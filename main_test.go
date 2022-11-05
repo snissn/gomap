@@ -16,12 +16,21 @@ func f() {
 	}
 }
 
-var N int = 10
+var Ntests int = 10
 
 func TestBasic(t *testing.T) {
 	folder := os.TempDir()
 	var obj Hashmap
 	obj.init(folder)
+}
+func TestCustom(t *testing.T) {
+	folder := "/var/folders/mg/bc5vt66d4dx_c88kt3028dc80000gn/T/hash3180176573/"
+	var obj Hashmap
+	obj.init(folder)
+
+	fmt.Println(obj.get([]byte("4111")))
+	obj.add([]byte("4111"), 69)
+	fmt.Println(obj.get([]byte("4111")))
 }
 
 func TestAdd1(t *testing.T) {
@@ -39,20 +48,20 @@ func TestAddGet1(t *testing.T) {
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	obj.add(key, 69)
 	res, _ := obj.get(key)
-	assert.Equal(t, res, hash(key), "they should be equal")
-	fmt.Println(res)
+	assert.Equal(t, res.hash, hash(key), "they should be equal")
 }
 
 func TestAddGetN(t *testing.T) {
-	folder := os.TempDir()
+	folder, _ := os.MkdirTemp("", "hash")
+
 	var obj Hashmap
 	obj.init(folder)
 
-	for i := 0; i < N; i++ {
+	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
 		obj.add(key, uint64(i))
 		res, _ := obj.get(key)
-		assert.Equal(t, res, hash(key), "they should be equal")
+		assert.Equal(t, res.hash, hash(key), "they should be equal")
 
 		//	t.Errorf("Find(%v, %d) = %d, expected %d",				e.a, e.x, res, e.exp)
 
@@ -60,17 +69,17 @@ func TestAddGetN(t *testing.T) {
 }
 
 func BenchmarkF(b *testing.B) {
-	folder := "./folder"
+	folder, _ := os.MkdirTemp("", "hash")
 
 	var obj Hashmap
 	obj.init(folder)
+	fmt.Println(folder)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		s := strconv.Itoa(i)
-
-		b := []byte(s)
-		obj.add(b, 69)
+		key := []byte(s)
+		obj.add(key, 69)
 
 	}
 }

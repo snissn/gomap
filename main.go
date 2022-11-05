@@ -36,12 +36,12 @@ type Hashmap struct {
 	keyMap   mmap.MMap
 	Capacity *uint64
 	Count    *uint64
-	Keys     []Key
+	Keys     *[]Key
 }
 
 var LOADFACTOR *big.Float = big.NewFloat(0.7)
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(2)
+var DEFAULTMAPSIZE uint64 = uint64(8)
 
 func hash(data []byte) uint64 {
 	h := fnv1.HashBytes64(data)
@@ -57,15 +57,15 @@ func hash(data []byte) uint64 {
 }
 
 func (h *Hashmap) checkResize() bool {
+	return *h.Count*14 > *h.Capacity*10
+}
+
+func (h *Hashmap) _checkResize() bool {
 	fcap := new(big.Float).SetUint64(*h.Capacity)
 	fcount := new(big.Float).SetUint64(*h.Count)
 	quo := new(big.Float).Quo(fcount, fcap) // our current load factor
 	return quo.Cmp(LOADFACTOR) != -1        // return true if we need to resize https://pkg.go.dev/math/big#Float.Cmp
 	//returns -1 if quo is less than load factor
-}
-
-func (h *Hashmap) addResize(key Key) {
-	fmt.Println("resize", key)
 }
 
 func handleError(err error) {
@@ -84,20 +84,19 @@ func (h *Hashmap) closeFPs() {
 }
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	//todo maybe make a copy to close easier?
-	go h.closeFPs() // async close fp
+	//go h.closeFPs() // async close fp
+	//	fmt.Println("Hashmap resize", h)
 	h.keyMap = newH.keyMap
 	h.FILE = newH.FILE
 	h.Capacity = newH.Capacity
 	h.Count = newH.Count
 	h.Keys = newH.Keys
-	fmt.Println("resze")
 }
 func (h *Hashmap) resize() {
-
 	var newH Hashmap
 	newH.initN(h.Folder, 2*(*h.Capacity))
-	for index, mykey := range h.Keys {
-		fmt.Println("resze At index", index, "value is", mykey)
+
+	for _, mykey := range *h.Keys {
 		if mykey.hash != 0 {
 			newH.addKey(mykey)
 		}
@@ -109,39 +108,40 @@ func (h *Hashmap) resize() {
 func (h *Hashmap) addKey(key Key) {
 	count := uint64(0)
 	myhash := key.hash
-	for true {
-		mybucket := h.Keys[((myhash%*h.Capacity)+count)%*h.Capacity]
+	for count < *h.Capacity {
+		hkey := ((myhash % (*h.Capacity)) + count) % *h.Capacity
+		mybucket := (*h.Keys)[hkey]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
 				*h.Count += 1
 			}
-			h.Keys[myhash%*h.Capacity] = key
-			break
+			(*h.Keys)[hkey] = key
+			return
 		} else {
 			count++
 		}
 	}
+	panic("why")
 }
 
-func (h *Hashmap) get(key []byte) (uint64, error) {
+func (h *Hashmap) get(key []byte) (*Key, error) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count != *h.Capacity {
-		mybucket := h.Keys[((myhash%*h.Capacity)+count)%*h.Capacity]
+		mybucket := (*h.Keys)[((myhash%*h.Capacity)+count)%*h.Capacity]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
-				return 0, nil
+				return nil, nil
 			}
-			return mybucket.hash, nil
+			return &mybucket, nil
 		} else {
 			count++
 		}
 	}
-	return 0, nil
+	return nil, nil
 }
 
 func (h *Hashmap) add(key []byte, data uint64) {
-	//fmt.Println("add - capacity count is: ", *h.Capacity, *h.Count)
 	if h.checkResize() {
 		h.resize()
 	}
@@ -149,7 +149,6 @@ func (h *Hashmap) add(key []byte, data uint64) {
 	myhash := hash(key)
 	mykey := Key{hash: myhash, data: data}
 	h.addKey(mykey)
-	fmt.Println("add", myhash)
 
 }
 
@@ -157,7 +156,7 @@ func (h *Hashmap) openMmap(N uint64) (mmap.MMap, *os.File, error) {
 	//make sure you close files!
 	var f *os.File
 	var err error
-	bytes := NtoBytes(N)
+	bytes := NtoBytes(N) * 2
 
 	err = os.MkdirAll(h.Folder, 0755)
 	if err != nil {
@@ -174,14 +173,14 @@ func (h *Hashmap) openMmap(N uint64) (mmap.MMap, *os.File, error) {
 		f.Seek(bytes-1, 0)
 		f.Write([]byte("\x00"))
 		f.Seek(0, 0)
+		f.Sync()
+		f.Close()
 
-	} else {
-		f, err = os.OpenFile(filename, os.O_RDWR, 0655)
-		if err != nil {
-			fmt.Println(filename)
-			log.Fatal("3", errors.Wrap(err, 1))
-		}
+	}
 
+	f, err = os.OpenFile(filename, os.O_RDWR, 0655)
+	if err != nil {
+		log.Fatal("3", errors.Wrap(err, 1))
 	}
 
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
@@ -189,11 +188,15 @@ func (h *Hashmap) openMmap(N uint64) (mmap.MMap, *os.File, error) {
 }
 
 func NtoBytes(N uint64) int64 {
-	return int64(size) * int64(2+N*2)
+	return int64(size*2) * int64(2+N*2)
 }
 
 func getCapacity(keyMap mmap.MMap) *uint64 {
-	return (*uint64)(unsafe.Pointer(&keyMap[0]))
+	cap := (*uint64)(unsafe.Pointer(&keyMap[0]))
+	if *cap == 0 {
+		*cap = uint64(DEFAULTMAPSIZE)
+	}
+	return cap
 }
 
 func getCount(keyMap mmap.MMap) *uint64 {
@@ -202,7 +205,9 @@ func getCount(keyMap mmap.MMap) *uint64 {
 
 func (h *Hashmap) getKeys() []Key {
 	tmpkeys := (*Key)(unsafe.Pointer(&h.keyMap[size*2]))
-	return unsafe.Slice(tmpkeys, *h.Capacity)
+	ret := unsafe.Slice(tmpkeys, *h.Capacity)
+	return ret
+
 }
 
 func (h *Hashmap) readCapcity() uint64 {
@@ -210,8 +215,6 @@ func (h *Hashmap) readCapcity() uint64 {
 	if err != nil {
 		return DEFAULTMAPSIZE
 	}
-	fmt.Print(string(dat))
-
 	ret, err := strconv.ParseUint(string(dat), 10, 64)
 	handleError(err)
 	return ret
@@ -223,9 +226,20 @@ func (h *Hashmap) init(folder string) {
 	N := h.readCapcity()
 	h.initN(folder, N)
 }
+
+func (h *Hashmap) writeCapacity(N uint64) error {
+	s := strconv.FormatUint(N, 10)
+	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
+}
+
 func (h *Hashmap) initN(folder string, N uint64) {
 	h.Folder = folder
 	m, f, err := h.openMmap(N)
+	if err != nil {
+		log.Fatal(errors.Wrap(err, 1))
+	}
+
+	err = h.writeCapacity(N)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
@@ -234,12 +248,10 @@ func (h *Hashmap) initN(folder string, N uint64) {
 	h.FILE = f
 
 	h.Capacity = getCapacity(h.keyMap)
+	*h.Capacity = N
 	h.Count = getCount(h.keyMap)
-	h.Keys = h.getKeys()
-	if *h.Capacity == 0 {
-		*h.Capacity = N
-	}
-
+	keys := h.getKeys()
+	h.Keys = &keys
 }
 
 func main() {
