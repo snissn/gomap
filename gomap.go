@@ -34,6 +34,9 @@ type Hashmap struct {
 	Folder   string
 	FILE     *os.File
 	keyMap   mmap.MMap
+  slabMap  mmap.MMap
+  slabFILE *os.File
+  slabSize int64
 	Capacity *uint64
 	Count    *uint64
 	Keys     *[]Key
@@ -42,6 +45,7 @@ type Hashmap struct {
 var LOADFACTOR *big.Float = big.NewFloat(0.7)
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(8)
+var DEFAULTSLABSIZE int64 = int64(8*1024)
 
 func hash(data []byte) uint64 {
 	h := fnv1.HashBytes64(data)
@@ -94,7 +98,7 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
-	newH.initN(h.Folder, 2*(*h.Capacity))
+	newH.initN(h.Folder, 2*(*h.Capacity), 2*(h.slabSize))
 
 	for _, mykey := range *h.Keys {
 		if mykey.hash != 0 {
@@ -152,7 +156,47 @@ func (h *Hashmap) add(key []byte, data uint64) {
 
 }
 
-func (h *Hashmap) openMmap(N uint64) (mmap.MMap, *os.File, error) {
+func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
+	var f *os.File
+	var err error
+
+	err = os.MkdirAll(h.Folder, 0755)
+	if err != nil {
+		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
+	}
+	filename := h.Folder + "/slab"
+	if !doesFileExist(filename) {
+		f, err = os.Create(filename)
+
+		if err != nil {
+			log.Fatal("2", errors.Wrap(err, 1))
+		}
+		f.Seek(slabSize-1, 0)
+		f.Write([]byte("\x00"))
+		f.Seek(0, 0)
+		f.Sync()
+		f.Close()
+	}
+	f, err = os.OpenFile(filename, os.O_RDWR, 0655)
+	if err != nil {
+		log.Fatal("3", errors.Wrap(err, 1))
+	}
+
+  fi, err := f.Stat()
+  if err != nil {
+		log.Fatal("4", errors.Wrap(err, 1))
+  }
+  if slabSize > fi.Size() { // need to expand file
+		f.Seek(slabSize-1, 0)
+		f.Write([]byte("\x00"))
+		f.Seek(0, 0)
+		f.Sync()
+  }
+	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	return ret, f, err
+}
+
+func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	//make sure you close files!
 	var f *os.File
 	var err error
@@ -160,7 +204,6 @@ func (h *Hashmap) openMmap(N uint64) (mmap.MMap, *os.File, error) {
 
 	err = os.MkdirAll(h.Folder, 0755)
 	if err != nil {
-
 		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
 	}
 	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
@@ -210,21 +253,33 @@ func (h *Hashmap) getKeys() []Key {
 
 }
 
-func (h *Hashmap) readCapcity() uint64 {
+func (h *Hashmap) readCapcity() (uint64, int64) {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
-		return DEFAULTMAPSIZE
+		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
 	}
-	ret, err := strconv.ParseUint(string(dat), 10, 64)
+	capacity, err := strconv.ParseUint(string(dat), 10, 64)
 	handleError(err)
-	return ret
 
+	slabdat, err := os.ReadFile(h.Folder + "/slabSize")
+	if err != nil {
+		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
+	}
+	slabSize, err := strconv.ParseInt(string(slabdat), 10, 64)
+	handleError(err)
+
+	return capacity, slabSize
 }
 
 func (h *Hashmap) init(folder string) {
 	h.Folder = folder
-	N := h.readCapcity()
-	h.initN(folder, N)
+	N, slabSize := h.readCapcity()
+	h.initN(folder, N, slabSize)
+}
+
+func (h *Hashmap) writeSlabSize(slabSize int64) error {
+	s := strconv.FormatInt(slabSize, 10)
+	return os.WriteFile(h.Folder+"/slabSize", []byte(s), 0655)
 }
 
 func (h *Hashmap) writeCapacity(N uint64) error {
@@ -232,9 +287,14 @@ func (h *Hashmap) writeCapacity(N uint64) error {
 	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
 }
 
-func (h *Hashmap) initN(folder string, N uint64) {
+func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	h.Folder = folder
-	m, f, err := h.openMmap(N)
+	m, f_map, err := h.openMmapHash(N)
+	if err != nil {
+		log.Fatal(errors.Wrap(err, 1))
+	}
+
+	slab, f_slab, err := h.openMmapSlab(slabSize)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
@@ -243,9 +303,18 @@ func (h *Hashmap) initN(folder string, N uint64) {
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
+	err = h.writeSlabSize(slabSize)
+	if err != nil {
+		log.Fatal(errors.Wrap(err, 1))
+	}
 
 	h.keyMap = m
-	h.FILE = f
+	h.FILE = f_map
+
+  h.slabMap = slab
+  h.slabFILE =  f_slab
+  fmt.Println("slabsize",slabSize)
+  h.slabSize = slabSize
 
 	h.Capacity = getCapacity(h.keyMap)
 	*h.Capacity = N
