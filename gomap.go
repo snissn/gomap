@@ -14,6 +14,7 @@ import (
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/segmentio/fasthash/fnv1"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 func doesFileExist(fileName string) bool {
@@ -31,33 +32,42 @@ type Key struct {
 	hash uint64
 }
 type Hashmap struct {
-	Folder   string
-	FILE     *os.File
-	keyMap   mmap.MMap
-  slabMap  mmap.MMap
-  slabFILE *os.File
-  slabSize int64
-	Capacity *uint64
-	Count    *uint64
-	Keys     *[]Key
+	Folder     string
+	FILE       *os.File
+	keyMap     mmap.MMap
+	slabMap    mmap.MMap
+	slabFILE   *os.File
+	slabOffset *uint64
+	slabSize   int64
+	Capacity   *uint64
+	Count      *uint64
+	Keys       *[]Key
+}
+
+type Item struct {
+	Key   string
+	Value string
 }
 
 var LOADFACTOR *big.Float = big.NewFloat(0.7)
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(8)
-var DEFAULTSLABSIZE int64 = int64(8*1024)
+var DEFAULTMAPSIZE uint64 = uint64(1024)
+var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
-func hash(data []byte) uint64 {
-	h := fnv1.HashBytes64(data)
-	if h == 0 {
-		//hash = 0 means it's empty
-		h++
-	}
-	if h == 18446744073709551615 {
-		h--
-		// MaxInt means it's been deleted
-	}
-	return h
+func hash(key string) uint64 {
+	return fnv1.HashString64(key)
+	//h := fnv1.HashBytes64(data)
+	/*
+		if h == 0 {
+			//hash = 0 means it's empty
+			h++
+		}
+		if h == 18446744073709551615 {
+			h--
+			// MaxInt means it's been deleted
+		}
+		return h
+	*/
 }
 
 func (h *Hashmap) checkResize() bool {
@@ -128,7 +138,7 @@ func (h *Hashmap) addKey(key Key) {
 	panic("why")
 }
 
-func (h *Hashmap) get(key []byte) (*Key, error) {
+func (h *Hashmap) get(key string) (*Key, error) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count != *h.Capacity {
@@ -145,7 +155,31 @@ func (h *Hashmap) get(key []byte) (*Key, error) {
 	return nil, nil
 }
 
-func (h *Hashmap) add(key []byte, data uint64) {
+func (h *Hashmap) AddValue(key string, item Item) {
+	slabData := h.addSlab(item)
+	h.add(key, slabData)
+}
+
+func (h *Hashmap) addSlab(item Item) uint64 {
+	b, err := msgpack.Marshal(&item)
+	if err != nil {
+		panic(err)
+	}
+
+	offset := *h.slabOffset
+	//XXX need to make sure that offset + len(b) is within	h.slabSize
+	if offset+uint64(len(b)) > uint64(h.slabSize) {
+		err := h.doubleSlab()
+		if err != nil {
+			panic(err)
+		}
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(b)), b)
+	*h.slabOffset += uint64(len(b))
+	return offset
+}
+
+func (h *Hashmap) add(key string, data uint64) {
 	if h.checkResize() {
 		h.resize()
 	}
@@ -182,18 +216,35 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		log.Fatal("3", errors.Wrap(err, 1))
 	}
 
-  fi, err := f.Stat()
-  if err != nil {
+	fi, err := f.Stat()
+	if err != nil {
 		log.Fatal("4", errors.Wrap(err, 1))
-  }
-  if slabSize > fi.Size() { // need to expand file
+	}
+	if slabSize > fi.Size() { // need to expand file
 		f.Seek(slabSize-1, 0)
 		f.Write([]byte("\x00"))
 		f.Seek(0, 0)
 		f.Sync()
-  }
+	}
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
 	return ret, f, err
+}
+
+func (h *Hashmap) doubleSlab() error {
+	fmt.Println("double", h.slabSize)
+	f := h.slabFILE
+	f.Seek(2*h.slabSize-1, 0)
+	f.Write([]byte("\x00"))
+	f.Seek(0, 0)
+	f.Sync()
+	m, err := mmap.Map(f, mmap.RDWR, 0)
+	if err != nil {
+		return err
+	}
+	h.slabSize *= 2
+	fmt.Println("new size", h.slabSize)
+	h.slabMap = m
+	return nil
 }
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
@@ -232,6 +283,11 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 
 func NtoBytes(N uint64) int64 {
 	return int64(size*2) * int64(2+N*2)
+}
+
+func getSlabOffset(slabMap mmap.MMap) *uint64 {
+	cap := (*uint64)(unsafe.Pointer(&slabMap[0]))
+	return cap
 }
 
 func getCapacity(keyMap mmap.MMap) *uint64 {
@@ -311,10 +367,13 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	h.keyMap = m
 	h.FILE = f_map
 
-  h.slabMap = slab
-  h.slabFILE =  f_slab
-  fmt.Println("slabsize",slabSize)
-  h.slabSize = slabSize
+	h.slabMap = slab
+	h.slabFILE = f_slab
+	h.slabSize = slabSize
+	h.slabOffset = getSlabOffset(h.slabMap)
+	if *h.slabOffset == 0 {
+		*h.slabOffset = 8
+	}
 
 	h.Capacity = getCapacity(h.keyMap)
 	*h.Capacity = N
@@ -336,11 +395,11 @@ func main() {
 		obj.Count = 0
 	*/
 
-	obj.add([]byte{'w', 'x', 'r', 'l', 'q'}, 69)
-	obj.add([]byte{'w', 'x', 'r', 'l', 'b'}, 69)
-	obj.add([]byte{'w', 'x', 'r', 'l', 'e'}, 69)
-	obj.add([]byte{'w', 'x', 'r', 'l', 'c'}, 69)
-	obj.add([]byte{'w', 'x', 'r', 'l', 'k'}, 71)
+	obj.add("wxrlq", 69)
+	obj.add("wxrlb", 69)
+	obj.add("wxrle", 69)
+	obj.add("wxrlc", 69)
+	obj.add("wxrlk", 71)
 
 	//	fmt.Printf("%+v\n\n", obj)
 }
