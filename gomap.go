@@ -13,62 +13,13 @@ import (
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
-	"github.com/segmentio/fasthash/fnv1"
 	"github.com/vmihailenco/msgpack/v5"
 )
-
-func doesFileExist(fileName string) bool {
-	_, error := os.Stat(fileName)
-	// check if error is "file not exists"
-	if os.IsNotExist(error) {
-		return false
-	} else {
-		return true
-	}
-}
-
-type Key struct {
-	data uint64
-	hash uint64
-}
-type Hashmap struct {
-	Folder     string
-	FILE       *os.File
-	keyMap     mmap.MMap
-	slabMap    mmap.MMap
-	slabFILE   *os.File
-	slabOffset *uint64
-	slabSize   int64
-	Capacity   *uint64
-	Count      *uint64
-	Keys       *[]Key
-}
-
-type Item struct {
-	Key   string
-	Value string
-}
 
 var LOADFACTOR *big.Float = big.NewFloat(0.7)
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
-
-func hash(key string) uint64 {
-	return fnv1.HashString64(key)
-	//h := fnv1.HashBytes64(data)
-	/*
-		if h == 0 {
-			//hash = 0 means it's empty
-			h++
-		}
-		if h == 18446744073709551615 {
-			h--
-			// MaxInt means it's been deleted
-		}
-		return h
-	*/
-}
 
 func (h *Hashmap) checkResize() bool {
 	return *h.Count*14 > *h.Capacity*10
@@ -80,13 +31,6 @@ func (h *Hashmap) _checkResize() bool {
 	quo := new(big.Float).Quo(fcount, fcap) // our current load factor
 	return quo.Cmp(LOADFACTOR) != -1        // return true if we need to resize https://pkg.go.dev/math/big#Float.Cmp
 	//returns -1 if quo is less than load factor
-}
-
-func handleError(err error) {
-	if err != nil {
-		fmt.Println(err)
-		panic(err)
-	}
 }
 
 func (h *Hashmap) closeFPs() {
@@ -279,27 +223,6 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
 	return ret, f, err
-}
-
-func NtoBytes(N uint64) int64 {
-	return int64(size*2) * int64(2+N*2)
-}
-
-func getSlabOffset(slabMap mmap.MMap) *uint64 {
-	cap := (*uint64)(unsafe.Pointer(&slabMap[0]))
-	return cap
-}
-
-func getCapacity(keyMap mmap.MMap) *uint64 {
-	cap := (*uint64)(unsafe.Pointer(&keyMap[0]))
-	if *cap == 0 {
-		*cap = uint64(DEFAULTMAPSIZE)
-	}
-	return cap
-}
-
-func getCount(keyMap mmap.MMap) *uint64 {
-	return (*uint64)(unsafe.Pointer(&keyMap[size]))
 }
 
 func (h *Hashmap) getKeys() []Key {
