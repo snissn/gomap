@@ -7,8 +7,10 @@ import (
 )
 
 type Key struct {
-	data uint64
-	hash uint64
+	//todo Tweak offset sizes
+	slabOffset      uint64
+	slabValueLength uint64
+	hash            uint64
 }
 type Hashmap struct {
 	Folder     string

@@ -7,7 +7,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"log"
-	"math/big"
 	"os"
 	"reflect"
 	"unsafe"
@@ -16,21 +15,12 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-var LOADFACTOR *big.Float = big.NewFloat(0.7)
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(1024)
+var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
 	return *h.Count*14 > *h.Capacity*10
-}
-
-func (h *Hashmap) _checkResize() bool {
-	fcap := new(big.Float).SetUint64(*h.Capacity)
-	fcount := new(big.Float).SetUint64(*h.Count)
-	quo := new(big.Float).Quo(fcount, fcap) // our current load factor
-	return quo.Cmp(LOADFACTOR) != -1        // return true if we need to resize https://pkg.go.dev/math/big#Float.Cmp
-	//returns -1 if quo is less than load factor
 }
 
 func (h *Hashmap) closeFPs() {
@@ -38,12 +28,11 @@ func (h *Hashmap) closeFPs() {
 	handleError(err)
 	err = h.keyMap.Unmap()
 	handleError(err)
-
 }
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
-	//todo maybe make a copy to close easier?
-	//go h.closeFPs() // async close fp
-	//	fmt.Println("Hashmap resize", h)
+	//TODO close and delete old file, can be async
+	// see closeFPs
+
 	h.keyMap = newH.keyMap
 	h.FILE = newH.FILE
 	h.Capacity = newH.Capacity
@@ -82,36 +71,51 @@ func (h *Hashmap) addKey(key Key) {
 	panic("why")
 }
 
-func (h *Hashmap) get(key string) (*Key, error) {
+func (h *Hashmap) unmarshalItemFromSlab(key Key) Item {
+	var ret Item
+	valueRawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[key.slabOffset])), key.slabValueLength)
+
+	err := msgpack.Unmarshal(valueRawBytes, &ret)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+
+}
+
+func (h *Hashmap) Get(key string) (string, error) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count != *h.Capacity {
 		mybucket := (*h.Keys)[((myhash%*h.Capacity)+count)%*h.Capacity]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
-				return nil, nil
+				return "", nil
 			}
-			return &mybucket, nil
+			item := h.unmarshalItemFromSlab(mybucket)
+			return item.Value, nil
 		} else {
 			count++
 		}
 	}
-	return nil, nil
+	return "", nil
 }
 
-func (h *Hashmap) AddValue(key string, item Item) {
-	slabData := h.addSlab(item)
-	h.add(key, slabData)
+func (h *Hashmap) Add(key string, value string) {
+
+	item := Item{Key: key, Value: value}
+	slabOffset, slabValueLength := h.addSlab(item)
+	h.addBucket(key, slabOffset, slabValueLength)
 }
 
-func (h *Hashmap) addSlab(item Item) uint64 {
+func (h *Hashmap) addSlab(item Item) (uint64, uint64) {
 	b, err := msgpack.Marshal(&item)
 	if err != nil {
 		panic(err)
 	}
 
 	offset := *h.slabOffset
-	//XXX need to make sure that offset + len(b) is within	h.slabSize
+	//make sure that offset + len(b) is within	h.slabSize
 	if offset+uint64(len(b)) > uint64(h.slabSize) {
 		err := h.doubleSlab()
 		if err != nil {
@@ -120,16 +124,16 @@ func (h *Hashmap) addSlab(item Item) uint64 {
 	}
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(b)), b)
 	*h.slabOffset += uint64(len(b))
-	return offset
+	return offset, uint64((len(b)))
 }
 
-func (h *Hashmap) add(key string, data uint64) {
+func (h *Hashmap) addBucket(key string, slabOffset uint64, slabValueLength uint64) {
 	if h.checkResize() {
 		h.resize()
 	}
 
 	myhash := hash(key)
-	mykey := Key{hash: myhash, data: data}
+	mykey := Key{hash: myhash, slabOffset: slabOffset, slabValueLength: slabValueLength}
 	h.addKey(mykey)
 
 }
@@ -175,7 +179,6 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 }
 
 func (h *Hashmap) doubleSlab() error {
-	fmt.Println("double", h.slabSize)
 	f := h.slabFILE
 	f.Seek(2*h.slabSize-1, 0)
 	f.Write([]byte("\x00"))
@@ -186,7 +189,7 @@ func (h *Hashmap) doubleSlab() error {
 		return err
 	}
 	h.slabSize *= 2
-	fmt.Println("new size", h.slabSize)
+	fmt.Println("new slab size", h.slabSize)
 	h.slabMap = m
 	return nil
 }
@@ -305,24 +308,13 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	h.Keys = &keys
 }
 
-func main() {
+/*
 
+Example usage:
 	folder := "./folder"
 
 	var obj Hashmap
 	obj.init(folder)
+	obj.Add("key", "value")
 
-	/*
-		obj = (*Hashmap)(unsafe.Pointer(&mmap[0]))
-		obj.Capacity = N
-		obj.Count = 0
-	*/
-
-	obj.add("wxrlq", 69)
-	obj.add("wxrlb", 69)
-	obj.add("wxrle", 69)
-	obj.add("wxrlc", 69)
-	obj.add("wxrlk", 71)
-
-	//	fmt.Printf("%+v\n\n", obj)
-}
+*/
