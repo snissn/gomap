@@ -1,4 +1,4 @@
-module example.com/m
+module github.com/snissn/gomap
 
 go 1.18
 
