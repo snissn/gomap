@@ -24,13 +24,13 @@ var Ntests int = 10
 func TestBasic(t *testing.T) {
 	folder := os.TempDir()
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 }
 
 func TestAdd1(t *testing.T) {
 	folder := os.TempDir()
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
 	value := "awoiljfasdlfj"
 	obj.Add(key, value)
@@ -39,7 +39,7 @@ func TestAdd1(t *testing.T) {
 func TestAddGet1(t *testing.T) {
 	folder := os.TempDir()
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
 	value := "value"
 	obj.Add(key, value)
@@ -51,7 +51,7 @@ func TestAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 
 	for i := 0; i < Ntests; i++ {
 		key := strconv.Itoa(i)
@@ -66,7 +66,7 @@ func BenchmarkValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 	fmt.Println(folder)
 	b.ResetTimer()
 
@@ -80,7 +80,7 @@ func BenchmarkValue(b *testing.B) {
 func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
-	obj.init(folder)
+	obj.New(folder)
 	fmt.Println(folder)
 	key := "key"
 	value := "bartesttesttest"

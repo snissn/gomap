@@ -90,6 +90,7 @@ func (h *Hashmap) Get(key string) (string, error) {
 		mybucket := (*h.Keys)[((myhash%*h.Capacity)+count)%*h.Capacity]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
+				//todo return err=notfound
 				return "", nil
 			}
 			item := h.unmarshalItemFromSlab(mybucket)
@@ -98,6 +99,7 @@ func (h *Hashmap) Get(key string) (string, error) {
 			count++
 		}
 	}
+	//todo return err=notfound
 	return "", nil
 }
 
@@ -253,7 +255,7 @@ func (h *Hashmap) readCapcity() (uint64, int64) {
 	return capacity, slabSize
 }
 
-func (h *Hashmap) init(folder string) {
+func (h *Hashmap) New(folder string) {
 	h.Folder = folder
 	N, slabSize := h.readCapcity()
 	h.initN(folder, N, slabSize)
