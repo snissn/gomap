@@ -41,7 +41,7 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
-	newH.initN(h.Folder, 2*(*h.Capacity), 2*(h.slabSize))
+	newH.initN(h.Folder, 2*(*h.Capacity), (h.slabSize))
 
 	for _, mykey := range *h.Keys {
 		if mykey.hash != 0 {
