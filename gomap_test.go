@@ -1,6 +1,7 @@
 package gomap
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 
@@ -18,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(DEFAULTMAPSIZE) * 4
+var Ntests int = int(400_000)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
@@ -50,6 +51,7 @@ func TestAddGet1(t *testing.T) {
 
 func TestAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	fmt.Println(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -61,6 +63,7 @@ func TestAddGetN(t *testing.T) {
 		res, _ := obj.Get(key)
 		assert.Equal(t, res, value, "they should be equal")
 	}
+
 }
 
 func BenchmarkValue(b *testing.B) {
