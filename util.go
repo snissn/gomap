@@ -4,11 +4,16 @@ import (
 	"fmt"
 
 	"os"
+	"runtime"
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/segmentio/fasthash/fnv1"
 )
+
+func getCPUNumber() int {
+	return runtime.NumCPU()
+}
 
 func handleError(err error) {
 	if err != nil {
