@@ -16,7 +16,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64)
+var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64 * 16)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
@@ -47,7 +47,7 @@ func (h *Hashmap) resize() {
 	var newH Hashmap
 	fmt.Println("Resize", h.Capacity)
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
+	newH.initN(h.Folder, 16*(h.Capacity), (h.slabSize))
 
 	for index, mykey := range *h.Keys {
 		if mykey.hash != 0 {
@@ -314,7 +314,14 @@ func (h *Hashmap) openMmapHashOffsetIndex(N uint64) (mmap.MMap, *os.File, error)
 		h.createFile(filename, bytes)
 	}
 
-	return h.openMmapFile(filename)
+	mappedData, file, err := h.openMmapFile(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	h.mlock(mappedData)
+
+	return mappedData, file, err
 }
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {

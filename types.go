@@ -6,10 +6,10 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-type SlabOffset uint64
-type SlabValueLength uint64
+type SlabOffset uint32
+type SlabValueLength uint32
 
-type Hash uint64
+type Hash uint32
 
 type Key struct {
 	//todo make slab sizes their own array and index into it
