@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 
@@ -19,18 +18,20 @@ func f() {
 	}
 }
 
-var Ntests int = 10
+var Ntests int = int(DEFAULTMAPSIZE) * 4
 
 func TestBasic(t *testing.T) {
-	folder := os.TempDir()
+	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
 }
 
 func TestAdd1(t *testing.T) {
-	folder := os.TempDir()
+	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
+
 	obj.New(folder)
+
 	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
 	value := "awoiljfasdlfj"
 	obj.Add(key, value)
@@ -67,7 +68,6 @@ func BenchmarkValue(b *testing.B) {
 
 	var obj Hashmap
 	obj.New(folder)
-	fmt.Println(folder)
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -81,7 +81,6 @@ func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
-	fmt.Println(folder)
 	key := "key"
 	value := "bartesttesttest"
 	obj.Add(key, value)
@@ -102,6 +101,5 @@ func TestMsgPack(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("final", ret.Value, ret.Key)
 
 }
