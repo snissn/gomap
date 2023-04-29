@@ -20,49 +20,57 @@ var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
-	return *h.Count*14 > *h.Capacity*10
+	return *h.Count*14 > h.Capacity*10
 }
 
 func (h *Hashmap) closeFPs() {
-	err := h.FILE.Close()
+	err := h.hashMapFile.Close()
 	handleError(err)
-	err = h.keyMap.Unmap()
+	err = h.hashMap.Unmap()
 	handleError(err)
 }
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	//TODO close and delete old file, can be async
 	// see closeFPs
 
-	h.keyMap = newH.keyMap
-	h.FILE = newH.FILE
+	h.hashMap = newH.hashMap
+	h.hashMapFile = newH.hashMapFile
 	h.Capacity = newH.Capacity
 	h.Count = newH.Count
 	h.Keys = newH.Keys
+
+	h.hashMapSlabValue = newH.hashMapSlabValue
+	h.SlabValues = newH.SlabValues
+	h.slabMap = newH.slabMap
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
-	newH.initN(h.Folder, 2*(*h.Capacity), (h.slabSize))
+	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
+	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
-	for _, mykey := range *h.Keys {
+	for index, mykey := range *h.Keys {
 		if mykey.hash != 0 {
-			newH.addKey(mykey)
+			slabValues := (*h.SlabValues)[index]
+			newH.addKey(mykey, slabValues.slabOffset, slabValues.slabValueLength)
 		}
 	}
 
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key Key) {
+func (h *Hashmap) addKey(key Key, slabOffset SlabOffset, slabValueLength SlabValueLength) {
+	slabValues := SlabValues{slabOffset: slabOffset, slabValueLength: slabValueLength}
 	count := uint64(0)
 	myhash := key.hash
-	for count < *h.Capacity {
-		hkey := ((myhash % (*h.Capacity)) + count) % *h.Capacity
+	for count < h.Capacity {
+		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
 		mybucket := (*h.Keys)[hkey]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
 				*h.Count += 1
 			}
 			(*h.Keys)[hkey] = key
+			(*h.SlabValues)[hkey] = slabValues
 			return
 		} else {
 			count++
@@ -71,9 +79,9 @@ func (h *Hashmap) addKey(key Key) {
 	panic("why")
 }
 
-func (h *Hashmap) unmarshalItemFromSlab(key Key) Item {
+func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	var ret Item
-	valueRawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[key.slabOffset])), key.slabValueLength)
+	valueRawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), slabValues.slabValueLength)
 
 	err := msgpack.Unmarshal(valueRawBytes, &ret)
 	if err != nil {
@@ -86,14 +94,18 @@ func (h *Hashmap) unmarshalItemFromSlab(key Key) Item {
 func (h *Hashmap) Get(key string) (string, error) {
 	myhash := hash(key)
 	count := uint64(0)
-	for count != *h.Capacity {
-		mybucket := (*h.Keys)[((myhash%*h.Capacity)+count)%*h.Capacity]
+	for count != h.Capacity {
+		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+		mybucket := (*h.Keys)[myKeyIndex]
 		if mybucket.hash == 0 || mybucket.hash == myhash {
 			if mybucket.hash == 0 {
 				//todo return err=notfound
 				return "", nil
 			}
-			item := h.unmarshalItemFromSlab(mybucket)
+
+			//XXX todo confirm the key is a match instead of just relyign on hash matching
+			item := h.unmarshalItemFromSlab((*h.SlabValues)[myKeyIndex])
+
 			return item.Value, nil
 		} else {
 			count++
@@ -126,6 +138,7 @@ func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 	}
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(b)), b)
 	*h.slabOffset += SlabOffset(len(b))
+
 	return offset, SlabValueLength((len(b)))
 }
 
@@ -135,8 +148,8 @@ func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength S
 	}
 
 	myhash := hash(key)
-	mykey := Key{hash: myhash, slabOffset: slabOffset, slabValueLength: slabValueLength}
-	h.addKey(mykey)
+	mykey := Key{hash: myhash}
+	h.addKey(mykey, slabOffset, slabValueLength)
 
 }
 
@@ -191,37 +204,30 @@ func (h *Hashmap) doubleSlab() error {
 		return err
 	}
 	h.slabSize *= 2
-	fmt.Println("new slab size", h.slabSize)
 	h.slabMap = m
 	return nil
 }
-
-func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
-	//make sure you close files!
-	var f *os.File
-	var err error
-	bytes := NtoBytes(N)
-
-	err = os.MkdirAll(h.Folder, 0755)
+func (h *Hashmap) createDirectory() {
+	err := os.MkdirAll(h.Folder, 0755)
 	if err != nil {
 		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
 	}
-	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
-	if !doesFileExist(filename) {
-		f, err = os.Create(filename)
+}
 
-		if err != nil {
-			log.Fatal("2", errors.Wrap(err, 1))
-		}
-		f.Seek(bytes-1, 0)
-		f.Write([]byte("\x00"))
-		f.Seek(0, 0)
-		f.Sync()
-		f.Close()
-
+func (h *Hashmap) createFile(filename string, bytes int64) {
+	f, err := os.Create(filename)
+	if err != nil {
+		log.Fatal("2", errors.Wrap(err, 1))
 	}
+	f.Seek(bytes-1, 0)
+	f.Write([]byte("\x00"))
+	f.Seek(0, 0)
+	f.Sync()
+	f.Close()
+}
 
-	f, err = os.OpenFile(filename, os.O_RDWR, 0655)
+func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
+	f, err := os.OpenFile(filename, os.O_RDWR, 0655)
 	if err != nil {
 		log.Fatal("3", errors.Wrap(err, 1))
 	}
@@ -230,14 +236,43 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	return ret, f, err
 }
 
-func (h *Hashmap) getKeys() []Key {
-	tmpkeys := (*Key)(unsafe.Pointer(&h.keyMap[size*2]))
-	ret := unsafe.Slice(tmpkeys, *h.Capacity)
-	return ret
+func (h *Hashmap) openMmapHashOffsetIndex(N uint64) (mmap.MMap, *os.File, error) {
+	bytes := NtoBytesHashmapOffsetIndex(N)
+	h.createDirectory()
+	filename := h.Folder + "/hashkeysOffsetIndex-" + fmt.Sprint(N)
 
+	if !doesFileExist(filename) {
+		h.createFile(filename, bytes)
+	}
+
+	return h.openMmapFile(filename)
 }
 
-func (h *Hashmap) readCapcity() (uint64, int64) {
+func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
+	bytes := NtoBytesHashmap(N)
+	h.createDirectory()
+	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
+
+	if !doesFileExist(filename) {
+		h.createFile(filename, bytes)
+	}
+
+	return h.openMmapFile(filename)
+}
+
+func (h *Hashmap) getSlabValues() []SlabValues {
+	tmpkeys := (*SlabValues)(unsafe.Pointer(&h.hashMapSlabValue[0]))
+	ret := unsafe.Slice(tmpkeys, h.Capacity)
+	return ret
+}
+
+func (h *Hashmap) getKeys() []Key {
+	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[size*2]))
+	ret := unsafe.Slice(tmpkeys, h.Capacity)
+	return ret
+}
+
+func (h *Hashmap) readCapacity() (uint64, int64) {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
 		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
@@ -257,7 +292,7 @@ func (h *Hashmap) readCapcity() (uint64, int64) {
 
 func (h *Hashmap) New(folder string) {
 	h.Folder = folder
-	N, slabSize := h.readCapcity()
+	N, slabSize := h.readCapacity()
 	h.initN(folder, N, slabSize)
 }
 
@@ -278,6 +313,11 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 		log.Fatal(errors.Wrap(err, 1))
 	}
 
+	offsetIndex, f_mapOffsetIndex, err := h.openMmapHashOffsetIndex(N)
+	if err != nil {
+		log.Fatal(errors.Wrap(err, 1))
+	}
+
 	slab, f_slab, err := h.openMmapSlab(slabSize)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
@@ -292,22 +332,31 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 		log.Fatal(errors.Wrap(err, 1))
 	}
 
-	h.keyMap = m
-	h.FILE = f_map
+	h.hashMap = m
+	h.hashMapFile = f_map
+
+	h.hashMapSlabValueFile = f_mapOffsetIndex
+	h.hashMapSlabValue = offsetIndex
 
 	h.slabMap = slab
 	h.slabFILE = f_slab
 	h.slabSize = slabSize
+
+	//todo
 	h.slabOffset = getSlabOffset(h.slabMap)
+	//xxx
+
 	if *h.slabOffset == 0 {
-		*h.slabOffset = 8
+		*h.slabOffset = 8 * 3
 	}
 
-	h.Capacity = getCapacity(h.keyMap)
-	*h.Capacity = N
-	h.Count = getCount(h.keyMap)
+	h.Capacity = N
+	h.Count = getCount(h.hashMap)
 	keys := h.getKeys()
 	h.Keys = &keys
+
+	slabValues := h.getSlabValues()
+	h.SlabValues = &slabValues
 }
 
 /*

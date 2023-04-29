@@ -26,12 +26,19 @@ func doesFileExist(fileName string) bool {
 	}
 }
 
-func hash(key string) uint64 {
-	return fnv1.HashString64(key)
+func hash(key string) Hash {
+	return Hash(fnv1.HashString64(key))
 }
 
-func NtoBytes(N uint64) int64 {
-	return int64(size*3) * int64(2+N)
+func NtoBytesHashmap(N uint64) int64 {
+	i := Hash(0)
+	return int64(unsafe.Sizeof(i)) * int64(2+N)
+}
+
+func NtoBytesHashmapOffsetIndex(N uint64) int64 {
+	i := SlabOffset(0)
+	j := SlabValueLength(0)
+	return (int64(unsafe.Sizeof(i)) + int64(unsafe.Sizeof(j))) * int64(N)
 }
 
 func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
@@ -39,14 +46,6 @@ func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
 	return cap
 }
 
-func getCapacity(keyMap mmap.MMap) *uint64 {
-	cap := (*uint64)(unsafe.Pointer(&keyMap[0]))
-	if *cap == 0 {
-		*cap = uint64(DEFAULTMAPSIZE)
-	}
-	return cap
-}
-
-func getCount(keyMap mmap.MMap) *uint64 {
-	return (*uint64)(unsafe.Pointer(&keyMap[size]))
+func getCount(slabMap mmap.MMap) *uint64 {
+	return (*uint64)(unsafe.Pointer(&slabMap[8]))
 }
