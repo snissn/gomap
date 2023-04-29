@@ -110,7 +110,7 @@ func (h *Hashmap) Add(key string, value string) {
 	h.addBucket(key, slabOffset, slabValueLength)
 }
 
-func (h *Hashmap) addSlab(item Item) (uint64, uint64) {
+func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 	b, err := msgpack.Marshal(&item)
 	if err != nil {
 		panic(err)
@@ -118,18 +118,18 @@ func (h *Hashmap) addSlab(item Item) (uint64, uint64) {
 
 	offset := *h.slabOffset
 	//make sure that offset + len(b) is within	h.slabSize
-	if offset+uint64(len(b)) > uint64(h.slabSize) {
+	if uint64(offset)+uint64(len(b)) > uint64(h.slabSize) {
 		err := h.doubleSlab()
 		if err != nil {
 			panic(err)
 		}
 	}
 	copy(unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(b)), b)
-	*h.slabOffset += uint64(len(b))
-	return offset, uint64((len(b)))
+	*h.slabOffset += SlabOffset(len(b))
+	return offset, SlabValueLength((len(b)))
 }
 
-func (h *Hashmap) addBucket(key string, slabOffset uint64, slabValueLength uint64) {
+func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength SlabValueLength) {
 	if h.checkResize() {
 		h.resize()
 	}
@@ -200,7 +200,7 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	//make sure you close files!
 	var f *os.File
 	var err error
-	bytes := NtoBytes(N) * 2
+	bytes := NtoBytes(N)
 
 	err = os.MkdirAll(h.Folder, 0755)
 	if err != nil {

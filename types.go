@@ -6,11 +6,14 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
+type SlabOffset uint8
+type SlabValueLength uint8
+
 type Key struct {
-	//todo Tweak offset sizes
-	slabOffset      uint64
-	slabValueLength uint64
+	//todo make slab sizes their own array and index into it
 	hash            uint64
+	slabOffset      SlabOffset
+	slabValueLength SlabValueLength
 }
 type Hashmap struct {
 	Folder     string
@@ -18,7 +21,7 @@ type Hashmap struct {
 	keyMap     mmap.MMap
 	slabMap    mmap.MMap
 	slabFILE   *os.File
-	slabOffset *uint64
+	slabOffset *SlabOffset
 	slabSize   int64
 	Capacity   *uint64
 	Count      *uint64

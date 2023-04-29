@@ -31,11 +31,11 @@ func hash(key string) uint64 {
 }
 
 func NtoBytes(N uint64) int64 {
-	return int64(size*2) * int64(2+N*2)
+	return int64(size*3) * int64(2+N)
 }
 
-func getSlabOffset(slabMap mmap.MMap) *uint64 {
-	cap := (*uint64)(unsafe.Pointer(&slabMap[0]))
+func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
+	cap := (*SlabOffset)(unsafe.Pointer(&slabMap[0]))
 	return cap
 }
 
