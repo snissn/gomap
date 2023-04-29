@@ -1,6 +1,7 @@
 package gomap
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strconv"
 
@@ -12,7 +13,6 @@ import (
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
@@ -81,14 +81,59 @@ func (h *Hashmap) addKey(key Key, slabOffset SlabOffset, slabValueLength SlabVal
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	var ret Item
-	valueRawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), slabValues.slabValueLength)
+	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), int(slabValues.slabValueLength))
 
-	err := msgpack.Unmarshal(valueRawBytes, &ret)
-	if err != nil {
-		panic(err)
-	}
+	// Read key length
+	keyLen := binary.LittleEndian.Uint64(slab)
+	slab = slab[binary.Size(uint64(0)):]
+
+	// Read value length
+	valueLen := binary.LittleEndian.Uint64(slab)
+	slab = slab[binary.Size(uint64(0)):]
+
+	// Read key
+	ret.Key = string(slab[:keyLen])
+	slab = slab[keyLen:]
+
+	// Read value
+	ret.Value = string(slab[:valueLen])
+
 	return ret
+}
 
+func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
+	keyLen := uint64(len(item.Key))
+	valueLen := uint64(len(item.Value))
+	totalLen := 2*binary.Size(uint64(0)) + len(item.Key) + len(item.Value)
+
+	offset := *h.slabOffset
+	// Make sure that offset + totalLen is within h.slabSize
+	if uint64(offset)+uint64(totalLen) > uint64(h.slabSize) {
+		err := h.doubleSlab()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), totalLen)
+
+	// Write key length
+	binary.LittleEndian.PutUint64(slab, keyLen)
+	slab = slab[binary.Size(uint64(0)):]
+
+	// Write value length
+	binary.LittleEndian.PutUint64(slab, valueLen)
+	slab = slab[binary.Size(uint64(0)):]
+
+	// Write key
+	copy(slab, item.Key)
+	slab = slab[len(item.Key):]
+
+	// Write value
+	copy(slab, item.Value)
+
+	*h.slabOffset += SlabOffset(totalLen)
+	return offset, SlabValueLength(totalLen)
 }
 
 func (h *Hashmap) Get(key string) (string, error) {
@@ -120,26 +165,6 @@ func (h *Hashmap) Add(key string, value string) {
 	item := Item{Key: key, Value: value}
 	slabOffset, slabValueLength := h.addSlab(item)
 	h.addBucket(key, slabOffset, slabValueLength)
-}
-
-func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
-	b, err := msgpack.Marshal(&item)
-	if err != nil {
-		panic(err)
-	}
-
-	offset := *h.slabOffset
-	//make sure that offset + len(b) is within	h.slabSize
-	if uint64(offset)+uint64(len(b)) > uint64(h.slabSize) {
-		err := h.doubleSlab()
-		if err != nil {
-			panic(err)
-		}
-	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(b)), b)
-	*h.slabOffset += SlabOffset(len(b))
-
-	return offset, SlabValueLength((len(b)))
 }
 
 func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength SlabValueLength) {
