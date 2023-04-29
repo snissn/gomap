@@ -3,6 +3,7 @@ package gomap
 import (
 	"fmt"
 	"strconv"
+	"syscall"
 
 	"github.com/go-errors/errors"
 
@@ -197,6 +198,30 @@ func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength S
 
 }
 
+// Mlock locks the data in memory to prevent it from being swapped to disk.
+func (h *Hashmap) mlock(data mmap.MMap) {
+	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
+	if errno != 0 {
+		// If the syscall fails, it could be because the user does not have
+		// sufficient privileges to lock memory. To fix this, edit the
+		// /etc/security/limits.conf file and add the following line:
+		//
+		// <username> soft memlock unlimited
+		//
+		// where <username> is the name of the user running the program.
+		// Then, log out and log back in for the changes to take effect.
+		//
+		// Alternatively, you can run the program with sudo privileges to
+		// bypass this error.
+		log.Fatalf("syscall.Syscall(SYS_MLOCK) failed: %v\n"+
+			"To fix this, edit the /etc/security/limits.conf file and add the following line:\n"+
+			"<username> soft memlock unlimited\n"+
+			"where <username> is the name of the user running the program.\n"+
+			"Then, log out and log back in for the changes to take effect.\n"+
+			"Alternatively, you can run the program with sudo privileges to bypass this error.", errno)
+	}
+}
+
 func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 	var f *os.File
 	var err error
@@ -301,7 +326,14 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 		h.createFile(filename, bytes)
 	}
 
-	return h.openMmapFile(filename)
+	mappedData, file, err := h.openMmapFile(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	h.mlock(mappedData)
+
+	return mappedData, file, err
 }
 
 func (h *Hashmap) getSlabValues() []SlabValues {
