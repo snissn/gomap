@@ -94,16 +94,15 @@ func decodeLEB128(input []byte) (uint64, int) {
 	return result, length
 }
 
-func encodeLEB128(input uint64) []byte {
-	var buf [10]byte
+func encodeLEB128(slab []byte, input uint64) int {
 	var i int
 	for input >= 0x80 {
-		buf[i] = byte(input&0x7F | 0x80)
+		slab[i] = byte(input&0x7F | 0x80)
 		input >>= 7
 		i++
 	}
-	buf[i] = byte(input)
-	return buf[:i+1]
+	slab[i] = byte(input)
+	return i + 1
 }
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
@@ -126,10 +125,8 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 	keyBytes := []byte(item.Key)
 	valueBytes := []byte(item.Value)
-	keyLengthBytes := encodeLEB128(uint64(len(keyBytes)))
-	valueLengthBytes := encodeLEB128(uint64(len(valueBytes)))
 
-	totalLength := len(keyLengthBytes) + len(valueLengthBytes) + len(keyBytes) + len(valueBytes)
+	totalLength := len(keyBytes) + len(valueBytes) + 10 // 10 is the maximum length of LEB128 encoded uint64
 
 	offset := *h.slabOffset
 
@@ -143,14 +140,18 @@ func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 
 	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), totalLength)
 
-	// Copy key length, value length, key, and value to the slab
-	copy(slab, keyLengthBytes)
-	copy(slab[len(keyLengthBytes):], valueLengthBytes)
-	copy(slab[len(keyLengthBytes)+len(valueLengthBytes):], keyBytes)
-	copy(slab[len(keyLengthBytes)+len(valueLengthBytes)+len(keyBytes):], valueBytes)
+	// Write key length
+	keyLength := encodeLEB128(slab, uint64(len(keyBytes)))
+	// Write value length
+	valueLength := encodeLEB128(slab[keyLength:], uint64(len(valueBytes)))
+	// Write key
+	copy(slab[keyLength+valueLength:], keyBytes)
+	// Write value
+	copy(slab[keyLength+valueLength+len(keyBytes):], valueBytes)
 
-	*h.slabOffset += SlabOffset(totalLength)
-	return offset, SlabValueLength(totalLength)
+	actualTotalLength := keyLength + valueLength + len(keyBytes) + len(valueBytes)
+	*h.slabOffset += SlabOffset(actualTotalLength)
+	return offset, SlabValueLength(actualTotalLength)
 }
 
 func (h *Hashmap) Get(key string) (string, error) {
