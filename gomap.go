@@ -15,7 +15,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
+var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
@@ -44,6 +44,7 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
+	fmt.Println("Resize", h.Capacity)
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
