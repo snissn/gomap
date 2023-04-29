@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strconv"
 
@@ -79,61 +78,79 @@ func (h *Hashmap) addKey(key Key, slabOffset SlabOffset, slabValueLength SlabVal
 	panic("why")
 }
 
+func decodeLEB128(input []byte) (uint64, int) {
+	var result uint64
+	var shift uint
+	var length int
+	for {
+		b := input[length]
+		length++
+		result |= (uint64(b&0x7F) << shift)
+		if b&0x80 == 0 {
+			break
+		}
+		shift += 7
+	}
+	return result, length
+}
+
+func encodeLEB128(input uint64) []byte {
+	var buf [10]byte
+	var i int
+	for input >= 0x80 {
+		buf[i] = byte(input&0x7F | 0x80)
+		input >>= 7
+		i++
+	}
+	buf[i] = byte(input)
+	return buf[:i+1]
+}
+
 func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	var ret Item
-	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), int(slabValues.slabValueLength))
 
-	// Read key length
-	keyLen := binary.LittleEndian.Uint64(slab)
-	slab = slab[binary.Size(uint64(0)):]
+	// Get slice from slabMap
+	rawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), slabValues.slabValueLength)
 
-	// Read value length
-	valueLen := binary.LittleEndian.Uint64(slab)
-	slab = slab[binary.Size(uint64(0)):]
+	// Decode key length and value length
+	keyLength, n := decodeLEB128(rawBytes)
+	valueLength, m := decodeLEB128(rawBytes[n:])
 
-	// Read key
-	ret.Key = string(slab[:keyLen])
-	slab = slab[keyLen:]
-
-	// Read value
-	ret.Value = string(slab[:valueLen])
+	// Decode key and value
+	ret.Key = string(rawBytes[n+m : n+m+int(keyLength)])
+	ret.Value = string(rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)])
 
 	return ret
 }
 
 func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
-	keyLen := uint64(len(item.Key))
-	valueLen := uint64(len(item.Value))
-	totalLen := 2*binary.Size(uint64(0)) + len(item.Key) + len(item.Value)
+	keyBytes := []byte(item.Key)
+	valueBytes := []byte(item.Value)
+	keyLengthBytes := encodeLEB128(uint64(len(keyBytes)))
+	valueLengthBytes := encodeLEB128(uint64(len(valueBytes)))
+
+	totalLength := len(keyLengthBytes) + len(valueLengthBytes) + len(keyBytes) + len(valueBytes)
 
 	offset := *h.slabOffset
-	// Make sure that offset + totalLen is within h.slabSize
-	if uint64(offset)+uint64(totalLen) > uint64(h.slabSize) {
+
+	// Make sure that offset + totalLength is within h.slabSize
+	if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
 		err := h.doubleSlab()
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), totalLen)
+	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), totalLength)
 
-	// Write key length
-	binary.LittleEndian.PutUint64(slab, keyLen)
-	slab = slab[binary.Size(uint64(0)):]
+	// Copy key length, value length, key, and value to the slab
+	copy(slab, keyLengthBytes)
+	copy(slab[len(keyLengthBytes):], valueLengthBytes)
+	copy(slab[len(keyLengthBytes)+len(valueLengthBytes):], keyBytes)
+	copy(slab[len(keyLengthBytes)+len(valueLengthBytes)+len(keyBytes):], valueBytes)
 
-	// Write value length
-	binary.LittleEndian.PutUint64(slab, valueLen)
-	slab = slab[binary.Size(uint64(0)):]
-
-	// Write key
-	copy(slab, item.Key)
-	slab = slab[len(item.Key):]
-
-	// Write value
-	copy(slab, item.Value)
-
-	*h.slabOffset += SlabOffset(totalLen)
-	return offset, SlabValueLength(totalLen)
+	*h.slabOffset += SlabOffset(totalLength)
+	return offset, SlabValueLength(totalLength)
 }
 
 func (h *Hashmap) Get(key string) (string, error) {
