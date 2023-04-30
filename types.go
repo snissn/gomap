@@ -6,7 +6,7 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-type SlabOffset uint64
+type SlabOffset uint32
 
 type Hash uint64
 
