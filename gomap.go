@@ -15,7 +15,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32)
+var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
@@ -48,11 +48,10 @@ func (h *Hashmap) resize() {
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
-	for index, mykey := range *h.Keys {
+	for _, mykey := range *h.Keys {
 		if mykey.slabOffset != 0 {
-			slabValues := (*h.SlabValues)[index]
+			slabValues := SlabValues{slabOffset: mykey.slabOffset}
 			item := h.unmarshalItemFromSlab(slabValues)
-
 			newH.addKey(item.Key, slabValues.slabOffset)
 		}
 	}
@@ -173,6 +172,7 @@ func (h *Hashmap) Get(key string) (string, error) {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
 		mybucket := (*h.Keys)[myKeyIndex]
+
 		if mybucket.slabOffset == 0 {
 			//todo return err=notfound
 			return "", nil

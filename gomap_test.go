@@ -19,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(400_0)
+var Ntests int = int(400_000)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
