@@ -6,9 +6,9 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-type SlabOffset uint64
+type SlabOffset uint32
 
-type Hash uint64
+type Hash uint32
 
 type Key struct {
 	hash Hash
