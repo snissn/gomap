@@ -6,13 +6,8 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-<<<<<<< HEAD
-type SlabOffset uint32
-type SlabValueLength uint32
-=======
 // todo consider chunking slabs so that uint32 is enough
 type SlabOffset uint32
->>>>>>> nostrings
 
 type Hash uint32
 
