@@ -39,7 +39,6 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	h.Keys = newH.Keys
 
 	h.hashMapSlabValue = newH.hashMapSlabValue
-	h.SlabValues = newH.SlabValues
 	h.slabMap = newH.slabMap
 }
 func (h *Hashmap) resize() {
@@ -49,17 +48,16 @@ func (h *Hashmap) resize() {
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
 	for _, mykey := range *h.Keys {
-		if mykey.slabOffset != 0 {
-			slabValues := SlabValues{slabOffset: mykey.slabOffset}
-			item := h.unmarshalItemFromSlab(slabValues)
-			newH.addKey(item.Key, slabValues.slabOffset)
+		if mykey != 0 {
+			item := h.unmarshalItemFromSlab(mykey)
+			newH.addKey(item.Key, mykey)
 		}
 	}
 
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key string, slabOffset SlabOffset) {
+func (h *Hashmap) addKey(key string, slabOffset Key) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count < h.Capacity {
@@ -67,19 +65,18 @@ func (h *Hashmap) addKey(key string, slabOffset SlabOffset) {
 		//fmt.Println("add", (*h.Keys))
 
 		mybucket := (*h.Keys)[hkey]
-		if mybucket.slabOffset == 0 {
+		if mybucket == 0 {
 			//nothing is in this entry, so set this key and increment counter
 			*h.Count += 1
-			(*h.Keys)[hkey].slabOffset = slabOffset
+			(*h.Keys)[hkey] = slabOffset
 			return
 		} else {
 			//access key from slab and compare
 			//if equal update value to new slab value, otherwise
 			//if not equal continue to next entry
-			slabValues := SlabValues{slabOffset: slabOffset}
-			item := h.unmarshalItemFromSlab(slabValues)
+			item := h.unmarshalItemFromSlab(slabOffset)
 			if item.Key == key {
-				(*h.Keys)[hkey].slabOffset = slabOffset
+				(*h.Keys)[hkey] = slabOffset
 				return
 			} else {
 				count++
@@ -116,11 +113,11 @@ func encodeLEB128(slab []byte, input uint64) int {
 	return i + 1
 }
 
-func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
+func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
 	// Get slice from slabMap
-	rawBytes := h.slabMap[slabValues.slabOffset:]
+	rawBytes := h.slabMap[slabValues:]
 
 	// Decode key length and value length
 	keyLength, n := decodeLEB128(rawBytes)
@@ -133,7 +130,7 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	return ret
 }
 
-func (h *Hashmap) addSlab(item Item) SlabOffset {
+func (h *Hashmap) addSlab(item Item) Key {
 	keyBytes := []byte(item.Key)
 	valueBytes := []byte(item.Value)
 
@@ -162,7 +159,7 @@ func (h *Hashmap) addSlab(item Item) SlabOffset {
 
 	actualTotalLength := keyLength + valueLength + len(keyBytes) + len(valueBytes)
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	return offset
+	return Key(offset)
 }
 
 func (h *Hashmap) Get(key string) (string, error) {
@@ -173,13 +170,12 @@ func (h *Hashmap) Get(key string) (string, error) {
 
 		mybucket := (*h.Keys)[myKeyIndex]
 
-		if mybucket.slabOffset == 0 {
+		if mybucket == 0 {
 			//todo return err=notfound
 			return "", nil
 		}
-		slabOffset := mybucket.slabOffset
-		slabValues := SlabValues{slabOffset: slabOffset}
-		item := h.unmarshalItemFromSlab(slabValues)
+
+		item := h.unmarshalItemFromSlab(mybucket)
 		if item.Key == key {
 			return item.Value, nil
 		} else {
@@ -198,7 +194,7 @@ func (h *Hashmap) Add(key string, value string) {
 	h.addBucket(key, slabOffset)
 }
 
-func (h *Hashmap) addBucket(key string, slabOffset SlabOffset) {
+func (h *Hashmap) addBucket(key string, slabOffset Key) {
 	if h.checkResize() {
 		h.resize()
 	}
@@ -314,12 +310,6 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	return h.openMmapFile(filename)
 }
 
-func (h *Hashmap) getSlabValues() []SlabValues {
-	tmpkeys := (*SlabValues)(unsafe.Pointer(&h.hashMapSlabValue[0]))
-	ret := unsafe.Slice(tmpkeys, h.Capacity)
-	return ret
-}
-
 func (h *Hashmap) getKeys() []Key {
 	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[size*2]))
 	ret := unsafe.Slice(tmpkeys, h.Capacity)
@@ -409,8 +399,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	keys := h.getKeys()
 	h.Keys = &keys
 
-	slabValues := h.getSlabValues()
-	h.SlabValues = &slabValues
 }
 
 /*

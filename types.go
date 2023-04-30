@@ -10,13 +10,7 @@ type SlabOffset uint32
 
 type Hash uint32
 
-type Key struct {
-	slabOffset SlabOffset
-}
-
-type SlabValues struct {
-	slabOffset SlabOffset
-}
+type Key SlabOffset
 
 type Hashmap struct {
 	Folder string
@@ -35,8 +29,6 @@ type Hashmap struct {
 
 	Keys       *[]Key
 	slabOffset *SlabOffset
-
-	SlabValues *[]SlabValues
 }
 
 type Item struct {
