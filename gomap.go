@@ -38,7 +38,6 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	h.Count = newH.Count
 	h.Keys = newH.Keys
 
-	h.hashMapSlabValue = newH.hashMapSlabValue
 	h.slabMap = newH.slabMap
 }
 func (h *Hashmap) resize() {
@@ -357,11 +356,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 		log.Fatal(errors.Wrap(err, 1))
 	}
 
-	offsetIndex, f_mapOffsetIndex, err := h.openMmapHashOffsetIndex(N)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
 	slab, f_slab, err := h.openMmapSlab(slabSize)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
@@ -378,9 +372,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 
 	h.hashMap = m
 	h.hashMapFile = f_map
-
-	h.hashMapSlabValueFile = f_mapOffsetIndex
-	h.hashMapSlabValue = offsetIndex
 
 	h.slabMap = slab
 	h.slabFILE = f_slab

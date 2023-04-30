@@ -15,12 +15,10 @@ type Key SlabOffset
 type Hashmap struct {
 	Folder string
 
-	hashMapFile          *os.File
-	hashMap              mmap.MMap
-	hashMapSlabValueFile *os.File
-	hashMapSlabValue     mmap.MMap
-	slabFILE             *os.File
-	slabMap              mmap.MMap
+	hashMapFile *os.File
+	hashMap     mmap.MMap
+	slabFILE    *os.File
+	slabMap     mmap.MMap
 
 	slabSize int64
 
