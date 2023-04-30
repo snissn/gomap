@@ -6,32 +6,25 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
+<<<<<<< HEAD
 type SlabOffset uint32
 type SlabValueLength uint32
+=======
+// todo consider chunking slabs so that uint32 is enough
+type SlabOffset uint32
+>>>>>>> nostrings
 
 type Hash uint32
 
-type Key struct {
-	//todo make slab sizes their own array and index into it
-	hash Hash
-}
-
-type SlabValues struct {
-	slabOffset      SlabOffset
-	slabValueLength SlabValueLength
-}
+type Key SlabOffset
 
 type Hashmap struct {
 	Folder string
 
 	hashMapFile *os.File
 	hashMap     mmap.MMap
-
-	hashMapSlabValueFile *os.File
-	hashMapSlabValue     mmap.MMap
-
-	slabFILE *os.File
-	slabMap  mmap.MMap
+	slabFILE    *os.File
+	slabMap     mmap.MMap
 
 	slabSize int64
 
@@ -40,11 +33,9 @@ type Hashmap struct {
 
 	Keys       *[]Key
 	slabOffset *SlabOffset
-
-	SlabValues *[]SlabValues
 }
 
 type Item struct {
-	Key   string
-	Value string
+	Key   []byte
+	Value []byte
 }

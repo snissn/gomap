@@ -1,11 +1,13 @@
 package gomap
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"syscall"
 
 	"github.com/go-errors/errors"
+	"golang.org/x/sys/unix"
 
 	"log"
 	"os"
@@ -20,7 +22,7 @@ var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64 * 16)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
-	return *h.Count*14 > h.Capacity*10
+	return *h.Count*100 > h.Capacity*55
 }
 
 func (h *Hashmap) closeFPs() {
@@ -39,8 +41,6 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	h.Count = newH.Count
 	h.Keys = newH.Keys
 
-	h.hashMapSlabValue = newH.hashMapSlabValue
-	h.SlabValues = newH.SlabValues
 	h.slabMap = newH.slabMap
 }
 func (h *Hashmap) resize() {
@@ -49,32 +49,35 @@ func (h *Hashmap) resize() {
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 16*(h.Capacity), (h.slabSize))
 
-	for index, mykey := range *h.Keys {
-		if mykey.hash != 0 {
-			slabValues := (*h.SlabValues)[index]
-			newH.addKey(mykey, slabValues.slabOffset, slabValues.slabValueLength)
+	for _, mykey := range *h.Keys {
+		if mykey != 0 {
+			item := h.unmarshalItemFromSlab(mykey)
+			newH.addKey(item.Key, mykey)
 		}
 	}
 
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key Key, slabOffset SlabOffset, slabValueLength SlabValueLength) {
-	slabValues := SlabValues{slabOffset: slabOffset, slabValueLength: slabValueLength}
+func (h *Hashmap) addKey(key []byte, slabOffset Key) {
+	myhash := hash(key)
 	count := uint64(0)
-	myhash := key.hash
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
+
 		mybucket := (*h.Keys)[hkey]
-		if mybucket.hash == 0 || mybucket.hash == myhash {
-			if mybucket.hash == 0 {
-				*h.Count += 1
-			}
-			(*h.Keys)[hkey] = key
-			(*h.SlabValues)[hkey] = slabValues
+		if mybucket == 0 {
+			*h.Count += 1
+			(*h.Keys)[hkey] = slabOffset
 			return
 		} else {
-			count++
+			item := h.unmarshalItemFromSlab(mybucket)
+			if string(item.Key) == string(key) {
+				(*h.Keys)[hkey] = slabOffset
+				return
+			} else {
+				count++
+			}
 		}
 	}
 	panic("why")
@@ -106,25 +109,21 @@ func encodeLEB128(slab []byte, input uint64) int {
 	slab[i] = byte(input)
 	return i + 1
 }
-
-func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
+func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
-	// Get slice from slabMap
-	rawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), slabValues.slabValueLength)
+	rawBytes := h.slabMap[slabValues:]
 
-	// Decode key length and value length
 	keyLength, n := decodeLEB128(rawBytes)
 	valueLength, m := decodeLEB128(rawBytes[n:])
 
-	// Decode key and value
-	ret.Key = string(rawBytes[n+m : n+m+int(keyLength)])
-	ret.Value = string(rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)])
+	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
+	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
 
 	return ret
 }
 
-func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
+func (h *Hashmap) addSlab(item Item) Key {
 	keyBytes := []byte(item.Key)
 	valueBytes := []byte(item.Value)
 
@@ -153,48 +152,43 @@ func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 
 	actualTotalLength := keyLength + valueLength + len(keyBytes) + len(valueBytes)
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	return offset, SlabValueLength(actualTotalLength)
+	return Key(offset)
 }
-
-func (h *Hashmap) Get(key string) (string, error) {
+func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	myhash := hash(key)
 	count := uint64(0)
-	for count != h.Capacity {
+	for count < h.Capacity {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+
 		mybucket := (*h.Keys)[myKeyIndex]
-		if mybucket.hash == 0 || mybucket.hash == myhash {
-			if mybucket.hash == 0 {
-				//todo return err=notfound
-				return "", nil
-			}
 
-			//XXX todo confirm the key is a match instead of just relyign on hash matching
-			item := h.unmarshalItemFromSlab((*h.SlabValues)[myKeyIndex])
+		if mybucket == 0 {
+			return nil, nil
+		}
 
+		item := h.unmarshalItemFromSlab(mybucket)
+		if bytes.Equal(item.Key, key) {
 			return item.Value, nil
 		} else {
 			count++
 		}
 	}
-	//todo return err=notfound
-	return "", nil
+
+	return nil, nil
 }
 
-func (h *Hashmap) Add(key string, value string) {
-
+func (h *Hashmap) Add(key []byte, value []byte) {
 	item := Item{Key: key, Value: value}
-	slabOffset, slabValueLength := h.addSlab(item)
-	h.addBucket(key, slabOffset, slabValueLength)
+	slabOffset := h.addSlab(item)
+	h.addBucket(key, slabOffset)
 }
 
-func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength SlabValueLength) {
+func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
 	if h.checkResize() {
 		h.resize()
 	}
 
-	myhash := hash(key)
-	mykey := Key{hash: myhash}
-	h.addKey(mykey, slabOffset, slabValueLength)
+	h.addKey(key, slabOffset)
 
 }
 
@@ -259,6 +253,7 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Sync()
 	}
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	h.madvise(ret, false) //this is probably correct to not read ahead
 	return ret, f, err
 }
 
@@ -302,7 +297,16 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	}
 
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	h.mlock(ret)
+	h.madvise(ret, false)
 	return ret, f, err
+}
+func (h *Hashmap) madvise(b []byte, readahead bool) error {
+	flags := unix.MADV_NORMAL
+	if !readahead {
+		flags = unix.MADV_RANDOM
+	}
+	return unix.Madvise(b, flags)
 }
 
 func (h *Hashmap) openMmapHashOffsetIndex(N uint64) (mmap.MMap, *os.File, error) {
@@ -341,12 +345,6 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	h.mlock(mappedData)
 
 	return mappedData, file, err
-}
-
-func (h *Hashmap) getSlabValues() []SlabValues {
-	tmpkeys := (*SlabValues)(unsafe.Pointer(&h.hashMapSlabValue[0]))
-	ret := unsafe.Slice(tmpkeys, h.Capacity)
-	return ret
 }
 
 func (h *Hashmap) getKeys() []Key {
@@ -396,11 +394,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 		log.Fatal(errors.Wrap(err, 1))
 	}
 
-	offsetIndex, f_mapOffsetIndex, err := h.openMmapHashOffsetIndex(N)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
 	slab, f_slab, err := h.openMmapSlab(slabSize)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
@@ -417,9 +410,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 
 	h.hashMap = m
 	h.hashMapFile = f_map
-
-	h.hashMapSlabValueFile = f_mapOffsetIndex
-	h.hashMapSlabValue = offsetIndex
 
 	h.slabMap = slab
 	h.slabFILE = f_slab
@@ -438,8 +428,6 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	keys := h.getKeys()
 	h.Keys = &keys
 
-	slabValues := h.getSlabValues()
-	h.SlabValues = &slabValues
 }
 
 /*

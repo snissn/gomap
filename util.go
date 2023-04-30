@@ -31,8 +31,8 @@ func doesFileExist(fileName string) bool {
 	}
 }
 
-func hash(key string) Hash {
-	return Hash(fnv1.HashString64(key))
+func hash(key []byte) Hash {
+	return Hash(fnv1.HashBytes64(key))
 }
 
 func NtoBytesHashmap(N uint64) int64 {
@@ -42,8 +42,8 @@ func NtoBytesHashmap(N uint64) int64 {
 
 func NtoBytesHashmapOffsetIndex(N uint64) int64 {
 	i := SlabOffset(0)
-	j := SlabValueLength(0)
-	return (int64(unsafe.Sizeof(i)) + int64(unsafe.Sizeof(j))) * int64(N)
+
+	return (int64(unsafe.Sizeof(i))) * int64(N)
 }
 
 func getSlabOffset(slabMap mmap.MMap) *SlabOffset {

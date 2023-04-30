@@ -35,7 +35,7 @@ func (h *HashmapDistributed) New(folder string) error {
 	return nil
 }
 
-func (h *HashmapDistributed) Get(key string) (string, error) {
+func (h *HashmapDistributed) Get(key []byte) ([]byte, error) {
 	hash := hash(key)
 	mapIndex := hash % Hash(len(h.maps))
 	h.mutexes[mapIndex].RLock()         // lock for reading
@@ -43,7 +43,7 @@ func (h *HashmapDistributed) Get(key string) (string, error) {
 	return h.maps[mapIndex].Get(key)
 }
 
-func (h *HashmapDistributed) Add(key string, value string) error {
+func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	hash := hash(key)
 	mapIndex := hash % Hash(len(h.maps))
 	h.mutexes[mapIndex].Lock()         // lock for writing
