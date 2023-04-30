@@ -21,7 +21,7 @@ var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
-	return *h.Count*14 > h.Capacity*10
+	return *h.Count*100 > h.Capacity*55
 }
 
 func (h *Hashmap) closeFPs() {

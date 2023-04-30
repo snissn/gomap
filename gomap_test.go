@@ -95,6 +95,16 @@ func BenchmarkValue(b *testing.B) {
 	}
 }
 
+func BenchmarkGoDefaultHashmap(b *testing.B) {
+	hashMap := make(map[string][]byte)
+
+	for i := 0; i < b.N; i++ {
+		key := strconv.Itoa(i)
+		value := []byte(key)
+		hashMap[key] = value
+	}
+}
+
 func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
