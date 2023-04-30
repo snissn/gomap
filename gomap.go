@@ -51,15 +51,15 @@ func (h *Hashmap) resize() {
 	for index, mykey := range *h.Keys {
 		if mykey.hash != 0 {
 			slabValues := (*h.SlabValues)[index]
-			newH.addKey(mykey, slabValues.slabOffset, slabValues.slabValueLength)
+			newH.addKey(mykey, slabValues.slabOffset)
 		}
 	}
 
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key Key, slabOffset SlabOffset, slabValueLength SlabValueLength) {
-	slabValues := SlabValues{slabOffset: slabOffset, slabValueLength: slabValueLength}
+func (h *Hashmap) addKey(key Key, slabOffset SlabOffset) {
+	slabValues := SlabValues{slabOffset: slabOffset}
 	count := uint64(0)
 	myhash := key.hash
 	for count < h.Capacity {
@@ -110,7 +110,7 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	var ret Item
 
 	// Get slice from slabMap
-	rawBytes := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[slabValues.slabOffset])), slabValues.slabValueLength)
+	rawBytes := h.slabMap[slabValues.slabOffset:]
 
 	// Decode key length and value length
 	keyLength, n := decodeLEB128(rawBytes)
@@ -123,7 +123,7 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues SlabValues) Item {
 	return ret
 }
 
-func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
+func (h *Hashmap) addSlab(item Item) SlabOffset {
 	keyBytes := []byte(item.Key)
 	valueBytes := []byte(item.Value)
 
@@ -152,7 +152,7 @@ func (h *Hashmap) addSlab(item Item) (SlabOffset, SlabValueLength) {
 
 	actualTotalLength := keyLength + valueLength + len(keyBytes) + len(valueBytes)
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	return offset, SlabValueLength(actualTotalLength)
+	return offset
 }
 
 func (h *Hashmap) Get(key string) (string, error) {
@@ -182,18 +182,18 @@ func (h *Hashmap) Get(key string) (string, error) {
 func (h *Hashmap) Add(key string, value string) {
 
 	item := Item{Key: key, Value: value}
-	slabOffset, slabValueLength := h.addSlab(item)
-	h.addBucket(key, slabOffset, slabValueLength)
+	slabOffset := h.addSlab(item)
+	h.addBucket(key, slabOffset)
 }
 
-func (h *Hashmap) addBucket(key string, slabOffset SlabOffset, slabValueLength SlabValueLength) {
+func (h *Hashmap) addBucket(key string, slabOffset SlabOffset) {
 	if h.checkResize() {
 		h.resize()
 	}
 
 	myhash := hash(key)
 	mykey := Key{hash: myhash}
-	h.addKey(mykey, slabOffset, slabValueLength)
+	h.addKey(mykey, slabOffset)
 
 }
 
