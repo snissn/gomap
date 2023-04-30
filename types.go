@@ -7,9 +7,9 @@ import (
 )
 
 // todo consider chunking slabs so that uint32 is enough
-type SlabOffset uint32
+type SlabOffset uint64
 
-type Hash uint32
+type Hash uint64
 
 type Key SlabOffset
 
