@@ -1,13 +1,12 @@
 package gomap
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 
 	"testing"
-
-	"github.com/vmihailenco/msgpack/v5"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -33,8 +32,8 @@ func TestAdd1(t *testing.T) {
 
 	obj.New(folder)
 
-	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
-	value := "awoiljfasdlfj"
+	key := []byte{'w', 'x', 'r', 'l', 'q'}
+	value := []byte("awoiljfasdlfj")
 	obj.Add(key, value)
 }
 
@@ -42,8 +41,8 @@ func TestAddGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
-	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
-	value := "value"
+	key := []byte{'w', 'x', 'r', 'l', 'q'}
+	value := []byte("value")
 	obj.Add(key, value)
 	res, _ := obj.Get(key)
 	assert.Equal(t, value, res, "they should be equal")
@@ -53,11 +52,11 @@ func TestAddResizeGet(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
-	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
-	value := "value"
+	key := []byte{'w', 'x', 'r', 'l', 'q'}
+	value := []byte("value")
 	obj.Add(key, value)
 	obj.resize()
-	key = string([]byte{'w', 'x', 'r', 'l', 'x'})
+	key = []byte{'w', 'x', 'r', 'l', 'x'}
 	obj.Add(key, value)
 	res, _ := obj.Get(key)
 	assert.Equal(t, value, res, "they should be equal")
@@ -71,11 +70,11 @@ func TestAddGetN(t *testing.T) {
 	obj.New(folder)
 
 	for i := 0; i < Ntests; i++ {
-		key := strconv.Itoa(i)
+		key := []byte(strconv.Itoa(i))
 		value := key
 		obj.Add(key, value)
 		res, _ := obj.Get(key)
-		if res != value {
+		if !bytes.Equal(res, value) {
 			assert.Equal(t, res, value, "they should be equal")
 		}
 	}
@@ -90,7 +89,7 @@ func BenchmarkValue(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		key := strconv.Itoa(i)
+		key := []byte(strconv.Itoa(i))
 		value := key
 		obj.Add(key, value)
 	}
@@ -100,25 +99,7 @@ func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
-	key := "key"
-	value := "bartesttesttest"
+	key := []byte("key")
+	value := []byte("bartesttesttest")
 	obj.Add(key, value)
-}
-
-func TestMsgPack(t *testing.T) {
-
-	key := "keyxyz"
-	value := "valuezyx"
-	item := Item{Key: key, Value: value}
-
-	b, err := msgpack.Marshal(&item)
-	if err != nil {
-		panic(err)
-	}
-	var ret Item
-	err = msgpack.Unmarshal(b, &ret)
-	if err != nil {
-		panic(err)
-	}
-
 }

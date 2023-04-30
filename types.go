@@ -30,6 +30,6 @@ type Hashmap struct {
 }
 
 type Item struct {
-	Key   string
-	Value string
+	Key   []byte
+	Value []byte
 }

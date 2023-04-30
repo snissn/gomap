@@ -1,8 +1,10 @@
 package gomap
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
+	"syscall"
 
 	"github.com/go-errors/errors"
 
@@ -56,25 +58,20 @@ func (h *Hashmap) resize() {
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key string, slabOffset Key) {
+func (h *Hashmap) addKey(key []byte, slabOffset Key) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
-		//fmt.Println("add", (*h.Keys))
 
 		mybucket := (*h.Keys)[hkey]
 		if mybucket == 0 {
-			//nothing is in this entry, so set this key and increment counter
 			*h.Count += 1
 			(*h.Keys)[hkey] = slabOffset
 			return
 		} else {
-			//access key from slab and compare
-			//if equal update value to new slab value, otherwise
-			//if not equal continue to next entry
-			item := h.unmarshalItemFromSlab(slabOffset)
-			if item.Key == key {
+			item := h.unmarshalItemFromSlab(mybucket)
+			if string(item.Key) == string(key) {
 				(*h.Keys)[hkey] = slabOffset
 				return
 			} else {
@@ -111,20 +108,16 @@ func encodeLEB128(slab []byte, input uint64) int {
 	slab[i] = byte(input)
 	return i + 1
 }
-
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
-	// Get slice from slabMap
 	rawBytes := h.slabMap[slabValues:]
 
-	// Decode key length and value length
 	keyLength, n := decodeLEB128(rawBytes)
 	valueLength, m := decodeLEB128(rawBytes[n:])
 
-	// Decode key and value
-	ret.Key = string(rawBytes[n+m : n+m+int(keyLength)])
-	ret.Value = string(rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)])
+	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
+	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
 
 	return ret
 }
@@ -160,8 +153,7 @@ func (h *Hashmap) addSlab(item Item) Key {
 	*h.slabOffset += SlabOffset(actualTotalLength)
 	return Key(offset)
 }
-
-func (h *Hashmap) Get(key string) (string, error) {
+func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count < h.Capacity {
@@ -170,36 +162,57 @@ func (h *Hashmap) Get(key string) (string, error) {
 		mybucket := (*h.Keys)[myKeyIndex]
 
 		if mybucket == 0 {
-			//todo return err=notfound
-			return "", nil
+			return nil, nil
 		}
 
 		item := h.unmarshalItemFromSlab(mybucket)
-		if item.Key == key {
+		if bytes.Equal(item.Key, key) {
 			return item.Value, nil
 		} else {
 			count++
 		}
 	}
 
-	//todo return err=notfound
-	return "", nil
+	return nil, nil
 }
 
-func (h *Hashmap) Add(key string, value string) {
-
+func (h *Hashmap) Add(key []byte, value []byte) {
 	item := Item{Key: key, Value: value}
 	slabOffset := h.addSlab(item)
 	h.addBucket(key, slabOffset)
 }
 
-func (h *Hashmap) addBucket(key string, slabOffset Key) {
+func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
 	if h.checkResize() {
 		h.resize()
 	}
 
 	h.addKey(key, slabOffset)
 
+}
+
+// Mlock locks the data in memory to prevent it from being swapped to disk.
+func (h *Hashmap) mlock(data mmap.MMap) {
+	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
+	if errno != 0 {
+		// If the syscall fails, it could be because the user does not have
+		// sufficient privileges to lock memory. To fix this, edit the
+		// /etc/security/limits.conf file and add the following line:
+		//
+		// <username> soft memlock unlimited
+		//
+		// where <username> is the name of the user running the program.
+		// Then, log out and log back in for the changes to take effect.
+		//
+		// Alternatively, you can run the program with sudo privileges to
+		// bypass this error.
+		log.Fatalf("syscall.Syscall(SYS_MLOCK) failed: %v\n"+
+			"To fix this, edit the /etc/security/limits.conf file and add the following line:\n"+
+			"<username> soft memlock unlimited\n"+
+			"where <username> is the name of the user running the program.\n"+
+			"Then, log out and log back in for the changes to take effect.\n"+
+			"Alternatively, you can run the program with sudo privileges to bypass this error.", errno)
+	}
 }
 
 func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
@@ -282,6 +295,7 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	}
 
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	h.mlock(ret)
 	return ret, f, err
 }
 

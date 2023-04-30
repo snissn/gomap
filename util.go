@@ -31,8 +31,8 @@ func doesFileExist(fileName string) bool {
 	}
 }
 
-func hash(key string) Hash {
-	return Hash(fnv1.HashString64(key))
+func hash(key []byte) Hash {
+	return Hash(fnv1.HashBytes64(key))
 }
 
 func NtoBytesHashmap(N uint64) int64 {
