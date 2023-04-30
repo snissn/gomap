@@ -19,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(400_000)
+var Ntests int = int(400_000_0)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
@@ -75,7 +75,9 @@ func TestAddGetN(t *testing.T) {
 		value := key
 		obj.Add(key, value)
 		res, _ := obj.Get(key)
-		assert.Equal(t, res, value, "they should be equal")
+		if res != value {
+			assert.Equal(t, res, value, "they should be equal")
+		}
 	}
 
 }
