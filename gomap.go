@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/go-errors/errors"
+	"golang.org/x/sys/unix"
 
 	"log"
 	"os"
@@ -252,6 +253,7 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Sync()
 	}
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	h.madvise(ret, false) //this is probably correct to not read ahead
 	return ret, f, err
 }
 
@@ -296,7 +298,15 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
 	h.mlock(ret)
+	h.madvise(ret, false)
 	return ret, f, err
+}
+func (h *Hashmap) madvise(b []byte, readahead bool) error {
+	flags := unix.MADV_NORMAL
+	if !readahead {
+		flags = unix.MADV_RANDOM
+	}
+	return unix.Madvise(b, flags)
 }
 
 func (h *Hashmap) openMmapHashOffsetIndex(N uint64) (mmap.MMap, *os.File, error) {
