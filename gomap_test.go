@@ -19,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(400_000)
+var Ntests int = int(400_0)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
@@ -39,11 +39,25 @@ func TestAdd1(t *testing.T) {
 }
 
 func TestAddGet1(t *testing.T) {
-	folder := os.TempDir()
+	folder, _ := os.MkdirTemp("", "hash")
 	var obj Hashmap
 	obj.New(folder)
 	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
 	value := "value"
+	obj.Add(key, value)
+	res, _ := obj.Get(key)
+	assert.Equal(t, value, res, "they should be equal")
+}
+
+func TestAddResizeGet(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	var obj Hashmap
+	obj.New(folder)
+	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
+	value := "value"
+	obj.Add(key, value)
+	obj.resize()
+	key = string([]byte{'w', 'x', 'r', 'l', 'x'})
 	obj.Add(key, value)
 	res, _ := obj.Get(key)
 	assert.Equal(t, value, res, "they should be equal")

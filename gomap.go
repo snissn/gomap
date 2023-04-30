@@ -15,7 +15,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64)
+var DEFAULTMAPSIZE uint64 = uint64(32)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
@@ -49,31 +49,42 @@ func (h *Hashmap) resize() {
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
 	for index, mykey := range *h.Keys {
-		if mykey.hash != 0 {
+		if mykey.slabOffset != 0 {
 			slabValues := (*h.SlabValues)[index]
-			newH.addKey(mykey, slabValues.slabOffset)
+			item := h.unmarshalItemFromSlab(slabValues)
+
+			newH.addKey(item.Key, slabValues.slabOffset)
 		}
 	}
 
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key Key, slabOffset SlabOffset) {
-	slabValues := SlabValues{slabOffset: slabOffset}
+func (h *Hashmap) addKey(key string, slabOffset SlabOffset) {
+	myhash := hash(key)
 	count := uint64(0)
-	myhash := key.hash
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
+		//fmt.Println("add", (*h.Keys))
+
 		mybucket := (*h.Keys)[hkey]
-		if mybucket.hash == 0 || mybucket.hash == myhash {
-			if mybucket.hash == 0 {
-				*h.Count += 1
-			}
-			(*h.Keys)[hkey] = key
-			(*h.SlabValues)[hkey] = slabValues
+		if mybucket.slabOffset == 0 {
+			//nothing is in this entry, so set this key and increment counter
+			*h.Count += 1
+			(*h.Keys)[hkey].slabOffset = slabOffset
 			return
 		} else {
-			count++
+			//access key from slab and compare
+			//if equal update value to new slab value, otherwise
+			//if not equal continue to next entry
+			slabValues := SlabValues{slabOffset: slabOffset}
+			item := h.unmarshalItemFromSlab(slabValues)
+			if item.Key == key {
+				(*h.Keys)[hkey].slabOffset = slabOffset
+				return
+			} else {
+				count++
+			}
 		}
 	}
 	panic("why")
@@ -158,23 +169,24 @@ func (h *Hashmap) addSlab(item Item) SlabOffset {
 func (h *Hashmap) Get(key string) (string, error) {
 	myhash := hash(key)
 	count := uint64(0)
-	for count != h.Capacity {
+	for count < h.Capacity {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+
 		mybucket := (*h.Keys)[myKeyIndex]
-		if mybucket.hash == 0 || mybucket.hash == myhash {
-			if mybucket.hash == 0 {
-				//todo return err=notfound
-				return "", nil
-			}
-
-			//XXX todo confirm the key is a match instead of just relyign on hash matching
-			item := h.unmarshalItemFromSlab((*h.SlabValues)[myKeyIndex])
-
+		if mybucket.slabOffset == 0 {
+			//todo return err=notfound
+			return "", nil
+		}
+		slabOffset := mybucket.slabOffset
+		slabValues := SlabValues{slabOffset: slabOffset}
+		item := h.unmarshalItemFromSlab(slabValues)
+		if item.Key == key {
 			return item.Value, nil
 		} else {
 			count++
 		}
 	}
+
 	//todo return err=notfound
 	return "", nil
 }
@@ -191,9 +203,7 @@ func (h *Hashmap) addBucket(key string, slabOffset SlabOffset) {
 		h.resize()
 	}
 
-	myhash := hash(key)
-	mykey := Key{hash: myhash}
-	h.addKey(mykey, slabOffset)
+	h.addKey(key, slabOffset)
 
 }
 

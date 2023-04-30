@@ -11,7 +11,7 @@ type SlabOffset uint32
 type Hash uint32
 
 type Key struct {
-	hash Hash
+	slabOffset SlabOffset
 }
 
 type SlabValues struct {

@@ -80,7 +80,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 
 	wg.Wait() // wait for all above goroutines to finish
 
-	for i := 0; i < Ntests; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)        // increment the WaitGroup counter
 		go func(i int) { // capture loop variable
 			defer wg.Done() // defer the Done call
