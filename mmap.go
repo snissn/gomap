@@ -46,7 +46,6 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
 	}
 
-	*/
 
 	// mmap the whole file into memory with read-write permissions.
 	// This avoids copy-on-write overhead and ensures that the file is never modified.
@@ -55,7 +54,6 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 		file.Close()
 		return nil, nil, fmt.Errorf("failed to mmap file %s: %w", filename, err)
 	}
-	/*
 
 	// Advise the kernel to keep the whole file in memory and avoid swapping.
 	if err := unix.Madvise(data, unix.MADV_WILLNEED); err != nil {
@@ -63,7 +61,6 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 		file.Close()
 		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
 	}
-	*/
 
 	return data, file, nil
 }
