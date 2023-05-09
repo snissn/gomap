@@ -2,12 +2,10 @@ package gomap
 
 import (
 	"bytes"
-	"fmt"
 	"strconv"
 	"syscall"
 
 	"github.com/go-errors/errors"
-	"golang.org/x/sys/unix"
 
 	"log"
 	"os"
@@ -18,7 +16,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024 * 64 * 16)
+var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) checkResize() bool {
@@ -45,9 +43,8 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
-	fmt.Println("Resize", h.Capacity)
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 16*(h.Capacity), (h.slabSize))
+	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
 	for _, mykey := range *h.Keys {
 		if mykey != 0 {
@@ -72,7 +69,7 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) {
 			return
 		} else {
 			item := h.unmarshalItemFromSlab(mybucket)
-			if string(item.Key) == string(key) {
+			if bytes.Equal(item.Key, key) {
 				(*h.Keys)[hkey] = slabOffset
 				return
 			} else {
@@ -253,7 +250,6 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Sync()
 	}
 	ret, err := mmap.Map(f, mmap.RDWR, 0)
-	h.madvise(ret, false) //this is probably correct to not read ahead
 	return ret, f, err
 }
 
@@ -288,63 +284,6 @@ func (h *Hashmap) createFile(filename string, bytes int64) {
 	f.Seek(0, 0)
 	f.Sync()
 	f.Close()
-}
-
-func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
-	f, err := os.OpenFile(filename, os.O_RDWR, 0655)
-	if err != nil {
-		log.Fatal("3", errors.Wrap(err, 1))
-	}
-
-	ret, err := mmap.Map(f, mmap.RDWR, 0)
-	h.mlock(ret)
-	h.madvise(ret, false)
-	return ret, f, err
-}
-func (h *Hashmap) madvise(b []byte, readahead bool) error {
-	flags := unix.MADV_NORMAL
-	if !readahead {
-		flags = unix.MADV_RANDOM
-	}
-	return unix.Madvise(b, flags)
-}
-
-func (h *Hashmap) openMmapHashOffsetIndex(N uint64) (mmap.MMap, *os.File, error) {
-	bytes := NtoBytesHashmapOffsetIndex(N)
-	h.createDirectory()
-	filename := h.Folder + "/hashkeysOffsetIndex-" + fmt.Sprint(N)
-
-	if !doesFileExist(filename) {
-		h.createFile(filename, bytes)
-	}
-
-	mappedData, file, err := h.openMmapFile(filename)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	h.mlock(mappedData)
-
-	return mappedData, file, err
-}
-
-func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
-	bytes := NtoBytesHashmap(N)
-	h.createDirectory()
-	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
-
-	if !doesFileExist(filename) {
-		h.createFile(filename, bytes)
-	}
-
-	mappedData, file, err := h.openMmapFile(filename)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	h.mlock(mappedData)
-
-	return mappedData, file, err
 }
 
 func (h *Hashmap) getKeys() []Key {
