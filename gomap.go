@@ -287,7 +287,7 @@ func (h *Hashmap) createFile(filename string, bytes int64) {
 }
 
 func (h *Hashmap) getKeys() []Key {
-	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[size*2]))
+	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[size]))
 	ret := unsafe.Slice(tmpkeys, h.Capacity)
 	return ret
 }
