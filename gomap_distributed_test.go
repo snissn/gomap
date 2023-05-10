@@ -15,8 +15,8 @@ func TestDistributedHashmapBasic(t *testing.T) {
 	var obj HashmapDistributed
 	obj.New(folder)
 
-	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
-	value := "awoiljfasdlfj"
+	key := []byte{'w', 'x', 'r', 'l', 'q'}
+	value := []byte("awoiljfasdlfj")
 	err := obj.Add(key, value)
 	assert.Nil(t, err, "Error should be nil")
 }
@@ -27,8 +27,8 @@ func TestDistributedHashmapAddGet1(t *testing.T) {
 	var obj HashmapDistributed
 	obj.New(folder)
 
-	key := string([]byte{'w', 'x', 'r', 'l', 'q'})
-	value := "value"
+	key := []byte{'w', 'x', 'r', 'l', 'q'}
+	value := []byte("value")
 
 	err := obj.Add(key, value)
 	assert.Nil(t, err, "Error should be nil")
@@ -45,7 +45,7 @@ func TestDistributedHashmapAddGetN(t *testing.T) {
 	obj.New(folder)
 
 	for i := 0; i < Ntests; i++ {
-		key := strconv.Itoa(i)
+		key := []byte(strconv.Itoa(i))
 		value := key
 
 		err := obj.Add(key, value)
@@ -69,7 +69,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 		go func(i int) { // capture loop variable
 			defer wg.Done() // defer the Done call
 
-			key := strconv.Itoa(i)
+			key := []byte(strconv.Itoa(i))
 			value := key
 
 			err := obj.Add(key, value)
@@ -85,7 +85,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 		go func(i int) { // capture loop variable
 			defer wg.Done() // defer the Done call
 
-			key := strconv.Itoa(i)
+			key := []byte(strconv.Itoa(i))
 			value := key
 
 			res, err := obj.Get(key)
@@ -106,7 +106,7 @@ func BenchmarkDistributedHashmapValue(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		key := strconv.Itoa(i)
+		key := []byte(strconv.Itoa(i))
 		value := key
 
 		err := obj.Add(key, value)
