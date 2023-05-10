@@ -46,11 +46,14 @@ func (h *Hashmap) resize() {
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
-	for _, mykey := range *h.Keys {
+	index := uint64(0)
+	for index < h.Capacity {
+		mykey := (*h.Keys)[index]
 		if mykey != 0 {
 			item := h.unmarshalItemFromSlab(mykey)
 			newH.addKey(item.Key, mykey)
 		}
+		index += 1
 	}
 
 	h.replaceHashmap(newH)
