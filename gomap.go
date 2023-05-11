@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"syscall"
 
@@ -49,11 +50,15 @@ func (h *Hashmap) resize() {
 	index := uint64(0)
 	for index < h.Capacity {
 		mykey := (*h.Keys)[index]
-		if mykey != 0 {
+		if mykey != 0 && mykey < h.slabSize {
 			item := h.unmarshalItemFromSlab(mykey)
 			newH.addKey(item.Key, mykey)
 		}
 		index += 1
+
+		if mykey > h.slabSize {
+			fmt.Println("Debug - mykey", mykey, index)
+		}
 	}
 
 	h.replaceHashmap(newH)

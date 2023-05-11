@@ -60,6 +60,14 @@ func TestAddResizeGet(t *testing.T) {
 	obj.Add(key, value)
 	res, _ := obj.Get(key)
 	assert.Equal(t, value, res, "they should be equal")
+	obj.resize()
+	obj.resize()
+	obj.resize()
+	obj.resize()
+	obj.resize()
+
+	res, _ = obj.Get(key)
+	assert.Equal(t, value, res, "they should be equal")
 }
 
 func TestAddGetN(t *testing.T) {
