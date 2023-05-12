@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const SlabBufferSize = 4096
+const SlabBufferSize = 4 * 256 * 4096
 
 func (h *Hashmap) writeSlab(buf []byte) {
 	// Append to slab buffer
@@ -73,12 +73,18 @@ func (h *Hashmap) addSlab(item Item) Key {
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
-	h.flushSlabBuffer()
+	if slabValues+Key(16) > Key(*h.slabOffset)-Key(len(h.slabBuffer)) {
+		h.flushSlabBuffer()
+	}
 
 	rawBytes := h.slabMap[slabValues:]
 
 	keyLength, n := decodeuint64(rawBytes)
 	valueLength, m := decodeuint64(rawBytes[n:])
+
+	if slabValues+Key(16)+Key(keyLength)+Key(valueLength) > Key(*h.slabOffset)-Key(len(h.slabBuffer)) {
+		h.flushSlabBuffer()
+	}
 
 	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
 	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
