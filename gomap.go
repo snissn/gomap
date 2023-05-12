@@ -122,15 +122,12 @@ func encodeLEB128(slab []byte, input uint64) int {
 	return i + 1
 }
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
-	fmt.Println("slabValues", slabValues)
 	var ret Item
 
 	rawBytes := h.slabMap[slabValues:]
 
 	keyLength, n := decodeuint64(rawBytes)
 	valueLength, m := decodeuint64(rawBytes[n:])
-	fmt.Println("keyLength", keyLength)
-	fmt.Println("valueLength", valueLength)
 
 	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
 	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
@@ -381,7 +378,7 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	}
 
 	h.Capacity = N
-	h.Count = getCount(h.hashMap)
+	h.Count = getCount(h.slabMap)
 	keys := h.getKeys()
 	h.Keys = &keys
 
