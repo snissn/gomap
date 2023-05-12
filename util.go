@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"os"
@@ -9,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
+	"github.com/segmentio/fasthash/fnv1"
 )
 
 func getCPUNumber() int {
@@ -31,19 +31,8 @@ func doesFileExist(fileName string) bool {
 	}
 }
 
-func createByteSlice(byteArray []byte) []byte {
-	sliceLength := 8
-	if len(byteArray) >= sliceLength {
-		return byteArray[:sliceLength]
-	}
-	sliceArray := make([]byte, sliceLength)
-	copy(sliceArray, byteArray)
-	return sliceArray
-}
-
 func hash(key []byte) Hash {
-	return Hash(binary.LittleEndian.Uint64(createByteSlice(key)))
-	//return Hash(fnv1.HashBytes64(key))
+	return Hash(fnv1.HashBytes64(key))
 }
 
 func NtoBytesHashmap(N uint64) int64 {
