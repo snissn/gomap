@@ -2,11 +2,13 @@ package gomap
 
 import (
 	"fmt"
+	"log"
 	"os"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/edsrzf/mmap-go"
+	"github.com/go-errors/errors"
 )
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
@@ -62,4 +64,16 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	}
 
 	return data, file, nil
+}
+
+func (h *Hashmap) createFile(filename string, bytes int64) {
+	f, err := os.Create(filename)
+	if err != nil {
+		log.Fatal("2", errors.Wrap(err, 1))
+	}
+	f.Seek(bytes-1, 0)
+	f.Write([]byte("\x00"))
+	f.Seek(0, 0)
+	f.Sync()
+	f.Close()
 }
