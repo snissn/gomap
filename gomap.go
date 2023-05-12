@@ -46,42 +46,6 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 
 	h.slabMap = newH.slabMap
 }
-func (h *Hashmap) resize2() {
-	fmt.Println("Resizing")
-	fmt.Println("Count: ", *h.Count)
-	fmt.Println("Capacity: ", h.Capacity)
-
-	startTime := time.Now()
-	defer printTotalRunTime(startTime)
-	BATCH_SIZE := 32 * 1024
-
-	slabOffsets := make([]Key, BATCH_SIZE)
-	items := make([]Item, BATCH_SIZE)
-	batch_index := 0
-
-	var newH Hashmap
-	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
-
-	index := uint64(0)
-	for index < h.Capacity {
-		mykey := (*h.Keys)[index]
-		if mykey != 0 {
-			item := h.unmarshalItemFromSlab(mykey)
-			slabOffsets[batch_index] = mykey
-			items[batch_index] = item
-			batch_index += 1
-			if batch_index == BATCH_SIZE {
-				newH.addManyBuckets(items, slabOffsets)
-				batch_index = 0
-			}
-		}
-		index += 1
-	}
-	newH.addManyBuckets(items[:batch_index], slabOffsets[:batch_index])
-
-	h.replaceHashmap(newH)
-}
 func (h *Hashmap) resize() {
 	startTime := time.Now()
 	defer printTotalRunTime(startTime)
@@ -92,6 +56,7 @@ func (h *Hashmap) resize() {
 	fmt.Println("Capacity: ", h.Capacity)
 	fmt.Println("Hash Time: ", h.hashTime)
 	fmt.Println("Slab Time: ", h.slabTime)
+	fmt.Println("")
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
