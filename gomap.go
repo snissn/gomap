@@ -302,7 +302,7 @@ func (h *Hashmap) createFile(filename string, bytes int64) {
 }
 
 func (h *Hashmap) getKeys() []Key {
-	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[size]))
+	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[0]))
 	ret := unsafe.Slice(tmpkeys, h.Capacity)
 	return ret
 }
