@@ -46,7 +46,6 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
 	}
 
-
 	// mmap the whole file into memory with read-write permissions.
 	// This avoids copy-on-write overhead and ensures that the file is never modified.
 	data, err := unix.Mmap(int(file.Fd()), 0, int(fi.Size()), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)

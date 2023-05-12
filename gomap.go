@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"golang.org/x/sys/unix"
 
 	"log"
 	"os"
@@ -368,7 +369,31 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Seek(0, 0)
 		f.Sync()
 	}
-	ret, err := mmap.Map(f, mmap.RDWR|mmap.ADV_SEQUENTIAL, 0)
+
+	// Advise the kernel that we intend to access the file sequentially.
+	// This will enable the kernel to do read-ahead and improve write performance.
+	if err := unix.Fadvise(int(f.Fd()), 0, int64(fi.Size()), unix.FADV_SEQUENTIAL); err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
+	}
+
+	// mmap the whole file into memory with read-write permissions.
+	// As the file is larger than memory, it won't be fully loaded into memory.
+	// Instead, the kernel will load and unload parts of the file as needed.
+	ret, err := unix.Mmap(int(f.Fd()), 0, int(fi.Size()), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("failed to mmap file %s: %w", filename, err)
+	}
+
+	// Advise the kernel that the mapped memory will be accessed soon.
+	// This will help to reduce the number of page faults in the beginning of the processing.
+	if err := unix.Madvise(ret, unix.MADV_WILLNEED); err != nil {
+		unix.Munmap(ret)
+		f.Close()
+		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
+	}
+
 	return ret, f, err
 }
 
