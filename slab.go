@@ -46,7 +46,7 @@ func (h *Hashmap) addSlab(item Item) Key {
 
 	totalLength := len(keyBytes) + len(valueBytes) + 16 // 10 is the maximum length of LEB128 encoded uint64
 
-	offset := *h.slabOffset + SlabOffset(len(h.slabBuffer))
+	offset := *h.slabOffset
 
 	// Make sure that offset + totalLength is within h.slabSize
 	if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
