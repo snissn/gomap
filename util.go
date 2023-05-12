@@ -65,11 +65,11 @@ func printTotalRunTime(startTime time.Time) {
 
 type Mapper func([]byte) (uint64, bool)
 
-func ConcurrentMap(inputs []Item, mapper Mapper) ([]uint64, []bool) {
+func ConcurrentMap(inputs []Item, mapper Mapper) ([]uint64, uint64) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	results := make([]uint64, len(inputs))
-	isnew := make([]bool, len(inputs))
+	totalNewKey := uint64(0)
 
 	for i, input := range inputs {
 		wg.Add(1)
@@ -77,12 +77,30 @@ func ConcurrentMap(inputs []Item, mapper Mapper) ([]uint64, []bool) {
 			defer wg.Done()
 
 			mu.Lock()
-			results[i], isnew[i] = mapper(input.Key)
+			result, isnew := mapper(input.Key)
+			results[i] = result
+			if isnew {
+				totalNewKey += 1
+			}
 			mu.Unlock()
 		}(i, input)
 	}
 
 	wg.Wait()
 
-	return results, isnew
+	return results, totalNewKey
+}
+
+type Set struct {
+	data map[uint64]bool
+}
+
+func NewSet() *Set {
+	return &Set{data: make(map[uint64]bool)}
+}
+
+func (s *Set) Add(value uint64) bool {
+	alreadyExists := s.data[value]
+	s.data[value] = true
+	return alreadyExists
 }

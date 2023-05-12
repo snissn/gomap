@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,6 +44,42 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	h.Keys = newH.Keys
 
 	h.slabMap = newH.slabMap
+}
+func (h *Hashmap) resize2() {
+	fmt.Println("Resizing")
+	fmt.Println("Count: ", *h.Count)
+	fmt.Println("Capacity: ", h.Capacity)
+
+	startTime := time.Now()
+	defer printTotalRunTime(startTime)
+	BATCH_SIZE := 32 * 1024
+
+	slabOffsets := make([]Key, BATCH_SIZE)
+	items := make([]Item, BATCH_SIZE)
+	batch_index := 0
+
+	var newH Hashmap
+	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
+	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
+
+	index := uint64(0)
+	for index < h.Capacity {
+		mykey := (*h.Keys)[index]
+		if mykey != 0 {
+			item := h.unmarshalItemFromSlab(mykey)
+			slabOffsets[batch_index] = mykey
+			items[batch_index] = item
+			batch_index += 1
+			if batch_index == BATCH_SIZE {
+				newH.addManyBuckets(items, slabOffsets)
+				batch_index = 0
+			}
+		}
+		index += 1
+	}
+	newH.addManyBuckets(items[:batch_index], slabOffsets[:batch_index])
+
+	h.replaceHashmap(newH)
 }
 func (h *Hashmap) resize() {
 	startTime := time.Now()
@@ -210,16 +247,39 @@ func (h *Hashmap) AddMany(items []Item) {
 
 func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
 	if h.checkResize() {
-		h.resize()
+		h.resize2()
 	}
 
 	h.addManyKeys(items, slabOffsets)
 }
 
 func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
-	results, isnew := ConcurrentMap(items, h.getKeyOffsetToAdd)
-	fmt.Println(results)
-	fmt.Println(isnew)
+	var wg sync.WaitGroup
+	seenSet := NewSet()
+	extra_items := make([]Item, 0)
+	extra_slabOffsets := make([]Key, 0)
+
+	hkeys, totalNewKey := ConcurrentMap(items, h.getKeyOffsetToAdd)
+	for i, hkey := range hkeys {
+		alreadyExists := seenSet.Add(hkey)
+		if alreadyExists {
+			extra_items = append(extra_items, items[i])
+			extra_slabOffsets = append(extra_slabOffsets, slabOffsets[i])
+			totalNewKey -= 1
+		} else {
+			//todo put this in gothing
+			wg.Add(1)
+			go func(i int, hkey uint64) {
+				defer wg.Done()
+				(*h.Keys)[hkey] = slabOffsets[i]
+			}(i, hkey)
+		}
+	}
+	wg.Wait()
+	*h.Count += totalNewKey
+	for i, item := range extra_items {
+		h.addKey(item.Key, extra_slabOffsets[i])
+	}
 }
 
 func (h *Hashmap) Add(key []byte, value []byte) {
@@ -230,7 +290,7 @@ func (h *Hashmap) Add(key []byte, value []byte) {
 
 func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
 	if h.checkResize() {
-		h.resize()
+		h.resize2()
 	}
 
 	h.addKey(key, slabOffset)
