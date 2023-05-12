@@ -352,6 +352,8 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Close()
 	}
 	f, err = os.OpenFile(filename, os.O_RDWR, 0655)
+	//todo test:
+	//    f, err = os.OpenFile(filename, os.O_RDWR|os.O_SYNC, 0655)
 	if err != nil {
 		log.Fatal("3", errors.Wrap(err, 1))
 	}
@@ -366,7 +368,7 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		f.Seek(0, 0)
 		f.Sync()
 	}
-	ret, err := mmap.Map(f, mmap.RDWR, 0)
+	ret, err := mmap.Map(f, mmap.RDWR|mmap.ADV_SEQUENTIAL, 0)
 	return ret, f, err
 }
 
