@@ -89,6 +89,8 @@ func (h *Hashmap) resize() {
 	fmt.Println("Resizing")
 	fmt.Println("Count: ", *h.Count)
 	fmt.Println("Capacity: ", h.Capacity)
+	fmt.Println("Hash Time: ", h.hashTime)
+	fmt.Println("Slab Time: ", h.slabTime)
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
@@ -284,8 +286,15 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
 
 func (h *Hashmap) Add(key []byte, value []byte) {
 	item := Item{Key: key, Value: value}
+	startTime := time.Now()
 	slabOffset := h.addSlab(item)
+	slabTime := getRunTime(startTime)
+	h.slabTime += slabTime
+
+	startTime = time.Now()
 	h.addBucket(key, slabOffset)
+	hashTime := getRunTime(startTime)
+	h.hashTime += hashTime
 }
 
 func (h *Hashmap) addBucket(key []byte, slabOffset Key) {

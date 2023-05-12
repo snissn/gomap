@@ -56,6 +56,11 @@ func getCount(slabMap mmap.MMap) *uint64 {
 	return (*uint64)(unsafe.Pointer(&slabMap[8]))
 }
 
+func getRunTime(startTime time.Time) time.Duration {
+	endTime := time.Now()
+	return endTime.Sub(startTime)
+}
+
 func printTotalRunTime(startTime time.Time) {
 	endTime := time.Now()
 	totalRunTime := endTime.Sub(startTime)

@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"os"
+	"time"
 
 	"github.com/edsrzf/mmap-go"
 )
@@ -28,6 +29,9 @@ type Hashmap struct {
 
 	Keys       *[]Key
 	slabOffset *SlabOffset
+
+	hashTime time.Duration
+	slabTime time.Duration
 }
 
 type Item struct {
