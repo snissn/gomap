@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"syscall"
@@ -51,15 +52,11 @@ func (h *Hashmap) resize() {
 	index := uint64(0)
 	for index < h.Capacity {
 		mykey := (*h.Keys)[index]
-		if mykey != 0 && mykey < Key(h.slabSize) {
+		if mykey != 0 {
 			item := h.unmarshalItemFromSlab(mykey)
 			newH.addKey(item.Key, mykey)
 		}
 		index += 1
-
-		if mykey > Key(h.slabSize) {
-			fmt.Println("Debug - mykey", mykey, index)
-		}
 	}
 
 	h.replaceHashmap(newH)
@@ -105,6 +102,15 @@ func decodeLEB128(input []byte) (uint64, int) {
 	return result, length
 }
 
+func decodeuint64(input []byte) (uint64, int) {
+	return binary.LittleEndian.Uint64(input), 8
+}
+
+func encodeuint64(slab []byte, input uint64) int {
+	binary.LittleEndian.PutUint64(slab, input)
+	return 8
+}
+
 func encodeLEB128(slab []byte, input uint64) int {
 	var i int
 	for input >= 0x80 {
@@ -116,12 +122,15 @@ func encodeLEB128(slab []byte, input uint64) int {
 	return i + 1
 }
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
+	fmt.Println("slabValues", slabValues)
 	var ret Item
 
 	rawBytes := h.slabMap[slabValues:]
 
-	keyLength, n := decodeLEB128(rawBytes)
-	valueLength, m := decodeLEB128(rawBytes[n:])
+	keyLength, n := decodeuint64(rawBytes)
+	valueLength, m := decodeuint64(rawBytes[n:])
+	fmt.Println("keyLength", keyLength)
+	fmt.Println("valueLength", valueLength)
 
 	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
 	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
@@ -133,7 +142,7 @@ func (h *Hashmap) addSlab(item Item) Key {
 	keyBytes := []byte(item.Key)
 	valueBytes := []byte(item.Value)
 
-	totalLength := len(keyBytes) + len(valueBytes) + 10 // 10 is the maximum length of LEB128 encoded uint64
+	totalLength := len(keyBytes) + len(valueBytes) + 16 // 10 is the maximum length of LEB128 encoded uint64
 
 	offset := *h.slabOffset
 
@@ -148,9 +157,9 @@ func (h *Hashmap) addSlab(item Item) Key {
 	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), totalLength)
 
 	// Write key length
-	keyLength := encodeLEB128(slab, uint64(len(keyBytes)))
+	keyLength := encodeuint64(slab, uint64(len(keyBytes)))
 	// Write value length
-	valueLength := encodeLEB128(slab[keyLength:], uint64(len(valueBytes)))
+	valueLength := encodeuint64(slab[keyLength:], uint64(len(valueBytes)))
 	// Write key
 	copy(slab[keyLength+valueLength:], keyBytes)
 	// Write value
