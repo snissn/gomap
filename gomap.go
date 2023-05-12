@@ -186,8 +186,8 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 }
 
 func (h *Hashmap) addSlab(item Item) Key {
-	keyBytes := []byte(item.Key)
-	valueBytes := []byte(item.Value)
+	keyBytes := item.Key
+	valueBytes := item.Value
 
 	totalLength := len(keyBytes) + len(valueBytes) + 16 // 10 is the maximum length of LEB128 encoded uint64
 

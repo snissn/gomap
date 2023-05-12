@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"strconv"
@@ -18,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(4_000_000)
+var Ntests int = int(4_0_000)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
@@ -80,6 +81,27 @@ func TestAddGetN(t *testing.T) {
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
 		value := key
+		obj.Add(key, value)
+		res, _ := obj.Get(key)
+		if !bytes.Equal(res, value) {
+			assert.Equal(t, res, value, "they should be equal")
+		}
+	}
+
+}
+
+func TestAddGetN_bigt(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	fmt.Println(folder)
+
+	var obj Hashmap
+	obj.New(folder)
+	randomBytes := make([]byte, 1024)
+	rand.Read(randomBytes)
+
+	for i := 0; i < Ntests; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := randomBytes
 		obj.Add(key, value)
 		res, _ := obj.Get(key)
 		if !bytes.Equal(res, value) {
