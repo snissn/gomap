@@ -247,7 +247,7 @@ func (h *Hashmap) AddMany(items []Item) {
 
 func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
 	if h.checkResize() {
-		h.resize2()
+		h.resize()
 	}
 
 	h.addManyKeys(items, slabOffsets)
@@ -290,7 +290,7 @@ func (h *Hashmap) Add(key []byte, value []byte) {
 
 func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
 	if h.checkResize() {
-		h.resize2()
+		h.resize()
 	}
 
 	h.addKey(key, slabOffset)

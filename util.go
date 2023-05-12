@@ -2,7 +2,6 @@ package gomap
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"os"
@@ -64,29 +63,31 @@ func printTotalRunTime(startTime time.Time) {
 }
 
 type Mapper func([]byte) (uint64, bool)
+type Result struct {
+	index uint64
+	hkey  uint64
+	isnew bool
+}
 
 func ConcurrentMap(inputs []Item, mapper Mapper) ([]uint64, uint64) {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+	ch := make(chan Result)
 	results := make([]uint64, len(inputs))
 	totalNewKey := uint64(0)
 
 	for i, input := range inputs {
-		wg.Add(1)
-		go func(i int, input Item) {
-			defer wg.Done()
-
-			mu.Lock()
-			result, isnew := mapper(input.Key)
-			results[i] = result
-			if isnew {
-				totalNewKey += 1
-			}
-			mu.Unlock()
-		}(i, input)
+		go func(i uint64, input Item, ch chan<- Result) {
+			hkey, isnew := mapper(input.Key)
+			result := Result{index: i, hkey: hkey, isnew: isnew}
+			ch <- result
+		}(uint64(i), input, ch)
 	}
-
-	wg.Wait()
+	for _ = range inputs {
+		result := <-ch
+		results[result.index] = result.hkey
+		if result.isnew {
+			totalNewKey += 1
+		}
+	}
 
 	return results, totalNewKey
 }
