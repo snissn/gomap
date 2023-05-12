@@ -30,8 +30,9 @@ type Hashmap struct {
 	Keys       *[]Key
 	slabOffset *SlabOffset
 
-	hashTime time.Duration
-	slabTime time.Duration
+	hashTime   time.Duration
+	slabTime   time.Duration
+	slabBuffer []byte
 }
 
 type Item struct {

@@ -12,18 +12,41 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const SlabBufferSize = 4096
+
 func (h *Hashmap) writeSlab(buf []byte) {
-	offset := *h.slabOffset
-	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(buf))
-	copy(slab, buf)
+	// Append to slab buffer
+	h.slabBuffer = append(h.slabBuffer, buf...)
+
+	// If buffer size exceeds SlabBufferSize, flush the buffer
+	if len(h.slabBuffer) >= SlabBufferSize {
+		h.flushSlabBuffer()
+	}
 }
+
+func (h *Hashmap) flushSlabBuffer() {
+	if len(h.slabBuffer) == 0 {
+		return
+	}
+
+	offset := *h.slabOffset
+	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[int(offset)-len(h.slabBuffer)])), len(h.slabBuffer))
+	copy(slab, h.slabBuffer)
+
+	// Reset slab buffer
+	h.slabBuffer = []byte{}
+
+	//actualTotalLength := len(h.slabBuffer)
+	////*h.slabOffset += SlabOffset(actualTotalLength)
+}
+
 func (h *Hashmap) addSlab(item Item) Key {
 	keyBytes := item.Key
 	valueBytes := item.Value
 
 	totalLength := len(keyBytes) + len(valueBytes) + 16 // 10 is the maximum length of LEB128 encoded uint64
 
-	offset := *h.slabOffset
+	offset := *h.slabOffset + SlabOffset(len(h.slabBuffer))
 
 	// Make sure that offset + totalLength is within h.slabSize
 	if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
@@ -49,6 +72,8 @@ func (h *Hashmap) addSlab(item Item) Key {
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
+
+	h.flushSlabBuffer()
 
 	rawBytes := h.slabMap[slabValues:]
 
