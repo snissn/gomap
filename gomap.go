@@ -45,7 +45,9 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 }
 func (h *Hashmap) resize() {
 	var newH Hashmap
-	fmt.Println("Resize", h.Capacity)
+	fmt.Println("Resizing")
+	fmt.Println("Count: ", *h.Count)
+	fmt.Println("Capacity: ", h.Capacity)
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 

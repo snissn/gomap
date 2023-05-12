@@ -31,8 +31,18 @@ func doesFileExist(fileName string) bool {
 	}
 }
 
+func createByteSlice(byteArray []byte) []byte {
+	sliceLength := 8
+	if len(byteArray) >= sliceLength {
+		return byteArray[:sliceLength]
+	}
+	sliceArray := make([]byte, sliceLength)
+	copy(sliceArray, byteArray)
+	return sliceArray
+}
+
 func hash(key []byte) Hash {
-	return binary.LittleEndian.Uint64(key)
+	return Hash(binary.LittleEndian.Uint64(createByteSlice(key)))
 	//return Hash(fnv1.HashBytes64(key))
 }
 
