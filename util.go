@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"os"
@@ -60,4 +61,28 @@ func printTotalRunTime(startTime time.Time) {
 	endTime := time.Now()
 	totalRunTime := endTime.Sub(startTime)
 	fmt.Printf("Total run time: %s\n", totalRunTime)
+}
+
+type Mapper func([]byte) (uint64, bool)
+
+func ConcurrentMap(inputs []Item, mapper Mapper) ([]uint64, []bool) {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	results := make([]uint64, len(inputs))
+	isnew := make([]bool, len(inputs))
+
+	for i, input := range inputs {
+		wg.Add(1)
+		go func(i int, input Item) {
+			defer wg.Done()
+
+			mu.Lock()
+			results[i], isnew[i] = mapper(input.Key)
+			mu.Unlock()
+		}(i, input)
+	}
+
+	wg.Wait()
+
+	return results, isnew
 }

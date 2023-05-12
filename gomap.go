@@ -68,28 +68,32 @@ func (h *Hashmap) resize() {
 	h.replaceHashmap(newH)
 }
 
-func (h *Hashmap) addKey(key []byte, slabOffset Key) {
+func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
-
 		mybucket := (*h.Keys)[hkey]
 		if mybucket == 0 {
-			*h.Count += 1
-			(*h.Keys)[hkey] = slabOffset
-			return
+			return hkey, true
 		} else {
 			item := h.unmarshalItemFromSlab(mybucket)
 			if bytes.Equal(item.Key, key) {
-				(*h.Keys)[hkey] = slabOffset
-				return
+				return hkey, false
 			} else {
 				count++
 			}
 		}
 	}
 	panic("why")
+}
+
+func (h *Hashmap) addKey(key []byte, slabOffset Key) {
+	hkey, newKey := h.getKeyOffsetToAdd(key)
+	(*h.Keys)[hkey] = slabOffset
+	if newKey {
+		*h.Count += 1
+	}
 }
 
 func decodeLEB128(input []byte) (uint64, int) {
@@ -193,6 +197,29 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+func (h *Hashmap) AddMany(items []Item) {
+
+	slabOffsets := make([]Key, len(items))
+	for i, item := range items {
+		slabOffsets[i] = h.addSlab(item)
+	}
+	h.addManyBuckets(items, slabOffsets)
+}
+
+func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
+	if h.checkResize() {
+		h.resize()
+	}
+
+	h.addManyKeys(items, slabOffsets)
+}
+
+func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
+	results, isnew := ConcurrentMap(items, h.getKeyOffsetToAdd)
+	fmt.Println(results)
+	fmt.Println(isnew)
 }
 
 func (h *Hashmap) Add(key []byte, value []byte) {
