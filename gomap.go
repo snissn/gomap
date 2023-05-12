@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -44,6 +45,9 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	h.slabMap = newH.slabMap
 }
 func (h *Hashmap) resize() {
+	startTime := time.Now()
+	defer printTotalRunTime(startTime)
+
 	var newH Hashmap
 	fmt.Println("Resizing")
 	fmt.Println("Count: ", *h.Count)

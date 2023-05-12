@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"fmt"
+	"time"
 
 	"os"
 	"runtime"
@@ -53,4 +54,10 @@ func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
 
 func getCount(slabMap mmap.MMap) *uint64 {
 	return (*uint64)(unsafe.Pointer(&slabMap[8]))
+}
+
+func printTotalRunTime(startTime time.Time) {
+	endTime := time.Now()
+	totalRunTime := endTime.Sub(startTime)
+	fmt.Printf("Total run time: %s\n", totalRunTime)
 }
