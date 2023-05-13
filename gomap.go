@@ -2,7 +2,6 @@ package gomap
 
 import (
 	"bytes"
-	"fmt"
 	"strconv"
 	"sync"
 	"syscall"
@@ -22,54 +21,11 @@ var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
-func (h *Hashmap) checkResize() bool {
-	return *h.Count*100 > h.Capacity*55
-}
-
 func (h *Hashmap) closeFPs() {
 	err := h.hashMapFile.Close()
 	handleError(err)
 	err = h.hashMap.Unmap()
 	handleError(err)
-}
-
-func (h *Hashmap) replaceHashmap(newH Hashmap) {
-	//TODO close and delete old file, can be async
-	// see closeFPs
-
-	h.hashMap = newH.hashMap
-	h.hashMapFile = newH.hashMapFile
-	h.Capacity = newH.Capacity
-	h.Count = newH.Count
-	h.Keys = newH.Keys
-
-	h.slabMap = newH.slabMap
-}
-func (h *Hashmap) resize() {
-	startTime := time.Now()
-	defer printTotalRunTime(startTime)
-
-	var newH Hashmap
-	fmt.Println("Resizing")
-	fmt.Println("Count: ", *h.Count)
-	fmt.Println("Capacity: ", h.Capacity)
-	fmt.Println("Hash Time: ", h.hashTime)
-	fmt.Println("Slab Time: ", h.slabTime)
-	fmt.Println("")
-	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
-
-	index := uint64(0)
-	for index < h.Capacity {
-		mykey := (*h.Keys)[index]
-		if mykey != 0 {
-			item := h.unmarshalItemFromSlab(mykey)
-			newH.addKey(item.Key, mykey)
-		}
-		index += 1
-	}
-
-	h.replaceHashmap(newH)
 }
 
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
