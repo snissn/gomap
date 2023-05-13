@@ -6,7 +6,7 @@ import (
 )
 
 func (h *Hashmap) checkResize() bool {
-	return *h.Count*100 > h.Capacity*55
+	return *h.Count*100 > h.Capacity*65
 }
 
 func (h *Hashmap) addKeyResize(key []byte, slabOffset Key) {
@@ -21,7 +21,7 @@ func (h *Hashmap) getKeyOffsetToAddResize(key []byte) uint64 {
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
 		mybucket := (*h.Keys)[hkey]
-		if mybucket == 0 {
+		if mybucket.slabOffset == 0 {
 			return hkey
 		} else {
 			count++
@@ -47,11 +47,12 @@ func (h *Hashmap) resize() {
 	index := uint64(0)
 	for index < h.Capacity {
 		mykey := (*h.Keys)[index]
-		if mykey != 0 {
+		index += 1
+
+		if mykey.slabOffset != 0 {
 			item := h.unmarshalItemFromSlab(mykey)
 			newH.addKeyResize(item.Key, mykey)
 		}
-		index += 1
 	}
 
 	h.replaceHashmap(newH)

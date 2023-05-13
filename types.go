@@ -12,7 +12,11 @@ type SlabOffset uint64
 
 type Hash uint64
 
-type Key SlabOffset
+type Key struct {
+	//todo try do tricks to make both 32 bit nums for speed
+	slabOffset SlabOffset
+	hash       Hash
+}
 
 type Hashmap struct {
 	Folder string

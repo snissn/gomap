@@ -34,15 +34,16 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 	for count < h.Capacity {
 		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
 		mybucket := (*h.Keys)[hkey]
-		if mybucket == 0 {
+		if mybucket.slabOffset == 0 {
 			return hkey, true
 		} else {
-			item := h.unmarshalItemFromSlab(mybucket)
-			if bytes.Equal(item.Key, key) {
-				return hkey, false
-			} else {
-				count++
+			if mybucket.hash == myhash {
+				item := h.unmarshalItemFromSlab(mybucket)
+				if bytes.Equal(item.Key, key) {
+					return hkey, false
+				}
 			}
+			count++
 		}
 	}
 	panic("why")
@@ -65,16 +66,17 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 
 		mybucket := (*h.Keys)[myKeyIndex]
 
-		if mybucket == 0 {
+		if mybucket.slabOffset == 0 {
 			return nil, nil
 		}
 
-		item := h.unmarshalItemFromSlab(mybucket)
-		if bytes.Equal(item.Key, key) {
-			return item.Value, nil
-		} else {
-			count++
+		if mybucket.hash == myhash {
+			item := h.unmarshalItemFromSlab(mybucket)
+			if bytes.Equal(item.Key, key) {
+				return item.Value, nil
+			}
 		}
+		count++
 	}
 
 	return nil, nil

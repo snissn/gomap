@@ -20,7 +20,7 @@ func (h *Hashmap) writeSlab(buf []byte) {
 }
 
 // ReadBytes reads N bytes from a given offset in the file
-func (h *Hashmap) ReadBytes(offset Key, n int64) ([]byte, error) {
+func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	bytes := make([]byte, n)
 	_, err := h.realSlabFILE.ReadAt(bytes, int64(offset))
 
@@ -56,22 +56,25 @@ func (h *Hashmap) addSlab(item Item) Key {
 	slabData = append(slabData, valueBytes...)
 	h.writeSlab(slabData)
 
+	ret := Key{slabOffset: offset, hash: hash(keyBytes)} // todo only actually compute hash() once
+
 	actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	return Key(offset)
+	return ret
 }
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
-	headerBytes, err := h.ReadBytes(slabValues, int64(16))
+	headerBytes, err := h.ReadBytes(slabValues.slabOffset, int64(16))
 	if err != nil {
+		fmt.Println("slabValues", slabValues)
 		panic(err)
 	}
 	keyLength, _ := decodeuint64(headerBytes[0:8])
 	valueLength, _ := decodeuint64(headerBytes[8:16])
 
-	valuesBytes, err := h.ReadBytes(slabValues+16, int64(keyLength+valueLength))
+	valuesBytes, err := h.ReadBytes(slabValues.slabOffset+16, int64(keyLength+valueLength))
 	if err != nil {
 		panic(err)
 	}

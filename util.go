@@ -37,14 +37,8 @@ func hash(key []byte) Hash {
 }
 
 func NtoBytesHashmap(N uint64) int64 {
-	i := Hash(0)
+	i := Key{}
 	return int64(unsafe.Sizeof(i)) * int64(N)
-}
-
-func NtoBytesHashmapOffsetIndex(N uint64) int64 {
-	i := SlabOffset(0)
-
-	return (int64(unsafe.Sizeof(i))) * int64(N)
 }
 
 func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
