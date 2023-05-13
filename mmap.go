@@ -25,7 +25,7 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 		return nil, nil, err
 	}
 
-	//h.mlock(mappedData)
+	//h.mlock(mappedData) // todo see if matters
 
 	return mappedData, file, err
 }

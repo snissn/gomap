@@ -85,14 +85,6 @@ func (h *Hashmap) addManySlabs(items []Item) []Key {
 
 		slabOffsets[i] = Key{slabOffset: offset, hash: hash(keyBytes)} // todo only actually compute hash() once
 
-		// Make sure that offset + totalLength is within h.slabSize
-		if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
-			err := h.doubleSlab()
-			if err != nil {
-				panic(err)
-			}
-		}
-
 		// Write key length
 		slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
 		slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
