@@ -19,7 +19,7 @@ func f() {
 	}
 }
 
-var Ntests int = int(8_0_000)
+var Ntests int = int(4_00_000)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
@@ -127,7 +127,7 @@ func TestAddGetN_bigt_batch(t *testing.T) {
 		value := randomBytes
 		item := Item{Key: key, Value: value}
 		items = append(items, item)
-		if len(items) > 100000 {
+		if len(items) > 1000 {
 			obj.AddMany(items)
 			items = []Item{}
 		}
