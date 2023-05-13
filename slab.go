@@ -33,18 +33,62 @@ func (h *Hashmap) addSlab(item Item) Key {
 		}
 	}
 
+	/*
+			slabData := []byte{}
+
+			// Write key length
+			slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
+			slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
+			slabData = append(slabData, keyBytes...)
+			slabData = append(slabData, valueBytes...)
+			h.writeSlab(slabData)
+		actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
+		*h.slabOffset += SlabOffset(actualTotalLength)
+	*/
+
+	h.writeSlab(encodeuint64(uint64(len(keyBytes))))
+	*h.slabOffset += 8
+	h.writeSlab(encodeuint64(uint64(len(valueBytes))))
+	*h.slabOffset += 8
+	h.writeSlab(keyBytes)
+	*h.slabOffset += SlabOffset(len(keyBytes))
+	h.writeSlab(valueBytes)
+	*h.slabOffset += SlabOffset(len(valueBytes))
+
+	return Key(offset)
+}
+
+func (h *Hashmap) addManySlabs(items []Item) []Key {
+	slabOffsets := make([]Key, len(items))
 	slabData := []byte{}
 
-	// Write key length
-	slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
-	slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
-	slabData = append(slabData, keyBytes...)
-	slabData = append(slabData, valueBytes...)
-	h.writeSlab(slabData)
+	offset := *h.slabOffset
+	for i, item := range items {
+		keyBytes := item.Key
+		valueBytes := item.Value
+		totalLength := len(keyBytes) + len(valueBytes) + 16 // 10 is the maximum length of LEB128 encoded uint64
 
-	actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
-	*h.slabOffset += SlabOffset(actualTotalLength)
-	return Key(offset)
+		slabOffsets[i] = Key(offset)
+
+		// Make sure that offset + totalLength is within h.slabSize
+		if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
+			err := h.doubleSlab()
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		// Write key length
+		slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
+		slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
+		slabData = append(slabData, keyBytes...)
+		slabData = append(slabData, valueBytes...)
+		offset += SlabOffset(totalLength)
+
+	}
+	h.writeSlab(slabData)
+	*h.slabOffset += SlabOffset(len(slabData))
+	return slabOffsets
 }
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
