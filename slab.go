@@ -39,13 +39,14 @@ func (h *Hashmap) addSlab(item Item) Key {
 
 	offset := *h.slabOffset
 
+	//for files we dont need to double slab
 	// Make sure that offset + totalLength is within h.slabSize
-	if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
-		err := h.doubleSlab()
-		if err != nil {
-			panic(err)
-		}
-	}
+	//if uint64(offset)+uint64(totalLength) > uint64(h.slabSize) {
+	//err := h.doubleSlab()
+	//if err != nil {
+	//panic(err)
+	//}
+	//}
 
 	slabData := []byte{}
 
