@@ -21,6 +21,7 @@ import (
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
+var DEFAULTSLABBUFFERSIZE int64 = int64(32 * 1024)
 
 func (h *Hashmap) checkResize() bool {
 	return *h.Count*100 > h.Capacity*55

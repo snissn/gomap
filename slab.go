@@ -12,20 +12,53 @@ import (
 )
 
 func (h *Hashmap) writeSlab(buf []byte) {
-	_, err := h.realSlabFILE.Write(buf) // Write the buffer to the file
-	if err != nil {
-		panic(err)
+	h.slabBuffer = append(h.slabBuffer, buf...)
+
+	if len(h.slabBuffer) > int(DEFAULTSLABBUFFERSIZE) {
+		_, err := h.realSlabFILE.Write(h.slabBuffer) // Write the buffer to the file
+		if err != nil {
+			panic(err)
+		}
+		h.slabBuffer = []byte{}
 	}
 
 }
 
 // ReadBytes reads N bytes from a given offset in the file
 func (h *Hashmap) ReadBytes(offset Key, n int64) ([]byte, error) {
-	bytes := make([]byte, n)
-	_, err := h.realSlabFILE.ReadAt(bytes, int64(offset))
+	slabOnDiskSize := Key(*h.slabOffset) - Key(len(h.slabBuffer))
 
+	if offset >= slabOnDiskSize {
+		// Read entirely from h.slabBuffer
+		start := int(offset) - int(slabOnDiskSize)
+		end := int(offset) + int(n) - int(slabOnDiskSize)
+		if end > len(h.slabBuffer) {
+			end = len(h.slabBuffer)
+		}
+		return h.slabBuffer[start:end], nil
+	}
+
+	// Read crosses the boundary between h.slabBuffer and h.realSlabFILE
+	bytes := make([]byte, n)
+	bytesRead := 0
+	var err error
+
+	// Read from h.realSlabFILE
+	bytesRead, err = h.realSlabFILE.ReadAt(bytes, int64(offset))
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if the remaining bytes need to be read from h.slabBuffer
+	remaining := n - int64(bytesRead)
+	if remaining > 0 && int64(offset)+int64(bytesRead) >= int64(slabOnDiskSize) {
+		start := int64(offset) + int64(bytesRead) - int64(slabOnDiskSize)
+		end := start + int64(remaining)
+		if end > int64(len(h.slabBuffer)) {
+			end = int64(len(h.slabBuffer))
+		}
+		bufferBytes := h.slabBuffer[start:end]
+		bytes = append(bytes, bufferBytes...)
 	}
 
 	return bytes, nil

@@ -23,6 +23,7 @@ type Hashmap struct {
 	slabMap     mmap.MMap
 
 	realSlabFILE *os.File
+	slabBuffer   []byte
 
 	slabSize int64
 
