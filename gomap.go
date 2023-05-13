@@ -64,7 +64,7 @@ func (h *Hashmap) resize() {
 		mykey := (*h.Keys)[index]
 		if mykey != 0 {
 			item := h.unmarshalItemFromSlab(mykey)
-			newH.addKey(item.Key, mykey)
+			newH.addKeyDuringResize(item.Key, mykey)
 		}
 		index += 1
 	}
@@ -72,6 +72,22 @@ func (h *Hashmap) resize() {
 	h.replaceHashmap(newH)
 }
 
+func (h *Hashmap) getKeyOffsetToAddDuringResize(key []byte) (uint64, bool) {
+	myhash := hash(key)
+	count := uint64(0)
+	for count < h.Capacity {
+		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
+		mybucket := (*h.Keys)[hkey]
+		if mybucket == 0 {
+			return hkey, true
+		} else {
+			//we know the items are not equal
+			count++
+
+		}
+	}
+	panic("why")
+}
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 	myhash := hash(key)
 	count := uint64(0)
@@ -90,6 +106,13 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 		}
 	}
 	panic("why")
+}
+func (h *Hashmap) addKeyDuringResize(key []byte, slabOffset Key) {
+	hkey, newKey := h.getKeyOffsetToAddDuringResize(key)
+	(*h.Keys)[hkey] = slabOffset
+	if newKey {
+		*h.Count += 1
+	}
 }
 
 func (h *Hashmap) addKey(key []byte, slabOffset Key) {

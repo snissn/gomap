@@ -130,9 +130,10 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		log.Fatal("4", errors.Wrap(err, 1))
 	}
 	if slabSize > fi.Size() { // need to expand file
-		f.Seek(slabSize-1, 0)
-		f.Write([]byte("\x00"))
-		f.Seek(0, 0)
+		err = f.Truncate(slabSize)
+		if err != nil {
+			log.Fatal("4", errors.Wrap(err, 1))
+		}
 		f.Sync()
 	}
 
@@ -165,9 +166,10 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 
 func (h *Hashmap) doubleSlab() error {
 	f := h.slabFILE
-	f.Seek(2*h.slabSize-1, 0)
-	f.Write([]byte("\x00"))
-	f.Seek(0, 0)
+	err := f.Truncate(2 * h.slabSize)
+	if err != nil {
+		log.Fatal("4", errors.Wrap(err, 1))
+	}
 	f.Sync()
 	m, err := mmap.Map(f, mmap.RDWR, 0)
 	if err != nil {
