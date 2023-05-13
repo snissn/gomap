@@ -130,7 +130,7 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
 	wg.Wait()
 	*h.Count += totalNewKey
 	for i, item := range extra_items {
-		h.addKey(item.Key, extra_slabOffsets[i])
+		h.addBucket(item.Key, extra_slabOffsets[i])
 	}
 }
 
