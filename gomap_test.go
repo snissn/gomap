@@ -111,6 +111,39 @@ func TestAddGetN_bigt(t *testing.T) {
 
 }
 
+func TestAddGetN_bigt_batch(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	fmt.Println(folder)
+
+	var obj Hashmap
+	obj.New(folder)
+	randomBytes := make([]byte, 1024)
+	rand.Read(randomBytes)
+
+	items := []Item{}
+
+	for i := 0; i < Ntests; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := randomBytes
+		item := Item{Key: key, Value: value}
+		items = append(items, item)
+		if len(items) > 100000 {
+			obj.AddMany(items)
+			items = []Item{}
+		}
+	}
+	obj.AddMany(items)
+	//for i := 0; i < Ntests; i++ {
+	//key := []byte(strconv.Itoa(i))
+	//value := randomBytes
+	//res, _ := obj.Get(key)
+	//if !bytes.Equal(res, value) {
+	//assert.Equal(t, res, value, "they should be equal")
+	//}
+	//}
+
+}
+
 func BenchmarkValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 

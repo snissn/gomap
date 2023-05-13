@@ -84,11 +84,17 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 
 func (h *Hashmap) AddMany(items []Item) {
 
-	slabOffsets := make([]Key, len(items))
+	startTime := time.Now()
+	slabOffsets := h.addManySlabs(items)
+	slabTime := getRunTime(startTime)
+	h.slabTime += slabTime
+
+	startTime = time.Now()
 	for i, item := range items {
-		slabOffsets[i] = h.addSlab(item)
+		h.addBucket(item.Key, slabOffsets[i])
 	}
-	h.addManyBuckets(items, slabOffsets)
+	hashTime := getRunTime(startTime)
+	h.hashTime += hashTime
 }
 
 func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
