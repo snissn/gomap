@@ -16,7 +16,6 @@ func (h *Hashmap) writeSlab(buf []byte) {
 	if err != nil {
 		panic(err)
 	}
-	h.realSlabFILE.Sync()
 
 }
 
