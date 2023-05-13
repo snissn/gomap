@@ -165,6 +165,7 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 }
 
 func (h *Hashmap) doubleSlab() error {
+	fmt.Println("DOUBLESLAB CALLED")
 	f := h.slabFILE
 	err := f.Truncate(2 * h.slabSize)
 	if err != nil {
@@ -176,6 +177,16 @@ func (h *Hashmap) doubleSlab() error {
 		return err
 	}
 	h.slabSize *= 2
+	slab_old := h.slabMap
 	h.slabMap = m
+	unix.Madvise(m, unix.MADV_DONTNEED)
+
+	//refresh slab offset and count pointres to the new map!
+	h.slabOffset = getSlabOffset(h.slabMap)
+	h.Count = getCount(h.slabMap)
+
+	unix.Munmap(slab_old)
+	unix.Madvise(slab_old, unix.MADV_DONTNEED)
+
 	return nil
 }
