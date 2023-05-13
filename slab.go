@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
@@ -13,10 +12,26 @@ import (
 )
 
 func (h *Hashmap) writeSlab(buf []byte) {
-	offset := *h.slabOffset
-	slab := unsafe.Slice((*byte)(unsafe.Pointer(&h.slabMap[offset])), len(buf))
-	copy(slab, buf)
+	_, err := h.realSlabFILE.Write(buf) // Write the buffer to the file
+	if err != nil {
+		panic(err)
+	}
+	h.realSlabFILE.Sync()
+
 }
+
+// ReadBytes reads N bytes from a given offset in the file
+func (h *Hashmap) ReadBytes(offset Key, n int64) ([]byte, error) {
+	bytes := make([]byte, n)
+	_, err := h.realSlabFILE.ReadAt(bytes, int64(offset))
+
+	if err != nil {
+		return nil, err
+	}
+
+	return bytes, nil
+}
+
 func (h *Hashmap) addSlab(item Item) Key {
 	keyBytes := item.Key
 	valueBytes := item.Value
@@ -50,13 +65,20 @@ func (h *Hashmap) addSlab(item Item) Key {
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
-	rawBytes := h.slabMap[slabValues:]
+	headerBytes, err := h.ReadBytes(slabValues, int64(16))
+	if err != nil {
+		panic(err)
+	}
+	keyLength, _ := decodeuint64(headerBytes[0:8])
+	valueLength, _ := decodeuint64(headerBytes[8:16])
 
-	keyLength, n := decodeuint64(rawBytes)
-	valueLength, m := decodeuint64(rawBytes[n:])
+	valuesBytes, err := h.ReadBytes(slabValues+16, int64(keyLength+valueLength))
+	if err != nil {
+		panic(err)
+	}
 
-	ret.Key = rawBytes[n+m : n+m+int(keyLength)]
-	ret.Value = rawBytes[n+m+int(keyLength) : n+m+int(keyLength)+int(valueLength)]
+	ret.Key = valuesBytes[0:keyLength]
+	ret.Value = valuesBytes[keyLength:]
 
 	return ret
 }
@@ -105,7 +127,21 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 	if err != nil {
 		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
 	}
+
 	filename := h.Folder + "/slab"
+
+	realfilename := filename + "-real"
+	if !doesFileExist(realfilename) {
+		_, _ = os.Create(realfilename)
+	}
+	fmt.Println(realfilename)
+
+	file, err := os.OpenFile(realfilename, os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatal("2", errors.Wrap(err, 1))
+	}
+	h.realSlabFILE = file
+
 	if !doesFileExist(filename) {
 		f, err = os.Create(filename)
 

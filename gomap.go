@@ -296,7 +296,9 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	//xxx
 
 	if *h.slabOffset == 0 {
-		*h.slabOffset = 8 * 3
+		sentinel := []byte("offset")
+		h.writeSlab(sentinel)
+		*h.slabOffset = SlabOffset(len(sentinel))
 	}
 
 	h.Capacity = N

@@ -22,6 +22,8 @@ type Hashmap struct {
 	slabFILE    *os.File
 	slabMap     mmap.MMap
 
+	realSlabFILE *os.File
+
 	slabSize int64
 
 	Count    *uint64
