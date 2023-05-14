@@ -202,12 +202,13 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
 func (h *Hashmap) Add(key []byte, value []byte) {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
-	slabOffset := h.addSlab(item)
+	//slabOffset := h.addSlab(item)
+	h.addSlab(item)
 	slabTime := getRunTime(startTime)
 	h.slabTime += slabTime
 
 	startTime = time.Now()
-	h.addBucket(key, slabOffset)
+	//h.addBucket(key, slabOffset)
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
 }
