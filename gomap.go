@@ -110,13 +110,6 @@ func (h *Hashmap) AddMany(items []Item) {
 	slabOffsets := h.addManySlabs(items)
 	slabTime := getRunTime(startTime)
 	h.slabTime += slabTime
-
-	startTime = time.Now()
-	for i, item := range items {
-		h.addBucket(item.Key, slabOffsets[i])
-	}
-	hashTime := getRunTime(startTime)
-	h.hashTime += hashTime
 }
 
 func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
