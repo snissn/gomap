@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	"github.com/edsrzf/mmap-go"
@@ -24,16 +25,22 @@ type Hashmap struct {
 	hashMapFile *os.File
 	hashMap     mmap.MMap
 	slabFILE    *os.File
-	slabMap     mmap.MMap
+
+	resizeLk   sync.Mutex
+	mapLk      sync.RWMutex
+	slabMap    mmap.MMap
+	slabMapOld mmap.MMap
 
 	realSlabFILE *os.File
 
 	slabSize int64
 
-	Count    *uint64
-	Capacity uint64
+	Count       *uint64
+	Capacity    uint64
+	oldCapacity uint64
 
 	Keys       *[]Key
+	oldKeys    *[]Key
 	slabOffset *SlabOffset
 
 	hashTime   time.Duration

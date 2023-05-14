@@ -50,6 +50,9 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 }
 
 func (h *Hashmap) addKey(key []byte, slabOffset Key) {
+	h.mapLk.Lock()
+	defer h.mapLk.Unlock()
+
 	hkey, newKey := h.getKeyOffsetToAdd(key)
 	(*h.Keys)[hkey] = slabOffset
 	if newKey {
@@ -57,14 +60,13 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) {
 	}
 }
 
-func (h *Hashmap) Get(key []byte) ([]byte, error) {
-
+func (h *Hashmap) getFromMap(key []byte, keys *[]Key) ([]byte, error) {
 	myhash := hash(key)
 	count := uint64(0)
 	for count < h.Capacity {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
-		mybucket := (*h.Keys)[myKeyIndex]
+		mybucket := (*keys)[myKeyIndex]
 
 		if mybucket.slabOffset == 0 {
 			return nil, nil
@@ -80,6 +82,26 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	}
 
 	return nil, nil
+
+}
+func (h *Hashmap) Get(key []byte) ([]byte, error) {
+	h.mapLk.RLock()
+	defer h.mapLk.RUnlock()
+
+	res, err := h.getFromMap(key, h.Keys)
+	//err found return err
+	if err != nil {
+		return res, err
+	}
+
+	//result found from new hashmap so use that
+	if res != nil {
+		return res, err
+	}
+
+	//no result found, return result from old keys
+	return h.getFromMap(key, h.oldKeys)
+
 }
 
 func (h *Hashmap) AddMany(items []Item) {
@@ -106,6 +128,9 @@ func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
 }
 
 func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
+	h.mapLk.Lock()
+	defer h.mapLk.Unlock()
+
 	var wg sync.WaitGroup
 	seenSet := NewSet()
 	extra_items := make([]Item, 0)

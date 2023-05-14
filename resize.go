@@ -10,9 +10,11 @@ func (h *Hashmap) checkResize() bool {
 }
 
 func (h *Hashmap) addKeyResize(slabOffset Key) {
+	h.mapLk.Lock()
+	defer h.mapLk.Unlock()
+
 	hkey := h.getKeyOffsetToAddResize(slabOffset)
 	(*h.Keys)[hkey] = slabOffset
-	*h.Count += 1
 }
 
 func (h *Hashmap) getKeyOffsetToAddResize(slabOffset Key) uint64 {
@@ -30,44 +32,62 @@ func (h *Hashmap) getKeyOffsetToAddResize(slabOffset Key) uint64 {
 	panic("why")
 }
 
-func (h *Hashmap) resize() {
-	startTime := time.Now()
-	defer printTotalRunTime(startTime)
+func (h *Hashmap) copyToNewMap() {
+	h.resizeLk.Lock()
+	defer h.resizeLk.Unlock()
 
-	var newH Hashmap
-	fmt.Println("Resizing")
-	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 8*(h.Capacity), (h.slabSize))
+	startTime := time.Now()
 
 	index := uint64(0)
-	for index < h.Capacity {
-		mykey := (*h.Keys)[index]
+	for index < h.oldCapacity {
+		mykey := (*h.oldKeys)[index]
 		index += 1
 
 		if mykey.slabOffset != 0 {
-			newH.addKeyResize(mykey)
+			h.addKeyResize(mykey)
 		}
 	}
 
-	h.replaceHashmap(newH)
 	resizeTime := getRunTime(startTime)
 	h.resizeTime += resizeTime
 	fmt.Println("Count: ", *h.Count)
 	fmt.Println("Capacity: ", h.Capacity)
-	fmt.Println("Resizing Time: ", h.resizeTime)
+	fmt.Println("Resizing Time this iteration: ", resizeTime)
+	fmt.Println("Total Resizing Time: ", h.resizeTime)
 	fmt.Println("Hash Time: ", h.hashTime)
 	fmt.Println("Slab Time: ", h.slabTime)
 	fmt.Println("")
+
+	fmt.Println("/copyToNewMap")
+}
+
+func (h *Hashmap) resize() {
+	fmt.Println("resize waitinf or lock")
+	h.resizeLk.Lock()
+
+	var newH Hashmap
+	fmt.Println("Resizing")
+	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
+	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
+
+	h.replaceHashmap(newH)
+
+	h.resizeLk.Unlock()
+	fmt.Println("/Resizing")
+	go h.copyToNewMap()
+
 }
 
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	//TODO close and delete old file, can be async
 	// see closeFPs
+	h.oldKeys = h.Keys
+	h.oldCapacity = h.Capacity
+	h.slabMapOld = h.slabMap
 
 	h.hashMap = newH.hashMap
 	h.hashMapFile = newH.hashMapFile
 	h.Capacity = newH.Capacity
 	h.Keys = newH.Keys
-
 	h.slabMap = newH.slabMap
 }
