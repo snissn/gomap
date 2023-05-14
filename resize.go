@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -9,12 +8,15 @@ func (h *Hashmap) checkResize() bool {
 	return *h.Count*100 > h.Capacity*65
 }
 
-func (h *Hashmap) addKeyResize(slabOffset Key) {
+func (h *Hashmap) addKeysResize(keys []Key) {
 	h.mapLk.Lock()
 	defer h.mapLk.Unlock()
 
-	hkey := h.getKeyOffsetToAddResize(slabOffset)
-	(*h.Keys)[hkey] = slabOffset
+	//batch advantage
+	for _, key := range keys {
+		hkey := h.getKeyOffsetToAddResize(key)
+		(*h.Keys)[hkey] = key
+	}
 }
 
 func (h *Hashmap) getKeyOffsetToAddResize(slabOffset Key) uint64 {
@@ -39,41 +41,44 @@ func (h *Hashmap) copyToNewMap() {
 	startTime := time.Now()
 
 	index := uint64(0)
+	//advantage of speed but also not too big or we hold the lock too long
+	RESIZE_BATCH := h.oldCapacity / 100
+
+	keys := make([]Key, 0)
 	for index < h.oldCapacity {
 		mykey := (*h.oldKeys)[index]
 		index += 1
 
 		if mykey.slabOffset != 0 {
-			h.addKeyResize(mykey)
+			keys = append(keys, mykey)
+			if uint64(len(keys)) == RESIZE_BATCH {
+				h.addKeysResize(keys)
+				h.adviseMemDoneDuringResize(index)
+			}
 		}
 	}
 
 	resizeTime := getRunTime(startTime)
 	h.resizeTime += resizeTime
-	fmt.Println("Count: ", *h.Count)
-	fmt.Println("Capacity: ", h.Capacity)
-	fmt.Println("Resizing Time this iteration: ", resizeTime)
-	fmt.Println("Total Resizing Time: ", h.resizeTime)
-	fmt.Println("Hash Time: ", h.hashTime)
-	fmt.Println("Slab Time: ", h.slabTime)
-	fmt.Println("")
 
-	fmt.Println("/copyToNewMap")
+	//fmt.Println("Count: ", *h.Count)
+	//fmt.Println("Capacity: ", h.Capacity)
+	//fmt.Println("Resizing Time this iteration: ", resizeTime)
+	//fmt.Println("Total Resizing Time: ", h.resizeTime)
+	//fmt.Println("Hash Time: ", h.hashTime)
+	//fmt.Println("Slab Time: ", h.slabTime)
 }
 
 func (h *Hashmap) resize() {
-	fmt.Println("resize waitinf or lock")
 	h.resizeLk.Lock()
 
 	var newH Hashmap
-	fmt.Println("Resizing")
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
 	h.replaceHashmap(newH)
 
 	h.resizeLk.Unlock()
-	fmt.Println("/Resizing")
 	go h.copyToNewMap()
 
 }
