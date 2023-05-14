@@ -107,7 +107,7 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 func (h *Hashmap) AddMany(items []Item) {
 
 	startTime := time.Now()
-	slabOffsets := h.addManySlabs(items)
+	_ = h.addManySlabs(items)
 	slabTime := getRunTime(startTime)
 	h.slabTime += slabTime
 }
