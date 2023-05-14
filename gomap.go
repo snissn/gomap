@@ -18,7 +18,7 @@ import (
 )
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
+var DEFAULTMAPSIZE uint64 = uint64(268435456) // use mainnet size TODO have this be a hint passed in 32 * 1024)
 var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) closeFPs() {
