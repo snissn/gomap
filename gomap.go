@@ -63,8 +63,8 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) {
 func (h *Hashmap) getFromMap(key []byte, keys *[]Key) ([]byte, error) {
 	myhash := hash(key)
 	count := uint64(0)
-	for count < h.Capacity {
-		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+	for count < uint64(len(*keys)) {
+		myKeyIndex := ((uint64(myhash) % uint64(len(*keys))) + count) % uint64(len(*keys))
 
 		mybucket := (*keys)[myKeyIndex]
 
