@@ -50,6 +50,10 @@ func getCount(slabMap mmap.MMap) *uint64 {
 	return (*uint64)(unsafe.Pointer(&slabMap[8]))
 }
 
+func getResizeOffset(slabMap mmap.MMap) *uint64 {
+	return (*uint64)(unsafe.Pointer(&slabMap[16]))
+}
+
 func getRunTime(startTime time.Time) time.Duration {
 	endTime := time.Now()
 	return endTime.Sub(startTime)

@@ -43,6 +43,8 @@ type Hashmap struct {
 	oldKeys    *[]Key
 	slabOffset *SlabOffset
 
+	resizeOffset *uint64
+
 	hashTime   time.Duration
 	resizeTime time.Duration
 	slabTime   time.Duration

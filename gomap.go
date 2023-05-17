@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"sync"
 	"syscall"
@@ -212,8 +213,8 @@ func (h *Hashmap) createDirectory() {
 	}
 }
 
-func (h *Hashmap) getKeys() []Key {
-	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[0]))
+func (h *Hashmap) getKeys(m mmap.MMap) []Key {
+	tmpkeys := (*Key)(unsafe.Pointer(&m[0]))
 	ret := unsafe.Slice(tmpkeys, h.Capacity)
 	return ret
 }
@@ -292,8 +293,25 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 
 	h.Capacity = N
 	h.Count = getCount(h.slabMap)
-	keys := h.getKeys()
+	keys := h.getKeys(m)
 	h.Keys = &keys
+
+	h.resizeOffset = getResizeOffset(h.slabMap)
+
+	if *h.resizeOffset != 0 {
+		fmt.Println("Last restarted during resize")
+		old_slab, _, err := h.openMmapSlab(slabSize) //todo leaking old file
+		if err != nil {
+			log.Fatal(errors.Wrap(err, 1))
+			keys = h.getKeys(old_slab)
+			h.oldKeys = &keys
+			h.oldCapacity = N / 2
+			h.slabMapOld = old_slab
+			go h.copyToNewMap()
+
+		}
+
+	}
 
 }
 

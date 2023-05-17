@@ -33,20 +33,22 @@ func (h *Hashmap) getKeyOffsetToAddResize(slabOffset Key) uint64 {
 }
 
 func (h *Hashmap) copyToNewMap() {
+	fmt.Println("copyToNewMap")
 	h.resizeLk.Lock()
 	defer h.resizeLk.Unlock()
 
 	startTime := time.Now()
 
-	index := uint64(0)
-	for index < h.oldCapacity {
-		mykey := (*h.oldKeys)[index]
-		index += 1
+	for *h.resizeOffset-1 < h.oldCapacity {
+		mykey := (*h.oldKeys)[*h.resizeOffset-1]
+		*h.resizeOffset += 1
 
 		if mykey.slabOffset != 0 {
 			h.addKeyResize(mykey)
 		}
 	}
+
+	*h.resizeOffset = 0
 
 	resizeTime := getRunTime(startTime)
 	h.resizeTime += resizeTime
@@ -71,7 +73,8 @@ func (h *Hashmap) resize() {
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
 	h.replaceHashmap(newH)
-
+	*h.resizeOffset = 1
+	//indicate resize must be worke don
 	h.resizeLk.Unlock()
 	fmt.Println("/Resizing")
 	go h.copyToNewMap()
@@ -81,6 +84,7 @@ func (h *Hashmap) resize() {
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	//TODO close and delete old file, can be async
 	// see closeFPs
+	//todo we're leaking oldIndexFP so less than 20 files to giant massive db, so not huge deal but good to fix
 	h.oldKeys = h.Keys
 	h.oldCapacity = h.Capacity
 	h.slabMapOld = h.slabMap
