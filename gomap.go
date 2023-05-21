@@ -2,15 +2,10 @@ package gomap
 
 import (
 	"bytes"
-	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/go-errors/errors"
-
 	"log"
-	"os"
 	"reflect"
 	"unsafe"
 
@@ -26,35 +21,6 @@ func (h *Hashmap) closeFPs() {
 	handleError(err)
 	err = h.hashMap.Unmap()
 	handleError(err)
-}
-
-func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
-	myhash := hash(key)
-	count := uint64(0)
-	for count < h.Capacity {
-		hkey := ((uint64(myhash) % (h.Capacity)) + count) % h.Capacity
-		mybucket := (*h.Keys)[hkey]
-		if mybucket.slabOffset == 0 {
-			return hkey, true
-		} else {
-			if mybucket.hash == myhash {
-				item := h.unmarshalItemFromSlab(mybucket)
-				if bytes.Equal(item.Key, key) {
-					return hkey, false
-				}
-			}
-			count++
-		}
-	}
-	panic("why")
-}
-
-func (h *Hashmap) addKey(key []byte, slabOffset Key) {
-	hkey, newKey := h.getKeyOffsetToAdd(key)
-	(*h.Keys)[hkey] = slabOffset
-	if newKey {
-		*h.Count += 1
-	}
 }
 
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
@@ -97,43 +63,6 @@ func (h *Hashmap) AddMany(items []Item) {
 	h.hashTime += hashTime
 }
 
-func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
-	if h.checkResize() {
-		h.resize()
-	}
-
-	h.addManyKeys(items, slabOffsets)
-}
-
-func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
-	var wg sync.WaitGroup
-	seenSet := NewSet()
-	extra_items := make([]Item, 0)
-	extra_slabOffsets := make([]Key, 0)
-
-	hkeys, totalNewKey := ConcurrentMap(items, h.getKeyOffsetToAdd)
-	for i, hkey := range hkeys {
-		alreadyExists := seenSet.Add(hkey)
-		if alreadyExists {
-			extra_items = append(extra_items, items[i])
-			extra_slabOffsets = append(extra_slabOffsets, slabOffsets[i])
-			totalNewKey -= 1
-		} else {
-			//todo put this in gothing
-			wg.Add(1)
-			go func(i int, hkey uint64) {
-				defer wg.Done()
-				(*h.Keys)[hkey] = slabOffsets[i]
-			}(i, hkey)
-		}
-	}
-	wg.Wait()
-	*h.Count += totalNewKey
-	for i, item := range extra_items {
-		h.addBucket(item.Key, extra_slabOffsets[i])
-	}
-}
-
 func (h *Hashmap) Add(key []byte, value []byte) {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
@@ -145,15 +74,6 @@ func (h *Hashmap) Add(key []byte, value []byte) {
 	h.addBucket(key, slabOffset)
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
-}
-
-func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
-	if h.checkResize() {
-		h.resize()
-	}
-
-	h.addKey(key, slabOffset)
-
 }
 
 // Mlock locks the data in memory to prevent it from being swapped to disk.
@@ -180,96 +100,10 @@ func (h *Hashmap) mlock(data mmap.MMap) {
 	}
 }
 
-func (h *Hashmap) createDirectory() {
-	err := os.MkdirAll(h.Folder, 0755)
-	if err != nil {
-		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
-	}
-}
-
-func (h *Hashmap) getKeys() []Key {
-	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[0]))
-	ret := unsafe.Slice(tmpkeys, h.Capacity)
-	return ret
-}
-
-func (h *Hashmap) readCapacity() (uint64, int64) {
-	dat, err := os.ReadFile(h.Folder + "/capacity")
-	if err != nil {
-		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
-	}
-	capacity, err := strconv.ParseUint(string(dat), 10, 64)
-	handleError(err)
-
-	slabdat, err := os.ReadFile(h.Folder + "/slabSize")
-	if err != nil {
-		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
-	}
-	slabSize, err := strconv.ParseInt(string(slabdat), 10, 64)
-	handleError(err)
-
-	return capacity, slabSize
-}
-
 func (h *Hashmap) New(folder string) {
 	h.Folder = folder
 	N, slabSize := h.readCapacity()
 	h.initN(folder, N, slabSize)
-}
-
-func (h *Hashmap) writeSlabSize(slabSize int64) error {
-	s := strconv.FormatInt(slabSize, 10)
-	return os.WriteFile(h.Folder+"/slabSize", []byte(s), 0655)
-}
-
-func (h *Hashmap) writeCapacity(N uint64) error {
-	s := strconv.FormatUint(N, 10)
-	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
-}
-
-func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
-	h.Folder = folder
-	m, f_map, err := h.openMmapHash(N)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
-	slab, f_slab, err := h.openMmapSlab(slabSize)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
-	err = h.writeCapacity(N)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-	err = h.writeSlabSize(slabSize)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
-	h.hashMap = m
-	h.hashMapFile = f_map
-
-	h.slabMap = slab
-	h.slabFILE = f_slab
-	h.slabSize = slabSize
-
-	//todo
-	h.slabOffset = getSlabOffset(h.slabMap)
-	//xxx
-
-	if *h.slabOffset == 0 {
-		sentinel := []byte("offset")
-		h.writeSlab(sentinel)
-		*h.slabOffset = SlabOffset(len(sentinel))
-	}
-
-	h.Capacity = N
-	h.Count = getCount(h.slabMap)
-	keys := h.getKeys()
-	h.Keys = &keys
-
 }
 
 /*
