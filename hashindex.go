@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"sync"
 	"unsafe"
+
+	"github.com/segmentio/fasthash/fnv1"
 )
 
 func (h *Hashmap) addKey(key []byte, slabOffset Key) {
@@ -21,6 +23,10 @@ func (h *Hashmap) addBucket(key []byte, slabOffset Key) {
 
 	h.addKey(key, slabOffset)
 
+}
+
+func hash(key []byte) Hash {
+	return Hash(fnv1.HashBytes32(key))
 }
 
 func (h *Hashmap) getKeys() []Key {
