@@ -39,6 +39,8 @@ type Hashmap struct {
 	hashTime   time.Duration
 	resizeTime time.Duration
 	slabTime   time.Duration
+
+	slabData []byte
 }
 
 type Item struct {

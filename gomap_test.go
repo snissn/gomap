@@ -176,3 +176,22 @@ func TestAddValue(t *testing.T) {
 	value := []byte("bartesttesttest")
 	obj.Add(key, value)
 }
+
+func BenchmarkAddManySlabs(b *testing.B) {
+	folder, _ := os.MkdirTemp("", "hash")
+
+	var obj Hashmap
+	obj.New(folder)
+	N := 100
+	items := make([]Item, N)
+	for i := 0; i < N; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := bytes.Repeat([]byte{'a'}, 1024)
+		items[i] = Item{Key: key, Value: value}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj.addManySlabs(items)
+	}
+}

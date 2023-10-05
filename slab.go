@@ -32,28 +32,32 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 }
 
 func (h *Hashmap) addSlab(item Item) Key {
+	offset := *h.slabOffset
 	key := item.Key
 	val := item.Value
-
-	offset := *h.slabOffset
-	slabData := make([]byte, 0, 16+len(key)+len(val))
+	keylen := len(key)
+	vallen := len(val)
+	actualTotalLength := 16 + keylen + vallen
+	slabData := make([]byte, 0, actualTotalLength)
 	// Write key length
-	slabData = append(slabData, encodeuint64(uint64(len(key)))...)
-	slabData = append(slabData, encodeuint64(uint64(len(val)))...)
+	slabData = append(slabData, encodeuint64(uint64(keylen))...)
+	slabData = append(slabData, encodeuint64(uint64(vallen))...)
 	slabData = append(slabData, key...)
 	slabData = append(slabData, val...)
 	h.writeSlab(slabData)
-	actualTotalLength := 8 + 8 + len(key) + len(val)
 	*h.slabOffset += SlabOffset(actualTotalLength)
 	ret := Key{slabOffset: offset, hash: hash(key)} // todo only actually compute hash() once
 	return ret
 }
 
-// todo optimize
 func (h *Hashmap) addManySlabs(items []Item) []Key {
 	slabOffsets := make([]Key, len(items))
-	slabData := []byte{}
 
+	if cap(h.slabData) < len(items)*2048 {
+		h.slabData = make([]byte, 0, len(items)*2048)
+	} else {
+		h.slabData = h.slabData[:0]
+	}
 	offset := *h.slabOffset
 	for i, item := range items {
 		keyBytes := item.Key
@@ -63,18 +67,18 @@ func (h *Hashmap) addManySlabs(items []Item) []Key {
 		slabOffsets[i] = Key{slabOffset: offset, hash: hash(keyBytes)} // todo only actually compute hash() once
 
 		// Write key length
-		slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
-		slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
-		slabData = append(slabData, keyBytes...)
-		slabData = append(slabData, valueBytes...)
+		h.slabData = append(h.slabData, encodeuint64(uint64(len(keyBytes)))...)
+		h.slabData = append(h.slabData, encodeuint64(uint64(len(valueBytes)))...)
+		h.slabData = append(h.slabData, keyBytes...)
+		h.slabData = append(h.slabData, valueBytes...)
 		offset += SlabOffset(totalLength)
 
 	}
-	h.writeSlab(slabData)
-	*h.slabOffset += SlabOffset(len(slabData))
+	h.writeSlab(h.slabData)
+	*h.slabOffset += SlabOffset(len(h.slabData))
 	return slabOffsets
-}
 
+}
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
 	var ret Item
 
