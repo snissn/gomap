@@ -49,6 +49,7 @@ func (h *Hashmap) addSlab(item Item) Key {
 	return ret
 }
 
+// todo optimize
 func (h *Hashmap) addManySlabs(items []Item) []Key {
 	slabOffsets := make([]Key, len(items))
 	slabData := []byte{}
