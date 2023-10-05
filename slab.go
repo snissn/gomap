@@ -47,27 +47,25 @@ func (h *Hashmap) addSlab(item Item) Key {
 	//}
 	//}
 
+	slabData := []byte{}
+	// Write key length
+	slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
+	slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
+	slabData = append(slabData, keyBytes...)
+	slabData = append(slabData, valueBytes...)
+	h.writeSlab(slabData)
+	actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
+	*h.slabOffset += SlabOffset(actualTotalLength)
 	/*
-			slabData := []byte{}
-
-			// Write key length
-			slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
-			slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
-			slabData = append(slabData, keyBytes...)
-			slabData = append(slabData, valueBytes...)
-			h.writeSlab(slabData)
-		actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
-		*h.slabOffset += SlabOffset(actualTotalLength)
+		h.writeSlab(encodeuint64(uint64(len(keyBytes))))
+		*h.slabOffset += 8
+		h.writeSlab(encodeuint64(uint64(len(valueBytes))))
+		*h.slabOffset += 8
+		h.writeSlab(keyBytes)
+		*h.slabOffset += SlabOffset(len(keyBytes))
+		h.writeSlab(valueBytes)
+		*h.slabOffset += SlabOffset(len(valueBytes))
 	*/
-
-	h.writeSlab(encodeuint64(uint64(len(keyBytes))))
-	*h.slabOffset += 8
-	h.writeSlab(encodeuint64(uint64(len(valueBytes))))
-	*h.slabOffset += 8
-	h.writeSlab(keyBytes)
-	*h.slabOffset += SlabOffset(len(keyBytes))
-	h.writeSlab(valueBytes)
-	*h.slabOffset += SlabOffset(len(valueBytes))
 
 	ret := Key{slabOffset: offset, hash: hash(keyBytes)} // todo only actually compute hash() once
 	return ret
