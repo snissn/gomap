@@ -38,13 +38,16 @@ func (h *Hashmap) addSlab(item Item) Key {
 	keylen := len(key)
 	vallen := len(val)
 	actualTotalLength := 16 + keylen + vallen
-	slabData := make([]byte, 0, actualTotalLength)
-	// Write key length
-	slabData = append(slabData, encodeuint64(uint64(keylen))...)
-	slabData = append(slabData, encodeuint64(uint64(vallen))...)
-	slabData = append(slabData, key...)
-	slabData = append(slabData, val...)
-	h.writeSlab(slabData)
+	if cap(h.slabData) < actualTotalLength {
+		h.slabData = make([]byte, 0, actualTotalLength)
+	} else {
+		h.slabData = h.slabData[:0]
+	} // Write key length
+	h.slabData = append(h.slabData, encodeuint64(uint64(keylen))...)
+	h.slabData = append(h.slabData, encodeuint64(uint64(vallen))...)
+	h.slabData = append(h.slabData, key...)
+	h.slabData = append(h.slabData, val...)
+	h.writeSlab(h.slabData)
 	*h.slabOffset += SlabOffset(actualTotalLength)
 	ret := Key{slabOffset: offset, hash: hash(key)} // todo only actually compute hash() once
 	return ret
