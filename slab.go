@@ -47,7 +47,7 @@ func (h *Hashmap) addSlab(item Item) Key {
 	//}
 	//}
 
-	slabData := []byte{}
+	slabData := make([]byte, 0, 16+len(keyBytes)+len(valueBytes))
 	// Write key length
 	slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
 	slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
