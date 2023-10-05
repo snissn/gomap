@@ -36,24 +36,20 @@ func (h *Hashmap) getKeys() []Key {
 }
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 	myhash := hash(key)
-	count := uint64(0)
-	initialHashOffset := uint64(myhash) % (h.Capacity)
+	hkey := uint64(myhash) % (h.Capacity)
 	for {
-		hkey := (initialHashOffset + count) % h.Capacity
+		hkey = (hkey + 1) % h.Capacity
 		mybucket := (*h.Keys)[hkey]
 		if mybucket.slabOffset == 0 {
 			return hkey, true
-		} else {
-			if mybucket.hash == myhash {
-				item := h.unmarshalItemFromSlab(mybucket)
-				if bytes.Equal(item.Key, key) {
-					return hkey, false
-				}
+		}
+		if mybucket.hash == myhash {
+			item := h.unmarshalItemFromSlab(mybucket)
+			if bytes.Equal(item.Key, key) {
+				return hkey, false
 			}
-			count++
 		}
 	}
-	panic("why")
 }
 
 func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
