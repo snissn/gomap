@@ -32,20 +32,20 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 }
 
 func (h *Hashmap) addSlab(item Item) Key {
-	keyBytes := item.Key
-	valueBytes := item.Value
+	key := item.Key
+	val := item.Value
 
 	offset := *h.slabOffset
-	slabData := make([]byte, 0, 16+len(keyBytes)+len(valueBytes))
+	slabData := make([]byte, 0, 16+len(key)+len(val))
 	// Write key length
-	slabData = append(slabData, encodeuint64(uint64(len(keyBytes)))...)
-	slabData = append(slabData, encodeuint64(uint64(len(valueBytes)))...)
-	slabData = append(slabData, keyBytes...)
-	slabData = append(slabData, valueBytes...)
+	slabData = append(slabData, encodeuint64(uint64(len(key)))...)
+	slabData = append(slabData, encodeuint64(uint64(len(val)))...)
+	slabData = append(slabData, key...)
+	slabData = append(slabData, val...)
 	h.writeSlab(slabData)
-	actualTotalLength := 8 + 8 + len(keyBytes) + len(valueBytes)
+	actualTotalLength := 8 + 8 + len(key) + len(val)
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	ret := Key{slabOffset: offset, hash: hash(keyBytes)} // todo only actually compute hash() once
+	ret := Key{slabOffset: offset, hash: hash(key)} // todo only actually compute hash() once
 	return ret
 }
 
