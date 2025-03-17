@@ -1,5 +1,5 @@
 benchmark-all:
-	go run cmd/benchmarkmain/main.go --engines=gomap,badger --keycounts=10000,200000 --csv=results.csv
+	go run cmd/benchmarkmain/main.go --engines=gomap,badger  --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
 
 build:
 	go build -o bin/gomap-redis-wrapper redisserver/main.go
@@ -12,7 +12,7 @@ run-badger:
 
 clean:
 	rm -rf bin/
-	rm -rf /tmp/gomap-benchmark /tmp/badger-benchmark benchmark_results.csv
+	rm -rf /tmp/gomap-benchmark /tmp/badger-benchmark
 
 fmt:
 	go fmt ./...

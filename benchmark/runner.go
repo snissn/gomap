@@ -69,6 +69,9 @@ func Run() {
 	if err := SaveResultsToCSV(cfg.CSVPath, results); err != nil {
 		log.Fatalf("failed to save CSV: %v", err)
 	}
+
+	plotResults(results)
+
 }
 
 func parseBenchmarkOutput(output string) BenchmarkResult {
