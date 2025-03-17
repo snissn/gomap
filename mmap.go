@@ -5,8 +5,6 @@ import (
 	"log"
 	"os"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
 )
@@ -25,7 +23,7 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 		return nil, nil, err
 	}
 
-	//h.mlock(mappedData) // todo see if matters
+	// h.mlock(mappedData) // todo see if matters
 
 	return mappedData, file, err
 }
@@ -38,30 +36,21 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 
 	fi, err := file.Stat()
 	if err != nil {
+		file.Close()
 		return nil, nil, fmt.Errorf("failed to stat file %s: %w", filename, err)
 	}
 
-	// Advise the kernel that we intend to access the file randomly
-	// and we want to avoid page cache pollution.
-	if err := unix.Fadvise(int(file.Fd()), 0, int64(fi.Size()), unix.FADV_RANDOM|unix.FADV_DONTNEED); err != nil {
-		file.Close()
-		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
-	}
+	// Apply cross-platform file access hint
+	applyFadvise(int(file.Fd()), fi.Size())
 
 	// mmap the whole file into memory with read-write permissions.
-	// This avoids copy-on-write overhead and ensures that the file is never modified.
-	data, err := unix.Mmap(int(file.Fd()), 0, int(fi.Size()), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+	data, err := mmap.Map(file, mmap.RDWR, 0)
 	if err != nil {
 		file.Close()
 		return nil, nil, fmt.Errorf("failed to mmap file %s: %w", filename, err)
 	}
 
-	// Advise the kernel to keep the whole file in memory and avoid swapping.
-	if err := unix.Madvise(data, unix.MADV_WILLNEED); err != nil {
-		unix.Munmap(data)
-		file.Close()
-		return nil, nil, fmt.Errorf("failed to advise kernel for file %s: %w", filename, err)
-	}
+	applyMadvise(data)
 
 	return data, file, nil
 }

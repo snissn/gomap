@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	badger "github.com/dgraph-io/badger/v3"
+	badger "github.com/dgraph-io/badger/v4"
 )
 
 func BenchmarkBadger(b *testing.B) {
