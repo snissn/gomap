@@ -38,7 +38,7 @@ func Run() {
 
 			time.Sleep(2 * time.Second) // wait for server to bind
 
-			out, err := exec.Command("redis-benchmark", "-p", strconv.Itoa(cfg.Port), "-t", "set,get", "-n", strconv.Itoa(keyCount), "-q", "--csv").CombinedOutput()
+			out, err := exec.Command("redis-benchmark", "-p", strconv.Itoa(cfg.Port), "-t", "set,get", "-n", strconv.Itoa(keyCount), "-q", "--csv", "-c", "200", "-P", "16").CombinedOutput()
 
 			// ⚠ Now kill Redis server forcefully again (double-safety)
 			_ = cmd.Process.Kill()

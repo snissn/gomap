@@ -1,8 +1,18 @@
-benchmark-all:
-	go run cmd/benchmarkmain/main.go --engines=gomap,badger  --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
 
 build:
+	go build -o bin/gomap-benchmark cmd/benchmarkmain/main.go
 	go build -o bin/gomap-redis-wrapper redisserver/main.go
+
+benchmark-all: build
+	go run cmd/benchmarkmain/main.go --engines=gomap,badger  --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
+
+
+# Optional: fast local test
+benchmark-quick: build
+	./bin/gomap-benchmark \
+		--engines=gomap,badger \
+		--keycounts=1000,10000 \
+		--csv=benchmark/results_quick.csv
 
 run-gomap:
 	go run redisserver/main.go gomap /tmp/gomap-benchmark
