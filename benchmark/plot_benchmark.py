@@ -27,6 +27,8 @@ axes[0].set_title("SET Requests per Second vs Key Count")
 axes[0].set_xlabel("Key Count (log scale)")
 axes[0].set_ylabel("Requests per Second")
 axes[0].set_xscale("log")
+axes[0].set_ylim(bottom=0)
+
 axes[0].grid(True)
 axes[0].legend()
 
@@ -37,6 +39,7 @@ axes[1].set_title("GET Requests per Second vs Key Count")
 axes[1].set_xlabel("Key Count (log scale)")
 axes[1].set_ylabel("Requests per Second")
 axes[1].set_xscale("log")
+axes[1].set_ylim(bottom=0)
 axes[1].grid(True)
 axes[1].legend()
 
