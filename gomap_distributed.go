@@ -18,7 +18,8 @@ type HashmapDistributed struct {
 // New initializes the distributed hash map with storage in the specified folder.
 // It creates sub-directories for each partition.
 func (h *HashmapDistributed) New(folder string) error {
-	return h.NewWithShards(folder, runtime.NumCPU())
+	// 128 shards provides excellent balance for high concurrency
+	return h.NewWithShards(folder, 128)
 }
 
 // NewWithShards initializes the distributed hash map with a specific number of shards.
