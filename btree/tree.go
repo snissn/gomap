@@ -1,0 +1,332 @@
+package btree
+
+import (
+	"bytes"
+	"fmt"
+	"sync"
+)
+
+// Meta is the durable header describing the tree layout.
+type Meta struct {
+	RootNodeID NodeID
+	Height     uint16
+	NextNodeID NodeID
+}
+
+// Tree implements a B+Tree on top of an abstract KV store.
+// Concurrency is handled with a coarse-grained RWMutex.
+type Tree struct {
+	treeID string
+	kv     KVStore
+
+	mu   sync.RWMutex
+	meta Meta
+}
+
+// OpenTree loads an existing tree or initializes a new one if no metadata exists.
+// Meta read errors are returned to the caller; only an absent meta entry triggers initialization.
+func OpenTree(kv KVStore, treeID string) (*Tree, error) {
+	t := &Tree{
+		treeID: treeID,
+		kv:     kv,
+	}
+
+	metaBytes, err := kv.Get(metaKey(treeID))
+	if err != nil {
+		return nil, fmt.Errorf("load meta: %w", err)
+	}
+
+	if len(metaBytes) > 0 {
+		m, err := decodeMeta(metaBytes)
+		if err != nil {
+			return nil, fmt.Errorf("decode meta: %w", err)
+		}
+		t.meta = *m
+		return t, nil
+	}
+
+	// Initialize a new tree with a single empty leaf root.
+	root := &Node{
+		ID:   1,
+		Type: NodeLeaf,
+	}
+
+	t.meta = Meta{
+		RootNodeID: 1,
+		Height:     1,
+		NextNodeID: 2,
+	}
+
+	if err := t.saveNode(root); err != nil {
+		return nil, err
+	}
+	if err := t.saveMeta(); err != nil {
+		return nil, err
+	}
+
+	return t, nil
+}
+
+// Get returns the value for the given key or (nil, nil) if it does not exist.
+func (t *Tree) Get(key []byte) ([]byte, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	currID := t.meta.RootNodeID
+
+	for {
+		node, err := t.loadNode(currID)
+		if err != nil {
+			return nil, err
+		}
+
+		idx := node.search(key)
+		if node.Type == NodeLeaf {
+			if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+				return node.Values[idx], nil
+			}
+			return nil, nil
+		}
+
+		childIdx := idx
+		if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+			childIdx = idx + 1
+		}
+		if childIdx >= len(node.Children) {
+			return nil, fmt.Errorf("node %d child index %d out of range", node.ID, childIdx)
+		}
+		currID = node.Children[childIdx]
+	}
+}
+
+// Put inserts or updates the given key/value pair.
+func (t *Tree) Put(key, value []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	split, splitKey, rightID, err := t.insertRecursive(t.meta.RootNodeID, key, value, t.meta.Height)
+	if err != nil {
+		return err
+	}
+
+	if split {
+		newRootID := t.meta.NextNodeID
+		t.meta.NextNodeID++
+
+		newRoot := &Node{
+			ID:       newRootID,
+			Type:     NodeInternal,
+			Keys:     [][]byte{splitKey},
+			Children: []NodeID{t.meta.RootNodeID, rightID},
+		}
+		if err := t.saveNode(newRoot); err != nil {
+			return err
+		}
+
+		t.meta.RootNodeID = newRootID
+		t.meta.Height++
+	}
+
+	// Persist meta even if root did not split to capture NextNodeID advances.
+	return t.saveMeta()
+}
+
+// Delete removes a key from the tree. It is a lazy delete and performs no rebalancing.
+func (t *Tree) Delete(key []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	currID := t.meta.RootNodeID
+
+	for {
+		node, err := t.loadNode(currID)
+		if err != nil {
+			return err
+		}
+
+		idx := node.search(key)
+		if node.Type == NodeLeaf {
+			if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+				node.Keys = append(node.Keys[:idx], node.Keys[idx+1:]...)
+				node.Values = append(node.Values[:idx], node.Values[idx+1:]...)
+				return t.saveNode(node)
+			}
+			return nil
+		}
+
+		childIdx := idx
+		if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+			childIdx = idx + 1
+		}
+		if childIdx >= len(node.Children) {
+			return fmt.Errorf("node %d child index %d out of range", node.ID, childIdx)
+		}
+		currID = node.Children[childIdx]
+	}
+}
+
+// insertRecursive inserts into the subtree rooted at nodeID.
+// Returns whether the node split, the promoted key, and the new right node ID.
+func (t *Tree) insertRecursive(nodeID NodeID, key, value []byte, level uint16) (bool, []byte, NodeID, error) {
+	node, err := t.loadNode(nodeID)
+	if err != nil {
+		return false, nil, 0, err
+	}
+
+	if level == 0 {
+		return false, nil, 0, fmt.Errorf("invalid tree level for node %d", nodeID)
+	}
+
+	idx := node.search(key)
+
+	if node.Type == NodeLeaf {
+		if level != 1 {
+			return false, nil, 0, fmt.Errorf("leaf node %d encountered above leaf level", nodeID)
+		}
+		if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+			node.Values[idx] = value
+			return false, nil, 0, t.saveNode(node)
+		}
+
+		node.Keys = insertBytes(node.Keys, idx, key)
+		node.Values = insertBytes(node.Values, idx, value)
+
+		if len(node.Keys) <= MaxKeys {
+			return false, nil, 0, t.saveNode(node)
+		}
+
+		return t.splitLeaf(node)
+	}
+
+	if level <= 1 {
+		return false, nil, 0, fmt.Errorf("internal node %d encountered at leaf level", nodeID)
+	}
+
+	childIdx := idx
+	if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
+		childIdx = idx + 1
+	}
+	if childIdx >= len(node.Children) {
+		return false, nil, 0, fmt.Errorf("node %d child index %d out of range", node.ID, childIdx)
+	}
+
+	childSplit, splitKey, rightID, err := t.insertRecursive(node.Children[childIdx], key, value, level-1)
+	if err != nil {
+		return false, nil, 0, err
+	}
+
+	if !childSplit {
+		return false, nil, 0, nil
+	}
+
+	node.Keys = insertBytes(node.Keys, childIdx, splitKey)
+	node.Children = insertNodeID(node.Children, childIdx+1, rightID)
+
+	if len(node.Keys) <= MaxKeys {
+		return false, nil, 0, t.saveNode(node)
+	}
+
+	return t.splitInternal(node)
+}
+
+// splitLeaf splits a full leaf node into two and links them.
+func (t *Tree) splitLeaf(left *Node) (bool, []byte, NodeID, error) {
+	mid := len(left.Keys) / 2
+
+	rightID := t.meta.NextNodeID
+	t.meta.NextNodeID++
+
+	right := &Node{
+		ID:       rightID,
+		Type:     NodeLeaf,
+		Keys:     append([][]byte(nil), left.Keys[mid:]...),
+		Values:   append([][]byte(nil), left.Values[mid:]...),
+		NextLeaf: left.NextLeaf,
+		PrevLeaf: left.ID,
+	}
+
+	left.Keys = left.Keys[:mid]
+	left.Values = left.Values[:mid]
+	left.NextLeaf = rightID
+
+	if right.NextLeaf != 0 {
+		if next, err := t.loadNode(right.NextLeaf); err == nil {
+			next.PrevLeaf = rightID
+			_ = t.saveNode(next)
+		}
+	}
+
+	if err := t.saveNode(right); err != nil {
+		return false, nil, 0, err
+	}
+	if err := t.saveNode(left); err != nil {
+		return false, nil, 0, err
+	}
+
+	return true, right.Keys[0], rightID, nil
+}
+
+// splitInternal splits a full internal node and returns the promoted key.
+func (t *Tree) splitInternal(left *Node) (bool, []byte, NodeID, error) {
+	mid := len(left.Keys) / 2
+	promoted := left.Keys[mid]
+
+	rightID := t.meta.NextNodeID
+	t.meta.NextNodeID++
+
+	right := &Node{
+		ID:       rightID,
+		Type:     NodeInternal,
+		Keys:     append([][]byte(nil), left.Keys[mid+1:]...),
+		Children: append([]NodeID(nil), left.Children[mid+1:]...),
+	}
+
+	left.Keys = left.Keys[:mid]
+	left.Children = left.Children[:mid+1]
+
+	if err := t.saveNode(right); err != nil {
+		return false, nil, 0, err
+	}
+	if err := t.saveNode(left); err != nil {
+		return false, nil, 0, err
+	}
+
+	return true, promoted, rightID, nil
+}
+
+func (t *Tree) saveMeta() error {
+	return t.kv.Put(metaKey(t.treeID), encodeMeta(&t.meta))
+}
+
+func (t *Tree) loadNode(id NodeID) (*Node, error) {
+	data, err := t.kv.Get(nodeKey(t.treeID, id))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("node %d not found", id)
+	}
+	return decodeNode(id, data)
+}
+
+func (t *Tree) saveNode(n *Node) error {
+	enc, err := encodeNode(n)
+	if err != nil {
+		return err
+	}
+	return t.kv.Put(nodeKey(t.treeID, n.ID), enc)
+}
+
+func insertBytes[T any](s []T, i int, v T) []T {
+	s = append(s, v)
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	return s
+}
+
+func insertNodeID(s []NodeID, i int, v NodeID) []NodeID {
+	s = append(s, v)
+	copy(s[i+1:], s[i:])
+	s[i] = v
+	return s
+}
