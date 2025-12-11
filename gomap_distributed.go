@@ -51,3 +51,34 @@ func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	h.maps[mapIndex].Add(key, value)
 	return nil
 }
+
+func (h *HashmapDistributed) AddMany(items []Item) error {
+	numShards := len(h.maps)
+	shardedItems := make([][]Item, numShards)
+	for i := 0; i < numShards; i++ {
+		shardedItems[i] = make([]Item, 0, len(items)/numShards)
+	}
+
+	for _, item := range items {
+		hash := hash(item.Key)
+		mapIndex := hash % Hash(numShards)
+		shardedItems[mapIndex] = append(shardedItems[mapIndex], item)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < numShards; i++ {
+		if len(shardedItems[i]) == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func(index int, items []Item) {
+			defer wg.Done()
+			h.mutexes[index].Lock()
+			defer h.mutexes[index].Unlock()
+			h.maps[index].AddMany(items)
+		}(i, shardedItems[i])
+	}
+	wg.Wait()
+
+	return nil
+}

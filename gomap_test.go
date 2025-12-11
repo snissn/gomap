@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"os"
 	"strconv"
-
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -192,5 +191,25 @@ func BenchmarkAddManySlabs(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		obj.addManySlabs(items)
+	}
+}
+
+func BenchmarkAddMany(b *testing.B) {
+	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
+
+	var obj Hashmap
+	obj.New(folder)
+	N := 1000
+	items := make([]Item, N)
+	for i := 0; i < N; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := bytes.Repeat([]byte{'a'}, 1024)
+		items[i] = Item{Key: key, Value: value}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj.AddMany(items)
 	}
 }

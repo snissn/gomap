@@ -2,7 +2,6 @@ package gomap
 
 import (
 	"bytes"
-	"sync"
 	"unsafe"
 
 	"github.com/segmentio/fasthash/fnv1"
@@ -61,30 +60,16 @@ func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) {
 }
 
 func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) {
-	var wg sync.WaitGroup
-	seenSet := NewSet()
-	extra_items := make([]Item, 0)
-	extra_slabOffsets := make([]Key, 0)
+	totalNewKey := uint64(0)
 
-	hkeys, totalNewKey := ConcurrentMap(items, h.getKeyOffsetToAdd)
-	for i, hkey := range hkeys {
-		alreadyExists := seenSet.Add(hkey)
-		if alreadyExists {
-			extra_items = append(extra_items, items[i])
-			extra_slabOffsets = append(extra_slabOffsets, slabOffsets[i])
-			totalNewKey -= 1
-		} else {
-			//todo put this in gothing
-			wg.Add(1)
-			go func(i int, hkey uint64) {
-				defer wg.Done()
-				(*h.Keys)[hkey] = slabOffsets[i]
-			}(i, hkey)
+	for i, item := range items {
+		hkey, isnew := h.getKeyOffsetToAdd(item.Key)
+		
+		(*h.Keys)[hkey] = slabOffsets[i]
+		if isnew {
+			totalNewKey++
 		}
 	}
-	wg.Wait()
+	
 	*h.Count += totalNewKey
-	for i, item := range extra_items {
-		h.addBucket(item.Key, extra_slabOffsets[i])
-	}
 }

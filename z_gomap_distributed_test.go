@@ -1,6 +1,7 @@
 package gomap
 
 import (
+	"bytes"
 	"os"
 	"strconv"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 func TestDistributedHashmapBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj HashmapDistributed
 	obj.New(folder)
@@ -23,6 +25,7 @@ func TestDistributedHashmapBasic(t *testing.T) {
 
 func TestDistributedHashmapAddGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj HashmapDistributed
 	obj.New(folder)
@@ -40,6 +43,7 @@ func TestDistributedHashmapAddGet1(t *testing.T) {
 
 func TestDistributedHashmapAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj HashmapDistributed
 	obj.New(folder)
@@ -58,6 +62,7 @@ func TestDistributedHashmapAddGetN(t *testing.T) {
 }
 func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj HashmapDistributed
 	obj.New(folder)
@@ -100,6 +105,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 
 func BenchmarkDistributedHashmapValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj HashmapDistributed
 	obj.New(folder)
@@ -111,5 +117,25 @@ func BenchmarkDistributedHashmapValue(b *testing.B) {
 
 		err := obj.Add(key, value)
 		assert.Nil(b, err, "Error should be nil")
+	}
+}
+
+func BenchmarkDistributedAddMany(b *testing.B) {
+	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
+
+	var obj HashmapDistributed
+	obj.New(folder)
+	N := 1000
+	items := make([]Item, N)
+	for i := 0; i < N; i++ {
+		key := []byte(strconv.Itoa(i))
+		value := bytes.Repeat([]byte{'a'}, 1024)
+		items[i] = Item{Key: key, Value: value}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		obj.AddMany(items)
 	}
 }
