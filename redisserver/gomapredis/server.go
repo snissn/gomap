@@ -10,8 +10,15 @@ import (
 	"github.com/tidwall/redcon"
 )
 
+type connState struct {
+	pending []gomap.Item
+}
+
+const setBatchSize = 16
+
 type RedisServer struct {
-	store *gomap.HashmapDistributed
+	store     *gomap.HashmapDistributed
+	batchSets bool
 }
 
 func NewRedisServer(dbdir string) *RedisServer {
@@ -29,7 +36,8 @@ func NewRedisServer(dbdir string) *RedisServer {
 	store.SetCompression(false)
 
 	return &RedisServer{
-		store: &store,
+		store:     &store,
+		batchSets: os.Getenv("GOMAP_BATCH_SETS") == "1",
 	}
 }
 
@@ -38,6 +46,21 @@ func (s *RedisServer) Serve(addr string) error {
 		if len(cmd.Args) == 0 {
 			conn.WriteError("empty command")
 			return
+		}
+
+		var state *connState
+		if s.batchSets {
+			if ctx := conn.Context(); ctx != nil {
+				if st, ok := ctx.(*connState); ok {
+					state = st
+				}
+			}
+			if state == nil {
+				state = &connState{
+					pending: make([]gomap.Item, 0, setBatchSize),
+				}
+				conn.SetContext(state)
+			}
 		}
 
 		switch string(cmd.Args[0]) {
@@ -52,13 +75,33 @@ func (s *RedisServer) Serve(addr string) error {
 			key := cmd.Args[1]
 			val := cmd.Args[2]
 
-			err := s.store.Add(key, val)
-			if err != nil {
-				conn.WriteError(err.Error())
-				return
-			}
+			if s.batchSets {
+				item := gomap.Item{Key: key, Value: val}
+				state.pending = append(state.pending, item)
 
-			conn.WriteString("OK")
+				// Flush once we hit the batch size; this is aimed at
+				// redis-benchmark -P16 where key counts are multiples of 16.
+				if len(state.pending) >= setBatchSize {
+					batch := state.pending
+					state.pending = state.pending[:0]
+
+					err := s.store.AddMany(batch)
+					if err != nil {
+						conn.WriteError(err.Error())
+						return
+					}
+					for range batch {
+						conn.WriteString("OK")
+					}
+				}
+			} else {
+				err := s.store.Add(key, val)
+				if err != nil {
+					conn.WriteError(err.Error())
+					return
+				}
+				conn.WriteString("OK")
+			}
 
 		case "GET":
 			if len(cmd.Args) < 2 {
