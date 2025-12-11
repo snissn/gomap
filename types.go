@@ -1,6 +1,7 @@
 package gomap
 
 import (
+	"bufio"
 	"os"
 	"time"
 
@@ -42,6 +43,9 @@ type Hashmap struct {
 	
 	slabFiles       map[uint16]*os.File
 	activeSegmentId uint16
+	
+	activeWriter      *bufio.Writer
+	activeSegmentSize int64
 	
 	CompressionEnabled bool
 }
