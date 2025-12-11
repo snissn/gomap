@@ -28,8 +28,6 @@ type Hashmap struct {
 	metadataFile *os.File
 	metadataMap  mmap.MMap
 
-	realSlabFILE *os.File
-
 	Count    *uint64
 	Capacity uint64
 
@@ -41,7 +39,17 @@ type Hashmap struct {
 	slabTime   time.Duration
 
 	slabData []byte
+	
+	slabFiles       map[uint16]*os.File
+	activeSegmentId uint16
 }
+
+const (
+	SegmentBits = 16
+	OffsetBits  = 48
+)
+
+var MaxSegmentSize int64 = 64 * 1024 * 1024 // 64MB
 
 type Item struct {
 	Key   []byte

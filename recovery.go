@@ -4,63 +4,106 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // Recover rebuilds the hash index from the slab file (WAL).
 // It iterates through the entire slab-real file and replays operations.
 func (h *Hashmap) Recover() error {
-	// Reset in-memory state (assuming h.Keys is allocated but empty or we clear it)
-	// We need to clear the existing index if it exists.
-	// Efficient way: zero out h.hashMap (mmap).
-	// But Recover is usually called on startup.
-	
 	// Reset Index map
 	for i := range *h.Keys {
 		(*h.Keys)[i] = Key{}
 	}
 	*h.Count = 0
 	
-	// Open slab file for reading
-	f, err := os.Open(h.Folder + "/slab-real")
+	// Scan for segments
+	files, err := os.ReadDir(h.Folder)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No data, nothing to recover
+		return err
+	}
+	
+	maxID := -1
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), "slab-") && !strings.HasSuffix(file.Name(), "-real") {
+			var id int
+			if _, err := fmt.Sscanf(file.Name(), "slab-%d", &id); err == nil {
+				if id > maxID {
+					maxID = id
+				}
+			}
 		}
+	}
+	
+	if maxID == -1 {
+		// Try slab-real legacy
+		if _, err := os.Stat(h.Folder + "/slab-real"); err == nil {
+			return h.recoverFile(h.Folder+"/slab-real", 0)
+		}
+		return nil
+	}
+	
+	for id := 0; id <= maxID; id++ {
+		filename := fmt.Sprintf("%s/slab-%d", h.Folder, id)
+		// Offset base for this segment
+		baseOffset := SlabOffset(uint64(id) << OffsetBits)
+		
+		if err := h.recoverFile(filename, baseOffset); err != nil {
+			if os.IsNotExist(err) {
+				continue // Gap in sequence? Should not happen but ignore
+			}
+			return err
+		}
+	}
+	
+	// Update slabOffset to point to end of last segment?
+	// Or writeSlab will handle it?
+	// writeSlab uses activeSegmentId.
+	// We need to set activeSegmentId to maxID.
+	// And *h.slabOffset to end of maxID file.
+	
+	h.activeSegmentId = uint16(maxID)
+	
+	lastFile := fmt.Sprintf("%s/slab-%d", h.Folder, maxID)
+	fi, err := os.Stat(lastFile)
+	if err != nil {
+		return err
+	}
+	
+	*h.slabOffset = SlabOffset((uint64(maxID) << OffsetBits) | uint64(fi.Size()))
+	
+	return nil
+}
+
+func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
+	f, err := os.Open(filename)
+	if err != nil {
 		return err
 	}
 	defer f.Close()
 
 	reader := bufio.NewReader(f)
 	
-	var offset SlabOffset = 0
-	// Handle sentinel if present?
-	// initN writes sentinel "offset" (6 bytes).
-	// If slab exists, we should skip sentinel?
-	// But initN sets *h.slabOffset to len(sentinel).
-	// So we should start reading from 0?
-	// The first "entry" might be garbage if we don't skip sentinel.
-	// But wait, addSlab writes sequentially.
-	// If sentinel is written, it's just bytes.
-	// "offset" is 6 bytes.
-	// Our header is 16 bytes.
-	// If we try to read header at 0, we get "offset" + junk.
-	// We should probably rely on *h.slabOffset being correct? 
-	// No, recovery assumes metadata might be lost/wrong.
+	var offset = baseOffset
 	
-	// Assumption: Slab starts with "offset" sentinel if created by initN.
-	// Let's check first 6 bytes.
-	prefix := make([]byte, 6)
-	_, err = io.ReadFull(reader, prefix)
-	if err == nil && string(prefix) == "offset" {
-		offset += 6
-	} else {
-		// Not sentinel? Or file too short.
-		// If too short, maybe empty?
-		f.Seek(0, 0)
-		reader.Reset(f)
-		offset = 0
+	// If it's slab-0 or slab-real, handle sentinel?
+	// Or check sentinel on every file?
+	// initN only writes sentinel if *h.slabOffset == 0.
+	// Only slab-0 starts at 0.
+	// So check sentinel only if baseOffset == 0.
+	
+	if baseOffset == 0 {
+		prefix := make([]byte, 6)
+		_, err = io.ReadFull(reader, prefix)
+		if err == nil && string(prefix) == "offset" {
+			offset += 6
+		} else {
+			f.Seek(0, 0)
+			reader.Reset(f)
+			offset = baseOffset
+		}
 	}
 
 	header := make([]byte, 16)
@@ -71,7 +114,7 @@ func (h *Hashmap) Recover() error {
 			break
 		}
 		if err != nil {
-			return err // Unexpected error
+			return err
 		}
 		
 		keyLen := binary.LittleEndian.Uint64(header[:8])
@@ -89,12 +132,8 @@ func (h *Hashmap) Recover() error {
 		}
 		
 		if valLen == ^uint64(0) {
-			// Delete operation
-			// We replay delete on the index
 			h.replayDelete(key)
 		} else {
-			// Add operation
-			// Skip value bytes in reader
 			discarded, err := reader.Discard(int(valLen))
 			if err != nil {
 				return err
@@ -103,21 +142,11 @@ func (h *Hashmap) Recover() error {
 				return io.ErrUnexpectedEOF
 			}
 			
-			// Replay add
-			// We use the OFFSET where this entry started.
-			// Current entry started at 'offset'.
-			// But we need to verify if this entry is valid?
-			// It is valid if we read it successfully.
-			
 			h.addBucket(key, Key{slabOffset: offset, hash: hash(key)})
 		}
 		
 		offset += SlabOffset(totalLen)
 	}
-	
-	// Update slabOffset in metadata to match where we ended
-	*h.slabOffset = offset
-	
 	return nil
 }
 

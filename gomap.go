@@ -34,6 +34,12 @@ func (h *Hashmap) closeFPs() error {
 	if err := h.hashMap.Unmap(); err != nil {
 		return err
 	}
+	
+	for _, f := range h.slabFiles {
+		if err := f.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

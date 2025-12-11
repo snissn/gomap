@@ -46,8 +46,7 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 		return errors.Wrap(err, 1)
 	}
 
-	f_data, err := h.openDataFile()
-	if err != nil {
+	if err := h.openSlabSegments(); err != nil {
 		return errors.Wrap(err, 1)
 	}
 
@@ -62,7 +61,7 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	h.metadataMap = meta
 	h.metadataFile = f_meta
 	
-	h.realSlabFILE = f_data
+	// h.realSlabFILE removed
 
 	//todo
 	h.slabOffset = getSlabOffset(h.metadataMap)

@@ -80,9 +80,8 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	if h.metadataMap != nil {
 		h.metadataMap.Unmap()
 	}
-	if h.realSlabFILE != nil {
-		h.realSlabFILE.Close()
-	}
+	
+	// slabFiles closed by closeFPs
 
 	h.hashMap = newH.hashMap
 	h.hashMapFile = newH.hashMapFile
@@ -91,7 +90,9 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	
 	h.metadataMap = newH.metadataMap
 	h.metadataFile = newH.metadataFile
-	h.realSlabFILE = newH.realSlabFILE
+	
+	h.slabFiles = newH.slabFiles
+	h.activeSegmentId = newH.activeSegmentId
 
 	// Update pointers to point to the new mmap region
 	h.Count = newH.Count

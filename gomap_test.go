@@ -3,8 +3,10 @@ package gomap
 import (
 	"bytes"
 	"crypto/rand"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -276,6 +278,56 @@ func TestCrashRecovery(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, val)
 	}
+}
+
+func TestSegmentRotation(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
+	
+	// Reduce limit for test
+	originalLimit := MaxSegmentSize
+	MaxSegmentSize = 1024 // 1KB
+	defer func() { MaxSegmentSize = originalLimit }()
+	
+	var obj Hashmap
+	err := obj.New(folder)
+	assert.NoError(t, err)
+	
+	// Write enough to force rotation
+	// 1KB limit. 100 items of 20 bytes ~ 2KB.
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		val := []byte("val")
+		err := obj.Add(key, val)
+		assert.NoError(t, err)
+	}
+	
+	// Check files
+	files, err := os.ReadDir(folder)
+	assert.NoError(t, err)
+	slabFiles := 0
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "slab-") {
+			slabFiles++
+		}
+	}
+	assert.Greater(t, slabFiles, 1, "Should have rotated segments")
+	
+	// Verify reading works (across segments)
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		val, err := obj.Get(key)
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("val"), val)
+	}
+	
+	// Verify Recovery with segments
+	err = obj.Recover()
+	assert.NoError(t, err)
+	
+	val, err := obj.Get([]byte("key-0"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("val"), val)
 }
 
 func BenchmarkAddManySlabs(b *testing.B) {
