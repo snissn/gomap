@@ -8,14 +8,23 @@ import (
 	"github.com/go-errors/errors"
 )
 
-func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
+func (h *Hashmap) initN(folder string, N uint64) {
 	h.Folder = folder
+	
+	// Create directory is handled inside openMmapHash if needed, but safer here.
+	h.createDirectory()
+
 	m, f_map, err := h.openMmapHash(N)
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
 
-	slab, f_slab, err := h.openMmapSlab(slabSize)
+	meta, f_meta, err := h.openMetadata()
+	if err != nil {
+		log.Fatal(errors.Wrap(err, 1))
+	}
+
+	f_data, err := h.openDataFile()
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
@@ -24,20 +33,17 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	if err != nil {
 		log.Fatal(errors.Wrap(err, 1))
 	}
-	err = h.writeSlabSize(slabSize)
-	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
-	}
-
+	
 	h.hashMap = m
 	h.hashMapFile = f_map
 
-	h.slabMap = slab
-	h.slabFILE = f_slab
-	h.slabSize = slabSize
+	h.metadataMap = meta
+	h.metadataFile = f_meta
+	
+	h.realSlabFILE = f_data
 
 	//todo
-	h.slabOffset = getSlabOffset(h.slabMap)
+	h.slabOffset = getSlabOffset(h.metadataMap)
 	//xxx
 
 	if *h.slabOffset == 0 {
@@ -47,36 +53,25 @@ func (h *Hashmap) initN(folder string, N uint64, slabSize int64) {
 	}
 
 	h.Capacity = N
-	h.Count = getCount(h.slabMap)
+	h.Count = getCount(h.metadataMap)
 	keys := h.getKeys()
 	h.Keys = &keys
 
-}
-func (h *Hashmap) writeSlabSize(slabSize int64) error {
-	s := strconv.FormatInt(slabSize, 10)
-	return os.WriteFile(h.Folder+"/slabSize", []byte(s), 0655)
 }
 
 func (h *Hashmap) writeCapacity(N uint64) error {
 	s := strconv.FormatUint(N, 10)
 	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
 }
-func (h *Hashmap) readCapacity() (uint64, int64) {
+func (h *Hashmap) readCapacity() uint64 {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
-		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
+		return DEFAULTMAPSIZE
 	}
 	capacity, err := strconv.ParseUint(string(dat), 10, 64)
 	handleError(err)
 
-	slabdat, err := os.ReadFile(h.Folder + "/slabSize")
-	if err != nil {
-		return DEFAULTMAPSIZE, DEFAULTSLABSIZE
-	}
-	slabSize, err := strconv.ParseInt(string(slabdat), 10, 64)
-	handleError(err)
-
-	return capacity, slabSize
+	return capacity
 }
 
 func (h *Hashmap) createDirectory() {

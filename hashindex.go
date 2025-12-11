@@ -38,7 +38,6 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 	myhash := hash(key)
 	hkey := uint64(myhash) % (h.Capacity)
 	for {
-		hkey = (hkey + 1) % h.Capacity
 		mybucket := (*h.Keys)[hkey]
 		if mybucket.slabOffset == 0 {
 			return hkey, true
@@ -49,6 +48,7 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool) {
 				return hkey, false
 			}
 		}
+		hkey = (hkey + 1) % h.Capacity
 	}
 }
 

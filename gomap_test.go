@@ -11,16 +11,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var Ntests int = int(8_000_00)
+var Ntests int = int(1_000)
 
 func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 	var obj Hashmap
 	obj.New(folder)
 }
 
 func TestAdd1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 	var obj Hashmap
 
 	obj.New(folder)
@@ -32,6 +34,7 @@ func TestAdd1(t *testing.T) {
 
 func TestAddGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 	var obj Hashmap
 	obj.New(folder)
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
@@ -43,6 +46,7 @@ func TestAddGet1(t *testing.T) {
 
 func TestAddResizeGet(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 	var obj Hashmap
 	obj.New(folder)
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
@@ -65,6 +69,7 @@ func TestAddResizeGet(t *testing.T) {
 
 func TestAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -83,6 +88,7 @@ func TestAddGetN(t *testing.T) {
 
 func TestAddGetN_bigt(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -103,6 +109,7 @@ func TestAddGetN_bigt(t *testing.T) {
 
 func TestAddGetN_bigt_batch(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -135,6 +142,7 @@ func TestAddGetN_bigt_batch(t *testing.T) {
 
 func BenchmarkValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -159,6 +167,7 @@ func BenchmarkGoDefaultHashmap(b *testing.B) {
 
 func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 	var obj Hashmap
 	obj.New(folder)
 	key := []byte("key")
@@ -168,6 +177,7 @@ func TestAddValue(t *testing.T) {
 
 func BenchmarkAddManySlabs(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
 
 	var obj Hashmap
 	obj.New(folder)

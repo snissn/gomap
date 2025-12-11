@@ -21,14 +21,12 @@ type Key struct {
 type Hashmap struct {
 	Folder string
 
-	hashMapFile *os.File
-	hashMap     mmap.MMap
-	slabFILE    *os.File
-	slabMap     mmap.MMap
+	hashMapFile  *os.File
+	hashMap      mmap.MMap
+	metadataFile *os.File
+	metadataMap  mmap.MMap
 
 	realSlabFILE *os.File
-
-	slabSize int64
 
 	Count    *uint64
 	Capacity uint64

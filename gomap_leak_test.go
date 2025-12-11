@@ -31,7 +31,7 @@ func TestResizeLeak(t *testing.T) {
 	// If unexported, I can access it since I am in package gomap.
 	
 	initialCapacity := uint64(10)
-	obj.initN(folder, initialCapacity, 1024)
+	obj.initN(folder, initialCapacity)
 
 	// Add enough keys to trigger resize
 	// Capacity 10. Resize check happens BEFORE add.

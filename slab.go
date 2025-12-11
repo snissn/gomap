@@ -125,29 +125,17 @@ func decodeLEB128(input []byte) (uint64, int) {
 	return result, length
 }
 
-func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
-	err := os.MkdirAll(h.Folder, 0755)
-	if err != nil {
-		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
-	}
-
-	filename := h.Folder + "/slab"
-	realfilename := filename + "-real"
-	if !doesFileExist(realfilename) {
-		_, _ = os.Create(realfilename)
-	}
-	file, err := os.OpenFile(realfilename, os.O_RDWR|os.O_APPEND, 0644)
-	if err != nil {
-		log.Fatal("2", errors.Wrap(err, 1))
-	}
-	h.realSlabFILE = file
+func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
+	filename := h.Folder + "/metadata"
+	// We only need a small space for Count and SlabOffset. 4KB is plenty (OS page size).
+	size := int64(4096)
 
 	if !doesFileExist(filename) {
 		f, err := os.Create(filename)
 		if err != nil {
 			log.Fatal("2", errors.Wrap(err, 1))
 		}
-		f.Seek(slabSize-1, 0)
+		f.Seek(size-1, 0)
 		f.Write([]byte("\x00"))
 		f.Seek(0, 0)
 		f.Sync()
@@ -164,14 +152,14 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 		log.Fatal("4", errors.Wrap(err, 1))
 	}
 
-	if slabSize > fi.Size() {
-		f.Seek(slabSize-1, 0)
+	if size > fi.Size() {
+		f.Seek(size-1, 0)
 		f.Write([]byte("\x00"))
 		f.Seek(0, 0)
 		f.Sync()
 	}
 
-	applyFadvise(int(f.Fd()), fi.Size())
+	// applyFadvise(int(f.Fd()), fi.Size()) // Optional for small metadata
 
 	data, err := mmap.Map(f, mmap.RDWR, 0)
 	if err != nil {
@@ -183,17 +171,14 @@ func (h *Hashmap) openMmapSlab(slabSize int64) (mmap.MMap, *os.File, error) {
 	return data, f, nil
 }
 
-func (h *Hashmap) doubleSlab() error {
-	f := h.slabFILE
-	f.Seek(2*h.slabSize-1, 0)
-	f.Write([]byte("\x00"))
-	f.Seek(0, 0)
-	f.Sync()
-	m, err := mmap.Map(f, mmap.RDWR, 0)
-	if err != nil {
-		return err
+func (h *Hashmap) openDataFile() (*os.File, error) {
+	filename := h.Folder + "/slab-real"
+	if !doesFileExist(filename) {
+		_, _ = os.Create(filename)
 	}
-	h.slabSize *= 2
-	h.slabMap = m
-	return nil
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, errors.Wrap(err, 1)
+	}
+	return file, nil
 }

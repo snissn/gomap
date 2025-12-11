@@ -14,7 +14,6 @@ import (
 
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
-var DEFAULTSLABSIZE int64 = int64(1024 * DEFAULTMAPSIZE)
 
 func (h *Hashmap) closeFPs() {
 	err := h.hashMapFile.Close()
@@ -102,8 +101,8 @@ func (h *Hashmap) mlock(data mmap.MMap) {
 
 func (h *Hashmap) New(folder string) {
 	h.Folder = folder
-	N, slabSize := h.readCapacity()
-	h.initN(folder, N, slabSize)
+	N := h.readCapacity()
+	h.initN(folder, N)
 }
 
 /*

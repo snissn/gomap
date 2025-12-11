@@ -37,7 +37,7 @@ func (h *Hashmap) resize() {
 
 	var newH Hashmap
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
+	newH.initN(h.Folder, 2*(h.Capacity))
 
 	index := uint64(0)
 	for index < h.Capacity {
@@ -68,10 +68,28 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 		fmt.Println("Failed to remove old hash map file:", err)
 	}
 
+	// Close old metadata and slab handles to prevent leaks
+	// Note: We ignore errors here as we are replacing them anyway
+	if h.metadataFile != nil {
+		h.metadataFile.Close()
+	}
+	if h.metadataMap != nil {
+		h.metadataMap.Unmap()
+	}
+	if h.realSlabFILE != nil {
+		h.realSlabFILE.Close()
+	}
+
 	h.hashMap = newH.hashMap
 	h.hashMapFile = newH.hashMapFile
 	h.Capacity = newH.Capacity
 	h.Keys = newH.Keys
+	
+	h.metadataMap = newH.metadataMap
+	h.metadataFile = newH.metadataFile
+	h.realSlabFILE = newH.realSlabFILE
 
-	h.slabMap = newH.slabMap
+	// Update pointers to point to the new mmap region
+	h.Count = newH.Count
+	h.slabOffset = newH.slabOffset
 }
