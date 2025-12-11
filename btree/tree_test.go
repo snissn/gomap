@@ -374,3 +374,99 @@ func TestRandomizedOperations(t *testing.T) {
 		t.Fatalf("iterator returned %d keys, expected %d", idx, len(sortedKeys))
 	}
 }
+
+// TestRandomizedOperationsWithGomap exercises the tree on top of the real
+// gomap backend with mixed put/delete operations, similar to the cosmos-db
+// dbbench mixed phase. This helps catch integration issues that do not
+// appear with the in-memory mockKV.
+func TestRandomizedOperationsWithGomap(t *testing.T) {
+	dir, err := os.MkdirTemp("", "btree-rand-gomap-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	store := &gomap.HashmapDistributed{}
+	if err := store.NewWithShards(dir, 8); err != nil {
+		t.Fatalf("init gomap: %v", err)
+	}
+
+	tree, err := NewTreeOnGomap(store, "rand-gomap")
+	if err != nil {
+		t.Fatalf("OpenTree: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(99))
+	ref := make(map[string]string)
+
+	keySpace := 500
+	ops := 5000
+
+	for i := 0; i < ops; i++ {
+		k := fmt.Sprintf("%04d", rng.Intn(keySpace))
+		if rng.Intn(3) == 0 {
+			// delete
+			if err := tree.Delete([]byte(k)); err != nil {
+				t.Fatalf("Delete %s: %v", k, err)
+			}
+			delete(ref, k)
+			continue
+		}
+
+		v := fmt.Sprintf("val-%d", rng.Int())
+		if err := tree.Put([]byte(k), []byte(v)); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+		ref[k] = v
+	}
+
+	// Verify point lookups against reference map.
+	for i := 0; i < keySpace; i++ {
+		k := fmt.Sprintf("%04d", i)
+		got, err := tree.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("Get %s: %v", k, err)
+		}
+		v, ok := ref[k]
+		if !ok {
+			if got != nil {
+				t.Fatalf("expected %s to be absent, got %s", k, got)
+			}
+			continue
+		}
+		if string(got) != v {
+			t.Fatalf("value mismatch for %s: want %s got %s", k, v, got)
+		}
+	}
+
+	// Verify full scan order and membership.
+	iter, err := tree.ScanAll()
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	defer iter.Close()
+
+	var sortedKeys []string
+	for k := range ref {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	idx := 0
+	for iter.Valid() {
+		if idx >= len(sortedKeys) {
+			t.Fatalf("iterator yielded extra key %s", iter.Key())
+		}
+		if string(iter.Key()) != sortedKeys[idx] {
+			t.Fatalf("iter mismatch at %d: want %s got %s", idx, sortedKeys[idx], iter.Key())
+		}
+		idx++
+		iter.Next()
+	}
+	if iter.Error() != nil {
+		t.Fatalf("iterator error: %v", iter.Error())
+	}
+	if idx != len(sortedKeys) {
+		t.Fatalf("iterator returned %d keys, expected %d", idx, len(sortedKeys))
+	}
+}
