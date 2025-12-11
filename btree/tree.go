@@ -87,38 +87,19 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
-	currID := t.meta.RootNodeID
-	opCache := make(map[NodeID]*Node)
-
-	for {
-		node, err := t.loadNodeCached(currID, opCache)
-		if err != nil {
-			return nil, err
-		}
-
-		idx := node.search(key)
-		if node.Type == NodeLeaf {
-			if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
-				return node.Values[idx], nil
-			}
-			return nil, nil
-		}
-
-		childIdx := idx
-		if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
-			childIdx = idx + 1
-		}
-		if childIdx >= len(node.Children) {
-			return nil, fmt.Errorf("node %d child index %d out of range", node.ID, childIdx)
-		}
-		currID = node.Children[childIdx]
-	}
+	// Values live directly in the underlying KV keyed by the user key.
+	return t.kv.Get(key)
 }
 
 // Put inserts or updates the given key/value pair.
 func (t *Tree) Put(key, value []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// First write the value into the underlying KV keyed by the user key.
+	if err := t.kv.Put(key, value); err != nil {
+		return err
+	}
 
 	opCache := make(map[NodeID]*Node)
 	split, splitKey, rightID, err := t.insertRecursiveCached(t.meta.RootNodeID, key, value, t.meta.Height, opCache)
@@ -166,10 +147,14 @@ func (t *Tree) Delete(key []byte) error {
 		if node.Type == NodeLeaf {
 			if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
 				node.Keys = append(node.Keys[:idx], node.Keys[idx+1:]...)
-				node.Values = append(node.Values[:idx], node.Values[idx+1:]...)
-				return t.saveNode(node)
+				if err := t.saveNode(node); err != nil {
+					return err
+				}
+				// Remove value from KV as well.
+				return t.kv.Delete(key)
 			}
-			return nil
+			// Key not present in tree; best-effort delete from KV.
+			return t.kv.Delete(key)
 		}
 
 		childIdx := idx
@@ -206,13 +191,13 @@ func (t *Tree) insertRecursiveCached(nodeID NodeID, key, value []byte, level uin
 		if level != 1 {
 			return false, nil, 0, fmt.Errorf("leaf node %d encountered above leaf level", nodeID)
 		}
+		// Keys only in leaf; values are stored separately in the KV.
 		if idx < len(node.Keys) && bytes.Equal(node.Keys[idx], key) {
-			node.Values[idx] = value
-			return false, nil, 0, t.saveNode(node)
+			// Key already present; nothing to change in the leaf.
+			return false, nil, 0, nil
 		}
 
 		node.Keys = insertBytes(node.Keys, idx, key)
-		node.Values = insertBytes(node.Values, idx, value)
 
 		if len(node.Keys) <= MaxKeys {
 			return false, nil, 0, t.saveNode(node)
@@ -264,13 +249,11 @@ func (t *Tree) splitLeaf(left *Node) (bool, []byte, NodeID, error) {
 		ID:       rightID,
 		Type:     NodeLeaf,
 		Keys:     append([][]byte(nil), left.Keys[mid:]...),
-		Values:   append([][]byte(nil), left.Values[mid:]...),
 		NextLeaf: left.NextLeaf,
 		PrevLeaf: left.ID,
 	}
 
 	left.Keys = left.Keys[:mid]
-	left.Values = left.Values[:mid]
 	left.NextLeaf = rightID
 
 	if right.NextLeaf != 0 {

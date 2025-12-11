@@ -40,27 +40,20 @@ func decodeMeta(data []byte) (*Meta, error) {
 // Header: [Type(1)][NumKeys(2)][NumChildren(2)][NextLeaf(8)][PrevLeaf(8)]
 // Keys: [len(4)][bytes]...
 // Payload: internal -> children (NumChildren x uint64)
-//
-//	leaf     -> values ([len(4)][bytes]) for each key
+// Leaf nodes store only keys and leaf links; values live in the underlying KV
+// keyed by the user key.
 func encodeNode(n *Node) ([]byte, error) {
 	if n.Type == NodeInternal && len(n.Children) != len(n.Keys)+1 {
 		return nil, fmt.Errorf("internal node %d has inconsistent children", n.ID)
 	}
-	if n.Type == NodeLeaf && len(n.Values) != len(n.Keys) {
-		return nil, fmt.Errorf("leaf node %d has inconsistent values", n.ID)
-	}
 
-	// Pre-size buffer: header (1 + 2 + 2 + 8 + 8) + keys + children/values.
+	// Pre-size buffer: header (1 + 2 + 2 + 8 + 8) + keys + children.
 	size := 1 + 2 + 2 + 8 + 8
 	for _, k := range n.Keys {
 		size += 4 + len(k) // uint32 length + bytes
 	}
 	if n.Type == NodeInternal {
 		size += 8 * (len(n.Keys) + 1)
-	} else {
-		for _, v := range n.Values {
-			size += 4 + len(v)
-		}
 	}
 
 	buf := make([]byte, 0, size)
@@ -85,9 +78,7 @@ func encodeNode(n *Node) ([]byte, error) {
 			buf = binary.LittleEndian.AppendUint64(buf, uint64(child))
 		}
 	case NodeLeaf:
-		for _, v := range n.Values {
-			buf = appendBytes(buf, v)
-		}
+		// No additional payload for leaves; values are stored separately.
 	default:
 		return nil, fmt.Errorf("unknown node type %d", n.Type)
 	}
@@ -144,17 +135,7 @@ func decodeNode(id NodeID, data []byte) (*Node, error) {
 			}
 		}
 	case NodeLeaf:
-		if numChildren != 0 {
-			// len check is best-effort; values for leaves are read below.
-		}
-		n.Values = make([][]byte, numKeys)
-		for i := 0; i < int(numKeys); i++ {
-			val, err := readBytes(reader)
-			if err != nil {
-				return nil, fmt.Errorf("read value %d: %w", i, err)
-			}
-			n.Values[i] = val
-		}
+		// Leaf nodes no longer store values inline; they act as a pure key index.
 	default:
 		return nil, fmt.Errorf("unknown node type %d", n.Type)
 	}

@@ -11,7 +11,6 @@ type Iter struct {
 	t         *Tree
 	currNode  *Node
 	keys      [][]byte // Direct cache of currNode.Keys to avoid double indirection
-	values    [][]byte // Direct cache of currNode.Values
 	currIdx   int
 	end       []byte // exclusive; nil for unbounded
 	leafLimit int    // index one past the last valid key in the current leaf
@@ -26,7 +25,6 @@ type RevIter struct {
 	t             *Tree
 	currNode      *Node
 	keys          [][]byte // Direct cache of currNode.Keys
-	values        [][]byte // Direct cache of currNode.Values
 	currIdx       int
 	start         []byte // inclusive lower bound
 	end           []byte // exclusive upper bound; nil for unbounded
@@ -90,7 +88,6 @@ func (it *Iter) seek(start []byte) error {
 		if node.Type == NodeLeaf {
 			it.currNode = node
 			it.keys = node.Keys
-			it.values = node.Values
 
 			// Determine starting index
 			if start == nil {
@@ -145,7 +142,6 @@ func (it *RevIter) seek() error {
 			if node.Type == NodeLeaf {
 				it.currNode = node
 				it.keys = node.Keys
-				it.values = node.Values
 				it.currIdx = len(node.Keys) - 1
 				break
 			}
@@ -162,7 +158,6 @@ func (it *RevIter) seek() error {
 			if node.Type == NodeLeaf {
 				it.currNode = node
 				it.keys = node.Keys
-				it.values = node.Values
 				// We want the largest key < end.
 				// search(end) returns first key >= end. Subtract 1 to get < end.
 				it.currIdx = node.search(it.end) - 1
@@ -226,7 +221,14 @@ func (it *Iter) Value() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.values[it.currIdx]
+	key := it.keys[it.currIdx]
+	val, err := it.t.kv.Get(key)
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return nil
+	}
+	return val
 }
 
 // Value returns the current value or nil if invalid.
@@ -234,7 +236,14 @@ func (it *RevIter) Value() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.values[it.currIdx]
+	key := it.keys[it.currIdx]
+	val, err := it.t.kv.Get(key)
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return nil
+	}
+	return val
 }
 
 // Next advances the iterator.
@@ -276,7 +285,6 @@ func (it *Iter) nextLeaf() {
 		// Update cache
 		it.currNode = nextNode
 		it.keys = nextNode.Keys
-		it.values = nextNode.Values
 
 		if len(it.keys) == 0 {
 			// Skip empty leaves
@@ -359,7 +367,6 @@ func (it *RevIter) prevLeaf() {
 		// Update cache
 		it.currNode = prevNode
 		it.keys = prevNode.Keys
-		it.values = prevNode.Values
 
 		if len(it.keys) == 0 {
 			continue
