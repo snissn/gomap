@@ -209,6 +209,7 @@ To ensure safe reading of both Pages and Slabs, every Read operation (including 
 
   * **In-Memory Graveyard:** `map[Sequence][]PageID`. When a Batch commits at Sequence `N`, all "Old Pages" replaced during that commit are added here.
   * **The Reader Hold:** Readers acquire a hold on a Sequence. `MinActiveSequence` is the lowest sequence currently being read.
+  * **Reader Liveness (TTL):** To prevent crashed readers from pinning the `MinActiveSequence` indefinitely (causing file bloat), Snapshots enforce a **TTL (e.g., 10 mins)**. If exceeded, the hold is ignored, and the reader receives `ErrSnapshotExpired`.
   * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when `Sequence < MinActiveSequence`.
 
 ### 5.3 Read Path & Iterator
@@ -253,7 +254,9 @@ Used heavily by Cosmos SDK for finding the latest versions or traversing time-or
 Instead of immediate deletion, compaction performs an atomic "Swap and Mark" to support Reference Counting.
 
 1.  **Metadata Tracking:** `SlabStats` in Page 0 tracks dead bytes.
-2.  **Trigger:** When `DeadBytes / TotalBytes > 0.5`.
+2.  **Trigger & Throttling:**
+      * **Trigger:** When `DeadBytes / TotalBytes > 0.5`.
+      * **Rate Limiter:** A **Leaky Bucket** limits compaction I/O (e.g., 20MB/s) to prevent "Compaction Storms" from starving the active writer.
 3.  **Compaction Loop:**
       * **Create New Generation:** Open `new.slab`. Iterate `old.slab`, verify liveness against B+Tree, copy live values to `new.slab`. Update B+Tree.
       * **The Atomic Swap:**
@@ -321,10 +324,10 @@ func (db *DB) Print() error
 
 // Stats returns a map of property strings to values.
 // Mandatory keys:
-//  - "cosmos.db.type": "treedb"
-//  - "treedb.pages.total": Total pages in index.db
-//  - "treedb.slabs.active_id": ID of the current write slab (from SlabManager)
-//  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
+//  - "cosmos.db.type": "treedb"
+//  - "treedb.pages.total": Total pages in index.db
+//  - "treedb.slabs.active_id": ID of the current write slab (from SlabManager)
+//  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
 
 
 func (db *DB) Stats() map[string]string
@@ -344,3 +347,4 @@ func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
 ```
+
