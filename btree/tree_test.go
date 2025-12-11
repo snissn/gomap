@@ -164,6 +164,54 @@ func TestRangeQueries(t *testing.T) {
 	checkRange([]byte("c"), []byte("c"), []string{})
 }
 
+func TestReverseRange(t *testing.T) {
+	tree, err := OpenTree(newMockKV(), "rev_range")
+	if err != nil {
+		t.Fatalf("OpenTree: %v", err)
+	}
+
+	keys := []string{"a", "b", "c", "d", "e"}
+	for _, k := range keys {
+		if err := tree.Put([]byte(k), []byte(k)); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+
+	iter, err := tree.ReverseRange(nil, nil)
+	if err != nil {
+		t.Fatalf("ReverseRange: %v", err)
+	}
+	defer iter.Close()
+
+	var got []string
+	for iter.Valid() {
+		got = append(got, string(iter.Key()))
+		iter.Next()
+	}
+	if iter.Error() != nil {
+		t.Fatalf("iter error: %v", iter.Error())
+	}
+	expectedAll := []string{"e", "d", "c", "b", "a"}
+	if fmt.Sprint(got) != fmt.Sprint(expectedAll) {
+		t.Fatalf("expected %v got %v", expectedAll, got)
+	}
+
+	iter, err = tree.ReverseRange([]byte("b"), []byte("e"))
+	if err != nil {
+		t.Fatalf("ReverseRange b-e: %v", err)
+	}
+	defer iter.Close()
+	got = got[:0]
+	for iter.Valid() {
+		got = append(got, string(iter.Key()))
+		iter.Next()
+	}
+	expected := []string{"d", "c", "b"}
+	if fmt.Sprint(got) != fmt.Sprint(expected) {
+		t.Fatalf("expected %v got %v", expected, got)
+	}
+}
+
 func TestPersistenceWithGomap(t *testing.T) {
 	dir, err := os.MkdirTemp("", "btree-persist-*")
 	if err != nil {
