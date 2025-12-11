@@ -137,14 +137,14 @@ func (s *RedisServer) Serve(addr string) error {
 				// If I try to delete non-existent key, count shouldn't increment.
 				// I'll check existence with Get first? No, race condition.
 				// I should update Delete to return bool.
-				
+
 				// For now, simple implementation: just return 1 if no error?
 				// Or check Get first (imperfect but okay for now).
 				// Or update Delete signature.
-				
+
 				// Let's rely on Delete returning nil error.
 				if err == nil {
-					count++ 
+					count++
 				}
 			}
 			conn.WriteInt(count)
@@ -154,7 +154,7 @@ func (s *RedisServer) Serve(addr string) error {
 				conn.WriteError("ERR wrong number of arguments for 'MSET'")
 				return
 			}
-			
+
 			items := make([]gomap.Item, 0, (len(cmd.Args)-1)/2)
 			for i := 1; i < len(cmd.Args); i += 2 {
 				items = append(items, gomap.Item{
@@ -162,7 +162,7 @@ func (s *RedisServer) Serve(addr string) error {
 					Value: cmd.Args[i+1],
 				})
 			}
-			
+
 			err := s.store.AddMany(items)
 			if err != nil {
 				conn.WriteError(err.Error())
@@ -198,7 +198,7 @@ func (s *RedisServer) Serve(addr string) error {
 				conn.WriteError("ERR wrong number of arguments for 'EXISTS'")
 				return
 			}
-			
+
 			count := 0
 			for i := 1; i < len(cmd.Args); i++ {
 				val, _ := s.store.Get(cmd.Args[i])
@@ -213,10 +213,10 @@ func (s *RedisServer) Serve(addr string) error {
 				conn.WriteError("ERR wrong number of arguments for 'INCR'")
 				return
 			}
-			
+
 			key := cmd.Args[1]
 			var newValInt int64
-			
+
 			err := s.store.Update(key, func(val []byte) ([]byte, error) {
 				var current int64
 				if val != nil {
@@ -230,7 +230,7 @@ func (s *RedisServer) Serve(addr string) error {
 				newValInt = current
 				return []byte(strconv.FormatInt(current, 10)), nil
 			})
-			
+
 			if err != nil {
 				conn.WriteError(err.Error()) // e.g. not integer
 				return
@@ -248,8 +248,8 @@ func (s *RedisServer) Serve(addr string) error {
 			stats := s.store.Stats()
 			info := fmt.Sprintf(
 				"# Keyspace\r\nkeys=%d,expires=0,avg_ttl=0\r\n"+
-				"# Memory\r\nused_memory=%d\r\n"+
-				"# Stats\r\ntotal_capacity=%d\r\ntotal_segments=%d\r\n",
+					"# Memory\r\nused_memory=%d\r\n"+
+					"# Stats\r\ntotal_capacity=%d\r\ntotal_segments=%d\r\n",
 				stats.KeyCount, stats.DataSize, stats.Capacity, stats.Segments,
 			)
 			conn.WriteBulkString(info)

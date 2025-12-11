@@ -44,7 +44,7 @@ type Hashmap struct {
 
 	activeWriter      *bufio.Writer
 	activeSegmentSize int64
-	
+
 	CompressionEnabled bool
 
 	// Incremental rehash state (per-shard, in-memory only).

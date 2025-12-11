@@ -5,13 +5,14 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // HashmapDistributed is a thread-safe, sharded hash map implementation.
 // It partitions keys across multiple underlying Hashmap instances (shards)
 // based on the number of available CPU cores to maximize concurrency.
 type HashmapDistributed struct {
-	maps    []*Hashmap
+	maps    []*CachedHashmap
 	mutexes []sync.RWMutex
 }
 
@@ -29,7 +30,7 @@ func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
 	}
 
 	// Initialize the slice of Hashmap pointers and mutexes
-	h.maps = make([]*Hashmap, numShards)
+	h.maps = make([]*CachedHashmap, numShards)
 	h.mutexes = make([]sync.RWMutex, numShards)
 
 	// Create a new Hashmap for each Shard
@@ -40,10 +41,11 @@ func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
 			return fmt.Errorf("failed to create directory for partition: %w", err)
 		}
 
-		h.maps[i] = &Hashmap{}
-		if err := h.maps[i].New(partitionFolder); err != nil {
+		cached, err := NewCachedHashmap(partitionFolder, 4096, 4<<20, 2*time.Second)
+		if err != nil {
 			return err
 		}
+		h.maps[i] = cached
 	}
 
 	return nil
@@ -111,7 +113,7 @@ func (h *HashmapDistributed) Clear() error {
 			defer h.mutexes[index].Unlock()
 			if err := h.maps[index].Clear(); err != nil {
 				// Race on error assignment, but it's just "an error occurred"
-				errGlobal = err 
+				errGlobal = err
 			}
 		}(i)
 	}
@@ -126,7 +128,7 @@ func (h *HashmapDistributed) Stats() Stats {
 		h.mutexes[i].RLock()
 		s := h.maps[i].Stats()
 		h.mutexes[i].RUnlock()
-		
+
 		total.KeyCount += s.KeyCount
 		total.Capacity += s.Capacity
 		total.DataSize += s.DataSize

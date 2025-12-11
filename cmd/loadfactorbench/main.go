@@ -88,4 +88,3 @@ func runLoadBench(loadFactor float64, ops int, writeRatio float64) (float64, tim
 
 	return rps, avgLat, capacity, targetKeys
 }
-

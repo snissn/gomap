@@ -1,6 +1,7 @@
 package gomap
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -9,9 +10,21 @@ type hashmapKV struct {
 	h *HashmapDistributed
 }
 
-func (m *hashmapKV) Get(key []byte) ([]byte, error)   { return m.h.Get(key) }
-func (m *hashmapKV) Put(key, value []byte) error      { return m.h.Add(key, value) }
-func (m *hashmapKV) Delete(key []byte) error          { return m.h.Delete(key) }
+func (m *hashmapKV) Get(key []byte) ([]byte, error) { return m.h.Get(key) }
+func (m *hashmapKV) Put(key, value []byte) error    { return m.h.Add(key, value) }
+func (m *hashmapKV) Delete(key []byte) error        { return m.h.Delete(key) }
+
+// PutMany batches writes down to the underlying HashmapDistributed.
+func (m *hashmapKV) PutMany(keys [][]byte, vals [][]byte) error {
+	if len(keys) != len(vals) {
+		return fmt.Errorf("PutMany: keys/vals length mismatch")
+	}
+	items := make([]Item, len(keys))
+	for i := range keys {
+		items[i] = Item{Key: keys[i], Value: vals[i]}
+	}
+	return m.h.AddMany(items)
+}
 
 // CachedHashmapDistributed wraps HashmapDistributed with a write-back cache.
 // WARNING: no WAL; cached writes are volatile until flushed.

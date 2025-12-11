@@ -61,4 +61,3 @@ func main() {
 	fmt.Printf("Per-op latency: p50=%s, p95=%s, p99=%s, max=%s\n",
 		p(0.50), p(0.95), p(0.99), durs[len(durs)-1])
 }
-

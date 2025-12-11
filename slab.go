@@ -52,12 +52,12 @@ func (h *Hashmap) writeSlab(buf []byte) error {
 func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	segmentID := uint16(uint64(offset) >> OffsetBits)
 	localOffset := int64(uint64(offset) & ((1 << OffsetBits) - 1))
-	
+
 	f, ok := h.slabFiles[segmentID]
 	if !ok {
 		return nil, fmt.Errorf("segment %d not found", segmentID)
 	}
-	
+
 	bytes := make([]byte, n)
 	_, err := f.ReadAt(bytes, localOffset)
 	if err != nil {
@@ -69,7 +69,7 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 func (h *Hashmap) addSlab(item Item) (Key, error) {
 	key := item.Key
 	val := item.Value
-	
+
 	// Compress value?
 	var flags uint8
 	if h.CompressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
@@ -83,32 +83,32 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	keylen := len(key)
 	vallen := len(val)
 	actualTotalLength := 16 + keylen + vallen
-	
+
 	if cap(h.slabData) < actualTotalLength {
 		h.slabData = make([]byte, 0, actualTotalLength)
 	} else {
 		h.slabData = h.slabData[:0]
 	}
-	
+
 	var scratch [16]byte
 	// Pack flags into KeyLen (since we retrieve KeyLen first usually, wait, unmarshal reads both)
 	// Let's pack flags into ValLen? Or KeyLen?
 	// unmarshal reads header.
 	// If we compress Value, flag should be on Value Length?
 	// Yes.
-	
+
 	binary.LittleEndian.PutUint64(scratch[:8], uint64(keylen))
 	binary.LittleEndian.PutUint64(scratch[8:], packLength(uint64(vallen), flags))
 	h.slabData = append(h.slabData, scratch[:]...)
-	
+
 	h.slabData = append(h.slabData, key...)
 	h.slabData = append(h.slabData, val...)
-	
+
 	writeOffset, err := h.writeSlabAndRotate(h.slabData)
 	if err != nil {
 		return Key{}, err
 	}
-	
+
 	*h.slabOffset += SlabOffset(actualTotalLength)
 	return Key{slabOffset: writeOffset, hash: hash(key)}, nil
 }
@@ -144,14 +144,14 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 	} else {
 		h.slabData = h.slabData[:0]
 	}
-	
+
 	var scratch [16]byte
-	
+
 	totalBatchSize := 0
 	for _, item := range items {
 		totalBatchSize += 16 + len(item.Key) + len(item.Value)
 	}
-	
+
 	// Check rotation once for batch using in-memory size.
 	// If batch > MaxSegmentSize, this logic needs to be smarter (split batch).
 	// For now assume batch fits.
@@ -166,15 +166,15 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
 		h.activeSegmentSize = 0
 	}
-	
+
 	f := h.slabFiles[h.activeSegmentId]
 	startOffset := *h.slabOffset
 	currentOffset := startOffset
-	
+
 	for i, item := range items {
 		keyBytes := item.Key
 		valueBytes := item.Value
-		
+
 		var flags uint8
 		if h.CompressionEnabled && len(valueBytes) > 32 {
 			compressed := s2.Encode(nil, valueBytes)
@@ -183,20 +183,20 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 				flags |= FlagCompressed
 			}
 		}
-		
+
 		totalLength := 16 + len(keyBytes) + len(valueBytes)
-		
+
 		slabOffsets[i] = Key{slabOffset: currentOffset, hash: hash(keyBytes)}
-		
+
 		binary.LittleEndian.PutUint64(scratch[:8], uint64(len(keyBytes)))
 		binary.LittleEndian.PutUint64(scratch[8:], packLength(uint64(len(valueBytes)), flags))
 		h.slabData = append(h.slabData, scratch[:]...)
 		h.slabData = append(h.slabData, keyBytes...)
 		h.slabData = append(h.slabData, valueBytes...)
-		
+
 		currentOffset += SlabOffset(totalLength)
 	}
-	
+
 	n, err := f.Write(h.slabData)
 	if err != nil {
 		return nil, err
@@ -209,19 +209,19 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 func (h *Hashmap) addDeleteSlab(key []byte) error {
 	keylen := len(key)
 	actualTotalLength := 16 + keylen
-	
+
 	if cap(h.slabData) < actualTotalLength {
 		h.slabData = make([]byte, 0, actualTotalLength)
 	} else {
 		h.slabData = h.slabData[:0]
 	}
-	
+
 	var scratch [16]byte
 	binary.LittleEndian.PutUint64(scratch[:8], uint64(keylen))
-	binary.LittleEndian.PutUint64(scratch[8:], ^uint64(0)) 
+	binary.LittleEndian.PutUint64(scratch[8:], ^uint64(0))
 	h.slabData = append(h.slabData, scratch[:]...)
 	h.slabData = append(h.slabData, key...)
-	
+
 	_, err := h.writeSlabAndRotate(h.slabData)
 	if err != nil {
 		return err
@@ -232,12 +232,12 @@ func (h *Hashmap) addDeleteSlab(key []byte) error {
 
 func (h *Hashmap) openSlabSegments() error {
 	h.slabFiles = make(map[uint16]*os.File)
-	
+
 	files, err := os.ReadDir(h.Folder)
 	if err != nil {
 		return err
 	}
-	
+
 	maxID := -1
 	for _, file := range files {
 		if strings.HasPrefix(file.Name(), "slab-") && !strings.HasSuffix(file.Name(), "-real") {
@@ -255,7 +255,7 @@ func (h *Hashmap) openSlabSegments() error {
 			}
 		}
 	}
-	
+
 	oldReal := h.Folder + "/slab-real"
 	if doesFileExist(oldReal) && maxID == -1 {
 		os.Rename(oldReal, h.Folder+"/slab-0")
@@ -266,7 +266,7 @@ func (h *Hashmap) openSlabSegments() error {
 		}
 		h.slabFiles[0] = f
 	}
-	
+
 	if maxID == -1 {
 		maxID = 0
 		f, err := os.Create(h.Folder + "/slab-0")
@@ -284,7 +284,7 @@ func (h *Hashmap) openSlabSegments() error {
 		}
 		h.activeSegmentSize = fi.Size()
 	}
-	
+
 	h.activeSegmentId = uint16(maxID)
 	return nil
 }
@@ -316,10 +316,10 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 			return Item{}, err
 		}
 	}
-	
+
 	key := valuesBytes[0:keyLength]
 	val := valuesBytes[keyLength:]
-	
+
 	if flags&FlagCompressed != 0 {
 		decompressed, err := s2.Decode(nil, val)
 		if err != nil {

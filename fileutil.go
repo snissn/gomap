@@ -30,7 +30,7 @@ func getCount(slabMap mmap.MMap) *uint64 {
 
 func (h *Hashmap) initN(folder string, N uint64) error {
 	h.Folder = folder
-	
+
 	// Create directory is handled inside openMmapHash if needed, but safer here.
 	if err := h.createDirectory(); err != nil {
 		return err
@@ -54,13 +54,13 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	if err != nil {
 		return errors.Wrap(err, 1)
 	}
-	
+
 	h.hashMap = m
 	h.hashMapFile = f_map
 
 	h.metadataMap = meta
 	h.metadataFile = f_meta
-	
+
 	h.CompressionEnabled = true
 
 	if h.resizeThreshold == 0 {

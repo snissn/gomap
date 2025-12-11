@@ -90,24 +90,19 @@ func TestCacheKVWithGomap(t *testing.T) {
 	if err := h.NewWithShards(dir, 2); err != nil {
 		t.Fatal(err)
 	}
-	kv := &hashmapKVAdapter{h}
-	c := NewCacheKV(kv, 4, 1024, 0)
-	if err := c.Put([]byte("k"), []byte("v")); err != nil {
+	// Use the cached wrapper to avoid adapter duplication.
+	cached, err := NewCachedHashmapDistributed(dir, 2, 4, 1024, 0)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Flush(); err != nil {
+	if err := cached.Add([]byte("k"), []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	v, _ := h.Get([]byte("k"))
+	if err := cached.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := cached.Get([]byte("k"))
 	if string(v) != "v" {
 		t.Fatalf("expected v, got %s", v)
 	}
 }
-
-type hashmapKVAdapter struct {
-	h *HashmapDistributed
-}
-
-func (m *hashmapKVAdapter) Get(key []byte) ([]byte, error)   { return m.h.Get(key) }
-func (m *hashmapKVAdapter) Put(key, value []byte) error      { return m.h.Add(key, value) }
-func (m *hashmapKVAdapter) Delete(key []byte) error          { return m.h.Delete(key) }

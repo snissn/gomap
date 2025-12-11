@@ -52,7 +52,7 @@ func TestCompaction(t *testing.T) {
 	for i := 0; i < keyCount; i++ {
 		setKey(t, conn, reader, i, 0)
 	}
-	
+
 	// Check initial size
 	sizeBefore := getDirSize(t, dbDir)
 	t.Logf("Size after initial write: %d bytes", sizeBefore)
@@ -63,10 +63,10 @@ func TestCompaction(t *testing.T) {
 			setKey(t, conn, reader, i, u)
 		}
 	}
-	
+
 	sizeBloated := getDirSize(t, dbDir)
 	t.Logf("Size after updates: %d bytes", sizeBloated)
-	
+
 	if sizeBloated <= sizeBefore*2 {
 		t.Log("Warning: File didn't grow as expected? Maybe slab allocation is large or compression handles it?")
 	}
@@ -82,13 +82,13 @@ func TestCompaction(t *testing.T) {
 	}
 
 	// 4. Wait for compaction
-	// Poll size or just sleep. 
+	// Poll size or just sleep.
 	// Compaction is fast for small DB.
 	time.Sleep(2 * time.Second)
-	
+
 	sizeAfter := getDirSize(t, dbDir)
 	t.Logf("Size after compaction: %d bytes", sizeAfter)
-	
+
 	// 5. Verify Integrity
 	for i := 0; i < keyCount; i++ {
 		val := getKey(t, conn, reader, i)
@@ -97,7 +97,7 @@ func TestCompaction(t *testing.T) {
 			t.Errorf("Key %d corrupted. Want %s, Got %s", i, expected, val)
 		}
 	}
-	
+
 	// 6. Verify Size Reduction
 	if sizeAfter >= sizeBloated {
 		t.Errorf("Compaction did not reduce size! Before: %d, After: %d", sizeBloated, sizeAfter)
