@@ -1,25 +1,25 @@
-# TreeDB Design Specification v2.3 (Concurrent Compaction)
+# TreeDB Design Specification v2.4 (Updated with RFCs)
 
-## 1. System Overview
+## 1\. System Overview
 
 **TreeDB** is an embedded, persistent key-value store tailored for the Cosmos SDK workload (IAVL+ Tree). It prioritizes high write throughput, efficient range scans, and low memory overhead during block commits.
 
 ### Key Architectural Features
 
-* **Hybrid Storage:** Values are stored in an append-only log (**Slabs**). Keys are stored in a Memory-Mapped B+Tree (**Index**).
-* **Safety:** Uses Copy-On-Write (COW) for snapshot isolation, redundant superblocks for crash recovery, and CRC32 checksums for data integrity.
-* **Concurrency:** Supports Single-Writer / Multi-Reader (SWMR) with lock-free reads via MVCC (Multi-Version Concurrency Control) semantics using Epochs and Reference Counting.
+  * **Hybrid Storage:** Values are stored in an append-only log (**Slabs**). Keys are stored in a Memory-Mapped B+Tree (**Index**).
+  * **Safety:** Uses Copy-On-Write (COW) for snapshot isolation, redundant superblocks for crash recovery, and CRC32C checksums for data integrity.
+  * **Concurrency:** Supports Single-Writer / Multi-Reader (SWMR) with lock-free reads via MVCC (Multi-Version Concurrency Control) semantics using Epochs and Reference Counting.
 
-## 2. File Architecture
+## 2\. File Architecture
 
 The database resides in a single directory containing two types of files.
 
 ### 2.1 The Value Log ("Slabs")
 
-* **Purpose:** Stores large data payloads (Contract code, large metadata).
-* **Filenames:** `data-0000.slab`, `data-0001.slab`, etc.
-* **Format:** Append-only record stream (Section 2.1.1).
-* **Rotation:** When the active file exceeds `4GB`, it is closed (becoming read-only) and a new file is created.
+  * **Purpose:** Stores large data payloads (Contract code, large metadata).
+  * **Filenames:** `data-0000.slab`, `data-0001.slab`, etc.
+  * **Format:** Append-only record stream (Section 2.1.1).
+  * **Rotation:** When the active file exceeds `4GB`, it is closed (becoming read-only) and a new file is created.
 
 #### 2.1.1 Slab Record Format (Compaction-Readable)
 
@@ -28,7 +28,7 @@ To allow compaction to iterate slabs without scanning the B+Tree, large values a
 ```text
 [ Slab Record ]
 +-------------------------------+
-| CRC32        (4 bytes)        |  CRC32 of (KeyLen..ValueBytes)
+| CRC32C       (4 bytes)        |  CRC32C (Castagnoli) of (KeyLen..ValueBytes)
 | KeyLen       (2 bytes)        |  uint16, max 64KiB
 | ValueLen     (4 bytes)        |  uint32
 | KeyBytes     (KeyLen bytes)   |
@@ -38,40 +38,47 @@ To allow compaction to iterate slabs without scanning the B+Tree, large values a
 
 Rules:
 
-* Only values stored out-of-line (i.e., `len(value) > InlineThreshold`) are appended as slab records.
-* The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32), so the compactor can parse forward easily and readers can bounds-check safely.
-* On read, the record CRC32 is verified before returning data.
+  * **Checksum:** Uses **CRC32C (Castagnoli)** for hardware acceleration (SSE4.2/ARMv8).
+  * Only values stored out-of-line (i.e., `len(value) > InlineThreshold`) are appended as slab records.
+  * The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32C), so the compactor can parse forward easily and readers can bounds-check safely.
+  * On read, the record CRC32C is verified before returning data.
 
 ### 2.2 The Index File ("The Pager")
 
-* **Purpose:** Stores the B+Tree structure, the Freelist, and redundant Superblocks (Meta).
-* **Filename:** `index.db`
-* **Access Pattern:** **Chunked Memory Map**.
+  * **Purpose:** Stores the B+Tree structure, the Freelist, and redundant Superblocks (Meta).
 
-  * The file is logically a contiguous array of Pages.
-  * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB; max: 1GB).
-  * **Growth:** To expand, we `Truncate` the file and `Mmap` *only* the new chunk. Old chunks remain valid to prevent segfaults in active readers.
+  * **Filename:** `index.db`
+
+  * **Access Pattern:** **Chunked Memory Map**.
+
+      * The file is logically a contiguous array of Pages.
+      * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB; max: 1GB).
+      * **Growth:** To expand, we `Truncate` the file and `Mmap` *only* the new chunk. Old chunks remain valid to prevent segfaults in active readers.
+      * **Safety Protocol:**
+          * `Truncate` operations are strictly limited to file expansion. Shrinking the file while mapped is forbidden to prevent `SIGBUS` panics.
+          * `Unmap` operations must verify zero active references before releasing a chunk.
 
 #### 2.2.1 Durability Ordering for Mmap Writes (Required)
 
 Because `index.db` is memory-mapped, TreeDB defines an explicit persistence boundary:
 
-* **Non-sync writes (`Set`, `Batch.Write`)**: may return after OS page cache has been dirtied; durability is not guaranteed until a later fsync.
-* **Sync writes (`SetSync`, `Batch.WriteSync`)**: return only after:
+  * **Non-sync writes (`Set`, `Batch.Write`)**: may return after OS page cache has been dirtied; durability is not guaranteed until a later fsync.
 
-  1. any required slab data is durable (`fdatasync`/`fsync` on active slab), and
-  2. the committed superblock is durable (`msync` dirty index pages as needed + `fdatasync`/`fsync` on `index.db`).
+  * **Sync writes (`SetSync`, `Batch.WriteSync`)**: return only after:
+
+    1.  **Strict Ordering:** The active slab data must be durable (`fdatasync`/`fsync` on active slab) **BEFORE** any meta page updates are written.
+    2.  The committed superblock is durable (`msync` dirty index pages as needed + `fdatasync`/`fsync` on `index.db`).
 
 Implementation note: the exact combination of `msync` and `fdatasync` is OS-dependent; the contract is that `*Sync` means the new root is recoverable after a power loss.
 
-## 3. Data Structures
+## 3\. Data Structures
 
 ### 3.1 Global Constants
 
-* **Page Size:** `4096 bytes`
-* **Inline Threshold:** `256 bytes` (Default. Values `<=` this size are stored directly in the tree).
-  *Note:* This is configurable; deployments may choose lower values for blob-heavy workloads.
-* **Max Key Size:** Variable (handled via Slotted Pages), typically < 1KB.
+  * **Page Size:** `4096 bytes`
+  * **Inline Threshold:** `256 bytes` (Default. Values `<=` this size are stored directly in the tree).
+    *Note:* This is configurable; deployments may choose lower values for blob-heavy workloads.
+  * **Max Key Size:** Variable (handled via Slotted Pages), typically \< 1KB.
 
 ### 3.2 The Value Pointer
 
@@ -111,19 +118,21 @@ Every page starts with this header.
 ```text
 [  Page Header  ]
 +--------------------------+
-| Checksum (4 bytes)       | <--- CRC32 (IEEE) of the page body. Verified on read.
+| Checksum (4 bytes)       | <--- CRC32C (Castagnoli) of the page body.
 | PageID   (8 bytes)       | <--- Self-referential ID for sanity checking.
 | Flags    (2 bytes)       | <--- Node Type (Meta/Free/Int/Leaf).
 | Count    (2 bytes)       | <--- Number of items in this page.
 +--------------------------+
 ```
 
+**Implementation Note:** To maximize throughput, deserialization of headers and records from memory-mapped slices should use `unsafe.Pointer` casting rather than `binary.Read`, ensuring zero-copy parsing.
+
 #### Page Types
 
-* **0x01 Meta:** Superblocks (two pages: Page 0 and Page 1).
-* **0x02 Freelist:** Stores IDs of dead pages available for reuse.
-* **0x03 Internal:** B+Tree Branch nodes.
-* **0x04 Leaf:** B+Tree Data nodes.
+  * **0x01 Meta:** Superblocks (two pages: Page 0 and Page 1).
+  * **0x02 Freelist:** Stores IDs of dead pages available for reuse.
+  * **0x03 Internal:** B+Tree Branch nodes.
+  * **0x04 Leaf:** B+Tree Data nodes.
 
 #### The Meta Pages (Page 0 and Page 1)
 
@@ -131,24 +140,24 @@ TreeDB uses **redundant superblocks** to survive torn writes during commit.
 
 Each Meta Page stores:
 
-* `CommitSeq` (8b): Monotonic commit counter.
-* `RootPageID` (8b): Pointer to the current B+Tree root.
-* `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
-* `TotalPages` (8b): Total file size in pages.
-* `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
-* `SlabStats` (Map): Tracks per-slab statistics (optional; see Section 3.4 and 5.4).
+  * `CommitSeq` (8b): Monotonic commit counter.
+  * `RootPageID` (8b): Pointer to the current B+Tree root.
+  * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
+  * `TotalPages` (8b): Total file size in pages.
+  * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
+  * `SlabStats` (Map): Tracks per-slab statistics (optional; see Section 3.4 and 5.4).
 
 **Recovery Rule (Open):**
 
-* Read both meta pages, verify CRC32, choose the page with the **highest valid `CommitSeq`**.
+  * Read both meta pages, verify CRC32C, choose the page with the **highest valid `CommitSeq`**.
 
 #### The Freelist Page (Type 0x02)
 
 Used to recycle space within `index.db`.
 
-* **Header:** Standard Header.
-* **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
-* **Body:** Array of `PageID (uint64)`.
+  * **Header:** Standard Header.
+  * **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
+  * **Body:** Array of `PageID (uint64)`.
 
 ### 3.4 The Slab Manager
 
@@ -159,7 +168,7 @@ The `SlabManager` controls access to physical `.slab` files. It mediates between
 type SlabFile struct {
     FileID   uint16
     Handle   *os.File
-    Mmap     []byte       // The read-only memory map
+    Mmap     []byte        // The read-only memory map
 
     // Safety Primitives
     RefCount atomic.Int64 // Number of active Snapshots referencing this file
@@ -178,31 +187,33 @@ type SlabSet struct {
 
 **Publication Rule (RCU / Atomic Swap):**
 
-* The current `SlabSet` is stored behind an atomic pointer.
-* Snapshot acquisition reads the pointer once (acquire semantics) and pins referenced slabs by incrementing their `RefCount`.
+  * The current `SlabSet` is stored behind an atomic pointer.
+  * Snapshot acquisition reads the pointer once (acquire semantics) and pins referenced slabs by incrementing their `RefCount`.
 
-## 4. Node Layouts (Slotted Pages)
+## 4\. Node Layouts (Slotted Pages)
 
 We use **Slotted Pages** to support variable-length keys while maintaining binary-search speed.
 
 ### 4.1 Internal Node Layout
 
-* **Directory (Top):** Array of `Offsets (uint16)` growing downward.
-* **Heap (Bottom):** Data growing upward.
-* **Entry Format:** `[Child PageID (8b)] [KeyBytes]`
-* **Search:** Binary search the Directory to find the Child pointer.
+  * **Directory (Top):** Array of `Offsets (uint16)` growing downward.
+  * **Heap (Bottom):** Data growing upward.
+  * **Entry Format:** `[Child PageID (8b)] [KeyBytes]`
+  * **Search:** Binary search the Directory to find the Child pointer.
 
 ### 4.2 Leaf Node Layout
 
 Leaf nodes store the actual key-value data. To support $O(1)$ bidirectional iteration (Forward and Reverse) required by Cosmos SDK, leaf nodes form a **Doubly Linked List**.
 
-* **Header (32 Bytes):**
+  * **Header (32 Bytes):**
 
-  * Standard Header (16 bytes)
-  * `NextLeafID` (8 bytes): Pointer to the right sibling. `0` if last.
-  * `PrevLeafID` (8 bytes): Pointer to the left sibling. `0` if first.
-* **Directory (Top):** Array of `Offsets (uint16)`.
-* **Heap (Bottom):** Stores keys and values (or pointers).
+      * Standard Header (16 bytes)
+      * `NextLeafID` (8 bytes): Pointer to the right sibling. `0` if last.
+      * `PrevLeafID` (8 bytes): Pointer to the left sibling. `0` if first.
+
+  * **Directory (Top):** Array of `Offsets (uint16)`.
+
+  * **Heap (Bottom):** Stores keys and values (or pointers).
 
 **Visual Layout:**
 
@@ -218,13 +229,15 @@ Leaf nodes store the actual key-value data. To support $O(1)$ bidirectional iter
 **Leaf Update Logic (Copy-On-Write):**
 When a Leaf Node is modified or split:
 
-1. **The Target Leaf** is duplicated/allocated (New PageID).
-2. **The Previous Leaf's** `NextLeafID` must be updated to point to the New PageID.
-3. **The Next Leaf's** `PrevLeafID` must be updated to point to the New PageID.
+1.  **The Target Leaf** is duplicated/allocated (New PageID).
 
-   * *Note:* In a standard COW B+Tree, updating neighbors can cause write amplification. TreeDB’s **Batch Zipper** reconstructs contiguous ranges of leaves in memory, so link stitching is only required at the **left-most** and **right-most** boundaries of the rewritten range.
+2.  **The Previous Leaf's** `NextLeafID` must be updated to point to the New PageID.
 
-## 5. Core Algorithms
+3.  **The Next Leaf's** `PrevLeafID` must be updated to point to the New PageID.
+
+      * *Note:* In a standard COW B+Tree, updating neighbors can cause write amplification. TreeDB’s **Batch Zipper** reconstructs contiguous ranges of leaves in memory, so link stitching is only required at the **left-most** and **right-most** boundaries of the rewritten range.
+
+## 5\. Core Algorithms
 
 ### 5.1 Batch Write (The "Zipper" Merge)
 
@@ -232,41 +245,51 @@ Writes are batched to ensure atomicity and reduce I/O.
 
 **Phase 1: Buffer & Pre-Write (Memory Pressure Fix)**
 
-1. Iterate over `Put(Key, Val)` operations.
-2. **If `len(Val) > InlineThreshold`:**
+1.  Iterate over `Put(Key, Val)` operations.
 
-   * **Immediately append** a slab record (Section 2.1.1) to the active `.slab` file.
-   * Calculate `ValuePtr`.
-   * Store `(Key -> ValuePtr)` in the in-memory Batch Map.
-   * *Note:* If the batch fails, these bytes in the slab are wasted but harmless.
-3. **If `len(Val) <= InlineThreshold`:**
+2.  **If `len(Val) > InlineThreshold`:**
 
-   * Store `(Key -> Val)` literals in the in-memory Batch Map.
+      * **Immediately append** a slab record (Section 2.1.1) to the active `.slab` file.
+      * Calculate `ValuePtr`.
+      * Store `(Key -> ValuePtr)` in the in-memory Batch Map.
+      * *Note:* If the batch fails, these bytes in the slab are wasted but harmless.
+
+3.  **If `len(Val) <= InlineThreshold`:**
+
+      * Store `(Key -> Val)` literals in the in-memory Batch Map.
 
 **Phase 2: Recursive Merge**
 
-1. Sort the Batch Keys.
-2. Recursively descend the B+Tree (COW).
-3. **Leaf Node:**
+1.  Sort the Batch Keys.
 
-   * Allocate `NewPage`.
-   * Merge `OldLeaf` items + `Batch` items into `NewPage`.
-   * Perform splitting if `NewPage` > 4KB.
-4. **Internal Node:** Update child pointers to point to new pages.
+2.  Recursively descend the B+Tree (COW).
+
+3.  **Leaf Node:**
+
+      * Allocate `NewPage`.
+      * Merge `OldLeaf` items + `Batch` items into `NewPage`.
+      * Perform splitting if `NewPage` \> 4KB.
+
+4.  **Internal Node:** Update child pointers to point to new pages.
 
 **Phase 3: Atomic Commit (Redundant Superblock)**
 
-1. We now have a `NewRootPageID`.
-2. **If Sync=true:** `fdatasync` the active slab file (if it received any new records).
-3. Ensure index pages backing the new root are persisted as required by the durability contract (Section 2.2.1).
-4. **Write the inactive Meta Page** (Page 0 or Page 1):
+1.  We now have a `NewRootPageID`.
 
-   * `CommitSeq = OldCommitSeq + 1`
-   * `RootPageID = NewRootPageID`
-   * `FreelistHeadID = CurrentFreelistHead`
-   * `TotalPages = CurrentTotalPages`
-5. **If Sync=true:** persist the meta update (Section 2.2.1).
-6. **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.2).
+2.  **If Sync=true:** `fdatasync` the active slab file **MUST complete** before any meta page update.
+
+3.  Ensure index pages backing the new root are persisted as required by the durability contract (Section 2.2.1).
+
+4.  **Write the inactive Meta Page** (Page 0 or Page 1):
+
+      * `CommitSeq = OldCommitSeq + 1`
+      * `RootPageID = NewRootPageID`
+      * `FreelistHeadID = CurrentFreelistHead`
+      * `TotalPages = CurrentTotalPages`
+
+5.  **If Sync=true:** persist the meta update (Section 2.2.1).
+
+6.  **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.2).
 
 ### 5.2 Page & Slab Lifecycle (The Graveyard & Snapshots)
 
@@ -276,81 +299,94 @@ To support concurrent readers without locks, we cannot immediately overwrite old
 
 To ensure safe reading of both Pages and Slabs, every Read operation (including `Get` and `Iterator`) must first acquire a **Snapshot**.
 
-1. **Capture State:** Read the current `SlabSet` pointer (atomic load).
-2. **Increment Refs:**
+1.  **Capture State:** Read the current `SlabSet` pointer (atomic load).
 
-   * Iterate through all `*SlabFile` pointers in the captured set.
-   * Atomically increment `SlabFile.RefCount` for each.
-3. **Release State:** When `Snapshot.Close()` or `Iterator.Close()` is called:
+2.  **Increment Refs:**
 
-   * Decrement `RefCount` for each slab in the snapshot.
-   * If `RefCount == 0` AND `IsZombie == true`, physically close and remove the file from disk.
+      * Iterate through all `*SlabFile` pointers in the captured set.
+      * Atomically increment `SlabFile.RefCount` for each.
+
+3.  **Release State:** When `Snapshot.Close()` or `Iterator.Close()` is called:
+
+      * Decrement `RefCount` for each slab in the snapshot.
+      * If `RefCount == 0` AND `IsZombie == true`, physically close and remove the file from disk.
 
 #### 5.2.2 The Graveyard (Pages)
 
-* **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
-* **The Reader Hold:** Readers (Snapshots and Iterators) pin a `CommitSeq` while traversing pages. A pinned CommitSeq is a **hard safety boundary** for reclamation decisions.
-* **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root (including via leaf `NextLeafID` / `PrevLeafID` chains) may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
-* **Reader Liveness (TTL) Policy (Updated):**
+  * **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
 
-  * TTL is used **only** to bound garbage collection delays.
-  * A Snapshot/Iterator is **not invalidated** solely due to time passing.
-  * TTL expiration **does not permit** reclamation of pages that are reachable from any pinned root.
-  * TTL may be used only for diagnostics, metrics, or optional future policies that explicitly fail iterators with a deterministic error.
-  * TTL **must not** cause iterators to observe fewer historical pages, miss keys, break leaf traversal, observe reused PageIDs, or return logically inconsistent views.
-* **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when safe under the hold policy and the Snapshot Safety Invariant.
+  * **The Reader Hold:** Readers (Snapshots and Iterators) pin a `CommitSeq` while traversing pages. A pinned CommitSeq is a **hard safety boundary** for reclamation decisions.
+
+  * **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root (including via leaf `NextLeafID` / `PrevLeafID` chains) may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
+
+  * **Reader Liveness (TTL) Policy (Updated):**
+
+      * TTL is used **only** to bound garbage collection delays.
+      * A Snapshot/Iterator is **not invalidated** solely due to time passing.
+      * TTL expiration **does not permit** reclamation of pages that are reachable from any pinned root.
+      * TTL may be used only for diagnostics, metrics, or optional future policies that explicitly fail iterators with a deterministic error.
+      * TTL **must not** cause iterators to observe fewer historical pages, miss keys, break leaf traversal, observe reused PageIDs, or return logically inconsistent views.
+
+  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when safe under the hold policy and the Snapshot Safety Invariant.
 
 ### 5.3 Read Path & Iterator
 
-#### 1. Standard Get(Key)
+#### 1\. Standard Get(Key)
 
-* Traverse B+Tree.
-* **Checksum:** On every `ReadPage`, verify CRC32.
-* **Fetch:**
+  * Traverse B+Tree.
 
-  * **Inlined:** Allocate a new byte slice and copy data from the Page.
-  * **Pointer:**
+  * **Checksum:** On every `ReadPage`, verify CRC32C.
 
-    1. Extract `FileID`, `Offset`, `Length` from `ValuePtr`.
-    2. Lookup the `*SlabFile` from the Snapshot’s `SlabSet`.
-    3. Bounds-check `Offset + Length` and parse the slab record (Section 2.1.1).
-    4. Verify record CRC32.
-    5. Copy `ValueBytes` into a newly allocated slice.
-  * *Safety Note:* Never return a direct slice into the mmap region.
+  * **Fetch:**
 
-#### 2. Iterator Semantics (Cosmos Compatibility)
+      * **Inlined:** Allocate a new byte slice and copy data from the Page.
+
+      * **Pointer:**
+
+        1.  Extract `FileID`, `Offset`, `Length` from `ValuePtr`.
+        2.  Lookup the `*SlabFile` from the Snapshot’s `SlabSet`.
+        3.  Bounds-check `Offset + Length` and parse the slab record (Section 2.1.1).
+        4.  Verify record CRC32C.
+        5.  Copy `ValueBytes` into a newly allocated slice.
+
+      * *Safety Note:* Never return a direct slice into the mmap region.
+
+#### 2\. Iterator Semantics (Cosmos Compatibility)
 
 TreeDB iterators must match cosmos-db semantics:
 
-* `Iterator(start,end)` yields keys in ascending order over `[start,end)`.
-* `ReverseIterator(start,end)` yields keys in descending order over `[start,end)`.
-* Both are advanced by calling `Next()`.
-* `nil` start/end represent unbounded domains.
-* Returned `Key()`/`Value()` must not alias internal memory.
-* End-of-iteration is represented by `Valid() == false` with `Error() == nil`.
+  * `Iterator(start,end)` yields keys in ascending order over `[start,end)`.
+  * `ReverseIterator(start,end)` yields keys in descending order over `[start,end)`.
+  * Both are advanced by calling `Next()`.
+  * `nil` start/end represent unbounded domains.
+  * Returned `Key()`/`Value()` must not alias internal memory.
+  * End-of-iteration is represented by `Valid() == false` with `Error() == nil`.
 
-#### 3. Forward Iterator (Internal Mechanics)
+#### 3\. Forward Iterator (Internal Mechanics)
 
-* **Initialization:** Seek to `startKey`.
-* **Next():**
+  * **Initialization:** Seek to `startKey`.
 
-  * Increment index in current Leaf Directory.
-  * If index >= `Count`: Load `NextLeafID`.
-  * If `NextLeafID == 0`: Stop (EOF).
+  * **Next():**
 
-#### 4. Reverse Iterator (Internal Mechanics)
+      * Increment index in current Leaf Directory.
+      * If index \>= `Count`: Load `NextLeafID`.
+      * If `NextLeafID == 0`: Stop (EOF).
 
-* **Initialization:**
+#### 4\. Reverse Iterator (Internal Mechanics)
 
-  * Seek to `endKey`.
-  * If `endKey` is exclusive and matches a key exactly, move one step back.
-  * If `endKey` is nil, Seek to the **Last Key** of the **Right-Most Leaf**.
-* **Next():**
+  * **Initialization:**
 
-  * Decrement index in current Leaf Directory.
-  * If index < 0: Load `PrevLeafID`.
-  * If `PrevLeafID == 0`: Stop (SOF).
-* **Concurrency:** Holds a reader hold on `CommitSeq` to protect page traversal.
+      * Seek to `endKey`.
+      * If `endKey` is exclusive and matches a key exactly, move one step back.
+      * If `endKey` is nil, Seek to the **Last Key** of the **Right-Most Leaf**.
+
+  * **Next():**
+
+      * Decrement index in current Leaf Directory.
+      * If index \< 0: Load `PrevLeafID`.
+      * If `PrevLeafID == 0`: Stop (SOF).
+
+  * **Concurrency:** Holds a reader hold on `CommitSeq` to protect page traversal.
 
 ### 5.4 Concurrent Slab Compaction (The "Move-and-CAS" Protocol)
 
@@ -360,37 +396,41 @@ Compaction runs concurrently with high-throughput writes and reads. To prevent r
 
 **Phase 1: Candidate Selection**
 
-* Select a “Cold Slab” where `DeadBytes / TotalBytes > 0.5`.
-* Allocate a “Target Slab” (`active-compaction.slab`).
+  * Select a “Cold Slab” where `DeadBytes / TotalBytes > 0.5`.
+  * Allocate a “Target Slab” (`active-compaction.slab`).
 
 **Phase 2: Optimistic Copy (The "Ghost" Write)**
 
 The compactor iterates sequentially through slab records (Section 2.1.1). For each record `(Key, OldPtr)`:
 
-1. **Liveness Check:** If `Tree.Get(Key) != OldPtr`, skip.
-2. **Copy:** Append the value to the Target Slab, producing `NewPtr`.
-3. **Record Intent:** Add `Key -> (OldPtr, NewPtr)` to a local `CompactionBatch`.
+1.  **Dead Hints Optimization:** Consult a "Dead Hint" mechanism (e.g., bitmap or tombstone log) if available to skip known-dead records without B+Tree lookups.
+2.  **Liveness Check:** If no hint, verify via B+Tree: If `Tree.Get(Key) != OldPtr`, skip.
+3.  **Copy:** Append the value to the Target Slab, producing `NewPtr`.
+4.  **Record Intent:** Add `Key -> (OldPtr, NewPtr)` to a local `CompactionBatch`.
 
 **Phase 3: Atomic Commit (CAS)**
 
 Once `CompactionBatch` reaches a threshold (e.g., 4MB):
 
-1. **Serialize with the Single Writer:** Compaction CAS runs within the same single-writer critical section as user batches.
-2. For each entry:
+1.  **Serialize with the Single Writer:** The Compaction CAS operation **MUST** execute under the **same global write lock** used by `Batch.Write` to prevent interleaving user updates.
 
-   * `CompareAndSwap(Key, OldPtr, NewPtr)`
-   * On mismatch: abort the update for that key (waste is acceptable).
+2.  For each entry:
+
+      * `CompareAndSwap(Key, OldPtr, NewPtr)`
+      * On mismatch: abort the update for that key (waste is acceptable).
 
 #### 5.4.2 Zombie Transition (Ref-Counted Deletion)
 
 Once the Cold Slab is fully processed:
 
-1. Atomically remove Cold Slab from the active `SlabSet` and add Target Slab.
-2. Mark Cold Slab `IsZombie = true`.
-3. Attempt deletion:
+1.  Atomically remove Cold Slab from the active `SlabSet` and add Target Slab.
 
-   * If `RefCount == 0`: close + remove immediately.
-   * Else: defer to the last Snapshot release.
+2.  Mark Cold Slab `IsZombie = true`.
+
+3.  Attempt deletion:
+
+      * If `RefCount == 0`: close + remove immediately.
+      * Else: defer to the last Snapshot release.
 
 ### 5.5 Race Condition Analysis & Safety Proofs
 
@@ -412,19 +452,20 @@ TreeDB may optionally run an adaptive controller to automatically tune `InlineTh
 
 #### 5.6.1 Goals
 
-* Avoid B+Tree fanout collapse and excess leaf splitting caused by inlining too much value data.
-* Avoid excessive slab bandwidth, dead-byte accumulation, and compaction storms caused by pushing too much out-of-line.
-* Keep behavior stable and predictable under Cosmos workloads (IAVL-heavy medium values vs. blob-heavy workloads).
+  * Avoid B+Tree fanout collapse and excess leaf splitting caused by inlining too much value data.
+  * Avoid excessive slab bandwidth, dead-byte accumulation, and compaction storms caused by pushing too much out-of-line.
+  * Keep behavior stable and predictable under Cosmos workloads (IAVL-heavy medium values vs. blob-heavy workloads).
 
 #### 5.6.2 Operating Rules (MANDATORY)
 
-* **Threshold is latched per commit:** At the start of each `Batch.Write*()` call, TreeDB reads the current `InlineThreshold` into a local variable and uses that value consistently for the entire commit.
+  * **Threshold is latched per commit:** At the start of each `Batch.Write*()` call, TreeDB reads the current `InlineThreshold` into a local variable and uses that value consistently for the entire commit.
 
-* **Hard caps:**
+  * **Hard caps:**
 
-  * `InlineHardMin = 64 bytes`
-  * `InlineHardMax = 2048 bytes`
-* **Very large values are always out-of-line:** if `len(value) > InlineHardMax`, they must be stored in slabs regardless of any adaptive decision.
+      * `InlineHardMin = 64 bytes`
+      * `InlineHardMax = 2048 bytes`
+
+  * **Very large values are always out-of-line:** if `len(value) > InlineHardMax`, they must be stored in slabs regardless of any adaptive decision.
 
 #### 5.6.3 Telemetry (EWMA)
 
@@ -432,19 +473,19 @@ TreeDB maintains exponentially-weighted moving averages (EWMA) for the following
 
 **Index-side telemetry**
 
-* `leaf_fill_avg`: average fraction of leaf bytes used after zipper merge (0..1).
-* `split_rate`: leaf splits per commit (or per 10k inserted/updated keys; implementation-defined).
-* `index_write_bytes`: approximate bytes dirtied/written in `index.db` per commit.
+  * `leaf_fill_avg`: average fraction of leaf bytes used after zipper merge (0..1).
+  * `split_rate`: leaf splits per commit (or per 10k inserted/updated keys; implementation-defined).
+  * `index_write_bytes`: approximate bytes dirtied/written in `index.db` per commit.
 
 **Slab/compaction telemetry**
 
-* `slab_write_bytes`: bytes appended to slabs per commit (including record overhead).
-* `slab_dead_ratio`: `sum(DeadBytes) / sum(TotalBytes)` over slabs in the active set (or over all slabs; implementation-defined).
-* `compaction_io_bps`: observed compaction IO bandwidth (bytes/sec), EWMA.
+  * `slab_write_bytes`: bytes appended to slabs per commit (including record overhead).
+  * `slab_dead_ratio`: `sum(DeadBytes) / sum(TotalBytes)` over slabs in the active set (or over all slabs; implementation-defined).
+  * `compaction_io_bps`: observed compaction IO bandwidth (bytes/sec), EWMA.
 
 EWMA parameters:
 
-* `ewma_alpha` is configurable; defaults should correspond to a half-life of ~1–5 minutes of commits (implementation-defined).
+  * `ewma_alpha` is configurable; defaults should correspond to a half-life of \~1–5 minutes of commits (implementation-defined).
 
 #### 5.6.4 Pressure Functions
 
@@ -464,15 +505,15 @@ slab_pressure  =
 
 Defaults (recommended, configurable):
 
-* `leaf_fill_target = 0.85`
-* `split_rate_target = 0` (or a small tolerance; workload-dependent)
-* `slab_dead_target = 0.35`
-* `compaction_io_target` is deployment-specific (e.g., rate limiter value)
-* `index_write_target` and `slab_write_target` are deployment-specific and may be disabled by setting weights to zero.
+  * `leaf_fill_target = 0.85`
+  * `split_rate_target = 0` (or a small tolerance; workload-dependent)
+  * `slab_dead_target = 0.35`
+  * `compaction_io_target` is deployment-specific (e.g., rate limiter value)
+  * `index_write_target` and `slab_write_target` are deployment-specific and may be disabled by setting weights to zero.
 
 Weights:
 
-* `w1,w2,w3,v1,v2,v3` are configurable. Default deployments may start with `w1,w2,v1,v3 > 0` and others at 0.
+  * `w1,w2,w3,v1,v2,v3` are configurable. Default deployments may start with `w1,w2,v1,v3 > 0` and others at 0.
 
 #### 5.6.5 Update Rule (Bounded Step Controller)
 
@@ -485,29 +526,29 @@ InlineThreshold = clamp(InlineThreshold + delta, InlineHardMin, InlineHardMax)
 
 Defaults (recommended, configurable):
 
-* `step = 64 bytes`
-* `alpha` chosen such that typical adjustments are one `step` per evaluation under sustained pressure.
-* `InlineThreshold` initializes to `256 bytes` unless configured otherwise.
+  * `step = 64 bytes`
+  * `alpha` chosen such that typical adjustments are one `step` per evaluation under sustained pressure.
+  * `InlineThreshold` initializes to `256 bytes` unless configured otherwise.
 
 Interpretation:
 
-* If `index_pressure` dominates, `delta` becomes negative and the threshold decreases, pushing more values out-of-line.
-* If `slab_pressure` dominates, `delta` becomes positive and the threshold increases, inlining more values.
+  * If `index_pressure` dominates, `delta` becomes negative and the threshold decreases, pushing more values out-of-line.
+  * If `slab_pressure` dominates, `delta` becomes positive and the threshold increases, inlining more values.
 
 #### 5.6.6 Observability
 
 The following `Stats()` keys should be exported when adaptive tuning is enabled:
 
-* `treedb.inline_threshold.current`
-* `treedb.inline_threshold.hard_min`
-* `treedb.inline_threshold.hard_max`
-* `treedb.inline_threshold.leaf_fill_avg`
-* `treedb.inline_threshold.split_rate`
-* `treedb.inline_threshold.slab_dead_ratio`
-* `treedb.inline_threshold.slab_write_bytes`
-* `treedb.inline_threshold.compaction_io_bps`
+  * `treedb.inline_threshold.current`
+  * `treedb.inline_threshold.hard_min`
+  * `treedb.inline_threshold.hard_max`
+  * `treedb.inline_threshold.leaf_fill_avg`
+  * `treedb.inline_threshold.split_rate`
+  * `treedb.inline_threshold.slab_dead_ratio`
+  * `treedb.inline_threshold.slab_write_bytes`
+  * `treedb.inline_threshold.compaction_io_bps`
 
-## 6. Go Interface Definition
+## 6\. Go Interface Definition
 
 ```go
 package goslab
@@ -570,6 +611,12 @@ func (db *DB) Print() error
 //  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
 func (db *DB) Stats() map[string]string
 
+// --- Extended Management Interface ---
+
+// Compact triggers a manual compaction cycle.
+// Useful for node operators during maintenance windows.
+func (db *DB) Compact() error
+
 // --- Internal Interfaces for CAS Support ---
 
 // Tree interface required for Safe Compaction
@@ -579,6 +626,7 @@ type Tree interface {
 
     // CompareAndSwap atomically sets 'key' to 'newPtr' ONLY IF the current value equals 'oldPtr'.
     // Returns true if swapped, false if mismatch.
+    // MUST execute under the same write lock as Batch.Write.
     CompareAndSwap(key []byte, oldPtr, newPtr ValuePtr) (bool, error)
 }
 
@@ -597,5 +645,4 @@ func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
 ```
-
 
