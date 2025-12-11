@@ -35,8 +35,12 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	} else {
 		h.slabData = h.slabData[:0]
 	}
-	h.slabData = append(h.slabData, encodeuint64(uint64(keylen))...)
-	h.slabData = append(h.slabData, encodeuint64(uint64(vallen))...)
+	
+	var scratch [16]byte
+	binary.LittleEndian.PutUint64(scratch[:8], uint64(keylen))
+	binary.LittleEndian.PutUint64(scratch[8:], uint64(vallen))
+	h.slabData = append(h.slabData, scratch[:]...)
+	
 	h.slabData = append(h.slabData, key...)
 	h.slabData = append(h.slabData, val...)
 	err := h.writeSlab(h.slabData)
@@ -55,15 +59,22 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		h.slabData = h.slabData[:0]
 	}
 	offset := *h.slabOffset
+	
+	var scratch [16]byte
+	
 	for i, item := range items {
 		keyBytes := item.Key
 		valueBytes := item.Value
 		totalLength := len(keyBytes) + len(valueBytes) + 16
 		slabOffsets[i] = Key{slabOffset: offset, hash: hash(keyBytes)}
-		h.slabData = append(h.slabData, encodeuint64(uint64(len(keyBytes)))...)
-		h.slabData = append(h.slabData, encodeuint64(uint64(len(valueBytes)))...)
+		
+		binary.LittleEndian.PutUint64(scratch[:8], uint64(len(keyBytes)))
+		binary.LittleEndian.PutUint64(scratch[8:], uint64(len(valueBytes)))
+		h.slabData = append(h.slabData, scratch[:]...)
+		
 		h.slabData = append(h.slabData, keyBytes...)
 		h.slabData = append(h.slabData, valueBytes...)
+		
 		offset += SlabOffset(totalLength)
 	}
 	err := h.writeSlab(h.slabData)
@@ -75,16 +86,38 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 }
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
-	headerBytes, err := h.ReadBytes(slabValues.slabOffset, int64(16))
+	// Optimistic read: 64 bytes covers header (16) + typical small key/value (48)
+	bufSize := int64(64)
+	buf, err := h.ReadBytes(slabValues.slabOffset, bufSize)
 	if err != nil {
-		return Item{}, err
+		// If read failed (EOF?), try exact header read
+		// But ReadBytes expects full read.
+		// If bufSize > filesize - offset, it returns error?
+		// We should probably rely on exact read if this fails, or check error type.
+		// For now, simple fallback:
+		buf, err = h.ReadBytes(slabValues.slabOffset, 16)
+		if err != nil {
+			return Item{}, err
+		}
 	}
-	keyLength, _ := decodeuint64(headerBytes[0:8])
-	valueLength, _ := decodeuint64(headerBytes[8:16])
-	valuesBytes, err := h.ReadBytes(slabValues.slabOffset+16, int64(keyLength+valueLength))
-	if err != nil {
-		return Item{}, err
+
+	keyLength, _ := decodeuint64(buf[0:8])
+	valueLength, _ := decodeuint64(buf[8:16])
+	totalLen := int64(16) + int64(keyLength) + int64(valueLength)
+
+	var valuesBytes []byte
+	if totalLen <= int64(len(buf)) {
+		// Data is already in buffer
+		valuesBytes = buf[16:totalLen]
+	} else {
+		// Need to read the rest (or all of it)
+		// We can read just the body:
+		valuesBytes, err = h.ReadBytes(slabValues.slabOffset+16, int64(keyLength+valueLength))
+		if err != nil {
+			return Item{}, err
+		}
 	}
+
 	return Item{
 		Key:   valuesBytes[0:keyLength],
 		Value: valuesBytes[keyLength:],
@@ -93,12 +126,6 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 
 func decodeuint64(input []byte) (uint64, int) {
 	return binary.LittleEndian.Uint64(input), 8
-}
-
-func encodeuint64(input uint64) []byte {
-	ret := make([]byte, 8)
-	binary.LittleEndian.PutUint64(ret, input)
-	return ret
 }
 
 func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
