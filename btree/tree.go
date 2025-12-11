@@ -2,6 +2,7 @@ package btree
 
 import (
 	"bytes"
+	"container/list"
 	"fmt"
 	"sync"
 )
@@ -26,8 +27,8 @@ type Tree struct {
 	mu        sync.RWMutex
 	meta      Meta
 	cacheMu   sync.Mutex
-	nodeCache map[NodeID]*Node
-	cacheFIFO []NodeID
+	nodeCache map[NodeID]*list.Element
+	cacheList *list.List
 	cacheCap  int
 	metaDirty bool
 }
@@ -39,7 +40,8 @@ func OpenTree(kv KVStore, treeID string) (*Tree, error) {
 		treeID:    treeID,
 		kv:        kv,
 		cacheCap:  128,
-		nodeCache: make(map[NodeID]*Node),
+		nodeCache: make(map[NodeID]*list.Element),
+		cacheList: list.New(),
 	}
 
 	metaBytes, err := kv.Get(metaKey(treeID))
@@ -406,7 +408,13 @@ func (t *Tree) cacheGet(id NodeID) *Node {
 	}
 	t.cacheMu.Lock()
 	defer t.cacheMu.Unlock()
-	return t.nodeCache[id]
+	if el, ok := t.nodeCache[id]; ok {
+		t.cacheList.MoveToFront(el)
+		if n, ok := el.Value.(*Node); ok {
+			return n
+		}
+	}
+	return nil
 }
 
 func (t *Tree) cachePut(n *Node) {
@@ -416,17 +424,23 @@ func (t *Tree) cachePut(n *Node) {
 	t.cacheMu.Lock()
 	defer t.cacheMu.Unlock()
 	if t.nodeCache == nil {
-		t.nodeCache = make(map[NodeID]*Node)
+		t.nodeCache = make(map[NodeID]*list.Element)
+		t.cacheList = list.New()
 	}
-	if _, exists := t.nodeCache[n.ID]; exists {
-		t.nodeCache[n.ID] = n
+	if el, ok := t.nodeCache[n.ID]; ok {
+		el.Value = n
+		t.cacheList.MoveToFront(el)
 		return
 	}
-	t.nodeCache[n.ID] = n
-	t.cacheFIFO = append(t.cacheFIFO, n.ID)
-	if len(t.cacheFIFO) > t.cacheCap {
-		evict := t.cacheFIFO[0]
-		t.cacheFIFO = t.cacheFIFO[1:]
-		delete(t.nodeCache, evict)
+	el := t.cacheList.PushFront(n)
+	t.nodeCache[n.ID] = el
+	if t.cacheList.Len() > t.cacheCap {
+		lru := t.cacheList.Back()
+		if lru != nil {
+			t.cacheList.Remove(lru)
+			if ln, ok := lru.Value.(*Node); ok {
+				delete(t.nodeCache, ln.ID)
+			}
+		}
 	}
 }
