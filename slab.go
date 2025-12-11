@@ -51,6 +51,33 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	return Key{slabOffset: offset, hash: hash(key)}, nil
 }
 
+func (h *Hashmap) addDeleteSlab(key []byte) error {
+	keylen := len(key)
+	// 8 bytes keylen + 8 bytes vallen + keylen + 0 bytes val
+	actualTotalLength := 16 + keylen
+	
+	if cap(h.slabData) < actualTotalLength {
+		h.slabData = make([]byte, 0, actualTotalLength)
+	} else {
+		h.slabData = h.slabData[:0]
+	}
+	
+	var scratch [16]byte
+	binary.LittleEndian.PutUint64(scratch[:8], uint64(keylen))
+	binary.LittleEndian.PutUint64(scratch[8:], ^uint64(0)) // MaxUint64 for Tombstone
+	h.slabData = append(h.slabData, scratch[:]...)
+	
+	h.slabData = append(h.slabData, key...)
+	// No value
+	
+	err := h.writeSlab(h.slabData)
+	if err != nil {
+		return err
+	}
+	*h.slabOffset += SlabOffset(actualTotalLength)
+	return nil
+}
+
 func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 	slabOffsets := make([]Key, len(items))
 	if cap(h.slabData) < len(items)*2048 {

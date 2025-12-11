@@ -233,6 +233,51 @@ func TestDelete(t *testing.T) {
 	assert.Equal(t, value, res)
 }
 
+func TestCrashRecovery(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
+
+	// Phase 1: Populate and Delete
+	{
+		var obj Hashmap
+		err := obj.New(folder)
+		assert.NoError(t, err)
+
+		obj.Add([]byte("keep"), []byte("val1"))
+		obj.Add([]byte("delete"), []byte("val2"))
+		obj.Delete([]byte("delete"))
+		
+		// "Crash" -> obj goes out of scope, files remain
+		// We don't close cleanly to simulate crash (though New doesn't hold locks on files except flock? no flock used)
+	}
+
+	// Phase 2: Recover
+	{
+		var obj Hashmap
+		// New loads metadata. 
+		// If metadata says Count=1 (correct), we are good.
+		// But let's assume metadata is corrupt or we want to force rebuild.
+		// We corrupt metadata file? 
+		// Or just call Recover explicitly.
+		err := obj.New(folder)
+		assert.NoError(t, err)
+		
+		// Verify state before recovery (should be consistent if closed properly/flushed)
+		// But we want to test REPLAY.
+		
+		err = obj.Recover()
+		assert.NoError(t, err)
+		
+		val, err := obj.Get([]byte("keep"))
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("val1"), val)
+		
+		val, err = obj.Get([]byte("delete"))
+		assert.NoError(t, err)
+		assert.Nil(t, val)
+	}
+}
+
 func BenchmarkAddManySlabs(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)

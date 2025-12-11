@@ -96,7 +96,13 @@ func (h *Hashmap) Delete(key []byte) error {
 				return err
 			}
 			if bytes.Equal(item.Key, key) {
-				// Found it. Mark as deleted.
+				// Found it. 
+				// 1. Log delete to slab (WAL) for durability/recovery
+				if err := h.addDeleteSlab(key); err != nil {
+					return err
+				}
+				
+				// 2. Mark as deleted in index
 				(*h.Keys)[myKeyIndex].slabOffset = Tombstone
 				*h.Count -= 1
 				return nil
