@@ -89,3 +89,29 @@ This note summarizes the main engine and benchmark changes made during the recen
     - `Scenario.Name == "Pipeline16"` or `"LargeVal1KB"`.
   - Standard and RandomKeys scenarios, and non-benchmark gomapredis usage, keep the original one-SET-per-Add behavior.
 
+## Possible Next Steps
+
+- **Zero/low-copy slab reads**
+  - Explore returning slices into an mmap-backed slab region (or shard-local reusable buffers) for read-heavy workloads to reduce allocations and memcpy in `Get`.
+  - Requires careful handling of file growth/rotation and ensuring callers do not retain references across compaction or close.
+
+- **Vectorized I/O / deeper MGET optimizations**
+  - Build on `HashmapDistributed.GetMany` to batch slab reads per shard.
+  - On Linux, optionally experiment with `preadv`/`readv` or io_uring for large MGETs to further reduce syscalls.
+
+- **Compaction correctness & performance**
+  - Fix `Compact()` + `TestCompaction` to be correct with the segmented slab design.
+  - Once correct, tune compaction to be more streaming and less stop-the-world, and consider background compaction per shard.
+
+- **Index layout / key size experiments**
+  - Prototype a variant where `Key` is reduced from 16 bytes to 8 bytes (e.g., 32-bit chunked offsets + 32-bit hash) with a clear maximum DB size.
+  - Use `loadfactorbench` and `resizebench` to compare cache behavior, probe lengths, and latency at large capacities.
+
+- **Compression policy tuning**
+  - Systematically benchmark different compression thresholds and possibly alternative codecs for large values (e.g., only compress >4KB or user-configurable).
+  - Expose per-DB or per-shard compression modes (off / fast / aggressive) and document recommended defaults for common workloads.
+
+- **Durability and WAL improvements**
+  - If stronger durability is desired, add an explicit small WAL (separate from the slab segments) with configurable fsync policies.
+  - Keep the current slab-based log as the primary recovery mechanism, but allow stricter durability modes for users who need them.
+
