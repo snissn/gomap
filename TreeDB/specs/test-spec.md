@@ -1,4 +1,4 @@
-# Addendum A: Testing Specification v2.3 (Updated for Redundant Superblocks, Slab Records, and Cosmos Iterator Semantics)
+# Addendum A: Testing Specification v2.3 (Updated for Redundant Superblocks, Slab Records, Cosmos Iterator Semantics, and Adaptive Inline Threshold)
 
 ## 1. Unit Testing Strategies
 
@@ -112,6 +112,40 @@ Focus on isolating the complex low-level data structures before system integrati
 
   * Ensure `CommitSeq` increments exactly once per successful commit and never decreases across restarts.
 
+### 1.6 Adaptive Inline Threshold (Telemetry + Feedback) (NEW)
+
+These tests validate that the adaptive controller is (a) safe, (b) low-overhead, and (c) converges toward sane behavior.
+
+* **Latch Semantics (MANDATORY):**
+
+  * **Scenario:** Enable adaptive threshold updates with an aggressive evaluation interval (e.g., update every commit) and induce oscillating pressures.
+  * **Trigger:** Create a single large `Batch` that takes non-trivial time to commit (e.g., many keys and values around the current threshold).
+  * **Assert:**
+
+    * The commit uses exactly one latched threshold value for all ops in that commit (instrumentation: record the threshold observed by the commit).
+    * No operation within the same commit uses a different threshold, regardless of concurrent controller updates.
+
+* **Controller Bounded Step (MANDATORY):**
+
+  * **Scenario:** Configure `InlineHardMin`, `InlineHardMax`, and `step` (e.g., 64).
+  * **Trigger:** Force sustained index pressure for several evaluation intervals, then sustained slab pressure.
+  * **Assert:**
+
+    * Threshold moves by at most `step` per evaluation.
+    * Threshold never exceeds hard bounds.
+    * Threshold changes direction when pressure flips.
+
+* **Low Overhead / Evaluation Frequency (NEW):**
+
+  * **Scenario:** Configure `K=100` (update every 100 commits).
+  * **Trigger:** Run 10,000 small commits.
+  * **Assert:** Controller evaluation occurs approximately `10000 / K` times (instrumentation counter), and does not allocate per-operation.
+
+* **Telemetry Sanity (NEW):**
+
+  * Verify `leaf_fill_avg` stays in [0,1], `slab_dead_ratio` stays in [0,1], and reported bytes are non-negative and monotonic where expected.
+  * Verify EWMA values respond smoothly (no instantaneous jumps unless input jumps).
+
 ---
 
 ## 2. Integration & Functional Testing
@@ -173,6 +207,21 @@ Focus on the public `DB` interface and ACID properties.
 * **Smoke:** Call `NewBatchWithSize(1<<20)`, write keys, ensure correctness matches `NewBatch()`.
 * **Hint Utilization (Optional):** Track internal capacity growth (via instrumentation) to ensure the hint reduces reallocations (non-functional, best-effort).
 
+### 2.5 Adaptive Inline Threshold Integration (NEW)
+
+* **Mixed Workload Convergence (Smoke):**
+
+  * Run a workload with two phases:
+
+    1. IAVL-like: many medium values (e.g., 200–800 bytes).
+    2. Blob-like: periodic very large values (e.g., 1–10MB).
+  * **Assert:** Threshold moves sensibly (does not peg min/max permanently) and system remains correct (all values readable, iterators correct, no corruption).
+
+* **Hard Max Enforcement:**
+
+  * Write values larger than `InlineHardMax` while the controller attempts to increase threshold.
+  * **Assert:** those values always go out-of-line; reads succeed.
+
 ---
 
 ## 3. Advanced Stress Testing (Fuzzing)
@@ -197,6 +246,11 @@ Standard unit tests miss edge cases. We must use **Property-Based Testing** (e.g
 
   * Randomly keep some iterators open across multiple commits while invoking `Prune()`.
   * **Assert:** Regardless of TTL and pruning activity, open iterators never observe missing keys, duplicated keys, broken traversal, or reclaimed-page corruption.
+
+* **Adaptive Threshold Stability (NEW):**
+
+  * Randomly enable/disable compaction and vary value sizes around the current threshold.
+  * **Assert:** Threshold stays within hard bounds; per-commit latch semantics hold; database correctness invariants remain valid.
 
 ### 3.2 Fuzzing Inputs
 
@@ -223,9 +277,7 @@ Simulate power loss to ensure durability.
 ### 4.1 The "Kill" Test
 
 * **Setup:** A separate process writes to the DB continuously.
-
 * **Trigger:** `kill -9` the process randomly.
-
 * **Recovery:**
 
   * Restart process.
@@ -237,7 +289,6 @@ Simulate power loss to ensure durability.
 * **Disk Full:** Mock the filesystem to return `ENOSPC` during a slab write or index extension.
 
   * **Expectation:** Batch returns error. DB remains readable and consistent.
-
 * **ReadOnly Mount:** Remount FS as Read-Only during operation.
 
 ### 4.3 Torn Write Recovery (UPDATED for Redundant Superblocks)
@@ -267,7 +318,6 @@ Simulate power loss to ensure durability.
 * **Scenario:**
 
   * Flip a bit in a non-meta B+Tree page used by the active root.
-
 * **Expectation:**
 
   * CRC detects corruption; Open or Get fails loudly (no silent corruption).
@@ -290,14 +340,12 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   * Start a long-running **Reverse Iterator** on an "Old Slab".
   * Trigger compaction (marks old slab zombie and attempts deletion).
-
 * **Assert (During Iteration):**
 
   * `Slab.IsZombie == true`
   * `Slab.RefCount > 0`
   * underlying file exists on disk
   * iterator successfully reads values
-
 * **Assert (After Close):**
 
   * Close iterator.
@@ -312,7 +360,6 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
   2. Pause compactor just before CAS.
   3. User calls `Set(Key A, Val=2)` (points to write slab).
   4. Resume compactor.
-
 * **Assert:**
 
   * CAS fails (returns false).
@@ -325,7 +372,6 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   1. Start compaction on a slab with 1,000 keys.
   2. Kill halfway through CAS loop (500 keys updated, 500 still old).
-
 * **Recovery:**
 
   * Restart DB.
@@ -339,7 +385,6 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   * Run continuous user batches.
   * Run compactor CAS commits in parallel.
-
 * **Assert:**
 
   * All CAS commits occur under the same single-writer serialization as user commits (no interleaving that violates atomicity).
@@ -352,7 +397,6 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
   * Populate DB to trigger a large compaction (e.g., 2GB).
   * Configure leaky-bucket rate limiter to low value (e.g., 5MB/s).
   * Start compaction in goroutine.
-
 * **Assert:**
 
   * Duration is at least `Size / Rate`.
@@ -369,7 +413,6 @@ The database must pass the Cosmos SDK integration definition.
 * **Requirement:** TreeDB must pass the generic `cosmos-db` backend test suite:
 
   * `github.com/cosmos/cosmos-db/db/db_test.go`
-
 * **Key Tests:**
 
   * `TestDBIterator`: Validates forward iteration.

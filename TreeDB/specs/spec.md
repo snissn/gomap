@@ -406,6 +406,107 @@ Ref-counted deletion ensures that slabs remain present while any Snapshot holds 
 
 A crash during CAS can leave a mix of pointers across slabs; this is safe because the B+Tree is authoritative and both slabs remain loadable after restart.
 
+### 5.6 Adaptive Inline Threshold (Option A: Telemetry + Feedback Control)
+
+TreeDB may optionally run an adaptive controller to automatically tune `InlineThreshold` based on observed index pressure and slab/compaction pressure.
+
+#### 5.6.1 Goals
+
+* Avoid B+Tree fanout collapse and excess leaf splitting caused by inlining too much value data.
+* Avoid excessive slab bandwidth, dead-byte accumulation, and compaction storms caused by pushing too much out-of-line.
+* Keep behavior stable and predictable under Cosmos workloads (IAVL-heavy medium values vs. blob-heavy workloads).
+
+#### 5.6.2 Operating Rules (MANDATORY)
+
+* **Threshold is latched per commit:** At the start of each `Batch.Write*()` call, TreeDB reads the current `InlineThreshold` into a local variable and uses that value consistently for the entire commit.
+
+* **Hard caps:**
+
+  * `InlineHardMin = 64 bytes`
+  * `InlineHardMax = 2048 bytes`
+* **Very large values are always out-of-line:** if `len(value) > InlineHardMax`, they must be stored in slabs regardless of any adaptive decision.
+
+#### 5.6.3 Telemetry (EWMA)
+
+TreeDB maintains exponentially-weighted moving averages (EWMA) for the following metrics. All are computed at commit boundaries.
+
+**Index-side telemetry**
+
+* `leaf_fill_avg`: average fraction of leaf bytes used after zipper merge (0..1).
+* `split_rate`: leaf splits per commit (or per 10k inserted/updated keys; implementation-defined).
+* `index_write_bytes`: approximate bytes dirtied/written in `index.db` per commit.
+
+**Slab/compaction telemetry**
+
+* `slab_write_bytes`: bytes appended to slabs per commit (including record overhead).
+* `slab_dead_ratio`: `sum(DeadBytes) / sum(TotalBytes)` over slabs in the active set (or over all slabs; implementation-defined).
+* `compaction_io_bps`: observed compaction IO bandwidth (bytes/sec), EWMA.
+
+EWMA parameters:
+
+* `ewma_alpha` is configurable; defaults should correspond to a half-life of ~1–5 minutes of commits (implementation-defined).
+
+#### 5.6.4 Pressure Functions
+
+TreeDB computes two pressures each evaluation interval:
+
+```text
+index_pressure =
+    w1 * max(0, leaf_fill_avg - leaf_fill_target)
+  + w2 * max(0, split_rate - split_rate_target)
+  + w3 * max(0, index_write_bytes_per_op - index_write_target)
+
+slab_pressure  =
+    v1 * max(0, slab_dead_ratio - slab_dead_target)
+  + v2 * max(0, compaction_io_bps - compaction_io_target)
+  + v3 * max(0, slab_write_bytes_per_op - slab_write_target)
+```
+
+Defaults (recommended, configurable):
+
+* `leaf_fill_target = 0.85`
+* `split_rate_target = 0` (or a small tolerance; workload-dependent)
+* `slab_dead_target = 0.35`
+* `compaction_io_target` is deployment-specific (e.g., rate limiter value)
+* `index_write_target` and `slab_write_target` are deployment-specific and may be disabled by setting weights to zero.
+
+Weights:
+
+* `w1,w2,w3,v1,v2,v3` are configurable. Default deployments may start with `w1,w2,v1,v3 > 0` and others at 0.
+
+#### 5.6.5 Update Rule (Bounded Step Controller)
+
+Every `K` commits (default: `K=100`), TreeDB updates `InlineThreshold`:
+
+```text
+delta = clamp( alpha * (slab_pressure - index_pressure), -step, +step )
+InlineThreshold = clamp(InlineThreshold + delta, InlineHardMin, InlineHardMax)
+```
+
+Defaults (recommended, configurable):
+
+* `step = 64 bytes`
+* `alpha` chosen such that typical adjustments are one `step` per evaluation under sustained pressure.
+* `InlineThreshold` initializes to `256 bytes` unless configured otherwise.
+
+Interpretation:
+
+* If `index_pressure` dominates, `delta` becomes negative and the threshold decreases, pushing more values out-of-line.
+* If `slab_pressure` dominates, `delta` becomes positive and the threshold increases, inlining more values.
+
+#### 5.6.6 Observability
+
+The following `Stats()` keys should be exported when adaptive tuning is enabled:
+
+* `treedb.inline_threshold.current`
+* `treedb.inline_threshold.hard_min`
+* `treedb.inline_threshold.hard_max`
+* `treedb.inline_threshold.leaf_fill_avg`
+* `treedb.inline_threshold.split_rate`
+* `treedb.inline_threshold.slab_dead_ratio`
+* `treedb.inline_threshold.slab_write_bytes`
+* `treedb.inline_threshold.compaction_io_bps`
+
 ## 6. Go Interface Definition
 
 ```go
