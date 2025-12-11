@@ -9,7 +9,7 @@ import (
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/s2"
 )
 
 const FlagCompressed = 0x80
@@ -75,7 +75,7 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	// Compress value?
 	var flags uint8
 	if h.CompressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
-		compressed := snappy.Encode(nil, val)
+		compressed := s2.Encode(nil, val)
 		if len(compressed) < len(val) {
 			val = compressed
 			flags |= FlagCompressed
@@ -184,7 +184,7 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		
 		var flags uint8
 		if h.CompressionEnabled && len(valueBytes) > 32 {
-			compressed := snappy.Encode(nil, valueBytes)
+			compressed := s2.Encode(nil, valueBytes)
 			if len(compressed) < len(valueBytes) {
 				valueBytes = compressed
 				flags |= FlagCompressed
@@ -317,7 +317,7 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	val := valuesBytes[keyLength:]
 	
 	if flags&FlagCompressed != 0 {
-		decompressed, err := snappy.Decode(nil, val)
+		decompressed, err := s2.Decode(nil, val)
 		if err != nil {
 			return Item{}, err
 		}
