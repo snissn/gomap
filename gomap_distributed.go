@@ -70,6 +70,15 @@ func (h *HashmapDistributed) Delete(key []byte) error {
 	return h.maps[mapIndex].Delete(key)
 }
 
+// Update performs an atomic read-modify-write operation on a key.
+func (h *HashmapDistributed) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+	hash := hash(key)
+	mapIndex := hash % Hash(len(h.maps))
+	h.mutexes[mapIndex].Lock()         // lock for writing
+	defer h.mutexes[mapIndex].Unlock() // unlock after writing
+	return h.maps[mapIndex].Update(key, callback)
+}
+
 // AddMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
 func (h *HashmapDistributed) AddMany(items []Item) error {

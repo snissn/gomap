@@ -119,6 +119,29 @@ func (h *Hashmap) Delete(key []byte) error {
 	return nil
 }
 
+// Update performs an atomic read-modify-write operation on a key.
+// The callback receives the current value (or nil if not found) and returns the new value.
+func (h *Hashmap) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+	// Simple implementation: Get then Add.
+	// Since Hashmap is NOT thread-safe, the caller (HashmapDistributed) must hold the lock.
+	// So we can just reuse Get logic (or duplicate probing for efficiency) then Add.
+	// But Add appends new slab.
+	// So we can just call Get, run callback, then Add.
+	// The atomicity is provided by the caller holding the lock.
+	
+	val, err := h.Get(key)
+	if err != nil {
+		return err
+	}
+	
+	newVal, err := callback(val)
+	if err != nil {
+		return err
+	}
+	
+	return h.Add(key, newVal)
+}
+
 // AddMany inserts multiple items in a batch.
 // It is not thread-safe.
 func (h *Hashmap) AddMany(items []Item) error {
