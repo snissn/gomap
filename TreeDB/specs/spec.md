@@ -1,4 +1,4 @@
-# TreeDB Design Specification v2.1
+# TreeDB Design Specification v2.2 (Ref-Counted Slabs)
 
 ## 1\. System Overview
 
@@ -8,7 +8,7 @@
 
   * **Hybrid Storage:** Values are stored in an append-only log (**Slabs**). Keys are stored in a Memory-Mapped B+Tree (**Index**).
   * **Safety:** Uses Copy-On-Write (COW) for snapshot isolation and CRC32 checksums for data integrity.
-  * **Concurrency:** Supports Single-Writer / Multi-Reader (SWMR) with lock-free reads via MVCC (Multi-Version Concurrency Control) semantics using Epochs.
+  * **Concurrency:** Supports Single-Writer / Multi-Reader (SWMR) with lock-free reads via MVCC (Multi-Version Concurrency Control) semantics using Epochs and Reference Counting.
 
 ## 2\. File Architecture
 
@@ -91,6 +91,26 @@ Used to recycle space within `index.db`.
   * **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
   * **Body:** Array of `PageID (uint64)`.
 
+### 3.4 The Slab Manager (NEW)
+
+The `SlabManager` controls access to physical `.slab` files. It mediates between the Reader (needing stability) and the Compactor (needing cleanup).
+
+```go
+// SlabFile represents a single physical file on disk.
+type SlabFile struct {
+    FileID   uint16
+    Handle   *os.File
+    Mmap     []byte       // The read-only memory map
+    RefCount atomic.Int64 // Number of active Snapshots referencing this file
+    IsZombie bool         // True if the file has been "deleted" by compaction
+}
+
+// SlabSet is an immutable list of SlabFiles active at a specific point in time.
+type SlabSet struct {
+    Files    map[uint16]*SlabFile
+}
+```
+
 ## 4\. Node Layouts (Slotted Pages)
 
 We use **Slotted Pages** to support variable-length keys while maintaining binary-search speed.
@@ -166,34 +186,30 @@ Writes are batched to ensure atomicity and reduce I/O.
 3.  Update **Page 0 (Meta)**:
       * `RootPageID = NewRootPageID`
       * `FreelistHeadID = CurrentFreelistHead`
-4.  **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.3).
+4.  **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.2).
 
-### 5.2 Page Lifecycle & Safety (The Graveyard)
+### 5.2 Page & Slab Lifecycle (The Graveyard & Snapshots)
 
-To support concurrent readers without locks, we cannot immediately overwrite old pages.
+To support concurrent readers without locks, we cannot immediately overwrite old pages or delete old slab files.
 
-**1. The In-Memory Graveyard**
+#### 5.2.1 Snapshot Acquisition (NEW)
 
-  * A structure in RAM: `map[Sequence][]PageID`.
-  * When a Batch commits at Sequence `N`, all "Old Pages" replaced during that commit are added to `Graveyard[N]`.
+To ensure safe reading of both Pages and Slabs, every Read operation (including `Get` and `Iterator`) must first acquire a **Snapshot**.
 
-**2. The Reader Hold**
+1.  **Capture State:** The Snapshot captures the `CurrentSlabSet` from the `SlabManager`.
+2.  **Increment Refs:**
+      * Iterate through all `*SlabFile` pointers in the captured `CurrentSlabSet`.
+      * Atomically increment `SlabFile.RefCount` for each.
+3.  **Release State:** When `Snapshot.Close()` or `Iterator.Close()` is called:
+      * Iterate through the captured `SlabFile` pointers.
+      * Atomically decrement `SlabFile.RefCount`.
+      * **Trigger Cleanup:** If `RefCount == 0` AND `IsZombie == true`, physically close and remove the file from disk.
 
-  * Readers (Iterators) acquire a "Hold" on a specific Sequence.
-  * `MinActiveSequence` = The lowest sequence currently being read by any iterator.
+#### 5.2.2 The Graveyard (Pages)
 
-**3. The Pruner (Moving to Disk)**
-
-  * A background process (or triggered at Commit start).
-  * Finds all `Graveyard[S]` where `S < MinActiveSequence` (and `S < PruningKeepRecent`).
-  * Moves these PageIDs from the RAM Graveyard to the **On-Disk Freelist** (Type 0x02 pages inside `index.db`).
-
-**4. The Allocator**
-
-  * When `NewPage()` is requested:
-    1.  Check **On-Disk Freelist**.
-    2.  If not empty, pop a PageID and overwrite it.
-    3.  If empty, append a new page to the end of `index.db`.
+  * **In-Memory Graveyard:** `map[Sequence][]PageID`. When a Batch commits at Sequence `N`, all "Old Pages" replaced during that commit are added here.
+  * **The Reader Hold:** Readers acquire a hold on a Sequence. `MinActiveSequence` is the lowest sequence currently being read.
+  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when `Sequence < MinActiveSequence`.
 
 ### 5.3 Read Path & Iterator
 
@@ -202,9 +218,13 @@ To support concurrent readers without locks, we cannot immediately overwrite old
   * Traverse B+Tree.
   * **Checksum:** On every `ReadPage`, verify CRC32.
   * **Fetch:**
-      * **Inlined:** **Allocate a new byte slice** and copy data from the Page. Return the copy.
-      * **Pointer:** Read from `SlabManager`. **Allocate a new byte slice** and copy data from the Mmap region. Return the copy.
-      * *Safety Note:* Never return a direct slice into the Mmap region, as file truncation/remaps can cause Segfaults in consumer code.
+      * **Inlined:** Allocate a new byte slice and copy data from the Page.
+      * **Pointer:**
+        1.  Extract `FileID`, `Offset`, `Length` from `ValuePtr`.
+        2.  **Lookup:** Retrieve the `*SlabFile` from the **Snapshot's local SlabSet** (not the global one).
+        3.  **Bounds Check:** Verify `Offset + Length <= len(SlabFile.Mmap)`.
+        4.  **Copy:** `val = make([]byte, Length)` -\> `copy(val, SlabFile.Mmap[Offset:])`.
+      * *Safety Note:* Never return a direct slice into the Mmap region.
 
 #### 2\. Forward Iterator
 
@@ -214,7 +234,7 @@ To support concurrent readers without locks, we cannot immediately overwrite old
       * If index \>= `Count`: Load `NextLeafID`.
       * If `NextLeafID == 0`: Stop (EOF).
 
-#### 3\. Reverse Iterator (NEW)
+#### 3\. Reverse Iterator
 
 Used heavily by Cosmos SDK for finding the latest versions or traversing time-ordered queues.
 
@@ -224,30 +244,28 @@ Used heavily by Cosmos SDK for finding the latest versions or traversing time-or
       * If `endKey` is nil, Seek to the **Last Key** of the **Right-Most Leaf** in the tree.
   * **Prev():**
       * Decrement index in current Leaf Directory.
-      * If index \< 0:
-          * Load `PrevLeafID`.
-          * If `PrevLeafID == 0`: Stop (SOF).
-          * Load the new page.
-          * Set index to `NewPage.Count - 1` (Last item in the new page).
-  * **Concurrency:**
-      * Like the Forward Iterator, the Reverse Iterator holds a "Reader Hold" on the Sequence number (Epoch) at the time of creation to prevent the `PrevLeafID` pages from being garbage collected by the Graveyard/Pruner.
+      * If index \< 0: Load `PrevLeafID`.
+      * If `PrevLeafID == 0`: Stop (SOF).
+  * **Concurrency:** Holds a "Reader Hold" on the Sequence to protect page traversal.
 
-### 5.4 Slab Compaction (Garbage Collection)
+### 5.4 Slab Compaction (Atomic Mark-and-Sweep)
 
-Instead of scanning the whole tree, we track "Liveness" per slab file to avoid "stop-the-world" pauses.
+Instead of immediate deletion, compaction performs an atomic "Swap and Mark" to support Reference Counting.
 
-1.  **Metadata Tracking:**
-      * In `Page 0` (Meta), we maintain a map: `SlabStats[FileID] { TotalBytes, DeadBytes }`.
-      * When a key is **overwritten** or **deleted**, we look up the old `ValuePtr` (if not inlined) and increment `DeadBytes` for that `FileID`.
-2.  **Trigger:**
-      * When `DeadBytes / TotalBytes > 0.5` (50% fragmentation) for a specific `.slab` file.
-3.  **Compaction Process (Background):**
-      * Open `new.slab`.
-      * Iterate the `old.slab` sequentially (fast scan).
-      * **Verification:** For every value in `old.slab`, check the B+Tree. Does the current Index still point to this offset?
-          * **Yes:** Copy value to `new.slab`. Update B+Tree to point to new location.
-          * **No:** Discard (it was deleted/moved).
-      * Delete `old.slab`.
+1.  **Metadata Tracking:** `SlabStats` in Page 0 tracks dead bytes.
+2.  **Trigger:** When `DeadBytes / TotalBytes > 0.5`.
+3.  **Compaction Loop:**
+      * **Create New Generation:** Open `new.slab`. Iterate `old.slab`, verify liveness against B+Tree, copy live values to `new.slab`. Update B+Tree.
+      * **The Atomic Swap:**
+          * Lock `SlabManager`.
+          * Create `NextSlabSet`. Add `new.slab`, remove `old.slab`.
+          * Update Global SlabSet pointer.
+          * Unlock.
+      * **Mark as Zombie:** Set `old.slab.IsZombie = true`.
+      * **Attempt Deletion:**
+          * Check `old.slab.RefCount`.
+          * **If 0:** Close handle and `os.Remove`.
+          * **If \> 0:** Do nothing (Deletion is deferred to the last Snapshot release).
 
 ## 6\. Go Interface Definition
 
@@ -258,7 +276,7 @@ import "github.com/cosmos/cosmos-db" // Implied dependency
 
 // DB implements the cosmos-db.DB interface
 type DB struct {
-    // ... internal fields (pager, slabs, meta) ...
+    // ... internal fields (pager, slabManager, meta) ...
 }
 
 // Open initializes the store
@@ -303,11 +321,12 @@ func (db *DB) Print() error
 
 // Stats returns a map of property strings to values.
 // Mandatory keys:
-//  - "cosmos.db.type": "treedb"
-//  - "treedb.pages.total": Total pages in index.db
-//  - "treedb.pages.free": Count of pages in the freelist
-//  - "treedb.slabs.active_id": ID of the current write slab
-//  - "treedb.slabs.total_size": Combined size of all slab files
+//  - "cosmos.db.type": "treedb"
+//  - "treedb.pages.total": Total pages in index.db
+//  - "treedb.slabs.active_id": ID of the current write slab (from SlabManager)
+//  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
+
+
 func (db *DB) Stats() map[string]string
 
 // --- Batch Implementation ---
