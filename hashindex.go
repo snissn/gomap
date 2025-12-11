@@ -20,8 +20,10 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
 }
 
 func (h *Hashmap) addBucket(key []byte, slabOffset Key) error {
-	if h.checkResize() {
-		h.resize()
+	if !h.rehashInProgress && h.checkResize() {
+		if err := h.startRehash(); err != nil {
+			return err
+		}
 	}
 
 	return h.addKey(key, slabOffset)

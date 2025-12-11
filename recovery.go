@@ -13,6 +13,14 @@ import (
 // Recover rebuilds the hash index from the slab file (WAL).
 // It iterates through the entire slab-real file and replays operations.
 func (h *Hashmap) Recover() error {
+	// If an incremental rehash was in progress, discard any old table state.
+	h.rehashInProgress = false
+	h.rehashOldMapFile = nil
+	h.rehashOldMap = nil
+	h.rehashOldKeys = nil
+	h.rehashOldCapacity = 0
+	h.rehashIdx = 0
+
 	// Reset Index map
 	for i := range *h.Keys {
 		(*h.Keys)[i] = Key{}
@@ -72,6 +80,7 @@ func (h *Hashmap) Recover() error {
 		return err
 	}
 	
+	h.activeSegmentSize = fi.Size()
 	*h.slabOffset = SlabOffset((uint64(maxID) << OffsetBits) | uint64(fi.Size()))
 	
 	return nil

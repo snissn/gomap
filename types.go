@@ -47,6 +47,14 @@ type Hashmap struct {
 	
 	CompressionEnabled bool
 
+	// Incremental rehash state (per-shard, in-memory only).
+	rehashInProgress  bool
+	rehashOldMapFile  *os.File
+	rehashOldMap      mmap.MMap
+	rehashOldCapacity uint64
+	rehashOldKeys     []Key
+	rehashIdx         uint64
+
 	resizeThreshold uint64
 }
 

@@ -48,6 +48,10 @@ func TestResizeLeak(t *testing.T) {
 		obj.Add(key, val)
 	}
 
+	// Ensure any in-progress incremental rehash is fully completed so we can
+	// assert on on-disk files deterministically.
+	obj.resize()
+
 	// Now capacity should be 20.
     // Note: There is a known bug where Count double-counts during resize, causing aggressive resizing.
     // We relax the exact capacity check but ensure it has resized at least once.

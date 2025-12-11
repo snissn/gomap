@@ -144,6 +144,52 @@ func (h *HashmapDistributed) Compact() error {
 	return errGlobal
 }
 
+// GetMany retrieves values for multiple keys efficiently by grouping them per shard.
+// It returns a slice of values aligned with the input keys slice; missing keys map to nil.
+// Errors are returned per key; nil error means the operation for that key succeeded (even if value is nil).
+func (h *HashmapDistributed) GetMany(keys [][]byte) ([][]byte, []error) {
+	numShards := len(h.maps)
+	if numShards == 0 {
+		return make([][]byte, len(keys)), make([]error, len(keys))
+	}
+
+	shardedIndexes := make([][]int, numShards)
+	for i, key := range keys {
+		hash := hash(key)
+		mapIndex := hash % Hash(numShards)
+		shardedIndexes[mapIndex] = append(shardedIndexes[mapIndex], i)
+	}
+
+	values := make([][]byte, len(keys))
+	errs := make([]error, len(keys))
+
+	var wg sync.WaitGroup
+	for shardIdx, idxs := range shardedIndexes {
+		if len(idxs) == 0 {
+			continue
+		}
+		wg.Add(1)
+		go func(shard int, idxs []int) {
+			defer wg.Done()
+			h.mutexes[shard].RLock()
+			defer h.mutexes[shard].RUnlock()
+
+			m := h.maps[shard]
+			for _, keyIndex := range idxs {
+				val, err := m.Get(keys[keyIndex])
+				if err != nil {
+					errs[keyIndex] = err
+				} else {
+					values[keyIndex] = val
+				}
+			}
+		}(shardIdx, idxs)
+	}
+	wg.Wait()
+
+	return values, errs
+}
+
 // AddMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
 func (h *HashmapDistributed) AddMany(items []Item) error {

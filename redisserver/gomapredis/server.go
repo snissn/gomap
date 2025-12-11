@@ -128,14 +128,21 @@ func (s *RedisServer) Serve(addr string) error {
 				conn.WriteError("ERR wrong number of arguments for 'MGET'")
 				return
 			}
-			
-			conn.WriteArray(len(cmd.Args) - 1)
-			for i := 1; i < len(cmd.Args); i++ {
-				val, err := s.store.Get(cmd.Args[i])
-				if err != nil || val == nil {
+
+			keyCount := len(cmd.Args) - 1
+			keys := make([][]byte, keyCount)
+			for i := 0; i < keyCount; i++ {
+				keys[i] = cmd.Args[i+1]
+			}
+
+			values, errs := s.store.GetMany(keys)
+
+			conn.WriteArray(keyCount)
+			for i := 0; i < keyCount; i++ {
+				if errs[i] != nil || values[i] == nil {
 					conn.WriteNull()
 				} else {
-					conn.WriteBulk(val)
+					conn.WriteBulk(values[i])
 				}
 			}
 

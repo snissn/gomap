@@ -25,15 +25,10 @@ func unpackLength(packed uint64) (uint64, uint8) {
 }
 
 func (h *Hashmap) writeSlab(buf []byte) error {
-	// Check if active segment is full
+	// Check if active segment is full using in-memory size accounting
 	f := h.slabFiles[h.activeSegmentId]
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	
-	if fi.Size()+int64(len(buf)) > MaxSegmentSize {
-		// Rotate
+	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
+		// Rotate to a new segment
 		h.activeSegmentId++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -42,12 +37,15 @@ func (h *Hashmap) writeSlab(buf []byte) error {
 		}
 		h.slabFiles[h.activeSegmentId] = newF
 		f = newF
-		
-		newOffset := SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
-		*h.slabOffset = newOffset
+
+		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		h.activeSegmentSize = 0
 	}
-	
-	_, err = f.Write(buf)
+
+	n, err := f.Write(buf)
+	if err == nil {
+		h.activeSegmentSize += int64(n)
+	}
 	return err
 }
 
@@ -117,12 +115,7 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 
 func (h *Hashmap) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 	f := h.slabFiles[h.activeSegmentId]
-	fi, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	
-	if fi.Size()+int64(len(buf)) > MaxSegmentSize {
+	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
 		h.activeSegmentId++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -131,12 +124,16 @@ func (h *Hashmap) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 		}
 		h.slabFiles[h.activeSegmentId] = newF
 		f = newF
-		
+
 		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		h.activeSegmentSize = 0
 	}
-	
+
 	offset := *h.slabOffset
-	_, err = f.Write(buf)
+	n, err := f.Write(buf)
+	if err == nil {
+		h.activeSegmentSize += int64(n)
+	}
 	return offset, err
 }
 
@@ -155,15 +152,10 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		totalBatchSize += 16 + len(item.Key) + len(item.Value)
 	}
 	
-	// Check rotation once for batch (simplified)
+	// Check rotation once for batch using in-memory size.
 	// If batch > MaxSegmentSize, this logic needs to be smarter (split batch).
 	// For now assume batch fits.
-	f := h.slabFiles[h.activeSegmentId]
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if fi.Size()+int64(totalBatchSize) > MaxSegmentSize {
+	if h.activeSegmentSize+int64(totalBatchSize) > MaxSegmentSize {
 		h.activeSegmentId++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -172,9 +164,10 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		}
 		h.slabFiles[h.activeSegmentId] = newF
 		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		h.activeSegmentSize = 0
 	}
 	
-	f = h.slabFiles[h.activeSegmentId]
+	f := h.slabFiles[h.activeSegmentId]
 	startOffset := *h.slabOffset
 	currentOffset := startOffset
 	
@@ -204,10 +197,11 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		currentOffset += SlabOffset(totalLength)
 	}
 	
-	_, err = f.Write(h.slabData)
+	n, err := f.Write(h.slabData)
 	if err != nil {
 		return nil, err
 	}
+	h.activeSegmentSize += int64(n)
 	*h.slabOffset = currentOffset
 	return slabOffsets, nil
 }
@@ -280,6 +274,15 @@ func (h *Hashmap) openSlabSegments() error {
 			return err
 		}
 		h.slabFiles[0] = f
+		h.activeSegmentSize = 0
+	} else {
+		// Initialize active segment size from the last segment on disk.
+		lastFile := fmt.Sprintf("%s/slab-%d", h.Folder, maxID)
+		fi, err := os.Stat(lastFile)
+		if err != nil {
+			return err
+		}
+		h.activeSegmentSize = fi.Size()
 	}
 	
 	h.activeSegmentId = uint16(maxID)

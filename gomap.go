@@ -29,11 +29,35 @@ func printTotalRunTime(startTime time.Time) {
 }
 
 func (h *Hashmap) closeFPs() error {
-	if err := h.hashMapFile.Close(); err != nil {
-		return err
+	if h.hashMapFile != nil {
+		if err := h.hashMapFile.Close(); err != nil {
+			return err
+		}
 	}
-	if err := h.hashMap.Unmap(); err != nil {
-		return err
+	if h.hashMap != nil {
+		if err := h.hashMap.Unmap(); err != nil {
+			return err
+		}
+	}
+
+	// If an incremental rehash is in progress, close the old index as well.
+	if h.rehashInProgress {
+		if h.rehashOldMapFile != nil {
+			if err := h.rehashOldMapFile.Close(); err != nil {
+				return err
+			}
+		}
+		if h.rehashOldMap != nil {
+			if err := h.rehashOldMap.Unmap(); err != nil {
+				return err
+			}
+		}
+		h.rehashOldMapFile = nil
+		h.rehashOldMap = nil
+		h.rehashOldKeys = nil
+		h.rehashOldCapacity = 0
+		h.rehashIdx = 0
+		h.rehashInProgress = false
 	}
 	
 	for _, f := range h.slabFiles {
@@ -47,33 +71,67 @@ func (h *Hashmap) closeFPs() error {
 // Get retrieves the value for a given key.
 // It returns nil, nil if the key is not found.
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
+	// Probe current (new) table first.
+	if h.Keys != nil && h.Capacity > 0 {
+		myhash := hash(key)
+		count := uint64(0)
+		for count < h.Capacity {
+			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
-	myhash := hash(key)
-	count := uint64(0)
-	for count < h.Capacity {
-		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+			mybucket := (*h.Keys)[myKeyIndex]
 
-		mybucket := (*h.Keys)[myKeyIndex]
+			if mybucket.slabOffset == 0 {
+				return nil, nil
+			}
 
-		if mybucket.slabOffset == 0 {
-			return nil, nil
-		}
-		
-		if mybucket.slabOffset == Tombstone {
+			if mybucket.slabOffset == Tombstone {
+				count++
+				continue
+			}
+
+			if mybucket.hash == myhash {
+				item, err := h.unmarshalItemFromSlab(mybucket)
+				if err != nil {
+					return nil, err
+				}
+				if bytes.Equal(item.Key, key) {
+					return item.Value, nil
+				}
+			}
 			count++
-			continue
 		}
+	}
 
-		if mybucket.hash == myhash {
-			item, err := h.unmarshalItemFromSlab(mybucket)
-			if err != nil {
-				return nil, err
+	// If an incremental rehash is in progress, also probe the old table
+	// for keys that haven't been migrated yet.
+	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+		myhash := hash(key)
+		count := uint64(0)
+		for count < h.rehashOldCapacity {
+			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
+
+			mybucket := h.rehashOldKeys[myKeyIndex]
+
+			if mybucket.slabOffset == 0 {
+				return nil, nil
 			}
-			if bytes.Equal(item.Key, key) {
-				return item.Value, nil
+
+			if mybucket.slabOffset == Tombstone {
+				count++
+				continue
 			}
+
+			if mybucket.hash == myhash {
+				item, err := h.unmarshalItemFromSlab(mybucket)
+				if err != nil {
+					return nil, err
+				}
+				if bytes.Equal(item.Key, key) {
+					return item.Value, nil
+				}
+			}
+			count++
 		}
-		count++
 	}
 
 	return nil, nil
@@ -82,40 +140,80 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 // Delete removes a key from the map.
 func (h *Hashmap) Delete(key []byte) error {
 	myhash := hash(key)
-	count := uint64(0)
-	for count < h.Capacity {
-		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+	foundNew := false
 
-		mybucket := (*h.Keys)[myKeyIndex]
+	// Delete in the current (new) table.
+	if h.Keys != nil && h.Capacity > 0 {
+		count := uint64(0)
+		for count < h.Capacity {
+			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
-		if mybucket.slabOffset == 0 {
-			return nil // Key not found
-		}
-		
-		if mybucket.slabOffset == Tombstone {
-			count++
-			continue
-		}
+			mybucket := (*h.Keys)[myKeyIndex]
 
-		if mybucket.hash == myhash {
-			item, err := h.unmarshalItemFromSlab(mybucket)
-			if err != nil {
-				return err
+			if mybucket.slabOffset == 0 {
+				break // Key not found in new table
 			}
-			if bytes.Equal(item.Key, key) {
-				// Found it. 
-				// 1. Log delete to slab (WAL) for durability/recovery
-				if err := h.addDeleteSlab(key); err != nil {
+
+			if mybucket.slabOffset == Tombstone {
+				count++
+				continue
+			}
+
+			if mybucket.hash == myhash {
+				item, err := h.unmarshalItemFromSlab(mybucket)
+				if err != nil {
 					return err
 				}
-				
-				// 2. Mark as deleted in index
-				(*h.Keys)[myKeyIndex].slabOffset = Tombstone
-				*h.Count -= 1
-				return nil
+				if bytes.Equal(item.Key, key) {
+					// Found it in new table.
+					if err := h.addDeleteSlab(key); err != nil {
+						return err
+					}
+					(*h.Keys)[myKeyIndex].slabOffset = Tombstone
+					*h.Count -= 1
+					foundNew = true
+					break
+				}
 			}
+			count++
 		}
-		count++
+	}
+
+	// If rehash in progress, also tombstone any copy in the old table so it
+	// doesn't get resurrected during migration. Do not adjust Count again.
+	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+		count := uint64(0)
+		for count < h.rehashOldCapacity {
+			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
+
+			mybucket := h.rehashOldKeys[myKeyIndex]
+
+			if mybucket.slabOffset == 0 {
+				break
+			}
+
+			if mybucket.slabOffset == Tombstone {
+				count++
+				continue
+			}
+
+			if mybucket.hash == myhash {
+				item, err := h.unmarshalItemFromSlab(mybucket)
+				if err != nil {
+					return err
+				}
+				if bytes.Equal(item.Key, key) {
+					h.rehashOldKeys[myKeyIndex].slabOffset = Tombstone
+					break
+				}
+			}
+			count++
+		}
+	}
+
+	if !foundNew {
+		// Key not present; no delete slab written.
+		return nil
 	}
 	return nil
 }
@@ -161,6 +259,11 @@ func (h *Hashmap) AddMany(items []Item) error {
 			return err
 		}
 	}
+	if h.rehashInProgress {
+		if err := h.rehashStep(rehashBucketsPerWrite); err != nil {
+			return err
+		}
+	}
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
 	return nil
@@ -180,6 +283,11 @@ func (h *Hashmap) Add(key []byte, value []byte) error {
 
 	startTime = time.Now()
 	err = h.addBucket(key, slabOffset)
+	if err == nil && h.rehashInProgress {
+		if err2 := h.rehashStep(rehashBucketsPerWrite); err2 != nil {
+			return err2
+		}
+	}
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
 	return err
