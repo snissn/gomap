@@ -61,7 +61,7 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	h.metadataMap = meta
 	h.metadataFile = f_meta
 	
-	// h.realSlabFILE removed
+	h.CompressionEnabled = true
 
 	//todo
 	h.slabOffset = getSlabOffset(h.metadataMap)

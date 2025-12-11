@@ -42,6 +42,8 @@ type Hashmap struct {
 	
 	slabFiles       map[uint16]*os.File
 	activeSegmentId uint16
+	
+	CompressionEnabled bool
 }
 
 const (

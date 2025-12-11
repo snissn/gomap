@@ -195,6 +195,12 @@ func (h *Hashmap) New(folder string) error {
 	return h.initN(folder, N)
 }
 
+// SetCompression enables or disables value compression.
+// Default is true.
+func (h *Hashmap) SetCompression(enabled bool) {
+	h.CompressionEnabled = enabled
+}
+
 /*
 
 Example usage:

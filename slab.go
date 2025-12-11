@@ -74,7 +74,7 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	
 	// Compress value?
 	var flags uint8
-	if len(val) > 32 { // Only try compressing if > 32 bytes
+	if h.CompressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
 		compressed := snappy.Encode(nil, val)
 		if len(compressed) < len(val) {
 			val = compressed
@@ -183,7 +183,7 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 		valueBytes := item.Value
 		
 		var flags uint8
-		if len(valueBytes) > 32 {
+		if h.CompressionEnabled && len(valueBytes) > 32 {
 			compressed := snappy.Encode(nil, valueBytes)
 			if len(compressed) < len(valueBytes) {
 				valueBytes = compressed
