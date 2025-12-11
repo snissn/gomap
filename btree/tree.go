@@ -87,9 +87,10 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	defer t.mu.RUnlock()
 
 	currID := t.meta.RootNodeID
+	opCache := make(map[NodeID]*Node)
 
 	for {
-		node, err := t.loadNode(currID)
+		node, err := t.loadNodeCached(currID, opCache)
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +119,8 @@ func (t *Tree) Put(key, value []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	split, splitKey, rightID, err := t.insertRecursive(t.meta.RootNodeID, key, value, t.meta.Height)
+	opCache := make(map[NodeID]*Node)
+	split, splitKey, rightID, err := t.insertRecursiveCached(t.meta.RootNodeID, key, value, t.meta.Height, opCache)
 	if err != nil {
 		return err
 	}
@@ -151,9 +153,10 @@ func (t *Tree) Delete(key []byte) error {
 	defer t.mu.Unlock()
 
 	currID := t.meta.RootNodeID
+	opCache := make(map[NodeID]*Node)
 
 	for {
-		node, err := t.loadNode(currID)
+		node, err := t.loadNodeCached(currID, opCache)
 		if err != nil {
 			return err
 		}
@@ -182,7 +185,12 @@ func (t *Tree) Delete(key []byte) error {
 // insertRecursive inserts into the subtree rooted at nodeID.
 // Returns whether the node split, the promoted key, and the new right node ID.
 func (t *Tree) insertRecursive(nodeID NodeID, key, value []byte, level uint16) (bool, []byte, NodeID, error) {
-	node, err := t.loadNode(nodeID)
+	nodeCache := make(map[NodeID]*Node)
+	return t.insertRecursiveCached(nodeID, key, value, level, nodeCache)
+}
+
+func (t *Tree) insertRecursiveCached(nodeID NodeID, key, value []byte, level uint16, opCache map[NodeID]*Node) (bool, []byte, NodeID, error) {
+	node, err := t.loadNodeCached(nodeID, opCache)
 	if err != nil {
 		return false, nil, 0, err
 	}
@@ -224,7 +232,7 @@ func (t *Tree) insertRecursive(nodeID NodeID, key, value []byte, level uint16) (
 		return false, nil, 0, fmt.Errorf("node %d child index %d out of range", node.ID, childIdx)
 	}
 
-	childSplit, splitKey, rightID, err := t.insertRecursive(node.Children[childIdx], key, value, level-1)
+	childSplit, splitKey, rightID, err := t.insertRecursiveCached(node.Children[childIdx], key, value, level-1, opCache)
 	if err != nil {
 		return false, nil, 0, err
 	}
@@ -443,4 +451,21 @@ func (t *Tree) cachePut(n *Node) {
 			}
 		}
 	}
+}
+
+// loadNodeCached first checks an operation-local cache, then the tree cache, then storage.
+func (t *Tree) loadNodeCached(id NodeID, opCache map[NodeID]*Node) (*Node, error) {
+	if opCache != nil {
+		if n := opCache[id]; n != nil {
+			return n, nil
+		}
+	}
+	n, err := t.loadNode(id)
+	if err != nil {
+		return nil, err
+	}
+	if opCache != nil {
+		opCache[id] = n
+	}
+	return n, nil
 }
