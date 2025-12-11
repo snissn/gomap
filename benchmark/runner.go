@@ -28,7 +28,13 @@ func Run() {
 			_ = exec.Command("bash", "-c", "lsof -ti tcp:6380 | xargs kill -9").Run()
 			time.Sleep(1 * time.Second)
 
-			cmd := exec.Command("go", "run", "redisserver/main.go", engine, tempDir)
+			var cmd *exec.Cmd
+			if engine == "redis" || engine == "redis-server" {
+				cmd = exec.Command("redis-server", "--port", strconv.Itoa(cfg.Port), "--dir", tempDir, "--save", "")
+			} else {
+				cmd = exec.Command("go", "run", "redisserver/main.go", engine, tempDir)
+			}
+			
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 

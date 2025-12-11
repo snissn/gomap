@@ -20,7 +20,7 @@ func ParseConfig() *Config {
 	var csvPath string
 	var port int
 
-	flag.StringVar(&enginesStr, "engines", "gomap,badger", "Comma-separated list of engines to benchmark")
+	flag.StringVar(&enginesStr, "engines", "gomap,badger,redis", "Comma-separated list of engines to benchmark")
 	flag.StringVar(&keyCountsStr, "keycounts", "10000,50000,100000", "Comma-separated list of key counts")
 	flag.IntVar(&port, "port", 6380, "Redis-compatible server port")
 	flag.StringVar(&csvPath, "csv", "benchmark_results.csv", "Path to CSV output file")
