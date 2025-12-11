@@ -31,6 +31,11 @@ Focus on isolating the complex low-level data structures before system integrati
     4.  Close `Iterator A`.
     5.  Run `Prune()`. Verify pages move to On-Disk Freelist.
 * **Reuse:** Verify that the Allocator actually pulls IDs from the Freelist before growing the file.
+* **Liveness & TTL (NEW):**
+    * **Scenario:** Create a reader `Iterator A` and perform a sleep exceeding the configured TTL (e.g., 10 minutes).
+    * **Trigger:** Attempt to advance `Iterator A` (`Next()` or `Prev()`).
+    * **Assert:** The iterator returns `ErrSnapshotExpired`.
+    * **Verify Cleanup:** Run `Prune()`. Verify that the sequence held by the expired reader is ignored and the associated "Old Pages" are successfully moved to the On-Disk Freelist.
 
 ---
 
@@ -102,6 +107,16 @@ Simulate power loss to ensure durability.
     * **Expectation:** The Batch must return an error. The DB must remain readable and consistent.
 * **ReadOnly Mount:** Remount FS as Read-Only during operation.
 
+### 4.3 Torn Write Recovery (NEW)
+* **Scenario:**
+    1. Prepare a batch with large values.
+    2. Mock the `fsync` call or inject a panic **after** the `.slab` file append completes but **before** the `Page 0 (Meta)` update is flushed.
+* **Recovery:**
+    1. Restart the DB.
+    2. **Assert:** The DB loads the *previous* `RootPageID`.
+    3. **Assert:** The "orphaned" bytes at the end of the `.slab` file are detected (via length mismatch or pointer validation) and effectively ignored (or truncated) by the new writer.
+    4. **Consistency:** Verify `Get()` returns the old values, not the new ones from the failed batch.
+
 ---
 
 ## 5. Concurrency & Race Detection
@@ -119,6 +134,15 @@ Go's `-race` detector is mandatory, but we need logical race tests too.
     * Start a long-running **Reverse Iterator** on the "Old Slab".
     * Trigger Slab Compaction (which rewrites valid values to `active.slab` and deletes the old file).
     * **Assert:** The Compaction logic must not delete the underlying file while the Iterator has it open (Ref Counting). The Iterator must successfully read the values.
+
+### 5.3 Compaction Throttling (NEW)
+* **Scenario:**
+    * Populate the DB with enough dead data to trigger a massive compaction (e.g., 2GB).
+    * Configure the Leaky Bucket rate limiter to a low value (e.g., 5MB/s).
+    * Start the compaction process in a goroutine.
+* **Assert:**
+    * **Duration Check:** The compaction operation should take at least `Size / Rate` seconds to complete. If it finishes instantly, the limiter is broken.
+    * **Latency Impact:** Run a concurrent writer. Verify that write latency does not spike significantly during the background compaction (proving the IO throttling is working).
 
 ---
 
@@ -142,4 +166,3 @@ The database must pass the Cosmos SDK integration definition.
     4.  Verify disk usage drops (Index pages reused).
     5.  Verify querying Block 1 fails (correctly).
     6.  Verify querying Block 9,999 succeeds.
-
