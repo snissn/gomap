@@ -51,6 +51,11 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 		if mybucket.slabOffset == 0 {
 			return nil, nil
 		}
+		
+		if mybucket.slabOffset == Tombstone {
+			count++
+			continue
+		}
 
 		if mybucket.hash == myhash {
 			item, err := h.unmarshalItemFromSlab(mybucket)
@@ -65,6 +70,41 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	}
 
 	return nil, nil
+}
+
+// Delete removes a key from the map.
+func (h *Hashmap) Delete(key []byte) error {
+	myhash := hash(key)
+	count := uint64(0)
+	for count < h.Capacity {
+		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+
+		mybucket := (*h.Keys)[myKeyIndex]
+
+		if mybucket.slabOffset == 0 {
+			return nil // Key not found
+		}
+		
+		if mybucket.slabOffset == Tombstone {
+			count++
+			continue
+		}
+
+		if mybucket.hash == myhash {
+			item, err := h.unmarshalItemFromSlab(mybucket)
+			if err != nil {
+				return err
+			}
+			if bytes.Equal(item.Key, key) {
+				// Found it. Mark as deleted.
+				(*h.Keys)[myKeyIndex].slabOffset = Tombstone
+				*h.Count -= 1
+				return nil
+			}
+		}
+		count++
+	}
+	return nil
 }
 
 // AddMany inserts multiple items in a batch.

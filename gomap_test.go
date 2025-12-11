@@ -196,6 +196,43 @@ func TestAddValue(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestDelete(t *testing.T) {
+	folder, _ := os.MkdirTemp("", "hash")
+	defer os.RemoveAll(folder)
+	var obj Hashmap
+	err := obj.New(folder)
+	assert.NoError(t, err)
+
+	key := []byte("key")
+	value := []byte("value")
+
+	// Add
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
+
+	// Get
+	res, err := obj.Get(key)
+	assert.NoError(t, err)
+	assert.Equal(t, value, res)
+
+	// Delete
+	err = obj.Delete(key)
+	assert.NoError(t, err)
+
+	// Get (should be nil)
+	res, err = obj.Get(key)
+	assert.NoError(t, err)
+	assert.Nil(t, res)
+
+	// Add again (Reuse tombstone? Test implicitly covers logic if no error)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
+	
+	res, err = obj.Get(key)
+	assert.NoError(t, err)
+	assert.Equal(t, value, res)
+}
+
 func BenchmarkAddManySlabs(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)

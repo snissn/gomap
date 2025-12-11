@@ -10,6 +10,8 @@ import (
 // todo consider chunking slabs so that uint32 is enough
 type SlabOffset uint64
 
+const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
+
 type Hash uint64
 
 type Key struct {

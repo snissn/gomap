@@ -61,6 +61,15 @@ func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	return h.maps[mapIndex].Add(key, value)
 }
 
+// Delete removes a key from the map.
+func (h *HashmapDistributed) Delete(key []byte) error {
+	hash := hash(key)
+	mapIndex := hash % Hash(len(h.maps))
+	h.mutexes[mapIndex].Lock()         // lock for writing
+	defer h.mutexes[mapIndex].Unlock() // unlock after writing
+	return h.maps[mapIndex].Delete(key)
+}
+
 // AddMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
 func (h *HashmapDistributed) AddMany(items []Item) error {

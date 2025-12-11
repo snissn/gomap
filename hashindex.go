@@ -40,12 +40,29 @@ func (h *Hashmap) getKeys() []Key {
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 	myhash := hash(key)
 	hkey := uint64(myhash) % (h.Capacity)
+	
+	var firstTombstoneIndex uint64
+	foundTombstone := false
+
 	for {
 		mybucket := (*h.Keys)[hkey]
+		
 		if mybucket.slabOffset == 0 {
+			// Found Empty Slot.
+			// If we saw a Tombstone earlier, use that instead to reduce fragmentation.
+			if foundTombstone {
+				return firstTombstoneIndex, true, nil
+			}
 			return hkey, true, nil
 		}
-		if mybucket.hash == myhash {
+		
+		if mybucket.slabOffset == Tombstone {
+			if !foundTombstone {
+				firstTombstoneIndex = hkey
+				foundTombstone = true
+			}
+			// Continue probing to ensure key doesn't exist further down
+		} else if mybucket.hash == myhash {
 			item, err := h.unmarshalItemFromSlab(mybucket)
 			if err != nil {
 				return 0, false, err
