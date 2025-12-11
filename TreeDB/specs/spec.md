@@ -289,13 +289,16 @@ To ensure safe reading of both Pages and Slabs, every Read operation (including 
 #### 5.2.2 The Graveyard (Pages)
 
 * **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
-* **The Reader Hold:** Readers pin a `CommitSeq` while traversing pages.
+* **The Reader Hold:** Readers (Snapshots and Iterators) pin a `CommitSeq` while traversing pages. A pinned CommitSeq is a **hard safety boundary** for reclamation decisions.
+* **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root (including via leaf `NextLeafID` / `PrevLeafID` chains) may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
 * **Reader Liveness (TTL) Policy (Updated):**
 
   * TTL is used **only** to bound garbage collection delays.
   * A Snapshot/Iterator is **not invalidated** solely due to time passing.
-  * If a hold exceeds TTL, the pruner may ignore it for reclamation decisions; this may cause very old iterators to observe fewer historical pages, but it must not crash or return corrupt values.
-* **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when safe under the hold policy.
+  * TTL expiration **does not permit** reclamation of pages that are reachable from any pinned root.
+  * TTL may be used only for diagnostics, metrics, or optional future policies that explicitly fail iterators with a deterministic error.
+  * TTL **must not** cause iterators to observe fewer historical pages, miss keys, break leaf traversal, observe reused PageIDs, or return logically inconsistent views.
+* **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when safe under the hold policy and the Snapshot Safety Invariant.
 
 ### 5.3 Read Path & Iterator
 
@@ -361,6 +364,7 @@ Compaction runs concurrently with high-throughput writes and reads. To prevent r
 * Allocate a “Target Slab” (`active-compaction.slab`).
 
 **Phase 2: Optimistic Copy (The "Ghost" Write)**
+
 The compactor iterates sequentially through slab records (Section 2.1.1). For each record `(Key, OldPtr)`:
 
 1. **Liveness Check:** If `Tree.Get(Key) != OldPtr`, skip.
@@ -368,6 +372,7 @@ The compactor iterates sequentially through slab records (Section 2.1.1). For ea
 3. **Record Intent:** Add `Key -> (OldPtr, NewPtr)` to a local `CompactionBatch`.
 
 **Phase 3: Atomic Commit (CAS)**
+
 Once `CompactionBatch` reaches a threshold (e.g., 4MB):
 
 1. **Serialize with the Single Writer:** Compaction CAS runs within the same single-writer critical section as user batches.
@@ -491,4 +496,5 @@ func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
 ```
+
 

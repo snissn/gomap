@@ -23,6 +23,7 @@ Focus on isolating the complex low-level data structures before system integrati
     * Traverse `Head -> Tail` via `NextLeafID`. Count pages.
     * Traverse `Tail -> Head` via `PrevLeafID`. Count pages.
     * **Assert:** Both counts must be identical.
+
 * **Split Logic & Pointer Wiring:**
 
   * Fill a page (`Page A`) to capacity and trigger a split (creating `Page B`).
@@ -31,13 +32,15 @@ Focus on isolating the complex low-level data structures before system integrati
     * `Page A.Next == Page B`
     * `Page B.Prev == Page A`
     * If `Page C` existed to the right of A, `Page B.Next == Page C` and `Page C.Prev == Page B`.
+
 * **Boundary Stitch Regression (NEW):**
 
   * Construct a batch that rewrites keys spanning multiple leaves, but where the left boundary leaf is *not* rewritten and only its right neighbor is, and similarly on the right boundary.
   * **Assert:** Leaf chain remains consistent and sorted; no missing/duplicated leaves.
+
 * **Defragmentation:** Delete every other key in a page. Verify that subsequent writes utilize the freed space (compaction within the page heap).
 
-### 1.3 The Graveyard (Epochs)
+### 1.3 The Graveyard (Epochs) — Strict Snapshot Safety
 
 * **Hold & Release:**
 
@@ -46,13 +49,39 @@ Focus on isolating the complex low-level data structures before system integrati
   3. Verify "Old Pages" are in Graveyard but **not** in On-Disk Freelist.
   4. Close `Iterator A`.
   5. Run `Prune()`. Verify pages move to On-Disk Freelist.
+
+* **Reachability Barrier (NEW, MANDATORY):**
+
+  * **Scenario:** Create `Iterator A` and force a workload that causes:
+
+    * leaf splits and rewrites across multiple adjacent leaves,
+    * internal node rewrites,
+    * and at least one full commit producing a new root.
+  * **Trigger:** While `Iterator A` is still open:
+
+    * repeatedly call `Prune()` (or trigger automatic pruning),
+    * apply additional commits to produce more "Old Pages",
+    * and attempt page allocations that would prefer freelist reuse.
+  * **Assert (Safety):**
+
+    * No PageID that is reachable from `Iterator A`’s pinned root (including via `NextLeafID` / `PrevLeafID` traversal) is ever observed as reclaimed or reused.
+    * Iteration completes without missing keys, loops, dead ends, or corruption.
+    * If instrumentation is available: pages reachable from the pinned snapshot must not appear in the On-Disk Freelist until `Iterator A` is closed.
+
 * **Reuse:** Verify that the Allocator actually pulls IDs from the Freelist before growing the file.
-* **TTL is GC-Only (UPDATED):**
+
+* **TTL is GC-Only (REVISED):**
 
   * **Scenario:** Create a reader `Iterator A` and sleep exceeding the configured TTL (e.g., 10 minutes).
-  * **Trigger:** Continue iterating.
-  * **Assert:** The iterator remains operational (no `ErrSnapshotExpired` surfaced as an API failure).
-  * **Verify Cleanup Policy:** Run `Prune()` and verify the pruner may ignore the stale hold for reclamation decisions (implementation-defined), but the iterator must not crash or return corrupt values.
+  * **Trigger:** Run `Prune()` repeatedly during the TTL exceedance (and/or continue committing new roots), then continue iterating.
+  * **Assert:** The iterator remains operational and correct:
+
+    * no `ErrSnapshotExpired` (or any TTL-derived failure) is surfaced as an API failure,
+    * no missing keys,
+    * no duplicated keys,
+    * no broken leaf traversal,
+    * no corruption / CRC errors attributable to reclamation.
+  * **Verify Cleanup Policy:** TTL may delay GC scheduling/metrics, but it must **not** allow reclamation of pages reachable from any pinned snapshot. (Pruner must remain blocked on reachability, not time.)
 
 ### 1.4 Slab Record Format (NEW)
 
@@ -60,10 +89,12 @@ Focus on isolating the complex low-level data structures before system integrati
 
   * Write a large value record with key+value.
   * Read by `ValuePtr`, parse record, verify CRC32 and payload integrity.
+
 * **Corrupt Record CRC:**
 
   * Flip one bit in `ValueBytes` or the CRC field.
   * **Assert:** `Get()` returns an error (or safe panic in lower-level tests), never silent corruption.
+
 * **Record Enumeration:**
 
   * Append N records; iterate sequentially through slab parsing.
@@ -76,6 +107,7 @@ Focus on isolating the complex low-level data structures before system integrati
   * Create a DB, commit multiple times.
   * Corrupt Meta Page A (checksum mismatch).
   * **Assert:** Open selects Meta Page B and loads correctly.
+
 * **Monotonic CommitSeq:**
 
   * Ensure `CommitSeq` increments exactly once per successful commit and never decreases across restarts.
@@ -95,6 +127,7 @@ Focus on the public `DB` interface and ACID properties.
 ### 2.2 Iterators (Forward & Reverse)
 
 * **Forward Scan:** Insert keys `A, C, E`. Scan `start=A, end=Z`. Expect `A, C, E`.
+
 * **Reverse Scan (Cosmos Semantics):**
 
   * Insert keys `A, B, C, D, E`.
@@ -102,16 +135,33 @@ Focus on the public `DB` interface and ACID properties.
   * Advance by calling `Next()` repeatedly.
   * **Expect:** `C`, then `B`.
   * **Boundary Check:** Call `ReverseIterator(start=nil, end=nil)`. Expect `E, D, C, B, A`.
+
 * **End-Exclusive Exact Hit:**
 
   * Insert `A,B,C`.
   * `ReverseIterator(start=nil, end=C)` should yield `B,A` (since end is exclusive).
   * `Iterator(start=B, end=C)` yields `B` only.
+
 * **Concurrent Iteration (Snapshot Visibility):**
 
   * Start `ReverseIterator`.
   * Delete or overwrite half the keys in the range via a new commit.
   * Verify iterator continues to see a stable snapshot and successfully traverses `PrevLeafID` pointers even if pages were replaced in newer roots.
+
+* **Concurrent Iteration Under Aggressive Pruning (NEW, MANDATORY):**
+
+  * Start `Iterator` and `ReverseIterator` over a wide range (or full domain).
+  * In parallel:
+
+    * run continuous commits that rewrite leaves and internal nodes,
+    * invoke `Prune()` frequently.
+  * **Assert:** Both iterators complete with a logically consistent snapshot:
+
+    * no missing keys relative to the snapshot start,
+    * no duplicates,
+    * correct ordering,
+    * no leaf-link traversal failures,
+    * no CRC/page-corruption errors caused by reclamation/reuse.
 
 ### 2.3 The "Zipper" Batch Merge
 
@@ -132,24 +182,33 @@ Standard unit tests miss edge cases. We must use **Property-Based Testing** (e.g
 ### 3.1 Randomized "Model" Testing
 
 * **The Oracle:** Maintain a simple Go `map[string][]byte` in memory (The Oracle).
+
 * **The Subject:** The TreeDB instance.
+
 * **The Loop:**
 
-  1. Generate random op (`Put`, `Delete`, `Get`, `Iterator`, `ReverseIterator`, `Batch`, `WriteSync`).
-  2. Apply to both Oracle and Subject.
+  1. Generate random op (`Put`, `Delete`, `Get`, `Iterator`, `ReverseIterator`, `Batch`, `WriteSync`, `Prune`).
+  2. Apply to both Oracle and Subject (subject operations may be grouped into commits as required by the implementation).
   3. Compare output.
-  4. **Invariant Check:** After every N ops, iterate the entire Subject (Forward AND Reverse) and verify it matches the Oracle 1:1.
+  4. **Invariant Check:** After every N ops, iterate the entire Subject (Forward AND Reverse) and verify it matches the Oracle 1:1 at the chosen snapshot boundary.
   5. **Restart:** Randomly close/reopen the DB to verify persistence.
+
+* **Snapshot-Reachability Invariant (NEW):**
+
+  * Randomly keep some iterators open across multiple commits while invoking `Prune()`.
+  * **Assert:** Regardless of TTL and pruning activity, open iterators never observe missing keys, duplicated keys, broken traversal, or reclaimed-page corruption.
 
 ### 3.2 Fuzzing Inputs
 
 * **Key Fuzzing:** Feed arbitrary bytes (including nulls, max-byte `0xFF`, and massive keys) into `Put`.
+
 * **Corrupt Files:**
 
   1. Write a valid DB.
   2. Flip 1 bit in `index.db` or `data.slab`.
   3. Run `Open()` or `Get()`.
   4. **Expectation:** Error or safe panic, **NEVER** silent corrupt data.
+
 * **Corrupt Superblock Targeting (NEW):**
 
   * Flip bits in Meta Page 0 only; ensure Meta Page 1 recovery works.
@@ -164,7 +223,9 @@ Simulate power loss to ensure durability.
 ### 4.1 The "Kill" Test
 
 * **Setup:** A separate process writes to the DB continuously.
+
 * **Trigger:** `kill -9` the process randomly.
+
 * **Recovery:**
 
   * Restart process.
@@ -176,6 +237,7 @@ Simulate power loss to ensure durability.
 * **Disk Full:** Mock the filesystem to return `ENOSPC` during a slab write or index extension.
 
   * **Expectation:** Batch returns error. DB remains readable and consistent.
+
 * **ReadOnly Mount:** Remount FS as Read-Only during operation.
 
 ### 4.3 Torn Write Recovery (UPDATED for Redundant Superblocks)
@@ -205,6 +267,7 @@ Simulate power loss to ensure durability.
 * **Scenario:**
 
   * Flip a bit in a non-meta B+Tree page used by the active root.
+
 * **Expectation:**
 
   * CRC detects corruption; Open or Get fails loudly (no silent corruption).
@@ -227,12 +290,14 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   * Start a long-running **Reverse Iterator** on an "Old Slab".
   * Trigger compaction (marks old slab zombie and attempts deletion).
+
 * **Assert (During Iteration):**
 
   * `Slab.IsZombie == true`
   * `Slab.RefCount > 0`
   * underlying file exists on disk
   * iterator successfully reads values
+
 * **Assert (After Close):**
 
   * Close iterator.
@@ -247,6 +312,7 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
   2. Pause compactor just before CAS.
   3. User calls `Set(Key A, Val=2)` (points to write slab).
   4. Resume compactor.
+
 * **Assert:**
 
   * CAS fails (returns false).
@@ -259,6 +325,7 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   1. Start compaction on a slab with 1,000 keys.
   2. Kill halfway through CAS loop (500 keys updated, 500 still old).
+
 * **Recovery:**
 
   * Restart DB.
@@ -272,6 +339,7 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
 
   * Run continuous user batches.
   * Run compactor CAS commits in parallel.
+
 * **Assert:**
 
   * All CAS commits occur under the same single-writer serialization as user commits (no interleaving that violates atomicity).
@@ -284,6 +352,7 @@ Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify t
   * Populate DB to trigger a large compaction (e.g., 2GB).
   * Configure leaky-bucket rate limiter to low value (e.g., 5MB/s).
   * Start compaction in goroutine.
+
 * **Assert:**
 
   * Duration is at least `Size / Rate`.
@@ -300,6 +369,7 @@ The database must pass the Cosmos SDK integration definition.
 * **Requirement:** TreeDB must pass the generic `cosmos-db` backend test suite:
 
   * `github.com/cosmos/cosmos-db/db/db_test.go`
+
 * **Key Tests:**
 
   * `TestDBIterator`: Validates forward iteration.
