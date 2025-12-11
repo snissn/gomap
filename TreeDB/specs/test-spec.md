@@ -1,8 +1,4 @@
-This addendum outlines the rigorous testing protocols required to certify **TreeDB v2.1** for production use in the Cosmos ecosystem. Given the catastrophic nature of database corruption in blockchain applications, this suite prioritizes correctness, crash recovery, and concurrency safety above raw performance.
-
----
-
-# Addendum A: Testing Specification
+# Addendum A: Testing Specification v2.2
 
 ## 1. Unit Testing Strategies
 
@@ -13,13 +9,18 @@ Focus on isolating the complex low-level data structures before system integrati
 * **Growth Safety:** Simulate file growth (Truncate + Remap) while a "Reader" holds a pointer to the old memory region. Ensure no panic/segfault occurs.
 * **Ref-Counting:** Verify that `Unmap` is never called on active chunks.
 
-### 1.2 Slotted Pages (Variable Keys)
-* **Insertion Logic:**
-    * Insert keys in random order; verify the `Directory` array remains sorted.
-    * Insert keys of varying lengths (1 byte to 1KB).
-* **Split Logic:**
-    * Fill a page to exactly 4096 bytes. Verify the split occurs at the median key.
-    * **Edge Case:** Insert a single key larger than `PageSize / 2`. (Should trigger an immediate split or dedicated overflow page logic, though spec currently relies on MaxKeySize constraints).
+### 1.2 Slotted Pages (Leaf Node Linkage)
+* **Doubly Linked List Integrity:**
+    * **The "Walk" Test:** Insert 10,000 keys causing multiple splits.
+        * Traverse `Head -> Tail` via `NextLeafID`. Count pages.
+        * Traverse `Tail -> Head` via `PrevLeafID`. Count pages.
+        * **Assert:** Both counts must be identical.
+* **Split Logic & Pointer Wiring:**
+    * Fill a page (`Page A`) to capacity and trigger a split (creating `Page B`).
+    * **Assert:**
+        * `Page A.Next == Page B`
+        * `Page B.Prev == Page A`
+        * If `Page C` existed to the right of A, `Page B.Next == Page C` and `Page C.Prev == Page B`.
 * **Defragmentation:** Delete every other key in a page. Verify that subsequent writes utilize the freed space (compaction within the page heap).
 
 ### 1.3 The Graveyard (Epochs)
@@ -39,19 +40,20 @@ Focus on the public `DB` interface and ACID properties.
 
 ### 2.1 Basic CRUD
 * **CRUD Cycle:** `Put(K, V)` -> `Get(K)` -> `Delete(K)` -> `Get(K)` (expect NotFound).
-* **Overwrite:** `Put(K, V1)` -> `Put(K, V2)`. Ensure `Get(K)` returns V2 and the space for V1 is eventually reclaimed (if checking internals).
+* **Overwrite:** `Put(K, V1)` -> `Put(K, V2)`. Ensure `Get(K)` returns V2 and the space for V1 is eventually reclaimed.
 * **Persistence:** `Put(K, V)` -> `Close()` -> `Reopen()` -> `Get(K)`.
 
-### 2.2 Range Scans (Iterators)
-* **Forward Scan:** Insert keys `A, C, E`. Scan `A..Z`. Expect `A, C, E`.
-* **Boundary Conditions:**
-    * Scan `start=nil` (First key).
-    * Scan `end=nil` (Last key).
-    * Scan range with no matching keys.
+### 2.2 Iterators (Forward & Reverse)
+* **Forward Scan:** Insert keys `A, C, E`. Scan `start=A, end=Z`. Expect `A, C, E`.
+* **Reverse Scan:**
+    * Insert keys `A, B, C, D, E`.
+    * Call `ReverseIterator(start=B, end=D)`.
+    * **Expect:** `C`, then `B` (Assuming `start` inclusive, `end` exclusive standard).
+    * **Boundary Check:** Call `ReverseIterator(start=nil, end=nil)`. Expect `E, D, C, B, A`.
 * **Concurrent Iteration:**
-    * Start Iterator.
+    * Start `ReverseIterator`.
     * Delete half the keys in the range.
-    * Verify Iterator still sees the "Snapshot" state (old keys).
+    * Verify Iterator still sees the "Snapshot" state (old keys) and successfully traverses `PrevLeafID` pointers even if those pages were logically deleted in the new version.
 
 ### 2.3 The "Zipper" Batch Merge
 * **Atomicity:** Construct a Batch with 100 keys. Inject a panic/error at key 50 during commit. Reopen DB. Verify **0 keys** are present.
@@ -67,10 +69,10 @@ Standard unit tests miss edge cases. We must use **Property-Based Testing** (e.g
 * **The Oracle:** Maintain a simple Go `map[string][]byte` in memory (The Oracle).
 * **The Subject:** The TreeDB instance.
 * **The Loop:**
-    1.  Generate random op (`Put`, `Delete`, `Get`, `Batch`).
+    1.  Generate random op (`Put`, `Delete`, `Get`, `ReverseIterator`, `Batch`).
     2.  Apply to both Oracle and Subject.
     3.  Compare output.
-    4.  **Invariant Check:** After every N ops, iterate the entire Subject and verify it matches the Oracle 1:1.
+    4.  **Invariant Check:** After every N ops, iterate the entire Subject (Forward AND Backward) and verify it matches the Oracle 1:1.
     5.  **Restart:** Randomly close/reopen the DB to verify persistence.
 
 ### 3.2 Fuzzing Inputs
@@ -92,8 +94,8 @@ Simulate power loss to ensure durability.
 * **Trigger:** `kill -9` the process randomly.
 * **Recovery:**
     * Restart process.
-    * Verify consistency: The DB should either be at State N or State N-1. It cannot be in a half-committed state (e.g., Key A exists but Key B from the same batch is missing).
-* **Slab Integrity:** Verify the `.slab` file doesn't contain half-written values that cause the parser to hang.
+    * Verify consistency: The DB should either be at State N or State N-1. It cannot be in a half-committed state.
+    * **Leaf Link Integrity:** Verify that `PrevLeafID` and `NextLeafID` chains are not broken (no loops or dead ends).
 
 ### 4.2 IO Failure Simulation
 * **Disk Full:** Mock the filesystem to return `ENOSPC` (No space left on device) during a `.slab` write or `.index` extension.
@@ -114,9 +116,9 @@ Go's `-race` detector is mandatory, but we need logical race tests too.
 ### 5.2 Compaction Race
 * **Scenario:**
     * Fill DB to trigger Slab Rotation.
-    * Start a long-running Iterator on the "Old Slab".
-    * Trigger Slab GC (which deletes Old Slabs).
-    * **Assert:** The GC must **wait** or **skip** deletion because the Iterator holds a reference. The Iterator must successfully read the values.
+    * Start a long-running **Reverse Iterator** on the "Old Slab".
+    * Trigger Slab Compaction (which rewrites valid values to `active.slab` and deletes the old file).
+    * **Assert:** The Compaction logic must not delete the underlying file while the Iterator has it open (Ref Counting). The Iterator must successfully read the values.
 
 ---
 
@@ -124,9 +126,13 @@ Go's `-race` detector is mandatory, but we need logical race tests too.
 
 The database must pass the Cosmos SDK integration definition.
 
-### 6.1 IAVL Compatibility
-* **Import/Export:** Load a standard IAVL snapshot (approx 10GB). Measure time and memory.
-* **Proof Generation:** Ensure point lookups (needed for Merkle paths) are efficient (cached pages).
+### 6.1 The Standard Suite
+* **Requirement:** TreeDB must pass the generic `cosmos-db` backend test suite:
+    * `github.com/cosmos/cosmos-db/db/db_test.go`
+* **Key Tests:**
+    * `TestDBIterator`: Validates standard forward iteration.
+    * `TestDBReverseIterator`: Validates strict reverse iteration requirements.
+    * `TestDBBatch`: Validates batch writing and sorting guarantees.
 
 ### 6.2 Pruning Validation
 * **Scenario:**
@@ -136,3 +142,4 @@ The database must pass the Cosmos SDK integration definition.
     4.  Verify disk usage drops (Index pages reused).
     5.  Verify querying Block 1 fails (correctly).
     6.  Verify querying Block 9,999 succeeds.
+

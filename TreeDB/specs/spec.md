@@ -101,13 +101,37 @@ We use **Slotted Pages** to support variable-length keys while maintaining binar
   * **Entry Format:** `[Child PageID (8b)] [KeyBytes]`
   * **Search:** Binary search the Directory to find the Child pointer.
 
+
 ### 4.2 Leaf Node Layout
 
-  * **Header:** Standard Header + `NextLeafID (8b)` (Linked list for range scans).
+Leaf nodes store the actual key-value data. To support $O(1)$ bidirectional iteration (Forward and Reverse) required by Cosmos SDK, leaf nodes form a **Doubly Linked List**.
+
+  * **Header (32 Bytes):**
+      * Standard Header (16 bytes)
+      * `NextLeafID` (8 bytes): Pointer to the right sibling. `0` if last.
+      * `PrevLeafID` (8 bytes): Pointer to the left sibling. `0` if first.
   * **Directory (Top):** Array of `Offsets (uint16)`.
-  * **Heap (Bottom):**
-      * **Case A (Pointer):** `[KeyLen] [KeyBytes] [Flag=0x00] [ValuePtr (14b)]`
-      * **Case B (Inlined):** `[KeyLen] [KeyBytes] [Flag=0x01] [ValLen] [ValueBytes]`
+  * **Heap (Bottom):** Stores keys and values (or pointers).
+
+**Visual Layout:**
+
+```text
+[  Standard Header (16b)  ]
+[   NextLeafID (8b)       ] <--- NEW: Forward Link
+[   PrevLeafID (8b)       ] <--- NEW: Backward Link
+[  ... Directory ...      ]
+          ...
+[  ... Heap Data ...      ]
+```
+
+**Leaf Update Logic (Copy-On-Write):**
+When a Leaf Node is modified or split:
+
+1.  **The Target Leaf** is duplicated/allocated (New PageID).
+2.  **The Previous Leaf's** `NextLeafID` must be updated to point to the New PageID.
+3.  **The Next Leaf's** `PrevLeafID` must be updated to point to the New PageID.
+      * *Note:* In a standard COW B+Tree, updating neighbors can cause write amplification (cascading updates). However, since TreeDB uses the **Batch Zipper** (Section 5.1), we reconstruct contiguous ranges of leaves in memory. We only need to perform the "Link Stitching" on the **left-most** and **right-most** boundaries of the batch.
+
 
 ## 5\. Core Algorithms
 
@@ -172,19 +196,39 @@ To support concurrent readers without locks, we cannot immediately overwrite old
     2.  If not empty, pop a PageID and overwrite it.
     3.  If empty, append a new page to the end of `index.db`.
 
-### 5.3 Read Path & Integrity
+### 5.3 Read Path & Iterator
 
-1.  **Get(Key):**
+#### 1\. Standard Get(Key)
 
-      * Traverse B+Tree.
-      * **Checksum:** On every `ReadPage`, verify CRC32. If mismatch -\> Panic/Error.
-      * **Leaf:** Search Key.
-      * **Fetch:** If Inlined, return bytes. If Pointer, read from `SlabManager`.
+  * Traverse B+Tree.
+  * **Checksum:** On every `ReadPage`, verify CRC32.
+  * **Fetch:** If Inlined, return bytes. If Pointer, read from `SlabManager`.
 
-2.  **Iterator:**
+#### 2\. Forward Iterator
 
-      * Holds a reference to the `RootPageID` at the time of creation.
-      * Lazy-loads values from disk only when `Value()` is called.
+  * **Initialization:** Seek to `startKey`.
+  * **Next():**
+      * Increment index in current Leaf Directory.
+      * If index \>= `Count`: Load `NextLeafID`.
+      * If `NextLeafID == 0`: Stop (EOF).
+
+#### 3\. Reverse Iterator (NEW)
+
+Used heavily by Cosmos SDK for finding the latest versions or traversing time-ordered queues.
+
+  * **Initialization:**
+      * Seek to `endKey`.
+      * If `endKey` is exclusive and matches a key exactly, move one step back.
+      * If `endKey` is nil, Seek to the **Last Key** of the **Right-Most Leaf** in the tree.
+  * **Prev():**
+      * Decrement index in current Leaf Directory.
+      * If index \< 0:
+          * Load `PrevLeafID`.
+          * If `PrevLeafID == 0`: Stop (SOF).
+          * Load the new page.
+          * Set index to `NewPage.Count - 1` (Last item in the new page).
+  * **Concurrency:**
+      * Like the Forward Iterator, the Reverse Iterator holds a "Reader Hold" on the Sequence number (Epoch) at the time of creation to prevent the `PrevLeafID` pages from being garbage collected by the Graveyard/Pruner.
 
 ### 5.4 Slab Garbage Collection
 
@@ -200,57 +244,68 @@ To support concurrent readers without locks, we cannot immediately overwrite old
 ```go
 package goslab
 
-// Immutable configuration
-type Options struct {
-    DirPath          string
-    InlineThreshold  int  // Default 64
-    SyncOnCommit     bool // Default false
-    Checksums        bool // Default true
-}
+import "github.com/cosmos/cosmos-db" // Implied dependency
 
+// DB implements the cosmos-db.DB interface
 type DB struct {
-    pager    *Pager        // Chunked MMap & CRC32
-    slabs    *SlabManager  // Append-only logs
-    meta     *MetaPage     // Root & Freelist pointers
-    graveyard *Graveyard   // In-Memory Epoch reclamation
+    // ... internal fields (pager, slabs, meta) ...
 }
 
-// Opens the database
+// Open initializes the store
 func Open(opts Options) (*DB, error)
 
-// --- Write Path ---
+// --- cosmos-db.DB Interface Implementation ---
 
-func (db *DB) NewBatch() *Batch
-
-type Batch struct {
-    // Stores Ptrs for large values, Literals for small values
-    ops map[string]operation 
-}
-
-func (b *Batch) Put(key, value []byte) error
-func (b *Batch) Delete(key []byte) error
-func (b *Batch) Commit() error 
-
-// --- Read Path ---
-
+// Get returns the value for a key, or nil if not found.
 func (db *DB) Get(key []byte) ([]byte, error)
 
-// Range Scan
-// Automatically acquires a "Reader Hold" on the current sequence
-func (db *DB) Iterator(start, end []byte) *Iterator
+// Has checks if a key exists.
+func (db *DB) Has(key []byte) (bool, error)
 
-type Iterator struct {
-    // ...
+// Set sets the value for a key. (Immediate write - internally creates a mini-batch)
+func (db *DB) Set(key, value []byte) error
+
+// SetSync sets the value and flushes to disk immediately.
+func (db *DB) SetSync(key, value []byte) error
+
+// Delete removes a key.
+func (db *DB) Delete(key []byte) error
+
+// DeleteSync removes a key and flushes to disk.
+func (db *DB) DeleteSync(key []byte) error
+
+// Iterator returns an iterator over a domain of keys in ascending order.
+// Start is inclusive, End is exclusive.
+func (db *DB) Iterator(start, end []byte) (db.Iterator, error)
+
+// ReverseIterator returns an iterator over a domain of keys in descending order.
+// Start is inclusive, End is exclusive.
+func (db *DB) ReverseIterator(start, end []byte) (db.Iterator, error)
+
+// Close closes the database.
+func (db *DB) Close() error
+
+// NewBatch creates a batch for atomic updates.
+func (db *DB) NewBatch() db.Batch
+
+// Print prints the internal tree structure (for debugging).
+func (db *DB) Print() error
+
+// Stats returns a map of property strings to values.
+func (db *DB) Stats() map[string]string
+
+// --- Batch Implementation ---
+
+type Batch struct {
+    db      *DB
+    ops     map[string]operation 
+    size    int
 }
 
-func (it *Iterator) Valid() bool
-func (it *Iterator) Next()
-func (it *Iterator) Key() []byte
-func (it *Iterator) Value() ([]byte, error) 
-func (it *Iterator) Close() // Releases the "Reader Hold"
-
-// --- Maintenance ---
-
-// Marks versions older than `keepRecent` as safe for the Freelist
-func (db *DB) Prune(keepRecent uint64) error
+func (b *Batch) Set(key, value []byte) error
+func (b *Batch) Delete(key []byte) error
+func (b *Batch) Write() error
+func (b *Batch) WriteSync() error
+func (b *Batch) Close() error
+func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
 ```
