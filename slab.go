@@ -290,10 +290,11 @@ func (h *Hashmap) openSlabSegments() error {
 }
 
 func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
-	// Optimistic read: 64 bytes covers header (16) + typical small key/value (48)
-	bufSize := int64(64)
-	buf, err := h.ReadBytes(slabValues.slabOffset, bufSize)
+	// Optimistic read: pull a full page to cover header + typical key/value with one syscall.
+	const firstReadSize = int64(4096)
+	buf, err := h.ReadBytes(slabValues.slabOffset, firstReadSize)
 	if err != nil {
+		// Fall back to just the header.
 		buf, err = h.ReadBytes(slabValues.slabOffset, 16)
 		if err != nil {
 			return Item{}, err
@@ -303,7 +304,7 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	keyLength, _ := decodeuint64(buf[0:8])
 	valueLengthPacked, _ := decodeuint64(buf[8:16])
 	valueLength, flags := unpackLength(valueLengthPacked)
-	
+
 	totalLen := int64(16) + int64(keyLength) + int64(valueLength)
 
 	var valuesBytes []byte
