@@ -9,7 +9,20 @@ import (
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
+	"github.com/golang/snappy"
 )
+
+const FlagCompressed = 0x80
+
+func packLength(len uint64, flags uint8) uint64 {
+	return len | (uint64(flags) << 56)
+}
+
+func unpackLength(packed uint64) (uint64, uint8) {
+	len := packed & 0x00FFFFFFFFFFFFFF
+	flags := uint8(packed >> 56)
+	return len, flags
+}
 
 func (h *Hashmap) writeSlab(buf []byte) error {
 	// Check if active segment is full
@@ -58,6 +71,17 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 func (h *Hashmap) addSlab(item Item) (Key, error) {
 	key := item.Key
 	val := item.Value
+	
+	// Compress value?
+	var flags uint8
+	if len(val) > 32 { // Only try compressing if > 32 bytes
+		compressed := snappy.Encode(nil, val)
+		if len(compressed) < len(val) {
+			val = compressed
+			flags |= FlagCompressed
+		}
+	}
+
 	keylen := len(key)
 	vallen := len(val)
 	actualTotalLength := 16 + keylen + vallen
@@ -69,8 +93,14 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	}
 	
 	var scratch [16]byte
+	// Pack flags into KeyLen (since we retrieve KeyLen first usually, wait, unmarshal reads both)
+	// Let's pack flags into ValLen? Or KeyLen?
+	// unmarshal reads header.
+	// If we compress Value, flag should be on Value Length?
+	// Yes.
+	
 	binary.LittleEndian.PutUint64(scratch[:8], uint64(keylen))
-	binary.LittleEndian.PutUint64(scratch[8:], uint64(vallen))
+	binary.LittleEndian.PutUint64(scratch[8:], packLength(uint64(vallen), flags))
 	h.slabData = append(h.slabData, scratch[:]...)
 	
 	h.slabData = append(h.slabData, key...)
@@ -151,12 +181,22 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 	for i, item := range items {
 		keyBytes := item.Key
 		valueBytes := item.Value
+		
+		var flags uint8
+		if len(valueBytes) > 32 {
+			compressed := snappy.Encode(nil, valueBytes)
+			if len(compressed) < len(valueBytes) {
+				valueBytes = compressed
+				flags |= FlagCompressed
+			}
+		}
+		
 		totalLength := 16 + len(keyBytes) + len(valueBytes)
 		
 		slabOffsets[i] = Key{slabOffset: currentOffset, hash: hash(keyBytes)}
 		
 		binary.LittleEndian.PutUint64(scratch[:8], uint64(len(keyBytes)))
-		binary.LittleEndian.PutUint64(scratch[8:], uint64(len(valueBytes)))
+		binary.LittleEndian.PutUint64(scratch[8:], packLength(uint64(len(valueBytes)), flags))
 		h.slabData = append(h.slabData, scratch[:]...)
 		h.slabData = append(h.slabData, keyBytes...)
 		h.slabData = append(h.slabData, valueBytes...)
@@ -258,7 +298,9 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	}
 
 	keyLength, _ := decodeuint64(buf[0:8])
-	valueLength, _ := decodeuint64(buf[8:16])
+	valueLengthPacked, _ := decodeuint64(buf[8:16])
+	valueLength, flags := unpackLength(valueLengthPacked)
+	
 	totalLen := int64(16) + int64(keyLength) + int64(valueLength)
 
 	var valuesBytes []byte
@@ -270,10 +312,21 @@ func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 			return Item{}, err
 		}
 	}
+	
+	key := valuesBytes[0:keyLength]
+	val := valuesBytes[keyLength:]
+	
+	if flags&FlagCompressed != 0 {
+		decompressed, err := snappy.Decode(nil, val)
+		if err != nil {
+			return Item{}, err
+		}
+		val = decompressed
+	}
 
 	return Item{
-		Key:   valuesBytes[0:keyLength],
-		Value: valuesBytes[keyLength:],
+		Key:   key,
+		Value: val,
 	}, nil
 }
 
