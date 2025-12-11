@@ -3,7 +3,6 @@ package gomap
 import (
 	"bytes"
 	"crypto/rand"
-	"fmt"
 	"os"
 	"strconv"
 
@@ -11,13 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-func f() {
-	var a []int
-	for i := 0; i < 100; i++ {
-		_ = append(a, i*3)
-	}
-}
 
 var Ntests int = int(8_000_00)
 
@@ -73,7 +65,6 @@ func TestAddResizeGet(t *testing.T) {
 
 func TestAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
-	fmt.Println(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -92,7 +83,6 @@ func TestAddGetN(t *testing.T) {
 
 func TestAddGetN_bigt(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
-	fmt.Println(folder)
 
 	var obj Hashmap
 	obj.New(folder)
@@ -113,7 +103,6 @@ func TestAddGetN_bigt(t *testing.T) {
 
 func TestAddGetN_bigt_batch(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
-	fmt.Println(folder)
 
 	var obj Hashmap
 	obj.New(folder)

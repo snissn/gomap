@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -32,10 +33,9 @@ func (h *Hashmap) getKeyOffsetToAddResize(slabOffset Key) uint64 {
 
 func (h *Hashmap) resize() {
 	startTime := time.Now()
-	defer printTotalRunTime(startTime)
+	// defer printTotalRunTime(startTime) // Optional: keep or remove, but it prints too
 
 	var newH Hashmap
-	fmt.Println("Resizing")
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
 	newH.initN(h.Folder, 2*(h.Capacity), (h.slabSize))
 
@@ -52,17 +52,21 @@ func (h *Hashmap) resize() {
 	h.replaceHashmap(newH)
 	resizeTime := getRunTime(startTime)
 	h.resizeTime += resizeTime
-	fmt.Println("Count: ", *h.Count)
-	fmt.Println("Capacity: ", h.Capacity)
-	fmt.Println("Resizing Time: ", h.resizeTime)
-	fmt.Println("Hash Time: ", h.hashTime)
-	fmt.Println("Slab Time: ", h.slabTime)
-	fmt.Println("")
 }
 
 func (h *Hashmap) replaceHashmap(newH Hashmap) {
-	//TODO close and delete old file, can be async
-	// see closeFPs
+	// Close and delete old file
+	// We reconstruct the filename based on current capacity
+	oldFilename := h.Folder + "/hashkeys-" + fmt.Sprint(h.Capacity)
+
+	// Close the file handle and unmap memory
+	h.closeFPs()
+
+	// Delete the old file from disk
+	err := os.Remove(oldFilename)
+	if err != nil {
+		fmt.Println("Failed to remove old hash map file:", err)
+	}
 
 	h.hashMap = newH.hashMap
 	h.hashMapFile = newH.hashMapFile
