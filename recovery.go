@@ -26,13 +26,13 @@ func (h *Hashmap) Recover() error {
 		(*h.Keys)[i] = Key{}
 	}
 	*h.Count = 0
-	
+
 	// Scan for segments
 	files, err := os.ReadDir(h.Folder)
 	if err != nil {
 		return err
 	}
-	
+
 	maxID := -1
 	for _, file := range files {
 		if strings.HasPrefix(file.Name(), "slab-") && !strings.HasSuffix(file.Name(), "-real") {
@@ -44,7 +44,7 @@ func (h *Hashmap) Recover() error {
 			}
 		}
 	}
-	
+
 	if maxID == -1 {
 		// Try slab-real legacy
 		if _, err := os.Stat(h.Folder + "/slab-real"); err == nil {
@@ -52,12 +52,12 @@ func (h *Hashmap) Recover() error {
 		}
 		return nil
 	}
-	
+
 	for id := 0; id <= maxID; id++ {
 		filename := fmt.Sprintf("%s/slab-%d", h.Folder, id)
 		// Offset base for this segment
 		baseOffset := SlabOffset(uint64(id) << OffsetBits)
-		
+
 		if err := h.recoverFile(filename, baseOffset); err != nil {
 			if os.IsNotExist(err) {
 				continue // Gap in sequence? Should not happen but ignore
@@ -65,24 +65,24 @@ func (h *Hashmap) Recover() error {
 			return err
 		}
 	}
-	
+
 	// Update slabOffset to point to end of last segment?
 	// Or writeSlab will handle it?
 	// writeSlab uses activeSegmentId.
 	// We need to set activeSegmentId to maxID.
 	// And *h.slabOffset to end of maxID file.
-	
+
 	h.activeSegmentId = uint16(maxID)
-	
+
 	lastFile := fmt.Sprintf("%s/slab-%d", h.Folder, maxID)
 	fi, err := os.Stat(lastFile)
 	if err != nil {
 		return err
 	}
-	
+
 	h.activeSegmentSize = fi.Size()
 	*h.slabOffset = SlabOffset((uint64(maxID) << OffsetBits) | uint64(fi.Size()))
-	
+
 	return nil
 }
 
@@ -94,15 +94,15 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 	defer f.Close()
 
 	reader := bufio.NewReader(f)
-	
+
 	var offset = baseOffset
-	
+
 	// If it's slab-0 or slab-real, handle sentinel?
 	// Or check sentinel on every file?
 	// initN only writes sentinel if *h.slabOffset == 0.
 	// Only slab-0 starts at 0.
 	// So check sentinel only if baseOffset == 0.
-	
+
 	if baseOffset == 0 {
 		prefix := make([]byte, 6)
 		_, err = io.ReadFull(reader, prefix)
@@ -116,7 +116,7 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 	}
 
 	header := make([]byte, 16)
-	
+
 	for {
 		_, err := io.ReadFull(reader, header)
 		if err == io.EOF {
@@ -125,21 +125,21 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 		if err != nil {
 			return err
 		}
-		
+
 		keyLen := binary.LittleEndian.Uint64(header[:8])
 		valLen := binary.LittleEndian.Uint64(header[8:])
-		
+
 		totalLen := 16 + keyLen
 		if valLen != ^uint64(0) {
 			totalLen += valLen
 		}
-		
+
 		key := make([]byte, keyLen)
 		_, err = io.ReadFull(reader, key)
 		if err != nil {
 			return err
 		}
-		
+
 		if valLen == ^uint64(0) {
 			h.replayDelete(key)
 		} else {
@@ -150,10 +150,10 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 			if discarded != int(valLen) {
 				return io.ErrUnexpectedEOF
 			}
-			
+
 			h.addBucket(key, Key{slabOffset: offset, hash: hash(key)})
 		}
-		
+
 		offset += SlabOffset(totalLen)
 	}
 	return nil
@@ -166,7 +166,7 @@ func (h *Hashmap) replayDelete(key []byte) {
 	for count < h.Capacity {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 		mybucket := (*h.Keys)[myKeyIndex]
-		
+
 		if mybucket.slabOffset == 0 {
 			return // Not found
 		}
@@ -184,7 +184,7 @@ func (h *Hashmap) replayDelete(key []byte) {
 			// Index points to OLD slab entry.
 			item, err := h.unmarshalItemFromSlab(mybucket)
 			if err != nil {
-				// If unmarshal fails during recovery? 
+				// If unmarshal fails during recovery?
 				// Maybe old data is corrupt?
 				// Ignore?
 				return

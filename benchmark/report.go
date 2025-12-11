@@ -49,11 +49,11 @@ func PrintResultsTable(results []BenchmarkResult) {
 	for _, r := range results {
 		fmt.Printf("%-8s | %-15s | %10s | %14s | %9.3f | %14s | %9.3f\n",
 			r.Engine,
-			r.Scenario, 
-			formatInt(r.KeyCount), 
-			formatFloat(r.SetRPS), 
-			r.SetP50, 
-			formatFloat(r.GetRPS), 
+			r.Scenario,
+			formatInt(r.KeyCount),
+			formatFloat(r.SetRPS),
+			r.SetP50,
+			formatFloat(r.GetRPS),
 			r.GetP50)
 	}
 	fmt.Println("")

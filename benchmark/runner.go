@@ -42,7 +42,7 @@ func Run() {
 				if engine == "gomap" && (scenario.Name == "Pipeline16" || scenario.Name == "LargeVal1KB") {
 					cmd.Env = append(cmd.Env, "GOMAP_BATCH_SETS=1")
 				}
-				
+
 				cmd.Stdout = os.Stdout
 				cmd.Stderr = os.Stderr
 
@@ -57,7 +57,7 @@ func Run() {
 				// scenario args appended
 				benchArgs := []string{"-p", strconv.Itoa(cfg.Port), "-n", strconv.Itoa(keyCount), "--csv"}
 				benchArgs = append(benchArgs, scenario.Args...)
-				
+
 				out, err := exec.Command("redis-benchmark", benchArgs...).CombinedOutput()
 
 				// ⚠ Now kill Redis server forcefully again (double-safety)

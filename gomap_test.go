@@ -229,7 +229,7 @@ func TestDelete(t *testing.T) {
 	// Add again (Reuse tombstone? Test implicitly covers logic if no error)
 	err = obj.Add(key, value)
 	assert.NoError(t, err)
-	
+
 	res, err = obj.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, value, res)
@@ -248,7 +248,7 @@ func TestCrashRecovery(t *testing.T) {
 		obj.Add([]byte("keep"), []byte("val1"))
 		obj.Add([]byte("delete"), []byte("val2"))
 		obj.Delete([]byte("delete"))
-		
+
 		// "Crash" -> obj goes out of scope, files remain
 		// We don't close cleanly to simulate crash (though New doesn't hold locks on files except flock? no flock used)
 	}
@@ -256,24 +256,24 @@ func TestCrashRecovery(t *testing.T) {
 	// Phase 2: Recover
 	{
 		var obj Hashmap
-		// New loads metadata. 
+		// New loads metadata.
 		// If metadata says Count=1 (correct), we are good.
 		// But let's assume metadata is corrupt or we want to force rebuild.
-		// We corrupt metadata file? 
+		// We corrupt metadata file?
 		// Or just call Recover explicitly.
 		err := obj.New(folder)
 		assert.NoError(t, err)
-		
+
 		// Verify state before recovery (should be consistent if closed properly/flushed)
 		// But we want to test REPLAY.
-		
+
 		err = obj.Recover()
 		assert.NoError(t, err)
-		
+
 		val, err := obj.Get([]byte("keep"))
 		assert.NoError(t, err)
 		assert.Equal(t, []byte("val1"), val)
-		
+
 		val, err = obj.Get([]byte("delete"))
 		assert.NoError(t, err)
 		assert.Nil(t, val)
@@ -283,16 +283,16 @@ func TestCrashRecovery(t *testing.T) {
 func TestSegmentRotation(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
-	
+
 	// Reduce limit for test
 	originalLimit := MaxSegmentSize
 	MaxSegmentSize = 1024 // 1KB
 	defer func() { MaxSegmentSize = originalLimit }()
-	
+
 	var obj Hashmap
 	err := obj.New(folder)
 	assert.NoError(t, err)
-	
+
 	// Write enough to force rotation
 	// 1KB limit. 100 items of 20 bytes ~ 2KB.
 	for i := 0; i < 100; i++ {
@@ -301,7 +301,7 @@ func TestSegmentRotation(t *testing.T) {
 		err := obj.Add(key, val)
 		assert.NoError(t, err)
 	}
-	
+
 	// Check files
 	files, err := os.ReadDir(folder)
 	assert.NoError(t, err)
@@ -312,7 +312,7 @@ func TestSegmentRotation(t *testing.T) {
 		}
 	}
 	assert.Greater(t, slabFiles, 1, "Should have rotated segments")
-	
+
 	// Verify reading works (across segments)
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
@@ -320,11 +320,11 @@ func TestSegmentRotation(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, []byte("val"), val)
 	}
-	
+
 	// Verify Recovery with segments
 	err = obj.Recover()
 	assert.NoError(t, err)
-	
+
 	val, err := obj.Get([]byte("key-0"))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("val"), val)

@@ -59,7 +59,7 @@ func (h *Hashmap) closeFPs() error {
 		h.rehashIdx = 0
 		h.rehashInProgress = false
 	}
-	
+
 	for _, f := range h.slabFiles {
 		if err := f.Close(); err != nil {
 			return err
@@ -227,17 +227,17 @@ func (h *Hashmap) Update(key []byte, callback func([]byte) ([]byte, error)) erro
 	// But Add appends new slab.
 	// So we can just call Get, run callback, then Add.
 	// The atomicity is provided by the caller holding the lock.
-	
+
 	val, err := h.Get(key)
 	if err != nil {
 		return err
 	}
-	
+
 	newVal, err := callback(val)
 	if err != nil {
 		return err
 	}
-	
+
 	return h.Add(key, newVal)
 }
 
@@ -349,7 +349,7 @@ func (h *Hashmap) Clear() error {
 	if err := h.closeFPs(); err != nil {
 		return err
 	}
-	
+
 	// Delete files
 	files, err := os.ReadDir(h.Folder)
 	if err != nil {
@@ -360,7 +360,7 @@ func (h *Hashmap) Clear() error {
 			return err
 		}
 	}
-	
+
 	// Re-initialize
 	// initN expects folder to exist (it might have been deleted? No, we deleted contents)
 	// We read capacity? No, files are gone.
@@ -376,7 +376,7 @@ func (h *Hashmap) Stats() Stats {
 		fi, _ := f.Stat()
 		size += uint64(fi.Size())
 	}
-	
+
 	return Stats{
 		KeyCount: *h.Count,
 		Capacity: h.Capacity,
@@ -390,7 +390,7 @@ func (h *Hashmap) Stats() Stats {
 func (h *Hashmap) Compact() error {
 	tmpFolder := h.Folder + "-compact"
 	_ = os.RemoveAll(tmpFolder) // Clean start
-	
+
 	var newH Hashmap
 	// Use same capacity, or maybe shrink if Count << Capacity?
 	// For now maintain capacity.
@@ -404,16 +404,16 @@ func (h *Hashmap) Compact() error {
 	// But New called initN(Default).
 	// We can close newH and re-init? Or just use initN.
 	// Better: Don't use New. Use initN.
-	
+
 	// Close newH first (New opened it)
 	newH.closeFPs()
 	_ = os.RemoveAll(tmpFolder)
-	
+
 	if err := newH.initN(tmpFolder, h.Capacity); err != nil {
 		return err
 	}
 	newH.SetCompression(h.CompressionEnabled)
-	
+
 	// Migrate Data
 	// Iterate through all buckets
 	keys := h.getKeys()
@@ -421,7 +421,7 @@ func (h *Hashmap) Compact() error {
 		if k.slabOffset == 0 || k.slabOffset == Tombstone {
 			continue
 		}
-		
+
 		// Read Item
 		item, err := h.unmarshalItemFromSlab(k)
 		if err != nil {
@@ -431,7 +431,7 @@ func (h *Hashmap) Compact() error {
 			os.RemoveAll(tmpFolder)
 			return err
 		}
-		
+
 		// Write to newH
 		if err := newH.Add(item.Key, item.Value); err != nil {
 			newH.closeFPs()
@@ -439,16 +439,16 @@ func (h *Hashmap) Compact() error {
 			return err
 		}
 	}
-	
+
 	// Swap
 	// 1. Close both
 	h.closeFPs()
 	newH.closeFPs()
-	
+
 	// 2. Rename folders
 	backupFolder := h.Folder + "-old"
 	_ = os.RemoveAll(backupFolder)
-	
+
 	if err := os.Rename(h.Folder, backupFolder); err != nil {
 		// Try to reopen h?
 		return err
@@ -458,15 +458,15 @@ func (h *Hashmap) Compact() error {
 		os.Rename(backupFolder, h.Folder)
 		return err
 	}
-	
+
 	// 3. Re-open h on new files
 	if err := h.initN(h.Folder, h.Capacity); err != nil {
 		return err
 	}
-	
+
 	// 4. Delete backup
 	os.RemoveAll(backupFolder)
-	
+
 	return nil
 }
 
