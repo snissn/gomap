@@ -46,6 +46,13 @@ type Hashmap struct {
 	CompressionEnabled bool
 }
 
+type Stats struct {
+	KeyCount uint64
+	Capacity uint64
+	DataSize uint64
+	Segments int
+}
+
 const (
 	SegmentBits = 16
 	OffsetBits  = 48

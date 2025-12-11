@@ -1,6 +1,7 @@
 package gomapredis
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -181,6 +182,31 @@ func (s *RedisServer) Serve(addr string) error {
 				return
 			}
 			conn.WriteInt64(newValInt)
+
+		case "FLUSHDB", "FLUSHALL":
+			if err := s.store.Clear(); err != nil {
+				conn.WriteError(err.Error())
+				return
+			}
+			conn.WriteString("OK")
+
+		case "INFO":
+			stats := s.store.Stats()
+			info := fmt.Sprintf(
+				"# Keyspace\r\nkeys=%d,expires=0,avg_ttl=0\r\n"+
+				"# Memory\r\nused_memory=%d\r\n"+
+				"# Stats\r\ntotal_capacity=%d\r\ntotal_segments=%d\r\n",
+				stats.KeyCount, stats.DataSize, stats.Capacity, stats.Segments,
+			)
+			conn.WriteBulkString(info)
+
+		case "BGREWRITEAOF", "COMPACT":
+			go func() {
+				if err := s.store.Compact(); err != nil {
+					log.Printf("Compaction failed: %v", err)
+				}
+			}()
+			conn.WriteString("Background append only file rewriting started")
 
 		default:
 			conn.WriteError("unknown command")

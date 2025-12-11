@@ -79,6 +79,64 @@ func (h *HashmapDistributed) Update(key []byte, callback func([]byte) ([]byte, e
 	return h.maps[mapIndex].Update(key, callback)
 }
 
+// Clear wipes all data from all shards.
+func (h *HashmapDistributed) Clear() error {
+	var errGlobal error
+	// Iterate sequentially or parallel?
+	// Sequentially is safer for file ops? Parallel is faster.
+	// Since each shard has its own folder, parallel is fine.
+	var wg sync.WaitGroup
+	for i := 0; i < len(h.maps); i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			h.mutexes[index].Lock()
+			defer h.mutexes[index].Unlock()
+			if err := h.maps[index].Clear(); err != nil {
+				// Race on error assignment, but it's just "an error occurred"
+				errGlobal = err 
+			}
+		}(i)
+	}
+	wg.Wait()
+	return errGlobal
+}
+
+// Stats collects and aggregates stats from all shards.
+func (h *HashmapDistributed) Stats() Stats {
+	var total Stats
+	for i := 0; i < len(h.maps); i++ {
+		h.mutexes[i].RLock()
+		s := h.maps[i].Stats()
+		h.mutexes[i].RUnlock()
+		
+		total.KeyCount += s.KeyCount
+		total.Capacity += s.Capacity
+		total.DataSize += s.DataSize
+		total.Segments += s.Segments
+	}
+	return total
+}
+
+// Compact triggers garbage collection on all shards.
+func (h *HashmapDistributed) Compact() error {
+	var errGlobal error
+	var wg sync.WaitGroup
+	for i := 0; i < len(h.maps); i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			h.mutexes[index].Lock()
+			defer h.mutexes[index].Unlock()
+			if err := h.maps[index].Compact(); err != nil {
+				errGlobal = err
+			}
+		}(i)
+	}
+	wg.Wait()
+	return errGlobal
+}
+
 // AddMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
 func (h *HashmapDistributed) AddMany(items []Item) error {

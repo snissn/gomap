@@ -3,6 +3,7 @@ package gomap
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 
@@ -222,6 +223,133 @@ func (h *Hashmap) New(folder string) error {
 // Default is true.
 func (h *Hashmap) SetCompression(enabled bool) {
 	h.CompressionEnabled = enabled
+}
+
+// Clear wipes the database (deletes all data) and resets it.
+func (h *Hashmap) Clear() error {
+	// Close resources
+	if err := h.closeFPs(); err != nil {
+		return err
+	}
+	
+	// Delete files
+	files, err := os.ReadDir(h.Folder)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.Remove(h.Folder + "/" + f.Name()); err != nil {
+			return err
+		}
+	}
+	
+	// Re-initialize
+	// initN expects folder to exist (it might have been deleted? No, we deleted contents)
+	// We read capacity? No, files are gone.
+	// Default capacity.
+	return h.initN(h.Folder, DEFAULTMAPSIZE)
+}
+
+// Stats returns statistics about the database.
+func (h *Hashmap) Stats() Stats {
+	// Calculate total file size
+	var size uint64
+	for _, f := range h.slabFiles {
+		fi, _ := f.Stat()
+		size += uint64(fi.Size())
+	}
+	
+	return Stats{
+		KeyCount: *h.Count,
+		Capacity: h.Capacity,
+		DataSize: size,
+		Segments: len(h.slabFiles),
+	}
+}
+
+// Compact rewrites the database to reclaim space from deleted/updated keys.
+// It creates a new copy of the database and swaps it in.
+func (h *Hashmap) Compact() error {
+	tmpFolder := h.Folder + "-compact"
+	_ = os.RemoveAll(tmpFolder) // Clean start
+	
+	var newH Hashmap
+	// Use same capacity, or maybe shrink if Count << Capacity?
+	// For now maintain capacity.
+	// But we need to know capacity. h.Capacity.
+	if err := newH.New(tmpFolder); err != nil {
+		return err
+	}
+	// Force capacity to match? New reads capacity from file (doesn't exist) -> Default.
+	// We should init with specific capacity.
+	// Call initN directly on newH?
+	// But New called initN(Default).
+	// We can close newH and re-init? Or just use initN.
+	// Better: Don't use New. Use initN.
+	
+	// Close newH first (New opened it)
+	newH.closeFPs()
+	_ = os.RemoveAll(tmpFolder)
+	
+	if err := newH.initN(tmpFolder, h.Capacity); err != nil {
+		return err
+	}
+	newH.SetCompression(h.CompressionEnabled)
+	
+	// Migrate Data
+	// Iterate through all buckets
+	keys := h.getKeys()
+	for _, k := range keys {
+		if k.slabOffset == 0 || k.slabOffset == Tombstone {
+			continue
+		}
+		
+		// Read Item
+		item, err := h.unmarshalItemFromSlab(k)
+		if err != nil {
+			// If corruption, we skip? Or fail?
+			// Fail is safer.
+			newH.closeFPs()
+			os.RemoveAll(tmpFolder)
+			return err
+		}
+		
+		// Write to newH
+		if err := newH.Add(item.Key, item.Value); err != nil {
+			newH.closeFPs()
+			os.RemoveAll(tmpFolder)
+			return err
+		}
+	}
+	
+	// Swap
+	// 1. Close both
+	h.closeFPs()
+	newH.closeFPs()
+	
+	// 2. Rename folders
+	backupFolder := h.Folder + "-old"
+	_ = os.RemoveAll(backupFolder)
+	
+	if err := os.Rename(h.Folder, backupFolder); err != nil {
+		// Try to reopen h?
+		return err
+	}
+	if err := os.Rename(tmpFolder, h.Folder); err != nil {
+		// Restore backup
+		os.Rename(backupFolder, h.Folder)
+		return err
+	}
+	
+	// 3. Re-open h on new files
+	if err := h.initN(h.Folder, h.Capacity); err != nil {
+		return err
+	}
+	
+	// 4. Delete backup
+	os.RemoveAll(backupFolder)
+	
+	return nil
 }
 
 /*
