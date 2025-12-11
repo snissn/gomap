@@ -11,6 +11,10 @@ func BenchmarkHashmap_SetGet(b *testing.B) {
 	benchmarkHashmapSetGet(b, 1024, 8)
 }
 
+func BenchmarkHashmap_SetGetSingleShard(b *testing.B) {
+	benchmarkHashmapSetGet(b, 1024, 1)
+}
+
 func benchmarkHashmapSetGet(b *testing.B, numKeys int, shards int) {
 	dir, err := os.MkdirTemp("", "gomap-bench-*")
 	if err != nil {
