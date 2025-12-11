@@ -50,55 +50,49 @@ func encodeNode(n *Node) ([]byte, error) {
 		return nil, fmt.Errorf("leaf node %d has inconsistent values", n.ID)
 	}
 
-	buf := &bytes.Buffer{}
-	buf.Grow(1 + 2 + 2 + 8 + 8)
+	// Pre-size buffer: header (1 + 2 + 2 + 8 + 8) + keys + children/values.
+	size := 1 + 2 + 2 + 8 + 8
+	for _, k := range n.Keys {
+		size += 4 + len(k) // uint32 length + bytes
+	}
+	if n.Type == NodeInternal {
+		size += 8 * (len(n.Keys) + 1)
+	} else {
+		for _, v := range n.Values {
+			size += 4 + len(v)
+		}
+	}
 
-	if err := buf.WriteByte(byte(n.Type)); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.LittleEndian, uint16(len(n.Keys))); err != nil {
-		return nil, err
-	}
+	buf := make([]byte, 0, size)
+	buf = append(buf, byte(n.Type))
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(n.Keys)))
 
 	childCount := uint16(0)
 	if n.Type == NodeInternal {
 		childCount = uint16(len(n.Children))
 	}
-	if err := binary.Write(buf, binary.LittleEndian, childCount); err != nil {
-		return nil, err
-	}
-
-	if err := binary.Write(buf, binary.LittleEndian, n.NextLeaf); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.LittleEndian, n.PrevLeaf); err != nil {
-		return nil, err
-	}
+	buf = binary.LittleEndian.AppendUint16(buf, childCount)
+	buf = binary.LittleEndian.AppendUint64(buf, uint64(n.NextLeaf))
+	buf = binary.LittleEndian.AppendUint64(buf, uint64(n.PrevLeaf))
 
 	for _, k := range n.Keys {
-		if err := writeBytes(buf, k); err != nil {
-			return nil, err
-		}
+		buf = appendBytes(buf, k)
 	}
 
 	switch n.Type {
 	case NodeInternal:
 		for _, child := range n.Children {
-			if err := binary.Write(buf, binary.LittleEndian, child); err != nil {
-				return nil, err
-			}
+			buf = binary.LittleEndian.AppendUint64(buf, uint64(child))
 		}
 	case NodeLeaf:
 		for _, v := range n.Values {
-			if err := writeBytes(buf, v); err != nil {
-				return nil, err
-			}
+			buf = appendBytes(buf, v)
 		}
 	default:
 		return nil, fmt.Errorf("unknown node type %d", n.Type)
 	}
 
-	return buf.Bytes(), nil
+	return buf, nil
 }
 
 func decodeNode(id NodeID, data []byte) (*Node, error) {
@@ -169,14 +163,17 @@ func decodeNode(id NodeID, data []byte) (*Node, error) {
 }
 
 func writeBytes(w io.Writer, b []byte) error {
-	if len(b) == 0 {
-		return binary.Write(w, binary.LittleEndian, uint32(0))
-	}
 	if err := binary.Write(w, binary.LittleEndian, uint32(len(b))); err != nil {
 		return err
 	}
 	_, err := w.Write(b)
 	return err
+}
+
+// appendBytes is an allocation-free helper to append a length-prefixed byte slice.
+func appendBytes(buf []byte, b []byte) []byte {
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(b)))
+	return append(buf, b...)
 }
 
 func readBytes(r io.Reader) ([]byte, error) {

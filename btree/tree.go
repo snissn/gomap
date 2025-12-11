@@ -19,8 +19,9 @@ type Tree struct {
 	treeID string
 	kv     KVStore
 
-	mu   sync.RWMutex
-	meta Meta
+	mu        sync.RWMutex
+	meta      Meta
+	metaDirty bool
 }
 
 // OpenTree loads an existing tree or initializes a new one if no metadata exists.
@@ -56,6 +57,7 @@ func OpenTree(kv KVStore, treeID string) (*Tree, error) {
 		Height:     1,
 		NextNodeID: 2,
 	}
+	t.metaDirty = true
 
 	if err := t.saveNode(root); err != nil {
 		return nil, err
@@ -125,10 +127,10 @@ func (t *Tree) Put(key, value []byte) error {
 
 		t.meta.RootNodeID = newRootID
 		t.meta.Height++
+		t.metaDirty = true
 	}
 
-	// Persist meta even if root did not split to capture NextNodeID advances.
-	return t.saveMeta()
+	return t.saveMetaIfDirty()
 }
 
 // Delete removes a key from the tree. It is a lazy delete and performs no rebalancing.
@@ -235,6 +237,7 @@ func (t *Tree) splitLeaf(left *Node) (bool, []byte, NodeID, error) {
 
 	rightID := t.meta.NextNodeID
 	t.meta.NextNodeID++
+	t.metaDirty = true
 
 	right := &Node{
 		ID:       rightID,
@@ -273,6 +276,7 @@ func (t *Tree) splitInternal(left *Node) (bool, []byte, NodeID, error) {
 
 	rightID := t.meta.NextNodeID
 	t.meta.NextNodeID++
+	t.metaDirty = true
 
 	right := &Node{
 		ID:       rightID,
@@ -295,7 +299,11 @@ func (t *Tree) splitInternal(left *Node) (bool, []byte, NodeID, error) {
 }
 
 func (t *Tree) saveMeta() error {
-	return t.kv.Put(metaKey(t.treeID), encodeMeta(&t.meta))
+	if err := t.kv.Put(metaKey(t.treeID), encodeMeta(&t.meta)); err != nil {
+		return err
+	}
+	t.metaDirty = false
+	return nil
 }
 
 func (t *Tree) loadNode(id NodeID) (*Node, error) {
@@ -318,15 +326,36 @@ func (t *Tree) saveNode(n *Node) error {
 }
 
 func insertBytes[T any](s []T, i int, v T) []T {
-	s = append(s, v)
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
+	if len(s) < cap(s) {
+		s = s[:len(s)+1]
+		copy(s[i+1:], s[i:])
+		s[i] = v
+		return s
+	}
+	ns := make([]T, len(s)+1)
+	copy(ns, s[:i])
+	ns[i] = v
+	copy(ns[i+1:], s[i:])
+	return ns
 }
 
 func insertNodeID(s []NodeID, i int, v NodeID) []NodeID {
-	s = append(s, v)
-	copy(s[i+1:], s[i:])
-	s[i] = v
-	return s
+	if len(s) < cap(s) {
+		s = s[:len(s)+1]
+		copy(s[i+1:], s[i:])
+		s[i] = v
+		return s
+	}
+	ns := make([]NodeID, len(s)+1)
+	copy(ns, s[:i])
+	ns[i] = v
+	copy(ns[i+1:], s[i:])
+	return ns
+}
+
+func (t *Tree) saveMetaIfDirty() error {
+	if !t.metaDirty {
+		return nil
+	}
+	return t.saveMeta()
 }
