@@ -44,8 +44,10 @@ type Hashmap struct {
 
 	activeWriter      *bufio.Writer
 	activeSegmentSize int64
-
+	
 	CompressionEnabled bool
+
+	resizeThreshold uint64
 }
 
 type Stats struct {

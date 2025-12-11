@@ -63,6 +63,10 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	
 	h.CompressionEnabled = true
 
+	if h.resizeThreshold == 0 {
+		h.resizeThreshold = 65
+	}
+
 	//todo
 	h.slabOffset = getSlabOffset(h.metadataMap)
 	//xxx

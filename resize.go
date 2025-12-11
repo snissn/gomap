@@ -7,7 +7,11 @@ import (
 )
 
 func (h *Hashmap) checkResize() bool {
-	return *h.Count*100 > h.Capacity*65
+	threshold := h.resizeThreshold
+	if threshold == 0 {
+		threshold = 65
+	}
+	return *h.Count*100 > h.Capacity*threshold
 }
 
 func (h *Hashmap) addKeyResize(slabOffset Key) {

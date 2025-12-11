@@ -225,6 +225,16 @@ func (h *Hashmap) SetCompression(enabled bool) {
 	h.CompressionEnabled = enabled
 }
 
+// SetResizeThreshold sets the load factor percentage at which the hashmap resizes.
+// For example, 65 means resize when Count/Capacity > 0.65.
+// Values <= 0 reset to the default of 65.
+func (h *Hashmap) SetResizeThreshold(percent uint64) {
+	if percent == 0 {
+		percent = 65
+	}
+	h.resizeThreshold = percent
+}
+
 // Clear wipes the database (deletes all data) and resets it.
 func (h *Hashmap) Clear() error {
 	// Close resources
