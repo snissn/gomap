@@ -1,4 +1,4 @@
-This addendum outlines the rigorous testing protocols required to certify **GoSlabDB v2.1** for production use in the Cosmos ecosystem. Given the catastrophic nature of database corruption in blockchain applications, this suite prioritizes correctness, crash recovery, and concurrency safety above raw performance.
+This addendum outlines the rigorous testing protocols required to certify **TreeDB v2.1** for production use in the Cosmos ecosystem. Given the catastrophic nature of database corruption in blockchain applications, this suite prioritizes correctness, crash recovery, and concurrency safety above raw performance.
 
 ---
 
@@ -65,7 +65,7 @@ Standard unit tests miss edge cases. We must use **Property-Based Testing** (e.g
 
 ### 3.1 Randomized "Model" Testing
 * **The Oracle:** Maintain a simple Go `map[string][]byte` in memory (The Oracle).
-* **The Subject:** The GoSlabDB instance.
+* **The Subject:** The TreeDB instance.
 * **The Loop:**
     1.  Generate random op (`Put`, `Delete`, `Get`, `Batch`).
     2.  Apply to both Oracle and Subject.

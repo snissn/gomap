@@ -1,8 +1,8 @@
-# GoSlabDB Design Specification v2.1
+# TreeDB Design Specification v2.1
 
 ## 1\. System Overview
 
-**GoSlabDB** is an embedded, persistent key-value store tailored for the Cosmos SDK workload (IAVL+ Tree). It prioritizes high write throughput, efficient range scans, and low memory overhead during block commits.
+**TreeDB** is an embedded, persistent key-value store tailored for the Cosmos SDK workload (IAVL+ Tree). It prioritizes high write throughput, efficient range scans, and low memory overhead during block commits.
 
 ### Key Architectural Features
 
