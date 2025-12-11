@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type BenchmarkResult struct {
@@ -44,8 +45,39 @@ func PrintResultsTable(results []BenchmarkResult) {
 	fmt.Println("\nEngine   | Keys       | SET RPS        | SET p50   | GET RPS        | GET p50")
 	fmt.Println("--------------------------------------------------------------------------")
 	for _, r := range results {
-		fmt.Printf("%-8s | %10d | %14.2f | %9.3f | %14.2f | %9.3f\n",
-			r.Engine, r.KeyCount, r.SetRPS, r.SetP50, r.GetRPS, r.GetP50)
+		fmt.Printf("%-8s | %10s | %14s | %9.3f | %14s | %9.3f\n",
+			r.Engine, 
+			formatInt(r.KeyCount), 
+			formatFloat(r.SetRPS), 
+			r.SetP50, 
+			formatFloat(r.GetRPS), 
+			r.GetP50)
 	}
 	fmt.Println("")
+}
+
+func formatInt(n int) string {
+	s := strconv.Itoa(n)
+	return addCommas(s)
+}
+
+func formatFloat(f float64) string {
+	s := fmt.Sprintf("%.2f", f)
+	parts := strings.Split(s, ".")
+	parts[0] = addCommas(parts[0])
+	return strings.Join(parts, ".")
+}
+
+func addCommas(s string) string {
+	if len(s) <= 3 {
+		return s
+	}
+	var res []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			res = append(res, ',')
+		}
+		res = append(res, byte(c))
+	}
+	return string(res)
 }
