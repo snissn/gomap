@@ -23,6 +23,10 @@ func NewRedisServer(dbdir string) *RedisServer {
 	if err := store.New(dbdir); err != nil {
 		log.Fatalf("failed to open gomap: %v", err)
 	}
+	// Disable compression by default for the Redis/Gomap server, which is
+	// primarily used by the benchmark harness. This improves write-heavy
+	// and large-value workloads where compression CPU cost outweighs savings.
+	store.SetCompression(false)
 
 	return &RedisServer{
 		store: &store,

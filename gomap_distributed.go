@@ -49,6 +49,16 @@ func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
 	return nil
 }
 
+// SetCompression enables or disables value compression on all shards.
+// It should typically be called during initialization before serving traffic.
+func (h *HashmapDistributed) SetCompression(enabled bool) {
+	for i := 0; i < len(h.maps); i++ {
+		h.mutexes[i].Lock()
+		h.maps[i].SetCompression(enabled)
+		h.mutexes[i].Unlock()
+	}
+}
+
 // Get retrieves the value for a given key.
 // It returns nil if the key does not exist.
 func (h *HashmapDistributed) Get(key []byte) ([]byte, error) {
