@@ -8,27 +8,32 @@ import (
 // Iter iterates over the B+Tree in ascending key order.
 // It holds a read lock on the tree for its lifetime; callers must Close().
 type Iter struct {
-	t        *Tree
-	currNode *Node
-	currIdx  int
-	end      []byte // exclusive; nil for unbounded
-	leafLimit int   // index one past the last valid key in the current leaf
-	err      error
-	valid    bool
-	closed   bool
+	t         *Tree
+	currNode  *Node
+	keys      [][]byte // Direct cache of currNode.Keys to avoid double indirection
+	values    [][]byte // Direct cache of currNode.Values
+	currIdx   int
+	end       []byte // exclusive; nil for unbounded
+	leafLimit int    // index one past the last valid key in the current leaf
+	err       error
+	valid     bool
+	closed    bool
 }
 
 // RevIter iterates over the B+Tree in descending key order.
 // It holds a read lock on the tree for its lifetime; callers must Close().
 type RevIter struct {
-	t        *Tree
-	currNode *Node
-	currIdx  int
-	start    []byte // inclusive lower bound
-	end      []byte // exclusive upper bound; nil for unbounded
-	err      error
-	valid    bool
-	closed   bool
+	t             *Tree
+	currNode      *Node
+	keys          [][]byte // Direct cache of currNode.Keys
+	values        [][]byte // Direct cache of currNode.Values
+	currIdx       int
+	start         []byte // inclusive lower bound
+	end           []byte // exclusive upper bound; nil for unbounded
+	lowerBoundIdx int    // stop when currIdx < lowerBoundIdx
+	err           error
+	valid         bool
+	closed        bool
 }
 
 // Range returns an iterator over [start, end).
@@ -83,17 +88,34 @@ func (it *Iter) seek(start []byte) error {
 		}
 
 		if node.Type == NodeLeaf {
+			it.currNode = node
+			it.keys = node.Keys
+			it.values = node.Values
+
+			// Determine starting index
 			if start == nil {
 				it.currIdx = 0
 			} else {
 				it.currIdx = node.search(start)
 			}
-			it.currNode = node
+
 			it.initLeafBounds()
-			it.adjust()
+
+			// If we landed off the end of this leaf, we must advance to the next leaf.
+			// This handles the edge case where 'start' > all keys in this leaf.
+			if it.currIdx >= len(it.keys) {
+				it.valid = true // Temporarily valid so nextLeaf can operate
+				it.nextLeaf()
+			} else if it.currIdx >= it.leafLimit {
+				// We landed on a key, but it is >= end. The range is empty.
+				it.valid = false
+			} else {
+				it.valid = true
+			}
 			return nil
 		}
 
+		// Internal node traversal
 		idx := 0
 		if start != nil {
 			idx = node.search(start)
@@ -110,9 +132,11 @@ func (it *Iter) seek(start []byte) error {
 }
 
 func (it *RevIter) seek() error {
+	// 1. Find the starting leaf (Rightmost if end==nil, else search for end)
+	currID := it.t.meta.RootNodeID
+
+	// If end is nil, we want the rightmost leaf.
 	if it.end == nil {
-		// Seek to the rightmost leaf.
-		currID := it.t.meta.RootNodeID
 		for {
 			node, err := it.t.loadNode(currID)
 			if err != nil {
@@ -120,114 +144,55 @@ func (it *RevIter) seek() error {
 			}
 			if node.Type == NodeLeaf {
 				it.currNode = node
+				it.keys = node.Keys
+				it.values = node.Values
 				it.currIdx = len(node.Keys) - 1
-				it.adjust()
-				return nil
+				break
 			}
 			currID = node.Children[len(node.Children)-1]
 		}
+	} else {
+		// Seek to the leaf containing 'end'
+		for {
+			node, err := it.t.loadNode(currID)
+			if err != nil {
+				return err
+			}
+
+			if node.Type == NodeLeaf {
+				it.currNode = node
+				it.keys = node.Keys
+				it.values = node.Values
+				// We want the largest key < end.
+				// search(end) returns first key >= end. Subtract 1 to get < end.
+				it.currIdx = node.search(it.end) - 1
+				break
+			}
+
+			childIdx := node.search(it.end)
+			if childIdx >= len(node.Children) {
+				childIdx = len(node.Children) - 1
+			}
+			currID = node.Children[childIdx]
+		}
 	}
 
-	// Seek to the leaf containing the largest key < end.
-	currID := it.t.meta.RootNodeID
-	for {
-		node, err := it.t.loadNode(currID)
-		if err != nil {
-			return err
-		}
+	// 2. Setup bounds and validate position
+	it.initLowerBound()
 
-		if node.Type == NodeLeaf {
-			it.currNode = node
-			it.currIdx = node.search(it.end) - 1
-			it.adjust()
-			return nil
-		}
-
-		childIdx := node.search(it.end)
-		if childIdx >= len(node.Children) {
-			childIdx = len(node.Children) - 1
-		}
-		currID = node.Children[childIdx]
-	}
-}
-
-// adjust normalizes the iterator to the next valid position respecting bounds.
-func (it *Iter) adjust() {
-	if it.err != nil || it.currNode == nil {
+	// Handle edge cases where seek landed us out of bounds
+	if it.currIdx < 0 {
+		// Valid indicates we can try to move to previous leaf
+		it.valid = true
+		it.prevLeaf()
+	} else if it.currIdx < it.lowerBoundIdx {
+		// We are within the leaf, but below the start bound. Range is empty.
 		it.valid = false
-		return
+	} else {
+		it.valid = true
 	}
 
-	for it.currIdx >= len(it.currNode.Keys) {
-		nextID := it.currNode.NextLeaf
-		if nextID == 0 {
-			it.valid = false
-			return
-		}
-		nextNode, err := it.t.loadNode(nextID)
-		if err != nil {
-			it.err = err
-			it.valid = false
-			return
-		}
-		it.currNode = nextNode
-		it.currIdx = 0
-	}
-
-	if len(it.currNode.Keys) == 0 {
-		it.valid = false
-		return
-	}
-
-	if it.currIdx >= it.leafLimit {
-		it.valid = false
-		return
-	}
-
-	it.valid = true
-}
-
-// adjust normalizes the reverse iterator to the next valid position respecting bounds.
-func (it *RevIter) adjust() {
-	if it.err != nil || it.currNode == nil {
-		it.valid = false
-		return
-	}
-
-	for it.currIdx < 0 {
-		prevID := it.currNode.PrevLeaf
-		if prevID == 0 {
-			it.valid = false
-			return
-		}
-
-		prevNode, err := it.t.loadNode(prevID)
-		if err != nil {
-			it.err = err
-			it.valid = false
-			return
-		}
-		it.currNode = prevNode
-		it.currIdx = len(prevNode.Keys) - 1
-	}
-
-	if it.currIdx < 0 || it.currIdx >= len(it.currNode.Keys) {
-		it.valid = false
-		return
-	}
-
-	key := it.currNode.Keys[it.currIdx]
-	if it.end != nil && bytes.Compare(key, it.end) >= 0 {
-		it.currIdx--
-		it.adjust()
-		return
-	}
-	if it.start != nil && bytes.Compare(key, it.start) < 0 {
-		it.valid = false
-		return
-	}
-
-	it.valid = true
+	return nil
 }
 
 // Valid reports whether the iterator points to a valid key/value pair.
@@ -242,54 +207,58 @@ func (it *RevIter) Valid() bool {
 
 // Key returns the current key or nil if invalid.
 func (it *Iter) Key() []byte {
-	if !it.Valid() {
+	if !it.valid {
 		return nil
 	}
-	return it.currNode.Keys[it.currIdx]
+	return it.keys[it.currIdx]
 }
 
 // Key returns the current key or nil if invalid.
 func (it *RevIter) Key() []byte {
-	if !it.Valid() {
+	if !it.valid {
 		return nil
 	}
-	return it.currNode.Keys[it.currIdx]
+	return it.keys[it.currIdx]
 }
 
 // Value returns the current value or nil if invalid.
 func (it *Iter) Value() []byte {
-	if !it.Valid() {
+	if !it.valid {
 		return nil
 	}
-	return it.currNode.Values[it.currIdx]
+	return it.values[it.currIdx]
 }
 
 // Value returns the current value or nil if invalid.
 func (it *RevIter) Value() []byte {
-	if !it.Valid() {
+	if !it.valid {
 		return nil
 	}
-	return it.currNode.Values[it.currIdx]
+	return it.values[it.currIdx]
 }
 
 // Next advances the iterator.
+// Optimized for inlining: Keep this function small and simple.
 func (it *Iter) Next() {
-	// Fast path: rely on internal state instead of calling Valid(),
-	// to avoid the extra function call on every step.
-	if !it.valid || it.err != nil {
+	if !it.valid {
 		return
 	}
 
 	it.currIdx++
 
-	// Stay within the current leaf when possible: this avoids
-	// invoking the more expensive cross-leaf normalization logic.
+	// Hot Path: Compare directly against cached limit.
+	// This avoids function calls and complex checks 99% of the time.
 	if it.currIdx < it.leafLimit {
 		return
 	}
 
-	// We ran off the end of the current leaf: follow NextLeaf links
-	// until we either find a non-empty leaf or exhaust the chain.
+	// Cold Path: Switch leaves.
+	it.nextLeaf()
+}
+
+// nextLeaf handles the complex logic of moving to the next node.
+// It is explicitly separated to allow Next() to be inlined.
+func (it *Iter) nextLeaf() {
 	for {
 		nextID := it.currNode.NextLeaf
 		if nextID == 0 {
@@ -304,45 +273,129 @@ func (it *Iter) Next() {
 			return
 		}
 
-		if len(nextNode.Keys) == 0 {
-			// Skip empty leaves; continue following the chain.
-			it.currNode = nextNode
-			it.currIdx = 0
+		// Update cache
+		it.currNode = nextNode
+		it.keys = nextNode.Keys
+		it.values = nextNode.Values
+
+		if len(it.keys) == 0 {
+			// Skip empty leaves
 			continue
 		}
 
-		it.currNode = nextNode
 		it.currIdx = 0
 		it.initLeafBounds()
 
-		// Found a valid key within bounds.
+		// If the very first key in this new node is already past our end bound, stop.
+		// (initLeafBounds sets leafLimit=0 if keys[0] >= end)
+		if it.leafLimit == 0 && len(it.keys) > 0 {
+			// Double check: if leafLimit is 0 it usually means keys[0] >= end.
+			// But if end==nil, leafLimit is len(keys).
+			// We rely on initLeafBounds logic here.
+			it.valid = false
+			return
+		}
+
+		// If initLeafBounds found valid keys (leafLimit > 0), we are good.
 		it.valid = true
 		return
 	}
 }
 
-// initLeafBounds computes the per-leaf limit for the current leaf,
-// so that Next can apply range end checks without per-key comparisons.
+// initLeafBounds computes the per-leaf limit for the current leaf.
+// This turns the bound check in Next() into a simple integer comparison (O(1)).
 func (it *Iter) initLeafBounds() {
-	if it.currNode == nil {
-		it.leafLimit = 0
-		return
-	}
 	if it.end == nil {
-		it.leafLimit = len(it.currNode.Keys)
+		it.leafLimit = len(it.keys)
 		return
 	}
-	// leafLimit is the index of the first key >= end in this leaf.
+
+	// Optimization: If the last key in this node is strictly smaller than 'end',
+	// we can iterate the entire node without per-key checks.
+	// This avoids the binary search overhead on the vast majority of leaves.
+	if len(it.keys) > 0 && bytes.Compare(it.keys[len(it.keys)-1], it.end) < 0 {
+		it.leafLimit = len(it.keys)
+		return
+	}
+
+	// 'end' falls within this leaf; find the exact cutoff.
 	it.leafLimit = it.currNode.search(it.end)
 }
 
 // Next advances the iterator backwards.
+// Optimized for inlining.
 func (it *RevIter) Next() {
-	if !it.Valid() {
+	if !it.valid {
 		return
 	}
+
 	it.currIdx--
-	it.adjust()
+
+	// Hot Path: Compare against cached lower bound.
+	if it.currIdx >= it.lowerBoundIdx {
+		return
+	}
+
+	// Cold Path: Switch leaves
+	it.prevLeaf()
+}
+
+// prevLeaf handles moving to the previous node.
+func (it *RevIter) prevLeaf() {
+	for {
+		prevID := it.currNode.PrevLeaf
+		if prevID == 0 {
+			it.valid = false
+			return
+		}
+
+		prevNode, err := it.t.loadNode(prevID)
+		if err != nil {
+			it.err = err
+			it.valid = false
+			return
+		}
+
+		// Update cache
+		it.currNode = prevNode
+		it.keys = prevNode.Keys
+		it.values = prevNode.Values
+
+		if len(it.keys) == 0 {
+			continue
+		}
+
+		it.currIdx = len(it.keys) - 1
+		it.initLowerBound()
+
+		// If the largest key in this new node is smaller than 'start',
+		// then the entire node is out of bounds. We are done.
+		if it.currIdx < it.lowerBoundIdx {
+			it.valid = false
+			return
+		}
+
+		it.valid = true
+		return
+	}
+}
+
+// initLowerBound computes the index below which we should stop iterating.
+func (it *RevIter) initLowerBound() {
+	if it.start == nil {
+		it.lowerBoundIdx = 0
+		return
+	}
+
+	// Optimization: If the first (smallest) key is >= start,
+	// we can iterate all the way to 0. Avoids binary search.
+	if len(it.keys) > 0 && bytes.Compare(it.keys[0], it.start) >= 0 {
+		it.lowerBoundIdx = 0
+		return
+	}
+
+	// 'start' falls within this leaf. Find the first key >= start.
+	it.lowerBoundIdx = it.currNode.search(it.start)
 }
 
 // Close releases the tree read lock.
