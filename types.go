@@ -8,7 +8,6 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-// todo consider chunking slabs so that uint32 is enough
 type SlabOffset uint64
 
 const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
@@ -16,7 +15,6 @@ const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
 type Hash uint64
 
 type Key struct {
-	//todo try do tricks to make both 32 bit nums for speed
 	slabOffset SlabOffset
 	hash       Hash
 }
@@ -40,13 +38,13 @@ type Hashmap struct {
 	slabTime   time.Duration
 
 	slabData []byte
-	
+
 	slabFiles       map[uint16]*os.File
 	activeSegmentId uint16
-	
+
 	activeWriter      *bufio.Writer
 	activeSegmentSize int64
-	
+
 	CompressionEnabled bool
 }
 

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"unsafe"
 
-	"github.com/segmentio/fasthash/fnv1"
+	xxhash "github.com/cespare/xxhash/v2"
 )
 
 func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
@@ -28,7 +28,7 @@ func (h *Hashmap) addBucket(key []byte, slabOffset Key) error {
 }
 
 func hash(key []byte) Hash {
-	return Hash(fnv1.HashBytes32(key))
+	return Hash(xxhash.Sum64(key))
 }
 
 func (h *Hashmap) getKeys() []Key {
@@ -40,13 +40,13 @@ func (h *Hashmap) getKeys() []Key {
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 	myhash := hash(key)
 	hkey := uint64(myhash) % (h.Capacity)
-	
+
 	var firstTombstoneIndex uint64
 	foundTombstone := false
 
 	for {
 		mybucket := (*h.Keys)[hkey]
-		
+
 		if mybucket.slabOffset == 0 {
 			// Found Empty Slot.
 			// If we saw a Tombstone earlier, use that instead to reduce fragmentation.
@@ -55,7 +55,7 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 			}
 			return hkey, true, nil
 		}
-		
+
 		if mybucket.slabOffset == Tombstone {
 			if !foundTombstone {
 				firstTombstoneIndex = hkey
@@ -91,13 +91,13 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) error {
 		if err != nil {
 			return err
 		}
-		
+
 		(*h.Keys)[hkey] = slabOffsets[i]
 		if isnew {
 			totalNewKey++
 		}
 	}
-	
+
 	*h.Count += totalNewKey
 	return nil
 }
