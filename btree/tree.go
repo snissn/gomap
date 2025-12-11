@@ -16,6 +16,7 @@ type Meta struct {
 
 type kvBatcher interface {
 	PutMany(keys [][]byte, values [][]byte) error
+	Flush() error
 }
 
 // Tree implements a B+Tree on top of an abstract KV store.
@@ -313,6 +314,16 @@ func (t *Tree) splitInternal(left *Node) (bool, []byte, NodeID, error) {
 }
 
 func (t *Tree) saveMeta() error {
+	if b, ok := t.kv.(kvBatcher); ok {
+		if err := b.PutMany([][]byte{metaKey(t.treeID)}, [][]byte{encodeMeta(&t.meta)}); err != nil {
+			return err
+		}
+		if err := b.Flush(); err != nil {
+			return err
+		}
+		t.metaDirty = false
+		return nil
+	}
 	if err := t.kv.Put(metaKey(t.treeID), encodeMeta(&t.meta)); err != nil {
 		return err
 	}
@@ -393,8 +404,11 @@ func (t *Tree) saveNodes(nodes ...*Node) error {
 		vals[i] = enc
 	}
 
-	if b, ok := t.kv.(kvBatcher); ok && len(nodes) > 1 {
+	if b, ok := t.kv.(kvBatcher); ok {
 		if err := b.PutMany(keys, vals); err != nil {
+			return err
+		}
+		if err := b.Flush(); err != nil {
 			return err
 		}
 	} else {
