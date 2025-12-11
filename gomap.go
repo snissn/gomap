@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"fmt"
 	"syscall"
 	"time"
 
@@ -15,6 +16,17 @@ import (
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 
+func getRunTime(startTime time.Time) time.Duration {
+	endTime := time.Now()
+	return endTime.Sub(startTime)
+}
+
+func printTotalRunTime(startTime time.Time) {
+	endTime := time.Now()
+	totalRunTime := endTime.Sub(startTime)
+	fmt.Printf("Total run time: %s\n", totalRunTime)
+}
+
 func (h *Hashmap) closeFPs() error {
 	if err := h.hashMapFile.Close(); err != nil {
 		return err
@@ -25,6 +37,8 @@ func (h *Hashmap) closeFPs() error {
 	return nil
 }
 
+// Get retrieves the value for a given key.
+// It returns nil, nil if the key is not found.
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
 
 	myhash := hash(key)
@@ -53,6 +67,8 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	return nil, nil
 }
 
+// AddMany inserts multiple items in a batch.
+// It is not thread-safe.
 func (h *Hashmap) AddMany(items []Item) error {
 
 	startTime := time.Now()
@@ -74,6 +90,8 @@ func (h *Hashmap) AddMany(items []Item) error {
 	return nil
 }
 
+// Add inserts a single key-value pair.
+// It is not thread-safe.
 func (h *Hashmap) Add(key []byte, value []byte) error {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
@@ -91,7 +109,7 @@ func (h *Hashmap) Add(key []byte, value []byte) error {
 	return err
 }
 
-// Mlock locks the data in memory to prevent it from being swapped to disk.
+// mlock locks the data in memory to prevent it from being swapped to disk.
 func (h *Hashmap) mlock(data mmap.MMap) {
 	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
 	if errno != 0 {
@@ -115,6 +133,7 @@ func (h *Hashmap) mlock(data mmap.MMap) {
 	}
 }
 
+// New initializes a Hashmap in the given folder.
 func (h *Hashmap) New(folder string) error {
 	h.Folder = folder
 	N, err := h.readCapacity()

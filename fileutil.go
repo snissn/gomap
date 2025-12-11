@@ -3,9 +3,30 @@ package gomap
 import (
 	"os"
 	"strconv"
+	"unsafe"
 
+	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
 )
+
+func doesFileExist(fileName string) bool {
+	_, error := os.Stat(fileName)
+	// check if error is "file not exists"
+	if os.IsNotExist(error) {
+		return false
+	} else {
+		return true
+	}
+}
+
+func getSlabOffset(slabMap mmap.MMap) *SlabOffset {
+	cap := (*SlabOffset)(unsafe.Pointer(&slabMap[0]))
+	return cap
+}
+
+func getCount(slabMap mmap.MMap) *uint64 {
+	return (*uint64)(unsafe.Pointer(&slabMap[8]))
+}
 
 func (h *Hashmap) initN(folder string, N uint64) error {
 	h.Folder = folder

@@ -7,11 +7,16 @@ import (
 	"sync"
 )
 
+// HashmapDistributed is a thread-safe, sharded hash map implementation.
+// It partitions keys across multiple underlying Hashmap instances (shards)
+// based on the number of available CPU cores to maximize concurrency.
 type HashmapDistributed struct {
 	maps    []*Hashmap
 	mutexes []sync.RWMutex
 }
 
+// New initializes the distributed hash map with storage in the specified folder.
+// It creates sub-directories for each partition.
 func (h *HashmapDistributed) New(folder string) error {
 	// Get the number of CPUs
 	numCPU := runtime.NumCPU()
@@ -37,6 +42,8 @@ func (h *HashmapDistributed) New(folder string) error {
 	return nil
 }
 
+// Get retrieves the value for a given key.
+// It returns nil if the key does not exist.
 func (h *HashmapDistributed) Get(key []byte) ([]byte, error) {
 	hash := hash(key)
 	mapIndex := hash % Hash(len(h.maps))
@@ -45,6 +52,7 @@ func (h *HashmapDistributed) Get(key []byte) ([]byte, error) {
 	return h.maps[mapIndex].Get(key)
 }
 
+// Add inserts or updates a key-value pair.
 func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	hash := hash(key)
 	mapIndex := hash % Hash(len(h.maps))
@@ -53,6 +61,8 @@ func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	return h.maps[mapIndex].Add(key, value)
 }
 
+// AddMany inserts multiple key-value pairs efficiently.
+// It buckets items by shard and performs parallel insertion.
 func (h *HashmapDistributed) AddMany(items []Item) error {
 	numShards := len(h.maps)
 	shardedItems := make([][]Item, numShards)

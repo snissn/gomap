@@ -101,33 +101,6 @@ func encodeuint64(input uint64) []byte {
 	return ret
 }
 
-func encodeLEB128(slab []byte, input uint64) int {
-	var i int
-	for input >= 0x80 {
-		slab[i] = byte(input&0x7F | 0x80)
-		input >>= 7
-		i++
-	}
-	slab[i] = byte(input)
-	return i + 1
-}
-
-func decodeLEB128(input []byte) (uint64, int) {
-	var result uint64
-	var shift uint
-	var length int
-	for {
-		b := input[length]
-		length++
-		result |= (uint64(b&0x7F) << shift)
-		if b&0x80 == 0 {
-			break
-		}
-		shift += 7
-	}
-	return result, length
-}
-
 func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
 	filename := h.Folder + "/metadata"
 	// We only need a small space for Count and SlabOffset. 4KB is plenty (OS page size).

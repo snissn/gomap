@@ -3,10 +3,16 @@ package gomap
 import (
 	"fmt"
 	"os"
+	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
 )
+
+func NtoBytesHashmap(N uint64) int64 {
+	i := Key{}
+	return int64(unsafe.Sizeof(i)) * int64(N)
+}
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	bytes := NtoBytesHashmap(N)
