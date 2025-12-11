@@ -42,10 +42,11 @@ func SaveResultsToCSV(filename string, results []BenchmarkResult) error {
 }
 
 func PrintResultsTable(results []BenchmarkResult) {
-	fmt.Printf("\n%-8s | %-8s | %-10s | %-7s | %-10s | %-7s\n", "Engine", "Keys", "SET RPS", "SET p50", "GET RPS", "GET p50")
-	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println("\nEngine   | Keys     | SET RPS      | SET p50   | GET RPS      | GET p50")
+	fmt.Println("------------------------------------------------------------------------")
 	for _, r := range results {
-		fmt.Printf("%-8s | %-8d | %-10.2f | %-7.3f | %-10.2f | %-7.3f\n",
+		fmt.Printf("%-8s | %-8d | %-12.2f | %-9.3f | %-12.2f | %-9.3f\n",
 			r.Engine, r.KeyCount, r.SetRPS, r.SetP50, r.GetRPS, r.GetP50)
 	}
+	fmt.Println("")
 }
