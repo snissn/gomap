@@ -16,7 +16,8 @@ func TestBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 }
 
 func TestAdd1(t *testing.T) {
@@ -24,22 +25,27 @@ func TestAdd1(t *testing.T) {
 	defer os.RemoveAll(folder)
 	var obj Hashmap
 
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("awoiljfasdlfj")
-	obj.Add(key, value)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
 }
 
 func TestAddGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
-	obj.Add(key, value)
-	res, _ := obj.Get(key)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
+	res, err := obj.Get(key)
+	assert.NoError(t, err)
 	assert.Equal(t, value, res, "they should be equal")
 }
 
@@ -47,14 +53,18 @@ func TestAddResizeGet(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
-	obj.Add(key, value)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
 	obj.resize()
 	key = []byte{'w', 'x', 'r', 'l', 'x'}
-	obj.Add(key, value)
-	res, _ := obj.Get(key)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
+	res, err := obj.Get(key)
+	assert.NoError(t, err)
 	assert.Equal(t, value, res, "they should be equal")
 	obj.resize()
 	obj.resize()
@@ -62,7 +72,8 @@ func TestAddResizeGet(t *testing.T) {
 	obj.resize()
 	obj.resize()
 
-	res, _ = obj.Get(key)
+	res, err = obj.Get(key)
+	assert.NoError(t, err)
 	assert.Equal(t, value, res, "they should be equal")
 }
 
@@ -71,13 +82,16 @@ func TestAddGetN(t *testing.T) {
 	defer os.RemoveAll(folder)
 
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
 		value := key
-		obj.Add(key, value)
-		res, _ := obj.Get(key)
+		err = obj.Add(key, value)
+		assert.NoError(t, err)
+		res, err := obj.Get(key)
+		assert.NoError(t, err)
 		if !bytes.Equal(res, value) {
 			assert.Equal(t, res, value, "they should be equal")
 		}
@@ -90,15 +104,18 @@ func TestAddGetN_bigt(t *testing.T) {
 	defer os.RemoveAll(folder)
 
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 	randomBytes := make([]byte, 1024)
 	rand.Read(randomBytes)
 
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
 		value := randomBytes
-		obj.Add(key, value)
-		res, _ := obj.Get(key)
+		err = obj.Add(key, value)
+		assert.NoError(t, err)
+		res, err := obj.Get(key)
+		assert.NoError(t, err)
 		if !bytes.Equal(res, value) {
 			assert.Equal(t, res, value, "they should be equal")
 		}
@@ -111,7 +128,8 @@ func TestAddGetN_bigt_batch(t *testing.T) {
 	defer os.RemoveAll(folder)
 
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 	randomBytes := make([]byte, 1024)
 	rand.Read(randomBytes)
 
@@ -123,11 +141,13 @@ func TestAddGetN_bigt_batch(t *testing.T) {
 		item := Item{Key: key, Value: value}
 		items = append(items, item)
 		if len(items) > 100000 {
-			obj.AddMany(items)
+			err = obj.AddMany(items)
+			assert.NoError(t, err)
 			items = []Item{}
 		}
 	}
-	obj.AddMany(items)
+	err = obj.AddMany(items)
+	assert.NoError(t, err)
 	//for i := 0; i < Ntests; i++ {
 	//key := []byte(strconv.Itoa(i))
 	//value := randomBytes
@@ -168,10 +188,12 @@ func TestAddValue(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 	var obj Hashmap
-	obj.New(folder)
+	err := obj.New(folder)
+	assert.NoError(t, err)
 	key := []byte("key")
 	value := []byte("bartesttesttest")
-	obj.Add(key, value)
+	err = obj.Add(key, value)
+	assert.NoError(t, err)
 }
 
 func BenchmarkAddManySlabs(b *testing.B) {

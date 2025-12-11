@@ -20,7 +20,9 @@ func NewRedisServer(dbdir string) *RedisServer {
 	}
 
 	var store gomap.Hashmap
-	store.New(dbdir)
+	if err := store.New(dbdir); err != nil {
+		log.Fatalf("failed to open gomap: %v", err)
+	}
 
 	return &RedisServer{
 		store: &store,
@@ -47,8 +49,13 @@ func (s *RedisServer) Serve(addr string) error {
 			val := cmd.Args[2]
 
 			s.lock.Lock()
-			s.store.Add(key, val)
+			err := s.store.Add(key, val)
 			s.lock.Unlock()
+
+			if err != nil {
+				conn.WriteError(err.Error())
+				return
+			}
 
 			conn.WriteString("OK")
 

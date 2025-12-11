@@ -2,7 +2,6 @@ package gomap
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/edsrzf/mmap-go"
@@ -11,11 +10,15 @@ import (
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	bytes := NtoBytesHashmap(N)
-	h.createDirectory()
+	if err := h.createDirectory(); err != nil {
+		return nil, nil, err
+	}
 	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
 
 	if !doesFileExist(filename) {
-		h.createFile(filename, bytes)
+		if err := h.createFile(filename, bytes); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	mappedData, file, err := h.openMmapFile(filename)
@@ -55,14 +58,15 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	return data, file, nil
 }
 
-func (h *Hashmap) createFile(filename string, bytes int64) {
+func (h *Hashmap) createFile(filename string, bytes int64) error {
 	f, err := os.Create(filename)
 	if err != nil {
-		log.Fatal("2", errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
 	f.Seek(bytes-1, 0)
 	f.Write([]byte("\x00"))
 	f.Seek(0, 0)
 	f.Sync()
 	f.Close()
+	return nil
 }

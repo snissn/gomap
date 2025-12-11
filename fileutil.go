@@ -1,37 +1,38 @@
 package gomap
 
 import (
-	"log"
 	"os"
 	"strconv"
 
 	"github.com/go-errors/errors"
 )
 
-func (h *Hashmap) initN(folder string, N uint64) {
+func (h *Hashmap) initN(folder string, N uint64) error {
 	h.Folder = folder
 	
 	// Create directory is handled inside openMmapHash if needed, but safer here.
-	h.createDirectory()
+	if err := h.createDirectory(); err != nil {
+		return err
+	}
 
 	m, f_map, err := h.openMmapHash(N)
 	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
 
 	meta, f_meta, err := h.openMetadata()
 	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
 
 	f_data, err := h.openDataFile()
 	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
 
 	err = h.writeCapacity(N)
 	if err != nil {
-		log.Fatal(errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
 	
 	h.hashMap = m
@@ -48,7 +49,9 @@ func (h *Hashmap) initN(folder string, N uint64) {
 
 	if *h.slabOffset == 0 {
 		sentinel := []byte("offset")
-		h.writeSlab(sentinel)
+		if err := h.writeSlab(sentinel); err != nil {
+			return err
+		}
 		*h.slabOffset = SlabOffset(len(sentinel))
 	}
 
@@ -56,27 +59,30 @@ func (h *Hashmap) initN(folder string, N uint64) {
 	h.Count = getCount(h.metadataMap)
 	keys := h.getKeys()
 	h.Keys = &keys
-
+	return nil
 }
 
 func (h *Hashmap) writeCapacity(N uint64) error {
 	s := strconv.FormatUint(N, 10)
 	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
 }
-func (h *Hashmap) readCapacity() uint64 {
+func (h *Hashmap) readCapacity() (uint64, error) {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
-		return DEFAULTMAPSIZE
+		return DEFAULTMAPSIZE, nil // Default if not found
 	}
 	capacity, err := strconv.ParseUint(string(dat), 10, 64)
-	handleError(err)
+	if err != nil {
+		return 0, err
+	}
 
-	return capacity
+	return capacity, nil
 }
 
-func (h *Hashmap) createDirectory() {
+func (h *Hashmap) createDirectory() error {
 	err := os.MkdirAll(h.Folder, 0755)
 	if err != nil {
-		log.Fatal("1", h.Folder, "2", errors.Wrap(err, 1))
+		return errors.Wrap(err, 1)
 	}
+	return nil
 }

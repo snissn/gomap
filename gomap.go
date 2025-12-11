@@ -15,11 +15,14 @@ import (
 var size uintptr = reflect.TypeOf(uint64(0)).Size()
 var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
 
-func (h *Hashmap) closeFPs() {
-	err := h.hashMapFile.Close()
-	handleError(err)
-	err = h.hashMap.Unmap()
-	handleError(err)
+func (h *Hashmap) closeFPs() error {
+	if err := h.hashMapFile.Close(); err != nil {
+		return err
+	}
+	if err := h.hashMap.Unmap(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
@@ -36,7 +39,10 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 		}
 
 		if mybucket.hash == myhash {
-			item := h.unmarshalItemFromSlab(mybucket)
+			item, err := h.unmarshalItemFromSlab(mybucket)
+			if err != nil {
+				return nil, err
+			}
 			if bytes.Equal(item.Key, key) {
 				return item.Value, nil
 			}
@@ -47,32 +53,42 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (h *Hashmap) AddMany(items []Item) {
+func (h *Hashmap) AddMany(items []Item) error {
 
 	startTime := time.Now()
-	slabOffsets := h.addManySlabs(items)
+	slabOffsets, err := h.addManySlabs(items)
+	if err != nil {
+		return err
+	}
 	slabTime := getRunTime(startTime)
 	h.slabTime += slabTime
 
 	startTime = time.Now()
 	for i, item := range items {
-		h.addBucket(item.Key, slabOffsets[i])
+		if err := h.addBucket(item.Key, slabOffsets[i]); err != nil {
+			return err
+		}
 	}
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
+	return nil
 }
 
-func (h *Hashmap) Add(key []byte, value []byte) {
+func (h *Hashmap) Add(key []byte, value []byte) error {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
-	slabOffset := h.addSlab(item)
+	slabOffset, err := h.addSlab(item)
+	if err != nil {
+		return err
+	}
 	slabTime := getRunTime(startTime)
 	h.slabTime += slabTime
 
 	startTime = time.Now()
-	h.addBucket(key, slabOffset)
+	err = h.addBucket(key, slabOffset)
 	hashTime := getRunTime(startTime)
 	h.hashTime += hashTime
+	return err
 }
 
 // Mlock locks the data in memory to prevent it from being swapped to disk.
@@ -99,10 +115,13 @@ func (h *Hashmap) mlock(data mmap.MMap) {
 	}
 }
 
-func (h *Hashmap) New(folder string) {
+func (h *Hashmap) New(folder string) error {
 	h.Folder = folder
-	N := h.readCapacity()
-	h.initN(folder, N)
+	N, err := h.readCapacity()
+	if err != nil {
+		return err
+	}
+	return h.initN(folder, N)
 }
 
 /*

@@ -29,7 +29,9 @@ func (h *HashmapDistributed) New(folder string) error {
 		}
 
 		h.maps[i] = &Hashmap{}
-		h.maps[i].New(partitionFolder)
+		if err := h.maps[i].New(partitionFolder); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -48,8 +50,7 @@ func (h *HashmapDistributed) Add(key []byte, value []byte) error {
 	mapIndex := hash % Hash(len(h.maps))
 	h.mutexes[mapIndex].Lock()         // lock for writing
 	defer h.mutexes[mapIndex].Unlock() // unlock after writing
-	h.maps[mapIndex].Add(key, value)
-	return nil
+	return h.maps[mapIndex].Add(key, value)
 }
 
 func (h *HashmapDistributed) AddMany(items []Item) error {
@@ -66,6 +67,9 @@ func (h *HashmapDistributed) AddMany(items []Item) error {
 	}
 
 	var wg sync.WaitGroup
+	var errGlobal error
+	var errOnce sync.Once
+
 	for i := 0; i < numShards; i++ {
 		if len(shardedItems[i]) == 0 {
 			continue
@@ -75,10 +79,15 @@ func (h *HashmapDistributed) AddMany(items []Item) error {
 			defer wg.Done()
 			h.mutexes[index].Lock()
 			defer h.mutexes[index].Unlock()
-			h.maps[index].AddMany(items)
+			err := h.maps[index].AddMany(items)
+			if err != nil {
+				errOnce.Do(func() {
+					errGlobal = err
+				})
+			}
 		}(i, shardedItems[i])
 	}
 	wg.Wait()
 
-	return nil
+	return errGlobal
 }

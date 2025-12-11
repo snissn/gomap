@@ -37,7 +37,9 @@ func (h *Hashmap) resize() {
 
 	var newH Hashmap
 	//todo create a new init function that doesn't take a slabSize and doesn't resize the slab
-	newH.initN(h.Folder, 2*(h.Capacity))
+	if err := newH.initN(h.Folder, 2*(h.Capacity)); err != nil {
+		panic(err) // Resize failure is critical and we can't easily recover or propagate without changing signature
+	}
 
 	index := uint64(0)
 	for index < h.Capacity {
@@ -60,7 +62,9 @@ func (h *Hashmap) replaceHashmap(newH Hashmap) {
 	oldFilename := h.Folder + "/hashkeys-" + fmt.Sprint(h.Capacity)
 
 	// Close the file handle and unmap memory
-	h.closeFPs()
+	if err := h.closeFPs(); err != nil {
+		fmt.Println("Error closing FPs:", err)
+	}
 
 	// Delete the old file from disk
 	err := os.Remove(oldFilename)

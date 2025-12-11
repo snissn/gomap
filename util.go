@@ -15,12 +15,6 @@ func getCPUNumber() int {
 	return runtime.NumCPU()
 }
 
-func handleError(err error) {
-	if err != nil {
-		fmt.Println(err)
-		panic(err)
-	}
-}
 func doesFileExist(fileName string) bool {
 	_, error := os.Stat(fileName)
 	// check if error is "file not exists"

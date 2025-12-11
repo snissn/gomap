@@ -3,18 +3,15 @@ package gomap
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
 )
 
-func (h *Hashmap) writeSlab(buf []byte) {
+func (h *Hashmap) writeSlab(buf []byte) error {
 	_, err := h.realSlabFILE.Write(buf)
-	if err != nil {
-		panic(err)
-	}
+	return err
 }
 
 func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
@@ -26,7 +23,7 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	return bytes, nil
 }
 
-func (h *Hashmap) addSlab(item Item) Key {
+func (h *Hashmap) addSlab(item Item) (Key, error) {
 	offset := *h.slabOffset
 	key := item.Key
 	val := item.Value
@@ -42,12 +39,15 @@ func (h *Hashmap) addSlab(item Item) Key {
 	h.slabData = append(h.slabData, encodeuint64(uint64(vallen))...)
 	h.slabData = append(h.slabData, key...)
 	h.slabData = append(h.slabData, val...)
-	h.writeSlab(h.slabData)
+	err := h.writeSlab(h.slabData)
+	if err != nil {
+		return Key{}, err
+	}
 	*h.slabOffset += SlabOffset(actualTotalLength)
-	return Key{slabOffset: offset, hash: hash(key)}
+	return Key{slabOffset: offset, hash: hash(key)}, nil
 }
 
-func (h *Hashmap) addManySlabs(items []Item) []Key {
+func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 	slabOffsets := make([]Key, len(items))
 	if cap(h.slabData) < len(items)*2048 {
 		h.slabData = make([]byte, 0, len(items)*2048)
@@ -66,26 +66,29 @@ func (h *Hashmap) addManySlabs(items []Item) []Key {
 		h.slabData = append(h.slabData, valueBytes...)
 		offset += SlabOffset(totalLength)
 	}
-	h.writeSlab(h.slabData)
+	err := h.writeSlab(h.slabData)
+	if err != nil {
+		return nil, err
+	}
 	*h.slabOffset += SlabOffset(len(h.slabData))
-	return slabOffsets
+	return slabOffsets, nil
 }
 
-func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) Item {
+func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	headerBytes, err := h.ReadBytes(slabValues.slabOffset, int64(16))
 	if err != nil {
-		panic(err)
+		return Item{}, err
 	}
 	keyLength, _ := decodeuint64(headerBytes[0:8])
 	valueLength, _ := decodeuint64(headerBytes[8:16])
 	valuesBytes, err := h.ReadBytes(slabValues.slabOffset+16, int64(keyLength+valueLength))
 	if err != nil {
-		panic(err)
+		return Item{}, err
 	}
 	return Item{
 		Key:   valuesBytes[0:keyLength],
 		Value: valuesBytes[keyLength:],
-	}
+	}, nil
 }
 
 func decodeuint64(input []byte) (uint64, int) {
@@ -133,7 +136,7 @@ func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
 	if !doesFileExist(filename) {
 		f, err := os.Create(filename)
 		if err != nil {
-			log.Fatal("2", errors.Wrap(err, 1))
+			return nil, nil, errors.Wrap(err, 1)
 		}
 		f.Seek(size-1, 0)
 		f.Write([]byte("\x00"))
@@ -144,12 +147,12 @@ func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
 
 	f, err := os.OpenFile(filename, os.O_RDWR, 0655)
 	if err != nil {
-		log.Fatal("3", errors.Wrap(err, 1))
+		return nil, nil, errors.Wrap(err, 1)
 	}
 
 	fi, err := f.Stat()
 	if err != nil {
-		log.Fatal("4", errors.Wrap(err, 1))
+		return nil, nil, errors.Wrap(err, 1)
 	}
 
 	if size > fi.Size() {
@@ -170,6 +173,7 @@ func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
 	applyMadvise(data)
 	return data, f, nil
 }
+
 
 func (h *Hashmap) openDataFile() (*os.File, error) {
 	filename := h.Folder + "/slab-real"
