@@ -1,4 +1,4 @@
-# Addendum A: Testing Specification v2.2
+# Addendum A: Testing Specification v2.3
 
 ## 1. Unit Testing Strategies
 
@@ -107,7 +107,7 @@ Simulate power loss to ensure durability.
     * **Expectation:** The Batch must return an error. The DB must remain readable and consistent.
 * **ReadOnly Mount:** Remount FS as Read-Only during operation.
 
-### 4.3 Torn Write Recovery (NEW)
+### 4.3 Torn Write Recovery
 * **Scenario:**
     1. Prepare a batch with large values.
     2. Mock the `fsync` call or inject a panic **after** the `.slab` file append completes but **before** the `Page 0 (Meta)` update is flushed.
@@ -119,23 +119,51 @@ Simulate power loss to ensure durability.
 
 ---
 
-## 5. Concurrency & Race Detection
+## 5. Concurrency & Race Detection (Updated)
 
-Go's `-race` detector is mandatory, but we need logical race tests too.
+Go's `-race` detector is mandatory. We also use "Logical Race Tests" to verify the "Move-and-CAS" compaction protocol.
 
 ### 5.1 The Reader/Writer Duel
 * **Routine 1 (Writer):** Continually updates `Key1` with incrementing integers (1, 2, 3...).
 * **Routine 2 (Reader):** Continually reads `Key1`.
 * **Assert:** Reader always sees a monotonically increasing number. It never sees a "torn read" (e.g., a mix of bytes from Value 2 and Value 3).
 
-### 5.2 Compaction Race
+### 5.2 Zombie Life-Support (Reader vs. Deleter)
 * **Scenario:**
-    * Fill DB to trigger Slab Rotation.
-    * Start a long-running **Reverse Iterator** on the "Old Slab".
-    * Trigger Slab Compaction (which rewrites valid values to `active.slab` and deletes the old file).
-    * **Assert:** The Compaction logic must not delete the underlying file while the Iterator has it open (Ref Counting). The Iterator must successfully read the values.
+    * Start a long-running **Reverse Iterator** on an "Old Slab".
+    * Trigger Compaction (which marks the Old Slab as Zombie and attempts deletion).
+* **Assert (During Iteration):**
+    * `Slab.IsZombie` must be `true`.
+    * `Slab.RefCount` must be `> 0`.
+    * The underlying file **must exist** on disk.
+    * The Iterator successfully reads values.
+* **Assert (After Close):**
+    * Close the Iterator.
+    * Verify `Slab.RefCount` drops to 0.
+    * Verify the file is deleted from disk.
 
-### 5.3 Compaction Throttling (NEW)
+### 5.3 The "Resurrection" Write (CAS Verification)
+* **Scenario:**
+    1.  Compactor reads `Key A` (Val=1) from `OldSlab` and copies to `NewSlab`.
+    2.  **Hook:** Pause Compactor just before the `CompareAndSwap` step.
+    3.  **User Action:** Call `Set(Key A, Val=2)`. (This points Index to `WriteSlab`).
+    4.  **Resume:** Unpause Compactor.
+* **Assert:**
+    * The Compactor's `CompareAndSwap` **must fail** (return false).
+    * `Get(Key A)` returns `Val=2` (User wins).
+    * The `NewSlab` contains the (now garbage) copy of `Val=1`, but the Index does not point to it.
+
+### 5.4 Torn Compaction Recovery
+* **Scenario:**
+    1.  Start Compaction on a slab with 1,000 keys.
+    2.  **Hook:** Panic/Kill the process halfway through the `CAS Loop` (500 keys updated to `NewSlab`, 500 still pointing to `OldSlab`).
+* **Recovery:**
+    * Restart DB.
+    * **Assert:** `Get()` works for all 1,000 keys.
+    * **Assert:** `SlabManager` loads **both** `OldSlab` and `NewSlab` as active files.
+    * **Assert:** `OldSlab` is **not** deleted (since it still has active references in the B+Tree).
+
+### 5.5 Compaction Throttling
 * **Scenario:**
     * Populate the DB with enough dead data to trigger a massive compaction (e.g., 2GB).
     * Configure the Leaky Bucket rate limiter to a low value (e.g., 5MB/s).
@@ -166,3 +194,4 @@ The database must pass the Cosmos SDK integration definition.
     4.  Verify disk usage drops (Index pages reused).
     5.  Verify querying Block 1 fails (correctly).
     6.  Verify querying Block 9,999 succeeds.
+

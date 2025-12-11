@@ -1,4 +1,4 @@
-# TreeDB Design Specification v2.2 (Ref-Counted Slabs)
+# TreeDB Design Specification v2.3 (Concurrent Compaction)
 
 ## 1\. System Overview
 
@@ -101,8 +101,13 @@ type SlabFile struct {
     FileID   uint16
     Handle   *os.File
     Mmap     []byte       // The read-only memory map
+
+    // Safety Primitives (Updated for Race Safety)
     RefCount atomic.Int64 // Number of active Snapshots referencing this file
-    IsZombie bool         // True if the file has been "deleted" by compaction
+    IsZombie atomic.Bool  // True if the file has been "deleted" by compaction
+    
+    // Compaction Stats
+    DeadBytes atomic.Uint64
 }
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
@@ -249,26 +254,91 @@ Used heavily by Cosmos SDK for finding the latest versions or traversing time-or
       * If `PrevLeafID == 0`: Stop (SOF).
   * **Concurrency:** Holds a "Reader Hold" on the Sequence to protect page traversal.
 
-### 5.4 Slab Compaction (Atomic Mark-and-Sweep)
+### 5.4 Concurrent Slab Compaction (The "Move-and-CAS" Protocol)
 
-Instead of immediate deletion, compaction performs an atomic "Swap and Mark" to support Reference Counting.
+Compaction is the most dangerous operation in the database. It runs concurrently with high-throughput writes and reads. To prevent race conditions (e.g., the "Resurrection Bug" where an old value overwrites a new one), compaction relies on **Optimistic Concurrency Control** via a `CompareAndSwap` operation on the B+Tree index.
 
-1.  **Metadata Tracking:** `SlabStats` in Page 0 tracks dead bytes.
-2.  **Trigger & Throttling:**
-      * **Trigger:** When `DeadBytes / TotalBytes > 0.5`.
-      * **Rate Limiter:** A **Leaky Bucket** limits compaction I/O (e.g., 20MB/s) to prevent "Compaction Storms" from starving the active writer.
-3.  **Compaction Loop:**
-      * **Create New Generation:** Open `new.slab`. Iterate `old.slab`, verify liveness against B+Tree, copy live values to `new.slab`. Update B+Tree.
-      * **The Atomic Swap:**
-          * Lock `SlabManager`.
-          * Create `NextSlabSet`. Add `new.slab`, remove `old.slab`.
-          * Update Global SlabSet pointer.
-          * Unlock.
-      * **Mark as Zombie:** Set `old.slab.IsZombie = true`.
-      * **Attempt Deletion:**
-          * Check `old.slab.RefCount`.
-          * **If 0:** Close handle and `os.Remove`.
-          * **If \> 0:** Do nothing (Deletion is deferred to the last Snapshot release).
+#### 5.4.1 The Compaction Lifecycle
+
+**Phase 1: Candidate Selection**
+
+  * The system identifies a "Cold Slab" where `DeadBytes / TotalBytes > 0.5`.
+  * A new "Target Slab" is allocated (`active-compaction.slab`).
+
+**Phase 2: Optimistic Copy (The "Ghost" Write)**
+The compactor iterates sequentially through the **Cold Slab**. For every `ValuePtr` (FileID, Offset, Len) found:
+
+1.  **Liveness Check (Read):** Query the B+Tree for the corresponding Key.
+      * If `Tree.Get(Key) != CurrentValuePtr`: The value has already been updated or deleted by the user. **Skip.**
+      * If `Tree.Get(Key) == CurrentValuePtr`: The value is still live.
+2.  **Copy Data:** Read the bytes from the **Cold Slab** and append them to the **Target Slab**.
+3.  **Record Intent:** Store the mapping `Key -> (OldPtr, NewPtr)` in a local `CompactionBatch`.
+      * *Note:* At this stage, the `NewPtr` is valid on disk but **invisible** to readers.
+
+**Phase 3: The Atomic Commit (CAS)**
+Once the `CompactionBatch` reaches a size threshold (e.g., 4MB), we commit it to the B+Tree.
+
+1.  **Acquire Writer Lock:** Determine the commit ordering relative to standard user batches.
+2.  **Execute CAS Loop:**
+    For every entry in the `CompactionBatch`:
+      * **Check:** Does `Tree.Get(Key)` still equal `OldPtr`?
+      * **If YES:** Update `Tree.Set(Key, NewPtr)`. (Success: Value moved).
+      * **If NO:** The user updated `Key` while we were copying. **Abort update.**
+          * *Result:* The data we copied to `Target Slab` is now "dead on arrival". This is acceptable waste. It will be cleaned up in the *next* compaction cycle of the `Target Slab`.
+3.  **Release Lock.**
+
+#### 5.4.2 The Zombie Transition (Ref-Counted Deletion)
+
+Once the Cold Slab has been fully processed:
+
+1.  **Global Swap:** The `SlabManager` atomically removes the **Cold Slab** from the `ActiveSet` and adds the **Target Slab**.
+2.  **Mark Zombie:** The **Cold Slab** is marked `IsZombie = true`.
+3.  **Cleanup Trigger:**
+      * The Compactor calls `TryDelete(ColdSlab)`.
+      * The function checks `Slab.RefCount`.
+          * **If RefCount == 0:** Close file handle and `os.Remove()`.
+          * **If RefCount \> 0:** The file remains on disk. It is added to a `ZombieList`.
+4.  **Deferred Cleanup:**
+      * Every time a Reader releases a Snapshot (`Close()`), it decrements the RefCount of all slabs in that snapshot.
+      * If the decrement transitions a Slab's RefCount to 0 **AND** it is in the `ZombieList`, the Reader thread triggers the `os.Remove()`.
+
+### 5.5 Race Condition Analysis & Safety Proofs
+
+This section defines how TreeDB guarantees strict serializability despite background file shuffling.
+
+#### 5.5.1 Race: The "Resurrection" Write
+
+  * **Scenario:**
+    1.  Compactor reads `Key A` (val=1) from Slab 1.
+    2.  Compactor copies `val=1` to Slab 2.
+    3.  **User** calls `Set(Key A, val=2)`. This updates the Index to point to `Slab 3`.
+    4.  Compactor tries to update Index for `Key A` to point to `Slab 2`.
+  * **Resolution:**
+    The **Compare-And-Swap (CAS)** in Phase 3 fails.
+    The Compactor compares its `OldPtr` (Slab 1) with the current Index state (Slab 3). They mismatch. The Compactor aborts the update. `Key A` correctly remains `val=2`.
+
+#### 5.5.2 Race: The "Vanishing" Slab (Reader vs. Deleter)
+
+  * **Scenario:**
+    1.  Reader A acquires Snapshot at `T=1`. It holds a pointer to `Slab 1`.
+    2.  Compactor finishes processing `Slab 1` at `T=2`.
+    3.  Compactor attempts to delete `Slab 1`.
+    4.  Reader A tries to read a value from `Slab 1`.
+  * **Resolution:**
+    When Reader A acquired the snapshot, it performed `atomic.AddInt64(&Slab1.RefCount, 1)`.
+    When Compactor finishes, it marks `Slab1.IsZombie = true` but checks `RefCount`. Since RefCount is at least 1, **physical deletion is skipped**.
+    Reader A continues to read from the open file handle.
+    When Reader A calls `Close()`, it performs `atomic.AddInt64(&Slab1.RefCount, -1)`. The count hits 0. The Reader's defer handler detects `IsZombie` and deletes the file.
+
+#### 5.5.3 Race: The "Torn" Compaction Commit
+
+  * **Scenario:** System crashes mid-way through the Compactor's `CAS Loop`. Half the keys point to `OldSlab`, half point to `NewSlab`.
+  * **Resolution:**
+    Both `OldSlab` and `NewSlab` are valid files on disk. The B+Tree is the source of truth. Upon restart:
+    1.  The B+Tree loads successfully.
+    2.  Keys pointing to `OldSlab` work fine.
+    3.  Keys pointing to `NewSlab` work fine.
+    4.  **Recovery:** The `SlabManager` scans the directory. It loads both slabs. The compaction simply resumes (or restarts) later. No data is lost; only disk space efficiency is temporarily reduced.
 
 ## 6\. Go Interface Definition
 
@@ -328,9 +398,20 @@ func (db *DB) Print() error
 //  - "treedb.pages.total": Total pages in index.db
 //  - "treedb.slabs.active_id": ID of the current write slab (from SlabManager)
 //  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
-
-
 func (db *DB) Stats() map[string]string
+
+// --- Internal Interfaces for CAS Support ---
+
+// Tree interface required for Safe Compaction
+type Tree interface {
+    Get(key []byte) (ValuePtr, error)
+    Set(key []byte, ptr ValuePtr) error
+    
+    // CompareAndSwap is required for safe compaction.
+    // It atomically sets 'key' to 'newPtr' ONLY IF the current value equals 'oldPtr'.
+    // Returns true if swapped, false if mismatch.
+    CompareAndSwap(key []byte, oldPtr, newPtr ValuePtr) (bool, error)
+}
 
 // --- Batch Implementation ---
 
