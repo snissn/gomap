@@ -13,6 +13,10 @@ type Meta struct {
 	NextNodeID NodeID
 }
 
+type kvBatcher interface {
+	PutMany(keys [][]byte, values [][]byte) error
+}
+
 // Tree implements a B+Tree on top of an abstract KV store.
 // Concurrency is handled with a coarse-grained RWMutex.
 type Tree struct {
@@ -21,6 +25,10 @@ type Tree struct {
 
 	mu        sync.RWMutex
 	meta      Meta
+	cacheMu   sync.Mutex
+	nodeCache map[NodeID]*Node
+	cacheFIFO []NodeID
+	cacheCap  int
 	metaDirty bool
 }
 
@@ -28,8 +36,10 @@ type Tree struct {
 // Meta read errors are returned to the caller; only an absent meta entry triggers initialization.
 func OpenTree(kv KVStore, treeID string) (*Tree, error) {
 	t := &Tree{
-		treeID: treeID,
-		kv:     kv,
+		treeID:    treeID,
+		kv:        kv,
+		cacheCap:  128,
+		nodeCache: make(map[NodeID]*Node),
 	}
 
 	metaBytes, err := kv.Get(metaKey(treeID))
@@ -259,10 +269,7 @@ func (t *Tree) splitLeaf(left *Node) (bool, []byte, NodeID, error) {
 		}
 	}
 
-	if err := t.saveNode(right); err != nil {
-		return false, nil, 0, err
-	}
-	if err := t.saveNode(left); err != nil {
+	if err := t.saveNodes(right, left); err != nil {
 		return false, nil, 0, err
 	}
 
@@ -288,10 +295,7 @@ func (t *Tree) splitInternal(left *Node) (bool, []byte, NodeID, error) {
 	left.Keys = left.Keys[:mid]
 	left.Children = left.Children[:mid+1]
 
-	if err := t.saveNode(right); err != nil {
-		return false, nil, 0, err
-	}
-	if err := t.saveNode(left); err != nil {
+	if err := t.saveNodes(right, left); err != nil {
 		return false, nil, 0, err
 	}
 
@@ -307,6 +311,9 @@ func (t *Tree) saveMeta() error {
 }
 
 func (t *Tree) loadNode(id NodeID) (*Node, error) {
+	if n := t.cacheGet(id); n != nil {
+		return n, nil
+	}
 	data, err := t.kv.Get(nodeKey(t.treeID, id))
 	if err != nil {
 		return nil, err
@@ -314,15 +321,16 @@ func (t *Tree) loadNode(id NodeID) (*Node, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
-	return decodeNode(id, data)
+	n, err := decodeNode(id, data)
+	if err != nil {
+		return nil, err
+	}
+	t.cachePut(n)
+	return n, nil
 }
 
 func (t *Tree) saveNode(n *Node) error {
-	enc, err := encodeNode(n)
-	if err != nil {
-		return err
-	}
-	return t.kv.Put(nodeKey(t.treeID, n.ID), enc)
+	return t.saveNodes(n)
 }
 
 func insertBytes[T any](s []T, i int, v T) []T {
@@ -358,4 +366,67 @@ func (t *Tree) saveMetaIfDirty() error {
 		return nil
 	}
 	return t.saveMeta()
+}
+
+func (t *Tree) saveNodes(nodes ...*Node) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+	keys := make([][]byte, len(nodes))
+	vals := make([][]byte, len(nodes))
+	for i, n := range nodes {
+		enc, err := encodeNode(n)
+		if err != nil {
+			return err
+		}
+		keys[i] = nodeKey(t.treeID, n.ID)
+		vals[i] = enc
+	}
+
+	if b, ok := t.kv.(kvBatcher); ok && len(nodes) > 1 {
+		if err := b.PutMany(keys, vals); err != nil {
+			return err
+		}
+	} else {
+		for i := range nodes {
+			if err := t.kv.Put(keys[i], vals[i]); err != nil {
+				return err
+			}
+		}
+	}
+	for _, n := range nodes {
+		t.cachePut(n)
+	}
+	return nil
+}
+
+func (t *Tree) cacheGet(id NodeID) *Node {
+	if t.cacheCap == 0 {
+		return nil
+	}
+	t.cacheMu.Lock()
+	defer t.cacheMu.Unlock()
+	return t.nodeCache[id]
+}
+
+func (t *Tree) cachePut(n *Node) {
+	if t.cacheCap == 0 {
+		return
+	}
+	t.cacheMu.Lock()
+	defer t.cacheMu.Unlock()
+	if t.nodeCache == nil {
+		t.nodeCache = make(map[NodeID]*Node)
+	}
+	if _, exists := t.nodeCache[n.ID]; exists {
+		t.nodeCache[n.ID] = n
+		return
+	}
+	t.nodeCache[n.ID] = n
+	t.cacheFIFO = append(t.cacheFIFO, n.ID)
+	if len(t.cacheFIFO) > t.cacheCap {
+		evict := t.cacheFIFO[0]
+		t.cacheFIFO = t.cacheFIFO[1:]
+		delete(t.nodeCache, evict)
+	}
 }

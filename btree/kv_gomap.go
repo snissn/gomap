@@ -1,10 +1,26 @@
 package btree
 
-import "github.com/snissn/gomap"
+import (
+	"fmt"
+
+	"github.com/snissn/gomap"
+)
 
 // GomapKV adapts HashmapDistributed to the KVStore interface.
 type GomapKV struct {
 	Store *gomap.HashmapDistributed
+}
+
+// PutMany batches multiple puts when available.
+func (g *GomapKV) PutMany(keys [][]byte, vals [][]byte) error {
+	if len(keys) != len(vals) {
+		return fmt.Errorf("keys/vals length mismatch")
+	}
+	items := make([]gomap.Item, len(keys))
+	for i := range keys {
+		items[i] = gomap.Item{Key: keys[i], Value: vals[i]}
+	}
+	return g.Store.AddMany(items)
 }
 
 // NewTreeOnGomap constructs a Tree backed by a gomap.HashmapDistributed.
