@@ -43,6 +43,10 @@ func TestCacheKVFlush(t *testing.T) {
 	if err := c.Put([]byte("c"), []byte("3")); err != nil {
 		t.Fatal(err)
 	}
+	// Flush to ensure all pending items are persisted.
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
 	if v, _ := base.Get([]byte("a")); string(v) != "1" {
 		t.Fatalf("expected flushed value 1, got %s", v)
 	}
@@ -86,8 +90,7 @@ func TestCacheKVWithGomap(t *testing.T) {
 	if err := h.NewWithShards(dir, 2); err != nil {
 		t.Fatal(err)
 	}
-	// Simple adapter to KVStore.
-	kv := &hashmapKV{h}
+	kv := &hashmapKVAdapter{h}
 	c := NewCacheKV(kv, 4, 1024, 0)
 	if err := c.Put([]byte("k"), []byte("v")); err != nil {
 		t.Fatal(err)
@@ -101,10 +104,10 @@ func TestCacheKVWithGomap(t *testing.T) {
 	}
 }
 
-type hashmapKV struct {
+type hashmapKVAdapter struct {
 	h *HashmapDistributed
 }
 
-func (m *hashmapKV) Get(key []byte) ([]byte, error)   { return m.h.Get(key) }
-func (m *hashmapKV) Put(key, value []byte) error      { return m.h.Add(key, value) }
-func (m *hashmapKV) Delete(key []byte) error          { return m.h.Delete(key) }
+func (m *hashmapKVAdapter) Get(key []byte) ([]byte, error)   { return m.h.Get(key) }
+func (m *hashmapKVAdapter) Put(key, value []byte) error      { return m.h.Add(key, value) }
+func (m *hashmapKVAdapter) Delete(key []byte) error          { return m.h.Delete(key) }
