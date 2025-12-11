@@ -18,15 +18,21 @@ type HashmapDistributed struct {
 // New initializes the distributed hash map with storage in the specified folder.
 // It creates sub-directories for each partition.
 func (h *HashmapDistributed) New(folder string) error {
-	// Get the number of CPUs
-	numCPU := runtime.NumCPU()
+	return h.NewWithShards(folder, runtime.NumCPU())
+}
+
+// NewWithShards initializes the distributed hash map with a specific number of shards.
+func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
+	if numShards <= 0 {
+		numShards = runtime.NumCPU()
+	}
 
 	// Initialize the slice of Hashmap pointers and mutexes
-	h.maps = make([]*Hashmap, numCPU)
-	h.mutexes = make([]sync.RWMutex, numCPU)
+	h.maps = make([]*Hashmap, numShards)
+	h.mutexes = make([]sync.RWMutex, numShards)
 
-	// Create a new Hashmap for each CPU
-	for i := 0; i < numCPU; i++ {
+	// Create a new Hashmap for each Shard
+	for i := 0; i < numShards; i++ {
 		partitionFolder := fmt.Sprintf("%s/partition-%d", folder, i)
 		err := os.MkdirAll(partitionFolder, 0755)
 		if err != nil {
