@@ -81,6 +81,7 @@ Every page starts with this header.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
   * `LastCommitSeq` (8b): The Sequence (Height) of the last commit.
+  * `SlabStats` (Map): Tracks dead bytes per slab file for compaction triggers.
 
 #### The Freelist Page (Type 0x02)
 
@@ -100,7 +101,6 @@ We use **Slotted Pages** to support variable-length keys while maintaining binar
   * **Heap (Bottom):** Data growing upward.
   * **Entry Format:** `[Child PageID (8b)] [KeyBytes]`
   * **Search:** Binary search the Directory to find the Child pointer.
-
 
 ### 4.2 Leaf Node Layout
 
@@ -131,7 +131,6 @@ When a Leaf Node is modified or split:
 2.  **The Previous Leaf's** `NextLeafID` must be updated to point to the New PageID.
 3.  **The Next Leaf's** `PrevLeafID` must be updated to point to the New PageID.
       * *Note:* In a standard COW B+Tree, updating neighbors can cause write amplification (cascading updates). However, since TreeDB uses the **Batch Zipper** (Section 5.1), we reconstruct contiguous ranges of leaves in memory. We only need to perform the "Link Stitching" on the **left-most** and **right-most** boundaries of the batch.
-
 
 ## 5\. Core Algorithms
 
@@ -202,7 +201,10 @@ To support concurrent readers without locks, we cannot immediately overwrite old
 
   * Traverse B+Tree.
   * **Checksum:** On every `ReadPage`, verify CRC32.
-  * **Fetch:** If Inlined, return bytes. If Pointer, read from `SlabManager`.
+  * **Fetch:**
+      * **Inlined:** **Allocate a new byte slice** and copy data from the Page. Return the copy.
+      * **Pointer:** Read from `SlabManager`. **Allocate a new byte slice** and copy data from the Mmap region. Return the copy.
+      * *Safety Note:* Never return a direct slice into the Mmap region, as file truncation/remaps can cause Segfaults in consumer code.
 
 #### 2\. Forward Iterator
 
@@ -230,14 +232,22 @@ Used heavily by Cosmos SDK for finding the latest versions or traversing time-or
   * **Concurrency:**
       * Like the Forward Iterator, the Reverse Iterator holds a "Reader Hold" on the Sequence number (Epoch) at the time of creation to prevent the `PrevLeafID` pages from being garbage collected by the Graveyard/Pruner.
 
-### 5.4 Slab Garbage Collection
+### 5.4 Slab Compaction (Garbage Collection)
 
-  * **Trigger:** User-defined (e.g., "Disk usage \> 80%").
-  * **Method:**
-    1.  Open a new `active.slab`.
-    2.  Iterate the **entire B+Tree**.
-    3.  If a key points to an "Old Slab", read the value and rewrite it to `active.slab`. Update the B+Tree with the new `ValuePtr`.
-    4.  Once an Old Slab has zero references (ref-count tracked or post-scan), delete the file.
+Instead of scanning the whole tree, we track "Liveness" per slab file to avoid "stop-the-world" pauses.
+
+1.  **Metadata Tracking:**
+      * In `Page 0` (Meta), we maintain a map: `SlabStats[FileID] { TotalBytes, DeadBytes }`.
+      * When a key is **overwritten** or **deleted**, we look up the old `ValuePtr` (if not inlined) and increment `DeadBytes` for that `FileID`.
+2.  **Trigger:**
+      * When `DeadBytes / TotalBytes > 0.5` (50% fragmentation) for a specific `.slab` file.
+3.  **Compaction Process (Background):**
+      * Open `new.slab`.
+      * Iterate the `old.slab` sequentially (fast scan).
+      * **Verification:** For every value in `old.slab`, check the B+Tree. Does the current Index still point to this offset?
+          * **Yes:** Copy value to `new.slab`. Update B+Tree to point to new location.
+          * **No:** Discard (it was deleted/moved).
+      * Delete `old.slab`.
 
 ## 6\. Go Interface Definition
 
@@ -292,6 +302,12 @@ func (db *DB) NewBatch() db.Batch
 func (db *DB) Print() error
 
 // Stats returns a map of property strings to values.
+// Mandatory keys:
+//  - "cosmos.db.type": "treedb"
+//  - "treedb.pages.total": Total pages in index.db
+//  - "treedb.pages.free": Count of pages in the freelist
+//  - "treedb.slabs.active_id": ID of the current write slab
+//  - "treedb.slabs.total_size": Combined size of all slab files
 func (db *DB) Stats() map[string]string
 
 // --- Batch Implementation ---
