@@ -10,6 +10,7 @@ import (
 
 type BenchmarkResult struct {
 	Engine   string
+	Scenario string
 	KeyCount int
 	SetRPS   float64
 	GetRPS   float64
@@ -27,10 +28,11 @@ func SaveResultsToCSV(filename string, results []BenchmarkResult) error {
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
-	w.Write([]string{"Engine", "KeyCount", "SET RPS", "SET p50", "GET RPS", "GET p50"})
+	w.Write([]string{"Engine", "Scenario", "KeyCount", "SET RPS", "SET p50", "GET RPS", "GET p50"})
 	for _, r := range results {
 		w.Write([]string{
 			r.Engine,
+			r.Scenario,
 			strconv.Itoa(r.KeyCount),
 			fmt.Sprintf("%.2f", r.SetRPS),
 			fmt.Sprintf("%.3f", r.SetP50),
@@ -42,11 +44,12 @@ func SaveResultsToCSV(filename string, results []BenchmarkResult) error {
 }
 
 func PrintResultsTable(results []BenchmarkResult) {
-	fmt.Println("\nEngine   | Keys       | SET RPS        | SET p50   | GET RPS        | GET p50")
-	fmt.Println("--------------------------------------------------------------------------")
+	fmt.Println("\nEngine   | Scenario        | Keys       | SET RPS        | SET p50   | GET RPS        | GET p50")
+	fmt.Println("---------------------------------------------------------------------------------------------")
 	for _, r := range results {
-		fmt.Printf("%-8s | %10s | %14s | %9.3f | %14s | %9.3f\n",
-			r.Engine, 
+		fmt.Printf("%-8s | %-15s | %10s | %14s | %9.3f | %14s | %9.3f\n",
+			r.Engine,
+			r.Scenario, 
 			formatInt(r.KeyCount), 
 			formatFloat(r.SetRPS), 
 			r.SetP50, 

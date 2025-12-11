@@ -16,59 +16,67 @@ func Run() {
 	var results []BenchmarkResult
 
 	for _, engine := range cfg.Engines {
-		for _, keyCount := range cfg.KeyCounts {
-			tempDir, err := os.MkdirTemp("", fmt.Sprintf("%s-db", engine))
-			if err != nil {
-				log.Fatalf("failed to create temp dir: %v", err)
+		for _, scenario := range cfg.Scenarios {
+			for _, keyCount := range cfg.KeyCounts {
+				tempDir, err := os.MkdirTemp("", fmt.Sprintf("%s-db", engine))
+				if err != nil {
+					log.Fatalf("failed to create temp dir: %v", err)
+				}
+
+				fmt.Printf("\nRunning benchmark: engine=%s scenario=%s keys=%d tmpdir=%s\n", engine, scenario.Name, keyCount, tempDir)
+
+				// 🔥 Kill anything lingering on 6380 before starting
+				_ = exec.Command("bash", "-c", "lsof -ti tcp:6380 | xargs kill -9").Run()
+				time.Sleep(1 * time.Second)
+
+				var cmd *exec.Cmd
+				if engine == "redis" || engine == "redis-server" {
+					cmd = exec.Command("redis-server", "--port", strconv.Itoa(cfg.Port), "--dir", tempDir, "--save", "")
+				} else {
+					cmd = exec.Command("go", "run", "redisserver/main.go", engine, tempDir)
+				}
+				
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+
+				if err := cmd.Start(); err != nil {
+					log.Fatalf("failed to start server: %v", err)
+				}
+
+				time.Sleep(2 * time.Second) // wait for server to bind
+
+				// Construct redis-benchmark command
+				// base args: -p port -n keys -q --csv
+				// scenario args appended
+				benchArgs := []string{"-p", strconv.Itoa(cfg.Port), "-n", strconv.Itoa(keyCount), "--csv"}
+				benchArgs = append(benchArgs, scenario.Args...)
+				
+				out, err := exec.Command("redis-benchmark", benchArgs...).CombinedOutput()
+
+				// ⚠ Now kill Redis server forcefully again (double-safety)
+				_ = cmd.Process.Kill()
+				_ = exec.Command("bash", "-c", "lsof -ti tcp:6380 | xargs kill -9").Run()
+
+				if err := cmd.Wait(); err != nil {
+					fmt.Printf("Server exited with error: %v\n", err)
+				}
+
+				time.Sleep(2 * time.Second) // Let port clear completely
+
+				if err != nil {
+					fmt.Printf("Benchmark failed: %v\nOutput:\n%s\n", err, out)
+					continue // still continue benchmarking others
+				}
+
+				res := parseBenchmarkOutput(string(out))
+				res.Engine = engine
+				res.Scenario = scenario.Name
+				res.KeyCount = keyCount
+				results = append(results, res)
+
+				_ = os.RemoveAll(tempDir)
 			}
-
-			fmt.Printf("\nRunning benchmark: engine=%s keys=%d tmpdir=%s\n", engine, keyCount, tempDir)
-
-			// 🔥 Kill anything lingering on 6380 before starting
-			_ = exec.Command("bash", "-c", "lsof -ti tcp:6380 | xargs kill -9").Run()
-			time.Sleep(1 * time.Second)
-
-			var cmd *exec.Cmd
-			if engine == "redis" || engine == "redis-server" {
-				cmd = exec.Command("redis-server", "--port", strconv.Itoa(cfg.Port), "--dir", tempDir, "--save", "")
-			} else {
-				cmd = exec.Command("go", "run", "redisserver/main.go", engine, tempDir)
-			}
-			
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-
-			if err := cmd.Start(); err != nil {
-				log.Fatalf("failed to start server: %v", err)
-			}
-
-			time.Sleep(2 * time.Second) // wait for server to bind
-
-			out, err := exec.Command("redis-benchmark", "-p", strconv.Itoa(cfg.Port), "-t", "set,get", "-n", strconv.Itoa(keyCount), "-q", "--csv", "-c", "200", "-P", "16").CombinedOutput()
-
-			// ⚠ Now kill Redis server forcefully again (double-safety)
-			_ = cmd.Process.Kill()
-			_ = exec.Command("bash", "-c", "lsof -ti tcp:6380 | xargs kill -9").Run()
-
-			if err := cmd.Wait(); err != nil {
-				fmt.Printf("Server exited with error: %v\n", err)
-			}
-
-			time.Sleep(2 * time.Second) // Let port clear completely
-
-			if err != nil {
-				fmt.Printf("Benchmark failed: %v\nOutput:\n%s\n", err, out)
-				continue // still continue benchmarking others
-			}
-
-			res := parseBenchmarkOutput(string(out))
-			res.Engine = engine
-			res.KeyCount = keyCount
-			results = append(results, res)
-
-			_ = os.RemoveAll(tempDir)
 		}
-
 	}
 
 	PrintResultsTable(results)
