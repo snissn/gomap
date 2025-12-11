@@ -240,6 +240,11 @@ func TestPersistenceWithGomap(t *testing.T) {
 		}
 	}
 
+	// Ensure all cached writes are flushed to disk before reopening.
+	if err := store.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
 	store2 := &gomap.HashmapDistributed{}
 	if err := store2.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("reopen gomap: %v", err)

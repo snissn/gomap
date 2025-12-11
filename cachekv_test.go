@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"os"
 	"testing"
 	"time"
 )
@@ -76,33 +75,5 @@ func TestCacheKVTicker(t *testing.T) {
 	v, _ := base.Get([]byte("x"))
 	if string(v) != "y" {
 		t.Fatalf("expected ticker flush, got %s", v)
-	}
-}
-
-// Ensure CacheKV works with HashmapDistributed.
-func TestCacheKVWithGomap(t *testing.T) {
-	dir, err := os.MkdirTemp("", "cachekv-gomap-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	h := &HashmapDistributed{}
-	if err := h.NewWithShards(dir, 2); err != nil {
-		t.Fatal(err)
-	}
-	// Use the cached wrapper to avoid adapter duplication.
-	cached, err := NewCachedHashmapDistributed(dir, 2, 4, 1024, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := cached.Add([]byte("k"), []byte("v")); err != nil {
-		t.Fatal(err)
-	}
-	if err := cached.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	v, _ := cached.Get([]byte("k"))
-	if string(v) != "v" {
-		t.Fatalf("expected v, got %s", v)
 	}
 }

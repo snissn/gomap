@@ -54,11 +54,15 @@ func (c *CachedHashmap) Compact() error {
 }
 
 func (c *CachedHashmap) AddMany(items []Item) error {
-	// Flush pending to avoid ordering issues.
-	if err := c.cache.Flush(); err != nil {
-		return err
+	// Route batched writes through the write-back cache so they are
+	// coalesced with other pending writes. CacheKV will flush to the
+	// underlying Hashmap using AddMany when thresholds or timers fire.
+	for _, it := range items {
+		if err := c.cache.Put(it.Key, it.Value); err != nil {
+			return err
+		}
 	}
-	return c.h.AddMany(items)
+	return nil
 }
 
 func (c *CachedHashmap) Stats() Stats {

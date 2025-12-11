@@ -156,6 +156,23 @@ func (h *HashmapDistributed) Compact() error {
 	return errGlobal
 }
 
+// Flush forces all shard-level write-back caches to flush pending writes.
+// This is important before process exit or reopening the same on-disk store
+// to ensure durability of recent writes.
+func (h *HashmapDistributed) Flush() error {
+	var errGlobal error
+	for i := 0; i < len(h.maps); i++ {
+		h.mutexes[i].Lock()
+		if h.maps[i] != nil {
+			if err := h.maps[i].Flush(); err != nil && errGlobal == nil {
+				errGlobal = err
+			}
+		}
+		h.mutexes[i].Unlock()
+	}
+	return errGlobal
+}
+
 // GetMany retrieves values for multiple keys efficiently by grouping them per shard.
 // It returns a slice of values aligned with the input keys slice; missing keys map to nil.
 // Errors are returned per key; nil error means the operation for that key succeeded (even if value is nil).
