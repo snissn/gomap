@@ -376,7 +376,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests for estimate under-shoot fallback and “cap” enforcement; run `go test ./...`.
    - Perf: rerun `BenchmarkBatchSet150B`; expect `ns/op` ↓ (both thresholds).
 
-3. [ ] Pager freelist pop/append in place (no slice materialization).
+3. [x] Pager freelist pop/append in place (no slice materialization).
    - Goal: Eliminate freelist decode allocations during `AllocPage`/`FreePages`.
    - Touch: `internal/pager/freelist.go`.
    - Correctness: add chain/partial-page cases + CRC mutation checks; run `go test ./...`.

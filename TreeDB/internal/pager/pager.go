@@ -291,22 +291,14 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if err != nil {
 			return 0, err
 		}
-		fp, err := decodeFreelistPage(head, buf)
+		alloc, next, ok, err := popFreelistID(buf)
 		if err != nil {
 			return 0, err
 		}
-		if len(fp.ids) == 0 {
-			// Advance to next freelist page.
-			head = fp.next
+		if !ok {
+			head = next
 			p.meta.FreelistHeadID = head
 			continue
-		}
-		// Pop last id.
-		n := len(fp.ids) - 1
-		alloc := fp.ids[n]
-		fp.ids = fp.ids[:n]
-		if err := encodeFreelistPage(fp, buf); err != nil {
-			return 0, err
 		}
 		if p.freelistCount > 0 {
 			p.freelistCount--
@@ -430,29 +422,26 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 		}
 		head = newID
 		p.meta.FreelistHeadID = head
-		fp := freelistPage{pageID: head, next: 0, ids: nil}
 		buf, err := p.pageSliceLocked(head)
 		if err != nil {
 			return err
 		}
-		if err := encodeFreelistPage(fp, buf); err != nil {
+		if err := initFreelistPage(head, 0, buf); err != nil {
 			return err
 		}
 	}
 
-	remaining := append([]page.PageID(nil), ids...)
-	for len(remaining) > 0 {
+	remaining := ids
+	for len(remaining) != 0 {
 		buf, err := p.pageSliceLocked(head)
 		if err != nil {
 			return err
 		}
-		fp, err := decodeFreelistPage(head, buf)
+		n, err := appendFreelistIDs(buf, remaining)
 		if err != nil {
 			return err
 		}
-		capacity := freelistCapacity()
-		space := capacity - len(fp.ids)
-		if space == 0 {
+		if n == 0 {
 			// Need a new freelist page; push current head down.
 			newHead := page.PageID(p.totalPages)
 			if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
@@ -462,23 +451,14 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 			if err != nil {
 				return err
 			}
-			newFP := freelistPage{pageID: newHead, next: head, ids: nil}
-			if err := encodeFreelistPage(newFP, newBuf); err != nil {
+			if err := initFreelistPage(newHead, head, newBuf); err != nil {
 				return err
 			}
 			head = newHead
 			p.meta.FreelistHeadID = head
 			continue
 		}
-		n := space
-		if n > len(remaining) {
-			n = len(remaining)
-		}
-		fp.ids = append(fp.ids, remaining[:n]...)
 		remaining = remaining[n:]
-		if err := encodeFreelistPage(fp, buf); err != nil {
-			return err
-		}
 	}
 	p.freelistCount += uint64(len(ids))
 	return nil
