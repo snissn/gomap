@@ -183,6 +183,9 @@ func (b *Batch) prepare(inlineThreshold int, mgr *slab.SlabManager, observe func
 	keys := make([][]byte, 0, len(b.ops))
 	modSlabs := make(map[uint32]struct{})
 	var slabWriteBytes uint64
+	var largeOps []*batchOp
+	var largeKeys [][]byte
+	var largeValues [][]byte
 	for _, op := range b.ops {
 		if op == nil {
 			continue
@@ -195,17 +198,26 @@ func (b *Batch) prepare(inlineThreshold int, mgr *slab.SlabManager, observe func
 			continue
 		}
 		if len(op.value) > page.InlineHardMax || len(op.value) > inlineThreshold {
-			ptr, err := mgr.AppendLarge(op.key, op.value)
-			if err != nil {
-				return nil, nil, 0, err
-			}
+			largeOps = append(largeOps, op)
+			largeKeys = append(largeKeys, op.key)
+			largeValues = append(largeValues, op.value)
+			op.inline = false
+			continue
+		}
+		op.inline = true
+	}
+	if len(largeOps) > 0 {
+		ptrs, err := mgr.AppendLargeBatch(largeKeys, largeValues)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for i, ptr := range ptrs {
+			op := largeOps[i]
 			op.ptr = ptr
 			op.inline = false
 			op.value = nil // allow GC of large values
 			modSlabs[ptr.FileID] = struct{}{}
 			slabWriteBytes += uint64(4 + ptr.Length)
-		} else {
-			op.inline = true
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool { return compareKeys(keys[i], keys[j]) < 0 })

@@ -181,38 +181,22 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets key/value without durability guarantee.
 func (db *DB) Set(key, value []byte) error {
-	b := db.NewBatch()
-	if err := b.Set(key, value); err != nil {
-		return err
-	}
-	return b.Write()
+	return db.writeOne(key, value, false, false)
 }
 
 // SetSync sets key/value and flushes durability boundary.
 func (db *DB) SetSync(key, value []byte) error {
-	b := db.NewBatch()
-	if err := b.Set(key, value); err != nil {
-		return err
-	}
-	return b.WriteSync()
+	return db.writeOne(key, value, false, true)
 }
 
 // Delete removes key without durability guarantee.
 func (db *DB) Delete(key []byte) error {
-	b := db.NewBatch()
-	if err := b.Delete(key); err != nil {
-		return err
-	}
-	return b.Write()
+	return db.writeOne(key, nil, true, false)
 }
 
 // DeleteSync removes key and flushes durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
-	b := db.NewBatch()
-	if err := b.Delete(key); err != nil {
-		return err
-	}
-	return b.WriteSync()
+	return db.writeOne(key, nil, true, true)
 }
 
 // NewBatch returns an empty batch.

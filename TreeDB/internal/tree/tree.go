@@ -63,10 +63,10 @@ func (t *Tree) GetRaw(key []byte) (LeafEntry, error) {
 	return entries[idx].entry, nil
 }
 
-// SetRaw inserts or updates key with val and returns retired page IDs.
-func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, error) {
+// SetRaw inserts or updates key with val and returns retired page IDs and the previous entry (if any).
+func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, *LeafEntry, error) {
 	if key == nil {
-		return nil, fmt.Errorf("tree: nil key")
+		return nil, nil, fmt.Errorf("tree: nil key")
 	}
 	encKey := t.encodeKey(key)
 
@@ -74,39 +74,39 @@ func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, error) {
 	if t.root == 0 {
 		pid, err := t.pager.AllocPage()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		buf := make([]byte, page.PageSize)
 		lp, err := page.InitLeafPage(buf, pid)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		_, err = lp.Set(encKey, val.Flags, val.InlineValue, val.Ptr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		h, body, _ := page.SplitPage(buf)
 		h.SetBodyCRC(body)
 		if err := t.pager.WritePage(pid, buf); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		t.root = pid
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	newRoot, splitKey, splitPid, retired, err := t.cowSet(t.root, encKey, val)
+	newRoot, splitKey, splitPid, retired, oldEnt, err := t.cowSet(t.root, encKey, val)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if splitKey != nil {
 		// Root split: create a new internal root referencing left and right.
 		rootPid, err := t.pager.AllocPage()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		leftMin, err := t.minKey(newRoot)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		entries := []internalKV{
 			{key: leftMin, child: newRoot},
@@ -114,16 +114,16 @@ func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, error) {
 		}
 		rootBuf := make([]byte, page.PageSize)
 		if err := buildInternalPage(rootBuf, rootPid, entries); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := t.pager.WritePage(rootPid, rootBuf); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		t.root = rootPid
 	} else {
 		t.root = newRoot
 	}
-	return retired, nil
+	return retired, oldEnt, nil
 }
 
 // search descends to the leaf for key, returning the leaf buffer and path pids.
@@ -198,4 +198,3 @@ func (t *Tree) minKey(pid page.PageID) ([]byte, error) {
 func isPageFull(err error) bool {
 	return err == page.ErrPageFull || bytes.Contains([]byte(err.Error()), []byte("page: not enough free space"))
 }
-

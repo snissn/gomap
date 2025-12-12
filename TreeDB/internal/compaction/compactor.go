@@ -320,10 +320,10 @@ func (c *Compactor) applyBatch(batch []Update) error {
 		if err != nil || ent.Flags != page.LeafFlagPointer || ent.Ptr != u.Old {
 			continue
 		}
-		ids, err := userTree.SetRaw(u.Key, tree.LeafEntry{
-			Flags: page.LeafFlagPointer,
-			Ptr:   u.New,
-		})
+			ids, _, err := userTree.SetRaw(u.Key, tree.LeafEntry{
+				Flags: page.LeafFlagPointer,
+				Ptr:   u.New,
+			})
 		if err != nil {
 			return err
 		}
@@ -379,9 +379,9 @@ func (c *Compactor) zombieTransition(coldID uint32) error {
 	var retired []page.PageID
 
 	// Tombstone cold slab stats key if present.
-	if ids, err := systemTree.SetRaw(slab.StatsKey(coldID), tree.LeafEntry{
-		Flags: page.LeafFlagTombstone,
-	}); err == nil {
+		if ids, _, err := systemTree.SetRaw(slab.StatsKey(coldID), tree.LeafEntry{
+			Flags: page.LeafFlagTombstone,
+		}); err == nil {
 		retired = append(retired, ids...)
 	} else {
 		return err
@@ -392,10 +392,10 @@ func (c *Compactor) zombieTransition(coldID uint32) error {
 	if set := c.slabs.SlabSet(); set != nil {
 		if f, ok := set.Get(activeID); ok && f != nil {
 			statsVal := slab.EncodeStatsValue(f.Stats())
-			ids, err := systemTree.SetRaw(slab.StatsKey(activeID), tree.LeafEntry{
-				Flags:       page.LeafFlagInline,
-				InlineValue: statsVal,
-			})
+				ids, _, err := systemTree.SetRaw(slab.StatsKey(activeID), tree.LeafEntry{
+					Flags:       page.LeafFlagInline,
+					InlineValue: statsVal,
+				})
 			if err != nil {
 				return err
 			}
@@ -499,4 +499,3 @@ func walkTree(p *pager.Pager, pid page.PageID, visit func(key []byte, flags page
 		return fmt.Errorf("compaction: unexpected page type %d", h.Flags)
 	}
 }
-

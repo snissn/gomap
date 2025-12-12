@@ -58,23 +58,20 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 		if op == nil {
 			continue
 		}
-
+		ids, oldEnt, err := userTree.SetRaw(k, op.leafEntry())
+		if err != nil {
+			return err
+		}
 		// Track old pointer dead bytes if overwritten/deleted.
-		old, err := userTree.GetRaw(k)
-		if err == nil && old.Flags == page.LeafFlagPointer {
-			if op.del || (op.inline || op.ptr != old.Ptr) {
+		if oldEnt != nil && oldEnt.Flags == page.LeafFlagPointer {
+			if op.del || (op.inline || op.ptr != oldEnt.Ptr) {
 				if set := db.slabs.SlabSet(); set != nil {
-					if f, ok := set.Get(old.Ptr.FileID); ok && f != nil {
-						f.MarkDead(old.Ptr)
-						modifiedSlabs[old.Ptr.FileID] = struct{}{}
+					if f, ok := set.Get(oldEnt.Ptr.FileID); ok && f != nil {
+						f.MarkDead(oldEnt.Ptr)
+						modifiedSlabs[oldEnt.Ptr.FileID] = struct{}{}
 					}
 				}
 			}
-		}
-
-		ids, err := userTree.SetRaw(k, op.leafEntry())
-		if err != nil {
-			return err
 		}
 		retired = append(retired, ids...)
 
@@ -91,7 +88,7 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 		if set := db.slabs.SlabSet(); set != nil {
 			if f, ok := set.Get(id); ok && f != nil {
 				statsVal := slab.EncodeStatsValue(f.Stats())
-				ids, err := systemTree.SetRaw(slab.StatsKey(id), tree.LeafEntry{
+				ids, _, err := systemTree.SetRaw(slab.StatsKey(id), tree.LeafEntry{
 					Flags:       page.LeafFlagInline,
 					InlineValue: statsVal,
 				})
@@ -103,6 +100,107 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 		}
 	}
 
+	return db.finishCommit(st, userTree, systemTree, retired, modifiedSlabs, slabWriteBytes, len(keys), sync)
+}
+
+// writeOne applies a single Set/Delete operation under the global writer lock.
+// It bypasses Batch allocation/sorting while preserving identical commit semantics.
+func (db *DB) writeOne(key, value []byte, del bool, sync bool) error {
+	if db == nil {
+		return fmt.Errorf("treedb: nil db")
+	}
+	if db.closed.Load() {
+		return fmt.Errorf("treedb: db closed")
+	}
+	if key == nil || len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if !del && value == nil {
+		return ErrValueNil
+	}
+
+	db.writerMu.Lock()
+	defer db.writerMu.Unlock()
+
+	st := db.state.Load()
+	if st == nil {
+		return fmt.Errorf("treedb: no state")
+	}
+
+	threshold := db.opts.InlineThreshold
+	if db.adaptive != nil && db.adaptive.Enabled() {
+		threshold = db.adaptive.Latch()
+	}
+	if db.hooks != nil && db.hooks.thresholdObserved != nil {
+		db.hooks.thresholdObserved(threshold)
+	}
+
+	modifiedSlabs := make(map[uint32]struct{})
+	var slabWriteBytes uint64
+	var opInline bool
+	var opPtr page.ValuePtr
+
+	leaf := tree.LeafEntry{Flags: page.LeafFlagTombstone}
+	if !del {
+		if len(value) > page.InlineHardMax || len(value) > threshold {
+			ptr, err := db.slabs.AppendLarge(key, value)
+			if err != nil {
+				return err
+			}
+			opPtr = ptr
+			opInline = false
+			leaf = tree.LeafEntry{Flags: page.LeafFlagPointer, Ptr: ptr}
+			modifiedSlabs[ptr.FileID] = struct{}{}
+			slabWriteBytes = uint64(4 + ptr.Length)
+		} else {
+			opInline = true
+			leaf = tree.LeafEntry{Flags: page.LeafFlagInline, InlineValue: append([]byte(nil), value...)}
+		}
+	}
+
+	userTree := tree.NewUserTree(db.pager, st.UserRootPageID)
+	systemTree := tree.NewSystemTree(db.pager, st.SystemRootPageID)
+
+	retired, oldEnt, err := userTree.SetRaw(key, leaf)
+	if err != nil {
+		return err
+	}
+
+	// Track old pointer dead bytes if overwritten/deleted.
+	if oldEnt != nil && oldEnt.Flags == page.LeafFlagPointer {
+		if del || (opInline || opPtr != oldEnt.Ptr) {
+			if set := db.slabs.SlabSet(); set != nil {
+				if f, ok := set.Get(oldEnt.Ptr.FileID); ok && f != nil {
+					f.MarkDead(oldEnt.Ptr)
+					modifiedSlabs[oldEnt.Ptr.FileID] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Update slab stats in system tree.
+	for id := range modifiedSlabs {
+		if set := db.slabs.SlabSet(); set != nil {
+			if f, ok := set.Get(id); ok && f != nil {
+				statsVal := slab.EncodeStatsValue(f.Stats())
+				ids, _, err := systemTree.SetRaw(slab.StatsKey(id), tree.LeafEntry{
+					Flags:       page.LeafFlagInline,
+					InlineValue: statsVal,
+				})
+				if err != nil {
+					return err
+				}
+				retired = append(retired, ids...)
+			}
+		}
+	}
+
+	return db.finishCommit(st, userTree, systemTree, retired, modifiedSlabs, slabWriteBytes, 1, sync)
+}
+
+// finishCommit persists meta, applies durability if requested, publishes DBState, and records adaptive metrics.
+// Caller must hold db.writerMu.
+func (db *DB) finishCommit(st *mvcc.DBState, userTree, systemTree *tree.Tree, retired []page.PageID, modifiedSlabs map[uint32]struct{}, slabWriteBytes uint64, ops int, sync bool) error {
 	newSeq := st.CommitSeq + 1
 
 	// Build new meta based on current pager meta.
@@ -171,12 +269,11 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 			SlabWriteBytes:  slabWriteBytes,
 			SlabDeadRatio:   slabDeadRatio,
 			CompactionIOBPS: 0,
-			Ops:             len(keys),
+			Ops:             ops,
 		})
 	}
 
 	_ = db.pruner.Prune(newSeq)
-
 	return nil
 }
 

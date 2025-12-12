@@ -118,6 +118,12 @@ type SlabManager struct {
 	closed     bool
 }
 
+const (
+	// maxBatchBuffer caps in-memory buffering for batched slab appends.
+	// This bounds memory use for very large batches while still amortizing syscalls.
+	maxBatchBuffer = 4 << 20 // 4MB
+)
+
 func Load(dir string, activeID uint32, activeTail uint64) (*SlabManager, *SlabSet, error) {
 	if dir == "" {
 		return nil, nil, fmt.Errorf("slab: dir required")
@@ -269,6 +275,89 @@ func (m *SlabManager) AppendLarge(key, value []byte) (page.ValuePtr, error) {
 	}
 
 	return ptr, nil
+}
+
+// AppendLargeBatch appends multiple large records in order and returns their pointers.
+// The implementation buffers records and flushes in bounded chunks to avoid OOM.
+// Callers must already hold any higher-level writer lock; SlabManager serializes via m.mu.
+func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, error) {
+	if len(keys) != len(values) {
+		return nil, fmt.Errorf("slab: keys/values length mismatch")
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrManagerClosed
+	}
+
+	ptrs := make([]page.ValuePtr, 0, len(keys))
+	buf := make([]byte, 0, maxBatchBuffer)
+	var chunkStart uint64
+
+	flush := func() error {
+		if len(buf) == 0 {
+			return nil
+		}
+		n, err := m.active.Handle.WriteAt(buf, int64(chunkStart))
+		if err != nil {
+			return err
+		}
+		if n != len(buf) {
+			return io.ErrShortWrite
+		}
+		buf = buf[:0]
+		return nil
+	}
+
+	for i := 0; i < len(keys); i++ {
+		key, value := keys[i], values[i]
+		if key == nil {
+			return nil, fmt.Errorf("slab: nil key")
+		}
+		if value == nil {
+			return nil, fmt.Errorf("slab: nil value")
+		}
+
+		base := m.activeTail
+		rec, ptr, err := EncodeRecordAt(key, value, m.active.FileID, base)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(buf) == 0 {
+			chunkStart = base
+		}
+		// Flush current chunk if adding rec would exceed the cap.
+		if len(buf) > 0 && len(buf)+len(rec) > maxBatchBuffer {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			chunkStart = base
+		}
+
+		buf = append(buf, rec...)
+		ptrs = append(ptrs, ptr)
+		m.activeTail += uint64(len(rec))
+		m.active.AddTotalBytes(uint64(len(rec)))
+
+		// Rotate slabs at boundary; flush buffered bytes first so pointers remain valid.
+		if m.activeTail >= page.SlabRotateSize {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			if err := m.rotateLocked(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return ptrs, nil
 }
 
 // ForceRotate seals the current active slab and creates a new active slab.

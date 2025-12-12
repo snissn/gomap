@@ -133,10 +133,10 @@ func TestInsertSplitsMaintainOrderAndMinKeys(t *testing.T) {
 		k := makeKey(i)
 		keys = append(keys, k)
 		// Insert in reverse order to stress search paths.
-		_, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte{byte(i)}})
-		if err != nil {
-			t.Fatalf("SetRaw %d: %v", i, err)
-		}
+			_, _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte{byte(i)}})
+			if err != nil {
+				t.Fatalf("SetRaw %d: %v", i, err)
+			}
 	}
 
 	got, err := collectUserKeys(ut)
@@ -163,16 +163,16 @@ func TestDeleteAddsTombstones(t *testing.T) {
 
 	for i := 0; i < 20; i++ {
 		k := makeKey(i)
-		if _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+			if _, _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
 	}
 	// Delete even keys.
 	for i := 0; i < 20; i += 2 {
 		k := makeKey(i)
-		if _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagTombstone}); err != nil {
-			t.Fatalf("delete: %v", err)
-		}
+			if _, _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagTombstone}); err != nil {
+				t.Fatalf("delete: %v", err)
+			}
 		e, err := ut.GetRaw(k)
 		if err != nil {
 			t.Fatalf("GetRaw after delete: %v", err)
@@ -198,13 +198,13 @@ func TestCopyOnWriteRetiresOldRoot(t *testing.T) {
 	ut := NewUserTree(p, 0)
 	for i := 0; i < 15; i++ {
 		k := makeKey(i)
-		if _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
+			if _, _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
 	}
 	oldRoot := ut.Root()
 	k := makeKey(5)
-	retired, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("vv")})
+	retired, _, err := ut.SetRaw(k, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("vv")})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestUserKeyEncodingMatchesTestSpec(t *testing.T) {
 	p := openTestPager(t)
 	ut := NewUserTree(p, 0)
 	userKey := []byte{0x00, 0x01}
-	if _, err := ut.SetRaw(userKey, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
+	if _, _, err := ut.SetRaw(userKey, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
 		t.Fatalf("SetRaw: %v", err)
 	}
 	rawKeys, err := collectRawKeys(ut)
@@ -247,7 +247,7 @@ func TestUserKeyEncodingMatchesTestSpec(t *testing.T) {
 	}
 
 	st := NewSystemTree(p, 0)
-	if _, err := st.SetRaw(userKey, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
+	if _, _, err := st.SetRaw(userKey, LeafEntry{Flags: page.LeafFlagInline, InlineValue: []byte("v")}); err != nil {
 		t.Fatalf("SetRaw system: %v", err)
 	}
 	rawSys, err := collectRawKeys(st)
@@ -298,4 +298,3 @@ func collectRawKeys(t *Tree) ([][]byte, error) {
 	}
 	return out, walk(t.Root())
 }
-

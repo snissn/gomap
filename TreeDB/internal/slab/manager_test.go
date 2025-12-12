@@ -86,9 +86,9 @@ func TestStatsKeyValuePersistence(t *testing.T) {
 		}
 		val := EncodeStatsValue(st)
 		entry := tree.LeafEntry{Flags: page.LeafFlagInline, InlineValue: val}
-		if _, err := sys.SetRaw(key, entry); err != nil {
-			t.Fatalf("SetRaw stats %d: %v", id, err)
-		}
+			if _, _, err := sys.SetRaw(key, entry); err != nil {
+				t.Fatalf("SetRaw stats %d: %v", id, err)
+			}
 	}
 
 	for id, want := range stats {
@@ -106,4 +106,3 @@ func TestStatsKeyValuePersistence(t *testing.T) {
 		}
 	}
 }
-
