@@ -72,8 +72,9 @@ Implementation note: the exact combination of `msync` and `fdatasync` is OS-depe
 ### 3.1 Global Constants
 
   * **Page Size:** `4096 bytes`
-  * **Inline Threshold:** `256 bytes` (Default. Values `<=` this size are stored directly in the tree).
-      * *Note:* This is configurable; deployments may choose lower values for blob-heavy workloads.
+  * **Inline Threshold:** `64 bytes` (Provisional Default).
+      * **Hypothesis:** We anticipate that minimizing the inline threshold increases B+Tree fanout (entries per page), reducing tree depth and I/O hops for random reads. For IAVL nodes (~100-150 bytes), this forces data into Slabs, keeping the index dense.
+      * **Benchmarking Required:** This value is speculative. Final tuning requires benchmarking the trade-off between **Tree Scan Performance** (improved by lower thresholds) and **Slab Fragmentation/Compaction Overhead** (worsened by lower thresholds).
   * **Max Key Size:** Variable (handled via Slotted Pages), typically \< 1KB.
 
 ### 3.2 The Value Pointer
@@ -318,7 +319,12 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
         3.  Bounds-check `Offset + Length` and parse the slab record (Section 2.1.1).
         4.  Verify record CRC32C.
         5.  Copy `ValueBytes` into a newly allocated slice.
-      * *Safety Note:* Never return a direct slice into the mmap region.
+      * **Mmap Safety Protocol (CRITICAL):**
+          * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap.
+          * **Safe Access:** Use `uintptr` arithmetic or a custom accessor.
+          * **Panic Protection:** All reads from the mmap region must be wrapped in `recover()` to catch `SIGBUS` (which occurs if the file is truncated physically while mapped).
+
+
 
 #### 2\. Iterator Data Structure
 
@@ -359,7 +365,10 @@ type Iterator struct {
 
 #### 4\. Reverse Iterator Logic (`Next` / `Prev` Semantics)
 
-  * **Initialization:** Seek to `endKey`. If `endKey` is exclusive, adjust logic to start at `Index - 1`.
+  * **Initialization (Cosmos Semantics):** * The domain is `[start, end)`. 
+      * If `end` is `nil`, seek to the very last key in the database.
+      * If `end` is provided, seek to the first key `>= end`. Move cursor backward by one.
+      * Verify the resulting key is `>= start`. If not, the range is empty.
   * **Advance:**
     1.  Look at the `Top` item of the Stack.
     2.  Decrement `Top.Index`.
@@ -492,7 +501,8 @@ Defaults (recommended, configurable):
 
 Weights:
 
-  * `w1,w2,w3,v1,v2,v3` are configurable. Default deployments may start with `w1,w2,v1,v3 > 0` and others at 0.
+  * `w1,w2,w3` (Index Weights) should generally be **2x-3x higher** than `v1,v2,v3` (Slab Weights) for IAVL workloads.
+  * *Rationale:* In IAVL, "Index Health" (Fanout) is critical for read performance. "Slab Health" (Dead Bytes) is secondary and can be managed by aggressive background compaction. We must avoid polluting the Index with high-churn data.
 
 #### 5.6.5 Update Rule (Bounded Step Controller)
 

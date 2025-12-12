@@ -121,6 +121,21 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
         * The commit uses exactly one latched threshold value for all ops in that commit (instrumentation: record the threshold observed by the commit).
         * No operation within the same commit uses a different threshold, regardless of concurrent controller updates.
 
+* **Fanout Preservation (IAVL Simulation):**
+    * **Scenario:** Insert 1,000,000 keys with values of size 150 bytes (typical IAVL node).
+    * **Config A:** `InlineThreshold = 256` (Default Old). Measure Tree Depth and File Size.
+    * **Config B:** `InlineThreshold = 64`. Measure Tree Depth and File Size.
+    * **Assert:** Config B results in a significantly smaller `index.db` (factor of 4x-10x) and shallower tree depth, proving the architecture correctly offloads node data to slabs.
+
+* **Fanout vs. Fragmentation Benchmark (Validation):**
+    * **Goal:** Verify the speculative default of 64 bytes.
+    * **Scenario:** Load a dataset mirroring mainnet IAVL distribution (1M+ keys, 150-byte values).
+    * **Compare:** Run two configurations:
+        1.  `InlineThreshold = 256` (Values in Tree).
+        2.  `InlineThreshold = 64` (Values in Slab).
+    * **Assert (Success Criteria):**
+        * Config 2 must show reduced **Read Latency** (shallower tree).
+        * Config 2 must NOT show excessive **Compaction CPU usage** or **Slab Wasted Space** (>20% degradation compared to Config 1).
 * **Controller Bounded Step (MANDATORY):**
     * **Scenario:** Configure `InlineHardMin`, `InlineHardMax`, and `step` (e.g., 64).
     * **Trigger:** Force sustained index pressure for several evaluation intervals, then sustained slab pressure.
