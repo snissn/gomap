@@ -1,4 +1,4 @@
-# Addendum A: Testing Specification v2.7 (Updated for Spec v2.7)
+# Addendum A: Testing Specification v2.8 (Updated for Spec v2.8)
 
 ## 1. Unit Testing Strategies
 
@@ -169,11 +169,51 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
 * **Meta Page Overflow Prevention:**
     * **Scenario:** Simulate 5,000 active slab files.
     * **Commit:** Ensure the commit succeeds.
-    * **Assert:** Superblock size remains 4KB (Stats are in the tree, not the page).
+        *   **Assert:** Superblock size remains 4KB (Stats are in the tree, not the page).
+    
+    ### 1.8 Performance Optimizations (Spec v2.8)
+    
+    *   **Zipper Buffer Pooling:**
+        *   **Split Key Isolation:**
+            *   Trigger a node split during `Put` (causing `zipper.writeRecursive` to return a `splitKey`).
+            *   Capture the propagated `splitKey` in a unit test.
+            *   Overwrite the `splitKey` byte slice.
+            *   **Assert:** The key actually stored in the parent node remains correct. This proves the `splitKey` was a deep copy and not a pointer into the recycled pool buffer.
+    *   **Targeted Msync (Pager):**
+        *   **Dirty Tracking Logic:**
+            *   Open DB with multiple chunks capacity.
+            *   Write to a page in Chunk 0.
+            *   **Assert:** `pager.dirtyChunks` contains 0.
+            *   Write to a page in Chunk 5.
+            *   **Assert:** `pager.dirtyChunks` contains 0 and 5.
+            *   Call `Sync()`.
+            *   **Assert:** `pager.dirtyChunks` is empty.
+    *   **Zero-Copy Read Safety:**
+        *   **Get Isolation:**
+            *   `val, _ := db.Get(key)`
+            *   `val[0] = ^val[0]` (Flip bits in the returned slice).
+            *   `val2, _ := db.Get(key)`
+            *   **Assert:** `val2` is unchanged. This proves `Get` returned a copy, not a raw mmap pointer.
 
----
+    ### 1.9 Performance Regression Benchmarks
 
-## 2. Integration & Functional Testing
+    *   **Zipper Allocation Rate:**
+        *   **Benchmark:** Run `Batch.Write` with 10k random keys (small values).
+        *   **Assert:** `Allocations/Op` should be significantly lower than pre-optimization (target: < 5 allocs per key, primarily for the key copy and map overhead).
+        *   **Assert:** `Zero-Copy` path is active (profiling shows `pager.Get` vs `pager.ReadPage`).
+
+    *   **Tree Traversal Throughput:**
+        *   **Benchmark:** Run `Get` on 100k existing keys.
+        *   **Assert:** Latency p99 should be < 1ms (nvme).
+        *   **Assert:** Throughput > 50k ops/sec/core.
+
+    *   **Msync Latency:**
+        *   **Benchmark:** Commit with writes concentrated in a single chunk vs writes spread across 10 chunks.
+        *   **Assert:** `Pager.Sync` latency scales with `DirtyChunks`, not `TotalChunks`.
+
+    ---
+
+    ## 2. Integration & Functional Testing
 
 Focus on the public `DB` interface and ACID properties.
 

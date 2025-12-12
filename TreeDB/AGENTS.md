@@ -169,25 +169,53 @@ This document outlines the step-by-step plan to implement **TreeDB**, a persiste
 **Goal:** Instrument, measure, and optimize TreeDB performance.
 
 ### 9.1 Metrics & Instrumentation
-- [ ] **Latency Metrics:** Update `cmd/stress` to track operation latencies (Get/Set) and report p50, p95, and p99.
-- [ ] **Profiling Support:** Update `cmd/stress` to accept `-cpuprofile` and `-memprofile` flags, writing `pprof` data for analysis.
-- [ ] **Write Amplification:** Update `cmd/stress` to calculate:
+- [x] **Latency Metrics:** Update `cmd/stress` to track operation latencies (Get/Set) and report p50, p95, and p99.
+- [x] **Profiling Support:** Update `cmd/stress` to accept `-cpuprofile` and `-memprofile` flags, writing `pprof` data for analysis.
+- [x] **Write Amplification:** Update `cmd/stress` to calculate:
     - `LogicalBytes`: Total bytes of Keys + Values successfully written.
     - `PhysicalBytes`: Total size of the database directory (via `fs.Stat` or directory walk) at test end.
     - `WriteAmp`: `PhysicalBytes / LogicalBytes`.
 
 ### 9.2 Data Collection Strategy
-- [ ] **Baseline Run:** Run `cmd/stress` with:
+- [x] **Baseline Run:** Run `cmd/stress` with:
     - `duration=30s`, `workers=4`, `keys=100000`, `valsize=1024`.
     - Enable `-cpuprofile` to identify CPU hotspots.
     - Capture stdout for Throughput (IOPS) and Latency metrics.
-- [ ] **Analysis:** Inspect `cpu.pprof` using `go tool pprof -http=:8080`.
+- [x] **Analysis:** Inspect `cpu.pprof` using `go tool pprof -http=:8080`.
 
-### 9.3 Optimization Loop
-- [ ] Identify top CPU consumers (e.g., CRC calculation, syscalls, map access).
-- [ ] Identify top Allocators (GC pressure).
-- [ ] Implement targeted optimizations.
-- [ ] Re-run Baseline to verify improvements.
+### 9.3 Implementation
+- [x] **Zipper: Add Node Pooling**
+    - Add `nodePool` field to `Zipper` struct.
+    - Initialize pool in `NewZipper` with `4096` byte buffers.
+- [x] **Zipper: Implement Zero-Copy Read**
+    - In `writeRecursive`, replace `pager.ReadPage` with `pager.Get` to avoid allocating for old nodes.
+- [x] **Zipper: Implement Pooled Write**
+    - In `writeRecursive`, acquire `newData` from `nodePool`.
+    - Use `newData` for merge operations.
+    - Return `newData` to `nodePool` immediately after `pager.Write` (safe because `Write` copies).
+- [x] **Zipper: Enforce Safety**
+    - Ensure `splitKey` is deep copied in `mergeLeaf` and `mergeInternal` before returning.
+    - **Test:** Run `zipper_test.go` to ensure no data corruption.
+- [x] **Pager: Track Dirty Chunks**
+    - Add `dirtyChunks map[int]struct{}` to `Pager` struct.
+    - Initialize map in `Open`.
+    - In `Write`, calculate chunk index and mark as dirty.
+- [x] **Pager: Targeted Msync**
+    - Implement split-locking in `Sync`:
+        1. Lock `mu` (Write).
+        2. Copy dirty chunks to local list and clear map.
+        3. Unlock `mu`.
+        4. RLock `mu` (Read).
+        5. Call `Msync` only on dirty chunks.
+        6. RUnlock `mu`.
+    - **Test:** Run `pager_test.go`.
+- [x] **Tree: Zero-Copy Read Path**
+    - Update `Tree.GetEntry` to use `pager.Get` instead of `ReadPage`.
+    - Update `Tree.Get` to explicitly copy the value before returning to user.
+    - **Test:** Run `tree_test.go`.
+- [x] **Final Verification**
+    - Execute `run_perf.sh`.
+    - Compare `PERF_REPORT.md` with Baseline.
 
 ---
 

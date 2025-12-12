@@ -1,4 +1,4 @@
-# TreeDB Design Specification v2.7 (Final Polish)
+# TreeDB Design Specification v2.8 (Performance Update)
 
 ## 1\. System Overview
 
@@ -62,7 +62,18 @@ Rules:
                 * **Fail-Stop:** The system acknowledges that `recover()` cannot catch `SIGBUS` in Go. Hardware I/O errors on mmap regions will result in a node crash.
           * `Unmap` operations must verify zero active references before releasing a chunk.
 
-#### 2.2.1 Durability Ordering for Mmap Writes (Required)
+#### 2.2.2 Targeted Msync (Performance)
+
+To avoid the O(N) cost of scanning all chunks during `Msync`, the Pager tracks "Dirty Chunks".
+
+  * **Tracking:** A `dirtyChunks` map records which chunks have been modified since the last sync.
+  * **Sync Strategy:**
+    1.  Atomically extract the list of dirty chunks.
+    2.  Clear the dirty set.
+    3.  Call `msync` ONLY on the extracted chunks.
+  * **Benefit:** Reduces syscalls from O(TotalChunks) to O(DirtyChunks), significantly improving commit latency on large databases.
+
+#### 2.2.3 Durability Ordering for Mmap Writes (Required)
 
 Because `index.db` is memory-mapped, TreeDB defines an explicit persistence boundary:
 
@@ -263,29 +274,32 @@ Writes are batched to ensure atomicity and reduce I/O.
 3.  **If `len(Val) <= InlineThreshold`:**
       * Store `(Key -> Val)` literals in the in-memory Batch Map.
 
-**Phase 2: Recursive Merge**
+**Phase 2: Recursive Merge (Zero-Copy & Pooled)**
 
 1.  Sort the Batch Keys.
 2.  Recursively descend the B+Tree (COW).
 3.  **Leaf Node:**
-      * Allocate `NewPage`.
-      * Merge `OldLeaf` items + `Batch` items into `NewPage`.
-      * Perform splitting if `NewPage` \> 4KB.
-4.  **Internal Node:** Update child pointers to point to new pages.
+      * **Acquire Buffer:** Get `newData` buffer from `sync.Pool`.
+      * **Zero-Copy Read:** Access `OldLeaf` via `pager.Get()` (direct mmap pointer) to avoid allocation.
+      * **Merge:** Merge `OldLeaf` items + `Batch` items into `newData`.
+      * **Write:** `pager.Write(NewPageID, newData)` (copies data to mmap).
+      * **Release Buffer:** Return `newData` to `sync.Pool`.
+      * **Safety:** Any split keys propagated up the tree MUST be deep copied.
+4.  **Internal Node:** Update child pointers to point to new pages (using similar pooling strategy).
 5.  **Stats Update:** Update internal metadata keys (`0x00` prefix) for any modified slab stats.
 
 **Phase 3: Atomic Commit (Redundant Superblock)**
 
 1.  We now have a `NewRootPageID`.
 2.  **If Sync=true:** `fdatasync` the active slab file **MUST complete** before any meta page update.
-3.  Ensure index pages backing the new root are persisted as required by the durability contract (Section 2.2.1).
-4.  **Write the inactive Meta Page** (Page 0 or Page 1):
-      * `CommitSeq = OldCommitSeq + 1`
-      * `RootPageID = NewRootPageID`
-      * `FreelistHeadID = CurrentFreelistHead`
-      * `TotalPages = CurrentTotalPages`
-      * `ActiveSlabTail = ActiveSlab.CurrentOffset` (for crash recovery)
-5.  **If Sync=true:** persist the meta update (Section 2.2.1).
+3. Ensure index pages backing the new root are persisted as required by the durability contract (Section 2.2.3).
+    4.  **Write the inactive Meta Page** (Page 0 or Page 1):
+          * `CommitSeq = OldCommitSeq + 1`
+          * `RootPageID = NewRootPageID`
+          * `FreelistHeadID = CurrentFreelistHead`
+          * `TotalPages = CurrentTotalPages`
+          * `ActiveSlabTail = ActiveSlab.CurrentOffset` (for crash recovery)
+    5.  **If Sync=true:** persist the meta update (Section 2.2.3).
 6.  **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.2).
 
 ### 5.2 Page & Slab Lifecycle (The Graveyard & Snapshots)
@@ -327,10 +341,12 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
 
 #### 1\. Standard Get(Key)
 
-  * Traverse B+Tree.
-  * **Checksum:** On every `ReadPage`, verify CRC32C.
+  * Traverse B+Tree using **Zero-Copy Reads** (`pager.Get()`).
+  * **Checksum:** On every access, verify CRC32C.
   * **Fetch:**
-      * **Inlined:** Allocate a new byte slice and copy data from the Page.
+      * **Inlined:** Return a **Copy** of the data.
+          * *Internal:* The tree traversal uses mmap pointers to avoid allocation.
+          * *Boundary:* The final result passed to the user is `append([]byte(nil), data...)` to ensure memory safety and isolation.
       * **Pointer:**
         1.  Extract `Offset`, `Length`, `FileID` from `ValuePtr`.
         2.  Lookup the `*SlabFile` from the Snapshot’s `SlabSet`.
@@ -341,6 +357,7 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
           * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap to avoid GC scanning of off-heap memory.
           * **Safe Access:** Use `unsafe.Pointer` casting or `uintptr` arithmetic.
           * **Bounds Enforcement:** The Pager MUST explicitly verify `Offset + PageSize <= ChunkSize` before returning a pointer. `SIGBUS` cannot be recovered from; it must be prevented.
+          * **Concurrency Violation:** Since `Pager.Close()` unmaps memory, calling `Close()` concurrently with active `Get()` or `Iterator` usage will cause a crash (SIGSEGV). The user is responsible for ensuring strict lifecycle ordering.
 
 
 
