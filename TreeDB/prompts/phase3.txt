@@ -41,4 +41,7 @@ Implement Batch Writes, Copy-On-Write (COW), and Atomic Commit idempotently.
 3.  **Final Verification:**
     *   Run `go test -v ./db/... ./tree/...`.
     *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 3: Zipper Write Path and Atomic Commit"`.
-    *   If all tests pass, output "Phase 3 Complete" and exit.
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_3_COMPLETE' containing the text 'Phase 3 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 3 Complete" to stdout, just create the file.

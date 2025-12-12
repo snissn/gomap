@@ -37,4 +37,7 @@ Implement safe concurrent reads and the public Cosmos API idempotently.
 3.  **Final Verification:**
     *   Run `go test -race -v ./db/...`.
     *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 4: Read Path, Snapshots, and Public API"`.
-    *   If all tests pass, output "Phase 4 Complete" and exit.
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_4_COMPLETE' containing the text 'Phase 4 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 4 Complete" to stdout, just create the file.

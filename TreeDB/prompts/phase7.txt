@@ -32,4 +32,7 @@ Perform comprehensive testing, fuzzing, and compliance checks idempotently.
 3.  **Final Verification:**
     *   Run `go test -v ./...`.
     *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 7: Verification, Hardening, and Compliance"`.
-    *   Output "Phase 7 Complete - Project Ready".
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_7_COMPLETE' containing the text 'Phase 7 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 7 Complete - Project Ready" to stdout, just create the file.

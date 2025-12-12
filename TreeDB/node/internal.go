@@ -1,0 +1,166 @@
+package node
+
+import (
+	"bytes"
+	"encoding/binary"
+
+	"github.com/snissn/gomap-gemini/TreeDB/page"
+)
+
+// InternalEntry represents a parsed entry from an Internal Node.
+type InternalEntry struct {
+	Key         []byte
+	ChildPageID uint64
+}
+
+// GetInternalEntry reads the entry at the given index.
+func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return InternalEntry{}, err
+	}
+	
+	if int(offset) >= len(n.data) {
+		return InternalEntry{}, ErrCorruptedNode
+	}
+	
+	ptr := int(offset)
+	// Layout: KeyLen(2) | ChildPageID(8) | Key
+	if ptr+10 > len(n.data) {
+		return InternalEntry{}, ErrCorruptedNode
+	}
+	
+	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+	childID := binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+	
+	ptr += 10
+	if ptr+int(keyLen) > len(n.data) {
+		return InternalEntry{}, ErrCorruptedNode
+	}
+	
+	key := make([]byte, keyLen)
+	copy(key, n.data[ptr:ptr+int(keyLen)])
+	
+	return InternalEntry{
+		Key:         key,
+		ChildPageID: childID,
+	}, nil
+}
+
+// SearchInternal performs a binary search for the given key in an Internal Node.
+// Returns the index of the child that covers the range containing key.
+// Logic: Find largest index i such that Entry[i].Key <= key.
+// If key < Entry[0].Key, returns index 0 (Left-most child rule usually handles this).
+func (n *Node) SearchInternal(key []byte) (uint16, bool) {
+	count := n.Count()
+	if count == 0 {
+		return 0, false
+	}
+
+	i, j := 0, int(count)
+	
+	// Find first element > key, then subtract 1
+	// Upper Bound
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		
+		offset := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+h*2:])
+		ptr := int(offset)
+		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		keyPtr := ptr + 10 // Skip KeyLen(2) + ChildID(8)
+		
+		// Compare Entry.Key vs Key
+		// We want to find position where Key would be inserted
+		cmp := bytes.Compare(n.data[keyPtr:keyPtr+int(keyLen)], key)
+		
+		if cmp <= 0 { // Entry.Key <= Key
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	
+	// i is the first index where Entry.Key > Key.
+	// So i-1 is the largest index where Entry.Key <= Key.
+	if i > 0 {
+		return uint16(i - 1), true
+	}
+	
+	// If i == 0, it means Key < Entry[0].Key.
+	// Return 0 (left-most child).
+	return 0, false // found=false implies exact match? No.
+	// Search usually returns the index to follow.
+	// Let's rely on index.
+}
+
+// AddInternalChild adds a child pointer to the internal node.
+func (n *Node) AddInternalChild(key []byte, childPageID uint64) error {
+	// Calculate size
+	entrySize := 2 + 8 + len(key)
+	
+	// Search to find insert position
+	// For Internal Nodes, we want to keep them sorted by Key.
+	// SearchInternal gives us the child to follow, but for insertion, we want exact position.
+	// We can reuse SearchLeaf logic (First entry >= Key) to find insert slot.
+	
+	// Re-implement LowerBound search here for insertion index
+	count := n.Count()
+	i, j := 0, int(count)
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		offset := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+h*2:])
+		ptr := int(offset)
+		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		keyPtr := ptr + 10
+		cmp := bytes.Compare(n.data[keyPtr:keyPtr+int(keyLen)], key)
+		if cmp < 0 {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+	idx := uint16(i)
+	// found := (idx < count) && keys match...
+	
+	// Check space
+	needed := entrySize + DirectoryEntrySize // Assuming new entry
+	if n.FreeSpace() < needed {
+		return ErrNodeFull
+	}
+	
+	// Allocate
+	heapStart := int(page.PageSize)
+	for k := uint16(0); k < count; k++ {
+		off := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+int(k)*2:])
+		if int(off) < heapStart && int(off) != 0 {
+			heapStart = int(off)
+		}
+	}
+	
+	newOffset := heapStart - entrySize
+	dirEnd := NodeHeaderSize + int(count)*2 + 2 // +2 for new slot
+	
+	if newOffset < dirEnd {
+		return ErrNodeFull
+	}
+	
+	// Write
+	binary.LittleEndian.PutUint16(n.data[newOffset:newOffset+2], uint16(len(key)))
+	binary.LittleEndian.PutUint64(n.data[newOffset+2:newOffset+10], childPageID)
+	copy(n.data[newOffset+10:], key)
+	
+	// Shift Directory
+	srcPos := NodeHeaderSize + int(idx)*2
+	destPos := srcPos + 2
+	moveLen := int(count-idx) * 2
+	
+	if moveLen > 0 {
+		copy(n.data[destPos:destPos+moveLen], n.data[srcPos:srcPos+moveLen])
+	}
+	
+	n.setOffset(idx, uint16(newOffset))
+	n.SetCount(count + 1)
+	n.UpdateChecksum()
+	
+	return nil
+}
