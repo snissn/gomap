@@ -1,4 +1,4 @@
-# TreeDB Design Specification v2.5 (Revised)
+# TreeDB Design Specification v2.6 (Revised)
 
 ## 1\. System Overview
 
@@ -41,6 +41,7 @@ Rules:
   * **Checksum:** Uses **CRC32C (Castagnoli)** for hardware acceleration (SSE4.2/ARMv8).
   * Only values stored out-of-line (i.e., `len(value) > InlineThreshold`) are appended as slab records.
   * The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32C), so the compactor can parse forward easily and readers can bounds-check safely.
+  * **Definition of Length:** `ValuePtr.Length` is defined as `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`. This ensures that `Offset + Length` precisely covers the data protected by the CRC, enabling dead-byte accounting without reading the record header.
   * On read, the record CRC32C is verified before returning data.
 
 ### 2.2 The Index File ("The Pager")
@@ -87,7 +88,7 @@ ValuePtr (16 bytes)
 | FileID   (2 bytes)      |
 | Reserved (2 bytes)      |  // Must be zero; reserved for future use
 | Offset   (8 bytes)      |
-| Length   (4 bytes)      |
+| Length   (4 bytes)      |  // See Section 2.1.1 for precise definition
 +-------------------------+
 ```
 
@@ -110,11 +111,13 @@ The `index.db` file is an array of 4KB pages.
 
 Every page starts with this header.
 
+**Updated Layout (Alignment):** `PageID` is moved to offset 0 to ensure 8-byte alignment for unsafe casting on all architectures.
+
 ```text
 [  Page Header  ]
 +--------------------------+
+| PageID   (8 bytes)       | <--- Self-referential ID (Aligned).
 | Checksum (4 bytes)       | <--- CRC32C (Castagnoli) of the page body.
-| PageID   (8 bytes)       | <--- Self-referential ID for sanity checking.
 | Flags    (2 bytes)       | <--- Node Type (Meta/Free/Int/Leaf).
 | Count    (2 bytes)       | <--- Number of items in this page.
 +--------------------------+
@@ -139,12 +142,14 @@ Each Meta Page stores:
   * `RootPageID` (8b): Pointer to the current B+Tree root.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
+  * `ActiveSlabTail` (8b): **(New)** The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
   * `SlabStats` (Map): Tracks per-slab statistics (optional; see Section 3.4 and 5.4).
 
 **Recovery Rule (Open):**
 
-  * Read both meta pages, verify CRC32C, choose the page with the **highest valid `CommitSeq`**.
+1.  Read both meta pages, verify CRC32C, choose the page with the **highest valid `CommitSeq`**.
+2.  **Slab Repair:** Truncate the active slab file to `ActiveSlabTail` to remove any torn records from a crash.
 
 #### The Freelist Page (Type 0x02)
 
@@ -207,13 +212,20 @@ Unlike v2.3, Leaf Nodes **do not** store persistent sibling pointers (`NextLeafI
   * **Directory (Top):** Array of `Offsets (uint16)`.
   * **Heap (Bottom):** Stores keys and values (or pointers).
 
-**Visual Layout:**
+#### 4.2.1 Leaf Entry Format
+
+To support variable keys and hybrid value storage (Inline vs Pointer), leaf entries in the heap are encoded as follows:
 
 ```text
-[  Standard Header (16b)  ]
-[  ... Directory ...      ]
-          ...
-[  ... Heap Data ...      ]
+[ Leaf Entry ]
++-------------------------+
+| KeyLen   (2 bytes)      | uint16
+| ValueLen (4 bytes)      | uint32
+| Flags    (1 byte)       | 0x00=Inline, 0x01=Pointer, 0x02=Tombstone
+| Key      (KeyLen bytes) |
+| Value    (Variable)     | If Inline: ValueLen bytes.
+|                         | If Pointer: 16-byte ValuePtr (ValueLen ignored).
++-------------------------+
 ```
 
 ## 5\. Core Algorithms
@@ -253,6 +265,7 @@ Writes are batched to ensure atomicity and reduce I/O.
       * `RootPageID = NewRootPageID`
       * `FreelistHeadID = CurrentFreelistHead`
       * `TotalPages = CurrentTotalPages`
+      * `ActiveSlabTail = ActiveSlab.CurrentOffset` (for crash recovery)
 5.  **If Sync=true:** persist the meta update (Section 2.2.1).
 6.  **Retire Old Pages:** Add all replaced `OldPageIDs` to the **Graveyard** (See 5.2).
 
@@ -276,6 +289,8 @@ To ensure safe reading of both Pages and Slabs, every Read operation (including 
 
   * **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
 
+  * **Reader Registry (MinPinnedSeq):** TreeDB maintains an atomic counter or lock-protected set of all active Snapshot `CommitSeq`s. The **MinPinnedSeq** is the lowest sequence number currently in use by any reader.
+
   * **The Reader Hold:** Readers (Snapshots and Iterators) pin a `CommitSeq` while traversing pages. A pinned CommitSeq is a **hard safety boundary** for reclamation decisions.
 
   * **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
@@ -288,7 +303,7 @@ To ensure safe reading of both Pages and Slabs, every Read operation (including 
       * TTL may be used only for diagnostics, metrics, or optional future policies that explicitly fail iterators with a deterministic error.
       * TTL **must not** cause iterators to observe fewer historical pages, miss keys, break leaf traversal, observe reused PageIDs, or return logically inconsistent views.
 
-  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when safe under the hold policy and the Snapshot Safety Invariant.
+  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when `RetiredAtSeq < MinPinnedSeq`.
 
 ### 5.3 Read Path & Iterator (Cursor Stack)
 
@@ -533,42 +548,45 @@ func Open(opts Options) (*DB, error)
 // --- cosmos-db.DB Interface Implementation ---
 
 // Get returns the value for a key, or nil if not found.
-func (db *DB) Get(key []byte) ([]byte, error)
+// Receiver name 'tdb' used to avoid shadowing imported 'db' package.
+func (tdb *DB) Get(key []byte) ([]byte, error)
 
 // Has checks if a key exists.
-func (db *DB) Has(key []byte) (bool, error)
+func (tdb *DB) Has(key []byte) (bool, error)
 
 // Set sets the value for a key. (Immediate write - internally creates a mini-batch)
-func (db *DB) Set(key, value []byte) error
+// Contract: key cannot be nil or empty; value cannot be nil.
+func (tdb *DB) Set(key, value []byte) error
 
 // SetSync sets the value and flushes to disk immediately.
-func (db *DB) SetSync(key, value []byte) error
+func (tdb *DB) SetSync(key, value []byte) error
 
 // Delete removes a key.
-func (db *DB) Delete(key []byte) error
+func (tdb *DB) Delete(key []byte) error
 
 // DeleteSync removes a key and flushes to disk.
-func (db *DB) DeleteSync(key []byte) error
+func (tdb *DB) DeleteSync(key []byte) error
 
 // Iterator returns an iterator over a domain of keys in ascending order.
 // Start is inclusive, End is exclusive.
-func (db *DB) Iterator(start, end []byte) (db.Iterator, error)
+// nil start/end represent unbounded domains.
+func (tdb *DB) Iterator(start, end []byte) (db.Iterator, error)
 
 // ReverseIterator returns an iterator over a domain of keys in descending order.
 // Start is inclusive, End is exclusive.
-func (db *DB) ReverseIterator(start, end []byte) (db.Iterator, error)
+func (tdb *DB) ReverseIterator(start, end []byte) (db.Iterator, error)
 
 // Close closes the database.
-func (db *DB) Close() error
+func (tdb *DB) Close() error
 
 // NewBatch creates a batch for atomic updates.
-func (db *DB) NewBatch() db.Batch
+func (tdb *DB) NewBatch() db.Batch
 
 // NewBatchWithSize creates a batch with a size hint for internal buffering.
-func (db *DB) NewBatchWithSize(size int) db.Batch
+func (tdb *DB) NewBatchWithSize(size int) db.Batch
 
 // Print prints the internal tree structure (for debugging).
-func (db *DB) Print() error
+func (tdb *DB) Print() error
 
 // Stats returns a map of property strings to values.
 // Mandatory keys:
@@ -576,25 +594,29 @@ func (db *DB) Print() error
 //  - "treedb.pages.total": Total pages in index.db
 //  - "treedb.slabs.active_id": ID of the current write slab (from SlabManager)
 //  - "treedb.slabs.zombies": Count of zombie slabs awaiting cleanup
-func (db *DB) Stats() map[string]string
+func (tdb *DB) Stats() map[string]string
 
 // --- Extended Management Interface ---
 
 // Compact triggers a manual compaction cycle.
 // Useful for node operators during maintenance windows.
-func (db *DB) Compact() error
+func (tdb *DB) Compact() error
 
 // --- Internal Interfaces for CAS Support ---
 
 // Tree interface required for Safe Compaction
 type Tree interface {
-    Get(key []byte) (ValuePtr, error)
-    Set(key []byte, ptr ValuePtr) error
+    // Get returns the raw leaf data (Inline, Pointer, or Tombstone).
+    // needed for CompareAndSwap to verify current state.
+    Get(key []byte) (LeafEntry, error)
+    
+    // Set updates the leaf directly with a specific pointer/inline value.
+    Set(key []byte, val LeafEntry) error
 
-    // CompareAndSwap atomically sets 'key' to 'newPtr' ONLY IF the current value equals 'oldPtr'.
+    // CompareAndSwap atomically sets 'key' to 'newVal' ONLY IF the current value matches 'oldVal'.
     // Returns true if swapped, false if mismatch.
     // MUST execute under the same write lock as Batch.Write.
-    CompareAndSwap(key []byte, oldPtr, newPtr ValuePtr) (bool, error)
+    CompareAndSwap(key []byte, oldVal, newVal LeafEntry) (bool, error)
 }
 
 // --- Batch Implementation ---
@@ -607,7 +629,9 @@ type Batch struct {
 
 func (b *Batch) Set(key, value []byte) error
 func (b *Batch) Delete(key []byte) error
+// Write flushes the batch to the DB. The batch is closed after this call.
 func (b *Batch) Write() error
+// WriteSync flushes and syncs to disk. The batch is closed after this call.
 func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
