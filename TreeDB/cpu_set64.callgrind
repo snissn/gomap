@@ -1,0 +1,5629 @@
+positions: instr line
+events: cpu(ms)
+
+ob=(1) /private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/go-build151186966/b001/treedb.test
+fl=(1) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/sys_darwin.go
+fn=(1) runtime.kevent
+0x100e6174f 498 3060
+
+ob=(1)
+fl=(1)
+fn=(2) syscall.syscall6
++105776 61 3060
+
+ob=(1)
+fl=(1)
+fn=(3) runtime.pthread_cond_wait
+-105472 547 2240
+
+ob=(1)
+fl=(1)
+fn=(4) runtime.pthread_kill
+-1556 208 1840
+
+ob=(1)
+fl=(1)
+fn=(5) runtime.madvise
++240 284 1490
+
+ob=(1)
+fl=(1)
+fn=(6) runtime.usleep
++240 333 1390
+
+ob=(1)
+fl=(1)
+fn=(7) runtime.pthread_cond_signal
++1204 568 840
+
+ob=(1)
+fl=(1)
+fn=(8) runtime.pthread_cond_timedwait_relative_np
+-64 557 360
+
+ob=(1)
+fl=(2) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mbitmap.go
+fn=(9) runtime.typePointers.next
+-307219 245 220
+
+ob=(1)
+fl=(3) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgcmark.go
+fn=(10) runtime.scanobject
++60740 1507 200
+
+ob=(1)
+fl=(3)
+fn=(11) runtime.scanblock
+-400 1416 170
+
+ob=(1)
+fl=(2)
+fn=(12) runtime.findObject
++328764 1323 130
+
+ob=(1)
+fl=(2)
+fn=(9)
+-389120 245 100
+
+ob=(1)
+fl=(1)
+fn=(13) runtime.nanotime1
++306311 368 70
+cfl=(4) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/sys_libc.go
+cfn=(14) runtime.libcCall
+calls=0 +307864 20
+* * 10
+
+ob=(1)
+fl=(5) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/runtime1.go
+fn=(15) runtime.acquirem
+-313035 631 60
+
+ob=(1)
+fl=(1)
+fn=(16) runtime.pthread_mutex_unlock
++313767 528 60
+
+ob=(1)
+fl=(6) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/page/internal.go
+fn=(17) treedb/internal/page.(*InternalPage).keyAt
++1314397 215 60
+
+ob=(1)
+fl=(2)
+fn=(9)
+-1621372 263 50
+
+ob=(1)
+fl=(3)
+fn=(10)
++60740 1499 50
+
+ob=(1)
+fl=(2)
+fn=(12)
++328308 1320 50
+
+ob=(1)
+fl=(1)
+fn=(18) syscall.syscall
++23303 28 50
+
+ob=(1)
+fl=(7) /Users/michaelseiler/.gvm/gos/go1.25.5/src/hash/crc32/crc32_arm64.s
+fn=(19) hash/crc32.castagnoliUpdate
++1109197 16 50
+
+ob=(1)
+fl=(8) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/proc.go
+fn=(20) runtime.stealWork
+-1312540 3873 40
+
+ob=(1)
+fl=(9) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/stubs.go
+fn=(21) runtime.divRoundUp
++197132 382 40
+
+ob=(1)
+fl=(10) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/memclr_arm64.s
+fn=(22) runtime.memclrNoHeapPointers
++26360 180 40
+
+ob=(1)
+fl=(11) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/preempt_arm64.s
+fn=(23) runtime.asyncPreempt
++652 7 40
+
+ob=(1)
+fl=(3)
+fn=(11)
+-372912 1409 30
+
+ob=(1)
+fl=(3)
+fn=(10)
++456 1498 30
+
+ob=(1)
+fl=(2)
+fn=(24) runtime.typePointers.nextFast
++8 220 30
+
+ob=(1)
+fl=(3)
+fn=(10)
++20 1498 30
+
+ob=(1)
+fl=(3)
+fn=(25) runtime.greyobject
++1428 1692 30
+
+ob=(1)
+fl=(12) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mwbbuf.go
+fn=(26) runtime.wbBufFlush1
++86180 230 30
+
+ob=(1)
+fl=(2)
+fn=(12)
++240648 1319 30
+
+ob=(1)
+fl=(13) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/memmove_arm64.s
+fn=(27) runtime.memmove
++43604 53 30
+
+ob=(1)
+fl=(6)
+fn=(28) treedb/internal/page.(*InternalPage).entries
++1187496 168 30
+
+ob=(1)
+fl=(14) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/page/slotted.go
+fn=(29) treedb/internal/page.dirEntry
++1276 42 30
++28 45 30
+
+ob=(1)
+fl=(15) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/lock_spinbit.go
+fn=(30) runtime.unlock2
+-1633876 275 20
+
+ob=(1)
+fl=(16) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/malloc.go
+fn=(31) runtime.mallocgcSmallNoscan
++5340 1266 20
+
+ob=(1)
+fl=(9)
+fn=(32) runtime.bool2int
++196 394 20
+
+ob=(1)
+fl=(16)
+fn=(33) runtime.nextFreeFast
++28 932 20
++32 935 20
+
+ob=(1)
+fl=(17) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mheap.go
+fn=(34) runtime.(*mspan).base
++88 523 20
+
+ob=(1)
+fl=(2)
+fn=(35) runtime.(*mspan).typePointersOfUnchecked
++6512 143 20
+
+ob=(1)
+fl=(2)
+fn=(9)
++256 255 20
+
+ob=(1)
+fl=(18) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/type.go
+fn=(36) runtime.getGCMask
++48 89 20
+
+ob=(1)
+fl=(2)
+fn=(37) runtime.(*mspan).heapBitsSmallForAddr
++2384 612 20
+
+ob=(1)
+fl=(3)
+fn=(38) runtime.gcDrain
++56320 1237 20
++8 1238 20
+
+ob=(1)
+fl=(19) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgcwork.go
+fn=(39) runtime.(*gcWork).tryGetObjFast
++32 286 20
++20 291 20
+
+ob=(1)
+fl=(3)
+fn=(11)
++1544 1417 20
++4 1419 20
++88 1425 20
+
+ob=(1)
+fl=(3)
+fn=(25)
++1480 1660 20
++160 1688 20
+
+ob=(1)
+fl=(2)
+fn=(40) runtime.markBits.setMarked
++20 1225 20
+
+ob=(1)
+fl=(17)
+fn=(41) runtime.pageIndexOf
++32 763 20
+
+ob=(1)
+fl=(3)
+fn=(25)
++352 1713 20
+
+ob=(1)
+fl=(8)
+fn=(20)
++146296 3830 20
+
+ob=(1)
+fl=(16)
+fn=(42) runtime.mallocgc
++177560 1054 20
++80 1097 20
++52 1104 20
+
+ob=(1)
+fl=(2)
+fn=(12)
++2536 1319 20
+
+ob=(1)
+fl=(17)
+fn=(43) runtime.spanOf
++48 722 20
+
+ob=(1)
+fl=(2)
+fn=(12)
++304 1330 20
+
+ob=(1)
+fl=(20) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/slice.go
+fn=(44) runtime.growslice
++16692 194 20
+
+ob=(1)
+fl=(21) /Users/michaelseiler/.gvm/gos/go1.25.5/src/internal/abi/type.go
+fn=(45) internal/abi.(*Type).Pointers
++64 200 20
+
+ob=(1)
+fl=(20)
+fn=(44)
++968 258 20
++28 285 20
+
+ob=(1)
+fl=(10)
+fn=(22)
++25416 179 20
+
+ob=(1)
+fl=(13)
+fn=(27)
++32 30 20
++148 84 20
+
+ob=(1)
+fl=(6)
+fn=(28)
++1187060 168 20
+
+ob=(1)
+fl=(14)
+fn=(29)
++84 45 20
+
+ob=(1)
+fl=(6)
+fn=(28)
++288 168 20
++36 168 20
++4 168 20
++20 168 20
+
+ob=(1)
+fl=(6)
+fn=(46) treedb/internal/page.(*InternalPage).entryLen
++216 175 20
+
+ob=(1)
+fl=(6)
+fn=(17)
++940 214 20
+
+ob=(1)
+fl=(22) /Users/michaelseiler/.gvm/gos/go1.25.5/src/encoding/binary/binary.go
+fn=(47) encoding/binary.littleEndian.Uint16
++76 71 20
+
+ob=(1)
+fl=(23) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/lfstack.go
+fn=(48) runtime.(*lfstack).push
+-1637268 30 10
+
+ob=(1)
+fl=(15)
+fn=(49) runtime.lock2
++1900 155 10
++92 166 10
++124 170 10
+
+ob=(1)
+fl=(15)
+fn=(30)
++1224 273 10
++40 275 10
++116 319 10
++8 322 10
++24 325 10
+
+ob=(1)
+fl=(16)
+fn=(31)
++5200 1266 10
+
+ob=(1)
+fl=(5)
+fn=(15)
++28 630 10
+
+ob=(1)
+fl=(16)
+fn=(31)
++116 1290 10
++60 1292 10
+
+ob=(1)
+fl=(16)
+fn=(33)
++64 937 10
+
+ob=(1)
+fl=(16)
+fn=(31)
++156 1297 10
++56 1310 10
++64 1337 10
++104 1344 10
+
+ob=(1)
+fl=(16)
+fn=(50) runtime.mallocgcSmallScanHeader
++1344 1474 10
++204 1494 10
+
+ob=(1)
+fl=(5)
+fn=(51) runtime.releasem
++152 640 10
++4 640 10
+
+ob=(1)
+fl=(2)
+fn=(35)
++4356 153 10
++164 148 10
+
+ob=(1)
+fl=(2)
+fn=(9)
++184 243 10
++228 271 10
++96 246 10
++4 246 10
+
+ob=(1)
+fl=(12)
+fn=(52) runtime.(*wbBuf).get1
++1628 132 10
+
+ob=(1)
+fl=(2)
+fn=(53) runtime.bulkBarrierPreWriteSrcOnly
++84 505 10
+
+ob=(1)
+fl=(2)
+fn=(37)
++300 604 10
+
+ob=(1)
+fl=(2)
+fn=(54) runtime.(*mspan).nextFreeIndex
++896 1140 10
+
+ob=(1)
+fl=(24) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mcentral.go
+fn=(55) runtime.(*mcentral).fullSwept
++6528 78 10
+
+ob=(1)
+fl=(3)
+fn=(56) runtime.markrootSpans
++42076 362 10
++20 365 10
+
+ob=(1)
+fl=(19)
+fn=(39)
++6820 286 10
+
+ob=(1)
+fl=(3)
+fn=(38)
++200 1244 10
++60 1257 10
++16 1277 10
+
+ob=(1)
+fl=(25) /Users/michaelseiler/.gvm/gos/go1.25.5/src/internal/runtime/atomic/types.go
+fn=(57) internal/runtime/atomic.(*Int64).Add
++40 109 10
+
+ob=(1)
+fl=(3)
+fn=(38)
++36 1279 10
+
+ob=(1)
+fl=(3)
+fn=(11)
++1320 1416 10
++56 1419 10
++16 1417 10
++52 1425 10
+
+ob=(1)
+fl=(17)
+fn=(58) runtime.spanOfUnchecked
++160 737 10
+
+ob=(1)
+fl=(3)
+fn=(10)
++44 1457 10
++72 1515 10
+
+ob=(1)
+fl=(2)
+fn=(24)
++24 214 10
+
+ob=(1)
+fl=(3)
+fn=(10)
++64 1511 10
++8 1511 10
+
+ob=(1)
+fl=(3)
+fn=(25)
++1144 1660 10
++68 1676 10
++204 1693 10
++40 1686 10
+
+ob=(1)
+fl=(2)
+fn=(40)
++1544 1225 10
+
+ob=(1)
+fl=(17)
+fn=(41)
++44 763 10
+
+ob=(1)
+fl=(25)
+fn=(59) internal/runtime/atomic.(*Int64).Load
++2816 74 10
+
+ob=(1)
+fl=(26) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgcpacer.go
+fn=(60) runtime.(*gcControllerState).heapGoalInternal
++2464 948 10
+
+ob=(1)
+fl=(27) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgcscavenge.go
+fn=(61) runtime.(*scavengerState).park
++3244 426 10
+
+ob=(1)
+fl=(24)
+fn=(62) runtime.(*mcentral).fullUnswept
++8060 72 10
+
+ob=(1)
+fl=(28) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgcsweep.go
+fn=(63) runtime.(*mheap).nextSpanForSweep
++20 100 10
+
+ob=(1)
+fl=(24)
+fn=(64) runtime.(*mcentral).partialUnswept
++72 60 10
+
+ob=(1)
+fl=(25)
+fn=(65) internal/runtime/atomic.(*Uint32).Load
++360 194 10
+
+ob=(1)
+fl=(28)
+fn=(66) runtime.bgsweep
++824 310 10
+
+ob=(1)
+fl=(28)
+fn=(67) runtime.(*sweepLocker).tryAcquire
++356 350 10
+
+ob=(1)
+fl=(28)
+fn=(68) runtime.(*sweepLocked).sweep
++2488 680 10
+
+ob=(1)
+fl=(17)
+fn=(69) runtime.(*mSpanStateBox).get
++116 417 10
+
+ob=(1)
+fl=(28)
+fn=(68)
++1444 671 10
++16 671 10
+
+ob=(1)
+fl=(19)
+fn=(70) runtime.handoff
++5892 501 10
+
+ob=(1)
+fl=(17)
+fn=(71) runtime.(*gcBitsArena).tryAlloc
++17540 2906 10
+
+ob=(1)
+fl=(17)
+fn=(72) runtime.newArenaMayUnlock
++1148 3029 10
+
+ob=(1)
+fl=(29) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mpallocbits.go
+fn=(73) runtime.(*pallocBits).summarize
++13184 154 10
++92 168 10
++16 169 10
+
+ob=(1)
+fl=(25)
+fn=(74) internal/runtime/atomic.(*Uintptr).Load
++18500 359 10
+
+ob=(1)
+fl=(30) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mspanset.go
+fn=(75) runtime.(*spanSet).pop
++48 158 10
+
+ob=(1)
+fl=(25)
+fn=(76) internal/runtime/atomic.(*Uint64).CompareAndSwap
++92 325 10
+
+ob=(1)
+fl=(25)
+fn=(77) internal/runtime/atomic.(*UnsafePointer).Load
++76 466 10
+
+ob=(1)
+fl=(30)
+fn=(75)
++104 222 10
+
+ob=(1)
+fl=(31) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mstats.go
+fn=(78) runtime.(*consistentHeapStats).acquire
++3528 779 10
+
+ob=(1)
+fl=(12)
+fn=(26)
++1836 195 10
+
+ob=(1)
+fl=(2)
+fn=(79) runtime.markBits.isMarked
++296 1217 10
+
+ob=(1)
+fl=(8)
+fn=(80) runtime.casgstatus
++38136 1288 10
+
+ob=(1)
+fl=(8)
+fn=(81) runtime.forEachPInternal
++6184 2160 10
+
+ob=(1)
+fl=(8)
+fn=(20)
++15580 3822 10
++204 3825 10
++116 3831 10
+
+ob=(1)
+fl=(32) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/runtime2.go
+fn=(82) runtime.(*guintptr).set
++5124 242 10
+
+ob=(1)
+fl=(8)
+fn=(83) runtime.runqgrab
++29368 7279 10
+
+ob=(1)
+fl=(33) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/stack.go
+fn=(84) runtime.newstack
++42192 1015 10
+
+ob=(1)
+fl=(34) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/symtab.go
+fn=(85) runtime.(*moduledata).textAddr
++13840 688 10
++20 691 10
+
+ob=(1)
+fl=(5)
+fn=(51)
++1176 640 10
+
+ob=(1)
+fl=(34)
+fn=(86) runtime.pcvalue
++532 1098 10
+
+ob=(1)
+fl=(34)
+fn=(87) runtime.step
++1888 1277 10
++128 1288 10
++44 1293 10
+
+ob=(1)
+fl=(1)
+fn=(88) runtime.pthread_mutex_lock
++3939 519 10
+
+ob=(1)
+fl=(1)
+fn=(3)
++193 548 10
+
+ob=(1)
+fl=(4)
+fn=(14)
++692 20 10
+
+ob=(1)
+fl=(35) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/time.go
+fn=(89) runtime.(*timers).wakeTime
++5872 990 10
+
+ob=(1)
+fl=(35)
+fn=(90) runtime.(*timers).check
++16 1011 10
+
+ob=(1)
+fl=(16)
+fn=(42)
++72568 1032 10
++32 1047 10
++96 1059 10
++12 1097 10
++76 1107 10
+
+ob=(1)
+fl=(2)
+fn=(12)
++2768 1351 10
+
+ob=(1)
+fl=(25)
+fn=(91) internal/runtime/atomic.(*Int32).CompareAndSwap
++7208 37 10
+
+ob=(1)
+fl=(36) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/msize.go
+fn=(92) runtime.roundupsize
++9652 18 10
+
+ob=(1)
+fl=(20)
+fn=(44)
++1132 283 10
++24 285 10
+
+ob=(1)
+fl=(37) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/asm_arm64.s
+fn=(93) gcWriteBarrier
++11480 1303 10
++28 1315 10
++12 1321 10
+
+ob=(1)
+fl=(37)
+fn=(94) runtime.morestack
++2252 354 10
+
+ob=(1)
+fl=(37)
+fn=(95) runtime.procyield
++8564 970 10
+
+ob=(1)
+fl=(10)
+fn=(22)
++2508 12 10
++12 20 10
+
+ob=(1)
+fl=(13)
+fn=(27)
++424 33 10
++72 58 10
++8 60 10
++300 169 10
++20 174 10
+
+ob=(1)
+fl=(6)
+fn=(96) treedb/internal/page.(*InternalPage).Set
++1185284 91 10
++36 91 10
++60 92 10
+
+ob=(1)
+fl=(6)
+fn=(28)
++1436 160 10
++4 159 10
+
+ob=(1)
+fl=(14)
+fn=(29)
++28 42 10
+cfl=(11)
+cfn=(23)
+calls=0 -1186600 7
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(97) treedb/internal/page.decodeInternalEntry
++108 231 10
++68 234 10
+
+ob=(1)
+fl=(6)
+fn=(28)
++172 168 10
++140 170 10
+
+ob=(1)
+fl=(6)
+fn=(98) treedb/internal/page.(*InternalPage).Count
++148 42 10
+
+ob=(1)
+fl=(14)
+fn=(29)
++12 37 10
++56 45 10
++32 37 10
++44 45 10
+
+ob=(1)
+fl=(6)
+fn=(46)
++56 184 10
++12 184 10
+
+ob=(1)
+fl=(6)
+fn=(99) treedb/internal/page.(*InternalPage).rebuild
++172 196 10
++36 198 10
++28 198 10
++76 196 10
++100 202 10
+
+ob=(1)
+fl=(22)
+fn=(100) encoding/binary.littleEndian.PutUint16
++28 77 10
+
+ob=(1)
+fl=(6)
+fn=(17)
++268 215 10
+cfl=(11)
+cfn=(23)
+calls=0 -1187916 7
+* * 10
+
+ob=(1)
+fl=(14)
+fn=(29)
++16 40 10
++24 45 10
+
+ob=(1)
+fl=(6)
+fn=(17)
++44 214 10
+
+ob=(1)
+fl=(38) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/page/leaf.go
+fn=(101) treedb/internal/page.decodeLeafEntry
++5280 290 10
+
+ob=(1)
+fl=(14)
+fn=(102) treedb/internal/page.insertDirEntry
++1316 73 10
+
+ob=(1)
+fl=(39) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/mvcc/graveyard.go
+fn=(103) treedb/internal/mvcc.(*Graveyard).Record
++46640 22 10
+
+ob=(1)
+fl=(40) /Users/michaelseiler/dev/snissn/gomap/TreeDB/treedb.go
+fn=(104) treedb.encodeMetaPage
++3125112 399 10
+
+ob=(1)
+fl=(41) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/lock_sema.go
+fn=(105) runtime.notewakeup
+-4815317 42 0
+cfl=(42) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/os_darwin.go
+cfn=(106) runtime.semawakeup
+calls=0 -4645233 85
+* * 780
+cfl=(42)
+cfn=(106)
+calls=0 -4645221 87
+* * 50
+cfl=(42)
+cfn=(106)
+calls=0 -4645269 82
+* * 10
+
+ob=(1)
+fl=(41)
+fn=(107) runtime.notesleep
++232 62 0
+cfl=(42)
+cfn=(108) runtime.semasleep
+calls=0 +169756 72
+* * 2220
+
+ob=(1)
+fl=(41)
+fn=(109) runtime.notetsleep_internal
++444 113 0
+cfl=(42)
+cfn=(108)
+calls=0 +169636 66
+* * 360
+
+ob=(1)
+fl=(41)
+fn=(110) runtime.notetsleep
++436 164 0
+cfl=(41)
+cfn=(109)
+calls=0 * 113
+* * 360
+
+ob=(1)
+fl=(15)
+fn=(111) runtime.lock
++436 152 0
+cfl=(43) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/lockrank_off.go
+cfn=(112) runtime.lockWithRank
+calls=0 +436 24
+* * 50
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 +584 220
+* * 40
+cfl=(15)
+cfn=(49)
+calls=0 +249 170
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(49)
++584 220 0
+cfl=(42)
+cfn=(113) runtime.osyield
+calls=0 +584 363
+* * 1280
+
+ob=(1)
+fl=(42)
+fn=(113)
+* 363 0
+cfl=(1)
+cfn=(6)
+calls=0 +319444 333
+* * 1280
+
+ob=(1)
+fl=(15)
+fn=(49)
++56 216 0
+cfl=(37)
+cfn=(95)
+calls=0 +443005 970
+* * 10
++284 250 0
+cfl=(42)
+cfn=(108)
+calls=0 +167568 72
+* * 30
+
+ob=(1)
+fl=(15)
+fn=(114) runtime.unlock
++356 261 0
+cfl=(43)
+cfn=(115) runtime.unlockWithRank
+calls=0 +356 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 +229 275
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(30)
++280 314 0
+cfl=(15)
+cfn=(116) runtime.unlock2Wake
+calls=0 +1148 461
+* * 70
+
+ob=(1)
+fl=(15)
+fn=(116)
++868 461 0
+cfl=(42)
+cfn=(106)
+calls=0 +166976 85
+* * 60
+cfl=(42)
+cfn=(106)
+calls=0 +166988 87
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(117) runtime.(*mcache).nextFree
++3272 968 0
+cfl=(44) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mcache.go
+cfn=(118) runtime.(*mcache).refill
+calls=0 +18160 184
+* * 30
+cfl=(44)
+cfn=(118)
+calls=0 +17876 161
+* * 10
+cfl=(44)
+cfn=(118)
+calls=0 +18248 214
+* * 10
++20 972 0
+cfl=(2)
+cfn=(54)
+calls=0 +11453 1140
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(31)
++1169 1268 0
+cfl=(5)
+cfn=(15)
+calls=0 +1169 630
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(119) runtime.makeSpanClass
++156 594 0
+cfl=(9)
+cfn=(32)
+calls=0 +156 394
+* * 20
+
+ob=(1)
+fl=(16)
+fn=(31)
+* 1291 0
+cfl=(17)
+cfn=(119)
+calls=0 * 594
+* * 20
++28 1293 0
+cfl=(16)
+cfn=(33)
+calls=0 +28 932
+* * 20
++32 1293 0
+cfl=(16)
+cfn=(33)
+calls=0 +32 935
+* * 20
++24 1293 0
+cfl=(16)
+cfn=(33)
+calls=0 +24 937
+* * 10
++64 1293 0
+cfl=(16)
+cfn=(33)
+calls=0 +64 943
+* * 20
+
+ob=(1)
+fl=(16)
+fn=(33)
+* 943 0
+cfl=(17)
+cfn=(34)
+calls=0 * 523
+* * 20
+
+ob=(1)
+fl=(16)
+fn=(31)
++16 1268 0
+cfl=(5)
+cfn=(15)
+calls=0 +16 631
+* * 60
++167 1315 0
+cfl=(3)
+cfn=(120) runtime.gcmarknewobject
+calls=0 +70556 1780
+* * 10
+cfl=(3)
+cfn=(120)
+calls=0 +70600 1787
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(121) runtime.mallocgcSmallScanNoHeader
++664 1382 0
+cfl=(10)
+cfn=(22)
+calls=0 +439121 179
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(50)
++856 1476 0
+cfl=(16)
+cfn=(117)
+calls=0 -2340 968
+* * 50
+cfl=(16)
+cfn=(117)
+calls=0 -2320 972
+* * 10
++64 1480 0
+cfl=(10)
+cfn=(22)
+calls=0 +437605 180
+* * 30
++196 1523 0
+cfl=(16)
+cfn=(122) runtime.profilealloc
+calls=0 +2124 1835
+* * 10
++53 1526 0
+cfl=(5)
+cfn=(51)
+calls=0 +53 640
+* * 10
++4 1526 0
+cfl=(5)
+cfn=(51)
+calls=0 +4 640
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(123) runtime.deductAssistCredit
++1431 1712 0
+cfl=(3)
+cfn=(124) runtime.gcAssistAlloc
+calls=0 +58119 580
+* * 60
+
+ob=(1)
+fl=(16)
+fn=(122)
++440 1835 0
+cfl=(45) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mprof.go
+cfn=(125) runtime.mProf_Malloc
+calls=0 +130736 447
+* * 10
+
+ob=(1)
+fl=(2)
+fn=(35)
++2628 148 0
+cfl=(2)
+cfn=(37)
+calls=0 +5309 612
+* * 20
+cfl=(2)
+cfn=(37)
+calls=0 +5173 604
+* * 10
+
+ob=(1)
+fl=(2)
+fn=(9)
++297 268 0
+cfl=(18)
+cfn=(36)
+calls=0 +297 89
+* * 20
+
+ob=(1)
+fl=(2)
+fn=(53)
++1831 498 0
+cfl=(2)
+cfn=(9)
+calls=0 -76 245
+* * 10
+cfl=(2)
+cfn=(9)
+calls=0 -60 245
+* * 10
+cfl=(2)
+cfn=(9)
+calls=0 -8 263
+* * 10
+cfl=(2)
+cfn=(9)
+calls=0 +136 271
+* * 10
++33 502 0
+cfl=(12)
+cfn=(52)
+calls=0 +33 132
+* * 10
+
+ob=(1)
+fl=(12)
+fn=(52)
++43 133 0
+cfl=(12)
+cfn=(126) runtime.wbBufFlush
+calls=0 +146251 180
+* * 50
+
+ob=(1)
+fl=(2)
+fn=(53)
+* 502 0
+cfl=(12)
+cfn=(52)
+calls=0 * 133
+* * 50
+
+ob=(1)
+fl=(44)
+fn=(118)
++4388 161 0
+cfl=(24)
+cfn=(127) runtime.(*mcentral).uncacheSpan
+calls=0 +7765 245
+* * 10
++284 184 0
+cfl=(24)
+cfn=(128) runtime.(*mcentral).cacheSpan
+calls=0 +3168 171
+* * 20
+cfl=(24)
+cfn=(128)
+calls=0 +2876 148
+* * 10
++88 214 0
+cfl=(26)
+cfn=(129) runtime.(*gcControllerState).update
+calls=0 +62408 913
+* * 10
+
+ob=(1)
+fl=(44)
+fn=(130) runtime.(*mcache).releaseAll
++1084 301 0
+cfl=(24)
+cfn=(127)
+calls=0 +3048 237
+* * 20
+
+ob=(1)
+fl=(44)
+fn=(131) runtime.(*mcache).prepareForSweep
++284 338 0
+cfl=(44)
+cfn=(130)
+calls=0 * 301
+* * 20
+
+ob=(1)
+fl=(24)
+fn=(128)
++1136 148 0
+cfl=(28)
+cfn=(68)
+calls=0 +76544 697
+* * 10
++292 171 0
+cfl=(24)
+cfn=(132) runtime.(*mcentral).grow
+calls=0 +664 253
+* * 20
+
+ob=(1)
+fl=(24)
+fn=(127)
++209 245 0
+cfl=(24)
+cfn=(55)
+calls=0 +209 78
+* * 10
++43 237 0
+cfl=(28)
+cfn=(68)
+calls=0 +74948 709
+* * 10
+cfl=(28)
+cfn=(68)
+calls=0 +75275 772
+* * 10
+
+ob=(1)
+fl=(24)
+fn=(132)
++120 253 0
+cfl=(17)
+cfn=(133) runtime.(*mheap).alloc
+calls=0 +86560 1011
+* * 20
+
+ob=(1)
+fl=(46) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mgc.go
+fn=(134) runtime.gcStart.func4
++24884 821 0
+cfl=(8)
+cfn=(135) runtime.startTheWorldWithSema
+calls=0 +180664 1768
+* * 2890
+cfl=(8)
+cfn=(135)
+calls=0 +181248 1825
+* * 30
+
+ob=(1)
+fl=(46)
+fn=(136) runtime.gcStart.func2
++144 744 0
+cfl=(8)
+cfn=(137) runtime.stopTheWorldWithSema
+calls=0 +155628 1696
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(138) runtime.forEachP
++464 2115 0
+cfl=(37)
+cfn=(139) runtime.systemstack
+calls=0 +386000 294
+* * 30
+
+ob=(1)
+fl=(46)
+fn=(140) runtime.gcMarkDone
+* 914 0
+cfl=(8)
+cfn=(138)
+calls=0 * 2115
+* * 30
++228 974 0
+cfl=(37)
+cfn=(139)
+calls=0 +385536 294
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(141) runtime.gcMarkDone.func3
++572 976 0
+cfl=(12)
+cfn=(26)
+calls=0 +112816 243
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(142) runtime.gcMarkDone.func2
++112 955 0
+cfl=(8)
+cfn=(137)
+calls=0 +153188 1656
+* * 50
+cfl=(8)
+cfn=(137)
+calls=0 +154220 1696
+* * 40
+cfl=(8)
+cfn=(137)
+calls=0 +153776 1690
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(143) runtime.gcMarkDone.forEachP.func5
++104 2134 0
+cfl=(8)
+cfn=(81)
+calls=0 +156572 2165
+* * 330
+cfl=(8)
+cfn=(81)
+calls=0 +157404 2214
+* * 240
+cfl=(8)
+cfn=(81)
+calls=0 +156748 2181
+* * 40
+cfl=(8)
+cfn=(81)
+calls=0 +156408 2152
+* * 10
+cfl=(8)
+cfn=(81)
+calls=0 +156513 2160
+* * 10
+cfl=(8)
+cfn=(81)
+calls=0 +156684 2175
+* * 10
+cfl=(8)
+cfn=(81)
+calls=0 +157560 2232
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(144) runtime.gcMarkTermination.forEachP.func6
++4064 2134 0
+cfl=(8)
+cfn=(81)
+calls=0 +157300 2214
+* * 70
+cfl=(8)
+cfn=(81)
+calls=0 +156580 2175
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(145) runtime.gcMarkTermination.func3
++92 1197 0
+cfl=(8)
+cfn=(135)
+calls=0 +150092 1768
+* * 140
+cfl=(8)
+cfn=(135)
+calls=0 +150316 1783
+* * 30
+cfl=(8)
+cfn=(135)
+calls=0 +150676 1825
+* * 30
+
+ob=(1)
+fl=(46)
+fn=(146) runtime.gcBgMarkWorker
++1112 1510 0
+cfl=(47) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/time_nofake.go
+cfn=(147) runtime.nanotime
+calls=0 +1112 33
+* * 30
+
+ob=(1)
+fl=(47)
+fn=(147)
+* 33 0
+cfl=(1)
+cfn=(13)
+calls=0 +264624 368
+* * 30
+
+ob=(1)
+fl=(46)
+fn=(146)
++204 1523 0
+cfl=(37)
+cfn=(139)
+calls=0 +379252 294
+* * 1750
++8 1566 0
+cfl=(47)
+cfn=(147)
+calls=0 +8 33
+* * 10
+
+ob=(1)
+fl=(47)
+fn=(147)
+* 33 0
+cfl=(1)
+cfn=(13)
+calls=0 +264412 368
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(146)
++40 1568 0
+cfl=(26)
+cfn=(148) runtime.(*gcControllerState).markWorkerStop
+calls=0 +26764 880
+* * 10
++324 1600 0
+cfl=(46)
+cfn=(140)
+calls=0 -6536 914
+* * 30
+cfl=(46)
+cfn=(140)
+calls=0 -6308 974
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(149) runtime.gcBgMarkWorker.func2
++432 1560 0
+cfl=(3)
+cfn=(150) runtime.gcDrainMarkWorkerIdle
+calls=0 +432 1120
+* * 680
+
+ob=(1)
+fl=(3)
+fn=(150)
+* 1120 0
+cfl=(3)
+cfn=(38)
+calls=0 +16096 1238
+* * 380
+cfl=(3)
+cfn=(38)
+calls=0 +16244 1258
+* * 220
+cfl=(3)
+cfn=(38)
+calls=0 +16844 1206
+* * 30
+cfl=(3)
+cfn=(38)
+calls=0 +16093 1238
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16125 1244
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16245 1277
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16285 1278
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16321 1279
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(149)
++44 1541 0
+cfl=(3)
+cfn=(151) runtime.gcDrainMarkWorkerDedicated
+calls=0 +44 1130
+* * 2110
+
+ob=(1)
+fl=(3)
+fn=(151)
+* 1130 0
+cfl=(3)
+cfn=(38)
+calls=0 +16200 1258
+* * 780
+cfl=(3)
+cfn=(38)
+calls=0 +16052 1238
+* * 720
+cfl=(3)
+cfn=(38)
+calls=0 +16800 1206
+* * 530
+cfl=(3)
+cfn=(38)
+calls=0 +16041 1237
+* * 20
+cfl=(3)
+cfn=(38)
+calls=0 +16101 1244
+* * 20
+cfl=(3)
+cfn=(38)
+calls=0 +16049 1238
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16081 1244
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16125 1244
+* * 10
+cfl=(3)
+cfn=(38)
+calls=0 +16185 1257
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(149)
++176 1556 0
+cfl=(3)
+cfn=(151)
+calls=0 +176 1130
+* * 330
+
+ob=(1)
+fl=(3)
+fn=(151)
+* 1130 0
+cfl=(3)
+cfn=(38)
+calls=0 +16024 1258
+* * 170
+cfl=(3)
+cfn=(38)
+calls=0 +15876 1238
+* * 100
+cfl=(3)
+cfn=(38)
+calls=0 +16624 1206
+* * 50
+cfl=(3)
+cfn=(38)
+calls=0 +15749 1244
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(152) runtime.markroot
++7096 201 0
+cfl=(3)
+cfn=(56)
+calls=0 +8909 362
+* * 10
+cfl=(3)
+cfn=(56)
+calls=0 +8929 365
+* * 10
++156 222 0
+cfl=(3)
+cfn=(153) runtime.markroot.func1
+calls=0 +964 240
+* * 200
+cfl=(3)
+cfn=(153)
+calls=0 +1004 248
+* * 60
++476 177 0
+cfl=(3)
+cfn=(154) runtime.markrootBlock
+calls=0 +1084 293
+* * 120
++112 171 0
+cfl=(3)
+cfn=(154)
+calls=0 +608 293
+* * 230
+
+ob=(1)
+fl=(3)
+fn=(153)
++220 240 0
+cfl=(48) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/preempt.go
+cfn=(155) runtime.suspendG
+calls=0 +121036 232
+* * 200
++40 248 0
+cfl=(3)
+cfn=(156) runtime.scanstack
+calls=0 +6088 924
+* * 50
+cfl=(3)
+cfn=(156)
+calls=0 +6080 925
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(154)
++236 293 0
+cfl=(3)
+cfn=(11)
+calls=0 +9341 1416
+* * 170
+cfl=(3)
+cfn=(11)
+calls=0 +9460 1425
+* * 40
+cfl=(3)
+cfn=(11)
+calls=0 +9293 1409
+* * 30
+cfl=(3)
+cfn=(11)
+calls=0 +9369 1417
+* * 20
+cfl=(3)
+cfn=(11)
+calls=0 +9373 1419
+* * 20
+cfl=(3)
+cfn=(11)
+calls=0 +9461 1425
+* * 20
+cfl=(3)
+cfn=(11)
+calls=0 +9321 1416
+* * 10
+cfl=(3)
+cfn=(11)
+calls=0 +9377 1419
+* * 10
+cfl=(3)
+cfn=(11)
+calls=0 +9393 1417
+* * 10
+cfl=(3)
+cfn=(11)
+calls=0 +9445 1425
+* * 10
+cfl=(3)
+cfn=(11)
+calls=0 +9488 1426
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(124)
++2148 580 0
+cfl=(37)
+cfn=(139)
+calls=0 +369688 294
+* * 60
+
+ob=(1)
+fl=(3)
+fn=(157) runtime.gcAssistAlloc.func2
++892 581 0
+cfl=(3)
+cfn=(158) runtime.gcAssistAlloc1
+calls=0 +1300 690
+* * 160
+cfl=(3)
+cfn=(158)
+calls=0 +1320 692
+* * 20
+
+ob=(1)
+fl=(3)
+fn=(158)
++408 690 0
+cfl=(3)
+cfn=(159) runtime.gcDrainN
+calls=0 +5512 1334
+* * 90
+cfl=(3)
+cfn=(159)
+calls=0 +5788 1362
+* * 30
+cfl=(3)
+cfn=(159)
+calls=0 +5720 1352
+* * 20
+cfl=(3)
+cfn=(159)
+calls=0 +5584 1342
+* * 10
+cfl=(3)
+cfn=(159)
+calls=0 +5592 1346
+* * 10
++20 692 0
+cfl=(8)
+cfn=(80)
+calls=0 +132096 1304
+* * 20
+
+ob=(1)
+fl=(3)
+fn=(156)
++2336 925 0
+cfl=(3)
+cfn=(160) runtime.scanframeworker
+calls=0 +3316 1070
+* * 10
++8 924 0
+cfl=(49) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/traceback.go
+cfn=(161) runtime.(*unwinder).next
+calls=0 +270956 513
+* * 50
+
+ob=(1)
+fl=(3)
+fn=(160)
++972 1070 0
+cfl=(50) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/stkframe.go
+cfn=(162) runtime.(*stkframe).getStackMap
+calls=0 +232808 172
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(38)
++629 1244 0
+cfl=(19)
+cfn=(39)
+calls=0 +629 286
+* * 10
++127 1238 0
+cfl=(19)
+cfn=(163) runtime.(*gcWork).balance
+calls=0 +32203 361
+* * 1180
+cfl=(19)
+cfn=(163)
+calls=0 +32111 351
+* * 20
++29 1244 0
+cfl=(19)
+cfn=(39)
+calls=0 +29 286
+* * 20
++20 1244 0
+cfl=(19)
+cfn=(39)
+calls=0 +20 291
+* * 20
++99 1258 0
+cfl=(3)
+cfn=(10)
+calls=0 +1967 1499
+* * 400
+cfl=(3)
+cfn=(10)
+calls=0 +1916 1507
+* * 200
+cfl=(3)
+cfn=(10)
+calls=0 +2047 1526
+* * 160
+cfl=(3)
+cfn=(10)
+calls=0 +2075 1527
+* * 160
+cfl=(3)
+cfn=(10)
+calls=0 +1895 1492
+* * 60
+cfl=(3)
+cfn=(10)
+calls=0 +1968 1499
+* * 50
+cfl=(3)
+cfn=(10)
+calls=0 +1924 1498
+* * 30
+cfl=(3)
+cfn=(10)
+calls=0 +1932 1498
+* * 30
+cfl=(3)
+cfn=(10)
+calls=0 +1952 1498
+* * 20
+cfl=(3)
+cfn=(10)
+calls=0 +1780 1456
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +1824 1457
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +1896 1515
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +1920 1498
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +1984 1511
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +1992 1511
+* * 10
++41 1278 0
+cfl=(25)
+cfn=(57)
+calls=0 +41 109
+* * 10
++559 1206 0
+cfl=(3)
+cfn=(152)
+calls=0 -8813 222
+* * 260
+cfl=(3)
+cfn=(152)
+calls=0 -8225 171
+* * 230
+cfl=(3)
+cfn=(152)
+calls=0 -8337 177
+* * 100
+cfl=(3)
+cfn=(152)
+calls=0 -8969 201
+* * 20
+
+ob=(1)
+fl=(3)
+fn=(159)
++264 1334 0
+cfl=(19)
+cfn=(163)
+calls=0 +31328 361
+* * 90
++72 1342 0
+cfl=(19)
+cfn=(164) runtime.(*gcWork).tryGetObj
+calls=0 +30416 258
+* * 10
++8 1346 0
+cfl=(12)
+cfn=(126)
+calls=0 +88316 180
+* * 10
++128 1352 0
+cfl=(3)
+cfn=(152)
+calls=0 -9240 177
+* * 20
++68 1362 0
+cfl=(3)
+cfn=(10)
+calls=0 +724 1492
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +781 1498
+* * 10
+cfl=(3)
+cfn=(10)
+calls=0 +796 1499
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(11)
++396 1425 0
+cfl=(2)
+cfn=(12)
+calls=0 +328965 1319
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +328969 1319
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +329013 1320
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +329041 1323
+* * 10
++28 1426 0
+cfl=(3)
+cfn=(25)
+calls=0 +1773 1693
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(10)
++117 1456 0
+cfl=(17)
+cfn=(58)
+calls=0 +117 737
+* * 10
++115 1492 0
+cfl=(2)
+cfn=(35)
+calls=0 -60841 148
+* * 30
+cfl=(2)
+cfn=(35)
+calls=0 -60848 143
+* * 20
+cfl=(2)
+cfn=(35)
+calls=0 -60984 153
+* * 10
+cfl=(2)
+cfn=(35)
+calls=0 -60820 148
+* * 10
++25 1498 0
+cfl=(2)
+cfn=(24)
+calls=0 +25 214
+* * 10
++12 1498 0
+cfl=(2)
+cfn=(24)
+calls=0 +12 220
+* * 30
++35 1499 0
+cfl=(2)
+cfn=(9)
+calls=0 -60756 245
+* * 210
+cfl=(2)
+cfn=(9)
+calls=0 -60772 245
+* * 90
+cfl=(2)
+cfn=(9)
+calls=0 -60704 263
+* * 40
+cfl=(2)
+cfn=(9)
+calls=0 -60744 255
+* * 20
+cfl=(2)
+cfn=(9)
+calls=0 -60696 268
+* * 20
+cfl=(2)
+cfn=(9)
+calls=0 -60788 243
+* * 10
+cfl=(2)
+cfn=(9)
+calls=0 -60464 246
+* * 10
+cfl=(2)
+cfn=(9)
+calls=0 -60460 246
+* * 10
++80 1526 0
+cfl=(2)
+cfn=(12)
+calls=0 +328313 1323
+* * 70
+cfl=(2)
+cfn=(12)
+calls=0 +328309 1320
+* * 50
+cfl=(2)
+cfn=(12)
+calls=0 +328589 1330
+* * 20
+cfl=(2)
+cfn=(12)
+calls=0 +328241 1319
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +328285 1320
+* * 10
++28 1527 0
+cfl=(3)
+cfn=(25)
+calls=0 +1333 1692
+* * 30
+cfl=(3)
+cfn=(25)
+calls=0 +1069 1660
+* * 20
+cfl=(3)
+cfn=(25)
+calls=0 +1229 1688
+* * 20
+cfl=(3)
+cfn=(25)
+calls=0 +1249 1688
+* * 20
+cfl=(3)
+cfn=(25)
+calls=0 +1281 1691
+* * 20
+cfl=(3)
+cfn=(25)
+calls=0 +1633 1713
+* * 20
+cfl=(3)
+cfn=(25)
+calls=0 +1089 1660
+* * 10
+cfl=(3)
+cfn=(25)
+calls=0 +1157 1676
+* * 10
+cfl=(3)
+cfn=(25)
+calls=0 +1401 1686
+* * 10
+
+ob=(1)
+fl=(3)
+fn=(25)
++1221 1688 0
+cfl=(2)
+cfn=(40)
+calls=0 +1221 1225
+* * 20
++32 1691 0
+cfl=(17)
+cfn=(41)
+calls=0 +32 763
+* * 20
+
+ob=(1)
+fl=(3)
+fn=(120)
++1664 1780 0
+cfl=(2)
+cfn=(40)
+calls=0 +1664 1225
+* * 10
++44 1787 0
+cfl=(17)
+cfn=(41)
+calls=0 +44 763
+* * 10
+
+ob=(1)
+fl=(26)
+fn=(165) runtime.(*gcControllerState).heapGoal
++1483 935 0
+cfl=(26)
+cfn=(60)
+calls=0 +5280 948
+* * 10
+
+ob=(1)
+fl=(26)
+fn=(166) runtime.(*gcControllerState).revise
+* 505 0
+cfl=(26)
+cfn=(165)
+calls=0 * 935
+* * 10
+
+ob=(1)
+fl=(26)
+fn=(167) runtime.(*gcControllerState).enlistWorker
++1333 698 0
+cfl=(25)
+cfn=(59)
+calls=0 +1333 74
+* * 10
++271 746 0
+cfl=(8)
+cfn=(168) runtime.preemptone
+calls=0 +169883 6516
+* * 1260
+
+ob=(1)
+fl=(26)
+fn=(169) runtime.(*gcControllerState).findRunnableGCWorker
++136 764 0
+cfl=(47)
+cfn=(147)
+calls=0 +136 33
+* * 20
+
+ob=(1)
+fl=(47)
+fn=(147)
+* 33 0
+cfl=(1)
+cfn=(13)
+calls=0 +239212 368
+* * 20
+
+ob=(1)
+fl=(26)
+fn=(169)
++688 845 0
+cfl=(8)
+cfn=(80)
+calls=0 +119545 1288
+* * 10
+
+ob=(1)
+fl=(26)
+fn=(148)
++876 880 0
+cfl=(33)
+cfn=(84)
+calls=0 +217625 1015
+* * 10
+
+ob=(1)
+fl=(26)
+fn=(129)
++400 913 0
+cfl=(26)
+cfn=(166)
+calls=0 -3304 505
+* * 10
+
+ob=(1)
+fl=(27)
+fn=(170) runtime.bgscavenge
++4776 658 0
+cfl=(27)
+cfn=(61)
+calls=0 +3337 426
+* * 10
+
+ob=(1)
+fl=(27)
+fn=(171) runtime.(*pageAlloc).scavenge.func1
++328 683 0
+cfl=(27)
+cfn=(172) runtime.(*pageAlloc).scavengeOne
+calls=0 +1280 778
+* * 30
+
+ob=(1)
+fl=(27)
+fn=(172)
++952 778 0
+cfl=(51) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mem.go
+cfn=(173) runtime.sysUnused
+calls=0 +952 70
+* * 30
+
+ob=(1)
+fl=(51)
+fn=(173)
+* 70 0
+cfl=(52) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mem_darwin.go
+cfn=(174) runtime.sysUnusedOS
+calls=0 * 26
+* * 30
+
+ob=(1)
+fl=(52)
+fn=(174)
+* 26 0
+cfl=(1)
+cfn=(5)
+calls=0 +230736 284
+* * 30
+
+ob=(1)
+fl=(28)
+fn=(63)
++5341 103 0
+cfl=(24)
+cfn=(62)
+calls=0 +5341 72
+* * 10
++87 103 0
+cfl=(30)
+cfn=(75)
+calls=0 +62116 158
+* * 10
+cfl=(30)
+cfn=(75)
+calls=0 +62208 177
+* * 10
+cfl=(30)
+cfn=(75)
+calls=0 +62284 197
+* * 10
++5 105 0
+cfl=(24)
+cfn=(64)
+calls=0 +5 60
+* * 10
++31 105 0
+cfl=(30)
+cfn=(75)
+calls=0 +61976 162
+* * 10
+cfl=(30)
+cfn=(75)
+calls=0 +62296 222
+* * 10
+
+ob=(1)
+fl=(28)
+fn=(175) runtime.(*activeSweep).end
++329 167 0
+cfl=(25)
+cfn=(65)
+calls=0 +329 194
+* * 10
+
+ob=(1)
+fl=(28)
+fn=(66)
++843 310 0
+cfl=(15)
+cfn=(111)
+calls=0 +843 152
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -95563 166
+* * 10
+
+ob=(1)
+fl=(28)
+fn=(66)
++100 315 0
+cfl=(15)
+cfn=(114)
+calls=0 +100 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -94279 275
+* * 10
+
+ob=(1)
+fl=(28)
+fn=(66)
++20 300 0
+cfl=(28)
+cfn=(176) runtime.sweepone
+calls=0 +704 395
+* * 90
+cfl=(28)
+cfn=(176)
+calls=0 +604 377
+* * 80
+cfl=(28)
+cfn=(176)
+calls=0 +676 392
+* * 10
+cfl=(28)
+cfn=(176)
+calls=0 +916 409
+* * 10
++112 306 0
+cfl=(19)
+cfn=(177) runtime.freeSomeWbufs
+calls=0 +10636 530
+* * 20
+
+ob=(1)
+fl=(28)
+fn=(176)
++472 377 0
+cfl=(28)
+cfn=(63)
+calls=0 -1440 103
+* * 30
+cfl=(28)
+cfn=(63)
+calls=0 -1404 105
+* * 20
+cfl=(28)
+cfn=(63)
+calls=0 -1527 103
+* * 10
+cfl=(28)
+cfn=(63)
+calls=0 -1507 100
+* * 10
+cfl=(28)
+cfn=(63)
+calls=0 -1435 105
+* * 10
++72 392 0
+cfl=(28)
+cfn=(67)
+calls=0 -367 350
+* * 10
++28 395 0
+cfl=(28)
+cfn=(68)
+calls=0 +2828 787
+* * 50
+cfl=(28)
+cfn=(68)
+calls=0 +2049 680
+* * 10
+cfl=(28)
+cfn=(68)
+calls=0 +2784 794
+* * 10
+cfl=(28)
+cfn=(68)
+calls=0 +3609 671
+* * 10
+cfl=(28)
+cfn=(68)
+calls=0 +3625 671
+* * 10
++212 409 0
+cfl=(28)
+cfn=(175)
+calls=0 -1647 167
+* * 10
+
+ob=(1)
+fl=(28)
+fn=(68)
++1884 697 0
+cfl=(17)
+cfn=(178) runtime.newMarkBits
+calls=0 +26817 2927
+* * 10
++41 709 0
+cfl=(17)
+cfn=(69)
+calls=0 +41 417
+* * 10
++327 772 0
+cfl=(31)
+cfn=(78)
+calls=0 +61680 779
+* * 10
++292 794 0
+cfl=(30)
+cfn=(179) runtime.(*spanSet).push
+calls=0 +57320 140
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(180) runtime.(*mheap).freeSpan
++44 1633 0
+cfl=(37)
+cfn=(139)
+calls=0 +335624 294
+* * 50
+
+ob=(1)
+fl=(28)
+fn=(68)
+* 787 0
+cfl=(17)
+cfn=(180)
+calls=0 * 1633
+* * 50
+
+ob=(1)
+fl=(17)
+fn=(181) runtime.(*sweepLocked).sweep.(*mheap).freeSpan.func2
++2156 1643 0
+cfl=(15)
+cfn=(111)
+calls=0 -99292 152
+* * 50
++16 1660 0
+cfl=(17)
+cfn=(182) runtime.(*mheap).freeSpanLocked
+calls=0 +14168 1747
+* * 30
++8 1661 0
+cfl=(15)
+cfn=(114)
+calls=0 -100184 261
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(183) runtime.(*gcWork).init
++1872 144 0
+cfl=(19)
+cfn=(184) runtime.getempty
+calls=0 +3560 435
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(164)
++808 258 0
+cfl=(19)
+cfn=(183)
+calls=0 * 144
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(163)
++556 351 0
+cfl=(19)
+cfn=(70)
+calls=0 +1829 501
+* * 10
+cfl=(19)
+cfn=(70)
+calls=0 +1872 504
+* * 10
++92 361 0
+cfl=(26)
+cfn=(167)
+calls=0 -23812 746
+* * 1260
+cfl=(26)
+cfn=(167)
+calls=0 -24083 698
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(184)
++232 435 0
+cfl=(19)
+cfn=(185) runtime.getempty.func1
+calls=0 +644 436
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(185)
++412 436 0
+cfl=(17)
+cfn=(186) runtime.(*mheap).allocManual
+calls=0 +5488 1043
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(187) runtime.putfull
++208 478 0
+cfl=(23)
+cfn=(48)
+calls=0 -107311 30
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(70)
++372 504 0
+cfl=(19)
+cfn=(187)
+calls=0 * 478
+* * 10
+
+ob=(1)
+fl=(19)
+fn=(177)
++420 530 0
+cfl=(15)
+cfn=(114)
+calls=0 +420 261
+* * 20
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 20
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -104971 273
+* * 10
+cfl=(15)
+cfn=(30)
+calls=0 -104783 325
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(188) runtime.(*mheap).reclaim
++2272 885 0
+cfl=(17)
+cfn=(189) runtime.(*mheap).reclaimChunk
+calls=0 +3508 952
+* * 10
+cfl=(17)
+cfn=(189)
+calls=0 +3540 956
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(189)
++1236 952 0
+cfl=(15)
+cfn=(114)
+calls=0 +1236 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -108392 314
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(189)
++32 956 0
+cfl=(15)
+cfn=(111)
+calls=0 +32 152
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -109951 155
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(133)
++300 1011 0
+cfl=(37)
+cfn=(139)
+calls=0 +324888 294
+* * 20
+
+ob=(1)
+fl=(17)
+fn=(190) runtime.(*mheap).alloc.func1
++136 1015 0
+cfl=(17)
+cfn=(188)
+calls=0 -1568 885
+* * 20
++20 1017 0
+cfl=(17)
+cfn=(191) runtime.(*mheap).allocSpan
+calls=0 +2048 1404
+* * 1450
+cfl=(17)
+cfn=(191)
+calls=0 +1036 1244
+* * 50
+cfl=(17)
+cfn=(191)
+calls=0 +1228 1263
+* * 20
+cfl=(17)
+cfn=(191)
+calls=0 +1936 1393
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(186)
++80 1043 0
+cfl=(17)
+cfn=(191)
+calls=0 +2028 1404
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(191)
++936 1244 0
+cfl=(15)
+cfn=(111)
+calls=0 +936 152
+* * 50
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 50
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -110872 220
+* * 50
+
+ob=(1)
+fl=(17)
+fn=(191)
++192 1263 0
+cfl=(15)
+cfn=(111)
+calls=0 +192 152
+* * 20
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 20
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -111064 220
+* * 20
+
+ob=(1)
+fl=(17)
+fn=(191)
++708 1393 0
+cfl=(17)
+cfn=(192) runtime.(*mheap).initSpan
+calls=0 +1788 1487
+* * 10
++112 1404 0
+cfl=(51)
+cfn=(193) runtime.sysUsed
+calls=0 +112 85
+* * 1460
+
+ob=(1)
+fl=(51)
+fn=(193)
+* 85 0
+cfl=(52)
+cfn=(194) runtime.sysUsedOS
+calls=0 * 33
+* * 1460
+
+ob=(1)
+fl=(52)
+fn=(194)
+* 33 0
+cfl=(1)
+cfn=(5)
+calls=0 +207320 284
+* * 1460
+
+ob=(1)
+fl=(17)
+fn=(192)
++968 1487 0
+cfl=(17)
+cfn=(178)
+calls=0 +11376 2943
+* * 10
+
+ob=(1)
+fl=(17)
+fn=(182)
++2180 1747 0
+cfl=(53) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/mpagealloc.go
+cfn=(195) runtime.(*pageAlloc).free
+calls=0 +18544 972
+* * 30
+
+ob=(1)
+fl=(17)
+fn=(178)
++7905 2927 0
+cfl=(17)
+cfn=(71)
+calls=0 +7905 2906
+* * 10
++323 2943 0
+cfl=(17)
+cfn=(72)
+calls=0 +1148 3029
+* * 10
+
+ob=(1)
+fl=(53)
+fn=(196) runtime.(*pageAlloc).update
++2696 500 0
+cfl=(29)
+cfn=(73)
+calls=0 +14009 154
+* * 10
+cfl=(29)
+cfn=(73)
+calls=0 +14101 168
+* * 10
+cfl=(29)
+cfn=(73)
+calls=0 +14117 169
+* * 10
+
+ob=(1)
+fl=(53)
+fn=(195)
++5440 972 0
+cfl=(53)
+cfn=(196)
+calls=0 * 500
+* * 30
+
+ob=(1)
+fl=(45)
+fn=(125)
++9400 447 0
+cfl=(49)
+cfn=(197) runtime.callers
+calls=0 +299244 1097
+* * 10
+
+ob=(1)
+fl=(30)
+fn=(179)
++14896 140 0
+cfl=(15)
+cfn=(114)
+calls=0 +14896 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -154763 275
+* * 10
+
+ob=(1)
+fl=(30)
+fn=(75)
++185 162 0
+cfl=(25)
+cfn=(74)
+calls=0 +185 359
+* * 10
+
+ob=(1)
+fl=(30)
+fn=(198) runtime.(*atomicHeadTailIndex).cas
++140 371 0
+cfl=(25)
+cfn=(76)
+calls=0 +140 325
+* * 10
+
+ob=(1)
+fl=(30)
+fn=(75)
+* 177 0
+cfl=(30)
+cfn=(198)
+calls=0 * 371
+* * 10
+
+ob=(1)
+fl=(25)
+fn=(199) internal/runtime/atomic.(*Pointer[go.shape.struct { runtime.spanSetBlockHeader2; runtime.spans [512]runtime.atomicMSpanPointer }]).Load
++76 526 0
+cfl=(25)
+cfn=(77)
+calls=0 +76 466
+* * 10
+
+ob=(1)
+fl=(30)
+fn=(75)
+* 197 0
+cfl=(25)
+cfn=(199)
+calls=0 * 526
+* * 10
+
+ob=(1)
+fl=(12)
+fn=(126)
++5447 180 0
+cfl=(37)
+cfn=(139)
+calls=0 +278195 294
+* * 100
+cfl=(12)
+cfn=(200) runtime.wbBufFlush.func1
+calls=0 +232655 181
+* * 10
+
+ob=(1)
+fl=(12)
+fn=(26)
++256 243 0
+cfl=(2)
+cfn=(12)
+calls=0 +240929 1323
+* * 50
+cfl=(2)
+cfn=(12)
+calls=0 +240853 1319
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +240857 1319
+* * 10
+cfl=(2)
+cfn=(12)
+calls=0 +241113 1351
+* * 10
++61 250 0
+cfl=(2)
+cfn=(79)
+calls=0 +61 1217
+* * 10
+
+ob=(1)
+fl=(54) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/netpoll_kqueue.go
+fn=(201) runtime.netpoll
++4415 110 0
+cfl=(1)
+cfn=(1)
+calls=0 +158359 498
+* * 3060
+
+ob=(1)
+fl=(42)
+fn=(108)
++1352 72 0
+cfl=(1)
+cfn=(3)
+calls=0 +154248 547
+* * 2240
+cfl=(1)
+cfn=(3)
+calls=0 +154249 548
+* * 10
++112 66 0
+cfl=(1)
+cfn=(8)
+calls=0 +152960 557
+* * 360
+
+ob=(1)
+fl=(42)
+fn=(106)
++180 82 0
+cfl=(1)
+cfn=(88)
+calls=0 +152592 519
+* * 10
++36 85 0
+cfl=(1)
+cfn=(7)
+calls=0 +152732 568
+* * 840
++12 87 0
+cfl=(1)
+cfn=(16)
+calls=0 +152440 528
+* * 60
+
+ob=(1)
+fl=(48)
+fn=(155)
++17176 232 0
+cfl=(55) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/signal_unix.go
+cfn=(202) runtime.preemptM
+calls=0 +116832 385
+* * 200
+
+ob=(1)
+fl=(8)
+fn=(203) runtime.(*m).clearAllpSnapshot
++12532 1095 0
+cfl=(37)
+cfn=(93)
+calls=0 +247037 1315
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(80)
++2472 1304 0
+cfl=(42)
+cfn=(113)
+calls=0 +2472 363
+* * 20
+
+ob=(1)
+fl=(42)
+fn=(113)
+* 363 0
+cfl=(1)
+cfn=(6)
+calls=0 +119300 333
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(137)
++2596 1656 0
+cfl=(8)
+cfn=(204) runtime.preemptall
+calls=0 +49612 6478
+* * 50
++588 1690 0
+cfl=(15)
+cfn=(114)
+calls=0 +588 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -202352 314
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(137)
++444 1696 0
+cfl=(41)
+cfn=(110)
+calls=0 -204348 164
+* * 50
+
+ob=(1)
+fl=(8)
+fn=(135)
++152 1768 0
+cfl=(54)
+cfn=(201)
+calls=0 -37500 110
+* * 3030
++224 1783 0
+cfl=(41)
+cfn=(105)
+calls=0 -206056 42
+* * 30
++360 1825 0
+cfl=(8)
+cfn=(205) runtime.wakep
+calls=0 +206032 3248
+* * 60
+
+ob=(1)
+fl=(8)
+fn=(81)
++1564 2152 0
+cfl=(15)
+cfn=(111)
+calls=0 +1564 152
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -206072 220
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(81)
++164 2165 0
+cfl=(8)
+cfn=(204)
+calls=0 +43684 6478
+* * 330
++112 2175 0
+cfl=(46)
+cfn=(206) runtime.gcMarkTermination.func4
+calls=0 +183604 1230
+* * 10
+cfl=(46)
+cfn=(207) runtime.gcMarkDone.func1
+calls=0 +183996 917
+* * 10
++64 2181 0
+cfl=(15)
+cfn=(114)
+calls=0 +64 261
+* * 40
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 40
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -205436 314
+* * 40
+
+ob=(1)
+fl=(8)
+fn=(81)
++656 2214 0
+cfl=(41)
+cfn=(110)
+calls=0 -207432 164
+* * 310
++156 2232 0
+cfl=(15)
+cfn=(114)
+calls=0 +156 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -206171 322
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
++276 152 0
+cfl=(43)
+cfn=(112)
+calls=0 +276 24
+* * 50
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -207500 220
+* * 50
+
+ob=(1)
+fl=(8)
+fn=(208) runtime.runSafePointFn
+* 2256 0
+cfl=(15)
+cfn=(111)
+calls=0 * 152
+* * 50
++40 2259 0
+cfl=(41)
+cfn=(105)
+calls=0 -209632 42
+* * 130
+
+ob=(1)
+fl=(15)
+fn=(111)
++4656 152 0
+cfl=(43)
+cfn=(112)
+calls=0 +4656 24
+* * 100
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -212196 220
+* * 100
+
+ob=(1)
+fl=(8)
+fn=(209) runtime.stopm
+* 3010 0
+cfl=(15)
+cfn=(111)
+calls=0 * 152
+* * 100
+
+ob=(1)
+fl=(8)
+fn=(210) runtime.mPark
++56 1974 0
+cfl=(41)
+cfn=(107)
+calls=0 -214096 62
+* * 2220
+
+ob=(1)
+fl=(8)
+fn=(209)
+* 3013 0
+cfl=(8)
+cfn=(210)
+calls=0 * 1974
+* * 2220
++28 3014 0
+cfl=(8)
+cfn=(211) runtime.acquirep
+calls=0 +32744 6023
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(212) runtime.startm
++620 3126 0
+cfl=(41)
+cfn=(105)
+calls=0 -214412 42
+* * 680
+
+ob=(1)
+fl=(8)
+fn=(213) runtime.gcstopm
++2208 3316 0
+cfl=(15)
+cfn=(111)
+calls=0 +2208 152
+* * 20
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 20
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -215108 220
+* * 10
+cfl=(15)
+cfn=(49)
+calls=0 -214768 250
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(213)
++92 3324 0
+cfl=(8)
+cfn=(209)
+calls=0 -2856 3013
+* * 70
+cfl=(8)
+cfn=(209)
+calls=0 -2828 3014
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(214) runtime.findRunnable
++660 3396 0
+cfl=(8)
+cfn=(208)
+calls=0 -7660 2259
+* * 110
+cfl=(8)
+cfn=(208)
+calls=0 -7700 2256
+* * 50
++24 3403 0
+cfl=(35)
+cfn=(90)
+calls=0 +111268 1017
+* * 20
+cfl=(35)
+cfn=(90)
+calls=0 +111225 1010
+* * 10
+cfl=(35)
+cfn=(90)
+calls=0 +111241 1011
+* * 10
++108 3421 0
+cfl=(26)
+cfn=(169)
+calls=0 -135436 764
+* * 20
+cfl=(26)
+cfn=(169)
+calls=0 -134748 845
+* * 10
++648 3392 0
+cfl=(8)
+cfn=(213)
+calls=0 -792 3324
+* * 90
+cfl=(8)
+cfn=(213)
+calls=0 -884 3316
+* * 20
++64 3463 0
+cfl=(15)
+cfn=(111)
+calls=0 +64 152
+* * 30
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 30
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -216704 220
+* * 30
+
+ob=(1)
+fl=(8)
+fn=(214)
++472 3510 0
+cfl=(8)
+cfn=(20)
+calls=0 +5748 3872
+* * 100
+cfl=(8)
+cfn=(20)
+calls=0 +5721 3873
+* * 40
+cfl=(8)
+cfn=(20)
+calls=0 +5461 3830
+* * 20
+cfl=(8)
+cfn=(20)
+calls=0 +5053 3822
+* * 10
+cfl=(8)
+cfn=(20)
+calls=0 +5257 3825
+* * 10
+cfl=(8)
+cfn=(20)
+calls=0 +5373 3831
+* * 10
++384 3582 0
+cfl=(15)
+cfn=(111)
+calls=0 +384 152
+* * 380
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 380
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -217560 220
+* * 380
+
+ob=(1)
+fl=(8)
+fn=(214)
++292 3608 0
+cfl=(15)
+cfn=(114)
+calls=0 +292 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -216807 319
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(214)
++108 3664 0
+cfl=(15)
+cfn=(111)
+calls=0 +108 152
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -217960 220
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(214)
++188 3691 0
+cfl=(8)
+cfn=(215) runtime.checkIdleGCNoP
+calls=0 +5952 3982
+* * 10
++292 3742 0
+cfl=(54)
+cfn=(201)
+calls=0 -51876 110
+* * 30
++2280 3784 0
+cfl=(8)
+cfn=(209)
+calls=0 -6188 3013
+* * 2150
+cfl=(8)
+cfn=(209)
+calls=0 -6244 3010
+* * 100
+
+ob=(1)
+fl=(8)
+fn=(20)
++1732 3872 0
+cfl=(8)
+cfn=(216) runtime.runqsteal
+calls=0 +36040 7299
+* * 100
+
+ob=(1)
+fl=(8)
+fn=(215)
++1460 3982 0
+cfl=(15)
+cfn=(114)
+calls=0 +1460 261
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(114)
+* 261 0
+cfl=(43)
+cfn=(115)
+calls=0 * 35
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(115)
+* 35 0
+cfl=(15)
+cfn=(30)
+calls=0 -222936 314
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(217) runtime.resetspinning
++436 4022 0
+cfl=(8)
+cfn=(205)
+calls=0 +186268 3248
+* * 250
+cfl=(8)
+cfn=(205)
+calls=0 +185949 3220
+* * 10
+cfl=(8)
+cfn=(205)
+calls=0 +186072 3232
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(218) runtime.schedule
++1228 4152 0
+cfl=(8)
+cfn=(214)
+calls=0 -3628 3784
+* * 2250
+cfl=(8)
+cfn=(214)
+calls=0 -6788 3582
+* * 380
+cfl=(8)
+cfn=(214)
+calls=0 -7172 3510
+* * 190
+cfl=(8)
+cfn=(214)
+calls=0 -8488 3396
+* * 160
+cfl=(8)
+cfn=(214)
+calls=0 -7708 3392
+* * 110
+cfl=(8)
+cfn=(214)
+calls=0 -8464 3403
+* * 40
+cfl=(8)
+cfn=(214)
+calls=0 -8356 3421
+* * 30
+cfl=(8)
+cfn=(214)
+calls=0 -7644 3463
+* * 30
+cfl=(8)
+cfn=(214)
+calls=0 -5908 3742
+* * 30
+cfl=(8)
+cfn=(214)
+calls=0 -6496 3608
+* * 10
+cfl=(8)
+cfn=(214)
+calls=0 -6388 3664
+* * 10
+cfl=(8)
+cfn=(214)
+calls=0 -6200 3691
+* * 10
++20 4157 0
+cfl=(8)
+cfn=(203)
+calls=0 -27904 1095
+* * 10
++92 4175 0
+cfl=(8)
+cfn=(217)
+calls=0 -1248 4022
+* * 270
++260 4197 0
+cfl=(8)
+cfn=(205)
+calls=0 +184492 3248
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(219) runtime.park_m
++872 4280 0
+cfl=(8)
+cfn=(218)
+calls=0 -372 4152
+* * 2990
+cfl=(8)
+cfn=(218)
+calls=0 -260 4175
+* * 260
+cfl=(8)
+cfn=(218)
+calls=0 * 4197
+* * 20
+cfl=(8)
+cfn=(218)
+calls=0 -352 4157
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(220) runtime.dropg
++381 4220 0
+cfl=(32)
+cfn=(221) runtime.setGNoWB
+calls=0 +381 260
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(222) runtime.goschedImpl
+* 4305 0
+cfl=(8)
+cfn=(220)
+calls=0 * 4220
+* * 10
+
+ob=(1)
+fl=(32)
+fn=(221)
+* 260 0
+cfl=(32)
+cfn=(82)
+calls=0 * 242
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(222)
++23 4306 0
+cfl=(15)
+cfn=(111)
+calls=0 +23 152
+* * 590
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 590
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -227224 220
+* * 560
+cfl=(15)
+cfn=(49)
+calls=0 -226884 250
+* * 20
+cfl=(15)
+cfn=(49)
+calls=0 -227168 216
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(222)
++128 4311 0
+cfl=(8)
+cfn=(205)
+calls=0 +182956 3248
+* * 350
++4 4314 0
+cfl=(8)
+cfn=(218)
+calls=0 -1776 4152
+* * 210
+cfl=(8)
+cfn=(218)
+calls=0 -1664 4175
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(223) runtime.preemptPark
++900 4390 0
+cfl=(8)
+cfn=(218)
+calls=0 -1780 4152
+* * 50
+
+ob=(1)
+fl=(8)
+fn=(211)
++16740 6023 0
+cfl=(44)
+cfn=(131)
+calls=0 -206796 338
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(204)
++4760 6478 0
+cfl=(8)
+cfn=(168)
+calls=0 +4928 6516
+* * 380
+
+ob=(1)
+fl=(8)
+fn=(168)
++168 6516 0
+cfl=(55)
+cfn=(202)
+calls=0 +35040 385
+* * 1640
+
+ob=(1)
+fl=(8)
+fn=(83)
++6444 7264 0
+cfl=(1)
+cfn=(6)
+calls=0 +69520 333
+* * 90
+
+ob=(1)
+fl=(8)
+fn=(216)
++392 7299 0
+cfl=(8)
+cfn=(83)
+calls=0 * 7264
+* * 90
+cfl=(8)
+cfn=(83)
+calls=0 +201 7279
+* * 10
+
+ob=(1)
+fl=(55)
+fn=(202)
++28036 385 0
+cfl=(42)
+cfn=(224) runtime.signalM
+calls=0 +28036 473
+* * 1840
+
+ob=(1)
+fl=(42)
+fn=(224)
+* 473 0
+cfl=(1)
+cfn=(4)
+calls=0 +34168 208
+* * 1840
+
+ob=(1)
+fl=(33)
+fn=(84)
++14656 1122 0
+cfl=(8)
+cfn=(223)
+calls=0 -56540 4390
+* * 50
+
+ob=(1)
+fl=(8)
+fn=(225) runtime.gopreempt_m
++16 4331 0
+cfl=(8)
+cfn=(222)
+calls=0 -72228 4306
+* * 590
+cfl=(8)
+cfn=(222)
+calls=0 -72100 4311
+* * 350
+cfl=(8)
+cfn=(222)
+calls=0 -72096 4314
+* * 220
+cfl=(8)
+cfn=(222)
+calls=0 -72251 4305
+* * 10
+
+ob=(1)
+fl=(33)
+fn=(84)
+* 1126 0
+cfl=(8)
+cfn=(225)
+calls=0 * 4331
+* * 1170
+
+ob=(1)
+fl=(50)
+fn=(162)
++3752 172 0
+cfl=(34)
+cfn=(226) runtime.pcdatavalue
+calls=0 +16440 1236
+* * 10
+
+ob=(1)
+fl=(34)
+fn=(86)
++10577 1057 0
+cfl=(5)
+cfn=(51)
+calls=0 +10577 640
+* * 10
+
+ob=(1)
+fl=(34)
+fn=(227) runtime.funcInfo.entry
++295 894 0
+cfl=(34)
+cfn=(85)
+calls=0 -1196 688
+* * 10
+cfl=(34)
+cfn=(85)
+calls=0 -1176 691
+* * 10
+
+ob=(1)
+fl=(34)
+fn=(86)
+* 1074 0
+cfl=(34)
+cfn=(227)
+calls=0 * 894
+* * 20
++36 1074 0
+cfl=(34)
+cfn=(87)
+calls=0 +2125 1277
+* * 10
+cfl=(34)
+cfn=(87)
+calls=0 +2253 1288
+* * 10
+cfl=(34)
+cfn=(87)
+calls=0 +2297 1293
+* * 10
+
+ob=(1)
+fl=(34)
+fn=(226)
++1780 1236 0
+cfl=(34)
+cfn=(86)
+calls=0 * 1074
+* * 10
+
+ob=(1)
+fl=(34)
+fn=(228) runtime.pcdatavalue1
++124 1244 0
+cfl=(34)
+cfn=(86)
+calls=0 -1780 1074
+* * 10
+
+ob=(1)
+fl=(35)
+fn=(90)
++11053 1010 0
+cfl=(35)
+cfn=(89)
+calls=0 +11053 990
+* * 10
++43 1017 0
+cfl=(47)
+cfn=(147)
+calls=0 +43 33
+* * 20
+
+ob=(1)
+fl=(47)
+fn=(147)
+* 33 0
+cfl=(1)
+cfn=(13)
+calls=0 -7468 368
+* * 20
+
+ob=(1)
+fl=(49)
+fn=(229) runtime.(*unwinder).resolveInternal
++13480 326 0
+cfl=(34)
+cfn=(230) runtime.funcspdelta
+calls=0 +13480 1203
+* * 50
+
+ob=(1)
+fl=(34)
+fn=(230)
+* 1203 0
+cfl=(34)
+cfn=(86)
+calls=0 -26516 1074
+* * 20
+cfl=(34)
+cfn=(86)
+calls=0 -26811 1057
+* * 10
+cfl=(34)
+cfn=(86)
+calls=0 -26480 1074
+* * 10
+cfl=(34)
+cfn=(86)
+calls=0 -26279 1098
+* * 10
+
+ob=(1)
+fl=(49)
+fn=(161)
++752 513 0
+cfl=(49)
+cfn=(229)
+calls=0 * 326
+* * 50
+
+ob=(1)
+fl=(49)
+fn=(231) runtime.tracebackPCs
++1340 628 0
+cfl=(56) /Users/michaelseiler/.gvm/gos/go1.25.5/src/runtime/symtabinl.go
+cfn=(232) runtime.newInlineUnwinder
+calls=0 +84004 74
+* * 10
+
+ob=(1)
+fl=(49)
+fn=(233) runtime.callers.func1
++6604 1100 0
+cfl=(49)
+cfn=(231)
+calls=0 * 628
+* * 10
+
+ob=(1)
+fl=(12)
+fn=(200)
++39444 181 0
+cfl=(12)
+cfn=(26)
+calls=0 -187508 243
+* * 60
+cfl=(12)
+cfn=(26)
+calls=0 -187555 230
+* * 30
+cfl=(12)
+cfn=(26)
+calls=0 -187743 195
+* * 10
+cfl=(12)
+cfn=(26)
+calls=0 -187447 250
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(206)
++1092 1230 0
+cfl=(46)
+cfn=(234) runtime.gcMarkTermination.func4.1
+calls=0 +1312 1231
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(234)
++220 1231 0
+cfl=(15)
+cfn=(111)
+calls=0 +220 152
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
+* 152 0
+cfl=(43)
+cfn=(112)
+calls=0 * 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -390060 220
+* * 10
+
+ob=(1)
+fl=(46)
+fn=(207)
++172 917 0
+cfl=(12)
+cfn=(26)
+calls=0 -228264 243
+* * 10
+
+ob=(1)
+fl=(16)
+fn=(42)
++9480 1048 0
+cfl=(16)
+cfn=(123)
+calls=0 -380172 1712
+* * 60
++52 1066 0
+cfl=(16)
+cfn=(121)
+calls=0 -392256 1382
+* * 10
++8 1068 0
+cfl=(16)
+cfn=(50)
+calls=0 -391452 1476
+* * 60
+cfl=(16)
+cfn=(50)
+calls=0 -391388 1480
+* * 30
+cfl=(16)
+cfn=(50)
+calls=0 -391495 1474
+* * 10
+cfl=(16)
+cfn=(50)
+calls=0 -391291 1494
+* * 10
+cfl=(16)
+cfn=(50)
+calls=0 -391192 1523
+* * 10
+cfl=(16)
+cfn=(50)
+calls=0 -391139 1526
+* * 10
+cfl=(16)
+cfn=(50)
+calls=0 -391135 1526
+* * 10
++24 1059 0
+cfl=(16)
+cfn=(31)
+calls=0 -393147 1268
+* * 60
+cfl=(16)
+cfn=(31)
+calls=0 -393507 1266
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -393311 1291
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -393283 1293
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -393251 1293
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -393163 1293
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -392980 1315
+* * 20
+cfl=(16)
+cfn=(31)
+calls=0 -393495 1266
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393467 1268
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393351 1290
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393291 1292
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393227 1293
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393071 1297
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -393015 1310
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -392951 1337
+* * 10
+cfl=(16)
+cfn=(31)
+calls=0 -392847 1344
+* * 10
+
+ob=(1)
+fl=(2)
+fn=(12)
++2645 1320 0
+cfl=(17)
+cfn=(43)
+calls=0 +2645 722
+* * 20
+
+ob=(1)
+fl=(8)
+fn=(205)
++7420 3220 0
+cfl=(25)
+cfn=(91)
+calls=0 +7420 37
+* * 10
+
+ob=(1)
+fl=(15)
+fn=(111)
++123 152 0
+cfl=(43)
+cfn=(112)
+calls=0 +123 24
+* * 10
+
+ob=(1)
+fl=(43)
+fn=(112)
+* 24 0
+cfl=(15)
+cfn=(49)
+calls=0 -409984 220
+* * 10
+
+ob=(1)
+fl=(8)
+fn=(205)
+* 3232 0
+cfl=(15)
+cfn=(111)
+calls=0 * 152
+* * 10
++196 3248 0
+cfl=(8)
+cfn=(212)
+calls=0 -197084 3126
+* * 680
+
+ob=(1)
+fl=(20)
+fn=(235) runtime.makeslice
++9092 116 0
+cfl=(16)
+cfn=(42)
+calls=0 -10408 1068
+* * 50
+cfl=(16)
+cfn=(42)
+calls=0 -10468 1048
+* * 20
+
+ob=(1)
+fl=(20)
+fn=(44)
++229 208 0
+cfl=(21)
+cfn=(45)
+calls=0 +229 200
+* * 20
++12 213 0
+cfl=(36)
+cfn=(92)
+calls=0 +12 18
+* * 10
++44 213 0
+cfl=(36)
+cfn=(92)
+calls=0 +44 26
+* * 40
+
+ob=(1)
+fl=(36)
+fn=(92)
+* 26 0
+cfl=(9)
+cfn=(21)
+calls=0 * 382
+* * 40
+
+ob=(1)
+fl=(20)
+fn=(44)
++967 272 0
+cfl=(16)
+cfn=(42)
+calls=0 -19785 1068
+* * 90
+cfl=(16)
+cfn=(42)
+calls=0 -19845 1048
+* * 30
+cfl=(16)
+cfn=(42)
+calls=0 -19793 1066
+* * 10
++60 280 0
+cfl=(2)
+cfn=(53)
+calls=0 -405192 502
+* * 50
+cfl=(2)
+cfn=(53)
+calls=0 -405268 498
+* * 40
+cfl=(2)
+cfn=(53)
+calls=0 -405235 502
+* * 10
+cfl=(2)
+cfn=(53)
+calls=0 -405151 505
+* * 10
++36 264 0
+cfl=(16)
+cfn=(42)
+calls=0 -20788 1059
+* * 270
+cfl=(16)
+cfn=(42)
+calls=0 -20859 1054
+* * 20
+cfl=(16)
+cfn=(42)
+calls=0 -20779 1097
+* * 20
+cfl=(16)
+cfn=(42)
+calls=0 -20727 1104
+* * 20
+cfl=(16)
+cfn=(42)
+calls=0 -20915 1032
+* * 10
+cfl=(16)
+cfn=(42)
+calls=0 -20883 1047
+* * 10
+cfl=(16)
+cfn=(42)
+calls=0 -20872 1048
+* * 10
+cfl=(16)
+cfn=(42)
+calls=0 -20787 1059
+* * 10
+cfl=(16)
+cfn=(42)
+calls=0 -20775 1097
+* * 10
+cfl=(16)
+cfn=(42)
+calls=0 -20699 1107
+* * 10
++24 269 0
+cfl=(10)
+cfn=(22)
+calls=0 +24893 12
+* * 10
+cfl=(10)
+cfn=(22)
+calls=0 +24905 20
+* * 10
++24 283 0
+cfl=(13)
+cfn=(27)
+calls=0 +25449 84
+* * 20
+cfl=(13)
+cfn=(27)
+calls=0 +25685 169
+* * 10
+cfl=(13)
+cfn=(27)
+calls=0 +25705 174
+* * 10
+
+ob=(1)
+fl=(56)
+fn=(236) runtime.(*inlineUnwinder).resolveInternal
++4696 82 0
+cfl=(34)
+cfn=(228)
+calls=0 -104636 1244
+* * 10
+
+ob=(1)
+fl=(56)
+fn=(232)
+* 74 0
+cfl=(56)
+cfn=(236)
+calls=0 * 82
+* * 10
+
+ob=(1)
+fl=(49)
+fn=(197)
++5276 1097 0
+cfl=(37)
+cfn=(139)
+calls=0 +8924 294
+* * 10
+
+ob=(1)
+fl=(37)
+fn=(93)
++1596 1340 0
+cfl=(12)
+cfn=(126)
+calls=0 -269100 180
+* * 50
+
+ob=(1)
+fl=(37)
+fn=(237) runtime.mcall
++1904 241 0
+cfl=(8)
+cfn=(219)
+calls=0 -205416 4280
+* * 3280
+
+ob=(1)
+fl=(37)
+fn=(139)
++148 294 0
+cfl=(46)
+cfn=(134)
+calls=0 -385996 821
+* * 2920
+cfl=(46)
+cfn=(149)
+calls=0 -378052 1541
+* * 2110
+cfl=(17)
+cfn=(190)
+calls=0 -324284 1017
+* * 1530
+cfl=(46)
+cfn=(149)
+calls=0 -378096 1560
+* * 680
+cfl=(8)
+cfn=(143)
+calls=0 -384372 2134
+* * 650
+cfl=(46)
+cfn=(149)
+calls=0 -377876 1556
+* * 330
+cfl=(46)
+cfn=(145)
+calls=0 -380216 1197
+* * 200
+cfl=(3)
+cfn=(157)
+calls=0 -366500 581
+* * 180
+cfl=(46)
+cfn=(142)
+calls=0 -384476 955
+* * 100
+cfl=(12)
+cfn=(200)
+calls=0 -45392 181
+* * 100
+cfl=(8)
+cfn=(144)
+calls=0 -380308 2134
+* * 80
+cfl=(17)
+cfn=(181)
+calls=0 -333276 1643
+* * 50
+cfl=(27)
+cfn=(171)
+calls=0 -346624 683
+* * 30
+cfl=(17)
+cfn=(181)
+calls=0 -333260 1660
+* * 30
+cfl=(17)
+cfn=(190)
+calls=0 -324304 1015
+* * 20
+cfl=(8)
+cfn=(208)
+calls=0 -226600 2259
+* * 20
+cfl=(46)
+cfn=(136)
+calls=0 -385852 744
+* * 10
+cfl=(46)
+cfn=(141)
+calls=0 -384588 976
+* * 10
+cfl=(17)
+cfn=(181)
+calls=0 -333252 1661
+* * 10
+cfl=(49)
+cfn=(233)
+calls=0 -84836 1100
+* * 10
+
+ob=(1)
+fl=(37)
+fn=(94)
++264 392 0
+cfl=(33)
+cfn=(84)
+calls=0 -134820 1126
+* * 1170
+cfl=(33)
+cfn=(84)
+calls=0 -134836 1122
+* * 50
+
+ob=(1)
+fl=(57) /Users/michaelseiler/.gvm/gos/go1.25.5/src/syscall/zsyscall_darwin_arm64.go
+fn=(238) syscall.pwrite
++79648 1224 0
+cfl=(1)
+cfn=(2)
+calls=0 -8560 61
+* * 3060
+
+ob=(1)
+fl=(57)
+fn=(239) syscall.Fstat
++2824 1897 0
+cfl=(1)
+cfn=(18)
+calls=0 -88432 28
+* * 50
+
+ob=(1)
+fl=(58) /Users/michaelseiler/.gvm/gos/go1.25.5/src/internal/poll/fd_unix.go
+fn=(240) internal/poll.(*FD).Pwrite
++111124 418 0
+cfl=(59) /Users/michaelseiler/.gvm/gos/go1.25.5/src/syscall/syscall_unix.go
+cfn=(241) syscall.Pwrite
+calls=0 +111124 248
+* * 3060
+
+ob=(1)
+fl=(59)
+fn=(241)
+* 248 0
+cfl=(57)
+cfn=(238)
+calls=0 -113948 1224
+* * 3060
+
+ob=(1)
+fl=(58)
+fn=(242) internal/poll.(*FD).Fstat
++748 644 0
+cfl=(60) /Users/michaelseiler/.gvm/gos/go1.25.5/src/internal/poll/fd_posix.go
+cfn=(243) internal/poll.ignoringEINTR
+calls=0 +748 74
+* * 50
+
+ob=(1)
+fl=(58)
+fn=(244) internal/poll.(*FD).Fstat.func1
+* 645 0
+cfl=(57)
+cfn=(239)
+calls=0 -111872 1897
+* * 50
+
+ob=(1)
+fl=(60)
+fn=(243)
+* 74 0
+cfl=(58)
+cfn=(244)
+calls=0 * 645
+* * 50
+
+ob=(1)
+fl=(61) /Users/michaelseiler/.gvm/gos/go1.25.5/src/os/file.go
+fn=(245) os.(*File).WriteAt
++15352 252 0
+cfl=(62) /Users/michaelseiler/.gvm/gos/go1.25.5/src/os/file_posix.go
+cfn=(246) os.(*File).pwrite
+calls=0 +15352 54
+* * 3060
+
+ob=(1)
+fl=(62)
+fn=(246)
+* 54 0
+cfl=(58)
+cfn=(240)
+calls=0 -16100 418
+* * 3060
+
+ob=(1)
+fl=(63) /Users/michaelseiler/.gvm/gos/go1.25.5/src/os/stat_unix.go
+fn=(247) os.(*File).Stat
++18172 20 0
+cfl=(58)
+cfn=(242)
+calls=0 -15352 644
+* * 50
+
+ob=(1)
+fl=(64) /Users/michaelseiler/.gvm/gos/go1.25.5/src/testing/benchmark.go
+fn=(248) testing.(*B).runN
++321320 219 0
+cfl=(65) /Users/michaelseiler/dev/snissn/gomap/TreeDB/bench_test.go
+cfn=(249) treedb.BenchmarkSet150B.func1
+calls=0 +4152552 63
+* * 4920
+
+ob=(1)
+fl=(64)
+fn=(250) testing.(*B).launch
++2832 354 0
+cfl=(64)
+cfn=(248)
+calls=0 * 219
+* * 4920
+
+ob=(1)
+fl=(66) /Users/michaelseiler/.gvm/gos/go1.25.5/src/hash/crc32/crc32.go
+fn=(251) hash/crc32.update
++547205 204 0
+cfl=(11)
+cfn=(23)
+calls=0 -540003 7
+* * 10
++47 205 0
+cfl=(67) /Users/michaelseiler/.gvm/gos/go1.25.5/src/hash/crc32/crc32_arm64.go
+cfn=(252) hash/crc32.archUpdateCastagnoli
+calls=0 +467 31
+* * 50
+
+ob=(1)
+fl=(67)
+fn=(252)
++420 31 0
+cfl=(7)
+cfn=(19)
+calls=0 +1141 16
+* * 50
+
+ob=(1)
+fl=(66)
+fn=(253) hash/crc32.Checksum
++95788 239 0
+cfl=(66)
+cfn=(254) hash/crc32.Update
+calls=0 +95788 220
+* * 20
+
+ob=(1)
+fl=(66)
+fn=(254)
+* 220 0
+cfl=(66)
+cfn=(251)
+calls=0 -96208 205
+* * 20
+
+ob=(1)
+fl=(68) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/crc/crc.go
+fn=(255) treedb/internal/crc.Checksum
+* 17 0
+cfl=(66)
+cfn=(253)
+calls=0 * 239
+* * 20
+
+ob=(1)
+fl=(68)
+fn=(256) treedb/internal/crc.Verify
+* 22 0
+cfl=(68)
+cfn=(255)
+calls=0 * 17
+* * 20
+
+ob=(1)
+fl=(66)
+fn=(253)
++176 239 0
+cfl=(66)
+cfn=(254)
+calls=0 +176 220
+* * 40
+
+ob=(1)
+fl=(66)
+fn=(254)
+* 220 0
+cfl=(66)
+cfn=(251)
+calls=0 -96384 205
+* * 30
+cfl=(66)
+cfn=(251)
+calls=0 -96431 204
+* * 10
+
+ob=(1)
+fl=(68)
+fn=(255)
+* 17 0
+cfl=(66)
+cfn=(253)
+calls=0 * 239
+* * 40
+
+ob=(1)
+fl=(69) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/page/header.go
+fn=(257) treedb/internal/page.(*Header).SetBodyCRC
+* 65 0
+cfl=(68)
+cfn=(255)
+calls=0 * 17
+* * 40
+
+ob=(1)
+fl=(6)
+fn=(258) treedb/internal/page.(*InternalPage).Search
++852 52 0
+cfl=(14)
+cfn=(259) treedb/internal/page.binarySearchOffsets
+calls=0 +12020 134
+* * 210
+
+ob=(1)
+fl=(6)
+fn=(96)
++116 61 0
+cfl=(6)
+cfn=(258)
+calls=0 * 52
+* * 210
++388 87 0
+cfl=(6)
+cfn=(28)
+calls=0 +2320 168
+* * 580
+cfl=(6)
+cfn=(28)
+calls=0 +2112 164
+* * 90
+cfl=(6)
+cfn=(28)
+calls=0 +1924 158
+* * 70
+cfl=(6)
+cfn=(28)
+calls=0 +2432 168
+* * 70
+cfl=(6)
+cfn=(28)
+calls=0 +2321 168
+* * 30
+cfl=(6)
+cfn=(28)
+calls=0 +1977 168
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2021 160
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2061 160
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2349 168
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2385 168
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2389 168
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +2409 168
+* * 20
+cfl=(6)
+cfn=(28)
+calls=0 +1989 160
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +1993 159
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +2129 164
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +2197 164
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +2368 168
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +2369 168
+* * 10
+cfl=(6)
+cfn=(28)
+calls=0 +2509 170
+* * 10
++68 91 0
+cfl=(20)
+cfn=(44)
+calls=0 -1211040 272
+* * 130
+cfl=(20)
+cfn=(44)
+calls=0 -1210980 280
+* * 110
+cfl=(20)
+cfn=(44)
+calls=0 -1210896 283
+* * 20
++352 94 0
+cfl=(6)
+cfn=(99)
+calls=0 +2756 201
+* * 70
+cfl=(6)
+cfn=(99)
+calls=0 +2540 190
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2585 196
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2621 198
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2637 201
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2649 198
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2725 196
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2825 202
+* * 10
+cfl=(6)
+cfn=(99)
+calls=0 +2853 202
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(28)
++1116 158 0
+cfl=(20)
+cfn=(235)
+calls=0 -1212712 116
+* * 70
++97 160 0
+cfl=(14)
+cfn=(29)
+calls=0 +97 42
+* * 20
++40 160 0
+cfl=(14)
+cfn=(29)
+calls=0 +40 45
+* * 20
++51 164 0
+cfl=(6)
+cfn=(46)
+calls=0 +564 175
+* * 20
+cfl=(6)
+cfn=(46)
+calls=0 +596 176
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +608 177
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +664 177
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +696 180
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +740 180
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +796 184
+* * 10
+cfl=(6)
+cfn=(46)
+calls=0 +808 184
+* * 10
++17 164 0
+cfl=(6)
+cfn=(97)
+calls=0 +17 231
+* * 10
++68 164 0
+cfl=(6)
+cfn=(97)
+calls=0 +68 234
+* * 10
++123 168 0
+cfl=(20)
+cfn=(44)
+calls=0 -1212753 264
+* * 390
+cfl=(20)
+cfn=(44)
+calls=0 -1213816 213
+* * 40
+cfl=(20)
+cfn=(44)
+calls=0 -1213936 194
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1213872 208
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1212904 258
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1212876 285
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1212729 269
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1212705 283
+* * 20
+cfl=(20)
+cfn=(44)
+calls=0 -1213860 213
+* * 10
+cfl=(20)
+cfn=(44)
+calls=0 -1212728 283
+* * 10
+cfl=(20)
+cfn=(44)
+calls=0 -1212704 285
+* * 10
++48 168 0
+cfl=(13)
+cfn=(27)
+calls=0 -1187495 53
+* * 10
++64 168 0
+cfl=(37)
+cfn=(93)
+calls=0 -1201308 1340
+* * 50
+cfl=(37)
+cfn=(93)
+calls=0 -1201395 1303
+* * 10
+cfl=(37)
+cfn=(93)
+calls=0 -1201355 1321
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(46)
++225 176 0
+cfl=(6)
+cfn=(98)
+calls=0 +225 42
+* * 10
++12 177 0
+cfl=(14)
+cfn=(29)
+calls=0 +12 37
+* * 10
++56 177 0
+cfl=(14)
+cfn=(29)
+calls=0 +56 45
+* * 10
++32 180 0
+cfl=(14)
+cfn=(29)
+calls=0 +32 37
+* * 10
++44 180 0
+cfl=(14)
+cfn=(29)
+calls=0 +44 45
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(99)
++195 190 0
+cfl=(10)
+cfn=(22)
+calls=0 -1188060 180
+* * 10
++97 201 0
+cfl=(11)
+cfn=(23)
+calls=0 -1187603 7
+* * 10
++119 201 0
+cfl=(6)
+cfn=(260) treedb/internal/page.encodeInternalEntry
+calls=0 +119 227
+* * 70
+
+ob=(1)
+fl=(6)
+fn=(260)
+* 227 0
+cfl=(13)
+cfn=(27)
+calls=0 -1188443 30
+* * 20
+cfl=(13)
+cfn=(27)
+calls=0 -1188387 53
+* * 20
+cfl=(13)
+cfn=(27)
+calls=0 -1188439 33
+* * 10
+cfl=(13)
+cfn=(27)
+calls=0 -1188367 58
+* * 10
+cfl=(13)
+cfn=(27)
+calls=0 -1188359 60
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(99)
++97 202 0
+cfl=(14)
+cfn=(261) treedb/internal/page.setDirEntry
+calls=0 +97 57
+* * 10
+
+ob=(1)
+fl=(14)
+fn=(261)
+* 57 0
+cfl=(22)
+cfn=(100)
+calls=0 * 77
+* * 10
+
+ob=(1)
+fl=(6)
+fn=(17)
++284 215 0
+cfl=(14)
+cfn=(29)
+calls=0 +284 40
+* * 10
++4 215 0
+cfl=(14)
+cfn=(29)
+calls=0 +4 42
+* * 30
++20 215 0
+cfl=(14)
+cfn=(29)
+calls=0 +20 45
+* * 10
++8 215 0
+cfl=(14)
+cfn=(29)
+calls=0 +8 45
+* * 30
++16 215 0
+cfl=(14)
+cfn=(29)
+calls=0 +16 45
+* * 20
+
+ob=(1)
+fl=(14)
+fn=(29)
+* 45 0
+cfl=(22)
+cfn=(47)
+calls=0 * 71
+* * 20
+
+ob=(1)
+fl=(38)
+fn=(262) treedb/internal/page.InitLeafPage
++371 26 0
+cfl=(14)
+cfn=(263) treedb/internal/page.initSlottedPage
+calls=0 +6979 117
+* * 10
+
+ob=(1)
+fl=(38)
+fn=(264) treedb/internal/page.(*LeafPage).Search
++752 60 0
+cfl=(14)
+cfn=(259)
+calls=0 +7040 134
+* * 10
+
+ob=(1)
+fl=(38)
+fn=(265) treedb/internal/page.(*LeafPage).Set
++148 68 0
+cfl=(38)
+cfn=(264)
+calls=0 * 60
+* * 10
++1120 123 0
+cfl=(14)
+cfn=(102)
+calls=0 +5345 73
+* * 10
+
+ob=(1)
+fl=(14)
+fn=(263)
++4588 117 0
+cfl=(10)
+cfn=(22)
+calls=0 -1191295 179
+* * 10
+
+ob=(1)
+fl=(14)
+fn=(259)
++432 134 0
+cfl=(6)
+cfn=(17)
+calls=0 -7007 215
+* * 60
+cfl=(6)
+cfn=(17)
+calls=0 -7023 215
+* * 30
+cfl=(6)
+cfn=(17)
+calls=0 -6995 215
+* * 30
+cfl=(6)
+cfn=(17)
+calls=0 -7055 214
+* * 20
+cfl=(6)
+cfn=(17)
+calls=0 -7043 215
+* * 20
+cfl=(6)
+cfn=(17)
+calls=0 -6979 215
+* * 20
+cfl=(6)
+cfn=(17)
+calls=0 -7027 215
+* * 10
+cfl=(6)
+cfn=(17)
+calls=0 -7003 215
+* * 10
+cfl=(6)
+cfn=(17)
+calls=0 -6959 214
+* * 10
+cfl=(38)
+cfn=(266) treedb/internal/page.(*LeafPage).keyAt
+calls=0 +972 235
+* * 10
+
+ob=(1)
+fl=(38)
+fn=(266)
++540 235 0
+cfl=(38)
+cfn=(101)
+calls=0 -2111 290
+* * 10
+
+ob=(1)
+fl=(70) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/slab/manager.go
+fn=(267) treedb/internal/slab.(*SlabManager).AppendLarge
++4636 254 0
+cfl=(61)
+cfn=(245)
+calls=0 -998520 252
+* * 3060
+
+ob=(1)
+fl=(69)
+fn=(268) treedb/internal/page.(*Header).VerifyBodyCRC
++8980 70 0
+cfl=(68)
+cfn=(256)
+calls=0 -17372 22
+* * 20
+
+ob=(1)
+fl=(71) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/pager/freelist.go
+fn=(269) treedb/internal/pager.decodeFreelistPage
+* 29 0
+cfl=(69)
+cfn=(268)
+calls=0 * 70
+* * 20
+
+ob=(1)
+fl=(71)
+fn=(270) treedb/internal/pager.encodeFreelistPage
++960 71 0
+cfl=(69)
+cfn=(257)
+calls=0 -26176 65
+* * 20
+
+ob=(1)
+fl=(72) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/pager/pager.go
+fn=(271) treedb/internal/pager.(*Pager).growToPagesLocked
++2588 239 0
+cfl=(72)
+cfn=(272) treedb/internal/pager.(*Pager).preallocate
+calls=0 +7312 451
+* * 50
+
+ob=(1)
+fl=(72)
+fn=(273) treedb/internal/pager.(*Pager).AllocPage
++656 270 0
+cfl=(71)
+cfn=(269)
+calls=0 -3548 29
+* * 10
++88 284 0
+cfl=(71)
+cfn=(270)
+calls=0 -3244 71
+* * 10
++200 292 0
+cfl=(72)
+cfn=(271)
+calls=0 -744 239
+* * 50
+
+ob=(1)
+fl=(72)
+fn=(274) treedb/internal/pager.(*Pager).FreePages
++1056 342 0
+cfl=(71)
+cfn=(269)
+calls=0 -4492 29
+* * 10
++272 372 0
+cfl=(71)
+cfn=(270)
+calls=0 -4588 71
+* * 10
+
+ob=(1)
+fl=(72)
+fn=(272)
++2452 451 0
+cfl=(63)
+cfn=(247)
+calls=0 -999784 20
+* * 50
+
+ob=(1)
+fl=(73) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/tree/ops.go
+fn=(275) treedb/internal/tree.buildLeafPage
++4380 6 0
+cfl=(38)
+cfn=(262)
+calls=0 -29468 26
+* * 10
++144 11 0
+cfl=(38)
+cfn=(265)
+calls=0 -32948 68
+* * 10
+cfl=(38)
+cfn=(265)
+calls=0 -31828 123
+* * 10
++176 16 0
+cfl=(69)
+cfn=(257)
+calls=0 -38972 65
+* * 10
+
+ob=(1)
+fl=(73)
+fn=(276) treedb/internal/tree.buildInternalPage
++212 26 0
+cfl=(6)
+cfn=(96)
+calls=0 -37792 87
+* * 1050
+cfl=(6)
+cfn=(96)
+calls=0 -37724 91
+* * 260
+cfl=(6)
+cfn=(96)
+calls=0 -38180 61
+* * 210
+cfl=(6)
+cfn=(96)
+calls=0 -37372 94
+* * 150
+cfl=(6)
+cfn=(96)
+calls=0 -37723 91
+* * 10
+cfl=(6)
+cfn=(96)
+calls=0 -37687 91
+* * 10
+cfl=(6)
+cfn=(96)
+calls=0 -37627 92
+* * 10
++176 31 0
+cfl=(69)
+cfn=(257)
+calls=0 -39360 65
+* * 10
+
+ob=(1)
+fl=(73)
+fn=(277) treedb/internal/tree.(*Tree).cowSet
++324 48 0
+cfl=(73)
+cfn=(278) treedb/internal/tree.(*Tree).cowSetLeaf
+calls=0 +1416 71
+* * 50
+cfl=(73)
+cfn=(278)
+calls=0 +1500 78
+* * 40
++120 50 0
+cfl=(73)
+cfn=(279) treedb/internal/tree.(*Tree).cowSetInternal
+calls=0 +3164 158
+* * 1710
+cfl=(73)
+cfn=(279)
+calls=0 +2460 129
+* * 730
+cfl=(73)
+cfn=(279)
+calls=0 +3028 151
+* * 20
+
+ob=(1)
+fl=(73)
+fn=(278)
++972 71 0
+cfl=(72)
+cfn=(273)
+calls=0 -9312 292
+* * 50
++84 78 0
+cfl=(73)
+cfn=(275)
+calls=0 -1980 11
+* * 20
+cfl=(73)
+cfn=(275)
+calls=0 -2124 6
+* * 10
+cfl=(73)
+cfn=(275)
+calls=0 -1804 16
+* * 10
+
+ob=(1)
+fl=(73)
+fn=(279)
++1284 129 0
+cfl=(73)
+cfn=(277)
+calls=0 -1056 50
+* * 710
+cfl=(73)
+cfn=(277)
+calls=0 -1176 48
+* * 30
++568 151 0
+cfl=(72)
+cfn=(273)
+calls=0 -11940 270
+* * 10
+cfl=(72)
+cfn=(273)
+calls=0 -11852 284
+* * 10
++136 158 0
+cfl=(73)
+cfn=(276)
+calls=0 -3528 26
+* * 1700
+cfl=(73)
+cfn=(276)
+calls=0 -3352 31
+* * 10
+
+ob=(1)
+fl=(74) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/tree/tree.go
+fn=(280) treedb/internal/tree.(*Tree).SetRaw
++7096 97 0
+cfl=(73)
+cfn=(277)
+calls=0 -3044 50
+* * 1760
+cfl=(73)
+cfn=(277)
+calls=0 -3164 48
+* * 60
+
+ob=(1)
+fl=(75) /Users/michaelseiler/dev/snissn/gomap/TreeDB/internal/mvcc/pruner.go
+fn=(281) treedb/internal/mvcc.(*Pruner).Prune
++9108 46 0
+cfl=(72)
+cfn=(274)
+calls=0 -18396 342
+* * 10
+cfl=(72)
+cfn=(274)
+calls=0 -18124 372
+* * 10
+
+ob=(1)
+fl=(76) /Users/michaelseiler/dev/snissn/gomap/TreeDB/batch.go
+fn=(282) treedb.(*Batch).Write
++3097072 130 0
+cfl=(77) /Users/michaelseiler/dev/snissn/gomap/TreeDB/commit.go
+cfn=(283) treedb.(*DB).writeBatch
+calls=0 +3099208 37
+* * 3060
+cfl=(77)
+cfn=(283)
+calls=0 +3100252 75
+* * 1760
+cfl=(77)
+cfn=(283)
+calls=0 +3100896 94
+* * 60
+cfl=(77)
+cfn=(283)
+calls=0 +3101804 178
+* * 20
+cfl=(77)
+cfn=(283)
+calls=0 +3101256 117
+* * 10
+cfl=(77)
+cfn=(283)
+calls=0 +3101428 141
+* * 10
+
+ob=(1)
+fl=(76)
+fn=(284) treedb.(*Batch).prepare
++1060 198 0
+cfl=(70)
+cfn=(267)
+calls=0 -3139104 254
+* * 3060
+
+ob=(1)
+fl=(77)
+fn=(283)
++1076 37 0
+cfl=(76)
+cfn=(284)
+calls=0 * 198
+* * 3060
++1044 75 0
+cfl=(74)
+cfn=(280)
+calls=0 -3108316 97
+* * 1760
++644 94 0
+cfl=(74)
+cfn=(280)
+calls=0 -3109360 97
+* * 60
++360 117 0
+cfl=(40)
+cfn=(104)
+calls=0 +22853 399
+* * 10
++172 141 0
+cfl=(39)
+cfn=(103)
+calls=0 -3102619 22
+* * 10
++376 178 0
+cfl=(75)
+cfn=(281)
+calls=0 -3101428 46
+* * 20
+
+ob=(1)
+fl=(40)
+fn=(285) treedb.(*DB).Set
++17892 188 0
+cfl=(76)
+cfn=(282)
+calls=0 -4732 130
+* * 4920
+
+ob=(1)
+fl=(65)
+fn=(249)
++5840 63 0
+cfl=(40)
+cfn=(285)
+calls=0 * 188
+* * 4920
