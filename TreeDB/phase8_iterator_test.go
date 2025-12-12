@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-
-	cosmosdb "github.com/cosmos/cosmos-db"
 )
 
-func collectKeys(t *testing.T, it cosmosdb.Iterator) [][]byte {
+func collectKeys(t *testing.T, it *Iterator) [][]byte {
 	t.Helper()
 	var out [][]byte
 	for ; it.Valid(); it.Next() {

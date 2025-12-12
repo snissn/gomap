@@ -6,20 +6,19 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"treedb/internal/page"
-	"treedb/internal/slab"
-	"treedb/internal/tree"
-)
-
-var (
-	// ErrBatchClosed matches cosmos-db batch closed semantics.
-	ErrBatchClosed = errors.New("batch has been written or closed")
-	// ErrKeyEmpty matches cosmos-db empty key semantics.
-	ErrKeyEmpty = errors.New("key cannot be empty")
-	// ErrValueNil matches cosmos-db nil value semantics.
-	ErrValueNil = errors.New("value cannot be nil")
-)
-
+		"treedb/internal/page"
+		"treedb/internal/slab"
+		"treedb/internal/tree"
+	)
+	
+	var (
+		// ErrBatchClosed is returned when the batch is closed.
+		ErrBatchClosed = errors.New("batch has been written or closed")
+		// ErrKeyEmpty is returned when the key is empty.
+		ErrKeyEmpty = errors.New("key cannot be empty")
+		// ErrValueNil is returned when the value is nil.
+		ErrValueNil = errors.New("value cannot be nil")
+	)
 type batchState uint8
 
 const (
@@ -36,7 +35,7 @@ type batchOp struct {
 	inline bool
 }
 
-// Batch implements the cosmos-db Batch interface.
+// Batch implements the batch interface.
 type Batch struct {
 	db *DB
 

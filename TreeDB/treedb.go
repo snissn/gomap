@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	cosmosdb "github.com/cosmos/cosmos-db"
-
 	"treedb/internal/adaptive"
 	"treedb/internal/mvcc"
 	"treedb/internal/page"
@@ -158,15 +156,26 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	switch ent.Flags {
 	case page.LeafFlagInline:
-		return append([]byte(nil), ent.InlineValue...), nil
+		val := append([]byte(nil), ent.InlineValue...)
+		if val == nil {
+			val = []byte{}
+		}
+		return val, nil
 	case page.LeafFlagPointer:
 		val, err := db.readPtr(ent.Ptr, st.SlabSet)
 		if err != nil {
 			return nil, err
 		}
+		if val == nil {
+			val = []byte{}
+		}
 		return val, nil
 	default:
-		return append([]byte(nil), ent.InlineValue...), nil
+		val := append([]byte(nil), ent.InlineValue...)
+		if val == nil {
+			val = []byte{}
+		}
+		return val, nil
 	}
 }
 
@@ -216,14 +225,14 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 // NewBatch returns an empty batch.
-func (db *DB) NewBatch() cosmosdb.Batch { return db.NewBatchWithSize(0) }
+func (db *DB) NewBatch() *Batch { return db.NewBatchWithSize(0) }
 
 // NewBatchWithSize returns a batch with a size hint.
-func (db *DB) NewBatchWithSize(size int) cosmosdb.Batch {
+func (db *DB) NewBatchWithSize(size int) *Batch {
 	return newBatch(db, size)
 }
 
-func (db *DB) Iterator(start, end []byte) (cosmosdb.Iterator, error) {
+func (db *DB) Iterator(start, end []byte) (*Iterator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("treedb: nil db")
 	}
@@ -251,7 +260,7 @@ func (db *DB) Iterator(start, end []byte) (cosmosdb.Iterator, error) {
 	return it, nil
 }
 
-func (db *DB) ReverseIterator(start, end []byte) (cosmosdb.Iterator, error) {
+func (db *DB) ReverseIterator(start, end []byte) (*Iterator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("treedb: nil db")
 	}

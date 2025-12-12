@@ -7,8 +7,6 @@ import (
 	"sort"
 	"sync/atomic"
 
-	cosmosdb "github.com/cosmos/cosmos-db"
-
 	"treedb/internal/mvcc"
 	"treedb/internal/page"
 )
@@ -33,7 +31,8 @@ type internalKV struct {
 	child page.PageID
 }
 
-type iterator struct {
+// Iterator implements the iterator interface.
+type Iterator struct {
 	db      *DB
 	snap    *mvcc.Snapshot
 	st      *mvcc.DBState
@@ -49,8 +48,8 @@ type iterator struct {
 	err    error
 }
 
-func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *iterator {
-	it := &iterator{
+func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *Iterator {
+	it := &Iterator{
 		db:      db,
 		snap:    snap,
 		st:      snap.State(),
@@ -67,28 +66,28 @@ func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *
 	return it
 }
 
-func (it *iterator) Domain() (start, end []byte) {
+func (it *Iterator) Domain() (start, end []byte) {
 	if it == nil {
 		return nil, nil
 	}
 	return append([]byte(nil), it.start...), append([]byte(nil), it.end...)
 }
 
-func (it *iterator) Valid() bool {
+func (it *Iterator) Valid() bool {
 	if it == nil {
 		return false
 	}
 	return it.valid.Load()
 }
 
-func (it *iterator) Error() error {
+func (it *Iterator) Error() error {
 	if it == nil {
 		return nil
 	}
 	return it.err
 }
 
-func (it *iterator) Close() error {
+func (it *Iterator) Close() error {
 	if it == nil {
 		return nil
 	}
@@ -102,7 +101,7 @@ func (it *iterator) Close() error {
 	return nil
 }
 
-func (it *iterator) Next() {
+func (it *Iterator) Next() {
 	if it == nil || !it.Valid() {
 		panic("treedb: Next on invalid iterator")
 	}
@@ -117,7 +116,7 @@ func (it *iterator) Next() {
 	}
 }
 
-func (it *iterator) Key() []byte {
+func (it *Iterator) Key() []byte {
 	if it == nil || !it.Valid() {
 		panic("treedb: Key on invalid iterator")
 	}
@@ -130,7 +129,7 @@ func (it *iterator) Key() []byte {
 	return decodeUserKey(key)
 }
 
-func (it *iterator) Value() []byte {
+func (it *Iterator) Value() []byte {
 	if it == nil || !it.Valid() {
 		panic("treedb: Value on invalid iterator")
 	}
@@ -156,7 +155,7 @@ func (it *iterator) Value() []byte {
 	}
 }
 
-func (it *iterator) initForward() {
+func (it *Iterator) initForward() {
 	root := it.st.UserRootPageID
 	if root == 0 {
 		it.valid.Store(false)
@@ -180,7 +179,7 @@ func (it *iterator) initForward() {
 	it.enforceForwardBounds()
 }
 
-func (it *iterator) initReverse() {
+func (it *Iterator) initReverse() {
 	root := it.st.UserRootPageID
 	if root == 0 {
 		it.valid.Store(false)
@@ -204,7 +203,7 @@ func (it *iterator) initReverse() {
 	it.enforceReverseBounds()
 }
 
-func (it *iterator) enforceForwardBounds() {
+func (it *Iterator) enforceForwardBounds() {
 	if !it.Valid() {
 		return
 	}
@@ -222,7 +221,7 @@ func (it *iterator) enforceForwardBounds() {
 	}
 }
 
-func (it *iterator) enforceReverseBounds() {
+func (it *Iterator) enforceReverseBounds() {
 	if !it.Valid() {
 		return
 	}
@@ -240,7 +239,7 @@ func (it *iterator) enforceReverseBounds() {
 	}
 }
 
-func (it *iterator) seekFirst(root page.PageID) error {
+func (it *Iterator) seekFirst(root page.PageID) error {
 	it.stack = it.stack[:0]
 	pid := root
 	for {
@@ -275,7 +274,7 @@ func (it *iterator) seekFirst(root page.PageID) error {
 	}
 }
 
-func (it *iterator) seekLast(root page.PageID) error {
+func (it *Iterator) seekLast(root page.PageID) error {
 	it.stack = it.stack[:0]
 	pid := root
 	for {
@@ -310,7 +309,7 @@ func (it *iterator) seekLast(root page.PageID) error {
 	}
 }
 
-func (it *iterator) search(root page.PageID, key []byte) error {
+func (it *Iterator) search(root page.PageID, key []byte) error {
 	it.stack = it.stack[:0]
 	pid := root
 	for {
@@ -353,7 +352,7 @@ func (it *iterator) search(root page.PageID, key []byte) error {
 	}
 }
 
-func (it *iterator) advanceForward() {
+func (it *Iterator) advanceForward() {
 	if len(it.stack) == 0 {
 		it.valid.Store(false)
 		return
@@ -363,7 +362,7 @@ func (it *iterator) advanceForward() {
 	it.normalizeForward()
 }
 
-func (it *iterator) normalizeForward() {
+func (it *Iterator) normalizeForward() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
@@ -414,7 +413,7 @@ func (it *iterator) normalizeForward() {
 	it.valid.Store(false)
 }
 
-func (it *iterator) retreatReverse() {
+func (it *Iterator) retreatReverse() {
 	if len(it.stack) == 0 {
 		it.valid.Store(false)
 		return
@@ -424,7 +423,7 @@ func (it *iterator) retreatReverse() {
 	it.normalizeReverse()
 }
 
-func (it *iterator) normalizeReverse() {
+func (it *Iterator) normalizeReverse() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
@@ -475,7 +474,7 @@ func (it *iterator) normalizeReverse() {
 	it.valid.Store(false)
 }
 
-func (it *iterator) drillDownLeft(pid page.PageID) error {
+func (it *Iterator) drillDownLeft(pid page.PageID) error {
 	for {
 		item, err := it.readCursorItem(pid)
 		if err != nil {
@@ -503,7 +502,7 @@ func (it *iterator) drillDownLeft(pid page.PageID) error {
 	}
 }
 
-func (it *iterator) drillDownRight(pid page.PageID) error {
+func (it *Iterator) drillDownRight(pid page.PageID) error {
 	for {
 		item, err := it.readCursorItem(pid)
 		if err != nil {
@@ -531,7 +530,7 @@ func (it *iterator) drillDownRight(pid page.PageID) error {
 	}
 }
 
-func (it *iterator) skipTombstonesForward() {
+func (it *Iterator) skipTombstonesForward() {
 	for it.Valid() {
 		_, flags, _, _, err := it.currentLeafEntry()
 		if err != nil {
@@ -547,7 +546,7 @@ func (it *iterator) skipTombstonesForward() {
 	}
 }
 
-func (it *iterator) skipTombstonesReverse() {
+func (it *Iterator) skipTombstonesReverse() {
 	for it.Valid() {
 		_, flags, _, _, err := it.currentLeafEntry()
 		if err != nil {
@@ -563,7 +562,7 @@ func (it *iterator) skipTombstonesReverse() {
 	}
 }
 
-func (it *iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.ValuePtr, error) {
+func (it *Iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.ValuePtr, error) {
 	if len(it.stack) == 0 {
 		return nil, 0, nil, page.ValuePtr{}, fmt.Errorf("treedb: empty cursor stack")
 	}
@@ -585,7 +584,7 @@ func (it *iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.Val
 	return key, flags, inline, ptr, nil
 }
 
-func (it *iterator) readCursorItem(pid page.PageID) (cursorItem, error) {
+func (it *Iterator) readCursorItem(pid page.PageID) (cursorItem, error) {
 	buf, err := it.db.pager.ReadPage(pid)
 	if err != nil {
 		return cursorItem{}, err
@@ -769,6 +768,3 @@ func decodeLeafEntry(body []byte, off uint16) ([]byte, page.LeafFlags, []byte, p
 		return key, flags, val, page.ValuePtr{}, base + valLen, nil
 	}
 }
-
-var _ cosmosdb.Iterator = (*iterator)(nil)
-
