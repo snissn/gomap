@@ -16,8 +16,6 @@ func buildLeafPage(buf []byte, pid page.PageID, entries []leafKV) error {
 			return err
 		}
 	}
-	h, body, _ := page.SplitPage(buf)
-	h.SetBodyCRC(body)
 	return nil
 }
 
@@ -31,8 +29,6 @@ func buildInternalPage(buf []byte, pid page.PageID, entries []internalKV) error 
 			return err
 		}
 	}
-	h, body, _ := page.SplitPage(buf)
-	h.SetBodyCRC(body)
 	return nil
 }
 
@@ -88,22 +84,20 @@ func (t *Tree) cowSetLeaf(oldPid page.PageID, oldBuf []byte, key []byte, val Lea
 	retired := []page.PageID{oldPid}
 
 	// Fast path: clone old page and apply in-page Set.
-	leftBuf := make([]byte, page.PageSize)
-	copy(leftBuf, oldBuf)
-	h, body, err := page.SplitPage(leftBuf)
-	if err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	h.PageID = leftPid
-	lp, err := page.OpenLeafPage(leftBuf)
-	if err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	if _, err := lp.Set(key, val.Flags, val.InlineValue, val.Ptr); err == nil {
-		h.SetBodyCRC(body)
-		if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-			return 0, nil, 0, nil, oldEnt, err
+	if err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+		copy(leftBuf, oldBuf)
+		h, _, err := page.SplitPage(leftBuf)
+		if err != nil {
+			return err
 		}
+		h.PageID = leftPid
+		lp, err := page.OpenLeafPage(leftBuf)
+		if err != nil {
+			return err
+		}
+		_, err = lp.Set(key, val.Flags, val.InlineValue, val.Ptr)
+		return err
+	}); err == nil {
 		return leftPid, nil, 0, retired, oldEnt, nil
 	} else if !isPageFull(err) {
 		return 0, nil, 0, nil, oldEnt, err
@@ -124,10 +118,9 @@ func (t *Tree) cowSetLeaf(oldPid page.PageID, oldBuf []byte, key []byte, val Lea
 		entries[idx] = rec
 	}
 
-	if err := buildLeafPage(leftBuf, leftPid, entries); err == nil {
-		if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-			return 0, nil, 0, nil, oldEnt, err
-		}
+	if err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+		return buildLeafPage(leftBuf, leftPid, entries)
+	}); err == nil {
 		return leftPid, nil, 0, retired, oldEnt, nil
 	} else if !isPageFull(err) {
 		return 0, nil, 0, nil, oldEnt, err
@@ -146,18 +139,14 @@ func (t *Tree) cowSetLeaf(oldPid page.PageID, oldBuf []byte, key []byte, val Lea
 	}
 	leftEntries := entries[:mid]
 	rightEntries := entries[mid:]
-	rightBuf := make([]byte, page.PageSize)
-	leftBuf = make([]byte, page.PageSize)
-	if err := buildLeafPage(leftBuf, leftPid, leftEntries); err != nil {
+	if err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+		return buildLeafPage(leftBuf, leftPid, leftEntries)
+	}); err != nil {
 		return 0, nil, 0, nil, oldEnt, err
 	}
-	if err := buildLeafPage(rightBuf, rightPid, rightEntries); err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	if err := t.pager.WritePage(rightPid, rightBuf); err != nil {
+	if err := t.pager.WithMutablePage(rightPid, func(rightBuf []byte) error {
+		return buildLeafPage(rightBuf, rightPid, rightEntries)
+	}); err != nil {
 		return 0, nil, 0, nil, oldEnt, err
 	}
 	return leftPid, rightEntries[0].key, rightPid, retired, oldEnt, nil
@@ -217,38 +206,32 @@ func (t *Tree) cowSetInternal(oldPid page.PageID, oldBuf []byte, key []byte, val
 
 	// Fast path: clone and update in place when min key unchanged.
 	if !minChanged {
-		leftBuf := make([]byte, page.PageSize)
-		copy(leftBuf, oldBuf)
-		h, body, err := page.SplitPage(leftBuf)
-		if err != nil {
-			return 0, nil, 0, nil, oldEnt, err
-		}
-		h.PageID = leftPid
-		ipNew, err := page.OpenInternalPage(leftBuf)
-		if err != nil {
-			return 0, nil, 0, nil, oldEnt, err
-		}
-		// Update existing child pointer.
-		if _, err := ipNew.Set(childKey, newChild); err != nil {
-			return 0, nil, 0, nil, oldEnt, err
-		}
-		// Insert split child if needed.
-		if childSplitKey != nil {
-			if _, err := ipNew.Set(childSplitKey, childSplitPid); err != nil {
-				if !isPageFull(err) {
-					return 0, nil, 0, nil, oldEnt, err
-				}
-				// fall through to rebuild/split
-			} else {
-				childSplitKey = nil
+		needInsert := childSplitKey != nil
+		err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+			copy(leftBuf, oldBuf)
+			h, _, err := page.SplitPage(leftBuf)
+			if err != nil {
+				return err
 			}
-		}
-		if childSplitKey == nil {
-			h.SetBodyCRC(body)
-			if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-				return 0, nil, 0, nil, oldEnt, err
+			h.PageID = leftPid
+			ipNew, err := page.OpenInternalPage(leftBuf)
+			if err != nil {
+				return err
 			}
+			if _, err := ipNew.Set(childKey, newChild); err != nil {
+				return err
+			}
+			if needInsert {
+				_, err := ipNew.Set(childSplitKey, childSplitPid)
+				return err
+			}
+			return nil
+		})
+		if err == nil {
 			return leftPid, nil, 0, retired, oldEnt, nil
+		}
+		if !needInsert || !isPageFull(err) {
+			return 0, nil, 0, nil, oldEnt, err
 		}
 		// page full on insertion; rebuild below
 	}
@@ -274,11 +257,9 @@ func (t *Tree) cowSetInternal(oldPid page.PageID, oldBuf []byte, key []byte, val
 		entries[insIdx2] = ins
 	}
 
-	leftBuf := make([]byte, page.PageSize)
-	if err := buildInternalPage(leftBuf, leftPid, entries); err == nil {
-		if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-			return 0, nil, 0, nil, oldEnt, err
-		}
+	if err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+		return buildInternalPage(leftBuf, leftPid, entries)
+	}); err == nil {
 		return leftPid, nil, 0, retired, oldEnt, nil
 	} else if !isPageFull(err) {
 		return 0, nil, 0, nil, oldEnt, err
@@ -297,18 +278,14 @@ func (t *Tree) cowSetInternal(oldPid page.PageID, oldBuf []byte, key []byte, val
 	}
 	leftEntries := entries[:mid]
 	rightEntries := entries[mid:]
-	rightBuf := make([]byte, page.PageSize)
-	leftBuf = make([]byte, page.PageSize)
-	if err := buildInternalPage(leftBuf, leftPid, leftEntries); err != nil {
+	if err := t.pager.WithMutablePage(leftPid, func(leftBuf []byte) error {
+		return buildInternalPage(leftBuf, leftPid, leftEntries)
+	}); err != nil {
 		return 0, nil, 0, nil, oldEnt, err
 	}
-	if err := buildInternalPage(rightBuf, rightPid, rightEntries); err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	if err := t.pager.WritePage(leftPid, leftBuf); err != nil {
-		return 0, nil, 0, nil, oldEnt, err
-	}
-	if err := t.pager.WritePage(rightPid, rightBuf); err != nil {
+	if err := t.pager.WithMutablePage(rightPid, func(rightBuf []byte) error {
+		return buildInternalPage(rightBuf, rightPid, rightEntries)
+	}); err != nil {
 		return 0, nil, 0, nil, oldEnt, err
 	}
 	return leftPid, rightEntries[0].key, rightPid, retired, oldEnt, nil

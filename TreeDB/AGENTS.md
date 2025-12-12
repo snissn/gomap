@@ -394,7 +394,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests enforcing “new pages only” usage, CRC verify-before-clone, and CRC recompute on commit; run `go test ./...`.
    - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓, `B/op` ↓, `ns/op` ↓.
 
-6. [ ] Tree COW fast paths using pager views + mutable pages.
+6. [x] Tree COW fast paths using pager views + mutable pages.
    - Goal: Make `cowSet*` clone/modify pages without extra PageSize allocations.
    - Depends on: TODO 4–5.
    - Touch: `internal/tree/ops.go`, `internal/tree/parse.go`.
