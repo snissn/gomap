@@ -20,8 +20,8 @@ func New(p *pager.Pager) *Zipper {
 }
 
 // Apply applies the batch to the tree rooted at rootID.
-// Returns the new root page ID.
-func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, error) {
+// Returns the new root page ID and list of retired pages.
+func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) {
 	ops := b.Ops()
 	keys := make([]string, 0, len(ops))
 	for k := range ops {
@@ -29,21 +29,21 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, error) {
 	}
 	sort.Strings(keys)
 
-	newRoot, splitKey, splitNode, err := z.writeRecursive(rootID, keys, ops)
+	newRoot, splitKey, splitNode, retired, err := z.writeRecursive(rootID, keys, ops)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	if splitNode != 0 {
 		// Root split! Create new internal root.
 		newRootID, err := z.pager.Alloc(1)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		
 		data, err := z.pager.Get(newRootID)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		
 		n := node.NewNode(data)
@@ -51,129 +51,82 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, error) {
 		n.SetType(page.PageTypeInternal)
 		n.SetCount(0)
 		
-		// Add left child (old root) - Key is implicit?
-		// Internal Node Structure:
-		// Entry 0: Key X, Child Y. -> Keys < X go to Y?
-		// Wait, my Internal Node implementation (SearchInternal):
-		// "Find largest i such that Entry[i].Key <= Key".
-		// So Entry[i] covers range [Entry[i].Key, Entry[i+1].Key).
-		// Left-most child usually covers (-inf, Entry[0].Key).
-		// But in my implementation (TestInternalNode), I had:
-		// Entry("10", 100). Search("05") -> 0.
-		// This implies Entry 0 is the "Left-most" but it has a key "10"?
-		// No, `SearchInternal` returned 0 because `10 <= 5` is false.
-		// It returned 0 (default).
-		// If I add a "dummy" minimal key? Or handle 0 explicitly?
-		// "Internal Node: Directory (Top): Array of Offsets... Entry: [ChildID] [Key]"
-		// My `AddInternalChild` adds `Key` and `ChildID`.
-		
-		// Standard B+Tree Internal Node:
-		// Keys: K1, K2, ... Kn
-		// Pointers: P0, P1, ... Pn
-		// P0 covers < K1.
-		// P1 covers [K1, K2).
-		// ...
-		// Pn covers >= Kn.
-		
-		// My Node Layout (Slotted Page):
-		// Just entries.
-		// If I use the "First Key" strategy:
-		// Entry i: (Key_i, P_i).
-		// P_i covers keys >= Key_i.
-		// Then we need a P_0 with Key_0 = -Inf (or smallest possible).
-		// My `SearchInternal` finds largest Key_i <= SearchKey.
-		// So if I have (Key=10, P=1), (Key=20, P=2).
-		// Query 15: 10 <= 15 (True). 20 <= 15 (False). Index 0 -> P=1.
-		// So P=1 covers [10, 20).
-		// What about Query 5? Returns 0 (Index 0). P=1.
-		// So P=1 covers (-inf, 20)? No, "Key=10".
-		// My logic returns index 0 if nothing matches?
-		// `if i > 0 { return i-1 } return 0`.
-		// So yes, it falls back to 0.
-		// So Entry 0 covers (-inf, Key_1).
-		// And Entry 0's Key is effectively ignored for lower bound?
-		// Usually Entry 0's Key IS the lower bound of that page, but for routing from parent, parent uses it.
-		// Inside the node, we just need to know which child to pick.
-		
-		// So, when Root Splits:
-		// We have Left Node (newRoot) and Right Node (splitNode).
-		// Right Node starts at `splitKey`.
-		// We need to add:
-		// 1. Left Node (covers -inf). Key? Maybe empty or copy first key?
-		//    Let's use Empty Key "" for first child?
-		// 2. Right Node (covers >= splitKey). Key = splitKey.
-		
-		// Add Left Child (newRoot)
-		// We use Key=""? Or "00"?
-		// `AddInternalChild` puts key in slot.
-		// Let's use empty slice for "min key"?
 		if err := n.AddInternalChild([]byte{}, newRoot); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		
-		// Add Right Child (splitNode)
 		if err := n.AddInternalChild(splitKey, splitNode); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		
 		n.UpdateChecksum()
-		return newRootID, nil
+		return newRootID, retired, nil
 	}
 
-	return newRoot, nil
+	return newRoot, retired, nil
 }
 
 // writeRecursive handles the COW merge.
-// Returns: newPageID, splitKey (if split), splitPageID (if split), error.
-func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, error) {
+// Returns: newPageID, splitKey (if split), splitPageID (if split), retiredPages, error.
+func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, []uint64, error) {
 	// 1. Allocate New Page (COW)
 	newPageID, err := z.pager.Alloc(1)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	
 	newData, err := z.pager.Get(newPageID)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	
 	newNode := node.NewNode(newData)
 	newNode.SetPageID(newPageID) // Set ID first
 	
-	// Handle Empty Tree (pageID 0 might be uninitialized if fresh?)
-	// If pageID == 0 (and we are root), we might be creating first leaf.
-	// But `Apply` passes `rootID`. If `rootID` is valid, we read it.
-	// If `rootID` points to empty/newly alloc page?
-	// Let's assume `pageID` is valid.
-	
 	oldData, err := z.pager.Get(pageID)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	oldNode := node.NewNode(oldData)
 	
+	// Track retired page (the old one we are copying from)
+	var retired []uint64
+	if pageID != 0 {
+		retired = append(retired, pageID)
+	}
+
 	// Copy Header & Type
 	newNode.SetType(oldNode.Type())
-	// Count will be adjusted as we fill.
-	// We DO NOT just copy raw bytes because we are merging.
-	// We rebuild the node.
 	
 	if oldNode.Type() == page.PageTypeLeaf {
-		return z.mergeLeaf(oldNode, newNode, keys, ops)
+		// Merge Leaf returns NO additional retired pages (leaves don't have children to retire)
+		// Wait, mergeLeaf signature needs update to match expected return type or handle it here?
+		// mergeLeaf only returns split info.
+		// So we return `retired` constructed here.
+		nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+		return nr, sk, sn, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
-		return z.mergeInternal(oldNode, newNode, keys, ops)
+		// Internal merge might return MORE retired pages from children recursion
+		nr, sk, sn, childRetired, err := z.mergeInternal(oldNode, newNode, keys, ops)
+		if err != nil {
+			return 0, nil, 0, nil, err
+		}
+		retired = append(retired, childRetired...)
+		return nr, sk, sn, retired, nil
 	} else {
-		// Maybe unitialized root?
-		// If Type is 0, assume Leaf?
 		if oldNode.Type() == 0 {
 			newNode.SetType(page.PageTypeLeaf)
-			return z.mergeLeaf(oldNode, newNode, keys, ops)
+			nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+			return nr, sk, sn, retired, err
 		}
-		return 0, nil, 0, page.ErrInvalidPageType // Need to define or import
+		return 0, nil, 0, nil, page.ErrInvalidPageType
 	}
 }
 
 func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, error) {
+	// ... (content unchanged, just signature matches call in writeRecursive which discards retired? No, mergeLeaf doesn't return retired)
+	// I'll keep mergeLeaf signature as is, and writeRecursive wraps it.
+	
 	// Iterate old keys and batch keys in order
 	// Merge into newNode.
 	// If newNode fills, split.
@@ -181,13 +134,6 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	keyIdx := 0
-	
-	// Helper to append and check split
-	// We defer split handling? No, we must handle it as we go or at end?
-	// Easiest: Fill newNode. If full, allocate splitNode and move half.
-	// But "Node" struct doesn't support "Overflow".
-	// We check `FreeSpace` before adding.
-	// If full, we switch to `splitNode`.
 	
 	var splitNode *node.Node
 	var splitNodeID uint64
@@ -294,10 +240,6 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 					return 0, nil, 0, err // If split node is somehow full immediately (huge key?)
 				}
 			} else {
-				// Split node also full?
-				// Triple split? Not supported in this simplified logic.
-				// Fail or support overflow pages.
-				// For Phase 3, error.
 				return 0, nil, 0, errors.New("node overflow even after split")
 			}
 		} else if err != nil {
@@ -313,23 +255,23 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 	return newNode.PageID(), splitKey, splitNodeID, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, error) {
+func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, []uint64, error) {
 	// Iterate children.
 	// For each child, determine which batch keys belong to it.
-	// Range: [Entry[i].Key, Entry[i+1].Key)
 	
 	count := oldNode.Count()
 	var splitNode *node.Node
 	var splitNodeID uint64
 	var splitKey []byte
 	target := newNode
+	var retired []uint64
 	
 	keyIdx := 0
 	
 	for i := uint16(0); i < count; i++ {
 		entry, err := oldNode.GetInternalEntry(i)
 		if err != nil {
-			return 0, nil, 0, err
+			return 0, nil, 0, nil, err
 		}
 		
 		// Determine End Key for this child
@@ -337,11 +279,10 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 		if i+1 < count {
 			nextEntry, err := oldNode.GetInternalEntry(i+1)
 			if err != nil {
-				return 0, nil, 0, err
+				return 0, nil, 0, nil, err
 			}
 			endKey = nextEntry.Key
 		}
-		// If endKey is nil, it means "to infinity" (last child)
 		
 		// Collect keys for this child
 		var childKeys []string
@@ -355,41 +296,36 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 			}
 		}
 		
-		// If no keys for this child, just copy the pointer?
-		// No, standard COW requires us to copy the path?
-		// Actually, if a child is NOT modified, we can point to the OLD pageID!
-		// Optimization: If childKeys is empty, just reuse Entry.ChildPageID.
-		
 		var newChildID uint64
 		var childSplitKey []byte
 		var childSplitID uint64
 		
 		if len(childKeys) > 0 {
 			// Recurse
-			ncID, sk, sID, err := z.writeRecursive(entry.ChildPageID, childKeys, ops)
+			ncID, sk, sID, childRet, err := z.writeRecursive(entry.ChildPageID, childKeys, ops)
 			if err != nil {
-				return 0, nil, 0, err
+				return 0, nil, 0, nil, err
 			}
 			newChildID = ncID
 			childSplitKey = sk
 			childSplitID = sID
+			retired = append(retired, childRet...)
 		} else {
 			// Reuse
 			newChildID = entry.ChildPageID
 		}
 		
 		// Add (Key, NewChildID) to target
-		// Note: Entry.Key is the separator.
 		err = target.AddInternalChild(entry.Key, newChildID)
 		if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, entry.Key, newChildID, err) != nil {
-             return 0, nil, 0, err
+             return 0, nil, 0, nil, err
         }
         
         // If child split, add sibling
         if childSplitID != 0 {
              err = target.AddInternalChild(childSplitKey, childSplitID)
              if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, childSplitKey, childSplitID, err) != nil {
-                  return 0, nil, 0, err
+                  return 0, nil, 0, nil, err
              }
         }
         
@@ -399,16 +335,12 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
         }
 	}
 	
-	// Check if any keys remain (should not if logic is correct, as last child covers infinity)
-	// But if they are > all existing ranges?
-	// The last child should have captured them.
-	
 	newNode.UpdateChecksum()
 	if splitNode != nil {
 		splitNode.UpdateChecksum()
 	}
 	
-	return newNode.PageID(), splitKey, splitNodeID, nil
+	return newNode.PageID(), splitKey, splitNodeID, retired, nil
 }
 
 func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, splitNodeID *uint64, splitKey *[]byte, key []byte, val uint64, err error) error {

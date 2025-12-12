@@ -42,20 +42,13 @@ func (b *Batch) Write() error {
 	rootID := b.db.meta.UserRootPageID
 	
 	// Zipper Apply
-	// Note: Zipper reads from pager. Pager is thread-safe.
-	// But we are modifying Pager (Alloc). Pager.Alloc is locked.
-	newRoot, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 	
-	// Commit
-	// We are already holding Lock?
-	// DB.Commit also takes Lock.
-	// We should split DB.Commit or have `commitLocked`.
-	// Or `Write` takes lock, then calls `commitLocked`.
-	
-	return b.db.commitLocked(newRoot, false)
+	// Commit (System Root is unchanged for now)
+	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, false)
 }
 
 func (b *Batch) WriteSync() error {
@@ -63,12 +56,12 @@ func (b *Batch) WriteSync() error {
 	defer b.db.mu.Unlock()
 	
 	rootID := b.db.meta.UserRootPageID
-	newRoot, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 	
-	return b.db.commitLocked(newRoot, true)
+	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, true)
 }
 
 func (b *Batch) Close() error {

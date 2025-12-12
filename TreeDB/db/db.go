@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap-gemini/TreeDB/lifecycle"
 	"github.com/snissn/gomap-gemini/TreeDB/node"
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 	"github.com/snissn/gomap-gemini/TreeDB/pager"
@@ -17,19 +18,22 @@ import (
 const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
+	KeepRecent  = 100
 )
 
 type DBState struct {
-	CommitSeq  uint64
-	RootPageID uint64
-	SlabSet    *slab.SlabSet
+	CommitSeq        uint64
+	RootPageID       uint64
+	SystemRootPageID uint64
+	SlabSet          *slab.SlabSet
 }
 
 type DB struct {
 	pager       *pager.Pager
 	slabManager *slab.SlabManager
 	zipper      *zipper.Zipper
-	// tree        *tree.Tree // Removed: Tree is created per-snapshot or operation
+	graveyard   *lifecycle.Graveyard
+	registry    *lifecycle.ReaderRegistry
 	
 	mu          sync.RWMutex
 	meta        page.MetaPageBody
@@ -44,9 +48,10 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db    *DB
-	state *DBState
-	tree  *tree.Tree
+	db         *DB
+	state      *DBState
+	tree       *tree.Tree
+	registryID int64
 }
 
 // Open opens the database.
@@ -71,6 +76,8 @@ func Open(opts Options) (*DB, error) {
 		pager:       p,
 		slabManager: sm,
 		zipper:      zipper.New(p),
+		graveyard:   lifecycle.NewGraveyard(),
+		registry:    lifecycle.NewReaderRegistry(),
 	}
 
 	if err := db.recover(); err != nil {
@@ -80,9 +87,10 @@ func Open(opts Options) (*DB, error) {
 
 	// Initialize State
 	initialState := &DBState{
-		CommitSeq:  db.meta.CommitSeq,
-		RootPageID: db.meta.UserRootPageID,
-		SlabSet:    sm.CurrentSlabSet(),
+		CommitSeq:        db.meta.CommitSeq,
+		RootPageID:       db.meta.UserRootPageID,
+		SystemRootPageID: db.meta.SystemRootPageID,
+		SlabSet:          sm.CurrentSlabSet(),
 	}
 	db.state.Store(initialState)
 	
@@ -123,6 +131,23 @@ func (db *DB) recover() error {
 		n.UpdateChecksum()
 		
 		db.meta.UserRootPageID = rootID
+		
+		// Init System Root
+		sysRootID, err := db.pager.Alloc(1)
+		if err != nil {
+			return err
+		}
+		dataSys, err := db.pager.Get(sysRootID)
+		if err != nil {
+			return err
+		}
+		nSys := node.NewNode(dataSys)
+		nSys.SetPageID(sysRootID)
+		nSys.SetType(page.PageTypeLeaf)
+		nSys.SetCount(0)
+		nSys.UpdateChecksum()
+		
+		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
 		
 		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
@@ -191,8 +216,6 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	if n.Type() != page.PageTypeMeta {
 		return page.MetaPageBody{}, false
 	}
-	// Note: MetaBody struct size is 60. Header is 16.
-	// Ensure we don't panic if page is somehow smaller? Pager guarantees 4KB.
 	return page.DecodeMetaBody(data[page.PageHeaderSize:]), true
 }
 
@@ -212,7 +235,7 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // commitLocked persists the new root.
 // Caller must hold db.mu.
-func (db *DB) commitLocked(newRootID uint64, sync bool) error {
+func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool) error {
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {
 			return err
@@ -225,6 +248,7 @@ func (db *DB) commitLocked(newRootID uint64, sync bool) error {
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
+	nextMeta.SystemRootPageID = sysRootID
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = db.pager.PageCount()
@@ -247,38 +271,72 @@ func (db *DB) commitLocked(newRootID uint64, sync bool) error {
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 	
+	// Add retired pages to Graveyard
+	// Note: We use nextMeta.CommitSeq (the seq we just committed).
+	// These pages were replaced by this commit.
+	db.graveyard.Add(nextMeta.CommitSeq, retired)
+	
+	// Prune
+	db.Prune()
+	
 	// Update State
 	newState := &DBState{
-		CommitSeq:  nextMeta.CommitSeq,
-		RootPageID: nextMeta.UserRootPageID,
-		SlabSet:    db.slabManager.CurrentSlabSet(),
+		CommitSeq:        nextMeta.CommitSeq,
+		RootPageID:       nextMeta.UserRootPageID,
+		SystemRootPageID: nextMeta.SystemRootPageID,
+		SlabSet:          db.slabManager.CurrentSlabSet(),
 	}
 	db.state.Store(newState)
 	
 	return nil
 }
 
-// Commit persists the new root (Sync=true by default for public API convenience if used directly).
+// Commit persists the new root (Sync=true by default).
+// Note: This is usually called internally by Batch.Write or externally if manual root management.
+// If manual, retired pages are unknown? `Commit` signature assumes manual root.
+// If external user calls Commit, they might not know retired pages.
+// We'll accept nil for retired if manual.
 func (db *DB) Commit(newRootID uint64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.commitLocked(newRootID, true)
+	return db.commitLocked(newRootID, db.meta.SystemRootPageID, nil, true)
 }
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	state := db.state.Load()
 	db.slabManager.AcquireSlabs(state.SlabSet)
+	
+	// Register Reader
+	id := db.registry.Register(state.CommitSeq)
+	
 	return &Snapshot{
-		db:    db,
-		state: state,
-		tree:  tree.New(db.pager, db.slabManager, state.RootPageID),
+		db:         db,
+		state:      state,
+		tree:       tree.New(db.pager, db.slabManager, state.RootPageID),
+		registryID: id,
 	}
 }
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	s.db.registry.Unregister(s.registryID)
 	return s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+}
+
+// Prune reclaims pages from the graveyard.
+func (db *DB) Prune() {
+	min := db.registry.MinPinnedSeq()
+	current := db.meta.CommitSeq
+	
+	freed := db.graveyard.Extract(min, current, KeepRecent)
+	
+	if len(freed) > 0 {
+		// Add to Freelist (On-Disk).
+		// Currently Pager/Freelist not fully implemented.
+		// We just drop them (leak space effectively, but logically free).
+		// TODO: Implement FreelistPage and Pager.Free(pageID).
+	}
 }
 
 // Get returns value from snapshot.
