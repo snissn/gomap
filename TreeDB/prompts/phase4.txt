@@ -36,4 +36,5 @@ Implement safe concurrent reads and the public Cosmos API idempotently.
 
 3.  **Final Verification:**
     *   Run `go test -race -v ./db/...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 4: Read Path, Snapshots, and Public API"`.
     *   If all tests pass, output "Phase 4 Complete" and exit.

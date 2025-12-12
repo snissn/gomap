@@ -6,7 +6,11 @@ Focus on isolating the complex low-level data structures before system integrati
 
 ### 1.1 The Pager (Chunked MMap)
 
-* **Boundary Crossing:** Initialize with a small chunk size (e.g., 1KB) to force frequent chunk allocations. Verify reads spanning across chunk boundaries (`Offset` in Chunk A, `Length` extends into Chunk B).
+* **Boundary Crossing (Alignment):**
+    * **Scenario:** Initialize with `ChunkSize = 2 * PageSize`.
+    * **Verify:** Attempt to allocate a Page that would logically cross the chunk boundary.
+    * **Assert:** The Pager allocates a fresh chunk or skips the boundary padding, ensuring `PageID * PageSize` and `(PageID+1) * PageSize` fall within the same chunk.
+    * **Negative Test:** Manually corrupt an index pointer to point to a boundary-straddling offset. Assert `Get()` returns a specific "Bounds Error" rather than crashing/panicking.
 * **Growth Safety (RFC-01):**
     * Simulate file growth (Truncate + Remap) while a "Reader" holds a pointer to the old memory region. Ensure no panic/segfault occurs.
     * **Negative Test:** Attempt to `Truncate` (shrink) the file while mapped. Verify the internal safety wrapper forbids this or that the test environment handles the panic gracefully without crashing the suite.

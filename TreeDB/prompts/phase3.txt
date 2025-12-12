@@ -40,4 +40,5 @@ Implement Batch Writes, Copy-On-Write (COW), and Atomic Commit idempotently.
 
 3.  **Final Verification:**
     *   Run `go test -v ./db/... ./tree/...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 3: Zipper Write Path and Atomic Commit"`.
     *   If all tests pass, output "Phase 3 Complete" and exit.

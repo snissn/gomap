@@ -33,4 +33,5 @@ Implement the Graveyard, Pruning, and Resource Management idempotently.
 
 3.  **Final Verification:**
     *   Run `go test -v ./db/... -run TestLifecycle`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 5: Lifecycle, Graveyard, and Pruning"`.
     *   If all tests pass, output "Phase 5 Complete" and exit.

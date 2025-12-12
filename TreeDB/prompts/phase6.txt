@@ -14,15 +14,15 @@ Implement Slab Compaction and Adaptive Thresholds idempotently.
 
 2.  **Idempotent Implementation (Sub-tasks):**
 
-    *   **Step 6.1: CAS & Tree Extensions**
-        *   *Action:* Add `CompareAndSwap(key, old, new)` to `Tree`.
-        *   Ensure it uses the same write lock as Batch.
+    *   **Step 6.1: Compaction Extensions**
+        *   *Action:* Ensure `Tree` interface supports efficient `Get/Set` for compaction.
+        *   Ensure Compactor uses the Global Write Lock for micro-batches.
 
     *   **Step 6.2: Slab Compaction**
         *   *Check:* Run `go test -v ./db/... -run TestCompaction`.
         *   *Action:* If pass, SKIP. If not:
             *   Implement `Compactor` struct.
-            *   Logic: Scan System Tree -> Ghost Copy -> CAS Micro-batches.
+            *   Logic: Scan System Tree -> Ghost Copy -> Micro-batch Locking (Read-Verify-Set).
             *   Add `db/compaction_test.go`.
 
     *   **Step 6.3: Adaptive Inline Threshold (Optional)**
@@ -31,4 +31,5 @@ Implement Slab Compaction and Adaptive Thresholds idempotently.
 
 3.  **Final Verification:**
     *   Run `go test -v ./db/... -run TestCompaction`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 6: Compaction and Extensions"`.
     *   If all tests pass, output "Phase 6 Complete" and exit.

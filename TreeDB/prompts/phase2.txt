@@ -36,4 +36,5 @@ Implement the in-memory representation of B+Tree nodes and basic read operations
 
 3.  **Final Verification:**
     *   Run `go test -v ./node/... ./tree/...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 2: B+Tree Structure and Nodes implementation"`.
     *   If all tests pass, output "Phase 2 Complete" and exit.

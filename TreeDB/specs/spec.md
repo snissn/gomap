@@ -52,12 +52,14 @@ Rules:
 
   * **Purpose:** Stores the B+Tree structure, the Freelist, and redundant Superblocks (Meta).
   * **Filename:** `index.db`
-  * **Access Pattern:** **Chunked Memory Map**.
-      * The file is logically a contiguous array of Pages.
-      * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB; max: 1GB).
-      * **Growth:** To expand, we `Truncate` the file and `Mmap` *only* the new chunk. Old chunks remain valid to prevent segfaults in active readers.
-      * **Safety Protocol:**
-          * `Truncate` operations are strictly limited to file expansion. Shrinking the file while mapped is forbidden to prevent `SIGBUS` panics.
+        *   **Access Pattern:** **Chunked Memory Map**.
+            * The file is logically a contiguous array of Pages.
+            * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB).
+            * **Alignment Invariant:** `ChunkSize` MUST be an exact multiple of the **Page Size** (4KB). The Pager MUST ensure that no Page physically crosses a chunk boundary.
+            * **Growth:** To expand, we strictly **pre-allocate disk space** (via `fallocate`) *before* extending the Mmap.
+            * **Safety Protocol:**
+                * **No Shrinking:** Physical file truncation (shrinking) is FORBIDDEN while the process is running.
+                * **Fail-Stop:** The system acknowledges that `recover()` cannot catch `SIGBUS` in Go. Hardware I/O errors on mmap regions will result in a node crash.
           * `Unmap` operations must verify zero active references before releasing a chunk.
 
 #### 2.2.1 Durability Ordering for Mmap Writes (Required)
@@ -91,10 +93,9 @@ Used to point to data stored in the Slabs.
 ```text
 ValuePtr (16 bytes)
 +-------------------------+
-| Offset   (8 bytes)      |  // 8-byte aligned
-| Length   (4 bytes)      |
-| FileID   (2 bytes)      |
-| Reserved (2 bytes)      |  // Must be zero
+| Offset     (8 bytes)    |  // 8-byte aligned
+| Length     (4 bytes)    |
+| FileID     (4 bytes)    |  // Expanded to uint32 using reserved space
 +-------------------------+
 ```
 
@@ -104,8 +105,7 @@ Corresponding Go type (in-memory):
 type ValuePtr struct {
     Offset    uint64 // Bytes 0-7
     Length    uint32 // Bytes 8-11
-    FileID    uint16 // Bytes 12-13
-    _reserved uint16 // Bytes 14-15
+    FileID    uint32 // Bytes 12-15
 } // 16 bytes, naturally aligned
 ```
 
@@ -147,7 +147,7 @@ Each Meta Page stores:
   * `SystemRootPageID` (8b): Pointer to the Internal Metadata B+Tree root.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
-  * `ActiveSlabID` (2b): The FileID of the slab that was active at the time of commit.
+  * `ActiveSlabID` (4b): The FileID of the slab that was active at the time of commit.
   * `ActiveSlabTail` (8b): The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
 
@@ -176,7 +176,7 @@ TreeDB maintains two distinct B+Trees rooted in the Superblock:
 This eliminates the storage and CPU overhead of byte-prefixing.
 
 #### 3.5.2 Slab Stats Keys
-  * **Key:** `0x00 | "slab" | uint16(FileID)`
+  * **Key:** `0x00 | "slab" | uint32(FileID)`
   * **Value:** `[DeadBytes (8b)] [TotalBytes (8b)]`
 
 ### 3.4 The Slab Manager
@@ -186,7 +186,7 @@ The `SlabManager` controls access to physical `.slab` files. It mediates between
 ```go
 // SlabFile represents a single physical file on disk.
 type SlabFile struct {
-    FileID   uint16
+    FileID   uint32
     Handle   *os.File
     // Slabs are accessed via syscall.Pread (Random Read).
     // We DO NOT mmap slabs to avoid SIGBUS on truncation and excessive virtual memory usage.
@@ -198,7 +198,7 @@ type SlabFile struct {
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
 type SlabSet struct {
-    Files map[uint16]*SlabFile
+    Files map[uint32]*SlabFile
 }
 ```
 
@@ -338,9 +338,9 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
         4.  Verify record CRC32C.
         5.  Copy `ValueBytes` into a newly allocated slice.
       * **Mmap Safety Protocol (CRITICAL):**
-          * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap.
-          * **Safe Access:** Use `uintptr` arithmetic or a custom accessor.
-          * **Panic Protection:** All reads from the mmap region must be wrapped in `recover()` to catch `SIGBUS` (which occurs if the file is truncated physically while mapped).
+          * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap to avoid GC scanning of off-heap memory.
+          * **Safe Access:** Use `unsafe.Pointer` casting or `uintptr` arithmetic.
+          * **Bounds Enforcement:** The Pager MUST explicitly verify `Offset + PageSize <= ChunkSize` before returning a pointer. `SIGBUS` cannot be recovered from; it must be prevented.
 
 
 
@@ -381,12 +381,18 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
               * **Drill Down:** Continuously follow index `0` (left-most child) until a Leaf is reached.
               * Return Key at `Leaf.Index = 0`.
 
-#### 4\. Reverse Iterator Logic (`Next` / `Prev` Semantics)
+#### 4. Reverse Iterator Logic (`Next` / `Prev` Semantics)
 
-  * **Initialization (Cosmos Semantics):** * The domain is `[start, end)`. 
-      * If `end` is `nil`, seek to the very last key in the database.
-      * If `end` is provided, seek to the first key `>= end`. Move cursor backward by one.
-      * Verify the resulting key is `>= start`. If not, the range is empty.
+  * **Initialization (Cosmos Semantics):**
+      * The domain is `[start, end)`.
+      * **Step 1 (Seek):**
+          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key).
+          * If `end` is provided: Seek to the first key `>= end`.
+      * **Step 2 (Adjust):**
+          * If the Seek found a key `>= end` (or hit EOF), move the cursor **Backward** one item.
+          * *Rationale:* This positions the cursor at the largest key strictly less than `end`.
+      * **Step 3 (Verify):**
+          * If cursor is Invalid or `Key < start`: Iterator is Empty.
   * **Advance:**
     1.  Look at the `Top` item of the Stack.
     2.  Decrement `Top.Index`.
@@ -422,17 +428,19 @@ The compactor iterates sequentially through slab records (Section 2.1.1). For ea
 3.  **Copy:** Append the value to the Target Slab, producing `NewPtr`.
 4.  **Record Intent:** Add `Key -> (OldPtr, NewPtr)` to a local `CompactionBatch`.
 
-**Phase 3: Atomic Commit (CAS)**
+**Phase 3: Atomic Commit (Micro-Batch Locking)**
 
-1.  **Micro-Batch Execution:** The Compactor MUST split the batch into micro-batches (e.g., 100 entries).
-2.  **Interleaved Locking:**
-      * Acquire Global Write Lock.
-      * Process one micro-batch (CAS loop).
+Instead of a complex `CompareAndSwap` on the Tree interface, the compactor utilizes the standard Write Lock.
+
+1.  **Preparation:** The compactor holds a buffer of `(Key, OldPtr, NewPtr)`.
+2.  **Execution (Loop):**
+      * Acquire Global Write Lock (Stop-the-World).
+      * **Verify & Apply:** For each item in the micro-batch:
+          * `CurrentPtr = Tree.Get(Key)` (Fast in-memory lookup).
+          * If `CurrentPtr == OldPtr`: `Tree.Set(Key, NewPtr)`.
+          * Else: Skip (User updated key concurrently).
       * Release Global Write Lock.
-      * Yield briefly to allow pending User Writes to proceed.
-3.  For each entry in a micro-batch:
-      * `CompareAndSwap(Key, OldPtr, NewPtr)`
-      * On mismatch: abort the update for that key (waste is acceptable).
+      * **Yield:** Sleep briefly to ensure User Writes are not starved.
 
 #### 5.4.2 Zombie Transition (Ref-Counted Deletion)
 

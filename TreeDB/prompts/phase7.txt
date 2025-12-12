@@ -31,4 +31,5 @@ Perform comprehensive testing, fuzzing, and compliance checks idempotently.
 
 3.  **Final Verification:**
     *   Run `go test -v ./...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 7: Verification, Hardening, and Compliance"`.
     *   Output "Phase 7 Complete - Project Ready".

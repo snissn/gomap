@@ -22,7 +22,7 @@ This document outlines the step-by-step plan to implement **TreeDB**, a persiste
 - [ ] **Test:** `pager_test.go` covering growth, boundary reads, and panic safety on unmap.
 
 ### 1.3 The Slab Manager (`slab`)
-- [ ] Implement `SlabFile` struct (FileID, os.File, RefCount).
+- [ ] Implement `SlabFile` struct (FileID uint32, os.File, RefCount).
 - [ ] Implement `SlabManager` to manage active/immutable slabs.
 - [ ] Implement `Append(key, value)` logic (Record Format: CRC + Lens + Data).
 - [ ] Implement `Read(valuePtr)` logic with CRC verification.
@@ -129,15 +129,15 @@ This document outlines the step-by-step plan to implement **TreeDB**, a persiste
 
 **Goal:** Implement Slab Compaction and Adaptive Thresholds.
 
-### 6.1 CAS & Tree Extensions
-- [ ] Add `CompareAndSwap(key, old, new)` to `Tree`.
-- [ ] Ensure CAS works under the same write lock as Batch.
+### 6.1 Compaction Extensions
+- [ ] Ensure Tree supports `Get` and `Set` for Compaction usage.
+- [ ] Ensure Compaction works under the Global Write Lock (Micro-Batching).
 
 ### 6.2 Slab Compaction
 - [ ] Implement `Compactor`:
     - Scan "System Tree" for high dead-byte slabs.
-    - "Ghost Copy": Read old slab, append to "Target Slab", prepare CAS batch.
-    - Execute CAS micro-batches.
+    - "Ghost Copy": Read old slab, append to "Target Slab", prepare batch.
+    - Execute Micro-batches using Global Write Lock (Read-Verify-Set).
 - [ ] Implement Zombie Slab deletion (check RefCount).
 - [ ] **Test:** `compaction_test.go`: Fill slab with updates, compact, verify space reclaimed.
 
