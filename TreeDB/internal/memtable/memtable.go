@@ -153,3 +153,29 @@ func (it *Iterator) Item() *Item {
 	}
 	return it.curr
 }
+
+func (it *Iterator) IsDeleted() bool {
+	if !it.valid {
+		return false
+	}
+	return it.curr.IsDeleted
+}
+
+// Implement Iterator interface methods matching merging package expectation
+func (it *Iterator) Key() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.curr.Key
+}
+
+func (it *Iterator) Value() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.curr.Value
+}
+
+func (it *Iterator) Close() error {
+	return nil
+}
