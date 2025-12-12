@@ -1,200 +1,383 @@
-# TreeDB Implementation & Testing Plan
+# TreeDB Implementation & Testing Plan (Spec v2.7)
 
-This document outlines the step-by-step plan to implement **TreeDB**, a persistent key-value store for the Cosmos SDK, strictly adhering to `specs/spec.md` and `specs/test-spec.md`.
-
-## Phase 1: Foundation - Storage Layer
-
-**Goal:** Establish the physical file handling for Index (Pages) and Data (Slabs).
-
-### 1.1 Page Architecture (`page`, `layout`)
-- [ ] Define global constants (`PageSize=4096`, `InlineThreshold=256`).
-- [ ] Implement `PageHeader` struct (16 bytes) with serialization/deserialization.
-- [ ] Implement `ValuePtr` struct (16 bytes) with `Offset`, `Length`, `FileID`.
-- [ ] Implement `CRC32C` helper functions.
-- [ ] **Test:** Unit tests for Header/ValuePtr binary encoding and alignment.
-
-### 1.2 The Pager (`pager`)
-- [ ] Implement `Pager` struct managing `index.db`.
-- [ ] Implement `Mmap` logic with chunking (default 256MB).
-- [ ] Implement `Alloc(count)` to grow file and return new PageIDs.
-- [ ] Implement `Read(pageID)` and `Write(pageID, data)`.
-- [ ] Implement `Truncate` safety checks (grow only).
-- [ ] **Test:** `pager_test.go` covering growth, boundary reads, and panic safety on unmap.
-
-### 1.3 The Slab Manager (`slab`)
-- [ ] Implement `SlabFile` struct (FileID uint32, os.File, RefCount).
-- [ ] Implement `SlabManager` to manage active/immutable slabs.
-- [ ] Implement `Append(key, value)` logic (Record Format: CRC + Lens + Data).
-- [ ] Implement `Read(valuePtr)` logic with CRC verification.
-- [ ] Implement Rotation logic (4GB limit).
-- [ ] **Test:** `slab_test.go` covering append/read round-trip, rotation, and corrupted record detection.
+This repository currently contains only the design and test specifications under `specs/`. The goal is to implement **TreeDB** end‑to‑end per `specs/spec.md` and validate it per `specs/test-spec.md`.
 
 ---
 
-## Phase 2: B+Tree Structure & Nodes
+## Scope, Constraints, and Non‑Negotiables
 
-**Goal:** Implement the in-memory representation and manipulation of B+Tree nodes.
+- Embedded, persistent key‑value store implementing the `github.com/cosmos/cosmos-db` `DB` and `Batch` interfaces.
+- Hybrid storage:
+  - **Index**: memory‑mapped B+Tree in `index.db` with **chunked mmap** growth (expand only; never shrink).
+  - **Values**: append‑only **slabs** (`data-XXXX.slab`) storing out‑of‑line values as self‑describing records.
+- Copy‑On‑Write commits with **redundant superblocks** (Meta pages 0/1).
+- **SWMR** concurrency: single writer lock; lock‑free reads via **Snapshots** (MVCC epochs).
+- **CRC32C (Castagnoli)** checksums on every B+Tree page body and every slab record.
+- Durability contract:
+  - `*Sync` writes must make slab durable **before** meta/index durability boundary.
+  - `Write()`/`Set()` may return before durability.
+- Iterator semantics must match Cosmos SDK:
+  - domain `[start,end)` where `end` is exclusive.
+  - reverse iterators descend via repeated `Next()`.
+  - `Key()`/`Value()` return **copies**; `Next()` panics if invalid; tombstones skipped.
+- Compaction is concurrent and uses **Move‑and‑Micro‑Batch** locking: under the writer lock it verifies old pointers before setting new ones.
+- Adaptive inline threshold controller is an optional feature but specified and tested.
 
-### 2.1 Node Layout (Slotted Pages)
-- [ ] Implement `Node` wrapper around raw Page data.
-- [ ] Implement **Leaf Node** layout: Directory (offsets), Heap (Entries).
-    - Entry Format: `KeyLen | ValLen | Flags | Key | Val/Ptr`.
-- [ ] Implement **Internal Node** layout: Directory, Heap (Child Pointers).
-- [ ] **Test:** `node_test.go` verifying entry insertion, space accounting, and binary search within a node.
-
-### 2.2 Tree Operations (Single Threaded)
-- [ ] Define `Tree` struct holding the `Pager` and `RootPageID`.
-- [ ] Implement `Get(key)`: Binary search traversal.
-- [ ] Implement `Set` helpers (basic node splitting logic basics, though full recursive write comes in Phase 3).
-- [ ] **Test:** Manually construct a 2-level tree and verify `Get` works.
-
----
-
-## Phase 3: The "Zipper" - Write Path & Commit
-
-**Goal:** Implement the Batch Write, Copy-On-Write (COW), and Atomic Commit.
-
-### 3.1 Batch & Pre-Write
-- [ ] Implement `Batch` struct (`map[string]entry`).
-- [ ] Implement **Phase 1**: Iterate batch, write large values (`> InlineThreshold`) to Active Slab, store `ValuePtr` in map.
-- [ ] **Test:** Verify batch pre-write appends to slab and updates map with pointers.
-
-### 3.2 Recursive Merge (COW)
-- [ ] Implement **Phase 2**: `writeRecursive(node, batchKeys)`.
-    - Clone node (COW).
-    - Merge batch ops into node.
-    - Handle Split (creating new siblings) and propagate up.
-- [ ] Implement `Freelist` page handling (allocate from free vs end of file).
-- [ ] **Test:** `zipper_test.go`: Insert keys causing splits, verify old pages remain untouched (COW).
-
-### 3.3 Atomic Commit & Superblocks
-- [ ] Implement `MetaPage` (Superblock) layout (Pages 0 & 1).
-- [ ] Implement **Phase 3**:
-    - `fsync` active slab.
-    - Write new root to Index.
-    - Update and write new `MetaPage` (Seq+1).
-    - `fsync` Index.
-- [ ] Implement `Open()` recovery: Read both metas, pick highest valid Seq, repair active slab tail.
-- [ ] **Test:** `recovery_test.go`: Simulate torn writes, verify recovery chooses correct meta.
+**Spec/Test mismatch to resolve early:**  
+`spec.md` says dual roots store user keys raw. `test-spec.md` section 1.7 expects an internal key encoding/prefix (`0x01|userKey`) that is stripped on public iteration. Decide the canonical behavior up front and align implementation + tests accordingly (likely follow tests for compatibility unless clarified).
 
 ---
 
-## Phase 4: Read Path, Snapshots & API
+## Repository Bootstrap
 
-**Goal:** Implement safe concurrent reads and the public Cosmos API.
-
-### 4.1 Snapshot Isolation
-- [ ] Implement `DBState` atomic pointer (`CommitSeq`, `RootPageID`, `SlabSet`).
-- [ ] Implement `AcquireSnapshot()` and `ReleaseSnapshot()`.
-- [ ] Integrate Reference Counting on Slabs.
-
-### 4.2 Cursors & Iterators
-- [ ] Implement `CursorItem` and `CursorStack`.
-- [ ] Implement `Iterator` (Forward): Logic to drill down left.
-- [ ] Implement `ReverseIterator`: Logic to drill down right.
-- [ ] **Test:** `iterator_test.go`: Full traversal, range queries, "Step" logic.
-
-### 4.3 Public API
-- [ ] Implement `DB` struct satisfying `cosmos-db` interface.
-- [ ] Wire up `Get`, `Set`, `Delete`, `Iterator`, `Close`.
-- [ ] Implement `NewBatch` and `NewBatchWithSize`.
-- [ ] **Test:** `api_test.go`: Basic CRUD cycles.
-
----
-
-## Phase 5: Lifecycle & Safety
-
-**Goal:** Implement the Graveyard, Pruning, and Resource Management.
-
-### 5.1 The Graveyard
-- [ ] Track `RetiredPages` in `Batch` commit.
-- [ ] Store retired pages in in-memory Graveyard (`CommitSeq -> []PageID`).
-
-### 5.2 Reader Registry & Pruning
-- [ ] Implement `ReaderRegistry` to track active `CommitSeq`s.
-- [ ] Implement `MinPinnedSeq()` calculation.
-- [ ] Implement `Prune()`:
-    - Move pages from Graveyard to On-Disk Freelist if `RetiredSeq < MinPinnedSeq`.
-    - Handle `KeepRecent` history window.
-- [ ] **Test:** `lifecycle_test.go`: Verify pages are not reused while an Iterator is open.
-
-### 5.3 Internal Metadata
-- [ ] Implement "System Tree" (dual root in Superblock).
-- [ ] Implement Internal Key encoding (`0x00 | ...`).
-- [ ] Track Slab Stats (`DeadBytes`) in System Tree.
+1. Initialize module and deps:
+   - `go mod init <module>`
+   - add `github.com/cosmos/cosmos-db` and any mmap helpers if needed.
+2. Create **canonical packages** (do not rename; prompts assume these paths):
+   - `internal/crc` — CRC32C Castagnoli helpers.
+   - `internal/pager` — `index.db` file, chunked mmap, page alloc/free, msync/fsync.
+   - `internal/page` — page headers/types, slotted page primitives, leaf/internal layouts.
+   - `internal/tree` — B+Tree search/COW merge, dual roots, compaction verify‑set helpers.
+   - `internal/slab` — slab manager, record IO, stats.
+   - `internal/mvcc` — DBState, snapshots, reader registry, graveyard, pruning.
+   - `internal/compaction` — candidate selection, optimistic copy, micro‑batch locking, throttling.
+   - `internal/adaptive` — telemetry + inline threshold controller.
+   - module root package (recommend name `treedb`) — public `DB`, `Batch`, `Options`, `Open`, etc.
+3. Optional tooling:
+   - `cmd/treedbtool` for debug printing, corruption helpers, kill‑test driver.
+4. CI targets:
+   - `go test ./...`
+   - `go test -race ./...`
 
 ---
 
-## Phase 6: Compaction & Advanced Features
+## Implementation Plan
 
-**Goal:** Implement Slab Compaction and Adaptive Thresholds.
+### Phase 1 — On‑Disk Primitives & Checksums
 
-### 6.1 Compaction Extensions
-- [ ] Ensure Tree supports `Get` and `Set` for Compaction usage.
-- [ ] Ensure Compaction works under the Global Write Lock (Micro-Batching).
+- Define global constants: `PageSize=4096`, default `InlineThreshold=256`, `InlineHardMin=64`, `InlineHardMax=2048`, slab rotation size `4GB`.
+- Implement CRC32C Castagnoli utility:
+  - `Checksum(data []byte) uint32`
+  - `Verify(data []byte, want uint32) error`
+  - shared by pager and slab.
+- Implement `ValuePtr`:
+  - in‑memory struct with 16‑byte natural alignment.
+  - encode/decode to on‑disk LE bytes.
+  - helpers for `Offset`, `Length`, `FileID` (`FileID` is `uint32` occupying the final 4 bytes of the 16‑byte layout).
+- Implement slab record encode/decode:
+  - write: `[CRC32C][KeyLen][ValueLen][Key][Value]`
+  - compute CRC over `KeyLen..ValueBytes`.
+  - return `ValuePtr` where `Offset` points at `KeyLen` and `Length = 2 + 4 + len(Key) + len(Value)`.
+  - read: bounds check, parse forward from `Offset`, verify CRC, return value bytes.
+- Implement page header and unsafe parsing/encoding:
+  - header layout with CRC32C on body.
+  - page flags/types (Meta/Freelist/Internal/Leaf).
 
-### 6.2 Slab Compaction
-- [ ] Implement `Compactor`:
-    - Scan "System Tree" for high dead-byte slabs.
-    - "Ghost Copy": Read old slab, append to "Target Slab", prepare batch.
-    - Execute Micro-batches using Global Write Lock (Read-Verify-Set).
-- [ ] Implement Zombie Slab deletion (check RefCount).
-- [ ] **Test:** `compaction_test.go`: Fill slab with updates, compact, verify space reclaimed.
+### Phase 2 — Pager (`index.db`) with Chunked MMap
 
-### 6.3 Adaptive Inline Threshold (Optional/Advanced)
-- [ ] Implement Telemetry (EWMA) for leaf fill, split rate, etc.
-- [ ] Implement `Controller` to adjust `InlineThreshold` per commit.
+- Options: data directory, chunk size (default 256MB). `ChunkSize` MUST be a multiple of `PageSize` so pages never straddle chunk boundaries.
+- Open/create `index.db`:
+  - allocate two Meta pages and initial Freelist page.
+  - initialize empty user/system roots and total pages.
+- Chunked mmap manager:
+  - map file in logical pages; physical chunks tracked in slice/map.
+  - growth by pre‑allocating disk space (e.g., fallocate) then extending mmap **only for the new chunk**.
+  - forbid shrink; guard with panic/error.
+  - per‑chunk refcount; `Unmap` only when count==0.
+  - provide safe accessors (no exported `[]byte` slices pointing to mmap).
+  - enforce bounds (`Offset + PageSize` within mapped region) before any pointer/unsafe cast; SIGBUS cannot be recovered.
+- Page allocation:
+  - on‑disk freelist pages linked via `NextPageID`.
+  - `AllocPage()` prefers freelist, else extends file.
+  - `FreePages(ids []uint64)` appends into freelist pages.
+- Durability plumbing:
+  - `WriteSync()` path triggers `msync` for dirty pages and `fdatasync`/`fsync` for `index.db`.
+
+### Phase 3 — Slotted Pages
+
+- Implement slotted‑page heap/directory operations:
+  - insert/update/delete variable‑length entries.
+  - binary search on directory keys.
+  - in‑page defragmentation and free‑space reuse.
+- Leaf entry encode/decode:
+  - `[KeyLen][ValueLen][Flags][Key][InlineValue|ValuePtr]`.
+  - flags for Inline, Pointer, Tombstone.
+- Internal node encode/decode:
+  - `[ChildPageID][KeyBytes]` in heap; directory offsets.
+
+### Phase 4 — B+Tree Core (Dual Roots)
+
+- Implement search returning cursor path stack (root → leaf).
+- Copy‑On‑Write insert/update/delete:
+  - clone pages along search path.
+  - merge/overwrite/delete with tombstones.
+  - split leaf/internal on overflow; propagate separators upward.
+  - handle root split.
+- Write page CRC32C on commit.
+- Provide internal `Tree` interface:
+  - `GetRaw(key) (LeafEntry, error)`
+  - `SetRaw(key, LeafEntry) error`
+- Implement separate User and System trees with root IDs in Meta.
+- Decide and implement key‑encoding layer if required by section 1.7 tests.
+
+### Phase 5 — Slab Manager & SlabSet
+
+- On `Open()`:
+  - scan `data-*.slab`, open handles, build immutable `SlabSet`.
+  - identify active slab from Meta.
+  - truncate active slab to `ActiveSlabTail`.
+  - delete ghost slabs with `ID > ActiveSlabID`.
+- Append‑only writer:
+  - append large values as records; rotate at `4GB`:
+    1. `fdatasync` active slab
+    2. close/seal
+    3. create new slab
+    4. `fsync` parent directory
+- Track per‑slab stats: `DeadBytes`, `TotalBytes`.
+  - update on overwrite/delete producing dead bytes.
+  - persist in System tree keys `0x00|"slab"|FileID`.
+- Implement ref‑counted zombie deletion:
+  - `IsZombie` set when removed from active set.
+  - physical delete only when `RefCount==0`.
+
+### Phase 6 — MVCC Snapshots, Graveyard, Pruning
+
+- Define immutable `DBState`:
+  - `CommitSeq`, `UserRootPageID`, `SystemRootPageID`, `SlabSet`.
+- Maintain `atomic.Pointer[DBState]` published after each commit.
+- Reader registry:
+  - track pinned sequences from active snapshots/iterators.
+  - compute `MinPinnedSeq`.
+- Snapshot acquisition:
+  - atomic load DBState once (Acquire).
+  - register `CommitSeq`.
+  - increment slab `RefCount` for all slabs in state.
+- Snapshot close:
+  - deregister seq.
+  - decrement slab refs; delete zombies when last ref drops.
+- Graveyard:
+  - in‑memory `map[CommitSeq][]PageID` of replaced pages.
+  - pruner moves pages to on‑disk freelist only if
+    - `RetiredAtSeq < MinPinnedSeq` and
+    - `RetiredAtSeq < CurrentSeq - KeepRecent`.
+
+### Phase 7 — Batch “Zipper” Merge & Redundant Superblock Commit
+
+- Implement `Batch`:
+  - ops map, byte size tracking, strict state machine.
+  - `NewBatchWithSize` uses size hint.
+- Write path:
+  - Phase 1 pre‑write large values to active slab and store `ValuePtr`.
+  - Phase 2 sort keys and recursively merge into COW tree.
+  - collect old pages into graveyard.
+  - update system slab stats keys.
+- Commit:
+  - bump `CommitSeq`.
+  - if Sync:
+    - `fdatasync` active slab **before** meta/index persistence.
+    - `msync` dirty pages + `fdatasync`/`fsync` `index.db`.
+  - write inactive Meta page with new roots, freelist head, total pages, `ActiveSlabID/Tail`, CRC.
+  - publish new DBState.
+- Expose `Set/SetSync/Delete/DeleteSync` as single‑op batches under writer lock.
+
+### Phase 8 — Iterators (Cursor Stack)
+
+- Implement forward `Iterator(start,end)`:
+  - initialize stack via search to `start`.
+  - `Next()` drill‑down/up per spec.
+- Implement reverse `ReverseIterator(start,end)`:
+  - seek to first key `>= end` then step back; handle nil end to seek last key.
+  - `Next()` moves backward; optional `Prev()` for symmetry.
+- Ensure:
+  - tombstones skipped.
+  - invalid domain (`start>=end`) yields immediately invalid iterator.
+  - `Key()/Value()` allocate copies.
+  - iterator holds snapshot until `Close()`.
+
+### Phase 9 — Compaction (Move‑and‑Micro‑Batch)
+
+- Candidate selection:
+  - scan system slab stats; choose slabs with `DeadBytes/TotalBytes > 0.5`.
+- Optimistic copy:
+  - sequentially parse cold slab records.
+  - optional dead‑hint shortcut (start without, add later).
+  - liveness check: if tree pointer != old pointer, skip.
+  - copy live records to target slab; build local batch `(Key,OldPtr,NewPtr)`.
+- Micro‑batch locking commit:
+  - split into micro‑batches (~100 entries).
+  - for each micro‑batch under writer lock:
+    - `Current = Tree.Get(Key)`
+    - if `Current == OldPtr`, `Tree.Set(Key, NewPtr)` else skip.
+    - release lock and yield.
+- Zombie transition:
+  - atomic swap SlabSet to include target and remove cold.
+  - mark cold slab zombie; delete if unreferenced.
+- `DB.Compact()` triggers a full blocking cycle.
+- Throttling:
+  - leaky‑bucket limiter around copy loop to cap IO and isolate write latency.
+
+### Phase 10 — Adaptive Inline Threshold Controller
+
+- Add adaptive config: enabled flag, interval `K`, weights `w1..`, `step`, `alpha`.
+- Maintain EWMA telemetry at commit boundaries:
+  - `leaf_fill_avg`, `split_rate`, `index_write_bytes`,
+  - `slab_write_bytes`, `slab_dead_ratio`, `compaction_io_bps`.
+- Every `K` commits compute pressures and bounded‑step update.
+- Latch threshold at commit start; enforce hard bounds and “always out‑of‑line” for `len(value) > InlineHardMax`.
+- Export Stats keys listed in spec when enabled.
+
+### Phase 11 — Public DB API & Misc
+
+- Implement `Open(opts Options)`:
+  - validate opts, create dir, open pager/slabs.
+  - read/verify both Meta pages; pick highest valid `CommitSeq`.
+  - perform slab repair and ghost slab cleanup.
+  - initialize User/System trees.
+  - rebuild and publish DBState.
+- Implement public methods:
+  - `Get`, `Has`, `Set`, `SetSync`, `Delete`, `DeleteSync`.
+  - `Iterator`, `ReverseIterator`.
+  - `NewBatch`, `NewBatchWithSize`.
+  - `Stats` (mandatory keys + telemetry).
+  - `Print` (debug tree dump).
+  - `Close` (flush, unmap, close files).
+- Add non‑blocking benchmarks for write throughput and range scans.
 
 ---
 
-## Phase 7: Verification & Hardening
+## Phase 12: Write-Back Caching Layer (Memtable & WAL)
 
-**Goal:** comprehensive testing and failure simulation.
+**Goal:** Implement an LSM-style Level 0 in-memory buffer to resolve write amplification issues for high-frequency random writes.
 
-### 7.1 Fuzzing
-- [ ] Implement `fuzz_test.go` using `gopter` or Go Fuzz.
-- [ ] Model-based testing (compare against Go map).
+### 12.1 Foundations
+- [ ] Add `github.com/google/btree` dependency.
+- [ ] Implement `WAL` (Write-Ahead Log) writer/reader in `internal/wal`.
+    - Format: `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
+    - Support `Sync()` for durability.
+- [ ] Implement `Memtable` wrapper in `internal/memtable`.
+    - Use `google/btree`.
+    - Support `Set`, `Delete` (Tombstones), `Get`.
+    - Track approximate memory usage.
+- [ ] **Test:** Unit tests for WAL durability and recovery, and Memtable CRUD.
 
-### 7.2 Crash Simulation
-- [ ] Create `cmd/stress`: A tool to run random ops.
-- [ ] Script to `kill -9` stress tool and verify DB integrity on restart.
+### 12.2 Merging Iterator
+- [ ] Implement `Min-Heap` for sorting iterators by Key + Layer Precedence.
+- [ ] Implement `MergingIterator` in `internal/merging`.
+    - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
+    - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
+- [ ] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
 
-### 7.3 Cosmos Compliance
-- [ ] Import `github.com/cosmos/cosmos-db` and run their compliance suite.
+### 12.3 CachingDB Core Logic
+- [ ] Create `caching` package (or extend `treedb`).
+- [ ] Implement `CachingDB` struct wrapping `treedb.DB`.
+- [ ] **Write Path:**
+    - `Set`: Append to WAL -> Insert to Memtable.
+    - `SetSync`: Call `WAL.Sync()`.
+- [ ] **Flush Pipeline:**
+    - Check `Memtable.Size > FlushThreshold`.
+    - Rotate: Mutable -> Queue. Close WAL. Create new WAL.
+    - Background Worker: Pick from Queue -> `treedb.Batch` -> `WriteSync` -> Delete old WAL.
+- [ ] **Read Path:** `Get` checks Memtable(s) then Disk. `Iterator` uses `MergingIterator`.
 
----
-
-## Phase 9: Performance Sprint
-
-**Goal:** Instrument, measure, and optimize TreeDB performance.
-
-### 9.1 Metrics & Instrumentation
-- [ ] **Latency Metrics:** Update `cmd/stress` to track operation latencies (Get/Set) and report p50, p95, and p99.
-- [ ] **Profiling Support:** Update `cmd/stress` to accept `-cpuprofile` and `-memprofile` flags, writing `pprof` data for analysis.
-- [ ] **Write Amplification:** Update `cmd/stress` to calculate:
-    - `LogicalBytes`: Total bytes of Keys + Values successfully written.
-    - `PhysicalBytes`: Total size of the database directory (via `fs.Stat` or directory walk) at test end.
-    - `WriteAmp`: `PhysicalBytes / LogicalBytes`.
-
-### 9.2 Data Collection Strategy
-- [ ] **Baseline Run:** Run `cmd/stress` with:
-    - `duration=30s`, `workers=4`, `keys=100000`, `valsize=1024`.
-    - Enable `-cpuprofile` to identify CPU hotspots.
-    - Capture stdout for Throughput (IOPS) and Latency metrics.
-- [ ] **Analysis:** Inspect `cpu.pprof` using `go tool pprof -http=:8080`.
-
-### 9.3 Optimization Loop
-- [ ] Identify top CPU consumers (e.g., CRC calculation, syscalls, map access).
-- [ ] Identify top Allocators (GC pressure).
-- [ ] Implement targeted optimizations.
-- [ ] Re-run Baseline to verify improvements.
+### 12.4 Integration & Config
+- [ ] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
+- [ ] Update `Open` to initialize `CachingDB` wrapper if enabled.
+- [ ] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
+- **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
 
 ---
 
-## Work Procedure
+## Testing Plan (Aligned to `specs/test-spec.md`)
 
-1.  **Read Context**: Before starting a phase, re-read relevant spec sections.
-2.  **Implementation**: Write code + Unit Tests.
-3.  **Verification**: Run tests.
-4.  **Commit**: Git commit with clear message.
-5.  **User Check**: Briefly pause for user feedback if major design decisions arise.
+### Unit Tests
+
+1. **Pager (Chunked MMap)**:
+   - boundary‑crossing reads with tiny chunk sizes.
+   - growth safety while readers pin old chunks.
+   - negative shrink test (must fail/panic safely).
+   - refcounted unmap safety.
+   - durability ordering: `WriteSync` fdatasync slab before msync/fsync index.
+2. **Slotted Pages & Cursor Stack**:
+   - walk test: 10k inserts, forward and reverse counts match.
+   - split logic & parent wiring invariants.
+   - cursor stack depth correctness and drill‑down in `Next/Prev`.
+   - defragmentation reuses freed heap space.
+3. **Graveyard / Epoch Safety**:
+   - hold/release and prune movement to freelist.
+   - reachability barrier under open iterators + aggressive prune/commit.
+   - `MinPinnedSeq` advancement.
+   - `KeepRecent` history window behavior.
+4. **Slab Record Format**:
+   - round‑trip with CRC verification.
+   - ValuePtr alignment/size (16B) and length precision.
+   - corrupt record CRC detection.
+   - sequential enumeration over variable‑length records.
+5. **Superblocks / Recovery**:
+   - dual meta selection with one/both CRC corrupted.
+   - `ActiveSlabTail` truncation on open.
+   - monotonic `CommitSeq` across restarts.
+6. **Adaptive Inline Threshold**:
+   - latch semantics per commit.
+   - fanout preservation IAVL simulation.
+   - bounded‑step + hard‑bound enforcement.
+   - evaluation frequency/low‑overhead counters.
+7. **Internal Metadata Keyspace**:
+   - namespace isolation / internal encoding expectations.
+   - slab stats key persistence and decoding.
+   - meta page overflow prevention with thousands of slabs.
+
+### Integration & Functional Tests
+
+- CRUD cycles, overwrites, persistence across reopen.
+- Input validation (nil keys/values, empty keys ok).
+- Forward/reverse iterator semantics incl. end‑exclusive and nil bounds.
+- Concurrent iteration snapshot stability under commits + pruning.
+- Batch atomicity (panic mid‑merge yields no partial commit), state machine errors, large values memory safety.
+- `NewBatchWithSize` correctness and hint effectiveness (if instrumented).
+- Adaptive threshold mixed workload convergence and hard max enforcement.
+- Manual compaction blocking behavior and dead‑byte reduction.
+
+### Property‑Based / Fuzz Tests
+
+- Model‑based randomized ops against Go map oracle.
+- Open iterators across random commits + pruning to assert reachability invariant.
+- Key/value fuzzing with arbitrary bytes and huge keys.
+- File corruption fuzzing:
+  - flip bits in `index.db`, slabs, and meta pages.
+  - expect CRC errors / safe panics, never silent corruption.
+
+### Failure‑Injection / Crash‑Recovery
+
+- Kill‑test driver:
+  - separate writer process; random `kill -9`.
+  - on restart DB must be at state N or N‑1; no traversal corruption.
+- IO failure simulations via mocks:
+  - `ENOSPC`, read‑only mount, directory‑sync orphan slab cleanup.
+- Torn‑write scenarios:
+  - slab durable but meta not committed.
+  - torn meta page selection.
+  - torn index page CRC detection.
+
+### Concurrency & Race
+
+- Run full suite under `go test -race`.
+- Reader/writer duel monotonicity.
+- Zombie slab life‑support during iteration then deletion after close.
+- Resurrection verify‑set race (user update wins).
+- Torn compaction recovery.
+- Compaction serialization under writer lock.
+- Compaction throttling latency isolation.
+- Dead‑hint optimization metrics (if implemented).
+
+### Cosmos Compliance
+
+- Run upstream `cosmos-db` backend suite (`db/db_test.go`):
+  - iterator, reverse iterator, batch tests.
+- Pruning validation scenario (10k commits, `KeepRecent` policy).
+
+### Commands
+
+- Standard tests: `go test ./...`
+- Race detection: `go test -race ./...`
+- Fuzzing (Go 1.18+): `go test -fuzz=Fuzz -run=^$ ./...`
+- Benchmarks: `go test -bench=. ./...`
