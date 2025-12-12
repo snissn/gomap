@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap-gemini/TreeDB/node"
 	"github.com/snissn/gomap-gemini/TreeDB/page"
@@ -18,15 +19,23 @@ const (
 	MetaPage1ID = 1
 )
 
+type DBState struct {
+	CommitSeq  uint64
+	RootPageID uint64
+	SlabSet    *slab.SlabSet
+}
+
 type DB struct {
 	pager       *pager.Pager
 	slabManager *slab.SlabManager
 	zipper      *zipper.Zipper
-	tree        *tree.Tree
+	// tree        *tree.Tree // Removed: Tree is created per-snapshot or operation
 	
 	mu          sync.RWMutex
 	meta        page.MetaPageBody
-	metaPageID  uint64 // Which page (0 or 1) holds the current valid meta
+	metaPageID  uint64 
+	
+	state       atomic.Pointer[DBState]
 }
 
 type Options struct {
@@ -34,7 +43,13 @@ type Options struct {
 	ChunkSize int64 // Default 256MB
 }
 
-// Open opens the database, performing recovery if necessary.
+type Snapshot struct {
+	db    *DB
+	state *DBState
+	tree  *tree.Tree
+}
+
+// Open opens the database.
 func Open(opts Options) (*DB, error) {
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = 256 * 1024 * 1024
@@ -63,8 +78,13 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Initialize Tree with recovering root
-	db.tree = tree.New(p, sm, db.meta.UserRootPageID)
+	// Initialize State
+	initialState := &DBState{
+		CommitSeq:  db.meta.CommitSeq,
+		RootPageID: db.meta.UserRootPageID,
+		SlabSet:    sm.CurrentSlabSet(),
+	}
+	db.state.Store(initialState)
 	
 	return db, nil
 }
@@ -81,22 +101,13 @@ func (db *DB) Close() error {
 
 // recover reads meta pages and restores state.
 func (db *DB) recover() error {
-	// 1. Ensure Meta Pages exist (Alloc if new file)
 	if db.pager.PageCount() < 2 {
-		// New DB? Alloc 0 and 1.
 		if _, err := db.pager.Alloc(2); err != nil {
 			return err
 		}
-		// Init empty meta
 		db.meta = page.MetaPageBody{}
-		db.metaPageID = MetaPage1ID // So next write goes to 0? Or start with 0 valid?
-		// Write initial meta to 0 and 1?
-		// Let's assume initialized to 0s is fine?
-		// We should write a valid empty meta.
-		// "New DB" state: CommitSeq=0, Roots=0 (invalid? or empty root?).
-		// We need an Empty Root Node.
+		db.metaPageID = MetaPage1ID 
 		
-		// Create Empty Root
 		rootID, err := db.pager.Alloc(1)
 		if err != nil {
 			return err
@@ -105,20 +116,18 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		n := page.UnsafeCastHeader(data)
-		n.PageID = rootID
-		n.Flags = uint16(page.PageTypeLeaf)
-		n.Count = 0
-		n.Checksum = page.Checksum(data) // Update checksum
+		n := node.NewNode(data)
+		n.SetPageID(rootID)
+		n.SetType(page.PageTypeLeaf)
+		n.SetCount(0)
+		n.UpdateChecksum()
 		
 		db.meta.UserRootPageID = rootID
 		db.meta.CommitSeq = 0
 		
-		// Write to Meta 0
 		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
 			return err
 		}
-		// Write to Meta 1
 		if err := db.writeMeta(MetaPage1ID, db.meta); err != nil {
 			return err
 		}
@@ -126,7 +135,6 @@ func (db *DB) recover() error {
 		return nil
 	}
 
-	// 2. Read Meta 0 and 1
 	m0, valid0 := db.readMeta(MetaPage0ID)
 	m1, valid1 := db.readMeta(MetaPage1ID)
 
@@ -142,7 +150,6 @@ func (db *DB) recover() error {
 		activeMeta = m1
 		activeID = MetaPage1ID
 	} else {
-		// Both valid, pick highest Seq
 		if m0.CommitSeq >= m1.CommitSeq {
 			activeMeta = m0
 			activeID = MetaPage0ID
@@ -155,24 +162,16 @@ func (db *DB) recover() error {
 	db.meta = activeMeta
 	db.metaPageID = activeID
 
-	// 3. Slab Repair
-	// "Open ActiveSlabID. Truncate it to ActiveSlabTail."
 	if err := db.slabManager.SetActiveSlab(activeMeta.ActiveSlabID); err != nil {
 		return err
 	}
 	if err := db.slabManager.TruncateActiveSlab(activeMeta.ActiveSlabTail); err != nil {
 		return err
 	}
-
-	// 4. Orphan Cleanup
-	// "Delete slabs > ActiveSlabID"
 	if err := db.slabManager.PruneSlabs(activeMeta.ActiveSlabID); err != nil {
 		return err
 	}
 	
-	// Update Pager PageCount
-	// We trust Meta.TotalPages. We do NOT truncate the physical file (shrinking forbidden).
-	// We just reset the logical count so new allocations overwrite the "dead" tail.
 	if activeMeta.TotalPages > 0 {
 		db.pager.SetPageCount(activeMeta.TotalPages)
 	}
@@ -185,23 +184,16 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	if err != nil {
 		return page.MetaPageBody{}, false
 	}
-	// Verify checksum
-	// PageHeader.Checksum covers the BODY.
-	// Let's manually verify.
-	n := node.NewNode(data) // Wrapper
+	n := node.NewNode(data) 
 	if !n.VerifyChecksum() {
 		return page.MetaPageBody{}, false
 	}
-	
-	// Check Type
 	if n.Type() != page.PageTypeMeta {
 		return page.MetaPageBody{}, false
 	}
-	
-	// Decode Body
-	// Body starts at PageHeaderSize
-	bodyData := data[page.PageHeaderSize:]
-	return page.DecodeMetaBody(bodyData), true
+	// Note: MetaBody struct size is 60. Header is 16.
+	// Ensure we don't panic if page is somehow smaller? Pager guarantees 4KB.
+	return page.DecodeMetaBody(data[page.PageHeaderSize:]), true
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
@@ -209,38 +201,27 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	if err != nil {
 		return err
 	}
-	
-	// Write Body
 	meta.Encode(data[page.PageHeaderSize:])
-	
-	// Update Header
 	n := node.NewNode(data)
 	n.SetPageID(pageID)
 	n.SetType(page.PageTypeMeta)
-	n.SetCount(0) // Unused for Meta
+	n.SetCount(0)
 	n.UpdateChecksum()
-	
 	return nil
 }
 
-// Commit persists the new root.
-func (db *DB) Commit(newRootID uint64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	// 1. Sync Active Slab
-	// "fdatasync the active slab file MUST complete before any meta page update"
-	if err := db.slabManager.Sync(); err != nil {
-		return err
+// commitLocked persists the new root.
+// Caller must hold db.mu.
+func (db *DB) commitLocked(newRootID uint64, sync bool) error {
+	if sync {
+		if err := db.slabManager.Sync(); err != nil {
+			return err
+		}
+		if err := db.pager.Sync(); err != nil {
+			return err
+		}
 	}
 	
-	// 2. Sync Index (Pages)
-	// Ensure new root and children are durable.
-	if err := db.pager.Sync(); err != nil {
-		return err
-	}
-	
-	// 3. Update Meta
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -248,7 +229,6 @@ func (db *DB) Commit(newRootID uint64) error {
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = db.pager.PageCount()
 	
-	// Write to inactive meta page
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
 		targetPageID = 1
@@ -258,31 +238,64 @@ func (db *DB) Commit(newRootID uint64) error {
 		return err
 	}
 	
-	// 4. Sync Index (Meta)
-	if err := db.pager.Sync(); err != nil {
-		return err
+	if sync {
+		if err := db.pager.Sync(); err != nil {
+			return err
+		}
 	}
 	
-	// 5. Update In-Memory State
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
-	db.tree.SetRoot(newRootID)
+	
+	// Update State
+	newState := &DBState{
+		CommitSeq:  nextMeta.CommitSeq,
+		RootPageID: nextMeta.UserRootPageID,
+		SlabSet:    db.slabManager.CurrentSlabSet(),
+	}
+	db.state.Store(newState)
 	
 	return nil
 }
 
+// Commit persists the new root (Sync=true by default for public API convenience if used directly).
+func (db *DB) Commit(newRootID uint64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.commitLocked(newRootID, true)
+}
+
+// AcquireSnapshot returns a new snapshot.
+func (db *DB) AcquireSnapshot() *Snapshot {
+	state := db.state.Load()
+	db.slabManager.AcquireSlabs(state.SlabSet)
+	return &Snapshot{
+		db:    db,
+		state: state,
+		tree:  tree.New(db.pager, db.slabManager, state.RootPageID),
+	}
+}
+
+// Close releases the snapshot.
+func (s *Snapshot) Close() error {
+	return s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+}
+
+// Get returns value from snapshot.
+func (s *Snapshot) Get(key []byte) ([]byte, error) {
+	return s.tree.Get(key)
+}
+
+// Getters
 func (db *DB) Pager() *pager.Pager {
 	return db.pager
 }
-
 func (db *DB) SlabManager() *slab.SlabManager {
 	return db.slabManager
 }
-
 func (db *DB) Zipper() *zipper.Zipper {
 	return db.zipper
 }
-
-func (db *DB) Tree() *tree.Tree {
-	return db.tree
+func (db *DB) State() *DBState {
+	return db.state.Load()
 }

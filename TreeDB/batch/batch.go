@@ -91,3 +91,8 @@ func (b *Batch) Delete(key []byte) error {
 func (b *Batch) Ops() map[string]Entry {
 	return b.ops
 }
+
+// ByteSize returns the approximate size of the batch.
+func (b *Batch) ByteSize() int {
+	return b.byteSize
+}

@@ -9,25 +9,24 @@ import (
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 )
 
+// SlabSet is an immutable list of SlabFiles active at a specific point in time.
+type SlabSet struct {
+	Files map[uint32]*SlabFile
+}
+
 type SlabManager struct {
 	dir        string
 	activeSlab *SlabFile
-	slabs      map[uint32]*SlabFile
+	slabs      map[uint32]*SlabFile // The master list of all live + zombie slabs
 	mu         sync.RWMutex
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
-	// For now, we assume starting fresh or need scanning?
-	// Spec says "Open() recovery... Scan data directory".
-	// For Phase 1, we can just start with slab 0 or scanning existing.
-	// Let's implement simple scanning to find the highest ID.
-	
 	sm := &SlabManager{
 		dir:   dir,
 		slabs: make(map[uint32]*SlabFile),
 	}
 	
-	// Scan directory for data-*.slab
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
 	if err != nil {
 		return nil, err
@@ -53,7 +52,6 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 	}
 	
 	if !found {
-		// Create slab 0
 		s, err := OpenSlab(filepath.Join(dir, "data-0000.slab"), 0)
 		if err != nil {
 			return nil, err
@@ -78,6 +76,11 @@ func (sm *SlabManager) Close() error {
 	return nil
 }
 
+// Read reads from the slab file identified by ptr.FileID.
+// For Snapshot Isolation, the caller should ensure the file is pinned via a Snapshot.
+// If accessing without snapshot (e.g. during Compaction or internal ops), care must be taken.
+// Current impl uses RLock on the master map, so it's safe against concurrent Close() initiated by Prune/Compaction
+// IF Prune/Compaction removes from map.
 func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
@@ -96,11 +99,9 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	
 	offset, err := sm.activeSlab.Write(key, value)
 	if err == ErrSlabFull {
-		// Rotate
 		if err := sm.rotate(); err != nil {
 			return page.ValuePtr{}, err
 		}
-		// Try again with new slab
 		offset, err = sm.activeSlab.Write(key, value)
 	}
 	
@@ -108,8 +109,6 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, err
 	}
 	
-	// Construct ValuePtr
-	// Length = 2 (KeyLen) + 4 (ValLen) + len(Key) + len(Value)
 	length := 2 + 4 + len(key) + len(value)
 	
 	return page.ValuePtr{
@@ -120,12 +119,10 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 }
 
 func (sm *SlabManager) rotate() error {
-	// Sync old slab
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
 	
-	// Create new slab
 	newID := sm.activeSlab.ID + 1
 	filename := fmt.Sprintf("data-%04d.slab", newID)
 	path := filepath.Join(sm.dir, filename)
@@ -138,9 +135,6 @@ func (sm *SlabManager) rotate() error {
 	sm.slabs[newID] = newSlab
 	sm.activeSlab = newSlab
 	
-	// Sync directory? Spec 2.1 says "fsync the parent directory".
-	// Implement if needed for strict durability, skip for now.
-	
 	return nil
 }
 
@@ -150,30 +144,24 @@ func (sm *SlabManager) Sync() error {
 	return sm.activeSlab.Sync()
 }
 
-// ActiveSlabID returns the ID of the current active slab.
 func (sm *SlabManager) ActiveSlabID() uint32 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.activeSlab.ID
 }
 
-// ActiveSlabTail returns the current size (tail offset) of the active slab.
 func (sm *SlabManager) ActiveSlabTail() uint64 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return uint64(sm.activeSlab.Size)
 }
 
-// SetActiveSlab sets the active slab to the given ID.
 func (sm *SlabManager) SetActiveSlab(id uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	
 	s, ok := sm.slabs[id]
 	if !ok {
-		// Try to open it if not loaded?
-		// Assuming NewSlabManager loaded all?
-		// If not loaded, maybe try opening?
 		path := filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", id))
 		var err error
 		s, err = OpenSlab(path, id)
@@ -186,14 +174,12 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 	return nil
 }
 
-// TruncateActiveSlab truncates the active slab to the specified offset.
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.activeSlab.Truncate(int64(offset))
 }
 
-// PruneSlabs removes any slab files with ID > maxID.
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -209,7 +195,70 @@ func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 			delete(sm.slabs, id)
 		}
 	}
-	// Also scan directory just in case?
-	// NewSlabManager scans, so memory map should be accurate if called after New.
 	return nil
+}
+
+// CurrentSlabSet returns a snapshot of the current slabs.
+func (sm *SlabManager) CurrentSlabSet() *SlabSet {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	
+	files := make(map[uint32]*SlabFile, len(sm.slabs))
+	for k, v := range sm.slabs {
+		files[k] = v
+	}
+	return &SlabSet{Files: files}
+}
+
+// AcquireSlabs increments the RefCount for all slabs in the set.
+func (sm *SlabManager) AcquireSlabs(set *SlabSet) {
+	for _, s := range set.Files {
+		s.RefCount.Add(1)
+	}
+}
+
+// ReleaseSlabs decrements the RefCount. If 0 and Zombie, closes and removes.
+func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
+	// We iterate the set. For each slab:
+	// Decrement RefCount.
+	// If RefCount == 0 && IsZombie -> Delete.
+	
+	// We need to lock SlabManager to remove from master map if we delete.
+	// But we can check condition without lock first?
+	// `IsZombie` is atomic. `RefCount` is atomic.
+	// But `delete(sm.slabs, id)` needs lock.
+	
+	var err error
+	
+	for _, s := range set.Files {
+		newRef := s.RefCount.Add(-1)
+		if newRef == 0 && s.IsZombie.Load() {
+			// Needs cleanup.
+			// Lock manager.
+			sm.mu.Lock()
+			// Double check?
+			// RefCount could have gone up?
+			// No, once Zombie, new readers don't pick it up (unless they pick it from old snapshot?).
+			// Wait, "Snapshot Safety Invariant".
+			// If IsZombie is true, it means it was removed from ACTIVE set.
+			// Only old snapshots hold it.
+			// So no NEW snapshot can acquire it.
+			// So RefCount cannot go up.
+			
+			// Double check ref count just in case?
+			if s.RefCount.Load() == 0 {
+				if _, exists := sm.slabs[s.ID]; exists {
+					if e := s.Close(); e != nil {
+						err = e // store error but continue?
+					}
+					if e := os.Remove(s.Path); e != nil {
+						err = e
+					}
+					delete(sm.slabs, s.ID)
+				}
+			}
+			sm.mu.Unlock()
+		}
+	}
+	return err
 }
