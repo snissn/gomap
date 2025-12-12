@@ -18,6 +18,27 @@ Focus on isolating the complex low-level data structures before system integrati
 * **Durability Plumbing (RFC-03):**
     * **Strict Ordering:** Verify that `WriteSync()` calls `fdatasync` on the active slab file **before** issuing any `msync`/`fsync` on the index file.
     * Verify that `Write()` does not necessarily force durability (allowed), but remains recoverable up to the last completed `WriteSync()`.
+* **Preallocation Cache (Perf-01):**
+    * **Scenario:** Grow `index.db`, then repeatedly call growth paths that would normally `Stat`/`Truncate`.
+    * **Assert:** Pager uses cached `preallocSize` to avoid redundant syscalls.
+    * **Negative Test:** Force an external shrink or stale cache observation (mocked stat smaller than cached). Assert Pager refreshes or fails fast rather than mapping beyond EOF.
+* **Commit-Level Growth Estimate (Perf-02):**
+    * **Scenario:** Under a single commit, request many new pages.
+    * **Assert:** Pager estimates growth once per commit, caps the estimate to ≤2–4 chunks, and still falls back to on-demand growth if the estimate under-shoots.
+* **Pinned PageRef Views (Perf-03):**
+    * **Scenario:** Acquire `ReadPageRef` pins across multiple pages, then grow the file and remap new chunks.
+    * **Assert:** Old pinned refs remain valid (no SIGBUS) and can be CRC-verified/parsed.
+    * **Leak Test:** Intentionally hold refs past an operation boundary; assert `Close()` reports/blocks on outstanding refs in debug/tests.
+* **Mutable New-Page Writes (Perf-04):**
+    * **Scenario:** Allocate a new page and mutate it via `WithMutablePage`.
+    * **Assert:** Mutation is allowed only for pages allocated in the current commit. Using `WithMutablePage` on an old/reused PageID must fail or panic in debug.
+    * **CRC Guard:** Corrupt the old page CRC before cloning; assert the write path aborts rather than propagating corruption.
+* **Optional Skip-Zeroing (Perf-05):**
+    * **Scenario:** Disable zeroing for file-extended pages.
+    * **Assert:** Only brand-new, file-extended pages may be un-zeroed; freelist-reused pages are still fully overwritten/initialized before publish and CRC reflects deterministic bytes.
+* **Freelist In-Place Mutations (Perf-06):**
+    * **Scenario:** Pop and append IDs without allocating full freelist slices.
+    * **Assert:** Freelist page CRC is verified before mutation and updated after; `NextPageID` chain and capacity invariants hold.
 
 ### 1.2 Slotted Pages & Cursor Stack
 
@@ -39,6 +60,9 @@ Focus on isolating the complex low-level data structures before system integrati
     * **Assert:** The internal `Cursor.Stack` slice has length 3 when at a leaf, and correctly pushes/pops during `Next()` calls that cross subtree boundaries.
     * **Drill Down:** Verify `Next()` correctly descends from a Branch node to the **left-most** leaf descendant.
     * **Reverse Drill Down:** Verify `Prev()` correctly descends from a Branch node to the **right-most** leaf descendant.
+* **Pinned Ref Release in Cursor Stack (Perf-09):**
+    * **Scenario:** Use an iterator that pins pages via `ReadPageRef`, then force stack pops by scanning across many splits.
+    * **Assert:** PageRefs are released on every pop and on `Close()`. No pinned ref leaks remain after iteration completes.
 
 * **Defragmentation:** Delete every other key in a page. Verify that subsequent writes utilize the freed space (compaction within the page heap).
 
@@ -96,6 +120,12 @@ Focus on isolating the complex low-level data structures before system integrati
 * **Record Enumeration:**
     * Append N records; iterate sequentially through slab parsing.
     * **Assert:** All records are discoverable and offsets advance correctly (no desync on variable lengths).
+* **Byte-Exact Encoding Regression (Perf-07):**
+    * **Scenario:** Append the same large key/value via the baseline path and via the optimized AppendLarge path (`pwritev`/pooled header).
+    * **Assert:** On-disk bytes match exactly and CRC verification succeeds for both.
+* **Buffered Writer Flush & Tail Safety (Perf-08):**
+    * **Scenario:** Enable buffered append, write many large values, then crash before commit.
+    * **Assert:** On reopen, `ActiveSlabTail` truncation restores the last committed tail and no committed pointer references unwritten bytes.
 
 ### 1.5 Superblocks (Redundant Meta & Recovery)
 
@@ -137,6 +167,7 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
     * **Compare:** Run two configurations:
         1.  `InlineThreshold = 256` (Values in Tree).
         2.  `InlineThreshold = 64` (Values in Slab).
+    * **Tagging:** This benchmark is long-running and MUST be guarded behind a long/slow build tag (e.g., `//go:build long`) so it does not block CI.
     * **Assert (Success Criteria):**
         * Config 2 must show reduced **Read Latency** (shallower tree).
         * Config 2 must NOT show excessive **Compaction CPU usage** or **Slab Wasted Space** (>20% degradation compared to Config 1).
@@ -152,6 +183,8 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
     * **Scenario:** Configure `K=100` (update every 100 commits).
     * **Trigger:** Run 10,000 small commits.
     * **Assert:** Controller evaluation occurs approximately `10000 / K` times (instrumentation counter), and does not allocate per-operation.
+* **Stats Exposure (Perf-12):**
+    * **Assert:** When adaptive tuning is enabled, `Stats()` includes per-commit byte counters for `treedb.inline_threshold.index_write_bytes` and `treedb.inline_threshold.slab_write_bytes` (EWMAs), in addition to existing mandatory keys.
 
 ### 1.7 Internal Metadata Keyspace & Scalability (Spec v2.7)
 
@@ -193,6 +226,12 @@ These checks are non-functional guardrails intended to catch obvious performance
 * **Single-Op Fast Path:**
     * **Scenario:** Compare `DB.Set`/`DB.Delete` loops to an equivalent 1-op `Batch`.
     * **Assert:** `DB.Set`/`DB.Delete` are within ~10% of (or faster than) the 1-op batch and avoid per-op key sorting or map churn.
+* **Point Read Allocation Guardrail (Perf):**
+    * **Scenario:** Run `BenchmarkGet150B` with `-benchmem`.
+    * **Assert:** Allocations/op are stable and below the pre-optimization baseline after view-based reads land.
+* **Iterator Scan Allocation Guardrail (Perf):**
+    * **Scenario:** Run `BenchmarkIterScan` with `-benchmem` over a large range.
+    * **Assert:** Allocations and bytes/op remain close to the post-optimization baseline; no O(PageSize * pagesVisited) regressions.
 
 ---
 

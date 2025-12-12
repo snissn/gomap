@@ -1,6 +1,8 @@
 package pager
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"unsafe"
 
@@ -33,6 +35,21 @@ func TestChunkAlignmentAndBoundaryCrossing(t *testing.T) {
 		}
 		if len(b) != page.PageSize {
 			t.Fatalf("unexpected page size for %d: %d", id, len(b))
+		}
+	}
+
+	if len(p.chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(p.chunks))
+	}
+	for i, c := range p.chunks {
+		if c.startOffset%p.chunkSize != 0 {
+			t.Fatalf("chunk %d startOffset misaligned: %d", i, c.startOffset)
+		}
+		if int64(len(c.data)) != p.chunkSize {
+			t.Fatalf("chunk %d data length: got %d want %d", i, len(c.data), p.chunkSize)
+		}
+		if int64(len(c.data))%page.PageSize != 0 {
+			t.Fatalf("chunk %d data length not page-aligned: %d", i, len(c.data))
 		}
 	}
 
@@ -173,3 +190,25 @@ func TestFreelistReuse(t *testing.T) {
 	}
 }
 
+func TestPreallocCacheStalenessFailsFast(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	fi, err := os.Stat(filepath.Join(dir, "index.db"))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	p.mu.Lock()
+	p.preallocSize = fi.Size() + p.chunkSize
+	wantGrowSize := p.preallocSize + p.chunkSize
+	p.mu.Unlock()
+
+	if err := p.preallocate(wantGrowSize); err != ErrFileCorrupt {
+		t.Fatalf("expected ErrFileCorrupt, got %v", err)
+	}
+}

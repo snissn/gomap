@@ -26,14 +26,15 @@ type chunk struct {
 	mapped []byte
 	// data is the logical chunk view within mapped.
 	data []byte
-	refs        atomic.Int64
+	refs atomic.Int64
 }
 
 type Pager struct {
-	path      string
-	file      *os.File
-	chunkSize int64
-	sysPageSize int64
+	path         string
+	file         *os.File
+	chunkSize    int64
+	sysPageSize  int64
+	preallocSize int64
 
 	mu     sync.Mutex
 	chunks []*chunk
@@ -77,9 +78,9 @@ func Open(dir string, chunkSize int64) (*Pager, error) {
 		return nil, err
 	}
 	p := &Pager{
-		path:      path,
-		file:      f,
-		chunkSize: chunkSize,
+		path:        path,
+		file:        f,
+		chunkSize:   chunkSize,
 		sysPageSize: int64(os.Getpagesize()),
 	}
 
@@ -96,6 +97,7 @@ func (p *Pager) initOrLoad() error {
 		return err
 	}
 	size := fi.Size()
+	p.preallocSize = size
 	if size == 0 {
 		return p.initNew()
 	}
@@ -262,11 +264,11 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	}
 
 	head := p.meta.FreelistHeadID
-		for head != 0 {
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return 0, err
-			}
+	for head != 0 {
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return 0, err
+		}
 		fp, err := decodeFreelistPage(head, buf)
 		if err != nil {
 			return 0, err
@@ -292,11 +294,11 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
 		return 0, err
 	}
-		// Zero the new page for determinism.
-		b, err := p.pageSliceLocked(newID)
-		if err != nil {
-			return 0, err
-		}
+	// Zero the new page for determinism.
+	b, err := p.pageSliceLocked(newID)
+	if err != nil {
+		return 0, err
+	}
 	for i := range b {
 		b[i] = 0
 	}
@@ -324,21 +326,21 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 		head = newID
 		p.meta.FreelistHeadID = head
 		fp := freelistPage{pageID: head, next: 0, ids: nil}
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return err
-			}
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return err
+		}
 		if err := encodeFreelistPage(fp, buf); err != nil {
 			return err
 		}
 	}
 
 	remaining := append([]page.PageID(nil), ids...)
-		for len(remaining) > 0 {
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return err
-			}
+	for len(remaining) > 0 {
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return err
+		}
 		fp, err := decodeFreelistPage(head, buf)
 		if err != nil {
 			return err
@@ -351,10 +353,10 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 			if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
 				return err
 			}
-				newBuf, err := p.pageSliceLocked(newHead)
-				if err != nil {
-					return err
-				}
+			newBuf, err := p.pageSliceLocked(newHead)
+			if err != nil {
+				return err
+			}
 			newFP := freelistPage{pageID: newHead, next: head, ids: nil}
 			if err := encodeFreelistPage(newFP, newBuf); err != nil {
 				return err
@@ -447,11 +449,6 @@ func alignUp(size, multiple int64) int64 {
 }
 
 func (p *Pager) preallocate(size int64) error {
-	// Prevent shrink while mapped.
-	fi, err := p.file.Stat()
-	if err != nil {
-		return err
-	}
 	mapSize := alignUp(size, p.chunkSize)
 	aligned := mapSize
 	sysPS := p.sysPageSize
@@ -461,10 +458,30 @@ func (p *Pager) preallocate(size int64) error {
 	if rem := aligned % sysPS; rem != 0 {
 		aligned += sysPS - rem
 	}
+	if aligned <= p.preallocSize {
+		return nil
+	}
+
+	// Prevent shrink while mapped.
+	fi, err := p.file.Stat()
+	if err != nil {
+		return err
+	}
+	if fi.Size() < p.preallocSize {
+		return ErrFileCorrupt
+	}
 	if aligned < fi.Size() {
 		return ErrShrinkForbidden
 	}
-	return p.file.Truncate(aligned)
+	if fi.Size() == aligned {
+		p.preallocSize = aligned
+		return nil
+	}
+	if err := p.file.Truncate(aligned); err != nil {
+		return err
+	}
+	p.preallocSize = aligned
+	return nil
 }
 
 func (p *Pager) mapExisting(size int64) error {

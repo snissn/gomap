@@ -47,6 +47,9 @@ Rules:
   * The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32C), so the compactor can parse forward easily and readers can bounds-check safely.
   * **Definition of Length:** `ValuePtr.Length` is defined as `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`. This ensures that `Offset + Length` precisely covers the data protected by the CRC.
   * On read, the record CRC32C is verified before returning data.
+  * **Approved performance optimizations (write path):**
+      * Implementations MAY use vectored writes (e.g., `pwritev`) and pooled header buffers when appending large records. The on-disk bytes MUST remain identical to the layout above and CRC coverage MUST be unchanged; a portable fallback to `WriteAt` is required.
+      * Implementations MAY use a bounded, sequential buffered writer (optionally with `O_APPEND`) for the active slab. Buffers MUST be memory-bounded, MUST flush all pending bytes before any commit publishes new roots, and MUST flush then `fdatasync` for `*Sync` commits **before** the index/meta durability boundary. Concurrent random `WriteAt` on the active slab is forbidden while buffered append is enabled.
 
 ### 2.2 The Index File ("The Pager")
 
@@ -72,6 +75,20 @@ Because `index.db` is memory-mapped, TreeDB defines an explicit persistence boun
     2.  The committed superblock is durable (`msync` dirty index pages as needed + `fdatasync`/`fsync` on `index.db`).
 
 Implementation note: the exact combination of `msync` and `fdatasync` is OS-dependent; the contract is that `*Sync` means the new root is recoverable after a power loss.
+
+#### 2.2.2 Approved Pager Optimizations & Internal APIs (Performance Sprint)
+
+The following pager-level optimizations are permitted provided their invariants hold:
+
+  * **Preallocation cache:** The Pager MAY cache the last preallocated file size (`preallocSize`) to skip redundant `Stat`/`Truncate` calls. The cached size is advisory: if a later stat observes the file smaller than cached, the Pager MUST refresh or fail fast to avoid mapping beyond EOF (SIGBUS risk). Alignment to chunk boundaries and OS page size MUST be preserved.
+  * **Commit-level growth estimate:** The writer MAY batch/guesstimate required growth once per commit. Estimates MUST be capped to a small multiple of `ChunkSize` (≤2–4 chunks) and correctness MUST NOT depend on the estimate; under-shoots must fall back to on-demand growth.
+  * **Optional skip-zeroing:** Skipping zeroing of freshly file-extended pages is allowed only as an explicit opt-in. It MAY apply only to pages that extend the file (never freelist-reused pages). All bytes covered by the page body CRC MUST still be deterministically initialized by the tree/pager before publish. Tests/debug builds SHOULD keep zeroing enabled.
+  * **Zero-copy internal reads:** Internal packages MAY use pinned page views to avoid PageSize copies:
+      * `ReadPage(pid)` continues to return a safe copy.
+      * `ReadPageRef(pid)` returns a lifetime-bounded view that pins the underlying chunk. Callers MUST treat `PageRef.Bytes()` as read-only and MUST still verify the per-page body CRC before semantic use.
+      * Every `PageRef` MUST be released (`defer ref.Release()`); `Pager.Close()` MUST account for outstanding refs.
+  * **Direct mmap writes for new pages:** The Pager MAY expose `WithMutablePage(pid, fn)` (or equivalent) that yields a mutable view only for pages newly allocated in the current commit. Using it on old/retired pages MUST be prevented by API shape or debug assertions. Old page CRC MUST be verified before cloning, and new page body CRC MUST be recomputed before commit.
+  * **Freelist in-place pop/append:** Freelist operations MAY mutate freelist pages in place to avoid allocations, but MUST verify freelist-page CRC before reading/modifying and MUST update CRC after each mutation while preserving the `NextPageID` chain invariants.
 
 ## 3\. Data Structures
 
@@ -171,9 +188,9 @@ Used to recycle space within `index.db`.
 
 #### 3.5.1 Namespace Isolation (Dual Roots)
 TreeDB maintains two distinct B+Trees rooted in the Superblock:
-1. **User Tree:** Stores user keys raw (no prefixing).
-2. **System Tree:** Stores internal metadata (Slab Stats, Configs).
-This eliminates the storage and CPU overhead of byte-prefixing.
+1. **User Tree:** Stores **encoded user keys** as `0x01 | userKey` internally. Public APIs and iterators MUST strip the `0x01` prefix on output.
+2. **System Tree:** Stores internal metadata (Slab Stats, Configs) in a disjoint keyspace starting with `0x00`.
+This encoding is canonical (not implementation-defined) to match Cosmos iterator expectations and to keep raw-tree dumps unambiguous.
 
 #### 3.5.2 Slab Stats Keys
   * **Key:** `0x00 | "slab" | uint32(FileID)`
@@ -268,7 +285,7 @@ Writes are batched to ensure atomicity and reduce I/O.
 
 1.  Sort the Batch Keys.
 2.  Recursively descend the B+Tree (COW).
-      * **Implementation note (performance):** Writers SHOULD clone page buffers along the search path and apply slotted-page `Set/Delete` directly on the clones, rather than decoding all entries into Go slices and rebuilding entire pages for every update. Full zipper merge remains the canonical algorithm for large batches; incremental updates are an allowed optimization that preserves identical on-disk layout and COW semantics.
+      * **Implementation note (performance):** Writers SHOULD clone pages along the search path using zero-copy views (`ReadPageRef`) and write new pages directly into mmap via `WithMutablePage` where available, applying slotted-page `Set/Delete` in place on the clones. Full zipper merge remains the canonical algorithm for large batches; incremental updates are an allowed optimization that preserves identical on-disk layout and COW semantics.
 3.  **Leaf Node:**
       * Allocate `NewPage`.
       * Merge `OldLeaf` items + `Batch` items into `NewPage`.
@@ -331,7 +348,8 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
 #### 1\. Standard Get(Key)
 
   * Traverse B+Tree.
-  * **Checksum:** On every `ReadPage`, verify CRC32C.
+  * **Checksum:** On every `ReadPage`/`ReadPageRef`, verify CRC32C before semantic use.
+  * **Performance (allowed):** Internal point reads MAY descend using a zero-allocation `searchView(encKey)` that uses `ReadPageRef` for pinned views and in-place binary search. Any key/value slice decoded as a view into pinned pages MUST NOT escape the pin; public `Get` still returns copies and strips the user-key prefix.
   * **Fetch:**
       * **Inlined:** Allocate a new byte slice and copy data from the Page.
       * **Pointer:**
@@ -354,7 +372,8 @@ The Iterator holds a slice of `CursorItem` objects representing the path from Ro
 ```go
 type CursorItem struct {
     PageID  uint64
-    Node    *Page  // The parsed page structure
+    Ref     pager.PageRef // Pinned mmap view; must be released on pop/Close.
+    Node    *Page         // Parsed view backed by Ref.Bytes().
     Index   int    // The current index within the node's directory
 }
 ```
@@ -362,6 +381,7 @@ type CursorItem struct {
 #### 2.1 Cosmos Iterator Contract (Strict)
 To comply with `cosmos-db`, the Iterator must adhere to these rules:
   * **Safety Copies:** `Key()` and `Value()` MUST return newly allocated copies safe for modification by the caller.
+  * **Key Encoding:** Iterators MUST strip the internal user-key prefix (`0x01`) before returning keys.
   * **Panic on Invalid:** `Next()` MUST panic if `Valid()` is false.
   * **Invalid Domain:** If `start >= end`, the iterator is immediately Invalid.
   * **Tombstones:** Tombstones encountered during iteration must be skipped (treated as non-existent).
@@ -565,6 +585,7 @@ The following `Stats()` keys should be exported when adaptive tuning is enabled:
   * `treedb.inline_threshold.hard_max`
   * `treedb.inline_threshold.leaf_fill_avg`
   * `treedb.inline_threshold.split_rate`
+  * `treedb.inline_threshold.index_write_bytes`
   * `treedb.inline_threshold.slab_dead_ratio`
   * `treedb.inline_threshold.slab_write_bytes`
   * `treedb.inline_threshold.compaction_io_bps`

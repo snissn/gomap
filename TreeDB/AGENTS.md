@@ -339,3 +339,103 @@ This repository currently contains only the design and test specifications under
 - Race detection: `go test -race ./...`
 - Fuzzing (Go 1.18+): `go test -fuzz=Fuzz -run=^$ ./...`
 - Benchmarks: `go test -bench=. ./...`
+
+---
+
+## Performance Sprint TODOs
+
+### Prereqs
+
+- Step 6 complete (specs stable): `@PERF_06_COMPLETE` and `perf/spec-review.md`.
+- Baseline benches (median of 5 runs): `perf/bench-20251211_233513.txt`.
+
+### Compliance Goals (vs baseline medians)
+
+All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`, `-count=5`, `-benchmem`).
+
+- `BenchmarkSet150B/InlineThreshold=64` (baseline: 18049 ns/op, 39654 B/op, 51 allocs/op): allocs/op ≤ 25; B/op ≤ 20000; ns/op improves ≥ 20% (≤ 14440).
+- `BenchmarkSet150B/InlineThreshold=256` (baseline: 16562 ns/op, 36766 B/op, 77 allocs/op): allocs/op ≤ 35; B/op ≤ 22000; ns/op improves ≥ 15% (≤ 14078).
+- `BenchmarkBatchSet150B/InlineThreshold=64` (baseline: 14058 ns/op, 37939 B/op, 36 allocs/op): allocs/op ≤ 15; B/op ≤ 18000; ns/op improves ≥ 20% (≤ 11246).
+- `BenchmarkBatchSet150B/InlineThreshold=256` (baseline: 17309 ns/op, 38862 B/op, 71 allocs/op): allocs/op ≤ 30; B/op ≤ 22000; ns/op improves ≥ 15% (≤ 14712).
+- `BenchmarkGet150B/InlineThreshold=64` (baseline: 7403 ns/op, 25011 B/op, 209 allocs/op): allocs/op ≤ 40; B/op ≤ 6000; ns/op improves ≥ 25% (≤ 5552).
+- `BenchmarkGet150B/InlineThreshold=256` (baseline: 6075 ns/op, 22915 B/op, 188 allocs/op): allocs/op ≤ 35; B/op ≤ 6000; ns/op improves ≥ 25% (≤ 4556).
+- `BenchmarkIterScan/InlineThreshold=64` (baseline: 2125759 ns/op, 4286288 B/op, 51697 allocs/op): allocs/op ≤ 1000; B/op ≤ 512000; ns/op improves ≥ 25% (≤ 1594319).
+- `BenchmarkIterScan/InlineThreshold=256` (baseline: 7924554 ns/op, 26227888 B/op, 108456 allocs/op): allocs/op ≤ 1000; B/op ≤ 512000; ns/op improves ≥ 25% (≤ 5943415).
+
+### Ordered TODOs (dependency-aware)
+
+1. [x] Pager: cache preallocated size (avoid redundant `Stat/Truncate`).
+   - Goal: Reduce pager grow syscalls while preserving expand-only mmap + SIGBUS safety.
+   - Touch: `internal/pager/pager.go`.
+   - Correctness: add/extend tests for cached-size staleness (file smaller than cache) and chunk-alignment invariants; run `go test ./...` and `go test -race ./...`.
+   - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `ns/op` ↓ (both thresholds), `allocs/op` ↔/↓.
+
+2. [ ] Commit-level index growth estimate (guesstimate once per commit).
+   - Goal: Reduce incremental grow calls by estimating needed pages per commit (bounded to ≤2–4 chunks).
+   - Touch: `commit.go`, `internal/pager/pager.go`.
+   - Correctness: add tests for estimate under-shoot fallback and “cap” enforcement; run `go test ./...`.
+   - Perf: rerun `BenchmarkBatchSet150B`; expect `ns/op` ↓ (both thresholds).
+
+3. [ ] Pager freelist pop/append in place (no slice materialization).
+   - Goal: Eliminate freelist decode allocations during `AllocPage`/`FreePages`.
+   - Touch: `internal/pager/freelist.go`.
+   - Correctness: add chain/partial-page cases + CRC mutation checks; run `go test ./...`.
+   - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓ and `B/op` ↓.
+
+4. [ ] Pager: add pinned read views (`ReadPageRef`/`PageRef`) with strict release discipline.
+   - Goal: Remove PageSize copies on internal reads while keeping CRC verification and preventing escaping views.
+   - Touch: `internal/pager/pager.go` (+ new `PageRef` type), callers in `internal/tree/*` and `iterator.go`.
+   - Correctness: add tests for growth safety while refs are pinned, ref-leak detection, and `Close()` behavior with live refs; run `go test ./...` and `go test -race ./...`.
+   - Perf: rerun all four benches; expect large `allocs/op` ↓ and `B/op` ↓ (especially `BenchmarkIterScan`).
+
+5. [ ] Pager: add `WithMutablePage` (new-pages-only) and opt-in skip-zeroing for file-extended pages.
+   - Goal: Write freshly allocated pages directly into mmap (no `make([]byte, PageSize)` clones) while preserving snapshot/COW invariants.
+   - Touch: `internal/pager/pager.go` (mutable pin API), `internal/page/*` init paths.
+   - Correctness: add tests enforcing “new pages only” usage, CRC verify-before-clone, and CRC recompute on commit; run `go test ./...`.
+   - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓, `B/op` ↓, `ns/op` ↓.
+
+6. [ ] Tree COW fast paths using pager views + mutable pages.
+   - Goal: Make `cowSet*` clone/modify pages without extra PageSize allocations.
+   - Depends on: TODO 4–5.
+   - Touch: `internal/tree/ops.go`, `internal/tree/parse.go`.
+   - Correctness: extend snapshot reachability invariants + ensure old pages are never mutated; run `go test ./...` and `go test -race ./...`.
+   - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓ and `ns/op` ↓ (primary win).
+
+7. [ ] Tree: zero-alloc `searchView` for point reads + internal node search helper (no key copies).
+   - Goal: Make `GetRaw` descend via pinned views with CRC verification and no per-level key slice allocations.
+   - Depends on: TODO 4.
+   - Touch: `internal/tree/tree.go`, `internal/tree/parse.go`, `internal/page/internal.go`.
+   - Correctness: add tests for exact-boundary keys, deep trees, and “no escaping views”; run `go test ./...`.
+   - Perf: rerun `BenchmarkGet150B`; expect `allocs/op` ↓↓↓ and `ns/op` ↓.
+
+8. [ ] Iterator: zero-copy scan via pinned views + view-based decoding; copy only in `Key()`/`Value()`.
+   - Goal: Remove per-entry allocations from scans while keeping CRC checks, tombstone skipping, and public copy semantics.
+   - Depends on: TODO 4.
+   - Touch: `iterator.go`, `internal/page/leaf.go`, `internal/page/internal.go`.
+   - Correctness: add tests for ref release on stack pop + `Close()`, and concurrent commits while iterating; run `go test ./...` and `go test -race ./...`.
+   - Perf: rerun `BenchmarkIterScan`; expect `allocs/op` ↓↓↓ and `ns/op` ↓ (both thresholds).
+
+9. [ ] Slab: low-risk `AppendLarge` optimizations (`pwritev` + pooled header; byte-identical format).
+   - Goal: Reduce syscall+alloc overhead for out-of-line writes without changing the `[CRC32C][KeyLen][ValueLen][Key][Value]` bytes or CRC coverage.
+   - Touch: `internal/slab/manager.go`, `internal/slab/record.go`.
+   - Correctness: add byte-exact encoding regression and fallback-path tests; run `go test ./...`.
+   - Perf: rerun `BenchmarkSet150B/InlineThreshold=64` + `BenchmarkBatchSet150B/InlineThreshold=64`; expect `ns/op` ↓.
+
+10. [ ] Slab: bounded buffered sequential writer (`O_APPEND`) with flush-before-publish invariants.
+   - Goal: Amortize slab write syscalls while ensuring commits never publish pointers to unwritten bytes.
+   - Depends on: TODO 9.
+   - Touch: `internal/slab/manager.go`, `commit.go`.
+   - Correctness: add crash/reopen tail correctness tests and durability-ordering assertions (`*Sync`: slab durable before index/meta); run `go test ./...` and `go test -race ./...`.
+   - Perf: rerun `BenchmarkBatchSet150B/InlineThreshold=64`; expect `ns/op` ↓ and `allocs/op` ↔/↓.
+
+11. [ ] Pager: optional stop-zeroing newly extended pages (keep default safe + deterministic in tests).
+   - Goal: Make page zeroing policy configurable and preserve “no stale bytes under CRC” guarantees.
+   - Touch: `internal/pager/pager.go`, `internal/page/*`.
+   - Correctness: add tests that reused freelist pages are fully initialized/overwritten before publish; run `go test ./...`.
+   - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect small `ns/op` ↓.
+
+12. [ ] Instrumentation + re-profiling + adaptive stats exposure.
+   - Goal: Keep perf counters low-overhead/race-safe, expose missing stats keys, and refresh CPU+mem profiles after landing TODOs 1–11.
+   - Touch: `internal/adaptive/controller.go` (export `treedb.inline_threshold.index_write_bytes`), any commit-level counters in `commit.go`, perf notes under `perf/`.
+   - Correctness: run `go test ./...`, `go test -race ./...`.
+   - Perf: rerun all four benches with `-benchmem -count=5`, regenerate CPU+mem profiles for `BenchmarkGet150B` and `BenchmarkIterScan`; expect profiles shift away from `runtime.mallocgc`/page copies and toward actual compare/CRC work.
