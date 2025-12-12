@@ -256,7 +256,8 @@ Writes are batched to ensure atomicity and reduce I/O.
 
 1.  Iterate over `Put(Key, Val)` operations.
 2.  **If `len(Val) > InlineThreshold`:**
-      * **Immediately append** a slab record (Section 2.1.1) to the active `.slab` file.
+      * **Append** a slab record (Section 2.1.1) to the active `.slab` file.
+        Implementations MAY buffer multiple records and flush them as a single sequential write per commit to reduce syscall overhead, but MUST preserve append order and return correct `ValuePtr` offsets into the final on-disk stream.
       * Calculate `ValuePtr`.
       * Store `(Key -> ValuePtr)` in the in-memory Batch Map.
       * *Note:* If the batch fails, these bytes in the slab are wasted but harmless.
@@ -267,12 +268,14 @@ Writes are batched to ensure atomicity and reduce I/O.
 
 1.  Sort the Batch Keys.
 2.  Recursively descend the B+Tree (COW).
+      * **Implementation note (performance):** Writers SHOULD clone page buffers along the search path and apply slotted-page `Set/Delete` directly on the clones, rather than decoding all entries into Go slices and rebuilding entire pages for every update. Full zipper merge remains the canonical algorithm for large batches; incremental updates are an allowed optimization that preserves identical on-disk layout and COW semantics.
 3.  **Leaf Node:**
       * Allocate `NewPage`.
       * Merge `OldLeaf` items + `Batch` items into `NewPage`.
       * Perform splitting if `NewPage` \> 4KB.
 4.  **Internal Node:** Update child pointers to point to new pages.
 5.  **Stats Update:** Update internal metadata keys (`0x00` prefix) for any modified slab stats.
+      * **Optimization:** Dead-byte accounting for overwritten pointer values SHOULD reuse the leaf entry observed during the merge/update rather than issuing a separate `Get` for each key.
 
 **Phase 3: Atomic Commit (Redundant Superblock)**
 
@@ -593,12 +596,15 @@ func (tdb *DB) Has(key []byte) (bool, error)
 
 // Set sets the value for a key.
 // Contract: Errors on nil key or nil value. Empty keys (`[]byte{}`) are allowed.
+// Implementations MAY use a single-op fast path that bypasses Batch allocation/sorting,
+// but MUST preserve identical atomicity and durability semantics.
 func (tdb *DB) Set(key, value []byte) error
 
 // SetSync sets the value and flushes to disk immediately.
 func (tdb *DB) SetSync(key, value []byte) error
 
 // Delete removes a key.
+// Implementations MAY share the same single-op fast path as Set.
 func (tdb *DB) Delete(key []byte) error
 
 // DeleteSync removes a key and flushes to disk.
@@ -647,6 +653,8 @@ type Tree interface {
     Get(key []byte) (LeafEntry, error)
     
     // Set updates the leaf directly with a specific pointer/inline value.
+    // Implementations MAY return the previous LeafEntry to avoid an extra Get
+    // for dead-byte accounting; exact signature is implementation-defined.
     // MUST execute under the same write lock as Batch.Write.
     Set(key []byte, val LeafEntry) error
 }

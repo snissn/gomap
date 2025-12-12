@@ -171,6 +171,29 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
     * **Commit:** Ensure the commit succeeds.
     * **Assert:** Superblock size remains 4KB (Stats are in the tree, not the page).
 
+### 1.8 Write-Path Performance & Allocation Regression (Recommended)
+
+These checks are non-functional guardrails intended to catch obvious performance regressions once write-path optimizations are in place.
+
+* **Incremental COW Update (Perf):**
+    * **Scenario:** Repeated single-op `Set`/`Delete` in a tight loop (equivalent to a 1-op batch).
+    * **Assert:** Allocations and CPU per op are stable and significantly below the pre-optimization baseline (use `BenchmarkSet150B`/`-benchmem` and `testing.AllocsPerRun`).
+    * **Optional Instrumentation:** Verify that only pages along the search path are cloned/written, not full-page rebuilds for unchanged siblings.
+
+* **Batched Slab Appends:**
+    * **Scenario:** One `Batch.Write` containing 10k values where `len(val) > InlineThreshold` and `InlineThreshold=64`.
+    * **Instrumentation:** Count slab `Write/WriteAt` calls on the active slab.
+    * **Assert:** Slab writes are amortized (O(chunks) not O(ops)), while maintaining correct `ValuePtr` offsets and `*Sync` durability ordering.
+
+* **Single-Search Dead-Byte Accounting:**
+    * **Scenario:** Overwrite keys that currently point to slabs in a batch.
+    * **Instrumentation:** Count B+Tree searches during commit.
+    * **Assert:** Each op performs a single tree descent (no extra `Get` before `Set` solely for stats).
+
+* **Single-Op Fast Path:**
+    * **Scenario:** Compare `DB.Set`/`DB.Delete` loops to an equivalent 1-op `Batch`.
+    * **Assert:** `DB.Set`/`DB.Delete` are within ~10% of (or faster than) the 1-op batch and avoid per-op key sorting or map churn.
+
 ---
 
 ## 2. Integration & Functional Testing
