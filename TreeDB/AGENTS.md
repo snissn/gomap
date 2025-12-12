@@ -245,6 +245,48 @@ This repository currently contains only the design and test specifications under
 
 ---
 
+## Phase 12: Write-Back Caching Layer (Memtable & WAL)
+
+**Goal:** Implement an LSM-style Level 0 in-memory buffer to resolve write amplification issues for high-frequency random writes.
+
+### 12.1 Foundations
+- [ ] Add `github.com/google/btree` dependency.
+- [ ] Implement `WAL` (Write-Ahead Log) writer/reader in `internal/wal`.
+    - Format: `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
+    - Support `Sync()` for durability.
+- [ ] Implement `Memtable` wrapper in `internal/memtable`.
+    - Use `google/btree`.
+    - Support `Set`, `Delete` (Tombstones), `Get`.
+    - Track approximate memory usage.
+- [ ] **Test:** Unit tests for WAL durability and recovery, and Memtable CRUD.
+
+### 12.2 Merging Iterator
+- [ ] Implement `Min-Heap` for sorting iterators by Key + Layer Precedence.
+- [ ] Implement `MergingIterator` in `internal/merging`.
+    - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
+    - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
+- [ ] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
+
+### 12.3 CachingDB Core Logic
+- [ ] Create `caching` package (or extend `treedb`).
+- [ ] Implement `CachingDB` struct wrapping `treedb.DB`.
+- [ ] **Write Path:**
+    - `Set`: Append to WAL -> Insert to Memtable.
+    - `SetSync`: Call `WAL.Sync()`.
+- [ ] **Flush Pipeline:**
+    - Check `Memtable.Size > FlushThreshold`.
+    - Rotate: Mutable -> Queue. Close WAL. Create new WAL.
+    - Background Worker: Pick from Queue -> `treedb.Batch` -> `WriteSync` -> Delete old WAL.
+- [ ] **Read Path:** `Get` checks Memtable(s) then Disk. `Iterator` uses `MergingIterator`.
+
+### 12.4 Integration & Config
+- [ ] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
+- [ ] Update `Open` to initialize `CachingDB` wrapper if enabled.
+- [ ] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
+- **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
+
+---
+
 ## Testing Plan (Aligned to `specs/test-spec.md`)
 
 ### Unit Tests
