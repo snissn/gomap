@@ -6,7 +6,11 @@ Focus on isolating the complex low-level data structures before system integrati
 
 ### 1.1 The Pager (Chunked MMap)
 
-* **Boundary Crossing:** Initialize with a small chunk size (e.g., 1KB) to force frequent chunk allocations. Verify reads spanning across chunk boundaries (`Offset` in Chunk A, `Length` extends into Chunk B).
+* **Boundary Crossing (Alignment):**
+    * **Scenario:** Initialize with `ChunkSize = 2 * PageSize` (ensuring alignment).
+    * **Verify:** Attempt to allocate or access a Page that would logically cross a chunk boundary.
+    * **Assert:** The Pager allocates a fresh chunk or pads/skips boundary space so every 4KB Page resides fully within a single chunk.
+    * **Negative Test:** Manually corrupt an index pointer to point to a boundary-straddling offset. Assert `Get()` returns a specific bounds error rather than crashing/panicking.
 * **Growth Safety (RFC-01):**
     * Simulate file growth (Truncate + Remap) while a "Reader" holds a pointer to the old memory region. Ensure no panic/segfault occurs.
     * **Negative Test:** Attempt to `Truncate` (shrink) the file while mapped. Verify the internal safety wrapper forbids this or that the test environment handles the panic gracefully without crashing the suite.
@@ -353,22 +357,22 @@ Go's `-race` detector is mandatory.
     * Verify `Slab.RefCount` drops to 0.
     * Verify file is deleted from disk.
 
-### 5.3 The "Resurrection" Write (CAS Verification)
+### 5.3 The "Resurrection" Write (Verify‑and‑Set)
 
 * **Scenario:**
     1.  Compactor reads `Key A` (Val=1) from `OldSlab` and copies to `NewSlab`.
-    2.  Pause compactor just before CAS.
+    2.  Pause compactor just before applying a micro-batch.
     3.  User calls `Set(Key A, Val=2)` (points to write slab).
     4.  Resume compactor.
 * **Assert:**
-    * CAS fails (returns false).
+    * Compactor observes `CurrentPtr != OldPtr` under the write lock and skips the update.
     * `Get(Key A)` returns Val=2 (user wins).
 
 ### 5.4 Torn Compaction Recovery
 
 * **Scenario:**
     1.  Start compaction on a slab with 1,000 keys.
-    2.  Kill halfway through CAS loop (500 keys updated, 500 still old).
+    2.  Kill halfway through the micro-batch apply loop (500 keys updated, 500 still old).
 * **Recovery:**
     * Restart DB.
     * **Assert:** `Get()` works for all 1,000 keys.
@@ -380,10 +384,10 @@ Go's `-race` detector is mandatory.
 
 * **Scenario:**
     * Run continuous user batches.
-    * Run compactor CAS commits in parallel.
+    * Run compactor micro-batch commits in parallel.
 * **Assert:**
-    * All CAS commits occur under the **same single-writer lock** as user commits.
-    * Instrumentation: Ensure no "Read-Modify-Write" gaps exist where a user write could slip in between a Compactor's pointer read and pointer CAS.
+    * All micro-batch verify‑and‑set steps occur under the **same single-writer lock** as user commits.
+    * Instrumentation: Ensure no "Read-Modify-Write" gaps exist where a user write could slip in between a Compactor's pointer read and pointer set within a micro-batch.
 
 ### 5.6 Compaction Throttling
 

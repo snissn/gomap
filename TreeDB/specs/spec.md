@@ -54,10 +54,12 @@ Rules:
   * **Filename:** `index.db`
   * **Access Pattern:** **Chunked Memory Map**.
       * The file is logically a contiguous array of Pages.
-      * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB; max: 1GB).
-      * **Growth:** To expand, we `Truncate` the file and `Mmap` *only* the new chunk. Old chunks remain valid to prevent segfaults in active readers.
+      * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB).
+      * **Alignment Invariant:** `ChunkSize` MUST be an exact multiple of the **Page Size** (4KB). The Pager MUST ensure that no Page physically crosses a chunk boundary.
+      * **Growth:** To expand, we strictly **pre-allocate disk space** (e.g., via `fallocate`) *before* extending the mmap. Old chunks remain valid to prevent segfaults in active readers.
       * **Safety Protocol:**
-          * `Truncate` operations are strictly limited to file expansion. Shrinking the file while mapped is forbidden to prevent `SIGBUS` panics.
+          * **No Shrinking:** Physical file truncation (shrinking) is FORBIDDEN while the process is running.
+          * **Fail-Stop:** `recover()` cannot catch `SIGBUS` in Go. Hardware I/O errors on mmap regions will crash the node; truncation faults must be prevented via bounds checks.
           * `Unmap` operations must verify zero active references before releasing a chunk.
 
 #### 2.2.1 Durability Ordering for Mmap Writes (Required)
@@ -93,8 +95,7 @@ ValuePtr (16 bytes)
 +-------------------------+
 | Offset   (8 bytes)      |  // 8-byte aligned
 | Length   (4 bytes)      |
-| FileID   (2 bytes)      |
-| Reserved (2 bytes)      |  // Must be zero
+| FileID   (4 bytes)      |  // uint32 (expanded)
 +-------------------------+
 ```
 
@@ -104,8 +105,7 @@ Corresponding Go type (in-memory):
 type ValuePtr struct {
     Offset    uint64 // Bytes 0-7
     Length    uint32 // Bytes 8-11
-    FileID    uint16 // Bytes 12-13
-    _reserved uint16 // Bytes 14-15
+    FileID    uint32 // Bytes 12-15
 } // 16 bytes, naturally aligned
 ```
 
@@ -147,7 +147,7 @@ Each Meta Page stores:
   * `SystemRootPageID` (8b): Pointer to the Internal Metadata B+Tree root.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
-  * `ActiveSlabID` (2b): The FileID of the slab that was active at the time of commit.
+  * `ActiveSlabID` (4b): The FileID of the slab that was active at the time of commit.
   * `ActiveSlabTail` (8b): The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
 
@@ -176,7 +176,7 @@ TreeDB maintains two distinct B+Trees rooted in the Superblock:
 This eliminates the storage and CPU overhead of byte-prefixing.
 
 #### 3.5.2 Slab Stats Keys
-  * **Key:** `0x00 | "slab" | uint16(FileID)`
+  * **Key:** `0x00 | "slab" | uint32(FileID)`
   * **Value:** `[DeadBytes (8b)] [TotalBytes (8b)]`
 
 ### 3.4 The Slab Manager
@@ -186,7 +186,7 @@ The `SlabManager` controls access to physical `.slab` files. It mediates between
 ```go
 // SlabFile represents a single physical file on disk.
 type SlabFile struct {
-    FileID   uint16
+    FileID   uint32
     Handle   *os.File
     // Slabs are accessed via syscall.Pread (Random Read).
     // We DO NOT mmap slabs to avoid SIGBUS on truncation and excessive virtual memory usage.
@@ -198,7 +198,7 @@ type SlabFile struct {
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
 type SlabSet struct {
-    Files map[uint16]*SlabFile
+    Files map[uint32]*SlabFile
 }
 ```
 
@@ -338,9 +338,9 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
         4.  Verify record CRC32C.
         5.  Copy `ValueBytes` into a newly allocated slice.
       * **Mmap Safety Protocol (CRITICAL):**
-          * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap.
-          * **Safe Access:** Use `uintptr` arithmetic or a custom accessor.
-          * **Panic Protection:** All reads from the mmap region must be wrapped in `recover()` to catch `SIGBUS` (which occurs if the file is truncated physically while mapped).
+          * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap to avoid GC scanning of off-heap memory.
+          * **Safe Access:** Use `unsafe.Pointer` casting or `uintptr` arithmetic.
+          * **Bounds Enforcement:** The Pager MUST verify `Offset + PageSize` is within the mapped chunk/file before returning a pointer. `SIGBUS` cannot be recovered from; it must be prevented.
 
 
 
@@ -383,10 +383,16 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
 
 #### 4\. Reverse Iterator Logic (`Next` / `Prev` Semantics)
 
-  * **Initialization (Cosmos Semantics):** * The domain is `[start, end)`. 
-      * If `end` is `nil`, seek to the very last key in the database.
-      * If `end` is provided, seek to the first key `>= end`. Move cursor backward by one.
-      * Verify the resulting key is `>= start`. If not, the range is empty.
+  * **Initialization (Cosmos Semantics):**
+      * The domain is `[start, end)`.
+      * **Step 1 (Seek):**
+          * If `end` is `nil`: seek to the **right-most leaf**, last item (largest key).
+          * If `end` is provided: seek to the first key `>= end`.
+      * **Step 2 (Adjust):**
+          * If the seek found a key `>= end` (or hit EOF), move the cursor **backward** one item.
+          * *Rationale:* positions the cursor at the largest key strictly less than `end`.
+      * **Step 3 (Verify):**
+          * If cursor is invalid or `Key < start`: iterator is empty.
   * **Advance:**
     1.  Look at the `Top` item of the Stack.
     2.  Decrement `Top.Index`.
@@ -402,9 +408,9 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
               * **Drill Down:** Continuously follow index `Count - 1` (right-most child) until a Leaf is reached.
               * Return Key at `Leaf.Index = Leaf.Count - 1`.
 
-### 5.4 Concurrent Slab Compaction (The "Move-and-CAS" Protocol)
+### 5.4 Concurrent Slab Compaction (The "Move-and-Micro-Batch" Protocol)
 
-Compaction runs concurrently with high-throughput writes and reads. To prevent races (e.g., “Resurrection”), compaction relies on **Optimistic Concurrency Control** via a `CompareAndSwap` operation on the B+Tree index.
+Compaction runs concurrently with high-throughput writes and reads. To prevent races (e.g., “Resurrection”), compaction performs an **optimistic copy** followed by **micro-batch locking**: under the global write lock it verifies the current pointer still matches `OldPtr` before applying `NewPtr`.
 
 #### 5.4.1 Compaction Lifecycle
 
@@ -422,17 +428,19 @@ The compactor iterates sequentially through slab records (Section 2.1.1). For ea
 3.  **Copy:** Append the value to the Target Slab, producing `NewPtr`.
 4.  **Record Intent:** Add `Key -> (OldPtr, NewPtr)` to a local `CompactionBatch`.
 
-**Phase 3: Atomic Commit (CAS)**
+**Phase 3: Atomic Commit (Micro-Batch Locking)**
 
-1.  **Micro-Batch Execution:** The Compactor MUST split the batch into micro-batches (e.g., 100 entries).
-2.  **Interleaved Locking:**
+Instead of a `CompareAndSwap` interface, the compactor uses the standard global write lock.
+
+1.  **Preparation:** Hold a buffer of `(Key, OldPtr, NewPtr)` pairs.
+2.  **Execution (Loop):**
       * Acquire Global Write Lock.
-      * Process one micro-batch (CAS loop).
+      * **Verify & Apply:** For each item in the micro-batch:
+          * `CurrentPtr = Tree.Get(Key)`
+          * If `CurrentPtr == OldPtr`: `Tree.Set(Key, NewPtr)`
+          * Else: skip (user updated concurrently).
       * Release Global Write Lock.
-      * Yield briefly to allow pending User Writes to proceed.
-3.  For each entry in a micro-batch:
-      * `CompareAndSwap(Key, OldPtr, NewPtr)`
-      * On mismatch: abort the update for that key (waste is acceptable).
+      * **Yield:** Sleep briefly to avoid starving user writes.
 
 #### 5.4.2 Zombie Transition (Ref-Counted Deletion)
 
@@ -448,7 +456,7 @@ Once the Cold Slab is fully processed:
 
 #### 5.5.1 Race: The "Resurrection" Write
 
-CAS prevents a compactor from overwriting a newer user write: if the index no longer points at `OldPtr`, `CompareAndSwap` fails.
+Verification under the write lock prevents resurrection: if the index no longer points at `OldPtr`, the compactor skips the update and the user write wins.
 
 #### 5.5.2 Race: The "Vanishing" Slab (Reader vs. Deleter)
 
@@ -456,7 +464,7 @@ Ref-counted deletion ensures that slabs remain present while any Snapshot holds 
 
 #### 5.5.3 Race: The "Torn" Compaction Commit
 
-A crash during CAS can leave a mix of pointers across slabs; this is safe because the B+Tree is authoritative and both slabs remain loadable after restart.
+A crash during micro-batch updates can leave a mix of pointers across slabs; this is safe because the B+Tree is authoritative and both slabs remain loadable after restart.
 
 ### 5.6 Adaptive Inline Threshold (Option A: Telemetry + Feedback Control)
 
@@ -631,21 +639,16 @@ func (tdb *DB) Stats() map[string]string
 // Useful for node operators during maintenance windows.
 func (tdb *DB) Compact() error
 
-// --- Internal Interfaces for CAS Support ---
+// --- Internal Interfaces for Compaction Support ---
 
-// Tree interface required for Safe Compaction
+// Tree interface required for compaction verify-set
 type Tree interface {
     // Get returns the raw leaf data (Inline, Pointer, or Tombstone).
-    // needed for CompareAndSwap to verify current state.
     Get(key []byte) (LeafEntry, error)
     
     // Set updates the leaf directly with a specific pointer/inline value.
-    Set(key []byte, val LeafEntry) error
-
-    // CompareAndSwap atomically sets 'key' to 'newVal' ONLY IF the current value matches 'oldVal'.
-    // Returns true if swapped, false if mismatch.
     // MUST execute under the same write lock as Batch.Write.
-    CompareAndSwap(key []byte, oldVal, newVal LeafEntry) (bool, error)
+    Set(key []byte, val LeafEntry) error
 }
 
 // --- Batch Implementation ---
