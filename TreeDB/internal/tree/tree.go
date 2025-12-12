@@ -56,35 +56,76 @@ func (t *Tree) GetRaw(key []byte) (LeafEntry, error) {
 		}
 		buf := ref.Bytes()
 
-		h, _, err := page.SplitPage(buf)
+		h, body, err := page.SplitPage(buf)
 		if err != nil {
+			ref.Release()
+			return LeafEntry{}, err
+		}
+		if err := h.VerifyBodyCRC(body); err != nil {
 			ref.Release()
 			return LeafEntry{}, err
 		}
 
 		switch h.Flags {
 		case page.PageTypeLeaf:
-			entries, err := parseLeafEntries(buf)
-			ref.Release()
+			lp, err := page.OpenLeafPage(buf)
 			if err != nil {
+				ref.Release()
 				return LeafEntry{}, err
 			}
-			idx, found := findLeafIndex(entries, encKey)
+			idx, found, err := lp.Search(encKey)
+			if err != nil {
+				ref.Release()
+				return LeafEntry{}, err
+			}
 			if !found {
+				ref.Release()
 				return LeafEntry{}, ErrNotFound
 			}
-			return entries[idx].entry, nil
-		case page.PageTypeInternal:
-			entries, err := parseInternalEntries(buf)
+			off, err := dirEntry(body, int(h.Count), idx)
+			if err != nil {
+				ref.Release()
+				return LeafEntry{}, err
+			}
+			_, flags, inline, ptr, _, err := decodeLeafEntry(body, off)
 			ref.Release()
 			if err != nil {
 				return LeafEntry{}, err
 			}
-			if len(entries) == 0 {
+			out := LeafEntry{Flags: flags, Ptr: ptr}
+			if flags == page.LeafFlagInline {
+				out.InlineValue = append([]byte(nil), inline...)
+			}
+			return out, nil
+		case page.PageTypeInternal:
+			ip, err := page.OpenInternalPage(buf)
+			if err != nil {
+				ref.Release()
+				return LeafEntry{}, err
+			}
+			if ip.Count() == 0 {
+				ref.Release()
 				return LeafEntry{}, ErrCorrupt
 			}
-			idx := findChildIndex(entries, encKey)
-			pid = entries[idx].child
+			insIdx, found, err := ip.Search(encKey)
+			if err != nil {
+				ref.Release()
+				return LeafEntry{}, err
+			}
+			childIdx := insIdx
+			if !found {
+				if insIdx == 0 {
+					childIdx = 0
+				} else {
+					childIdx = insIdx - 1
+				}
+			}
+			next, err := ip.ChildAt(childIdx)
+			ref.Release()
+			if err != nil {
+				return LeafEntry{}, err
+			}
+			pid = next
 		default:
 			ref.Release()
 			return LeafEntry{}, ErrCorrupt

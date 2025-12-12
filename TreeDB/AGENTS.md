@@ -401,7 +401,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: extend snapshot reachability invariants + ensure old pages are never mutated; run `go test ./...` and `go test -race ./...`.
    - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓ and `ns/op` ↓ (primary win).
 
-7. [ ] Tree: zero-alloc `searchView` for point reads + internal node search helper (no key copies).
+7. [x] Tree: zero-alloc `searchView` for point reads + internal node search helper (no key copies).
    - Goal: Make `GetRaw` descend via pinned views with CRC verification and no per-level key slice allocations.
    - Depends on: TODO 4.
    - Touch: `internal/tree/tree.go`, `internal/tree/parse.go`, `internal/page/internal.go`.

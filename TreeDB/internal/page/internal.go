@@ -49,7 +49,30 @@ func (p *InternalPage) FreeSpace() int {
 
 // Search performs a binary search for key.
 func (p *InternalPage) Search(key []byte) (int, bool, error) {
-	return binarySearchOffsets(p.body, p.Count(), key, p.keyAt)
+	count := p.Count()
+	lo, hi := 0, count
+	for lo < hi {
+		mid := (lo + hi) / 2
+		k, err := p.keyAtIndex(mid)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Compare(k, key) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < count {
+		k, err := p.keyAtIndex(lo)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Equal(k, key) {
+			return lo, true, nil
+		}
+	}
+	return lo, false, nil
 }
 
 // Set inserts a new child pointer or updates an existing one.
@@ -136,6 +159,22 @@ func (p *InternalPage) EntryAt(i int) ([]byte, PageID, error) {
 	return append([]byte(nil), key...), child, nil
 }
 
+// ChildAt returns the child pointer at directory index i.
+func (p *InternalPage) ChildAt(i int) (PageID, error) {
+	count := p.Count()
+	if i < 0 || i >= count {
+		return 0, ErrPageCorrupt
+	}
+	off, err := dirEntry(p.body, count, i)
+	if err != nil {
+		return 0, err
+	}
+	if int(off)+8 > len(p.body) {
+		return 0, ErrPageCorrupt
+	}
+	return PageID(binary.LittleEndian.Uint64(p.body[off : off+8])), nil
+}
+
 // Defragment rebuilds the heap in directory order.
 func (p *InternalPage) Defragment() error {
 	entries, err := p.entries()
@@ -219,6 +258,19 @@ func (p *InternalPage) keyAt(off uint16) ([]byte, error) {
 		}
 	}
 	return nil, ErrPageCorrupt
+}
+
+func (p *InternalPage) keyAtIndex(i int) ([]byte, error) {
+	count := p.Count()
+	if i < 0 || i >= count {
+		return nil, ErrPageCorrupt
+	}
+	off, err := dirEntry(p.body, count, i)
+	if err != nil {
+		return nil, err
+	}
+	_, key, _, err := decodeInternalEntry(p.body, off, p.entryLen(i))
+	return key, err
 }
 
 func encodeInternalEntry(body []byte, off uint16, child PageID, key []byte) {
