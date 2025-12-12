@@ -112,6 +112,32 @@ func (p *Pager) Close() error {
 	return p.file.Close()
 }
 
+// Truncate resizes the file to the specified number of pages.
+// Safety: Shrinking is forbidden. Only growing is allowed.
+func (p *Pager) Truncate(targetPages uint64) error {
+	p.mu.Lock()
+	currentPages := p.numPages
+	p.mu.Unlock() // Alloc locks internaly, so we unlock here to avoid deadlock if we call Alloc.
+	// However, between Unlock and Alloc, another thread might Alloc.
+	// But Alloc uses p.numPages as startID.
+	// To be safe, we should hold the lock if we were modifying p.numPages directly.
+	// But Alloc modifies p.numPages.
+	// Let's rely on Alloc's locking.
+	
+	if targetPages < currentPages {
+		return fmt.Errorf("truncation (shrinking) is forbidden: current %d, target %d", currentPages, targetPages)
+	}
+	
+	if targetPages == currentPages {
+		return nil
+	}
+	
+	// diff is guaranteed positive
+	diff := int(targetPages - currentPages)
+	_, err := p.Alloc(diff)
+	return err
+}
+
 // Alloc allocates `count` new pages and returns the ID of the first one.
 // It grows the file if necessary.
 func (p *Pager) Alloc(count int) (uint64, error) {

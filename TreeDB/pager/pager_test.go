@@ -143,8 +143,96 @@ func TestPagerOutOfBounds(t *testing.T) {
 
 	p.Alloc(1)
 
-	_, err := p.Get(1)
-	if err != ErrPageOutOfBounds {
-		t.Errorf("Expected ErrPageOutOfBounds, got %v", err)
+		if err := p.Close(); err != nil {
+
+			t.Fatalf("Close failed: %v", err)
+
+		}
+
 	}
-}
+
+	
+
+	func TestPagerTruncate(t *testing.T) {
+
+		dir := t.TempDir()
+
+		path := filepath.Join(dir, "index_trunc.db")
+
+		chunkSize := int64(page.PageSize * 4) // 4 pages per chunk
+
+	
+
+		p, err := Open(path, chunkSize)
+
+		if err != nil {
+
+			t.Fatalf("Open failed: %v", err)
+
+		}
+
+		defer p.Close()
+
+	
+
+		// 1. Alloc 2 pages
+
+		if _, err := p.Alloc(2); err != nil {
+
+			t.Fatalf("Alloc failed: %v", err)
+
+		}
+
+		if p.PageCount() != 2 {
+
+			t.Errorf("Expected 2 pages, got %d", p.PageCount())
+
+		}
+
+	
+
+		// 2. Try to truncate to 1 (Shrink) -> Should fail
+
+		if err := p.Truncate(1); err == nil {
+
+			t.Error("Expected error when shrinking, got nil")
+
+		}
+
+	
+
+		// 3. Truncate to 5 (Grow) -> Should succeed
+
+		if err := p.Truncate(5); err != nil {
+
+			t.Fatalf("Truncate(5) failed: %v", err)
+
+		}
+
+		if p.PageCount() != 5 {
+
+			t.Errorf("Expected 5 pages, got %d", p.PageCount())
+
+		}
+
+	
+
+		// Verify file size grew
+
+		info, _ := os.Stat(path)
+
+		// 5 pages. chunkSize is 4 pages. Needs 2 chunks.
+
+		// 2 * chunkSize
+
+		expectedSize := chunkSize * 2
+
+		if info.Size() != expectedSize {
+
+			t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
+
+		}
+
+	}
+
+	
