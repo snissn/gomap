@@ -19,6 +19,7 @@ var (
 	keyRange    = flag.Int("keys", 10000, "Key range size")
 	valSize     = flag.Int("valsize", 100, "Value size (bytes)")
 	opsCount    = flag.Int64("ops", 0, "Total operations limit (0 = unlimited, time based)")
+	keepRecent  = flag.Int("keeprecent", 10000, "Keep recent versions (0 or 1 for aggressive reuse)")
 )
 
 func main() {
@@ -34,9 +35,12 @@ func main() {
 		dbDir = tmpDir
 	}
 	
-	fmt.Printf("Stress Test Config:\n Dir: %s\n Duration: %v\n Workers: %d\n Keys: %d\n", dbDir, *duration, *workers, *keyRange)
+	fmt.Printf("Stress Test Config:\n Dir: %s\n Duration: %v\n Workers: %d\n Keys: %d\n KeepRecent: %d\n", dbDir, *duration, *workers, *keyRange, *keepRecent)
 
-	opts := db.Options{Dir: dbDir}
+	opts := db.Options{
+		Dir:        dbDir,
+		KeepRecent: uint64(*keepRecent),
+	}
 	d, err := db.Open(opts)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to open DB: %v", err))

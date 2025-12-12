@@ -36,6 +36,11 @@ func NewNode(data []byte) *Node {
 	return &Node{data: data}
 }
 
+// Data returns the underlying byte slice.
+func (n *Node) Data() []byte {
+	return n.data
+}
+
 // PageID returns the page ID from the header.
 func (n *Node) PageID() uint64 {
 	return binary.LittleEndian.Uint64(n.data[0:8])

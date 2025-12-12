@@ -219,10 +219,23 @@ func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
 // Write copies data into the page.
 // The data slice must be exactly PageSize bytes (or less, but we usually write full pages).
 func (p *Pager) Write(pageID uint64, data []byte) error {
-	dst, err := p.Get(pageID)
-	if err != nil {
-		return err
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if pageID >= p.numPages {
+		return ErrPageOutOfBounds
 	}
+
+	byteOffset := int64(pageID) * int64(page.PageSize)
+	chunkIdx := byteOffset / p.chunkSize
+	offsetInChunk := byteOffset % p.chunkSize
+
+	if int(chunkIdx) >= len(p.chunks) {
+		return ErrPageOutOfBounds
+	}
+
+	chunk := p.chunks[chunkIdx]
+	dst := chunk[offsetInChunk : offsetInChunk+page.PageSize]
 	copy(dst, data)
 	return nil
 }

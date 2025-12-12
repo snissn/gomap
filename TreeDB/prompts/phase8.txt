@@ -1,0 +1,40 @@
+You are an expert Systems Engineer working on Phase 8 of the TreeDB project: Stabilization & Concurrency Fixes.
+
+**Context:**
+The `cmd/stress` tool has revealed severe instability under concurrent load (99% failure rate with "checksum mismatch" and "page index out of bounds"). This indicates a race condition or data corruption issue in the Pager, Zipper (COW), or Freelist that standard unit tests missed.
+
+**Goal:**
+Diagnose the root cause of the corruption and implement a fix to ensure `cmd/stress` passes with 0 errors.
+
+**Instructions:**
+
+1.  **Reproduction (Isolate the bug):**
+    *   Create `db/race_test.go`.
+    *   Implement a test `TestConcurrentReadsWrites` that mimics `cmd/stress`:
+        *   Spawn 4 goroutines.
+        *   Mix `Set`, `Get`, `Delete` operations.
+        *   Run for 2 seconds.
+    *   Run `go test -v -run TestConcurrentReadsWrites ./db/...` to confirm it fails.
+
+2.  **Diagnosis (Investigate Root Causes):**
+    *   **Hypothesis 1: Pager/Mmap Unsafety.**
+        *   Check `pager/pager.go`. Does `Get(id)` return a slice pointing directly to `mmap`?
+        *   If `Alloc` triggers `mremap` (growth), are old slices invalidated while readers hold them?
+        *   *Fix Idea:* Ensure `Get` returns a **Copy** of the page data if safety cannot be guaranteed, OR ensure the Pager locks appropriately during growth.
+    *   **Hypothesis 2: Freelist/COW Violation.**
+        *   Check if `freelist` returns pages that are still visible to active Snapshots.
+        *   Add logging to `Alloc` and `Free` to see if Page X is freed and immediately reused while a Reader is active.
+
+3.  **Implementation (Fix the Bug):**
+    *   **Action:** Modify `pager`, `zipper`, or `db` to resolve the race.
+    *   *Recommendation:* If `mmap` remapping is the issue, implementing a `ReadPage` that copies data to a safe buffer (instead of zero-copy unsafe pointer) is the safest first step for stability.
+
+4.  **Verification:**
+    *   Run `go test -v -run TestConcurrentReadsWrites ./db/...`.
+    *   Run `go build -o ./bin/stress ./cmd/stress && ./bin/stress -duration 5s`.
+    *   **Success Criteria:** Zero errors in output.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 8: Fix Stress test"`.
+
+5.  **Completion Signal:**
+     *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_8_COMPLETE' containing the text 'Phase 8 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.

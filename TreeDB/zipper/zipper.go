@@ -46,10 +46,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 			return 0, nil, err
 		}
 		
-		data, err := z.pager.Get(newRootID)
-		if err != nil {
-			return 0, nil, err
-		}
+		data := make([]byte, page.PageSize)
 		
 		n := node.NewNode(data)
 		n.SetPageID(newRootID)
@@ -65,6 +62,11 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 		}
 		
 		n.UpdateChecksum()
+		
+		if err := z.pager.Write(newRootID, data); err != nil {
+			return 0, nil, err
+		}
+		
 		return newRootID, retired, nil
 	}
 
@@ -80,15 +82,12 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 		return 0, nil, 0, nil, err
 	}
 	
-	newData, err := z.pager.Get(newPageID)
-	if err != nil {
-		return 0, nil, 0, nil, err
-	}
+	newData := make([]byte, page.PageSize)
 	
 	newNode := node.NewNode(newData)
 	newNode.SetPageID(newPageID) // Set ID first
 	
-	oldData, err := z.pager.Get(pageID)
+	oldData, err := z.pager.ReadPage(pageID)
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
@@ -104,11 +103,13 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	newNode.SetType(oldNode.Type())
 	
 	if oldNode.Type() == page.PageTypeLeaf {
-		// Merge Leaf returns NO additional retired pages (leaves don't have children to retire)
-		// Wait, mergeLeaf signature needs update to match expected return type or handle it here?
-		// mergeLeaf only returns split info.
-		// So we return `retired` constructed here.
+		// Merge Leaf returns NO additional retired pages
 		nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+		if err == nil {
+			if werr := z.pager.Write(newPageID, newData); werr != nil {
+				return 0, nil, 0, nil, werr
+			}
+		}
 		return nr, sk, sn, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge might return MORE retired pages from children recursion
@@ -116,12 +117,22 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 		if err != nil {
 			return 0, nil, 0, nil, err
 		}
+		
+		if err := z.pager.Write(newPageID, newData); err != nil {
+			return 0, nil, 0, nil, err
+		}
+		
 		retired = append(retired, childRetired...)
 		return nr, sk, sn, retired, nil
 	} else {
 		if oldNode.Type() == 0 {
 			newNode.SetType(page.PageTypeLeaf)
 			nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+			if err == nil {
+				if werr := z.pager.Write(newPageID, newData); werr != nil {
+					return 0, nil, 0, nil, werr
+				}
+			}
 			return nr, sk, sn, retired, err
 		}
 		return 0, nil, 0, nil, page.ErrInvalidPageType
@@ -227,10 +238,7 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 					return 0, nil, 0, err
 				}
 				splitNodeID = sid
-				sdata, err := z.pager.Get(sid)
-				if err != nil {
-					return 0, nil, 0, err
-				}
+				sdata := make([]byte, page.PageSize)
 				splitNode = node.NewNode(sdata)
 				splitNode.SetPageID(sid)
 				splitNode.SetType(page.PageTypeLeaf)
@@ -255,6 +263,9 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 	newNode.UpdateChecksum()
 	if splitNode != nil {
 		splitNode.UpdateChecksum()
+		if err := z.pager.Write(splitNodeID, splitNode.Data()); err != nil {
+			return 0, nil, 0, err
+		}
 	}
 	
 	return newNode.PageID(), splitKey, splitNodeID, nil
@@ -346,6 +357,9 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 	newNode.UpdateChecksum()
 	if splitNode != nil {
 		splitNode.UpdateChecksum()
+		if err := z.pager.Write(splitNodeID, splitNode.Data()); err != nil {
+			return 0, nil, 0, nil, err
+		}
 	}
 	
 	return newNode.PageID(), splitKey, splitNodeID, retired, nil
@@ -359,10 +373,7 @@ func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, sp
                 return err
             }
             *splitNodeID = sid
-            sdata, err := z.pager.Get(sid)
-            if err != nil {
-                return err
-            }
+            sdata := make([]byte, page.PageSize)
             sn := node.NewNode(sdata)
             sn.SetPageID(sid)
             sn.SetType(page.PageTypeInternal)

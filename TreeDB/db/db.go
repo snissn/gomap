@@ -38,6 +38,7 @@ type DB struct {
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
 	
+	keepRecent      uint64
 	inlineThreshold int
 	
 	mu          sync.RWMutex
@@ -48,8 +49,9 @@ type DB struct {
 }
 
 type Options struct {
-	Dir       string
-	ChunkSize int64 // Default 256MB
+	Dir        string
+	ChunkSize  int64 // Default 256MB
+	KeepRecent uint64 // Default 10000
 }
 
 type Snapshot struct {
@@ -63,6 +65,9 @@ type Snapshot struct {
 func Open(opts Options) (*DB, error) {
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = 256 * 1024 * 1024
+	}
+	if opts.KeepRecent == 0 {
+		opts.KeepRecent = 10000
 	}
 
 	idxPath := filepath.Join(opts.Dir, "index.db")
@@ -101,6 +106,7 @@ func Open(opts Options) (*DB, error) {
 
 			registry:        lifecycle.NewReaderRegistry(),
 
+			keepRecent:      opts.KeepRecent,
 			inlineThreshold: page.DefaultInlineThreshold,
 
 		}
@@ -363,7 +369,7 @@ func (db *DB) Prune() {
 	min := db.registry.MinPinnedSeq()
 	current := db.meta.CommitSeq
 	
-	freed := db.graveyard.Extract(min, current, KeepRecent)
+	freed := db.graveyard.Extract(min, current, db.keepRecent)
 	
 	if len(freed) > 0 {
 		for _, id := range freed {
