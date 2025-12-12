@@ -226,5 +226,6 @@ func (p *Pager) Sync() error {
 			return err
 		}
 	}
-	return nil
+	// Sync file metadata (size)
+	return p.file.Sync()
 }
