@@ -2,9 +2,12 @@ package page
 
 import (
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"unsafe"
 )
+
+var ErrInvalidPageType = errors.New("invalid page type")
 
 const (
 	// PageSize is the fixed size of a page in bytes.

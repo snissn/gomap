@@ -64,6 +64,15 @@ func (s *SlabFile) Sync() error {
 	return s.File.Sync()
 }
 
+// Truncate resizes the slab file. Used for crash recovery.
+func (s *SlabFile) Truncate(size int64) error {
+	if err := s.File.Truncate(size); err != nil {
+		return err
+	}
+	s.Size = size
+	return nil
+}
+
 // ReadAt reads a record at the given offset.
 func (s *SlabFile) Read(offset int64) ([]byte, error) {
 	// 1. Read Header (10 bytes)

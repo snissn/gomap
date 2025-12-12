@@ -78,6 +78,9 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 			}
 			p.chunks[i] = data
 		}
+		
+		// Initial guess for numPages (will be corrected by DB recovery)
+		p.numPages = uint64(size / page.PageSize)
 	}
 
 	return p, nil

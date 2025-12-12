@@ -2,6 +2,7 @@ package slab
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -147,4 +148,68 @@ func (sm *SlabManager) Sync() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.activeSlab.Sync()
+}
+
+// ActiveSlabID returns the ID of the current active slab.
+func (sm *SlabManager) ActiveSlabID() uint32 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.activeSlab.ID
+}
+
+// ActiveSlabTail returns the current size (tail offset) of the active slab.
+func (sm *SlabManager) ActiveSlabTail() uint64 {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return uint64(sm.activeSlab.Size)
+}
+
+// SetActiveSlab sets the active slab to the given ID.
+func (sm *SlabManager) SetActiveSlab(id uint32) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	
+	s, ok := sm.slabs[id]
+	if !ok {
+		// Try to open it if not loaded?
+		// Assuming NewSlabManager loaded all?
+		// If not loaded, maybe try opening?
+		path := filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", id))
+		var err error
+		s, err = OpenSlab(path, id)
+		if err != nil {
+			return err
+		}
+		sm.slabs[id] = s
+	}
+	sm.activeSlab = s
+	return nil
+}
+
+// TruncateActiveSlab truncates the active slab to the specified offset.
+func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.activeSlab.Truncate(int64(offset))
+}
+
+// PruneSlabs removes any slab files with ID > maxID.
+func (sm *SlabManager) PruneSlabs(maxID uint32) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	
+	for id, s := range sm.slabs {
+		if id > maxID {
+			if err := s.Close(); err != nil {
+				return err
+			}
+			if err := os.Remove(s.Path); err != nil {
+				return err
+			}
+			delete(sm.slabs, id)
+		}
+	}
+	// Also scan directory just in case?
+	// NewSlabManager scans, so memory map should be accurate if called after New.
+	return nil
 }
