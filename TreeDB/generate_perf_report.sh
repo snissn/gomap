@@ -8,16 +8,11 @@ DATE=$(date)
 SYSTEM_INFO=$(uname -sr)
 BENCHMARKS=("BenchmarkStress" "BenchmarkGet" "BenchmarkScan" "BenchmarkBatch" "BenchmarkLargeVal")
 
-echo "# TreeDB Performance Report" > "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-echo "**Date:** $DATE" >> "$REPORT_FILE"
-echo "**System:** $SYSTEM_INFO" >> "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-
-echo "## Benchmark Results" >> "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-echo "| Benchmark | Iterations | Time/Op | Throughput | Memory/Op | Alloc/Op |" >> "$REPORT_FILE"
-echo "|---|---|---|---|---|---|" >> "$REPORT_FILE"
+# Variables to hold snapshot data
+STRESS_OPS_SEC=""
+BATCH_KEYS_SEC=""
+GET_OPS_SEC=""
+SCAN_SCANS_SEC=""
 
 # Temporary file for raw output
 RAW_OUTPUT_FILE="perf_raw.txt"
@@ -25,6 +20,7 @@ echo "" > "$RAW_OUTPUT_FILE"
 
 echo "Running benchmarks and profiling..."
 
+# --- Collect Benchmark Data ---
 for BENCH in "${BENCHMARKS[@]}"; do
     echo "Running $BENCH..."
     
@@ -49,40 +45,81 @@ for BENCH in "${BENCHMARKS[@]}"; do
     ALLOCS=$(echo "$LINE" | awk '{print $7}')
     
     # Calculate Throughput
+    OPS_SEC="0" # Default in case of division by zero
     if [ "$NS_OP" -gt 0 ]; then
         OPS_SEC=$(echo "1000000000 / $NS_OP" | bc)
-    else
-        OPS_SEC="N/A"
     fi
     
-    if [[ "$NAME" == *"Batch"* ]]; then
-        OPS_SEC="$OPS_SEC (batches)"
-    fi
+    # Store snapshot data
+    case "$NAME" in
+        "BenchmarkStress"*) 
+            STRESS_OPS_SEC="$OPS_SEC"
+            ;;
+        "BenchmarkBatch"*) 
+            BATCH_KEYS_SEC=$(echo "$OPS_SEC * 1000" | bc) # Convert batches/sec to keys/sec
+            ;;
+        "BenchmarkGet"*) 
+            GET_OPS_SEC="$OPS_SEC"
+            ;;
+        "BenchmarkScan"*) 
+            SCAN_SCANS_SEC="$OPS_SEC"
+            ;;
+    esac
     
-    # Format Time
+    # Format Time for table
+    TIME_FMT="$NS_OP"
+    TIME_UNIT="ns"
     if [ "$NS_OP" -gt 1000000 ]; then
         TIME_FMT=$(echo "scale=2; $NS_OP / 1000000" | bc)
         TIME_UNIT="ms"
     elif [ "$NS_OP" -gt 1000 ]; then
         TIME_FMT=$(echo "scale=2; $NS_OP / 1000" | bc)
         TIME_UNIT="µs"
-    else
-        TIME_FMT="$NS_OP"
-        TIME_UNIT="ns"
     fi
     
-    echo "| $NAME | $ITER | $TIME_FMT $TIME_UNIT | $OPS_SEC | $MEM_B B | $ALLOCS |" >> "$REPORT_FILE"
+    # Append to a temporary results array for later writing to table
+    BENCHMARK_TABLE_LINES+=("| $NAME | $ITER | $TIME_FMT $TIME_UNIT | $OPS_SEC | $MEM_B B | $ALLOCS |
+")
 done
+
+
+# --- Generate Report Header and Snapshot ---
+echo "# TreeDB Performance Report" > "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+echo "**Date:** $DATE" >> "$REPORT_FILE"
+echo "**System:** $SYSTEM_INFO" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+echo "## Performance Snapshot" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+echo "\`\`\`" >> "$REPORT_FILE"
+echo "  - Strict Writes: ~$STRESS_OPS_SEC ops/sec" >> "$REPORT_FILE"
+echo "  - Batch Writes: ~$BATCH_KEYS_SEC keys/sec" >> "$REPORT_FILE"
+echo "  - Reads: ~$GET_OPS_SEC ops/sec" >> "$REPORT_FILE"
+echo "  - Full Scans: ~$SCAN_SCANS_SEC scans/sec" >> "$REPORT_FILE"
+echo "\`\`\`" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+
+echo "## Benchmark Results" >> "$REPORT_FILE"
+echo "" >> "$REPORT_FILE"
+echo "| Benchmark | Iterations | Time/Op | Throughput | Memory/Op | Alloc/Op |" >> "$REPORT_FILE"
+echo "|---|---|---|---|---|---|" >> "$REPORT_FILE"
+
+# --- Append Benchmark Table Lines ---
+for line in "${BENCHMARK_TABLE_LINES[@]}"; do
+    echo -e "$line" >> "$REPORT_FILE"
+done
+
 
 echo "" >> "$REPORT_FILE"
 echo "## Hotspots (Top 5 Functions)" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
+# --- Generate Hotspots ---
 for BENCH in "${BENCHMARKS[@]}"; do
     echo "### $BENCH" >> "$REPORT_FILE"
     echo '```' >> "$REPORT_FILE"
     
-    # Generate Top 5 text report
     if [ -f "${BENCH}.prof" ]; then
         go tool pprof -top -nodecount=5 "${BENCH}.prof" >> "$REPORT_FILE"
         
