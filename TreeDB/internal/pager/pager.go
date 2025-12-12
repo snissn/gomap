@@ -499,6 +499,9 @@ func (p *Pager) preallocate(size int64) error {
 	if aligned < fi.Size() {
 		return ErrShrinkForbidden
 	}
+	if aligned == fi.Size() {
+		return nil
+	}
 	return p.file.Truncate(aligned)
 }
 
