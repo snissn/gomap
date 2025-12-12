@@ -242,6 +242,14 @@ func (db *DB) writeOne(key, value []byte, del bool, sync bool) error {
 func (db *DB) finishCommit(st *mvcc.DBState, userTree, systemTree *tree.Tree, retired []page.PageID, modifiedSlabs map[uint32]struct{}, slabWriteBytes uint64, ops int, sync bool) error {
 	newSeq := st.CommitSeq + 1
 
+	// Ensure any buffered slab bytes are written before publishing pointers and
+	// before any durability boundary (WriteSync).
+	if db.slabs != nil {
+		if err := db.slabs.Flush(); err != nil {
+			return err
+		}
+	}
+
 	// Build new meta based on current pager meta.
 	meta := db.pager.ReadActiveMeta()
 	meta.CommitSeq = newSeq

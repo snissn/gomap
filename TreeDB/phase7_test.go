@@ -3,6 +3,9 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -59,6 +62,18 @@ func TestWriteSyncDurabilityOrdering(t *testing.T) {
 			mu.Lock()
 			order = append(order, "slab")
 			mu.Unlock()
+
+			// Ensure any buffered slab bytes are flushed before fsync.
+			id := db.slabs.ActiveID()
+			tail := db.slabs.ActiveTail()
+			path := filepath.Join(dir, fmt.Sprintf("data-%04d.slab", id))
+			fi, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("stat slab: %v", err)
+			}
+			if uint64(fi.Size()) != tail {
+				t.Fatalf("slab size mismatch after sync: got %d want %d", fi.Size(), tail)
+			}
 		},
 		indexSynced: func() {
 			mu.Lock()
@@ -81,6 +96,91 @@ func TestWriteSyncDurabilityOrdering(t *testing.T) {
 	mu.Unlock()
 	if len(got) != 2 || got[0] != "slab" || got[1] != "index" {
 		t.Fatalf("expected [slab index], got %v", got)
+	}
+}
+
+func TestBatchWriteFlushesSlabBeforePublish(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, InlineThreshold: 8})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	val := bytes.Repeat([]byte("x"), 64)
+	b := db.NewBatch().(*Batch)
+	if err := b.Set([]byte("k"), val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("value mismatch: got %q want %q", got, val)
+	}
+}
+
+func TestActiveSlabTailTruncationAfterGarbageAppend(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, InlineThreshold: 8})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	val := bytes.Repeat([]byte("y"), 64)
+	b := db.NewBatch().(*Batch)
+	if err := b.Set([]byte("k"), val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("writesync: %v", err)
+	}
+
+	activeID := db.slabs.ActiveID()
+	tail := db.slabs.ActiveTail()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	path := filepath.Join(dir, fmt.Sprintf("data-%04d.slab", activeID))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open slab: %v", err)
+	}
+	if _, err := f.Write(bytes.Repeat([]byte{0xaa}, 123)); err != nil {
+		_ = f.Close()
+		t.Fatalf("append garbage: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close slab: %v", err)
+	}
+
+	db2, err := Open(Options{Dir: dir, InlineThreshold: 8})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db2.Close()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat slab: %v", err)
+	}
+	if uint64(fi.Size()) != tail {
+		t.Fatalf("expected truncation to %d, got %d", tail, fi.Size())
+	}
+
+	got, err := db2.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("value mismatch after reopen")
 	}
 }
 
@@ -165,4 +265,3 @@ func TestLargeValueStoredOutOfLine(t *testing.T) {
 		t.Fatalf("expected pointer leaf flag, got %v", ent.Flags)
 	}
 }
-

@@ -116,6 +116,7 @@ type SlabManager struct {
 	mu         sync.Mutex
 	active     *SlabFile
 	activeTail uint64
+	appendBuf  []byte
 	set        *SlabSet
 	closed     bool
 }
@@ -162,7 +163,7 @@ func Load(dir string, activeID uint32, activeTail uint64) (*SlabManager, *SlabSe
 
 		flags := os.O_RDONLY
 		if id == activeID {
-			flags = os.O_RDWR
+			flags = os.O_RDWR | os.O_APPEND
 		}
 		fh, err := os.OpenFile(path, flags, 0o600)
 		if err != nil {
@@ -179,7 +180,7 @@ func Load(dir string, activeID uint32, activeTail uint64) (*SlabManager, *SlabSe
 	active, ok := files[activeID]
 	if !ok {
 		path := slabPath(dir, activeID)
-		fh, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		fh, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {
 			closeFiles(files)
 			return nil, nil, err
@@ -212,6 +213,7 @@ func Load(dir string, activeID uint32, activeTail uint64) (*SlabManager, *SlabSe
 		dir:        dir,
 		active:     active,
 		activeTail: activeTail,
+		appendBuf:  make([]byte, 0, maxBatchBuffer),
 		set:        set,
 	}
 	return mgr, set, nil
@@ -246,6 +248,17 @@ func (m *SlabManager) ActiveTail() uint64 {
 	return m.activeTail
 }
 
+// Flush writes any buffered slab bytes to the active slab file.
+// Callers should ensure no pointers are published until Flush succeeds.
+func (m *SlabManager) Flush() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrManagerClosed
+	}
+	return m.flushLocked()
+}
+
 func (m *SlabManager) AppendLarge(key, value []byte) (page.ValuePtr, error) {
 	if key == nil {
 		return page.ValuePtr{}, fmt.Errorf("slab: nil key")
@@ -265,6 +278,10 @@ func (m *SlabManager) AppendLarge(key, value []byte) (page.ValuePtr, error) {
 func (m *SlabManager) appendLargeLocked(key, value []byte) (page.ValuePtr, error) {
 	if m.active == nil || m.active.Handle == nil {
 		return page.ValuePtr{}, fmt.Errorf("slab: no active slab")
+	}
+
+	if err := m.flushLocked(); err != nil {
+		return page.ValuePtr{}, err
 	}
 
 	hdr := recordHeaderPool.Get().(*[recordHeaderLen]byte)
@@ -304,16 +321,14 @@ func (m *SlabManager) appendLargeLocked(key, value []byte) (page.ValuePtr, error
 		}
 	}
 
-	// Fallback: use three WriteAt calls. This path is primarily for tests/ENOSYS.
-	if err := writeAtAll(m.active.Handle, hdr[:], off); err != nil {
+	// Fallback: use three writes (O_APPEND). This path is primarily for tests/ENOSYS.
+	if err := writeAll(m.active.Handle, hdr[:]); err != nil {
 		return page.ValuePtr{}, err
 	}
-	off += recordHeaderLen
-	if err := writeAtAll(m.active.Handle, key, off); err != nil {
+	if err := writeAll(m.active.Handle, key); err != nil {
 		return page.ValuePtr{}, err
 	}
-	off += int64(len(key))
-	if err := writeAtAll(m.active.Handle, value, off); err != nil {
+	if err := writeAll(m.active.Handle, value); err != nil {
 		return page.ValuePtr{}, err
 	}
 
@@ -347,23 +362,6 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 	}
 
 	ptrs := make([]page.ValuePtr, 0, len(keys))
-	buf := make([]byte, 0, maxBatchBuffer)
-	var chunkStart uint64
-
-	flush := func() error {
-		if len(buf) == 0 {
-			return nil
-		}
-		n, err := m.active.Handle.WriteAt(buf, int64(chunkStart))
-		if err != nil {
-			return err
-		}
-		if n != len(buf) {
-			return io.ErrShortWrite
-		}
-		buf = buf[:0]
-		return nil
-	}
 
 	for i := 0; i < len(keys); i++ {
 		key, value := keys[i], values[i]
@@ -382,7 +380,7 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 
 		// Oversized records bypass buffering to preserve the memory cap.
 		if recordLen > maxBatchBuffer {
-			if err := flush(); err != nil {
+			if err := m.flushLocked(); err != nil {
 				return nil, err
 			}
 			ptr, err := m.appendLargeLocked(key, value)
@@ -393,20 +391,16 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 			continue
 		}
 
-		if len(buf) == 0 {
-			chunkStart = base
-		}
-		// Flush current chunk if adding recordLen would exceed the cap.
-		if len(buf) > 0 && len(buf)+recordLen > maxBatchBuffer {
-			if err := flush(); err != nil {
+		// Flush active buffer if adding recordLen would exceed the cap.
+		if len(m.appendBuf) > 0 && len(m.appendBuf)+recordLen > maxBatchBuffer {
+			if err := m.flushLocked(); err != nil {
 				return nil, err
 			}
-			chunkStart = base
 		}
 
-		pos := len(buf)
-		buf = buf[:pos+recordLen]
-		dst := buf[pos : pos+recordLen]
+		pos := len(m.appendBuf)
+		m.appendBuf = m.appendBuf[:pos+recordLen]
+		dst := m.appendBuf[pos : pos+recordLen]
 		sum := recordChecksum(keyLen, valueLen, key, value)
 		encodeRecordHeader(dst[0:recordHeaderLen], sum, keyLen, valueLen)
 		copy(dst[recordHeaderLen:recordHeaderLen+len(key)], key)
@@ -422,7 +416,7 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 
 		// Rotate slabs at boundary; flush buffered bytes first so pointers remain valid.
 		if m.activeTail >= page.SlabRotateSize {
-			if err := flush(); err != nil {
+			if err := m.flushLocked(); err != nil {
 				return nil, err
 			}
 			if err := m.rotateLocked(); err != nil {
@@ -430,10 +424,21 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 			}
 		}
 	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
 	return ptrs, nil
+}
+
+func (m *SlabManager) flushLocked() error {
+	if len(m.appendBuf) == 0 {
+		return nil
+	}
+	if m.active == nil || m.active.Handle == nil {
+		return fmt.Errorf("slab: no active slab")
+	}
+	if err := writeAll(m.active.Handle, m.appendBuf); err != nil {
+		return err
+	}
+	m.appendBuf = m.appendBuf[:0]
+	return nil
 }
 
 func pwritevAll(fd int, iovs [][]byte, off int64) error {
@@ -480,6 +485,23 @@ func writeAtAll(f *os.File, b []byte, off int64) error {
 	return nil
 }
 
+func writeAll(f *os.File, b []byte) error {
+	for len(b) > 0 {
+		n, err := f.Write(b)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
+	}
+	return nil
+}
+
 // ForceRotate seals the current active slab and creates a new active slab.
 // This is used by compaction to obtain a fresh target slab.
 func (m *SlabManager) ForceRotate() (*SlabFile, error) {
@@ -487,6 +509,9 @@ func (m *SlabManager) ForceRotate() (*SlabFile, error) {
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, ErrManagerClosed
+	}
+	if err := m.flushLocked(); err != nil {
+		return nil, err
 	}
 	if err := m.rotateLocked(); err != nil {
 		return nil, err
@@ -521,6 +546,9 @@ func (m *SlabManager) RemoveFromSet(fileID uint32) (*SlabFile, error) {
 }
 
 func (m *SlabManager) rotateLocked() error {
+	if err := m.flushLocked(); err != nil {
+		return err
+	}
 	old := m.active
 	if old == nil {
 		return nil
@@ -531,7 +559,7 @@ func (m *SlabManager) rotateLocked() error {
 
 	newID := old.FileID + 1
 	path := slabPath(m.dir, newID)
-	fh, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	fh, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}

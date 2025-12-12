@@ -121,6 +121,9 @@ func TestAppendLargeBatch_ByteExactEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendLargeBatch: %v", err)
 	}
+	if err := mgr.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	if len(ptrs) != len(keys) {
 		t.Fatalf("ptrs length: got %d want %d", len(ptrs), len(keys))
 	}

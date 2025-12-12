@@ -421,7 +421,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add byte-exact encoding regression and fallback-path tests; run `go test ./...`.
    - Perf: rerun `BenchmarkSet150B/InlineThreshold=64` + `BenchmarkBatchSet150B/InlineThreshold=64`; expect `ns/op` ↓.
 
-10. [ ] Slab: bounded buffered sequential writer (`O_APPEND`) with flush-before-publish invariants.
+10. [x] Slab: bounded buffered sequential writer (`O_APPEND`) with flush-before-publish invariants.
    - Goal: Amortize slab write syscalls while ensuring commits never publish pointers to unwritten bytes.
    - Depends on: TODO 9.
    - Touch: `internal/slab/manager.go`, `commit.go`.
