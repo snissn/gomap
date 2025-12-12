@@ -63,6 +63,41 @@ func (p *chunkPin) Release() {
 	p.c.refs.Add(-1)
 }
 
+// PageRef pins a single mmap-backed page until Release is called.
+// Callers must not retain the returned Bytes slice after releasing.
+type PageRef struct {
+	pid      page.PageID
+	c        *chunk
+	pageData []byte
+	released atomic.Bool
+}
+
+func (r *PageRef) PageID() page.PageID {
+	if r == nil {
+		return 0
+	}
+	return r.pid
+}
+
+func (r *PageRef) Bytes() []byte {
+	if r == nil {
+		return nil
+	}
+	return r.pageData
+}
+
+func (r *PageRef) Release() {
+	if r == nil || r.c == nil {
+		return
+	}
+	if r.released.Swap(true) {
+		return
+	}
+	r.c.refs.Add(-1)
+	r.c = nil
+	r.pageData = nil
+}
+
 // Open opens or creates index.db in dir.
 func Open(dir string, chunkSize int64) (*Pager, error) {
 	if dir == "" {
@@ -206,6 +241,34 @@ func (p *Pager) TotalPages() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.totalPages
+}
+
+// ReadPageRef returns a pinned reference to the mmap-backed page bytes.
+// The caller must call Release() when done.
+func (p *Pager) ReadPageRef(pid page.PageID) (*PageRef, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("pager: closed")
+	}
+	if uint64(pid) >= p.totalPages {
+		p.mu.Unlock()
+		return nil, ErrPageOutOfBounds
+	}
+	c, off, err := p.chunkForPage(pid)
+	if err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
+	c.refs.Add(1)
+	data := c.data[off : off+page.PageSize]
+	p.mu.Unlock()
+
+	return &PageRef{
+		pid:      pid,
+		c:        c,
+		pageData: data,
+	}, nil
 }
 
 // HasFreePages reports whether the freelist currently contains at least one page ID.

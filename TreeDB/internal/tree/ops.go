@@ -39,10 +39,13 @@ func buildInternalPage(buf []byte, pid page.PageID, entries []internalKV) error 
 // cowSet performs a copy-on-write update starting at pid.
 // Returns newPid (left), optional splitKey/splitPid (right), retired pages, and old leaf entry (if any).
 func (t *Tree) cowSet(pid page.PageID, key []byte, val LeafEntry) (page.PageID, []byte, page.PageID, []page.PageID, *LeafEntry, error) {
-	oldBuf, err := t.pager.ReadPage(pid)
+	ref, err := t.pager.ReadPageRef(pid)
 	if err != nil {
 		return 0, nil, 0, nil, nil, err
 	}
+	defer ref.Release()
+	oldBuf := ref.Bytes()
+
 	h, _, err := page.SplitPage(oldBuf)
 	if err != nil {
 		return 0, nil, 0, nil, nil, err

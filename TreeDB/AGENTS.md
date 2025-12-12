@@ -382,7 +382,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add chain/partial-page cases + CRC mutation checks; run `go test ./...`.
    - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `allocs/op` ↓ and `B/op` ↓.
 
-4. [ ] Pager: add pinned read views (`ReadPageRef`/`PageRef`) with strict release discipline.
+4. [x] Pager: add pinned read views (`ReadPageRef`/`PageRef`) with strict release discipline.
    - Goal: Remove PageSize copies on internal reads while keeping CRC verification and preventing escaping views.
    - Touch: `internal/pager/pager.go` (+ new `PageRef` type), callers in `internal/tree/*` and `iterator.go`.
    - Correctness: add tests for growth safety while refs are pinned, ref-leak detection, and `Close()` behavior with live refs; run `go test ./...` and `go test -race ./...`.

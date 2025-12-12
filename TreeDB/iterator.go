@@ -11,6 +11,7 @@ import (
 
 	"treedb/internal/mvcc"
 	"treedb/internal/page"
+	"treedb/internal/pager"
 )
 
 const (
@@ -20,7 +21,7 @@ const (
 
 type cursorItem struct {
 	pid       page.PageID
-	buf       []byte
+	ref       *pager.PageRef
 	h         *page.Header
 	body      []byte
 	count     int
@@ -67,6 +68,37 @@ func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *
 	return it
 }
 
+func (it *iterator) popCursorItem() {
+	if it == nil || len(it.stack) == 0 {
+		return
+	}
+	last := len(it.stack) - 1
+	if it.stack[last].ref != nil {
+		it.stack[last].ref.Release()
+		it.stack[last].ref = nil
+	}
+	it.stack = it.stack[:last]
+}
+
+func (it *iterator) truncateCursorStack(n int) {
+	if it == nil {
+		return
+	}
+	if n < 0 {
+		n = 0
+	}
+	if n > len(it.stack) {
+		n = len(it.stack)
+	}
+	for i := n; i < len(it.stack); i++ {
+		if it.stack[i].ref != nil {
+			it.stack[i].ref.Release()
+			it.stack[i].ref = nil
+		}
+	}
+	it.stack = it.stack[:n]
+}
+
 func (it *iterator) Domain() (start, end []byte) {
 	if it == nil {
 		return nil, nil
@@ -96,6 +128,7 @@ func (it *iterator) Close() error {
 		return nil
 	}
 	it.valid.Store(false)
+	it.truncateCursorStack(0)
 	if it.snap != nil {
 		return it.snap.Close()
 	}
@@ -241,7 +274,7 @@ func (it *iterator) enforceReverseBounds() {
 }
 
 func (it *iterator) seekFirst(root page.PageID) error {
-	it.stack = it.stack[:0]
+	it.truncateCursorStack(0)
 	pid := root
 	for {
 		item, err := it.readCursorItem(pid)
@@ -261,22 +294,25 @@ func (it *iterator) seekFirst(root page.PageID) error {
 		case page.PageTypeInternal:
 			item.internals, err = parseInternalEntries(item.body, item.count)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			if len(item.internals) == 0 {
+				item.ref.Release()
 				return fmt.Errorf("treedb: corrupt internal page")
 			}
 			item.index = 0
 			it.stack = append(it.stack, item)
 			pid = item.internals[0].child
 		default:
+			item.ref.Release()
 			return fmt.Errorf("treedb: unexpected page type %d", item.h.Flags)
 		}
 	}
 }
 
 func (it *iterator) seekLast(root page.PageID) error {
-	it.stack = it.stack[:0]
+	it.truncateCursorStack(0)
 	pid := root
 	for {
 		item, err := it.readCursorItem(pid)
@@ -296,22 +332,25 @@ func (it *iterator) seekLast(root page.PageID) error {
 		case page.PageTypeInternal:
 			item.internals, err = parseInternalEntries(item.body, item.count)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			if len(item.internals) == 0 {
+				item.ref.Release()
 				return fmt.Errorf("treedb: corrupt internal page")
 			}
 			item.index = len(item.internals) - 1
 			it.stack = append(it.stack, item)
 			pid = item.internals[item.index].child
 		default:
+			item.ref.Release()
 			return fmt.Errorf("treedb: unexpected page type %d", item.h.Flags)
 		}
 	}
 }
 
 func (it *iterator) search(root page.PageID, key []byte) error {
-	it.stack = it.stack[:0]
+	it.truncateCursorStack(0)
 	pid := root
 	for {
 		item, err := it.readCursorItem(pid)
@@ -322,6 +361,7 @@ func (it *iterator) search(root page.PageID, key []byte) error {
 		case page.PageTypeLeaf:
 			idx, _, err := findLeafIndex(item.body, item.count, key)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			item.index = idx
@@ -335,19 +375,23 @@ func (it *iterator) search(root page.PageID, key []byte) error {
 		case page.PageTypeInternal:
 			item.internals, err = parseInternalEntries(item.body, item.count)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			if len(item.internals) == 0 {
+				item.ref.Release()
 				return fmt.Errorf("treedb: corrupt internal page")
 			}
 			childIdx := findChildIndex(item.internals, key)
 			if childIdx < 0 || childIdx >= len(item.internals) {
+				item.ref.Release()
 				return fmt.Errorf("treedb: child index out of bounds")
 			}
 			item.index = childIdx
 			it.stack = append(it.stack, item)
 			pid = item.internals[childIdx].child
 		default:
+			item.ref.Release()
 			return fmt.Errorf("treedb: unexpected page type %d", item.h.Flags)
 		}
 	}
@@ -367,17 +411,17 @@ func (it *iterator) normalizeForward() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
-		if top.h.Flags == page.PageTypeLeaf {
-			if top.index < top.count {
-				it.valid.Store(true)
-				return
-			}
-			it.stack = it.stack[:topIdx]
-			if len(it.stack) == 0 {
-				it.valid.Store(false)
-				return
-			}
-			parent := &it.stack[len(it.stack)-1]
+			if top.h.Flags == page.PageTypeLeaf {
+				if top.index < top.count {
+					it.valid.Store(true)
+					return
+				}
+				it.popCursorItem()
+				if len(it.stack) == 0 {
+					it.valid.Store(false)
+					return
+				}
+				parent := &it.stack[len(it.stack)-1]
 			parent.index++
 			for {
 				if parent.index < parent.count {
@@ -386,24 +430,24 @@ func (it *iterator) normalizeForward() {
 						it.err = err
 						it.valid.Store(false)
 						return
+						}
+						break
 					}
-					break
-				}
-				it.stack = it.stack[:len(it.stack)-1]
-				if len(it.stack) == 0 {
-					it.valid.Store(false)
-					return
-				}
-				parent = &it.stack[len(it.stack)-1]
+					it.popCursorItem()
+					if len(it.stack) == 0 {
+						it.valid.Store(false)
+						return
+					}
+					parent = &it.stack[len(it.stack)-1]
 				parent.index++
 			}
 			continue
 		}
 
-		if top.index >= top.count {
-			it.stack = it.stack[:topIdx]
-			continue
-		}
+			if top.index >= top.count {
+				it.popCursorItem()
+				continue
+			}
 		childPid := top.internals[top.index].child
 		if err := it.drillDownLeft(childPid); err != nil {
 			it.err = err
@@ -428,17 +472,17 @@ func (it *iterator) normalizeReverse() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
-		if top.h.Flags == page.PageTypeLeaf {
-			if top.index >= 0 {
-				it.valid.Store(true)
-				return
-			}
-			it.stack = it.stack[:topIdx]
-			if len(it.stack) == 0 {
-				it.valid.Store(false)
-				return
-			}
-			parent := &it.stack[len(it.stack)-1]
+			if top.h.Flags == page.PageTypeLeaf {
+				if top.index >= 0 {
+					it.valid.Store(true)
+					return
+				}
+				it.popCursorItem()
+				if len(it.stack) == 0 {
+					it.valid.Store(false)
+					return
+				}
+				parent := &it.stack[len(it.stack)-1]
 			parent.index--
 			for {
 				if parent.index >= 0 {
@@ -447,24 +491,24 @@ func (it *iterator) normalizeReverse() {
 						it.err = err
 						it.valid.Store(false)
 						return
+						}
+						break
 					}
-					break
-				}
-				it.stack = it.stack[:len(it.stack)-1]
-				if len(it.stack) == 0 {
-					it.valid.Store(false)
-					return
-				}
-				parent = &it.stack[len(it.stack)-1]
+					it.popCursorItem()
+					if len(it.stack) == 0 {
+						it.valid.Store(false)
+						return
+					}
+					parent = &it.stack[len(it.stack)-1]
 				parent.index--
 			}
 			continue
 		}
 
-		if top.index < 0 {
-			it.stack = it.stack[:topIdx]
-			continue
-		}
+			if top.index < 0 {
+				it.popCursorItem()
+				continue
+			}
 		childPid := top.internals[top.index].child
 		if err := it.drillDownRight(childPid); err != nil {
 			it.err = err
@@ -489,15 +533,18 @@ func (it *iterator) drillDownLeft(pid page.PageID) error {
 		case page.PageTypeInternal:
 			item.internals, err = parseInternalEntries(item.body, item.count)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			if len(item.internals) == 0 {
+				item.ref.Release()
 				return fmt.Errorf("treedb: corrupt internal page")
 			}
 			item.index = 0
 			it.stack = append(it.stack, item)
 			pid = item.internals[0].child
 		default:
+			item.ref.Release()
 			return fmt.Errorf("treedb: unexpected page type %d", item.h.Flags)
 		}
 	}
@@ -517,15 +564,18 @@ func (it *iterator) drillDownRight(pid page.PageID) error {
 		case page.PageTypeInternal:
 			item.internals, err = parseInternalEntries(item.body, item.count)
 			if err != nil {
+				item.ref.Release()
 				return err
 			}
 			if len(item.internals) == 0 {
+				item.ref.Release()
 				return fmt.Errorf("treedb: corrupt internal page")
 			}
 			item.index = len(item.internals) - 1
 			it.stack = append(it.stack, item)
 			pid = item.internals[item.index].child
 		default:
+			item.ref.Release()
 			return fmt.Errorf("treedb: unexpected page type %d", item.h.Flags)
 		}
 	}
@@ -586,20 +636,23 @@ func (it *iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.Val
 }
 
 func (it *iterator) readCursorItem(pid page.PageID) (cursorItem, error) {
-	buf, err := it.db.pager.ReadPage(pid)
+	ref, err := it.db.pager.ReadPageRef(pid)
 	if err != nil {
 		return cursorItem{}, err
 	}
+	buf := ref.Bytes()
 	h, body, err := page.SplitPage(buf)
 	if err != nil {
+		ref.Release()
 		return cursorItem{}, err
 	}
 	if err := h.VerifyBodyCRC(body); err != nil {
+		ref.Release()
 		return cursorItem{}, err
 	}
 	return cursorItem{
 		pid:   pid,
-		buf:   buf,
+		ref:   ref,
 		h:     h,
 		body:  body,
 		count: int(h.Count),
@@ -771,4 +824,3 @@ func decodeLeafEntry(body []byte, off uint16) ([]byte, page.LeafFlags, []byte, p
 }
 
 var _ cosmosdb.Iterator = (*iterator)(nil)
-

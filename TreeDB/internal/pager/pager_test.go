@@ -87,6 +87,74 @@ func TestGrowthSafetyWithPinnedChunk(t *testing.T) {
 	pin.Release()
 }
 
+func TestGrowthSafetyWithPinnedPageRef(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	ref, err := p.ReadPageRef(0)
+	if err != nil {
+		t.Fatalf("read ref: %v", err)
+	}
+	oldAddr := uintptr(unsafe.Pointer(&ref.Bytes()[0]))
+
+	// Grow well beyond current size.
+	if err := p.GrowToPages(p.TotalPages() + 10); err != nil {
+		ref.Release()
+		t.Fatalf("grow: %v", err)
+	}
+
+	newAddr := uintptr(unsafe.Pointer(&ref.Bytes()[0]))
+	if oldAddr != newAddr {
+		ref.Release()
+		t.Fatalf("pinned page remapped unexpectedly")
+	}
+	ref.Release()
+}
+
+func TestReadPageRefCloseBehavior(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ref, err := p.ReadPageRef(0)
+	if err != nil {
+		t.Fatalf("read ref: %v", err)
+	}
+	if err := p.Close(); err != ErrChunkPinned {
+		ref.Release()
+		_ = p.Close()
+		t.Fatalf("expected ErrChunkPinned, got %v", err)
+	}
+	ref.Release()
+	if err := p.Close(); err != nil {
+		t.Fatalf("close after release: %v", err)
+	}
+}
+
+func TestReadPageRefReleaseIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ref, err := p.ReadPageRef(0)
+	if err != nil {
+		t.Fatalf("read ref: %v", err)
+	}
+	ref.Release()
+	ref.Release()
+	if err := p.Close(); err != nil {
+		t.Fatalf("close after double release: %v", err)
+	}
+}
+
 func TestShrinkForbidden(t *testing.T) {
 	dir := t.TempDir()
 	p, err := Open(dir, 2*page.PageSize)

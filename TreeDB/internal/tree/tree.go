@@ -48,19 +48,48 @@ func (t *Tree) GetRaw(key []byte) (LeafEntry, error) {
 		return LeafEntry{}, ErrNotFound
 	}
 	encKey := t.encodeKey(key)
-	leafBuf, _, err := t.search(encKey)
-	if err != nil {
-		return LeafEntry{}, err
+	pid := t.root
+	for {
+		ref, err := t.pager.ReadPageRef(pid)
+		if err != nil {
+			return LeafEntry{}, err
+		}
+		buf := ref.Bytes()
+
+		h, _, err := page.SplitPage(buf)
+		if err != nil {
+			ref.Release()
+			return LeafEntry{}, err
+		}
+
+		switch h.Flags {
+		case page.PageTypeLeaf:
+			entries, err := parseLeafEntries(buf)
+			ref.Release()
+			if err != nil {
+				return LeafEntry{}, err
+			}
+			idx, found := findLeafIndex(entries, encKey)
+			if !found {
+				return LeafEntry{}, ErrNotFound
+			}
+			return entries[idx].entry, nil
+		case page.PageTypeInternal:
+			entries, err := parseInternalEntries(buf)
+			ref.Release()
+			if err != nil {
+				return LeafEntry{}, err
+			}
+			if len(entries) == 0 {
+				return LeafEntry{}, ErrCorrupt
+			}
+			idx := findChildIndex(entries, encKey)
+			pid = entries[idx].child
+		default:
+			ref.Release()
+			return LeafEntry{}, ErrCorrupt
+		}
 	}
-	entries, err := parseLeafEntries(leafBuf)
-	if err != nil {
-		return LeafEntry{}, err
-	}
-	idx, found := findLeafIndex(entries, encKey)
-	if !found {
-		return LeafEntry{}, ErrNotFound
-	}
-	return entries[idx].entry, nil
 }
 
 // SetRaw inserts or updates key with val and returns retired page IDs and the previous entry (if any).
@@ -126,72 +155,44 @@ func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, *LeafEntry, err
 	return retired, oldEnt, nil
 }
 
-// search descends to the leaf for key, returning the leaf buffer and path pids.
-func (t *Tree) search(key []byte) ([]byte, []page.PageID, error) {
-	if t.root == 0 {
-		return nil, nil, ErrEmptyTree
-	}
-	var path []page.PageID
-	pid := t.root
+func (t *Tree) minKey(pid page.PageID) ([]byte, error) {
 	for {
-		path = append(path, pid)
-		buf, err := t.pager.ReadPage(pid)
+		ref, err := t.pager.ReadPageRef(pid)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
+		buf := ref.Bytes()
+
 		h, _, err := page.SplitPage(buf)
 		if err != nil {
-			return nil, nil, err
+			ref.Release()
+			return nil, err
 		}
 		switch h.Flags {
 		case page.PageTypeLeaf:
-			return buf, path, nil
-		case page.PageTypeInternal:
-			entries, err := parseInternalEntries(buf)
+			entries, err := parseLeafEntries(buf)
+			ref.Release()
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if len(entries) == 0 {
-				return nil, nil, ErrCorrupt
+				return nil, ErrCorrupt
 			}
-			idx := findChildIndex(entries, key)
-			pid = entries[idx].child
+			return append([]byte(nil), entries[0].key...), nil
+		case page.PageTypeInternal:
+			entries, err := parseInternalEntries(buf)
+			ref.Release()
+			if err != nil {
+				return nil, err
+			}
+			if len(entries) == 0 {
+				return nil, ErrCorrupt
+			}
+			pid = entries[0].child
 		default:
-			return nil, nil, ErrCorrupt
-		}
-	}
-}
-
-func (t *Tree) minKey(pid page.PageID) ([]byte, error) {
-	buf, err := t.pager.ReadPage(pid)
-	if err != nil {
-		return nil, err
-	}
-	h, _, err := page.SplitPage(buf)
-	if err != nil {
-		return nil, err
-	}
-	switch h.Flags {
-	case page.PageTypeLeaf:
-		entries, err := parseLeafEntries(buf)
-		if err != nil {
-			return nil, err
-		}
-		if len(entries) == 0 {
+			ref.Release()
 			return nil, ErrCorrupt
 		}
-		return append([]byte(nil), entries[0].key...), nil
-	case page.PageTypeInternal:
-		entries, err := parseInternalEntries(buf)
-		if err != nil {
-			return nil, err
-		}
-		if len(entries) == 0 {
-			return nil, ErrCorrupt
-		}
-		return append([]byte(nil), entries[0].key...), nil
-	default:
-		return nil, ErrCorrupt
 	}
 }
 
