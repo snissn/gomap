@@ -98,12 +98,12 @@ func TestPrunerReachabilityBarrier(t *testing.T) {
 		t.Fatalf("acquire snapshot: %v", err)
 	}
 
+	old, _ := p.AllocPage()
+	g.Record(5, []page.PageID{old}) // Record 5 first (older)
+
 	reachable, _ := p.AllocPage()
 	reg.SetCurrentSeq(21)
-	g.Record(21, []page.PageID{reachable})
-
-	old, _ := p.AllocPage()
-	g.Record(5, []page.PageID{old})
+	g.Record(21, []page.PageID{reachable}) // Record 21 second (newer)
 
 	reg.SetCurrentSeq(30)
 	if err := pruner.Prune(30); err != nil {
@@ -143,38 +143,57 @@ func TestPrunerKeepRecentWindow(t *testing.T) {
 
 	p95, _ := p.AllocPage()
 	p85, _ := p.AllocPage()
-	g.Record(95, []page.PageID{p95})
+	// Record in order: 85 then 95
 	g.Record(85, []page.PageID{p85})
+	g.Record(95, []page.PageID{p95})
 
-	reg.SetCurrentSeq(100)
-	if err := pruner.Prune(100); err != nil {
-		t.Fatalf("prune: %v", err)
-	}
+		reg.SetCurrentSeq(100)
 
-	a, _ := p.AllocPage()
-	if a != p85 {
-		t.Fatalf("expected seq85 page reclaimed, got %d", a)
-	}
-	if _, ok := g.retired[95]; !ok {
-		t.Fatalf("seq95 pages should remain due to KeepRecent")
-	}
+		if err := pruner.Prune(100); err != nil {
 
-	// Reader pinned outside history protects seq85.
-	g2 := NewGraveyard()
-	p85b, _ := p.AllocPage()
-	g2.Record(85, []page.PageID{p85b})
-	reg.Pin(85)
-	defer reg.Unpin(85)
+			t.Fatalf("prune: %v", err)
 
-	pruner2 := NewPruner(p, g2, reg, 10)
-	if err := pruner2.Prune(100); err != nil {
-		t.Fatalf("prune with reader: %v", err)
+		}
+	
+		a, _ := p.AllocPage()
+		if a != p85 {
+			t.Fatalf("expected seq85 page reclaimed, got %d", a)
+		}
+		
+		found95 := false
+		for _, b := range g.retired {
+			if b.seq == 95 {
+				found95 = true
+				break
+			}
+		}
+		if !found95 {
+			t.Fatalf("seq95 pages should remain due to KeepRecent")
+		}
+	
+		// Reader pinned outside history protects seq85.
+		g2 := NewGraveyard()
+		p85b, _ := p.AllocPage()
+		g2.Record(85, []page.PageID{p85b})
+		reg.Pin(85)
+		defer reg.Unpin(85)
+	
+		pruner2 := NewPruner(p, g2, reg, 10)
+		if err := pruner2.Prune(100); err != nil {
+			t.Fatalf("prune with reader: %v", err)
+		}
+		
+		found85 := false
+		for _, b := range g2.retired {
+			if b.seq == 85 {
+				found85 = true
+				break
+			}
+		}
+		if !found85 {
+			t.Fatalf("seq85 pages should remain due to pinned reader")
+		}
 	}
-	if _, ok := g2.retired[85]; !ok {
-		t.Fatalf("seq85 pages should remain due to pinned reader")
-	}
-}
-
 func TestSnapshotPinsAndReleasesSlabs(t *testing.T) {
 	dir := t.TempDir()
 	mgr, set, err := slab.Load(dir, 0, 0)

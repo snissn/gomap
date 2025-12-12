@@ -43,15 +43,12 @@ func (p *Pruner) Prune(currentSeq uint64) error {
 		return nil
 	}
 
-	if err := p.pager.FreePages(pages); err != nil {
-		// Reinsert on failure.
-		p.graveyard.mu.Lock()
-		for seq, ids := range eligible {
-			p.graveyard.retired[seq] = append(p.graveyard.retired[seq], ids...)
+		if err := p.pager.FreePages(pages); err != nil {
+			// Reinsert on failure.
+			for seq, ids := range eligible {
+				p.graveyard.Reinsert(seq, ids)
+			}
+			return err
 		}
-		p.graveyard.mu.Unlock()
-		return err
+		return nil
 	}
-	return nil
-}
-
