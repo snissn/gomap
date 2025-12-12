@@ -3,112 +3,21 @@ package db
 import (
 	"fmt"
 
+	"github.com/snissn/gomap-gemini/TreeDB/internal/merging"
 	"github.com/snissn/gomap-gemini/TreeDB/tree"
 )
 
-// --- Public API ---
-
-// Get returns the value for a key.
-func (db *DB) Get(key []byte) ([]byte, error) {
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	val, err := snap.Get(key)
-	if err == tree.ErrKeyNotFound {
-		return nil, nil
-	}
-	return val, err
-}
-
-// Has checks if a key exists.
-func (db *DB) Has(key []byte) (bool, error) {
-	val, err := db.Get(key)
-	if err != nil {
-		return false, err
-	}
-	return val != nil, nil
-}
-
-// Set sets the value for a key.
-func (db *DB) Set(key, value []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Set(key, value); err != nil {
-		return err
-	}
-	return batch.WriteSync()
-}
-
-// SetSync sets the value and syncs to disk.
-func (db *DB) SetSync(key, value []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Set(key, value); err != nil {
-		return err
-	}
-	return batch.WriteSync()
-}
-
-// Delete removes a key.
-func (db *DB) Delete(key []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Delete(key); err != nil {
-		return err
-	}
-	return batch.WriteSync()
-}
-
-// DeleteSync removes a key and syncs.
-func (db *DB) DeleteSync(key []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Delete(key); err != nil {
-		return err
-	}
-	return batch.WriteSync()
-}
-
-// DBIterator wraps tree.Iterator and holds a Snapshot.
-type DBIterator struct {
-	snap *Snapshot
-	iter *tree.Iterator
-}
-
-func (it *DBIterator) Next() {
-	it.iter.Next()
-}
-
-func (it *DBIterator) Valid() bool {
-	return it.iter.Valid()
-}
-
-func (it *DBIterator) Key() []byte {
-	return it.iter.Key()
-}
-
-func (it *DBIterator) Value() []byte {
-	return it.iter.Value()
-}
-
-func (it *DBIterator) Error() error {
-	return it.iter.Error()
-}
-
-func (it *DBIterator) Close() error {
-	err := it.iter.Close()
-	if e := it.snap.Close(); e != nil {
-		if err == nil {
-			err = e
-		}
-	}
-	return err
-}
+// ...
 
 // Iterator returns an iterator.
-func (db *DB) Iterator(start, end []byte) (*DBIterator, error) {
+func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	snap := db.AcquireSnapshot()
 	it := snap.tree.Iterator(start, end)
 	return &DBIterator{snap: snap, iter: it}, nil
 }
 
 // ReverseIterator returns a reverse iterator.
-func (db *DB) ReverseIterator(start, end []byte) (*DBIterator, error) {
+func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	snap := db.AcquireSnapshot()
 	it := snap.tree.ReverseIterator(start, end)
 	return &DBIterator{snap: snap, iter: it}, nil

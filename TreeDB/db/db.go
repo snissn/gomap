@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap-gemini/TreeDB/batch"
+	"github.com/snissn/gomap-gemini/TreeDB/caching"
 	"github.com/snissn/gomap-gemini/TreeDB/freelist"
 	"github.com/snissn/gomap-gemini/TreeDB/lifecycle"
 	"github.com/snissn/gomap-gemini/TreeDB/node"
@@ -49,13 +50,23 @@ type DB struct {
 }
 
 type Options struct {
-	Dir        string
-	ChunkSize  int64 // Default 256MB
-	KeepRecent uint64 // Default 10000
+	Dir            string
+	ChunkSize      int64 // Default 256MB
+	KeepRecent     uint64 // Default 10000
+	EnableCaching  bool
+	FlushThreshold int64
 }
 
-type Snapshot struct {
-	db         *DB
+// OpenCached opens the database with caching if enabled.
+func OpenCached(opts Options) (*caching.DB, error) {
+	db, err := Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return caching.Open(opts.Dir, db, opts.FlushThreshold)
+}
+
+type Snapshot struct {	db         *DB
 	state      *DBState
 	tree       *tree.Tree
 	registryID int64

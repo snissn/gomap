@@ -2,6 +2,7 @@ package db
 
 import (
 	"github.com/snissn/gomap-gemini/TreeDB/batch"
+	"github.com/snissn/gomap-gemini/TreeDB/caching"
 )
 
 // Batch implements the cosmos-db Batch interface.
@@ -10,7 +11,11 @@ type Batch struct {
 	batch *batch.Batch
 }
 
-func (db *DB) NewBatch() *Batch {
+func (db *DB) NewBatch() caching.BatchInterface {
+	return db.NewBatchWithSize(0)
+}
+
+func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
 	return &Batch{
 		db:    db,
 		batch: batch.New(db.slabManager, db.inlineThreshold),
