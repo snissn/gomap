@@ -1,6 +1,7 @@
 package pager
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,10 @@ type Pager struct {
 	chunkSize    int64
 	sysPageSize  int64
 	preallocSize int64
+	freelistCount uint64
+	reserveBatch uint64
+	reserveNext  uint64
+	reserveEnd   uint64
 
 	mu     sync.Mutex
 	chunks []*chunk
@@ -143,6 +148,11 @@ func (p *Pager) initOrLoad() error {
 		p.totalPages = physicalPages
 		p.meta.TotalPages = physicalPages
 	}
+
+	// Compute freelist count once on open; future updates are tracked incrementally.
+	if err := p.loadFreelistCountLocked(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -187,6 +197,7 @@ func (p *Pager) initNew() error {
 	if err := p.writeMetaToPage(1, p.meta); err != nil {
 		return err
 	}
+	p.freelistCount = 0
 	return nil
 }
 
@@ -195,6 +206,17 @@ func (p *Pager) TotalPages() uint64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.totalPages
+}
+
+// HasFreePages reports whether the freelist currently contains at least one page ID.
+// This is tracked incrementally and does not scan freelist pages.
+func (p *Pager) HasFreePages() (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return false, fmt.Errorf("pager: closed")
+	}
+	return p.freelistCount > 0, nil
 }
 
 // ReadPage returns a copy of the page data.
@@ -286,13 +308,35 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if err := encodeFreelistPage(fp, buf); err != nil {
 			return 0, err
 		}
+		if p.freelistCount > 0 {
+			p.freelistCount--
+		}
 		return alloc, nil
 	}
 
-	// No freelist entries; extend file.
-	newID := page.PageID(p.totalPages)
-	if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
-		return 0, err
+	// No freelist entries: allocate from reserve if available, else extend file.
+	var newID page.PageID
+	if p.reserveNext < p.reserveEnd {
+		newID = page.PageID(p.reserveNext)
+		p.reserveNext++
+	} else if p.reserveBatch > 0 {
+		start := p.totalPages
+		if p.reserveBatch > (^uint64(0) - start) {
+			return 0, fmt.Errorf("pager: reserve overflow")
+		}
+		end := start + p.reserveBatch
+		if err := p.growToPagesLocked(end); err != nil {
+			return 0, err
+		}
+		p.reserveNext = start
+		p.reserveEnd = end
+		newID = page.PageID(p.reserveNext)
+		p.reserveNext++
+	} else {
+		newID = page.PageID(p.totalPages)
+		if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
+			return 0, err
+		}
 	}
 	// Zero the new page for determinism.
 	b, err := p.pageSliceLocked(newID)
@@ -303,6 +347,67 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		b[i] = 0
 	}
 	return newID, nil
+}
+
+// BeginAllocReserve reserves up to estimatePages fresh PageIDs for subsequent AllocPage calls.
+// Unused pages must be returned via EndAllocReserve to avoid leaking free space.
+func (p *Pager) BeginAllocReserve(estimatePages uint64, maxChunks int) error {
+	if estimatePages == 0 || maxChunks <= 0 {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return fmt.Errorf("pager: closed")
+	}
+	if p.reserveBatch != 0 || p.reserveNext != p.reserveEnd {
+		return fmt.Errorf("pager: alloc reserve already active")
+	}
+
+	chunkPages := uint64(p.chunkSize / page.PageSize)
+	if chunkPages == 0 {
+		return fmt.Errorf("pager: invalid chunk size")
+	}
+	maxPages := chunkPages * uint64(maxChunks)
+	if estimatePages > maxPages {
+		estimatePages = maxPages
+	}
+	if estimatePages == 0 {
+		return nil
+	}
+	p.reserveBatch = estimatePages
+	return nil
+}
+
+// EndAllocReserve returns unused reserved pages to the freelist.
+func (p *Pager) EndAllocReserve() error {
+	p.mu.Lock()
+	p.reserveBatch = 0
+	start := p.reserveNext
+	end := p.reserveEnd
+	p.reserveNext = 0
+	p.reserveEnd = 0
+	p.mu.Unlock()
+
+	if start >= end {
+		return nil
+	}
+
+	const batchSize = 1024
+	buf := make([]page.PageID, 0, batchSize)
+	for id := start; id < end; id++ {
+		buf = append(buf, page.PageID(id))
+		if len(buf) == cap(buf) {
+			if err := p.FreePages(buf); err != nil {
+				return err
+			}
+			buf = buf[:0]
+		}
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	return p.FreePages(buf)
 }
 
 // FreePages appends page IDs to the on-disk freelist.
@@ -375,6 +480,7 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 			return err
 		}
 	}
+	p.freelistCount += uint64(len(ids))
 	return nil
 }
 
@@ -684,4 +790,37 @@ func (p *Pager) CopyPageTo(pid page.PageID, w io.Writer) error {
 	}
 	_, err = w.Write(data)
 	return err
+}
+
+func (p *Pager) loadFreelistCountLocked() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return fmt.Errorf("pager: closed")
+	}
+	var count uint64
+	head := p.meta.FreelistHeadID
+	for head != 0 {
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return err
+		}
+		h, body, err := page.SplitPage(buf)
+		if err != nil {
+			return err
+		}
+		if h.Flags != page.PageTypeFreelist {
+			return ErrFileCorrupt
+		}
+		if err := h.VerifyBodyCRC(body); err != nil {
+			return err
+		}
+		if len(body) < freelistHeaderExtra {
+			return ErrFileCorrupt
+		}
+		count += uint64(h.Count)
+		head = page.PageID(binary.LittleEndian.Uint64(body[0:8]))
+	}
+	p.freelistCount = count
+	return nil
 }

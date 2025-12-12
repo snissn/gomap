@@ -42,6 +42,27 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 		return nil
 	}
 
+	// Best-effort: if the freelist is empty, set a bounded grow quantum so the
+	// commit can amortize pager growth work.
+	reserveActive := false
+	if est := estimateCommitReservePages(len(keys)); est > 0 {
+		hasFree, err := db.pager.HasFreePages()
+		if err != nil {
+			return err
+		}
+		if !hasFree {
+			if err := db.pager.BeginAllocReserve(est, 4); err != nil {
+				return err
+			}
+			reserveActive = true
+			defer func() {
+				if reserveActive {
+					_ = db.pager.EndAllocReserve()
+				}
+			}()
+		}
+	}
+
 	// Local COW roots.
 	userTree := tree.NewUserTree(db.pager, st.UserRootPageID)
 	systemTree := tree.NewSystemTree(db.pager, st.SystemRootPageID)
@@ -100,7 +121,25 @@ func (db *DB) writeBatch(b *Batch, sync bool) error {
 		}
 	}
 
+	if reserveActive {
+		if err := db.pager.EndAllocReserve(); err != nil {
+			return err
+		}
+		reserveActive = false
+	}
+
 	return db.finishCommit(st, userTree, systemTree, retired, modifiedSlabs, slabWriteBytes, len(keys), sync)
+}
+
+func estimateCommitReservePages(ops int) uint64 {
+	if ops < 64 {
+		return 0
+	}
+	// When the freelist is empty, the commit must allocate many fresh pages. Use
+	// a (capped) estimate to reduce incremental pager growth calls.
+	est := uint64(ops) * 2
+	est += est / 10
+	return est
 }
 
 // writeOne applies a single Set/Delete operation under the global writer lock.

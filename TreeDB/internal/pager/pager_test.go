@@ -212,3 +212,58 @@ func TestPreallocCacheStalenessFailsFast(t *testing.T) {
 		t.Fatalf("expected ErrFileCorrupt, got %v", err)
 	}
 }
+
+func TestAllocReserveCapEnforced(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	// chunkPages=2, maxChunks=2 => cap=4 pages.
+	if err := p.BeginAllocReserve(1_000_000, 2); err != nil {
+		t.Fatalf("begin reserve: %v", err)
+	}
+	p.mu.Lock()
+	gotBatch := p.reserveBatch
+	p.mu.Unlock()
+	if gotBatch != 4 {
+		t.Fatalf("reserve batch: got %d want %d", gotBatch, 4)
+	}
+	if err := p.EndAllocReserve(); err != nil {
+		t.Fatalf("end reserve: %v", err)
+	}
+}
+
+func TestAllocReserveUndershootFallback(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	start := p.TotalPages()
+	if err := p.BeginAllocReserve(1, 4); err != nil {
+		t.Fatalf("begin reserve: %v", err)
+	}
+
+	var ids []page.PageID
+	for i := 0; i < 5; i++ {
+		id, err := p.AllocPage()
+		if err != nil {
+			t.Fatalf("alloc %d: %v", i, err)
+		}
+		ids = append(ids, id)
+	}
+	for i, id := range ids {
+		want := page.PageID(uint64(start) + uint64(i))
+		if id != want {
+			t.Fatalf("id[%d]=%d want %d (ids=%v)", i, id, want, ids)
+		}
+	}
+	if err := p.EndAllocReserve(); err != nil {
+		t.Fatalf("end reserve: %v", err)
+	}
+}

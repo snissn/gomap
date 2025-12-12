@@ -370,7 +370,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add/extend tests for cached-size staleness (file smaller than cache) and chunk-alignment invariants; run `go test ./...` and `go test -race ./...`.
    - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect `ns/op` ↓ (both thresholds), `allocs/op` ↔/↓.
 
-2. [ ] Commit-level index growth estimate (guesstimate once per commit).
+2. [x] Commit-level index growth estimate (guesstimate once per commit).
    - Goal: Reduce incremental grow calls by estimating needed pages per commit (bounded to ≤2–4 chunks).
    - Touch: `commit.go`, `internal/pager/pager.go`.
    - Correctness: add tests for estimate under-shoot fallback and “cap” enforcement; run `go test ./...`.

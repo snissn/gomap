@@ -75,12 +75,20 @@ func (c *Compactor) CompactAll() error {
 	if c == nil || c.pager == nil || c.slabs == nil || c.state == nil {
 		return nil
 	}
-	st := c.state.Load()
+	// Hold a snapshot while selecting candidates to prevent page reuse via
+	// pruning from racing with the scan under concurrent commits.
+	snap, err := c.state.AcquireSnapshot()
+	if err != nil {
+		return err
+	}
+	st := snap.State()
 	if st == nil {
+		_ = snap.Close()
 		return fmt.Errorf("compaction: no state")
 	}
 
 	candidates, err := c.selectCandidates(st.SystemRootPageID, st.SlabSet)
+	_ = snap.Close()
 	if err != nil {
 		return err
 	}
