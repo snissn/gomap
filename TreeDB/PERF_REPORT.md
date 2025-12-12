@@ -1,17 +1,17 @@
 # TreeDB Performance Report
 
-**Date:** Fri Dec 12 01:04:15 HST 2025
+**Date:** Fri Dec 12 01:19:32 HST 2025
 **System:** Darwin 24.6.0
 
 ## Benchmark Results
 
 | Benchmark | Iterations | Time/Op | Throughput | Memory/Op | Alloc/Op |
 |---|---|---|---|---|---|
-| BenchmarkStress-8 | 477 | 2.28 ms | 437 | 7844 B | 87 |
-| BenchmarkGet-8 | 560984 | 1.91 µs | 523286 | 12635 B | 11 |
-| BenchmarkScan-8 | 2557 | 420.75 µs | 2376 | 1292633 B | 20618 |
-| BenchmarkBatch-8 | 234 | 5.00 ms | 199 (batches) | 853650 B | 4571 |
-| BenchmarkLargeVal-8 | 172 | 7.22 ms | 138 | 12129 B | 208 |
+| BenchmarkStress-8 | 553 | 3.48 ms | 286 | 7692 B | 98 |
+| BenchmarkGet-8 | 704922 | 1.64 µs | 606796 | 12635 B | 11 |
+| BenchmarkScan-8 | 3026 | 394.93 µs | 2532 | 1292637 B | 20618 |
+| BenchmarkBatch-8 | 199 | 6.31 ms | 158 (batches) | 841849 B | 4389 |
+| BenchmarkLargeVal-8 | 170 | 7.27 ms | 137 | 11857 B | 196 |
 
 ## Hotspots (Top 5 Functions)
 
@@ -19,81 +19,82 @@
 ```
 File: db.test
 Type: cpu
-Time: 2025-12-12 01:04:15 HST
-Duration: 8.36s, Total samples = 180ms ( 2.15%)
-Showing nodes accounting for 180ms, 100% of 180ms total
-Showing top 5 nodes out of 78
+Time: 2025-12-12 01:19:32 HST
+Duration: 8.97s, Total samples = 640ms ( 7.13%)
+Showing nodes accounting for 590ms, 92.19% of 640ms total
+Showing top 5 nodes out of 119
       flat  flat%   sum%        cum   cum%
-     100ms 55.56% 55.56%      100ms 55.56%  syscall.syscall
-      40ms 22.22% 77.78%       40ms 22.22%  runtime.memmove
-      30ms 16.67% 94.44%       30ms 16.67%  runtime.fcntl
-      10ms  5.56%   100%       10ms  5.56%  syscall.syscall6
-         0     0%   100%       10ms  5.56%  github.com/snissn/gomap-gemini/TreeDB/batch.(*Batch).Set
+     300ms 46.88% 46.88%      300ms 46.88%  syscall.syscall
+     160ms 25.00% 71.88%      160ms 25.00%  runtime.fcntl
+      70ms 10.94% 82.81%       70ms 10.94%  runtime.memmove
+      30ms  4.69% 87.50%       30ms  4.69%  encoding/binary.littleEndian.PutUint64
+      30ms  4.69% 92.19%       30ms  4.69%  runtime.pthread_cond_wait
 ```
 
 ### BenchmarkGet
 ```
 File: db.test
 Type: cpu
-Time: 2025-12-12 01:04:24 HST
-Duration: 7.96s, Total samples = 4120ms (51.77%)
-Showing nodes accounting for 2940ms, 71.36% of 4120ms total
-Dropped 141 nodes (cum <= 20.60ms)
-Showing top 5 nodes out of 141
+Time: 2025-12-12 01:19:41 HST
+Duration: 8.66s, Total samples = 6990ms (80.76%)
+Showing nodes accounting for 4980ms, 71.24% of 6990ms total
+Dropped 164 nodes (cum <= 34.95ms)
+Showing top 5 nodes out of 148
       flat  flat%   sum%        cum   cum%
-    1350ms 32.77% 32.77%     1350ms 32.77%  runtime.usleep
-     640ms 15.53% 48.30%      640ms 15.53%  runtime.madvise
-     440ms 10.68% 58.98%      440ms 10.68%  runtime.pthread_cond_wait
-     320ms  7.77% 66.75%      320ms  7.77%  runtime.pthread_kill
-     190ms  4.61% 71.36%      190ms  4.61%  hash/crc32.castagnoliUpdate
+    2600ms 37.20% 37.20%     2600ms 37.20%  runtime.usleep
+     940ms 13.45% 50.64%      940ms 13.45%  runtime.pthread_cond_wait
+     790ms 11.30% 61.95%      790ms 11.30%  runtime.madvise
+     340ms  4.86% 66.81%      340ms  4.86%  runtime.pthread_kill
+     310ms  4.43% 71.24%      310ms  4.43%  hash/crc32.castagnoliUpdate
 ```
 
 ### BenchmarkScan
 ```
 File: db.test
 Type: cpu
-Time: 2025-12-12 01:04:32 HST
-Duration: 7.76s, Total samples = 1510ms (19.45%)
-Showing nodes accounting for 1170ms, 77.48% of 1510ms total
-Showing top 5 nodes out of 119
+Time: 2025-12-12 01:19:50 HST
+Duration: 10.07s, Total samples = 2940ms (29.19%)
+Showing nodes accounting for 2060ms, 70.07% of 2940ms total
+Dropped 57 nodes (cum <= 14.70ms)
+Showing top 5 nodes out of 114
       flat  flat%   sum%        cum   cum%
-     840ms 55.63% 55.63%      840ms 55.63%  runtime.kevent
-     110ms  7.28% 62.91%      110ms  7.28%  runtime.pthread_cond_wait
-     100ms  6.62% 69.54%      100ms  6.62%  runtime.pthread_kill
-      60ms  3.97% 73.51%       60ms  3.97%  runtime.fcntl
-      60ms  3.97% 77.48%       60ms  3.97%  syscall.syscall
+     930ms 31.63% 31.63%      930ms 31.63%  runtime.kevent
+     330ms 11.22% 42.86%      330ms 11.22%  runtime.pthread_cond_wait
+     290ms  9.86% 52.72%      290ms  9.86%  runtime.pthread_cond_signal
+     270ms  9.18% 61.90%      270ms  9.18%  runtime.pthread_kill
+     240ms  8.16% 70.07%      240ms  8.16%  syscall.syscall
 ```
 
 ### BenchmarkBatch
 ```
 File: db.test
 Type: cpu
-Time: 2025-12-12 01:04:40 HST
-Duration: 7.66s, Total samples = 510ms ( 6.66%)
-Showing nodes accounting for 440ms, 86.27% of 510ms total
-Showing top 5 nodes out of 129
+Time: 2025-12-12 01:20:00 HST
+Duration: 8.77s, Total samples = 1210ms (13.79%)
+Showing nodes accounting for 970ms, 80.17% of 1210ms total
+Showing top 5 nodes out of 180
       flat  flat%   sum%        cum   cum%
-     270ms 52.94% 52.94%      270ms 52.94%  runtime.memmove
-      80ms 15.69% 68.63%       80ms 15.69%  syscall.syscall
-      40ms  7.84% 76.47%       40ms  7.84%  runtime.fcntl
-      30ms  5.88% 82.35%       30ms  5.88%  runtime.pthread_cond_signal
-      20ms  3.92% 86.27%       20ms  3.92%  runtime.typePointers.next
+     500ms 41.32% 41.32%      500ms 41.32%  runtime.memmove
+     200ms 16.53% 57.85%      200ms 16.53%  syscall.syscall
+     150ms 12.40% 70.25%      150ms 12.40%  runtime.fcntl
+      80ms  6.61% 76.86%       80ms  6.61%  runtime.pthread_cond_wait
+      40ms  3.31% 80.17%       40ms  3.31%  runtime.madvise
 ```
 
 ### BenchmarkLargeVal
 ```
 File: db.test
 Type: cpu
-Time: 2025-12-12 01:04:48 HST
-Duration: 8.57s, Total samples = 190ms ( 2.22%)
-Showing nodes accounting for 190ms, 100% of 190ms total
-Showing top 5 nodes out of 62
+Time: 2025-12-12 01:20:09 HST
+Duration: 8.37s, Total samples = 690ms ( 8.25%)
+Showing nodes accounting for 620ms, 89.86% of 690ms total
+Showing top 5 nodes out of 116
       flat  flat%   sum%        cum   cum%
-      70ms 36.84% 36.84%       70ms 36.84%  runtime.fcntl
-      60ms 31.58% 68.42%       60ms 31.58%  runtime.memmove
-      40ms 21.05% 89.47%       40ms 21.05%  syscall.syscall
-      10ms  5.26% 94.74%       10ms  5.26%  runtime.pthread_cond_wait
-      10ms  5.26%   100%       10ms  5.26%  syscall.syscall6
+     320ms 46.38% 46.38%      320ms 46.38%  syscall.syscall
+     160ms 23.19% 69.57%      160ms 23.19%  runtime.fcntl
+      80ms 11.59% 81.16%       80ms 11.59%  runtime.memmove
+      30ms  4.35% 85.51%       30ms  4.35%  runtime.pthread_cond_signal
+      30ms  4.35% 89.86%       30ms  4.35%  runtime.pthread_cond_wait
 ```
 
 
@@ -104,35 +105,35 @@ goos: darwin
 goarch: arm64
 pkg: github.com/snissn/gomap-gemini/TreeDB/db
 cpu: Apple M3
-BenchmarkStress-8   	     477	   2284145 ns/op	    7844 B/op	      87 allocs/op
+BenchmarkStress-8   	     553	   3489298 ns/op	    7692 B/op	      98 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.366s
+ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.976s
 goos: darwin
 goarch: arm64
 pkg: github.com/snissn/gomap-gemini/TreeDB/db
 cpu: Apple M3
-BenchmarkGet-8   	  560984	      1911 ns/op	   12635 B/op	      11 allocs/op
+BenchmarkGet-8   	  704922	      1648 ns/op	   12635 B/op	      11 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	7.962s
+ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.660s
 goos: darwin
 goarch: arm64
 pkg: github.com/snissn/gomap-gemini/TreeDB/db
 cpu: Apple M3
-BenchmarkScan-8   	    2557	    420755 ns/op	 1292633 B/op	   20618 allocs/op
+BenchmarkScan-8   	    3026	    394939 ns/op	 1292637 B/op	   20618 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	7.766s
+ok  	github.com/snissn/gomap-gemini/TreeDB/db	10.078s
 goos: darwin
 goarch: arm64
 pkg: github.com/snissn/gomap-gemini/TreeDB/db
 cpu: Apple M3
-BenchmarkBatch-8   	     234	   5006285 ns/op	  853650 B/op	    4571 allocs/op
+BenchmarkBatch-8   	     199	   6318190 ns/op	  841849 B/op	    4389 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	7.662s
+ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.777s
 goos: darwin
 goarch: arm64
 pkg: github.com/snissn/gomap-gemini/TreeDB/db
 cpu: Apple M3
-BenchmarkLargeVal-8   	     172	   7225111 ns/op	   12129 B/op	     208 allocs/op
+BenchmarkLargeVal-8   	     170	   7273251 ns/op	   11857 B/op	     196 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.571s
+ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.375s
 ```

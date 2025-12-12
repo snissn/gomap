@@ -2,14 +2,19 @@ package lifecycle
 
 import "sync"
 
+type batch struct {
+	seq uint64
+	ids []uint64
+}
+
 type Graveyard struct {
-	mu          sync.Mutex
-	retiredPages map[uint64][]uint64 // CommitSeq -> []PageID
+	mu           sync.Mutex
+	retiredPages []batch // Ordered by CommitSeq
 }
 
 func NewGraveyard() *Graveyard {
 	return &Graveyard{
-		retiredPages: make(map[uint64][]uint64),
+		retiredPages: make([]batch, 0, 64),
 	}
 }
 
@@ -17,11 +22,19 @@ func NewGraveyard() *Graveyard {
 func (g *Graveyard) Add(seq uint64, pages []uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	if len(pages) == 0 {
 		return
 	}
-	g.retiredPages[seq] = append(g.retiredPages[seq], pages...)
+	// Optimization: merge with last if same seq
+	if len(g.retiredPages) > 0 {
+		last := &g.retiredPages[len(g.retiredPages)-1]
+		if last.seq == seq {
+			last.ids = append(last.ids, pages...)
+			return
+		}
+	}
+	g.retiredPages = append(g.retiredPages, batch{seq: seq, ids: pages})
 }
 
 // Extract returns pages that are safe to free.
@@ -29,29 +42,59 @@ func (g *Graveyard) Add(seq uint64, pages []uint64) {
 func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	
+
 	var freed []uint64
-	
-	// Threshold logic
-	// Safe if seq < minPinnedSeq
-	// AND seq < safeHistoryThreshold
-	
+
 	safeHistory := currentSeq - keepRecent
 	if currentSeq < keepRecent {
 		safeHistory = 0
 	}
-	
+
 	limit := minPinnedSeq
 	if safeHistory < limit {
 		limit = safeHistory
 	}
-	
-	for seq, pages := range g.retiredPages {
-		if seq < limit {
-			freed = append(freed, pages...)
-			delete(g.retiredPages, seq)
+
+	cutIdx := 0
+	for i := range g.retiredPages {
+		b := &g.retiredPages[i]
+		if b.seq < limit {
+			freed = append(freed, b.ids...)
+			cutIdx = i + 1
+		} else {
+			break
 		}
 	}
-	
+
+	if cutIdx > 0 {
+		g.retiredPages = g.retiredPages[cutIdx:]
+	}
+
 	return freed
+}
+
+// Reinsert adds pages back to the graveyard in order.
+// Useful if freeing fails.
+func (g *Graveyard) Reinsert(seq uint64, pages []uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(pages) == 0 {
+		return
+	}
+
+	insertIdx := len(g.retiredPages)
+	for i, b := range g.retiredPages {
+		if b.seq > seq {
+			insertIdx = i
+			break
+		}
+	}
+
+	val := batch{seq: seq, ids: pages}
+	if insertIdx == len(g.retiredPages) {
+		g.retiredPages = append(g.retiredPages, val)
+	} else {
+		g.retiredPages = append(g.retiredPages[:insertIdx+1], g.retiredPages[insertIdx:]...)
+		g.retiredPages[insertIdx] = val
+	}
 }

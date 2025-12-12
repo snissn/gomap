@@ -313,7 +313,7 @@ To guarantee consistent reads, TreeDB maintains a global atomic pointer to an im
 
 #### 5.2.2 The Graveyard (Pages)
 
-  * **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
+  * **In-Memory Graveyard:** Ordered list of `(CommitSeq, []PageID)`. When a commit occurs at `CommitSeq N`, all replaced pages are appended.
   * **Reader Registry (MinPinnedSeq):** TreeDB maintains an atomic counter or lock-protected set of all active Snapshot `CommitSeq`s. The **MinPinnedSeq** is the lowest sequence number currently in use by any reader.
   * **KeepRecent Policy:** A configurable setting (e.g., `KeepRecent=100`) defining how many historical versions must be retained regardless of active readers.
   * **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
