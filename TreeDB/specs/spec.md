@@ -19,7 +19,11 @@ The database resides in a single directory containing two types of files.
   * **Purpose:** Stores large data payloads (Contract code, large metadata).
   * **Filenames:** `data-0000.slab`, `data-0001.slab`, etc.
   * **Format:** Append-only record stream (Section 2.1.1).
-  * **Rotation:** When the active file exceeds `4GB`, it is closed (becoming read-only) and a new file is created.
+  * **Rotation:** When the active file exceeds `4GB`:
+     1. `fsync` the active file.
+     2. Close (seal) the active file.
+     3. Create new slab.
+     4. **Directory Sync:** `fsync` the parent directory to persist the new file entry.
 
 #### 2.1.1 Slab Record Format (Compaction-Readable)
 
@@ -72,9 +76,8 @@ Implementation note: the exact combination of `msync` and `fdatasync` is OS-depe
 ### 3.1 Global Constants
 
   * **Page Size:** `4096 bytes`
-  * **Inline Threshold:** `64 bytes` (Provisional Default).
-      * **Hypothesis:** We anticipate that minimizing the inline threshold increases B+Tree fanout (entries per page), reducing tree depth and I/O hops for random reads. For IAVL nodes (~100-150 bytes), this forces data into Slabs, keeping the index dense.
-      * **Benchmarking Required:** This value is speculative. Final tuning requires benchmarking the trade-off between **Tree Scan Performance** (improved by lower thresholds) and **Slab Fragmentation/Compaction Overhead** (worsened by lower thresholds).
+  * **Inline Threshold:** `256 bytes` (Default).
+      * **Rationale:** Chosen to ensure standard IAVL Tree Nodes (~150 bytes) are stored inline. This prevents a "Double-IO" penalty (Index Read + Slab Read) for tree traversals.
   * **Max Key Size:** Variable (handled via Slotted Pages), typically \< 1KB.
 
 ### 3.2 The Value Pointer
@@ -140,9 +143,11 @@ TreeDB uses **redundant superblocks** to survive torn writes during commit.
 Each Meta Page stores:
 
   * `CommitSeq` (8b): Monotonic commit counter.
-  * `RootPageID` (8b): Pointer to the current B+Tree root.
+  * `UserRootPageID` (8b): Pointer to the User Data B+Tree root.
+  * `SystemRootPageID` (8b): Pointer to the Internal Metadata B+Tree root.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
+  * `ActiveSlabID` (2b): The FileID of the slab that was active at the time of commit.
   * `ActiveSlabTail` (8b): The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
 
@@ -151,7 +156,8 @@ Each Meta Page stores:
 **Recovery Rule (Open):**
 
 1.  Read both meta pages, verify CRC32C, choose the page with the **highest valid `CommitSeq`**.
-2.  **Slab Repair:** Truncate the active slab file to `ActiveSlabTail` to remove any torn records from a crash.
+2.  **Slab Repair:** Open `ActiveSlabID`. Truncate it to `ActiveSlabTail`.
+3.  **Orphan Cleanup:** Scan data directory. Any slab file with `ID > ActiveSlabID` is a "Ghost Slab" (created but not committed) and MUST be deleted.
 
 #### The Freelist Page (Type 0x02)
 
@@ -163,18 +169,11 @@ Used to recycle space within `index.db`.
 
 ### 3.5 Internal Metadata Keyspace (Namespace Isolation)
 
-TreeDB stores internal metadata in the same B+Tree as user data, but uses prefixing to prevent collisions.
-
-#### 3.5.1 Key Encoding (MANDATORY)
-To support arbitrary user keys (including `nil` or `0x00` prefixes), TreeDB applies an internal encoding:
-
-  * **Internal Meta Keys:** `0x00 || <payload>`
-  * **User Keys:** `0x01 || <user_key>` (ALWAYS prefixed)
-
-**Consequences:**
-  * User keys allow any byte sequence (including empty `[]`).
-  * Public Iterators automatically map `[start, end)` to `[0x01|start, 0x01|end)`.
-  * `Iterator(nil, nil)` iterates `[0x01, 0x02)`.
+#### 3.5.1 Namespace Isolation (Dual Roots)
+TreeDB maintains two distinct B+Trees rooted in the Superblock:
+1. **User Tree:** Stores user keys raw (no prefixing).
+2. **System Tree:** Stores internal metadata (Slab Stats, Configs).
+This eliminates the storage and CPU overhead of byte-prefixing.
 
 #### 3.5.2 Slab Stats Keys
   * **Key:** `0x00 | "slab" | uint16(FileID)`
@@ -189,7 +188,8 @@ The `SlabManager` controls access to physical `.slab` files. It mediates between
 type SlabFile struct {
     FileID   uint16
     Handle   *os.File
-    Mmap     []byte        // The read-only memory map
+    // Slabs are accessed via syscall.Pread (Random Read).
+    // We DO NOT mmap slabs to avoid SIGBUS on truncation and excessive virtual memory usage.
 
     // Safety Primitives
     RefCount atomic.Int64 // Number of active Snapshots referencing this file
@@ -424,10 +424,13 @@ The compactor iterates sequentially through slab records (Section 2.1.1). For ea
 
 **Phase 3: Atomic Commit (CAS)**
 
-Once `CompactionBatch` reaches a threshold (e.g., 4MB):
-
-1.  **Serialize with the Single Writer:** The Compaction CAS operation **MUST** execute under the **same global write lock** used by `Batch.Write` to prevent interleaving user updates.
-2.  For each entry:
+1.  **Micro-Batch Execution:** The Compactor MUST split the batch into micro-batches (e.g., 100 entries).
+2.  **Interleaved Locking:**
+      * Acquire Global Write Lock.
+      * Process one micro-batch (CAS loop).
+      * Release Global Write Lock.
+      * Yield briefly to allow pending User Writes to proceed.
+3.  For each entry in a micro-batch:
       * `CompareAndSwap(Key, OldPtr, NewPtr)`
       * On mismatch: abort the update for that key (waste is acceptable).
 
@@ -648,9 +651,9 @@ type Tree interface {
 // --- Batch Implementation ---
 
 type Batch struct {
-    db   *DB
-    ops  map[string]operation
-    size int
+    db       *DB
+    ops      map[string]operation
+    byteSize int // Tracks cumulative key+value size for gas.
 }
 
 func (b *Batch) Set(key, value []byte) error
@@ -660,5 +663,8 @@ func (b *Batch) Write() error
 // WriteSync flushes and syncs to disk. The batch is closed after this call.
 func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
-func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
+// GetByteSize returns the approximate memory cost (Keys + Values + Overhead).
+func (b *Batch) GetByteSize() (int, error) {
+    return b.byteSize, nil
+}
 ```

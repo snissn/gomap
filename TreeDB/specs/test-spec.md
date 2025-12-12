@@ -299,6 +299,12 @@ Simulate power loss to ensure durability.
 * **Disk Full:** Mock the filesystem to return `ENOSPC` during a slab write or index extension.
     * **Expectation:** Batch returns error. DB remains readable and consistent.
 * **ReadOnly Mount:** Remount FS as Read-Only during operation.
+* **Directory Sync / Orphan Slab:**
+    * **Scenario:** 
+        1. Commit with `ActiveSlabID = 5`.
+        2. Manually create `data-0006.slab` (simulating a crash after rotation but before meta commit).
+    * **Recovery:** Call `Open()`.
+    * **Assert:** `data-0006.slab` is detected and deleted.
 
 ### 4.3 Torn Write Recovery (RFC-03 Compliance)
 
@@ -386,7 +392,7 @@ Go's `-race` detector is mandatory.
     * Configure leaky-bucket rate limiter to low value.
 * **Assert:**
     * Duration matches expected rate.
-    * Concurrent writer latency does not spike.
+    * **Latency Isolation:** Concurrent `SetSync` operations (User Writes) MUST NOT observe latency spikes > 50ms, even while the Compactor is processing a 4GB slab (validates Micro-Batching).
 
 ### 5.7 Dead Hint Optimization Verification (RFC-05)
 
