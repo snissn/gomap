@@ -12,16 +12,17 @@ import (
 func (db *DB) Get(key []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	return snap.Get(key)
+	val, err := snap.Get(key)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	return val, err
 }
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
 	val, err := db.Get(key)
 	if err != nil {
-		if err == tree.ErrKeyNotFound {
-			return false, nil
-		}
 		return false, err
 	}
 	return val != nil, nil

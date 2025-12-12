@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-
-	"github.com/snissn/gomap-gemini/TreeDB/tree"
 )
 
 func TestCRUD(t *testing.T) {
@@ -63,8 +61,11 @@ func TestCRUD(t *testing.T) {
 
 	// 6. Get (Deleted)
 	val, err = db.Get([]byte("key1"))
-	if err != tree.ErrKeyNotFound && val != nil {
-		t.Errorf("Get deleted key should fail or return nil")
+	if err != nil {
+		t.Errorf("Get deleted key returned error: %v", err)
+	}
+	if val != nil {
+		t.Errorf("Get deleted key should return nil")
 	}
 	// Has
 	has, _ = db.Has([]byte("key1"))
@@ -88,18 +89,20 @@ func TestConcurrentReads(t *testing.T) {
 
 	var wg sync.WaitGroup
 	
+	// Acquire snapshot BEFORE writer starts to ensure we see v1
+	snap := db.AcquireSnapshot()
+	
 	// Reader 1 (Long running snapshot)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		snap := db.AcquireSnapshot()
 		defer snap.Close()
 		
 		// This snapshot should see "v1" forever
 		for i := 0; i < 100; i++ {
 			val, _ := snap.Get([]byte(fmt.Sprintf("k%d", i)))
 			if !bytes.Equal(val, []byte("v1")) {
-				t.Errorf("Snapshot isolation failed")
+				t.Errorf("Snapshot isolation failed for k%d: got %s, want v1", i, val)
 			}
 		}
 	}()
