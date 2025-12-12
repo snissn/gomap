@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap-gemini/TreeDB/lifecycle"
 	"github.com/snissn/gomap-gemini/TreeDB/node"
+	"github.com/snissn/gomap-gemini/TreeDB/batch"
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 	"github.com/snissn/gomap-gemini/TreeDB/pager"
 	"github.com/snissn/gomap-gemini/TreeDB/slab"
@@ -34,6 +35,8 @@ type DB struct {
 	zipper      *zipper.Zipper
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
+	
+	inlineThreshold int
 	
 	mu          sync.RWMutex
 	meta        page.MetaPageBody
@@ -75,9 +78,10 @@ func Open(opts Options) (*DB, error) {
 	db := &DB{
 		pager:       p,
 		slabManager: sm,
-		zipper:      zipper.New(p),
-		graveyard:   lifecycle.NewGraveyard(),
-		registry:    lifecycle.NewReaderRegistry(),
+		zipper:          zipper.New(p),
+		graveyard:       lifecycle.NewGraveyard(),
+		registry:        lifecycle.NewReaderRegistry(),
+		inlineThreshold: page.DefaultInlineThreshold,
 	}
 
 	if err := db.recover(); err != nil {
@@ -356,4 +360,49 @@ func (db *DB) Zipper() *zipper.Zipper {
 }
 func (db *DB) State() *DBState {
 	return db.state.Load()
+}
+
+type CompactionOp struct {
+	Key    []byte
+	OldPtr page.ValuePtr
+	NewPtr page.ValuePtr
+}
+
+// ApplyCompaction applies pointer updates atomically.
+func (db *DB) ApplyCompaction(ops []CompactionOp) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	
+	b := batch.New(db.slabManager, db.inlineThreshold)
+	
+	// Create temporary tree for verification (using current root)
+	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
+	
+	for _, op := range ops {
+		entry, err := tr.GetEntry(op.Key)
+		if err != nil {
+			continue // Skip if not found
+		}
+		
+		if entry.Flags & node.FlagPointer != 0 {
+			if entry.ValuePtr == op.OldPtr {
+				if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	
+	if len(b.Ops()) == 0 {
+		return nil
+	}
+	
+	rootID := db.meta.UserRootPageID
+	newRoot, retired, err := db.zipper.Apply(rootID, b)
+	if err != nil {
+		return err
+	}
+	
+	// Commit with sync=true (Compaction should be durable)
+	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true)
 }

@@ -16,7 +16,7 @@ func TestBatchPreWrite(t *testing.T) {
 	}
 	defer sm.Close()
 
-	b := New(sm)
+	b := New(sm, page.DefaultInlineThreshold)
 
 	// Case 1: Inline Value
 	smallKey := []byte("small")
@@ -38,7 +38,7 @@ func TestBatchPreWrite(t *testing.T) {
 
 	// Case 2: Large Value (> 256 bytes)
 	largeKey := []byte("large")
-	largeVal := bytes.Repeat([]byte("A"), page.InlineThreshold+10)
+	largeVal := bytes.Repeat([]byte("A"), page.DefaultInlineThreshold+10)
 	if err := b.Set(largeKey, largeVal); err != nil {
 		t.Fatalf("Set large failed: %v", err)
 	}

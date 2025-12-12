@@ -43,7 +43,7 @@ func TestZipperInsertSplit(t *testing.T) {
 	// If key=10 bytes, val=10 bytes -> 30 bytes/entry.
 	// 4000 / 30 = ~133 entries.
 	
-	b := batch.New(sm)
+	b := batch.New(sm, page.DefaultInlineThreshold)
 	// Insert 200 items
 	for i := 0; i < 200; i++ {
 		key := []byte(fmt.Sprintf("key-%03d", i))
@@ -101,7 +101,7 @@ func TestZipperUpdates(t *testing.T) {
 	n.UpdateChecksum()
 	
 	// Batch 1: Insert A, B
-	b1 := batch.New(sm)
+	b1 := batch.New(sm, page.DefaultInlineThreshold)
 	b1.Set([]byte("A"), []byte("valA"))
 	b1.Set([]byte("B"), []byte("valB"))
 	
@@ -111,7 +111,7 @@ func TestZipperUpdates(t *testing.T) {
 	}
 	
 	// Batch 2: Update A, Delete B, Insert C
-	b2 := batch.New(sm)
+	b2 := batch.New(sm, page.DefaultInlineThreshold)
 	b2.Set([]byte("A"), []byte("valA2"))
 	b2.Delete([]byte("B"))
 	b2.Set([]byte("C"), []byte("valC"))

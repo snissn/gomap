@@ -26,16 +26,21 @@ type Entry struct {
 
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
-	ops         map[string]Entry
-	slabManager *slab.SlabManager
-	byteSize    int
+	ops             map[string]Entry
+	slabManager     *slab.SlabManager
+	byteSize        int
+	inlineThreshold int
 }
 
 // New creates a new Batch.
-func New(sm *slab.SlabManager) *Batch {
+func New(sm *slab.SlabManager, threshold int) *Batch {
+	if threshold <= 0 {
+		threshold = page.DefaultInlineThreshold
+	}
 	return &Batch{
-		ops:         make(map[string]Entry),
-		slabManager: sm,
+		ops:             make(map[string]Entry),
+		slabManager:     sm,
+		inlineThreshold: threshold,
 	}
 }
 
@@ -52,7 +57,7 @@ func (b *Batch) Set(key, value []byte) error {
 	}
 
 	// Check threshold
-	if len(value) > page.InlineThreshold {
+	if len(value) > b.inlineThreshold {
 		// Write to slab
 		ptr, err := b.slabManager.Append(key, value)
 		if err != nil {
@@ -70,6 +75,22 @@ func (b *Batch) Set(key, value []byte) error {
 	b.ops[string(key)] = entry
 	// Approximate size tracking (optional for now)
 	b.byteSize += len(key) + len(value)
+	return nil
+}
+
+// SetPointer adds a pointer directly to the batch (used by Compaction).
+func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	if len(key) == 0 {
+		return errors.New("key cannot be empty")
+	}
+	
+	entry := Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	}
+	b.ops[string(key)] = entry
 	return nil
 }
 

@@ -76,6 +76,11 @@ func (sm *SlabManager) Close() error {
 	return nil
 }
 
+// GetSlabPath returns the path for a given slab ID.
+func (sm *SlabManager) GetSlabPath(id uint32) string {
+	return filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", id))
+}
+
 // Read reads from the slab file identified by ptr.FileID.
 // For Snapshot Isolation, the caller should ensure the file is pinned via a Snapshot.
 // If accessing without snapshot (e.g. during Compaction or internal ops), care must be taken.

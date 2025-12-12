@@ -13,7 +13,7 @@ type Batch struct {
 func (db *DB) NewBatch() *Batch {
 	return &Batch{
 		db:    db,
-		batch: batch.New(db.slabManager),
+		batch: batch.New(db.slabManager, db.inlineThreshold),
 	}
 }
 

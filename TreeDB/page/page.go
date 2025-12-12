@@ -13,8 +13,8 @@ const (
 	// PageSize is the fixed size of a page in bytes.
 	PageSize = 4096
 
-	// InlineThreshold determines when a value is stored in the slab.
-	InlineThreshold = 256
+	// DefaultInlineThreshold determines when a value is stored in the slab.
+	DefaultInlineThreshold = 256
 
 	// PageHeaderSize is the size of the PageHeader struct.
 	PageHeaderSize = 16
