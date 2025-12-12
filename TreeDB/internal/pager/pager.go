@@ -20,6 +20,12 @@ const (
 	DefaultChunkSize = 256 << 20
 )
 
+type OpenOptions struct {
+	Dir                       string
+	ChunkSize                 int64
+	SkipZeroFileExtendedPages bool
+}
+
 type chunk struct {
 	index       int
 	startOffset int64 // bytes in file
@@ -31,15 +37,20 @@ type chunk struct {
 }
 
 type Pager struct {
-	path         string
-	file         *os.File
-	chunkSize    int64
-	sysPageSize  int64
-	preallocSize int64
-	freelistCount uint64
-	reserveBatch uint64
-	reserveNext  uint64
-	reserveEnd   uint64
+	path                      string
+	file                      *os.File
+	chunkSize                 int64
+	sysPageSize               int64
+	preallocSize              int64
+	freelistCount             uint64
+	reserveBatch              uint64
+	reserveNext               uint64
+	reserveEnd                uint64
+	skipZeroFileExtendedPages bool
+
+	mutableRangeStart page.PageID
+	mutableRangeEnd   page.PageID
+	mutableExtra      map[page.PageID]struct{}
 
 	mu     sync.Mutex
 	chunks []*chunk
@@ -100,28 +111,34 @@ func (r *PageRef) Release() {
 
 // Open opens or creates index.db in dir.
 func Open(dir string, chunkSize int64) (*Pager, error) {
-	if dir == "" {
+	return OpenWithOptions(OpenOptions{Dir: dir, ChunkSize: chunkSize})
+}
+
+func OpenWithOptions(opts OpenOptions) (*Pager, error) {
+	if opts.Dir == "" {
 		return nil, fmt.Errorf("pager: dir required")
 	}
+	chunkSize := opts.ChunkSize
 	if chunkSize <= 0 {
 		chunkSize = DefaultChunkSize
 	}
 	if chunkSize%page.PageSize != 0 {
 		return nil, ErrInvalidChunkSize
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(opts.Dir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "index.db")
+	path := filepath.Join(opts.Dir, "index.db")
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	p := &Pager{
-		path:        path,
-		file:        f,
-		chunkSize:   chunkSize,
-		sysPageSize: int64(os.Getpagesize()),
+		path:                      path,
+		file:                      f,
+		chunkSize:                 chunkSize,
+		sysPageSize:               int64(os.Getpagesize()),
+		skipZeroFileExtendedPages: opts.SkipZeroFileExtendedPages,
 	}
 
 	if err := p.initOrLoad(); err != nil {
@@ -299,10 +316,19 @@ func (p *Pager) WritePage(pid page.PageID, data []byte) error {
 	if len(data) != page.PageSize {
 		return fmt.Errorf("pager: write expects %d bytes", page.PageSize)
 	}
-	return p.withPage(pid, func(dst []byte) error {
+	isMeta := isMetaPageWrite(pid, data)
+	if err := p.withPage(pid, func(dst []byte) error {
 		copy(dst, data)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if isMeta {
+		p.mu.Lock()
+		p.clearMutablePagesLocked()
+		p.mu.Unlock()
+	}
+	return nil
 }
 
 // GrowToPages expands the file to at least newTotal pages.
@@ -366,6 +392,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if p.freelistCount > 0 {
 			p.freelistCount--
 		}
+		p.markMutableExtraLocked(alloc)
 		return alloc, nil
 	}
 
@@ -394,14 +421,59 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		}
 	}
 	// Zero the new page for determinism.
-	b, err := p.pageSliceLocked(newID)
-	if err != nil {
-		return 0, err
+	if !p.skipZeroFileExtendedPages {
+		b, err := p.pageSliceLocked(newID)
+		if err != nil {
+			return 0, err
+		}
+		for i := range b {
+			b[i] = 0
+		}
 	}
-	for i := range b {
-		b[i] = 0
-	}
+	p.markMutableRangeLocked(newID)
 	return newID, nil
+}
+
+// WithMutablePage yields a mutable mmap-backed page slice for pages newly allocated
+// since the last meta-page write. It recomputes the page body CRC after fn returns.
+func (p *Pager) WithMutablePage(pid page.PageID, fn func([]byte) error) error {
+	if fn == nil {
+		return fmt.Errorf("pager: nil mutable callback")
+	}
+
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("pager: closed")
+	}
+	if uint64(pid) >= p.totalPages {
+		p.mu.Unlock()
+		return ErrPageOutOfBounds
+	}
+	if !p.isMutablePageLocked(pid) {
+		p.mu.Unlock()
+		return ErrMutablePageNotNew
+	}
+	c, off, err := p.chunkForPage(pid)
+	if err != nil {
+		p.mu.Unlock()
+		return err
+	}
+	c.refs.Add(1)
+	buf := c.data[off : off+page.PageSize]
+	p.mu.Unlock()
+
+	defer c.refs.Add(-1)
+
+	if err := fn(buf); err != nil {
+		return err
+	}
+	h, body, err := page.SplitPage(buf)
+	if err != nil {
+		return err
+	}
+	h.SetBodyCRC(body)
+	return nil
 }
 
 // BeginAllocReserve reserves up to estimatePages fresh PageIDs for subsequent AllocPage calls.
@@ -474,6 +546,15 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 	defer p.mu.Unlock()
 	if p.closed {
 		return fmt.Errorf("pager: closed")
+	}
+	for _, id := range ids {
+		if p.mutableRangeStart != p.mutableRangeEnd && id >= p.mutableRangeStart && id < p.mutableRangeEnd {
+			// We can't represent holes in the range cheaply; disable mutable access for this commit.
+			p.mutableRangeStart = 0
+			p.mutableRangeEnd = 0
+			continue
+		}
+		delete(p.mutableExtra, id)
 	}
 
 	head := p.meta.FreelistHeadID
@@ -595,6 +676,52 @@ func alignUp(size, multiple int64) int64 {
 		return size
 	}
 	return size + multiple - rem
+}
+
+func isMetaPageWrite(pid page.PageID, data []byte) bool {
+	if pid != 0 && pid != 1 {
+		return false
+	}
+	if len(data) < page.HeaderSize {
+		return false
+	}
+	flags := page.PageFlags(binary.LittleEndian.Uint16(data[12:14]))
+	return flags == page.PageTypeMeta
+}
+
+func (p *Pager) markMutableRangeLocked(pid page.PageID) {
+	switch {
+	case p.mutableRangeStart == p.mutableRangeEnd:
+		p.mutableRangeStart = pid
+		p.mutableRangeEnd = pid + 1
+	case pid == p.mutableRangeEnd:
+		p.mutableRangeEnd++
+	case pid >= p.mutableRangeStart && pid < p.mutableRangeEnd:
+		// already covered
+	default:
+		p.markMutableExtraLocked(pid)
+	}
+}
+
+func (p *Pager) markMutableExtraLocked(pid page.PageID) {
+	if p.mutableExtra == nil {
+		p.mutableExtra = make(map[page.PageID]struct{}, 16)
+	}
+	p.mutableExtra[pid] = struct{}{}
+}
+
+func (p *Pager) isMutablePageLocked(pid page.PageID) bool {
+	if p.mutableRangeStart != p.mutableRangeEnd && pid >= p.mutableRangeStart && pid < p.mutableRangeEnd {
+		return true
+	}
+	_, ok := p.mutableExtra[pid]
+	return ok
+}
+
+func (p *Pager) clearMutablePagesLocked() {
+	p.mutableRangeStart = 0
+	p.mutableRangeEnd = 0
+	clear(p.mutableExtra)
 }
 
 func (p *Pager) preallocate(size int64) error {

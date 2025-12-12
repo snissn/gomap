@@ -490,3 +490,155 @@ func TestFreelistCRCMismatchOnAlloc(t *testing.T) {
 		t.Fatalf("expected crc mismatch, got %v", err)
 	}
 }
+
+func TestWithMutablePageNewPagesOnly(t *testing.T) {
+	dir := t.TempDir()
+	p, err := Open(dir, 2*page.PageSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	pid, err := p.AllocPage()
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+
+	if err := p.WithMutablePage(pid, func(buf []byte) error {
+		lp, err := page.InitLeafPage(buf, pid)
+		if err != nil {
+			return err
+		}
+		_, err = lp.Set([]byte("k"), page.LeafFlagInline, []byte("v"), page.ValuePtr{})
+		return err
+	}); err != nil {
+		t.Fatalf("with mutable: %v", err)
+	}
+
+	ref, err := p.ReadPageRef(pid)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	h, body, err := page.SplitPage(ref.Bytes())
+	if err != nil {
+		ref.Release()
+		t.Fatalf("split: %v", err)
+	}
+	if err := h.VerifyBodyCRC(body); err != nil {
+		ref.Release()
+		t.Fatalf("verify crc: %v", err)
+	}
+	ref.Release()
+
+	// Simulate a commit boundary by writing a meta page.
+	meta := p.ReadActiveMeta()
+	meta.CommitSeq++
+	meta.TotalPages = p.TotalPages()
+	metaBuf := encodeMetaPageForTest(0, meta)
+	if err := p.WritePage(0, metaBuf); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+
+	if err := p.WithMutablePage(pid, func([]byte) error { return nil }); !errors.Is(err, ErrMutablePageNotNew) {
+		t.Fatalf("expected ErrMutablePageNotNew, got %v", err)
+	}
+
+	// Reuse the page via freelist and ensure mutability is re-enabled.
+	if err := p.FreePages([]page.PageID{pid}); err != nil {
+		t.Fatalf("free: %v", err)
+	}
+	reused, err := p.AllocPage()
+	if err != nil {
+		t.Fatalf("realloc: %v", err)
+	}
+	if reused != pid {
+		t.Fatalf("expected reuse of %d, got %d", pid, reused)
+	}
+	if err := p.WithMutablePage(reused, func([]byte) error { return nil }); err != nil {
+		t.Fatalf("with mutable on reused page: %v", err)
+	}
+}
+
+func TestSkipZeroFileExtendedPages(t *testing.T) {
+	const chunkSize = 2 * page.PageSize
+	const preallocPid = page.PageID(3) // physical page exists due to chunk alignment in initNew.
+
+	writePattern := func(t *testing.T, p *Pager, b byte) {
+		t.Helper()
+		buf := make([]byte, page.PageSize)
+		for i := range buf {
+			buf[i] = b
+		}
+		if _, err := p.file.WriteAt(buf, int64(preallocPid)*page.PageSize); err != nil {
+			t.Fatalf("write pattern: %v", err)
+		}
+	}
+
+	t.Run("default_zeroing", func(t *testing.T) {
+		dir := t.TempDir()
+		p, err := OpenWithOptions(OpenOptions{Dir: dir, ChunkSize: chunkSize})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer func() { _ = p.Close() }()
+
+		writePattern(t, p, 0xAB)
+		got, err := p.AllocPage()
+		if err != nil {
+			t.Fatalf("alloc: %v", err)
+		}
+		if got != preallocPid {
+			t.Fatalf("alloc pid=%d want %d", got, preallocPid)
+		}
+		pageBuf, err := p.ReadPage(got)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if pageBuf[0] != 0 {
+			t.Fatalf("expected zeroed page, got 0x%02x", pageBuf[0])
+		}
+	})
+
+	t.Run("skip_zeroing", func(t *testing.T) {
+		dir := t.TempDir()
+		p, err := OpenWithOptions(OpenOptions{
+			Dir:                       dir,
+			ChunkSize:                 chunkSize,
+			SkipZeroFileExtendedPages: true,
+		})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer func() { _ = p.Close() }()
+
+		writePattern(t, p, 0xCD)
+		got, err := p.AllocPage()
+		if err != nil {
+			t.Fatalf("alloc: %v", err)
+		}
+		if got != preallocPid {
+			t.Fatalf("alloc pid=%d want %d", got, preallocPid)
+		}
+		pageBuf, err := p.ReadPage(got)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if pageBuf[0] != 0xCD {
+			t.Fatalf("expected un-zeroed page, got 0x%02x", pageBuf[0])
+		}
+	})
+}
+
+func encodeMetaPageForTest(pid page.PageID, m Meta) []byte {
+	buf := make([]byte, page.PageSize)
+	h, body, _ := page.SplitPage(buf)
+	h.PageID = pid
+	h.Flags = page.PageTypeMeta
+	h.Count = 0
+	encodeMetaBody(m, body)
+	for i := metaBodySize; i < len(body); i++ {
+		body[i] = 0
+	}
+	h.SetBodyCRC(body)
+	return buf
+}

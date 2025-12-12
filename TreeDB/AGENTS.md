@@ -388,7 +388,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests for growth safety while refs are pinned, ref-leak detection, and `Close()` behavior with live refs; run `go test ./...` and `go test -race ./...`.
    - Perf: rerun all four benches; expect large `allocs/op` ↓ and `B/op` ↓ (especially `BenchmarkIterScan`).
 
-5. [ ] Pager: add `WithMutablePage` (new-pages-only) and opt-in skip-zeroing for file-extended pages.
+5. [x] Pager: add `WithMutablePage` (new-pages-only) and opt-in skip-zeroing for file-extended pages.
    - Goal: Write freshly allocated pages directly into mmap (no `make([]byte, PageSize)` clones) while preserving snapshot/COW invariants.
    - Touch: `internal/pager/pager.go` (mutable pin API), `internal/page/*` init paths.
    - Correctness: add tests enforcing “new pages only” usage, CRC verify-before-clone, and CRC recompute on commit; run `go test ./...`.

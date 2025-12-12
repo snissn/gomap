@@ -105,18 +105,14 @@ func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, *LeafEntry, err
 		if err != nil {
 			return nil, nil, err
 		}
-		buf := make([]byte, page.PageSize)
-		lp, err := page.InitLeafPage(buf, pid)
-		if err != nil {
-			return nil, nil, err
-		}
-		_, err = lp.Set(encKey, val.Flags, val.InlineValue, val.Ptr)
-		if err != nil {
-			return nil, nil, err
-		}
-		h, body, _ := page.SplitPage(buf)
-		h.SetBodyCRC(body)
-		if err := t.pager.WritePage(pid, buf); err != nil {
+		if err := t.pager.WithMutablePage(pid, func(buf []byte) error {
+			lp, err := page.InitLeafPage(buf, pid)
+			if err != nil {
+				return err
+			}
+			_, err = lp.Set(encKey, val.Flags, val.InlineValue, val.Ptr)
+			return err
+		}); err != nil {
 			return nil, nil, err
 		}
 		t.root = pid
@@ -141,11 +137,9 @@ func (t *Tree) SetRaw(key []byte, val LeafEntry) ([]page.PageID, *LeafEntry, err
 			{key: leftMin, child: newRoot},
 			{key: splitKey, child: splitPid},
 		}
-		rootBuf := make([]byte, page.PageSize)
-		if err := buildInternalPage(rootBuf, rootPid, entries); err != nil {
-			return nil, nil, err
-		}
-		if err := t.pager.WritePage(rootPid, rootBuf); err != nil {
+		if err := t.pager.WithMutablePage(rootPid, func(rootBuf []byte) error {
+			return buildInternalPage(rootBuf, rootPid, entries)
+		}); err != nil {
 			return nil, nil, err
 		}
 		t.root = rootPid

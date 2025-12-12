@@ -46,8 +46,11 @@ func (t *Tree) cowSet(pid page.PageID, key []byte, val LeafEntry) (page.PageID, 
 	defer ref.Release()
 	oldBuf := ref.Bytes()
 
-	h, _, err := page.SplitPage(oldBuf)
+	h, body, err := page.SplitPage(oldBuf)
 	if err != nil {
+		return 0, nil, 0, nil, nil, err
+	}
+	if err := h.VerifyBodyCRC(body); err != nil {
 		return 0, nil, 0, nil, nil, err
 	}
 	switch h.Flags {

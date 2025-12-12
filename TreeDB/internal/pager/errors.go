@@ -13,5 +13,6 @@ var (
 	ErrShrinkForbidden = errors.New("pager: shrinking index.db while mapped is forbidden")
 	// ErrChunkPinned is returned when closing with pinned chunks.
 	ErrChunkPinned = errors.New("pager: cannot unmap chunk with active references")
+	// ErrMutablePageNotNew is returned when attempting to mutate a non-new page via WithMutablePage.
+	ErrMutablePageNotNew = errors.New("pager: mutable access requires a newly allocated page")
 )
-
