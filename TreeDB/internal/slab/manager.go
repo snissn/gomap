@@ -12,12 +12,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"golang.org/x/sys/unix"
+
 	"treedb/internal/page"
 )
 
 var (
 	ErrActiveTailBeyondEOF = errors.New("slab: active tail beyond eof")
-	ErrManagerClosed      = errors.New("slab: manager closed")
+	ErrManagerClosed       = errors.New("slab: manager closed")
 )
 
 type SlabFile struct {
@@ -123,6 +125,12 @@ const (
 	// This bounds memory use for very large batches while still amortizing syscalls.
 	maxBatchBuffer = 4 << 20 // 4MB
 )
+
+var pwritevFunc = unix.Pwritev
+
+var recordHeaderPool = sync.Pool{
+	New: func() any { return new([recordHeaderLen]byte) },
+}
 
 func Load(dir string, activeID uint32, activeTail uint64) (*SlabManager, *SlabSet, error) {
 	if dir == "" {
@@ -251,22 +259,66 @@ func (m *SlabManager) AppendLarge(key, value []byte) (page.ValuePtr, error) {
 	if m.closed {
 		return page.ValuePtr{}, ErrManagerClosed
 	}
+	return m.appendLargeLocked(key, value)
+}
+
+func (m *SlabManager) appendLargeLocked(key, value []byte) (page.ValuePtr, error) {
+	if m.active == nil || m.active.Handle == nil {
+		return page.ValuePtr{}, fmt.Errorf("slab: no active slab")
+	}
+
+	hdr := recordHeaderPool.Get().(*[recordHeaderLen]byte)
+	defer recordHeaderPool.Put(hdr)
 
 	base := m.activeTail
-	rec, ptr, err := EncodeRecordAt(key, value, m.active.FileID, base)
+
+	keyLen, valueLen, protectedLen, recordLen, err := recordLengths(key, value)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
-	n, err := m.active.Handle.WriteAt(rec, int64(base))
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	if n != len(rec) {
-		return page.ValuePtr{}, io.ErrShortWrite
+	sum := recordChecksum(keyLen, valueLen, key, value)
+	encodeRecordHeader(hdr[:], sum, keyLen, valueLen)
+
+	ptr := page.ValuePtr{
+		Offset: base + recordCRCLen,
+		Length: uint32(protectedLen),
+		FileID: m.active.FileID,
 	}
 
-	m.activeTail += uint64(len(rec))
-	m.active.AddTotalBytes(uint64(len(rec)))
+	off := int64(base)
+	if pwritevFunc != nil {
+		parts := [3][]byte{hdr[:], key, value}
+		if err := pwritevAll(int(m.active.Handle.Fd()), parts[:], off); err != nil {
+			if !errors.Is(err, unix.ENOSYS) {
+				return page.ValuePtr{}, err
+			}
+		} else {
+			m.activeTail += uint64(recordLen)
+			m.active.AddTotalBytes(uint64(recordLen))
+			if m.activeTail >= page.SlabRotateSize {
+				if err := m.rotateLocked(); err != nil {
+					return page.ValuePtr{}, err
+				}
+			}
+			return ptr, nil
+		}
+	}
+
+	// Fallback: use three WriteAt calls. This path is primarily for tests/ENOSYS.
+	if err := writeAtAll(m.active.Handle, hdr[:], off); err != nil {
+		return page.ValuePtr{}, err
+	}
+	off += recordHeaderLen
+	if err := writeAtAll(m.active.Handle, key, off); err != nil {
+		return page.ValuePtr{}, err
+	}
+	off += int64(len(key))
+	if err := writeAtAll(m.active.Handle, value, off); err != nil {
+		return page.ValuePtr{}, err
+	}
+
+	m.activeTail += uint64(recordLen)
+	m.active.AddTotalBytes(uint64(recordLen))
 
 	if m.activeTail >= page.SlabRotateSize {
 		if err := m.rotateLocked(); err != nil {
@@ -323,26 +375,50 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 		}
 
 		base := m.activeTail
-		rec, ptr, err := EncodeRecordAt(key, value, m.active.FileID, base)
+		keyLen, valueLen, protectedLen, recordLen, err := recordLengths(key, value)
 		if err != nil {
 			return nil, err
+		}
+
+		// Oversized records bypass buffering to preserve the memory cap.
+		if recordLen > maxBatchBuffer {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			ptr, err := m.appendLargeLocked(key, value)
+			if err != nil {
+				return nil, err
+			}
+			ptrs = append(ptrs, ptr)
+			continue
 		}
 
 		if len(buf) == 0 {
 			chunkStart = base
 		}
-		// Flush current chunk if adding rec would exceed the cap.
-		if len(buf) > 0 && len(buf)+len(rec) > maxBatchBuffer {
+		// Flush current chunk if adding recordLen would exceed the cap.
+		if len(buf) > 0 && len(buf)+recordLen > maxBatchBuffer {
 			if err := flush(); err != nil {
 				return nil, err
 			}
 			chunkStart = base
 		}
 
-		buf = append(buf, rec...)
-		ptrs = append(ptrs, ptr)
-		m.activeTail += uint64(len(rec))
-		m.active.AddTotalBytes(uint64(len(rec)))
+		pos := len(buf)
+		buf = buf[:pos+recordLen]
+		dst := buf[pos : pos+recordLen]
+		sum := recordChecksum(keyLen, valueLen, key, value)
+		encodeRecordHeader(dst[0:recordHeaderLen], sum, keyLen, valueLen)
+		copy(dst[recordHeaderLen:recordHeaderLen+len(key)], key)
+		copy(dst[recordHeaderLen+len(key):], value)
+
+		ptrs = append(ptrs, page.ValuePtr{
+			Offset: base + recordCRCLen,
+			Length: uint32(protectedLen),
+			FileID: m.active.FileID,
+		})
+		m.activeTail += uint64(recordLen)
+		m.active.AddTotalBytes(uint64(recordLen))
 
 		// Rotate slabs at boundary; flush buffered bytes first so pointers remain valid.
 		if m.activeTail >= page.SlabRotateSize {
@@ -358,6 +434,50 @@ func (m *SlabManager) AppendLargeBatch(keys, values [][]byte) ([]page.ValuePtr, 
 		return nil, err
 	}
 	return ptrs, nil
+}
+
+func pwritevAll(fd int, iovs [][]byte, off int64) error {
+	for len(iovs) > 0 {
+		n, err := pwritevFunc(fd, iovs, off)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		off += int64(n)
+		for n > 0 && len(iovs) > 0 {
+			if n >= len(iovs[0]) {
+				n -= len(iovs[0])
+				iovs = iovs[1:]
+				continue
+			}
+			iovs[0] = iovs[0][n:]
+			n = 0
+		}
+	}
+	return nil
+}
+
+func writeAtAll(f *os.File, b []byte, off int64) error {
+	for len(b) > 0 {
+		n, err := f.WriteAt(b, off)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		off += int64(n)
+		b = b[n:]
+	}
+	return nil
 }
 
 // ForceRotate seals the current active slab and creates a new active slab.

@@ -415,7 +415,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests for ref release on stack pop + `Close()`, and concurrent commits while iterating; run `go test ./...` and `go test -race ./...`.
    - Perf: rerun `BenchmarkIterScan`; expect `allocs/op` ↓↓↓ and `ns/op` ↓ (both thresholds).
 
-9. [ ] Slab: low-risk `AppendLarge` optimizations (`pwritev` + pooled header; byte-identical format).
+9. [x] Slab: low-risk `AppendLarge` optimizations (`pwritev` + pooled header; byte-identical format).
    - Goal: Reduce syscall+alloc overhead for out-of-line writes without changing the `[CRC32C][KeyLen][ValueLen][Key][Value]` bytes or CRC coverage.
    - Touch: `internal/slab/manager.go`, `internal/slab/record.go`.
    - Correctness: add byte-exact encoding regression and fallback-path tests; run `go test ./...`.

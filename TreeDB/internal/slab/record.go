@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"math"
 
 	"treedb/internal/crc"
@@ -11,38 +12,70 @@ import (
 )
 
 var (
-	ErrKeyTooLarge   = errors.New("slab record key too large")
-	ErrValueTooLarge = errors.New("slab record value too large")
-	ErrRecordCorrupt = errors.New("slab record corrupt")
+	ErrKeyTooLarge     = errors.New("slab record key too large")
+	ErrValueTooLarge   = errors.New("slab record value too large")
+	ErrRecordCorrupt   = errors.New("slab record corrupt")
 	ErrRecordTruncated = errors.New("slab record truncated")
 )
+
+const (
+	recordCRCLen             = 4
+	recordKeyLenLen          = 2
+	recordValueLenLen        = 4
+	recordProtectedHeaderLen = recordKeyLenLen + recordValueLenLen
+	recordHeaderLen          = recordCRCLen + recordProtectedHeaderLen
+)
+
+var castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
+
+func recordLengths(key, value []byte) (keyLen uint16, valueLen uint32, protectedLen int, recordLen int, _ error) {
+	if len(key) > math.MaxUint16 {
+		return 0, 0, 0, 0, ErrKeyTooLarge
+	}
+	if len(value) > math.MaxUint32 {
+		return 0, 0, 0, 0, ErrValueTooLarge
+	}
+	keyLen = uint16(len(key))
+	valueLen = uint32(len(value))
+	protectedLen = recordProtectedHeaderLen + len(key) + len(value)
+	recordLen = recordCRCLen + protectedLen
+	return keyLen, valueLen, protectedLen, recordLen, nil
+}
+
+func recordChecksum(keyLen uint16, valueLen uint32, key, value []byte) uint32 {
+	var hdr [recordProtectedHeaderLen]byte
+	binary.LittleEndian.PutUint16(hdr[0:2], keyLen)
+	binary.LittleEndian.PutUint32(hdr[2:6], valueLen)
+
+	sum := crc32.Update(0, castagnoliTable, hdr[:])
+	sum = crc32.Update(sum, castagnoliTable, key)
+	sum = crc32.Update(sum, castagnoliTable, value)
+	return sum
+}
+
+func encodeRecordHeader(dst []byte, sum uint32, keyLen uint16, valueLen uint32) {
+	binary.LittleEndian.PutUint32(dst[0:4], sum)
+	binary.LittleEndian.PutUint16(dst[4:6], keyLen)
+	binary.LittleEndian.PutUint32(dst[6:10], valueLen)
+}
 
 // EncodeRecordAt encodes a slab record for key/value beginning at baseOffset
 // within slab file fileID. It returns the record bytes and a ValuePtr that
 // points to the KeyLen field (immediately after the CRC).
 func EncodeRecordAt(key, value []byte, fileID uint32, baseOffset uint64) ([]byte, page.ValuePtr, error) {
-	if len(key) > math.MaxUint16 {
-		return nil, page.ValuePtr{}, ErrKeyTooLarge
+	keyLen, valueLen, protectedLen, recordLen, err := recordLengths(key, value)
+	if err != nil {
+		return nil, page.ValuePtr{}, err
 	}
-	if len(value) > math.MaxUint32 {
-		return nil, page.ValuePtr{}, ErrValueTooLarge
-	}
-
-	protectedLen := 2 + 4 + len(key) + len(value)
-	recordLen := 4 + protectedLen
 	rec := make([]byte, recordLen)
 
-	// Layout after CRC.
-	binary.LittleEndian.PutUint16(rec[4:6], uint16(len(key)))
-	binary.LittleEndian.PutUint32(rec[6:10], uint32(len(value)))
-	copy(rec[10:10+len(key)], key)
-	copy(rec[10+len(key):], value)
-
-	sum := crc.Checksum(rec[4:])
-	binary.LittleEndian.PutUint32(rec[0:4], sum)
+	sum := recordChecksum(keyLen, valueLen, key, value)
+	encodeRecordHeader(rec[0:recordHeaderLen], sum, keyLen, valueLen)
+	copy(rec[recordHeaderLen:recordHeaderLen+len(key)], key)
+	copy(rec[recordHeaderLen+len(key):], value)
 
 	ptr := page.ValuePtr{
-		Offset: baseOffset + 4,
+		Offset: baseOffset + recordCRCLen,
 		Length: uint32(protectedLen),
 		FileID: fileID,
 	}
