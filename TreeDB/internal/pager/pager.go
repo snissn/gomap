@@ -288,28 +288,64 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	}
 
 	// No freelist entries; extend file.
-	newID := page.PageID(p.totalPages)
-	if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
+	// Optimization: Grow by a batch to amortize ftruncate costs.
+	const growthBatch = 1024 // 4MB
+	startID := page.PageID(p.totalPages)
+	if err := p.growToPagesLocked(p.totalPages + uint64(growthBatch)); err != nil {
 		return 0, err
 	}
-		// Zero the new page for determinism.
-		b, err := p.pageSliceLocked(newID)
-		if err != nil {
-			return 0, err
-		}
+
+	// The first page (startID) is returned.
+	alloc := startID
+
+	// Zero the allocated page.
+	b, err := p.pageSliceLocked(alloc)
+	if err != nil {
+		return 0, err
+	}
 	for i := range b {
 		b[i] = 0
 	}
-	return newID, nil
+
+	// Add the remaining pages to the freelist.
+	// We need to release the lock to call FreePages? 
+	// No, FreePages takes the lock. We are holding the lock.
+	// We must use an internal helper or add to freelist manually here.
+	// Re-using FreePages is risky due to deadlock.
+	// Let's implement freelist addition logic here or extract a helper.
+	
+	// Actually, growing the file updates p.totalPages.
+	// The pages startID+1 ... startID+growthBatch-1 are now valid but unused.
+	// We should add them to the freelist.
+	
+	// Since we hold the lock, we can't call FreePages.
+	// We'll extract FreePages logic to freePagesLocked.
+	
+	var extra []page.PageID
+	for i := 1; i < growthBatch; i++ {
+		extra = append(extra, startID+page.PageID(i))
+	}
+	
+	if err := p.freePagesLocked(extra); err != nil {
+		// If we fail to add to freelist, we leak space but don't corrupt data.
+		// But returning error is better.
+		return 0, err
+	}
+
+	return alloc, nil
 }
 
 // FreePages appends page IDs to the on-disk freelist.
 func (p *Pager) FreePages(ids []page.PageID) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.freePagesLocked(ids)
+}
+
+func (p *Pager) freePagesLocked(ids []page.PageID) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
 		return fmt.Errorf("pager: closed")
 	}
@@ -324,21 +360,21 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 		head = newID
 		p.meta.FreelistHeadID = head
 		fp := freelistPage{pageID: head, next: 0, ids: nil}
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return err
-			}
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return err
+		}
 		if err := encodeFreelistPage(fp, buf); err != nil {
 			return err
 		}
 	}
 
 	remaining := append([]page.PageID(nil), ids...)
-		for len(remaining) > 0 {
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return err
-			}
+	for len(remaining) > 0 {
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return err
+		}
 		fp, err := decodeFreelistPage(head, buf)
 		if err != nil {
 			return err
@@ -351,10 +387,10 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 			if err := p.growToPagesLocked(p.totalPages + 1); err != nil {
 				return err
 			}
-				newBuf, err := p.pageSliceLocked(newHead)
-				if err != nil {
-					return err
-				}
+			newBuf, err := p.pageSliceLocked(newHead)
+			if err != nil {
+				return err
+			}
 			newFP := freelistPage{pageID: newHead, next: head, ids: nil}
 			if err := encodeFreelistPage(newFP, newBuf); err != nil {
 				return err
@@ -375,7 +411,6 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 	}
 	return nil
 }
-
 // ReadActiveMeta returns the meta selected on open.
 func (p *Pager) ReadActiveMeta() Meta {
 	p.mu.Lock()
