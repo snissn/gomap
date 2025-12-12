@@ -149,11 +149,14 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
     * **Trigger:** Run 10,000 small commits.
     * **Assert:** Controller evaluation occurs approximately `10000 / K` times (instrumentation counter), and does not allocate per-operation.
 
-### 1.7 System Keys & Scalability (Spec v2.7)
+### 1.7 Internal Metadata Keyspace & Scalability (Spec v2.7)
 
-* **Prefix Protection:**
-    * Attempt `Set([]byte{0x00, 0x01}, val)`.
-    * **Assert:** Returns Error (User cannot write to System Key namespace).
+* **Namespace Isolation (Internal Encoding):**
+    * **Write:** `Set([]byte{0x00, 0x01}, val)`.
+    * **Assert:** Success.
+    * **Internal Inspect:** Scan raw B+Tree (debug mode). Verify key is stored as `0x01 0x00 0x01`.
+    * **Iterator Check:** `Iterator(nil, nil)` returns the key as `0x00 0x01` (prefix stripped).
+    * **Meta Isolation:** Ensure internal stats keys (`0x00...`) do NOT appear in the public iterator.
 * **Stat Persistence:**
     * Perform writes to multiple slabs. Commit.
     * **Internal Inspect:** Read keys starting with `0x00 | "slab"`.
@@ -177,10 +180,10 @@ Focus on the public `DB` interface and ACID properties.
 * **Persistence:** `Put(K, V)` -> `Close()` -> `Reopen()` -> `Get(K)`.
 * **Input Validation (Spec v2.7):**
     * `Set(nil, val)` -> Expect Error.
-    * `Set([], val)` -> Expect Error.
-    * `Set(key, nil)` -> Expect Error (Empty slice `[]byte{}` is allowed).
+    * `Set([], val)` -> Expect Success (Empty keys allowed).
+    * `Set(key, nil)` -> Expect Error (Nil values forbidden).
     * `Delete(nil)` -> Expect Error.
-    * `Set(\x00..., val)` -> Expect Error (System Key protection).
+    * `Set(\x00..., val)` -> Expect Success (Internal encoding handles collision).
 
 ### 2.2 Iterators (Forward & Reverse)
 
@@ -419,4 +422,3 @@ The database must pass the Cosmos SDK integration definition.
     4.  Verify disk usage drops (index pages reused; slab dead bytes reduced after compaction).
     5.  Verify querying Block 1 fails (correctly).
     6.  Verify querying Block 9,999 succeeds.
-

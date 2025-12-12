@@ -146,7 +146,7 @@ Each Meta Page stores:
   * `ActiveSlabTail` (8b): The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
 
-**Removed:** `SlabStats` are no longer stored in the fixed-size Meta Page (overflow risk). They are stored as **System Keys** (Section 3.5).
+**Removed:** `SlabStats` are no longer stored in the fixed-size Meta Page (overflow risk). They are stored as **Internal Metadata Keys** (Section 3.5).
 
 **Recovery Rule (Open):**
 
@@ -161,14 +161,24 @@ Used to recycle space within `index.db`.
   * **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
   * **Body:** Array of `PageID (uint64)`.
 
-### 3.5 System Keys (New)
+### 3.5 Internal Metadata Keyspace (Namespace Isolation)
 
-Internal database statistics and metadata that exceed fixed header limits are stored directly in the B+Tree using a reserved key prefix.
+TreeDB stores internal metadata in the same B+Tree as user data, but uses prefixing to prevent collisions.
 
-  * **Prefix:** `0x00` (Null Byte). User keys must not start with `0x00` (enforced by `Set`).
-  * **Slab Stats Key:** `0x00 | "slab" | uint16(FileID)`
-      * **Value:** `[DeadBytes (8b)] [TotalBytes (8b)]`
-  * **Usage:** Updated transactionally during `Batch.Write`. Used by the Compactor to find candidates.
+#### 3.5.1 Key Encoding (MANDATORY)
+To support arbitrary user keys (including `nil` or `0x00` prefixes), TreeDB applies an internal encoding:
+
+  * **Internal Meta Keys:** `0x00 || <payload>`
+  * **User Keys:** `0x01 || <user_key>` (ALWAYS prefixed)
+
+**Consequences:**
+  * User keys allow any byte sequence (including empty `[]`).
+  * Public Iterators automatically map `[start, end)` to `[0x01|start, 0x01|end)`.
+  * `Iterator(nil, nil)` iterates `[0x01, 0x02)`.
+
+#### 3.5.2 Slab Stats Keys
+  * **Key:** `0x00 | "slab" | uint16(FileID)`
+  * **Value:** `[DeadBytes (8b)] [TotalBytes (8b)]`
 
 ### 3.4 The Slab Manager
 
@@ -194,8 +204,9 @@ type SlabSet struct {
 
 **Publication Rule (RCU / Atomic Swap):**
 
-  * The current `SlabSet` is stored behind an atomic pointer.
-  * Snapshot acquisition reads the pointer once (acquire semantics) and pins referenced slabs by incrementing their `RefCount`.
+  * The current `DBState` is stored behind an atomic pointer.
+  * Writers publish a new `DBState` (with updated `SlabSet`) via a single atomic swap.
+  * Snapshot acquisition loads the `DBState` once (acquire semantics) and pins referenced slabs by incrementing their `RefCount`.
 
 ## 4\. Node Layouts (Slotted Pages)
 
@@ -261,7 +272,7 @@ Writes are batched to ensure atomicity and reduce I/O.
       * Merge `OldLeaf` items + `Batch` items into `NewPage`.
       * Perform splitting if `NewPage` \> 4KB.
 4.  **Internal Node:** Update child pointers to point to new pages.
-5.  **Stats Update:** Update System Keys (`0x00` prefix) for any modified slab stats.
+5.  **Stats Update:** Update internal metadata keys (`0x00` prefix) for any modified slab stats.
 
 **Phase 3: Atomic Commit (Redundant Superblock)**
 
@@ -285,11 +296,18 @@ To support concurrent readers without locks, we cannot immediately overwrite old
 
 To ensure safe reading of both Pages and Slabs, every Read operation (including `Get` and `Iterator`) must first acquire a **Snapshot**.
 
-1.  **Capture State:** Read the current `SlabSet` pointer (atomic load).
-2.  **Increment Refs:**
-      * Iterate through all `*SlabFile` pointers in the captured set.
-      * Atomically increment `SlabFile.RefCount` for each.
-3.  **Release State:** When `Snapshot.Close()` or `Iterator.Close()` is called:
+##### 5.2.1.1 The DBState (Atomic View)
+To guarantee consistent reads, TreeDB maintains a global atomic pointer to an immutable `DBState` struct:
+  * `CommitSeq` (uint64)
+  * `RootPageID` (uint64)
+  * `SlabSet` (*SlabSet)
+
+##### 5.2.1.2 Snapshot Acquisition
+1.  **Capture State:** Atomically load the `DBState` pointer once (Acquire Semantics).
+2.  **Pin Sequence:** Register `DBState.CommitSeq` in the Reader Registry (affects `MinPinnedSeq`).
+3.  **Pin Slabs:** Iterate `DBState.SlabSet` and increment `RefCount` for each file.
+4.  **Traverse:** The Snapshot MUST use `DBState.RootPageID` for all lookups.
+5.  **Release State:** When `Snapshot.Close()` or `Iterator.Close()` is called:
       * Decrement `RefCount` for each slab in the snapshot.
       * If `RefCount == 0` AND `IsZombie == true`, physically close and remove the file from disk.
 
@@ -336,14 +354,14 @@ type CursorItem struct {
     Node    *Page  // The parsed page structure
     Index   int    // The current index within the node's directory
 }
-
-type Iterator struct {
-    Stack     []CursorItem
-    Snapshot  *Snapshot
-    Valid     bool
-    // ...
-}
 ```
+
+#### 2.1 Cosmos Iterator Contract (Strict)
+To comply with `cosmos-db`, the Iterator must adhere to these rules:
+  * **Safety Copies:** `Key()` and `Value()` MUST return newly allocated copies safe for modification by the caller.
+  * **Panic on Invalid:** `Next()` MUST panic if `Valid()` is false.
+  * **Invalid Domain:** If `start >= end`, the iterator is immediately Invalid.
+  * **Tombstones:** Tombstones encountered during iteration must be skipped (treated as non-existent).
 
 #### 3\. Forward Iterator Logic (`Next`)
 
@@ -392,7 +410,7 @@ Compaction runs concurrently with high-throughput writes and reads. To prevent r
 
 **Phase 1: Candidate Selection**
 
-  * Iterate **System Keys** (`0x00` prefix) to find slabs where `DeadBytes / TotalBytes > 0.5`.
+  * Iterate **internal metadata keys** (`0x00` prefix) to find slabs where `DeadBytes / TotalBytes > 0.5`.
   * Allocate a “Target Slab” (`active-compaction.slab`).
 
 **Phase 2: Optimistic Copy (The "Ghost" Write)**
@@ -555,14 +573,15 @@ func Open(opts Options) (*DB, error)
 // --- cosmos-db.DB Interface Implementation ---
 
 // Get returns the value for a key, or nil if not found.
+// Contract: Errors on nil key. Returns nil (no error) if key does not exist.
 // Receiver name 'tdb' used to avoid shadowing imported 'db' package.
 func (tdb *DB) Get(key []byte) ([]byte, error)
 
 // Has checks if a key exists.
 func (tdb *DB) Has(key []byte) (bool, error)
 
-// Set sets the value for a key. (Immediate write - internally creates a mini-batch)
-// Contract: key cannot be nil or empty; value cannot be nil.
+// Set sets the value for a key.
+// Contract: Errors on nil key or nil value. Empty keys (`[]byte{}`) are allowed.
 func (tdb *DB) Set(key, value []byte) error
 
 // SetSync sets the value and flushes to disk immediately.
@@ -643,4 +662,3 @@ func (b *Batch) WriteSync() error
 func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) // Required by Cosmos
 ```
-
