@@ -433,9 +433,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if err != nil {
 			return 0, err
 		}
-		for i := range b {
-			b[i] = 0
-		}
+		clear(b)
 	}
 	p.markMutableRangeLocked(newID)
 	return newID, nil

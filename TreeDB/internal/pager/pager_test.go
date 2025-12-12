@@ -629,6 +629,75 @@ func TestSkipZeroFileExtendedPages(t *testing.T) {
 	})
 }
 
+func TestReusedFreelistPagesAreFullyInitialized(t *testing.T) {
+	const chunkSize = 2 * page.PageSize
+
+	dir := t.TempDir()
+	p, err := OpenWithOptions(OpenOptions{
+		Dir:                       dir,
+		ChunkSize:                 chunkSize,
+		SkipZeroFileExtendedPages: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	pid, err := p.AllocPage()
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+
+	// Fill the page with a pattern and ensure a freelist reuse doesn't leak bytes
+	// once the page is re-initialized as a leaf/internal page.
+	pat := make([]byte, page.PageSize)
+	for i := range pat {
+		pat[i] = 0xAB
+	}
+	if _, err := p.file.WriteAt(pat, int64(pid)*page.PageSize); err != nil {
+		t.Fatalf("write pattern: %v", err)
+	}
+
+	if err := p.FreePages([]page.PageID{pid}); err != nil {
+		t.Fatalf("free: %v", err)
+	}
+	reused, err := p.AllocPage()
+	if err != nil {
+		t.Fatalf("realloc: %v", err)
+	}
+	if reused != pid {
+		t.Fatalf("expected reuse of %d, got %d", pid, reused)
+	}
+
+	if err := p.WithMutablePage(reused, func(buf []byte) error {
+		_, err := page.InitLeafPage(buf, reused)
+		return err
+	}); err != nil {
+		t.Fatalf("init leaf: %v", err)
+	}
+
+	pageBuf, err := p.ReadPage(reused)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	_, body, err := page.SplitPage(pageBuf)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	if len(body) < 4 {
+		t.Fatalf("body too small: %d", len(body))
+	}
+	// heapTop=4, body[2:4]=0, remainder zero.
+	if body[0] != 4 || body[1] != 0 || body[2] != 0 || body[3] != 0 {
+		t.Fatalf("unexpected slotted header bytes: %02x %02x %02x %02x", body[0], body[1], body[2], body[3])
+	}
+	for i := 4; i < len(body); i++ {
+		if body[i] != 0 {
+			t.Fatalf("expected cleared body at %d, got 0x%02x", i, body[i])
+		}
+	}
+}
+
 func encodeMetaPageForTest(pid page.PageID, m Meta) []byte {
 	buf := make([]byte, page.PageSize)
 	h, body, _ := page.SplitPage(buf)

@@ -428,7 +428,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add crash/reopen tail correctness tests and durability-ordering assertions (`*Sync`: slab durable before index/meta); run `go test ./...` and `go test -race ./...`.
    - Perf: rerun `BenchmarkBatchSet150B/InlineThreshold=64`; expect `ns/op` ↓ and `allocs/op` ↔/↓.
 
-11. [ ] Pager: optional stop-zeroing newly extended pages (keep default safe + deterministic in tests).
+11. [x] Pager: optional stop-zeroing newly extended pages (keep default safe + deterministic in tests).
    - Goal: Make page zeroing policy configurable and preserve “no stale bytes under CRC” guarantees.
    - Touch: `internal/pager/pager.go`, `internal/page/*`.
    - Correctness: add tests that reused freelist pages are fully initialized/overwritten before publish; run `go test ./...`.

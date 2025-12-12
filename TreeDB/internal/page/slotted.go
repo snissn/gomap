@@ -114,9 +114,7 @@ func initSlottedPage(buf []byte, pid PageID, flags PageFlags) (*Header, []byte, 
 		Flags:  flags,
 		Count:  0,
 	}
-	for i := range body {
-		body[i] = 0
-	}
+	clear(body)
 	setHeapTop(body, slotHeaderSize)
 	return h, body, nil
 }
