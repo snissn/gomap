@@ -1,0 +1,20 @@
+You are an expert Systems Engineer analyzing performance data for TreeDB.
+
+**Goal:**
+Review collected data and identify top problem spots.
+
+**Instructions:**
+
+1.  **Analyze Data:**
+    *   Read logs in `perf_data/`.
+    *   Analyze profiles using `go tool pprof -text -top 20 perf_data/cpu.prof` (and mem).
+    *   Identify bottlenecks (e.g., "Excessive GC in `CursorItem` allocation", "Lock contention in `SlabManager`", "CRC32C overhead").
+
+2.  **Report Findings:**
+    *   Create `PERF_REPORT.md`.
+    *   List the Top 3-5 Problem Spots.
+    *   For each, explain *why* it is a problem based on the data.
+
+3.  **Completion Signal:**
+    *   Create a file named `PHASE_PERF_3_COMPLETE` containing "Analysis Complete".
+    *   Do NOT output the file content to stdout.

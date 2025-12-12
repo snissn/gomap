@@ -1,0 +1,25 @@
+You are an expert Systems Engineer collecting performance data for TreeDB.
+
+**Goal:**
+Collect baseline performance metrics and profiling data.
+
+**Instructions:**
+
+1.  **Prepare Environment:**
+    *   Ensure `bin/stress` is built (`go build -o bin/stress cmd/stress/main.go`).
+    *   Create a directory `perf_data/` to store artifacts.
+
+2.  **Execute Benchmarks:**
+    *   Run a **Baseline Stress Test**:
+        *   Duration: 30s.
+        *   Workload: 50% reads, 50% writes.
+        *   Concurrency: 4 threads (or suitable for machine).
+        *   Capture stdout to `perf_data/baseline.log`.
+    *   Run **Profiling**:
+        *   Modify or run `cmd/stress` to output profiles, or use `go test -bench ... -cpuprofile ...` if a benchmark exists.
+        *   If no benchmark exists, create a simple one in `db/bench_test.go` that mimics `stress` and run it to generate `cpu.prof` and `mem.prof`.
+        *   Save profiles to `perf_data/`.
+
+3.  **Completion Signal:**
+    *   Create a file named `PHASE_PERF_2_COMPLETE` containing "Collection Complete".
+    *   Do NOT output the file content to stdout.
