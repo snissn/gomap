@@ -8,7 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"treedb/caching"
 	"treedb/internal/adaptive"
+	"treedb/internal/merging"
 	"treedb/internal/mvcc"
 	"treedb/internal/page"
 	"treedb/internal/pager"
@@ -23,6 +25,17 @@ type Options struct {
 	InlineThreshold int
 	KeepRecent      uint64
 	AdaptiveEnabled bool
+	EnableCaching   bool
+	FlushThreshold  int64
+}
+
+// OpenCached opens a TreeDB with write-back caching enabled.
+func OpenCached(opts Options) (*caching.DB, error) {
+	db, err := Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return caching.Open(opts.Dir, db, opts.FlushThreshold)
 }
 
 // DB is the public database handle.
@@ -225,14 +238,14 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 // NewBatch returns an empty batch.
-func (db *DB) NewBatch() *Batch { return db.NewBatchWithSize(0) }
+func (db *DB) NewBatch() caching.BatchInterface { return db.NewBatchWithSize(0) }
 
 // NewBatchWithSize returns a batch with a size hint.
-func (db *DB) NewBatchWithSize(size int) *Batch {
+func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
 	return newBatch(db, size)
 }
 
-func (db *DB) Iterator(start, end []byte) (*Iterator, error) {
+func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("treedb: nil db")
 	}
@@ -260,7 +273,7 @@ func (db *DB) Iterator(start, end []byte) (*Iterator, error) {
 	return it, nil
 }
 
-func (db *DB) ReverseIterator(start, end []byte) (*Iterator, error) {
+func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	if db == nil {
 		return nil, fmt.Errorf("treedb: nil db")
 	}
