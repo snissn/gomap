@@ -257,7 +257,7 @@ Writes are batched to ensure atomicity and reduce I/O.
 1.  Iterate over `Put(Key, Val)` operations.
 2.  **If `len(Val) > InlineThreshold`:**
       * **Append** a slab record (Section 2.1.1) to the active `.slab` file.
-        Implementations MAY buffer multiple records and flush them as a single sequential write per commit to reduce syscall overhead, but MUST preserve append order and return correct `ValuePtr` offsets into the final on-disk stream.
+        Implementations MAY buffer records and flush them sequentially per commit to reduce syscall overhead. Buffers MUST be memory-bounded: implementations MAY flush in bounded chunks when the buffer grows large, while still preserving append order and returning correct `ValuePtr` offsets into the final on-disk stream.
       * Calculate `ValuePtr`.
       * Store `(Key -> ValuePtr)` in the in-memory Batch Map.
       * *Note:* If the batch fails, these bytes in the slab are wasted but harmless.
@@ -598,6 +598,7 @@ func (tdb *DB) Has(key []byte) (bool, error)
 // Contract: Errors on nil key or nil value. Empty keys (`[]byte{}`) are allowed.
 // Implementations MAY use a single-op fast path that bypasses Batch allocation/sorting,
 // but MUST preserve identical atomicity and durability semantics.
+// Fast paths MUST acquire the same global writer lock used by Batch commits and compaction micro-batches.
 func (tdb *DB) Set(key, value []byte) error
 
 // SetSync sets the value and flushes to disk immediately.
@@ -653,10 +654,10 @@ type Tree interface {
     Get(key []byte) (LeafEntry, error)
     
     // Set updates the leaf directly with a specific pointer/inline value.
-    // Implementations MAY return the previous LeafEntry to avoid an extra Get
-    // for dead-byte accounting; exact signature is implementation-defined.
+    // It returns the previous LeafEntry (or nil if absent) to allow dead-byte accounting
+    // without an extra tree lookup.
     // MUST execute under the same write lock as Batch.Write.
-    Set(key []byte, val LeafEntry) error
+    Set(key []byte, val LeafEntry) (old *LeafEntry, err error)
 }
 
 // --- Batch Implementation ---
