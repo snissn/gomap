@@ -408,7 +408,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests for exact-boundary keys, deep trees, and “no escaping views”; run `go test ./...`.
    - Perf: rerun `BenchmarkGet150B`; expect `allocs/op` ↓↓↓ and `ns/op` ↓.
 
-8. [ ] Iterator: zero-copy scan via pinned views + view-based decoding; copy only in `Key()`/`Value()`.
+8. [x] Iterator: zero-copy scan via pinned views + view-based decoding; copy only in `Key()`/`Value()`.
    - Goal: Remove per-entry allocations from scans while keeping CRC checks, tombstone skipping, and public copy semantics.
    - Depends on: TODO 4.
    - Touch: `iterator.go`, `internal/page/leaf.go`, `internal/page/internal.go`.

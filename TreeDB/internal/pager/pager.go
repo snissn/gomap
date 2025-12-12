@@ -83,6 +83,10 @@ type PageRef struct {
 	released atomic.Bool
 }
 
+var pageRefPool = sync.Pool{
+	New: func() any { return &PageRef{} },
+}
+
 func (r *PageRef) PageID() page.PageID {
 	if r == nil {
 		return 0
@@ -106,7 +110,9 @@ func (r *PageRef) Release() {
 	}
 	r.c.refs.Add(-1)
 	r.c = nil
+	r.pid = 0
 	r.pageData = nil
+	pageRefPool.Put(r)
 }
 
 // Open opens or creates index.db in dir.
@@ -281,11 +287,12 @@ func (p *Pager) ReadPageRef(pid page.PageID) (*PageRef, error) {
 	data := c.data[off : off+page.PageSize]
 	p.mu.Unlock()
 
-	return &PageRef{
-		pid:      pid,
-		c:        c,
-		pageData: data,
-	}, nil
+	ref := pageRefPool.Get().(*PageRef)
+	ref.pid = pid
+	ref.c = c
+	ref.pageData = data
+	ref.released.Store(false)
+	return ref, nil
 }
 
 // HasFreePages reports whether the freelist currently contains at least one page ID.

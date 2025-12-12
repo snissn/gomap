@@ -324,3 +324,10 @@ func decodeLeafEntry(body []byte, off uint16) ([]byte, LeafFlags, []byte, ValueP
 		return key, flags, val, ValuePtr{}, base + valLen, nil
 	}
 }
+
+// DecodeLeafEntryView decodes a leaf entry at heap offset off and returns slices
+// that alias body. Callers must not retain the returned slices after unpinning
+// the underlying page buffer.
+func DecodeLeafEntryView(body []byte, off uint16) ([]byte, LeafFlags, []byte, ValuePtr, int, error) {
+	return decodeLeafEntry(body, off)
+}

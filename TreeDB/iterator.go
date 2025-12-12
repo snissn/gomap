@@ -411,17 +411,17 @@ func (it *iterator) normalizeForward() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
-			if top.h.Flags == page.PageTypeLeaf {
-				if top.index < top.count {
-					it.valid.Store(true)
-					return
-				}
-				it.popCursorItem()
-				if len(it.stack) == 0 {
-					it.valid.Store(false)
-					return
-				}
-				parent := &it.stack[len(it.stack)-1]
+		if top.h.Flags == page.PageTypeLeaf {
+			if top.index < top.count {
+				it.valid.Store(true)
+				return
+			}
+			it.popCursorItem()
+			if len(it.stack) == 0 {
+				it.valid.Store(false)
+				return
+			}
+			parent := &it.stack[len(it.stack)-1]
 			parent.index++
 			for {
 				if parent.index < parent.count {
@@ -430,24 +430,24 @@ func (it *iterator) normalizeForward() {
 						it.err = err
 						it.valid.Store(false)
 						return
-						}
-						break
 					}
-					it.popCursorItem()
-					if len(it.stack) == 0 {
-						it.valid.Store(false)
-						return
-					}
-					parent = &it.stack[len(it.stack)-1]
+					break
+				}
+				it.popCursorItem()
+				if len(it.stack) == 0 {
+					it.valid.Store(false)
+					return
+				}
+				parent = &it.stack[len(it.stack)-1]
 				parent.index++
 			}
 			continue
 		}
 
-			if top.index >= top.count {
-				it.popCursorItem()
-				continue
-			}
+		if top.index >= top.count {
+			it.popCursorItem()
+			continue
+		}
 		childPid := top.internals[top.index].child
 		if err := it.drillDownLeft(childPid); err != nil {
 			it.err = err
@@ -472,17 +472,17 @@ func (it *iterator) normalizeReverse() {
 	for len(it.stack) > 0 {
 		topIdx := len(it.stack) - 1
 		top := &it.stack[topIdx]
-			if top.h.Flags == page.PageTypeLeaf {
-				if top.index >= 0 {
-					it.valid.Store(true)
-					return
-				}
-				it.popCursorItem()
-				if len(it.stack) == 0 {
-					it.valid.Store(false)
-					return
-				}
-				parent := &it.stack[len(it.stack)-1]
+		if top.h.Flags == page.PageTypeLeaf {
+			if top.index >= 0 {
+				it.valid.Store(true)
+				return
+			}
+			it.popCursorItem()
+			if len(it.stack) == 0 {
+				it.valid.Store(false)
+				return
+			}
+			parent := &it.stack[len(it.stack)-1]
 			parent.index--
 			for {
 				if parent.index >= 0 {
@@ -491,24 +491,24 @@ func (it *iterator) normalizeReverse() {
 						it.err = err
 						it.valid.Store(false)
 						return
-						}
-						break
 					}
-					it.popCursorItem()
-					if len(it.stack) == 0 {
-						it.valid.Store(false)
-						return
-					}
-					parent = &it.stack[len(it.stack)-1]
+					break
+				}
+				it.popCursorItem()
+				if len(it.stack) == 0 {
+					it.valid.Store(false)
+					return
+				}
+				parent = &it.stack[len(it.stack)-1]
 				parent.index--
 			}
 			continue
 		}
 
-			if top.index < 0 {
-				it.popCursorItem()
-				continue
-			}
+		if top.index < 0 {
+			it.popCursorItem()
+			continue
+		}
 		childPid := top.internals[top.index].child
 		if err := it.drillDownRight(childPid); err != nil {
 			it.err = err
@@ -740,7 +740,7 @@ func decodeInternalEntry(body []byte, off uint16, entryLen int) (page.PageID, []
 	}
 	src := body[off:]
 	child := page.PageID(binary.LittleEndian.Uint64(src[0:8]))
-	key := append([]byte(nil), src[8:entryLen]...)
+	key := src[8:entryLen]
 	return child, key, entryLen, nil
 }
 
@@ -761,9 +761,10 @@ func findLeafIndex(body []byte, count int, key []byte) (int, bool, error) {
 	if count == 0 {
 		return 0, false, nil
 	}
-	keys := make([][]byte, count)
-	for i := 0; i < count; i++ {
-		off, err := dirEntry(body, count, i)
+	lo, hi := 0, count
+	for lo < hi {
+		mid := (lo + hi) / 2
+		off, err := dirEntry(body, count, mid)
 		if err != nil {
 			return 0, false, err
 		}
@@ -771,15 +772,26 @@ func findLeafIndex(body []byte, count int, key []byte) (int, bool, error) {
 		if err != nil {
 			return 0, false, err
 		}
-		keys[i] = k
+		if bytes.Compare(k, key) < 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
 	}
-	idx := sort.Search(len(keys), func(i int) bool {
-		return bytes.Compare(keys[i], key) >= 0
-	})
-	if idx < len(keys) && bytes.Equal(keys[idx], key) {
-		return idx, true, nil
+	if lo < count {
+		off, err := dirEntry(body, count, lo)
+		if err != nil {
+			return 0, false, err
+		}
+		k, _, _, _, _, err := decodeLeafEntry(body, off)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Equal(k, key) {
+			return lo, true, nil
+		}
 	}
-	return idx, false, nil
+	return lo, false, nil
 }
 
 func decodeLeafEntry(body []byte, off uint16) ([]byte, page.LeafFlags, []byte, page.ValuePtr, int, error) {
@@ -794,14 +806,14 @@ func decodeLeafEntry(body []byte, off uint16) ([]byte, page.LeafFlags, []byte, p
 	if base > len(src) {
 		return nil, 0, nil, page.ValuePtr{}, 0, page.ErrPageCorrupt
 	}
-	key := append([]byte(nil), src[7:7+keyLen]...)
+	key := src[7 : 7+keyLen]
 	pos := base
 	switch flags {
 	case page.LeafFlagInline:
 		if pos+valLen > len(src) {
 			return nil, 0, nil, page.ValuePtr{}, 0, page.ErrPageCorrupt
 		}
-		val := append([]byte(nil), src[pos:pos+valLen]...)
+		val := src[pos : pos+valLen]
 		return key, flags, val, page.ValuePtr{}, base + valLen, nil
 	case page.LeafFlagPointer:
 		if pos+page.ValuePtrSize > len(src) {
@@ -818,7 +830,7 @@ func decodeLeafEntry(body []byte, off uint16) ([]byte, page.LeafFlags, []byte, p
 		if pos+valLen > len(src) {
 			return nil, 0, nil, page.ValuePtr{}, 0, page.ErrPageCorrupt
 		}
-		val := append([]byte(nil), src[pos:pos+valLen]...)
+		val := src[pos : pos+valLen]
 		return key, flags, val, page.ValuePtr{}, base + valLen, nil
 	}
 }

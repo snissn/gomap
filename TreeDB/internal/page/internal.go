@@ -289,6 +289,13 @@ func decodeInternalEntry(body []byte, off uint16, entryLen int) (PageID, []byte,
 	return child, key, entryLen, nil
 }
 
+// DecodeInternalEntryView decodes an internal entry and returns a key slice that
+// aliases body. Callers must not retain the returned slice after unpinning the
+// underlying page buffer.
+func DecodeInternalEntryView(body []byte, off uint16, entryLen int) (PageID, []byte, int, error) {
+	return decodeInternalEntry(body, off, entryLen)
+}
+
 // CompareChild is a helper for tests and later tree code.
 func (p *InternalPage) CompareChild(i int, wantKey []byte, wantChild PageID) error {
 	key, err := p.KeyAt(i)

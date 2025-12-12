@@ -2,11 +2,14 @@ package treedb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 
 	cosmosdb "github.com/cosmos/cosmos-db"
+
+	"treedb/internal/pager"
 )
 
 func collectKeys(t *testing.T, it cosmosdb.Iterator) [][]byte {
@@ -265,5 +268,55 @@ func TestIteratorsStableUnderAggressivePruning(t *testing.T) {
 		if !bytes.Equal(gotR[i], want) {
 			t.Fatalf("reverse snapshot mismatch at %d: %q != %q", i, gotR[i], want)
 		}
+	}
+}
+
+func TestIteratorReleasesPinnedRefsOnClose(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	val := makeBenchValue(150)
+	batch := db.NewBatch()
+	for i := 0; i < 5000; i++ {
+		k := []byte(fmt.Sprintf("k%05d", i))
+		if err := batch.Set(k, val); err != nil {
+			t.Fatalf("batch set: %v", err)
+		}
+		if (i+1)%500 == 0 {
+			if err := batch.Write(); err != nil {
+				t.Fatalf("batch write: %v", err)
+			}
+			batch = db.NewBatch()
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch write final: %v", err)
+	}
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	for i := 0; i < 1000 && it.Valid(); i++ {
+		it.Next()
+	}
+
+	if err := db.pager.Close(); !errors.Is(err, pager.ErrChunkPinned) {
+		_ = it.Close()
+		_ = db.pager.Close()
+		t.Fatalf("expected ErrChunkPinned while iterator open, got %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+	if err := db.pager.Close(); err != nil {
+		t.Fatalf("pager close after iterator: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
 	}
 }
