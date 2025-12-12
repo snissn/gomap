@@ -70,8 +70,5 @@ func (b *Batch) Close() error {
 }
 
 func (b *Batch) GetByteSize() (int, error) {
-	// batch package didn't expose byteSize?
-	// I added `byteSize` field but maybe not getter?
-	// Let's check batch.go.
-	return 0, nil // Placeholder
+	return b.batch.ByteSize(), nil
 }
