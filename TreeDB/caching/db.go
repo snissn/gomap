@@ -13,6 +13,10 @@ import (
 	"treedb/internal/wal"
 )
 
+var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
+var ErrValueNil = fmt.Errorf("value cannot be nil")
+var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+
 // BatchInterface matches the Batch methods we need from backend.
 type BatchInterface interface {
 	Set(key, value []byte) error
@@ -118,10 +122,22 @@ func (db *DB) Close() error {
 	return db.backend.Close()
 }
 func (db *DB) Set(key, value []byte) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
 	return db.set(key, value, false)
 }
 
 func (db *DB) SetSync(key, value []byte) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
 	return db.set(key, value, true)
 }
 
@@ -152,10 +168,16 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) Delete(key []byte) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
 	return db.delete(key, false)
 }
 
 func (db *DB) DeleteSync(key []byte) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
 	return db.delete(key, true)
 }
 
@@ -290,6 +312,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if deleted {
 			return nil, nil
 		}
+		if val == nil {
+			return []byte{}, nil
+		}
 		return val, nil
 	}
 	
@@ -300,6 +325,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 			db.mu.RUnlock()
 			if deleted {
 				return nil, nil
+			}
+			if val == nil {
+				return []byte{}, nil
 			}
 			return val, nil
 		}
@@ -432,12 +460,27 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	return &Batch{db: db, ops: make(map[string]batchOp, size)}
 }
 func (b *Batch) Set(key, value []byte) error {
+	if b.ops == nil {
+		return ErrBatchClosed
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
 	b.ops[string(key)] = batchOp{value: value, del: false}
 	b.size += len(key) + len(value)
 	return nil
 }
 
 func (b *Batch) Delete(key []byte) error {
+	if b.ops == nil {
+		return ErrBatchClosed
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
 	b.ops[string(key)] = batchOp{del: true}
 	b.size += len(key)
 	return nil
@@ -452,6 +495,9 @@ func (b *Batch) WriteSync() error {
 }
 
 func (b *Batch) write(sync bool) error {
+	if b.ops == nil {
+		return ErrBatchClosed
+	}
 	b.db.mu.Lock()
 	defer b.db.mu.Unlock()
 
@@ -491,7 +537,8 @@ func (b *Batch) write(sync bool) error {
 			return err
 		}
 	}
-	return nil
+	
+	return b.Close()
 }
 
 func (b *Batch) Close() error {
@@ -500,5 +547,8 @@ func (b *Batch) Close() error {
 }
 
 func (b *Batch) GetByteSize() (int, error) {
+	if b.ops == nil {
+		return 0, ErrBatchClosed
+	}
 	return b.size, nil
 }
