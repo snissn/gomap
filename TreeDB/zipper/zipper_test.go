@@ -14,6 +14,14 @@ import (
 	"github.com/snissn/gomap-gemini/TreeDB/tree"
 )
 
+type MockAllocator struct {
+	p *pager.Pager
+}
+
+func (m *MockAllocator) Alloc() (uint64, error) {
+	return m.p.Alloc(1)
+}
+
 func TestZipperInsertSplit(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
@@ -28,7 +36,8 @@ func TestZipperInsertSplit(t *testing.T) {
 	}
 	defer sm.Close()
 
-	z := New(p)
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
 
 	// Create initial root (Leaf)
 	rootID, _ := p.Alloc(1)
@@ -90,7 +99,8 @@ func TestZipperUpdates(t *testing.T) {
 	defer p.Close()
 	sm, _ := slab.NewSlabManager(dir)
 	defer sm.Close()
-	z := New(p)
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
 
 	// Init Root
 	rootID, _ := p.Alloc(1)

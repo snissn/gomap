@@ -203,6 +203,19 @@ func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 	return nil
 }
 
+// ZombieCount returns the number of zombie slabs.
+func (sm *SlabManager) ZombieCount() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	count := 0
+	for _, s := range sm.slabs {
+		if s.IsZombie.Load() {
+			count++
+		}
+	}
+	return count
+}
+
 // CurrentSlabSet returns a snapshot of the current slabs.
 func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	sm.mu.RLock()

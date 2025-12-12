@@ -6,9 +6,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap-gemini/TreeDB/batch"
+	"github.com/snissn/gomap-gemini/TreeDB/freelist"
 	"github.com/snissn/gomap-gemini/TreeDB/lifecycle"
 	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 	"github.com/snissn/gomap-gemini/TreeDB/pager"
 	"github.com/snissn/gomap-gemini/TreeDB/slab"
@@ -33,6 +34,7 @@ type DB struct {
 	pager       *pager.Pager
 	slabManager *slab.SlabManager
 	zipper      *zipper.Zipper
+	allocator   *freelist.Allocator
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
 	
@@ -75,16 +77,37 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	db := &DB{
-		pager:       p,
-		slabManager: sm,
-		zipper:          zipper.New(p),
-		graveyard:       lifecycle.NewGraveyard(),
-		registry:        lifecycle.NewReaderRegistry(),
-		inlineThreshold: page.DefaultInlineThreshold,
-	}
+		// Allocator initialized after recovery (needs Meta)
 
-	if err := db.recover(); err != nil {
+		// But Zipper needs it.
+
+		// We'll init with 0 and update after recovery.
+
+		alloc := freelist.New(p, 0)
+
+		
+
+		db := &DB{
+
+			pager:           p,
+
+			slabManager:     sm,
+
+			zipper:          zipper.New(p, alloc),
+
+			allocator:       alloc,
+
+			graveyard:       lifecycle.NewGraveyard(),
+
+			registry:        lifecycle.NewReaderRegistry(),
+
+			inlineThreshold: page.DefaultInlineThreshold,
+
+		}
+
+	
+
+		if err := db.recover(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -205,6 +228,9 @@ func (db *DB) recover() error {
 		db.pager.SetPageCount(activeMeta.TotalPages)
 	}
 	
+	// Update Allocator Head
+	db.allocator.SetHead(activeMeta.FreelistHeadID)
+	
 	return nil
 }
 
@@ -253,6 +279,7 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
 	nextMeta.SystemRootPageID = sysRootID
+	nextMeta.FreelistHeadID = db.allocator.Head()
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = db.pager.PageCount()
@@ -336,10 +363,9 @@ func (db *DB) Prune() {
 	freed := db.graveyard.Extract(min, current, KeepRecent)
 	
 	if len(freed) > 0 {
-		// Add to Freelist (On-Disk).
-		// Currently Pager/Freelist not fully implemented.
-		// We just drop them (leak space effectively, but logically free).
-		// TODO: Implement FreelistPage and Pager.Free(pageID).
+		for _, id := range freed {
+			_ = db.allocator.Free(id) // Ignore error?
+		}
 	}
 }
 

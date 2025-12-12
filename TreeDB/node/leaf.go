@@ -155,7 +155,6 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	}
 	
 	if n.FreeSpace() < needed {
-		// TODO: Try compaction if space is fragmented?
 		// For now, just error.
 		return ErrNodeFull
 	}

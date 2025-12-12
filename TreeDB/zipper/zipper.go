@@ -11,12 +11,17 @@ import (
 	"github.com/snissn/gomap-gemini/TreeDB/pager"
 )
 
-type Zipper struct {
-	pager *pager.Pager
+type PageAllocator interface {
+	Alloc() (uint64, error)
 }
 
-func New(p *pager.Pager) *Zipper {
-	return &Zipper{pager: p}
+type Zipper struct {
+	pager     *pager.Pager
+	allocator PageAllocator
+}
+
+func New(p *pager.Pager, a PageAllocator) *Zipper {
+	return &Zipper{pager: p, allocator: a}
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -36,7 +41,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 
 	if splitNode != 0 {
 		// Root split! Create new internal root.
-		newRootID, err := z.pager.Alloc(1)
+		newRootID, err := z.allocator.Alloc()
 		if err != nil {
 			return 0, nil, err
 		}
@@ -70,7 +75,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 // Returns: newPageID, splitKey (if split), splitPageID (if split), retiredPages, error.
 func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, []uint64, error) {
 	// 1. Allocate New Page (COW)
-	newPageID, err := z.pager.Alloc(1)
+	newPageID, err := z.allocator.Alloc()
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
@@ -217,7 +222,7 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 			// SPLIT!
 			if splitNode == nil {
 				// Allocate split node
-				sid, err := z.pager.Alloc(1)
+				sid, err := z.allocator.Alloc()
 				if err != nil {
 					return 0, nil, 0, err
 				}
@@ -346,7 +351,7 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, splitNodeID *uint64, splitKey *[]byte, key []byte, val uint64, err error) error {
     if err == node.ErrNodeFull {
         if *splitNode == nil {
-            sid, err := z.pager.Alloc(1)
+            sid, err := z.allocator.Alloc()
             if err != nil {
                 return err
             }

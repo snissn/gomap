@@ -127,6 +127,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", db.pager.PageCount())
 	
 	stats["treedb.slabs.active_id"] = fmt.Sprintf("%d", db.slabManager.ActiveSlabID())
+	stats["treedb.slabs.zombies"] = fmt.Sprintf("%d", db.slabManager.ZombieCount())
 	
 	return stats
 }
