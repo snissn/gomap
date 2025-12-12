@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap-gemini/TreeDB/batch"
 	"github.com/snissn/gomap-gemini/TreeDB/node"
@@ -18,10 +19,30 @@ type PageAllocator interface {
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
+	nodePool  sync.Pool
 }
 
 func New(p *pager.Pager, a PageAllocator) *Zipper {
-	return &Zipper{pager: p, allocator: a}
+	return &Zipper{
+		pager:     p,
+		allocator: a,
+		nodePool: sync.Pool{
+			New: func() any {
+				b := make([]byte, page.PageSize)
+				return &b
+			},
+		},
+	}
+}
+
+func (z *Zipper) getPooledBuf() *[]byte {
+	return z.nodePool.Get().(*[]byte)
+}
+
+func (z *Zipper) putPooledBuf(b *[]byte) {
+	// Zero out? Not strictly necessary as we overwrite headers, but good for safety if debug.
+	// For performance, we skip zeroing as Node wrappers overwrite header/count.
+	z.nodePool.Put(b)
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -46,7 +67,9 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 			return 0, nil, err
 		}
 		
-		data := make([]byte, page.PageSize)
+		buf := z.getPooledBuf()
+		defer z.putPooledBuf(buf)
+		data := *buf
 		
 		n := node.NewNode(data)
 		n.SetPageID(newRootID)
@@ -82,13 +105,21 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 		return 0, nil, 0, nil, err
 	}
 	
-	newData := make([]byte, page.PageSize)
+	buf := z.getPooledBuf()
+	// We must release buf only after we are done writing it.
+	// Since we return from multiple places, we need careful handling.
+	// We'll defer a cleanup function that checks a flag, or just handle it explicitly.
+	// Explicit is clearer here.
 	
+	newData := *buf
 	newNode := node.NewNode(newData)
 	newNode.SetPageID(newPageID) // Set ID first
+	newNode.SetCount(0)          // Reset count for pooled buffer
 	
-	oldData, err := z.pager.ReadPage(pageID)
+	// Zero-Copy Read: Use Get instead of ReadPage
+	oldData, err := z.pager.Get(pageID)
 	if err != nil {
+		z.putPooledBuf(buf)
 		return 0, nil, 0, nil, err
 	}
 	oldNode := node.NewNode(oldData)
@@ -103,50 +134,53 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	newNode.SetType(oldNode.Type())
 	
 	if oldNode.Type() == page.PageTypeLeaf {
-		// Merge Leaf returns NO additional retired pages
+		// Merge Leaf
 		nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
 		if err == nil {
 			if werr := z.pager.Write(newPageID, newData); werr != nil {
+				z.putPooledBuf(buf)
 				return 0, nil, 0, nil, werr
 			}
 		}
+		z.putPooledBuf(buf)
 		return nr, sk, sn, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
-		// Internal merge might return MORE retired pages from children recursion
+		// Internal merge
 		nr, sk, sn, childRetired, err := z.mergeInternal(oldNode, newNode, keys, ops)
 		if err != nil {
+			z.putPooledBuf(buf)
 			return 0, nil, 0, nil, err
 		}
 		
 		if err := z.pager.Write(newPageID, newData); err != nil {
+			z.putPooledBuf(buf)
 			return 0, nil, 0, nil, err
 		}
+		z.putPooledBuf(buf)
 		
 		retired = append(retired, childRetired...)
 		return nr, sk, sn, retired, nil
 	} else {
 		if oldNode.Type() == 0 {
+			// Initialize new leaf? This case might happen if root is empty page 0 (though page 0 is usually meta).
+			// If pageID is 0, it might be a fresh tree.
 			newNode.SetType(page.PageTypeLeaf)
 			nr, sk, sn, err := z.mergeLeaf(oldNode, newNode, keys, ops)
 			if err == nil {
 				if werr := z.pager.Write(newPageID, newData); werr != nil {
+					z.putPooledBuf(buf)
 					return 0, nil, 0, nil, werr
 				}
 			}
+			z.putPooledBuf(buf)
 			return nr, sk, sn, retired, err
 		}
+		z.putPooledBuf(buf)
 		return 0, nil, 0, nil, page.ErrInvalidPageType
 	}
 }
 
 func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []byte, uint64, error) {
-	// ... (content unchanged, just signature matches call in writeRecursive which discards retired? No, mergeLeaf doesn't return retired)
-	// I'll keep mergeLeaf signature as is, and writeRecursive wraps it.
-	
-	// Iterate old keys and batch keys in order
-	// Merge into newNode.
-	// If newNode fills, split.
-	
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	keyIdx := 0
@@ -154,8 +188,16 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 	var splitNode *node.Node
 	var splitNodeID uint64
 	var splitKey []byte
+	var splitBuf *[]byte // To track for release
 	
 	target := newNode
+	
+	// Ensure we release splitBuf if we exit early on error
+	defer func() {
+		if splitBuf != nil {
+			z.putPooledBuf(splitBuf)
+		}
+	}()
 	
 	for {
 		// Pick next key: min(oldNode[oldIdx], keys[keyIdx])
@@ -238,19 +280,24 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 					return 0, nil, 0, err
 				}
 				splitNodeID = sid
-				sdata := make([]byte, page.PageSize)
+				
+				splitBuf = z.getPooledBuf()
+				sdata := *splitBuf
+				
 				splitNode = node.NewNode(sdata)
 				splitNode.SetPageID(sid)
 				splitNode.SetType(page.PageTypeLeaf)
+				splitNode.SetCount(0) // Reset count for pooled buffer
 				
 				// Set split key (first key of new node)
-				splitKey = key
+				// Deep copy key because it might point to old mmapped data or transient batch data
+				splitKey = append([]byte(nil), key...)
 				target = splitNode
 				
 				// Retry insert
 				err = target.AddLeafEntry(key, val, flags, valPtr)
 				if err != nil {
-					return 0, nil, 0, err // If split node is somehow full immediately (huge key?)
+					return 0, nil, 0, err 
 				}
 			} else {
 				return 0, nil, 0, errors.New("node overflow even after split")
@@ -266,6 +313,7 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 		if err := z.pager.Write(splitNodeID, splitNode.Data()); err != nil {
 			return 0, nil, 0, err
 		}
+		// splitBuf is released by defer
 	}
 	
 	return newNode.PageID(), splitKey, splitNodeID, nil
@@ -279,8 +327,17 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 	var splitNode *node.Node
 	var splitNodeID uint64
 	var splitKey []byte
+	var splitBuf *[]byte // To track for release
+	
 	target := newNode
 	var retired []uint64
+	
+	// Ensure we release splitBuf if we exit early on error
+	defer func() {
+		if splitBuf != nil {
+			z.putPooledBuf(splitBuf)
+		}
+	}()
 	
 	keyIdx := 0
 	
@@ -336,14 +393,14 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 			return 0, nil, 0, nil, errors.New("zipper: detected OOB child ID")
 		}
 		err = target.AddInternalChild(entry.Key, newChildID)
-		if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, entry.Key, newChildID, err) != nil {
+		if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, &splitBuf, entry.Key, newChildID, err) != nil {
              return 0, nil, 0, nil, err
         }
         
         // If child split, add sibling
         if childSplitID != 0 {
              err = target.AddInternalChild(childSplitKey, childSplitID)
-             if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, childSplitKey, childSplitID, err) != nil {
+             if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, &splitBuf, childSplitKey, childSplitID, err) != nil {
                   return 0, nil, 0, nil, err
              }
         }
@@ -365,7 +422,7 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 	return newNode.PageID(), splitKey, splitNodeID, retired, nil
 }
 
-func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, splitNodeID *uint64, splitKey *[]byte, key []byte, val uint64, err error) error {
+func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, splitNodeID *uint64, splitKey *[]byte, splitBuf **[]byte, key []byte, val uint64, err error) error {
     if err == node.ErrNodeFull {
         if *splitNode == nil {
             sid, err := z.allocator.Alloc()
@@ -373,13 +430,18 @@ func (z *Zipper) handleFullInternal(target *node.Node, splitNode **node.Node, sp
                 return err
             }
             *splitNodeID = sid
-            sdata := make([]byte, page.PageSize)
+            
+            buf := z.getPooledBuf()
+            *splitBuf = buf
+            sdata := *buf
+            
             sn := node.NewNode(sdata)
             sn.SetPageID(sid)
             sn.SetType(page.PageTypeInternal)
+            sn.SetCount(0) // Reset count for pooled buffer
             *splitNode = sn
             
-            *splitKey = key // Separation key
+            *splitKey = append([]byte(nil), key...) // Deep copy
             
             // Retry on new node
             return (*splitNode).AddInternalChild(key, val)

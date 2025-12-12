@@ -17,12 +17,13 @@ var (
 
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
-	file      *os.File
-	chunks    [][]byte
-	chunkSize int64
-	numPages  uint64 // The number of pages logically allocated
-	mu        sync.RWMutex
-	path      string
+	file        *os.File
+	chunks      [][]byte
+	chunkSize   int64
+	numPages    uint64 // The number of pages logically allocated
+	dirtyChunks map[int]struct{}
+	mu          sync.RWMutex
+	path        string
 }
 
 // Open opens the pager at the given path.
@@ -50,9 +51,10 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	size := info.Size()
 	
 	p := &Pager{
-		file:      f,
-		chunkSize: chunkSize,
-		path:      path,
+		file:        f,
+		chunkSize:   chunkSize,
+		path:        path,
+		dirtyChunks: make(map[int]struct{}),
 	}
 
 	if size > 0 {
@@ -120,12 +122,7 @@ func (p *Pager) Close() error {
 func (p *Pager) Truncate(targetPages uint64) error {
 	p.mu.Lock()
 	currentPages := p.numPages
-	p.mu.Unlock() // Alloc locks internaly, so we unlock here to avoid deadlock if we call Alloc.
-	// However, between Unlock and Alloc, another thread might Alloc.
-	// But Alloc uses p.numPages as startID.
-	// To be safe, we should hold the lock if we were modifying p.numPages directly.
-	// But Alloc modifies p.numPages.
-	// Let's rely on Alloc's locking.
+	p.mu.Unlock() 
 	
 	if targetPages < currentPages {
 		return fmt.Errorf("truncation (shrinking) is forbidden: current %d, target %d", currentPages, targetPages)
@@ -234,6 +231,9 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 		return ErrPageOutOfBounds
 	}
 
+	// Mark chunk as dirty
+	p.dirtyChunks[int(chunkIdx)] = struct{}{}
+
 	chunk := p.chunks[chunkIdx]
 	dst := chunk[offsetInChunk : offsetInChunk+page.PageSize]
 	copy(dst, data)
@@ -242,13 +242,27 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 
 // Sync msyncs the memory maps to disk.
 func (p *Pager) Sync() error {
+	p.mu.Lock()
+	// Copy dirty list
+	toSync := make([]int, 0, len(p.dirtyChunks))
+	for idx := range p.dirtyChunks {
+		toSync = append(toSync, idx)
+	}
+	// Clear map
+	p.dirtyChunks = make(map[int]struct{})
+	p.mu.Unlock()
+	
+	// Perform msync under read lock (or no lock? Pager.Close takes Lock, so RLock is safer against Close)
+	// Also Get/ReadPage takes RLock. Msync shouldn't block readers, but Close unmaps.
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	
 	// MS_SYNC is synchronous.
-	for _, chunk := range p.chunks {
-		if err := unix.Msync(chunk, unix.MS_SYNC); err != nil {
-			return err
+	for _, idx := range toSync {
+		if idx < len(p.chunks) {
+			if err := unix.Msync(p.chunks[idx], unix.MS_SYNC); err != nil {
+				return err
+			}
 		}
 	}
 	// Sync file metadata (size)

@@ -32,16 +32,21 @@ func (t *Tree) SetRoot(root uint64) {
 }
 
 // GetEntry returns the raw leaf entry (useful for compaction/CAS).
+// CAUTION: Returned entry Key/Value might point directly to mmap memory.
+// Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	currID := t.rootPageID
 	
 	for depth := 0; depth < 50; depth++ {
+		// Use ReadPage (Copy) instead of Get
 		data, err := t.pager.ReadPage(currID)
 		if err != nil {
 			return node.LeafEntry{}, err
 		}
 		
 		n := node.NewNode(data)
+		// VerifyChecksum is fast (CRC32C hardware accelerated).
+		// We still verify it to detect corruption.
 		if !n.VerifyChecksum() {
 			return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
 		}
@@ -87,5 +92,8 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 		return val, nil
 	}
 	
-	return entry.Value, nil
+	// Copy value before returning to user
+	val := make([]byte, len(entry.Value))
+	copy(val, entry.Value)
+	return val, nil
 }
