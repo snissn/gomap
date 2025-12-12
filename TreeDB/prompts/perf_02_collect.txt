@@ -21,5 +21,7 @@ Collect baseline performance metrics and profiling data.
         *   Save profiles to `perf_data/`.
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_2_COMPLETE` containing "Collection Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_2_COMPLETE` containing "Collection Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

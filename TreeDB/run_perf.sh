@@ -38,26 +38,17 @@ for i in {1..9}; do
     echo "Goal: Create $complete_file"
     echo "=================================================="
     
-    for (( attempt=1; attempt<=MAX_RETRIES; attempt++ )); do
-        echo "Run $attempt/$MAX_RETRIES for Perf Step $i"
-        
-        # Run Gemini with the prompt content
-        npx https://github.com/google-gemini/gemini-cli --yolo "$(cat "$prompt_file")"
-        
-        if [ -f "$complete_file" ]; then
-            echo "Perf Step $i completed successfully on attempt $attempt."
-            echo ""
-            break
-        fi
+    # Run Gemini with the prompt content ONE TIME
+    npx https://github.com/google-gemini/gemini-cli --yolo "$(cat "$prompt_file")"
+    
+    if [ -f "$complete_file" ]; then
+        echo "Perf Step $i completed successfully."
+    else
+        echo "Perf Step $i executed. Run again to verify or continue."
+    fi
 
-        if [ $attempt -eq $MAX_RETRIES ]; then
-            echo "Error: Perf Step $i failed to complete after $MAX_RETRIES attempts."
-            exit 1
-        fi
-
-        echo "Perf Step $i not yet complete (file $complete_file not found). Retrying..."
-        echo ""
-    done
+    # Exit after running the active step, so the user can review or re-run.
+    exit 0
 done
 
 echo "All 9 Performance Sprint Steps Executed Successfully."

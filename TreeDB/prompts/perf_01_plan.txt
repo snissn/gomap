@@ -25,5 +25,7 @@ TreeDB is functional but needs optimization. We need a structured approach to me
         *   Specify how to calculate Write Amp (using `fs.Stat` vs logical counts).
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_1_COMPLETE` containing "Plan Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_1_COMPLETE` containing "Plan Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

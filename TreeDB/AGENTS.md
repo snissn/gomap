@@ -164,6 +164,33 @@ This document outlines the step-by-step plan to implement **TreeDB**, a persiste
 
 ---
 
+## Phase 9: Performance Sprint
+
+**Goal:** Instrument, measure, and optimize TreeDB performance.
+
+### 9.1 Metrics & Instrumentation
+- [ ] **Latency Metrics:** Update `cmd/stress` to track operation latencies (Get/Set) and report p50, p95, and p99.
+- [ ] **Profiling Support:** Update `cmd/stress` to accept `-cpuprofile` and `-memprofile` flags, writing `pprof` data for analysis.
+- [ ] **Write Amplification:** Update `cmd/stress` to calculate:
+    - `LogicalBytes`: Total bytes of Keys + Values successfully written.
+    - `PhysicalBytes`: Total size of the database directory (via `fs.Stat` or directory walk) at test end.
+    - `WriteAmp`: `PhysicalBytes / LogicalBytes`.
+
+### 9.2 Data Collection Strategy
+- [ ] **Baseline Run:** Run `cmd/stress` with:
+    - `duration=30s`, `workers=4`, `keys=100000`, `valsize=1024`.
+    - Enable `-cpuprofile` to identify CPU hotspots.
+    - Capture stdout for Throughput (IOPS) and Latency metrics.
+- [ ] **Analysis:** Inspect `cpu.pprof` using `go tool pprof -http=:8080`.
+
+### 9.3 Optimization Loop
+- [ ] Identify top CPU consumers (e.g., CRC calculation, syscalls, map access).
+- [ ] Identify top Allocators (GC pressure).
+- [ ] Implement targeted optimizations.
+- [ ] Re-run Baseline to verify improvements.
+
+---
+
 ## Work Procedure
 
 1.  **Read Context**: Before starting a phase, re-read relevant spec sections.

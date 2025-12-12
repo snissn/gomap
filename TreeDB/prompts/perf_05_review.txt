@@ -16,5 +16,7 @@ Critique the `PERF_DESIGN.md` for security, memory safety, and concurrency corre
     *   Add a "Safety Sign-off" section to `PERF_DESIGN.md` confirming the remaining items are safe.
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_5_COMPLETE` containing "Review Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_5_COMPLETE` containing "Review Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

@@ -15,5 +15,7 @@ Iteratively review spec changes for compliance with Performance and Correctness 
     *   Repeat until satisfied.
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_7_COMPLETE` containing "Spec Review Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_7_COMPLETE` containing "Spec Review Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

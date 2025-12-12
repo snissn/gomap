@@ -19,5 +19,7 @@ Create a detailed Todo List in `AGENTS.md` for the performance changes.
     *   Associate each task with a clear acceptance criterion (test name or metric).
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_8_COMPLETE` containing "Todo List Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_8_COMPLETE` containing "Todo List Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

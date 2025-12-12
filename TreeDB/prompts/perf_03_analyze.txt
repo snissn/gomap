@@ -16,5 +16,7 @@ Review collected data and identify top problem spots.
     *   For each, explain *why* it is a problem based on the data.
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_3_COMPLETE` containing "Analysis Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_3_COMPLETE` containing "Analysis Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.

@@ -15,5 +15,7 @@ Design specific improvements for the identified problem spots.
     *   Create `PERF_DESIGN.md` with these details.
 
 3.  **Completion Signal:**
-    *   Create a file named `PHASE_PERF_4_COMPLETE` containing "Design Complete".
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_4_COMPLETE` containing "Design Complete".
+    *   If you performed any work in this session, DO NOT create the file.
     *   Do NOT output the file content to stdout.
