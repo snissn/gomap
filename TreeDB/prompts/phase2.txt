@@ -1,0 +1,39 @@
+You are an expert Systems Engineer working on Phase 2 of the TreeDB project: B+Tree Structure & Nodes.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 2.
+
+**Goal:**
+Implement the in-memory representation of B+Tree nodes and basic read operations idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Run `go test -v ./page/... ./pager/... ./slab/...`.
+    *   If any fail, STOP and report the error.
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 2.1: Node Layout (`node/`)**
+        *   *Check:* Does `node/` exist? Run `go test -v ./node/...`.
+        *   *Action:* If tests pass, SKIP. If not:
+            *   Create `node/` directory.
+            *   Implement `Node` wrapper.
+            *   Implement **Leaf Node**: Directory (offsets), Heap (Entries).
+            *   Implement **Internal Node**: Directory (offsets), Heap (Child Pointers).
+            *   Create `node/node_test.go` verifying insertion, space accounting, and binary search.
+            *   Run `go test -v ./node/...` and fix errors.
+
+    *   **Step 2.2: Tree Operations (`tree/`)**
+        *   *Check:* Does `tree/` exist? Run `go test -v ./tree/...`.
+        *   *Action:* If tests pass, SKIP. If not:
+            *   Create `tree/` directory.
+            *   Define `Tree` struct holding `Pager` and `RootPageID`.
+            *   Implement `Get(key)` using binary search traversal.
+            *   Implement basic `Set` helpers (node splitting basics only).
+            *   Create `tree/tree_test.go`: Manually build a 2-level tree and verify `Get`.
+            *   Run `go test -v ./tree/...` and fix errors.
+
+3.  **Final Verification:**
+    *   Run `go test -v ./node/... ./tree/...`.
+    *   If all tests pass, output "Phase 2 Complete" and exit.

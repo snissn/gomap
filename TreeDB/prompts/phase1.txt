@@ -1,0 +1,46 @@
+You are an expert Systems Engineer working on Phase 1 of the TreeDB project: Foundation - Storage Layer.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 1.
+
+**Goal:**
+Implement the physical file handling for Pages (Index) and Slabs (Data) idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Verify you are in the project root (`TreeDB`).
+    *   Ensure `go.mod` exists (initialize if needed).
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 1.1: Page Architecture (`page/`)**
+        *   *Check:* Does `page/` exist? Run `go test -v ./page/...`.
+        *   *Action:* If tests pass, SKIP. If not (or if files missing):
+            *   Create `page/` directory.
+            *   Implement `PageHeader` (16 bytes), `ValuePtr` (16 bytes, aligned), and `CRC32C` in `page/`.
+            *   Create `page/page_test.go` to test binary encoding/decoding and alignment.
+            *   Run `go test -v ./page/...` and fix any errors.
+
+    *   **Step 1.2: The Pager (`pager/`)**
+        *   *Check:* Does `pager/` exist? Run `go test -v ./pager/...`.
+        *   *Action:* If tests pass, SKIP. If not:
+            *   Create `pager/` directory.
+            *   Implement `Pager` struct managing `index.db` using chunked mmap (default 256MB).
+            *   Implement `Alloc`, `Read`, `Write`, and `Truncate`.
+            *   Create `pager/pager_test.go` covering growth and boundary reads.
+            *   Run `go test -v ./pager/...` and fix errors.
+
+    *   **Step 1.3: The Slab Manager (`slab/`)**
+        *   *Check:* Does `slab/` exist? Run `go test -v ./slab/...`.
+        *   *Action:* If tests pass, SKIP. If not:
+            *   Create `slab/` directory.
+            *   Implement `SlabFile` and `SlabManager`.
+            *   Implement `Append` (Record: CRC+KeyLen+ValLen+Key+Val) and `Read` (verify CRC).
+            *   Implement file rotation (4GB limit).
+            *   Create `slab/slab_test.go`.
+            *   Run `go test -v ./slab/...` and fix errors.
+
+3.  **Final Verification:**
+    *   Run `go test -v ./page/... ./pager/... ./slab/...`.
+    *   If all tests pass, output "Phase 1 Complete" and exit.

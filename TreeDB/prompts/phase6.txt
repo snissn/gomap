@@ -1,0 +1,34 @@
+You are an expert Systems Engineer working on Phase 6 of the TreeDB project: Compaction & Advanced Features.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 6.
+
+**Goal:**
+Implement Slab Compaction and Adaptive Thresholds idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Run `go test -v ./db/...`.
+    *   If fail, STOP.
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 6.1: CAS & Tree Extensions**
+        *   *Action:* Add `CompareAndSwap(key, old, new)` to `Tree`.
+        *   Ensure it uses the same write lock as Batch.
+
+    *   **Step 6.2: Slab Compaction**
+        *   *Check:* Run `go test -v ./db/... -run TestCompaction`.
+        *   *Action:* If pass, SKIP. If not:
+            *   Implement `Compactor` struct.
+            *   Logic: Scan System Tree -> Ghost Copy -> CAS Micro-batches.
+            *   Add `db/compaction_test.go`.
+
+    *   **Step 6.3: Adaptive Inline Threshold (Optional)**
+        *   *Action:* Check if hooks are present for Telemetry.
+        *   Implement `Controller` skeleton (can be simple for now).
+
+3.  **Final Verification:**
+    *   Run `go test -v ./db/... -run TestCompaction`.
+    *   If all tests pass, output "Phase 6 Complete" and exit.
