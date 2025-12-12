@@ -1,4 +1,4 @@
-# TreeDB Design Specification v2.6 (Revised)
+# TreeDB Design Specification v2.7 (Final Polish)
 
 ## 1\. System Overview
 
@@ -41,7 +41,7 @@ Rules:
   * **Checksum:** Uses **CRC32C (Castagnoli)** for hardware acceleration (SSE4.2/ARMv8).
   * Only values stored out-of-line (i.e., `len(value) > InlineThreshold`) are appended as slab records.
   * The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32C), so the compactor can parse forward easily and readers can bounds-check safely.
-  * **Definition of Length:** `ValuePtr.Length` is defined as `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`. This ensures that `Offset + Length` precisely covers the data protected by the CRC, enabling dead-byte accounting without reading the record header.
+  * **Definition of Length:** `ValuePtr.Length` is defined as `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`. This ensures that `Offset + Length` precisely covers the data protected by the CRC.
   * On read, the record CRC32C is verified before returning data.
 
 ### 2.2 The Index File ("The Pager")
@@ -80,15 +80,17 @@ Implementation note: the exact combination of `msync` and `fdatasync` is OS-depe
 
 Used to point to data stored in the Slabs.
 
-**On-disk encoding is fixed-width 16 bytes** (do not rely on Go struct packing):
+**Updated Layout (Alignment):** Fields are reordered to ensure the `uint64 Offset` falls on an 8-byte boundary. This prevents compiler padding and safe-guards against alignment faults on ARM.
+
+**On-disk encoding (16 bytes):**
 
 ```text
 ValuePtr (16 bytes)
 +-------------------------+
+| Offset   (8 bytes)      |  // 8-byte aligned
+| Length   (4 bytes)      |
 | FileID   (2 bytes)      |
-| Reserved (2 bytes)      |  // Must be zero; reserved for future use
-| Offset   (8 bytes)      |
-| Length   (4 bytes)      |  // See Section 2.1.1 for precise definition
+| Reserved (2 bytes)      |  // Must be zero
 +-------------------------+
 ```
 
@@ -96,11 +98,11 @@ Corresponding Go type (in-memory):
 
 ```go
 type ValuePtr struct {
-    FileID    uint16
-    _reserved uint16
-    Offset    uint64
-    Length    uint32
-} // 16 bytes in serialized form
+    Offset    uint64 // Bytes 0-7
+    Length    uint32 // Bytes 8-11
+    FileID    uint16 // Bytes 12-13
+    _reserved uint16 // Bytes 14-15
+} // 16 bytes, naturally aligned
 ```
 
 ### 3.3 Page Layout
@@ -110,8 +112,6 @@ The `index.db` file is an array of 4KB pages.
 #### Common Page Header (16 Bytes)
 
 Every page starts with this header.
-
-**Updated Layout (Alignment):** `PageID` is moved to offset 0 to ensure 8-byte alignment for unsafe casting on all architectures.
 
 ```text
 [  Page Header  ]
@@ -142,9 +142,10 @@ Each Meta Page stores:
   * `RootPageID` (8b): Pointer to the current B+Tree root.
   * `FreelistHeadID` (8b): Pointer to the head of the On-Disk Freelist.
   * `TotalPages` (8b): Total file size in pages.
-  * `ActiveSlabTail` (8b): **(New)** The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
+  * `ActiveSlabTail` (8b): The byte offset of the valid end-of-data for the active slab. Used to truncate torn tail records during crash recovery.
   * `LastCommitHeight` (8b): Optional: the application’s height/sequence (may equal `CommitSeq`).
-  * `SlabStats` (Map): Tracks per-slab statistics (optional; see Section 3.4 and 5.4).
+
+**Removed:** `SlabStats` are no longer stored in the fixed-size Meta Page (overflow risk). They are stored as **System Keys** (Section 3.5).
 
 **Recovery Rule (Open):**
 
@@ -158,6 +159,15 @@ Used to recycle space within `index.db`.
   * **Header:** Standard Header.
   * **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
   * **Body:** Array of `PageID (uint64)`.
+
+### 3.5 System Keys (New)
+
+Internal database statistics and metadata that exceed fixed header limits are stored directly in the B+Tree using a reserved key prefix.
+
+  * **Prefix:** `0x00` (Null Byte). User keys must not start with `0x00` (enforced by `Set`).
+  * **Slab Stats Key:** `0x00 | "slab" | uint16(FileID)`
+      * **Value:** `[DeadBytes (8b)] [TotalBytes (8b)]`
+  * **Usage:** Updated transactionally during `Batch.Write`. Used by the Compactor to find candidates.
 
 ### 3.4 The Slab Manager
 
@@ -173,10 +183,6 @@ type SlabFile struct {
     // Safety Primitives
     RefCount atomic.Int64 // Number of active Snapshots referencing this file
     IsZombie atomic.Bool  // True if the file has been removed from the active set
-
-    // Compaction Stats
-    DeadBytes atomic.Uint64
-    TotalBytes uint64 // Immutable once sealed; tracked for trigger decisions
 }
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
@@ -254,6 +260,7 @@ Writes are batched to ensure atomicity and reduce I/O.
       * Merge `OldLeaf` items + `Batch` items into `NewPage`.
       * Perform splitting if `NewPage` \> 4KB.
 4.  **Internal Node:** Update child pointers to point to new pages.
+5.  **Stats Update:** Update System Keys (`0x00` prefix) for any modified slab stats.
 
 **Phase 3: Atomic Commit (Redundant Superblock)**
 
@@ -288,22 +295,12 @@ To ensure safe reading of both Pages and Slabs, every Read operation (including 
 #### 5.2.2 The Graveyard (Pages)
 
   * **In-Memory Graveyard:** `map[CommitSeq][]PageID`. When a commit occurs at `CommitSeq N`, all replaced pages are added here.
-
   * **Reader Registry (MinPinnedSeq):** TreeDB maintains an atomic counter or lock-protected set of all active Snapshot `CommitSeq`s. The **MinPinnedSeq** is the lowest sequence number currently in use by any reader.
-
-  * **The Reader Hold:** Readers (Snapshots and Iterators) pin a `CommitSeq` while traversing pages. A pinned CommitSeq is a **hard safety boundary** for reclamation decisions.
-
+  * **KeepRecent Policy:** A configurable setting (e.g., `KeepRecent=100`) defining how many historical versions must be retained regardless of active readers.
   * **Snapshot Safety Invariant (MANDATORY):** **No page that is reachable from any pinned root may be reclaimed, reused, or placed on the On-Disk Freelist until all Snapshots and Iterators that could reach that page have been closed.**
-
-  * **Reader Liveness (TTL) Policy:**
-
-      * TTL is used **only** to bound garbage collection delays.
-      * A Snapshot/Iterator is **not invalidated** solely due to time passing.
-      * TTL expiration **does not permit** reclamation of pages that are reachable from any pinned root.
-      * TTL may be used only for diagnostics, metrics, or optional future policies that explicitly fail iterators with a deterministic error.
-      * TTL **must not** cause iterators to observe fewer historical pages, miss keys, break leaf traversal, observe reused PageIDs, or return logically inconsistent views.
-
-  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when `RetiredAtSeq < MinPinnedSeq`.
+  * **The Pruner:** Moves `PageID`s from Graveyard to the **On-Disk Freelist** only when:
+      * `RetiredAtSeq < MinPinnedSeq` **AND**
+      * `RetiredAtSeq < (CurrentSeq - KeepRecent)`
 
 ### 5.3 Read Path & Iterator (Cursor Stack)
 
@@ -316,7 +313,7 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
   * **Fetch:**
       * **Inlined:** Allocate a new byte slice and copy data from the Page.
       * **Pointer:**
-        1.  Extract `FileID`, `Offset`, `Length` from `ValuePtr`.
+        1.  Extract `Offset`, `Length`, `FileID` from `ValuePtr`.
         2.  Lookup the `*SlabFile` from the Snapshot’s `SlabSet`.
         3.  Bounds-check `Offset + Length` and parse the slab record (Section 2.1.1).
         4.  Verify record CRC32C.
@@ -386,7 +383,7 @@ Compaction runs concurrently with high-throughput writes and reads. To prevent r
 
 **Phase 1: Candidate Selection**
 
-  * Select a “Cold Slab” where `DeadBytes / TotalBytes > 0.5`.
+  * Iterate **System Keys** (`0x00` prefix) to find slabs where `DeadBytes / TotalBytes > 0.5`.
   * Allocate a “Target Slab” (`active-compaction.slab`).
 
 **Phase 2: Optimistic Copy (The "Ghost" Write)**

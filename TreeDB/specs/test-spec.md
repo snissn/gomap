@@ -1,4 +1,4 @@
-# Addendum A: Testing Specification v2.6 (Updated for Spec v2.6)
+# Addendum A: Testing Specification v2.7 (Updated for Spec v2.7)
 
 ## 1. Unit Testing Strategies
 
@@ -59,30 +59,30 @@ Focus on isolating the complex low-level data structures before system integrati
     * **Assert (Safety):**
         * No PageID that is reachable from `Iterator A`’s pinned root (via **Cursor Stack traversal**) is ever observed as reclaimed or reused.
         * Iteration completes without missing keys, loops, dead ends, or corruption.
-        * If instrumentation is available: pages reachable from the pinned snapshot must not appear in the On-Disk Freelist until `Iterator A` is closed.
 
 * **Reader Registry (MinPinnedSeq):**
     * **Scenario:** Open Iterators at Seq 10, 12, and 15.
     * **Assert:** `MinPinnedSeq` reports 10.
     * **Action:** Close Iterator at Seq 10.
     * **Assert:** `MinPinnedSeq` advances to 12.
-    * **Pruning Check:** Ensure pages retired at Seq 11 are **not** pruned while the Seq 10 iterator was open, but **are** pruned after it closes.
 
-* **TTL is GC-Only:**
-    * **Scenario:** Create a reader `Iterator A` and sleep exceeding the configured TTL (e.g., 10 minutes).
-    * **Trigger:** Run `Prune()` repeatedly during the TTL exceedance (and/or continue committing new roots), then continue iterating.
-    * **Assert:** The iterator remains operational and correct:
-        * no `ErrSnapshotExpired` (or any TTL-derived failure) is surfaced as an API failure,
-        * no missing keys,
-        * no broken leaf traversal,
-        * no corruption / CRC errors attributable to reclamation.
+* **KeepRecent History Preservation (Spec v2.7):**
+    * **Scenario:** `KeepRecent = 10`. Current Seq = 100. No active readers.
+    * **Action:** Run `Prune()`.
+    * **Assert:** Pages retired at Seq 95 are **NOT** pruned (Protected by History).
+    * **Assert:** Pages retired at Seq 85 **ARE** pruned (Outside History Window).
+    * **Interaction:** Open Reader at Seq 85. Run `Prune()`. Pages retired at Seq 85 are now **NOT** pruned (Protected by Reader, even though outside History).
 
 ### 1.4 Slab Record Format
 
 * **Record Round-Trip:**
     * Write a large value record with key+value.
     * Read by `ValuePtr`, parse record, verify **CRC32C** and payload integrity.
-* **Length Precision (Spec v2.6):**
+* **Struct Alignment (Spec v2.7):**
+    * **Assert:** `ValuePtr` serializes to 16 bytes.
+    * **Assert:** The first 8 bytes correspond to `Offset` (Little Endian).
+    * **Assert:** `Length` (4 bytes) follows `Offset`.
+* **Length Precision:**
     * Write a record.
     * **Assert:** `ValuePtr.Length` equals exactly `2 + 4 + len(Key) + len(Value)`.
     * Verify that reading `Length` bytes from `Offset` covers the CRC, Headers, Key, and Value exactly.
@@ -99,7 +99,7 @@ Focus on isolating the complex low-level data structures before system integrati
     * Create a DB, commit multiple times.
     * Corrupt Meta Page A (CRC32C mismatch).
     * **Assert:** Open selects Meta Page B and loads correctly.
-* **ActiveSlabTail Truncation (Spec v2.6):**
+* **ActiveSlabTail Truncation:**
     * **Scenario:**
         1. Write 10 records to the active slab.
         2. Commit (Persist `ActiveSlabTail` in Meta).
@@ -134,6 +134,21 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
     * **Trigger:** Run 10,000 small commits.
     * **Assert:** Controller evaluation occurs approximately `10000 / K` times (instrumentation counter), and does not allocate per-operation.
 
+### 1.7 System Keys & Scalability (Spec v2.7)
+
+* **Prefix Protection:**
+    * Attempt `Set([]byte{0x00, 0x01}, val)`.
+    * **Assert:** Returns Error (User cannot write to System Key namespace).
+* **Stat Persistence:**
+    * Perform writes to multiple slabs. Commit.
+    * **Internal Inspect:** Read keys starting with `0x00 | "slab"`.
+    * **Assert:** Keys exist for each active slab ID.
+    * **Assert:** Values decode to valid `[DeadBytes][TotalBytes]` integers.
+* **Meta Page Overflow Prevention:**
+    * **Scenario:** Simulate 5,000 active slab files.
+    * **Commit:** Ensure the commit succeeds.
+    * **Assert:** Superblock size remains 4KB (Stats are in the tree, not the page).
+
 ---
 
 ## 2. Integration & Functional Testing
@@ -145,11 +160,12 @@ Focus on the public `DB` interface and ACID properties.
 * **CRUD Cycle:** `Put(K, V)` -> `Get(K)` -> `Delete(K)` -> `Get(K)` (expect NotFound).
 * **Overwrite:** `Put(K, V1)` -> `Put(K, V2)`. Ensure `Get(K)` returns V2 and space for V1 is eventually reclaimed (dead bytes increase, later compaction reduces).
 * **Persistence:** `Put(K, V)` -> `Close()` -> `Reopen()` -> `Get(K)`.
-* **Input Validation (Spec v2.6):**
+* **Input Validation (Spec v2.7):**
     * `Set(nil, val)` -> Expect Error.
     * `Set([], val)` -> Expect Error.
     * `Set(key, nil)` -> Expect Error (Empty slice `[]byte{}` is allowed).
     * `Delete(nil)` -> Expect Error.
+    * `Set(\x00..., val)` -> Expect Error (System Key protection).
 
 ### 2.2 Iterators (Forward & Reverse)
 
@@ -183,7 +199,7 @@ Focus on the public `DB` interface and ACID properties.
 ### 2.3 The "Zipper" Batch Merge & State Machine
 
 * **Atomicity:** Construct a Batch with 100 keys. Inject a panic/error at key 50 during commit. Reopen DB. Verify **0 keys** are present (no partial root commit).
-* **Batch State Machine (Spec v2.6):**
+* **Batch State Machine:**
     * Create Batch. Call `Write()`.
     * Call `Set()` on same batch. -> **Expect Error**.
     * Call `Write()` on same batch. -> **Expect Error**.
@@ -275,7 +291,7 @@ Simulate power loss to ensure durability.
         1.  Restart the DB.
         2.  **Assert:** DB loads the previous superblock (highest valid `CommitSeq`).
         3.  **Assert:** The values from the "ghost" slab write are not accessible; the index points to the old version (if any).
-        4.  **Assert (New):** The active slab is truncated at `ActiveSlabTail` recorded in the old superblock.
+        4.  **Assert:** The active slab is truncated at `ActiveSlabTail` recorded in the old superblock.
 * **Scenario B (Torn meta write):**
     1.  Crash during writing the inactive meta page (partial/torn).
     * **Recovery:**
