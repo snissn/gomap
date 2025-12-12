@@ -8,7 +8,8 @@ set -e
 
 MAX_RETRIES=10
 
-for i in {1..7}; do
+for i in {8..8}; do
+#for i in {1..7}; do
     prompt_file="prompts/phase${i}.txt"
     complete_file="PHASE_${i}_COMPLETE"
     

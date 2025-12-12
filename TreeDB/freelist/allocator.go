@@ -51,8 +51,9 @@ func (a *Allocator) Alloc() (uint64, error) {
 	
 	// Decode
 	n := node.NewNode(data) // Helper for header
-	// Verify checksum/type? 
-	// Assume valid for now or check Type == Freelist
+	if !n.VerifyChecksum() {
+		return 0, errors.New("freelist head corrupted (Alloc)")
+	}
 	if n.Type() != page.PageTypeFreelist {
 		return 0, errors.New("invalid freelist page type")
 	}
@@ -111,6 +112,9 @@ func (a *Allocator) Free(id uint64) error {
 		return err
 	}
 	n := node.NewNode(data)
+	if !n.VerifyChecksum() {
+		return errors.New("freelist head corrupted (Free)")
+	}
 	if n.Type() != page.PageTypeFreelist {
 		return errors.New("invalid freelist page type")
 	}

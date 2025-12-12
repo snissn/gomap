@@ -20,7 +20,7 @@ import (
 const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
-	KeepRecent  = 100
+	KeepRecent  = 10000
 )
 
 type DBState struct {
@@ -235,7 +235,7 @@ func (db *DB) recover() error {
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
-	data, err := db.pager.Get(pageID)
+	data, err := db.pager.ReadPage(pageID)
 	if err != nil {
 		return page.MetaPageBody{}, false
 	}

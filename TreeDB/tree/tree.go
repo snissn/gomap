@@ -36,7 +36,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	currID := t.rootPageID
 	
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		data, err := t.pager.ReadPage(currID)
 		if err != nil {
 			return node.LeafEntry{}, err
 		}

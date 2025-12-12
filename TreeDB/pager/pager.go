@@ -204,6 +204,18 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
+// ReadPage returns a copy of the page data.
+// Safe for concurrent use including checksum verification.
+func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
+	src, err := p.Get(pageID)
+	if err != nil {
+		return nil, err
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst, nil
+}
+
 // Write copies data into the page.
 // The data slice must be exactly PageSize bytes (or less, but we usually write full pages).
 func (p *Pager) Write(pageID uint64, data []byte) error {

@@ -321,6 +321,9 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 		}
 		
 		// Add (Key, NewChildID) to target
+		if newChildID >= z.pager.PageCount() {
+			return 0, nil, 0, nil, errors.New("zipper: detected OOB child ID")
+		}
 		err = target.AddInternalChild(entry.Key, newChildID)
 		if z.handleFullInternal(target, &splitNode, &splitNodeID, &splitKey, entry.Key, newChildID, err) != nil {
              return 0, nil, 0, nil, err
