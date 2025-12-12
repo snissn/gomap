@@ -23,4 +23,7 @@ Implementation loop:
 Finish:
 - When all TODOs are done, rerun full suite + key benchmarks.
 - Ensure `specs/` still match implementation.
-- Create `@PERF_08_COMPLETE`.
+- Phase completion marker:
+  - Marker file: `@PERF_08_COMPLETE` in the repo root.
+  - If during this run all TODOs were already complete and you made no changes or only trivial touchups, then create/leave the marker (`touch @PERF_08_COMPLETE`).
+  - If you implemented substantial code changes or completed TODOs in this run, **do not** create the marker; if it already exists, delete it.

@@ -31,4 +31,6 @@ Deliverable:
   - Expected impact class (high/medium/low) and area (tree/slab/pager/iterator/GC).
 
 Phase completion marker:
-- Create `@PERF_02_COMPLETE` when `perf/problems.md` is complete and no code changes were made.
+- Marker file: `@PERF_02_COMPLETE` in the repo root.
+- If during this run `perf/problems.md` already existed and required no changes or only minor edits, then create/leave the marker (`touch @PERF_02_COMPLETE`).
+- If you created `perf/problems.md` or made substantial analysis updates, **do not** create the marker; if it already exists, delete it.

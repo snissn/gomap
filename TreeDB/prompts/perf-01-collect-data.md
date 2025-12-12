@@ -33,4 +33,6 @@ Deliverable:
 - A short `perf/README.md` noting how the artifacts were produced.
 
 Phase completion marker:
-- Create `@PERF_01_COMPLETE` once artifacts are present and labeled.
+- Marker file: `@PERF_01_COMPLETE` in the repo root.
+- If during this run data collection was already complete and you made no changes or only trivial labeling/cleanup, then create/leave the marker (`touch @PERF_01_COMPLETE`).
+- If you collected new benchmark/profile data or added substantial new artifacts, **do not** create the marker; if it already exists, delete it.

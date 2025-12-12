@@ -25,4 +25,6 @@ Deliverable:
   - Risk analysis and validation plan per item.
 
 Phase completion marker:
-- Create `@PERF_03_COMPLETE` once `perf/improvements.md` is written.
+- Marker file: `@PERF_03_COMPLETE` in the repo root.
+- If during this run `perf/improvements.md` already existed and you made no changes or only minor clarifications, then create/leave the marker (`touch @PERF_03_COMPLETE`).
+- If you created `perf/improvements.md` or made substantial new design changes, **do not** create the marker; if it already exists, delete it.

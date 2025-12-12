@@ -48,4 +48,6 @@ Deliverable:
   - Baseline expectations and success criteria.
 
 Phase completion marker:
-- Create `@PERF_00_COMPLETE` when `perf/plan.md` is written and reviewed for correctness.
+- Marker file: `@PERF_00_COMPLETE` in the repo root.
+- If during this run the plan already existed and you made no changes or only minor edits, then create/leave the marker (`touch @PERF_00_COMPLETE`).
+- If you created a new plan or made substantial updates to `perf/plan.md`, **do not** create the marker; if it already exists, delete it.

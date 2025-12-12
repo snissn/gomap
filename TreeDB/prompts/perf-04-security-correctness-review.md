@@ -29,4 +29,6 @@ Deliverable:
   - Any dropped/reworked items with rationale.
 
 Phase completion marker:
-- Create `@PERF_04_COMPLETE` when the approved list is stable.
+- Marker file: `@PERF_04_COMPLETE` in the repo root.
+- If during this run `perf/review.md` already existed and required no changes or only minor edits, then create/leave the marker (`touch @PERF_04_COMPLETE`).
+- If you created `perf/review.md` or made substantial safety/correctness revisions, **do not** create the marker; if it already exists, delete it.

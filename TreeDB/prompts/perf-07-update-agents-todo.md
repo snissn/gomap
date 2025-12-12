@@ -18,4 +18,6 @@ Tasks:
 - Keep the list ordered and dependency‑aware.
 
 Phase completion marker:
-- Create `@PERF_07_COMPLETE` once TODOs + compliance goals are in `AGENTS.md`.
+- Marker file: `@PERF_07_COMPLETE` in the repo root.
+- If during this run the TODO section already existed and needed no changes or only minor tweaks, then create/leave the marker (`touch @PERF_07_COMPLETE`).
+- If you added a new TODO section or made substantial updates to `AGENTS.md`, **do not** create the marker; if it already exists, delete it.

@@ -18,4 +18,6 @@ Review tasks:
 - Summarize remaining open questions (if any) in `perf/spec-review.md`.
 
 Phase completion marker:
-- Create `@PERF_06_COMPLETE` when specs are unambiguous and aligned.
+- Marker file: `@PERF_06_COMPLETE` in the repo root.
+- If during this run the spec diffs were already compliant and you made no changes or only minor edits, then create/leave the marker (`touch @PERF_06_COMPLETE`).
+- If you made substantial spec corrections in this run, **do not** create the marker; if it already exists, delete it.

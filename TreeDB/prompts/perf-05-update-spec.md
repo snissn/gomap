@@ -23,4 +23,6 @@ Verification:
 - Run `go test ./...` to ensure docs compile with existing tests (no code changes required here).
 
 Phase completion marker:
-- Create `@PERF_05_COMPLETE` when spec diffs match `perf/review.md` and tests are clearly planned.
+- Marker file: `@PERF_05_COMPLETE` in the repo root.
+- If during this run the specs were already aligned with `perf/review.md` and you made no changes or only trivial wording fixes, then create/leave the marker (`touch @PERF_05_COMPLETE`).
+- If you made substantial updates to `specs/spec.md` or `specs/test-spec.md`, **do not** create the marker; if it already exists, delete it.
