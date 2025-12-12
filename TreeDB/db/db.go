@@ -335,6 +335,9 @@ func (db *DB) Commit(newRootID uint64) error {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	state := db.state.Load()
 	db.slabManager.AcquireSlabs(state.SlabSet)
 	

@@ -34,7 +34,7 @@ func (db *DB) Set(key, value []byte) error {
 	if err := batch.Set(key, value); err != nil {
 		return err
 	}
-	return batch.Write()
+	return batch.WriteSync()
 }
 
 // SetSync sets the value and syncs to disk.
@@ -52,7 +52,7 @@ func (db *DB) Delete(key []byte) error {
 	if err := batch.Delete(key); err != nil {
 		return err
 	}
-	return batch.Write()
+	return batch.WriteSync()
 }
 
 // DeleteSync removes a key and syncs.
