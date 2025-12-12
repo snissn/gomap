@@ -85,6 +85,7 @@ func TestAdaptiveStatsKeysExposed(t *testing.T) {
 		"treedb.inline_threshold.hard_max",
 		"treedb.inline_threshold.leaf_fill_avg",
 		"treedb.inline_threshold.split_rate",
+		"treedb.inline_threshold.index_write_bytes",
 		"treedb.inline_threshold.slab_dead_ratio",
 		"treedb.inline_threshold.slab_write_bytes",
 		"treedb.inline_threshold.compaction_io_bps",

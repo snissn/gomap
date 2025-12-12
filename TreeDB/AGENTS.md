@@ -434,7 +434,7 @@ All goals must pass with the same controls used for the baseline (`GOMAXPROCS=1`
    - Correctness: add tests that reused freelist pages are fully initialized/overwritten before publish; run `go test ./...`.
    - Perf: rerun `BenchmarkSet150B` + `BenchmarkBatchSet150B`; expect small `ns/op` ↓.
 
-12. [ ] Instrumentation + re-profiling + adaptive stats exposure.
+12. [x] Instrumentation + re-profiling + adaptive stats exposure.
    - Goal: Keep perf counters low-overhead/race-safe, expose missing stats keys, and refresh CPU+mem profiles after landing TODOs 1–11.
    - Touch: `internal/adaptive/controller.go` (export `treedb.inline_threshold.index_write_bytes`), any commit-level counters in `commit.go`, perf notes under `perf/`.
    - Correctness: run `go test ./...`, `go test -race ./...`.

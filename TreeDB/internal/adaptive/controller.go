@@ -161,6 +161,7 @@ func (c *Controller) StatsMap() map[string]string {
 	c.mu.Lock()
 	leafFill := c.leafFillAvg
 	splitRate := c.splitRate
+	indexWrite := c.indexWriteBytes
 	slabDead := c.slabDeadRatio
 	slabWrite := c.slabWriteBytes
 	compIO := c.compactionIOBPS
@@ -172,6 +173,7 @@ func (c *Controller) StatsMap() map[string]string {
 		"treedb.inline_threshold.hard_max":          fmt.Sprintf("%d", c.cfg.HardMax),
 		"treedb.inline_threshold.leaf_fill_avg":     fmt.Sprintf("%.6f", leafFill),
 		"treedb.inline_threshold.split_rate":        fmt.Sprintf("%.6f", splitRate),
+		"treedb.inline_threshold.index_write_bytes": fmt.Sprintf("%.0f", indexWrite),
 		"treedb.inline_threshold.slab_dead_ratio":   fmt.Sprintf("%.6f", slabDead),
 		"treedb.inline_threshold.slab_write_bytes":  fmt.Sprintf("%.0f", slabWrite),
 		"treedb.inline_threshold.compaction_io_bps": fmt.Sprintf("%.0f", compIO),
