@@ -42,6 +42,10 @@ func (h *Hashmap) startRehash() error {
 	if h.Keys != nil {
 		oldKeys = *h.Keys
 	}
+	var oldControls []byte
+	if h.Controls != nil {
+		oldControls = *h.Controls
+	}
 
 	// Allocate new index file/mmap.
 	newMap, newFile, err := h.openMmapHash(newCap)
@@ -61,7 +65,15 @@ func (h *Hashmap) startRehash() error {
 	h.hashMap = newMap
 	h.hashMapFile = newFile
 	h.Capacity = newCap
-	keys := h.getKeys()
+	
+	// Controls
+	ctrlPtr := (*byte)(unsafe.Pointer(&newMap[0]))
+	controls := unsafe.Slice(ctrlPtr, newCap)
+	h.Controls = &controls
+
+	// Keys
+	keyPtr := (*Key)(unsafe.Pointer(&newMap[newCap]))
+	keys := unsafe.Slice(keyPtr, newCap)
 	h.Keys = &keys
 
 	// Record old index for incremental migration.
@@ -70,17 +82,22 @@ func (h *Hashmap) startRehash() error {
 	h.rehashOldCapacity = oldCap
 	if oldKeys == nil && len(oldMap) > 0 {
 		// Fallback: build slice view over old mmap if Keys wasn't initialized.
-		tmp := (*Key)(unsafe.Pointer(&oldMap[0]))
+		// Old format: Controls at 0, Keys start at oldCap
+		tmpCtrl := (*byte)(unsafe.Pointer(&oldMap[0]))
+		oldControls = unsafe.Slice(tmpCtrl, oldCap)
+		
+		tmp := (*Key)(unsafe.Pointer(&oldMap[oldCap]))
 		oldKeys = unsafe.Slice(tmp, oldCap)
 	}
 	h.rehashOldKeys = oldKeys
+	h.rehashOldControls = oldControls
 	h.rehashIdx = 0
 	h.rehashInProgress = true
 
 	return nil
 }
 
-// rehashStep migrates up to maxToMove buckets from the old table into the new one.
+	// rehashStep migrates up to maxToMove buckets from the old table into the new one.
 // It should be called while holding the shard's write lock.
 func (h *Hashmap) rehashStep(maxToMove uint64) error {
 	if !h.rehashInProgress || h.rehashOldCapacity == 0 {
@@ -100,21 +117,21 @@ func (h *Hashmap) rehashStep(maxToMove uint64) error {
 			continue
 		}
 
-		// Read key bytes from slab to locate its slot in the new table.
-		item, err := h.unmarshalItemFromSlab(k)
+		// Optimization: We don't need to read the key from disk.
+		// We know the key is unique (duplicates were invalidated in Old by Add/Delete).
+		// We rely on the stored hash.
+		hkey, err := h.probeForRehash(uint64(k.hash))
 		if err != nil {
 			return err
 		}
 
-		hkey, isNew, err := h.probeForAdd(item.Key)
-		if err != nil {
-			return err
-		}
+		(*h.Keys)[hkey] = k
 
-		if isNew {
-			(*h.Keys)[hkey] = k
-			// Do not modify Count; logical key cardinality doesn't change.
-		}
+		// Set Control Byte
+		h2 := byte(k.hash&0x7f) | 0x80
+		(*h.Controls)[hkey] = h2
+
+		// Do not modify Count; logical key cardinality doesn't change.
 
 		// Mark old bucket as migrated so we don't revisit it.
 		h.rehashOldKeys[idx].slabOffset = 0

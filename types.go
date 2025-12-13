@@ -31,6 +31,7 @@ type Hashmap struct {
 	Capacity uint64
 
 	Keys       *[]Key
+	Controls   *[]byte
 	slabOffset *SlabOffset
 
 	hashTime   time.Duration
@@ -53,6 +54,7 @@ type Hashmap struct {
 	rehashOldMap      mmap.MMap
 	rehashOldCapacity uint64
 	rehashOldKeys     []Key
+	rehashOldControls []byte
 	rehashIdx         uint64
 
 	resizeThreshold uint64

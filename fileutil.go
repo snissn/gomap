@@ -81,7 +81,15 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 
 	h.Capacity = N
 	h.Count = getCount(h.metadataMap)
-	keys := h.getKeys()
+	
+	// Controls are the first N bytes
+	ctrlPtr := (*byte)(unsafe.Pointer(&h.hashMap[0]))
+	controls := unsafe.Slice(ctrlPtr, N)
+	h.Controls = &controls
+
+	// Keys are after controls
+	keyPtr := (*Key)(unsafe.Pointer(&h.hashMap[N]))
+	keys := unsafe.Slice(keyPtr, N)
 	h.Keys = &keys
 	return nil
 }

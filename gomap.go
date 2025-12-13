@@ -72,7 +72,7 @@ func (h *Hashmap) closeFPs() error {
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
 	if h.Keys != nil && h.Capacity > 0 {
-		_, item, found, err := h.probe(*h.Keys, h.Capacity, key)
+		_, item, found, err := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +84,7 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// If an incremental rehash is in progress, also probe the old table
 	// for keys that haven't been migrated yet.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		_, item, found, err := h.probe(h.rehashOldKeys, h.rehashOldCapacity, key)
+		_, item, found, err := h.probe(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +102,7 @@ func (h *Hashmap) Delete(key []byte) error {
 
 	// Delete in the current (new) table.
 	if h.Keys != nil && h.Capacity > 0 {
-		idx, _, found, err := h.probe(*h.Keys, h.Capacity, key)
+		idx, _, found, err := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
 		if err != nil {
 			return err
 		}
@@ -112,6 +112,7 @@ func (h *Hashmap) Delete(key []byte) error {
 				return err
 			}
 			(*h.Keys)[idx].slabOffset = Tombstone
+			h.setDeleted(idx)
 			*h.Count -= 1
 			foundNew = true
 		}
@@ -120,7 +121,7 @@ func (h *Hashmap) Delete(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probe(h.rehashOldKeys, h.rehashOldCapacity, key)
+		idx, _, found, err := h.probe(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key)
 		if err != nil {
 			return err
 		}
@@ -178,7 +179,9 @@ func (h *Hashmap) AddMany(items []Item) error {
 		}
 	}
 	if h.rehashInProgress {
-		if err := h.rehashStep(rehashBucketsPerWrite); err != nil {
+		// Migrate proportional to the batch size to keep up with the growth.
+		steps := uint64(len(items)) * rehashBucketsPerWrite
+		if err := h.rehashStep(steps); err != nil {
 			return err
 		}
 	}

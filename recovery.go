@@ -2,7 +2,6 @@ package gomap
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -24,6 +23,11 @@ func (h *Hashmap) Recover() error {
 	// Reset Index map
 	for i := range *h.Keys {
 		(*h.Keys)[i] = Key{}
+	}
+	if h.Controls != nil {
+		for i := range *h.Controls {
+			(*h.Controls)[i] = 0 // ctrlEmpty
+		}
 	}
 	*h.Count = 0
 
@@ -161,40 +165,12 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 
 func (h *Hashmap) replayDelete(key []byte) {
 	// Internal delete for recovery (doesn't write to slab)
-	myhash := hash(key)
-	count := uint64(0)
-	for count < h.Capacity {
-		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
-		mybucket := (*h.Keys)[myKeyIndex]
-
-		if mybucket.slabOffset == 0 {
-			return // Not found
+	if h.Keys != nil && h.Capacity > 0 {
+		idx, _, found, _ := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
+		if found {
+			(*h.Keys)[idx].slabOffset = Tombstone
+			h.setDeleted(idx)
+			*h.Count -= 1
 		}
-		if mybucket.slabOffset == Tombstone {
-			count++
-			continue
-		}
-		if mybucket.hash == myhash {
-			// We MUST read key to confirm identity?
-			// Yes, otherwise we delete wrong key on collision!
-			// But we are in recovery. The slab-real IS the source of truth.
-			// We have the key from the log!
-			// But to find the slot, we probe.
-			// Probing requires comparing key in index with key in hand.
-			// Index points to OLD slab entry.
-			item, err := h.unmarshalItemFromSlab(mybucket)
-			if err != nil {
-				// If unmarshal fails during recovery?
-				// Maybe old data is corrupt?
-				// Ignore?
-				return
-			}
-			if bytes.Equal(item.Key, key) {
-				(*h.Keys)[myKeyIndex].slabOffset = Tombstone
-				*h.Count -= 1
-				return
-			}
-		}
-		count++
 	}
 }
