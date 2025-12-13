@@ -386,7 +386,7 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
   * **Initialization (Cosmos Semantics):**
       * The domain is `[start, end)`.
       * **Step 1 (Seek):**
-          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key).
+          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key.
           * If `end` is provided: Seek to the first key `>= end`.
       * **Step 2 (Adjust):**
           * If the Seek found a key `>= end` (or hit EOF), move the cursor **Backward** one item.
@@ -602,7 +602,7 @@ func (tdb *DB) SetSync(key, value []byte) error
 func (tdb *DB) Delete(key []byte) error
 
 // DeleteSync removes a key and flushes to disk.
-func (tdb *DB) DeleteSync(key []byte) error
+func (tdb *DB) DeleteSync(key, value []byte) error
 
 // Iterator returns an iterator over a domain of keys in ascending order.
 // Start is inclusive, End is exclusive.
@@ -675,4 +675,87 @@ func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) {
     return b.byteSize, nil
 }
-```
+
+## 7\. Write-Back Caching Layer & Read Optimizations
+
+To boost performance for write-heavy workloads and improve read throughput, TreeDB implements an LSM-style write-back caching layer (Memtable + WAL) and significant read path optimizations.
+
+### 7.1 Write-Back Caching (LSM-style Level 0)
+
+TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable and a queue of immutable Memtables, backed by a Write-Ahead Log (WAL).
+
+#### 7.1.1 Memtable (`internal/memtable`)
+- **Structure:** Uses a `google/btree` for efficient in-memory key-value storage.
+- **Operations:** Supports `Set`, `Delete` (using tombstones), and `Get`.
+- **Memory Tracking:** Tracks approximate memory usage for flush decisions.
+
+#### 7.1.2 Write-Ahead Log (WAL) (`internal/wal`)
+- **Purpose:** Ensures durability of in-memory Memtable writes.
+- **Format:** Records operations as `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
+- **Durability:** Provides `Sync()` method to guarantee writes are flushed to disk.
+
+#### 7.1.3 CachingDB (`caching` package)
+- **Architecture:** Wraps the core `treedb.DB` instance (referred to as `backend`).
+- **Write Path:**
+    1.  `Set`/`Delete`: Operation is first appended to the current WAL.
+    2.  Then, the operation is applied to the `mutable` Memtable.
+    3.  `SetSync`/`DeleteSync`: Additionally calls `WAL.Sync()` after appending to the WAL.
+- **Flush Mechanism:**
+    1.  When `mutable.Size()` exceeds `FlushThreshold` (e.g., 4MB):
+        - The `mutable` Memtable is moved to the `queue` of immutable Memtables.
+        - A new empty `mutable` Memtable and a new WAL file are created.
+    2.  A background worker continuously flushes Memtables from the `queue` to the `backend` (disk).
+        - It creates a `treedb.Batch` from the Memtable's contents.
+        - The batch is committed to disk via `Batch.WriteSync()`.
+        - Once successfully flushed, the Memtable is removed from the `queue`, and its corresponding WAL file is deleted.
+- **Read Path (`Get`):**
+    1.  Attempts to retrieve the key from the `mutable` Memtable.
+    2.  If not found, searches through the `queue` of immutable Memtables (from newest to oldest).
+    3.  If still not found, falls back to the `backend` (disk).
+
+### 7.2 Read Path Optimizations
+
+To achieve high read throughput, especially for range scans, TreeDB employs several allocation-reducing and latency-masking techniques.
+
+#### 7.2.1 O(1) Snapshot Acquisition (Group RefCounting)
+- **Problem:** Traditional MVCC might involve iterating and pinning individual `SlabFile`s, leading to O(N) acquisition time with many slab files.
+- **Solution:** `internal/slab/group.go` introduces `SlabGroup`, which holds a single `atomic.Int64` reference counter for a collection of slab files.
+- **Mechanism:** `DBState` now references `*SlabGroup` instead of `SlabSet`. Snapshot acquisition involves only an atomic increment on the group's refcount, making it O(1). Zombie slab deletion waits for the group refcount to drop.
+
+#### 7.2.2 Unsafe Iterator Interface (`internal/iterator/iterator.go`)
+- **Purpose:** Provides a minimal, zero-copy interface for internal iteration where performance is critical.
+- **Methods:**
+    - `Valid() bool`: Checks if the iterator points to a valid entry.
+    - `Next()`: Advances the iterator.
+    - `Seek(key []byte)`: Positions the iterator.
+    - `UnsafeKey() []byte`: Returns a **view** (slice pointing directly to internal buffer) of the current key. Callers MUST NOT modify it and it is only valid until the next `Next()` or `Seek()`.
+    - `UnsafeValue() []byte`: Returns a **view** of the current value (lazy-loaded if from slab). Similar safety warnings apply.
+    - `Key() []byte`: Returns a **copy** of the key (for safe public API use).
+    - `Value() []byte`: Returns a **copy** of the value (for safe public API use).
+    - `IsDeleted() bool`: Indicates if the current entry is a tombstone.
+    - `Error() error`: Returns any error encountered.
+    - `Close() error`: Releases resources.
+    - `Domain() (start, end []byte)`: Returns the iteration bounds.
+- **Implementations:** `memtable.Iterator` and `tree.Iterator` (Disk Iterator) now implement `UnsafeIterator`.
+
+#### 7.2.3 Specialized TwoWayMerger (`internal/merging/twoway.go`)
+- **Problem:** The generic `MergingIterator` uses a min-heap, incurring overhead when only two sources (e.g., Memtable and Disk) need to be merged.
+- **Solution:** `TwoWayMerger` is an optimized implementation for exactly two `UnsafeIterator` sources.
+- **Optimization:** Avoids heap overhead and uses direct `bytes.Compare` logic to efficiently find the smallest key, handle shadowing, and filter tombstones.
+- **Usage:** `merging.NewMergingIterator` transparently uses `TwoWayMerger` when only two sources are provided.
+
+#### 7.2.4 Lazy Disk Iterator (`internal/tree/iterator.go`)
+- **Problem:** Eagerly loading values from disk during tree traversal can lead to unnecessary I/O, especially if values are large or not all iterated keys are used.
+- **Solution:** The Disk Iterator (the `tree.Iterator` struct) is modified for lazy value loading.
+- **Mechanism:**
+    - `Next()` (or `Seek()`) only parses the leaf entry to identify the key and whether the value is inline or a `ValuePtr`. It does NOT read the value bytes from the slab.
+    - `UnsafeValue()` (or `Value()`) triggers the slab read *only when* the value is actually requested and is a `ValuePtr`. The read value is then cached within the iterator struct to prevent repeated I/O.
+- **Zero-Copy Keys:** `UnsafeKey()` returns slices directly into the memory-mapped index pages, eliminating allocations for keys during internal iteration.
+
+#### 7.2.5 Integration (`caching` package)
+- The `CachingDB`'s `Iterator` method now orchestrates these components:
+    - It gathers `UnsafeIterator` instances from the `mutable` Memtable, the `queue` of immutable Memtables, and the `backend` (disk).
+    - It then passes these `UnsafeIterator`s to `merging.NewMergingIterator`, which dynamically selects the most optimized merger (e.g., `TwoWayMerger` for two sources or the heap-based `MergingIterator` for more).
+    - The `caching.Iterator` (which is itself a `merging.Iterator`) returns `Key()` and `Value()` as copies, satisfying the Cosmos DB contract, while leveraging `UnsafeKey()` and `UnsafeValue()` internally for performance.
+
+---
