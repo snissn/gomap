@@ -2,7 +2,7 @@ package merging
 
 import (
 	"bytes"
-	"treedb/internal/iterator" // For UnsafeIterator
+	"github.com/snissn/gomap/TreeDB/internal/iterator" // For UnsafeIterator
 )
 
 // TwoWayMerger implements MergingIterator for two sources (Memtable and Disk).

@@ -6,9 +6,9 @@ import (
 	"sort"
 	"sync/atomic"
 
-		"treedb/internal/page"
-		"treedb/internal/slab"
-		"treedb/internal/tree"
+		"github.com/snissn/gomap/TreeDB/internal/page"
+		"github.com/snissn/gomap/TreeDB/internal/slab"
+		"github.com/snissn/gomap/TreeDB/internal/tree"
 	)
 	
 	var (

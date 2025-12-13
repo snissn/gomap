@@ -1,8 +1,8 @@
 package adaptive
 
 import (
-	"treedb/internal/page"
-	"treedb/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
 )
 
 // ComputeLeafStats scans the B+Tree rooted at root and returns:

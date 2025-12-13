@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"treedb/internal/page"
-	"treedb/internal/slab"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
 )
 
 // DBState is an immutable view of the database at a commit sequence.

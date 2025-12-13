@@ -4,7 +4,7 @@ import (
 	"errors"
 	"unsafe"
 
-	"treedb/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 // PageID is the logical page number within index.db.

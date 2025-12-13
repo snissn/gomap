@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"treedb/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 func TestHeaderBodyCRC(t *testing.T) {

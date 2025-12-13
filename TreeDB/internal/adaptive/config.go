@@ -1,6 +1,6 @@
 package adaptive
 
-import "treedb/internal/page"
+import "github.com/snissn/gomap/TreeDB/internal/page"
 
 // Config controls the adaptive inline threshold controller.
 // All fields are optional; zero values are replaced by defaults in Normalize.

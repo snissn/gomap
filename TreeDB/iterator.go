@@ -7,8 +7,8 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"treedb/internal/mvcc"
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/mvcc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 const (

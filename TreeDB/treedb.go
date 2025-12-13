@@ -7,13 +7,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"treedb/caching"
-	"treedb/internal/adaptive"
-	"treedb/internal/iterator" // Import for iterator.UnsafeIterator
-	"treedb/internal/mvcc"
-	"treedb/internal/page"
-	"treedb/internal/pager"
-	"treedb/internal/slab"
+	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/iterator" // Import for iterator.UnsafeIterator
+	"github.com/snissn/gomap/TreeDB/internal/mvcc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
 )
 
 // Options configures a TreeDB instance.

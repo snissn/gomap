@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"treedb/internal/crc"
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 func TestRecordRoundTrip(t *testing.T) {

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"treedb/internal/compaction"
-	"treedb/internal/slab"
-	"treedb/internal/tree"
+	"github.com/snissn/gomap/TreeDB/internal/compaction"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
+	"github.com/snissn/gomap/TreeDB/internal/tree"
 )
 
 func TestCompactBlocksAndReducesDeadBytes(t *testing.T) {

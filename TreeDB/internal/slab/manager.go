@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 var (

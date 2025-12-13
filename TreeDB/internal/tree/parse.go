@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"sort"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 // We duplicate minimal slotted-page parsing helpers here because internal/page

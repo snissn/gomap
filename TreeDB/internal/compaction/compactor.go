@@ -9,12 +9,12 @@ import (
 	"sort"
 	"sync"
 
-	"treedb/internal/crc"
-	"treedb/internal/mvcc"
-	"treedb/internal/page"
-	"treedb/internal/pager"
-	"treedb/internal/slab"
-	"treedb/internal/tree"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/mvcc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
+	"github.com/snissn/gomap/TreeDB/internal/tree"
 )
 
 const (

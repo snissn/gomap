@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"treedb/internal/iterator" // Import for UnsafeIterator
-	"treedb/internal/memtable"
-	"treedb/internal/merging"
-	"treedb/internal/wal"
+	"github.com/snissn/gomap/TreeDB/internal/iterator" // Import for UnsafeIterator
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/wal"
 )
 
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")

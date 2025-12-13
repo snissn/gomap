@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"treedb/internal/page"
-	"treedb/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
 )
 
 // encodeMetaPage builds a meta page buffer for pid and meta.

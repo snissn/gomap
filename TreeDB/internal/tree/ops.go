@@ -1,7 +1,7 @@
 package tree
 
 import (
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 func buildLeafPage(buf []byte, pid page.PageID, entries []leafKV) error {

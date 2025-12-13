@@ -3,7 +3,7 @@ package treedb
 import (
 	"fmt"
 
-	"treedb/internal/compaction"
+	"github.com/snissn/gomap/TreeDB/internal/compaction"
 )
 
 // Compact runs a full blocking slab compaction cycle.

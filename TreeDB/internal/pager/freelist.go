@@ -3,7 +3,7 @@ package pager
 import (
 	"encoding/binary"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 const freelistHeaderExtra = 8 // NextPageID uint64 after standard header.

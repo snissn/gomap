@@ -3,11 +3,11 @@ package treedb
 import (
 	"fmt"
 
-	"treedb/internal/adaptive"
-	"treedb/internal/mvcc"
-	"treedb/internal/page"
-	"treedb/internal/slab"
-	"treedb/internal/tree"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/mvcc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
+	"github.com/snissn/gomap/TreeDB/internal/tree"
 )
 
 func (db *DB) writeBatch(b *Batch, sync bool) error {

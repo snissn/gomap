@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"treedb/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 )
 
 func TestAdaptiveLatchSemanticsPerCommit(t *testing.T) {

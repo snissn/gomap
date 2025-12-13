@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"treedb/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 // MockBackend implements BackendDB

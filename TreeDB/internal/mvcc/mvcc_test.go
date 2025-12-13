@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"treedb/internal/page"
-	"treedb/internal/pager"
-	"treedb/internal/slab"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/slab"
 )
 
 func newTestPager(t *testing.T) *pager.Pager {

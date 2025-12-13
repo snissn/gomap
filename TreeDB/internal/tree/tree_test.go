@@ -6,8 +6,8 @@ import (
 	"sort"
 	"testing"
 
-	"treedb/internal/page"
-	"treedb/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
 )
 
 func openTestPager(t *testing.T) *pager.Pager {

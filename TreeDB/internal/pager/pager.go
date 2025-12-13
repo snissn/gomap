@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 const (

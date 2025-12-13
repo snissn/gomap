@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"treedb/internal/page"
-	"treedb/internal/tree"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/tree"
 )
 
 func TestBatchInvalidReuse(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"treedb/internal/page"
-	"treedb/internal/pager"
-	"treedb/internal/tree"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/tree"
 )
 
 func TestLoadTruncatesTailAndDeletesGhosts(t *testing.T) {

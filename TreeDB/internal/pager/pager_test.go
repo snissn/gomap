@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 func TestChunkAlignmentAndBoundaryCrossing(t *testing.T) {

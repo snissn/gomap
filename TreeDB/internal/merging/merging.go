@@ -3,7 +3,7 @@ package merging
 import (
 	"bytes"
 	"container/heap"
-	"treedb/internal/iterator" // For UnsafeIterator
+	"github.com/snissn/gomap/TreeDB/internal/iterator" // For UnsafeIterator
 )
 
 // Iterator represents a generic iterator that yields key-value pairs.

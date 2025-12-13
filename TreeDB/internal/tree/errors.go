@@ -3,7 +3,7 @@ package tree
 import (
 	"errors"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 var (

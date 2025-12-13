@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"treedb/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 const (

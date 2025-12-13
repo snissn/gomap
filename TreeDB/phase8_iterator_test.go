@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"treedb/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func collectKeys(t *testing.T, it iterator.UnsafeIterator) [][]byte {

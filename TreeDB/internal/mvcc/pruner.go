@@ -1,8 +1,8 @@
 package mvcc
 
 import (
-	"treedb/internal/page"
-	"treedb/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
 )
 
 // Pruner reclaims retired pages once safe.

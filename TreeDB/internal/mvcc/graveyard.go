@@ -3,7 +3,7 @@ package mvcc
 import (
 	"sync"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 type batch struct {

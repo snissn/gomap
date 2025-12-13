@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/google/btree"
-	"treedb/internal/iterator" // Import iterator interface
+	"github.com/snissn/gomap/TreeDB/internal/iterator" // Import iterator interface
 )
 
 type Item struct {

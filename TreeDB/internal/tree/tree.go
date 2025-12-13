@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 
-	"treedb/internal/page"
-	"treedb/internal/pager"
+	"github.com/snissn/gomap/TreeDB/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/pager"
 )
 
 // Tree is a B+Tree rooted at a pager page. It performs copy-on-write updates.

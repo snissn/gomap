@@ -3,7 +3,7 @@ package pager
 import (
 	"encoding/binary"
 
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 // Meta mirrors the on-disk superblock body fields.

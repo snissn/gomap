@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"math"
 
-	"treedb/internal/crc"
-	"treedb/internal/page"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/page"
 )
 
 var (
