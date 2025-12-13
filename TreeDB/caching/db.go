@@ -329,6 +329,14 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return v != nil, err
 }
 
+func (db *DB) Stats() map[string]string {
+	return db.backend.Stats()
+}
+
+func (db *DB) Print() error {
+	return db.backend.Print()
+}
+
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.RLock()
