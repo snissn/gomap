@@ -1,7 +1,7 @@
 package pager
 
 import (
-	"errors"
+	"errors" // Added import
 	"fmt"
 	"os"
 	"sync"
@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrPageOutOfBounds = errors.New("page index out of bounds")
+	ErrPageOutOfBounds = errors.New("page index out of bounds") // Added declaration
 	ErrFileSize        = errors.New("file size is not a multiple of chunk size")
 )
 
@@ -31,6 +31,9 @@ type Pager struct {
 // If the file doesn't exist, it creates it.
 // chunkSize determines the size of each mmap region.
 func Open(path string, chunkSize int64) (*Pager, error) {
+	if chunkSize%page.PageSize != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
+	}
 	if chunkSize%page.PageSize != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
 	}

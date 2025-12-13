@@ -65,11 +65,6 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 
 	if len(splits) > 0 {
 		// Root split! Create new internal root.
-		// If splits > 0, we have the new "original" root (newRoot) plus N splits.
-		// The new internal root will point to:
-		// - newRoot (First child)
-		// - splits... (Subsequent children)
-
 		newRootID, err := z.allocator.Alloc()
 		if err != nil {
 			return 0, nil, err
@@ -79,49 +74,24 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 		defer z.putPooledBuf(buf)
 		data := *buf
 
-		n := node.NewNode(data)
-		n.SetPageID(newRootID)
-		n.SetType(page.PageTypeInternal)
-		n.SetCount(0)
+		// Use Builder for new root
+		builder := node.NewBuilder(data, page.PageTypeInternal)
+		builder.SetPageID(newRootID)
 
-		// 1. Add first child (the "new version" of the old root)
-		// Internal nodes usually start with a "dummy" key (empty byte slice) for the first child?
-		// OR does the first child have a key?
-		// In B-Trees, usually keys are separators.
-		// If using "min-key" convention (where key K covers range [K, next K)), then first child key is min-key.
-		// TreeDB seems to use "Separator Key K means child covers >= K"?
-		// Let's check `node/internal.go` or usage.
-		// `AddInternalChild` takes (key, val).
-		// Existing code used `[]byte{}` for first child.
-
-		// However, wait.
-		// `newRoot` is the left-most node.
-		// `splits[0]` is the next node to the right.
-		// `splits[0].Key` is the separator key (first key of that node).
-
-		// So for the first child, we need a key that is <= everything in it.
-		// Since it's the root, it covers everything from -infinity.
-		// So []byte{} is appropriate if it represents "Start".
-
-		if err := n.AddInternalChild([]byte{}, newRoot); err != nil {
+		// 1. Add first child
+		if err := builder.AddInternalChild([]byte{}, newRoot); err != nil {
 			return 0, nil, err
 		}
 
 		// 2. Add splits
 		for _, s := range splits {
-			if err := n.AddInternalChild(s.Key, s.NodeID); err != nil {
-				// If the NEW ROOT fills up, we have a problem.
-				// This means we split the root into SO MANY nodes that they don't fit in one parent.
-				// This requires recursion (growing height by > 1).
-				// For now, let's assume one level growth is enough.
-				// If not, we error "root split overflow".
+			if err := builder.AddInternalChild(s.Key, s.NodeID); err != nil {
 				return 0, nil, errors.New("root split overflow: batch too large for single level growth")
 			}
 		}
 
-		n.UpdateChecksum()
-
-		if err := z.pager.Write(newRootID, data); err != nil {
+		n := builder.Finish()
+		if err := z.pager.Write(newRootID, n.Data()); err != nil {
 			return 0, nil, err
 		}
 
@@ -142,10 +112,7 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 
 	buf := z.getPooledBuf()
 	newData := *buf
-	newNode := node.NewNode(newData)
-	newNode.SetPageID(newPageID)
-	newNode.SetCount(0)
-
+	
 	// Zero-Copy Read: Use Get instead of ReadPage
 	oldData, err := z.pager.Get(pageID)
 	if err != nil {
@@ -154,19 +121,22 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	}
 	oldNode := node.NewNode(oldData)
 
+	// Create Builder for new page
+	builder := node.NewBuilder(newData, oldNode.Type())
+	builder.SetPageID(newPageID)
+
 	// Track retired page
 	var retired []uint64
 	if pageID != 0 {
 		retired = append(retired, pageID)
 	}
 
-	newNode.SetType(oldNode.Type())
-
 	if oldNode.Type() == page.PageTypeLeaf {
 		// Merge Leaf
-		nr, splits, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+		nr, splits, err := z.mergeLeaf(oldNode, builder, keys, ops)
 		if err == nil {
-			if werr := z.pager.Write(newPageID, newData); werr != nil {
+			n := builder.Finish() // Finish writes header/checksum
+			if werr := z.pager.Write(newPageID, n.Data()); werr != nil {
 				z.putPooledBuf(buf)
 				return 0, nil, nil, werr
 			}
@@ -175,13 +145,14 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, newNode, keys, ops)
+		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, keys, ops)
 		if err != nil {
 			z.putPooledBuf(buf)
 			return 0, nil, nil, err
 		}
 
-		if err := z.pager.Write(newPageID, newData); err != nil {
+		n := builder.Finish()
+		if err := z.pager.Write(newPageID, n.Data()); err != nil {
 			z.putPooledBuf(buf)
 			return 0, nil, nil, err
 		}
@@ -192,10 +163,14 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	} else {
 		// Handle Page 0 / Empty / New Tree case
 		if oldNode.Type() == 0 {
-			newNode.SetType(page.PageTypeLeaf)
-			nr, splits, err := z.mergeLeaf(oldNode, newNode, keys, ops)
+			// Reuse builder, set type
+			builder = node.NewBuilder(newData, page.PageTypeLeaf)
+			builder.SetPageID(newPageID)
+			
+			nr, splits, err := z.mergeLeaf(oldNode, builder, keys, ops)
 			if err == nil {
-				if werr := z.pager.Write(newPageID, newData); werr != nil {
+				n := builder.Finish()
+				if werr := z.pager.Write(newPageID, n.Data()); werr != nil {
 					z.putPooledBuf(buf)
 					return 0, nil, nil, werr
 				}
@@ -208,7 +183,7 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	}
 }
 
-func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []string, ops map[string]batch.Entry) (uint64, []Split, error) {
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	keyIdx := 0
@@ -223,9 +198,8 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 		}
 	}()
 
-	// Current target node we are filling (starts with newNode)
-	target := newNode
-	// If we split, current target changes to the split node.
+	// Current target builder
+	target := builder
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], keys[keyIdx])
@@ -241,13 +215,14 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 			// useOld = true
 		} else {
 			// Compare
-			oldEntry, err := oldNode.GetLeafEntry(oldIdx)
+			// Optimization: GetLeafEntryView (Zero Copy)
+			k, _, _, _, err := oldNode.GetLeafEntryView(oldIdx)
 			if err != nil {
 				return 0, nil, err
 			}
 			batchKey := []byte(keys[keyIdx])
 
-			cmp := bytes.Compare(oldEntry.Key, batchKey)
+			cmp := bytes.Compare(k, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -280,31 +255,37 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 			}
 		} else {
 			// useOld
-			entry, err := oldNode.GetLeafEntry(oldIdx)
+			// Optimization: View
+			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
 			if err != nil {
 				return 0, nil, err
 			}
 			oldIdx++
-			key = entry.Key
-			if entry.Flags&node.FlagTombstone != 0 {
+			key = k
+			if f&node.FlagTombstone != 0 {
 				continue // Skip tombstones
 			}
-			flags = entry.Flags
-			if flags&node.FlagPointer != 0 {
-				valPtr = entry.ValuePtr
+			flags = f
+			if f&node.FlagPointer != 0 {
+				valPtr = ptr
 			} else {
-				val = entry.Value
+				val = v
 			}
 		}
 
-		// Insert into target
+		// Insert into target builder
 		err := target.AddLeafEntry(key, val, flags, valPtr)
 		if err == node.ErrNodeFull {
 			// SPLIT!
 			
-			// 1. Write the current target to disk (it's full)
-			// (If it's newNode, it's written by caller, but we need checksum now?)
-			// Caller writes newNode. We only write splits.
+			// 1. Finish current target (writes header/checksum)
+			// But wait, if target != builder, we need to write it to disk now.
+			if target != builder {
+				n := target.Finish()
+				if err := z.pager.Write(target.PageID(), n.Data()); err != nil {
+					return 0, nil, err
+				}
+			}
 			
 			// 2. Allocate NEW split node
 			sid, err := z.allocator.Alloc()
@@ -316,45 +297,20 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 			splitBufs = append(splitBufs, buf) // Track for cleanup
 			sdata := *buf
 			
-			splitNode := node.NewNode(sdata)
-			splitNode.SetPageID(sid)
-			splitNode.SetType(page.PageTypeLeaf)
-			splitNode.SetCount(0)
+			// New Builder
+			splitBuilder := node.NewBuilder(sdata, page.PageTypeLeaf)
+			splitBuilder.SetPageID(sid)
 
 			// Record split
-			// Key is the FIRST key of the new node.
 			splitKey := append([]byte(nil), key...) // Deep copy
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 			
-			// Switch target
-			// If previous target was a split node, we must write it now?
-			// The caller writes `newNode`.
-			// `splitBufs` holds all split buffers.
-			// We can write them all at the end, or incrementally.
-			// Writing incrementally is safer for memory if lots of splits?
-			// But we have them pinned in `splitBufs`.
+			target = splitBuilder
 			
-			// If we are chaining splits:
-			// newNode -> split1 -> split2 -> split3
-			// We need to write split1, split2, split3.
-			// But since we are iterating, the *previous* split (or newNode) is "done" except for checksum.
-			
-			if target != newNode {
-				target.UpdateChecksum()
-				if err := z.pager.Write(target.PageID(), target.Data()); err != nil {
-					return 0, nil, err
-				}
-			} else {
-				// We don't write newNode here, caller does.
-				// But we should UpdateChecksum? Caller does.
-			}
-			
-			target = splitNode
-			
-			// Retry insert into new target
+			// Retry insert
 			err = target.AddLeafEntry(key, val, flags, valPtr)
 			if err != nil {
-				return 0, nil, err // Should not happen on empty node unless key too large
+				return 0, nil, err 
 			}
 		} else if err != nil {
 			return 0, nil, err
@@ -362,25 +318,19 @@ func (z *Zipper) mergeLeaf(oldNode, newNode *node.Node, keys []string, ops map[s
 	}
 
 	// Finalize last split node
-	if target != newNode {
-		target.UpdateChecksum()
-		if err := z.pager.Write(target.PageID(), target.Data()); err != nil {
+	if target != builder {
+		n := target.Finish()
+		if err := z.pager.Write(target.PageID(), n.Data()); err != nil {
 			return 0, nil, err
 		}
 	}
 	
-	// Note: splitBufs are released by defer.
-	// But we wrote them to Pager (which copies them or uses them).
-	// Pager.Write copies if it's in-memory pager?
-	// `pager.Write` writes to mmap or file.
-	// If mmap, it copies.
-	// So we can release buffer.
+	// 'builder' is finalized by caller.
 
-	newNode.UpdateChecksum()
-	return newNode.PageID(), splits, nil
+	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops map[string]batch.Entry) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, keys []string, ops map[string]batch.Entry) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 	
 	var splits []Split
@@ -391,12 +341,17 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 		}
 	}()
 	
-	target := newNode
+	target := builder
 	var retired []uint64
 
 	keyIdx := 0
 
 	for i := uint16(0); i < count; i++ {
+		// Optimization: View
+		// But InternalEntry doesn't have a View method yet?
+		// Check node/internal.go. Yes, GetInternalEntry does copy.
+		// GetInternalChildID and SearchInternal use offsets.
+		// Let's use GetInternalEntry for now, can optimize later.
 		entry, err := oldNode.GetInternalEntry(i)
 		if err != nil {
 			return 0, nil, nil, err
@@ -441,14 +396,14 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 			newChildID = entry.ChildPageID
 		}
 
-		// Add (Key, NewChildID) to target
+		// Add (Key, NewChildID) to target builder
 		if newChildID >= z.pager.PageCount() {
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
 		
 		err = target.AddInternalChild(entry.Key, newChildID)
 		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, newNode, &splits, &splitBufs, entry.Key, newChildID)
+			target, err = z.createNewSplitInternal(target, builder, &splits, &splitBufs, entry.Key, newChildID)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -460,7 +415,7 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 		for _, s := range childSplits {
 			err = target.AddInternalChild(s.Key, s.NodeID)
 			if err == node.ErrNodeFull {
-				target, err = z.createNewSplitInternal(target, newNode, &splits, &splitBufs, s.Key, s.NodeID)
+				target, err = z.createNewSplitInternal(target, builder, &splits, &splitBufs, s.Key, s.NodeID)
 				if err != nil {
 					return 0, nil, nil, err
 				}
@@ -471,22 +426,22 @@ func (z *Zipper) mergeInternal(oldNode, newNode *node.Node, keys []string, ops m
 	}
 	
 	// Finalize last split node
-	if target != newNode {
-		target.UpdateChecksum()
-		if err := z.pager.Write(target.PageID(), target.Data()); err != nil {
+	if target != builder {
+		n := target.Finish()
+		if err := z.pager.Write(target.PageID(), n.Data()); err != nil {
 			return 0, nil, nil, err
 		}
 	}
 
-	newNode.UpdateChecksum()
-	return newNode.PageID(), splits, retired, nil
+	// builder finalized by caller.
+	return builder.PageID(), splits, retired, nil
 }
 
-func (z *Zipper) createNewSplitInternal(currentTarget, newNode *node.Node, splits *[]Split, splitBufs *[]*[]byte, key []byte, val uint64) (*node.Node, error) {
-	// 1. Write current (if not newNode)
-	if currentTarget != newNode {
-		currentTarget.UpdateChecksum()
-		if err := z.pager.Write(currentTarget.PageID(), currentTarget.Data()); err != nil {
+func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, splitBufs *[]*[]byte, key []byte, val uint64) (*node.Builder, error) {
+	// 1. Finish current (if not rootBuilder)
+	if currentTarget != rootBuilder {
+		n := currentTarget.Finish()
+		if err := z.pager.Write(currentTarget.PageID(), n.Data()); err != nil {
 			return nil, err
 		}
 	}
@@ -501,17 +456,15 @@ func (z *Zipper) createNewSplitInternal(currentTarget, newNode *node.Node, split
 	*splitBufs = append(*splitBufs, buf)
 	sdata := *buf
 	
-	sn := node.NewNode(sdata)
-	sn.SetPageID(sid)
-	sn.SetType(page.PageTypeInternal)
-	sn.SetCount(0)
+	sb := node.NewBuilder(sdata, page.PageTypeInternal)
+	sb.SetPageID(sid)
 	
 	*splits = append(*splits, Split{Key: append([]byte(nil), key...), NodeID: sid})
 	
 	// Retry insert
-	if err := sn.AddInternalChild(key, val); err != nil {
+	if err := sb.AddInternalChild(key, val); err != nil {
 		return nil, err
 	}
 	
-	return sn, nil
+	return sb, nil
 }

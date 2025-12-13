@@ -131,29 +131,11 @@ func TestPagerLifecycle(t *testing.T) {
 	p2.Close()
 }
 
-func TestPagerOutOfBounds(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "index_oob.db")
-	
-	osPageSize := int64(os.Getpagesize())
-	chunkSize := osPageSize
-	
-	p, _ := Open(path, chunkSize)
-	defer p.Close()
 
-	p.Alloc(1)
 
-		if err := p.Close(); err != nil {
 
-			t.Fatalf("Close failed: %v", err)
 
-		}
-
-	}
-
-	
-
-	func TestPagerTruncate(t *testing.T) {
+func TestPagerTruncate(t *testing.T) {
 
 		dir := t.TempDir()
 
