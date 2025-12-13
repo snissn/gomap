@@ -1,6 +1,8 @@
 package tree
 
-import "treedb/internal/page"
+import (
+	"treedb/internal/page"
+)
 
 func buildLeafPage(buf []byte, pid page.PageID, entries []leafKV) error {
 	lp, err := page.InitLeafPage(buf, pid)
@@ -39,6 +41,19 @@ func (t *Tree) cowSet(pid page.PageID, key []byte, val LeafEntry) (page.PageID, 
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
+	
+	// Verified Cache
+	if !t.pager.IsVerified(uint64(pid)) {
+		h, body, err := page.SplitPage(oldBuf)
+		if err != nil {
+			return 0, nil, 0, nil, err
+		}
+		if err := h.VerifyBodyCRC(body); err != nil {
+			return 0, nil, 0, nil, err
+		}
+		t.pager.MarkVerified(uint64(pid))
+	}
+
 	h, _, err := page.SplitPage(oldBuf)
 	if err != nil {
 		return 0, nil, 0, nil, err

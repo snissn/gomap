@@ -42,6 +42,8 @@ type Pager struct {
 	activeMetaID page.PageID
 	totalPages   uint64
 	closed       bool
+
+	verifiedBits []uint64 // Bitset: 1 = Verified, 0 = Unverified
 }
 
 // chunkPin keeps a chunk pinned until Release is called.
@@ -81,6 +83,7 @@ func Open(dir string, chunkSize int64) (*Pager, error) {
 		file:      f,
 		chunkSize: chunkSize,
 		sysPageSize: int64(os.Getpagesize()),
+		verifiedBits: make([]uint64, 0),
 	}
 
 	if err := p.initOrLoad(); err != nil {
@@ -117,6 +120,7 @@ func (p *Pager) initOrLoad() error {
 	// Establish physical size before reading metas.
 	physicalPages := uint64(mapSize / page.PageSize)
 	p.totalPages = physicalPages
+	p.resizeBitset(p.totalPages)
 
 	m0, ok0 := p.readMetaFromMapped(0)
 	m1, ok1 := p.readMetaFromMapped(1)
@@ -137,9 +141,11 @@ func (p *Pager) initOrLoad() error {
 
 	if p.meta.TotalPages != 0 && p.meta.TotalPages <= physicalPages {
 		p.totalPages = p.meta.TotalPages
+		p.resizeBitset(p.totalPages)
 	} else {
 		p.totalPages = physicalPages
 		p.meta.TotalPages = physicalPages
+		p.resizeBitset(p.totalPages)
 	}
 	return nil
 }
@@ -156,6 +162,7 @@ func (p *Pager) initNew() error {
 	}
 
 	p.totalPages = initialPages
+	p.resizeBitset(p.totalPages)
 	p.meta = Meta{
 		CommitSeq:        0,
 		UserRootPageID:   0,
@@ -212,6 +219,7 @@ func (p *Pager) WritePage(pid page.PageID, data []byte) error {
 	if len(data) != page.PageSize {
 		return fmt.Errorf("pager: write expects %d bytes", page.PageSize)
 	}
+	p.MarkUnverified(uint64(pid)) // Invalidate cache
 	return p.withPage(pid, func(dst []byte) error {
 		copy(dst, data)
 		return nil
@@ -250,6 +258,7 @@ func (p *Pager) growToPagesLocked(newTotal uint64) error {
 	}
 	p.totalPages = newTotal
 	p.meta.TotalPages = newTotal
+	p.resizeBitset(newTotal)
 	return nil
 }
 
@@ -284,6 +293,8 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if err := encodeFreelistPage(fp, buf); err != nil {
 			return 0, err
 		}
+		
+		p.markUnverifiedLocked(uint64(alloc))
 		return alloc, nil
 	}
 
@@ -306,6 +317,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	for i := range b {
 		b[i] = 0
 	}
+	p.markUnverifiedLocked(uint64(alloc))
 
 	// Add the remaining pages to the freelist.
 	// We need to release the lock to call FreePages? 
@@ -313,19 +325,19 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	// We must use an internal helper or add to freelist manually here.
 	// Re-using FreePages is risky due to deadlock.
 	// Let's implement freelist addition logic here or extract a helper.
-	
+
 	// Actually, growing the file updates p.totalPages.
 	// The pages startID+1 ... startID+growthBatch-1 are now valid but unused.
 	// We should add them to the freelist.
-	
+
 	// Since we hold the lock, we can't call FreePages.
 	// We'll extract FreePages logic to freePagesLocked.
-	
+
 	var extra []page.PageID
 	for i := 1; i < growthBatch; i++ {
 		extra = append(extra, startID+page.PageID(i))
 	}
-	
+
 	if err := p.freePagesLocked(extra); err != nil {
 		// If we fail to add to freelist, we leak space but don't corrupt data.
 		// But returning error is better.
@@ -466,6 +478,52 @@ func (p *Pager) Close() error {
 	p.chunks = nil
 	p.closed = true
 	return p.file.Close()
+}
+
+// Verified Cache Methods
+
+func (p *Pager) resizeBitset(numPages uint64) {
+	needed := (numPages + 63) / 64
+	current := uint64(len(p.verifiedBits))
+	if needed > current {
+		newBits := make([]uint64, needed)
+		copy(newBits, p.verifiedBits)
+		p.verifiedBits = newBits
+	}
+}
+
+func (p *Pager) IsVerified(pageID uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	if idx < uint64(len(p.verifiedBits)) {
+		return (p.verifiedBits[idx] & bit) != 0
+	}
+	return false
+}
+
+func (p *Pager) MarkVerified(pageID uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resizeBitset(pageID + 1)
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	p.verifiedBits[idx] |= bit
+}
+
+func (p *Pager) MarkUnverified(pageID uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.markUnverifiedLocked(pageID)
+}
+
+func (p *Pager) markUnverifiedLocked(pageID uint64) {
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	if idx < uint64(len(p.verifiedBits)) {
+		p.verifiedBits[idx] &^= bit
+	}
 }
 
 // Internal helpers below.
@@ -641,9 +699,15 @@ func (p *Pager) readMetaFromMapped(pid page.PageID) (Meta, bool) {
 	if h.Flags != page.PageTypeMeta {
 		return Meta{}, false
 	}
-	if err := h.VerifyBodyCRC(body); err != nil {
-		return Meta{}, false
+	
+	// Check Verification
+	if !p.IsVerified(uint64(pid)) {
+		if err := h.VerifyBodyCRC(body); err != nil {
+			return Meta{}, false
+		}
+		p.MarkVerified(uint64(pid))
 	}
+
 	if len(body) < metaBodySize {
 		return Meta{}, false
 	}
@@ -655,6 +719,9 @@ func (p *Pager) writeMetaToPage(pid page.PageID, m Meta) error {
 	if err != nil {
 		return err
 	}
+	// Invalidate
+	p.MarkUnverified(uint64(pid))
+	
 	h, body, err := page.SplitPage(buf)
 	if err != nil {
 		return err
@@ -679,6 +746,8 @@ func (p *Pager) writeMetaToPageLocked(pid page.PageID, m Meta) error {
 	if err != nil {
 		return err
 	}
+	p.markUnverifiedLocked(uint64(pid))
+
 	h, body, err := page.SplitPage(buf)
 	if err != nil {
 		return err

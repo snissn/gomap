@@ -139,6 +139,19 @@ func (t *Tree) search(key []byte) ([]byte, []page.PageID, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		
+		// Verified Cache
+		if !t.pager.IsVerified(uint64(pid)) {
+			h, body, err := page.SplitPage(buf)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := h.VerifyBodyCRC(body); err != nil {
+				return nil, nil, err
+			}
+			t.pager.MarkVerified(uint64(pid))
+		}
+
 		h, _, err := page.SplitPage(buf)
 		if err != nil {
 			return nil, nil, err
@@ -167,6 +180,19 @@ func (t *Tree) minKey(pid page.PageID) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	// Verified Cache
+	if !t.pager.IsVerified(uint64(pid)) {
+		h, body, err := page.SplitPage(buf)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.VerifyBodyCRC(body); err != nil {
+			return nil, err
+		}
+		t.pager.MarkVerified(uint64(pid))
+	}
+
 	h, _, err := page.SplitPage(buf)
 	if err != nil {
 		return nil, err
@@ -198,4 +224,3 @@ func (t *Tree) minKey(pid page.PageID) ([]byte, error) {
 func isPageFull(err error) bool {
 	return err == page.ErrPageFull || bytes.Contains([]byte(err.Error()), []byte("page: not enough free space"))
 }
-
