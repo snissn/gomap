@@ -238,12 +238,14 @@ func (p *Pager) growToPagesLocked(newTotal uint64) error {
 		return fmt.Errorf("pager: closed")
 	}
 	if newTotal < p.totalPages {
-		return ErrShrinkForbidden
+		return fmt.Errorf("%w: GrowToPages newTotal %d < current %d", ErrShrinkForbidden, newTotal, p.totalPages)
 	}
 	if newTotal == p.totalPages {
 		return nil
 	}
+
 	newSize := int64(newTotal * page.PageSize)
+
 	if err := p.preallocate(newSize); err != nil {
 		return err
 	}
@@ -258,7 +260,6 @@ func (p *Pager) growToPagesLocked(newTotal uint64) error {
 	}
 	p.totalPages = newTotal
 	p.meta.TotalPages = newTotal
-	p.resizeBitset(newTotal)
 	return nil
 }
 
@@ -271,11 +272,11 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	}
 
 	head := p.meta.FreelistHeadID
-		for head != 0 {
-			buf, err := p.pageSliceLocked(head)
-			if err != nil {
-				return 0, err
-			}
+	for head != 0 {
+		buf, err := p.pageSliceLocked(head)
+		if err != nil {
+			return 0, err
+		}
 		fp, err := decodeFreelistPage(head, buf)
 		if err != nil {
 			return 0, err
@@ -293,7 +294,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if err := encodeFreelistPage(fp, buf); err != nil {
 			return 0, err
 		}
-		
+
 		p.markUnverifiedLocked(uint64(alloc))
 		return alloc, nil
 	}
@@ -305,7 +306,6 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	if err := p.growToPagesLocked(p.totalPages + uint64(growthBatch)); err != nil {
 		return 0, err
 	}
-
 	// The first page (startID) is returned.
 	alloc := startID
 
@@ -320,7 +320,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 	p.markUnverifiedLocked(uint64(alloc))
 
 	// Add the remaining pages to the freelist.
-	// We need to release the lock to call FreePages? 
+	// We need to release the lock to call FreePages?
 	// No, FreePages takes the lock. We are holding the lock.
 	// We must use an internal helper or add to freelist manually here.
 	// Re-using FreePages is risky due to deadlock.
@@ -610,16 +610,16 @@ func (p *Pager) mapChunk(index int, size int64) error {
 func (p *Pager) chunkForPage(pid page.PageID) (*chunk, int, error) {
 	byteOff := int64(pid) * page.PageSize
 	if byteOff < 0 {
-		return nil, 0, ErrPageOutOfBounds
+		return nil, 0, fmt.Errorf("%w: chunkForPage pid %d neg offset", ErrPageOutOfBounds, pid)
 	}
 	chunkIndex := int(byteOff / p.chunkSize)
 	if chunkIndex >= len(p.chunks) {
-		return nil, 0, ErrPageOutOfBounds
+		return nil, 0, fmt.Errorf("%w: chunkForPage pid %d idx %d >= len %d", ErrPageOutOfBounds, pid, chunkIndex, len(p.chunks))
 	}
 	c := p.chunks[chunkIndex]
 	offInChunk := int(byteOff - c.startOffset)
 	if offInChunk < 0 || offInChunk+page.PageSize > len(c.data) {
-		return nil, 0, ErrPageOutOfBounds
+		return nil, 0, fmt.Errorf("%w: chunkForPage pid %d, offInChunk %d or page extends beyond chunk data. len(c.data) %d", ErrPageOutOfBounds, pid, offInChunk, len(c.data))
 	}
 	return c, offInChunk, nil
 }
@@ -633,7 +633,7 @@ func (p *Pager) withPage(pid page.PageID, fn func([]byte) error) error {
 	// Ensure file large enough.
 	if uint64(pid) >= p.totalPages {
 		p.mu.Unlock()
-		return ErrPageOutOfBounds
+		return fmt.Errorf("%w: withPage pid %d >= totalPages %d", ErrPageOutOfBounds, pid, p.totalPages)
 	}
 	c, off, err := p.chunkForPage(pid)
 	if err != nil {
@@ -661,7 +661,7 @@ func (p *Pager) pageSliceLocked(pid page.PageID) ([]byte, error) {
 		return nil, fmt.Errorf("pager: closed")
 	}
 	if uint64(pid) >= p.totalPages {
-		return nil, ErrPageOutOfBounds
+		return nil, fmt.Errorf("%w: pageSliceLocked pid %d >= totalPages %d", ErrPageOutOfBounds, pid, p.totalPages)
 	}
 	c, off, err := p.chunkForPage(pid)
 	if err != nil {
@@ -699,7 +699,7 @@ func (p *Pager) readMetaFromMapped(pid page.PageID) (Meta, bool) {
 	if h.Flags != page.PageTypeMeta {
 		return Meta{}, false
 	}
-	
+
 	// Check Verification
 	if !p.IsVerified(uint64(pid)) {
 		if err := h.VerifyBodyCRC(body); err != nil {
@@ -721,7 +721,7 @@ func (p *Pager) writeMetaToPage(pid page.PageID, m Meta) error {
 	}
 	// Invalidate
 	p.MarkUnverified(uint64(pid))
-	
+
 	h, body, err := page.SplitPage(buf)
 	if err != nil {
 		return err

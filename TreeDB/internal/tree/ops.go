@@ -5,32 +5,30 @@ import (
 )
 
 func buildLeafPage(buf []byte, pid page.PageID, entries []leafKV) error {
-	lp, err := page.InitLeafPage(buf, pid)
+	b, err := page.NewBuilder(buf, pid, page.PageTypeLeaf)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if _, err := lp.Set(e.key, e.entry.Flags, e.entry.InlineValue, e.entry.Ptr); err != nil {
+		if err := b.AddLeafEntry(e.key, e.entry.Flags, e.entry.InlineValue, e.entry.Ptr); err != nil {
 			return err
 		}
 	}
-	h, body, _ := page.SplitPage(buf)
-	h.SetBodyCRC(body)
+	b.Finish()
 	return nil
 }
 
 func buildInternalPage(buf []byte, pid page.PageID, entries []internalKV) error {
-	ip, err := page.InitInternalPage(buf, pid)
+	b, err := page.NewBuilder(buf, pid, page.PageTypeInternal)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		if _, err := ip.Set(e.key, e.child); err != nil {
+		if err := b.AddInternalChild(e.key, e.child); err != nil {
 			return err
 		}
 	}
-	h, body, _ := page.SplitPage(buf)
-	h.SetBodyCRC(body)
+	b.Finish()
 	return nil
 }
 
