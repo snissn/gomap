@@ -1,4 +1,4 @@
-module treedb
+module github.com/snissn/gomap/TreeDB
 
 go 1.25.4
 
