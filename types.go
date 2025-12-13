@@ -14,6 +14,8 @@ const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
 
 type Hash uint64
 
+const HashTombstone Hash = ^Hash(0)
+
 type Key struct {
 	slabOffset SlabOffset
 	hash       Hash
@@ -30,7 +32,8 @@ type Hashmap struct {
 	Count    *uint64
 	Capacity uint64
 
-	Keys       *[]Key
+	Hashes     *[]Hash
+	Offsets    *[]SlabOffset
 	slabOffset *SlabOffset
 
 	hashTime   time.Duration
@@ -52,7 +55,8 @@ type Hashmap struct {
 	rehashOldMapFile  *os.File
 	rehashOldMap      mmap.MMap
 	rehashOldCapacity uint64
-	rehashOldKeys     []Key
+	rehashOldHashes   []Hash
+	rehashOldOffsets  []SlabOffset
 	rehashIdx         uint64
 
 	resizeThreshold uint64

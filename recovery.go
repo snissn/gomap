@@ -17,14 +17,14 @@ func (h *Hashmap) Recover() error {
 	h.rehashInProgress = false
 	h.rehashOldMapFile = nil
 	h.rehashOldMap = nil
-	h.rehashOldKeys = nil
+	h.rehashOldHashes = nil
+	h.rehashOldOffsets = nil
 	h.rehashOldCapacity = 0
 	h.rehashIdx = 0
 
 	// Reset Index map
-	for i := range *h.Keys {
-		(*h.Keys)[i] = Key{}
-	}
+	clear(*h.Hashes)
+	clear(*h.Offsets)
 	*h.Count = 0
 
 	// Scan for segments
@@ -165,16 +165,16 @@ func (h *Hashmap) replayDelete(key []byte) {
 	count := uint64(0)
 	for count < h.Capacity {
 		myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
-		mybucket := (*h.Keys)[myKeyIndex]
+		probeHash := (*h.Hashes)[myKeyIndex]
 
-		if mybucket.slabOffset == 0 {
+		if probeHash == 0 {
 			return // Not found
 		}
-		if mybucket.slabOffset == Tombstone {
+		if probeHash == HashTombstone {
 			count++
 			continue
 		}
-		if mybucket.hash == myhash {
+		if probeHash == myhash {
 			// We MUST read key to confirm identity?
 			// Yes, otherwise we delete wrong key on collision!
 			// But we are in recovery. The slab-real IS the source of truth.
@@ -182,7 +182,8 @@ func (h *Hashmap) replayDelete(key []byte) {
 			// But to find the slot, we probe.
 			// Probing requires comparing key in index with key in hand.
 			// Index points to OLD slab entry.
-			item, err := h.unmarshalItemFromSlab(mybucket)
+			offset := (*h.Offsets)[myKeyIndex]
+			item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
 			if err != nil {
 				// If unmarshal fails during recovery?
 				// Maybe old data is corrupt?
@@ -190,7 +191,8 @@ func (h *Hashmap) replayDelete(key []byte) {
 				return
 			}
 			if bytes.Equal(item.Key, key) {
-				(*h.Keys)[myKeyIndex].slabOffset = Tombstone
+				(*h.Hashes)[myKeyIndex] = HashTombstone
+				(*h.Offsets)[myKeyIndex] = Tombstone
 				*h.Count -= 1
 				return
 			}

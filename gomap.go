@@ -54,7 +54,8 @@ func (h *Hashmap) closeFPs() error {
 		}
 		h.rehashOldMapFile = nil
 		h.rehashOldMap = nil
-		h.rehashOldKeys = nil
+		h.rehashOldHashes = nil
+		h.rehashOldOffsets = nil
 		h.rehashOldCapacity = 0
 		h.rehashIdx = 0
 		h.rehashInProgress = false
@@ -72,25 +73,26 @@ func (h *Hashmap) closeFPs() error {
 // It returns nil, nil if the key is not found.
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
-	if h.Keys != nil && h.Capacity > 0 {
+	if h.Hashes != nil && h.Capacity > 0 {
 		myhash := hash(key)
 		count := uint64(0)
 		for count < h.Capacity {
 			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
-			mybucket := (*h.Keys)[myKeyIndex]
+			probeHash := (*h.Hashes)[myKeyIndex]
 
-			if mybucket.slabOffset == 0 {
+			if probeHash == 0 {
 				return nil, nil
 			}
 
-			if mybucket.slabOffset == Tombstone {
+			if probeHash == HashTombstone {
 				count++
 				continue
 			}
 
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
+			if probeHash == myhash {
+				offset := (*h.Offsets)[myKeyIndex]
+				item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
 				if err != nil {
 					return nil, err
 				}
@@ -104,25 +106,26 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 
 	// If an incremental rehash is in progress, also probe the old table
 	// for keys that haven't been migrated yet.
-	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldHashes) > 0 {
 		myhash := hash(key)
 		count := uint64(0)
 		for count < h.rehashOldCapacity {
 			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
 
-			mybucket := h.rehashOldKeys[myKeyIndex]
+			probeHash := h.rehashOldHashes[myKeyIndex]
 
-			if mybucket.slabOffset == 0 {
+			if probeHash == 0 {
 				return nil, nil
 			}
 
-			if mybucket.slabOffset == Tombstone {
+			if probeHash == HashTombstone {
 				count++
 				continue
 			}
 
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
+			if probeHash == myhash {
+				offset := h.rehashOldOffsets[myKeyIndex]
+				item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
 				if err != nil {
 					return nil, err
 				}
@@ -143,24 +146,25 @@ func (h *Hashmap) Delete(key []byte) error {
 	foundNew := false
 
 	// Delete in the current (new) table.
-	if h.Keys != nil && h.Capacity > 0 {
+	if h.Hashes != nil && h.Capacity > 0 {
 		count := uint64(0)
 		for count < h.Capacity {
 			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
 
-			mybucket := (*h.Keys)[myKeyIndex]
+			probeHash := (*h.Hashes)[myKeyIndex]
 
-			if mybucket.slabOffset == 0 {
+			if probeHash == 0 {
 				break // Key not found in new table
 			}
 
-			if mybucket.slabOffset == Tombstone {
+			if probeHash == HashTombstone {
 				count++
 				continue
 			}
 
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
+			if probeHash == myhash {
+				offset := (*h.Offsets)[myKeyIndex]
+				item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
 				if err != nil {
 					return err
 				}
@@ -169,7 +173,8 @@ func (h *Hashmap) Delete(key []byte) error {
 					if err := h.addDeleteSlab(key); err != nil {
 						return err
 					}
-					(*h.Keys)[myKeyIndex].slabOffset = Tombstone
+					(*h.Hashes)[myKeyIndex] = HashTombstone
+					(*h.Offsets)[myKeyIndex] = Tombstone
 					*h.Count -= 1
 					foundNew = true
 					break
@@ -181,29 +186,31 @@ func (h *Hashmap) Delete(key []byte) error {
 
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
-	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldHashes) > 0 {
 		count := uint64(0)
 		for count < h.rehashOldCapacity {
 			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
 
-			mybucket := h.rehashOldKeys[myKeyIndex]
+			probeHash := h.rehashOldHashes[myKeyIndex]
 
-			if mybucket.slabOffset == 0 {
+			if probeHash == 0 {
 				break
 			}
 
-			if mybucket.slabOffset == Tombstone {
+			if probeHash == HashTombstone {
 				count++
 				continue
 			}
 
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
+			if probeHash == myhash {
+				offset := h.rehashOldOffsets[myKeyIndex]
+				item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
 				if err != nil {
 					return err
 				}
 				if bytes.Equal(item.Key, key) {
-					h.rehashOldKeys[myKeyIndex].slabOffset = Tombstone
+					h.rehashOldHashes[myKeyIndex] = HashTombstone
+					h.rehashOldOffsets[myKeyIndex] = Tombstone
 					break
 				}
 			}
@@ -416,14 +423,16 @@ func (h *Hashmap) Compact() error {
 
 	// Migrate Data
 	// Iterate through all buckets
-	keys := h.getKeys()
-	for _, k := range keys {
-		if k.slabOffset == 0 || k.slabOffset == Tombstone {
+	for i := uint64(0); i < h.Capacity; i++ {
+		slotHash := (*h.Hashes)[i]
+		if slotHash == 0 || slotHash == HashTombstone {
 			continue
 		}
 
+		offset := (*h.Offsets)[i]
+
 		// Read Item
-		item, err := h.unmarshalItemFromSlab(k)
+		item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: slotHash})
 		if err != nil {
 			// If corruption, we skip? Or fail?
 			// Fail is safer.
