@@ -244,6 +244,13 @@ func (s *RedisServer) Serve(addr string) error {
 			}
 			conn.WriteString("OK")
 
+		case "SAVE":
+			if err := s.store.Flush(); err != nil {
+				conn.WriteError(err.Error())
+				return
+			}
+			conn.WriteString("OK")
+
 		case "INFO":
 			stats := s.store.Stats()
 			info := fmt.Sprintf(

@@ -62,6 +62,9 @@ func TestCompaction(t *testing.T) {
 		for i := 0; i < keyCount; i++ {
 			setKey(t, conn, reader, i, u)
 		}
+		// Force flush to generate garbage on disk (prevent CacheKV coalescing)
+		conn.Write([]byte("*1\r\n$4\r\nSAVE\r\n"))
+		reader.ReadString('\n') // +OK (ignore error for brevity/speed)
 	}
 
 	sizeBloated := getDirSize(t, dbDir)
@@ -71,9 +74,23 @@ func TestCompaction(t *testing.T) {
 		t.Log("Warning: File didn't grow as expected? Maybe slab allocation is large or compression handles it?")
 	}
 
+	// 2.5. Flush to ensure we measure real bloated size
+	conn.Write([]byte("*1\r\n$4\r\nSAVE\r\n"))
+	resp, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp, "OK") {
+		t.Fatalf("SAVE failed: %s", resp)
+	}
+
+	// Remeasure sizeBloated
+	sizeBloated = getDirSize(t, dbDir)
+	t.Logf("Size after updates and flush: %d bytes", sizeBloated)
+
 	// 3. Trigger Compaction
 	conn.Write([]byte("*1\r\n$12\r\nBGREWRITEAOF\r\n"))
-	resp, err := reader.ReadString('\n')
+	resp, err = reader.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,9 +109,24 @@ func TestCompaction(t *testing.T) {
 	// 5. Verify Integrity
 	for i := 0; i < keyCount; i++ {
 		val := getKey(t, conn, reader, i)
-		expected := fmt.Sprintf("val-%d-%d", i, updates)
+		
+		var sb strings.Builder
+		for k := 0; k < 100; k++ {
+			sb.WriteString(fmt.Sprintf("%d-%d-", i, k))
+		}
+		padding := sb.String()
+		if len(padding) < 1024 {
+			padding += strings.Repeat("x", 1024-len(padding))
+		}
+		
+		expected := fmt.Sprintf("val-%d-%d-%s", i, updates, padding)
 		if val != expected {
-			t.Errorf("Key %d corrupted. Want %s, Got %s", i, expected, val)
+			// Don't print huge values
+			if len(val) > 50 {
+				t.Errorf("Key %d corrupted. Want %s..., Got %s...", i, expected[:20], val[:20])
+			} else {
+				t.Errorf("Key %d corrupted. Want %s..., Got %s", i, expected[:20], val)
+			}
 		}
 	}
 
@@ -106,7 +138,23 @@ func TestCompaction(t *testing.T) {
 
 func setKey(t *testing.T, conn net.Conn, reader *bufio.Reader, i, v int) {
 	key := fmt.Sprintf("key-%d", i)
-	val := fmt.Sprintf("val-%d-%d", i, v)
+	// Use random data to avoid compression
+	// We can't use random data easily if we need to verify exact value later without storing it.
+	// But we can generate pseudo-random based on i, v.
+	// Simple pattern that repeats but isn't trivial for s2?
+	// s2 is Snappy. Repeats are compressible.
+	// Let's use a string that changes every few bytes.
+	var sb strings.Builder
+	for k := 0; k < 100; k++ {
+		sb.WriteString(fmt.Sprintf("%d-%d-", i, k))
+	}
+	padding := sb.String()
+	// Ensure it's long
+	if len(padding) < 1024 {
+		padding += strings.Repeat("x", 1024-len(padding))
+	}
+	
+	val := fmt.Sprintf("val-%d-%d-%s", i, v, padding)
 	cmd := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 	conn.Write([]byte(cmd))
 	reader.ReadString('\n') // +OK
@@ -125,6 +173,7 @@ func getKey(t *testing.T, conn net.Conn, reader *bufio.Reader, i int) string {
 	valLine, _ := reader.ReadString('\n')
 	return strings.TrimRight(valLine, "\r\n")
 }
+
 
 func getDirSize(t *testing.T, path string) int64 {
 	var size int64

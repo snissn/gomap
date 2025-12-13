@@ -25,7 +25,10 @@ type CacheKV struct {
 
 	mu         sync.RWMutex
 	pending    map[string]cacheEntry
+	flushing   map[string]cacheEntry // Items currently being flushed (visible to Get)
 	pendingLen int
+
+	flushMu sync.Mutex // Serializes Flush operations to backend
 
 	maxEntries int
 	maxBytes   int
@@ -63,7 +66,14 @@ func (c *CacheKV) Get(key []byte) ([]byte, error) {
 	k := string(key)
 	c.mu.RLock()
 	if e, ok := c.pending[k]; ok {
-		defer c.mu.RUnlock()
+		c.mu.RUnlock()
+		if e.del {
+			return nil, nil
+		}
+		return e.value, nil
+	}
+	if e, ok := c.flushing[k]; ok {
+		c.mu.RUnlock()
 		if e.del {
 			return nil, nil
 		}
@@ -101,6 +111,9 @@ func (c *CacheKV) Delete(key []byte) error {
 
 // Flush writes pending changes to the backend. No WAL; pending data is volatile until flushed.
 func (c *CacheKV) Flush() error {
+	c.flushMu.Lock()
+	defer c.flushMu.Unlock()
+
 	c.mu.Lock()
 	if len(c.pending) == 0 {
 		c.mu.Unlock()
@@ -108,8 +121,16 @@ func (c *CacheKV) Flush() error {
 	}
 	entries := c.pending
 	c.pending = make(map[string]cacheEntry)
+	c.flushing = entries
 	c.pendingLen = 0
 	c.mu.Unlock()
+
+	// Ensure flushing is cleared even if write fails
+	defer func() {
+		c.mu.Lock()
+		c.flushing = nil
+		c.mu.Unlock()
+	}()
 
 	var batchKeys [][]byte
 	var batchVals [][]byte
