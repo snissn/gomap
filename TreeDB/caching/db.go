@@ -31,7 +31,7 @@ type BatchInterface interface {
 // Its Iterator methods now return iterator.UnsafeIterator.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
-	Iterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
+	Iterator(start, end []byte) (iterator.UnsafeIterator, error)        // Returns UnsafeIterator
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
 	NewBatch() BatchInterface
 	Close() error
@@ -40,7 +40,8 @@ type BackendDB interface {
 }
 
 type DB struct {
-	mu sync.RWMutex
+	mu      sync.RWMutex
+	flushMu sync.Mutex
 
 	// Level 0 (Memory)
 	mutable *memtable.Memtable
@@ -246,6 +247,9 @@ func (db *DB) flushAll() {
 }
 
 func (db *DB) flushOne() bool {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
 	db.mu.Lock()
 	if len(db.queue) == 0 {
 		db.mu.Unlock()
@@ -256,14 +260,14 @@ func (db *DB) flushOne() bool {
 
 	// Flush 'mem' to backend
 
-batch := db.backend.NewBatch()
+	batch := db.backend.NewBatch()
 	iter := mem.NewIterator() // Returns iterator.UnsafeIterator
-	iter.Seek(nil)             // Start
+	iter.Seek(nil)            // Start
 	for iter.Valid() {
 		if iter.IsDeleted() {
-			batch.Delete(iter.UnsafeKey())
+			_ = batch.Delete(iter.UnsafeKey())
 		} else {
-			batch.Set(iter.UnsafeKey(), iter.UnsafeValue())
+			_ = batch.Set(iter.UnsafeKey(), iter.UnsafeValue())
 		}
 		iter.Next()
 	}
@@ -281,7 +285,9 @@ batch := db.backend.NewBatch()
 	// We should probably track (Memtable, WalPath) pairs in the queue.
 
 	db.mu.Lock()
-	db.queue = db.queue[1:]
+	if len(db.queue) > 0 {
+		db.queue = db.queue[1:]
+	}
 	// TODO: Delete old WAL file here.
 	// Need to track WAL paths.
 	db.mu.Unlock()
@@ -372,14 +378,12 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 	sources = append(sources, merging.IteratorSource{
-		Iter:     diskIter, 
+		Iter:     diskIter,
 		Priority: prio,
 	})
 
 	return merging.NewMergingIterator(sources, start, end), nil
 }
-
-
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
@@ -495,7 +499,7 @@ func (b *Batch) write(sync bool) error {
 			return err
 		}
 	}
-	
+
 	return b.Close()
 }
 
