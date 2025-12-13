@@ -277,9 +277,14 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 		return page.MetaPageBody{}, false
 	}
 	n := node.NewNode(data)
-	if !n.VerifyChecksum() {
-		return page.MetaPageBody{}, false
+	
+	if !db.pager.IsVerified(pageID) {
+		if !n.VerifyChecksum() {
+			return page.MetaPageBody{}, false
+		}
+		db.pager.MarkVerified(pageID)
 	}
+	
 	if n.Type() != page.PageTypeMeta {
 		return page.MetaPageBody{}, false
 	}

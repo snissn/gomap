@@ -334,3 +334,21 @@
 4.  **Commit**: Git commit with clear message.
 5.  **User Check**: Briefly pause for user feedback if major design decisions arise.
 6.  **Spec Update**: Keep `specs/spec.md` in sync with completed phases.
+
+## Phase 14: Verified Page Cache (Optimization)
+
+**Goal:** Reduce CPU overhead by skipping CRC verification for already-checked pages.
+
+### 14.1 Pager Update
+- [ ] Add `VerifiedBitset` (slice of uint64) to `Pager`.
+- [ ] Implement `IsVerified(pageID)`, `MarkVerified(pageID)`, `MarkUnverified(pageID)`.
+- [ ] **Thread Safety:** Ensure atomic access or lock protection.
+
+### 14.2 Integration
+- [ ] **Tree:** Update `GetEntry` to check `IsVerified`. If verified, skip `VerifyChecksum`. If not, verify and call `MarkVerified`.
+- [ ] **Alloc/Write:** Ensure `GetForWrite` and `Alloc` call `MarkUnverified`.
+
+### 14.3 Verification
+- [ ] **Benchmark:** Compare Read throughput before/after.
+- [ ] **Safety Test:** Corrupt a page in RAM (via unsafe access) *after* verification and ensure the system (correctly) fails to detect it if cached, but detects it if cache is cleared. (Validates the cache is working).
+

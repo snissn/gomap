@@ -73,6 +73,19 @@ Because `index.db` is memory-mapped, TreeDB defines an explicit persistence boun
 
 Implementation note: the exact combination of `msync` and `fdatasync` is OS-dependent; the contract is that `*Sync` means the new root is recoverable after a power loss.
 
+#### 2.2.2 Verified Page Cache (Optimization)
+
+To reduce CPU overhead from repeated CRC32C verification on hot pages, the Pager maintains a **Verified Bitset** (volatile RAM-only cache).
+
+*   **Structure:** A Bitset (e.g., `[]uint64`) where each bit corresponds to a PageID.
+*   **Logic:**
+    *   **Read (Hit):** If `Bitset[PageID] == 1`, the page is assumed valid. The Pager returns the byte slice immediately (skipping CRC).
+    *   **Read (Miss):** If `Bitset[PageID] == 0`, the Pager computes CRC32C. If valid, it sets `Bitset[PageID] = 1`.
+*   **Invalidation (Critical):**
+    *   **On Allocation:** When a page is reused (allocated from the Freelist), its bit MUST be cleared (0).
+    *   **On Overwrite:** Any write to a page via `GetForWrite` MUST clear its bit.
+    *   **Startup:** The bitset is initialized to all zeros.
+
 ## 3\. Data Structures
 
 ### 3.1 Global Constants

@@ -24,6 +24,7 @@ type Pager struct {
 	dirtyChunks map[int]struct{}
 	mu          sync.RWMutex
 	path        string
+	verifiedBits []uint64 // Bitset: 1 = Verified, 0 = Unverified
 }
 
 // Open opens the pager at the given path.
@@ -83,9 +84,74 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		
 		// Initial guess for numPages (will be corrected by DB recovery)
 		p.numPages = uint64(size / page.PageSize)
+		
+		// Initialize Bitset
+		p.resizeBitset(p.numPages)
+	} else {
+		// Initialize Bitset (empty)
+		p.verifiedBits = make([]uint64, 0)
 	}
 
 	return p, nil
+}
+
+func (p *Pager) resizeBitset(numPages uint64) {
+	needed := (numPages + 63) / 64
+	current := uint64(len(p.verifiedBits))
+	if needed > current {
+		newBits := make([]uint64, needed)
+		copy(newBits, p.verifiedBits)
+		p.verifiedBits = newBits
+	}
+}
+
+// IsVerified returns true if the page has passed CRC verification.
+// Thread-safe (protected by p.mu in caller, or we can add internal locking if needed, 
+// but Pager methods usually hold lock).
+// Currently Pager.Get holds RLock.
+func (p *Pager) IsVerified(pageID uint64) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.isVerifiedLocked(pageID)
+}
+
+func (p *Pager) isVerifiedLocked(pageID uint64) bool {
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	if idx < uint64(len(p.verifiedBits)) {
+		return (p.verifiedBits[idx] & bit) != 0
+	}
+	return false
+}
+
+// MarkVerified marks a page as verified.
+func (p *Pager) MarkVerified(pageID uint64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	
+	p.resizeBitset(pageID + 1) // Ensure capacity
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	p.verifiedBits[idx] |= bit
+}
+
+// MarkUnverified marks a page as unverified (dirty/reused).
+func (p *Pager) MarkUnverified(pageID uint64) {
+	p.mu.Lock() // Must be Lock (write)
+	// Caller likely holds Lock?
+	// If caller holds Lock (e.g. GetForWrite), we can't Lock again.
+	// But GetForWrite holds p.mu.Lock.
+	// So we need an internal helper.
+	p.markUnverifiedLocked(pageID)
+	p.mu.Unlock()
+}
+
+func (p *Pager) markUnverifiedLocked(pageID uint64) {
+	idx := pageID / 64
+	bit := uint64(1) << (pageID % 64)
+	if idx < uint64(len(p.verifiedBits)) {
+		p.verifiedBits[idx] &^= bit
+	}
 }
 
 // SetPageCount updates the logical page count. 
@@ -94,6 +160,7 @@ func (p *Pager) SetPageCount(count uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.numPages = count
+	p.resizeBitset(count)
 }
 
 // PageCount returns the current logical number of pages.
@@ -175,6 +242,7 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 	}
 
 	p.numPages = newTotal
+	p.resizeBitset(newTotal)
 	return startID, nil
 }
 
@@ -186,6 +254,8 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	if pageID >= p.numPages {
 		return nil, ErrPageOutOfBounds
 	}
+	
+	p.markUnverifiedLocked(pageID) // Invalidate cache
 
 	byteOffset := int64(pageID) * int64(page.PageSize)
 	chunkIdx := int(byteOffset / p.chunkSize)
@@ -245,6 +315,8 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	if pageID >= p.numPages {
 		return ErrPageOutOfBounds
 	}
+	
+	p.markUnverifiedLocked(pageID) // Invalidate cache
 
 	byteOffset := int64(pageID) * int64(page.PageSize)
 	chunkIdx := byteOffset / p.chunkSize
