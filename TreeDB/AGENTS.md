@@ -14,7 +14,7 @@ This repository currently contains only the design and test specifications under
 - **SWMR** concurrency: single writer lock; lock‑free reads via **Snapshots** (MVCC epochs).
 - **CRC32C (Castagnoli)** checksums on every B+Tree page body and every slab record.
 - Durability contract:
-  - `*Sync` writes must make slab durable **before** meta/index durability boundary.
+  - `*Sync` writes must make slab durable **before** meta/index persistence.
   - `Write()`/`Set()` may return before durability.
 - Iterator semantics must match Cosmos SDK:
   - domain `[start,end)` where `end` is exclusive.
@@ -243,141 +243,89 @@ This repository currently contains only the design and test specifications under
   - `Close` (flush, unmap, close files).
 - Add non‑blocking benchmarks for write throughput and range scans.
 
----
-
-## Phase 12: Write-Back Caching Layer (Memtable & WAL)
+### Phase 12: Write-Back Caching Layer (Memtable & WAL)
 
 **Goal:** Implement an LSM-style Level 0 in-memory buffer to resolve write amplification issues for high-frequency random writes.
 
 ### 12.1 Foundations
-- [ ] Add `github.com/google/btree` dependency.
-- [ ] Implement `WAL` (Write-Ahead Log) writer/reader in `internal/wal`.
+- [x] Add `github.com/google/btree` dependency.
+- [x] Implement `WAL` (Write-Ahead Log) writer/reader in `internal/wal`.
     - Format: `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
     - Support `Sync()` for durability.
-- [ ] Implement `Memtable` wrapper in `internal/memtable`.
+- [x] Implement `Memtable` wrapper in `internal/memtable`.
     - Use `google/btree`.
     - Support `Set`, `Delete` (Tombstones), `Get`.
     - Track approximate memory usage.
-- [ ] **Test:** Unit tests for WAL durability and recovery, and Memtable CRUD.
+- [x] **Test:** Unit tests for WAL durability and recovery, and Memtable CRUD.
 
 ### 12.2 Merging Iterator
-- [ ] Implement `Min-Heap` for sorting iterators by Key + Layer Precedence.
-- [ ] Implement `MergingIterator` in `internal/merging`.
+- [x] Implement `Min-Heap` for sorting iterators by Key + Layer Precedence.
+- [x] Implement `MergingIterator` in `internal/merging`.
     - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
     - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
-- [ ] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
+- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct version returned.
 
 ### 12.3 CachingDB Core Logic
-- [ ] Create `caching` package (or extend `treedb`).
-- [ ] Implement `CachingDB` struct wrapping `treedb.DB`.
-- [ ] **Write Path:**
+- [x] Create `caching` package (or extend `treedb`).
+- [x] Implement `CachingDB` struct wrapping `treedb.DB`.
+- [x] **Write Path:**
     - `Set`: Append to WAL -> Insert to Memtable.
     - `SetSync`: Call `WAL.Sync()`.
-- [ ] **Flush Pipeline:**
+- [x] **Flush Pipeline:**
     - Check `Memtable.Size > FlushThreshold`.
     - Rotate: Mutable -> Queue. Close WAL. Create new WAL.
     - Background Worker: Pick from Queue -> `treedb.Batch` -> `WriteSync` -> Delete old WAL.
-- [ ] **Read Path:** `Get` checks Memtable(s) then Disk. `Iterator` uses `MergingIterator`.
+- [x] **Read Path:** `Get` checks Memtable(s) then Disk. `Iterator` uses `MergingIterator`.
 
 ### 12.4 Integration & Config
-- [ ] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
-- [ ] Update `Open` to initialize `CachingDB` wrapper if enabled.
+- [x] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
+- [x] Update `Open` to initialize `CachingDB` wrapper if enabled.
 - [ ] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
 - **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
 
 ---
 
-## Testing Plan (Aligned to `specs/test-spec.md`)
+## Phase 13: Read Optimization Sprint
 
-### Unit Tests
+**Goal:** Achieve 500k+ ranges/s by eliminating allocations and setup overhead.
 
-1. **Pager (Chunked MMap)**:
-   - boundary‑crossing reads with tiny chunk sizes.
-   - growth safety while readers pin old chunks.
-   - negative shrink test (must fail/panic safely).
-   - refcounted unmap safety.
-   - durability ordering: `WriteSync` fdatasync slab before msync/fsync index.
-2. **Slotted Pages & Cursor Stack**:
-   - walk test: 10k inserts, forward and reverse counts match.
-   - split logic & parent wiring invariants.
-   - cursor stack depth correctness and drill‑down in `Next/Prev`.
-   - defragmentation reuses freed heap space.
-3. **Graveyard / Epoch Safety**:
-   - hold/release and prune movement to freelist.
-   - reachability barrier under open iterators + aggressive prune/commit.
-   - `MinPinnedSeq` advancement.
-   - `KeepRecent` history window behavior.
-4. **Slab Record Format**:
-   - round‑trip with CRC verification.
-   - ValuePtr alignment/size (16B) and length precision.
-   - corrupt record CRC detection.
-   - sequential enumeration over variable‑length records.
-5. **Superblocks / Recovery**:
-   - dual meta selection with one/both CRC corrupted.
-   - `ActiveSlabTail` truncation on open.
-   - monotonic `CommitSeq` across restarts.
-6. **Adaptive Inline Threshold**:
-   - latch semantics per commit.
-   - fanout preservation IAVL simulation.
-   - bounded‑step + hard‑bound enforcement.
-   - evaluation frequency/low‑overhead counters.
-7. **Internal Metadata Keyspace**:
-   - namespace isolation / internal encoding expectations.
-   - slab stats key persistence and decoding.
-   - meta page overflow prevention with thousands of slabs.
+### 13.1 O(1) Snapshot Acquisition (Group RefCount)
+- [x] Create `internal/slab/group.go` (or `SlabGroup` struct).
+- [x] Group holds map of files + single `atomic.Int64` for snapshot pinning.
+- [x] Update `DBState` to hold `*SlabGroup` instead of `SlabSet`.
+- [x] Refactor `AcquireSnapshot` to increment group ref instead of iterating all files.
+- [x] **Test:** Verify zombie deletion waits for group refcount to drop.
 
-### Integration & Functional Tests
+### 13.2 Unsafe Iterator Interface
+- [ ] Define `UnsafeIterator` in `internal/iterator`:
+    - `UnsafeKey() []byte` (view)
+    - `UnsafeValue() []byte` (view)
+    - `Next()`, `Valid()`, `Close()`
+- [ ] Update `memtable.Iterator` to implement this (it already returns views).
 
-- CRUD cycles, overwrites, persistence across reopen.
-- Input validation (nil keys/values, empty keys ok).
-- Forward/reverse iterator semantics incl. end‑exclusive and nil bounds.
-- Concurrent iteration snapshot stability under commits + pruning.
-- Batch atomicity (panic mid‑merge yields no partial commit), state machine errors, large values memory safety.
-- `NewBatchWithSize` correctness and hint effectiveness (if instrumented).
-- Adaptive threshold mixed workload convergence and hard max enforcement.
-- Manual compaction blocking behavior and dead‑byte reduction.
+### 13.3 Specialized TwoWayMerger
+- [ ] Implement `TwoWayMerger` in `internal/merging` to replace `MergingIterator` for the 2-source case.
+- [ ] Optimize logic: direct comparison `if keyA < keyB`, no interface dispatch.
+- [ ] Handle shadowing and tombstones efficiently.
 
-### Property‑Based / Fuzz Tests
+### 13.4 Lazy Disk Iterator
+- [ ] Modify `internal/tree/iterator.go` (Disk Iterator) to implement `UnsafeIterator`.
+- [ ] **Lazy Value Loading:**
+    - `Next()` parses leaf but does NOT read Value pointer from slab.
+    - `UnsafeValue()` triggers slab read if needed (and caches it in iterator struct).
+- [ ] **Zero-Copy Keys:** Return slice into mmap buffer for Key (safety warning: valid only until next call/close).
 
-- Model‑based randomized ops against Go map oracle.
-- Open iterators across random commits + pruning to assert reachability invariant.
-- Key/value fuzzing with arbitrary bytes and huge keys.
-- File corruption fuzzing:
-  - flip bits in `index.db`, slabs, and meta pages.
-  - expect CRC errors / safe panics, never silent corruption.
+### 13.5 Integration
+- [ ] Update `caching.DB` to use `TwoWayMerger` and `UnsafeIterator`.
+- [ ] Update public `Iterator` wrapper to perform the final safety copy (`append([]byte(nil), view...)`).
+- [ ] **Benchmark:** Run `dbbench` Range Scan to verify >500k ranges/s.
 
-### Failure‑Injection / Crash‑Recovery
+---
 
-- Kill‑test driver:
-  - separate writer process; random `kill -9`.
-  - on restart DB must be at state N or N‑1; no traversal corruption.
-- IO failure simulations via mocks:
-  - `ENOSPC`, read‑only mount, directory‑sync orphan slab cleanup.
-- Torn‑write scenarios:
-  - slab durable but meta not committed.
-  - torn meta page selection.
-  - torn index page CRC detection.
+## Work Procedure
 
-### Concurrency & Race
-
-- Run full suite under `go test -race`.
-- Reader/writer duel monotonicity.
-- Zombie slab life‑support during iteration then deletion after close.
-- Resurrection verify‑set race (user update wins).
-- Torn compaction recovery.
-- Compaction serialization under writer lock.
-- Compaction throttling latency isolation.
-- Dead‑hint optimization metrics (if implemented).
-
-### Cosmos Compliance
-
-- Run upstream `cosmos-db` backend suite (`db/db_test.go`):
-  - iterator, reverse iterator, batch tests.
-- Pruning validation scenario (10k commits, `KeepRecent` policy).
-
-### Commands
-
-- Standard tests: `go test ./...`
-- Race detection: `go test -race ./...`
-- Fuzzing (Go 1.18+): `go test -fuzz=Fuzz -run=^$ ./...`
-- Benchmarks: `go test -bench=. ./...`
+1.  **Read Context**: Before starting a phase, re-read relevant spec sections.
+2.  **Implementation**: Write code + Unit Tests.
+3.  **Verification**: Run tests.
+4.  **Commit**: Git commit with clear message.
+5.  **User Check**: Briefly pause for user feedback if major design decisions arise.

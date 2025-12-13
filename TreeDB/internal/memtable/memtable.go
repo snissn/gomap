@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/google/btree"
+	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator" // Import iterator interface
 )
 
 type Item struct {
@@ -33,13 +34,6 @@ func (m *Memtable) Set(key, value []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	
-	// Estimate size change
-	// Note: We copy key/value to ensure immutability if caller reuses buffer?
-	// The caller (CachingDB) usually handles copies or passes safe slices.
-	// cosmos-db contract usually implies Set(k,v) copies are needed if user modifies them later.
-	// For now assume unsafe, we should copy.
-	// But let's defer copy to caller for performance, or do it here.
-	// Doing it here is safer.
 	k := append([]byte(nil), key...)
 	v := append([]byte(nil), value...)
 
@@ -79,10 +73,6 @@ func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 		return nil, false, false
 	}
 	i := item.(*Item)
-	// Return copy? Or direct?
-	// Direct is faster, but unsafe if Memtable mutates (which it shouldn't for this item).
-	// But ReplaceOrInsert replaces the item pointer.
-	// So the old item structure is not mutated, it's replaced. Safe.
 	return i.Value, i.IsDeleted, true
 }
 
@@ -105,55 +95,69 @@ type Iterator struct {
 	valid bool
 }
 
-func (m *Memtable) NewIterator() *Iterator {
+// NewIterator returns an iterator.UnsafeIterator.
+func (m *Memtable) NewIterator() iterator.UnsafeIterator {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	// COW Clone for iteration safety without locking
 	return &Iterator{tree: m.tree.Clone()}
 }
 
+// Seek positions the iterator to the first key >= target.
 func (it *Iterator) Seek(key []byte) {
 	it.valid = false
 	it.tree.AscendGreaterOrEqual(&Item{Key: key}, func(i btree.Item) bool {
 		it.curr = i.(*Item)
 		it.valid = true
-		return false // Stop
+		return false // Stop after 1
 	})
 }
 
+// Next advances the iterator.
 func (it *Iterator) Next() {
 	if !it.valid {
-		return
+		return // Do nothing if already invalid
 	}
 	start := it.curr
-	it.valid = false
+	it.valid = false // Assume invalid until next is found
 	
+	// Find the entry strictly greater than start.
+	// AscendGreaterOrEqual with 'start' will yield start itself first.
+	// We need to skip it and take the next.
+	skipCurrent := true
 	it.tree.AscendGreaterOrEqual(start, func(i btree.Item) bool {
-		item := i.(*Item)
-		if item == start { // Pointer equality check might fail if Clone copies items?
-			// google/btree Clone shares items (they are pointers).
-			// But let's be safe with Key comparison.
-			// Actually, if we use pointer comparison and it works, great.
-			// If not, key comparison.
-			return true // Skip current
+		if skipCurrent {
+			skipCurrent = false
+			return true // Continue to next item
 		}
-		it.curr = item
+		it.curr = i.(*Item)
 		it.valid = true
-		return false // Stop
+		return false // Stop after finding the next one
 	})
 }
 
+// Valid returns true if the iterator is currently pointing to a valid item.
 func (it *Iterator) Valid() bool {
 	return it.valid
 }
 
-func (it *Iterator) Item() *Item {
+// UnsafeKey returns a view (no copy) of the current key.
+func (it *Iterator) UnsafeKey() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.curr
+	return it.curr.Key
 }
 
+// UnsafeValue returns a view (no copy) of the current value.
+func (it *Iterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.curr.Value
+}
+
+// IsDeleted returns true if the current item is a tombstone.
 func (it *Iterator) IsDeleted() bool {
 	if !it.valid {
 		return false
@@ -161,21 +165,8 @@ func (it *Iterator) IsDeleted() bool {
 	return it.curr.IsDeleted
 }
 
-// Implement Iterator interface methods matching merging package expectation
-func (it *Iterator) Key() []byte {
-	if !it.valid {
-		return nil
-	}
-	return it.curr.Key
-}
-
-func (it *Iterator) Value() []byte {
-	if !it.valid {
-		return nil
-	}
-	return it.curr.Value
-}
-
+// Close closes the iterator.
 func (it *Iterator) Close() error {
+	// No resources to close for in-memory btree iterator
 	return nil
 }
