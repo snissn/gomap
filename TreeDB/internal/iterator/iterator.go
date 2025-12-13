@@ -11,4 +11,5 @@ type UnsafeIterator interface {
 	IsDeleted() bool     // True if the current item is a tombstone
 	Error() error
 	Close() error
+	Domain() (start, end []byte)
 }

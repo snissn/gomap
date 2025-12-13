@@ -186,8 +186,6 @@ func (it *Iterator) Close() error {
 	return nil
 }
 
-// Domain returns the start and end keys of the iterator.
-// Memtable iterator does not have a concept of domain, so it returns nil, nil.
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, nil
 }

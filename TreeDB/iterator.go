@@ -264,7 +264,7 @@ func (it *Iterator) UnsafeValue() []byte {
 		val = []byte{}
 	}
 	it.valBuf = val
-	it.valueLoaded = false // Only load once
+	it.valueLoaded = true // Correctly set to true
 	return it.valBuf
 }
 
