@@ -2,8 +2,10 @@ package caching
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
+	"github.com/snissn/gomap-gemini/TreeDB/batch"
 	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
 )
 
@@ -29,8 +31,51 @@ func (m *MockBackend) Set(key, val []byte) {
 }
 
 func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
-	return nil, fmt.Errorf("not implemented in mock")
+	keys := make([]string, 0, len(m.data))
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return &MockIterator{data: m.data, keys: keys, idx: -1}, nil
 }
+
+type MockIterator struct {
+	data map[string][]byte
+	keys []string
+	idx  int
+}
+
+func (it *MockIterator) Valid() bool {
+	return it.idx >= 0 && it.idx < len(it.keys)
+}
+
+func (it *MockIterator) Next() {
+	it.idx++
+}
+
+func (it *MockIterator) Seek(key []byte) {
+	it.idx = sort.SearchStrings(it.keys, string(key))
+	// If not found, sort.Search returns insertion point.
+	// If exact match or greater, that's what we want.
+	if it.idx == len(it.keys) {
+		// eof
+	}
+}
+
+func (it *MockIterator) UnsafeKey() []byte {
+	return []byte(it.keys[it.idx])
+}
+
+func (it *MockIterator) UnsafeValue() []byte {
+	return it.data[it.keys[it.idx]]
+}
+
+func (it *MockIterator) IsDeleted() bool { return false }
+func (it *MockIterator) Error() error { return nil }
+func (it *MockIterator) Close() error { return nil }
+func (it *MockIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (it *MockIterator) Key() []byte { return it.UnsafeKey() }
+func (it *MockIterator) Value() []byte { return it.UnsafeValue() }
 
 func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return nil, fmt.Errorf("not implemented in mock")
@@ -56,6 +101,17 @@ func (b *MockBatch) Delete(key []byte) error {
 	delete(b.mb.data, string(key))
 	return nil
 }
+func (b *MockBatch) SetOps(ops map[string]batch.Entry) error {
+	for k, op := range ops {
+		if op.Type == batch.OpDelete {
+			delete(b.mb.data, k)
+		} else {
+			b.mb.data[k] = op.Value
+		}
+	}
+	return nil
+}
+
 func (b *MockBatch) Write() error { return nil }
 func (b *MockBatch) WriteSync() error { return nil }
 func (b *MockBatch) Close() error { return nil }

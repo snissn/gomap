@@ -243,6 +243,51 @@ func (g *GeminiWrapper) NewBatch() (BatchInterface, error) {
 	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
 }
 
+type GeminiCachedWrapper struct {
+	db *geminicaching.DB
+}
+
+func NewGeminiCached(dir string) (*GeminiCachedWrapper, error) {
+	opts := geminidb.Options{
+		Dir:       dir,
+		ChunkSize: 64 * 1024 * 1024,
+		// Explicitly enable caching in options, if it matters (it's implicitly true if OpenCached is called)
+	}
+	// Use geminicaching.Open directly
+	backendDB, err := geminidb.Open(opts) // Open the underlying DB first
+	if err != nil {
+		return nil, err
+	}
+	
+	// geminicaching.Open expects a BackendDB interface, which geminidb.DB implements
+	db, err := geminicaching.Open(dir, backendDB, 4*1024*1024) // 4MB flush threshold
+	if err != nil {
+		backendDB.Close()
+		return nil, err
+	}
+	return &GeminiCachedWrapper{db: db}, nil
+}
+
+func (g *GeminiCachedWrapper) Name() string                 { return "GeminiCached" }
+func (g *GeminiCachedWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
+func (g *GeminiCachedWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
+func (g *GeminiCachedWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
+func (g *GeminiCachedWrapper) Close() error                 { return g.db.Close() }
+func (g *GeminiCachedWrapper) SupportsScan() bool           { return true }
+func (g *GeminiCachedWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	it, err := g.db.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	// The caching.Iterator already implements the merging.Iterator,
+	// which satisfies our GenericIterator
+	return it, nil
+}
+func (g *GeminiCachedWrapper) SupportsBatch() bool { return true }
+func (g *GeminiCachedWrapper) NewBatch() (BatchInterface, error) {
+	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
+}
+
 // --- Benchmark Runner ---
 
 var (
@@ -271,12 +316,13 @@ func main() {
 		"btree":  func(d string) (DBInterface, error) { return NewBTree(d) },
 		"treedb": func(d string) (DBInterface, error) { return NewLegacyTreeDB(d) },
 		"gemini": func(d string) (DBInterface, error) { return NewGemini(d) },
+		"geminicached": func(d string) (DBInterface, error) { return NewGeminiCached(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"gomap", "btree", "treedb", "gemini"}
+	orderedDBs := []string{"gomap", "btree", "treedb", "gemini", "geminicached"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}

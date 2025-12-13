@@ -64,38 +64,95 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 	}
 
 	if len(splits) > 0 {
-		// Root split! Create new internal root.
-		newRootID, err := z.allocator.Alloc()
-		if err != nil {
-			return 0, nil, err
-		}
+		// Root split! 
+		// The children for the next level are:
+		// 1. The new version of the old root (newRoot) with Key=[] (effectively min key)
+		// 2. The splits (siblings) generated from it.
+		
+		currentLevelNodes := []Split{{Key: []byte{}, NodeID: newRoot}}
+		currentLevelNodes = append(currentLevelNodes, splits...)
 
-		buf := z.getPooledBuf()
-		defer z.putPooledBuf(buf)
-		data := *buf
-
-		// Use Builder for new root
-		builder := node.NewBuilder(data, page.PageTypeInternal)
-		builder.SetPageID(newRootID)
-
-		// 1. Add first child
-		if err := builder.AddInternalChild([]byte{}, newRoot); err != nil {
-			return 0, nil, err
-		}
-
-		// 2. Add splits
-		for _, s := range splits {
-			if err := builder.AddInternalChild(s.Key, s.NodeID); err != nil {
-				return 0, nil, errors.New("root split overflow: batch too large for single level growth")
+		// Iteratively build levels up until all nodes fit in one root.
+		for {
+			// If we only have 1 node left, that is our new root.
+			if len(currentLevelNodes) == 1 {
+				return currentLevelNodes[0].NodeID, retired, nil
 			}
-		}
 
-		n := builder.Finish()
-		if err := z.pager.Write(newRootID, n.Data()); err != nil {
-			return 0, nil, err
-		}
+			var nextLevelNodes []Split
+			
+			// Allocate a node for the current batch of children
+			var currentBuilder *node.Builder
+			var currentBuf *[]byte
+			
+			// We need to track the "Start Key" of the current builder to promote it.
+			var currentStartKey []byte
 
-		return newRootID, retired, nil
+			for i, child := range currentLevelNodes {
+				if currentBuilder == nil {
+					// Start new node
+					pid, err := z.allocator.Alloc()
+					if err != nil {
+						return 0, nil, err
+					}
+					currentBuf = z.getPooledBuf()
+					// We can defer putPooledBuf only if we track them, but here we loop.
+					// Better to put manually.
+					
+					currentBuilder = node.NewBuilder(*currentBuf, page.PageTypeInternal)
+					currentBuilder.SetPageID(pid)
+					
+					currentStartKey = child.Key
+				}
+
+				// Add child
+				err := currentBuilder.AddInternalChild(child.Key, child.NodeID)
+				if err == node.ErrNodeFull {
+					// Finish current
+					n := currentBuilder.Finish()
+					if err := z.pager.Write(currentBuilder.PageID(), n.Data()); err != nil {
+						z.putPooledBuf(currentBuf)
+						return 0, nil, err
+					}
+					// Promote
+					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
+					z.putPooledBuf(currentBuf)
+
+					// Start new for THIS child (retry)
+					pid, err := z.allocator.Alloc()
+					if err != nil {
+						return 0, nil, err
+					}
+					currentBuf = z.getPooledBuf()
+					currentBuilder = node.NewBuilder(*currentBuf, page.PageTypeInternal)
+					currentBuilder.SetPageID(pid)
+					currentStartKey = child.Key
+					
+					if err := currentBuilder.AddInternalChild(child.Key, child.NodeID); err != nil {
+						z.putPooledBuf(currentBuf)
+						return 0, nil, err // Should fit in empty node
+					}
+				} else if err != nil {
+					z.putPooledBuf(currentBuf)
+					return 0, nil, err
+				}
+				
+				// If this was the last child, finish
+				if i == len(currentLevelNodes)-1 {
+					n := currentBuilder.Finish()
+					if err := z.pager.Write(currentBuilder.PageID(), n.Data()); err != nil {
+						z.putPooledBuf(currentBuf)
+						return 0, nil, err
+					}
+					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
+					z.putPooledBuf(currentBuf)
+					currentBuilder = nil
+				}
+			}
+			
+			// Move up
+			currentLevelNodes = nextLevelNodes
+		}
 	}
 
 	return newRoot, retired, nil
