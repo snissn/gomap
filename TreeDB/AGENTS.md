@@ -14,7 +14,7 @@ This repository currently contains only the design and test specifications under
 - **SWMR** concurrency: single writer lock; lock‑free reads via **Snapshots** (MVCC epochs).
 - **CRC32C (Castagnoli)** checksums on every B+Tree page body and every slab record.
 - Durability contract:
-  - `*Sync` writes must make slab durable **before** meta/index persistence.
+  - `*Sync` writes must make slab durable **before** meta/index durability boundary.
   - `Write()`/`Set()` may return before durability.
 - Iterator semantics must match Cosmos SDK:
   - domain `[start,end)` where `end` is exclusive.
@@ -263,7 +263,7 @@ This repository currently contains only the design and test specifications under
 - [x] Implement `MergingIterator` in `internal/merging`.
     - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
     - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
-- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct version returned.
+- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
 
 ### 12.3 CachingDB Core Logic
 - [x] Create `caching` package (or extend `treedb`).
@@ -280,7 +280,7 @@ This repository currently contains only the design and test specifications under
 ### 12.4 Integration & Config
 - [x] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
 - [x] Update `Open` to initialize `CachingDB` wrapper if enabled.
-- [ ] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
+- [x] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
 - **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
 
 ---
@@ -297,28 +297,28 @@ This repository currently contains only the design and test specifications under
 - [x] **Test:** Verify zombie deletion waits for group refcount to drop.
 
 ### 13.2 Unsafe Iterator Interface
-- [ ] Define `UnsafeIterator` in `internal/iterator`:
+- [x] Define `UnsafeIterator` in `internal/iterator`:
     - `UnsafeKey() []byte` (view)
     - `UnsafeValue() []byte` (view)
     - `Next()`, `Valid()`, `Close()`
-- [ ] Update `memtable.Iterator` to implement this (it already returns views).
+- [x] Update `memtable.Iterator` to implement this (it already returns views).
 
 ### 13.3 Specialized TwoWayMerger
-- [ ] Implement `TwoWayMerger` in `internal/merging` to replace `MergingIterator` for the 2-source case.
-- [ ] Optimize logic: direct comparison `if keyA < keyB`, no interface dispatch.
-- [ ] Handle shadowing and tombstones efficiently.
+- [x] Implement `TwoWayMerger` in `internal/merging` to replace `MergingIterator` for the 2-source case.
+- [x] Optimize logic: direct comparison `if keyA < keyB`, no interface dispatch.
+- [x] Handle shadowing and tombstones efficiently.
 
 ### 13.4 Lazy Disk Iterator
-- [ ] Modify `internal/tree/iterator.go` (Disk Iterator) to implement `UnsafeIterator`.
-- [ ] **Lazy Value Loading:**
+- [x] Modify `internal/tree/iterator.go` (Disk Iterator) to implement `UnsafeIterator`.
+- [x] **Lazy Value Loading:**
     - `Next()` parses leaf but does NOT read Value pointer from slab.
     - `UnsafeValue()` triggers slab read if needed (and caches it in iterator struct).
-- [ ] **Zero-Copy Keys:** Return slice into mmap buffer for Key (safety warning: valid only until next call/close).
+- [x] **Zero-Copy Keys:** Return slice into mmap buffer for Key (safety warning: valid only until next call/close).
 
 ### 13.5 Integration
-- [ ] Update `caching.DB` to use `TwoWayMerger` and `UnsafeIterator`.
-- [ ] Update public `Iterator` wrapper to perform the final safety copy (`append([]byte(nil), view...)`).
-- [ ] **Benchmark:** Run `dbbench` Range Scan to verify >500k ranges/s.
+- [x] Update `caching.DB` to use `TwoWayMerger` and `UnsafeIterator`.
+- [x] Update public `Iterator` wrapper to perform the final safety copy (`append([]byte(nil), view...)`).
+- [x] **Benchmark:** Run `dbbench` Range Scan to verify >500k ranges/s.
 
 ---
 
