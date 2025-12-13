@@ -79,22 +79,6 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 		myKeyIndex := uint64(myhash) % h.Capacity
 		count := uint64(0)
 		for count < h.Capacity {
-			remaining := h.Capacity - count
-			if useAVX512Scan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
-				mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
-				if mask == 0 {
-					myKeyIndex += 8
-					if myKeyIndex == h.Capacity {
-						myKeyIndex = 0
-					}
-					count += 8
-					continue
-				}
-				skip := uint64(bits.TrailingZeros64(mask))
-				myKeyIndex += skip
-				count += skip
-			}
-
 			probeHash := (*h.Hashes)[myKeyIndex]
 
 			if probeHash == 0 {
@@ -126,6 +110,25 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 				myKeyIndex = 0
 			}
 			count++
+
+			remaining := h.Capacity - count
+			if useSIMDScan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
+				first := (*h.Hashes)[myKeyIndex]
+				if first != 0 && first != HashTombstone && first != myhash {
+					mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
+					if mask == 0 {
+						myKeyIndex += 8
+						if myKeyIndex == h.Capacity {
+							myKeyIndex = 0
+						}
+						count += 8
+						continue
+					}
+					skip := uint64(bits.TrailingZeros64(mask))
+					myKeyIndex += skip
+					count += skip
+				}
+			}
 		}
 	}
 
@@ -183,22 +186,6 @@ func (h *Hashmap) Delete(key []byte) error {
 		myKeyIndex := uint64(myhash) % h.Capacity
 		count := uint64(0)
 		for count < h.Capacity {
-			remaining := h.Capacity - count
-			if useAVX512Scan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
-				mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
-				if mask == 0 {
-					myKeyIndex += 8
-					if myKeyIndex == h.Capacity {
-						myKeyIndex = 0
-					}
-					count += 8
-					continue
-				}
-				skip := uint64(bits.TrailingZeros64(mask))
-				myKeyIndex += skip
-				count += skip
-			}
-
 			probeHash := (*h.Hashes)[myKeyIndex]
 
 			if probeHash == 0 {
@@ -238,6 +225,25 @@ func (h *Hashmap) Delete(key []byte) error {
 				myKeyIndex = 0
 			}
 			count++
+
+			remaining := h.Capacity - count
+			if useSIMDScan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
+				first := (*h.Hashes)[myKeyIndex]
+				if first != 0 && first != HashTombstone && first != myhash {
+					mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
+					if mask == 0 {
+						myKeyIndex += 8
+						if myKeyIndex == h.Capacity {
+							myKeyIndex = 0
+						}
+						count += 8
+						continue
+					}
+					skip := uint64(bits.TrailingZeros64(mask))
+					myKeyIndex += skip
+					count += skip
+				}
+			}
 		}
 	}
 

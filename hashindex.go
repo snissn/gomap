@@ -61,18 +61,6 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 	foundTombstone := false
 
 	for {
-		if useAVX512Scan && hkey+8 <= h.Capacity {
-			mask := scanSpecial8Mask(&(*h.Hashes)[hkey], myhash)
-			if mask == 0 {
-				hkey += 8
-				if hkey == h.Capacity {
-					hkey = 0
-				}
-				continue
-			}
-			hkey += uint64(bits.TrailingZeros64(mask))
-		}
-
 		probeHash := (*h.Hashes)[hkey]
 
 		if probeHash == 0 {
@@ -103,6 +91,21 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 		hkey++
 		if hkey == h.Capacity {
 			hkey = 0
+		}
+
+		if useSIMDScan && hkey+8 <= h.Capacity {
+			first := (*h.Hashes)[hkey]
+			if first != 0 && first != HashTombstone && first != myhash {
+				mask := scanSpecial8Mask(&(*h.Hashes)[hkey], myhash)
+				if mask == 0 {
+					hkey += 8
+					if hkey == h.Capacity {
+						hkey = 0
+					}
+					continue
+				}
+				hkey += uint64(bits.TrailingZeros64(mask))
+			}
 		}
 	}
 }
