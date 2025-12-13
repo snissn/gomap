@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/snissn/gomap"
@@ -17,6 +16,7 @@ import (
 
 	// Legacy TreeDB
 	legacydb "github.com/snissn/gomap/TreeDB"
+	legacycaching "github.com/snissn/gomap/TreeDB/caching" // Import for Legacy Batch Interface
 
 	// Gemini TreeDB
 	geminicaching "github.com/snissn/gomap-gemini/TreeDB/caching"
@@ -60,25 +60,20 @@ type DBInterface interface {
 
 // 1. Gomap Wrapper
 type GomapBatch struct {
-	m     *gomap.HashmapDistributed
-	items []gomap.Item
+	bw *gomap.BatchWriter
 }
 
 func (b *GomapBatch) Set(key, value []byte) error {
-	b.items = append(b.items, gomap.Item{Key: key, Value: value})
-	return nil
+	return b.bw.Add(key, value)
 }
 func (b *GomapBatch) Delete(key []byte) error {
 	return errors.New("Gomap batch delete not supported")
 }
 func (b *GomapBatch) Commit() error {
-	if len(b.items) > 0 {
-		return b.m.AddMany(b.items)
-	}
-	return nil
+	return b.bw.Flush()
 }
 func (b *GomapBatch) Close() error {
-	b.items = nil
+	// BatchWriter doesn't need explicit close, but we ensure flush in Commit
 	return nil
 }
 
@@ -94,18 +89,23 @@ func NewGomap(dir string) (*GomapWrapper, error) {
 	return &GomapWrapper{m: m}, nil
 }
 
-func (g *GomapWrapper) Name() string { return "Gomap" }
-func (g *GomapWrapper) Set(k, v []byte) error { return g.m.Add(k, v) }
+func (g *GomapWrapper) Name() string                 { return "Gomap" }
+func (g *GomapWrapper) Set(k, v []byte) error        { return g.m.Add(k, v) }
 func (g *GomapWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
-func (g *GomapWrapper) Delete(k []byte) error { return g.m.Delete(k) }
-func (g *GomapWrapper) Close() error { return g.m.Flush() }
-func (g *GomapWrapper) SupportsScan() bool { return false }
+func (g *GomapWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
+func (g *GomapWrapper) Close() error                 { return g.m.Flush() }
+func (g *GomapWrapper) SupportsScan() bool           { return false }
 func (g *GomapWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	return nil, errors.New("Gomap does not support scan")
 }
 func (g *GomapWrapper) SupportsBatch() bool { return true }
 func (g *GomapWrapper) NewBatch() (BatchInterface, error) {
-	return &GomapBatch{m: g.m}, nil
+	// Use global batchSize flag if possible, or default
+	bs := 1000
+	if batchSize != nil {
+		bs = *batchSize
+	}
+	return &GomapBatch{bw: gomap.NewBatchWriter(g.m, bs)}, nil
 }
 
 // 2. BTree Wrapper
@@ -135,12 +135,12 @@ func NewBTree(dir string) (*BTreeWrapper, error) {
 	return &BTreeWrapper{t: t, m: m}, nil
 }
 
-func (b *BTreeWrapper) Name() string { return "BTree" }
-func (b *BTreeWrapper) Set(k, v []byte) error { return b.t.Put(k, v) }
+func (b *BTreeWrapper) Name() string                 { return "BTree" }
+func (b *BTreeWrapper) Set(k, v []byte) error        { return b.t.Put(k, v) }
 func (b *BTreeWrapper) Get(k []byte) ([]byte, error) { return b.t.Get(k) }
-func (b *BTreeWrapper) Delete(k []byte) error { return b.t.Delete(k) }
-func (b *BTreeWrapper) Close() error { return b.m.Flush() }
-func (b *BTreeWrapper) SupportsScan() bool { return false }
+func (b *BTreeWrapper) Delete(k []byte) error        { return b.t.Delete(k) }
+func (b *BTreeWrapper) Close() error                 { return b.m.Flush() }
+func (b *BTreeWrapper) SupportsScan() bool           { return false }
 func (b *BTreeWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	return nil, errors.New("BTree does not support scan via public API")
 }
@@ -151,17 +151,12 @@ func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
 
 // 3. Legacy TreeDB Wrapper
 type LegacyBatchWrapper struct {
-	b interface {
-		Set(key, value []byte) error
-		Delete(key []byte) error
-		Write() error
-		Close() error
-	}
+	b legacycaching.BatchInterface // Use the imported interface
 }
 
 func (w *LegacyBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
 func (w *LegacyBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *LegacyBatchWrapper) Commit() error         { return w.b.Write() }
+func (w *LegacyBatchWrapper) Commit() error         { return w.b.Write() } // Legacy batch has Write()
 func (w *LegacyBatchWrapper) Close() error          { return w.b.Close() }
 
 type LegacyTreeDBWrapper struct {
@@ -180,12 +175,12 @@ func NewLegacyTreeDB(dir string) (*LegacyTreeDBWrapper, error) {
 	return &LegacyTreeDBWrapper{db: db}, nil
 }
 
-func (l *LegacyTreeDBWrapper) Name() string { return "TreeDB" }
-func (l *LegacyTreeDBWrapper) Set(k, v []byte) error { return l.db.Set(k, v) }
+func (l *LegacyTreeDBWrapper) Name() string                 { return "TreeDB" }
+func (l *LegacyTreeDBWrapper) Set(k, v []byte) error        { return l.db.Set(k, v) }
 func (l *LegacyTreeDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k) }
-func (l *LegacyTreeDBWrapper) Delete(k []byte) error { return l.db.Delete(k) }
-func (l *LegacyTreeDBWrapper) Close() error { return l.db.Close() }
-func (l *LegacyTreeDBWrapper) SupportsScan() bool { return true }
+func (l *LegacyTreeDBWrapper) Delete(k []byte) error        { return l.db.Delete(k) }
+func (l *LegacyTreeDBWrapper) Close() error                 { return l.db.Close() }
+func (l *LegacyTreeDBWrapper) SupportsScan() bool           { return true }
 func (l *LegacyTreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	it, err := l.db.Iterator(start, end)
 	if err != nil {
@@ -227,12 +222,12 @@ func NewGemini(dir string) (*GeminiWrapper, error) {
 	return &GeminiWrapper{db: db}, nil
 }
 
-func (g *GeminiWrapper) Name() string { return "Gemini" }
-func (g *GeminiWrapper) Set(k, v []byte) error { return g.db.Set(k, v) }
+func (g *GeminiWrapper) Name() string                 { return "Gemini" }
+func (g *GeminiWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
 func (g *GeminiWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
-func (g *GeminiWrapper) Delete(k []byte) error { return g.db.Delete(k) }
-func (g *GeminiWrapper) Close() error { return g.db.Close() }
-func (g *GeminiWrapper) SupportsScan() bool { return true }
+func (g *GeminiWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
+func (g *GeminiWrapper) Close() error                 { return g.db.Close() }
+func (g *GeminiWrapper) SupportsScan() bool           { return true }
 func (g *GeminiWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	it, err := g.db.Iterator(start, end)
 	if err != nil {
@@ -314,7 +309,7 @@ func main() {
 	// 2. Define Tests
 	// Map of TestName -> Function
 	type TestFunc func(db DBInterface) float64
-	
+
 	testFuncs := map[string]TestFunc{
 		"write_seq": func(db DBInterface) float64 {
 			start := time.Now()
@@ -390,7 +385,7 @@ func main() {
 					// Use new keys for batch to stress growth/append?
 					// Or overwrite?
 					// Let's use high range keys to append.
-					k := key(j + *numKeys) 
+					k := key(j + *numKeys)
 					batch.Set(k, val)
 				}
 				if err := batch.Commit(); err != nil {
@@ -413,9 +408,19 @@ func main() {
 	}
 
 	// Ordered list of tests to run
-	allTestOrder := []string{"write_seq", "read_rand", "scan", "write_rand", "batch_write", "delete_rand"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "scan"}
 	finalTestOrder := make([]string, 0)
-	
+
+	// Display names for polished output
+	displayNames := map[string]string{
+		"write_seq":   "Sequential Write",
+		"write_rand":  "Random Write",
+		"read_rand":   "Random Read",
+		"scan":        "Scan",
+		"batch_write": "Batch Write",
+		"delete_rand": "Random Delete",
+	}
+
 	if contains(testsToRun, "all") {
 		finalTestOrder = allTestOrder
 	} else {
@@ -449,9 +454,8 @@ func main() {
 	}
 
 	for _, testName := range finalTestOrder {
-		fmt.Printf("Running Test: %s\n", testName)
 		fn := testFuncs[testName]
-		
+
 		for _, inst := range instances {
 			// Run Test
 			// Reset? No, we persist state.
@@ -470,27 +474,63 @@ func main() {
 
 	// 5. Print Transposed Table
 	fmt.Println()
-	w := tabwriter.NewWriter(os.Stdout, 12, 0, 2, ' ', 0)
-	
-	// Header
-	header := "Test"
-	for _, inst := range instances {
-		header += fmt.Sprintf("\t%s", inst.Wrapper.Name())
-	}
-	fmt.Fprintln(w, header)
-	
-	// Separator (visual only, tabwriter handles alignment)
-	// fmt.Fprintln(w, "----\t----\t----\t----\t----\n")
 
-	for _, testName := range finalTestOrder {
-		row := testName
-		for _, inst := range instances {
-			val := results[testName][inst.Wrapper.Name()]
-			row += fmt.Sprintf("\t%s", formatFloat(val))
-		}
-		fmt.Fprintln(w, row)
+	// Dynamically determine column widths based on content
+	colNames := []string{"Test"}
+	for _, inst := range instances {
+		colNames = append(colNames, inst.Wrapper.Name())
 	}
-	w.Flush()
+
+	colWidths := make(map[string]int)
+	for _, colName := range colNames {
+		colWidths[colName] = len(colName) // Start with header length
+	}
+
+	// Update widths based on test names (using display names)
+	for _, testName := range finalTestOrder {
+		dispName := displayNames[testName]
+		if len(dispName) > colWidths["Test"] {
+			colWidths["Test"] = len(dispName)
+		}
+	}
+
+	// Update widths based on results
+	for _, testName := range finalTestOrder {
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			valStr := formatFloat(results[testName][dbName])
+			if len(valStr) > colWidths[dbName] {
+				colWidths[dbName] = len(valStr)
+			}
+		}
+	}
+
+	// Print Header
+	headerRow := fmt.Sprintf("%*s", colWidths["Test"], "Test")
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName) // Right-align DB names for consistency with data
+	}
+	fmt.Println(headerRow)
+
+	// Print Separator
+	separatorRow := fmt.Sprintf("%*s", colWidths["Test"], strings.Repeat("-", colWidths["Test"]))
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
+	}
+	fmt.Println(separatorRow)
+
+	// Print Data Rows
+	for _, testName := range finalTestOrder {
+		dataRow := fmt.Sprintf("%*s", colWidths["Test"], displayNames[testName])
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			val := results[testName][dbName]
+			dataRow += fmt.Sprintf("  %*s", colWidths[dbName], formatFloat(val)) // Right-align values
+		}
+		fmt.Println(dataRow)
+	}
 }
 
 func key(i int) []byte {
@@ -519,20 +559,21 @@ func contains(list []string, item string) bool {
 // formatFloat formats a float with commas (e.g. 1,234,567)
 func formatFloat(f float64) string {
 	s := fmt.Sprintf("%.0f", f)
+	if f == 0 { // Explicitly handle 0 for non-supported tests
+		return "-"
+	}
 	n := len(s)
 	if n <= 3 {
 		return s
 	}
 	var sb strings.Builder
 	remainder := n % 3
-	if remainder > 0 {
-		sb.WriteString(s[:remainder])
-		sb.WriteString(",")
+	if remainder == 0 {
+		remainder = 3
 	}
+	sb.WriteString(s[:remainder])
 	for i := remainder; i < n; i += 3 {
-		if i > remainder {
-			sb.WriteString(",")
-		}
+		sb.WriteString(",")
 		sb.WriteString(s[i : i+3])
 	}
 	return sb.String()
