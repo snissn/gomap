@@ -1,6 +1,7 @@
 package pager
 
 import (
+	"errors"
 	"testing"
 	"unsafe"
 
@@ -77,7 +78,7 @@ func TestShrinkForbidden(t *testing.T) {
 	defer func() { _ = p.Close() }()
 
 	cur := p.TotalPages()
-	if err := p.GrowToPages(cur - 1); err != ErrShrinkForbidden {
+	if err := p.GrowToPages(cur - 1); !errors.Is(err, ErrShrinkForbidden) {
 		t.Fatalf("expected ErrShrinkForbidden, got %v", err)
 	}
 }
