@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"treedb/internal/iterator"
 )
 
-func collectKeys(t *testing.T, it *Iterator) [][]byte {
+func collectKeys(t *testing.T, it iterator.UnsafeIterator) [][]byte {
 	t.Helper()
 	var out [][]byte
 	for ; it.Valid(); it.Next() {
-		out = append(out, append([]byte(nil), it.Key()...))
+		out = append(out, append([]byte(nil), it.UnsafeKey()...))
 	}
+	// UnsafeIterator doesn't have Error(), but treedb.Iterator does.
+	// We can cast or ignore for test.
+	// If UnsafeIterator has Error() (which I added), use it.
 	if err := it.Error(); err != nil {
 		t.Fatalf("iterator error: %v", err)
 	}

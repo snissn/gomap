@@ -3,19 +3,17 @@ package treedb
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"treedb/caching"
 	"treedb/internal/adaptive"
-	"treedb/internal/merging"
+	"treedb/internal/iterator" // Import for iterator.UnsafeIterator
 	"treedb/internal/mvcc"
 	"treedb/internal/page"
 	"treedb/internal/pager"
 	"treedb/internal/slab"
-	"treedb/internal/tree"
 )
 
 // Options configures a TreeDB instance.
@@ -146,95 +144,72 @@ func (db *DB) Close() error {
 
 // Get fetches the value for key or nil if absent.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	if key == nil || len(key) == 0 {
-		return nil, ErrKeyEmpty
-	}
-	snap, err := db.state.AcquireSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	defer snap.Close()
-	st := snap.State()
+        if key == nil || len(key) == 0 {
+                return nil, ErrKeyEmpty
+        }
+        snap, err := db.state.AcquireSnapshot()
+        	if err != nil {
+        		return nil, err
+        	}
+        	defer snap.Close()
+        
+        	it := newIterator(db, snap, key, nil, false) // Seek to key
+	if it.err != nil {
+            return nil, it.err
+        }
+        if !it.Valid() || bytes.Compare(it.UnsafeKey(), key) != 0 {
+            return nil, nil // Key not found or exhausted
+        }
 
-	ut := tree.NewUserTree(db.pager, st.UserRootPageID)
-	ent, err := ut.GetRaw(key)
-	if err != nil {
-		if errors.Is(err, tree.ErrNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if ent.IsTombstone() {
-		return nil, nil
-	}
-	switch ent.Flags {
-	case page.LeafFlagInline:
-		val := append([]byte(nil), ent.InlineValue...)
-		if val == nil {
-			val = []byte{}
-		}
-		return val, nil
-	case page.LeafFlagPointer:
-		val, err := db.readPtr(ent.Ptr, st.SlabSet)
-		if err != nil {
-			return nil, err
-		}
-		if val == nil {
-			val = []byte{}
-		}
-		return val, nil
-	default:
-		val := append([]byte(nil), ent.InlineValue...)
-		if val == nil {
-			val = []byte{}
-		}
-		return val, nil
-	}
+        if it.IsDeleted() {
+            return nil, nil // Tombstone
+        }
+        return it.UnsafeValue(), nil
 }
 
 // Has reports whether key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	v, err := db.Get(key)
-	if err != nil {
-		return false, err
-	}
-	return v != nil, nil
+        v, err := db.Get(key)
+        if err != nil {
+                return false, err
+        }
+        return v != nil, nil
 }
 
 // Set sets key/value without durability guarantee.
 func (db *DB) Set(key, value []byte) error {
-	b := db.NewBatch()
-	if err := b.Set(key, value); err != nil {
-		return err
-	}
-	return b.Write()
+        b := db.NewBatch()
+        if err := b.Set(key, value); err != nil {
+                return err
+        }
+        return b.Write()
 }
 
 // SetSync sets key/value and flushes durability boundary.
 func (db *DB) SetSync(key, value []byte) error {
-	b := db.NewBatch()
-	if err := b.Set(key, value); err != nil {
-		return err
-	}
-	return b.WriteSync()
+        b := db.NewBatch()
+        if err := b.Set(key, value); err != nil {
+                return err
+        }
+        return b.WriteSync()
 }
 
 // Delete removes key without durability guarantee.
 func (db *DB) Delete(key []byte) error {
-	b := db.NewBatch()
-	if err := b.Delete(key); err != nil {
-		return err
-	}
-	return b.Write()
+        b := db.NewBatch()
+        if err := b.Delete(key); err != nil {
+                return err
+        }
+        return b.Write()
 }
 
 // DeleteSync removes key and flushes durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
-	b := db.NewBatch()
-	if err := b.Delete(key); err != nil {
-		return err
-	}
-	return b.WriteSync()
+        b := db.NewBatch()
+        if err := b.Delete(key); err != nil {
+                return err
+        }
+        return b.WriteSync()
 }
 
 // NewBatch returns an empty batch.
@@ -242,66 +217,50 @@ func (db *DB) NewBatch() caching.BatchInterface { return db.NewBatchWithSize(0) 
 
 // NewBatchWithSize returns a batch with a size hint.
 func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
-	return newBatch(db, size)
+        return newBatch(db, size)
 }
 
-func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
-	if db == nil {
-		return nil, fmt.Errorf("treedb: nil db")
-	}
-	if start != nil && len(start) == 0 {
-		return nil, ErrKeyEmpty
-	}
-	if end != nil && len(end) == 0 {
-		return nil, ErrKeyEmpty
-	}
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
-		snap, err := db.state.AcquireSnapshot()
-		if err != nil {
-			return nil, err
-		}
-		it := newIterator(db, snap, start, end, false)
-		it.valid.Store(false)
-		return it, nil
-	}
-	snap, err := db.state.AcquireSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	it := newIterator(db, snap, start, end, false)
-	it.initForward()
-	return it, nil
-}
-
-func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
-	if db == nil {
-		return nil, fmt.Errorf("treedb: nil db")
-	}
-	if start != nil && len(start) == 0 {
-		return nil, ErrKeyEmpty
-	}
-	if end != nil && len(end) == 0 {
-		return nil, ErrKeyEmpty
-	}
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
-		snap, err := db.state.AcquireSnapshot()
-		if err != nil {
-			return nil, err
-		}
-		it := newIterator(db, snap, start, end, true)
-		it.valid.Store(false)
-		return it, nil
-	}
-	snap, err := db.state.AcquireSnapshot()
-	if err != nil {
-		return nil, err
-	}
-	it := newIterator(db, snap, start, end, true)
-	it.initReverse()
-	return it, nil
-}
-
-// Print is a debug helper that dumps all user keys and values.
+func (db *DB) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+        if db == nil {
+                return nil, fmt.Errorf("treedb: nil db")
+        }
+        if start != nil && len(start) == 0 {
+                return nil, ErrKeyEmpty
+        }
+        if end != nil && len(end) == 0 {
+                return nil, ErrKeyEmpty
+        }
+        if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+                snap, err := db.state.AcquireSnapshot()
+                if err != nil {
+                        return nil, err
+                }
+                it := newIterator(db, snap, start, end, false)
+                it.valid.Store(false)
+                return it, nil
+        }
+        snap, err := db.state.AcquireSnapshot()
+        if err != nil {
+                return nil, err
+        }
+        	it := newIterator(db, snap, start, end, false)
+        	it.Seek(start) // Initial seek
+        	return it, nil
+        }
+        
+        func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+        	if db == nil {
+        		return nil, fmt.Errorf("treedb: nil db")
+        	}
+        	// It's the same error logic, but newIterator sets it.
+        	snap, err := db.state.AcquireSnapshot()
+        	if err != nil {
+        		return nil, err
+        	}
+        	it := newIterator(db, snap, start, end, true)
+        	it.Seek(end) // Initial seek for ReverseIterator
+        	return it, nil
+        }// Print is a debug helper that dumps all user keys and values.
 // It is best-effort and intended only for development.
 func (db *DB) Print() error {
 	if db == nil {

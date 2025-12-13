@@ -1,13 +1,13 @@
 package caching
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"treedb/internal/iterator" // Import for UnsafeIterator
 	"treedb/internal/memtable"
 	"treedb/internal/merging"
 	"treedb/internal/wal"
@@ -28,45 +28,36 @@ type BatchInterface interface {
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
+// Its Iterator methods now return iterator.UnsafeIterator.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
-	Iterator(start, end []byte) (merging.Iterator, error)
-	ReverseIterator(start, end []byte) (merging.Iterator, error)
+	Iterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
+	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
 	NewBatch() BatchInterface
 	Close() error
 	Print() error
 	Stats() map[string]string
 }
 
-// ...
-
-func (db *DB) Print() error {
-	return db.backend.Print()
-}
-
-func (db *DB) Stats() map[string]string {
-	return db.backend.Stats()
-}
-
 type DB struct {
 	mu sync.RWMutex
 
 	// Level 0 (Memory)
-	mutable   *memtable.Memtable
-	queue     []*memtable.Memtable
-	
+	mutable *memtable.Memtable
+	queue   []*memtable.Memtable
+
 	// Durability
-	wal       *wal.Writer
-	walPath   string
-	walSeq    int // Sequence number for WAL files
+	wal     *wal.Writer
+	walPath string
+	walSeq  int // Sequence number for WAL files
 
 	// Level 1 (Disk)
-	backend   BackendDB
-	
+	backend BackendDB
+
 	// Config
 	dir            string
 	flushThreshold int64
-	
+
 	// Lifecycle
 	closeCh chan struct{}
 	wg      sync.WaitGroup
@@ -76,7 +67,7 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	if flushThreshold <= 0 {
 		flushThreshold = 4 * 1024 * 1024 // 4MB default
 	}
-	
+
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
@@ -112,10 +103,10 @@ func (db *DB) Close() error {
 
 	close(db.closeCh)
 	db.wg.Wait()
-	
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	
+
 	if db.wal != nil {
 		db.wal.Close()
 	}
@@ -261,22 +252,18 @@ func (db *DB) flushOne() bool {
 		return false
 	}
 	mem := db.queue[0]
-	// Remove from queue? No, wait until flushed.
-	// Ideally we copy the pointer and release lock to flush.
-	// But we need to ensure we don't flush same memtable twice or concurrently.
-	// We'll peek, flush, then remove under lock.
 	db.mu.Unlock()
 
 	// Flush 'mem' to backend
-	batch := db.backend.NewBatch()
-	iter := mem.NewIterator()
-	iter.Seek(nil) // Start
+
+batch := db.backend.NewBatch()
+	iter := mem.NewIterator() // Returns iterator.UnsafeIterator
+	iter.Seek(nil)             // Start
 	for iter.Valid() {
-		item := iter.Item()
-		if item.IsDeleted {
-			batch.Delete(item.Key)
+		if iter.IsDeleted() {
+			batch.Delete(iter.UnsafeKey())
 		} else {
-			batch.Set(item.Key, item.Value)
+			batch.Set(iter.UnsafeKey(), iter.UnsafeValue())
 		}
 		iter.Next()
 	}
@@ -292,8 +279,8 @@ func (db *DB) flushOne() bool {
 	// Simplified: We rotate WAL every time we rotate Memtable.
 	// So queue[0] corresponds to walSeq - len(queue).
 	// We should probably track (Memtable, WalPath) pairs in the queue.
-	
-db.mu.Lock()
+
+	db.mu.Lock()
 	db.queue = db.queue[1:]
 	// TODO: Delete old WAL file here.
 	// Need to track WAL paths.
@@ -301,7 +288,7 @@ db.mu.Lock()
 	return true
 }
 
-// Get implements DB.Get using Merging logic logic conceptually, 
+// Get implements DB.Get using Merging logic logic conceptually,
 // but optimized: check mutable, then queue (newest to oldest), then disk.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	db.mu.RLock()
@@ -317,7 +304,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		}
 		return val, nil
 	}
-	
+
 	// check queue backwards (newest first)
 	for i := len(db.queue) - 1; i >= 0; i-- {
 		val, deleted, found = db.queue[i].Get(key)
@@ -333,7 +320,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		}
 	}
 	db.mu.RUnlock()
-	
+
 	return db.backend.Get(key)
 }
 
@@ -347,31 +334,31 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock() // Need to hold lock while creating iterators?
 	// If we create iterators from memtables, they are snapshots (COW).
-	
+
 	var sources []merging.IteratorSource
-	
+
 	// Priority 0: Mutable
 	sources = append(sources, merging.IteratorSource{
-		Iter:     wrapMemIterator(db.mutable.NewIterator(), start, end),
+		Iter:     db.mutable.NewIterator(),
 		Priority: 0,
 	})
-	
+
 	// Priority 1..N: Queue (Newest first? No, newest has lower priority number/better precedence)
 	// MergingIterator expects: Priority 0 is best.
 	// So Mutable = 0.
 	// Queue[Last] (Newest) = 1
 	// Queue[0] (Oldest) = N
 	// Disk = N+1
-	
+
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
 		sources = append(sources, merging.IteratorSource{
-			Iter:     wrapMemIterator(db.queue[i].NewIterator(), start, end),
+			Iter:     db.queue[i].NewIterator(),
 			Priority: prio,
 		})
 		prio++
 	}
-	
+
 	diskIter, err := db.backend.Iterator(start, end)
 	if err != nil {
 		return nil, err
@@ -380,53 +367,11 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		Iter:     diskIter, 
 		Priority: prio,
 	})
-	
+
 	return merging.NewMergingIterator(sources, start, end), nil
 }
 
-// wrapMemIterator adapts memtable.Iterator to merging.Iterator (and cosmosdb.Iterator subset)
-type memIterAdapter struct {
-	it    *memtable.Iterator
-	start []byte
-	end   []byte
-}
 
-func wrapMemIterator(it *memtable.Iterator, start, end []byte) *memIterAdapter {
-	if start != nil {
-		it.Seek(start)
-	} else {
-		it.Seek(nil)
-	}
-	return &memIterAdapter{it: it, start: start, end: end}
-}
-
-func (m *memIterAdapter) Next() {
-	m.it.Next()
-	// Bounds check
-	if m.it.Valid() && m.end != nil && bytes.Compare(m.it.Key(), m.end) >= 0 {
-		// Invalidate manually or just rely on MergingIterator to handle?
-		// MergingIterator relies on Valid(). We should make Valid() return false if out of bounds.
-		// But memtable iterator doesn't know bounds.
-		// We handle it in Valid().
-	}
-}
-
-func (m *memIterAdapter) Valid() bool {
-	if !m.it.Valid() {
-		return false
-	}
-	if m.end != nil && bytes.Compare(m.it.Key(), m.end) >= 0 {
-		return false
-	}
-	return true
-}
-
-func (m *memIterAdapter) Key() []byte { return m.it.Key() }
-func (m *memIterAdapter) Value() []byte { return m.it.Value() }
-func (m *memIterAdapter) Close() error { return m.it.Close() }
-func (m *memIterAdapter) IsDeleted() bool { return m.it.IsDeleted() }
-func (m *memIterAdapter) Error() error      { return nil } // Memtable iterator doesn't produce errors
-func (m *memIterAdapter) Domain() (start, end []byte) { return m.start, m.end }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
@@ -436,8 +381,13 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	}
 	db.mu.Unlock()
 	db.flushAll()
-	
-	return db.backend.ReverseIterator(start, end)
+
+	iter, err := db.backend.ReverseIterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	// Wrap in MergingIterator to convert UnsafeIterator to merging.Iterator (safe)
+	return merging.NewMergingIterator([]merging.IteratorSource{{Iter: iter, Priority: 0}}, start, end), nil
 }
 
 // NewBatch implementation for CachingDB

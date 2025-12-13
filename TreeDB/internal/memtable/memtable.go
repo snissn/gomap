@@ -165,8 +165,29 @@ func (it *Iterator) IsDeleted() bool {
 	return it.curr.IsDeleted
 }
 
+// Key returns a copy of the current key.
+func (it *Iterator) Key() []byte {
+	return append([]byte(nil), it.UnsafeKey()...)
+}
+
+// Value returns a copy of the current value.
+func (it *Iterator) Value() []byte {
+	return append([]byte(nil), it.UnsafeValue()...)
+}
+
+// Error returns nil.
+func (it *Iterator) Error() error {
+	return nil
+}
+
 // Close closes the iterator.
 func (it *Iterator) Close() error {
 	// No resources to close for in-memory btree iterator
 	return nil
+}
+
+// Domain returns the start and end keys of the iterator.
+// Memtable iterator does not have a concept of domain, so it returns nil, nil.
+func (it *Iterator) Domain() (start, end []byte) {
+	return nil, nil
 }

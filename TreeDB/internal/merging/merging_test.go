@@ -21,6 +21,9 @@ func (m *mockUnsafeIter) Next()                 { m.idx++ }
 func (m *mockUnsafeIter) Valid() bool           { return m.idx < len(m.data) }
 func (m *mockUnsafeIter) UnsafeKey() []byte     { return []byte(m.data[m.idx].k) }
 func (m *mockUnsafeIter) UnsafeValue() []byte   { return []byte(m.data[m.idx].v) }
+func (m *mockUnsafeIter) Key() []byte             { return m.UnsafeKey() } // Copy in mock is fine
+func (m *mockUnsafeIter) Value() []byte           { return m.UnsafeValue() }
+func (m *mockUnsafeIter) Error() error            { return nil }
 func (m *mockUnsafeIter) Close() error          { return nil }
 func (m *mockUnsafeIter) IsDeleted() bool       { return m.data[m.idx].del }
 func (m *mockUnsafeIter) Seek(key []byte) {
@@ -37,6 +40,7 @@ func (m *mockUnsafeIter) Seek(key []byte) {
 	}
 	m.idx = len(m.data) // Exhausted
 }
+func (m *mockUnsafeIter) Domain() (start, end []byte) { return nil, nil }
 
 func TestTwoWayMerger(t *testing.T) {
 	// Mutable (src1, higher precedence): A:1, B:del, C:1, E:1

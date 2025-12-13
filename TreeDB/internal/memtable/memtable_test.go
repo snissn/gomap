@@ -33,7 +33,7 @@ func TestMemtableIterator(t *testing.T) {
 		m.Set([]byte(fmt.Sprintf("k%d", i)), []byte(fmt.Sprintf("v%d", i)))
 	}
 	
-	it := m.NewIterator()
+	it := m.NewIterator() // Returns UnsafeIterator
 	it.Seek([]byte("k0"))
 	
 	count := 0
@@ -46,11 +46,11 @@ func TestMemtableIterator(t *testing.T) {
 	}
 	
 	it.Seek([]byte("k5"))
-	if !it.Valid() || string(it.Item().Key) != "k5" {
+	if !it.Valid() || string(it.UnsafeKey()) != "k5" {
 		t.Errorf("Seek k5 failed")
 	}
 	it.Next()
-	if !it.Valid() || string(it.Item().Key) != "k6" {
-		t.Errorf("Next after k5 failed, got %s", string(it.Item().Key))
+	if !it.Valid() || string(it.UnsafeKey()) != "k6" {
+		t.Errorf("Next after k5 failed, got %s", string(it.UnsafeKey()))
 	}
 }

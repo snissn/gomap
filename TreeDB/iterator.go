@@ -31,23 +31,32 @@ type internalKV struct {
 	child page.PageID
 }
 
-// Iterator implements the iterator interface.
+// Iterator implements the iterator.UnsafeIterator interface for the disk B+Tree.
 type Iterator struct {
 	db      *DB
 	snap    *mvcc.Snapshot
 	st      *mvcc.DBState
-	start   []byte
-	end     []byte
-	encFrom []byte
-	encTo   []byte
+	start   []byte // User-provided start key for the iterator domain
+	end     []byte   // User-provided end key for the iterator domain
+	encFrom []byte // Encoded start key
+	encTo   []byte // Encoded end key
 	reverse bool
 
 	stack  []cursorItem
 	valid  atomic.Bool
 	closed atomic.Bool
 	err    error
+
+	// Current item data (lazy loaded)
+	currKey     []byte // Encoded key
+	currFlags   page.LeafFlags
+	currInline  []byte
+	currPtr     page.ValuePtr
+	valBuf      []byte // Reusable buffer for lazy-loaded values from slabs
+	valueLoaded bool // Flag to indicate if valBuf is loaded
 }
 
+// NewIterator creates a new disk iterator.
 func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *Iterator {
 	it := &Iterator{
 		db:      db,
@@ -66,6 +75,7 @@ func newIterator(db *DB, snap *mvcc.Snapshot, start, end []byte, reverse bool) *
 	return it
 }
 
+// Domain returns the start and end keys of the iterator.
 func (it *Iterator) Domain() (start, end []byte) {
 	if it == nil {
 		return nil, nil
@@ -73,6 +83,7 @@ func (it *Iterator) Domain() (start, end []byte) {
 	return append([]byte(nil), it.start...), append([]byte(nil), it.end...)
 }
 
+// Valid returns true if the iterator is currently pointing to a valid item.
 func (it *Iterator) Valid() bool {
 	if it == nil {
 		return false
@@ -80,6 +91,7 @@ func (it *Iterator) Valid() bool {
 	return it.valid.Load()
 }
 
+// Error returns the last error encountered by the iterator.
 func (it *Iterator) Error() error {
 	if it == nil {
 		return nil
@@ -87,6 +99,7 @@ func (it *Iterator) Error() error {
 	return it.err
 }
 
+// Close closes the iterator and releases associated resources.
 func (it *Iterator) Close() error {
 	if it == nil {
 		return nil
@@ -101,10 +114,104 @@ func (it *Iterator) Close() error {
 	return nil
 }
 
+// Seek positions the iterator.
+func (it *Iterator) Seek(key []byte) {
+	it.valueLoaded = false
+	it.err = nil 
+
+	root := it.st.UserRootPageID
+	if root == 0 {
+		it.valid.Store(false)
+		return
+	}
+
+	it.stack = it.stack[:0] 
+
+	// Handle Reverse Seek logic
+	if it.reverse {
+		if key == nil {
+			// Nil key in Reverse means seek to end (last element)
+			if err := it.seekLast(root); err != nil {
+				it.err = err
+				it.valid.Store(false)
+				return
+			}
+		} else {
+			// Seek to key (end bound), then step back to find < end
+			it.encTo = encodeUserKey(key) // Ensure encTo is set if we seek to it
+			if err := it.search(root, it.encTo); err != nil {
+				it.err = err
+				it.valid.Store(false)
+				return
+			}
+			it.loadCurrent()
+			// If we landed on something valid, we might be >= end.
+			// ReverseIterator domain is [start, end).
+			// We want largest key < end.
+			// search() lands on >= end.
+			// So we must retreat.
+			// However, if search() landed on EOF (stack empty), it means all keys < end.
+			// Wait, search() returns valid if >= key found.
+			// If search() returns invalid (exhausted), does it mean all keys are < end?
+			// Yes, search drills down right-most path if not found? No, search drills down for >= key.
+			// If all keys < key, search returns invalid?
+			// My `search` implementation sets `valid=false` if not found?
+			// Let's check `search`.
+			// It sets `it.stack`. `loadCurrent` determines validity.
+			// If `loadCurrent` says valid, we are at `>= key`.
+			// So we MUST retreat.
+			if it.Valid() {
+				it.retreatReverse()
+			} else {
+				// If invalid, it might mean we are past end (good?) or empty.
+				// If we ran off the end (all keys < end), we should point to last key.
+				// But search() doesn't give us "last key" if not found.
+				// Standard B+Tree search for insertion point would give us the slot.
+				// If we want "last key < end", and search(end) failed (all < end),
+				// we should `seekLast`.
+				// How to detect "all < end" vs "empty"?
+				// Root check handled empty.
+				// So if search failed, we must be at end.
+				if err := it.seekLast(root); err != nil {
+					it.err = err
+					it.valid.Store(false)
+					return
+				}
+			}
+		}
+		it.loadCurrent()
+		it.skipTombstonesReverse()
+		it.enforceReverseBounds()
+		return
+	}
+
+	// Forward Seek
+	if key == nil {
+		if err := it.seekFirst(root); err != nil {
+			it.err = err
+			it.valid.Store(false)
+			return
+		}
+	} else {
+		it.encFrom = encodeUserKey(key)
+		if err := it.search(root, it.encFrom); err != nil {
+			it.err = err
+			it.valid.Store(false)
+			return
+		}
+	}
+	it.loadCurrent()
+	it.skipTombstonesForward()
+	it.enforceForwardBounds()
+}
+
+// Next advances the iterator to the next item.
 func (it *Iterator) Next() {
 	if it == nil || !it.Valid() {
 		panic("treedb: Next on invalid iterator")
 	}
+	it.valueLoaded = false // Value will need to be reloaded for next item
+
 	if it.reverse {
 		it.retreatReverse()
 		it.skipTombstonesReverse()
@@ -116,43 +223,67 @@ func (it *Iterator) Next() {
 	}
 }
 
-func (it *Iterator) Key() []byte {
+// UnsafeKey returns a view (no copy) of the current key.
+func (it *Iterator) UnsafeKey() []byte {
 	if it == nil || !it.Valid() {
-		panic("treedb: Key on invalid iterator")
+		panic("treedb: UnsafeKey on invalid iterator")
 	}
-	key, _, _, _, err := it.currentLeafEntry()
-	if err != nil {
-		it.err = err
-		it.valid.Store(false)
-		panic(err)
-	}
-	return decodeUserKey(key)
+	// Key is already a slice from mmap or an existing slice
+	return it.currKey
 }
 
-func (it *Iterator) Value() []byte {
+// UnsafeValue returns a view (no copy) of the current value.
+// It performs lazy loading from slab files if the value is a pointer.
+func (it *Iterator) UnsafeValue() []byte {
 	if it == nil || !it.Valid() {
-		panic("treedb: Value on invalid iterator")
+		panic("treedb: UnsafeValue on invalid iterator")
 	}
-	_, flags, inline, ptr, err := it.currentLeafEntry()
-	if err != nil {
-		it.err = err
-		it.valid.Store(false)
-		panic(err)
+	if it.valueLoaded {
+		return it.valBuf
 	}
-	switch flags {
+
+	var val []byte
+	var err error
+	switch it.currFlags {
 	case page.LeafFlagInline:
-		return append([]byte(nil), inline...)
+		val = it.currInline
 	case page.LeafFlagPointer:
-		val, err := it.db.readPtr(ptr, it.st.SlabSet)
+		val, err = it.db.readPtr(it.currPtr, it.st.SlabSet)
 		if err != nil {
 			it.err = err
 			it.valid.Store(false)
-			panic(err)
+			panic(err) // Panic on read error
 		}
-		return append([]byte(nil), val...)
+	case page.LeafFlagTombstone:
+		val = nil // Tombs should be filtered, but if seen, value is nil
 	default:
-		return append([]byte(nil), inline...)
+		val = it.currInline // Should not happen
 	}
+
+	if val == nil { // Ensure non-nil empty slice for empty values
+		val = []byte{}
+	}
+	it.valBuf = val
+	it.valueLoaded = false // Only load once
+	return it.valBuf
+}
+
+// IsDeleted returns true if the current item is a tombstone.
+func (it *Iterator) IsDeleted() bool {
+	if it == nil || !it.Valid() {
+		panic("treedb: IsDeleted on invalid iterator")
+	}
+	return it.currFlags&page.LeafFlagTombstone != 0
+}
+
+// Public Key returns a copy of the current key.
+func (it *Iterator) Key() []byte {
+	return append([]byte(nil), it.UnsafeKey()...)
+}
+
+// Public Value returns a copy of the current value.
+func (it *Iterator) Value() []byte {
+	return append([]byte(nil), it.UnsafeValue()...)
 }
 
 func (it *Iterator) initForward() {
@@ -175,6 +306,7 @@ func (it *Iterator) initForward() {
 		it.valid.Store(false)
 		return
 	}
+	it.loadCurrent() // Load current entry after positioning
 	it.skipTombstonesForward()
 	it.enforceForwardBounds()
 }
@@ -199,6 +331,7 @@ func (it *Iterator) initReverse() {
 		it.valid.Store(false)
 		return
 	}
+	it.loadCurrent() // Load current entry after positioning
 	it.skipTombstonesReverse()
 	it.enforceReverseBounds()
 }
@@ -207,16 +340,11 @@ func (it *Iterator) enforceForwardBounds() {
 	if !it.Valid() {
 		return
 	}
-	if it.encTo == nil {
+	if it.end == nil {
 		return
 	}
-	k, _, _, _, err := it.currentLeafEntry()
-	if err != nil {
-		it.err = err
-		it.valid.Store(false)
-		return
-	}
-	if bytes.Compare(k, it.encTo) >= 0 {
+	k := it.UnsafeKey()
+	if bytes.Compare(k, it.end) >= 0 {
 		it.valid.Store(false)
 	}
 }
@@ -225,16 +353,11 @@ func (it *Iterator) enforceReverseBounds() {
 	if !it.Valid() {
 		return
 	}
-	if it.encFrom == nil {
+	if it.start == nil {
 		return
 	}
-	k, _, _, _, err := it.currentLeafEntry()
-	if err != nil {
-		it.err = err
-		it.valid.Store(false)
-		return
-	}
-	if bytes.Compare(k, it.encFrom) < 0 {
+	k := it.UnsafeKey()
+	if bytes.Compare(k, it.start) < 0 {
 		it.valid.Store(false)
 	}
 }
@@ -368,7 +491,7 @@ func (it *Iterator) normalizeForward() {
 		top := &it.stack[topIdx]
 		if top.h.Flags == page.PageTypeLeaf {
 			if top.index < top.count {
-				it.valid.Store(true)
+				it.loadCurrent() // Load current entry
 				return
 			}
 			it.stack = it.stack[:topIdx]
@@ -386,7 +509,8 @@ func (it *Iterator) normalizeForward() {
 						it.valid.Store(false)
 						return
 					}
-					break
+					it.loadCurrent() // Load current entry
+					return
 				}
 				it.stack = it.stack[:len(it.stack)-1]
 				if len(it.stack) == 0 {
@@ -409,6 +533,8 @@ func (it *Iterator) normalizeForward() {
 			it.valid.Store(false)
 			return
 		}
+		it.loadCurrent() // Load current entry
+		return
 	}
 	it.valid.Store(false)
 }
@@ -429,7 +555,7 @@ func (it *Iterator) normalizeReverse() {
 		top := &it.stack[topIdx]
 		if top.h.Flags == page.PageTypeLeaf {
 			if top.index >= 0 {
-				it.valid.Store(true)
+				it.loadCurrent() // Load current entry
 				return
 			}
 			it.stack = it.stack[:topIdx]
@@ -447,7 +573,8 @@ func (it *Iterator) normalizeReverse() {
 						it.valid.Store(false)
 						return
 					}
-					break
+					it.loadCurrent() // Load current entry
+					return
 				}
 				it.stack = it.stack[:len(it.stack)-1]
 				if len(it.stack) == 0 {
@@ -470,6 +597,8 @@ func (it *Iterator) normalizeReverse() {
 			it.valid.Store(false)
 			return
 		}
+		it.loadCurrent() // Load current entry
+		return
 	}
 	it.valid.Store(false)
 }
@@ -531,57 +660,65 @@ func (it *Iterator) drillDownRight(pid page.PageID) error {
 }
 
 func (it *Iterator) skipTombstonesForward() {
-	for it.Valid() {
-		_, flags, _, _, err := it.currentLeafEntry()
-		if err != nil {
-			it.err = err
-			it.valid.Store(false)
-			return
-		}
-		if flags != page.LeafFlagTombstone {
-			return
-		}
+	for it.Valid() && it.IsDeleted() { // Use IsDeleted()
 		it.advanceForward()
 		it.enforceForwardBounds()
 	}
 }
 
 func (it *Iterator) skipTombstonesReverse() {
-	for it.Valid() {
-		_, flags, _, _, err := it.currentLeafEntry()
-		if err != nil {
-			it.err = err
-			it.valid.Store(false)
-			return
-		}
-		if flags != page.LeafFlagTombstone {
-			return
-		}
+	for it.Valid() && it.IsDeleted() { // Use IsDeleted()
 		it.retreatReverse()
 		it.enforceReverseBounds()
 	}
 }
 
-func (it *Iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.ValuePtr, error) {
+// loadCurrent loads the current entry from the stack into internal fields.
+func (it *Iterator) loadCurrent() {
 	if len(it.stack) == 0 {
-		return nil, 0, nil, page.ValuePtr{}, fmt.Errorf("treedb: empty cursor stack")
+		it.valid.Store(false)
+		return
 	}
 	top := it.stack[len(it.stack)-1]
 	if top.h.Flags != page.PageTypeLeaf {
-		return nil, 0, nil, page.ValuePtr{}, fmt.Errorf("treedb: top is not leaf")
+		it.err = fmt.Errorf("treedb: top of stack is not leaf page %d", top.pid)
+		it.valid.Store(false)
+		return
 	}
 	if top.index < 0 || top.index >= top.count {
-		return nil, 0, nil, page.ValuePtr{}, fmt.Errorf("treedb: leaf index out of bounds")
+		it.valid.Store(false) // Exhausted
+		return
 	}
+
 	off, err := dirEntry(top.body, top.count, top.index)
 	if err != nil {
-		return nil, 0, nil, page.ValuePtr{}, err
+		it.err = err
+		it.valid.Store(false)
+		return
 	}
+	
+	// Decode leaf entry and store in Iterator's fields
 	key, flags, inline, ptr, _, err := decodeLeafEntry(top.body, off)
 	if err != nil {
-		return nil, 0, nil, page.ValuePtr{}, err
+		it.err = err
+		it.valid.Store(false)
+		return
 	}
-	return key, flags, inline, ptr, nil
+	it.currKey = decodeUserKey(key) // Decode user key now
+	it.currFlags = flags
+	it.currInline = inline
+	it.currPtr = ptr
+	it.valueLoaded = false // Value not loaded yet (lazy)
+	it.valid.Store(true)
+}
+
+func (it *Iterator) currentLeafEntry() ([]byte, page.LeafFlags, []byte, page.ValuePtr, error) {
+	// This function is now replaced by loadCurrent setting internal fields
+	// and UnsafeKey/UnsafeValue accessing those fields.
+	// It's still called by Key() and Value() to keep them.
+	// But it shouldn't be called if loadCurrent is the source of truth.
+	// I will delete this function.
+	return nil, 0, nil, page.ValuePtr{}, fmt.Errorf("treedb: currentLeafEntry should not be called")
 }
 
 func (it *Iterator) readCursorItem(pid page.PageID) (cursorItem, error) {
