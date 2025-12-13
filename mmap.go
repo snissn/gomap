@@ -10,7 +10,8 @@ import (
 )
 
 func NtoBytesHashmap(N uint64) int64 {
-	return int64(unsafe.Sizeof(Hash(0))+unsafe.Sizeof(SlabOffset(0))) * int64(N)
+	i := Key{}
+	return int64(unsafe.Sizeof(i)) * int64(N)
 }
 
 func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {

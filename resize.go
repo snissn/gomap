@@ -38,13 +38,9 @@ func (h *Hashmap) startRehash() error {
 	oldMap := h.hashMap
 	oldFile := h.hashMapFile
 	oldCap := h.Capacity
-	var oldHashes []Hash
-	var oldOffsets []SlabOffset
-	if h.Hashes != nil {
-		oldHashes = *h.Hashes
-	}
-	if h.Offsets != nil {
-		oldOffsets = *h.Offsets
+	var oldKeys []Key
+	if h.Keys != nil {
+		oldKeys = *h.Keys
 	}
 
 	// Allocate new index file/mmap.
@@ -65,25 +61,19 @@ func (h *Hashmap) startRehash() error {
 	h.hashMap = newMap
 	h.hashMapFile = newFile
 	h.Capacity = newCap
-	hashes := h.getHashes()
-	offsets := h.getOffsets()
-	h.Hashes = &hashes
-	h.Offsets = &offsets
+	keys := h.getKeys()
+	h.Keys = &keys
 
 	// Record old index for incremental migration.
 	h.rehashOldMap = oldMap
 	h.rehashOldMapFile = oldFile
 	h.rehashOldCapacity = oldCap
-	if oldHashes == nil && len(oldMap) > 0 {
-		// Fallback: build slice views over old mmap if the active slices weren't initialized.
-		tmpHashes := (*Hash)(unsafe.Pointer(&oldMap[0]))
-		oldHashes = unsafe.Slice(tmpHashes, oldCap)
-		hashBytes := uintptr(oldCap) * unsafe.Sizeof(Hash(0))
-		tmpOffsets := (*SlabOffset)(unsafe.Add(unsafe.Pointer(&oldMap[0]), hashBytes))
-		oldOffsets = unsafe.Slice(tmpOffsets, oldCap)
+	if oldKeys == nil && len(oldMap) > 0 {
+		// Fallback: build slice view over old mmap if Keys wasn't initialized.
+		tmp := (*Key)(unsafe.Pointer(&oldMap[0]))
+		oldKeys = unsafe.Slice(tmp, oldCap)
 	}
-	h.rehashOldHashes = oldHashes
-	h.rehashOldOffsets = oldOffsets
+	h.rehashOldKeys = oldKeys
 	h.rehashIdx = 0
 	h.rehashInProgress = true
 
@@ -105,14 +95,13 @@ func (h *Hashmap) rehashStep(maxToMove uint64) error {
 		idx := h.rehashIdx
 		h.rehashIdx++
 
-		oldHash := h.rehashOldHashes[idx]
-		if oldHash == 0 || oldHash == HashTombstone {
+		k := h.rehashOldKeys[idx]
+		if k.slabOffset == 0 || k.slabOffset == Tombstone {
 			continue
 		}
-		oldOffset := h.rehashOldOffsets[idx]
 
 		// Read key bytes from slab to locate its slot in the new table.
-		item, err := h.unmarshalItemFromSlab(Key{slabOffset: oldOffset, hash: oldHash})
+		item, err := h.unmarshalItemFromSlab(k)
 		if err != nil {
 			return err
 		}
@@ -123,14 +112,12 @@ func (h *Hashmap) rehashStep(maxToMove uint64) error {
 		}
 
 		if isNew {
-			(*h.Hashes)[hkey] = oldHash
-			(*h.Offsets)[hkey] = oldOffset
+			(*h.Keys)[hkey] = k
 			// Do not modify Count; logical key cardinality doesn't change.
 		}
 
 		// Mark old bucket as migrated so we don't revisit it.
-		h.rehashOldHashes[idx] = 0
-		h.rehashOldOffsets[idx] = 0
+		h.rehashOldKeys[idx].slabOffset = 0
 		moved++
 	}
 
@@ -170,8 +157,7 @@ func (h *Hashmap) finishRehash() {
 
 	h.rehashOldMapFile = nil
 	h.rehashOldMap = nil
-	h.rehashOldHashes = nil
-	h.rehashOldOffsets = nil
+	h.rehashOldKeys = nil
 	h.rehashOldCapacity = 0
 	h.rehashIdx = 0
 	h.rehashInProgress = false

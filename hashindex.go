@@ -12,8 +12,7 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
 	if err != nil {
 		return err
 	}
-	(*h.Hashes)[hkey] = slabOffset.hash
-	(*h.Offsets)[hkey] = slabOffset.slabOffset
+	(*h.Keys)[hkey] = slabOffset
 	if isnew {
 		*h.Count += 1
 	}
@@ -31,25 +30,13 @@ func (h *Hashmap) addBucket(key []byte, slabOffset Key) error {
 }
 
 func hash(key []byte) Hash {
-	h := Hash(xxhash.Sum64(key))
-	if h == 0 {
-		return 1
-	}
-	if h == HashTombstone {
-		return HashTombstone - 1
-	}
-	return h
+	return Hash(xxhash.Sum64(key))
 }
 
-func (h *Hashmap) getHashes() []Hash {
-	tmp := (*Hash)(unsafe.Pointer(&h.hashMap[0]))
-	return unsafe.Slice(tmp, h.Capacity)
-}
-
-func (h *Hashmap) getOffsets() []SlabOffset {
-	hashBytes := uintptr(h.Capacity) * unsafe.Sizeof(Hash(0))
-	tmp := (*SlabOffset)(unsafe.Add(unsafe.Pointer(&h.hashMap[0]), hashBytes))
-	return unsafe.Slice(tmp, h.Capacity)
+func (h *Hashmap) getKeys() []Key {
+	tmpkeys := (*Key)(unsafe.Pointer(&h.hashMap[0]))
+	ret := unsafe.Slice(tmpkeys, h.Capacity)
+	return ret
 }
 
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
@@ -60,9 +47,9 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 	foundTombstone := false
 
 	for {
-		probeHash := (*h.Hashes)[hkey]
+		mybucket := (*h.Keys)[hkey]
 
-		if probeHash == 0 {
+		if mybucket.slabOffset == 0 {
 			// Found Empty Slot.
 			// If we saw a Tombstone earlier, use that instead to reduce fragmentation.
 			if foundTombstone {
@@ -71,15 +58,14 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 			return hkey, true, nil
 		}
 
-		if probeHash == HashTombstone {
+		if mybucket.slabOffset == Tombstone {
 			if !foundTombstone {
 				firstTombstoneIndex = hkey
 				foundTombstone = true
 			}
 			// Continue probing to ensure key doesn't exist further down
-		} else if probeHash == myhash {
-			offset := (*h.Offsets)[hkey]
-			item, err := h.unmarshalItemFromSlab(Key{slabOffset: offset, hash: probeHash})
+		} else if mybucket.hash == myhash {
+			item, err := h.unmarshalItemFromSlab(mybucket)
 			if err != nil {
 				return 0, false, err
 			}
@@ -108,8 +94,7 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) error {
 			return err
 		}
 
-		(*h.Hashes)[hkey] = slabOffsets[i].hash
-		(*h.Offsets)[hkey] = slabOffsets[i].slabOffset
+		(*h.Keys)[hkey] = slabOffsets[i]
 		if isnew {
 			totalNewKey++
 		}

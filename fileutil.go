@@ -81,10 +81,8 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 
 	h.Capacity = N
 	h.Count = getCount(h.metadataMap)
-	hashes := h.getHashes()
-	offsets := h.getOffsets()
-	h.Hashes = &hashes
-	h.Offsets = &offsets
+	keys := h.getKeys()
+	h.Keys = &keys
 	return nil
 }
 
