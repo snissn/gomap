@@ -375,40 +375,8 @@ func (db *DB) Commit(newRootID uint64) error {
 	return db.commitLocked(newRootID, db.meta.SystemRootPageID, nil, true)
 }
 
-// AcquireSnapshot returns a new snapshot.
-func (db *DB) AcquireSnapshot() *Snapshot {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	state := db.state.Load()
-	if state.SlabSet != nil {
-		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
-	}
-
-	// Register Reader
-	id := db.registry.Register(state.CommitSeq)
-
-	return &Snapshot{
-		db:         db,
-		state:      state,
-		tree:       tree.New(db.pager, db.slabManager, state.RootPageID),
-		registryID: id,
-	}
-}
-
-// Close releases the snapshot.
-func (s *Snapshot) Close() error {
-	var err error
-	if s.state != nil && s.state.SlabSet != nil {
-		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
-	}
-	s.db.registry.Unregister(s.registryID)
-	return err
-}
-
 // Prune reclaims pages from the graveyard.
-func (db *DB) Prune() {
-	min := db.registry.MinPinnedSeq()
+func (db *DB) Prune() {	min := db.registry.MinPinnedSeq()
 	current := db.meta.CommitSeq
 
 	freed := db.graveyard.Extract(min, current, db.keepRecent)

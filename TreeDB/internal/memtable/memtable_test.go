@@ -46,11 +46,11 @@ func TestMemtableIterator(t *testing.T) {
 	}
 	
 	it.Seek([]byte("k5"))
-	if !it.Valid() || string(it.Item().Key) != "k5" {
+	if !it.Valid() || string(it.UnsafeKey()) != "k5" {
 		t.Errorf("Seek k5 failed")
 	}
 	it.Next()
-	if !it.Valid() || string(it.Item().Key) != "k6" {
-		t.Errorf("Next after k5 failed, got %s", string(it.Item().Key))
+	if !it.Valid() || string(it.UnsafeKey()) != "k6" {
+		t.Errorf("Next after k5 failed, got %s", string(it.UnsafeKey()))
 	}
 }

@@ -425,3 +425,27 @@ func (it *Iterator) Close() error {
 func (it *Iterator) Domain() (start, end []byte) {
 	return it.start, it.end
 }
+
+// UnsafeIterator implementation
+func (it *Iterator) Seek(key []byte) {
+	it.seek(key)
+}
+
+func (it *Iterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.currKey
+}
+
+func (it *Iterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.currVal
+}
+
+func (it *Iterator) IsDeleted() bool {
+	// Tombstones are skipped internally by loadCurrent
+	return false
+}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
 )
 
 type mockUnsafeIter struct {
@@ -38,6 +37,10 @@ func (m *mockUnsafeIter) Seek(key []byte) {
 	}
 	m.idx = len(m.data) // Exhausted
 }
+func (m *mockUnsafeIter) Key() []byte             { return m.UnsafeKey() }
+func (m *mockUnsafeIter) Value() []byte           { return m.UnsafeValue() }
+func (m *mockUnsafeIter) Error() error            { return nil }
+func (m *mockUnsafeIter) Domain() (start, end []byte) { return nil, nil }
 
 func TestTwoWayMerger(t *testing.T) {
 	// Mutable (src1, higher precedence): A:1, B:del, C:1, E:1

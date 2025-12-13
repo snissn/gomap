@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/merging"
+	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
 )
 
 // MockBackend implements BackendDB
@@ -28,11 +28,11 @@ func (m *MockBackend) Set(key, val []byte) {
 	m.data[string(key)] = val
 }
 
-func (m *MockBackend) Iterator(start, end []byte) (merging.Iterator, error) {
+func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return nil, fmt.Errorf("not implemented in mock")
 }
 
-func (m *MockBackend) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return nil, fmt.Errorf("not implemented in mock")
 }
 
@@ -56,8 +56,10 @@ func (b *MockBatch) Delete(key []byte) error {
 	delete(b.mb.data, string(key))
 	return nil
 }
+func (b *MockBatch) Write() error { return nil }
 func (b *MockBatch) WriteSync() error { return nil }
 func (b *MockBatch) Close() error { return nil }
+func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
 
 func (m *MockBackend) Close() error { return nil }
 
