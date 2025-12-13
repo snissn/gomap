@@ -68,7 +68,7 @@ func (db *DB) DeleteSync(key []byte) error {
 // DBIterator wraps tree.Iterator and holds a Snapshot.
 type DBIterator struct {
 	snap *Snapshot
-	iter *tree.Iterator
+	iter iterator.UnsafeIterator
 }
 
 func (it *DBIterator) Next() {
