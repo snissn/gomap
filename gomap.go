@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"log"
+	"math/bits"
 	"reflect"
 	"unsafe"
 
@@ -75,9 +76,24 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
 	if h.Hashes != nil && h.Capacity > 0 {
 		myhash := hash(key)
+		myKeyIndex := uint64(myhash) % h.Capacity
 		count := uint64(0)
 		for count < h.Capacity {
-			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+			remaining := h.Capacity - count
+			if useAVX512Scan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
+				mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
+				if mask == 0 {
+					myKeyIndex += 8
+					if myKeyIndex == h.Capacity {
+						myKeyIndex = 0
+					}
+					count += 8
+					continue
+				}
+				skip := uint64(bits.TrailingZeros64(mask))
+				myKeyIndex += skip
+				count += skip
+			}
 
 			probeHash := (*h.Hashes)[myKeyIndex]
 
@@ -86,6 +102,10 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 			}
 
 			if probeHash == HashTombstone {
+				myKeyIndex++
+				if myKeyIndex == h.Capacity {
+					myKeyIndex = 0
+				}
 				count++
 				continue
 			}
@@ -100,6 +120,11 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 					return item.Value, nil
 				}
 			}
+
+			myKeyIndex++
+			if myKeyIndex == h.Capacity {
+				myKeyIndex = 0
+			}
 			count++
 		}
 	}
@@ -108,10 +133,9 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// for keys that haven't been migrated yet.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldHashes) > 0 {
 		myhash := hash(key)
+		myKeyIndex := uint64(myhash) % h.rehashOldCapacity
 		count := uint64(0)
 		for count < h.rehashOldCapacity {
-			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
-
 			probeHash := h.rehashOldHashes[myKeyIndex]
 
 			if probeHash == 0 {
@@ -119,6 +143,10 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 			}
 
 			if probeHash == HashTombstone {
+				myKeyIndex++
+				if myKeyIndex == h.rehashOldCapacity {
+					myKeyIndex = 0
+				}
 				count++
 				continue
 			}
@@ -132,6 +160,11 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 				if bytes.Equal(item.Key, key) {
 					return item.Value, nil
 				}
+			}
+
+			myKeyIndex++
+			if myKeyIndex == h.rehashOldCapacity {
+				myKeyIndex = 0
 			}
 			count++
 		}
@@ -147,9 +180,24 @@ func (h *Hashmap) Delete(key []byte) error {
 
 	// Delete in the current (new) table.
 	if h.Hashes != nil && h.Capacity > 0 {
+		myKeyIndex := uint64(myhash) % h.Capacity
 		count := uint64(0)
 		for count < h.Capacity {
-			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
+			remaining := h.Capacity - count
+			if useAVX512Scan && remaining >= 8 && myKeyIndex+8 <= h.Capacity {
+				mask := scanSpecial8Mask(&(*h.Hashes)[myKeyIndex], myhash)
+				if mask == 0 {
+					myKeyIndex += 8
+					if myKeyIndex == h.Capacity {
+						myKeyIndex = 0
+					}
+					count += 8
+					continue
+				}
+				skip := uint64(bits.TrailingZeros64(mask))
+				myKeyIndex += skip
+				count += skip
+			}
 
 			probeHash := (*h.Hashes)[myKeyIndex]
 
@@ -158,6 +206,10 @@ func (h *Hashmap) Delete(key []byte) error {
 			}
 
 			if probeHash == HashTombstone {
+				myKeyIndex++
+				if myKeyIndex == h.Capacity {
+					myKeyIndex = 0
+				}
 				count++
 				continue
 			}
@@ -180,6 +232,11 @@ func (h *Hashmap) Delete(key []byte) error {
 					break
 				}
 			}
+
+			myKeyIndex++
+			if myKeyIndex == h.Capacity {
+				myKeyIndex = 0
+			}
 			count++
 		}
 	}
@@ -187,10 +244,9 @@ func (h *Hashmap) Delete(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldHashes) > 0 {
+		myKeyIndex := uint64(myhash) % h.rehashOldCapacity
 		count := uint64(0)
 		for count < h.rehashOldCapacity {
-			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
-
 			probeHash := h.rehashOldHashes[myKeyIndex]
 
 			if probeHash == 0 {
@@ -198,6 +254,10 @@ func (h *Hashmap) Delete(key []byte) error {
 			}
 
 			if probeHash == HashTombstone {
+				myKeyIndex++
+				if myKeyIndex == h.rehashOldCapacity {
+					myKeyIndex = 0
+				}
 				count++
 				continue
 			}
@@ -213,6 +273,11 @@ func (h *Hashmap) Delete(key []byte) error {
 					h.rehashOldOffsets[myKeyIndex] = Tombstone
 					break
 				}
+			}
+
+			myKeyIndex++
+			if myKeyIndex == h.rehashOldCapacity {
+				myKeyIndex = 0
 			}
 			count++
 		}

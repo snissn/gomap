@@ -2,6 +2,7 @@ package gomap
 
 import (
 	"bytes"
+	"math/bits"
 	"unsafe"
 
 	xxhash "github.com/cespare/xxhash/v2"
@@ -54,12 +55,24 @@ func (h *Hashmap) getOffsets() []SlabOffset {
 
 func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 	myhash := hash(key)
-	hkey := uint64(myhash) % (h.Capacity)
+	hkey := uint64(myhash) % h.Capacity
 
 	var firstTombstoneIndex uint64
 	foundTombstone := false
 
 	for {
+		if useAVX512Scan && hkey+8 <= h.Capacity {
+			mask := scanSpecial8Mask(&(*h.Hashes)[hkey], myhash)
+			if mask == 0 {
+				hkey += 8
+				if hkey == h.Capacity {
+					hkey = 0
+				}
+				continue
+			}
+			hkey += uint64(bits.TrailingZeros64(mask))
+		}
+
 		probeHash := (*h.Hashes)[hkey]
 
 		if probeHash == 0 {
@@ -87,7 +100,10 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 				return hkey, false, nil
 			}
 		}
-		hkey = (hkey + 1) % h.Capacity
+		hkey++
+		if hkey == h.Capacity {
+			hkey = 0
+		}
 	}
 }
 
