@@ -12,6 +12,8 @@ type Iterator interface {
 	Key() []byte
 	Value() []byte
 	Close() error
+	Error() error
+	Domain() (start, end []byte)
 }
 
 // IteratorSource wraps an iterator with a priority level (0 = highest).
@@ -66,9 +68,11 @@ type MergingIterator struct {
 	key   []byte
 	val   []byte
 	err   error
+	start []byte
+	end   []byte
 }
 
-func NewMergingIterator(sources []IteratorSource) *MergingIterator {
+func NewMergingIterator(sources []IteratorSource, start, end []byte) *MergingIterator {
 	h := &iteratorHeap{}
 	heap.Init(h)
 
@@ -82,13 +86,24 @@ func NewMergingIterator(sources []IteratorSource) *MergingIterator {
 		}
 	}
 
-	mi := &MergingIterator{h: h}
+	mi := &MergingIterator{h: h, start: start, end: end}
 	// Position at first valid item
-	mi.Next()
+	mi.next()
 	return mi
 }
 
+func (mi *MergingIterator) Domain() (start, end []byte) {
+	return mi.start, mi.end
+}
+
 func (mi *MergingIterator) Next() {
+	if !mi.valid {
+		panic("merging iterator invalid")
+	}
+	mi.next()
+}
+
+func (mi *MergingIterator) next() {
 	mi.valid = false
 
 	for mi.h.Len() > 0 {
@@ -171,10 +186,16 @@ func (mi *MergingIterator) Valid() bool {
 }
 
 func (mi *MergingIterator) Key() []byte {
+	if !mi.valid {
+		panic("merging iterator invalid")
+	}
 	return mi.key
 }
 
 func (mi *MergingIterator) Value() []byte {
+	if !mi.valid {
+		panic("merging iterator invalid")
+	}
 	return mi.val
 }
 

@@ -5,15 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 )
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
 type SlabSet struct {
-	Files map[uint32]*SlabFile
+	Files    map[uint32]*SlabFile
+	RefCount atomic.Int64
 }
-
 type SlabManager struct {
 	dir        string
 	activeSlab *SlabFile
@@ -220,54 +221,44 @@ func (sm *SlabManager) ZombieCount() int {
 func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	
+
 	files := make(map[uint32]*SlabFile, len(sm.slabs))
 	for k, v := range sm.slabs {
 		files[k] = v
+		v.RefCount.Add(1) // Pin files for this Set
 	}
-	return &SlabSet{Files: files}
+	s := &SlabSet{Files: files}
+	s.RefCount.Store(1) // Manager owns one reference
+	return s
 }
-
-// AcquireSlabs increments the RefCount for all slabs in the set.
+// AcquireSlabs increments the RefCount for the Set (O(1)).
 func (sm *SlabManager) AcquireSlabs(set *SlabSet) {
-	for _, s := range set.Files {
-		s.RefCount.Add(1)
+	if set != nil {
+		set.RefCount.Add(1)
 	}
 }
 
-// ReleaseSlabs decrements the RefCount. If 0 and Zombie, closes and removes.
+// ReleaseSlabs decrements the Set RefCount. If 0, unpins files and cleans zombies.
 func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
-	// We iterate the set. For each slab:
-	// Decrement RefCount.
-	// If RefCount == 0 && IsZombie -> Delete.
+	if set == nil {
+		return nil
+	}
 	
-	// We need to lock SlabManager to remove from master map if we delete.
-	// But we can check condition without lock first?
-	// `IsZombie` is atomic. `RefCount` is atomic.
-	// But `delete(sm.slabs, id)` needs lock.
-	
+	// Decrement Set RefCount
+	if set.RefCount.Add(-1) > 0 {
+		return nil
+	}
+
+	// Set dropped to 0. Unpin files.
 	var err error
-	
 	for _, s := range set.Files {
 		newRef := s.RefCount.Add(-1)
 		if newRef == 0 && s.IsZombie.Load() {
-			// Needs cleanup.
-			// Lock manager.
 			sm.mu.Lock()
-			// Double check?
-			// RefCount could have gone up?
-			// No, once Zombie, new readers don't pick it up (unless they pick it from old snapshot?).
-			// Wait, "Snapshot Safety Invariant".
-			// If IsZombie is true, it means it was removed from ACTIVE set.
-			// Only old snapshots hold it.
-			// So no NEW snapshot can acquire it.
-			// So RefCount cannot go up.
-			
-			// Double check ref count just in case?
 			if s.RefCount.Load() == 0 {
 				if _, exists := sm.slabs[s.ID]; exists {
 					if e := s.Close(); e != nil {
-						err = e // store error but continue?
+						err = e 
 					}
 					if e := os.Remove(s.Path); e != nil {
 						err = e

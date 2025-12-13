@@ -421,3 +421,7 @@ func (it *Iterator) Close() error {
 	it.stack = nil
 	return nil
 }
+
+func (it *Iterator) Domain() (start, end []byte) {
+	return it.start, it.end
+}

@@ -327,18 +327,22 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 	// Prune
 	db.Prune()
 	
-	// Update State
-	newState := &DBState{
-		CommitSeq:        nextMeta.CommitSeq,
-		RootPageID:       nextMeta.UserRootPageID,
-		SystemRootPageID: nextMeta.SystemRootPageID,
-		SlabSet:          db.slabManager.CurrentSlabSet(),
-	}
-	db.state.Store(newState)
+		// Update State
+		oldState := db.state.Load()
+		newState := &DBState{
+			CommitSeq:        nextMeta.CommitSeq,
+			RootPageID:       nextMeta.UserRootPageID,
+			SystemRootPageID: nextMeta.SystemRootPageID,
+			SlabSet:          db.slabManager.CurrentSlabSet(),
+		}
+		db.state.Store(newState)
+		
+		if oldState != nil {
+			db.slabManager.ReleaseSlabs(oldState.SlabSet)
+		}
 	
-	return nil
-}
-
+		return nil
+	}
 // Commit persists the new root (Sync=true by default).
 // Note: This is usually called internally by Batch.Write or externally if manual root management.
 // If manual, retired pages are unknown? `Commit` signature assumes manual root.
