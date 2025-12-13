@@ -3,9 +3,11 @@ package merging
 import (
 	"bytes"
 	"container/heap"
+	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
 )
 
 // Iterator represents a generic iterator that yields key-value pairs.
+// It matches the public Cosmos-DB interface contract (returns copies).
 type Iterator interface {
 	Next()
 	Valid() bool
@@ -16,17 +18,17 @@ type Iterator interface {
 	Domain() (start, end []byte)
 }
 
-// IteratorSource wraps an iterator with a priority level (0 = highest).
+// IteratorSource wraps an internal UnsafeIterator with a priority level.
 type IteratorSource struct {
-	Iter     Iterator
+	Iter     iterator.UnsafeIterator
 	Priority int
 }
 
 // heapItem is an internal wrapper for the min-heap.
 type heapItem struct {
-	iter     Iterator
+	iter     iterator.UnsafeIterator
 	priority int
-	key      []byte
+	key      []byte // Cached Key from iter.UnsafeKey()
 }
 
 type iteratorHeap []*heapItem
@@ -65,14 +67,20 @@ func (h *iteratorHeap) Pop() interface{} {
 type MergingIterator struct {
 	h     *iteratorHeap
 	valid bool
-	key   []byte
-	val   []byte
+	key   []byte // Current Key (copy)
+	val   []byte // Current Value (copy)
 	err   error
 	start []byte
 	end   []byte
 }
 
-func NewMergingIterator(sources []IteratorSource, start, end []byte) *MergingIterator {
+func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
+	// Optimization for the common two-source case
+	if len(sources) == 2 {
+		// Assume sources[0] has higher priority (lower number)
+		return NewTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
+	}
+
 	h := &iteratorHeap{}
 	heap.Init(h)
 
@@ -81,19 +89,14 @@ func NewMergingIterator(sources []IteratorSource, start, end []byte) *MergingIte
 			heap.Push(h, &heapItem{
 				iter:     src.Iter,
 				priority: src.Priority,
-				key:      append([]byte(nil), src.Iter.Key()...),
+				key:      append([]byte(nil), src.Iter.UnsafeKey()...), // Copy here
 			})
 		}
 	}
 
 	mi := &MergingIterator{h: h, start: start, end: end}
-	// Position at first valid item
 	mi.next()
 	return mi
-}
-
-func (mi *MergingIterator) Domain() (start, end []byte) {
-	return mi.start, mi.end
 }
 
 func (mi *MergingIterator) Next() {
@@ -107,60 +110,27 @@ func (mi *MergingIterator) next() {
 	mi.valid = false
 
 	for mi.h.Len() > 0 {
-		// 1. Pop the smallest item (Key + Priority)
 		top := heap.Pop(mi.h).(*heapItem)
-		currentKey := top.key
-		currentVal := append([]byte(nil), top.iter.Value()...) // defensive copy? Iter contract says copy.
+		currentUnsafeKey := top.iter.UnsafeKey()
+		currentUnsafeVal := top.iter.UnsafeValue() // Value might be lazy-loaded here
 
-		// Determine if this is a tombstone
-		// How do we know if it's a tombstone?
-		// Value() usually returns nil for tombstone? Or empty?
-		// treedb Iterators skip tombstones.
-		// Memtable iterators need to expose tombstone status.
-		// Issue: The Iterator interface here is generic.
-		// Memtable Get returns `bool isDeleted`.
-		// But Iterator usually hides deleted items.
-		// For MergingIterator to work, underlying iterators MUST return Tombstones so we can mask older versions.
-		// If underlying iterators skip tombstones, we might see an older version!
-		// 
-		// Fix: We need `IsTombstone()` on Iterator interface or convention.
-		// Let's assume a nil value means tombstone? Or specific interface?
-		// cosmos-db Iterator doesn't have IsTombstone.
-		// But Memtable needs to return them.
-		
-		// Let's defer tombstone logic. Assume Value() == nil means tombstone?
-		// No, empty value != nil.
-		// Let's add `IsDeleted() bool` to our internal Iterator interface if possible.
-		// But treedb.Iterator doesn't have it.
-		// Wait, treedb.Iterator skips tombstones internally.
-		// So disk layer never returns tombstones.
-		// Memtable MUST return tombstones.
-		
-		// Actually, if we define our own Iterator interface for this package, we can add it.
-		// But we wrap treedb.Iterator.
-		
-		// Let's assume we can cast to an interface with IsDeleted.
-		isDeleted := false
-		if delIter, ok := top.iter.(interface{ IsDeleted() bool }); ok {
-			isDeleted = delIter.IsDeleted()
-		}
+		isDeleted := top.iter.IsDeleted() // Use IsDeleted from UnsafeIterator
 
-		// Advance the winner
+		// Advance the winner (UnsafeIterator.Next)
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.key = append([]byte(nil), top.iter.Key()...)
+			top.key = append([]byte(nil), top.iter.UnsafeKey()...) // Copy here
 			heap.Push(mi.h, top)
 		}
 
-		// 2. Consume Shadows
+		// Consume Shadows
 		for mi.h.Len() > 0 {
 			next := (*mi.h)[0]
-			if bytes.Equal(next.key, currentKey) {
-				// Same key, lower priority (older version). Discard.
+			if bytes.Equal(next.key, currentUnsafeKey) { // Compare against unsafe key
 				shadowed := heap.Pop(mi.h).(*heapItem)
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = append([]byte(nil), shadowed.iter.Key()...)
+					shadowed.key = append([]byte(nil), shadowed.iter.UnsafeKey()...)
 					heap.Push(mi.h, shadowed)
 				}
 			} else {
@@ -168,14 +138,14 @@ func (mi *MergingIterator) next() {
 			}
 		}
 
-		// 3. If tombstone, continue loop (don't return this key)
+		// If tombstone, continue loop
 		if isDeleted {
 			continue
 		}
 
-		// 4. Valid item found
-		mi.key = currentKey
-		mi.val = currentVal
+		// Found valid data: perform final copy for public API
+		mi.key = append([]byte(nil), currentUnsafeKey...)
+		mi.val = append([]byte(nil), currentUnsafeVal...)
 		mi.valid = true
 		return
 	}
@@ -205,7 +175,13 @@ func (mi *MergingIterator) Error() error {
 
 func (mi *MergingIterator) Close() error {
 	for _, item := range *mi.h {
-		item.iter.Close()
+		if err := item.iter.Close(); err != nil { // Call Close() on UnsafeIterator
+			return err
+		}
 	}
 	return nil
+}
+
+func (mi *MergingIterator) Domain() (start, end []byte) {
+	return mi.start, mi.end
 }
