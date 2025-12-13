@@ -52,14 +52,14 @@ Rules:
 
   * **Purpose:** Stores the B+Tree structure, the Freelist, and redundant Superblocks (Meta).
   * **Filename:** `index.db`
-  * **Access Pattern:** **Chunked Memory Map**.
-      * The file is logically a contiguous array of Pages.
-      * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB).
-      * **Alignment Invariant:** `ChunkSize` MUST be an exact multiple of the **Page Size** (4KB). The Pager MUST ensure that no Page physically crosses a chunk boundary.
-      * **Growth:** To expand, we strictly **pre-allocate disk space** (e.g., via `fallocate`) *before* extending the mmap. Old chunks remain valid to prevent segfaults in active readers.
-      * **Safety Protocol:**
-          * **No Shrinking:** Physical file truncation (shrinking) is FORBIDDEN while the process is running.
-          * **Fail-Stop:** `recover()` cannot catch `SIGBUS` in Go. Hardware I/O errors on mmap regions will crash the node; truncation faults must be prevented via bounds checks.
+        *   **Access Pattern:** **Chunked Memory Map**.
+            * The file is logically a contiguous array of Pages.
+            * Physically, the Go runtime maps it in **Configurable Chunks** (default: 256MB).
+            * **Alignment Invariant:** `ChunkSize` MUST be an exact multiple of the **Page Size** (4KB). The Pager MUST ensure that no Page physically crosses a chunk boundary.
+            * **Growth:** To expand, we strictly **pre-allocate disk space** (via `fallocate`) *before* extending the Mmap.
+            * **Safety Protocol:**
+                * **No Shrinking:** Physical file truncation (shrinking) is FORBIDDEN while the process is running.
+                * **Fail-Stop:** The system acknowledges that `recover()` cannot catch `SIGBUS` in Go. Hardware I/O errors on mmap regions will result in a node crash.
           * `Unmap` operations must verify zero active references before releasing a chunk.
 
 #### 2.2.1 Durability Ordering for Mmap Writes (Required)
@@ -93,9 +93,9 @@ Used to point to data stored in the Slabs.
 ```text
 ValuePtr (16 bytes)
 +-------------------------+
-| Offset   (8 bytes)      |  // 8-byte aligned
-| Length   (4 bytes)      |
-| FileID   (4 bytes)      |  // uint32 (expanded)
+| Offset     (8 bytes)    |  // 8-byte aligned
+| Length     (4 bytes)    |
+| FileID     (4 bytes)    |  // Expanded to uint32 using reserved space
 +-------------------------+
 ```
 
@@ -340,7 +340,7 @@ TreeDB implements iterators using a **Stateful Cursor Stack** to enable bidirect
       * **Mmap Safety Protocol (CRITICAL):**
           * **No Direct Slices:** The `Page` struct returned by the Pager MUST NOT contain standard Go slices (`[]byte`) pointing to the mmap to avoid GC scanning of off-heap memory.
           * **Safe Access:** Use `unsafe.Pointer` casting or `uintptr` arithmetic.
-          * **Bounds Enforcement:** The Pager MUST verify `Offset + PageSize` is within the mapped chunk/file before returning a pointer. `SIGBUS` cannot be recovered from; it must be prevented.
+          * **Bounds Enforcement:** The Pager MUST explicitly verify `Offset + PageSize <= ChunkSize` before returning a pointer. `SIGBUS` cannot be recovered from; it must be prevented.
 
 
 
@@ -381,18 +381,18 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
               * **Drill Down:** Continuously follow index `0` (left-most child) until a Leaf is reached.
               * Return Key at `Leaf.Index = 0`.
 
-#### 4\. Reverse Iterator Logic (`Next` / `Prev` Semantics)
+#### 4. Reverse Iterator Logic (`Next` / `Prev` Semantics)
 
   * **Initialization (Cosmos Semantics):**
       * The domain is `[start, end)`.
       * **Step 1 (Seek):**
-          * If `end` is `nil`: seek to the **right-most leaf**, last item (largest key).
-          * If `end` is provided: seek to the first key `>= end`.
+          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key).
+          * If `end` is provided: Seek to the first key `>= end`.
       * **Step 2 (Adjust):**
-          * If the seek found a key `>= end` (or hit EOF), move the cursor **backward** one item.
-          * *Rationale:* positions the cursor at the largest key strictly less than `end`.
+          * If the Seek found a key `>= end` (or hit EOF), move the cursor **Backward** one item.
+          * *Rationale:* This positions the cursor at the largest key strictly less than `end`.
       * **Step 3 (Verify):**
-          * If cursor is invalid or `Key < start`: iterator is empty.
+          * If cursor is Invalid or `Key < start`: Iterator is Empty.
   * **Advance:**
     1.  Look at the `Top` item of the Stack.
     2.  Decrement `Top.Index`.
@@ -408,9 +408,9 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
               * **Drill Down:** Continuously follow index `Count - 1` (right-most child) until a Leaf is reached.
               * Return Key at `Leaf.Index = Leaf.Count - 1`.
 
-### 5.4 Concurrent Slab Compaction (The "Move-and-Micro-Batch" Protocol)
+### 5.4 Concurrent Slab Compaction (The "Move-and-CAS" Protocol)
 
-Compaction runs concurrently with high-throughput writes and reads. To prevent races (e.g., “Resurrection”), compaction performs an **optimistic copy** followed by **micro-batch locking**: under the global write lock it verifies the current pointer still matches `OldPtr` before applying `NewPtr`.
+Compaction runs concurrently with high-throughput writes and reads. To prevent races (e.g., “Resurrection”), compaction relies on **Optimistic Concurrency Control** via a `CompareAndSwap` operation on the B+Tree index.
 
 #### 5.4.1 Compaction Lifecycle
 
@@ -430,17 +430,17 @@ The compactor iterates sequentially through slab records (Section 2.1.1). For ea
 
 **Phase 3: Atomic Commit (Micro-Batch Locking)**
 
-Instead of a `CompareAndSwap` interface, the compactor uses the standard global write lock.
+Instead of a complex `CompareAndSwap` on the Tree interface, the compactor utilizes the standard Write Lock.
 
-1.  **Preparation:** Hold a buffer of `(Key, OldPtr, NewPtr)` pairs.
+1.  **Preparation:** The compactor holds a buffer of `(Key, OldPtr, NewPtr)`.
 2.  **Execution (Loop):**
-      * Acquire Global Write Lock.
+      * Acquire Global Write Lock (Stop-the-World).
       * **Verify & Apply:** For each item in the micro-batch:
-          * `CurrentPtr = Tree.Get(Key)`
-          * If `CurrentPtr == OldPtr`: `Tree.Set(Key, NewPtr)`
-          * Else: skip (user updated concurrently).
+          * `CurrentPtr = Tree.Get(Key)` (Fast in-memory lookup).
+          * If `CurrentPtr == OldPtr`: `Tree.Set(Key, NewPtr)`.
+          * Else: Skip (User updated key concurrently).
       * Release Global Write Lock.
-      * **Yield:** Sleep briefly to avoid starving user writes.
+      * **Yield:** Sleep briefly to ensure User Writes are not starved.
 
 #### 5.4.2 Zombie Transition (Ref-Counted Deletion)
 
@@ -456,7 +456,7 @@ Once the Cold Slab is fully processed:
 
 #### 5.5.1 Race: The "Resurrection" Write
 
-Verification under the write lock prevents resurrection: if the index no longer points at `OldPtr`, the compactor skips the update and the user write wins.
+CAS prevents a compactor from overwriting a newer user write: if the index no longer points at `OldPtr`, `CompareAndSwap` fails.
 
 #### 5.5.2 Race: The "Vanishing" Slab (Reader vs. Deleter)
 
@@ -464,7 +464,7 @@ Ref-counted deletion ensures that slabs remain present while any Snapshot holds 
 
 #### 5.5.3 Race: The "Torn" Compaction Commit
 
-A crash during micro-batch updates can leave a mix of pointers across slabs; this is safe because the B+Tree is authoritative and both slabs remain loadable after restart.
+A crash during CAS can leave a mix of pointers across slabs; this is safe because the B+Tree is authoritative and both slabs remain loadable after restart.
 
 ### 5.6 Adaptive Inline Threshold (Option A: Telemetry + Feedback Control)
 
@@ -602,7 +602,7 @@ func (tdb *DB) SetSync(key, value []byte) error
 func (tdb *DB) Delete(key []byte) error
 
 // DeleteSync removes a key and flushes to disk.
-func (tdb *DB) DeleteSync(key []byte) error
+func (tdb *DB) DeleteSync(key, value []byte) error
 
 // Iterator returns an iterator over a domain of keys in ascending order.
 // Start is inclusive, End is exclusive.
@@ -639,16 +639,21 @@ func (tdb *DB) Stats() map[string]string
 // Useful for node operators during maintenance windows.
 func (tdb *DB) Compact() error
 
-// --- Internal Interfaces for Compaction Support ---
+// --- Internal Interfaces for CAS Support ---
 
-// Tree interface required for compaction verify-set
+// Tree interface required for Safe Compaction
 type Tree interface {
     // Get returns the raw leaf data (Inline, Pointer, or Tombstone).
+    // needed for CompareAndSwap to verify current state.
     Get(key []byte) (LeafEntry, error)
     
     // Set updates the leaf directly with a specific pointer/inline value.
-    // MUST execute under the same write lock as Batch.Write.
     Set(key []byte, val LeafEntry) error
+
+    // CompareAndSwap atomically sets 'key' to 'newVal' ONLY IF the current value matches 'oldVal'.
+    // Returns true if swapped, false if mismatch.
+    // MUST execute under the same write lock as Batch.Write.
+    CompareAndSwap(key []byte, oldVal, newVal LeafEntry) (bool, error)
 }
 
 // --- Batch Implementation ---
@@ -670,4 +675,87 @@ func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) {
     return b.byteSize, nil
 }
-```
+
+## 7\. Write-Back Caching Layer & Read Optimizations
+
+To boost performance for write-heavy workloads and improve read throughput, TreeDB implements an LSM-style write-back caching layer (Memtable + WAL) and significant read path optimizations.
+
+### 7.1 Write-Back Caching (LSM-style Level 0)
+
+TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable and a queue of immutable Memtables, backed by a Write-Ahead Log (WAL).
+
+#### 7.1.1 Memtable (`internal/memtable`)
+- **Structure:** Uses a `google/btree` for efficient in-memory key-value storage.
+- **Operations:** Supports `Set`, `Delete` (using tombstones), and `Get`.
+- **Memory Tracking:** Tracks approximate memory usage for flush decisions.
+
+#### 7.1.2 Write-Ahead Log (WAL) (`internal/wal`)
+- **Purpose:** Ensures durability of in-memory Memtable writes.
+- **Format:** Records operations as `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
+- **Durability:** Provides `Sync()` method to guarantee writes are flushed to disk.
+
+#### 7.1.3 CachingDB (`caching` package)
+- **Architecture:** Wraps the core `treedb.DB` instance (referred to as `backend`).
+- **Write Path:**
+    1.  `Set`/`Delete`: Operation is first appended to the current WAL.
+    2.  Then, the operation is applied to the `mutable` Memtable.
+    3.  `SetSync`/`DeleteSync`: Additionally calls `WAL.Sync()` after appending to the WAL.
+- **Flush Mechanism:**
+    1.  When `mutable.Size()` exceeds `FlushThreshold` (e.g., 4MB):
+        - The `mutable` Memtable is moved to the `queue` of immutable Memtables.
+        - A new empty `mutable` Memtable and a new WAL file are created.
+    2.  A background worker continuously flushes Memtables from the `queue` to the `backend` (disk).
+        - It creates a `treedb.Batch` from the Memtable's contents.
+        - The batch is committed to disk via `Batch.WriteSync()`.
+        - Once successfully flushed, the Memtable is removed from the `queue`, and its corresponding WAL file is deleted.
+- **Read Path (`Get`):**
+    1.  Attempts to retrieve the key from the `mutable` Memtable.
+    2.  If not found, searches through the `queue` of immutable Memtables (from newest to oldest).
+    3.  If still not found, falls back to the `backend` (disk).
+
+### 7.2 Read Path Optimizations
+
+To achieve high read throughput, especially for range scans, TreeDB employs several allocation-reducing and latency-masking techniques.
+
+#### 7.2.1 O(1) Snapshot Acquisition (Group RefCounting)
+- **Problem:** Traditional MVCC might involve iterating and pinning individual `SlabFile`s, leading to O(N) acquisition time with many slab files.
+- **Solution:** `internal/slab/group.go` introduces `SlabGroup`, which holds a single `atomic.Int64` reference counter for a collection of slab files.
+- **Mechanism:** `DBState` now references `*SlabGroup` instead of `SlabSet`. Snapshot acquisition involves only an atomic increment on the group's refcount, making it O(1). Zombie slab deletion waits for the group refcount to drop.
+
+#### 7.2.2 Unsafe Iterator Interface (`internal/iterator/iterator.go`)
+- **Purpose:** Provides a minimal, zero-copy interface for internal iteration where performance is critical.
+- **Methods:**
+    - `Valid() bool`: Checks if the iterator points to a valid entry.
+    - `Next()`: Advances the iterator.
+    - `Seek(key []byte)`: Positions the iterator.
+    - `UnsafeKey() []byte`: Returns a **view** (slice pointing directly to internal buffer) of the current key. Callers MUST NOT modify it and it is only valid until the next `Next()` or `Seek()`.
+    - `UnsafeValue() []byte`: Returns a **view** of the current value (lazy-loaded if from slab). Similar safety warnings apply.
+    - `Key() []byte`: Returns a **copy** of the key (for safe public API use).
+    - `Value() []byte`: Returns a **copy** of the value (for safe public API use).
+    - `IsDeleted() bool`: Indicates if the current entry is a tombstone.
+    - `Error() error`: Returns any error encountered.
+    - `Close() error`: Releases resources.
+    - `Domain() (start, end []byte)`: Returns the iteration bounds.
+- **Implementations:** `memtable.Iterator` and `tree.Iterator` (Disk Iterator) now implement `UnsafeIterator`.
+
+#### 7.2.3 Specialized TwoWayMerger (`internal/merging/twoway.go`)
+- **Problem:** The generic `MergingIterator` uses a min-heap, incurring overhead when only two sources (e.g., Memtable and Disk) need to be merged.
+- **Solution:** `TwoWayMerger` is an optimized implementation for exactly two `UnsafeIterator` sources.
+- **Optimization:** Avoids heap overhead and uses direct `bytes.Compare` logic to efficiently find the smallest key, handle shadowing, and filter tombstones.
+- **Usage:** `merging.NewMergingIterator` transparently uses `TwoWayMerger` when only two sources are provided.
+
+#### 7.2.4 Lazy Disk Iterator (`internal/tree/iterator.go`)
+- **Problem:** Eagerly loading values from disk during tree traversal can lead to unnecessary I/O, especially if values are large or not all iterated keys are used.
+- **Solution:** The Disk Iterator (the `tree.Iterator` struct) is modified for lazy value loading.
+- **Mechanism:**
+    - `Next()` (or `Seek()`) only parses the leaf entry to identify the key and whether the value is inline or a `ValuePtr`. It does NOT read the value bytes from the slab.
+    - `UnsafeValue()` (or `Value()`) triggers the slab read *only when* the value is actually requested and is a `ValuePtr`. The read value is then cached within the iterator struct to prevent repeated I/O.
+- **Zero-Copy Keys:** `UnsafeKey()` returns slices directly into the memory-mapped index pages, eliminating allocations for keys during internal iteration.
+
+#### 7.2.5 Integration (`caching` package)
+- The `CachingDB`'s `Iterator` method now orchestrates these components:
+    - It gathers `UnsafeIterator` instances from the `mutable` Memtable, the `queue` of immutable Memtables, and the `backend` (disk).
+    - It then passes these `UnsafeIterator`s to `merging.NewMergingIterator`, which dynamically selects the most optimized merger (e.g., `TwoWayMerger` for two sources or the heap-based `MergingIterator` for more).
+    - The `caching.Iterator` (which is itself a `merging.Iterator`) returns `Key()` and `Value()` as copies, satisfying the Cosmos DB contract, while leveraging `UnsafeKey()` and `UnsafeValue()` internally for performance.
+
+---

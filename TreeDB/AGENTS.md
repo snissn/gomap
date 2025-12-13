@@ -1,9 +1,5 @@
 # TreeDB Implementation & Testing Plan (Spec v2.7)
 
-This repository currently contains only the design and test specifications under `specs/`. The goal is to implement **TreeDB** end‑to‑end per `specs/spec.md` and validate it per `specs/test-spec.md`.
-
----
-
 ## Scope, Constraints, and Non‑Negotiables
 
 - Embedded, persistent key‑value store implementing the `github.com/cosmos/cosmos-db` `DB` and `Batch` interfaces.
@@ -71,9 +67,9 @@ This repository currently contains only the design and test specifications under
   - read: bounds check, parse forward from `Offset`, verify CRC, return value bytes.
 - Implement page header and unsafe parsing/encoding:
   - header layout with CRC32C on body.
-  - page flags/types (Meta/Freelist/Internal/Leaf).
+  - page flags/types (Meta/Free/Int/Leaf).
 
-### Phase 2 — Pager (`index.db`) with Chunked MMap
+### Phase 2 — Pager (`index.db`) with Chunked Mmap
 
 - Options: data directory, chunk size (default 256MB). `ChunkSize` MUST be a multiple of `PageSize` so pages never straddle chunk boundaries.
 - Open/create `index.db`:
@@ -103,7 +99,7 @@ This repository currently contains only the design and test specifications under
   - `[KeyLen][ValueLen][Flags][Key][InlineValue|ValuePtr]`.
   - flags for Inline, Pointer, Tombstone.
 - Internal node encode/decode:
-  - `[ChildPageID][KeyBytes]` in heap; directory offsets.
+  - `[Child PageID][KeyBytes]` in heap; directory offsets.
 
 ### Phase 4 — B+Tree Core (Dual Roots)
 
@@ -157,9 +153,9 @@ This repository currently contains only the design and test specifications under
   - decrement slab refs; delete zombies when last ref drops.
 - Graveyard:
   - in‑memory `map[CommitSeq][]PageID` of replaced pages.
-  - pruner moves pages to on‑disk freelist only if
+  - pruner moves pages to on‑disk freelist only when:
     - `RetiredAtSeq < MinPinnedSeq` and
-    - `RetiredAtSeq < CurrentSeq - KeepRecent`.
+    - `RetiredAtSeq < (CurrentSeq - KeepRecent)`
 
 ### Phase 7 — Batch “Zipper” Merge & Redundant Superblock Commit
 
@@ -289,7 +285,7 @@ This repository currently contains only the design and test specifications under
 
 **Goal:** Achieve 500k+ ranges/s by eliminating allocations and setup overhead.
 
-### 13.1 O(1) Snapshot Acquisition (Group RefCount)
+### 13.1 O(1) Snapshot Acquisition (Group RefCounting)
 - [x] Create `internal/slab/group.go` (or `SlabGroup` struct).
 - [x] Group holds map of files + single `atomic.Int64` for snapshot pinning.
 - [x] Update `DBState` to hold `*SlabGroup` instead of `SlabSet`.
@@ -298,9 +294,17 @@ This repository currently contains only the design and test specifications under
 
 ### 13.2 Unsafe Iterator Interface
 - [x] Define `UnsafeIterator` in `internal/iterator`:
-    - `UnsafeKey() []byte` (view)
-    - `UnsafeValue() []byte` (view)
-    - `Next()`, `Valid()`, `Close()`
+    - `Valid() bool`: Checks if the iterator points to a valid entry.
+    - `Next()`: Advances the iterator.
+    - `Seek(key []byte)`: Positions the iterator.
+    - `UnsafeKey() []byte`: Returns a **view** (slice pointing directly to internal buffer) of the current key. Callers MUST NOT modify it and it is only valid until the next `Next()` or `Seek()`.
+    - `UnsafeValue() []byte`: Returns a **view** of the current value (lazy-loaded if from slab). Similar safety warnings apply.
+    - `Key() []byte`: Returns a **copy** of the key (for safe public API use).
+    - `Value() []byte`: Returns a **copy** of the value (for safe public API use).
+    - `IsDeleted() bool`: Indicates if the current entry is a tombstone.
+    - `Error() error`: Returns any error encountered.
+    - `Close() error`: Releases resources.
+    - `Domain() (start, end []byte)`: Returns the iteration bounds.
 - [x] Update `memtable.Iterator` to implement this (it already returns views).
 
 ### 13.3 Specialized TwoWayMerger
@@ -311,9 +315,9 @@ This repository currently contains only the design and test specifications under
 ### 13.4 Lazy Disk Iterator
 - [x] Modify `internal/tree/iterator.go` (Disk Iterator) to implement `UnsafeIterator`.
 - [x] **Lazy Value Loading:**
-    - `Next()` parses leaf but does NOT read Value pointer from slab.
-    - `UnsafeValue()` triggers slab read if needed (and caches it in iterator struct).
-- [x] **Zero-Copy Keys:** Return slice into mmap buffer for Key (safety warning: valid only until next call/close).
+    - `Next()` (or `Seek()`) only parses the leaf entry to identify the key and whether the value is inline or a `ValuePtr`. It does NOT read the value bytes from the slab.
+    - `UnsafeValue()` (or `Value()`) triggers the slab read *only when* the value is actually requested and is a `ValuePtr`. The read value is then cached within the iterator struct to prevent repeated I/O.
+- [x] **Zero-Copy Keys:** `UnsafeKey()` returns slices directly into the memory-mapped index pages, eliminating allocations for keys during internal iteration.
 
 ### 13.5 Integration
 - [x] Update `caching.DB` to use `TwoWayMerger` and `UnsafeIterator`.
@@ -329,3 +333,4 @@ This repository currently contains only the design and test specifications under
 3.  **Verification**: Run tests.
 4.  **Commit**: Git commit with clear message.
 5.  **User Check**: Briefly pause for user feedback if major design decisions arise.
+6.  **Spec Update**: Keep `specs/spec.md` in sync with completed phases.
