@@ -89,7 +89,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return &Snapshot{
 		db:         db,
 		state:      state,
-		tree:       tree.New(db.pager, db.slabManager, state.RootPageID),
+		tree:       tree.New(db.pager, state.SlabSet, state.RootPageID),
 		registryID: id,
 	}
 }
@@ -184,7 +184,7 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		data, err := db.pager.Get(rootID)
+		data, err := db.pager.GetForWrite(rootID)
 		if err != nil {
 			return err
 		}
@@ -201,7 +201,7 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		dataSys, err := db.pager.Get(sysRootID)
+		dataSys, err := db.pager.GetForWrite(sysRootID)
 		if err != nil {
 			return err
 		}
@@ -272,7 +272,7 @@ func (db *DB) recover() error {
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
-	data, err := db.pager.ReadPage(pageID)
+	data, err := db.pager.Get(pageID)
 	if err != nil {
 		return page.MetaPageBody{}, false
 	}
@@ -287,7 +287,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
-	data, err := db.pager.Get(pageID)
+	data, err := db.pager.GetForWrite(pageID)
 	if err != nil {
 		return err
 	}

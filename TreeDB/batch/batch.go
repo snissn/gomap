@@ -7,6 +7,11 @@ import (
 	"github.com/snissn/gomap-gemini/TreeDB/slab"
 )
 
+var (
+	ErrKeyEmpty = errors.New("key cannot be empty")
+	ErrBatchClosed = errors.New("batch closed")
+)
+
 // OpType represents the type of operation (Put or Delete).
 type OpType uint8
 
@@ -30,6 +35,7 @@ type Batch struct {
 	slabManager     *slab.SlabManager
 	byteSize        int
 	inlineThreshold int
+	closed bool
 }
 
 // New creates a new Batch.
@@ -44,11 +50,20 @@ func New(sm *slab.SlabManager, threshold int) *Batch {
 	}
 }
 
-// Set adds a put operation to the batch.
-// If the value is larger than InlineThreshold, it is written to the slab immediately.
+func (b *Batch) ensureOpen() error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	return nil
+}
+
+// Set adds or replaces a key/value operation.
 func (b *Batch) Set(key, value []byte) error {
-	if len(key) == 0 {
-		return errors.New("key cannot be empty")
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if key == nil {
+		return ErrKeyEmpty
 	}
 
 	entry := Entry{
@@ -83,7 +98,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	if len(key) == 0 {
 		return errors.New("key cannot be empty")
 	}
-	
+
 	entry := Entry{
 		Type:     OpPut,
 		Key:      key,
@@ -94,10 +109,13 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	return nil
 }
 
-// Delete adds a delete operation to the batch.
+// Delete adds or replaces a delete operation.
 func (b *Batch) Delete(key []byte) error {
-	if len(key) == 0 {
-		return errors.New("key cannot be empty")
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if key == nil {
+		return ErrKeyEmpty
 	}
 
 	b.ops[string(key)] = Entry{

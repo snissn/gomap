@@ -78,19 +78,13 @@ func (n *Node) Checksum() uint32 {
 
 // UpdateChecksum calculates and updates the checksum in the header.
 func (n *Node) UpdateChecksum() {
-	// Zero out checksum field for calculation
-	binary.LittleEndian.PutUint32(n.data[8:12], 0)
-	sum := page.Checksum(n.data)
+	sum := page.CalculateChecksum(n.data)
 	binary.LittleEndian.PutUint32(n.data[8:12], sum)
 }
 
 // VerifyChecksum validates the node's checksum.
 func (n *Node) VerifyChecksum() bool {
-	stored := n.Checksum()
-	binary.LittleEndian.PutUint32(n.data[8:12], 0)
-	computed := page.Checksum(n.data)
-	binary.LittleEndian.PutUint32(n.data[8:12], stored) // Restore
-	return stored == computed
+	return page.VerifyChecksumNonMutating(n.data)
 }
 
 // getOffset returns the offset for the item at the given index.

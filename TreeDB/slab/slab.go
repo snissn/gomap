@@ -73,11 +73,17 @@ func (s *SlabFile) Truncate(size int64) error {
 	return nil
 }
 
-// ReadAt reads a record at the given offset.
+// ReadAt reads a record at the given offset (which points to KeyLen, skipping CRC).
 func (s *SlabFile) Read(offset int64) ([]byte, error) {
+	// Offset points to KeyLen. CRC is at Offset - 4.
+	realStart := offset - 4
+	if realStart < 0 {
+		return nil, errors.New("invalid slab offset")
+	}
+
 	// 1. Read Header (10 bytes)
 	headerBuf := make([]byte, HeaderSize)
-	if _, err := s.File.ReadAt(headerBuf, offset); err != nil {
+	if _, err := s.File.ReadAt(headerBuf, realStart); err != nil {
 		return nil, err
 	}
 
@@ -89,7 +95,7 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 	
 	// 2. Read Data (Key + Value)
 	dataBuf := make([]byte, totalLen)
-	if _, err := s.File.ReadAt(dataBuf, offset+HeaderSize); err != nil {
+	if _, err := s.File.ReadAt(dataBuf, realStart+HeaderSize); err != nil {
 		return nil, err
 	}
 	

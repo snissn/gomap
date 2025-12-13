@@ -21,64 +21,79 @@ type LeafEntry struct {
 	Flags    byte
 }
 
-// GetLeafEntry reads the entry at the given index.
-func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
+// GetLeafEntryView returns a view of the entry at the given index.
+// Key and Value slices point directly to the node's data.
+// CAUTION: The returned slices are valid only as long as the node data is valid.
+func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr page.ValuePtr, flags byte, err error) {
 	offset, err := n.getOffset(index)
 	if err != nil {
-		return LeafEntry{}, err
+		return nil, nil, page.ValuePtr{}, 0, err
 	}
 	
-	// Bounds check
 	if int(offset) >= len(n.data) {
-		return LeafEntry{}, ErrCorruptedNode
+		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 	}
 	
 	ptr := int(offset)
-	// Layout: KeyLen(2) | ValLen(4) | Flags(1) | Key | Value
 	if ptr+7 > len(n.data) {
-		return LeafEntry{}, ErrCorruptedNode
+		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 	}
 	
 	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
 	valLen := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
-	flags := n.data[ptr+6]
+	flags = n.data[ptr+6]
 	
 	ptr += 7
-	
 	if ptr+int(keyLen) > len(n.data) {
-		return LeafEntry{}, ErrCorruptedNode
+		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 	}
 	
-	key := make([]byte, keyLen)
-	copy(key, n.data[ptr:ptr+int(keyLen)])
+	key = n.data[ptr : ptr+int(keyLen)]
 	ptr += int(keyLen)
 	
-	entry := LeafEntry{
-		Key:   key,
-		Flags: flags,
-	}
-	
 	if flags&FlagTombstone != 0 {
-		return entry, nil
+		return key, nil, page.ValuePtr{}, flags, nil
 	}
 	
 	if flags&FlagPointer != 0 {
 		if ptr+page.ValuePtrSize > len(n.data) {
-			return LeafEntry{}, ErrCorruptedNode
+			return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 		}
-		entry.ValuePtr = page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
-		// Note: We don't allocate entry.Value for pointers, the caller must fetch it from Slab.
-	} else {
-		// Inline
-		if ptr+int(valLen) > len(n.data) {
-			return LeafEntry{}, ErrCorruptedNode
-		}
-		val := make([]byte, valLen)
-		copy(val, n.data[ptr:ptr+int(valLen)])
-		entry.Value = val
+		valPtr = page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
+		return key, nil, valPtr, flags, nil
 	}
 	
-	return entry, nil
+	// Inline
+	if ptr+int(valLen) > len(n.data) {
+		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+	val = n.data[ptr : ptr+int(valLen)]
+	return key, val, page.ValuePtr{}, flags, nil
+}
+
+// GetLeafEntry reads the entry at the given index.
+func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
+	keyView, valView, valPtr, flags, err := n.GetLeafEntryView(index)
+	if err != nil {
+		return LeafEntry{}, err
+	}
+
+	// Make copies for safety
+	key := make([]byte, len(keyView))
+	copy(key, keyView)
+
+	var val []byte
+	if valView != nil {
+		val = make([]byte, len(valView))
+		copy(val, valView)
+	}
+
+	return LeafEntry{
+		Key:      key,
+		Value:    val,
+		ValuePtr: valPtr,
+		Flags:    flags,
+	}, nil
 }
 
 // SearchLeaf performs a binary search for the given key in a Leaf Node.

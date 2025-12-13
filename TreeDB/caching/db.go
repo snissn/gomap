@@ -28,11 +28,10 @@ type BatchInterface interface {
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
-// Its Iterator methods now return iterator.UnsafeIterator.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
-	Iterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
-	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
+	Iterator(start, end []byte) (iterator.UnsafeIterator, error) 
+	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	NewBatch() BatchInterface
 	Close() error
 	Print() error
@@ -97,7 +96,7 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	if db.mutable.Size() > 0 {
-		_ = db.rotateMemtableLocked() // Ignore error (what can we do? WAL error?)
+		_ = db.rotateMemtableLocked() 
 	}
 	db.mu.Unlock()
 
@@ -113,7 +112,7 @@ func (db *DB) Close() error {
 	return db.backend.Close()
 }
 func (db *DB) Set(key, value []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -123,7 +122,7 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 func (db *DB) SetSync(key, value []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -159,14 +158,14 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) Delete(key []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	return db.delete(key, false)
 }
 
 func (db *DB) DeleteSync(key []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	return db.delete(key, true)
@@ -269,17 +268,11 @@ batch := db.backend.NewBatch()
 	}
 	// Commit to disk
 	if err := batch.WriteSync(); err != nil {
-		// Retry? Log? For now panic/log.
 		fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
 		return false
 	}
 
 	// Remove from queue and delete old WAL
-	// Note: We need to know WHICH wal corresponds to this memtable.
-	// Simplified: We rotate WAL every time we rotate Memtable.
-	// So queue[0] corresponds to walSeq - len(queue).
-	// We should probably track (Memtable, WalPath) pairs in the queue.
-
 	db.mu.Lock()
 	db.queue = db.queue[1:]
 	// TODO: Delete old WAL file here.
@@ -329,27 +322,28 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return v != nil, err
 }
 
+func (db *DB) Stats() map[string]string {
+	return db.backend.Stats()
+}
+
+func (db *DB) Print() error {
+	return db.backend.Print()
+}
+
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock() // Need to hold lock while creating iterators?
-	// If we create iterators from memtables, they are snapshots (COW).
 
 	var sources []merging.IteratorSource
 
-	// Priority 0: Mutable
+	// Priority 0: Mutable (always exists)
 	sources = append(sources, merging.IteratorSource{
 		Iter:     db.mutable.NewIterator(),
 		Priority: 0,
 	})
 
-	// Priority 1..N: Queue (Newest first? No, newest has lower priority number/better precedence)
-	// MergingIterator expects: Priority 0 is best.
-	// So Mutable = 0.
-	// Queue[Last] (Newest) = 1
-	// Queue[0] (Oldest) = N
-	// Disk = N+1
-
+	// Priority 1..N: Queue (Newest first)
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
 		sources = append(sources, merging.IteratorSource{
@@ -359,19 +353,18 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		prio++
 	}
 
+	// Disk Iterator
 	diskIter, err := db.backend.Iterator(start, end)
 	if err != nil {
 		return nil, err
 	}
 	sources = append(sources, merging.IteratorSource{
-		Iter:     diskIter, 
+		Iter:     diskIter,
 		Priority: prio,
 	})
 
 	return merging.NewMergingIterator(sources, start, end), nil
 }
-
-
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
@@ -382,12 +375,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Unlock()
 	db.flushAll()
 
-	iter, err := db.backend.ReverseIterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	// Wrap in MergingIterator to convert UnsafeIterator to merging.Iterator (safe)
-	return merging.NewMergingIterator([]merging.IteratorSource{{Iter: iter, Priority: 0}}, start, end), nil
+	return db.backend.ReverseIterator(start, end)
 }
 
 // NewBatch implementation for CachingDB
@@ -413,7 +401,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if b.ops == nil {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -428,7 +416,7 @@ func (b *Batch) Delete(key []byte) error {
 	if b.ops == nil {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	b.ops[string(key)] = batchOp{del: true}
@@ -487,7 +475,7 @@ func (b *Batch) write(sync bool) error {
 			return err
 		}
 	}
-	
+
 	return b.Close()
 }
 

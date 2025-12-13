@@ -63,6 +63,34 @@ func Checksum(data []byte) uint32 {
 	return crc32.Checksum(data, crcTable)
 }
 
+// CalculateChecksum computes the checksum of the page data,
+// treating the checksum field (bytes 8-12) as zero.
+func CalculateChecksum(data []byte) uint32 {
+	if len(data) < PageHeaderSize {
+		return 0
+	}
+	// CRC over 0..8
+	sum := crc32.Checksum(data[0:8], crcTable)
+	// CRC over zeroed checksum field (4 bytes)
+	var zero [4]byte
+	sum = crc32.Update(sum, crcTable, zero[:])
+	// CRC over rest (12..)
+	sum = crc32.Update(sum, crcTable, data[12:])
+	return sum
+}
+
+// VerifyChecksumNonMutating verifies that the page checksum matches the data,
+// assuming the checksum field (bytes 8-12) is zero for the calculation.
+// It avoids modifying the underlying buffer.
+func VerifyChecksumNonMutating(data []byte) bool {
+	if len(data) < PageHeaderSize {
+		return false
+	}
+	stored := binary.LittleEndian.Uint32(data[8:12])
+	computed := CalculateChecksum(data)
+	return stored == computed
+}
+
 // EncodeHeader encodes the PageHeader into the provided buffer.
 // The buffer must be at least PageHeaderSize bytes.
 func (h *PageHeader) Encode(buf []byte) {

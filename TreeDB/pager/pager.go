@@ -178,6 +178,29 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 	return startID, nil
 }
 
+// GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
+func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if pageID >= p.numPages {
+		return nil, ErrPageOutOfBounds
+	}
+
+	byteOffset := int64(pageID) * int64(page.PageSize)
+	chunkIdx := int(byteOffset / p.chunkSize)
+	offsetInChunk := byteOffset % p.chunkSize
+
+	if chunkIdx >= len(p.chunks) {
+		return nil, ErrPageOutOfBounds
+	}
+
+	p.dirtyChunks[chunkIdx] = struct{}{}
+
+	chunk := p.chunks[chunkIdx]
+	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
+}
+
 // Get returns the byte slice for the given page ID.
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
@@ -243,28 +266,46 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 // Sync msyncs the memory maps to disk.
 func (p *Pager) Sync() error {
 	p.mu.Lock()
-	// Copy dirty list
+	// Copy dirty list and clear
 	toSync := make([]int, 0, len(p.dirtyChunks))
 	for idx := range p.dirtyChunks {
 		toSync = append(toSync, idx)
 	}
-	// Clear map
+	// We clear the map now. If Msync fails, we must restore these.
 	p.dirtyChunks = make(map[int]struct{})
 	p.mu.Unlock()
 	
-	// Perform msync under read lock (or no lock? Pager.Close takes Lock, so RLock is safer against Close)
-	// Also Get/ReadPage takes RLock. Msync shouldn't block readers, but Close unmaps.
+	// Perform msync under read lock
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	// We defer RUnlock to ensure we hold it during the entire sync process
+	// including file sync.
 	
-	// MS_SYNC is synchronous.
+	var syncErr error
 	for _, idx := range toSync {
 		if idx < len(p.chunks) {
 			if err := unix.Msync(p.chunks[idx], unix.MS_SYNC); err != nil {
-				return err
+				syncErr = err
+				break // Stop on first error
 			}
 		}
 	}
-	// Sync file metadata (size)
-	return p.file.Sync()
+	
+	if syncErr == nil {
+		if err := p.file.Sync(); err != nil {
+			syncErr = err
+		}
+	}
+	p.mu.RUnlock()
+
+	// If error occurred, restore the dirty chunks
+	if syncErr != nil {
+		p.mu.Lock()
+		for _, idx := range toSync {
+			p.dirtyChunks[idx] = struct{}{}
+		}
+		p.mu.Unlock()
+		return syncErr
+	}
+
+	return nil
 }

@@ -60,9 +60,12 @@ func (c *Compactor) CompactSlab(id uint32) error {
 		value := dataBuf[keyLen:]
 
 		// Construct OldPtr
+		// Matches SlabManager.Append semantics:
+		// Offset points to KeyLen (skipping 4-byte CRC).
+		// Length excludes CRC (2 + 4 + k + v).
 		oldPtr := page.ValuePtr{
-			Offset: uint64(offset),
-			Length: uint32(totalLen),
+			Offset: uint64(offset + 4),
+			Length: uint32(totalLen - 4),
 			FileID: id,
 		}
 

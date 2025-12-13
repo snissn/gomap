@@ -118,7 +118,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	length := 2 + 4 + len(key) + len(value)
 	
 	return page.ValuePtr{
-		Offset: uint64(offset),
+		Offset: uint64(offset + 4),
 		Length: uint32(length),
 		FileID: sm.activeSlab.ID,
 	}, nil
@@ -231,6 +231,14 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	s.RefCount.Store(1) // Manager owns one reference
 	return s
 }
+func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
+	}
+	return f.Read(int64(ptr.Offset))
+}
+
 // AcquireSlabs increments the RefCount for the Set (O(1)).
 func (sm *SlabManager) AcquireSlabs(set *SlabSet) {
 	if set != nil {

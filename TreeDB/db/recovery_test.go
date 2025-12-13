@@ -36,8 +36,14 @@ func TestRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ptr.Offset != 0 {
-		t.Errorf("Expected offset 0, got %d", ptr.Offset)
+	// Header(10) + Key(4) + Val(4) = 18 bytes.
+	// Ptr.Offset points to KeyLen (start+4). So 4.
+	if ptr.Offset != 4 {
+		t.Errorf("Expected offset 4, got %d", ptr.Offset)
+	}
+	// Length excludes CRC(4). So 18-4 = 14.
+	if ptr.Length != 14 {
+		t.Errorf("Expected length 14, got %d", ptr.Length)
 	}
 	
 	// Simulate "Torn Write" on Slab: Append garbage but don't update meta

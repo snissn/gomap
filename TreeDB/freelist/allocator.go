@@ -44,7 +44,7 @@ func (a *Allocator) Alloc() (uint64, error) {
 	}
 
 	// Read Head
-	data, err := a.pager.Get(a.head)
+	data, err := a.pager.GetForWrite(a.head)
 	if err != nil {
 		return 0, err
 	}
@@ -107,7 +107,7 @@ func (a *Allocator) Free(id uint64) error {
 	}
 
 	// Load Head
-	data, err := a.pager.Get(a.head)
+	data, err := a.pager.GetForWrite(a.head)
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,7 @@ func (a *Allocator) Free(id uint64) error {
 }
 
 func (a *Allocator) initHead(id, next uint64) error {
-	data, err := a.pager.Get(id)
+	data, err := a.pager.GetForWrite(id)
 	if err != nil {
 		return err
 	}

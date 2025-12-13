@@ -28,6 +28,9 @@ type Iterator struct {
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
+	}
 	it := &Iterator{
 		tree:  t,
 		start: start,
@@ -39,6 +42,9 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return &Iterator{tree: t, valid: false, err: nil}
+	}
 	it := &Iterator{
 		tree:    t,
 		start:   start,
@@ -52,9 +58,8 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		it.Seek(end)
 		if it.valid {
 			it.stepBackward()
-		} else {
-			// seek(end) fell off the end.
-			it.err = nil 
+		} else if it.err == nil {
+			// seek(end) fell off the end (no error, just exhausted).
 			it.seekRightMost()
 		}
 	}
@@ -216,8 +221,8 @@ func (it *Iterator) loadCurrent() {
 
 	// Lazy Load Logic could go here, but for now eagerly loading as before
 	// to match structure. UnsafeValue will return it.
-	if entry.Flags & node.FlagPointer != 0 {
-		val, err := it.tree.slabManager.Read(entry.ValuePtr)
+	if entry.Flags&node.FlagPointer != 0 {
+		val, err := it.tree.slabReader.Read(entry.ValuePtr)
 		if err != nil {
 			it.err = err
 			it.valid = false
@@ -344,7 +349,7 @@ func (it *Iterator) stepBackward() {
 
 func (it *Iterator) Next() {
 	if !it.valid {
-		return
+		panic("iterator invalid")
 	}
 	if len(it.stack) > 0 {
 		if it.reverse {

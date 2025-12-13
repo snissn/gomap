@@ -13,6 +13,22 @@ type InternalEntry struct {
 	ChildPageID uint64
 }
 
+// GetInternalChildID returns only the child page ID at the given index.
+func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return 0, err
+	}
+	
+	ptr := int(offset)
+	// Layout: KeyLen(2) | ChildPageID(8)
+	if ptr+10 > len(n.data) {
+		return 0, ErrCorruptedNode
+	}
+	
+	return binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10]), nil
+}
+
 // GetInternalEntry reads the entry at the given index.
 func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
 	offset, err := n.getOffset(index)
