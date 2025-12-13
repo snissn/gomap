@@ -14,7 +14,7 @@ This repository currently contains only the design and test specifications under
 - **SWMR** concurrency: single writer lock; lock‑free reads via **Snapshots** (MVCC epochs).
 - **CRC32C (Castagnoli)** checksums on every B+Tree page body and every slab record.
 - Durability contract:
-  - `*Sync` writes must make slab durable **before** meta/index durability boundary.
+  - `*Sync` writes must make slab durable **before** meta/index persistence.
   - `Write()`/`Set()` may return before durability.
 - Iterator semantics must match Cosmos SDK:
   - domain `[start,end)` where `end` is exclusive.
@@ -263,7 +263,7 @@ This repository currently contains only the design and test specifications under
 - [x] Implement `MergingIterator` in `internal/merging`.
     - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
     - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
-- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
+- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct version returned.
 
 ### 12.3 CachingDB Core Logic
 - [x] Create `caching` package (or extend `treedb`).
@@ -280,7 +280,7 @@ This repository currently contains only the design and test specifications under
 ### 12.4 Integration & Config
 - [x] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
 - [x] Update `Open` to initialize `CachingDB` wrapper if enabled.
-- [x] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
+- [ ] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
 - **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
 
 ---
@@ -290,11 +290,11 @@ This repository currently contains only the design and test specifications under
 **Goal:** Achieve 500k+ ranges/s by eliminating allocations and setup overhead.
 
 ### 13.1 O(1) Snapshot Acquisition (Group RefCount)
-- [ ] Create `internal/slab/group.go` (or `SlabGroup` struct).
-- [ ] Group holds map of files + single `atomic.Int64` for snapshot pinning.
-- [ ] Update `DBState` to hold `*SlabGroup` instead of `SlabSet`.
-- [ ] Refactor `AcquireSnapshot` to increment group ref instead of iterating all files.
-- [ ] **Test:** Verify zombie deletion waits for group refcount to drop.
+- [x] Create `internal/slab/group.go` (or `SlabGroup` struct).
+- [x] Group holds map of files + single `atomic.Int64` for snapshot pinning.
+- [x] Update `DBState` to hold `*SlabGroup` instead of `SlabSet`.
+- [x] Refactor `AcquireSnapshot` to increment group ref instead of iterating all files.
+- [x] **Test:** Verify zombie deletion waits for group refcount to drop.
 
 ### 13.2 Unsafe Iterator Interface
 - [ ] Define `UnsafeIterator` in `internal/iterator`:
@@ -304,12 +304,12 @@ This repository currently contains only the design and test specifications under
 - [ ] Update `memtable.Iterator` to implement this (it already returns views).
 
 ### 13.3 Specialized TwoWayMerger
-- [ ] Implement `TwoWayMerger` in `internal/merging` to replace Heap for N=2 case.
+- [ ] Implement `TwoWayMerger` in `internal/merging` to replace `MergingIterator` for the 2-source case.
 - [ ] Optimize logic: direct comparison `if keyA < keyB`, no interface dispatch.
 - [ ] Handle shadowing and tombstones efficiently.
 
 ### 13.4 Lazy Disk Iterator
-- [ ] Update `internal/tree/iterator.go` to implement `UnsafeIterator`.
+- [ ] Modify `internal/tree/iterator.go` (Disk Iterator) to implement `UnsafeIterator`.
 - [ ] **Lazy Value Loading:**
     - `Next()` parses leaf but does NOT read Value pointer from slab.
     - `UnsafeValue()` triggers slab read if needed (and caches it in iterator struct).
@@ -319,3 +319,13 @@ This repository currently contains only the design and test specifications under
 - [ ] Update `caching.DB` to use `TwoWayMerger` and `UnsafeIterator`.
 - [ ] Update public `Iterator` wrapper to perform the final safety copy (`append([]byte(nil), view...)`).
 - [ ] **Benchmark:** Run `dbbench` Range Scan to verify >500k ranges/s.
+
+---
+
+## Work Procedure
+
+1.  **Read Context**: Before starting a phase, re-read relevant spec sections.
+2.  **Implementation**: Write code + Unit Tests.
+3.  **Verification**: Run tests.
+4.  **Commit**: Git commit with clear message.
+5.  **User Check**: Briefly pause for user feedback if major design decisions arise.
