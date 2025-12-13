@@ -21,6 +21,10 @@ import (
 	// Gemini TreeDB
 	geminicaching "github.com/snissn/gomap-gemini/TreeDB/caching"
 	geminidb "github.com/snissn/gomap-gemini/TreeDB/db"
+
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/iterator"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 // --- Interfaces ---
@@ -288,6 +292,71 @@ func (g *GeminiCachedWrapper) NewBatch() (BatchInterface, error) {
 	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
 }
 
+// 5. LevelDB Wrapper
+type LevelDBBatch struct {
+	batch *leveldb.Batch
+	db    *leveldb.DB
+}
+
+func (b *LevelDBBatch) Set(key, value []byte) error {
+	b.batch.Put(key, value)
+	return nil
+}
+func (b *LevelDBBatch) Delete(key []byte) error {
+	b.batch.Delete(key)
+	return nil
+}
+func (b *LevelDBBatch) Commit() error {
+	return b.db.Write(b.batch, nil)
+}
+func (b *LevelDBBatch) Close() error {
+	b.batch.Reset()
+	return nil
+}
+
+type LevelDBIterator struct {
+	it iterator.Iterator
+}
+
+func (i *LevelDBIterator) Valid() bool   { return i.it.Valid() }
+func (i *LevelDBIterator) Next()         { i.it.Next() }
+func (i *LevelDBIterator) Key() []byte   { return i.it.Key() }
+func (i *LevelDBIterator) Value() []byte { return i.it.Value() }
+func (i *LevelDBIterator) Close() error  { i.it.Release(); return nil }
+func (i *LevelDBIterator) Error() error  { return i.it.Error() }
+
+type LevelDBWrapper struct {
+	db *leveldb.DB
+}
+
+func NewLevelDB(dir string) (*LevelDBWrapper, error) {
+	db, err := leveldb.OpenFile(dir, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &LevelDBWrapper{db: db}, nil
+}
+
+func (l *LevelDBWrapper) Name() string                 { return "LevelDB" }
+func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
+func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
+func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
+func (l *LevelDBWrapper) Close() error                 { return l.db.Close() }
+func (l *LevelDBWrapper) SupportsScan() bool           { return true }
+func (l *LevelDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	var slice *util.Range
+	if start != nil || end != nil {
+		slice = &util.Range{Start: start, Limit: end}
+	}
+	it := l.db.NewIterator(slice, nil)
+	it.First()
+	return &LevelDBIterator{it: it}, nil
+}
+func (l *LevelDBWrapper) SupportsBatch() bool { return true }
+func (l *LevelDBWrapper) NewBatch() (BatchInterface, error) {
+	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
+}
+
 // --- Benchmark Runner ---
 
 var (
@@ -317,12 +386,13 @@ func main() {
 		"treedb": func(d string) (DBInterface, error) { return NewLegacyTreeDB(d) },
 		"gemini": func(d string) (DBInterface, error) { return NewGemini(d) },
 		"geminicached": func(d string) (DBInterface, error) { return NewGeminiCached(d) },
+		"leveldb":      func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"gomap", "btree", "treedb", "gemini", "geminicached"}
+	orderedDBs := []string{"gomap", "btree", "treedb", "gemini", "geminicached", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}
