@@ -106,7 +106,7 @@ func (h *Hashmap) rehashStep(maxToMove uint64) error {
 			return err
 		}
 
-		hkey, isNew, err := h.getKeyOffsetToAdd(item.Key)
+		hkey, isNew, err := h.probeForAdd(item.Key)
 		if err != nil {
 			return err
 		}

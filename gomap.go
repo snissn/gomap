@@ -1,7 +1,6 @@
 package gomap
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"syscall"
@@ -73,64 +72,24 @@ func (h *Hashmap) closeFPs() error {
 func (h *Hashmap) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
 	if h.Keys != nil && h.Capacity > 0 {
-		myhash := hash(key)
-		count := uint64(0)
-		for count < h.Capacity {
-			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
-
-			mybucket := (*h.Keys)[myKeyIndex]
-
-			if mybucket.slabOffset == 0 {
-				return nil, nil
-			}
-
-			if mybucket.slabOffset == Tombstone {
-				count++
-				continue
-			}
-
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
-				if err != nil {
-					return nil, err
-				}
-				if bytes.Equal(item.Key, key) {
-					return item.Value, nil
-				}
-			}
-			count++
+		_, item, found, err := h.probe(*h.Keys, h.Capacity, key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return item.Value, nil
 		}
 	}
 
 	// If an incremental rehash is in progress, also probe the old table
 	// for keys that haven't been migrated yet.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		myhash := hash(key)
-		count := uint64(0)
-		for count < h.rehashOldCapacity {
-			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
-
-			mybucket := h.rehashOldKeys[myKeyIndex]
-
-			if mybucket.slabOffset == 0 {
-				return nil, nil
-			}
-
-			if mybucket.slabOffset == Tombstone {
-				count++
-				continue
-			}
-
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
-				if err != nil {
-					return nil, err
-				}
-				if bytes.Equal(item.Key, key) {
-					return item.Value, nil
-				}
-			}
-			count++
+		_, item, found, err := h.probe(h.rehashOldKeys, h.rehashOldCapacity, key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return item.Value, nil
 		}
 	}
 
@@ -139,75 +98,34 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 
 // Delete removes a key from the map.
 func (h *Hashmap) Delete(key []byte) error {
-	myhash := hash(key)
 	foundNew := false
 
 	// Delete in the current (new) table.
 	if h.Keys != nil && h.Capacity > 0 {
-		count := uint64(0)
-		for count < h.Capacity {
-			myKeyIndex := ((uint64(myhash) % h.Capacity) + count) % h.Capacity
-
-			mybucket := (*h.Keys)[myKeyIndex]
-
-			if mybucket.slabOffset == 0 {
-				break // Key not found in new table
+		idx, _, found, err := h.probe(*h.Keys, h.Capacity, key)
+		if err != nil {
+			return err
+		}
+		if found {
+			// Found it in new table.
+			if err := h.addDeleteSlab(key); err != nil {
+				return err
 			}
-
-			if mybucket.slabOffset == Tombstone {
-				count++
-				continue
-			}
-
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
-				if err != nil {
-					return err
-				}
-				if bytes.Equal(item.Key, key) {
-					// Found it in new table.
-					if err := h.addDeleteSlab(key); err != nil {
-						return err
-					}
-					(*h.Keys)[myKeyIndex].slabOffset = Tombstone
-					*h.Count -= 1
-					foundNew = true
-					break
-				}
-			}
-			count++
+			(*h.Keys)[idx].slabOffset = Tombstone
+			*h.Count -= 1
+			foundNew = true
 		}
 	}
 
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		count := uint64(0)
-		for count < h.rehashOldCapacity {
-			myKeyIndex := ((uint64(myhash) % h.rehashOldCapacity) + count) % h.rehashOldCapacity
-
-			mybucket := h.rehashOldKeys[myKeyIndex]
-
-			if mybucket.slabOffset == 0 {
-				break
-			}
-
-			if mybucket.slabOffset == Tombstone {
-				count++
-				continue
-			}
-
-			if mybucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(mybucket)
-				if err != nil {
-					return err
-				}
-				if bytes.Equal(item.Key, key) {
-					h.rehashOldKeys[myKeyIndex].slabOffset = Tombstone
-					break
-				}
-			}
-			count++
+		idx, _, found, err := h.probe(h.rehashOldKeys, h.rehashOldCapacity, key)
+		if err != nil {
+			return err
+		}
+		if found {
+			h.rehashOldKeys[idx].slabOffset = Tombstone
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 )
 
 func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
-	hkey, isnew, err := h.getKeyOffsetToAdd(key)
+	hkey, isnew, err := h.probeForAdd(key)
 	if err != nil {
 		return err
 	}
@@ -39,13 +39,46 @@ func (h *Hashmap) getKeys() []Key {
 	return ret
 }
 
-func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
+// probe searches for a key in the provided keys slice.
+// It returns the index, the item (if found), whether it was found, and any error.
+func (h *Hashmap) probe(keys []Key, capacity uint64, key []byte) (uint64, *Item, bool, error) {
+	myhash := hash(key)
+	count := uint64(0)
+	hkey := uint64(myhash) % capacity
+
+	for count < capacity {
+		bucket := keys[hkey]
+
+		if bucket.slabOffset == 0 {
+			return 0, nil, false, nil
+		}
+
+		if bucket.slabOffset != Tombstone && bucket.hash == myhash {
+			item, err := h.unmarshalItemFromSlab(bucket)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			if bytes.Equal(item.Key, key) {
+				return hkey, &item, true, nil
+			}
+		}
+
+		hkey = (hkey + 1) % capacity
+		count++
+	}
+	return 0, nil, false, nil
+}
+
+// probeForAdd searches for a key or an insertion slot.
+// It returns the index to insert at, and whether the key is new.
+func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
 	myhash := hash(key)
 	hkey := uint64(myhash) % (h.Capacity)
 
 	var firstTombstoneIndex uint64
 	foundTombstone := false
 
+	// Loop until we find the key or an empty slot
 	for {
 		mybucket := (*h.Keys)[hkey]
 
@@ -63,7 +96,8 @@ func (h *Hashmap) getKeyOffsetToAdd(key []byte) (uint64, bool, error) {
 				firstTombstoneIndex = hkey
 				foundTombstone = true
 			}
-			// Continue probing to ensure key doesn't exist further down
+			// We MUST continue probing to ensure the key doesn't exist further down the chain.
+			// Ending early here would allow duplicate keys if a key exists after a tombstone.
 		} else if mybucket.hash == myhash {
 			item, err := h.unmarshalItemFromSlab(mybucket)
 			if err != nil {
@@ -89,7 +123,7 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) error {
 	totalNewKey := uint64(0)
 
 	for i, item := range items {
-		hkey, isnew, err := h.getKeyOffsetToAdd(item.Key)
+		hkey, isnew, err := h.probeForAdd(item.Key)
 		if err != nil {
 			return err
 		}
