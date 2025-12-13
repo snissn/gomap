@@ -1,0 +1,539 @@
+package main
+
+import (
+	"encoding/binary"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/btree"
+
+	// Legacy TreeDB
+	legacydb "github.com/snissn/gomap/TreeDB"
+
+	// Gemini TreeDB
+	geminicaching "github.com/snissn/gomap-gemini/TreeDB/caching"
+	geminidb "github.com/snissn/gomap-gemini/TreeDB/db"
+)
+
+// --- Interfaces ---
+
+// GenericIterator defines a common interface for iterators
+type GenericIterator interface {
+	Valid() bool
+	Next()
+	Key() []byte
+	Value() []byte
+	Close() error
+	Error() error
+}
+
+// BatchInterface defines a common interface for batches
+type BatchInterface interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	Commit() error
+	Close() error
+}
+
+// DBInterface defines the common benchmark interface
+type DBInterface interface {
+	Name() string
+	Set(key, value []byte) error
+	Get(key []byte) ([]byte, error)
+	Delete(key []byte) error
+	Close() error
+	SupportsScan() bool
+	Iterator(start, end []byte) (GenericIterator, error)
+	SupportsBatch() bool
+	NewBatch() (BatchInterface, error)
+}
+
+// --- Wrappers ---
+
+// 1. Gomap Wrapper
+type GomapBatch struct {
+	m     *gomap.HashmapDistributed
+	items []gomap.Item
+}
+
+func (b *GomapBatch) Set(key, value []byte) error {
+	b.items = append(b.items, gomap.Item{Key: key, Value: value})
+	return nil
+}
+func (b *GomapBatch) Delete(key []byte) error {
+	return errors.New("Gomap batch delete not supported")
+}
+func (b *GomapBatch) Commit() error {
+	if len(b.items) > 0 {
+		return b.m.AddMany(b.items)
+	}
+	return nil
+}
+func (b *GomapBatch) Close() error {
+	b.items = nil
+	return nil
+}
+
+type GomapWrapper struct {
+	m *gomap.HashmapDistributed
+}
+
+func NewGomap(dir string) (*GomapWrapper, error) {
+	m := &gomap.HashmapDistributed{}
+	if err := m.New(dir); err != nil {
+		return nil, err
+	}
+	return &GomapWrapper{m: m}, nil
+}
+
+func (g *GomapWrapper) Name() string { return "Gomap" }
+func (g *GomapWrapper) Set(k, v []byte) error { return g.m.Add(k, v) }
+func (g *GomapWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
+func (g *GomapWrapper) Delete(k []byte) error { return g.m.Delete(k) }
+func (g *GomapWrapper) Close() error { return g.m.Flush() }
+func (g *GomapWrapper) SupportsScan() bool { return false }
+func (g *GomapWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return nil, errors.New("Gomap does not support scan")
+}
+func (g *GomapWrapper) SupportsBatch() bool { return true }
+func (g *GomapWrapper) NewBatch() (BatchInterface, error) {
+	return &GomapBatch{m: g.m}, nil
+}
+
+// 2. BTree Wrapper
+type GomapKVAdapter struct {
+	m *gomap.HashmapDistributed
+}
+
+func (a *GomapKVAdapter) Get(k []byte) ([]byte, error) { return a.m.Get(k) }
+func (a *GomapKVAdapter) Put(k, v []byte) error        { return a.m.Add(k, v) }
+func (a *GomapKVAdapter) Delete(k []byte) error        { return a.m.Delete(k) }
+
+type BTreeWrapper struct {
+	t *btree.Tree
+	m *gomap.HashmapDistributed
+}
+
+func NewBTree(dir string) (*BTreeWrapper, error) {
+	m := &gomap.HashmapDistributed{}
+	if err := m.New(dir); err != nil {
+		return nil, err
+	}
+	adapter := &GomapKVAdapter{m: m}
+	t, err := btree.OpenTree(adapter, "bench")
+	if err != nil {
+		return nil, err
+	}
+	return &BTreeWrapper{t: t, m: m}, nil
+}
+
+func (b *BTreeWrapper) Name() string { return "BTree" }
+func (b *BTreeWrapper) Set(k, v []byte) error { return b.t.Put(k, v) }
+func (b *BTreeWrapper) Get(k []byte) ([]byte, error) { return b.t.Get(k) }
+func (b *BTreeWrapper) Delete(k []byte) error { return b.t.Delete(k) }
+func (b *BTreeWrapper) Close() error { return b.m.Flush() }
+func (b *BTreeWrapper) SupportsScan() bool { return false }
+func (b *BTreeWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return nil, errors.New("BTree does not support scan via public API")
+}
+func (b *BTreeWrapper) SupportsBatch() bool { return false }
+func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
+	return nil, errors.New("BTree does not support batch")
+}
+
+// 3. Legacy TreeDB Wrapper
+type LegacyBatchWrapper struct {
+	b interface {
+		Set(key, value []byte) error
+		Delete(key []byte) error
+		Write() error
+		Close() error
+	}
+}
+
+func (w *LegacyBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
+func (w *LegacyBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
+func (w *LegacyBatchWrapper) Commit() error         { return w.b.Write() }
+func (w *LegacyBatchWrapper) Close() error          { return w.b.Close() }
+
+type LegacyTreeDBWrapper struct {
+	db *legacydb.DB
+}
+
+func NewLegacyTreeDB(dir string) (*LegacyTreeDBWrapper, error) {
+	opts := legacydb.Options{
+		Dir:       dir,
+		ChunkSize: 64 * 1024 * 1024,
+	}
+	db, err := legacydb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &LegacyTreeDBWrapper{db: db}, nil
+}
+
+func (l *LegacyTreeDBWrapper) Name() string { return "TreeDB" }
+func (l *LegacyTreeDBWrapper) Set(k, v []byte) error { return l.db.Set(k, v) }
+func (l *LegacyTreeDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k) }
+func (l *LegacyTreeDBWrapper) Delete(k []byte) error { return l.db.Delete(k) }
+func (l *LegacyTreeDBWrapper) Close() error { return l.db.Close() }
+func (l *LegacyTreeDBWrapper) SupportsScan() bool { return true }
+func (l *LegacyTreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	it, err := l.db.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	if gi, ok := interface{}(it).(GenericIterator); ok {
+		return gi, nil
+	}
+	return nil, fmt.Errorf("Legacy Iterator does not satisfy GenericIterator")
+}
+func (l *LegacyTreeDBWrapper) SupportsBatch() bool { return true }
+func (l *LegacyTreeDBWrapper) NewBatch() (BatchInterface, error) {
+	return &LegacyBatchWrapper{b: l.db.NewBatch()}, nil
+}
+
+// 4. Gemini TreeDB Wrapper
+type GeminiBatchWrapper struct {
+	b geminicaching.BatchInterface
+}
+
+func (w *GeminiBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
+func (w *GeminiBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
+func (w *GeminiBatchWrapper) Commit() error         { return w.b.Write() }
+func (w *GeminiBatchWrapper) Close() error          { return w.b.Close() }
+
+type GeminiWrapper struct {
+	db *geminidb.DB
+}
+
+func NewGemini(dir string) (*GeminiWrapper, error) {
+	opts := geminidb.Options{
+		Dir:       dir,
+		ChunkSize: 64 * 1024 * 1024,
+	}
+	db, err := geminidb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &GeminiWrapper{db: db}, nil
+}
+
+func (g *GeminiWrapper) Name() string { return "Gemini" }
+func (g *GeminiWrapper) Set(k, v []byte) error { return g.db.Set(k, v) }
+func (g *GeminiWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
+func (g *GeminiWrapper) Delete(k []byte) error { return g.db.Delete(k) }
+func (g *GeminiWrapper) Close() error { return g.db.Close() }
+func (g *GeminiWrapper) SupportsScan() bool { return true }
+func (g *GeminiWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	it, err := g.db.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	if gi, ok := interface{}(it).(GenericIterator); ok {
+		return gi, nil
+	}
+	return nil, fmt.Errorf("Gemini Iterator does not satisfy GenericIterator")
+}
+func (g *GeminiWrapper) SupportsBatch() bool { return true }
+func (g *GeminiWrapper) NewBatch() (BatchInterface, error) {
+	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
+}
+
+// --- Benchmark Runner ---
+
+var (
+	numKeys   = flag.Int("keys", 100000, "Number of keys")
+	valSize   = flag.Int("valsize", 128, "Value size in bytes")
+	batchSize = flag.Int("batchsize", 1000, "Size of batches")
+	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
+	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write)")
+	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
+)
+
+type DBInstance struct {
+	Wrapper DBInterface
+	Dir     string
+}
+
+func main() {
+	flag.Parse()
+
+	dbsToRun := parseList(*dbsArg)
+	testsToRun := parseList(*testsArg)
+
+	// Define Factory Map
+	factories := map[string]func(string) (DBInterface, error){
+		"gomap":  func(d string) (DBInterface, error) { return NewGomap(d) },
+		"btree":  func(d string) (DBInterface, error) { return NewBTree(d) },
+		"treedb": func(d string) (DBInterface, error) { return NewLegacyTreeDB(d) },
+		"gemini": func(d string) (DBInterface, error) { return NewGemini(d) },
+	}
+
+	// 1. Initialize DBs
+	instances := make([]*DBInstance, 0)
+	// Order matching dbsArg or default hardcoded order if "all"
+	orderedDBs := []string{"gomap", "btree", "treedb", "gemini"}
+	if *dbsArg != "all" {
+		orderedDBs = dbsToRun
+	}
+
+	for _, name := range orderedDBs {
+		if !contains(dbsToRun, name) && !contains(dbsToRun, "all") {
+			continue
+		}
+		factory, ok := factories[name]
+		if !ok {
+			log.Printf("Unknown DB: %s", name)
+			continue
+		}
+
+		dir, err := os.MkdirTemp("", "bench-"+name+"*")
+		if err != nil {
+			log.Fatalf("Temp dir failed: %v", err)
+		}
+
+		db, err := factory(dir)
+		if err != nil {
+			log.Printf("Failed to init %s: %v", name, err)
+			os.RemoveAll(dir)
+			continue
+		}
+
+		instances = append(instances, &DBInstance{Wrapper: db, Dir: dir})
+	}
+
+	// 2. Define Tests
+	// Map of TestName -> Function
+	type TestFunc func(db DBInterface) float64
+	
+	testFuncs := map[string]TestFunc{
+		"write_seq": func(db DBInterface) float64 {
+			start := time.Now()
+			val := make([]byte, *valSize)
+			for i := 0; i < *numKeys; i++ {
+				k := key(i)
+				if err := db.Set(k, val); err != nil {
+					log.Fatalf("write_seq error: %v", err)
+				}
+			}
+			return float64(*numKeys) / time.Since(start).Seconds()
+		},
+		"read_rand": func(db DBInterface) float64 {
+			start := time.Now()
+			for i := 0; i < *numKeys; i++ {
+				k := key(rand.Intn(*numKeys))
+				if _, err := db.Get(k); err != nil {
+					// ignore
+				}
+			}
+			return float64(*numKeys) / time.Since(start).Seconds()
+		},
+		"scan": func(db DBInterface) float64 {
+			if !db.SupportsScan() {
+				return 0
+			}
+			start := time.Now()
+			iter, err := db.Iterator(nil, nil)
+			if err != nil {
+				log.Fatalf("scan iterator error: %v", err)
+			}
+			defer iter.Close()
+			count := 0
+			for iter.Valid() {
+				_ = iter.Key()
+				_ = iter.Value()
+				iter.Next()
+				count++
+			}
+			if iter.Error() != nil {
+				log.Fatalf("scan iter error: %v", iter.Error())
+			}
+			return float64(count) / time.Since(start).Seconds()
+		},
+		"write_rand": func(db DBInterface) float64 {
+			start := time.Now()
+			val := make([]byte, *valSize)
+			for i := 0; i < *numKeys; i++ {
+				k := key(rand.Intn(*numKeys))
+				if err := db.Set(k, val); err != nil {
+					log.Fatalf("write_rand error: %v", err)
+				}
+			}
+			return float64(*numKeys) / time.Since(start).Seconds()
+		},
+		"batch_write": func(db DBInterface) float64 {
+			if !db.SupportsBatch() {
+				return 0
+			}
+			start := time.Now()
+			val := make([]byte, *valSize)
+			total := *numKeys
+			for i := 0; i < total; i += *batchSize {
+				batch, err := db.NewBatch()
+				if err != nil {
+					log.Fatalf("new batch error: %v", err)
+				}
+				end := i + *batchSize
+				if end > total {
+					end = total
+				}
+				for j := i; j < end; j++ {
+					// Use new keys for batch to stress growth/append?
+					// Or overwrite?
+					// Let's use high range keys to append.
+					k := key(j + *numKeys) 
+					batch.Set(k, val)
+				}
+				if err := batch.Commit(); err != nil {
+					log.Fatalf("batch commit error: %v", err)
+				}
+				batch.Close()
+			}
+			return float64(total) / time.Since(start).Seconds()
+		},
+		"delete_rand": func(db DBInterface) float64 {
+			start := time.Now()
+			for i := 0; i < *numKeys; i++ {
+				k := key(rand.Intn(*numKeys))
+				if err := db.Delete(k); err != nil {
+					// ignore
+				}
+			}
+			return float64(*numKeys) / time.Since(start).Seconds()
+		},
+	}
+
+	// Ordered list of tests to run
+	allTestOrder := []string{"write_seq", "read_rand", "scan", "write_rand", "batch_write", "delete_rand"}
+	finalTestOrder := make([]string, 0)
+	
+	if contains(testsToRun, "all") {
+		finalTestOrder = allTestOrder
+	} else {
+		// Filter based on input but keep logical order if possible?
+		// Or strictly follow input order?
+		// User said "loop over tests and run one test after another".
+		// We'll follow input order if explicit, otherwise default order filtered.
+		if len(testsToRun) > 0 && testsToRun[0] != "all" {
+			// Actually, let's respect the standard order for consistency in dependencies
+			// (e.g. read after write), unless user explicitly asks for subset.
+			// If user asks for "read_rand,write_seq", we might have issues if read runs first on empty DB.
+			// But we initialized DBs once. They persist.
+			// So if user asks "read_rand" first, it will read 0 keys (or not founds).
+			// We trust user or enforce standard order.
+			// Let's enforce standard order intersection.
+			for _, t := range allTestOrder {
+				if contains(testsToRun, t) {
+					finalTestOrder = append(finalTestOrder, t)
+				}
+			}
+		} else {
+			finalTestOrder = allTestOrder
+		}
+	}
+
+	// 3. Run Tests
+	// map[TestName][DBName]Result
+	results := make(map[string]map[string]float64)
+	for _, t := range finalTestOrder {
+		results[t] = make(map[string]float64)
+	}
+
+	for _, testName := range finalTestOrder {
+		fmt.Printf("Running Test: %s\n", testName)
+		fn := testFuncs[testName]
+		
+		for _, inst := range instances {
+			// Run Test
+			// Reset? No, we persist state.
+			res := fn(inst.Wrapper)
+			results[testName][inst.Wrapper.Name()] = res
+		}
+	}
+
+	// 4. Cleanup
+	for _, inst := range instances {
+		inst.Wrapper.Close()
+		if !*keepDir {
+			os.RemoveAll(inst.Dir)
+		}
+	}
+
+	// 5. Print Transposed Table
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 12, 0, 2, ' ', 0)
+	
+	// Header
+	header := "Test"
+	for _, inst := range instances {
+		header += fmt.Sprintf("\t%s", inst.Wrapper.Name())
+	}
+	fmt.Fprintln(w, header)
+	
+	// Separator (visual only, tabwriter handles alignment)
+	// fmt.Fprintln(w, "----\t----\t----\t----\t----\n")
+
+	for _, testName := range finalTestOrder {
+		row := testName
+		for _, inst := range instances {
+			val := results[testName][inst.Wrapper.Name()]
+			row += fmt.Sprintf("\t%s", formatFloat(val))
+		}
+		fmt.Fprintln(w, row)
+	}
+	w.Flush()
+}
+
+func key(i int) []byte {
+	k := make([]byte, 8)
+	binary.BigEndian.PutUint64(k, uint64(i))
+	return k
+}
+
+func parseList(s string) []string {
+	parts := strings.Split(s, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
+}
+
+func contains(list []string, item string) bool {
+	for _, s := range list {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// formatFloat formats a float with commas (e.g. 1,234,567)
+func formatFloat(f float64) string {
+	s := fmt.Sprintf("%.0f", f)
+	n := len(s)
+	if n <= 3 {
+		return s
+	}
+	var sb strings.Builder
+	remainder := n % 3
+	if remainder > 0 {
+		sb.WriteString(s[:remainder])
+		sb.WriteString(",")
+	}
+	for i := remainder; i < n; i += 3 {
+		if i > remainder {
+			sb.WriteString(",")
+		}
+		sb.WriteString(s[i : i+3])
+	}
+	return sb.String()
+}
