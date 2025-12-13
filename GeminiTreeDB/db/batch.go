@@ -30,6 +30,10 @@ func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
 }
 
+func (b *Batch) SetOps(ops map[string]batch.Entry) error {
+	return b.batch.SetOps(ops)
+}
+
 func (b *Batch) Write() error {
 	// 1. Apply via Zipper
 	// We need a write lock on the DB for the Commit phase?

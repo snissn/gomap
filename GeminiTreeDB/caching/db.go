@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap-gemini/TreeDB/internal/memtable"
 	"github.com/snissn/gomap-gemini/TreeDB/internal/merging"
 	"github.com/snissn/gomap-gemini/TreeDB/internal/wal"
+	"github.com/snissn/gomap-gemini/TreeDB/batch"
 )
 
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
@@ -21,6 +22,7 @@ var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 type BatchInterface interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
+	SetOps(ops map[string]batch.Entry) error // New method
 	Write() error
 	WriteSync() error
 	Close() error
@@ -274,7 +276,9 @@ batch := db.backend.NewBatch()
 
 	// Remove from queue and delete old WAL
 	db.mu.Lock()
-	db.queue = db.queue[1:]
+	if len(db.queue) > 0 {
+		db.queue = db.queue[1:]
+	}
 	// TODO: Delete old WAL file here.
 	// Need to track WAL paths.
 	db.mu.Unlock()
@@ -338,16 +342,20 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var sources []merging.IteratorSource
 
 	// Priority 0: Mutable (always exists)
+	mutableIter := db.mutable.NewIterator()
+	mutableIter.Seek(start)
 	sources = append(sources, merging.IteratorSource{
-		Iter:     db.mutable.NewIterator(),
+		Iter:     mutableIter,
 		Priority: 0,
 	})
 
 	// Priority 1..N: Queue (Newest first)
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
+		qIter := db.queue[i].NewIterator()
+		qIter.Seek(start)
 		sources = append(sources, merging.IteratorSource{
-			Iter:     db.queue[i].NewIterator(),
+			Iter:     qIter,
 			Priority: prio,
 		})
 		prio++
@@ -358,6 +366,21 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Disk Iterator from backend.Iterator might already be initialized/seeked?
+	// The interface is: Iterator(start, end) returns an iterator.
+	// Usually database iterators are returned in a Valid state pointing to start, or Invalid if empty.
+	// Let's assume backend.Iterator does the right thing (Seek is implied by creation with start/end).
+	// But let's check backend contract.
+	// If backend.Iterator returns a tree.Iterator, it probably does a Seek internally.
+	// But to be safe and consistent with UnsafeIterator interface which usually requires Seek/Next...
+	// Actually, treedb.Iterator(start, end) usually does the initial seek.
+	// Let's verify tree.Iterator in a moment.
+	
+	// If the diskIter comes pre-seeked (which is common for DB.Iterator(start, end)),
+	// we don't need to Seek it again, or Seek(start) is idempotent/cheap.
+	// However, if we Seek it here, we ensure it's valid.
+	diskIter.Seek(start)
+	
 	sources = append(sources, merging.IteratorSource{
 		Iter:     diskIter,
 		Priority: prio,
@@ -379,23 +402,20 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 }
 
 // NewBatch implementation for CachingDB
-type batchOp struct {
-	value []byte
-	del   bool
-}
+// batchOp removed, using batch.Entry directly
 
 type Batch struct {
 	db   *DB
-	ops  map[string]batchOp
+	ops  map[string]batch.Entry
 	size int
 }
 
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, ops: make(map[string]batchOp)}
+	return &Batch{db: db, ops: make(map[string]batch.Entry)}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	return &Batch{db: db, ops: make(map[string]batchOp, size)}
+	return &Batch{db: db, ops: make(map[string]batch.Entry, size)}
 }
 func (b *Batch) Set(key, value []byte) error {
 	if b.ops == nil {
@@ -407,7 +427,14 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
-	b.ops[string(key)] = batchOp{value: value, del: false}
+	// We don't know about slabs/thresholds here, so we just store inline.
+	// Backend will handle promotion to slab if needed during writeBypass,
+	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
+	b.ops[string(key)] = batch.Entry{
+		Type:  batch.OpPut,
+		Key:   key,
+		Value: value,
+	}
 	b.size += len(key) + len(value)
 	return nil
 }
@@ -419,8 +446,22 @@ func (b *Batch) Delete(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
-	b.ops[string(key)] = batchOp{del: true}
+	b.ops[string(key)] = batch.Entry{
+		Type: batch.OpDelete,
+		Key:  key,
+	}
 	b.size += len(key)
+	return nil
+}
+
+func (b *Batch) SetOps(ops map[string]batch.Entry) error {
+	if b.ops == nil {
+		return ErrBatchClosed
+	}
+	for k, op := range ops {
+		b.ops[k] = op
+		b.size += len(op.Key) + len(op.Value)
+	}
 	return nil
 }
 
@@ -436,6 +477,12 @@ func (b *Batch) write(sync bool) error {
 	if b.ops == nil {
 		return ErrBatchClosed
 	}
+	
+	// Optimization: Bypass for Large Batches
+	if len(b.ops) > 2000 {
+		return b.writeBypass(sync)
+	}
+	
 	b.db.mu.Lock()
 	defer b.db.mu.Unlock()
 
@@ -443,10 +490,10 @@ func (b *Batch) write(sync bool) error {
 	for k, op := range b.ops {
 		key := []byte(k)
 		var err error
-		if op.del {
+		if op.Type == batch.OpDelete {
 			err = b.db.wal.Append(wal.OpDelete, key, nil)
 		} else {
-			err = b.db.wal.Append(wal.OpSet, key, op.value)
+			err = b.db.wal.Append(wal.OpSet, key, op.Value)
 		}
 		if err != nil {
 			return err
@@ -462,10 +509,10 @@ func (b *Batch) write(sync bool) error {
 	// 2. Memtable Update
 	for k, op := range b.ops {
 		key := []byte(k)
-		if op.del {
+		if op.Type == batch.OpDelete {
 			b.db.mutable.Delete(key)
 		} else {
-			b.db.mutable.Set(key, op.value)
+			b.db.mutable.Set(key, op.Value)
 		}
 	}
 
@@ -476,6 +523,39 @@ func (b *Batch) write(sync bool) error {
 		}
 	}
 
+	return b.Close()
+}
+
+func (b *Batch) writeBypass(sync bool) error {
+	// 1. Flush all pending memtables to disk to maintain consistency
+	b.db.mu.Lock()
+	if b.db.mutable.Size() > 0 {
+		_ = b.db.rotateMemtableLocked()
+	}
+	b.db.mu.Unlock()
+	
+	// This flushes everything (mutable -> queue -> backend)
+	b.db.flushAll()
+
+	// 2. Write directly to backend
+	backendBatch := b.db.backend.NewBatch()
+	
+	// Use SetOps for bulk transfer (checking slabs internally in backend)
+	if err := backendBatch.SetOps(b.ops); err != nil {
+		return err
+	}
+	
+	var err error
+	if sync {
+		err = backendBatch.WriteSync()
+	} else {
+		err = backendBatch.Write()
+	}
+	
+	if err != nil {
+		return err
+	}
+	
 	return b.Close()
 }
 

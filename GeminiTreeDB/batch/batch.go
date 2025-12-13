@@ -126,6 +126,61 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
+// SetOps merges a map of operations into the batch.
+func (b *Batch) SetOps(ops map[string]Entry) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	
+	for k, op := range ops {
+		// If op is already populated with ValuePtr, we trust it?
+		// But CachingDB doesn't populate ValuePtr.
+		// So we must check value size again.
+		
+		if op.Type == OpDelete {
+			b.ops[k] = op
+			b.byteSize += len(op.Key)
+			continue
+		}
+		
+		// OpPut
+		// If it came from CachingDB, it has Value but maybe not ValuePtr.
+		if op.IsPtr {
+			// Already has pointer (e.g. from compaction or advanced usage)
+			b.ops[k] = op
+			continue
+		}
+		
+		key := op.Key
+		value := op.Value
+		
+		// Check threshold
+		if len(value) > b.inlineThreshold {
+			// Write to slab
+			ptr, err := b.slabManager.Append(key, value)
+			if err != nil {
+				return err
+			}
+			op.ValuePtr = ptr
+			op.IsPtr = true
+			op.Value = nil // Clear inline
+		} else {
+			// Ensure inline copy? 
+			// If ops came from another batch, value might be shared?
+			// But CachingDB creates fresh batch.
+			// Let's copy to be safe if we want independent batch lifecycle,
+			// but for performance we might skip copy if we know ownership transfers.
+			// Standard Set() does copy. Let's do copy.
+			valCopy := make([]byte, len(value))
+			copy(valCopy, value)
+			op.Value = valCopy
+		}
+		b.ops[k] = op
+		b.byteSize += len(key) + len(value)
+	}
+	return nil
+}
+
 // Ops returns the map of operations.
 func (b *Batch) Ops() map[string]Entry {
 	return b.ops
