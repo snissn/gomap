@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
-	"treedb/internal/iterator"
 )
 
 type mockUnsafeIter struct {

@@ -114,10 +114,7 @@ func (mi *MergingIterator) next() {
 		currentUnsafeKey := top.iter.UnsafeKey()
 		currentUnsafeVal := top.iter.UnsafeValue() // Value might be lazy-loaded here
 
-		isDeleted := false
-		if delIter, ok := top.iter.(interface{ IsDeleted() bool }); ok {
-			isDeleted = delIter.IsDeleted()
-		}
+		isDeleted := top.iter.IsDeleted() // Use IsDeleted from UnsafeIterator
 
 		// Advance the winner (UnsafeIterator.Next)
 		top.iter.Next()
@@ -178,7 +175,9 @@ func (mi *MergingIterator) Error() error {
 
 func (mi *MergingIterator) Close() error {
 	for _, item := range *mi.h {
-		item.iter.Close()
+		if err := item.iter.Close(); err != nil { // Call Close() on UnsafeIterator
+			return err
+		}
 	}
 	return nil
 }
