@@ -1,0 +1,31 @@
+You are an expert Systems Engineer leading a Performance Sprint for TreeDB.
+
+**Goal:**
+Plan a performance sprint and update `AGENTS.md` with metrics, calculation methods, and data collection strategies.
+
+**Context:**
+TreeDB is functional but needs optimization. We need a structured approach to measure and improve performance.
+
+**Instructions:**
+
+1.  **Analyze Current State:**
+    *   Review `AGENTS.md` to see current architecture.
+    *   Review `cmd/stress` to see what load capabilities exist.
+
+2.  **Update AGENTS.md:**
+    *   Add a new section: `## Phase 9: Performance Sprint`.
+    *   **Define Metrics:**
+        *   **Latency:** End-to-end `Get`/`Set` latency (p50, p95, p99).
+        *   **Throughput:** Operations per second (IOPS) for Read/Write/Mixed workloads.
+        *   **Write Amplification:** (Physical Bytes Written / Logical Bytes Written).
+        *   **Resource Usage:** CPU Profile hotspots, Heap Allocations (GC pressure).
+    *   **Define Data Collection:**
+        *   Specify how to use `cmd/stress` (flags, duration).
+        *   Specify how to capture `pprof` data (`-cpuprofile`, `-memprofile`).
+        *   Specify how to calculate Write Amp (using `fs.Stat` vs logical counts).
+
+3.  **Completion Signal:**
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_1_COMPLETE` containing "Plan Complete".
+    *   If you performed any work in this session, DO NOT create the file.
+    *   Do NOT output the file content to stdout.

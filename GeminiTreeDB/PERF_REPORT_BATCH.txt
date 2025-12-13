@@ -1,0 +1,21 @@
+Benchmark Results - Bulk Split Optimization
+
+Date: Friday, December 12, 2025
+System: Apple M3, Darwin/arm64
+
+Benchmark: BenchmarkBatch
+Batch Size: 1000 keys/values
+Ops (Batches): 228
+Time per Batch: 5.86 ms
+Throughput: ~170,600 keys/sec
+Memory per Batch: 852 KB
+Allocs per Batch: 4544
+
+Comparison:
+- Strict Sync (Single Key): ~478 keys/sec
+- Batched Sync (1000 Keys): ~170,600 keys/sec
+- Improvement: ~356x
+
+Fixes Implemented:
+1. Refactored Zipper to support 1-into-N (Bulk) splits for Leaf and Internal nodes.
+2. Fixed regression in checksum calculation for primary nodes during split.

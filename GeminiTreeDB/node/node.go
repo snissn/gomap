@@ -1,0 +1,154 @@
+package node
+
+import (
+	"encoding/binary"
+	"errors"
+
+	"github.com/snissn/gomap-gemini/TreeDB/page"
+)
+
+// Common errors
+var (
+	ErrKeyTooLarge    = errors.New("key too large")
+	ErrValueTooLarge  = errors.New("value too large")
+	ErrNodeFull       = errors.New("node is full")
+	ErrInvalidType    = errors.New("invalid node type")
+	ErrKeyNotFound    = errors.New("key not found")
+	ErrCorruptedNode  = errors.New("corrupted node: invalid offsets")
+)
+
+const (
+	// NodeHeaderSize is the size of the page header (16 bytes).
+	NodeHeaderSize = page.PageHeaderSize
+
+	// DirectoryEntrySize is the size of an offset (uint16).
+	DirectoryEntrySize = 2
+)
+
+// Node is a wrapper around a raw page byte slice.
+// It implements the Slotted Page layout.
+type Node struct {
+	data []byte // The raw page data (4096 bytes)
+}
+
+// NewNode creates a Node wrapper around the given page data.
+func NewNode(data []byte) *Node {
+	return &Node{data: data}
+}
+
+// Data returns the underlying byte slice.
+func (n *Node) Data() []byte {
+	return n.data
+}
+
+// PageID returns the page ID from the header.
+func (n *Node) PageID() uint64 {
+	return binary.LittleEndian.Uint64(n.data[0:8])
+}
+
+// SetPageID sets the page ID in the header.
+func (n *Node) SetPageID(id uint64) {
+	binary.LittleEndian.PutUint64(n.data[0:8], id)
+}
+
+// Type returns the page type from the header.
+func (n *Node) Type() page.PageType {
+	return page.PageType(binary.LittleEndian.Uint16(n.data[12:14]))
+}
+
+// SetType sets the page type in the header.
+func (n *Node) SetType(t page.PageType) {
+	binary.LittleEndian.PutUint16(n.data[12:14], uint16(t))
+}
+
+// Count returns the number of items in the node.
+func (n *Node) Count() uint16 {
+	return binary.LittleEndian.Uint16(n.data[14:16])
+}
+
+// SetCount sets the number of items in the node.
+func (n *Node) SetCount(c uint16) {
+	binary.LittleEndian.PutUint16(n.data[14:16], c)
+}
+
+// Checksum returns the checksum from the header.
+func (n *Node) Checksum() uint32 {
+	return binary.LittleEndian.Uint32(n.data[8:12])
+}
+
+// UpdateChecksum calculates and updates the checksum in the header.
+func (n *Node) UpdateChecksum() {
+	sum := page.CalculateChecksum(n.data)
+	binary.LittleEndian.PutUint32(n.data[8:12], sum)
+}
+
+// VerifyChecksum validates the node's checksum.
+func (n *Node) VerifyChecksum() bool {
+	return page.VerifyChecksumNonMutating(n.data)
+}
+
+// getOffset returns the offset for the item at the given index.
+func (n *Node) getOffset(index uint16) (uint16, error) {
+	if index >= n.Count() {
+		return 0, errors.New("index out of bounds")
+	}
+	// Directory starts at NodeHeaderSize
+	// Offset is at NodeHeaderSize + index*2
+	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
+	return binary.LittleEndian.Uint16(n.data[dirOffset : dirOffset+2]), nil
+}
+
+// setOffset sets the offset for the item at the given index.
+func (n *Node) setOffset(index uint16, offset uint16) {
+	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
+	binary.LittleEndian.PutUint16(n.data[dirOffset:dirOffset+2], offset)
+}
+
+// FreeSpace returns the number of bytes available for new items.
+// Free space is the gap between the end of the Directory and the start of the Heap.
+func (n *Node) FreeSpace() int {
+	// Directory End = Header + Count * 2
+	dirEnd := NodeHeaderSize + int(n.Count())*DirectoryEntrySize
+	
+	// Heap Start = Minimum offset of all items, or PageSize if empty.
+	// To find Heap Start efficiently without scanning all offsets:
+	// 1. Maintain a "HeapStart" in the header? No, standard header doesn't have it.
+	// 2. Scan all offsets? Slow O(N).
+	// 3. Assume entries are added sequentially?
+	//    If we implement "Append only" or "Sorted Insert", we can track it.
+	//    But standard slotted pages usually compact or track the free pointer.
+	//    Wait, checking `specs/spec.md`:
+	//    "Directory (Top): Array of Offsets (uint16) growing downward."
+	//    "Heap (Bottom): Data growing upward."
+	//    It DOES NOT mention a "FreePtr".
+	//    However, usually in Slotted Pages, we just check the offsets.
+	//    Optimization: If we keep the items sorted by offset in the heap?
+	//    No, usually items are sorted by Key in the Directory (logical order),
+	//    but physical order in Heap can be anything (usually append-only).
+	//    So to find the "Heap Top" (lowest used address), we usually need to know it.
+	//    OR we scan.
+	//    Since `Count` is small (max ~200-300 items per 4KB page), scanning is fast enough?
+	//    Actually, we can just find the min offset.
+	
+	heapStart := int(page.PageSize)
+	count := n.Count()
+	if count > 0 {
+		// Scan offsets to find the lowest one.
+		// This is O(N). Is there a better way?
+		// Most implementations store "FreePtr" or "HeapOffset" in the header or special slot.
+		// The provided header `PageHeader` has `Flags` and `Count`, but no `HeapOffset`.
+		// Unless `Flags` is used for something else?
+		// Spec says `Flags` is Node Type.
+		// So we must compute it or store it elsewhere.
+		// Wait, if we compact on every write, or keep heap contiguous?
+		// Let's assume we scan for now.
+		for i := uint16(0); i < count; i++ {
+			off := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+int(i)*2:])
+			if int(off) < heapStart && off != 0 { // 0 checks for safety
+				heapStart = int(off)
+			}
+		}
+	}
+	
+	return heapStart - dirEnd
+}

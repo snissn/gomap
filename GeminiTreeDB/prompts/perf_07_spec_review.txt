@@ -1,0 +1,21 @@
+You are an expert Systems Engineer reviewing Spec Diffs.
+
+**Goal:**
+Iteratively review spec changes for compliance with Performance and Correctness goals.
+
+**Instructions:**
+
+1.  **Review Diffs:**
+    *   Check `specs/spec.md` against `PERF_DESIGN.md` and `AGENTS.md`.
+    *   Ensure no original requirements (ACID, Crash Recovery) were accidentally weakened.
+    *   Ensure the new testing requirements in `specs/test-spec.md` are sufficient to catch regressions.
+
+2.  **Iterate:**
+    *   If gaps exist, edit the specs to fix them.
+    *   Repeat until satisfied.
+
+3.  **Completion Signal:**
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_7_COMPLETE` containing "Spec Review Complete".
+    *   If you performed any work in this session, DO NOT create the file.
+    *   Do NOT output the file content to stdout.

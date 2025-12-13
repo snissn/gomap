@@ -1,0 +1,38 @@
+You are an expert Systems Engineer working on Phase 7 of the TreeDB project: Verification & Hardening.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 7.
+
+**Goal:**
+Perform comprehensive testing, fuzzing, and compliance checks idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Run `go test -v ./...`.
+    *   If fail, STOP.
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 7.1: Fuzzing**
+        *   *Check:* Does `fuzz_test.go` exist?
+        *   *Action:* If not, create it. Implement Model-Based tests (compare TreeDB vs Go Map).
+        *   Run fuzz tests for 10 seconds: `go test -v -fuzz=Fuzz -fuzztime=10s ./...`.
+
+    *   **Step 7.2: Crash Simulation**
+        *   *Action:* Create `cmd/stress/main.go` to run random ops.
+        *   Create `scripts/crash_test.sh` to simulate `kill -9`.
+
+    *   **Step 7.3: Cosmos Compliance**
+        *   *Action:* Create `compliance_test.go`.
+        *   Attempt to import `github.com/cosmos/cosmos-db`.
+        *   If unreachable, write a Mock Compliance Suite verifying Iterator/Batch contracts.
+        *   Run compliance tests.
+
+3.  **Final Verification:**
+    *   Run `go test -v ./...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 7: Verification, Hardening, and Compliance"`.
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_7_COMPLETE' containing the text 'Phase 7 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 7 Complete - Project Ready" to stdout, just create the file.

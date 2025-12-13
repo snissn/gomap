@@ -1,0 +1,47 @@
+You are an expert Systems Engineer working on Phase 3 of the TreeDB project: The "Zipper" - Write Path & Commit.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 3.
+
+**Goal:**
+Implement Batch Writes, Copy-On-Write (COW), and Atomic Commit idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Run `go test -v ./node/... ./tree/...`.
+    *   If fail, STOP.
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 3.1: Batch & Pre-Write (`db/`)**
+        *   *Check:* Does `db/` exist? Run `go test -v ./db/... -run TestBatchPreWrite`.
+        *   *Action:* If tests pass, SKIP. If not:
+            *   Create `db/` package.
+            *   Implement `Batch` struct.
+            *   Implement logic to iterate batch, write large values to Slab, store `ValuePtr`.
+            *   Add `db/batch_test.go`.
+
+    *   **Step 3.2: Recursive Merge (COW)**
+        *   *Check:* Run `go test -v ./tree/... -run TestZipper`.
+        *   *Action:* If pass, SKIP. If not:
+            *   In `tree/`, implement `writeRecursive(node, batchKeys)`.
+            *   Handle COW cloning, merging, and splitting.
+            *   Implement `Freelist` allocation.
+            *   Add `tree/zipper_test.go`.
+
+    *   **Step 3.3: Atomic Commit & Superblocks**
+        *   *Check:* Run `go test -v ./db/... -run TestRecovery`.
+        *   *Action:* If pass, SKIP. If not:
+            *   In `page/`, ensure `MetaPage` (Pages 0 & 1) is defined.
+            *   In `db/`, implement `Commit`: `fsync` slab -> new root -> meta -> `fsync` index.
+            *   Implement `Open()` recovery: Read both metas, pick highest Seq.
+            *   Add `db/recovery_test.go`.
+
+3.  **Final Verification:**
+    *   Run `go test -v ./db/... ./tree/...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 3: Zipper Write Path and Atomic Commit"`.
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_3_COMPLETE' containing the text 'Phase 3 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 3 Complete" to stdout, just create the file.

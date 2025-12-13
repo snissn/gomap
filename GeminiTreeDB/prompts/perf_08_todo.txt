@@ -1,0 +1,25 @@
+You are an expert Systems Engineer planning the implementation.
+
+**Goal:**
+Create a detailed Todo List in `AGENTS.md` for the performance changes.
+
+**Instructions:**
+
+1.  **Plan Tasks:**
+    *   Read `PERF_DESIGN.md` and the updated `specs/`.
+    *   Break down the work into atomic tasks (e.g., "Refactor Cursor to use sync.Pool", "Optimize Pager Read lock").
+
+2.  **Update AGENTS.md:**
+    *   In the "Phase 9: Performance Sprint" section, add a checklist:
+        ```markdown
+        ### 9.1 Implementation
+        - [ ] Task 1...
+        - [ ] Task 2...
+        ```
+    *   Associate each task with a clear acceptance criterion (test name or metric).
+
+3.  **Completion Signal:**
+    *   Check if the work is ALREADY complete.
+    *   If (and ONLY if) the work is ALREADY complete, create a file named `PHASE_PERF_8_COMPLETE` containing "Todo List Complete".
+    *   If you performed any work in this session, DO NOT create the file.
+    *   Do NOT output the file content to stdout.

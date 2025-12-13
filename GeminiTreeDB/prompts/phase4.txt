@@ -1,0 +1,43 @@
+You are an expert Systems Engineer working on Phase 4 of the TreeDB project: Read Path, Snapshots & API.
+
+**Context:**
+First, read `AGENTS.md` to understand the full context of Phase 4.
+
+**Goal:**
+Implement safe concurrent reads and the public Cosmos API idempotently.
+
+**Instructions:**
+
+1.  **Prerequisites Check:**
+    *   Run `go test -v ./db/... ./tree/...` (Phase 3).
+    *   If fail, STOP.
+
+2.  **Idempotent Implementation (Sub-tasks):**
+
+    *   **Step 4.1: Snapshot Isolation**
+        *   *Check:* Look for `DBState` struct in `db/`.
+        *   *Action:* Implement `AcquireSnapshot()` and `ReleaseSnapshot()` in `db/`.
+        *   Hook up Slab Reference Counting.
+
+    *   **Step 4.2: Cursors & Iterators**
+        *   *Check:* Run `go test -v ./db/... -run TestIterator`.
+        *   *Action:* If pass, SKIP. If not:
+            *   Implement `CursorItem` and `CursorStack`.
+            *   Implement `Iterator` (Forward) and `ReverseIterator`.
+            *   Ensure `cosmos-db` contract (safe copies, panic on invalid).
+            *   Add `db/iterator_test.go`.
+
+    *   **Step 4.3: Public API**
+        *   *Check:* Run `go test -v ./db/... -run TestAPI`.
+        *   *Action:* If pass, SKIP. If not:
+            *   Ensure `DB` struct satisfies `cosmos-db` interface.
+            *   Wire up `Get`, `Set`, `Delete`, `Iterator`, `Close`.
+            *   Add `db/api_test.go`.
+
+3.  **Final Verification:**
+    *   Run `go test -race -v ./db/...`.
+    *   **Git Commit:** If all tests pass, run `git add .` and `git commit -m "Phase 4: Read Path, Snapshots, and Public API"`.
+    *   **Completion Signal:**
+        *   If you verify that the code satisfies the requirements and you find that you are making ONLY trivial changes (or no changes at all) because the work is already done and stable, create a file named 'PHASE_4_COMPLETE' containing the text 'Phase 4 Complete' to signal completion.
+        *   Do NOT create this file if significant work or fixes were performed in this turn.
+        *   Do NOT output "Phase 4 Complete" to stdout, just create the file.
