@@ -59,6 +59,33 @@ type Pager struct {
 	activeMetaID page.PageID
 	totalPages   uint64
 	closed       bool
+
+	verifiedPages sync.Map // map[page.PageID]struct{}
+}
+
+func (p *Pager) clearVerifiedPage(pid page.PageID) {
+	if p == nil {
+		return
+	}
+	p.verifiedPages.Delete(pid)
+}
+
+// IsPageVerified reports whether the page body CRC has been verified for pid.
+// Verified status is best-effort and is cleared when pages are freed or reused.
+func (p *Pager) IsPageVerified(pid page.PageID) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.verifiedPages.Load(pid)
+	return ok
+}
+
+// MarkPageVerified records that pid's page body CRC was verified.
+func (p *Pager) MarkPageVerified(pid page.PageID) {
+	if p == nil {
+		return
+	}
+	p.verifiedPages.Store(pid, struct{}{})
 }
 
 // chunkPin keeps a chunk pinned until Release is called.
@@ -335,6 +362,7 @@ func (p *Pager) WritePage(pid page.PageID, data []byte) error {
 		p.clearMutablePagesLocked()
 		p.mu.Unlock()
 	}
+	p.clearVerifiedPage(pid)
 	return nil
 }
 
@@ -399,6 +427,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		if p.freelistCount > 0 {
 			p.freelistCount--
 		}
+		p.clearVerifiedPage(alloc)
 		p.markMutableExtraLocked(alloc)
 		return alloc, nil
 	}
@@ -435,6 +464,7 @@ func (p *Pager) AllocPage() (page.PageID, error) {
 		}
 		clear(b)
 	}
+	p.clearVerifiedPage(newID)
 	p.markMutableRangeLocked(newID)
 	return newID, nil
 }
@@ -553,6 +583,7 @@ func (p *Pager) FreePages(ids []page.PageID) error {
 		return fmt.Errorf("pager: closed")
 	}
 	for _, id := range ids {
+		p.clearVerifiedPage(id)
 		if p.mutableRangeStart != p.mutableRangeEnd && id >= p.mutableRangeStart && id < p.mutableRangeEnd {
 			// We can't represent holes in the range cheaply; disable mutable access for this commit.
 			p.mutableRangeStart = 0

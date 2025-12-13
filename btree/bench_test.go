@@ -1,12 +1,15 @@
 package btree
 
 import (
+	"encoding/binary"
 	"math/rand"
 	"os"
 	"testing"
 
 	"github.com/snissn/gomap"
 )
+
+var benchSinkUint64 uint64
 
 func BenchmarkBTree_PutGet(b *testing.B) {
 	benchmarkBTreePutGet(b, 1024, 8)
@@ -22,6 +25,63 @@ func BenchmarkBTree_GetOnly(b *testing.B) {
 
 func BenchmarkBTree_ScanAll(b *testing.B) {
 	benchmarkBTreeScanAll(b, 2048, 8)
+}
+
+func BenchmarkBTree_RangeSpan100(b *testing.B) {
+	const prefill = 50000
+	const span = 100
+
+	dir, err := os.MkdirTemp("", "btree-range-bench-*")
+	if err != nil {
+		b.Fatalf("tempdir: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	store := &gomap.HashmapDistributed{}
+	if err := store.NewWithShards(dir, 8); err != nil {
+		b.Fatalf("init gomap: %v", err)
+	}
+	tree, err := NewTreeOnGomap(store, "bench-range")
+	if err != nil {
+		b.Fatalf("init tree: %v", err)
+	}
+
+	val := make([]byte, 150)
+	for i := range val {
+		val[i] = byte(i)
+	}
+	for i := 0; i < prefill; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		if err := tree.Put(key[:], val); err != nil {
+			b.Fatalf("preload put: %v", err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		startIdx := i % (prefill - span)
+		endIdx := startIdx + span
+
+		var startKey [8]byte
+		var endKey [8]byte
+		binary.BigEndian.PutUint64(startKey[:], uint64(startIdx))
+		binary.BigEndian.PutUint64(endKey[:], uint64(endIdx))
+
+		it, err := tree.Range(startKey[:], endKey[:])
+		if err != nil {
+			b.Fatalf("range: %v", err)
+		}
+		for it.Valid() {
+			benchSinkUint64 += uint64(len(it.Key()))
+			it.Next()
+		}
+		if it.Error() != nil {
+			b.Fatalf("iterator error: %v", it.Error())
+		}
+		it.Close()
+	}
 }
 
 func benchmarkBTreePutGet(b *testing.B, numKeys int, shards int) {

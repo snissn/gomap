@@ -223,7 +223,7 @@ func (db *DB) Iterator(start, end []byte) (cosmosdb.Iterator, error) {
 			return nil, err
 		}
 		it := newIterator(db, snap, start, end, false)
-		it.valid.Store(false)
+		it.valid = false
 		return it, nil
 	}
 	snap, err := db.state.AcquireSnapshot()
@@ -251,7 +251,7 @@ func (db *DB) ReverseIterator(start, end []byte) (cosmosdb.Iterator, error) {
 			return nil, err
 		}
 		it := newIterator(db, snap, start, end, true)
-		it.valid.Store(false)
+		it.valid = false
 		return it, nil
 	}
 	snap, err := db.state.AcquireSnapshot()

@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+var benchSinkUint64 uint64
+
 // makeBenchValue returns a deterministic value of size n.
 func makeBenchValue(n int) []byte {
 	v := make([]byte, n)
@@ -145,6 +147,46 @@ func BenchmarkIterScan(b *testing.B) {
 					b.Fatalf("iterator: %v", err)
 				}
 				for ; it.Valid(); it.Next() {
+				}
+				if err := it.Close(); err != nil {
+					b.Fatalf("iterator close: %v", err)
+				}
+			}
+			b.StopTimer()
+			reportOpsPerSec(b)
+		})
+	}
+}
+
+// BenchmarkRangeScanSpan100 measures forward range scans over a fixed span of 100 keys.
+// This better matches dbbench-style "range scan" workloads than a full ScanAll.
+func BenchmarkRangeScanSpan100(b *testing.B) {
+	val := makeBenchValue(150)
+	const prefill = 50000
+	const span = 100
+
+	for _, th := range []int{64, 256} {
+		th := th
+		b.Run("InlineThreshold="+itoa(th), func(b *testing.B) {
+			db := openBenchDB(b, th)
+			prefillBenchDB(b, db, prefill, val)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				startIdx := i % (prefill - span)
+				endIdx := startIdx + span
+
+				var startKey [8]byte
+				var endKey [8]byte
+				binary.BigEndian.PutUint64(startKey[:], uint64(startIdx))
+				binary.BigEndian.PutUint64(endKey[:], uint64(endIdx))
+
+				it, err := db.Iterator(startKey[:], endKey[:])
+				if err != nil {
+					b.Fatalf("iterator: %v", err)
+				}
+				for ; it.Valid(); it.Next() {
+					benchSinkUint64 += uint64(len(it.Key()))
 				}
 				if err := it.Close(); err != nil {
 					b.Fatalf("iterator close: %v", err)
