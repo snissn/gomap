@@ -1,13 +1,16 @@
 package merging
 
 import (
+	"bytes"
+	"reflect"
 	"testing"
+	"treedb/internal/iterator"
 )
 
-type mockIter struct {
-	data      []entry
-	idx       int
-	isDeleted bool
+type mockUnsafeIter struct {
+	data []entry
+	idx  int
+	seekedKey []byte
 }
 
 type entry struct {
@@ -15,39 +18,49 @@ type entry struct {
 	del  bool
 }
 
-func (m *mockIter) Next() { m.idx++ }
-func (m *mockIter) Valid() bool { return m.idx < len(m.data) }
-func (m *mockIter) Key() []byte { return []byte(m.data[m.idx].k) }
-func (m *mockIter) Value() []byte { return []byte(m.data[m.idx].v) }
-func (m *mockIter) Close() error { return nil }
-func (m *mockIter) IsDeleted() bool { return m.data[m.idx].del }
+func (m *mockUnsafeIter) Next()                 { m.idx++ }
+func (m *mockUnsafeIter) Valid() bool           { return m.idx < len(m.data) }
+func (m *mockUnsafeIter) UnsafeKey() []byte     { return []byte(m.data[m.idx].k) }
+func (m *mockUnsafeIter) UnsafeValue() []byte   { return []byte(m.data[m.idx].v) }
+func (m *mockUnsafeIter) Close() error          { return nil }
+func (m *mockUnsafeIter) IsDeleted() bool       { return m.data[m.idx].del }
+func (m *mockUnsafeIter) Seek(key []byte) {
+	m.seekedKey = key
+	if key == nil {
+		m.idx = 0
+		return
+	}
+	for i, e := range m.data {
+		if bytes.Compare([]byte(e.k), key) >= 0 {
+			m.idx = i
+			return
+		}
+	}
+	m.idx = len(m.data) // Exhausted
+}
 
-func TestMergingIterator(t *testing.T) {
-	// Mutable: [A:1, B:del, C:1]
-	mut := &mockIter{
+func TestTwoWayMerger(t *testing.T) {
+	// Mutable (src1, higher precedence): A:1, B:del, C:1, E:1
+	mut := &mockUnsafeIter{
 		data: []entry{
 			{"A", "valA_new", false},
 			{"B", "", true},
 			{"C", "valC_new", false},
+			{"E", "valE", false},
 		},
 	}
 
-	// Disk: [A:0, B:0, D:0]
-	disk := &mockIter{
+	// Disk (src2, lower precedence): A:0, B:0, D:0, E:0
+	disk := &mockUnsafeIter{
 		data: []entry{
 			{"A", "valA_old", false},
 			{"B", "valB_old", false},
 			{"D", "valD_old", false},
+			{"E", "valE_old", false},
 		},
 	}
 
-	mi := NewMergingIterator([]IteratorSource{
-		{Iter: mut, Priority: 0},
-		{Iter: disk, Priority: 10},
-	})
-
-	// Expect: A:valA_new, C:valC_new, D:valD_old
-	// B is deleted in mut, so it masks disk, and is skipped.
+	merger := NewTwoWayMerger(mut, disk, nil, nil) // No specific domain filters here
 
 	expected := []struct {
 		k, v string
@@ -55,22 +68,43 @@ func TestMergingIterator(t *testing.T) {
 		{"A", "valA_new"},
 		{"C", "valC_new"},
 		{"D", "valD_old"},
+		{"E", "valE"},
 	}
 
-	for i, want := range expected {
-		if !mi.Valid() {
-			t.Fatalf("step %d: expected valid", i)
-		}
-		if string(mi.Key()) != want.k {
-			t.Errorf("step %d: got key %s, want %s", i, string(mi.Key()), want.k)
-		}
-		if string(mi.Value()) != want.v {
-			t.Errorf("step %d: got val %s, want %s", i, string(mi.Value()), want.v)
-		}
-		mi.Next()
+	var results []struct{ k, v string }
+	for merger.Valid() {
+		results = append(results, struct{ k, v string }{string(merger.Key()), string(merger.Value())})
+		merger.Next()
 	}
 
-	if mi.Valid() {
-		t.Errorf("expected iterator to be exhausted")
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Merge results mismatch.\nGot: %v\nWant:%v", results, expected)
+	}
+
+	// Test with domain
+	mut2 := &mockUnsafeIter{
+		data: []entry{
+			{"A", "1", false}, {"B", "2", false}, {"C", "3", false},
+		},
+	}
+	disk2 := &mockUnsafeIter{
+		data: []entry{
+			{"A", "10", false}, {"X", "100", false},
+		},
+	}
+	merger2 := NewTwoWayMerger(mut2, disk2, []byte("B"), []byte("Y"))
+	expected2 := []struct {
+		k, v string
+	}{
+		{"B", "2"}, {"C", "3"}, {"X", "100"},
+	}
+	results2 := []struct{ k, v string }{}
+	for merger2.Valid() {
+		results2 = append(results2, struct{ k, v string }{string(merger2.Key()), string(merger2.Value())})
+		merger2.Next()
+	}
+
+	if !reflect.DeepEqual(results2, expected2) {
+		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
 	}
 }
