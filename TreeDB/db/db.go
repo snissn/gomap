@@ -38,15 +38,15 @@ type DB struct {
 	allocator   *freelist.Allocator
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
-	
+
 	keepRecent      uint64
 	inlineThreshold int
-	
+
 	mu          sync.RWMutex
 	meta        page.MetaPageBody
-	metaPageID  uint64 
-	
-	state       atomic.Pointer[DBState]
+	metaPageID  uint64
+
+	state atomic.Pointer[DBState]
 }
 
 type Options struct {
@@ -66,10 +66,42 @@ func OpenCached(opts Options) (*caching.DB, error) {
 	return caching.Open(opts.Dir, db, opts.FlushThreshold)
 }
 
-type Snapshot struct {	db         *DB
+type Snapshot struct {
+	db         *DB
 	state      *DBState
 	tree       *tree.Tree
 	registryID int64
+}
+
+// AcquireSnapshot returns a new snapshot.
+func (db *DB) AcquireSnapshot() *Snapshot {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	state := db.state.Load()
+	if state.SlabSet != nil {
+		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
+	}
+
+	// Register Reader
+	id := db.registry.Register(state.CommitSeq)
+
+	return &Snapshot{
+		db:         db,
+		state:      state,
+		tree:       tree.New(db.pager, db.slabManager, state.RootPageID),
+		registryID: id,
+	}
+}
+
+// Close releases the snapshot.
+func (s *Snapshot) Close() error {
+	var err error
+	if s.state != nil && s.state.SlabSet != nil {
+		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+	}
+	s.db.registry.Unregister(s.registryID)
+	return err
 }
 
 // Open opens the database.
@@ -93,38 +125,26 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-		// Allocator initialized after recovery (needs Meta)
+	// Allocator initialized after recovery (needs Meta)
 
-		// But Zipper needs it.
+	// But Zipper needs it.
 
-		// We'll init with 0 and update after recovery.
+	// We'll init with 0 and update after recovery.
 
-		alloc := freelist.New(p, 0)
+	alloc := freelist.New(p, 0)
 
-		
+	db := &DB{
+		pager:           p,
+		slabManager:     sm,
+		zipper:          zipper.New(p, alloc),
+		allocator:       alloc,
+		graveyard:       lifecycle.NewGraveyard(),
+		registry:        lifecycle.NewReaderRegistry(),
+		keepRecent:      opts.KeepRecent,
+		inlineThreshold: page.DefaultInlineThreshold,
+	}
 
-		db := &DB{
-
-			pager:           p,
-
-			slabManager:     sm,
-
-			zipper:          zipper.New(p, alloc),
-
-			allocator:       alloc,
-
-			graveyard:       lifecycle.NewGraveyard(),
-
-			registry:        lifecycle.NewReaderRegistry(),
-
-			keepRecent:      opts.KeepRecent,
-			inlineThreshold: page.DefaultInlineThreshold,
-
-		}
-
-	
-
-		if err := db.recover(); err != nil {
+	if err := db.recover(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -137,14 +157,14 @@ func Open(opts Options) (*DB, error) {
 		SlabSet:          sm.CurrentSlabSet(),
 	}
 	db.state.Store(initialState)
-	
+
 	return db, nil
 }
 
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	
+
 	if err := db.pager.Close(); err != nil {
 		return err
 	}
@@ -158,8 +178,8 @@ func (db *DB) recover() error {
 			return err
 		}
 		db.meta = page.MetaPageBody{}
-		db.metaPageID = MetaPage1ID 
-		
+		db.metaPageID = MetaPage1ID
+
 		rootID, err := db.pager.Alloc(1)
 		if err != nil {
 			return err
@@ -173,9 +193,9 @@ func (db *DB) recover() error {
 		n.SetType(page.PageTypeLeaf)
 		n.SetCount(0)
 		n.UpdateChecksum()
-		
+
 		db.meta.UserRootPageID = rootID
-		
+
 		// Init System Root
 		sysRootID, err := db.pager.Alloc(1)
 		if err != nil {
@@ -190,10 +210,10 @@ func (db *DB) recover() error {
 		nSys.SetType(page.PageTypeLeaf)
 		nSys.SetCount(0)
 		nSys.UpdateChecksum()
-		
+
 		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
-		
+
 		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
 			return err
 		}
@@ -240,14 +260,14 @@ func (db *DB) recover() error {
 	if err := db.slabManager.PruneSlabs(activeMeta.ActiveSlabID); err != nil {
 		return err
 	}
-	
+
 	if activeMeta.TotalPages > 0 {
 		db.pager.SetPageCount(activeMeta.TotalPages)
 	}
-	
+
 	// Update Allocator Head
 	db.allocator.SetHead(activeMeta.FreelistHeadID)
-	
+
 	return nil
 }
 
@@ -256,7 +276,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	if err != nil {
 		return page.MetaPageBody{}, false
 	}
-	n := node.NewNode(data) 
+	n := node.NewNode(data)
 	if !n.VerifyChecksum() {
 		return page.MetaPageBody{}, false
 	}
@@ -291,7 +311,7 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 			return err
 		}
 	}
-	
+
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -300,49 +320,50 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = db.pager.PageCount()
-	
+
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
 		targetPageID = 1
 	}
-	
+
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return err
 	}
-	
+
 	if sync {
 		if err := db.pager.Sync(); err != nil {
 			return err
 		}
 	}
-	
+
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
-	
+
 	// Add retired pages to Graveyard
 	// Note: We use nextMeta.CommitSeq (the seq we just committed).
 	// These pages were replaced by this commit.
 	db.graveyard.Add(nextMeta.CommitSeq, retired)
-	
+
 	// Prune
 	db.Prune()
-	
-		// Update State
-		oldState := db.state.Load()
-		newState := &DBState{
-			CommitSeq:        nextMeta.CommitSeq,
-			RootPageID:       nextMeta.UserRootPageID,
-			SystemRootPageID: nextMeta.SystemRootPageID,
-			SlabSet:          db.slabManager.CurrentSlabSet(),
-		}
-		db.state.Store(newState)
-		
-		if oldState != nil {
-			db.slabManager.ReleaseSlabs(oldState.SlabSet)
-		}
-	
-		return nil
+
+	// Update State
+	oldState := db.state.Load()
+	newState := &DBState{
+		CommitSeq:        nextMeta.CommitSeq,
+		RootPageID:       nextMeta.UserRootPageID,
+		SystemRootPageID: nextMeta.SystemRootPageID,
+		SlabSet:          db.slabManager.CurrentSlabSet(),
 	}
+	db.state.Store(newState)
+
+	if oldState != nil {
+		db.slabManager.ReleaseSlabs(oldState.SlabSet)
+	}
+
+	return nil
+}
+
 // Commit persists the new root (Sync=true by default).
 // Note: This is usually called internally by Batch.Write or externally if manual root management.
 // If manual, retired pages are unknown? `Commit` signature assumes manual root.
@@ -360,11 +381,13 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	defer db.mu.RUnlock()
 
 	state := db.state.Load()
-	db.slabManager.AcquireSlabs(state.SlabSet)
-	
+	if state.SlabSet != nil {
+		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
+	}
+
 	// Register Reader
 	id := db.registry.Register(state.CommitSeq)
-	
+
 	return &Snapshot{
 		db:         db,
 		state:      state,
@@ -375,17 +398,21 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	var err error
+	if s.state != nil && s.state.SlabSet != nil {
+		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+	}
 	s.db.registry.Unregister(s.registryID)
-	return s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+	return err
 }
 
 // Prune reclaims pages from the graveyard.
 func (db *DB) Prune() {
 	min := db.registry.MinPinnedSeq()
 	current := db.meta.CommitSeq
-	
+
 	freed := db.graveyard.Extract(min, current, db.keepRecent)
-	
+
 	if len(freed) > 0 {
 		for _, id := range freed {
 			_ = db.allocator.Free(id) // Ignore error?
@@ -422,19 +449,19 @@ type CompactionOp struct {
 func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	
+
 	b := batch.New(db.slabManager, db.inlineThreshold)
-	
+
 	// Create temporary tree for verification (using current root)
 	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
-	
+
 	for _, op := range ops {
 		entry, err := tr.GetEntry(op.Key)
 		if err != nil {
 			continue // Skip if not found
 		}
-		
-		if entry.Flags & node.FlagPointer != 0 {
+
+		if entry.Flags&node.FlagPointer != 0 {
 			if entry.ValuePtr == op.OldPtr {
 				if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
 					return err
@@ -442,17 +469,17 @@ func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 			}
 		}
 	}
-	
+
 	if len(b.Ops()) == 0 {
 		return nil
 	}
-	
+
 	rootID := db.meta.UserRootPageID
 	newRoot, retired, err := db.zipper.Apply(rootID, b)
 	if err != nil {
 		return err
 	}
-	
+
 	// Commit with sync=true (Compaction should be durable)
 	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true)
 }
