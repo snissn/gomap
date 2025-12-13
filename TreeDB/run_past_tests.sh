@@ -25,6 +25,9 @@ fi
 
 echo "Running tests at HEAD~$N..."
 go test .
+TEST_EXIT_CODE=$?
 
 echo "Returning to original commit $CURRENT_COMMIT..."
 git checkout "$CURRENT_COMMIT"
+
+exit $TEST_EXIT_CODE
