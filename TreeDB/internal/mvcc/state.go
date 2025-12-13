@@ -30,6 +30,9 @@ func NewStateHolder(initial *DBState) *StateHolder {
 		registry: NewRegistry(),
 	}
 	if initial != nil {
+		if initial.SlabSet != nil {
+			initial.SlabSet.Pin()
+		}
 		h.ptr.Store(initial)
 		h.registry.SetCurrentSeq(initial.CommitSeq)
 	}
@@ -49,10 +52,18 @@ func (h *StateHolder) Publish(s *DBState) {
 	if h == nil || s == nil {
 		panic("mvcc: publish nil")
 	}
-	h.ptr.Store(s)
+	
+	if s.SlabSet != nil {
+		s.SlabSet.Pin()
+	}
+	
+	old := h.ptr.Swap(s)
+	if old != nil && old.SlabSet != nil {
+		_ = old.SlabSet.Unpin()
+	}
+	
 	h.registry.SetCurrentSeq(s.CommitSeq)
 }
-
 func (h *StateHolder) Registry() *Registry {
 	if h == nil {
 		return nil
@@ -72,25 +83,16 @@ func (h *StateHolder) AcquireSnapshot() (*Snapshot, error) {
 	seq := st.CommitSeq
 	h.registry.Pin(seq)
 
-	var pinned []*slab.SlabFile
 	if st.SlabSet != nil {
-		for _, id := range st.SlabSet.IDs() {
-			f, ok := st.SlabSet.Get(id)
-			if !ok || f == nil {
-				continue
-			}
-			f.Pin()
-			pinned = append(pinned, f)
-		}
+		st.SlabSet.Pin()
 	}
-	return &Snapshot{state: st, registry: h.registry, slabs: pinned}, nil
+	return &Snapshot{state: st, registry: h.registry}, nil
 }
 
 // Snapshot is a pinned, immutable view of DBState.
 type Snapshot struct {
 	state    *DBState
 	registry *Registry
-	slabs    []*slab.SlabFile
 	closed   atomic.Bool
 }
 
@@ -109,18 +111,14 @@ func (s *Snapshot) Close() error {
 	if s.closed.Swap(true) {
 		return nil
 	}
-	var firstErr error
-	for _, f := range s.slabs {
-		if f == nil {
-			continue
-		}
-		if err := f.Unpin(); err != nil && firstErr == nil {
-			firstErr = err
-		}
+	
+	var err error
+	if s.state != nil && s.state.SlabSet != nil {
+		err = s.state.SlabSet.Unpin()
 	}
+	
 	if s.registry != nil && s.state != nil {
 		s.registry.Unpin(s.state.CommitSeq)
 	}
-	return firstErr
+	return err
 }
-

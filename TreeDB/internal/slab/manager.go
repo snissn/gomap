@@ -84,19 +84,41 @@ func (f *SlabFile) delete() error {
 }
 
 type SlabSet struct {
-	Files map[uint32]*SlabFile
+	Files    map[uint32]*SlabFile
+	RefCount atomic.Int64
 }
 
 func NewSlabSet(files map[uint32]*SlabFile) *SlabSet {
 	cp := make(map[uint32]*SlabFile, len(files))
 	for id, f := range files {
 		cp[id] = f
+		f.Pin()
 	}
-	return &SlabSet{Files: cp}
+	s := &SlabSet{Files: cp}
+	s.RefCount.Store(1) // Owned by creator (Manager)
+	return s
 }
 
-func (s *SlabSet) Get(id uint32) (*SlabFile, bool) {
-	f, ok := s.Files[id]
+func (s *SlabSet) Pin() {
+	s.RefCount.Add(1)
+}
+
+func (s *SlabSet) Unpin() error {
+	if s.RefCount.Add(-1) == 0 {
+		var firstErr error
+		for _, f := range s.Files {
+			if err := f.Unpin(); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		}
+		return firstErr
+	}
+	return nil
+}
+
+func (s *SlabSet) Get(id uint32) (*SlabFile, bool) {	f, ok := s.Files[id]
 	return f, ok
 }
 
@@ -300,17 +322,20 @@ func (m *SlabManager) RemoveFromSet(fileID uint32) (*SlabFile, error) {
 	if !ok {
 		return nil, nil
 	}
-	newMap := make(map[uint32]*SlabFile, len(m.set.Files)-1)
-	for id, sf := range m.set.Files {
-		if id == fileID {
-			continue
+		newMap := make(map[uint32]*SlabFile, len(m.set.Files)-1)
+		for id, sf := range m.set.Files {
+			if id == fileID {
+				continue
+			}
+			newMap[id] = sf
 		}
-		newMap[id] = sf
+		
+		// Unpin old set
+		_ = m.set.Unpin()
+		
+		m.set = NewSlabSet(newMap)
+		return f, nil
 	}
-	m.set = NewSlabSet(newMap)
-	return f, nil
-}
-
 func (m *SlabManager) rotateLocked() error {
 	old := m.active
 	if old == nil {
@@ -332,13 +357,19 @@ func (m *SlabManager) rotateLocked() error {
 	}
 
 	newFile := &SlabFile{FileID: newID, Handle: fh, path: path}
-	newMap := make(map[uint32]*SlabFile, len(m.set.Files)+1)
-	for id, f := range m.set.Files {
-		newMap[id] = f
-	}
-	newMap[newID] = newFile
-	m.set = NewSlabSet(newMap)
-	m.active = newFile
+		newMap := make(map[uint32]*SlabFile, len(m.set.Files)+1)
+		for id, f := range m.set.Files {
+			newMap[id] = f
+		}
+		newMap[newID] = newFile
+		
+		// Unpin old set (release Manager's ownership)
+		if m.set != nil {
+			_ = m.set.Unpin()
+		}
+		
+		m.set = NewSlabSet(newMap)
+		m.active = newFile
 	m.activeTail = 0
 	return nil
 }
@@ -383,13 +414,9 @@ func (m *SlabManager) Close() error {
 		return nil
 	}
 	m.closed = true
-	var first error
-	for _, f := range m.set.Files {
-		if f != nil && f.Handle != nil {
-			if err := f.Handle.Close(); err != nil && first == nil {
-				first = err
-			}
-		}
+	
+	if m.set != nil {
+		return m.set.Unpin()
 	}
-	return first
+	return nil
 }
