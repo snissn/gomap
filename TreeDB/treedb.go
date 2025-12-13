@@ -154,6 +154,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
         	defer snap.Close()
         
         	it := newIterator(db, snap, key, nil, false) // Seek to key
+	it.Seek(key)
 	if it.err != nil {
             return nil, it.err
         }
@@ -252,8 +253,14 @@ func (db *DB) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
         	if db == nil {
         		return nil, fmt.Errorf("treedb: nil db")
         	}
+        	if start != nil && len(start) == 0 {
+        		return nil, ErrKeyEmpty
+        	}
+        	if end != nil && len(end) == 0 {
+        		return nil, ErrKeyEmpty
+        	}
         	// It's the same error logic, but newIterator sets it.
-        	snap, err := db.state.AcquireSnapshot()
+	snap, err := db.state.AcquireSnapshot()
         	if err != nil {
         		return nil, err
         	}
