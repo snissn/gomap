@@ -29,6 +29,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,treedbbackend,badger,leveldb`
 - `-tests` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
+- `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
+- `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
 - `-valsize` value size in bytes (default 128)
 - `-batchsize` batch size (default 1000)
 - `-range-queries` number of prefix/range queries (default 200)
@@ -36,3 +38,5 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-progress` live table updates to stderr (default true)
+- `-format` output format: `table` or `markdown`
+- `-suite` named suite (currently: `readme`)

@@ -3,6 +3,12 @@ TREEDB_DIR := TreeDB
 UNIFIED_BENCH_DIR := cmd/unified_bench
 BIN_DIR := bin
 
+BENCH_KEYCOUNTS ?= 100000,1000000
+BENCH_VALSIZE ?= 128
+BENCH_BATCHSIZE ?= 1000
+BENCH_RANGE_QUERIES ?= 200
+BENCH_RANGE_SPAN ?= 100
+
 .PHONY: help
 help:
 	@echo "Common targets:"
@@ -13,7 +19,9 @@ help:
 	@echo "  make tidy           - go mod tidy (repo root)"
 	@echo "  make deps           - download deps (repo root)"
 	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
-	@echo "  make benchmark-all  - run HashDB redis-benchmark suite"
+	@echo "  make bench          - run unified bench"
+	@echo "  make bench-readme   - regenerate README benchmark snapshot"
+	@echo "  make benchmark-all  - run HashDB redis-benchmark suite (legacy)"
 	@echo "  make unified-bench  - build unified bench binary"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
@@ -87,6 +95,13 @@ build-treedb:
 unified-bench:
 	mkdir -p $(BIN_DIR)
 	cd $(UNIFIED_BENCH_DIR) && go build -o ../../$(BIN_DIR)/unified-bench .
+
+.PHONY: bench bench-readme
+bench: unified-bench
+	./$(BIN_DIR)/unified-bench
+
+bench-readme: unified-bench
+	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -progress=false | go run ./scripts/update_readme_bench.go
 
 .PHONY: benchmark-all benchmark-quick
 benchmark-all: build-hashdb

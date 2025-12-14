@@ -34,12 +34,20 @@ Contracts (durability/locking/concurrency/iteration):
 
 ## Benchmarking
 
+Primary tool: `cmd/unified_bench/` (side-by-side: HashDB, TreeDB, Badger, LevelDB).
+
+- Run: `make unified-bench && ./bin/unified-bench`
+- Sweep key counts (markdown output): `./bin/unified-bench -format markdown -keycounts 100000,1000000`
+- Update the README benchmark snapshot: `make bench-readme`
+
+More details:
+
 - `cmd/unified_bench/README.md`
 - `docs/BENCHMARK_SPEC.md`
 
-HashDB benchmark suite includes plots (example):
-
-![Benchmark Performance](HashDB/benchmark/benchmark_performance_combined.png)
+<!-- BENCHMARK_START -->
+_Run `make bench-readme` to generate this section._
+<!-- BENCHMARK_END -->
 
 ## Testing
 
