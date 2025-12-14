@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/snissn/gomap/HashDB/redisserver/badgerredis"
-	"github.com/snissn/gomap/HashDB/redisserver/gomapredis"
+	"github.com/snissn/gomap/HashDB/redisserver/hashdbredis"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 
 	switch mode {
 	case "hashdb", "gomap":
-		server := gomapredis.NewRedisServer(dbdir)
+		server := hashdbredis.NewRedisServer(dbdir)
 		fmt.Printf("Starting Redis server using HashDB on :6380 (dbdir=%s)\n", dbdir)
 		if err := server.Serve(":6380"); err != nil {
 			fmt.Println("Server error:", err)

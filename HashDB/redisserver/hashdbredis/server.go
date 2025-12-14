@@ -1,4 +1,4 @@
-package gomapredis
+package hashdbredis
 
 import (
 	"fmt"
@@ -17,22 +17,21 @@ type connState struct {
 const setBatchSize = 16
 
 type RedisServer struct {
-	store     *hashdb.HashmapDistributed
+	store     *hashdb.ShardedDB
 	batchSets bool
 }
 
 func NewRedisServer(dbdir string) *RedisServer {
-	if err := os.MkdirAll(dbdir, 0755); err != nil {
+	if err := os.MkdirAll(dbdir, 0o755); err != nil {
 		log.Fatalf("failed to create HashDB folder: %v", err)
 	}
 
-	var store hashdb.HashmapDistributed
+	var store hashdb.ShardedDB
 	if err := store.New(dbdir); err != nil {
 		log.Fatalf("failed to open HashDB: %v", err)
 	}
-	// Disable compression by default for the Redis/Gomap server, which is
-	// primarily used by the benchmark harness. This improves write-heavy
-	// and large-value workloads where compression CPU cost outweighs savings.
+	// Disable compression by default for the Redis/HashDB server, which is primarily
+	// used by the benchmark harness.
 	store.SetCompression(false)
 
 	return &RedisServer{
@@ -85,7 +84,7 @@ func (s *RedisServer) Serve(addr string) error {
 					batch := state.pending
 					state.pending = state.pending[:0]
 
-					err := s.store.AddMany(batch)
+					err := s.store.PutMany(batch)
 					if err != nil {
 						conn.WriteError(err.Error())
 						return
@@ -95,7 +94,7 @@ func (s *RedisServer) Serve(addr string) error {
 					}
 				}
 			} else {
-				err := s.store.Add(key, val)
+				err := s.store.Put(key, val)
 				if err != nil {
 					conn.WriteError(err.Error())
 					return
@@ -163,7 +162,7 @@ func (s *RedisServer) Serve(addr string) error {
 				})
 			}
 
-			err := s.store.AddMany(items)
+			err := s.store.PutMany(items)
 			if err != nil {
 				conn.WriteError(err.Error())
 				return
