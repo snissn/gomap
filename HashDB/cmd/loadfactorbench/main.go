@@ -29,17 +29,17 @@ func runLoadBench(loadFactor float64, ops int, writeRatio float64) (float64, tim
 	dir, _ := os.MkdirTemp("", "loadfactorbench")
 	defer os.RemoveAll(dir)
 
-	var h hashdb.Hashmap
-	if err := h.New(dir); err != nil {
+	var db hashdb.DB
+	if err := db.Open(dir); err != nil {
 		panic(err)
 	}
 
 	// Disable resize so we can hold a fixed load factor.
-	h.SetResizeThreshold(100)
+	db.SetResizeThreshold(100)
 	// Disable compression to focus on index/slab access cost.
-	h.SetCompression(false)
+	db.SetCompression(false)
 
-	stats := h.Stats()
+	stats := db.Stats()
 	capacity := stats.Capacity
 	if capacity == 0 {
 		panic("hashmap capacity is zero")
@@ -54,7 +54,7 @@ func runLoadBench(loadFactor float64, ops int, writeRatio float64) (float64, tim
 	for i := 0; i < targetKeys; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
 		val := []byte("value")
-		if err := h.Add(key, val); err != nil {
+		if err := db.Put(key, val); err != nil {
 			panic(err)
 		}
 	}
@@ -72,11 +72,11 @@ func runLoadBench(loadFactor float64, ops int, writeRatio float64) (float64, tim
 		key := []byte(fmt.Sprintf("key-%d", idx))
 
 		if i%writeEvery == 0 {
-			if err := h.Add(key, []byte("value")); err != nil {
+			if err := db.Put(key, []byte("value")); err != nil {
 				panic(err)
 			}
 		} else {
-			if _, err := h.Get(key); err != nil {
+			if _, err := db.Get(key); err != nil {
 				panic(err)
 			}
 		}

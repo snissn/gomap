@@ -29,7 +29,7 @@ func runBench(shards, concurrency, ops int) (float64, time.Duration) {
 	dir, _ := os.MkdirTemp("", "shardbench")
 	defer os.RemoveAll(dir)
 
-	var store hashdb.HashmapDistributed
+	var store hashdb.ShardedDB
 	if err := store.NewWithShards(dir, shards); err != nil {
 		panic(err)
 	}
@@ -47,9 +47,13 @@ func runBench(shards, concurrency, ops int) (float64, time.Duration) {
 				k := []byte(fmt.Sprintf("key-%d", r.Intn(10000)))
 				v := []byte("val")
 				if j%5 == 0 { // 20% write
-					store.Add(k, v)
+					if err := store.Put(k, v); err != nil {
+						panic(err)
+					}
 				} else {
-					store.Get(k)
+					if _, err := store.Get(k); err != nil {
+						panic(err)
+					}
 				}
 			}
 		}()

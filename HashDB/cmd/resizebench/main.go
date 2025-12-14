@@ -9,8 +9,7 @@ import (
 	"github.com/snissn/gomap/HashDB"
 )
 
-// resizebench measures per-operation latency across one or more resizes on a single Hashmap.
-// Run on different gomap versions (e.g. before vs after incremental rehash) to compare tails.
+// resizebench measures per-operation latency across one or more resizes on a single HashDB DB.
 func main() {
 	const ops = 200000
 
@@ -20,14 +19,14 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	var h hashdb.Hashmap
-	if err := h.New(dir); err != nil {
+	var db hashdb.DB
+	if err := db.Open(dir); err != nil {
 		panic(err)
 	}
 
 	// Use the default resize threshold (65%) to exercise the normal path.
-	h.SetResizeThreshold(65)
-	h.SetCompression(false)
+	db.SetResizeThreshold(65)
+	db.SetCompression(false)
 
 	durs := make([]time.Duration, 0, ops)
 
@@ -37,7 +36,7 @@ func main() {
 		val := []byte("value")
 
 		start := time.Now()
-		if err := h.Add(key, val); err != nil {
+		if err := db.Put(key, val); err != nil {
 			panic(err)
 		}
 		durs = append(durs, time.Since(start))
