@@ -32,6 +32,7 @@ Readers acquire a `Snapshot` which pins the version of the tree and the active s
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 
@@ -43,6 +44,9 @@ func main() {
 	opts := treedb.Options{Dir: "./my-db-data"}
 	database, err := treedb.Open(opts)
 	if err != nil {
+		if errors.Is(err, treedb.ErrLocked) {
+			log.Fatal("database is already open in another process")
+		}
 		log.Fatal(err)
 	}
 	defer database.Close()
@@ -73,6 +77,11 @@ func main() {
 	batch.Write() // Atomic commit
 }
 ```
+
+### Exclusive Open (Process Lock)
+
+TreeDB acquires an **exclusive** lock on `Options.Dir`. If another process has the database open,
+`treedb.Open`/`treedb.OpenBackend` returns `treedb.ErrLocked`.
 
 ## Testing
 

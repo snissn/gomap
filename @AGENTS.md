@@ -127,6 +127,8 @@
 - 2025-12-14: CI quality gates
   - Added `gofmt` check and `go vet` steps to `.github/workflows/go-tests.yml`.
   - Expanded CI to run on Linux + macOS.
+- 2025-12-14: Docs
+  - Documented TreeDB exclusive open (`treedb.ErrLocked`) and added `cmd/unified_bench/README.md`.
 
 ## Notes / Conventions
 
