@@ -13,15 +13,9 @@ import (
 	"time"
 
 	"github.com/snissn/gomap"
+	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/btree"
-
-	// Legacy TreeDB
-	legacydb "github.com/snissn/gomap/TreeDB"
-	legacycaching "github.com/snissn/gomap/TreeDB/caching" // Import for Legacy Batch Interface
-
-	// Gemini TreeDB
-	geminicaching "github.com/snissn/gomap-gemini/TreeDB/caching"
-	geminidb "github.com/snissn/gomap-gemini/TreeDB/db"
 
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
@@ -154,143 +148,88 @@ func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
 	return nil, errors.New("BTree does not support batch")
 }
 
-// 3. Legacy TreeDB Wrapper
-type LegacyBatchWrapper struct {
-	b legacycaching.BatchInterface // Use the imported interface
+// 3. TreeDB Wrapper
+type treeDBBatch interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	Write() error
+	Close() error
 }
 
-func (w *LegacyBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
-func (w *LegacyBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *LegacyBatchWrapper) Commit() error         { return w.b.Write() } // Legacy batch has Write()
-func (w *LegacyBatchWrapper) Close() error          { return w.b.Close() }
-
-type LegacyTreeDBWrapper struct {
-	db *legacydb.DB
+type TreeDBBatchWrapper struct {
+	b treeDBBatch
 }
 
-func NewLegacyTreeDB(dir string) (*LegacyTreeDBWrapper, error) {
-	opts := legacydb.Options{
+func (w *TreeDBBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
+func (w *TreeDBBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
+func (w *TreeDBBatchWrapper) Commit() error         { return w.b.Write() }
+func (w *TreeDBBatchWrapper) Close() error          { return w.b.Close() }
+
+type TreeDBWrapper struct {
+	db *treedbdb.DB
+}
+
+func NewTreeDB(dir string) (*TreeDBWrapper, error) {
+	opts := treedbdb.Options{
 		Dir:       dir,
 		ChunkSize: 64 * 1024 * 1024,
 	}
-	db, err := legacydb.Open(opts)
+	db, err := treedbdb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &LegacyTreeDBWrapper{db: db}, nil
+	return &TreeDBWrapper{db: db}, nil
 }
 
-func (l *LegacyTreeDBWrapper) Name() string                 { return "TreeDB" }
-func (l *LegacyTreeDBWrapper) Set(k, v []byte) error        { return l.db.Set(k, v) }
-func (l *LegacyTreeDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k) }
-func (l *LegacyTreeDBWrapper) Delete(k []byte) error        { return l.db.Delete(k) }
-func (l *LegacyTreeDBWrapper) Close() error                 { return l.db.Close() }
-func (l *LegacyTreeDBWrapper) SupportsScan() bool           { return true }
-func (l *LegacyTreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := l.db.Iterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	if gi, ok := interface{}(it).(GenericIterator); ok {
-		return gi, nil
-	}
-	return nil, fmt.Errorf("Legacy Iterator does not satisfy GenericIterator")
+func (t *TreeDBWrapper) Name() string                 { return "TreeDB" }
+func (t *TreeDBWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
+func (t *TreeDBWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
+func (t *TreeDBWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
+func (t *TreeDBWrapper) Close() error                 { return t.db.Close() }
+func (t *TreeDBWrapper) SupportsScan() bool           { return true }
+func (t *TreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return t.db.Iterator(start, end)
 }
-func (l *LegacyTreeDBWrapper) SupportsBatch() bool { return true }
-func (l *LegacyTreeDBWrapper) NewBatch() (BatchInterface, error) {
-	return &LegacyBatchWrapper{b: l.db.NewBatch()}, nil
+func (t *TreeDBWrapper) SupportsBatch() bool { return true }
+func (t *TreeDBWrapper) NewBatch() (BatchInterface, error) {
+	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
-// 4. Gemini TreeDB Wrapper
-type GeminiBatchWrapper struct {
-	b geminicaching.BatchInterface
+// 4. TreeDB Cached Wrapper
+type TreeDBCachedWrapper struct {
+	db *treedbcaching.DB
 }
 
-func (w *GeminiBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
-func (w *GeminiBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *GeminiBatchWrapper) Commit() error         { return w.b.Write() }
-func (w *GeminiBatchWrapper) Close() error          { return w.b.Close() }
-
-type GeminiWrapper struct {
-	db *geminidb.DB
-}
-
-func NewGemini(dir string) (*GeminiWrapper, error) {
-	opts := geminidb.Options{
+func NewTreeDBCached(dir string) (*TreeDBCachedWrapper, error) {
+	opts := treedbdb.Options{
 		Dir:       dir,
 		ChunkSize: 64 * 1024 * 1024,
 	}
-	db, err := geminidb.Open(opts)
+	backendDB, err := treedbdb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &GeminiWrapper{db: db}, nil
+
+	db, err := treedbcaching.Open(dir, backendDB, 4*1024*1024) // 4MB flush threshold
+	if err != nil {
+		_ = backendDB.Close()
+		return nil, err
+	}
+	return &TreeDBCachedWrapper{db: db}, nil
 }
 
-func (g *GeminiWrapper) Name() string                 { return "Gemini" }
-func (g *GeminiWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
-func (g *GeminiWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
-func (g *GeminiWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
-func (g *GeminiWrapper) Close() error                 { return g.db.Close() }
-func (g *GeminiWrapper) SupportsScan() bool           { return true }
-func (g *GeminiWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := g.db.Iterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	if gi, ok := interface{}(it).(GenericIterator); ok {
-		return gi, nil
-	}
-	return nil, fmt.Errorf("Gemini Iterator does not satisfy GenericIterator")
+func (t *TreeDBCachedWrapper) Name() string                 { return "TreeDBCached" }
+func (t *TreeDBCachedWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
+func (t *TreeDBCachedWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
+func (t *TreeDBCachedWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
+func (t *TreeDBCachedWrapper) Close() error                 { return t.db.Close() }
+func (t *TreeDBCachedWrapper) SupportsScan() bool           { return true }
+func (t *TreeDBCachedWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return t.db.Iterator(start, end)
 }
-func (g *GeminiWrapper) SupportsBatch() bool { return true }
-func (g *GeminiWrapper) NewBatch() (BatchInterface, error) {
-	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
-}
-
-type GeminiCachedWrapper struct {
-	db *geminicaching.DB
-}
-
-func NewGeminiCached(dir string) (*GeminiCachedWrapper, error) {
-	opts := geminidb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-		// Explicitly enable caching in options, if it matters (it's implicitly true if OpenCached is called)
-	}
-	// Use geminicaching.Open directly
-	backendDB, err := geminidb.Open(opts) // Open the underlying DB first
-	if err != nil {
-		return nil, err
-	}
-	
-	// geminicaching.Open expects a BackendDB interface, which geminidb.DB implements
-	db, err := geminicaching.Open(dir, backendDB, 4*1024*1024) // 4MB flush threshold
-	if err != nil {
-		backendDB.Close()
-		return nil, err
-	}
-	return &GeminiCachedWrapper{db: db}, nil
-}
-
-func (g *GeminiCachedWrapper) Name() string                 { return "GeminiCached" }
-func (g *GeminiCachedWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
-func (g *GeminiCachedWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
-func (g *GeminiCachedWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
-func (g *GeminiCachedWrapper) Close() error                 { return g.db.Close() }
-func (g *GeminiCachedWrapper) SupportsScan() bool           { return true }
-func (g *GeminiCachedWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := g.db.Iterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	// The caching.Iterator already implements the merging.Iterator,
-	// which satisfies our GenericIterator
-	return it, nil
-}
-func (g *GeminiCachedWrapper) SupportsBatch() bool { return true }
-func (g *GeminiCachedWrapper) NewBatch() (BatchInterface, error) {
-	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
+func (t *TreeDBCachedWrapper) SupportsBatch() bool { return true }
+func (t *TreeDBCachedWrapper) NewBatch() (BatchInterface, error) {
+	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
 // 5. LevelDB Wrapper
@@ -361,15 +300,15 @@ func (l *LevelDBWrapper) NewBatch() (BatchInterface, error) {
 // --- Benchmark Runner ---
 
 var (
-	numKeys   = flag.Int("keys", 100000, "Number of keys")
-	valSize   = flag.Int("valsize", 128, "Value size in bytes")
-	batchSize = flag.Int("batchsize", 1000, "Size of batches")
+	numKeys      = flag.Int("keys", 100000, "Number of keys")
+	valSize      = flag.Int("valsize", 128, "Value size in bytes")
+	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
-	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
-	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
-	progress  = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,treedbcached,leveldb)")
+	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
+	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
+	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 )
 
 type DBInstance struct {
@@ -385,18 +324,17 @@ func main() {
 
 	// Define Factory Map
 	factories := map[string]func(string) (DBInterface, error){
-		"gomap":  func(d string) (DBInterface, error) { return NewGomap(d) },
-		"btree":  func(d string) (DBInterface, error) { return NewBTree(d) },
-		"treedb": func(d string) (DBInterface, error) { return NewLegacyTreeDB(d) },
-		"gemini": func(d string) (DBInterface, error) { return NewGemini(d) },
-		"geminicached": func(d string) (DBInterface, error) { return NewGeminiCached(d) },
+		"gomap":        func(d string) (DBInterface, error) { return NewGomap(d) },
+		"btree":        func(d string) (DBInterface, error) { return NewBTree(d) },
+		"treedb":       func(d string) (DBInterface, error) { return NewTreeDB(d) },
+		"treedbcached": func(d string) (DBInterface, error) { return NewTreeDBCached(d) },
 		"leveldb":      func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"gomap", "btree", "treedb", "gemini", "geminicached", "leveldb"}
+	orderedDBs := []string{"gomap", "btree", "treedb", "treedbcached", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}
@@ -487,7 +425,7 @@ func main() {
 				if endIdx > *numKeys {
 					endIdx = *numKeys
 				}
-				
+
 				var startKeyBuf [8]byte
 				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
 				startKey := startKeyBuf[:]
@@ -500,7 +438,7 @@ func main() {
 				if err != nil {
 					log.Fatalf("range_scan iterator error: %v", err)
 				}
-				
+
 				count := 0
 				for iter.Valid() {
 					iter.Next()
@@ -649,7 +587,6 @@ func main() {
 	printResultsTable(instances, finalTestOrder, displayNames, results)
 }
 
-
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
 	colNames := []string{"Test"}
@@ -727,15 +664,15 @@ func contains(list []string, item string) bool {
 }
 
 type liveTable struct {
-	w             io.Writer
-	instances     []*DBInstance
+	w              io.Writer
+	instances      []*DBInstance
 	finalTestOrder []string
-	displayNames  map[string]string
-	printedLines  int
-	enabledVT100  bool
-	colWidths     map[string]int
-	dbColStart    map[string]int
-	testRowIndex  map[string]int
+	displayNames   map[string]string
+	printedLines   int
+	enabledVT100   bool
+	colWidths      map[string]int
+	dbColStart     map[string]int
+	testRowIndex   map[string]int
 }
 
 func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *liveTable {
@@ -747,11 +684,11 @@ func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string,
 	}
 
 	return &liveTable{
-		w:             w,
-		instances:     instances,
+		w:              w,
+		instances:      instances,
 		finalTestOrder: finalTestOrder,
-		displayNames:  displayNames,
-		enabledVT100:  enabledVT100,
+		displayNames:   displayNames,
+		enabledVT100:   enabledVT100,
 	}
 }
 
@@ -821,9 +758,9 @@ func (t *liveTable) UpdateCell(testName, dbName string, val float64) error {
 	// Save cursor, jump to target cell, write, restore cursor.
 	// Cursor is currently below the table after initial Render().
 	_, err := fmt.Fprintf(t.w, "\x1b7\r\x1b[%dA\x1b[%dB\x1b[%dC%s\x1b8",
-		t.printedLines,          // up to top
-		targetLineFromTop-1,     // down to row
-		colStart-1,              // right to col
+		t.printedLines,      // up to top
+		targetLineFromTop-1, // down to row
+		colStart-1,          // right to col
 		cell,
 	)
 	return err

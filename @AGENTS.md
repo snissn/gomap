@@ -2,9 +2,9 @@
 
 ## Goals
 
-- [ ] Make `go test ./...` pass in all modules (`./`, `./TreeDB`, `./cmd/unified_bench`).
-- [ ] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
-- [ ] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
+- [x] Make `go test ./...` pass in all modules (`./`, `./TreeDB`, `./cmd/unified_bench`).
+- [x] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
+- [x] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
 - [ ] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 
@@ -20,6 +20,9 @@
 - 2025-12-14: TreeDB rename + tests
   - Renamed `GeminiTreeDB/` → `TreeDB/` and updated module/import paths
   - `go test ./...` (`TreeDB`): PASS
+- 2025-12-14: unified_bench cleanup
+  - Removed legacy/gemini DB references; now benchmarks `treedb` and `treedbcached`
+  - `go test ./...` (`cmd/unified_bench`): PASS
 
 ## Notes / Conventions
 
