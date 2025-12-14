@@ -19,7 +19,7 @@ const (
 	groupSize   = 8
 )
 
-func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
+func (h *DB) addKey(key []byte, slabOffset Key) error {
 	hkey, isnew, err := h.probeForAdd(key)
 	if err != nil {
 		return err
@@ -48,7 +48,7 @@ func (h *Hashmap) addKey(key []byte, slabOffset Key) error {
 	return nil
 }
 
-func (h *Hashmap) addBucket(key []byte, slabOffset Key) error {
+func (h *DB) addBucket(key []byte, slabOffset Key) error {
 	if !h.rehashInProgress && h.checkResize() {
 		if err := h.startRehash(); err != nil {
 			return err
@@ -62,7 +62,7 @@ func hash(key []byte) Hash {
 	return Hash(xxhash.Sum64(key))
 }
 
-func (h *Hashmap) getKeys() []Key {
+func (h *DB) getKeys() []Key {
 	// Deprecated/Internal use: returns slice of keys.
 	// We assume h.Keys is set.
 	if h.Keys != nil {
@@ -104,7 +104,7 @@ func loadGroup(controls []byte, i uint64, capacity uint64) uint64 {
 
 // probe searches for a key in the provided keys slice.
 // It returns the index, the item (if found), whether it was found, and any error.
-func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte) (uint64, *Item, bool, error) {
+func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (uint64, *Item, bool, error) {
 	myhash := hash(key)
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
@@ -168,7 +168,7 @@ func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte
 
 // probeForAdd searches for a key or an insertion slot.
 // It returns the index to insert at, and whether the key is new.
-func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
+func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 	myhash := hash(key)
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
@@ -245,7 +245,7 @@ func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
 	return 0, false, fmt.Errorf("hashmap is full (probed %d slots)", probes)
 }
 
-func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) error {
+func (h *DB) addManyBuckets(items []Item, slabOffsets []Key) error {
 	if h.checkResize() {
 		h.resize()
 	}
@@ -253,7 +253,7 @@ func (h *Hashmap) addManyBuckets(items []Item, slabOffsets []Key) error {
 	return h.addManyKeys(items, slabOffsets)
 }
 
-func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) error {
+func (h *DB) addManyKeys(items []Item, slabOffsets []Key) error {
 	totalNewKey := uint64(0)
 
 	for i, item := range items {
@@ -276,7 +276,7 @@ func (h *Hashmap) addManyKeys(items []Item, slabOffsets []Key) error {
 	return nil
 }
 
-func (h *Hashmap) setDeleted(idx uint64) {
+func (h *DB) setDeleted(idx uint64) {
 	if h.Controls != nil {
 		(*h.Controls)[idx] = ctrlDeleted
 	}
@@ -285,7 +285,7 @@ func (h *Hashmap) setDeleted(idx uint64) {
 // probeForRehash finds a slot for a key during resizing.
 // It assumes the key is NOT present in the map (guaranteed by resizing logic).
 // It returns the index to insert at.
-func (h *Hashmap) probeForRehash(hash uint64) (uint64, error) {
+func (h *DB) probeForRehash(hash uint64) (uint64, error) {
 	h1 := uint64(hash >> 7)
 
 	idx := h1 % h.Capacity

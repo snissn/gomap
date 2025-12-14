@@ -27,7 +27,7 @@ func printTotalRunTime(startTime time.Time) {
 	fmt.Printf("Total run time: %s\n", totalRunTime)
 }
 
-func (h *Hashmap) closeFPs() error {
+func (h *DB) closeFPs() error {
 	if h.hashMapFile != nil {
 		if err := h.hashMapFile.Close(); err != nil {
 			return err
@@ -69,7 +69,7 @@ func (h *Hashmap) closeFPs() error {
 
 // Get retrieves the value for a given key.
 // It returns nil, nil if the key is not found.
-func (h *Hashmap) Get(key []byte) ([]byte, error) {
+func (h *DB) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
 	if h.Keys != nil && h.Capacity > 0 {
 		_, item, found, err := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
@@ -97,7 +97,7 @@ func (h *Hashmap) Get(key []byte) ([]byte, error) {
 }
 
 // Delete removes a key from the map.
-func (h *Hashmap) Delete(key []byte) error {
+func (h *DB) Delete(key []byte) error {
 	foundNew := false
 
 	// Delete in the current (new) table.
@@ -139,7 +139,7 @@ func (h *Hashmap) Delete(key []byte) error {
 
 // Update performs an atomic read-modify-write operation on a key.
 // The callback receives the current value (or nil if not found) and returns the new value.
-func (h *Hashmap) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+func (h *DB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// Simple implementation: Get then Add.
 	// Since Hashmap is NOT thread-safe, the caller (HashmapDistributed) must hold the lock.
 	// So we can just reuse Get logic (or duplicate probing for efficiency) then Add.
@@ -162,7 +162,7 @@ func (h *Hashmap) Update(key []byte, callback func([]byte) ([]byte, error)) erro
 
 // AddMany inserts multiple items in a batch.
 // It is not thread-safe.
-func (h *Hashmap) AddMany(items []Item) error {
+func (h *DB) AddMany(items []Item) error {
 
 	startTime := time.Now()
 	slabOffsets, err := h.addManySlabs(items)
@@ -192,7 +192,7 @@ func (h *Hashmap) AddMany(items []Item) error {
 
 // Add inserts a single key-value pair.
 // It is not thread-safe.
-func (h *Hashmap) Add(key []byte, value []byte) error {
+func (h *DB) Add(key []byte, value []byte) error {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
 	slabOffset, err := h.addSlab(item)
@@ -215,7 +215,7 @@ func (h *Hashmap) Add(key []byte, value []byte) error {
 }
 
 // mlock locks the data in memory to prevent it from being swapped to disk.
-func (h *Hashmap) mlock(data mmap.MMap) {
+func (h *DB) mlock(data mmap.MMap) {
 	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
 	if errno != 0 {
 		// If the syscall fails, it could be because the user does not have
@@ -239,7 +239,7 @@ func (h *Hashmap) mlock(data mmap.MMap) {
 }
 
 // New initializes a Hashmap in the given folder.
-func (h *Hashmap) New(folder string) error {
+func (h *DB) New(folder string) error {
 	h.Folder = folder
 	N, err := h.readCapacity()
 	if err != nil {
@@ -250,14 +250,14 @@ func (h *Hashmap) New(folder string) error {
 
 // SetCompression enables or disables value compression.
 // Default is true.
-func (h *Hashmap) SetCompression(enabled bool) {
+func (h *DB) SetCompression(enabled bool) {
 	h.CompressionEnabled = enabled
 }
 
 // SetResizeThreshold sets the load factor percentage at which the hashmap resizes.
 // For example, 65 means resize when Count/Capacity > 0.65.
 // Values <= 0 reset to the default of 65.
-func (h *Hashmap) SetResizeThreshold(percent uint64) {
+func (h *DB) SetResizeThreshold(percent uint64) {
 	if percent == 0 {
 		percent = 65
 	}
@@ -265,7 +265,7 @@ func (h *Hashmap) SetResizeThreshold(percent uint64) {
 }
 
 // Clear wipes the database (deletes all data) and resets it.
-func (h *Hashmap) Clear() error {
+func (h *DB) Clear() error {
 	// Close resources
 	if err := h.closeFPs(); err != nil {
 		return err
@@ -290,7 +290,7 @@ func (h *Hashmap) Clear() error {
 }
 
 // Stats returns statistics about the database.
-func (h *Hashmap) Stats() Stats {
+func (h *DB) Stats() Stats {
 	// Calculate total file size
 	var size uint64
 	for _, f := range h.slabFiles {
@@ -308,7 +308,7 @@ func (h *Hashmap) Stats() Stats {
 
 // Compact rewrites the database to reclaim space from deleted/updated keys.
 // It creates a new copy of the database and swaps it in.
-func (h *Hashmap) Compact() error {
+func (h *DB) Compact() error {
 	tmpFolder := h.Folder + "-compact"
 	_ = os.RemoveAll(tmpFolder) // Clean start
 

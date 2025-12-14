@@ -28,7 +28,7 @@ func getCount(slabMap mmap.MMap) *uint64 {
 	return (*uint64)(unsafe.Pointer(&slabMap[8]))
 }
 
-func (h *Hashmap) initN(folder string, N uint64) error {
+func (h *DB) initN(folder string, N uint64) error {
 	h.Folder = folder
 
 	// Create directory is handled inside openMmapHash if needed, but safer here.
@@ -104,11 +104,11 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	return nil
 }
 
-func (h *Hashmap) writeCapacity(N uint64) error {
+func (h *DB) writeCapacity(N uint64) error {
 	s := strconv.FormatUint(N, 10)
 	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
 }
-func (h *Hashmap) readCapacity() (uint64, error) {
+func (h *DB) readCapacity() (uint64, error) {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
 		return DEFAULTMAPSIZE, nil // Default if not found
@@ -121,7 +121,7 @@ func (h *Hashmap) readCapacity() (uint64, error) {
 	return capacity, nil
 }
 
-func (h *Hashmap) createDirectory() error {
+func (h *DB) createDirectory() error {
 	err := os.MkdirAll(h.Folder, 0755)
 	if err != nil {
 		return errors.Wrap(err, 1)

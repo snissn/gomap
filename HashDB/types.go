@@ -19,7 +19,7 @@ type Key struct {
 	hash       Hash
 }
 
-type Hashmap struct {
+type DB struct {
 	Folder string
 
 	hashMapFile  *os.File
@@ -59,6 +59,10 @@ type Hashmap struct {
 
 	resizeThreshold uint64
 }
+
+// Hashmap is kept as a compatibility alias for older code.
+// New code should use DB.
+type Hashmap = DB
 
 type Stats struct {
 	KeyCount uint64

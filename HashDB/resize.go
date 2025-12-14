@@ -8,7 +8,7 @@ import (
 	"unsafe"
 )
 
-func (h *Hashmap) checkResize() bool {
+func (h *DB) checkResize() bool {
 	if h.rehashInProgress {
 		return false
 	}
@@ -24,7 +24,7 @@ const rehashBucketsPerWrite = 8
 // startRehash initializes an incremental rehash by allocating a new index
 // with double capacity and switching the active table to it. The old table
 // is kept around and migrated gradually.
-func (h *Hashmap) startRehash() error {
+func (h *DB) startRehash() error {
 	if h.rehashInProgress {
 		return nil
 	}
@@ -99,7 +99,7 @@ func (h *Hashmap) startRehash() error {
 
 // rehashStep migrates up to maxToMove buckets from the old table into the new one.
 // It should be called while holding the shard's write lock.
-func (h *Hashmap) rehashStep(maxToMove uint64) error {
+func (h *DB) rehashStep(maxToMove uint64) error {
 	if !h.rehashInProgress || h.rehashOldCapacity == 0 {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (h *Hashmap) rehashStep(maxToMove uint64) error {
 }
 
 // finishRehash releases resources for the old table once migration is complete.
-func (h *Hashmap) finishRehash() {
+func (h *DB) finishRehash() {
 	if !h.rehashInProgress {
 		return
 	}
@@ -182,7 +182,7 @@ func (h *Hashmap) finishRehash() {
 
 // resize performs a full, immediate resize for callers that explicitly invoke it
 // (e.g., tests). Normal writes use incremental rehash via startRehash+rehashStep.
-func (h *Hashmap) resize() {
+func (h *DB) resize() {
 	startTime := time.Now()
 	if !h.rehashInProgress {
 		if err := h.startRehash(); err != nil {

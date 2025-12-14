@@ -15,7 +15,7 @@ func NtoBytesHashmap(N uint64) int64 {
 	return int64(N) + int64(unsafe.Sizeof(i))*int64(N)
 }
 
-func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
+func (h *DB) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	bytes := NtoBytesHashmap(N)
 	if err := h.createDirectory(); err != nil {
 		return nil, nil, err
@@ -38,7 +38,7 @@ func (h *Hashmap) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	return mappedData, file, err
 }
 
-func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
+func (h *DB) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	file, err := os.OpenFile(filename, os.O_RDWR, 0)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open file %s: %w", filename, err)
@@ -65,7 +65,7 @@ func (h *Hashmap) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
 	return data, file, nil
 }
 
-func (h *Hashmap) createFile(filename string, bytes int64) error {
+func (h *DB) createFile(filename string, bytes int64) error {
 	f, err := os.Create(filename)
 	if err != nil {
 		return errors.Wrap(err, 1)

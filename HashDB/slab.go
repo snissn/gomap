@@ -24,7 +24,7 @@ func unpackLength(packed uint64) (uint64, uint8) {
 	return len, flags
 }
 
-func (h *Hashmap) writeSlab(buf []byte) error {
+func (h *DB) writeSlab(buf []byte) error {
 	// Check if active segment is full using in-memory size accounting
 	f := h.slabFiles[h.activeSegmentId]
 	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
@@ -49,7 +49,7 @@ func (h *Hashmap) writeSlab(buf []byte) error {
 	return err
 }
 
-func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
+func (h *DB) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	segmentID := uint16(uint64(offset) >> OffsetBits)
 	localOffset := int64(uint64(offset) & ((1 << OffsetBits) - 1))
 
@@ -66,7 +66,7 @@ func (h *Hashmap) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	return bytes, nil
 }
 
-func (h *Hashmap) addSlab(item Item) (Key, error) {
+func (h *DB) addSlab(item Item) (Key, error) {
 	key := item.Key
 	val := item.Value
 
@@ -113,7 +113,7 @@ func (h *Hashmap) addSlab(item Item) (Key, error) {
 	return Key{slabOffset: writeOffset, hash: hash(key)}, nil
 }
 
-func (h *Hashmap) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
+func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 	f := h.slabFiles[h.activeSegmentId]
 	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
 		h.activeSegmentId++
@@ -137,7 +137,7 @@ func (h *Hashmap) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 	return offset, err
 }
 
-func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
+func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 	slabOffsets := make([]Key, len(items))
 	if cap(h.slabData) < len(items)*2048 {
 		h.slabData = make([]byte, 0, len(items)*2048)
@@ -206,7 +206,7 @@ func (h *Hashmap) addManySlabs(items []Item) ([]Key, error) {
 	return slabOffsets, nil
 }
 
-func (h *Hashmap) addDeleteSlab(key []byte) error {
+func (h *DB) addDeleteSlab(key []byte) error {
 	keylen := len(key)
 	actualTotalLength := 16 + keylen
 
@@ -230,7 +230,7 @@ func (h *Hashmap) addDeleteSlab(key []byte) error {
 	return nil
 }
 
-func (h *Hashmap) openSlabSegments() error {
+func (h *DB) openSlabSegments() error {
 	h.slabFiles = make(map[uint16]*os.File)
 
 	files, err := os.ReadDir(h.Folder)
@@ -289,7 +289,7 @@ func (h *Hashmap) openSlabSegments() error {
 	return nil
 }
 
-func (h *Hashmap) unmarshalItemFromSlab(slabValues Key) (Item, error) {
+func (h *DB) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	// Optimistic read: pull a full page to cover header + typical key/value with one syscall.
 	const firstReadSize = int64(4096)
 	buf, err := h.ReadBytes(slabValues.slabOffset, firstReadSize)
@@ -338,7 +338,7 @@ func decodeuint64(input []byte) (uint64, int) {
 	return binary.LittleEndian.Uint64(input), 8
 }
 
-func (h *Hashmap) openMetadata() (mmap.MMap, *os.File, error) {
+func (h *DB) openMetadata() (mmap.MMap, *os.File, error) {
 	filename := h.Folder + "/metadata"
 	size := int64(4096)
 

@@ -11,7 +11,7 @@ import (
 
 // Recover rebuilds the hash index from the slab file (WAL).
 // It iterates through the entire slab-real file and replays operations.
-func (h *Hashmap) Recover() error {
+func (h *DB) Recover() error {
 	// If an incremental rehash was in progress, discard any old table state.
 	h.rehashInProgress = false
 	h.rehashOldMapFile = nil
@@ -90,7 +90,7 @@ func (h *Hashmap) Recover() error {
 	return nil
 }
 
-func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
+func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func (h *Hashmap) recoverFile(filename string, baseOffset SlabOffset) error {
 	return nil
 }
 
-func (h *Hashmap) replayDelete(key []byte) {
+func (h *DB) replayDelete(key []byte) {
 	// Internal delete for recovery (doesn't write to slab)
 	if h.Keys != nil && h.Capacity > 0 {
 		idx, _, found, _ := h.probe(*h.Keys, *h.Controls, h.Capacity, key)

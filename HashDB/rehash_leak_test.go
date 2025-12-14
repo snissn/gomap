@@ -23,7 +23,7 @@ func TestResizeLeak(t *testing.T) {
 	// That's too big for a quick test.
 	// Let's use internal initN if possible or just New and add MANY keys.
 	// Better to check if we can init with small size.
-	// gomap.go: func (h *Hashmap) initN(folder string, N uint64, slabSize int64)
+	// gomap.go: func (h *DB) initN(folder string, N uint64, slabSize int64)
 	// It is exported (capitalized)? No, wait.
 	// Let's check gomap.go again for initN visibility.
 
