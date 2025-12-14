@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  test-root:
-    name: go test (root)
+  test-hashdb:
+    name: go test (HashDB)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,9 +22,10 @@ jobs:
           go-version: "1.25.5"
           cache: true
           cache-dependency-path: |
-            go.sum
+            HashDB/go.sum
 
       - name: Test
+        working-directory: HashDB
         run: go test ./...
 
   test-treedb:
@@ -66,4 +67,3 @@ jobs:
       - name: Test
         working-directory: cmd/unified_bench
         run: go test ./...
-

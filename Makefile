@@ -1,38 +1,45 @@
 
 build:
-	go build -o bin/gomap-benchmark cmd/benchmarkmain/main.go
-	go build -o bin/gomap-redis-wrapper redisserver/main.go
+	mkdir -p bin
+	cd HashDB && go build -o ../bin/hashdb-benchmark ./cmd/benchmarkmain
+	cd HashDB && go build -o ../bin/hashdb-redis-wrapper ./redisserver
 
 benchmark-all: build
-	go run cmd/benchmarkmain/main.go --engines=gomap,badger  --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
+	cd HashDB && ../bin/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
 
 
 # Optional: fast local test
 benchmark-quick: build
-	./bin/gomap-benchmark \
+	cd HashDB && ../bin/hashdb-benchmark \
 		--engines=gomap,badger \
 		--keycounts=1000,10000 \
 		--csv=benchmark/results_quick.csv
 
 run-gomap:
-	go run redisserver/main.go gomap /tmp/gomap-benchmark
+	cd HashDB && go run ./redisserver/main.go hashdb /tmp/hashdb-benchmark
 
 run-badger:
-	go run redisserver/main.go badger /tmp/badger-benchmark
+	cd HashDB && go run ./redisserver/main.go badger /tmp/badger-benchmark
 
 clean:
 	rm -rf bin/
-	rm -rf /tmp/gomap-benchmark /tmp/badger-benchmark
+	rm -rf /tmp/hashdb-benchmark /tmp/badger-benchmark
 
 fmt:
-	go fmt ./...
+	cd HashDB && go fmt ./...
+	cd TreeDB && go fmt ./...
+	cd cmd/unified_bench && go fmt ./...
 
 test:
-	go test ./...
+	cd HashDB && go test ./...
+	cd TreeDB && go test ./...
+	cd cmd/unified_bench && go test ./...
 
 mod-tidy:
-	go mod tidy
+	cd HashDB && go mod tidy
+	cd TreeDB && go mod tidy
+	cd cmd/unified_bench && go mod tidy
 
 install-deps:
-	go get github.com/tidwall/redcon
-	go get github.com/dgraph-io/badger/v4
+	cd HashDB && go get github.com/tidwall/redcon
+	cd HashDB && go get github.com/dgraph-io/badger/v4

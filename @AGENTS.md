@@ -2,10 +2,10 @@
 
 ## Goals
 
-- [x] Make `go test ./...` pass in all modules (`./`, `./TreeDB`, `./cmd/unified_bench`).
+- [x] Make `go test ./...` pass in all modules (`HashDB/`, `TreeDB/`, `cmd/unified_bench/`).
 - [x] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
 - [x] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
-- [ ] Move `gomap` → `HashDB/` module directory.
+- [x] Move `gomap` → `HashDB/` module directory.
 - [x] Rename `btree` → `BTreeOnHashDB`.
 - [ ] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
@@ -33,10 +33,14 @@
 - 2025-12-14: HashDB rename (in progress)
   - Renamed root module/package `gomap` → `HashDB` (`github.com/snissn/gomap/HashDB`, package `hashdb`)
   - Updated internal imports and `cmd/unified_bench` to build against the new module path
-  - `go test ./...` (root): PASS
+  - `go test ./...` (`HashDB/`): PASS
 - 2025-12-14: BTreeOnHashDB rename
   - Renamed `btree/` → `BTreeOnHashDB/` (package `btreeonhashdb`)
   - Updated `cmd/unified_bench` import to `github.com/snissn/gomap/HashDB/BTreeOnHashDB`
+- 2025-12-14: HashDB directory move
+  - Moved the HashDB module into `HashDB/` (including `benchmark/`, `redisserver/`, `stress/`, and cmd tools)
+  - Updated CI workflow + `cmd/unified_bench` replace paths for the new layout
+  - `go test ./...` passes in `HashDB/`, `TreeDB/`, and `cmd/unified_bench/`
 
 ## Notes / Conventions
 

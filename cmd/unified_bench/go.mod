@@ -19,6 +19,6 @@ require (
 )
 
 replace (
-	github.com/snissn/gomap/HashDB => ../../
+	github.com/snissn/gomap/HashDB => ../../HashDB
 	github.com/snissn/gomap/TreeDB => ../../TreeDB
 )
