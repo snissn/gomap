@@ -154,6 +154,8 @@
 - 2025-12-14: CI (optional)
   - Added `make test-race` and a manual `Race (manual)` GitHub workflow.
   - Added Windows HashDB `go vet` + `go test` workflow (`HashDB: vet+test (Windows)`).
+- 2025-12-14: Docs (handoff)
+  - Added `CONTRIBUTING.md` and `CHANGELOG.md`; linked from `README.md` and `docs/`.
 
 ## Notes / Conventions
 
