@@ -11,7 +11,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/syndtr/goleveldb v1.0.0
 	github.com/tidwall/redcon v1.6.2
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.39.0
 	gonum.org/v1/plot v0.15.2
 )
 
