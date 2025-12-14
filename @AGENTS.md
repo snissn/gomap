@@ -160,6 +160,12 @@
   - Updated `TODO.md` with CI/-race status notes and a HashDB follow-up status note.
 - 2025-12-14: Tooling
   - Added an optional `gofmt` pre-commit hook under `.githooks/` and a `make hooks` installer target.
+- 2025-12-14: unified_bench
+  - Added Badger as a benchmark engine (`-dbs badger`) and updated the docs.
+  - Added keycount sweeps (`-keycounts` / `-keyscale`) and markdown output (`-format markdown`).
+  - Added a `-suite readme` mode that produces a README-friendly benchmark summary (includes explicit TreeDBBackend exclusions + baseline).
+- 2025-12-14: README benchmarking automation
+  - Added `make bench-readme` and a script to replace the section between `<!-- BENCHMARK_START -->` and `<!-- BENCHMARK_END -->` in `README.md`.
 
 ## Notes / Conventions
 
