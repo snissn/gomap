@@ -1,4 +1,4 @@
-module github.com/snissn/gomap-gemini/TreeDB
+module github.com/snissn/gomap/GeminiTreeDB
 
 go 1.25.5
 
