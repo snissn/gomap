@@ -55,7 +55,7 @@ HashDB/
 ├── cmd/
 │   └── benchmarkmain/       # Entry point for benchmark suite
 ├── redisserver/
-│   ├── gomapredis/          # Redis server wrapper for HashDB
+│   ├── hashdbredis/         # Redis server wrapper for HashDB
 │   └── badgerredis/         # Redis server wrapper for Badger
 ├── benchmark/
 │   ├── config.go            # CLI flag parsing
@@ -63,6 +63,11 @@ HashDB/
 │   ├── report.go            # CSV + terminal output
 │   └── plot.go              # Native Go plot support (optional)
 ├── benchmark/benchmark_performance_combined.png
-├── go.mod
 └── ...
 ```
+
+## ✅ Testing
+
+- `go test ./...` (repo root)
+- `go test ./...` (`TreeDB/`)
+- `go test ./...` (`cmd/unified_bench/`)
