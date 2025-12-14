@@ -166,6 +166,8 @@
   - Added a `-suite readme` mode that produces a README-friendly benchmark summary (includes explicit TreeDBBackend exclusions + baseline).
 - 2025-12-14: README benchmarking automation
   - Added `make bench-readme` and a script to replace the section between `<!-- BENCHMARK_START -->` and `<!-- BENCHMARK_END -->` in `README.md`.
+- 2025-12-14: Benchmark metadata
+  - `unified_bench -suite readme` now includes generation timestamp + environment summary (OS/arch, Go version, CPUs, RAM, CPU model).
 
 ## Notes / Conventions
 
