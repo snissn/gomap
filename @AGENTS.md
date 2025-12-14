@@ -1,0 +1,22 @@
+# Repo Agent Log (Go Cleanup)
+
+## Goals
+
+- [ ] Make `go test ./...` pass in all modules (`./`, `./TreeDB`, `./cmd/unified_bench`).
+- [ ] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
+- [ ] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
+- [ ] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
+- [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
+
+## Progress Log
+
+- 2025-12-14: Baseline tests
+  - `go test ./...` (root): PASS
+  - `go test ./...` (`GeminiTreeDB`): FAIL (memtable test compile error)
+  - `go test ./...` (`cmd/unified_bench`): FAIL (expects `../../TreeDB` module path; directory missing)
+
+## Notes / Conventions
+
+- Prefer small, reviewable commits; run relevant tests before/after each.
+- Keep renames “modest”: mostly package/module names and imports; avoid large API churn unless tests demand it.
+
