@@ -38,6 +38,10 @@ func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key,
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
+
+func (c *CachedDB) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
+	return c.cache.getWithHash(key, keyHash)
+}
 func (c *CachedDB) Close() error {
 	var firstErr error
 	if c.cache != nil {
@@ -102,6 +106,10 @@ type dbKVAdapter struct {
 func (m *dbKVAdapter) Get(key []byte) ([]byte, error) { return m.db.Get(key) }
 func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Put(key, value) }
 func (m *dbKVAdapter) Delete(key []byte) error        { return m.db.Delete(key) }
+
+func (m *dbKVAdapter) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
+	return m.db.getWithHash(key, keyHash)
+}
 
 // PutMany allows CacheKV to batch writes down to the underlying DB using PutMany.
 func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {

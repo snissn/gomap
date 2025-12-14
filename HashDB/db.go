@@ -125,9 +125,13 @@ func OpenSingle(dir string) (*DB, error) {
 // Get retrieves the value for a given key.
 // It returns nil, nil if the key is not found.
 func (h *DB) Get(key []byte) ([]byte, error) {
+	return h.getWithHash(key, hash(key))
+}
+
+func (h *DB) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
 	// Probe current (new) table first.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		_, item, found, err := h.probe(h.keys, h.controls, h.capacity, key)
+		_, item, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +143,7 @@ func (h *DB) Get(key []byte) ([]byte, error) {
 	// If an incremental rehash is in progress, also probe the old table
 	// for keys that haven't been migrated yet.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		_, item, found, err := h.probe(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key)
+		_, item, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return nil, err
 		}
@@ -154,10 +158,11 @@ func (h *DB) Get(key []byte) ([]byte, error) {
 // Delete removes a key from the map.
 func (h *DB) Delete(key []byte) error {
 	foundNew := false
+	keyHash := hash(key)
 
 	// Delete in the current (new) table.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probe(h.keys, h.controls, h.capacity, key)
+		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -176,7 +181,7 @@ func (h *DB) Delete(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probe(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key)
+		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return err
 		}

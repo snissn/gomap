@@ -12,6 +12,10 @@ type KVStore interface {
 	Delete(key []byte) error
 }
 
+type hashGetter interface {
+	getWithHash(key []byte, keyHash Hash) ([]byte, error)
+}
+
 // cacheEntry stores a pending write or delete.
 type cacheEntry struct {
 	value []byte
@@ -80,6 +84,31 @@ func (c *CacheKV) Get(key []byte) ([]byte, error) {
 		return e.value, nil
 	}
 	c.mu.RUnlock()
+	return c.backend.Get(key)
+}
+
+func (c *CacheKV) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
+	k := string(key)
+	c.mu.RLock()
+	if e, ok := c.pending[k]; ok {
+		c.mu.RUnlock()
+		if e.del {
+			return nil, nil
+		}
+		return e.value, nil
+	}
+	if e, ok := c.flushing[k]; ok {
+		c.mu.RUnlock()
+		if e.del {
+			return nil, nil
+		}
+		return e.value, nil
+	}
+	c.mu.RUnlock()
+
+	if hg, ok := c.backend.(hashGetter); ok {
+		return hg.getWithHash(key, keyHash)
+	}
 	return c.backend.Get(key)
 }
 

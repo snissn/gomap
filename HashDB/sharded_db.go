@@ -268,9 +268,11 @@ func (h *HashDB) GetMany(keys [][]byte) ([][]byte, []error) {
 	}
 
 	shardedIndexes := make([][]int, numShards)
+	hashes := make([]Hash, len(keys))
 	for i, key := range keys {
-		hash := hash(key)
-		mapIndex := hash % Hash(numShards)
+		keyHash := hash(key)
+		hashes[i] = keyHash
+		mapIndex := keyHash % Hash(numShards)
 		shardedIndexes[mapIndex] = append(shardedIndexes[mapIndex], i)
 	}
 
@@ -290,7 +292,7 @@ func (h *HashDB) GetMany(keys [][]byte) ([][]byte, []error) {
 
 			m := h.shards[shard]
 			for _, keyIndex := range idxs {
-				val, err := m.Get(keys[keyIndex])
+				val, err := m.getWithHash(keys[keyIndex], hashes[keyIndex])
 				if err != nil {
 					errs[keyIndex] = err
 				} else {

@@ -102,10 +102,9 @@ func loadGroup(controls []byte, i uint64, capacity uint64) uint64 {
 	return val
 }
 
-// probe searches for a key in the provided keys slice.
+// probeWithHash searches for a key in the provided keys slice using a precomputed hash.
 // It returns the index, the item (if found), whether it was found, and any error.
-func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (uint64, *Item, bool, error) {
-	myhash := hash(key)
+func (h *DB) probeWithHash(keys []Key, controls []byte, capacity uint64, key []byte, myhash Hash) (uint64, *Item, bool, error) {
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
@@ -164,6 +163,12 @@ func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (ui
 		probes += groupSize
 	}
 	return 0, nil, false, nil
+}
+
+// probe searches for a key in the provided keys slice.
+// It returns the index, the item (if found), whether it was found, and any error.
+func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (uint64, *Item, bool, error) {
+	return h.probeWithHash(keys, controls, capacity, key, hash(key))
 }
 
 // probeForAdd searches for a key or an insertion slot.
