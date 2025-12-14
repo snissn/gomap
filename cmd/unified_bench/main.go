@@ -57,77 +57,68 @@ type DBInterface interface {
 
 // --- Wrappers ---
 
-// 1. Gomap Wrapper
-type GomapBatch struct {
+// 1. HashDB Wrapper
+type HashDBBatch struct {
 	bw *hashdb.BatchWriter
 }
 
-func (b *GomapBatch) Set(key, value []byte) error {
+func (b *HashDBBatch) Set(key, value []byte) error {
 	return b.bw.Add(key, value)
 }
-func (b *GomapBatch) Delete(key []byte) error {
-	return errors.New("Gomap batch delete not supported")
+func (b *HashDBBatch) Delete(key []byte) error {
+	return errors.New("HashDB batch delete not supported")
 }
-func (b *GomapBatch) Commit() error {
+func (b *HashDBBatch) Commit() error {
 	return b.bw.Flush()
 }
-func (b *GomapBatch) Close() error {
+func (b *HashDBBatch) Close() error {
 	// BatchWriter doesn't need explicit close, but we ensure flush in Commit
 	return nil
 }
 
-type GomapWrapper struct {
-	m *hashdb.HashmapDistributed
+type HashDBWrapper struct {
+	m *hashdb.ShardedDB
 }
 
-func NewGomap(dir string) (*GomapWrapper, error) {
-	m := &hashdb.HashmapDistributed{}
+func NewHashDB(dir string) (*HashDBWrapper, error) {
+	m := &hashdb.ShardedDB{}
 	if err := m.New(dir); err != nil {
 		return nil, err
 	}
-	return &GomapWrapper{m: m}, nil
+	return &HashDBWrapper{m: m}, nil
 }
 
-func (g *GomapWrapper) Name() string                 { return "Gomap" }
-func (g *GomapWrapper) Set(k, v []byte) error        { return g.m.Add(k, v) }
-func (g *GomapWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
-func (g *GomapWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
-func (g *GomapWrapper) Close() error                 { return g.m.Flush() }
-func (g *GomapWrapper) SupportsScan() bool           { return false }
-func (g *GomapWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return nil, errors.New("Gomap does not support scan")
+func (g *HashDBWrapper) Name() string                 { return "HashDB" }
+func (g *HashDBWrapper) Set(k, v []byte) error        { return g.m.Put(k, v) }
+func (g *HashDBWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
+func (g *HashDBWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
+func (g *HashDBWrapper) Close() error                 { return g.m.Close() }
+func (g *HashDBWrapper) SupportsScan() bool           { return false }
+func (g *HashDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return nil, errors.New("HashDB does not support scan")
 }
-func (g *GomapWrapper) SupportsBatch() bool { return true }
-func (g *GomapWrapper) NewBatch() (BatchInterface, error) {
+func (g *HashDBWrapper) SupportsBatch() bool { return true }
+func (g *HashDBWrapper) NewBatch() (BatchInterface, error) {
 	// Use global batchSize flag if possible, or default
 	bs := 1000
 	if batchSize != nil {
 		bs = *batchSize
 	}
-	return &GomapBatch{bw: hashdb.NewBatchWriter(g.m, bs)}, nil
+	return &HashDBBatch{bw: hashdb.NewBatchWriter(g.m, bs)}, nil
 }
 
 // 2. BTree Wrapper
-type GomapKVAdapter struct {
-	m *hashdb.HashmapDistributed
-}
-
-func (a *GomapKVAdapter) Get(k []byte) ([]byte, error) { return a.m.Get(k) }
-func (a *GomapKVAdapter) Put(k, v []byte) error        { return a.m.Add(k, v) }
-func (a *GomapKVAdapter) Delete(k []byte) error        { return a.m.Delete(k) }
-
 type BTreeWrapper struct {
 	t *btreeonhashdb.Tree
-	m *hashdb.HashmapDistributed
+	m *hashdb.ShardedDB
 }
 
 func NewBTree(dir string) (*BTreeWrapper, error) {
-	m := &hashdb.HashmapDistributed{}
+	m := &hashdb.ShardedDB{}
 	if err := m.New(dir); err != nil {
 		return nil, err
 	}
-	adapter := &GomapKVAdapter{m: m}
-	t, err := btreeonhashdb.OpenTree(adapter, "bench")
+	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench")
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +129,7 @@ func (b *BTreeWrapper) Name() string                 { return "BTree" }
 func (b *BTreeWrapper) Set(k, v []byte) error        { return b.t.Put(k, v) }
 func (b *BTreeWrapper) Get(k []byte) ([]byte, error) { return b.t.Get(k) }
 func (b *BTreeWrapper) Delete(k []byte) error        { return b.t.Delete(k) }
-func (b *BTreeWrapper) Close() error                 { return b.m.Flush() }
+func (b *BTreeWrapper) Close() error                 { return b.m.Close() }
 func (b *BTreeWrapper) SupportsScan() bool           { return false }
 func (b *BTreeWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	return nil, errors.New("BTree does not support scan via public API")
@@ -305,7 +296,7 @@ var (
 	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,treedbcached,leveldb)")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbcached,leveldb); 'gomap' is accepted as an alias for 'hashdb'")
 	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
@@ -324,7 +315,8 @@ func main() {
 
 	// Define Factory Map
 	factories := map[string]func(string) (DBInterface, error){
-		"gomap":        func(d string) (DBInterface, error) { return NewGomap(d) },
+		"hashdb":       func(d string) (DBInterface, error) { return NewHashDB(d) },
+		"gomap":        func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
 		"btree":        func(d string) (DBInterface, error) { return NewBTree(d) },
 		"treedb":       func(d string) (DBInterface, error) { return NewTreeDB(d) },
 		"treedbcached": func(d string) (DBInterface, error) { return NewTreeDBCached(d) },
@@ -334,7 +326,7 @@ func main() {
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"gomap", "btree", "treedb", "treedbcached", "leveldb"}
+	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbcached", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}
