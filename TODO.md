@@ -34,7 +34,6 @@ Make backend-vs-cached a user option, not a separate concrete type, while keepin
 ### Proposed Public Shape
 - `treedb.Open(opts)` returns a single public type: `*treedb.DB`.
 - `opts` includes a mode flag:
-  - `opts.EnableCaching bool` (existing field in `TreeDB/db.Options`) OR
   - `opts.Mode treedb.Mode` where `ModeCached` / `ModeBackend`.
 
 Keep explicit helpers for power users:
@@ -111,10 +110,8 @@ Recovery pipeline (for both modes):
 1. Acquire exclusive lock.
 2. Recover backend meta/pages/slabs (existing `db.recover()`).
 3. Discover cache WAL segments.
-4. Replay WAL records into the backend in a bounded, idempotent way.
-5. Persist a “WAL checkpoint” to backend meta.
-6. Retire/delete WAL segments that are fully checkpointed.
-7. Start normal operation (cached or backend mode).
+4. Replay WAL records into the backend in a bounded, idempotent way and delete the segments on success.
+5. Start normal operation (cached or backend mode).
 
 ### WAL Checkpointing (Avoid Replaying Forever)
 Replaying WAL on every open is logically correct, but can cause disk growth and repeated work.

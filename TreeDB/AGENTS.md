@@ -274,8 +274,8 @@
 - [x] **Read Path:** `Get` checks Memtable(s) then Disk. `Iterator` uses `MergingIterator`.
 
 ### 12.4 Integration & Config
-- [x] Update `treedb.Options` to include `EnableCaching` and `FlushThreshold`.
-- [x] Update `Open` to initialize `CachingDB` wrapper if enabled.
+- [x] Update `treedb.Options` to include `Mode` and `FlushThreshold`.
+- [x] Update `Open` to select cached vs backend mode.
 - [x] **Spec Update:** Update `specs/spec.md` with Section 7 describing this architecture.
 - **Verification:** Run `dbbench` to confirm performance improvement (~3.4k -> ~40k+ ops/s expected for load).
 
@@ -351,4 +351,3 @@
 ### 14.3 Verification
 - [ ] **Benchmark:** Compare Read throughput before/after.
 - [ ] **Safety Test:** Corrupt a page in RAM (via unsafe access) *after* verification and ensure the system (correctly) fails to detect it if cached, but detects it if cache is cleared. (Validates the cache is working).
-
