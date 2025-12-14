@@ -7,10 +7,10 @@ BIN_DIR := bin
 help:
 	@echo "Common targets:"
 	@echo "  make fmt            - gofmt all tracked .go files"
-	@echo "  make test           - run tests in all modules"
-	@echo "  make vet            - go vet in all modules"
-	@echo "  make tidy           - go mod tidy in all modules"
-	@echo "  make deps           - download deps in all modules"
+	@echo "  make test           - run go test in root + key dirs"
+	@echo "  make vet            - run go vet in root + key dirs"
+	@echo "  make tidy           - go mod tidy (repo root)"
+	@echo "  make deps           - download deps (repo root)"
 	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
 	@echo "  make benchmark-all  - run HashDB redis-benchmark suite"
 	@echo "  make unified-bench  - build unified bench binary"
@@ -20,8 +20,11 @@ help:
 fmt:
 	gofmt -w $$(git ls-files '*.go')
 
-.PHONY: test test-hashdb test-treedb test-unified-bench
-test: test-hashdb test-treedb test-unified-bench
+.PHONY: test test-root test-hashdb test-treedb test-unified-bench
+test: test-root test-treedb test-unified-bench
+
+test-root:
+	go test ./...
 
 test-hashdb:
 	cd $(HASHDB_DIR) && go test ./...
@@ -32,8 +35,11 @@ test-treedb:
 test-unified-bench:
 	cd $(UNIFIED_BENCH_DIR) && go test ./...
 
-.PHONY: vet vet-hashdb vet-treedb vet-unified-bench
-vet: vet-hashdb vet-treedb vet-unified-bench
+.PHONY: vet vet-root vet-hashdb vet-treedb vet-unified-bench
+vet: vet-root vet-treedb vet-unified-bench
+
+vet-root:
+	go vet ./...
 
 vet-hashdb:
 	cd $(HASHDB_DIR) && go vet ./...
@@ -44,29 +50,13 @@ vet-treedb:
 vet-unified-bench:
 	cd $(UNIFIED_BENCH_DIR) && go vet ./...
 
-.PHONY: tidy tidy-hashdb tidy-treedb tidy-unified-bench
-tidy: tidy-hashdb tidy-treedb tidy-unified-bench
+.PHONY: tidy
+tidy:
+	go mod tidy
 
-tidy-hashdb:
-	cd $(HASHDB_DIR) && go mod tidy
-
-tidy-treedb:
-	cd $(TREEDB_DIR) && go mod tidy
-
-tidy-unified-bench:
-	cd $(UNIFIED_BENCH_DIR) && go mod tidy
-
-.PHONY: deps deps-hashdb deps-treedb deps-unified-bench
-deps: deps-hashdb deps-treedb deps-unified-bench
-
-deps-hashdb:
-	cd $(HASHDB_DIR) && go mod download
-
-deps-treedb:
-	cd $(TREEDB_DIR) && go mod download
-
-deps-unified-bench:
-	cd $(UNIFIED_BENCH_DIR) && go mod download
+.PHONY: deps
+deps:
+	go mod download
 
 .PHONY: build build-hashdb build-treedb unified-bench
 build: build-hashdb build-treedb unified-bench
