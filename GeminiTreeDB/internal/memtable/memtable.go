@@ -2,7 +2,9 @@ package memtable
 
 import (
 	"bytes"
+	"sort"
 	"sync"
+	"unsafe"
 
 	"github.com/google/btree"
 	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator" // Import iterator interface
@@ -20,6 +22,7 @@ func (i *Item) Less(than btree.Item) bool {
 
 type Memtable struct {
 	tree *btree.BTree
+	idx  map[string]*Item
 	size int64
 	mu   sync.RWMutex
 }
@@ -27,7 +30,15 @@ type Memtable struct {
 func New() *Memtable {
 	return &Memtable{
 		tree: btree.New(32),
+		idx:  make(map[string]*Item),
 	}
+}
+
+func bytesToStringNoCopy(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (m *Memtable) Set(key, value []byte) {
@@ -45,6 +56,7 @@ func (m *Memtable) Set(key, value []byte) {
 		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
 	}
 	m.size += added
+	m.idx[bytesToStringNoCopy(k)] = item
 }
 
 func (m *Memtable) Delete(key []byte) {
@@ -61,18 +73,18 @@ func (m *Memtable) Delete(key []byte) {
 		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
 	}
 	m.size += added
+	m.idx[bytesToStringNoCopy(k)] = item
 }
 
 func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	item := m.tree.Get(&Item{Key: key})
+	item := m.idx[bytesToStringNoCopy(key)]
 	if item == nil {
 		return nil, false, false
 	}
-	i := item.(*Item)
-	return i.Value, i.IsDeleted, true
+	return item.Value, item.IsDeleted, true
 }
 
 func (m *Memtable) Size() int64 {
@@ -89,7 +101,6 @@ func (m *Memtable) Len() int {
 
 // Iterator iterates over a snapshot of the memtable.
 type Iterator struct {
-	tree  *btree.BTree
 	items []*Item
 	idx   int
 	valid bool
@@ -100,22 +111,30 @@ func (m *Memtable) NewIterator() iterator.UnsafeIterator {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	// COW Clone for iteration safety without locking
-	return &Iterator{tree: m.tree.Clone()}
+	items := make([]*Item, 0, m.tree.Len())
+	m.tree.Ascend(func(i btree.Item) bool {
+		items = append(items, i.(*Item))
+		return true
+	})
+	return &Iterator{items: items}
 }
 
 // Seek positions the iterator to the first key >= target.
 func (it *Iterator) Seek(key []byte) {
 	it.valid = false
-	it.items = it.items[:0]
-	it.idx = 0
-
-	it.tree.AscendGreaterOrEqual(&Item{Key: key}, func(i btree.Item) bool {
-		it.items = append(it.items, i.(*Item))
-		return true
+	if len(it.items) == 0 {
+		it.idx = 0
+		return
+	}
+	if key == nil {
+		it.idx = 0
+		it.valid = true
+		return
+	}
+	it.idx = sort.Search(len(it.items), func(i int) bool {
+		return bytes.Compare(it.items[i].Key, key) >= 0
 	})
-
-	it.valid = len(it.items) > 0
+	it.valid = it.idx >= 0 && it.idx < len(it.items)
 }
 
 // Next advances the iterator.
@@ -174,7 +193,6 @@ func (it *Iterator) Error() error {
 
 // Close closes the iterator.
 func (it *Iterator) Close() error {
-	it.tree = nil
 	it.items = nil
 	return nil
 }

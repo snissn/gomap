@@ -367,7 +367,7 @@ var (
 	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
 	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write)")
 	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
-	progress  = flag.Bool("progress", true, "Live-update a placeholder results table on stderr while running; final table prints once to stdout")
+	progress  = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 )
 
 type DBInstance struct {
@@ -574,7 +574,7 @@ func main() {
 	var live *liveTable
 	if *progress {
 		live = newLiveTable(os.Stderr, instances, finalTestOrder, displayNames)
-		_ = live.Render(results)
+		_ = live.Render(results) // placeholder table
 	}
 
 	for _, testName := range finalTestOrder {
@@ -585,10 +585,9 @@ func main() {
 			// Reset? No, we persist state.
 			res := fn(inst.Wrapper)
 			results[testName][inst.Wrapper.Name()] = res
-		}
-
-		if *progress {
-			_ = live.Render(results)
+			if live != nil {
+				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
+			}
 		}
 	}
 
@@ -697,6 +696,9 @@ type liveTable struct {
 	displayNames  map[string]string
 	printedLines  int
 	enabledVT100  bool
+	colWidths     map[string]int
+	dbColStart    map[string]int
+	testRowIndex  map[string]int
 }
 
 func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *liveTable {
@@ -717,7 +719,7 @@ func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string,
 }
 
 func (t *liveTable) Render(results map[string]map[string]float64) error {
-	table := renderResultsTableString(t.instances, t.finalTestOrder, t.displayNames, results)
+	table, colWidths, dbColStart, testRowIndex := renderResultsTableStringWithLayout(t.instances, t.finalTestOrder, t.displayNames, results)
 	lines := 2 + len(t.finalTestOrder) // header + separator + rows
 
 	if t.printedLines == 0 {
@@ -726,21 +728,14 @@ func (t *liveTable) Render(results map[string]map[string]float64) error {
 			return err
 		}
 		t.printedLines = lines
+		t.colWidths = colWidths
+		t.dbColStart = dbColStart
+		t.testRowIndex = testRowIndex
 		return nil
 	}
 
-	if t.enabledVT100 {
-		// Move cursor back up over the previously printed table, clear to end, then reprint.
-		if _, err := fmt.Fprintf(t.w, "\r\x1b[%dA\x1b[J", t.printedLines); err != nil {
-			return err
-		}
-		_, err := fmt.Fprint(t.w, table)
-		return err
-	}
-
-	// Fallback: just print the table again (no in-place update).
-	_, err := fmt.Fprint(t.w, "\n"+table)
-	return err
+	// Once printed, we only do cell updates; re-render is a no-op.
+	return nil
 }
 
 func (t *liveTable) Clear() error {
@@ -755,14 +750,56 @@ func (t *liveTable) Clear() error {
 	return err
 }
 
-func renderResultsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) string {
+func (t *liveTable) UpdateCell(testName, dbName string, val float64) error {
+	if t.printedLines == 0 {
+		return nil
+	}
+	rowIdx, ok := t.testRowIndex[testName]
+	if !ok {
+		return nil
+	}
+	colStart, ok := t.dbColStart[dbName]
+	if !ok {
+		return nil
+	}
+	colWidth, ok := t.colWidths[dbName]
+	if !ok {
+		return nil
+	}
+
+	cell := fmt.Sprintf("%*s", colWidth, formatFloat(val))
+
+	if !t.enabledVT100 {
+		// Fallback: emit a simple progress line rather than trying to "page" in non-TTY output.
+		_, err := fmt.Fprintf(t.w, "%s / %s = %s\n", t.displayNames[testName], dbName, strings.TrimSpace(cell))
+		return err
+	}
+
+	// Table layout:
+	// line 1: header
+	// line 2: separator
+	// line 3..: rows (in finalTestOrder order)
+	targetLineFromTop := 3 + rowIdx
+
+	// Save cursor, jump to target cell, write, restore cursor.
+	// Cursor is currently below the table after initial Render().
+	_, err := fmt.Fprintf(t.w, "\x1b7\r\x1b[%dA\x1b[%dB\x1b[%dC%s\x1b8",
+		t.printedLines,          // up to top
+		targetLineFromTop-1,     // down to row
+		colStart-1,              // right to col
+		cell,
+	)
+	return err
+}
+
+func renderResultsTableStringWithLayout(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) (table string, colWidths map[string]int, dbColStart map[string]int, testRowIndex map[string]int) {
 	// Dynamically determine column widths based on content
 	colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-	colWidths := make(map[string]int)
+	colWidths = make(map[string]int)
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName)
 	}
@@ -796,6 +833,20 @@ func renderResultsTableString(instances []*DBInstance, finalTestOrder []string, 
 
 	var sb strings.Builder
 
+	dbColStart = make(map[string]int, len(instances))
+	// First DB column starts after the Test column plus two spaces.
+	pos := colWidths["Test"] + 3 // 1-based index
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		dbColStart[dbName] = pos
+		pos += colWidths[dbName] + 2
+	}
+
+	testRowIndex = make(map[string]int, len(finalTestOrder))
+	for i, tn := range finalTestOrder {
+		testRowIndex[tn] = i
+	}
+
 	// Header
 	headerRow := fmt.Sprintf("%*s", colWidths["Test"], "Test")
 	for _, inst := range instances {
@@ -826,7 +877,7 @@ func renderResultsTableString(instances []*DBInstance, finalTestOrder []string, 
 		sb.WriteString("\n")
 	}
 
-	return sb.String()
+	return sb.String(), colWidths, dbColStart, testRowIndex
 }
 
 // formatFloat formats a float with commas (e.g. 1,234,567)

@@ -18,8 +18,15 @@ const (
 var ErrCorrupt = errors.New("wal: corrupt record")
 
 type Writer struct {
-	f  *os.File
-	bw *bufio.Writer
+	f       *os.File
+	bw      *bufio.Writer
+	scratch []byte
+}
+
+type Record struct {
+	Op    byte
+	Key   []byte
+	Value []byte
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -28,8 +35,9 @@ func NewWriter(path string) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:  f,
-		bw: bufio.NewWriterSize(f, 1<<20), // 1MB buffer to amortize syscalls
+		f:       f,
+		bw:      bufio.NewWriterSize(f, 1<<20), // 1MB buffer to amortize syscalls
+		scratch: make([]byte, 0, 1<<20),
 	}, nil
 }
 
@@ -63,6 +71,44 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 	}
 
 	return nil
+}
+
+func (w *Writer) AppendBatch(records []Record) error {
+	total := 0
+	for _, r := range records {
+		total += 11 + len(r.Key) + len(r.Value)
+	}
+	if total == 0 {
+		return nil
+	}
+
+	if cap(w.scratch) < total {
+		w.scratch = make([]byte, total)
+	} else {
+		w.scratch = w.scratch[:total]
+	}
+	buf := w.scratch
+	off := 0
+	for _, r := range records {
+		kLen := len(r.Key)
+		vLen := len(r.Value)
+		recSize := 11 + kLen + vLen
+
+		body := buf[off+4 : off+recSize] // [Op|KeyLen|ValLen|Key|Value]
+		body[0] = r.Op
+		binary.LittleEndian.PutUint16(body[1:3], uint16(kLen))
+		binary.LittleEndian.PutUint32(body[3:7], uint32(vLen))
+		copy(body[7:], r.Key)
+		copy(body[7+kLen:], r.Value)
+
+		c := crc.Checksum(body)
+		binary.LittleEndian.PutUint32(buf[off:off+4], c)
+
+		off += recSize
+	}
+
+	_, err := w.bw.Write(buf)
+	return err
 }
 
 func (w *Writer) Sync() error {

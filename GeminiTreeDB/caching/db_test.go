@@ -3,6 +3,7 @@ package caching
 import (
 	"fmt"
 	"sort"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap-gemini/TreeDB/batch"
@@ -11,6 +12,7 @@ import (
 
 // MockBackend implements BackendDB
 type MockBackend struct {
+	mu   sync.RWMutex
 	data map[string][]byte
 }
 
@@ -19,6 +21,8 @@ func NewMockBackend() *MockBackend {
 }
 
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	val, ok := m.data[string(key)]
 	if !ok {
 		return nil, nil
@@ -27,22 +31,26 @@ func (m *MockBackend) Get(key []byte) ([]byte, error) {
 }
 
 func (m *MockBackend) Set(key, val []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.data[string(key)] = val
 }
 
 func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	m.mu.RLock()
 	keys := make([]string, 0, len(m.data))
 	for k := range m.data {
 		keys = append(keys, k)
 	}
+	m.mu.RUnlock()
 	sort.Strings(keys)
-	return &MockIterator{data: m.data, keys: keys, idx: -1}, nil
+	return &MockIterator{backend: m, keys: keys, idx: -1}, nil
 }
 
 type MockIterator struct {
-	data map[string][]byte
-	keys []string
-	idx  int
+	backend *MockBackend
+	keys    []string
+	idx     int
 }
 
 func (it *MockIterator) Valid() bool {
@@ -67,7 +75,9 @@ func (it *MockIterator) UnsafeKey() []byte {
 }
 
 func (it *MockIterator) UnsafeValue() []byte {
-	return it.data[it.keys[it.idx]]
+	it.backend.mu.RLock()
+	defer it.backend.mu.RUnlock()
+	return it.backend.data[it.keys[it.idx]]
 }
 
 func (it *MockIterator) IsDeleted() bool { return false }
@@ -98,10 +108,14 @@ func (b *MockBatch) Set(key, value []byte) error {
 	return nil
 }
 func (b *MockBatch) Delete(key []byte) error {
+	b.mb.mu.Lock()
 	delete(b.mb.data, string(key))
+	b.mb.mu.Unlock()
 	return nil
 }
 func (b *MockBatch) SetOps(ops map[string]batch.Entry) error {
+	b.mb.mu.Lock()
+	defer b.mb.mu.Unlock()
 	for k, op := range ops {
 		if op.Type == batch.OpDelete {
 			delete(b.mb.data, k)
