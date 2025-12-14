@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -39,6 +40,7 @@ type DB struct {
 	allocator   *freelist.Allocator
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
+	lock        *lockfile.Lock
 
 	keepRecent      uint64
 	inlineThreshold int
@@ -107,6 +109,9 @@ func (s *Snapshot) Close() error {
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	if opts.Dir == "" {
+		return nil, errors.New("db dir required")
+	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = 256 * 1024 * 1024
 	}
@@ -114,15 +119,22 @@ func Open(opts Options) (*DB, error) {
 		opts.KeepRecent = 10000
 	}
 
+	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
+	if err != nil {
+		return nil, err
+	}
+
 	idxPath := filepath.Join(opts.Dir, "index.db")
 	p, err := pager.Open(idxPath, opts.ChunkSize)
 	if err != nil {
+		_ = lock.Close()
 		return nil, err
 	}
 
 	sm, err := slab.NewSlabManager(opts.Dir)
 	if err != nil {
 		p.Close()
+		_ = lock.Close()
 		return nil, err
 	}
 
@@ -141,6 +153,7 @@ func Open(opts Options) (*DB, error) {
 		allocator:       alloc,
 		graveyard:       lifecycle.NewGraveyard(),
 		registry:        lifecycle.NewReaderRegistry(),
+		lock:            lock,
 		keepRecent:      opts.KeepRecent,
 		inlineThreshold: page.DefaultInlineThreshold,
 	}
@@ -166,10 +179,30 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if err := db.pager.Close(); err != nil {
-		return err
+	var errs []error
+
+	if db.pager != nil {
+		if err := db.pager.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.pager = nil
 	}
-	return db.slabManager.Close()
+
+	if db.slabManager != nil {
+		if err := db.slabManager.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.slabManager = nil
+	}
+
+	if db.lock != nil {
+		if err := db.lock.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.lock = nil
+	}
+
+	return errors.Join(errs...)
 }
 
 // recover reads meta pages and restores state.

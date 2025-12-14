@@ -117,6 +117,9 @@
   - Added a Raft-backed DB (“RaftDB”) milestone and prereqs to `TODO.md`.
 - 2025-12-14: Roadmap expansion
   - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
+- 2025-12-14: TreeDB exclusive open
+  - Added cross-process lock acquisition via `TreeDB/internal/lockfile` and exposed `treedb.ErrLocked`.
+  - Integrated locking into `TreeDB/db.Open` (covers cached and backend opens) and made `DB.Close` close all resources.
 
 ## Notes / Conventions
 
