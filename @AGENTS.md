@@ -13,6 +13,7 @@
 - [ ] Future work: unify TreeDB open + crash recovery (see `TODO.md`).
 - [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
 - [ ] Milestone: Raft-backed database (“RaftDB”) on TreeDB/HashDB (see `TODO.md`).
+- [ ] HashDB: add exclusive open lock + tests.
 
 ## Progress Log
 
@@ -129,6 +130,10 @@
   - Expanded CI to run on Linux + macOS.
 - 2025-12-14: Docs
   - Documented TreeDB exclusive open (`treedb.ErrLocked`) and added `cmd/unified_bench/README.md`.
+- 2025-12-14: HashDB exclusive open (in progress)
+  - Added directory locking (`hashdb.ErrLocked`) for both `hashdb.Open*` (sharded) and `hashdb.OpenSingle` (single).
+  - Updated HashDB crash-recovery test to simulate crashes via a helper subprocess so OS releases locks.
+  - Fixed BTreeOnHashDB persistence test to close HashDB before reopening.
 
 ## Notes / Conventions
 

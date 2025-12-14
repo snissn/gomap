@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/edsrzf/mmap-go"
+	"github.com/snissn/gomap/HashDB/internal/lockfile"
 )
 
 type SlabOffset uint64
@@ -26,6 +27,8 @@ type Key struct {
 // It is not safe for concurrent use; prefer HashDB for most applications.
 type DB struct {
 	dir string
+
+	lock *lockfile.Lock
 
 	controlFile  *os.File
 	controlMap   mmap.MMap

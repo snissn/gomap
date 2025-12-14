@@ -1,11 +1,15 @@
 package hashdb
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/snissn/gomap/HashDB/internal/lockfile"
 )
 
 // HashDB is the primary, thread-safe HashDB implementation.
@@ -13,6 +17,8 @@ import (
 // This is what older code called `gomap_distributed`: a sharded store backed by
 // multiple underlying on-disk DB instances to maximize concurrency.
 type HashDB struct {
+	dir    string
+	lock   *lockfile.Lock
 	shards []*CachedDB
 	locks  []sync.RWMutex
 }
@@ -36,21 +42,44 @@ func (h *HashDB) Open(folder string) error {
 }
 
 // NewWithShards initializes the sharded store with a specific number of shards.
-func (h *HashDB) NewWithShards(folder string, numShards int) error {
+func (h *HashDB) NewWithShards(folder string, numShards int) (err error) {
+	if folder == "" {
+		return errors.New("db dir required")
+	}
 	if numShards <= 0 {
 		numShards = runtime.NumCPU()
 	}
+
+	if err = os.MkdirAll(folder, 0o755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	var lock *lockfile.Lock
+	lock, err = lockfile.Acquire(filepath.Join(folder, "LOCK"))
+	if err != nil {
+		return err
+	}
+	h.dir = folder
+	h.lock = lock
+
+	defer func() {
+		// Release lock on error to avoid leaving the directory unusable.
+		if err != nil {
+			_ = h.Close()
+		}
+	}()
 
 	h.shards = make([]*CachedDB, numShards)
 	h.locks = make([]sync.RWMutex, numShards)
 
 	for i := 0; i < numShards; i++ {
 		partitionFolder := fmt.Sprintf("%s/partition-%d", folder, i)
-		if err := os.MkdirAll(partitionFolder, 0o755); err != nil {
+		if err = os.MkdirAll(partitionFolder, 0o755); err != nil {
 			return fmt.Errorf("failed to create directory for partition: %w", err)
 		}
 
-		cached, err := NewCachedDB(partitionFolder, 4096, 4<<20, 2*time.Second)
+		var cached *CachedDB
+		cached, err = NewCachedDB(partitionFolder, 4096, 4<<20, 2*time.Second)
 		if err != nil {
 			return err
 		}
@@ -197,7 +226,7 @@ func (h *HashDB) Flush() error {
 // Close flushes and closes all shards.
 // It is not safe to call Close concurrently with other operations.
 func (h *HashDB) Close() error {
-	var firstErr error
+	var errs []error
 	for i := range h.shards {
 		if i < len(h.locks) {
 			h.locks[i].Lock()
@@ -211,13 +240,22 @@ func (h *HashDB) Close() error {
 		if shard == nil {
 			continue
 		}
-		if err := shard.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := shard.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	h.shards = nil
 	h.locks = nil
-	return firstErr
+
+	if h.lock != nil {
+		if err := h.lock.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		h.lock = nil
+	}
+	h.dir = ""
+
+	return errors.Join(errs...)
 }
 
 // GetMany retrieves values for multiple keys efficiently by grouping them per shard.

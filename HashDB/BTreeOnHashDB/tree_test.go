@@ -244,11 +244,15 @@ func TestPersistenceWithHashDB(t *testing.T) {
 	if err := store.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 
 	store2 := &hashdb.HashDB{}
 	if err := store2.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("reopen hashdb: %v", err)
 	}
+	defer store2.Close()
 
 	tree2, err := NewTreeOnHashDB(store2, "persist")
 	if err != nil {

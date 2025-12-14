@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -239,45 +240,23 @@ func TestCrashRecovery(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	// Phase 1: Populate and Delete
-	{
-		var obj DB
-		err := obj.Open(folder)
-		assert.NoError(t, err)
+	runCrashRecoveryWriter(t, folder)
 
-		obj.Put([]byte("keep"), []byte("val1"))
-		obj.Put([]byte("delete"), []byte("val2"))
-		obj.Delete([]byte("delete"))
+	var obj DB
+	err := obj.Open(folder)
+	assert.NoError(t, err)
+	defer obj.Close()
 
-		// "Crash" -> obj goes out of scope, files remain
-		// We don't close cleanly to simulate crash (though New doesn't hold locks on files except flock? no flock used)
-	}
+	err = obj.Recover()
+	assert.NoError(t, err)
 
-	// Phase 2: Recover
-	{
-		var obj DB
-		// New loads metadata.
-		// If metadata says Count=1 (correct), we are good.
-		// But let's assume metadata is corrupt or we want to force rebuild.
-		// We corrupt metadata file?
-		// Or just call Recover explicitly.
-		err := obj.Open(folder)
-		assert.NoError(t, err)
+	val, err := obj.Get([]byte("keep"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("val1"), val)
 
-		// Verify state before recovery (should be consistent if closed properly/flushed)
-		// But we want to test REPLAY.
-
-		err = obj.Recover()
-		assert.NoError(t, err)
-
-		val, err := obj.Get([]byte("keep"))
-		assert.NoError(t, err)
-		assert.Equal(t, []byte("val1"), val)
-
-		val, err = obj.Get([]byte("delete"))
-		assert.NoError(t, err)
-		assert.Nil(t, val)
-	}
+	val, err = obj.Get([]byte("delete"))
+	assert.NoError(t, err)
+	assert.Nil(t, val)
 }
 
 func TestSegmentRotation(t *testing.T) {
@@ -328,6 +307,49 @@ func TestSegmentRotation(t *testing.T) {
 	val, err := obj.Get([]byte("key-0"))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("val"), val)
+}
+
+func runCrashRecoveryWriter(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperCrashRecoveryWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"HASHDB_CRASH_HELPER=1",
+		"HASHDB_CRASH_DIR="+dir,
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
+func TestHelperCrashRecoveryWriter(t *testing.T) {
+	if os.Getenv("HASHDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("HASHDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing HASHDB_CRASH_DIR")
+	}
+
+	var obj DB
+	if err := obj.Open(dir); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	_ = obj.Put([]byte("keep"), []byte("val1"))
+	_ = obj.Put([]byte("delete"), []byte("val2"))
+	_ = obj.Delete([]byte("delete"))
+
+	// Simulate a crash by exiting without calling Close() (no defers run, but OS releases locks).
+	os.Exit(0)
 }
 
 func BenchmarkAddManySlabs(b *testing.B) {

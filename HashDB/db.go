@@ -1,8 +1,12 @@
 package hashdb
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/snissn/gomap/HashDB/internal/lockfile"
 )
 
 func (h *DB) closeFPs() error {
@@ -75,7 +79,17 @@ func (h *DB) closeFPs() error {
 
 // Close releases mmap and file descriptors held by the DB.
 func (h *DB) Close() error {
-	return h.closeFPs()
+	var errs []error
+	if err := h.closeFPs(); err != nil {
+		errs = append(errs, err)
+	}
+	if h.lock != nil {
+		if err := h.lock.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		h.lock = nil
+	}
+	return errors.Join(errs...)
 }
 
 // Open opens (or creates) the primary HashDB store rooted at dir.
@@ -267,12 +281,29 @@ func (h *DB) Add(key []byte, value []byte) error {
 
 // Open initializes a DB in the given folder.
 func (h *DB) Open(folder string) error {
+	if folder == "" {
+		return errors.New("db dir required")
+	}
 	h.dir = folder
-	N, err := h.readCapacity()
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		return err
+	}
+	lock, err := lockfile.Acquire(filepath.Join(folder, "LOCK"))
 	if err != nil {
 		return err
 	}
-	return h.initN(folder, N)
+	h.lock = lock
+
+	N, err := h.readCapacity()
+	if err != nil {
+		_ = h.Close()
+		return err
+	}
+	if err := h.initN(folder, N); err != nil {
+		_ = h.Close()
+		return err
+	}
+	return nil
 }
 
 // New is a compatibility wrapper for older code.
