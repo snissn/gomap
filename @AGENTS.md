@@ -59,6 +59,10 @@
   - Introduced `Open`/`Put` APIs (kept compatibility wrappers), added proper `Close`, and unexported DB internals
   - Renamed HashDB Redis backend `gomapredis` → `hashdbredis`; stress tests now run `redisserver` in `hashdb` mode
   - Updated `cmd/unified_bench` engines to prefer `hashdb` (keeps `gomap` as an alias)
+- 2025-12-14: HashDB index split
+  - Split SwissHash control bytes into separate mmap file (`hashctl-<capacity>`) from keys (`hashkeys-<capacity>`)
+  - Updated incremental rehash cleanup and `TestResizeLeak` to assert both file families are cleaned up
+  - `go test ./...` (root): PASS
 
 ## Notes / Conventions
 
