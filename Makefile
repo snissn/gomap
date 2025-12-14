@@ -80,10 +80,10 @@ unified-bench:
 
 .PHONY: benchmark-all benchmark-quick
 benchmark-all: build-hashdb
-	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
+	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=hashdb,badger --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
 
 benchmark-quick: build-hashdb
-	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000 --csv=benchmark/results_quick.csv
+	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=hashdb,badger --keycounts=1000,10000 --csv=benchmark/results_quick.csv
 
 .PHONY: run-hashdb run-badger
 run-hashdb:
