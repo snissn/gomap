@@ -14,12 +14,12 @@ func TestDistributedHashmapBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("awoiljfasdlfj")
-	err := obj.Add(key, value)
+	err := obj.Put(key, value)
 	assert.Nil(t, err, "Error should be nil")
 }
 
@@ -27,13 +27,13 @@ func TestDistributedHashmapAddGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
 
-	err := obj.Add(key, value)
+	err := obj.Put(key, value)
 	assert.Nil(t, err, "Error should be nil")
 
 	res, err := obj.Get(key)
@@ -45,14 +45,14 @@ func TestDistributedHashmapAddGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
 		value := key
 
-		err := obj.Add(key, value)
+		err := obj.Put(key, value)
 		assert.Nil(t, err, "Error should be nil")
 
 		res, err := obj.Get(key)
@@ -64,7 +64,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 
 	var wg sync.WaitGroup // create a WaitGroup
@@ -77,7 +77,7 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 			key := []byte(strconv.Itoa(i))
 			value := key
 
-			err := obj.Add(key, value)
+			err := obj.Put(key, value)
 
 			assert.Nil(t, err, "Error should be nil")
 		}(i) // pass loop variable as argument
@@ -107,7 +107,7 @@ func BenchmarkDistributedHashmapValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 	b.ResetTimer()
 
@@ -115,7 +115,7 @@ func BenchmarkDistributedHashmapValue(b *testing.B) {
 		key := []byte(strconv.Itoa(i))
 		value := key
 
-		err := obj.Add(key, value)
+		err := obj.Put(key, value)
 		assert.Nil(b, err, "Error should be nil")
 	}
 }
@@ -124,7 +124,7 @@ func BenchmarkDistributedAddMany(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj HashmapDistributed
+	var obj ShardedDB
 	obj.New(folder)
 	N := 1000
 	items := make([]Item, N)
@@ -136,6 +136,6 @@ func BenchmarkDistributedAddMany(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		obj.AddMany(items)
+		obj.PutMany(items)
 	}
 }

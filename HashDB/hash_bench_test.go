@@ -7,24 +7,24 @@ import (
 )
 
 // Benchmark the raw hash-based store (no ordering) to gauge baseline performance.
-func BenchmarkHashmap_SetGet(b *testing.B) {
-	benchmarkHashmapSetGet(b, 1024, 8)
+func BenchmarkShardedDB_PutGet(b *testing.B) {
+	benchmarkShardedDBPutGet(b, 1024, 8)
 }
 
-func BenchmarkHashmap_SetGetSingleShard(b *testing.B) {
-	benchmarkHashmapSetGet(b, 1024, 1)
+func BenchmarkShardedDB_PutGetSingleShard(b *testing.B) {
+	benchmarkShardedDBPutGet(b, 1024, 1)
 }
 
-func benchmarkHashmapSetGet(b *testing.B, numKeys int, shards int) {
-	dir, err := os.MkdirTemp("", "gomap-bench-*")
+func benchmarkShardedDBPutGet(b *testing.B, numKeys int, shards int) {
+	dir, err := os.MkdirTemp("", "hashdb-bench-*")
 	if err != nil {
 		b.Fatalf("tempdir: %v", err)
 	}
 	defer os.RemoveAll(dir)
 
-	h := &HashmapDistributed{}
+	h := &ShardedDB{}
 	if err := h.NewWithShards(dir, shards); err != nil {
-		b.Fatalf("init gomap: %v", err)
+		b.Fatalf("init hashdb: %v", err)
 	}
 
 	keys := make([][]byte, numKeys)
@@ -48,8 +48,8 @@ func benchmarkHashmapSetGet(b *testing.B, numKeys int, shards int) {
 
 	for i := 0; i < b.N; i++ {
 		idx := i % numKeys
-		if err := h.Add(keys[idx], vals[idx]); err != nil {
-			b.Fatalf("add: %v", err)
+		if err := h.Put(keys[idx], vals[idx]); err != nil {
+			b.Fatalf("put: %v", err)
 		}
 		if _, err := h.Get(keys[idx]); err != nil {
 			b.Fatalf("get: %v", err)

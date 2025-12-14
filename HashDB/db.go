@@ -149,7 +149,7 @@ func (h *DB) Delete(key []byte) error {
 // The callback receives the current value (or nil if not found) and returns the new value.
 func (h *DB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// Simple implementation: Get then Add.
-	// Since Hashmap is NOT thread-safe, the caller (HashmapDistributed) must hold the lock.
+	// Since DB is NOT thread-safe, the caller (ShardedDB) must hold the lock.
 	// So we can just reuse Get logic (or duplicate probing for efficiency) then Add.
 	// But Add appends new slab.
 	// So we can just call Get, run callback, then Add.
@@ -320,7 +320,7 @@ func (h *DB) Compact() error {
 	tmpFolder := h.dir + "-compact"
 	_ = os.RemoveAll(tmpFolder) // Clean start
 
-	var newH Hashmap
+	var newH DB
 	// Use same capacity, or maybe shrink if Count << Capacity?
 	// For now maintain capacity.
 	// But we need to know capacity. h.Capacity.
@@ -404,7 +404,7 @@ func (h *DB) Compact() error {
 Example usage:
 	folder := "./folder"
 
-	var obj Hashmap
+	var obj DB
 	obj.init(folder)
 	obj.Add("key", "value")
 

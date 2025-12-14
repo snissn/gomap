@@ -15,7 +15,7 @@ func TestResizeLeak(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.RemoveAll(folder)
 
-	var obj Hashmap
+	var obj DB
 	// Initialize with a small size to force frequent resizes
 	// Assuming initN is called internally by New, but New uses hardcoded defaults?
 	// Let's use New and check defaults or use initN if accessible.
@@ -45,7 +45,7 @@ func TestResizeLeak(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
 		val := []byte("value")
-		obj.Add(key, val)
+		obj.Put(key, val)
 	}
 
 	// Ensure any in-progress incremental rehash is fully completed so we can

@@ -77,7 +77,7 @@ func (c *CachedDB) Compact() error {
 func (c *CachedDB) PutMany(items []Item) error {
 	// Route batched writes through the write-back cache so they are
 	// coalesced with other pending writes. CacheKV will flush to the
-	// underlying Hashmap using AddMany when thresholds or timers fire.
+	// underlying DB using PutMany when thresholds or timers fire.
 	for _, it := range items {
 		if err := c.cache.Put(it.Key, it.Value); err != nil {
 			return err
@@ -103,7 +103,7 @@ func (m *dbKVAdapter) Get(key []byte) ([]byte, error) { return m.db.Get(key) }
 func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Put(key, value) }
 func (m *dbKVAdapter) Delete(key []byte) error        { return m.db.Delete(key) }
 
-// PutMany allows CacheKV to batch writes down to the underlying Hashmap using AddMany.
+// PutMany allows CacheKV to batch writes down to the underlying DB using PutMany.
 func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	if len(keys) != len(vals) {
 		return fmt.Errorf("PutMany: keys/vals length mismatch")
