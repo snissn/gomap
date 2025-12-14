@@ -11,6 +11,7 @@
 - [x] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [ ] Future work: unify TreeDB open + crash recovery (see `TODO.md`).
+- [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
 
 ## Progress Log
 
@@ -107,6 +108,8 @@
   - `-` is now only for unsupported/not-run (uses NaN); real zero results print `0`
 - 2025-12-14: Roadmap
   - Added a detailed plan for unified TreeDB API + exclusive locking + coherent WAL replay recovery in `TODO.md`.
+- 2025-12-14: Docs milestone
+  - Sketched V1 “Wow” documentation requirements in `TODO.md`.
 
 ## Notes / Conventions
 
