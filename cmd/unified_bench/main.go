@@ -17,7 +17,6 @@ import (
 	"github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
 
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
@@ -187,7 +186,7 @@ func (t *TreeDBWrapper) NewBatch() (BatchInterface, error) {
 
 // 4. TreeDB Backend Wrapper (uncached; for comparison)
 type TreeDBBackendWrapper struct {
-	db *treedbdb.DB
+	db *treedb.DB
 }
 
 func NewTreeDBBackend(dir string) (*TreeDBBackendWrapper, error) {

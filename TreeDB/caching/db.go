@@ -58,6 +58,7 @@ type DB struct {
 	queue             []*memtable.Memtable
 	mutableRange      keyRange
 	queueRanges       []keyRange
+	queueWALPaths     []string
 	backendRange      keyRange
 	backendRangeKnown bool
 
@@ -320,8 +321,10 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) rotateMemtableLocked() error {
+	walPath := db.walPath
 	db.queue = append(db.queue, db.mutable)
 	db.queueRanges = append(db.queueRanges, db.mutableRange)
+	db.queueWALPaths = append(db.queueWALPaths, walPath)
 	db.mutable = memtable.New()
 	db.mutableRange = keyRange{}
 	if err := db.rotateWALLocked(); err != nil {
@@ -360,8 +363,9 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
-			// Background flush should not fsync; durability is via WAL.
-			db.flushAll(false)
+			// Background flush uses synced backend commits so we can safely
+			// retire WAL segments as they are applied.
+			db.flushAll(true)
 		}
 	}
 }
@@ -377,7 +381,7 @@ func (db *DB) flushAll(sync bool) {
 func (db *DB) flushOne() bool {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	return db.flushOneLocked(false)
+	return db.flushOneLocked(true)
 }
 
 func (db *DB) flushOneLocked(sync bool) bool {
@@ -390,6 +394,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	memRange := keyRange{}
 	if len(db.queueRanges) > 0 {
 		memRange = db.queueRanges[0]
+	}
+	walPath := ""
+	if len(db.queueWALPaths) > 0 {
+		walPath = db.queueWALPaths[0]
 	}
 	db.mu.Unlock()
 
@@ -472,9 +480,16 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueRanges) > 0 {
 		db.queueRanges = db.queueRanges[1:]
 	}
-	// TODO: Delete old WAL file here.
-	// Need to track WAL paths.
+	if len(db.queueWALPaths) > 0 {
+		db.queueWALPaths = db.queueWALPaths[1:]
+	}
 	db.mu.Unlock()
+
+	if walPath != "" {
+		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+		}
+	}
 	return true
 }
 

@@ -1,6 +1,8 @@
 package treedb
 
 import (
+	"errors"
+
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -8,20 +10,208 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
-// DB is the primary TreeDB entrypoint: the cached DB wrapper.
-type DB = caching.DB
+// Mode selects which TreeDB implementation to open.
+type Mode = db.Mode
 
-// Open opens TreeDB using the cached DB wrapper (recommended default).
-func Open(opts Options) (*DB, error) {
-	return db.OpenCached(opts)
+const (
+	ModeCached  = db.ModeCached
+	ModeBackend = db.ModeBackend
+)
+
+// Iterator is the public iterator contract returned by TreeDB.
+// Both cached and backend implementations satisfy it.
+type Iterator interface {
+	Valid() bool
+	Next()
+	Key() []byte
+	Value() []byte
+	Close() error
+	Error() error
 }
 
-// OpenCached is an explicit alias for Open.
+// Batch is the public batch contract returned by TreeDB.
+// Both cached and backend implementations satisfy it.
+type Batch interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	Write() error
+	WriteSync() error
+	Close() error
+}
+
+// DB is the public TreeDB handle. It can represent either cached mode (default)
+// or backend-only mode depending on Options.
+type DB struct {
+	mode    Mode
+	cached  *caching.DB
+	backend *db.DB
+}
+
+func (db *DB) ensureOpen() error {
+	if db == nil || (db.cached == nil && db.backend == nil) {
+		return errors.New("treedb: db is closed")
+	}
+	return nil
+}
+
+// Open opens TreeDB. By default it enables caching (write-back layer).
+// To open the backend-only engine, set opts.Mode = ModeBackend.
+func Open(opts Options) (*DB, error) {
+	backend, err := db.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.Mode == ModeBackend {
+		return &DB{mode: ModeBackend, backend: backend}, nil
+	}
+
+	cached, err := caching.Open(opts.Dir, backend, opts.FlushThreshold)
+	if err != nil {
+		_ = backend.Close()
+		return nil, err
+	}
+
+	return &DB{mode: ModeCached, cached: cached, backend: backend}, nil
+}
+
+// OpenCached is an explicit cached-mode opener (alias of Open with ModeCached).
 func OpenCached(opts Options) (*DB, error) {
+	opts.Mode = ModeCached
 	return Open(opts)
 }
 
-// OpenBackend opens the underlying uncached DB directly.
-func OpenBackend(opts Options) (*db.DB, error) {
-	return db.Open(opts)
+// OpenBackend opens TreeDB in backend-only mode (no caching).
+func OpenBackend(opts Options) (*DB, error) {
+	opts.Mode = ModeBackend
+	return Open(opts)
+}
+
+// Close closes the DB.
+func (db *DB) Close() error {
+	if db == nil {
+		return nil
+	}
+	if db.cached != nil {
+		err := db.cached.Close()
+		db.cached = nil
+		db.backend = nil
+		return err
+	}
+	if db.backend != nil {
+		err := db.backend.Close()
+		db.backend = nil
+		return err
+	}
+	return nil
+}
+
+func (db *DB) Get(key []byte) ([]byte, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.Get(key)
+	}
+	return db.backend.Get(key)
+}
+
+func (db *DB) Has(key []byte) (bool, error) {
+	if err := db.ensureOpen(); err != nil {
+		return false, err
+	}
+	if db.cached != nil {
+		return db.cached.Has(key)
+	}
+	return db.backend.Has(key)
+}
+
+func (db *DB) Set(key, value []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Set(key, value)
+	}
+	return db.backend.Set(key, value)
+}
+
+func (db *DB) SetSync(key, value []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.SetSync(key, value)
+	}
+	return db.backend.SetSync(key, value)
+}
+
+func (db *DB) Delete(key []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Delete(key)
+	}
+	return db.backend.Delete(key)
+}
+
+func (db *DB) DeleteSync(key []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.DeleteSync(key)
+	}
+	return db.backend.DeleteSync(key)
+}
+
+func (db *DB) Iterator(start, end []byte) (Iterator, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.Iterator(start, end)
+	}
+	return db.backend.Iterator(start, end)
+}
+
+func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.ReverseIterator(start, end)
+	}
+	return db.backend.ReverseIterator(start, end)
+}
+
+func (db *DB) NewBatch() Batch {
+	if db == nil || (db.cached == nil && db.backend == nil) {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.NewBatch()
+	}
+	return db.backend.NewBatch()
+}
+
+func (db *DB) Stats() map[string]string {
+	if db == nil || (db.cached == nil && db.backend == nil) {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.Stats()
+	}
+	return db.backend.Stats()
+}
+
+func (db *DB) Print() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Print()
+	}
+	return db.backend.Print()
 }
