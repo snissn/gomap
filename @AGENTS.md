@@ -71,6 +71,11 @@
   - Removed unused syscall-based `mlock` implementation (replaced by `x/sys` helpers)
   - Fixed Linux `applyFadvise` to use a single advice (`FADV_RANDOM`)
   - `go test ./...` (root): PASS
+- 2025-12-14: Public API polish (HashDB)
+  - Promoted the distributed/sharded engine (formerly `gomap_distributed`) as `hashdb.HashDB` (kept `ShardedDB`/`HashmapDistributed` aliases)
+  - Switched package-level `hashdb.Open(...)` to open the sharded `HashDB`; added `hashdb.OpenSingle(...)` for the single-shard DB
+  - Updated internal callsites (BTreeOnHashDB, redisserver, unified_bench) to prefer `HashDB`
+  - `go test ./...` (root): PASS
 
 ## Notes / Conventions
 
