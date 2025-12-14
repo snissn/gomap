@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # run_perf.sh
-# Executes the 9 steps of the TreeDB Performance Sprint using Gemini.
+# Executes the 9 steps of the TreeDB Performance Sprint using Gemini (legacy).
 # Loops each step up to 5 times until a completion file is detected.
 # If the completion file is found (even on the 6th check), it proceeds to the next step.
 # If the file is missing on the 6th check (after 5 runs), it errors out.

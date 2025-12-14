@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # run_phases.sh
-# Executes the 7 phases of TreeDB development using Gemini.
+# Executes the 7 phases of TreeDB development using Gemini (legacy).
 # Loops each phase up to N times until a completion file is detected.
 
 set -e

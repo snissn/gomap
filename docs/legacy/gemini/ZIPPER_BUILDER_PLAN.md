@@ -1,5 +1,7 @@
 # Zipper Page Builder Optimization Plan
 
+> Legacy note: this document was produced during an earlier “Gemini-era” planning workflow and may be outdated.
+
 ## 1. Problem: Inefficient Write Path
 The current `zipper` implementation (and `node` methods) uses `AddLeafEntry` and `AddInternalChild` to construct new pages during the merge phase.
 *   **Algorithm:** `AddLeafEntry` performs a **binary search** to find the insertion point, shifts the directory array to make space, and then writes the entry.

@@ -1,5 +1,7 @@
 # Verified Cache Optimization Plan
 
+> Legacy note: this document was produced during an earlier “Gemini-era” planning workflow and may be outdated.
+
 ## 1. Problem Statement
 In the current architecture, pages are accessed via memory-mapped I/O (mmap). Because the Pager is stateless regarding page content validity, every access to a page (even if repeated frequently) triggers a CRC32 Checksum verification.
 *   **Cost:** ~4096 bytes hashed per node visit.
