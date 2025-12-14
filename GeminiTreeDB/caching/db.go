@@ -1086,6 +1086,9 @@ func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte) me
 func (it *singleSourceIterator) advance() {
 	it.valid = false
 	for it.iter.Valid() {
+		if it.end != nil && bytes.Compare(it.iter.UnsafeKey(), it.end) >= 0 {
+			return
+		}
 		if it.iter.IsDeleted() {
 			it.iter.Next()
 			continue

@@ -112,6 +112,11 @@ func (mi *MergingIterator) next() {
 	for mi.h.Len() > 0 {
 		top := heap.Pop(mi.h).(*heapItem)
 		currentUnsafeKey := top.iter.UnsafeKey()
+		
+		if mi.end != nil && bytes.Compare(currentUnsafeKey, mi.end) >= 0 {
+			return
+		}
+
 		currentUnsafeVal := top.iter.UnsafeValue() // Value might be lazy-loaded here
 
 		isDeleted := top.iter.IsDeleted() // Use IsDeleted from UnsafeIterator
