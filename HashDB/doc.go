@@ -8,4 +8,9 @@
 // HashDB acquires an exclusive process lock on the database directory. If the
 // directory is already open in another process, Open/OpenWithShards/OpenSingle
 // return ErrLocked.
+//
+// Note on durability:
+// HashDB is tuned for performance and does not currently expose an explicit
+// “durable commit” API (no PutSync/Sync semantics). Treat durability across
+// power loss as best-effort unless/until stronger durability modes are added.
 package hashdb
