@@ -176,6 +176,32 @@ func (h *ShardedDB) Flush() error {
 	return errGlobal
 }
 
+// Close flushes and closes all shards.
+// It is not safe to call Close concurrently with other operations.
+func (h *ShardedDB) Close() error {
+	var firstErr error
+	for i := range h.shards {
+		if i < len(h.locks) {
+			h.locks[i].Lock()
+		}
+		shard := h.shards[i]
+		h.shards[i] = nil
+		if i < len(h.locks) {
+			h.locks[i].Unlock()
+		}
+
+		if shard == nil {
+			continue
+		}
+		if err := shard.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	h.shards = nil
+	h.locks = nil
+	return firstErr
+}
+
 // GetMany retrieves values for multiple keys efficiently by grouping them per shard.
 // It returns a slice of values aligned with the input keys slice; missing keys map to nil.
 // Errors are returned per key; nil error means the operation for that key succeeded (even if value is nil).

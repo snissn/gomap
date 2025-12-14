@@ -37,7 +37,18 @@ func (c *CachedDB) Get(key []byte) ([]byte, error)     { return c.cache.Get(key)
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.cache.Put(key, value) }
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
-func (c *CachedDB) Close() error                       { return c.cache.Close() }
+func (c *CachedDB) Close() error {
+	var firstErr error
+	if c.cache != nil {
+		firstErr = c.cache.Close()
+	}
+	if c.db != nil {
+		if err := c.db.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
 
 func (c *CachedDB) SetCompression(enabled bool) {
 	c.db.SetCompression(enabled)
