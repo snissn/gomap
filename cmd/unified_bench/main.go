@@ -432,9 +432,10 @@ func main() {
 		"write_seq": func(db DBInterface) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
+			var k [8]byte // Stack allocation
 			for i := 0; i < *numKeys; i++ {
-				k := key(i)
-				if err := db.Set(k, val); err != nil {
+				binary.BigEndian.PutUint64(k[:], uint64(i))
+				if err := db.Set(k[:], val); err != nil {
 					log.Fatalf("write_seq error: %v", err)
 				}
 			}
@@ -442,9 +443,10 @@ func main() {
 		},
 		"read_rand": func(db DBInterface) float64 {
 			start := time.Now()
+			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				k := key(rand.Intn(*numKeys))
-				if _, err := db.Get(k); err != nil {
+				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				if _, err := db.Get(k[:]); err != nil {
 					// ignore
 				}
 			}
@@ -475,9 +477,10 @@ func main() {
 		"write_rand": func(db DBInterface) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
+			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				k := key(rand.Intn(*numKeys))
-				if err := db.Set(k, val); err != nil {
+				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				if err := db.Set(k[:], val); err != nil {
 					log.Fatalf("write_rand error: %v", err)
 				}
 			}
@@ -490,6 +493,7 @@ func main() {
 			start := time.Now()
 			val := make([]byte, *valSize)
 			total := *numKeys
+			var k [8]byte
 			for i := 0; i < total; i += *batchSize {
 				batch, err := db.NewBatch()
 				if err != nil {
@@ -503,8 +507,8 @@ func main() {
 					// Use new keys for batch to stress growth/append?
 					// Or overwrite?
 					// Let's use high range keys to append.
-					k := key(j + *numKeys)
-					batch.Set(k, val)
+					binary.BigEndian.PutUint64(k[:], uint64(j+*numKeys))
+					batch.Set(k[:], val)
 				}
 				if err := batch.Commit(); err != nil {
 					log.Fatalf("batch commit error: %v", err)
@@ -515,9 +519,10 @@ func main() {
 		},
 		"delete_rand": func(db DBInterface) float64 {
 			start := time.Now()
+			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				k := key(rand.Intn(*numKeys))
-				if err := db.Delete(k); err != nil {
+				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				if err := db.Delete(k[:]); err != nil {
 					// ignore
 				}
 			}
@@ -607,11 +612,6 @@ func main() {
 	printResultsTable(instances, finalTestOrder, displayNames, results)
 }
 
-func key(i int) []byte {
-	k := make([]byte, 8)
-	binary.BigEndian.PutUint64(k, uint64(i))
-	return k
-}
 
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
