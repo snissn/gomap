@@ -2,15 +2,15 @@ package hashdb
 
 import "sync"
 
-// BatchWriter buffers writes and flushes them to the underlying HashmapDistributed
-// using AddMany to reduce syscall and hashing overhead.
+// BatchWriter buffers writes and flushes them to the underlying ShardedDB using
+// PutMany to reduce syscall and hashing overhead.
 //
 // Note: keys are copied into an internal arena so callers may safely reuse key
 // buffers between Add() calls (common in hot loops). Values are not copied; the
 // caller must not mutate the value slice until it has been flushed (explicitly
 // via Flush() or implicitly by reaching the limit).
 type BatchWriter struct {
-	store *HashmapDistributed
+	store *ShardedDB
 	limit int
 
 	mu  sync.Mutex
@@ -23,7 +23,7 @@ type BatchWriter struct {
 
 // NewBatchWriter creates a new BatchWriter with the given flush threshold.
 // A zero or negative limit defaults to 1024 items.
-func NewBatchWriter(store *HashmapDistributed, limit int) *BatchWriter {
+func NewBatchWriter(store *ShardedDB, limit int) *BatchWriter {
 	if limit <= 0 {
 		limit = 1024
 	}
@@ -64,7 +64,7 @@ func (b *BatchWriter) Add(key, value []byte) error {
 	b.mu.Unlock()
 
 	if shouldFlush {
-		err := b.store.AddMany(buf)
+		err := b.store.PutMany(buf)
 		arena.reset()
 		b.arenaPool.Put(arena)
 		return err
@@ -86,7 +86,7 @@ func (b *BatchWriter) Flush() error {
 	b.keyArena.reset()
 	b.mu.Unlock()
 
-	err := b.store.AddMany(buf)
+	err := b.store.PutMany(buf)
 	if arena != nil {
 		arena.reset()
 		b.arenaPool.Put(arena)
