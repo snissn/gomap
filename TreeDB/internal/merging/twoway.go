@@ -13,12 +13,15 @@ type TwoWayMerger struct {
 	// Source 2: Disk
 	src2     iterator.UnsafeIterator 
 
-	valid bool
-	key   []byte
-	val   []byte
-	err   error
-	start []byte
-	end   []byte
+	curr      iterator.UnsafeIterator
+	valid     bool
+	key       []byte
+	keyLoaded bool
+	val       []byte
+	valLoaded bool
+	err       error
+	start     []byte
+	end       []byte
 }
 
 func NewTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byte) *TwoWayMerger {
@@ -28,7 +31,7 @@ func NewTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byte) *Two
 		start: start,
 		end:   end,
 	}
-	m.next() // Position at first element
+	m.advance() // Position at first element
 	return m
 }
 
@@ -36,18 +39,19 @@ func (m *TwoWayMerger) Next() {
 	if !m.valid {
 		panic("merging iterator invalid")
 	}
-	m.next()
+	m.curr.Next()
+	m.advance()
 }
 
-func (m *TwoWayMerger) next() {
+func (m *TwoWayMerger) advance() {
 	m.valid = false // Assume invalid until an item is found
+	m.key = nil
+	m.keyLoaded = false
+	m.val = nil
+	m.valLoaded = false
+	m.curr = nil
 
-	// Advance any exhausted iterators
-	// Logic here is tricky: next() should find the *next* item.
-	// Initial call to next() positions it. Subsequent calls advance.
-	// So we don't call Next() on exhausted iterators here.
-	
-	// Find the smaller key
+	// Find the smaller key, without forcing value loads unless Value() is called.
 	for m.src1.Valid() || m.src2.Valid() {
 		cmp := 0
 		if m.src1.Valid() && m.src2.Valid() {
@@ -61,50 +65,46 @@ func (m *TwoWayMerger) next() {
 		}
 
 		var (
-			currentKey   []byte
-			currentValue []byte
-			isDeleted    bool
+			currentKey []byte
+			isDeleted  bool
 		)
 
-		if cmp < 0 { // src1 is smaller or src2 exhausted
+		switch {
+		case cmp < 0: // src1 is smaller or src2 exhausted
+			m.curr = m.src1
 			currentKey = m.src1.UnsafeKey()
-			currentValue = m.src1.UnsafeValue()
 			isDeleted = m.src1.IsDeleted()
-			m.src1.Next()
-		} else if cmp > 0 { // src2 is smaller or src1 exhausted
+		case cmp > 0: // src2 is smaller or src1 exhausted
+			m.curr = m.src2
 			currentKey = m.src2.UnsafeKey()
-			currentValue = m.src2.UnsafeValue()
 			isDeleted = m.src2.IsDeleted()
-			m.src2.Next()
-		} else { // Keys are equal (shadowing)
-			currentKey = m.src1.UnsafeKey() // Take from src1 (higher precedence)
-			currentValue = m.src1.UnsafeValue()
+		default: // Keys are equal (shadowing): src1 wins, src2 is advanced now.
+			m.curr = m.src1
+			currentKey = m.src1.UnsafeKey()
 			isDeleted = m.src1.IsDeleted()
-			m.src1.Next() // Advance both
 			m.src2.Next()
 		}
 
-		// Handle range bounds (exclusive end)
+		// Handle range bounds (exclusive end).
 		if m.end != nil && bytes.Compare(currentKey, m.end) >= 0 {
-			break // Reached or passed end boundary
+			m.curr = nil
+			return
 		}
-		// Handle range bounds (inclusive start) - only needed if Seek doesn't handle it
+		// Handle range bounds (inclusive start).
 		if m.start != nil && bytes.Compare(currentKey, m.start) < 0 {
-			continue // Skip if before start boundary
-		}
-
-		// If tombstone, continue loop
-		if isDeleted {
+			m.curr.Next()
 			continue
 		}
 
-		// Found valid data: perform final copy for public API
-		m.key = append([]byte(nil), currentKey...)
-		m.val = append([]byte(nil), currentValue...)
+		// Skip tombstones.
+		if isDeleted {
+			m.curr.Next()
+			continue
+		}
+
 		m.valid = true
 		return
 	}
-	m.valid = false // Exhausted
 }
 
 func (m *TwoWayMerger) Valid() bool {
@@ -115,12 +115,20 @@ func (m *TwoWayMerger) Key() []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
+	if !m.keyLoaded {
+		m.key = append([]byte(nil), m.curr.UnsafeKey()...)
+		m.keyLoaded = true
+	}
 	return m.key
 }
 
 func (m *TwoWayMerger) Value() []byte {
 	if !m.valid {
 		panic("iterator invalid")
+	}
+	if !m.valLoaded {
+		m.val = append([]byte(nil), m.curr.UnsafeValue()...)
+		m.valLoaded = true
 	}
 	return m.val
 }

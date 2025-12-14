@@ -111,3 +111,40 @@ func TestTwoWayMerger(t *testing.T) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
 	}
 }
+
+type closeCountingIter struct {
+	*mockUnsafeIter
+	closed *int
+}
+
+func (c *closeCountingIter) Close() error {
+	*c.closed++
+	return nil
+}
+
+func TestMergingIteratorCloseClosesAllSources(t *testing.T) {
+	closed := 0
+	it1 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"A", "1", false}}}, closed: &closed}
+	it2 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"B", "2", false}}}, closed: &closed}
+	it3 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"C", "3", false}}}, closed: &closed}
+
+	itr := NewMergingIterator(
+		[]IteratorSource{
+			{Iter: it1, Priority: 0},
+			{Iter: it2, Priority: 1},
+			{Iter: it3, Priority: 2},
+		},
+		nil,
+		nil,
+	)
+
+	// Advance at least once so one source iterator becomes exhausted and is no longer in the heap.
+	if itr.Valid() {
+		itr.Next()
+	}
+
+	_ = itr.Close()
+	if closed != 3 {
+		t.Fatalf("expected all sources closed, got %d", closed)
+	}
+}
