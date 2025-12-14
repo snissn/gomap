@@ -18,6 +18,7 @@ More docs:
 - `docs/README.md`
 - `docs/GETTING_STARTED.md`
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
+- `CONTRIBUTING.md`
 
 ## Choosing An Engine
 

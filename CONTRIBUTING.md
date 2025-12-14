@@ -1,0 +1,59 @@
+# Contributing
+
+## TL;DR
+
+- Format: `make fmt`
+- Tests: `make test` (plus `make test-race` optionally)
+- Bench: `make unified-bench && ./bin/unified-bench`
+
+## Scope / Philosophy
+
+This repo is a dev playground for two storage engines (HashDB + TreeDB) and benchmark tooling.
+“Tests are the north star”: changes should keep `go test ./...` passing and extend tests for new behavior.
+
+## Requirements
+
+- Go `1.25+` (see `go.mod`)
+- Linux/macOS recommended (TreeDB is Unix-focused due to mmap/locking specifics)
+
+## Common Commands
+
+- `make help`
+- `make fmt`
+- `make test`
+- `make vet`
+- `make tidy`
+- `make build`
+- `make unified-bench && ./bin/unified-bench`
+- Optional (slow): `make test-race`
+
+## CI
+
+GitHub Actions runs:
+
+- Root module `go vet` + `go test ./...` (Linux + macOS)
+- TreeDB `go vet` + `go test ./...` (Linux + macOS)
+- `cmd/unified_bench` `go vet` + `go test ./...` (Linux + macOS)
+- HashDB `go vet` + `go test ./...` (Windows)
+- Manual: `-race` runs (workflow dispatch)
+
+## Code Guidelines
+
+- Keep commits small and reviewable.
+- Prefer clear naming and simple control flow over cleverness.
+- Keep the intended stable surface small:
+  - `github.com/snissn/gomap/TreeDB` (package `treedb`)
+  - `github.com/snissn/gomap/HashDB` (package `hashdb`)
+  - See `docs/API_STABILITY.md`.
+- When changing semantics (durability/iteration/locking), update:
+  - `docs/contracts/*`, and
+  - the relevant spec tests.
+
+## On-Disk Format Changes
+
+Be extra careful when touching metadata formats or recovery logic:
+
+- Add/extend tests that cover crash/reopen and truncated/corrupt tail cases.
+- Prefer versioned metadata changes (explicit version fields).
+- If compatibility is intentionally broken, document it in `docs/API_STABILITY.md` / `CHANGELOG.md`.
+

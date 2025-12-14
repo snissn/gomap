@@ -19,6 +19,7 @@
 
 - Format: `make fmt`
 - Tests: `make test`
+- Optional race check: `make test-race`
 - Vet: `make vet`
 - Build useful binaries: `make build`
 
@@ -89,4 +90,3 @@ Build and run:
 
 See:
 - `cmd/unified_bench/README.md`
-

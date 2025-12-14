@@ -6,6 +6,7 @@
 - Use `docs/GETTING_STARTED.md` if you want to run things locally quickly.
 - Use `docs/contracts/` for the “do not surprise me” behavioral contracts (durability, iteration, concurrency, locking).
 - Use `cmd/unified_bench/README.md` for benchmark usage and methodology.
+- For contributing/dev workflow: `CONTRIBUTING.md`.
 
 ## Quickstart (dev)
 
