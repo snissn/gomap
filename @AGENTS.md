@@ -2,12 +2,13 @@
 
 ## Goals
 
-- [x] Make `go test ./...` pass in all modules (`HashDB/`, `TreeDB/`, `cmd/unified_bench/`).
+- [x] Make `go test ./...` pass in `./`, `TreeDB/`, and `cmd/unified_bench/`.
 - [x] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
 - [x] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
-- [x] Move `gomap` → `HashDB/` module directory.
+- [x] Move `gomap` → `HashDB/` directory and rename to HashDB.
 - [x] Rename `btree` → `BTreeOnHashDB`.
-- [ ] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
+- [x] Consolidate to a single root `go.mod` and keep CI/Makefile aligned.
+- [x] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 
 ## Progress Log
@@ -50,6 +51,14 @@
 - 2025-12-14: Multi-module ergonomics
   - Added `go.work` for local multi-module development
   - Rewrote `Makefile` with `help`, `fmt`, `test`, `vet`, `tidy`, `deps`, and `build` targets across modules
+- 2025-12-14: Single-module workspace
+  - Removed `go.work` and per-directory `go.mod` files; added root `go.mod`
+  - Updated CI + `Makefile` to reflect the single-module layout
+- 2025-12-14: HashDB refactor
+  - Renamed core types: `Hashmap` → `DB`, `HashmapDistributed` → `ShardedDB`, `CachedHashmap` → `CachedDB`
+  - Introduced `Open`/`Put` APIs (kept compatibility wrappers), added proper `Close`, and unexported DB internals
+  - Renamed HashDB Redis backend `gomapredis` → `hashdbredis`; stress tests now run `redisserver` in `hashdb` mode
+  - Updated `cmd/unified_bench` engines to prefer `hashdb` (keeps `gomap` as an alias)
 
 ## Notes / Conventions
 
