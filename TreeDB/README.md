@@ -33,16 +33,15 @@ package main
 
 import (
 	"fmt"
-
 	"log"
 
-	"github.com/snissn/gomap/TreeDB/db"
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func main() {
-	// Open the database
-	opts := db.Options{Dir: "./my-db-data"}
-	database, err := db.Open(opts)
+	// Open the database (recommended: cached wrapper)
+	opts := treedb.Options{Dir: "./my-db-data"}
+	database, err := treedb.Open(opts)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -68,11 +67,10 @@ func main() {
 	}
 	
 	// Atomic Batch
-
-batch := database.NewBatch()
-batch.Set([]byte("k2"), []byte("v2"))
-batch.Delete([]byte("key1"))
-batch.Write() // Atomic commit
+	batch := database.NewBatch()
+	batch.Set([]byte("k2"), []byte("v2"))
+	batch.Delete([]byte("key1"))
+	batch.Write() // Atomic commit
 }
 ```
 

@@ -58,7 +58,7 @@ type Options struct {
 	FlushThreshold int64
 }
 
-// OpenCached opens the database with caching if enabled.
+// OpenCached opens the database with the caching wrapper.
 func OpenCached(opts Options) (*caching.DB, error) {
 	db, err := Open(opts)
 	if err != nil {
