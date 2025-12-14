@@ -96,6 +96,10 @@
   - Added `node.NewNodeView` and stored iterator nodes by value to avoid per-page heap allocs
   - `BenchmarkScan`: ~314 allocs/op → ~7 allocs/op on local run
   - `go test ./...` (root/TreeDB/cmd/unified_bench): PASS
+- 2025-12-14: TreeDB cached Iterator correctness
+  - Fixed cached `Batch.Write` streaming path to update backend key-range tracking so `Iterator(nil,nil)` includes backend data
+  - Added regression test `TestCachingDB_IteratorIncludesBackendAfterStreamingBatch`
+  - `go test ./...` (`TreeDB/caching`): PASS
 
 ## Notes / Conventions
 

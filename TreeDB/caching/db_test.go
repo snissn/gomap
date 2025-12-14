@@ -44,7 +44,9 @@ func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, erro
 	}
 	m.mu.RUnlock()
 	sort.Strings(keys)
-	return &MockIterator{backend: m, keys: keys, idx: -1}, nil
+	it := &MockIterator{backend: m, keys: keys, idx: -1}
+	it.Seek(start)
+	return it, nil
 }
 
 type MockIterator struct {
@@ -88,7 +90,17 @@ func (it *MockIterator) Key() []byte              { return it.UnsafeKey() }
 func (it *MockIterator) Value() []byte            { return it.UnsafeValue() }
 
 func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
-	return nil, fmt.Errorf("not implemented in mock")
+	m.mu.RLock()
+	keys := make([]string, 0, len(m.data))
+	for k := range m.data {
+		keys = append(keys, k)
+	}
+	m.mu.RUnlock()
+	sort.Strings(keys)
+
+	it := &MockReverseIterator{backend: m, keys: keys, idx: len(keys) - 1}
+	it.Seek(end) // end is exclusive; start at first >= end, then step back via Next() if needed.
+	return it, nil
 }
 
 func (m *MockBackend) Print() error             { return nil }
@@ -173,5 +185,99 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 		if string(backend.data[k]) != fmt.Sprintf("v%d", i) {
 			t.Errorf("Backend missing %s", k)
 		}
+	}
+}
+
+type MockReverseIterator struct {
+	backend *MockBackend
+	keys    []string
+	idx     int
+}
+
+func (it *MockReverseIterator) Valid() bool {
+	return it.idx >= 0 && it.idx < len(it.keys)
+}
+
+func (it *MockReverseIterator) Next() {
+	it.idx--
+}
+
+func (it *MockReverseIterator) Seek(key []byte) {
+	if len(it.keys) == 0 {
+		it.idx = -1
+		return
+	}
+	if key == nil {
+		it.idx = len(it.keys) - 1
+		return
+	}
+
+	// Find first key >= target.
+	pos := sort.SearchStrings(it.keys, string(key))
+	if pos >= len(it.keys) {
+		it.idx = len(it.keys) - 1
+		return
+	}
+	it.idx = pos
+}
+
+func (it *MockReverseIterator) UnsafeKey() []byte {
+	return []byte(it.keys[it.idx])
+}
+
+func (it *MockReverseIterator) UnsafeValue() []byte {
+	it.backend.mu.RLock()
+	defer it.backend.mu.RUnlock()
+	return it.backend.data[it.keys[it.idx]]
+}
+
+func (it *MockReverseIterator) IsDeleted() bool          { return false }
+func (it *MockReverseIterator) Error() error             { return nil }
+func (it *MockReverseIterator) Close() error             { return nil }
+func (it *MockReverseIterator) Domain() ([]byte, []byte) { return nil, nil }
+func (it *MockReverseIterator) Key() []byte              { return it.UnsafeKey() }
+func (it *MockReverseIterator) Value() []byte            { return it.UnsafeValue() }
+
+func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	// Large threshold so nothing flushes from memtable; we want the batch fast-path.
+	db, err := Open(dir, backend, 1<<30)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatch()
+	for i := 0; i < 64; i++ {
+		k := []byte(fmt.Sprintf("k%06d", i))
+		v := []byte("v")
+		if err := b.Set(k, v); err != nil {
+			t.Fatalf("Batch.Set: %v", err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Batch.Write: %v", err)
+	}
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	defer it.Close()
+
+	got := 0
+	for it.Valid() {
+		_ = it.Key()
+		_ = it.Value()
+		it.Next()
+		got++
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("Iterator.Error: %v", err)
+	}
+	if got != 64 {
+		t.Fatalf("expected %d keys, got %d", 64, got)
 	}
 }

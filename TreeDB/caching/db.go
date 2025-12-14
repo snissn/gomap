@@ -86,7 +86,7 @@ type keyRange struct {
 }
 
 func (r *keyRange) add(key []byte) {
-	if len(key) == 0 {
+	if key == nil {
 		return
 	}
 	if !r.valid {
@@ -737,6 +737,7 @@ type Batch struct {
 	streamTried    bool
 	firstKey       []byte
 	lastKey        []byte
+	batchRange     keyRange
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -759,6 +760,8 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+
+	b.batchRange.add(key)
 
 	if b.backend != nil {
 		b.size += len(key) + len(value)
@@ -798,6 +801,8 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
+	b.batchRange.add(key)
+
 	if b.backend != nil {
 		b.size += len(key)
 		return b.backend.Delete(key)
@@ -831,12 +836,14 @@ func (b *Batch) SetOps(ops map[string]batch.Entry) error {
 	if b.backend != nil {
 		for _, op := range ops {
 			b.size += len(op.Key) + len(op.Value)
+			b.batchRange.add(op.Key)
 		}
 		return b.backend.SetOps(ops)
 	}
 	for k, op := range ops {
 		b.ops[k] = op
 		b.size += len(op.Key) + len(op.Value)
+		b.batchRange.add(op.Key)
 	}
 	return nil
 }
@@ -896,12 +903,22 @@ func (b *Batch) write(sync bool) error {
 	if b.backend != nil {
 		var err error
 		if sync {
+			b.db.flushMu.Lock()
 			err = b.backend.WriteSync()
+			b.db.flushMu.Unlock()
 		} else {
+			b.db.flushMu.Lock()
 			err = b.backend.Write()
+			b.db.flushMu.Unlock()
 		}
 		if cerr := b.backend.Close(); cerr != nil && err == nil {
 			err = cerr
+		}
+		if err == nil && b.batchRange.valid {
+			b.db.mu.Lock()
+			b.db.backendRange.add(b.batchRange.min)
+			b.db.backendRange.add(b.batchRange.max)
+			b.db.mu.Unlock()
 		}
 		b.backend = nil
 		b.closed = true
