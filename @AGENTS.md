@@ -131,6 +131,8 @@
   - Renamed workflow/job names for clarity in the GitHub Actions UI.
   - Restored `pull_request` trigger for CI.
   - Quoted job names containing `:` to fix GitHub Actions YAML parsing.
+- 2025-12-14: CI workflows
+  - Split CI into separate workflow files (`format.yml`, `root-tests.yml`, `treedb-tests.yml`, `unified-bench-tests.yml`) so check names don’t all share the same workflow prefix in GitHub UI.
 - 2025-12-14: Docs
   - Documented TreeDB exclusive open (`treedb.ErrLocked`) and added `cmd/unified_bench/README.md`.
 - 2025-12-14: HashDB exclusive open
