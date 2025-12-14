@@ -52,11 +52,18 @@ type DB struct {
 	state atomic.Pointer[DBState]
 }
 
+type Mode uint8
+
+const (
+	ModeCached Mode = iota
+	ModeBackend
+)
+
 type Options struct {
 	Dir            string
 	ChunkSize      int64  // Default 256MB
 	KeepRecent     uint64 // Default 10000
-	EnableCaching  bool
+	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
 }
 
