@@ -20,11 +20,8 @@ const (
 func TestChaos(t *testing.T) {
 	// 1. Build Server
 	rootDir, _ := os.Getwd()
-	// Assume we are running from root or stress/
-	if !strings.HasSuffix(rootDir, "gomap") {
-		// adjust if running from stress dir
-		rootDir = filepath.Dir(rootDir)
-	}
+	// When running `go test`, the working directory is typically `HashDB/stress`.
+	rootDir = filepath.Dir(rootDir)
 
 	serverBin := filepath.Join(rootDir, "redisserver_bin")
 	buildCmd := exec.Command("go", "build", "-o", serverBin, "redisserver/main.go")
@@ -136,7 +133,7 @@ func TestChaos(t *testing.T) {
 }
 
 func startServer(t *testing.T, bin string, dbDir string) *exec.Cmd {
-	cmd := exec.Command(bin, "gomap", dbDir)
+	cmd := exec.Command(bin, "hashdb", dbDir)
 	// We need to pass port? server.go uses hardcoded addr?
 	// redisserver/main.go calls NewRedisServer.
 	// server.go Serve(addr).

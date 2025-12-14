@@ -15,9 +15,8 @@ import (
 func TestCompaction(t *testing.T) {
 	// 1. Setup
 	rootDir, _ := os.Getwd()
-	if !strings.HasSuffix(rootDir, "gomap") {
-		rootDir = filepath.Dir(rootDir)
-	}
+	// When running `go test`, the working directory is typically `HashDB/stress`.
+	rootDir = filepath.Dir(rootDir)
 	serverBin := filepath.Join(rootDir, "redisserver_bin_compact")
 	buildCmd := exec.Command("go", "build", "-o", serverBin, "redisserver/main.go")
 	buildCmd.Dir = rootDir
