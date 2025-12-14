@@ -129,6 +129,7 @@
   - Added `gofmt` check and `go vet` steps to `.github/workflows/go-tests.yml`.
   - Expanded CI to run on Linux + macOS.
   - Renamed workflow/job names for clarity in the GitHub Actions UI.
+  - Restored `pull_request` trigger for CI.
 - 2025-12-14: Docs
   - Documented TreeDB exclusive open (`treedb.ErrLocked`) and added `cmd/unified_bench/README.md`.
 - 2025-12-14: HashDB exclusive open
