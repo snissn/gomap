@@ -21,6 +21,9 @@ type Key struct {
 	hash       Hash
 }
 
+// DB is a single-shard HashDB instance.
+//
+// It is not safe for concurrent use; prefer HashDB for most applications.
 type DB struct {
 	dir string
 
