@@ -212,9 +212,13 @@ Notes:
 ## 7) CI & Tooling (Quality Gates)
 
 - Add `go vet` to CI in all three contexts: `./`, `TreeDB/`, and `cmd/unified_bench/`.
+- Status: done (see `.github/workflows/root-tests.yml`, `.github/workflows/treedb-tests.yml`, `.github/workflows/unified-bench-tests.yml`).
 - Run CI on an OS matrix (Linux/macOS/Windows) since mmap/locking/memlock paths differ.
+- Status: partial (Linux/macOS for root + TreeDB + unified_bench; Windows for HashDB only via `.github/workflows/hashdb-tests.yml`).
 - Optional: add a `gofmt` check step (fail if `gofmt` would change tracked files).
+- Status: done (`.github/workflows/format.yml`).
 - Optional: add `go test -race` on Linux (at least for `TreeDB/...` and `HashDB/...`) to catch iterator/flush concurrency issues.
+- Status: available via `make test-race` and `.github/workflows/race.yml` (manual).
 
 ## 8) Benchmark Reproducibility
 
@@ -227,6 +231,7 @@ Notes:
 
 - Explore low/zero-copy slab reads for read-heavy workloads (mmap slab or shard-local reusable buffers; be careful with slab growth/rotation and caller lifetimes).
 - Deepen `GetMany` by batching slab reads per shard (Linux experiments: `preadv` / io_uring).
+  - Status: basic hashing reuse implemented; slab read batching still pending.
 - Compaction correctness + performance for segmented slab design (make it correct first, then tune).
 - Compression policy tuning (thresholds, codecs, defaults; document recommendations).
 - Optional stricter durability: a small WAL with configurable fsync policies (keep slab log as primary recovery).
