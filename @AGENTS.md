@@ -67,6 +67,10 @@
   - Added `IndexMemoryPolicy` (default: mlock controls best-effort, madvise key map WILLNEED+RANDOM best-effort)
   - Implemented cross-platform memory pinning via `x/sys` (`unix.Mlock` / `windows.VirtualLock`) and best-effort unlock on close
   - `go test ./...` (root): PASS
+- 2025-12-14: HashDB legacy cleanup
+  - Removed unused syscall-based `mlock` implementation (replaced by `x/sys` helpers)
+  - Fixed Linux `applyFadvise` to use a single advice (`FADV_RANDOM`)
+  - `go test ./...` (root): PASS
 
 ## Notes / Conventions
 
