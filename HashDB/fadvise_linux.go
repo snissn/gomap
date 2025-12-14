@@ -6,7 +6,7 @@ package hashdb
 import "golang.org/x/sys/unix"
 
 func applyFadvise(fd int, size int64) {
-	_ = unix.Fadvise(fd, 0, size, unix.FADV_RANDOM|unix.FADV_DONTNEED)
+	_ = unix.Fadvise(fd, 0, size, unix.FADV_RANDOM)
 }
 
 func applyMadvise(data []byte) {

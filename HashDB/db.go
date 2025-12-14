@@ -1,14 +1,8 @@
 package hashdb
 
 import (
-	"fmt"
 	"os"
-	"syscall"
 	"time"
-
-	"unsafe"
-
-	"github.com/edsrzf/mmap-go"
 )
 
 func (h *DB) closeFPs() error {
@@ -248,15 +242,6 @@ func (h *DB) Put(key []byte, value []byte) error {
 // Add is a compatibility wrapper for older code.
 func (h *DB) Add(key []byte, value []byte) error {
 	return h.Put(key, value)
-}
-
-// mlock locks the data in memory to prevent it from being swapped to disk.
-func (h *DB) mlock(data mmap.MMap) error {
-	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
-	if errno != 0 {
-		return fmt.Errorf("mlock: %w", errno)
-	}
-	return nil
 }
 
 // Open initializes a DB in the given folder.
