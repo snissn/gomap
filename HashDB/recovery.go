@@ -14,8 +14,10 @@ import (
 func (h *DB) Recover() error {
 	// If an incremental rehash was in progress, discard any old table state.
 	h.rehashInProgress = false
-	h.rehashOldMapFile = nil
-	h.rehashOldMap = nil
+	h.rehashOldControlFile = nil
+	h.rehashOldControlMap = nil
+	h.rehashOldKeyFile = nil
+	h.rehashOldKeyMap = nil
 	h.rehashOldKeys = nil
 	h.rehashOldControls = nil
 	h.rehashOldCapacity = 0

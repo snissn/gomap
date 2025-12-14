@@ -35,14 +35,16 @@ func (h *DB) startRehash() error {
 	}
 
 	// Save current index as "old".
-	oldMap := h.hashMap
-	oldFile := h.hashMapFile
+	oldControlMap := h.controlMap
+	oldControlFile := h.controlFile
+	oldKeyMap := h.keyMap
+	oldKeyFile := h.keyFile
 	oldCap := h.capacity
 	oldKeys := h.keys
 	oldControls := h.controls
 
 	// Allocate new index file/mmap.
-	newMap, newFile, err := h.openMmapHash(newCap)
+	newControlMap, newControlFile, newKeyMap, newKeyFile, err := h.openIndexMaps(newCap)
 	if err != nil {
 		return err
 	}
@@ -50,35 +52,37 @@ func (h *DB) startRehash() error {
 	// Persist new capacity for future opens. This mirrors the old resize behavior,
 	// which wrote capacity at the moment of resizing.
 	if err := h.writeCapacity(newCap); err != nil {
-		newMap.Unmap()
-		newFile.Close()
+		newControlMap.Unmap()
+		newControlFile.Close()
+		newKeyMap.Unmap()
+		newKeyFile.Close()
 		return err
 	}
 
 	// Switch active index to the new table.
-	h.hashMap = newMap
-	h.hashMapFile = newFile
+	h.controlMap = newControlMap
+	h.controlFile = newControlFile
+	h.keyMap = newKeyMap
+	h.keyFile = newKeyFile
 	h.capacity = newCap
 
 	// Controls
-	ctrlPtr := (*byte)(unsafe.Pointer(&newMap[0]))
-	h.controls = unsafe.Slice(ctrlPtr, newCap)
+	h.controls = []byte(newControlMap)
 
 	// Keys
-	keyPtr := (*Key)(unsafe.Pointer(&newMap[newCap]))
+	keyPtr := (*Key)(unsafe.Pointer(&newKeyMap[0]))
 	h.keys = unsafe.Slice(keyPtr, newCap)
 
 	// Record old index for incremental migration.
-	h.rehashOldMap = oldMap
-	h.rehashOldMapFile = oldFile
+	h.rehashOldControlMap = oldControlMap
+	h.rehashOldControlFile = oldControlFile
+	h.rehashOldKeyMap = oldKeyMap
+	h.rehashOldKeyFile = oldKeyFile
 	h.rehashOldCapacity = oldCap
-	if oldKeys == nil && len(oldMap) > 0 {
-		// Fallback: build slice view over old mmap if Keys wasn't initialized.
-		// Old format: Controls at 0, Keys start at oldCap
-		tmpCtrl := (*byte)(unsafe.Pointer(&oldMap[0]))
-		oldControls = unsafe.Slice(tmpCtrl, oldCap)
-
-		tmp := (*Key)(unsafe.Pointer(&oldMap[oldCap]))
+	if oldKeys == nil && len(oldKeyMap) > 0 && len(oldControlMap) > 0 {
+		// Fallback: build slice view over old mmaps if slices weren't initialized.
+		oldControls = []byte(oldControlMap)
+		tmp := (*Key)(unsafe.Pointer(&oldKeyMap[0]))
 		oldKeys = unsafe.Slice(tmp, oldCap)
 	}
 	h.rehashOldKeys = oldKeys
@@ -144,28 +148,40 @@ func (h *DB) finishRehash() {
 	}
 
 	// Close and unmap old index.
-	if h.rehashOldMapFile != nil {
-		h.rehashOldMapFile.Close()
+	if h.rehashOldControlFile != nil {
+		h.rehashOldControlFile.Close()
 	}
-	if h.rehashOldMap != nil {
-		h.rehashOldMap.Unmap()
+	if h.rehashOldControlMap != nil {
+		h.rehashOldControlMap.Unmap()
+	}
+	if h.rehashOldKeyFile != nil {
+		h.rehashOldKeyFile.Close()
+	}
+	if h.rehashOldKeyMap != nil {
+		h.rehashOldKeyMap.Unmap()
 	}
 
 	// Best-effort cleanup of old index files on disk.
-	// After a successful rehash there should be exactly one hashkeys-* file,
-	// corresponding to the current Capacity.
+	// After a successful rehash there should be exactly one hashkeys-* file and
+	// one hashctl-* file, corresponding to the current Capacity.
 	files, err := os.ReadDir(h.dir)
 	if err == nil {
-		current := fmt.Sprintf("hashkeys-%d", h.capacity)
+		currentKeys := fmt.Sprintf("hashkeys-%d", h.capacity)
+		currentCtl := fmt.Sprintf("hashctl-%d", h.capacity)
 		for _, f := range files {
-			if strings.HasPrefix(f.Name(), "hashkeys-") && f.Name() != current {
+			if strings.HasPrefix(f.Name(), "hashkeys-") && f.Name() != currentKeys {
+				_ = os.Remove(h.dir + "/" + f.Name())
+			}
+			if strings.HasPrefix(f.Name(), "hashctl-") && f.Name() != currentCtl {
 				_ = os.Remove(h.dir + "/" + f.Name())
 			}
 		}
 	}
 
-	h.rehashOldMapFile = nil
-	h.rehashOldMap = nil
+	h.rehashOldControlFile = nil
+	h.rehashOldControlMap = nil
+	h.rehashOldKeyFile = nil
+	h.rehashOldKeyMap = nil
 	h.rehashOldKeys = nil
 	h.rehashOldControls = nil
 	h.rehashOldCapacity = 0

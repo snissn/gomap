@@ -48,13 +48,18 @@ func TestResizeLeak(t *testing.T) {
 	assert.NoError(t, err)
 
 	hashKeyFiles := 0
+	hashCtlFiles := 0
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), "hashkeys-") {
 			hashKeyFiles++
 		}
+		if strings.HasPrefix(f.Name(), "hashctl-") {
+			hashCtlFiles++
+		}
 	}
 
-	// Logic: If leak exists, we expect multiple hashkeys- files.
-	// If fixed, we expect only 1 file (the current one).
+	// Logic: If leak exists, we expect multiple hashkeys-/hashctl- files.
+	// If fixed, we expect only 1 file for each (the current ones).
 	assert.Equal(t, 1, hashKeyFiles, "Should only have 1 hashkey file after resize, found %d", hashKeyFiles)
+	assert.Equal(t, 1, hashCtlFiles, "Should only have 1 hashctl file after resize, found %d", hashCtlFiles)
 }

@@ -3,24 +3,43 @@ package hashdb
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
 )
 
-func NtoBytesHashmap(N uint64) int64 {
-	i := Key{}
-	// N bytes for controls + N * sizeof(Key) for keys
-	return int64(N) + int64(unsafe.Sizeof(i))*int64(N)
+func bytesForControls(N uint64) int64 {
+	return int64(N)
 }
 
-func (h *DB) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
-	bytes := NtoBytesHashmap(N)
+func bytesForKeys(N uint64) int64 {
+	return int64(unsafe.Sizeof(Key{})) * int64(N)
+}
+
+func (h *DB) openIndexMaps(N uint64) (mmap.MMap, *os.File, mmap.MMap, *os.File, error) {
+	controlMap, controlFile, err := h.openMmapControls(N)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	keyMap, keyFile, err := h.openMmapKeys(N)
+	if err != nil {
+		_ = controlMap.Unmap()
+		_ = controlFile.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	return controlMap, controlFile, keyMap, keyFile, nil
+}
+
+func (h *DB) openMmapControls(N uint64) (mmap.MMap, *os.File, error) {
+	bytes := bytesForControls(N)
 	if err := h.createDirectory(); err != nil {
 		return nil, nil, err
 	}
-	filename := h.dir + "/hashkeys-" + fmt.Sprint(N)
+	filename := filepath.Join(h.dir, fmt.Sprintf("hashctl-%d", N))
 
 	if !doesFileExist(filename) {
 		if err := h.createFile(filename, bytes); err != nil {
@@ -33,9 +52,28 @@ func (h *DB) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 		return nil, nil, err
 	}
 
-	// h.mlock(mappedData) // todo see if matters
+	return mappedData, file, nil
+}
 
-	return mappedData, file, err
+func (h *DB) openMmapKeys(N uint64) (mmap.MMap, *os.File, error) {
+	bytes := bytesForKeys(N)
+	if err := h.createDirectory(); err != nil {
+		return nil, nil, err
+	}
+	filename := filepath.Join(h.dir, fmt.Sprintf("hashkeys-%d", N))
+
+	if !doesFileExist(filename) {
+		if err := h.createFile(filename, bytes); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	mappedData, file, err := h.openMmapFile(filename)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return mappedData, file, nil
 }
 
 func (h *DB) openMmapFile(filename string) (mmap.MMap, *os.File, error) {
@@ -70,10 +108,16 @@ func (h *DB) createFile(filename string, bytes int64) error {
 	if err != nil {
 		return errors.Wrap(err, 1)
 	}
-	f.Seek(bytes-1, 0)
-	f.Write([]byte("\x00"))
-	f.Seek(0, 0)
-	f.Sync()
-	f.Close()
+	if err := f.Truncate(bytes); err != nil {
+		f.Close()
+		return errors.Wrap(err, 1)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return errors.Wrap(err, 1)
+	}
+	if err := f.Close(); err != nil {
+		return errors.Wrap(err, 1)
+	}
 	return nil
 }

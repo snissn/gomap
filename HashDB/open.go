@@ -36,7 +36,7 @@ func (h *DB) initN(folder string, N uint64) error {
 		return err
 	}
 
-	m, f_map, err := h.openMmapHash(N)
+	controlMap, controlFile, keyMap, keyFile, err := h.openIndexMaps(N)
 	if err != nil {
 		return errors.Wrap(err, 1)
 	}
@@ -55,8 +55,10 @@ func (h *DB) initN(folder string, N uint64) error {
 		return errors.Wrap(err, 1)
 	}
 
-	h.hashMap = m
-	h.hashMapFile = f_map
+	h.controlMap = controlMap
+	h.controlFile = controlFile
+	h.keyMap = keyMap
+	h.keyFile = keyFile
 
 	h.metadataMap = meta
 	h.metadataFile = f_meta
@@ -92,12 +94,11 @@ func (h *DB) initN(folder string, N uint64) error {
 	h.capacity = N
 	h.count = getCount(h.metadataMap)
 
-	// Controls are the first N bytes
-	ctrlPtr := (*byte)(unsafe.Pointer(&h.hashMap[0]))
-	h.controls = unsafe.Slice(ctrlPtr, N)
+	// Controls are stored in a separate mmap.
+	h.controls = []byte(h.controlMap)
 
-	// Keys are after controls
-	keyPtr := (*Key)(unsafe.Pointer(&h.hashMap[N]))
+	// Keys are stored in a separate mmap.
+	keyPtr := (*Key)(unsafe.Pointer(&h.keyMap[0]))
 	h.keys = unsafe.Slice(keyPtr, N)
 	return nil
 }

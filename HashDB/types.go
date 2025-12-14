@@ -24,8 +24,10 @@ type Key struct {
 type DB struct {
 	dir string
 
-	hashMapFile  *os.File
-	hashMap      mmap.MMap
+	controlFile  *os.File
+	controlMap   mmap.MMap
+	keyFile      *os.File
+	keyMap       mmap.MMap
 	metadataFile *os.File
 	metadataMap  mmap.MMap
 
@@ -50,13 +52,15 @@ type DB struct {
 	compressionEnabled bool
 
 	// Incremental rehash state (per-shard, in-memory only).
-	rehashInProgress  bool
-	rehashOldMapFile  *os.File
-	rehashOldMap      mmap.MMap
-	rehashOldCapacity uint64
-	rehashOldKeys     []Key
-	rehashOldControls []byte
-	rehashIdx         uint64
+	rehashInProgress     bool
+	rehashOldControlFile *os.File
+	rehashOldControlMap  mmap.MMap
+	rehashOldKeyFile     *os.File
+	rehashOldKeyMap      mmap.MMap
+	rehashOldCapacity    uint64
+	rehashOldKeys        []Key
+	rehashOldControls    []byte
+	rehashIdx            uint64
 
 	resizeThreshold uint64
 }

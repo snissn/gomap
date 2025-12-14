@@ -20,13 +20,21 @@ func (h *DB) closeFPs() error {
 	}
 
 	// Unmap before closing files (important for Windows compatibility).
-	if h.hashMap != nil {
-		recordErr(h.hashMap.Unmap())
-		h.hashMap = nil
+	if h.controlMap != nil {
+		recordErr(h.controlMap.Unmap())
+		h.controlMap = nil
 	}
-	if h.hashMapFile != nil {
-		recordErr(h.hashMapFile.Close())
-		h.hashMapFile = nil
+	if h.controlFile != nil {
+		recordErr(h.controlFile.Close())
+		h.controlFile = nil
+	}
+	if h.keyMap != nil {
+		recordErr(h.keyMap.Unmap())
+		h.keyMap = nil
+	}
+	if h.keyFile != nil {
+		recordErr(h.keyFile.Close())
+		h.keyFile = nil
 	}
 
 	if h.metadataMap != nil {
@@ -39,13 +47,21 @@ func (h *DB) closeFPs() error {
 	}
 
 	// Close and unmap the old index if an incremental rehash was in progress.
-	if h.rehashOldMap != nil {
-		recordErr(h.rehashOldMap.Unmap())
-		h.rehashOldMap = nil
+	if h.rehashOldControlMap != nil {
+		recordErr(h.rehashOldControlMap.Unmap())
+		h.rehashOldControlMap = nil
 	}
-	if h.rehashOldMapFile != nil {
-		recordErr(h.rehashOldMapFile.Close())
-		h.rehashOldMapFile = nil
+	if h.rehashOldControlFile != nil {
+		recordErr(h.rehashOldControlFile.Close())
+		h.rehashOldControlFile = nil
+	}
+	if h.rehashOldKeyMap != nil {
+		recordErr(h.rehashOldKeyMap.Unmap())
+		h.rehashOldKeyMap = nil
+	}
+	if h.rehashOldKeyFile != nil {
+		recordErr(h.rehashOldKeyFile.Close())
+		h.rehashOldKeyFile = nil
 	}
 	h.rehashOldKeys = nil
 	h.rehashOldControls = nil
