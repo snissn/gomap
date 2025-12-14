@@ -58,6 +58,8 @@ type DB struct {
 	queue   []*memtable.Memtable
 	mutableRange keyRange
 	queueRanges  []keyRange
+	backendRange keyRange
+	backendRangeKnown bool
 
 	// Durability
 	wal     *wal.Writer
@@ -144,7 +146,48 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	db.wg.Add(1)
 	go db.flushLoop()
 
+	// Initialize backend key range for safe scan fast-path decisions.
+	if err := db.initBackendRange(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	return db, nil
+}
+
+func (db *DB) initBackendRange() error {
+	minIter, err := db.backend.Iterator(nil, nil)
+	if err != nil {
+		return err
+	}
+	defer minIter.Close()
+	minIter.Seek(nil)
+
+	r := keyRange{}
+	if minIter.Valid() && !minIter.IsDeleted() {
+		r.add(minIter.UnsafeKey())
+	}
+
+	maxIter, err := db.backend.ReverseIterator(nil, nil)
+	if err != nil {
+		// Backend doesn't support reverse iteration; disable backend-range-dependent optimizations.
+		db.mu.Lock()
+		db.backendRange = keyRange{}
+		db.backendRangeKnown = false
+		db.mu.Unlock()
+		return nil
+	}
+	defer maxIter.Close()
+
+	if maxIter.Valid() && !maxIter.IsDeleted() {
+		r.add(maxIter.UnsafeKey())
+	}
+
+	db.mu.Lock()
+	db.backendRange = r
+	db.backendRangeKnown = true
+	db.mu.Unlock()
+	return nil
 }
 
 func (db *DB) Close() error {
@@ -321,6 +364,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		return false
 	}
 	mem := db.queue[0]
+	memRange := keyRange{}
+	if len(db.queueRanges) > 0 {
+		memRange = db.queueRanges[0]
+	}
 	db.mu.Unlock()
 
 	// Flush 'mem' to backend
@@ -392,6 +439,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 	// Remove from queue and delete old WAL
 	db.mu.Lock()
+	if memRange.valid {
+		db.backendRange.add(memRange.min)
+		db.backendRange.add(memRange.max)
+	}
 	if len(db.queue) > 0 {
 		db.queue = db.queue[1:]
 	}
@@ -458,6 +509,31 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock() // Need to hold lock while creating iterators?
 
+	// Fast path for full scans: if the in-memory key ranges are disjoint from the
+	// backend key range, we can concatenate iterators instead of merging.
+	if start == nil && end == nil {
+		// Only do this when the queue is empty; queued memtables imply the backend
+		// might not yet include older keys, making disjoint-range checks unreliable.
+		if db.backendRangeKnown && len(db.queue) == 0 && db.mutableRange.valid && db.backendRange.valid && !rangesOverlap(db.mutableRange, db.backendRange) {
+			diskIter, err := db.backend.Iterator(nil, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			memIter := db.mutable.NewIterator()
+			memIter.Seek(nil)
+
+			// Common append-only case: backend max < mutable min.
+			if bytes.Compare(db.backendRange.max, db.mutableRange.min) < 0 {
+				return newConcatUnsafeIterator(diskIter, memIter), nil
+			}
+			// Rare: mutable max < backend min.
+			if bytes.Compare(db.mutableRange.max, db.backendRange.min) < 0 {
+				return newConcatUnsafeIterator(memIter, diskIter), nil
+			}
+		}
+	}
+
 	var sources []merging.IteratorSource
 
 	// Priority 0: Mutable (always exists)
@@ -495,10 +571,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Actually, treedb.Iterator(start, end) usually does the initial seek.
 	// Let's verify tree.Iterator in a moment.
 	
-	// If the diskIter comes pre-seeked (which is common for DB.Iterator(start, end)),
-	// we don't need to Seek it again, or Seek(start) is idempotent/cheap.
-	// However, if we Seek it here, we ensure it's valid.
-	diskIter.Seek(start)
+	// Most backends return an iterator already positioned at start; avoid redundant Seek(nil).
+	if start != nil {
+		diskIter.Seek(start)
+	}
 	
 	sources = append(sources, merging.IteratorSource{
 		Iter:     diskIter,
@@ -507,6 +583,109 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	return merging.NewMergingIterator(sources, start, end), nil
 }
+
+type concatUnsafeIterator struct {
+	first iterator.UnsafeIterator
+	second iterator.UnsafeIterator
+
+	cur      iterator.UnsafeIterator
+	usingFirst bool
+	valid    bool
+	err      error
+}
+
+func newConcatUnsafeIterator(first, second iterator.UnsafeIterator) merging.Iterator {
+	it := &concatUnsafeIterator{
+		first:      first,
+		second:     second,
+		cur:        first,
+		usingFirst: true,
+	}
+	it.advance()
+	return it
+}
+
+func (it *concatUnsafeIterator) advance() {
+	it.valid = false
+
+	for {
+		if it.cur == nil {
+			return
+		}
+
+		// Switch to second iterator when first is exhausted.
+		if !it.cur.Valid() {
+			if it.usingFirst {
+				it.cur = it.second
+				it.usingFirst = false
+				continue
+			}
+			return
+		}
+
+		if it.cur.IsDeleted() {
+			it.cur.Next()
+			continue
+		}
+
+		it.valid = true
+		return
+	}
+}
+
+func (it *concatUnsafeIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	it.cur.Next()
+	it.advance()
+}
+
+func (it *concatUnsafeIterator) Valid() bool { return it.valid }
+
+func (it *concatUnsafeIterator) Key() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.Key()
+}
+
+func (it *concatUnsafeIterator) Value() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.Value()
+}
+
+func (it *concatUnsafeIterator) Close() error {
+	var firstErr error
+	if it.first != nil {
+		if err := it.first.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if it.second != nil {
+		if err := it.second.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (it *concatUnsafeIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	if it.first != nil && it.first.Error() != nil {
+		return it.first.Error()
+	}
+	if it.second != nil && it.second.Error() != nil {
+		return it.second.Error()
+	}
+	return nil
+}
+
+func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
@@ -829,6 +1008,13 @@ func (b *Batch) writeBypass(sync bool) error {
 	if err != nil {
 		return err
 	}
+
+	b.db.mu.Lock()
+	if batchRange.valid {
+		b.db.backendRange.add(batchRange.min)
+		b.db.backendRange.add(batchRange.max)
+	}
+	b.db.mu.Unlock()
 	
 	return b.Close()
 }
