@@ -156,6 +156,8 @@
   - Added Windows HashDB `go vet` + `go test` workflow (`HashDB: vet+test (Windows)`).
 - 2025-12-14: Docs (handoff)
   - Added `CONTRIBUTING.md` and `CHANGELOG.md`; linked from `README.md` and `docs/`.
+- 2025-12-14: Roadmap status
+  - Updated `TODO.md` with CI/-race status notes and a HashDB follow-up status note.
 
 ## Notes / Conventions
 
