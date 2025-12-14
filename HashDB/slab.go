@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"strings"
+	"sync/atomic"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
