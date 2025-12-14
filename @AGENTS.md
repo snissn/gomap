@@ -26,6 +26,8 @@
 - 2025-12-14: Repo formatting + artifacts
   - Ran `gofmt` across the repo
   - Removed checked-in build artifact `cmd/unified_bench/benchmarker` (now gitignored)
+- 2025-12-14: CI
+  - Added GitHub Actions workflow to run `go test ./...` in `./`, `TreeDB/`, and `cmd/unified_bench/`
 
 ## Notes / Conventions
 

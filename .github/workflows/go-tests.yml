@@ -1,0 +1,69 @@
+name: Go tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-root:
+    name: go test (root)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test
+        run: go test ./...
+
+  test-treedb:
+    name: go test (TreeDB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            TreeDB/go.sum
+
+      - name: Test
+        working-directory: TreeDB
+        run: go test ./...
+
+  test-unified-bench:
+    name: go test (cmd/unified_bench)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            cmd/unified_bench/go.sum
+
+      - name: Test
+        working-directory: cmd/unified_bench
+        run: go test ./...
+
