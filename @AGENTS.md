@@ -14,9 +14,11 @@
   - `go test ./...` (root): PASS
   - `go test ./...` (`GeminiTreeDB`): FAIL (memtable test compile error)
   - `go test ./...` (`cmd/unified_bench`): FAIL (expects `../../TreeDB` module path; directory missing)
+- 2025-12-14: Housekeeping
+  - Added `TENTATIVE_DELETIONS.md`
+  - Stopped tracking `.DS_Store` and added it to `.gitignore`
 
 ## Notes / Conventions
 
 - Prefer small, reviewable commits; run relevant tests before/after each.
 - Keep renames “modest”: mostly package/module names and imports; avoid large API churn unless tests demand it.
-
