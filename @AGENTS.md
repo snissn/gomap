@@ -10,7 +10,7 @@
 - [x] Consolidate to a single root `go.mod` and keep CI/Makefile aligned.
 - [x] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
-- [ ] Future work: unify TreeDB open + crash recovery (see `TODO.md`).
+- [x] TreeDB: unify open + coherent crash recovery (cached WAL replay + cleanup; spec tests added).
 - [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
 - [ ] Milestone: Raft-backed database (“RaftDB”) on TreeDB/HashDB (see `TODO.md`).
 - [x] HashDB: add exclusive open lock + tests.
@@ -143,6 +143,11 @@
   - Documented the new lock behavior in `HashDB/doc.go`.
 - 2025-12-14: HashDB stress tests
   - Made `HashDB/stress/compaction_test.go` tolerate transient `ENOENT` during size walks while compaction creates/removes `*-compact` dirs (fixes flaky macOS CI failure).
+- 2025-12-14: TreeDB WAL recovery + unified public Open
+  - Backend `Open` now replays any cached WAL segments in `Dir/wal/` into the backend (sync commit) and removes them.
+  - Cached flush path now tracks and deletes WAL segments after successful flush.
+  - Public `treedb.Open` returns a single `*treedb.DB` wrapper; backend-only mode is `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`).
+  - Added spec tests covering crash recovery + truncated WAL handling in `TreeDB/recovery_spec_test.go`.
 
 ## Notes / Conventions
 

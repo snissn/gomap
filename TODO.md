@@ -8,12 +8,23 @@ This repo currently exposes two TreeDB entrypoints:
 The cached layer is **not** a read-cache; it is an LSM-style **write-back** layer:
 `Memtable + WAL + background flush → backend`.
 
-Today, the caching WAL is **not replayed** on open, and there is **no cross-process lock**.
+Historically, the caching WAL was not replayed on open and there was no cross-process lock (both are now fixed).
 This document outlines a coherent future plan to:
 
 1. Provide a single public DB type/API with a runtime mode switch (cached vs backend).
 2. Enforce **exclusive open** (single-writer, cross-process).
 3. Implement **coherent crash recovery** so the same on-disk state is recovered whether the next opener chooses cached or backend mode.
+
+## Status (2025-12-14)
+
+This roadmap is now largely implemented:
+
+- Public API: `treedb.Open(opts)` returns a single `*treedb.DB`; choose backend-only via `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend(opts)`).
+- Exclusive open: `treedb.Open*` enforces a cross-process directory lock (`treedb.ErrLocked`).
+- Coherent crash recovery: backend open replays any cached WAL segments in `Dir/wal/` into the backend (sync commit) and removes them.
+- WAL cleanup: cached flush deletes WAL segments after successful flush so WAL does not grow unbounded.
+
+Remaining future work is mostly optional polish (e.g. persistent checkpoints in meta, “ignore WAL” unsafe mode, and more corruption diagnostics).
 
 ## 1) Unify the Public API (One `treedb.DB`)
 
@@ -77,14 +88,14 @@ Implement cross-platform locking via `golang.org/x/sys`:
 
 ## 3) Coherent Crash Recovery (Backend + Cached WAL Replay)
 
-### Problem Today
+### Previous Problem
 Cached TreeDB writes go to:
 - caching WAL (buffered) + memtable (RAM)
 - flushed later to backend
 
 If the process crashes:
 - backend contains only the last flushed state,
-- WAL files may exist, but **are not replayed**,
+- WAL files may exist, but were previously not replayed,
 - so reopening as cached vs backend yields the **same** (backend-only) recovered state, losing unflushed updates.
 
 ### Goal
@@ -178,21 +189,21 @@ Notes:
 
 ## 5) Implementation Milestones (Suggested Order)
 
-1. **Locking**
+1. **Locking** (done)
    - Add lock file type + acquire/release in `treedb.Open*`.
-2. **Refactor Open path**
-   - Route all opens through a shared internal `openAndRecover(opts)` pipeline.
-3. **WAL segment discovery**
+2. **Refactor Open path** (done)
+   - Route all opens through a shared recovery pipeline.
+3. **WAL segment discovery** (done)
    - Enumerate `Dir/wal/` files, parse sequence numbers, sort.
-4. **Checkpoint persistence**
-   - Extend meta format (versioned) to store applied WAL checkpoint.
-5. **Replay engine**
-   - Apply WAL ops to backend via backend batches; commit; update checkpoint; cleanup.
-   - Retire/delete old WAL segments once they are checkpointed (e.g. remove the existing “delete old WAL file” TODO in the cached writer path).
-6. **Mode selection**
+4. **Replay engine + cleanup** (done)
+   - Apply WAL ops to backend via backend batches (`WriteSync`) and remove WAL segments on success.
+   - Retire/delete old WAL segments after successful flush (removes the old “delete old WAL file” TODO in the cached writer path).
+5. **Mode selection** (done)
    - Return `*treedb.DB` wrapper that chooses cached vs backend at runtime.
-7. **Spec tests**
-   - Implement tests A–D and ensure they pass on all platforms.
+6. **Spec tests** (done)
+   - Crash recovery + truncated WAL handling are covered by tests.
+7. **Optional: checkpoint persistence**
+   - If we ever need to keep WAL segments around for debugging/retention, extend meta format (versioned) to store an applied checkpoint.
 
 ## 6) Open Questions (Worth Deciding Early)
 
@@ -290,7 +301,7 @@ Call out the observed benchmark patterns (typical, not guaranteed):
 Also include:
 - How to force “scan speed mode” in cached TreeDB (e.g. flush before scan) if applicable.
 - Correctness caveats today:
-  - caching WAL is not replayed on open (until the recovery roadmap is implemented),
+  - caching WAL is replayed on open (coherent recovery across cached/backend),
   - multiple processes are unsafe without exclusive locking.
 
 ### 3) “Performance + Tuning” guide
