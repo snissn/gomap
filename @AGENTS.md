@@ -168,6 +168,8 @@
   - Added `make bench-readme` and a script to replace the section between `<!-- BENCHMARK_START -->` and `<!-- BENCHMARK_END -->` in `README.md`.
 - 2025-12-14: Benchmark metadata
   - `unified_bench -suite readme` now includes generation timestamp + environment summary (OS/arch, Go version, CPUs, RAM, CPU model).
+- 2025-12-14: Windows CI fix
+  - Fixed HashDB `stress` tests on Windows by building/execing the redis server binary with a `.exe` suffix and using `localhost:6380` for readiness checks.
 
 ## Notes / Conventions
 
