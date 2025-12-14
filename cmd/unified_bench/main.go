@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -212,7 +214,118 @@ func (t *TreeDBBackendWrapper) NewBatch() (BatchInterface, error) {
 	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
-// 5. LevelDB Wrapper
+// 5. Badger Wrapper
+type BadgerBatch struct {
+	wb *badger.WriteBatch
+}
+
+func (b *BadgerBatch) Set(key, value []byte) error { return b.wb.Set(key, value) }
+func (b *BadgerBatch) Delete(key []byte) error     { return b.wb.Delete(key) }
+func (b *BadgerBatch) Commit() error               { return b.wb.Flush() }
+func (b *BadgerBatch) Close() error                { b.wb.Cancel(); return nil }
+
+type BadgerIterator struct {
+	txn     *badger.Txn
+	it      *badger.Iterator
+	end     []byte
+	keyBuf  []byte
+	valBuf  []byte
+	lastErr error
+}
+
+func (i *BadgerIterator) Valid() bool {
+	if !i.it.Valid() {
+		return false
+	}
+	if i.end == nil {
+		return true
+	}
+	return bytes.Compare(i.it.Item().Key(), i.end) < 0
+}
+func (i *BadgerIterator) Next() { i.it.Next() }
+func (i *BadgerIterator) Key() []byte {
+	i.keyBuf = i.it.Item().KeyCopy(i.keyBuf[:0])
+	return i.keyBuf
+}
+func (i *BadgerIterator) Value() []byte {
+	var err error
+	i.valBuf, err = i.it.Item().ValueCopy(i.valBuf[:0])
+	if err != nil && i.lastErr == nil {
+		i.lastErr = err
+	}
+	return i.valBuf
+}
+func (i *BadgerIterator) Close() error {
+	i.it.Close()
+	i.txn.Discard()
+	return nil
+}
+func (i *BadgerIterator) Error() error { return i.lastErr }
+
+type BadgerWrapper struct {
+	db *badger.DB
+}
+
+func NewBadger(dir string) (*BadgerWrapper, error) {
+	opts := badger.DefaultOptions(dir).WithLogger(nil)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &BadgerWrapper{db: db}, nil
+}
+
+func (b *BadgerWrapper) Name() string { return "Badger" }
+func (b *BadgerWrapper) Set(k, v []byte) error {
+	return b.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(k, v)
+	})
+}
+func (b *BadgerWrapper) Get(k []byte) ([]byte, error) {
+	var out []byte
+	err := b.db.View(func(txn *badger.Txn) error {
+		it, err := txn.Get(k)
+		if err != nil {
+			if err == badger.ErrKeyNotFound {
+				return nil
+			}
+			return err
+		}
+		out, err = it.ValueCopy(nil)
+		return err
+	})
+	return out, err
+}
+func (b *BadgerWrapper) Delete(k []byte) error {
+	return b.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete(k)
+	})
+}
+func (b *BadgerWrapper) Close() error       { return b.db.Close() }
+func (b *BadgerWrapper) SupportsScan() bool { return true }
+func (b *BadgerWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	txn := b.db.NewTransaction(false)
+	opts := badger.DefaultIteratorOptions
+	opts.PrefetchValues = true
+	it := txn.NewIterator(opts)
+	if start != nil {
+		it.Seek(start)
+	} else {
+		it.Rewind()
+	}
+
+	var endCopy []byte
+	if end != nil {
+		endCopy = append([]byte(nil), end...)
+	}
+	return &BadgerIterator{txn: txn, it: it, end: endCopy}, nil
+}
+func (b *BadgerWrapper) SupportsBatch() bool { return true }
+func (b *BadgerWrapper) NewBatch() (BatchInterface, error) {
+	return &BadgerBatch{wb: b.db.NewWriteBatch()}, nil
+}
+
+// 6. LevelDB Wrapper
 type LevelDBBatch struct {
 	batch *leveldb.Batch
 	db    *leveldb.DB
@@ -285,7 +398,7 @@ var (
 	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
 	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
@@ -318,13 +431,14 @@ func main() {
 		"treedbcached":  func(d string) (DBInterface, error) { return NewTreeDB(d) },        // legacy alias
 		"treedbbackend": func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // uncached
 		"treedbraw":     func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // alias
+		"badger":        func(d string) (DBInterface, error) { return NewBadger(d) },
 		"leveldb":       func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "leveldb"}
+	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "badger", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}

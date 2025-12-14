@@ -1,6 +1,6 @@
 # unified_bench
 
-Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeDBBackend` (uncached), and LevelDB.
+Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeDBBackend` (uncached), Badger, and LevelDB.
 
 ## Run
 
@@ -26,7 +26,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 
 ## Common flags
 
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,treedbbackend,leveldb`
+- `-dbs` (`all` or CSV): `hashdb,btree,treedb,treedbbackend,badger,leveldb`
 - `-tests` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-valsize` value size in bytes (default 128)
@@ -36,4 +36,3 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-progress` live table updates to stderr (default true)
-
