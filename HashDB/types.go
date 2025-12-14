@@ -1,7 +1,6 @@
 package hashdb
 
 import (
-	"bufio"
 	"os"
 	"time"
 
@@ -23,18 +22,18 @@ type Key struct {
 }
 
 type DB struct {
-	Folder string
+	dir string
 
 	hashMapFile  *os.File
 	hashMap      mmap.MMap
 	metadataFile *os.File
 	metadataMap  mmap.MMap
 
-	Count    *uint64
-	Capacity uint64
+	count    *uint64
+	capacity uint64
 
-	Keys       *[]Key
-	Controls   *[]byte
+	keys       []Key
+	controls   []byte
 	slabOffset *SlabOffset
 
 	hashTime   time.Duration
@@ -44,12 +43,11 @@ type DB struct {
 	slabData []byte
 
 	slabFiles       map[uint16]*os.File
-	activeSegmentId uint16
+	activeSegmentID uint16
 
-	activeWriter      *bufio.Writer
 	activeSegmentSize int64
 
-	CompressionEnabled bool
+	compressionEnabled bool
 
 	// Incremental rehash state (per-shard, in-memory only).
 	rehashInProgress  bool

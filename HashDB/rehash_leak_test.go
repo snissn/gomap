@@ -55,7 +55,7 @@ func TestResizeLeak(t *testing.T) {
 	// Now capacity should be 20.
 	// Note: There is a known bug where Count double-counts during resize, causing aggressive resizing.
 	// We relax the exact capacity check but ensure it has resized at least once.
-	assert.Greater(t, obj.Capacity, uint64(10), "Capacity should have increased")
+	assert.Greater(t, obj.Stats().Capacity, uint64(10), "Capacity should have increased")
 
 	// Check files in directory
 	files, err := os.ReadDir(folder)

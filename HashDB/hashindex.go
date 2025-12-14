@@ -37,13 +37,13 @@ func (h *DB) addKey(key []byte, slabOffset Key) error {
 		}
 	}
 
-	(*h.Keys)[hkey] = slabOffset
+	h.keys[hkey] = slabOffset
 	if isnew {
-		*h.Count += 1
+		*h.count += 1
 		// Set Control Byte
 		myhash := hash(key)
 		h2 := byte(myhash&0x7f) | 0x80
-		(*h.Controls)[hkey] = h2
+		h.controls[hkey] = h2
 	}
 	return nil
 }
@@ -65,8 +65,8 @@ func hash(key []byte) Hash {
 func (h *DB) getKeys() []Key {
 	// Deprecated/Internal use: returns slice of keys.
 	// We assume h.Keys is set.
-	if h.Keys != nil {
-		return *h.Keys
+	if len(h.keys) > 0 {
+		return h.keys
 	}
 	// Fallback should not happen in normal operation
 	return nil
@@ -173,14 +173,14 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
-	idx := h1 % h.Capacity
+	idx := h1 % h.capacity
 
 	var firstDeletedIdx uint64
 	foundDeleted := false
 	probes := uint64(0)
 
-	for probes < h.Capacity {
-		group := loadGroup(*h.Controls, idx, h.Capacity)
+	for probes < h.capacity {
+		group := loadGroup(h.controls, idx, h.capacity)
 
 		// 1. Check if key already exists
 		matchMask := matchH2(h2, group)
@@ -189,10 +189,10 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 			groupOffset := uint64(bitPos >> 3)
 			matchMask &= (matchMask - 1) // clear lowest set bit
 
-			candidateIdx := (idx + groupOffset) % h.Capacity
+			candidateIdx := (idx + groupOffset) % h.capacity
 
 			// Verify
-			bucket := (*h.Keys)[candidateIdx]
+			bucket := h.keys[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
 				item, err := h.unmarshalItemFromSlab(bucket)
 				if err != nil {
@@ -217,8 +217,8 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 				groupOffset := uint64(bitPos >> 3)
 				tmpMask &= (tmpMask - 1) // clear lowest set bit
 
-				candidateIdx := (idx + groupOffset) % h.Capacity
-				ctrl := (*h.Controls)[candidateIdx]
+				candidateIdx := (idx + groupOffset) % h.capacity
+				ctrl := h.controls[candidateIdx]
 
 				if ctrl == ctrlEmpty {
 					// Found Empty. Stop search.
@@ -235,7 +235,7 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 			}
 		}
 
-		idx = (idx + groupSize) % h.Capacity
+		idx = (idx + groupSize) % h.capacity
 		probes += groupSize
 	}
 	// Map is full or probed entire capacity
@@ -262,23 +262,23 @@ func (h *DB) addManyKeys(items []Item, slabOffsets []Key) error {
 			return err
 		}
 
-		(*h.Keys)[hkey] = slabOffsets[i]
+		h.keys[hkey] = slabOffsets[i]
 		if isnew {
 			totalNewKey++
 			// Set Control Byte
 			myhash := hash(item.Key)
 			h2 := byte(myhash&0x7f) | 0x80
-			(*h.Controls)[hkey] = h2
+			h.controls[hkey] = h2
 		}
 	}
 
-	*h.Count += totalNewKey
+	*h.count += totalNewKey
 	return nil
 }
 
 func (h *DB) setDeleted(idx uint64) {
-	if h.Controls != nil {
-		(*h.Controls)[idx] = ctrlDeleted
+	if len(h.controls) > 0 {
+		h.controls[idx] = ctrlDeleted
 	}
 }
 
@@ -288,11 +288,11 @@ func (h *DB) setDeleted(idx uint64) {
 func (h *DB) probeForRehash(hash uint64) (uint64, error) {
 	h1 := uint64(hash >> 7)
 
-	idx := h1 % h.Capacity
+	idx := h1 % h.capacity
 	probes := uint64(0)
 
-	for probes < h.Capacity {
-		group := loadGroup(*h.Controls, idx, h.Capacity)
+	for probes < h.capacity {
+		group := loadGroup(h.controls, idx, h.capacity)
 
 		// We look for any Empty or Deleted slot.
 		emptyMask := matchEmptyOrDeleted(group)
@@ -302,11 +302,11 @@ func (h *DB) probeForRehash(hash uint64) (uint64, error) {
 			bitPos := bits.TrailingZeros64(emptyMask)
 			groupOffset := uint64(bitPos >> 3)
 
-			candidateIdx := (idx + groupOffset) % h.Capacity
+			candidateIdx := (idx + groupOffset) % h.capacity
 			return candidateIdx, nil
 		}
 
-		idx = (idx + groupSize) % h.Capacity
+		idx = (idx + groupSize) % h.capacity
 		probes += groupSize
 	}
 	return 0, fmt.Errorf("hashmap is full during rehash (probed %d slots)", probes)

@@ -20,7 +20,7 @@ func (h *DB) openMmapHash(N uint64) (mmap.MMap, *os.File, error) {
 	if err := h.createDirectory(); err != nil {
 		return nil, nil, err
 	}
-	filename := h.Folder + "/hashkeys-" + fmt.Sprint(N)
+	filename := h.dir + "/hashkeys-" + fmt.Sprint(N)
 
 	if !doesFileExist(filename) {
 		if err := h.createFile(filename, bytes); err != nil {

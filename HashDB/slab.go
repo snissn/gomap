@@ -26,19 +26,19 @@ func unpackLength(packed uint64) (uint64, uint8) {
 
 func (h *DB) writeSlab(buf []byte) error {
 	// Check if active segment is full using in-memory size accounting
-	f := h.slabFiles[h.activeSegmentId]
+	f := h.slabFiles[h.activeSegmentID]
 	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
 		// Rotate to a new segment
-		h.activeSegmentId++
-		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
+		h.activeSegmentID++
+		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return err
 		}
-		h.slabFiles[h.activeSegmentId] = newF
+		h.slabFiles[h.activeSegmentID] = newF
 		f = newF
 
-		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		*h.slabOffset = SlabOffset(uint64(h.activeSegmentID) << OffsetBits)
 		h.activeSegmentSize = 0
 	}
 
@@ -72,7 +72,7 @@ func (h *DB) addSlab(item Item) (Key, error) {
 
 	// Compress value?
 	var flags uint8
-	if h.CompressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
+	if h.compressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
 		compressed := s2.Encode(nil, val)
 		if len(compressed) < len(val) {
 			val = compressed
@@ -114,18 +114,18 @@ func (h *DB) addSlab(item Item) (Key, error) {
 }
 
 func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
-	f := h.slabFiles[h.activeSegmentId]
+	f := h.slabFiles[h.activeSegmentID]
 	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
-		h.activeSegmentId++
-		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
+		h.activeSegmentID++
+		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return 0, err
 		}
-		h.slabFiles[h.activeSegmentId] = newF
+		h.slabFiles[h.activeSegmentID] = newF
 		f = newF
 
-		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		*h.slabOffset = SlabOffset(uint64(h.activeSegmentID) << OffsetBits)
 		h.activeSegmentSize = 0
 	}
 
@@ -156,18 +156,18 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 	// If batch > MaxSegmentSize, this logic needs to be smarter (split batch).
 	// For now assume batch fits.
 	if h.activeSegmentSize+int64(totalBatchSize) > MaxSegmentSize {
-		h.activeSegmentId++
-		newFilename := fmt.Sprintf("%s/slab-%d", h.Folder, h.activeSegmentId)
+		h.activeSegmentID++
+		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return nil, err
 		}
-		h.slabFiles[h.activeSegmentId] = newF
-		*h.slabOffset = SlabOffset(uint64(h.activeSegmentId) << OffsetBits)
+		h.slabFiles[h.activeSegmentID] = newF
+		*h.slabOffset = SlabOffset(uint64(h.activeSegmentID) << OffsetBits)
 		h.activeSegmentSize = 0
 	}
 
-	f := h.slabFiles[h.activeSegmentId]
+	f := h.slabFiles[h.activeSegmentID]
 	startOffset := *h.slabOffset
 	currentOffset := startOffset
 
@@ -176,7 +176,7 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 		valueBytes := item.Value
 
 		var flags uint8
-		if h.CompressionEnabled && len(valueBytes) > 32 {
+		if h.compressionEnabled && len(valueBytes) > 32 {
 			compressed := s2.Encode(nil, valueBytes)
 			if len(compressed) < len(valueBytes) {
 				valueBytes = compressed
@@ -233,7 +233,7 @@ func (h *DB) addDeleteSlab(key []byte) error {
 func (h *DB) openSlabSegments() error {
 	h.slabFiles = make(map[uint16]*os.File)
 
-	files, err := os.ReadDir(h.Folder)
+	files, err := os.ReadDir(h.dir)
 	if err != nil {
 		return err
 	}
@@ -244,7 +244,7 @@ func (h *DB) openSlabSegments() error {
 			var id int
 			_, err := fmt.Sscanf(file.Name(), "slab-%d", &id)
 			if err == nil {
-				f, err := os.OpenFile(filepath.Join(h.Folder, file.Name()), os.O_RDWR|os.O_APPEND, 0644)
+				f, err := os.OpenFile(filepath.Join(h.dir, file.Name()), os.O_RDWR|os.O_APPEND, 0644)
 				if err != nil {
 					return err
 				}
@@ -256,11 +256,11 @@ func (h *DB) openSlabSegments() error {
 		}
 	}
 
-	oldReal := h.Folder + "/slab-real"
+	oldReal := h.dir + "/slab-real"
 	if doesFileExist(oldReal) && maxID == -1 {
-		os.Rename(oldReal, h.Folder+"/slab-0")
+		os.Rename(oldReal, h.dir+"/slab-0")
 		maxID = 0
-		f, err := os.OpenFile(h.Folder+"/slab-0", os.O_RDWR|os.O_APPEND, 0644)
+		f, err := os.OpenFile(h.dir+"/slab-0", os.O_RDWR|os.O_APPEND, 0644)
 		if err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func (h *DB) openSlabSegments() error {
 
 	if maxID == -1 {
 		maxID = 0
-		f, err := os.Create(h.Folder + "/slab-0")
+		f, err := os.Create(h.dir + "/slab-0")
 		if err != nil {
 			return err
 		}
@@ -277,7 +277,7 @@ func (h *DB) openSlabSegments() error {
 		h.activeSegmentSize = 0
 	} else {
 		// Initialize active segment size from the last segment on disk.
-		lastFile := fmt.Sprintf("%s/slab-%d", h.Folder, maxID)
+		lastFile := fmt.Sprintf("%s/slab-%d", h.dir, maxID)
 		fi, err := os.Stat(lastFile)
 		if err != nil {
 			return err
@@ -285,7 +285,7 @@ func (h *DB) openSlabSegments() error {
 		h.activeSegmentSize = fi.Size()
 	}
 
-	h.activeSegmentId = uint16(maxID)
+	h.activeSegmentID = uint16(maxID)
 	return nil
 }
 
@@ -339,7 +339,7 @@ func decodeuint64(input []byte) (uint64, int) {
 }
 
 func (h *DB) openMetadata() (mmap.MMap, *os.File, error) {
-	filename := h.Folder + "/metadata"
+	filename := h.dir + "/metadata"
 	size := int64(4096)
 
 	if !doesFileExist(filename) {
@@ -354,7 +354,7 @@ func (h *DB) openMetadata() (mmap.MMap, *os.File, error) {
 		f.Close()
 	}
 
-	f, err := os.OpenFile(filename, os.O_RDWR, 0655)
+	f, err := os.OpenFile(filename, os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, 1)
 	}

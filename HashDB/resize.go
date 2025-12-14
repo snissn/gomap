@@ -16,7 +16,7 @@ func (h *DB) checkResize() bool {
 	if threshold == 0 {
 		threshold = 65
 	}
-	return *h.Count*100 > h.Capacity*threshold
+	return *h.count*100 > h.capacity*threshold
 }
 
 const rehashBucketsPerWrite = 8
@@ -29,7 +29,7 @@ func (h *DB) startRehash() error {
 		return nil
 	}
 
-	newCap := h.Capacity * 2
+	newCap := h.capacity * 2
 	if newCap == 0 {
 		newCap = DefaultCapacity
 	}
@@ -37,15 +37,9 @@ func (h *DB) startRehash() error {
 	// Save current index as "old".
 	oldMap := h.hashMap
 	oldFile := h.hashMapFile
-	oldCap := h.Capacity
-	var oldKeys []Key
-	if h.Keys != nil {
-		oldKeys = *h.Keys
-	}
-	var oldControls []byte
-	if h.Controls != nil {
-		oldControls = *h.Controls
-	}
+	oldCap := h.capacity
+	oldKeys := h.keys
+	oldControls := h.controls
 
 	// Allocate new index file/mmap.
 	newMap, newFile, err := h.openMmapHash(newCap)
@@ -64,17 +58,15 @@ func (h *DB) startRehash() error {
 	// Switch active index to the new table.
 	h.hashMap = newMap
 	h.hashMapFile = newFile
-	h.Capacity = newCap
+	h.capacity = newCap
 
 	// Controls
 	ctrlPtr := (*byte)(unsafe.Pointer(&newMap[0]))
-	controls := unsafe.Slice(ctrlPtr, newCap)
-	h.Controls = &controls
+	h.controls = unsafe.Slice(ctrlPtr, newCap)
 
 	// Keys
 	keyPtr := (*Key)(unsafe.Pointer(&newMap[newCap]))
-	keys := unsafe.Slice(keyPtr, newCap)
-	h.Keys = &keys
+	h.keys = unsafe.Slice(keyPtr, newCap)
 
 	// Record old index for incremental migration.
 	h.rehashOldMap = oldMap
@@ -125,11 +117,11 @@ func (h *DB) rehashStep(maxToMove uint64) error {
 			return err
 		}
 
-		(*h.Keys)[hkey] = k
+		h.keys[hkey] = k
 
 		// Set Control Byte
 		h2 := byte(k.hash&0x7f) | 0x80
-		(*h.Controls)[hkey] = h2
+		h.controls[hkey] = h2
 
 		// Do not modify Count; logical key cardinality doesn't change.
 
@@ -162,12 +154,12 @@ func (h *DB) finishRehash() {
 	// Best-effort cleanup of old index files on disk.
 	// After a successful rehash there should be exactly one hashkeys-* file,
 	// corresponding to the current Capacity.
-	files, err := os.ReadDir(h.Folder)
+	files, err := os.ReadDir(h.dir)
 	if err == nil {
-		current := fmt.Sprintf("hashkeys-%d", h.Capacity)
+		current := fmt.Sprintf("hashkeys-%d", h.capacity)
 		for _, f := range files {
 			if strings.HasPrefix(f.Name(), "hashkeys-") && f.Name() != current {
-				_ = os.Remove(h.Folder + "/" + f.Name())
+				_ = os.Remove(h.dir + "/" + f.Name())
 			}
 		}
 	}
@@ -175,6 +167,7 @@ func (h *DB) finishRehash() {
 	h.rehashOldMapFile = nil
 	h.rehashOldMap = nil
 	h.rehashOldKeys = nil
+	h.rehashOldControls = nil
 	h.rehashOldCapacity = 0
 	h.rehashIdx = 0
 	h.rehashInProgress = false

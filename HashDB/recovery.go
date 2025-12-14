@@ -17,22 +17,21 @@ func (h *DB) Recover() error {
 	h.rehashOldMapFile = nil
 	h.rehashOldMap = nil
 	h.rehashOldKeys = nil
+	h.rehashOldControls = nil
 	h.rehashOldCapacity = 0
 	h.rehashIdx = 0
 
 	// Reset Index map
-	for i := range *h.Keys {
-		(*h.Keys)[i] = Key{}
+	for i := range h.keys {
+		h.keys[i] = Key{}
 	}
-	if h.Controls != nil {
-		for i := range *h.Controls {
-			(*h.Controls)[i] = 0 // ctrlEmpty
-		}
+	for i := range h.controls {
+		h.controls[i] = ctrlEmpty
 	}
-	*h.Count = 0
+	*h.count = 0
 
 	// Scan for segments
-	files, err := os.ReadDir(h.Folder)
+	files, err := os.ReadDir(h.dir)
 	if err != nil {
 		return err
 	}
@@ -51,14 +50,14 @@ func (h *DB) Recover() error {
 
 	if maxID == -1 {
 		// Try slab-real legacy
-		if _, err := os.Stat(h.Folder + "/slab-real"); err == nil {
-			return h.recoverFile(h.Folder+"/slab-real", 0)
+		if _, err := os.Stat(h.dir + "/slab-real"); err == nil {
+			return h.recoverFile(h.dir+"/slab-real", 0)
 		}
 		return nil
 	}
 
 	for id := 0; id <= maxID; id++ {
-		filename := fmt.Sprintf("%s/slab-%d", h.Folder, id)
+		filename := fmt.Sprintf("%s/slab-%d", h.dir, id)
 		// Offset base for this segment
 		baseOffset := SlabOffset(uint64(id) << OffsetBits)
 
@@ -76,9 +75,9 @@ func (h *DB) Recover() error {
 	// We need to set activeSegmentId to maxID.
 	// And *h.slabOffset to end of maxID file.
 
-	h.activeSegmentId = uint16(maxID)
+	h.activeSegmentID = uint16(maxID)
 
-	lastFile := fmt.Sprintf("%s/slab-%d", h.Folder, maxID)
+	lastFile := fmt.Sprintf("%s/slab-%d", h.dir, maxID)
 	fi, err := os.Stat(lastFile)
 	if err != nil {
 		return err
@@ -165,12 +164,12 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 
 func (h *DB) replayDelete(key []byte) {
 	// Internal delete for recovery (doesn't write to slab)
-	if h.Keys != nil && h.Capacity > 0 {
-		idx, _, found, _ := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
+	if len(h.keys) > 0 && h.capacity > 0 {
+		idx, _, found, _ := h.probe(h.keys, h.controls, h.capacity, key)
 		if found {
-			(*h.Keys)[idx].slabOffset = Tombstone
+			h.keys[idx].slabOffset = Tombstone
 			h.setDeleted(idx)
-			*h.Count -= 1
+			*h.count -= 1
 		}
 	}
 }

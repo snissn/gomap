@@ -29,7 +29,7 @@ func getCount(slabMap mmap.MMap) *uint64 {
 }
 
 func (h *DB) initN(folder string, N uint64) error {
-	h.Folder = folder
+	h.dir = folder
 
 	// Create directory is handled inside openMmapHash if needed, but safer here.
 	if err := h.createDirectory(); err != nil {
@@ -61,7 +61,7 @@ func (h *DB) initN(folder string, N uint64) error {
 	h.metadataMap = meta
 	h.metadataFile = f_meta
 
-	h.CompressionEnabled = true
+	h.compressionEnabled = true
 
 	if h.resizeThreshold == 0 {
 		h.resizeThreshold = 65
@@ -73,7 +73,7 @@ func (h *DB) initN(folder string, N uint64) error {
 
 	// Ensure slabOffset matches actual file size to avoid desync on crash recovery.
 	// The file system size is the source of truth for where we append.
-	diskOffset := SlabOffset((uint64(h.activeSegmentId) << OffsetBits) | uint64(h.activeSegmentSize))
+	diskOffset := SlabOffset((uint64(h.activeSegmentID) << OffsetBits) | uint64(h.activeSegmentSize))
 
 	// Always sync memory offset to disk offset.
 	// If metadata < disk: we crashed after write but before metadata update. Sync to disk (safe).
@@ -89,27 +89,25 @@ func (h *DB) initN(folder string, N uint64) error {
 		*h.slabOffset = SlabOffset(len(sentinel))
 	}
 
-	h.Capacity = N
-	h.Count = getCount(h.metadataMap)
+	h.capacity = N
+	h.count = getCount(h.metadataMap)
 
 	// Controls are the first N bytes
 	ctrlPtr := (*byte)(unsafe.Pointer(&h.hashMap[0]))
-	controls := unsafe.Slice(ctrlPtr, N)
-	h.Controls = &controls
+	h.controls = unsafe.Slice(ctrlPtr, N)
 
 	// Keys are after controls
 	keyPtr := (*Key)(unsafe.Pointer(&h.hashMap[N]))
-	keys := unsafe.Slice(keyPtr, N)
-	h.Keys = &keys
+	h.keys = unsafe.Slice(keyPtr, N)
 	return nil
 }
 
 func (h *DB) writeCapacity(N uint64) error {
 	s := strconv.FormatUint(N, 10)
-	return os.WriteFile(h.Folder+"/capacity", []byte(s), 0655)
+	return os.WriteFile(h.dir+"/capacity", []byte(s), 0o644)
 }
 func (h *DB) readCapacity() (uint64, error) {
-	dat, err := os.ReadFile(h.Folder + "/capacity")
+	dat, err := os.ReadFile(h.dir + "/capacity")
 	if err != nil {
 		return DefaultCapacity, nil // Default if not found
 	}
@@ -122,7 +120,7 @@ func (h *DB) readCapacity() (uint64, error) {
 }
 
 func (h *DB) createDirectory() error {
-	err := os.MkdirAll(h.Folder, 0755)
+	err := os.MkdirAll(h.dir, 0o755)
 	if err != nil {
 		return errors.Wrap(err, 1)
 	}

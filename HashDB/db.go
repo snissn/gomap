@@ -70,8 +70,8 @@ func (h *DB) Close() error {
 // It returns nil, nil if the key is not found.
 func (h *DB) Get(key []byte) ([]byte, error) {
 	// Probe current (new) table first.
-	if h.Keys != nil && h.Capacity > 0 {
-		_, item, found, err := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
+	if len(h.keys) > 0 && h.capacity > 0 {
+		_, item, found, err := h.probe(h.keys, h.controls, h.capacity, key)
 		if err != nil {
 			return nil, err
 		}
@@ -100,8 +100,8 @@ func (h *DB) Delete(key []byte) error {
 	foundNew := false
 
 	// Delete in the current (new) table.
-	if h.Keys != nil && h.Capacity > 0 {
-		idx, _, found, err := h.probe(*h.Keys, *h.Controls, h.Capacity, key)
+	if len(h.keys) > 0 && h.capacity > 0 {
+		idx, _, found, err := h.probe(h.keys, h.controls, h.capacity, key)
 		if err != nil {
 			return err
 		}
@@ -110,9 +110,9 @@ func (h *DB) Delete(key []byte) error {
 			if err := h.addDeleteSlab(key); err != nil {
 				return err
 			}
-			(*h.Keys)[idx].slabOffset = Tombstone
+			h.keys[idx].slabOffset = Tombstone
 			h.setDeleted(idx)
-			*h.Count -= 1
+			*h.count -= 1
 			foundNew = true
 		}
 	}
@@ -224,7 +224,7 @@ func (h *DB) mlock(data mmap.MMap) error {
 
 // New initializes a Hashmap in the given folder.
 func (h *DB) New(folder string) error {
-	h.Folder = folder
+	h.dir = folder
 	N, err := h.readCapacity()
 	if err != nil {
 		return err
@@ -235,7 +235,7 @@ func (h *DB) New(folder string) error {
 // SetCompression enables or disables value compression.
 // Default is true.
 func (h *DB) SetCompression(enabled bool) {
-	h.CompressionEnabled = enabled
+	h.compressionEnabled = enabled
 }
 
 // SetResizeThreshold sets the load factor percentage at which the hashmap resizes.
@@ -256,12 +256,12 @@ func (h *DB) Clear() error {
 	}
 
 	// Delete files
-	files, err := os.ReadDir(h.Folder)
+	files, err := os.ReadDir(h.dir)
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
-		if err := os.Remove(h.Folder + "/" + f.Name()); err != nil {
+		if err := os.Remove(h.dir + "/" + f.Name()); err != nil {
 			return err
 		}
 	}
@@ -270,7 +270,7 @@ func (h *DB) Clear() error {
 	// initN expects folder to exist (it might have been deleted? No, we deleted contents)
 	// We read capacity? No, files are gone.
 	// Default capacity.
-	return h.initN(h.Folder, DefaultCapacity)
+	return h.initN(h.dir, DefaultCapacity)
 }
 
 // Stats returns statistics about the database.
@@ -283,8 +283,8 @@ func (h *DB) Stats() Stats {
 	}
 
 	return Stats{
-		KeyCount: *h.Count,
-		Capacity: h.Capacity,
+		KeyCount: *h.count,
+		Capacity: h.capacity,
 		DataSize: size,
 		Segments: len(h.slabFiles),
 	}
@@ -293,7 +293,7 @@ func (h *DB) Stats() Stats {
 // Compact rewrites the database to reclaim space from deleted/updated keys.
 // It creates a new copy of the database and swaps it in.
 func (h *DB) Compact() error {
-	tmpFolder := h.Folder + "-compact"
+	tmpFolder := h.dir + "-compact"
 	_ = os.RemoveAll(tmpFolder) // Clean start
 
 	var newH Hashmap
@@ -314,10 +314,10 @@ func (h *DB) Compact() error {
 	newH.closeFPs()
 	_ = os.RemoveAll(tmpFolder)
 
-	if err := newH.initN(tmpFolder, h.Capacity); err != nil {
+	if err := newH.initN(tmpFolder, h.capacity); err != nil {
 		return err
 	}
-	newH.SetCompression(h.CompressionEnabled)
+	newH.SetCompression(h.compressionEnabled)
 
 	// Migrate Data
 	// Iterate through all buckets
@@ -351,21 +351,21 @@ func (h *DB) Compact() error {
 	newH.closeFPs()
 
 	// 2. Rename folders
-	backupFolder := h.Folder + "-old"
+	backupFolder := h.dir + "-old"
 	_ = os.RemoveAll(backupFolder)
 
-	if err := os.Rename(h.Folder, backupFolder); err != nil {
+	if err := os.Rename(h.dir, backupFolder); err != nil {
 		// Try to reopen h?
 		return err
 	}
-	if err := os.Rename(tmpFolder, h.Folder); err != nil {
+	if err := os.Rename(tmpFolder, h.dir); err != nil {
 		// Restore backup
-		os.Rename(backupFolder, h.Folder)
+		os.Rename(backupFolder, h.dir)
 		return err
 	}
 
 	// 3. Re-open h on new files
-	if err := h.initN(h.Folder, h.Capacity); err != nil {
+	if err := h.initN(h.dir, h.capacity); err != nil {
 		return err
 	}
 
