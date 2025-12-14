@@ -8,7 +8,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 )
 
 type mockKV struct {
@@ -221,7 +221,7 @@ func TestPersistenceWithGomap(t *testing.T) {
 
 	ref := make(map[string]string)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("init gomap: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestPersistenceWithGomap(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	store2 := &gomap.HashmapDistributed{}
+	store2 := &hashdb.HashmapDistributed{}
 	if err := store2.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("reopen gomap: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestRandomizedOperationsWithGomap(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, 8); err != nil {
 		t.Fatalf("init gomap: %v", err)
 	}

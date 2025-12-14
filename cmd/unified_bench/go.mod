@@ -3,7 +3,7 @@ module benchmark
 go 1.25.5
 
 require (
-	github.com/snissn/gomap v0.0.0
+	github.com/snissn/gomap/HashDB v0.0.0
 	github.com/snissn/gomap/TreeDB v0.0.0
 	github.com/syndtr/goleveldb v1.0.0
 )
@@ -19,6 +19,6 @@ require (
 )
 
 replace (
-	github.com/snissn/gomap => ../../
+	github.com/snissn/gomap/HashDB => ../../
 	github.com/snissn/gomap/TreeDB => ../../TreeDB
 )

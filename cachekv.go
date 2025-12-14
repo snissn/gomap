@@ -1,4 +1,4 @@
-package gomap
+package hashdb
 
 import (
 	"sync"

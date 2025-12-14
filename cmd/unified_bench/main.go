@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
+	"github.com/snissn/gomap/HashDB/btree"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/btree"
 
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
@@ -59,7 +59,7 @@ type DBInterface interface {
 
 // 1. Gomap Wrapper
 type GomapBatch struct {
-	bw *gomap.BatchWriter
+	bw *hashdb.BatchWriter
 }
 
 func (b *GomapBatch) Set(key, value []byte) error {
@@ -77,11 +77,11 @@ func (b *GomapBatch) Close() error {
 }
 
 type GomapWrapper struct {
-	m *gomap.HashmapDistributed
+	m *hashdb.HashmapDistributed
 }
 
 func NewGomap(dir string) (*GomapWrapper, error) {
-	m := &gomap.HashmapDistributed{}
+	m := &hashdb.HashmapDistributed{}
 	if err := m.New(dir); err != nil {
 		return nil, err
 	}
@@ -104,12 +104,12 @@ func (g *GomapWrapper) NewBatch() (BatchInterface, error) {
 	if batchSize != nil {
 		bs = *batchSize
 	}
-	return &GomapBatch{bw: gomap.NewBatchWriter(g.m, bs)}, nil
+	return &GomapBatch{bw: hashdb.NewBatchWriter(g.m, bs)}, nil
 }
 
 // 2. BTree Wrapper
 type GomapKVAdapter struct {
-	m *gomap.HashmapDistributed
+	m *hashdb.HashmapDistributed
 }
 
 func (a *GomapKVAdapter) Get(k []byte) ([]byte, error) { return a.m.Get(k) }
@@ -118,11 +118,11 @@ func (a *GomapKVAdapter) Delete(k []byte) error        { return a.m.Delete(k) }
 
 type BTreeWrapper struct {
 	t *btree.Tree
-	m *gomap.HashmapDistributed
+	m *hashdb.HashmapDistributed
 }
 
 func NewBTree(dir string) (*BTreeWrapper, error) {
-	m := &gomap.HashmapDistributed{}
+	m := &hashdb.HashmapDistributed{}
 	if err := m.New(dir); err != nil {
 		return nil, err
 	}

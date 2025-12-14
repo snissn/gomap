@@ -6,29 +6,29 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 	"github.com/tidwall/redcon"
 )
 
 type connState struct {
-	pending []gomap.Item
+	pending []hashdb.Item
 }
 
 const setBatchSize = 16
 
 type RedisServer struct {
-	store     *gomap.HashmapDistributed
+	store     *hashdb.HashmapDistributed
 	batchSets bool
 }
 
 func NewRedisServer(dbdir string) *RedisServer {
 	if err := os.MkdirAll(dbdir, 0755); err != nil {
-		log.Fatalf("failed to create gomap folder: %v", err)
+		log.Fatalf("failed to create HashDB folder: %v", err)
 	}
 
-	var store gomap.HashmapDistributed
+	var store hashdb.HashmapDistributed
 	if err := store.New(dbdir); err != nil {
-		log.Fatalf("failed to open gomap: %v", err)
+		log.Fatalf("failed to open HashDB: %v", err)
 	}
 	// Disable compression by default for the Redis/Gomap server, which is
 	// primarily used by the benchmark harness. This improves write-heavy
@@ -37,7 +37,7 @@ func NewRedisServer(dbdir string) *RedisServer {
 
 	return &RedisServer{
 		store:     &store,
-		batchSets: os.Getenv("GOMAP_BATCH_SETS") == "1",
+		batchSets: os.Getenv("HASHDB_BATCH_SETS") == "1" || os.Getenv("GOMAP_BATCH_SETS") == "1",
 	}
 }
 
@@ -57,7 +57,7 @@ func (s *RedisServer) Serve(addr string) error {
 			}
 			if state == nil {
 				state = &connState{
-					pending: make([]gomap.Item, 0, setBatchSize),
+					pending: make([]hashdb.Item, 0, setBatchSize),
 				}
 				conn.SetContext(state)
 			}
@@ -76,7 +76,7 @@ func (s *RedisServer) Serve(addr string) error {
 			val := cmd.Args[2]
 
 			if s.batchSets {
-				item := gomap.Item{Key: key, Value: val}
+				item := hashdb.Item{Key: key, Value: val}
 				state.pending = append(state.pending, item)
 
 				// Flush once we hit the batch size; this is aimed at
@@ -155,9 +155,9 @@ func (s *RedisServer) Serve(addr string) error {
 				return
 			}
 
-			items := make([]gomap.Item, 0, (len(cmd.Args)-1)/2)
+			items := make([]hashdb.Item, 0, (len(cmd.Args)-1)/2)
 			for i := 1; i < len(cmd.Args); i += 2 {
-				items = append(items, gomap.Item{
+				items = append(items, hashdb.Item{
 					Key:   cmd.Args[i],
 					Value: cmd.Args[i+1],
 				})

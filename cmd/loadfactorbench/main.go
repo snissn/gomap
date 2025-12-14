@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 )
 
 func main() {
@@ -29,7 +29,7 @@ func runLoadBench(loadFactor float64, ops int, writeRatio float64) (float64, tim
 	dir, _ := os.MkdirTemp("", "loadfactorbench")
 	defer os.RemoveAll(dir)
 
-	var h gomap.Hashmap
+	var h hashdb.Hashmap
 	if err := h.New(dir); err != nil {
 		panic(err)
 	}

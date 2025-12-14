@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/snissn/gomap/redisserver/badgerredis"
-	"github.com/snissn/gomap/redisserver/gomapredis"
+	"github.com/snissn/gomap/HashDB/redisserver/badgerredis"
+	"github.com/snissn/gomap/HashDB/redisserver/gomapredis"
 )
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run redisserver/main.go [gomap|badger] [dbdir]")
+		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir]")
 		os.Exit(1)
 	}
 
@@ -18,9 +18,9 @@ func main() {
 	dbdir := os.Args[2]
 
 	switch mode {
-	case "gomap":
+	case "hashdb", "gomap":
 		server := gomapredis.NewRedisServer(dbdir)
-		fmt.Printf("Starting Redis server using Gomap on :6380 (dbdir=%s)\n", dbdir)
+		fmt.Printf("Starting Redis server using HashDB on :6380 (dbdir=%s)\n", dbdir)
 		if err := server.Serve(":6380"); err != nil {
 			fmt.Println("Server error:", err)
 		}
@@ -38,7 +38,7 @@ func main() {
 
 	default:
 		fmt.Println("Unknown mode:", mode)
-		fmt.Println("Usage: go run redisserver/main.go [gomap|badger] [dbdir]")
+		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir]")
 		os.Exit(1)
 	}
 }

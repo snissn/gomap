@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 )
 
 func main() {
@@ -29,7 +29,7 @@ func runBench(shards, concurrency, ops int) (float64, time.Duration) {
 	dir, _ := os.MkdirTemp("", "shardbench")
 	defer os.RemoveAll(dir)
 
-	var store gomap.HashmapDistributed
+	var store hashdb.HashmapDistributed
 	if err := store.NewWithShards(dir, shards); err != nil {
 		panic(err)
 	}

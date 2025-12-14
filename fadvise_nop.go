@@ -1,7 +1,7 @@
 //go:build !linux
 // +build !linux
 
-package gomap
+package hashdb
 
 func applyFadvise(fd int, size int64) {
 	// no-op on non-Linux systems

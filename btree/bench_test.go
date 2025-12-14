@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 )
 
 func BenchmarkBTree_PutGet(b *testing.B) {
@@ -31,7 +31,7 @@ func benchmarkBTreePutGet(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init gomap: %v", err)
 	}
@@ -76,7 +76,7 @@ func benchmarkBTreeScanAll(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init gomap: %v", err)
 	}
@@ -129,7 +129,7 @@ func benchmarkBTreePutOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init gomap: %v", err)
 	}
@@ -180,7 +180,7 @@ func benchmarkBTreeGetOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &gomap.HashmapDistributed{}
+	store := &hashdb.HashmapDistributed{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init gomap: %v", err)
 	}

@@ -1,7 +1,7 @@
 //go:build linux
 // +build linux
 
-package gomap
+package hashdb
 
 import "golang.org/x/sys/unix"
 

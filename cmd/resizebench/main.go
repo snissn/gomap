@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/snissn/gomap"
+	"github.com/snissn/gomap/HashDB"
 )
 
 // resizebench measures per-operation latency across one or more resizes on a single Hashmap.
@@ -20,7 +20,7 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	var h gomap.Hashmap
+	var h hashdb.Hashmap
 	if err := h.New(dir); err != nil {
 		panic(err)
 	}
