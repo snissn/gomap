@@ -66,6 +66,15 @@ func (h *DB) Close() error {
 	return h.closeFPs()
 }
 
+// Open opens (or creates) a DB rooted at dir.
+func Open(dir string) (*DB, error) {
+	db := &DB{}
+	if err := db.Open(dir); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 // Get retrieves the value for a given key.
 // It returns nil, nil if the key is not found.
 func (h *DB) Get(key []byte) ([]byte, error) {
@@ -156,12 +165,12 @@ func (h *DB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 		return err
 	}
 
-	return h.Add(key, newVal)
+	return h.Put(key, newVal)
 }
 
-// AddMany inserts multiple items in a batch.
+// PutMany inserts multiple entries in a batch.
 // It is not thread-safe.
-func (h *DB) AddMany(items []Item) error {
+func (h *DB) PutMany(items []Item) error {
 
 	startTime := time.Now()
 	slabOffsets, err := h.addManySlabs(items)
@@ -189,9 +198,14 @@ func (h *DB) AddMany(items []Item) error {
 	return nil
 }
 
-// Add inserts a single key-value pair.
+// AddMany is a compatibility wrapper for older code.
+func (h *DB) AddMany(items []Item) error {
+	return h.PutMany(items)
+}
+
+// Put inserts a single key/value pair.
 // It is not thread-safe.
-func (h *DB) Add(key []byte, value []byte) error {
+func (h *DB) Put(key []byte, value []byte) error {
 	item := Item{Key: key, Value: value}
 	startTime := time.Now()
 	slabOffset, err := h.addSlab(item)
@@ -213,6 +227,11 @@ func (h *DB) Add(key []byte, value []byte) error {
 	return err
 }
 
+// Add is a compatibility wrapper for older code.
+func (h *DB) Add(key []byte, value []byte) error {
+	return h.Put(key, value)
+}
+
 // mlock locks the data in memory to prevent it from being swapped to disk.
 func (h *DB) mlock(data mmap.MMap) error {
 	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
@@ -222,14 +241,19 @@ func (h *DB) mlock(data mmap.MMap) error {
 	return nil
 }
 
-// New initializes a Hashmap in the given folder.
-func (h *DB) New(folder string) error {
+// Open initializes a DB in the given folder.
+func (h *DB) Open(folder string) error {
 	h.dir = folder
 	N, err := h.readCapacity()
 	if err != nil {
 		return err
 	}
 	return h.initN(folder, N)
+}
+
+// New is a compatibility wrapper for older code.
+func (h *DB) New(folder string) error {
+	return h.Open(folder)
 }
 
 // SetCompression enables or disables value compression.

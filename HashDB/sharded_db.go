@@ -27,6 +27,11 @@ func (h *ShardedDB) New(folder string) error {
 	return h.NewWithShards(folder, 128)
 }
 
+// Open is a compatibility wrapper for older code.
+func (h *ShardedDB) Open(folder string) error {
+	return h.New(folder)
+}
+
 // NewWithShards initializes the sharded store with a specific number of shards.
 func (h *ShardedDB) NewWithShards(folder string, numShards int) error {
 	if numShards <= 0 {
@@ -52,6 +57,11 @@ func (h *ShardedDB) NewWithShards(folder string, numShards int) error {
 	return nil
 }
 
+// OpenWithShards is a compatibility wrapper for older code.
+func (h *ShardedDB) OpenWithShards(folder string, numShards int) error {
+	return h.NewWithShards(folder, numShards)
+}
+
 // SetCompression enables or disables value compression on all shards.
 // It should typically be called during initialization before serving traffic.
 func (h *ShardedDB) SetCompression(enabled bool) {
@@ -72,13 +82,18 @@ func (h *ShardedDB) Get(key []byte) ([]byte, error) {
 	return h.shards[shardIndex].Get(key)
 }
 
-// Add inserts or updates a key-value pair.
-func (h *ShardedDB) Add(key []byte, value []byte) error {
+// Put inserts or updates a key-value pair.
+func (h *ShardedDB) Put(key []byte, value []byte) error {
 	hash := hash(key)
 	shardIndex := hash % Hash(len(h.shards))
 	h.locks[shardIndex].Lock()
 	defer h.locks[shardIndex].Unlock()
-	return h.shards[shardIndex].Add(key, value)
+	return h.shards[shardIndex].Put(key, value)
+}
+
+// Add is a compatibility wrapper for older code.
+func (h *ShardedDB) Add(key []byte, value []byte) error {
+	return h.Put(key, value)
 }
 
 // Delete removes a key from the map.
@@ -248,9 +263,9 @@ func (h *ShardedDB) GetMany(keys [][]byte) ([][]byte, []error) {
 	return values, errs
 }
 
-// AddMany inserts multiple key-value pairs efficiently.
+// PutMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
-func (h *ShardedDB) AddMany(items []Item) error {
+func (h *ShardedDB) PutMany(items []Item) error {
 	numShards := len(h.shards)
 	shardedItems := make([][]Item, numShards)
 	for i := 0; i < numShards; i++ {
@@ -276,7 +291,7 @@ func (h *ShardedDB) AddMany(items []Item) error {
 			defer wg.Done()
 			h.locks[index].Lock()
 			defer h.locks[index].Unlock()
-			err := h.shards[index].AddMany(items)
+			err := h.shards[index].PutMany(items)
 			if err != nil {
 				errOnce.Do(func() {
 					errGlobal = err
@@ -287,4 +302,9 @@ func (h *ShardedDB) AddMany(items []Item) error {
 	wg.Wait()
 
 	return errGlobal
+}
+
+// AddMany is a compatibility wrapper for older code.
+func (h *ShardedDB) AddMany(items []Item) error {
+	return h.PutMany(items)
 }

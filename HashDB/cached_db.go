@@ -34,7 +34,8 @@ func NewCachedHashmap(folder string, maxEntries, maxBytes int, flushInterval tim
 }
 
 func (c *CachedDB) Get(key []byte) ([]byte, error)     { return c.cache.Get(key) }
-func (c *CachedDB) Add(key []byte, value []byte) error { return c.cache.Put(key, value) }
+func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key, value) }
+func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
 func (c *CachedDB) Close() error {
@@ -73,7 +74,7 @@ func (c *CachedDB) Compact() error {
 	return c.db.Compact()
 }
 
-func (c *CachedDB) AddMany(items []Item) error {
+func (c *CachedDB) PutMany(items []Item) error {
 	// Route batched writes through the write-back cache so they are
 	// coalesced with other pending writes. CacheKV will flush to the
 	// underlying Hashmap using AddMany when thresholds or timers fire.
@@ -83,6 +84,10 @@ func (c *CachedDB) AddMany(items []Item) error {
 		}
 	}
 	return nil
+}
+
+func (c *CachedDB) AddMany(items []Item) error {
+	return c.PutMany(items)
 }
 
 func (c *CachedDB) Stats() Stats {
@@ -95,7 +100,7 @@ type dbKVAdapter struct {
 }
 
 func (m *dbKVAdapter) Get(key []byte) ([]byte, error) { return m.db.Get(key) }
-func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Add(key, value) }
+func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Put(key, value) }
 func (m *dbKVAdapter) Delete(key []byte) error        { return m.db.Delete(key) }
 
 // PutMany allows CacheKV to batch writes down to the underlying Hashmap using AddMany.
@@ -107,5 +112,5 @@ func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	for i := range keys {
 		items[i] = Item{Key: keys[i], Value: vals[i]}
 	}
-	return m.db.AddMany(items)
+	return m.db.PutMany(items)
 }
