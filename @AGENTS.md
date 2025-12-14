@@ -63,6 +63,10 @@
   - Split SwissHash control bytes into separate mmap file (`hashctl-<capacity>`) from keys (`hashkeys-<capacity>`)
   - Updated incremental rehash cleanup and `TestResizeLeak` to assert both file families are cleaned up
   - `go test ./...` (root): PASS
+- 2025-12-14: HashDB index memory policy
+  - Added `IndexMemoryPolicy` (default: mlock controls best-effort, madvise key map WILLNEED+RANDOM best-effort)
+  - Implemented cross-platform memory pinning via `x/sys` (`unix.Mlock` / `windows.VirtualLock`) and best-effort unlock on close
+  - `go test ./...` (root): PASS
 
 ## Notes / Conventions
 
