@@ -148,6 +148,12 @@
   - Cached flush path now tracks and deletes WAL segments after successful flush.
   - Public `treedb.Open` returns a single `*treedb.DB` wrapper; backend-only mode is `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`).
   - Added spec tests covering crash recovery + truncated WAL handling in `TreeDB/recovery_spec_test.go`.
+- 2025-12-14: Race hygiene (HashDB)
+  - Made `DummyKV` thread-safe in `HashDB/cachekv_test.go` so `go test -race` passes.
+  - Made `MaxSegmentSize` reads/writes atomic (fixes global race in `TestSegmentRotation` and slab writers).
+- 2025-12-14: CI (optional)
+  - Added `make test-race` and a manual `Race (manual)` GitHub workflow.
+  - Added Windows HashDB `go vet` + `go test` workflow (`HashDB: vet+test (Windows)`).
 
 ## Notes / Conventions
 
