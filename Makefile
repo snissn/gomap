@@ -1,45 +1,108 @@
+HASHDB_DIR := HashDB
+TREEDB_DIR := TreeDB
+UNIFIED_BENCH_DIR := cmd/unified_bench
+BIN_DIR := bin
 
-build:
-	mkdir -p bin
-	cd HashDB && go build -o ../bin/hashdb-benchmark ./cmd/benchmarkmain
-	cd HashDB && go build -o ../bin/hashdb-redis-wrapper ./redisserver
+.PHONY: help
+help:
+	@echo "Common targets:"
+	@echo "  make fmt            - gofmt all tracked .go files"
+	@echo "  make test           - run tests in all modules"
+	@echo "  make vet            - go vet in all modules"
+	@echo "  make tidy           - go mod tidy in all modules"
+	@echo "  make deps           - download deps in all modules"
+	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
+	@echo "  make benchmark-all  - run HashDB redis-benchmark suite"
+	@echo "  make unified-bench  - build unified bench binary"
+	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
-benchmark-all: build
-	cd HashDB && ../bin/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
+.PHONY: fmt
+fmt:
+	gofmt -w $$(git ls-files '*.go')
 
+.PHONY: test test-hashdb test-treedb test-unified-bench
+test: test-hashdb test-treedb test-unified-bench
 
-# Optional: fast local test
-benchmark-quick: build
-	cd HashDB && ../bin/hashdb-benchmark \
-		--engines=gomap,badger \
-		--keycounts=1000,10000 \
-		--csv=benchmark/results_quick.csv
+test-hashdb:
+	cd $(HASHDB_DIR) && go test ./...
 
-run-gomap:
-	cd HashDB && go run ./redisserver/main.go hashdb /tmp/hashdb-benchmark
+test-treedb:
+	cd $(TREEDB_DIR) && go test ./...
+
+test-unified-bench:
+	cd $(UNIFIED_BENCH_DIR) && go test ./...
+
+.PHONY: vet vet-hashdb vet-treedb vet-unified-bench
+vet: vet-hashdb vet-treedb vet-unified-bench
+
+vet-hashdb:
+	cd $(HASHDB_DIR) && go vet ./...
+
+vet-treedb:
+	cd $(TREEDB_DIR) && go vet ./...
+
+vet-unified-bench:
+	cd $(UNIFIED_BENCH_DIR) && go vet ./...
+
+.PHONY: tidy tidy-hashdb tidy-treedb tidy-unified-bench
+tidy: tidy-hashdb tidy-treedb tidy-unified-bench
+
+tidy-hashdb:
+	cd $(HASHDB_DIR) && go mod tidy
+
+tidy-treedb:
+	cd $(TREEDB_DIR) && go mod tidy
+
+tidy-unified-bench:
+	cd $(UNIFIED_BENCH_DIR) && go mod tidy
+
+.PHONY: deps deps-hashdb deps-treedb deps-unified-bench
+deps: deps-hashdb deps-treedb deps-unified-bench
+
+deps-hashdb:
+	cd $(HASHDB_DIR) && go mod download
+
+deps-treedb:
+	cd $(TREEDB_DIR) && go mod download
+
+deps-unified-bench:
+	cd $(UNIFIED_BENCH_DIR) && go mod download
+
+.PHONY: build build-hashdb build-treedb unified-bench
+build: build-hashdb build-treedb unified-bench
+
+build-hashdb:
+	mkdir -p $(BIN_DIR)
+	cd $(HASHDB_DIR) && go build -o ../$(BIN_DIR)/hashdb-benchmark ./cmd/benchmarkmain
+	cd $(HASHDB_DIR) && go build -o ../$(BIN_DIR)/hashdb-redis-wrapper ./redisserver
+	cd $(HASHDB_DIR) && go build -o ../$(BIN_DIR)/hashdb-loadfactorbench ./cmd/loadfactorbench
+	cd $(HASHDB_DIR) && go build -o ../$(BIN_DIR)/hashdb-resizebench ./cmd/resizebench
+	cd $(HASHDB_DIR) && go build -o ../$(BIN_DIR)/hashdb-shardbench ./cmd/shardbench
+
+build-treedb:
+	mkdir -p $(BIN_DIR)
+	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-stress ./cmd/stress
+	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-verify ./cmd/verify
+
+unified-bench:
+	mkdir -p $(BIN_DIR)
+	cd $(UNIFIED_BENCH_DIR) && go build -o ../../$(BIN_DIR)/unified-bench .
+
+.PHONY: benchmark-all benchmark-quick
+benchmark-all: build-hashdb
+	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000,100000,500000,1000000,5000000,10000000,20000000,30000000,40000000,50000000 --csv=benchmark/results.csv
+
+benchmark-quick: build-hashdb
+	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=gomap,badger --keycounts=1000,10000 --csv=benchmark/results_quick.csv
+
+.PHONY: run-hashdb run-badger
+run-hashdb:
+	cd $(HASHDB_DIR) && go run ./redisserver/main.go hashdb /tmp/hashdb-benchmark
 
 run-badger:
-	cd HashDB && go run ./redisserver/main.go badger /tmp/badger-benchmark
+	cd $(HASHDB_DIR) && go run ./redisserver/main.go badger /tmp/badger-benchmark
 
+.PHONY: clean
 clean:
-	rm -rf bin/
+	rm -rf $(BIN_DIR)/
 	rm -rf /tmp/hashdb-benchmark /tmp/badger-benchmark
-
-fmt:
-	cd HashDB && go fmt ./...
-	cd TreeDB && go fmt ./...
-	cd cmd/unified_bench && go fmt ./...
-
-test:
-	cd HashDB && go test ./...
-	cd TreeDB && go test ./...
-	cd cmd/unified_bench && go test ./...
-
-mod-tidy:
-	cd HashDB && go mod tidy
-	cd TreeDB && go mod tidy
-	cd cmd/unified_bench && go mod tidy
-
-install-deps:
-	cd HashDB && go get github.com/tidwall/redcon
-	cd HashDB && go get github.com/dgraph-io/badger/v4
