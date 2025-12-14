@@ -188,6 +188,7 @@ Notes:
    - Extend meta format (versioned) to store applied WAL checkpoint.
 5. **Replay engine**
    - Apply WAL ops to backend via backend batches; commit; update checkpoint; cleanup.
+   - Retire/delete old WAL segments once they are checkpointed (e.g. remove the existing “delete old WAL file” TODO in the cached writer path).
 6. **Mode selection**
    - Return `*treedb.DB` wrapper that chooses cached vs backend at runtime.
 7. **Spec tests**
@@ -199,6 +200,28 @@ Notes:
 - Should backend-only mode create/use a WAL at all, or only replay and then operate without WAL?
 - Should “ignore WAL” be an explicit unsafe option?
 - Do we want a “read-only open” mode (shared lock) later?
+
+## 7) CI & Tooling (Quality Gates)
+
+- Add `go vet` to CI in all three contexts: `./`, `TreeDB/`, and `cmd/unified_bench/`.
+- Run CI on an OS matrix (Linux/macOS/Windows) since mmap/locking/memlock paths differ.
+- Optional: add a `gofmt` check step (fail if `gofmt` would change tracked files).
+- Optional: add `go test -race` on Linux (at least for `TreeDB/...` and `HashDB/...`) to catch iterator/flush concurrency issues.
+
+## 8) Benchmark Reproducibility
+
+- Add `-seed` to `cmd/unified_bench`:
+  - Deterministic key generation when set.
+  - Print the seed in the output header so results are reproducible.
+  - Document how it interacts with `-tests` and keyspace offsets.
+
+## 9) HashDB Follow-ups (from `docs/DEV_NOTES.md`)
+
+- Explore low/zero-copy slab reads for read-heavy workloads (mmap slab or shard-local reusable buffers; be careful with slab growth/rotation and caller lifetimes).
+- Deepen `GetMany` by batching slab reads per shard (Linux experiments: `preadv` / io_uring).
+- Compaction correctness + performance for segmented slab design (make it correct first, then tune).
+- Compression policy tuning (thresholds, codecs, defaults; document recommendations).
+- Optional stricter durability: a small WAL with configurable fsync policies (keep slab log as primary recovery).
 
 ---
 
@@ -340,3 +363,12 @@ Deliverables:
 Quality bar:
 - Every doc page has “Who is this for?” and a short “TL;DR”.
 - Every major component has at least one minimal copy-pastable code example.
+
+## G) Documentation Debt / Legacy Cleanup
+
+- Audit and reconcile older docs that still use legacy naming (“gomap”, “Gomap”, old benchmark names):
+  - Update to current naming (`HashDB`, `TreeDB`, `BTreeOnHashDB`, “Full Scan” / “Prefix Scan”) where accurate, or
+  - Move to a clearly marked `docs/legacy/` folder if they’re historical.
+- Identify Gemini-related helper scripts/plans and either:
+  - move to `docs/legacy/`, or
+  - add to `TENTATIVE_DELETIONS.md` if genuinely obsolete (do not delete until confirmed).

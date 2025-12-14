@@ -110,6 +110,8 @@
   - Added a detailed plan for unified TreeDB API + exclusive locking + coherent WAL replay recovery in `TODO.md`.
 - 2025-12-14: Docs milestone
   - Sketched V1 “Wow” documentation requirements in `TODO.md`.
+- 2025-12-14: Roadmap expansion
+  - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
 
 ## Notes / Conventions
 
