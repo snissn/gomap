@@ -71,6 +71,16 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 	h.slabOffset = getSlabOffset(h.metadataMap)
 	//xxx
 
+	// Ensure slabOffset matches actual file size to avoid desync on crash recovery.
+	// The file system size is the source of truth for where we append.
+	diskOffset := SlabOffset((uint64(h.activeSegmentId) << OffsetBits) | uint64(h.activeSegmentSize))
+
+	// Always sync memory offset to disk offset.
+	// If metadata < disk: we crashed after write but before metadata update. Sync to disk (safe).
+	// If metadata > disk: we allocated offset but crashed before write (or filesystem truncated).
+	//    We must reset to disk size so next write offset matches file position.
+	*h.slabOffset = diskOffset
+
 	if *h.slabOffset == 0 {
 		sentinel := []byte("offset")
 		if err := h.writeSlab(sentinel); err != nil {
@@ -81,7 +91,7 @@ func (h *Hashmap) initN(folder string, N uint64) error {
 
 	h.Capacity = N
 	h.Count = getCount(h.metadataMap)
-	
+
 	// Controls are the first N bytes
 	ctrlPtr := (*byte)(unsafe.Pointer(&h.hashMap[0]))
 	controls := unsafe.Slice(ctrlPtr, N)
