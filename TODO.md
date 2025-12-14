@@ -380,6 +380,7 @@ Quality bar:
 - Identify Gemini-related helper scripts/plans and either:
   - move to `docs/legacy/`, or
   - add to `TENTATIVE_DELETIONS.md` if genuinely obsolete (do not delete until confirmed).
+  - Status: moved to `docs/legacy/gemini/` and tracked in `TENTATIVE_DELETIONS.md`.
 
 ---
 
