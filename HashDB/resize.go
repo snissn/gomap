@@ -31,7 +31,7 @@ func (h *DB) startRehash() error {
 
 	newCap := h.Capacity * 2
 	if newCap == 0 {
-		newCap = DEFAULTMAPSIZE
+		newCap = DefaultCapacity
 	}
 
 	// Save current index as "old".
@@ -195,6 +195,6 @@ func (h *DB) resize() {
 			panic(err)
 		}
 	}
-	resizeTime := getRunTime(startTime)
+	resizeTime := time.Since(startTime)
 	h.resizeTime += resizeTime
 }

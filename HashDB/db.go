@@ -6,65 +6,64 @@ import (
 	"syscall"
 	"time"
 
-	"log"
-	"reflect"
 	"unsafe"
 
 	"github.com/edsrzf/mmap-go"
 )
 
-var size uintptr = reflect.TypeOf(uint64(0)).Size()
-var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
-
-func getRunTime(startTime time.Time) time.Duration {
-	endTime := time.Now()
-	return endTime.Sub(startTime)
-}
-
-func printTotalRunTime(startTime time.Time) {
-	endTime := time.Now()
-	totalRunTime := endTime.Sub(startTime)
-	fmt.Printf("Total run time: %s\n", totalRunTime)
-}
-
 func (h *DB) closeFPs() error {
-	if h.hashMapFile != nil {
-		if err := h.hashMapFile.Close(); err != nil {
-			return err
-		}
-	}
-	if h.hashMap != nil {
-		if err := h.hashMap.Unmap(); err != nil {
-			return err
+	var firstErr error
+	recordErr := func(err error) {
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
 
-	// If an incremental rehash is in progress, close the old index as well.
-	if h.rehashInProgress {
-		if h.rehashOldMapFile != nil {
-			if err := h.rehashOldMapFile.Close(); err != nil {
-				return err
-			}
-		}
-		if h.rehashOldMap != nil {
-			if err := h.rehashOldMap.Unmap(); err != nil {
-				return err
-			}
-		}
-		h.rehashOldMapFile = nil
-		h.rehashOldMap = nil
-		h.rehashOldKeys = nil
-		h.rehashOldCapacity = 0
-		h.rehashIdx = 0
-		h.rehashInProgress = false
+	// Unmap before closing files (important for Windows compatibility).
+	if h.hashMap != nil {
+		recordErr(h.hashMap.Unmap())
+		h.hashMap = nil
 	}
+	if h.hashMapFile != nil {
+		recordErr(h.hashMapFile.Close())
+		h.hashMapFile = nil
+	}
+
+	if h.metadataMap != nil {
+		recordErr(h.metadataMap.Unmap())
+		h.metadataMap = nil
+	}
+	if h.metadataFile != nil {
+		recordErr(h.metadataFile.Close())
+		h.metadataFile = nil
+	}
+
+	// Close and unmap the old index if an incremental rehash was in progress.
+	if h.rehashOldMap != nil {
+		recordErr(h.rehashOldMap.Unmap())
+		h.rehashOldMap = nil
+	}
+	if h.rehashOldMapFile != nil {
+		recordErr(h.rehashOldMapFile.Close())
+		h.rehashOldMapFile = nil
+	}
+	h.rehashOldKeys = nil
+	h.rehashOldControls = nil
+	h.rehashOldCapacity = 0
+	h.rehashIdx = 0
+	h.rehashInProgress = false
 
 	for _, f := range h.slabFiles {
-		if err := f.Close(); err != nil {
-			return err
-		}
+		recordErr(f.Close())
 	}
-	return nil
+	h.slabFiles = nil
+
+	return firstErr
+}
+
+// Close releases mmap and file descriptors held by the DB.
+func (h *DB) Close() error {
+	return h.closeFPs()
 }
 
 // Get retrieves the value for a given key.
@@ -169,7 +168,7 @@ func (h *DB) AddMany(items []Item) error {
 	if err != nil {
 		return err
 	}
-	slabTime := getRunTime(startTime)
+	slabTime := time.Since(startTime)
 	h.slabTime += slabTime
 
 	startTime = time.Now()
@@ -185,7 +184,7 @@ func (h *DB) AddMany(items []Item) error {
 			return err
 		}
 	}
-	hashTime := getRunTime(startTime)
+	hashTime := time.Since(startTime)
 	h.hashTime += hashTime
 	return nil
 }
@@ -199,7 +198,7 @@ func (h *DB) Add(key []byte, value []byte) error {
 	if err != nil {
 		return err
 	}
-	slabTime := getRunTime(startTime)
+	slabTime := time.Since(startTime)
 	h.slabTime += slabTime
 
 	startTime = time.Now()
@@ -209,33 +208,18 @@ func (h *DB) Add(key []byte, value []byte) error {
 			return err2
 		}
 	}
-	hashTime := getRunTime(startTime)
+	hashTime := time.Since(startTime)
 	h.hashTime += hashTime
 	return err
 }
 
 // mlock locks the data in memory to prevent it from being swapped to disk.
-func (h *DB) mlock(data mmap.MMap) {
+func (h *DB) mlock(data mmap.MMap) error {
 	_, _, errno := syscall.Syscall(syscall.SYS_MLOCK, uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)), 0)
 	if errno != 0 {
-		// If the syscall fails, it could be because the user does not have
-		// sufficient privileges to lock memory. To fix this, edit the
-		// /etc/security/limits.conf file and add the following line:
-		//
-		// <username> soft memlock unlimited
-		//
-		// where <username> is the name of the user running the program.
-		// Then, log out and log back in for the changes to take effect.
-		//
-		// Alternatively, you can run the program with sudo privileges to
-		// bypass this error.
-		log.Fatalf("syscall.Syscall(SYS_MLOCK) failed: %v\n"+
-			"To fix this, edit the /etc/security/limits.conf file and add the following line:\n"+
-			"<username> soft memlock unlimited\n"+
-			"where <username> is the name of the user running the program.\n"+
-			"Then, log out and log back in for the changes to take effect.\n"+
-			"Alternatively, you can run the program with sudo privileges to bypass this error.", errno)
+		return fmt.Errorf("mlock: %w", errno)
 	}
+	return nil
 }
 
 // New initializes a Hashmap in the given folder.
@@ -286,7 +270,7 @@ func (h *DB) Clear() error {
 	// initN expects folder to exist (it might have been deleted? No, we deleted contents)
 	// We read capacity? No, files are gone.
 	// Default capacity.
-	return h.initN(h.Folder, DEFAULTMAPSIZE)
+	return h.initN(h.Folder, DefaultCapacity)
 }
 
 // Stats returns statistics about the database.

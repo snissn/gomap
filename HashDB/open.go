@@ -111,7 +111,7 @@ func (h *DB) writeCapacity(N uint64) error {
 func (h *DB) readCapacity() (uint64, error) {
 	dat, err := os.ReadFile(h.Folder + "/capacity")
 	if err != nil {
-		return DEFAULTMAPSIZE, nil // Default if not found
+		return DefaultCapacity, nil // Default if not found
 	}
 	capacity, err := strconv.ParseUint(string(dat), 10, 64)
 	if err != nil {

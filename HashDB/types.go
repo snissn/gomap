@@ -14,6 +14,9 @@ const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
 
 type Hash uint64
 
+// DefaultCapacity is used when no capacity metadata exists on disk.
+const DefaultCapacity uint64 = 32 * 1024
+
 type Key struct {
 	slabOffset SlabOffset
 	hash       Hash
