@@ -170,6 +170,9 @@
   - `unified_bench -suite readme` now includes generation timestamp + environment summary (OS/arch, Go version, CPUs, RAM, CPU model).
 - 2025-12-14: Windows CI fix
   - Fixed HashDB `stress` tests on Windows by building/execing the redis server binary with a `.exe` suffix and using `localhost:6380` for readiness checks.
+- 2025-12-14: Benchmark plots
+  - Added `-outdir` to `cmd/unified_bench` readme suite and generate PNG scaling plots via `gonum/plot`.
+  - `make bench-readme` now writes plots to `docs/images/` and embeds them in the README benchmark section.
 
 ## Notes / Conventions
 
