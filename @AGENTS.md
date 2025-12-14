@@ -17,6 +17,9 @@
 - 2025-12-14: Housekeeping
   - Added `TENTATIVE_DELETIONS.md`
   - Stopped tracking `.DS_Store` and added it to `.gitignore`
+- 2025-12-14: TreeDB rename + tests
+  - Renamed `GeminiTreeDB/` → `TreeDB/` and updated module/import paths
+  - `go test ./...` (`TreeDB`): PASS
 
 ## Notes / Conventions
 

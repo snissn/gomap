@@ -19,6 +19,5 @@ This file is a running list of items that look generated, obsolete, or non-essen
 
 ## Potentially Obsolete Docs/Scripts (confirm before deleting)
 
-- `GeminiTreeDB/run_phases.sh` (references external tooling; may be outdated after rename)
-- `GeminiTreeDB/run_perf.sh` (references external tooling; may be outdated after rename)
-
+- `TreeDB/run_phases.sh` (references external tooling; may be outdated after rename)
+- `TreeDB/run_perf.sh` (references external tooling; may be outdated after rename)
