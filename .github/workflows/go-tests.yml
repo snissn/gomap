@@ -1,4 +1,4 @@
-name: Go tests
+name: Go checks
 
 on: push
 
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   gofmt:
-    name: gofmt
+    name: Format (gofmt)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -33,7 +33,7 @@ jobs:
           fi
 
   test-root:
-    name: go test (repo root) (${{ matrix.os }})
+    name: Root module: vet+test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -58,7 +58,7 @@ jobs:
         run: go test ./...
 
   test-treedb:
-    name: go test (TreeDB) (${{ matrix.os }})
+    name: TreeDB: vet+test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -85,7 +85,7 @@ jobs:
         run: go test ./...
 
   test-unified-bench:
-    name: go test (cmd/unified_bench) (${{ matrix.os }})
+    name: unified_bench: vet+test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
