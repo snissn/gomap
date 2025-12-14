@@ -35,6 +35,10 @@ test-treedb:
 test-unified-bench:
 	cd $(UNIFIED_BENCH_DIR) && go test ./...
 
+.PHONY: test-race
+test-race:
+	go test -race ./HashDB/... ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging
+
 .PHONY: vet vet-root vet-hashdb vet-treedb vet-unified-bench
 vet: vet-root vet-treedb vet-unified-bench
 

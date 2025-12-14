@@ -1,0 +1,34 @@
+name: "HashDB: vet+test (Windows)"
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: windows-latest
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Vet
+        working-directory: HashDB
+        run: go vet ./...
+
+      - name: Test
+        working-directory: HashDB
+        run: go test ./...
+
