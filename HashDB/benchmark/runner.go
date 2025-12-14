@@ -36,11 +36,11 @@ func Run() {
 					cmd = exec.Command("go", "run", "redisserver/main.go", engine, tempDir)
 				}
 
-				// Enable batched SET semantics for gomap in specific scenarios
+				// Enable batched SET semantics for HashDB in specific scenarios
 				// where redis-benchmark uses pipelining and large values.
 				cmd.Env = os.Environ()
-				if engine == "gomap" && (scenario.Name == "Pipeline16" || scenario.Name == "LargeVal1KB") {
-					cmd.Env = append(cmd.Env, "GOMAP_BATCH_SETS=1")
+				if (engine == "hashdb" || engine == "gomap") && (scenario.Name == "Pipeline16" || scenario.Name == "LargeVal1KB") {
+					cmd.Env = append(cmd.Env, "HASHDB_BATCH_SETS=1")
 				}
 
 				cmd.Stdout = os.Stdout

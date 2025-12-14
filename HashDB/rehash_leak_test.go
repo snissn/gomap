@@ -10,26 +10,12 @@ import (
 )
 
 func TestResizeLeak(t *testing.T) {
-	// Create a temporary directory for the test
-	folder, err := os.MkdirTemp("", "gomap-leak-test")
+	folder, err := os.MkdirTemp("", "hashdb-leak-test")
 	assert.NoError(t, err)
 	defer os.RemoveAll(folder)
 
 	var obj DB
-	// Initialize with a small size to force frequent resizes
-	// Assuming initN is called internally by New, but New uses hardcoded defaults?
-	// Let's use New and check defaults or use initN if accessible.
-	// gomap.go: var DEFAULTMAPSIZE uint64 = uint64(32 * 1024)
-	// That's too big for a quick test.
-	// Let's use internal initN if possible or just New and add MANY keys.
-	// Better to check if we can init with small size.
-	// gomap.go: func (h *DB) initN(folder string, N uint64, slabSize int64)
-	// It is exported (capitalized)? No, wait.
-	// Let's check gomap.go again for initN visibility.
-
-	// Assuming initN is unexported based on previous reads, but let's check.
-	// If unexported, I can access it since I am in package gomap.
-
+	// Initialize with a small size to force frequent resizes.
 	initialCapacity := uint64(10)
 	err = obj.initN(folder, initialCapacity)
 	assert.NoError(t, err)
@@ -45,7 +31,7 @@ func TestResizeLeak(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		key := []byte(fmt.Sprintf("key-%d", i))
 		val := []byte("value")
-		obj.Put(key, val)
+		assert.NoError(t, obj.Put(key, val))
 	}
 
 	// Ensure any in-progress incremental rehash is fully completed so we can
