@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ func TestCompaction(t *testing.T) {
 	// When running `go test`, the working directory is typically `HashDB/stress`.
 	rootDir = filepath.Dir(rootDir)
 	serverBin := filepath.Join(rootDir, "redisserver_bin_compact")
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(serverBin), ".exe") {
+		serverBin += ".exe"
+	}
 	buildCmd := exec.Command("go", "build", "-o", serverBin, "redisserver/main.go")
 	buildCmd.Dir = rootDir
 	if out, err := buildCmd.CombinedOutput(); err != nil {

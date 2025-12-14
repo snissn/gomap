@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,9 @@ func TestChaos(t *testing.T) {
 	rootDir = filepath.Dir(rootDir)
 
 	serverBin := filepath.Join(rootDir, "redisserver_bin")
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(serverBin), ".exe") {
+		serverBin += ".exe"
+	}
 	buildCmd := exec.Command("go", "build", "-o", serverBin, "redisserver/main.go")
 	buildCmd.Dir = rootDir
 	if out, err := buildCmd.CombinedOutput(); err != nil {
@@ -134,15 +138,6 @@ func TestChaos(t *testing.T) {
 
 func startServer(t *testing.T, bin string, dbDir string) *exec.Cmd {
 	cmd := exec.Command(bin, "hashdb", dbDir)
-	// We need to pass port? server.go uses hardcoded addr?
-	// redisserver/main.go calls NewRedisServer.
-	// server.go Serve(addr).
-	// main.go uses hardcoded ":6380"?
-	// I need to check main.go.
-	// If hardcoded, I cannot change port easily.
-	// I will check main.go next.
-	// Assuming 6380 for now, but I used 6381 const.
-	// I might need to edit main.go to accept port flag.
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -153,7 +148,7 @@ func startServer(t *testing.T, bin string, dbDir string) *exec.Cmd {
 	// Wait for port
 	// Simple retry loop
 	for i := 0; i < 100; i++ {
-		conn, err := net.Dial("tcp", ":6380")
+		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", ServerPort))
 		if err == nil {
 			conn.Close()
 			return cmd
