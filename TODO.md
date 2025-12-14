@@ -372,3 +372,78 @@ Quality bar:
 - Identify Gemini-related helper scripts/plans and either:
   - move to `docs/legacy/`, or
   - add to `TENTATIVE_DELETIONS.md` if genuinely obsolete (do not delete until confirmed).
+
+---
+
+# Milestone: Raft-backed Database (“RaftDB”)
+
+Goal: build a consensus-based “database” on top of `TreeDB` and/or `HashDB` (Raft log + replicated state machine),
+with a stable surface that future projects can depend on confidently.
+
+## A) In-repo Prerequisites (Storage Contracts)
+
+These are required before a Raft layer can safely rely on this repo:
+
+- **Coherent durability + recovery**
+  - TreeDB must have a single recovery story (see sections 1–5 above) so crash recovery does not depend on whether the next opener chooses cached vs backend mode.
+- **Exclusive cross-process locking**
+  - `treedb.Open*` must enforce exclusive open; the Raft layer should never “accidentally” open the same dir from multiple processes.
+- **Clear durability API contract**
+  - Document exactly what is durable after each call (`Set`, `SetSync`, `Batch.Write`, `Batch.WriteSync`) and what recovery guarantees exist.
+  - Avoid “silent best-effort durability” for anything the Raft layer would treat as committed.
+- **Atomic batch apply**
+  - A Raft state machine apply needs an efficient `ApplyBatch` style path that is atomic and durable when requested.
+- **Snapshot support (consistent read view)**
+  - Need a way to create a consistent snapshot for:
+    - state machine snapshotting (iterate all keys deterministically), and
+    - restoring from snapshot.
+  - This can be: point-in-time iterator semantics, a `View`/read-only transaction, or explicit “flush then iterate” with documented tradeoffs.
+- **Deterministic iteration**
+  - Snapshotting requires stable ordering and clearly defined iterator bounds/semantics.
+- **Concurrency model documented**
+  - Raft will have concurrent goroutines (apply loop, reads, snapshot creation, compaction); DB types must clearly state what’s safe concurrently.
+
+## B) “Stable Surface” Requirements (API + Versioning)
+
+- Decide what packages are “stable” for dependents:
+  - likely `github.com/snissn/gomap/TreeDB` (public `treedb` API) and `github.com/snissn/gomap/HashDB` (`hashdb`).
+- Keep internals internal:
+  - move implementation details behind `internal/` where possible; avoid exporting types that aren’t part of the intended stable API.
+- Add typed errors and invariants where helpful (e.g. `ErrLocked`, `ErrClosed`, `ErrCorrupt`).
+- Consider a “compat/stability” doc:
+  - what can change freely vs what is intended to be stable.
+  - later: SemVer tags once the surface stabilizes.
+
+## C) Raft Storage Requirements (Design Targets)
+
+At minimum, a Raft-backed DB needs:
+- **Log store**: append entries, read by index, truncate suffix/prefix, and compact.
+- **Stable store**: persist current term, voted-for, and cluster config.
+- **State machine store**: apply committed commands (KV mutations) atomically and snapshot/restore.
+
+Open questions to decide early:
+- Which Raft implementation to build around (`hashicorp/raft`, `etcd/raft`, or a minimal custom layer)?
+- Which engine stores the Raft log vs the user KV state (TreeDB backend vs cached vs HashDB), and why?
+- How to encode commands and schema/version them.
+
+## D) Test Plan (North Star)
+
+- **Crash tests**: simulate power-loss at key phases; assert committed entries survive and uncommitted do not “appear”.
+- **Replay idempotence**: WAL/log replay can run twice without corruption.
+- **Linearizability / ordering**: state machine applies in commit order; reads are consistent with the chosen read mode (leader lease vs read-index vs local).
+- **Snapshot/restore correctness**: snapshot then restore yields identical keyspace.
+- **Race tests**: run `-race` in CI for core packages.
+
+## E) Documentation Requirements (Go Best Practices)
+
+Goal: make it hard to misuse the storage engines when building Raft on top.
+
+- **GoDoc-first API docs**
+  - Exported packages/types/funcs/methods should have doc comments.
+  - Not every private helper needs comments; prefer clear naming + comments for non-obvious invariants.
+- **Package docs (`doc.go`)**
+  - Each public package should have a top-level comment describing purpose, safety/durability caveats, and a minimal example.
+- **Runnable examples**
+  - Add `Example*` tests that appear in `go doc`/pkgsite and are executed by `go test`.
+- **Design docs**
+  - Add a `docs/raft/` section later: log format, snapshot model, recovery pipeline, and operational guidance.

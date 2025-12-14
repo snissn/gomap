@@ -12,6 +12,7 @@
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [ ] Future work: unify TreeDB open + crash recovery (see `TODO.md`).
 - [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
+- [ ] Milestone: Raft-backed database (“RaftDB”) on TreeDB/HashDB (see `TODO.md`).
 
 ## Progress Log
 
@@ -112,6 +113,8 @@
   - Sketched V1 “Wow” documentation requirements in `TODO.md`.
 - 2025-12-14: Roadmap expansion
   - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
+- 2025-12-14: Roadmap expansion
+  - Added a Raft-backed DB (“RaftDB”) milestone and prereqs to `TODO.md`.
 
 ## Notes / Conventions
 
