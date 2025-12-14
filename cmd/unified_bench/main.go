@@ -601,6 +601,9 @@ func main() {
 	}
 
 	// 5. Print final transposed table once to stdout
+	if live != nil {
+		_ = live.Clear()
+	}
 	fmt.Println()
 	printResultsTable(instances, finalTestOrder, displayNames, results)
 }
@@ -737,6 +740,18 @@ func (t *liveTable) Render(results map[string]map[string]float64) error {
 
 	// Fallback: just print the table again (no in-place update).
 	_, err := fmt.Fprint(t.w, "\n"+table)
+	return err
+}
+
+func (t *liveTable) Clear() error {
+	if t.printedLines == 0 {
+		return nil
+	}
+	if !t.enabledVT100 {
+		return nil
+	}
+	// Move cursor back up over the previously printed table and clear to end of screen.
+	_, err := fmt.Fprintf(t.w, "\r\x1b[%dA\x1b[J", t.printedLines)
 	return err
 }
 
