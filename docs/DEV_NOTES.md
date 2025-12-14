@@ -55,7 +55,7 @@ This note summarizes the main engine and benchmark changes made during the recen
 
 ## Sharded API & MGET
 
-- Added `ShardedDB.GetMany(keys [][]byte)`:
+- Added `HashDB.GetMany(keys [][]byte)`:
   - Groups key indexes per shard, acquires one read lock per shard, and calls `DB.Get` for all shard-local keys.
   - Returns values and per-key errors aligned with input.
 - `redisserver/hashdbredis` now implements Redis `MGET` via `GetMany`, reducing lock churn and improving multi-key read performance.
@@ -63,7 +63,7 @@ This note summarizes the main engine and benchmark changes made during the recen
 ## Compression Control
 
 - `DB.SetCompression(enabled bool)` already existed.
-- New `ShardedDB.SetCompression(enabled bool)`:
+- New `HashDB.SetCompression(enabled bool)`:
   - Iterates shards under their write locks and forwards the setting to each `DB`.
   - Used to quickly toggle compression for the entire distributed map.
 - `hashdbredis.NewRedisServer` now calls `store.SetCompression(false)`:
@@ -82,7 +82,7 @@ This note summarizes the main engine and benchmark changes made during the recen
 - `redisserver/hashdbredis` now supports optional batched SETs per connection:
   - `RedisServer` holds `batchSets bool`, enabled via `HASHDB_BATCH_SETS=1` (or legacy `GOMAP_BATCH_SETS=1`).
   - Connection state (`connState`) accumulates `hashdb.Item{Key, Value}` in `pending`.
-  - Once `pending` reaches `setBatchSize` (currently 16), it calls `ShardedDB.PutMany(pending)` and then writes `+OK` once per item.
+  - Once `pending` reaches `setBatchSize` (currently 16), it calls `HashDB.PutMany(pending)` and then writes `+OK` once per item.
   - This is specifically tuned for `redis-benchmark -P16` workloads.
 - Benchmark harness integration:
   - `benchmark/runner.go` sets `GOMAP_BATCH_SETS=1` in the hashdb server environment only for:
@@ -96,7 +96,7 @@ This note summarizes the main engine and benchmark changes made during the recen
   - Requires careful handling of file growth/rotation and ensuring callers do not retain references across compaction or close.
 
 - **Vectorized I/O / deeper MGET optimizations**
-  - Build on `ShardedDB.GetMany` to batch slab reads per shard.
+  - Build on `HashDB.GetMany` to batch slab reads per shard.
   - On Linux, optionally experiment with `preadv`/`readv` or io_uring for large MGETs to further reduce syscalls.
 
 - **Compaction correctness & performance**
