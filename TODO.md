@@ -447,3 +447,27 @@ Goal: make it hard to misuse the storage engines when building Raft on top.
   - Add `Example*` tests that appear in `go doc`/pkgsite and are executed by `go test`.
 - **Design docs**
   - Add a `docs/raft/` section later: log format, snapshot model, recovery pipeline, and operational guidance.
+
+## F) Handoff Checklist (“Future Projects Can Adopt This”)
+
+Goal: a new engineer (or a downstream repo) can depend on this repo without tribal knowledge.
+
+- **Stable API surface explicitly defined**
+  - Create `docs/API_STABILITY.md`:
+    - list the supported public packages (e.g. `treedb`, `hashdb`) and the expected stability level,
+    - state what can change (internals, benchmark tooling) vs what should be compatible.
+  - Prefer small, purpose-built exported APIs; move everything else behind `internal/`.
+- **GoDoc coverage**
+  - Every exported identifier that is part of the stable surface has a GoDoc comment explaining semantics (durability, concurrency, error behavior).
+  - Package-level docs (`doc.go`) explain the “happy path” plus caveats.
+  - Add runnable examples (`Example*`) for the primary entrypoints and common patterns.
+- **Specs + invariants live with code**
+  - Key behavioral contracts are pinned by tests (crash recovery, iterator semantics, batch atomicity).
+  - Add “spec tests” that read like documentation and prevent regressions.
+- **Developer onboarding**
+  - Add `docs/README.md` as an index (“start here”).
+  - Add a “repo map” page + architecture overview (where to look for what).
+  - Add `CONTRIBUTING.md` with: style, testing commands, benchmarks methodology, and how to change on-disk formats safely.
+- **Release / change communication**
+  - Add `CHANGELOG.md` and document how breaking changes are handled.
+  - Once the stable surface is ready, tag releases (SemVer) so downstream repos can pin.

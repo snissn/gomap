@@ -115,6 +115,8 @@
   - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
 - 2025-12-14: Roadmap expansion
   - Added a Raft-backed DB (“RaftDB”) milestone and prereqs to `TODO.md`.
+- 2025-12-14: Roadmap expansion
+  - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
 
 ## Notes / Conventions
 
