@@ -3,6 +3,7 @@
 ## TL;DR
 
 - Start with the root `README.md` for the high-level overview.
+- Use `docs/GETTING_STARTED.md` if you want to run things locally quickly.
 - Use `docs/contracts/` for the “do not surprise me” behavioral contracts (durability, iteration, concurrency, locking).
 - Use `cmd/unified_bench/README.md` for benchmark usage and methodology.
 
@@ -39,6 +40,9 @@ If you’re building a higher-level system (e.g. Raft replication) on top of the
 start here:
 
 - `docs/API_STABILITY.md`
+- `docs/GETTING_STARTED.md`
+- `docs/REPO_MAP.md`
+- `docs/TREEDB_CACHED_VS_BACKEND.md`
 - `docs/contracts/README.md`
 - `docs/raft/README.md`
 
@@ -51,4 +55,3 @@ start here:
 ## Legacy / Historical
 
 As the repo is cleaned up, older “planning” docs and one-off scripts may be moved into `docs/legacy/`.
-
