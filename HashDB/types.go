@@ -51,6 +51,10 @@ type DB struct {
 
 	compressionEnabled bool
 
+	indexMemoryPolicy    IndexMemoryPolicy
+	indexMemoryPolicySet bool
+	controlsLocked       bool
+
 	// Incremental rehash state (per-shard, in-memory only).
 	rehashInProgress     bool
 	rehashOldControlFile *os.File

@@ -28,7 +28,7 @@ func getCount(slabMap mmap.MMap) *uint64 {
 	return (*uint64)(unsafe.Pointer(&slabMap[8]))
 }
 
-func (h *DB) initN(folder string, N uint64) error {
+func (h *DB) initN(folder string, N uint64) (err error) {
 	h.dir = folder
 
 	// Create directory is handled inside openMmapHash if needed, but safer here.
@@ -39,6 +39,28 @@ func (h *DB) initN(folder string, N uint64) error {
 	controlMap, controlFile, keyMap, keyFile, err := h.openIndexMaps(N)
 	if err != nil {
 		return errors.Wrap(err, 1)
+	}
+
+	h.controlMap = controlMap
+	h.controlFile = controlFile
+	h.keyMap = keyMap
+	h.keyFile = keyFile
+
+	// Controls are stored in a separate mmap.
+	h.controls = []byte(h.controlMap)
+
+	// Keys are stored in a separate mmap.
+	keyPtr := (*Key)(unsafe.Pointer(&h.keyMap[0]))
+	h.keys = unsafe.Slice(keyPtr, N)
+
+	defer func() {
+		if err != nil {
+			_ = h.closeFPs()
+		}
+	}()
+
+	if err := h.applyIndexMemoryPolicy([]byte(h.controlMap), []byte(h.keyMap)); err != nil {
+		return err
 	}
 
 	meta, f_meta, err := h.openMetadata()
@@ -54,11 +76,6 @@ func (h *DB) initN(folder string, N uint64) error {
 	if err != nil {
 		return errors.Wrap(err, 1)
 	}
-
-	h.controlMap = controlMap
-	h.controlFile = controlFile
-	h.keyMap = keyMap
-	h.keyFile = keyFile
 
 	h.metadataMap = meta
 	h.metadataFile = f_meta
@@ -93,13 +110,6 @@ func (h *DB) initN(folder string, N uint64) error {
 
 	h.capacity = N
 	h.count = getCount(h.metadataMap)
-
-	// Controls are stored in a separate mmap.
-	h.controls = []byte(h.controlMap)
-
-	// Keys are stored in a separate mmap.
-	keyPtr := (*Key)(unsafe.Pointer(&h.keyMap[0]))
-	h.keys = unsafe.Slice(keyPtr, N)
 	return nil
 }
 

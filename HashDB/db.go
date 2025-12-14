@@ -21,6 +21,7 @@ func (h *DB) closeFPs() error {
 
 	// Unmap before closing files (important for Windows compatibility).
 	if h.controlMap != nil {
+		h.unlockControlsIfNeeded([]byte(h.controlMap))
 		recordErr(h.controlMap.Unmap())
 		h.controlMap = nil
 	}
@@ -48,6 +49,7 @@ func (h *DB) closeFPs() error {
 
 	// Close and unmap the old index if an incremental rehash was in progress.
 	if h.rehashOldControlMap != nil {
+		_ = unlockBytes([]byte(h.rehashOldControlMap))
 		recordErr(h.rehashOldControlMap.Unmap())
 		h.rehashOldControlMap = nil
 	}

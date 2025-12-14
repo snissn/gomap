@@ -24,10 +24,12 @@ const rehashBucketsPerWrite = 8
 // startRehash initializes an incremental rehash by allocating a new index
 // with double capacity and switching the active table to it. The old table
 // is kept around and migrated gradually.
-func (h *DB) startRehash() error {
+func (h *DB) startRehash() (err error) {
 	if h.rehashInProgress {
 		return nil
 	}
+
+	policy := h.indexMemoryPolicyOrDefault()
 
 	newCap := h.capacity * 2
 	if newCap == 0 {
@@ -42,6 +44,7 @@ func (h *DB) startRehash() error {
 	oldCap := h.capacity
 	oldKeys := h.keys
 	oldControls := h.controls
+	oldControlsLocked := h.controlsLocked
 
 	// Allocate new index file/mmap.
 	newControlMap, newControlFile, newKeyMap, newKeyFile, err := h.openIndexMaps(newCap)
@@ -49,13 +52,72 @@ func (h *DB) startRehash() error {
 		return err
 	}
 
+	newControlsLocked := false
+	oldControlsUnlocked := false
+	swapped := false
+	defer func() {
+		if err == nil || swapped {
+			return
+		}
+
+		if newControlsLocked {
+			_ = unlockBytes([]byte(newControlMap))
+		}
+
+		_ = newControlMap.Unmap()
+		_ = newControlFile.Close()
+		_ = newKeyMap.Unmap()
+		_ = newKeyFile.Close()
+
+		if oldControlsUnlocked && oldControlsLocked {
+			if lockErr := lockBytes([]byte(oldControlMap)); lockErr == nil {
+				h.controlsLocked = true
+			}
+		}
+	}()
+
+	// ---------------------------------------------------------
+	// 1. The Swiss Hash (Control Bytes) -> "Really Mean It"
+	// ---------------------------------------------------------
+	if policy.LockControls {
+		lockErr := lockBytes([]byte(newControlMap))
+		if lockErr != nil && oldControlsLocked {
+			// Free memlock budget and retry.
+			if unlockErr := unlockBytes([]byte(oldControlMap)); unlockErr == nil {
+				h.controlsLocked = false
+				oldControlsUnlocked = true
+				lockErr = lockBytes([]byte(newControlMap))
+			}
+		}
+
+		if lockErr != nil {
+			if policy.LockControlsStrict {
+				return fmt.Errorf("failed to hard-pin control bytes (check memlock/ulimit -l): %w", lockErr)
+			}
+		} else {
+			newControlsLocked = true
+			if oldControlsLocked && !oldControlsUnlocked {
+				if unlockErr := unlockBytes([]byte(oldControlMap)); unlockErr == nil {
+					h.controlsLocked = false
+					oldControlsUnlocked = true
+				}
+			}
+		}
+	}
+
+	// ---------------------------------------------------------
+	// 2. The Key Array (Data) -> "Hope / Hint"
+	// ---------------------------------------------------------
+	if policy.AdviseKeysWillNeed {
+		_ = adviseWillNeed([]byte(newKeyMap))
+	}
+	if policy.AdviseKeysRandom {
+		_ = adviseRandom([]byte(newKeyMap))
+	}
+
 	// Persist new capacity for future opens. This mirrors the old resize behavior,
 	// which wrote capacity at the moment of resizing.
 	if err := h.writeCapacity(newCap); err != nil {
-		newControlMap.Unmap()
-		newControlFile.Close()
-		newKeyMap.Unmap()
-		newKeyFile.Close()
 		return err
 	}
 
@@ -68,6 +130,7 @@ func (h *DB) startRehash() error {
 
 	// Controls
 	h.controls = []byte(newControlMap)
+	h.controlsLocked = newControlsLocked
 
 	// Keys
 	keyPtr := (*Key)(unsafe.Pointer(&newKeyMap[0]))
@@ -89,6 +152,7 @@ func (h *DB) startRehash() error {
 	h.rehashOldControls = oldControls
 	h.rehashIdx = 0
 	h.rehashInProgress = true
+	swapped = true
 
 	return nil
 }
