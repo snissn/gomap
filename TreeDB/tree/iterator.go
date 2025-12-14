@@ -11,7 +11,7 @@ import (
 
 type CursorItem struct {
 	PageID uint64
-	Node   *node.Node
+	Node   node.Node
 	Index  int
 }
 
@@ -434,18 +434,18 @@ func (it *Iterator) Domain() (start, end []byte) {
 	return it.start, it.end
 }
 
-func (it *Iterator) loadNode(pageID uint64) (*node.Node, error) {
+func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	// Use Get (mmap) instead of ReadPage (copy).
 	data, err := it.tree.pager.Get(pageID)
 	if err != nil {
-		return nil, err
+		return node.Node{}, err
 	}
-	n := node.NewNode(data)
+	n := node.NewNodeView(data)
 
 	// Skip checksum verification for pages we've already verified.
 	if !it.tree.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
-			return nil, fmt.Errorf("checksum mismatch on page %d", pageID)
+			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		it.tree.pager.MarkVerified(pageID)
 	}

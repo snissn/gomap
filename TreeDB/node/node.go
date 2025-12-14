@@ -36,6 +36,12 @@ func NewNode(data []byte) *Node {
 	return &Node{data: data}
 }
 
+// NewNodeView wraps the given page data without allocating a *Node.
+// It is useful in hot paths that store Node values directly (e.g. iterators).
+func NewNodeView(data []byte) Node {
+	return Node{data: data}
+}
+
 // Data returns the underlying byte slice.
 func (n *Node) Data() []byte {
 	return n.data

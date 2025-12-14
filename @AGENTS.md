@@ -92,6 +92,10 @@
 - 2025-12-14: TreeDB benchmarks cleanup
   - Reduced benchmark noise by precomputing keys (avoid per-iteration `fmt.Sprintf` allocations)
   - `go test ./...` (`TreeDB/db`): PASS
+- 2025-12-14: TreeDB scan allocs cleanup
+  - Added `node.NewNodeView` and stored iterator nodes by value to avoid per-page heap allocs
+  - `BenchmarkScan`: ~314 allocs/op → ~7 allocs/op on local run
+  - `go test ./...` (root/TreeDB/cmd/unified_bench): PASS
 
 ## Notes / Conventions
 
