@@ -2,26 +2,27 @@ package merging
 
 import (
 	"bytes"
-	"github.com/snissn/gomap/TreeDB/internal/iterator" // For UnsafeIterator
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 // TwoWayMerger implements MergingIterator for two sources (Memtable and Disk).
 // It avoids heap overhead for the common case.
 type TwoWayMerger struct {
 	// Source 1: Memtable (always higher precedence / lower priority)
-	src1     iterator.UnsafeIterator 
+	src1 iterator.UnsafeIterator
 	// Source 2: Disk
-	src2     iterator.UnsafeIterator 
+	src2 iterator.UnsafeIterator
 
-	curr      iterator.UnsafeIterator
-	valid     bool
-	key       []byte
-	keyLoaded bool
-	val       []byte
-	valLoaded bool
-	err       error
-	start     []byte
-	end       []byte
+	cur iterator.UnsafeIterator
+
+	valid bool
+	key   []byte
+	val   []byte
+	valOK bool
+	err   error
+	start []byte
+	end   []byte
 }
 
 func NewTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byte) *TwoWayMerger {
@@ -39,69 +40,60 @@ func (m *TwoWayMerger) Next() {
 	if !m.valid {
 		panic("merging iterator invalid")
 	}
-	m.curr.Next()
+	if m.cur != nil {
+		m.cur.Next()
+	}
 	m.advance()
 }
 
 func (m *TwoWayMerger) advance() {
 	m.valid = false // Assume invalid until an item is found
-	m.key = nil
-	m.keyLoaded = false
-	m.val = nil
-	m.valLoaded = false
-	m.curr = nil
+	m.cur = nil
+	m.valOK = false
 
-	// Find the smaller key, without forcing value loads unless Value() is called.
 	for m.src1.Valid() || m.src2.Valid() {
-		cmp := 0
-		if m.src1.Valid() && m.src2.Valid() {
-			cmp = bytes.Compare(m.src1.UnsafeKey(), m.src2.UnsafeKey())
-		} else if m.src1.Valid() {
-			cmp = -1 // src1 is smaller (src2 exhausted)
-		} else if m.src2.Valid() {
-			cmp = 1 // src2 is smaller (src1 exhausted)
-		} else {
-			break // Both exhausted
-		}
-
-		var (
-			currentKey []byte
-			isDeleted  bool
-		)
+		var winner iterator.UnsafeIterator
 
 		switch {
-		case cmp < 0: // src1 is smaller or src2 exhausted
-			m.curr = m.src1
-			currentKey = m.src1.UnsafeKey()
-			isDeleted = m.src1.IsDeleted()
-		case cmp > 0: // src2 is smaller or src1 exhausted
-			m.curr = m.src2
-			currentKey = m.src2.UnsafeKey()
-			isDeleted = m.src2.IsDeleted()
-		default: // Keys are equal (shadowing): src1 wins, src2 is advanced now.
-			m.curr = m.src1
-			currentKey = m.src1.UnsafeKey()
-			isDeleted = m.src1.IsDeleted()
-			m.src2.Next()
+		case m.src1.Valid() && m.src2.Valid():
+			cmp := bytes.Compare(m.src1.UnsafeKey(), m.src2.UnsafeKey())
+			if cmp < 0 {
+				winner = m.src1
+			} else if cmp > 0 {
+				winner = m.src2
+			} else {
+				// Keys equal: src1 wins, src2 is shadowed.
+				winner = m.src1
+				m.src2.Next()
+			}
+		case m.src1.Valid():
+			winner = m.src1
+		default:
+			winner = m.src2
 		}
 
-		// Handle range bounds (exclusive end).
-		if m.end != nil && bytes.Compare(currentKey, m.end) >= 0 {
-			m.curr = nil
+		k := winner.UnsafeKey()
+
+		// Handle range bounds (exclusive end)
+		if m.end != nil && bytes.Compare(k, m.end) >= 0 {
 			return
 		}
-		// Handle range bounds (inclusive start).
-		if m.start != nil && bytes.Compare(currentKey, m.start) < 0 {
-			m.curr.Next()
+		// Handle range bounds (inclusive start) - only needed if Seek doesn't handle it
+		if m.start != nil && bytes.Compare(k, m.start) < 0 {
+			winner.Next()
 			continue
 		}
 
-		// Skip tombstones.
-		if isDeleted {
-			m.curr.Next()
+		// If tombstone, skip it (and keep searching).
+		if winner.IsDeleted() {
+			winner.Next()
 			continue
 		}
 
+		// Found current item. Keep the winner positioned here; Value() will load
+		// lazily if needed.
+		m.cur = winner
+		m.key = append(m.key[:0], k...)
 		m.valid = true
 		return
 	}
@@ -115,10 +107,6 @@ func (m *TwoWayMerger) Key() []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
-	if !m.keyLoaded {
-		m.key = append([]byte(nil), m.curr.UnsafeKey()...)
-		m.keyLoaded = true
-	}
 	return m.key
 }
 
@@ -126,10 +114,15 @@ func (m *TwoWayMerger) Value() []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
-	if !m.valLoaded {
-		m.val = append([]byte(nil), m.curr.UnsafeValue()...)
-		m.valLoaded = true
+	if m.valOK {
+		return m.val
 	}
+
+	if m.cur == nil {
+		return nil
+	}
+	m.val = append(m.val[:0], m.cur.UnsafeValue()...)
+	m.valOK = true
 	return m.val
 }
 
@@ -139,8 +132,12 @@ func (m *TwoWayMerger) Error() error {
 
 func (m *TwoWayMerger) Close() error {
 	var firstErr error
-	if err := m.src1.Close(); err != nil && firstErr == nil { firstErr = err }
-	if err := m.src2.Close(); err != nil && firstErr == nil { firstErr = err }
+	if err := m.src1.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := m.src2.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	return firstErr
 }
 

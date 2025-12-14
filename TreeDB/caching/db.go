@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
-	"time"
+	"unsafe"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator" // Import for UnsafeIterator
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/wal"
@@ -18,10 +20,18 @@ var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 
+func bytesToStringNoCopy(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
 // BatchInterface matches the Batch methods we need from backend.
 type BatchInterface interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
+	SetOps(ops map[string]batch.Entry) error // New method
 	Write() error
 	WriteSync() error
 	Close() error
@@ -29,11 +39,10 @@ type BatchInterface interface {
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
-// Its Iterator methods now return iterator.UnsafeIterator.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
-	Iterator(start, end []byte) (iterator.UnsafeIterator, error)        // Returns UnsafeIterator
-	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) // Returns UnsafeIterator
+	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
+	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	NewBatch() BatchInterface
 	Close() error
 	Print() error
@@ -45,8 +54,12 @@ type DB struct {
 	flushMu sync.Mutex
 
 	// Level 0 (Memory)
-	mutable *memtable.Memtable
-	queue   []*memtable.Memtable
+	mutable           *memtable.Memtable
+	queue             []*memtable.Memtable
+	mutableRange      keyRange
+	queueRanges       []keyRange
+	backendRange      keyRange
+	backendRangeKnown bool
 
 	// Durability
 	wal     *wal.Writer
@@ -62,7 +75,69 @@ type DB struct {
 
 	// Lifecycle
 	closeCh chan struct{}
+	flushCh chan struct{}
 	wg      sync.WaitGroup
+}
+
+type keyRange struct {
+	valid bool
+	min   []byte
+	max   []byte
+}
+
+func (r *keyRange) add(key []byte) {
+	if key == nil {
+		return
+	}
+	if !r.valid {
+		r.valid = true
+		r.min = append([]byte(nil), key...)
+		r.max = append([]byte(nil), key...)
+		return
+	}
+	if bytes.Compare(key, r.min) < 0 {
+		r.min = append(r.min[:0], key...)
+	}
+	if bytes.Compare(key, r.max) > 0 {
+		r.max = append(r.max[:0], key...)
+	}
+}
+
+func rangesOverlap(a, b keyRange) bool {
+	if !a.valid || !b.valid {
+		return false
+	}
+	// [a.min, a.max] overlaps [b.min, b.max] iff neither is strictly before the other.
+	if bytes.Compare(a.max, b.min) < 0 {
+		return false
+	}
+	if bytes.Compare(a.min, b.max) > 0 {
+		return false
+	}
+	return true
+}
+
+// overlapsQuery checks if the query range [start, end) overlaps with the keyRange [r.min, r.max].
+// nil start means -inf, nil end means +inf.
+func overlapsQuery(start, end []byte, r keyRange) bool {
+	if !r.valid {
+		return false
+	}
+	// Range is [r.min, r.max]
+	// Query is [start, end)
+
+	// Check if Range is strictly before Query: r.max < start
+	if start != nil && bytes.Compare(r.max, start) < 0 {
+		return false
+	}
+
+	// Check if Range is strictly after Query: r.min >= end
+	// Note: end is exclusive, so if r.min == end, it's outside.
+	if end != nil && bytes.Compare(r.min, end) >= 0 {
+		return false
+	}
+
+	return true
 }
 
 func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
@@ -82,6 +157,7 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 		flushThreshold: flushThreshold,
 		mutable:        memtable.New(),
 		closeCh:        make(chan struct{}),
+		flushCh:        make(chan struct{}, 1),
 	}
 
 	// Open initial WAL
@@ -93,13 +169,54 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	db.wg.Add(1)
 	go db.flushLoop()
 
+	// Initialize backend key range for safe scan fast-path decisions.
+	if err := db.initBackendRange(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	return db, nil
+}
+
+func (db *DB) initBackendRange() error {
+	minIter, err := db.backend.Iterator(nil, nil)
+	if err != nil {
+		return err
+	}
+	defer minIter.Close()
+	minIter.Seek(nil)
+
+	r := keyRange{}
+	if minIter.Valid() && !minIter.IsDeleted() {
+		r.add(minIter.UnsafeKey())
+	}
+
+	maxIter, err := db.backend.ReverseIterator(nil, nil)
+	if err != nil {
+		// Backend doesn't support reverse iteration; disable backend-range-dependent optimizations.
+		db.mu.Lock()
+		db.backendRange = keyRange{}
+		db.backendRangeKnown = false
+		db.mu.Unlock()
+		return nil
+	}
+	defer maxIter.Close()
+
+	if maxIter.Valid() && !maxIter.IsDeleted() {
+		r.add(maxIter.UnsafeKey())
+	}
+
+	db.mu.Lock()
+	db.backendRange = r
+	db.backendRangeKnown = true
+	db.mu.Unlock()
+	return nil
 }
 
 func (db *DB) Close() error {
 	db.mu.Lock()
 	if db.mutable.Size() > 0 {
-		_ = db.rotateMemtableLocked() // Ignore error (what can we do? WAL error?)
+		_ = db.rotateMemtableLocked()
 	}
 	db.mu.Unlock()
 
@@ -115,7 +232,7 @@ func (db *DB) Close() error {
 	return db.backend.Close()
 }
 func (db *DB) Set(key, value []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -125,7 +242,7 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 func (db *DB) SetSync(key, value []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -150,6 +267,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	// 2. Insert to Memtable
 	db.mutable.Set(key, value)
+	db.mutableRange.add(key)
 
 	// 3. Check Threshold
 	if db.mutable.Size() > db.flushThreshold {
@@ -161,14 +279,14 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) Delete(key []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	return db.delete(key, false)
 }
 
 func (db *DB) DeleteSync(key []byte) error {
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	return db.delete(key, true)
@@ -190,6 +308,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 
 	// 2. Memtable
 	db.mutable.Delete(key)
+	db.mutableRange.add(key)
 
 	// 3. Threshold
 	if db.mutable.Size() > db.flushThreshold {
@@ -202,8 +321,17 @@ func (db *DB) delete(key []byte, sync bool) error {
 
 func (db *DB) rotateMemtableLocked() error {
 	db.queue = append(db.queue, db.mutable)
+	db.queueRanges = append(db.queueRanges, db.mutableRange)
 	db.mutable = memtable.New()
-	return db.rotateWALLocked()
+	db.mutableRange = keyRange{}
+	if err := db.rotateWALLocked(); err != nil {
+		return err
+	}
+	select {
+	case db.flushCh <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -224,70 +352,125 @@ func (db *DB) rotateWALLocked() error {
 
 func (db *DB) flushLoop() {
 	defer db.wg.Done()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
 
 	for {
 		select {
 		case <-db.closeCh:
-			// Flush all remaining
-			db.flushAll()
+			// Flush all remaining with sync on close.
+			db.flushAll(true)
 			return
-		case <-ticker.C:
-			db.flushOne()
+		case <-db.flushCh:
+			// Background flush should not fsync; durability is via WAL.
+			db.flushAll(false)
 		}
 	}
 }
 
-func (db *DB) flushAll() {
-	for {
-		if !db.flushOne() {
-			break
-		}
+func (db *DB) flushAll(sync bool) {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	for db.flushOneLocked(sync) {
 	}
 }
 
 func (db *DB) flushOne() bool {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
+	return db.flushOneLocked(false)
+}
 
+func (db *DB) flushOneLocked(sync bool) bool {
 	db.mu.Lock()
 	if len(db.queue) == 0 {
 		db.mu.Unlock()
 		return false
 	}
 	mem := db.queue[0]
+	memRange := keyRange{}
+	if len(db.queueRanges) > 0 {
+		memRange = db.queueRanges[0]
+	}
 	db.mu.Unlock()
 
 	// Flush 'mem' to backend
 
-	batch := db.backend.NewBatch()
-	iter := mem.NewIterator() // Returns iterator.UnsafeIterator
-	iter.Seek(nil)            // Start
-	for iter.Valid() {
-		if iter.IsDeleted() {
-			_ = batch.Delete(iter.UnsafeKey())
-		} else {
-			_ = batch.Set(iter.UnsafeKey(), iter.UnsafeValue())
+	backendBatch := db.backend.NewBatch()
+	iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
+	iter.Seek(nil)                    // Start
+
+	// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
+	if mem.Len() > 2000 {
+		ops := make(map[string]batch.Entry, mem.Len())
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if iter.IsDeleted() {
+				ops[bytesToStringNoCopy(key)] = batch.Entry{
+					Type: batch.OpDelete,
+					Key:  key,
+				}
+			} else {
+				ops[bytesToStringNoCopy(key)] = batch.Entry{
+					Type:  batch.OpPut,
+					Key:   key,
+					Value: iter.UnsafeValue(),
+				}
+			}
+			iter.Next()
 		}
-		iter.Next()
+		if err := backendBatch.SetOps(ops); err != nil {
+			fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+			_ = iter.Close()
+			_ = backendBatch.Close()
+			return false
+		}
+	} else {
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if iter.IsDeleted() {
+				if err := backendBatch.Delete(key); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
+				}
+			} else {
+				if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
+				}
+			}
+			iter.Next()
+		}
 	}
-	// Commit to disk
-	if err := batch.WriteSync(); err != nil {
-		// Retry? Log? For now panic/log.
+	_ = iter.Close()
+	// Commit to backend
+	var err error
+	if sync {
+		err = backendBatch.WriteSync()
+	} else {
+		err = backendBatch.Write()
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+		_ = backendBatch.Close()
 		return false
 	}
+	_ = backendBatch.Close()
 
 	// Remove from queue and delete old WAL
-	// Note: We need to know WHICH wal corresponds to this memtable.
-	// Simplified: We rotate WAL every time we rotate Memtable.
-	// So queue[0] corresponds to walSeq - len(queue).
-	// We should probably track (Memtable, WalPath) pairs in the queue.
-
 	db.mu.Lock()
+	if memRange.valid {
+		db.backendRange.add(memRange.min)
+		db.backendRange.add(memRange.max)
+	}
 	if len(db.queue) > 0 {
 		db.queue = db.queue[1:]
+	}
+	if len(db.queueRanges) > 0 {
+		db.queueRanges = db.queueRanges[1:]
 	}
 	// TODO: Delete old WAL file here.
 	// Need to track WAL paths.
@@ -346,56 +529,187 @@ func (db *DB) Print() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
-	// Match Cosmos DB iterator contract: if start >= end, return an invalid iterator.
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
-		return merging.NewMergingIterator(nil, start, end), nil
-	}
-
 	db.mu.RLock()
 	defer db.mu.RUnlock() // Need to hold lock while creating iterators?
-	// If we create iterators from memtables, they are snapshots (COW).
+
+	// Fast path for full scans: if the in-memory key ranges are disjoint from the
+	// backend key range, we can concatenate iterators instead of merging.
+	if start == nil && end == nil {
+		// Only do this when the queue is empty; queued memtables imply the backend
+		// might not yet include older keys, making disjoint-range checks unreliable.
+		if db.backendRangeKnown && len(db.queue) == 0 && db.mutableRange.valid && db.backendRange.valid && !rangesOverlap(db.mutableRange, db.backendRange) {
+			diskIter, err := db.backend.Iterator(nil, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			memIter := db.mutable.NewIterator(nil, nil)
+			memIter.Seek(nil)
+
+			// Common append-only case: backend max < mutable min.
+			if bytes.Compare(db.backendRange.max, db.mutableRange.min) < 0 {
+				return newConcatUnsafeIterator(diskIter, memIter), nil
+			}
+			// Rare: mutable max < backend min.
+			if bytes.Compare(db.mutableRange.max, db.backendRange.min) < 0 {
+				return newConcatUnsafeIterator(memIter, diskIter), nil
+			}
+		}
+	}
 
 	var sources []merging.IteratorSource
 
-	// Priority 0: Mutable
-	mutableIter := db.mutable.NewIterator()
-	mutableIter.Seek(start)
-	sources = append(sources, merging.IteratorSource{
-		Iter:     mutableIter,
-		Priority: 0,
-	})
+	// Priority 0: Mutable (always exists, check overlap)
+	if overlapsQuery(start, end, db.mutableRange) {
+		mutableIter := db.mutable.NewIterator(start, end)
+		mutableIter.Seek(start)
+		sources = append(sources, merging.IteratorSource{
+			Iter:     mutableIter,
+			Priority: 0,
+		})
+	}
 
-	// Priority 1..N: Queue (Newest first? No, newest has lower priority number/better precedence)
-	// MergingIterator expects: Priority 0 is best.
-	// So Mutable = 0.
-	// Queue[Last] (Newest) = 1
-	// Queue[0] (Oldest) = N
-	// Disk = N+1
-
+	// Priority 1..N: Queue (Newest first)
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
-		queueIter := db.queue[i].NewIterator()
-		queueIter.Seek(start)
-		sources = append(sources, merging.IteratorSource{
-			Iter:     queueIter,
-			Priority: prio,
-		})
+		if overlapsQuery(start, end, db.queueRanges[i]) {
+			qIter := db.queue[i].NewIterator(start, end)
+			qIter.Seek(start)
+			sources = append(sources, merging.IteratorSource{
+				Iter:     qIter,
+				Priority: prio,
+			})
+		}
 		prio++
 	}
 
-	diskIter, err := db.backend.Iterator(start, end)
-	if err != nil {
-		return nil, err
+	// Disk Iterator
+	// Only skip if we definitively know the range and it doesn't overlap.
+	if !db.backendRangeKnown || overlapsQuery(start, end, db.backendRange) {
+		diskIter, err := db.backend.Iterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+
+		sources = append(sources, merging.IteratorSource{
+			Iter:     diskIter,
+			Priority: prio,
+		})
 	}
-	// Ensure disk iterator is positioned; most backends already Seek(start), but this keeps behavior consistent.
-	diskIter.Seek(start)
-	sources = append(sources, merging.IteratorSource{
-		Iter:     diskIter,
-		Priority: prio,
-	})
+
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
+	}
+
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
 
 	return merging.NewMergingIterator(sources, start, end), nil
 }
+
+type concatUnsafeIterator struct {
+	first  iterator.UnsafeIterator
+	second iterator.UnsafeIterator
+
+	cur        iterator.UnsafeIterator
+	usingFirst bool
+	valid      bool
+	err        error
+}
+
+func newConcatUnsafeIterator(first, second iterator.UnsafeIterator) merging.Iterator {
+	it := &concatUnsafeIterator{
+		first:      first,
+		second:     second,
+		cur:        first,
+		usingFirst: true,
+	}
+	it.advance()
+	return it
+}
+
+func (it *concatUnsafeIterator) advance() {
+	it.valid = false
+
+	for {
+		if it.cur == nil {
+			return
+		}
+
+		// Switch to second iterator when first is exhausted.
+		if !it.cur.Valid() {
+			if it.usingFirst {
+				it.cur = it.second
+				it.usingFirst = false
+				continue
+			}
+			return
+		}
+
+		if it.cur.IsDeleted() {
+			it.cur.Next()
+			continue
+		}
+
+		it.valid = true
+		return
+	}
+}
+
+func (it *concatUnsafeIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	it.cur.Next()
+	it.advance()
+}
+
+func (it *concatUnsafeIterator) Valid() bool { return it.valid }
+
+func (it *concatUnsafeIterator) Key() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.Key()
+}
+
+func (it *concatUnsafeIterator) Value() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.Value()
+}
+
+func (it *concatUnsafeIterator) Close() error {
+	var firstErr error
+	if it.first != nil {
+		if err := it.first.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if it.second != nil {
+		if err := it.second.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (it *concatUnsafeIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	if it.first != nil && it.first.Error() != nil {
+		return it.first.Error()
+	}
+	if it.second != nil && it.second.Error() != nil {
+		return it.second.Error()
+	}
+	return nil
+}
+
+func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
@@ -404,60 +718,173 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		_ = db.rotateMemtableLocked()
 	}
 	db.mu.Unlock()
-	db.flushAll()
+	db.flushAll(false)
 
-	iter, err := db.backend.ReverseIterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	// Wrap in MergingIterator to convert UnsafeIterator to merging.Iterator (safe)
-	return merging.NewMergingIterator([]merging.IteratorSource{{Iter: iter, Priority: 0}}, start, end), nil
+	return db.backend.ReverseIterator(start, end)
 }
 
 // NewBatch implementation for CachingDB
-type batchOp struct {
-	value []byte
-	del   bool
-}
+// batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db   *DB
-	ops  map[string]batchOp
-	size int
+	db      *DB
+	ops     map[string]batch.Entry
+	backend BatchInterface
+	size    int
+
+	closed         bool
+	streamEligible bool
+	streamTried    bool
+	firstKey       []byte
+	lastKey        []byte
+	batchRange     keyRange
 }
 
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, ops: make(map[string]batchOp)}
+	return &Batch{db: db, ops: make(map[string]batch.Entry), streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	return &Batch{db: db, ops: make(map[string]batchOp, size)}
+	return &Batch{db: db, ops: make(map[string]batch.Entry, size), streamEligible: true}
 }
+
+const streamSwitchThreshold = 32
+
 func (b *Batch) Set(key, value []byte) error {
-	if b.ops == nil {
+	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 	if value == nil {
 		return ErrValueNil
 	}
-	b.ops[string(key)] = batchOp{value: value, del: false}
+
+	b.batchRange.add(key)
+
+	if b.backend != nil {
+		b.size += len(key) + len(value)
+		return b.backend.Set(key, value)
+	}
+
+	if b.streamEligible {
+		if b.firstKey == nil {
+			b.firstKey = append([]byte(nil), key...)
+			b.lastKey = append([]byte(nil), key...)
+		} else {
+			if bytes.Compare(key, b.lastKey) <= 0 {
+				b.streamEligible = false
+			}
+			b.lastKey = append(b.lastKey[:0], key...)
+		}
+	}
+	// We don't know about slabs/thresholds here, so we just store inline.
+	// Backend will handle promotion to slab if needed during writeBypass,
+	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
+	b.ops[string(key)] = batch.Entry{
+		Type:  batch.OpPut,
+		Key:   key,
+		Value: value,
+	}
 	b.size += len(key) + len(value)
+
+	b.maybeSwitchToStreaming()
 	return nil
 }
 
 func (b *Batch) Delete(key []byte) error {
-	if b.ops == nil {
+	if b.closed {
 		return ErrBatchClosed
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
-	b.ops[string(key)] = batchOp{del: true}
+
+	b.batchRange.add(key)
+
+	if b.backend != nil {
+		b.size += len(key)
+		return b.backend.Delete(key)
+	}
+
+	if b.streamEligible {
+		if b.firstKey == nil {
+			b.firstKey = append([]byte(nil), key...)
+			b.lastKey = append([]byte(nil), key...)
+		} else {
+			if bytes.Compare(key, b.lastKey) <= 0 {
+				b.streamEligible = false
+			}
+			b.lastKey = append(b.lastKey[:0], key...)
+		}
+	}
+	b.ops[string(key)] = batch.Entry{
+		Type: batch.OpDelete,
+		Key:  key,
+	}
 	b.size += len(key)
+
+	b.maybeSwitchToStreaming()
 	return nil
+}
+
+func (b *Batch) SetOps(ops map[string]batch.Entry) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if b.backend != nil {
+		for _, op := range ops {
+			b.size += len(op.Key) + len(op.Value)
+			b.batchRange.add(op.Key)
+		}
+		return b.backend.SetOps(ops)
+	}
+	for k, op := range ops {
+		b.ops[k] = op
+		b.size += len(op.Key) + len(op.Value)
+		b.batchRange.add(op.Key)
+	}
+	return nil
+}
+
+func (b *Batch) maybeSwitchToStreaming() {
+	if b.streamTried || !b.streamEligible || b.backend != nil {
+		return
+	}
+	if len(b.ops) < streamSwitchThreshold {
+		return
+	}
+
+	// Only attempt streaming if the batch is strictly increasing and starts beyond
+	// the maximum key present in the in-memory layers.
+	b.db.mu.RLock()
+	var maxKey []byte
+	if b.db.mutableRange.valid {
+		maxKey = b.db.mutableRange.max
+	}
+	for _, r := range b.db.queueRanges {
+		if !r.valid {
+			continue
+		}
+		if maxKey == nil || bytes.Compare(r.max, maxKey) > 0 {
+			maxKey = r.max
+		}
+	}
+	b.db.mu.RUnlock()
+
+	b.streamTried = true
+	if maxKey != nil && bytes.Compare(b.firstKey, maxKey) <= 0 {
+		return
+	}
+
+	backendBatch := b.db.backend.NewBatch()
+	if err := backendBatch.SetOps(b.ops); err != nil {
+		_ = backendBatch.Close()
+		return
+	}
+	b.backend = backendBatch
+	b.ops = nil
 }
 
 func (b *Batch) Write() error {
@@ -469,24 +896,65 @@ func (b *Batch) WriteSync() error {
 }
 
 func (b *Batch) write(sync bool) error {
-	if b.ops == nil {
+	if b.closed {
 		return ErrBatchClosed
 	}
+
+	if b.backend != nil {
+		var err error
+		if sync {
+			b.db.flushMu.Lock()
+			err = b.backend.WriteSync()
+			b.db.flushMu.Unlock()
+		} else {
+			b.db.flushMu.Lock()
+			err = b.backend.Write()
+			b.db.flushMu.Unlock()
+		}
+		if cerr := b.backend.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if err == nil && b.batchRange.valid {
+			b.db.mu.Lock()
+			b.db.backendRange.add(b.batchRange.min)
+			b.db.backendRange.add(b.batchRange.max)
+			b.db.mu.Unlock()
+		}
+		b.backend = nil
+		b.closed = true
+		return err
+	}
+
+	// Optimization: Bypass for Large Batches
+	if len(b.ops) >= 512 {
+		return b.writeBypass(sync)
+	}
+	return b.writeRegular(sync)
+}
+
+func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Lock()
 	defer b.db.mu.Unlock()
 
+	entries := make([]batch.Entry, 0, len(b.ops))
+	for _, op := range b.ops {
+		entries = append(entries, op)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	})
+
 	// 1. WAL Append loop
-	for k, op := range b.ops {
-		key := []byte(k)
-		var err error
-		if op.del {
-			err = b.db.wal.Append(wal.OpDelete, key, nil)
+	records := make([]wal.Record, 0, len(entries))
+	for _, op := range entries {
+		if op.Type == batch.OpDelete {
+			records = append(records, wal.Record{Op: wal.OpDelete, Key: op.Key})
 		} else {
-			err = b.db.wal.Append(wal.OpSet, key, op.value)
+			records = append(records, wal.Record{Op: wal.OpSet, Key: op.Key, Value: op.Value})
 		}
-		if err != nil {
-			return err
-		}
+	}
+	if err := b.db.wal.AppendBatch(records); err != nil {
+		return err
 	}
 
 	if sync {
@@ -496,13 +964,14 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	// 2. Memtable Update
-	for k, op := range b.ops {
-		key := []byte(k)
-		if op.del {
+	for _, op := range entries {
+		key := op.Key
+		if op.Type == batch.OpDelete {
 			b.db.mutable.Delete(key)
 		} else {
-			b.db.mutable.Set(key, op.value)
+			b.db.mutable.Set(key, op.Value)
 		}
+		b.db.mutableRange.add(key)
 	}
 
 	// 3. Threshold Check
@@ -515,14 +984,161 @@ func (b *Batch) write(sync bool) error {
 	return b.Close()
 }
 
+func (b *Batch) writeBypass(sync bool) error {
+	// Fast path: if none of these keys exist in mutable/queue, we can write directly
+	// to the backend without flushing (no in-memory shadowing possible).
+	b.db.mu.RLock()
+	mutable := b.db.mutable
+	queue := append([]*memtable.Memtable(nil), b.db.queue...)
+	mutableRange := b.db.mutableRange
+	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
+	b.db.mu.RUnlock()
+
+	// Cheap append-only check: if the batch key range does not overlap with any
+	// in-memory key ranges, it cannot be shadowed.
+	batchRange := keyRange{}
+	for _, op := range b.ops {
+		key := op.Key
+		batchRange.add(key)
+	}
+
+	overlaps := rangesOverlap(batchRange, mutableRange)
+	if !overlaps {
+		for _, r := range queueRanges {
+			if rangesOverlap(batchRange, r) {
+				overlaps = true
+				break
+			}
+		}
+	}
+
+	if overlaps {
+		// Slow path: verify no individual key exists in memory (handles sparse overlap).
+		for _, op := range b.ops {
+			key := op.Key
+			if _, _, found := mutable.Get(key); found {
+				return b.writeRegular(sync)
+			}
+			for i := len(queue) - 1; i >= 0; i-- {
+				if _, _, found := queue[i].Get(key); found {
+					return b.writeRegular(sync)
+				}
+			}
+		}
+	}
+
+	// Write directly to backend
+	backendBatch := b.db.backend.NewBatch()
+
+	// Use SetOps for bulk transfer (checking slabs internally in backend)
+	if err := backendBatch.SetOps(b.ops); err != nil {
+		return err
+	}
+
+	var err error
+	if sync {
+		b.db.flushMu.Lock()
+		err = backendBatch.WriteSync()
+		b.db.flushMu.Unlock()
+	} else {
+		b.db.flushMu.Lock()
+		err = backendBatch.Write()
+		b.db.flushMu.Unlock()
+	}
+
+	if err != nil {
+		return err
+	}
+
+	b.db.mu.Lock()
+	if batchRange.valid {
+		b.db.backendRange.add(batchRange.min)
+		b.db.backendRange.add(batchRange.max)
+	}
+	b.db.mu.Unlock()
+
+	return b.Close()
+}
+
 func (b *Batch) Close() error {
+	if b.closed {
+		return nil
+	}
+	b.closed = true
 	b.ops = nil
+	if b.backend != nil {
+		_ = b.backend.Close()
+		b.backend = nil
+	}
 	return nil
 }
 
 func (b *Batch) GetByteSize() (int, error) {
-	if b.ops == nil {
+	if b.closed {
 		return 0, ErrBatchClosed
 	}
 	return b.size, nil
 }
+
+// singleSourceIterator wraps a single UnsafeIterator to satisfy merging.Iterator,
+// skipping tombstones.
+type singleSourceIterator struct {
+	iter  iterator.UnsafeIterator
+	valid bool
+	start []byte
+	end   []byte
+}
+
+func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte) merging.Iterator {
+	it := &singleSourceIterator{
+		iter:  iter,
+		start: start,
+		end:   end,
+	}
+	// Iterator is already sought to start by the caller
+	it.advance()
+	return it
+}
+
+func (it *singleSourceIterator) advance() {
+	it.valid = false
+	for it.iter.Valid() {
+		if it.end != nil && bytes.Compare(it.iter.UnsafeKey(), it.end) >= 0 {
+			return
+		}
+		if it.iter.IsDeleted() {
+			it.iter.Next()
+			continue
+		}
+		it.valid = true
+		return
+	}
+}
+
+func (it *singleSourceIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	it.iter.Next()
+	it.advance()
+}
+
+func (it *singleSourceIterator) Valid() bool              { return it.valid }
+func (it *singleSourceIterator) Key() []byte              { return it.iter.Key() }
+func (it *singleSourceIterator) Value() []byte            { return it.iter.Value() }
+func (it *singleSourceIterator) Close() error             { return it.iter.Close() }
+func (it *singleSourceIterator) Error() error             { return it.iter.Error() }
+func (it *singleSourceIterator) Domain() ([]byte, []byte) { return it.start, it.end }
+
+// emptyIterator represents an iterator with no elements.
+type emptyIterator struct {
+	start, end []byte
+}
+
+func (it *emptyIterator) Next()                    { panic("iterator invalid") }
+func (it *emptyIterator) Valid() bool              { return false }
+func (it *emptyIterator) Key() []byte              { panic("iterator invalid") }
+func (it *emptyIterator) Value() []byte            { panic("iterator invalid") }
+func (it *emptyIterator) Close() error             { return nil }
+func (it *emptyIterator) Error() error             { return nil }
+func (it *emptyIterator) Domain() ([]byte, []byte) { return it.start, it.end }

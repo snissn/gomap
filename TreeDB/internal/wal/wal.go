@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -17,7 +18,15 @@ const (
 var ErrCorrupt = errors.New("wal: corrupt record")
 
 type Writer struct {
-	f *os.File
+	f       *os.File
+	bw      *bufio.Writer
+	scratch []byte
+}
+
+type Record struct {
+	Op    byte
+	Key   []byte
+	Value []byte
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -25,33 +34,95 @@ func NewWriter(path string) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Writer{f: f}, nil
+	return &Writer{
+		f:       f,
+		bw:      bufio.NewWriterSize(f, 1<<20), // 1MB buffer to amortize syscalls
+		scratch: make([]byte, 0, 1<<20),
+	}, nil
 }
 
 func (w *Writer) Append(op byte, key, value []byte) error {
 	// [CRC 4][Op 1][KeyLen 2][ValLen 4][Key][Value]
 	// Total overhead: 4+1+2+4 = 11 bytes
-	size := 11 + len(key) + len(value)
-	buf := make([]byte, size)
+	var header [7]byte
+	header[0] = op
+	binary.LittleEndian.PutUint16(header[1:3], uint16(len(key)))
+	binary.LittleEndian.PutUint32(header[3:7], uint32(len(value)))
 
-	buf[4] = op
-	binary.LittleEndian.PutUint16(buf[5:7], uint16(len(key)))
-	binary.LittleEndian.PutUint32(buf[7:11], uint32(len(value)))
-	copy(buf[11:], key)
-	copy(buf[11+len(key):], value)
+	c := crc.ChecksumParts(header[:], key, value)
+	var crcBuf [4]byte
+	binary.LittleEndian.PutUint32(crcBuf[:], c)
 
-	c := crc.Checksum(buf[4:])
-	binary.LittleEndian.PutUint32(buf[0:4], c)
+	if _, err := w.bw.Write(crcBuf[:]); err != nil {
+		return err
+	}
+	if _, err := w.bw.Write(header[:]); err != nil {
+		return err
+	}
+	if len(key) > 0 {
+		if _, err := w.bw.Write(key); err != nil {
+			return err
+		}
+	}
+	if len(value) > 0 {
+		if _, err := w.bw.Write(value); err != nil {
+			return err
+		}
+	}
 
-	_, err := w.f.Write(buf)
+	return nil
+}
+
+func (w *Writer) AppendBatch(records []Record) error {
+	total := 0
+	for _, r := range records {
+		total += 11 + len(r.Key) + len(r.Value)
+	}
+	if total == 0 {
+		return nil
+	}
+
+	if cap(w.scratch) < total {
+		w.scratch = make([]byte, total)
+	} else {
+		w.scratch = w.scratch[:total]
+	}
+	buf := w.scratch
+	off := 0
+	for _, r := range records {
+		kLen := len(r.Key)
+		vLen := len(r.Value)
+		recSize := 11 + kLen + vLen
+
+		body := buf[off+4 : off+recSize] // [Op|KeyLen|ValLen|Key|Value]
+		body[0] = r.Op
+		binary.LittleEndian.PutUint16(body[1:3], uint16(kLen))
+		binary.LittleEndian.PutUint32(body[3:7], uint32(vLen))
+		copy(body[7:], r.Key)
+		copy(body[7+kLen:], r.Value)
+
+		c := crc.Checksum(body)
+		binary.LittleEndian.PutUint32(buf[off:off+4], c)
+
+		off += recSize
+	}
+
+	_, err := w.bw.Write(buf)
 	return err
 }
 
 func (w *Writer) Sync() error {
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
 	return w.f.Sync()
 }
 
 func (w *Writer) Close() error {
+	if err := w.bw.Flush(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
 	return w.f.Close()
 }
 

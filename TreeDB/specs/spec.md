@@ -399,7 +399,7 @@ To comply with `cosmos-db`, the Iterator must adhere to these rules:
   * **Initialization (Cosmos Semantics):**
       * The domain is `[start, end)`.
       * **Step 1 (Seek):**
-          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key).
+          * If `end` is `nil`: Seek to the **Right-Most Leaf**, last item (largest key.
           * If `end` is provided: Seek to the first key `>= end`.
       * **Step 2 (Adjust):**
           * If the Seek found a key `>= end` (or hit EOF), move the cursor **Backward** one item.

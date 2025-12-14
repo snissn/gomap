@@ -5,23 +5,19 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap"
-	"github.com/snissn/gomap/btree"
-
-	// Legacy TreeDB
-	legacydb "github.com/snissn/gomap/TreeDB"
-	legacycaching "github.com/snissn/gomap/TreeDB/caching" // Import for Legacy Batch Interface
-
-	// Gemini TreeDB
-	geminicaching "github.com/snissn/gomap-gemini/TreeDB/caching"
-	geminidb "github.com/snissn/gomap-gemini/TreeDB/db"
+	"github.com/snissn/gomap/HashDB"
+	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
+	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
@@ -63,77 +59,68 @@ type DBInterface interface {
 
 // --- Wrappers ---
 
-// 1. Gomap Wrapper
-type GomapBatch struct {
-	bw *gomap.BatchWriter
+// 1. HashDB Wrapper
+type HashDBBatch struct {
+	bw *hashdb.BatchWriter
 }
 
-func (b *GomapBatch) Set(key, value []byte) error {
+func (b *HashDBBatch) Set(key, value []byte) error {
 	return b.bw.Add(key, value)
 }
-func (b *GomapBatch) Delete(key []byte) error {
-	return errors.New("Gomap batch delete not supported")
+func (b *HashDBBatch) Delete(key []byte) error {
+	return errors.New("HashDB batch delete not supported")
 }
-func (b *GomapBatch) Commit() error {
+func (b *HashDBBatch) Commit() error {
 	return b.bw.Flush()
 }
-func (b *GomapBatch) Close() error {
+func (b *HashDBBatch) Close() error {
 	// BatchWriter doesn't need explicit close, but we ensure flush in Commit
 	return nil
 }
 
-type GomapWrapper struct {
-	m *gomap.HashmapDistributed
+type HashDBWrapper struct {
+	m *hashdb.HashDB
 }
 
-func NewGomap(dir string) (*GomapWrapper, error) {
-	m := &gomap.HashmapDistributed{}
-	if err := m.New(dir); err != nil {
+func NewHashDB(dir string) (*HashDBWrapper, error) {
+	m, err := hashdb.Open(dir)
+	if err != nil {
 		return nil, err
 	}
-	return &GomapWrapper{m: m}, nil
+	return &HashDBWrapper{m: m}, nil
 }
 
-func (g *GomapWrapper) Name() string                 { return "Gomap" }
-func (g *GomapWrapper) Set(k, v []byte) error        { return g.m.Add(k, v) }
-func (g *GomapWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
-func (g *GomapWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
-func (g *GomapWrapper) Close() error                 { return g.m.Flush() }
-func (g *GomapWrapper) SupportsScan() bool           { return false }
-func (g *GomapWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return nil, errors.New("Gomap does not support scan")
+func (g *HashDBWrapper) Name() string                 { return "HashDB" }
+func (g *HashDBWrapper) Set(k, v []byte) error        { return g.m.Put(k, v) }
+func (g *HashDBWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
+func (g *HashDBWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
+func (g *HashDBWrapper) Close() error                 { return g.m.Close() }
+func (g *HashDBWrapper) SupportsScan() bool           { return false }
+func (g *HashDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return nil, errors.New("HashDB does not support scan")
 }
-func (g *GomapWrapper) SupportsBatch() bool { return true }
-func (g *GomapWrapper) NewBatch() (BatchInterface, error) {
+func (g *HashDBWrapper) SupportsBatch() bool { return true }
+func (g *HashDBWrapper) NewBatch() (BatchInterface, error) {
 	// Use global batchSize flag if possible, or default
 	bs := 1000
 	if batchSize != nil {
 		bs = *batchSize
 	}
-	return &GomapBatch{bw: gomap.NewBatchWriter(g.m, bs)}, nil
+	return &HashDBBatch{bw: hashdb.NewBatchWriter(g.m, bs)}, nil
 }
 
 // 2. BTree Wrapper
-type GomapKVAdapter struct {
-	m *gomap.HashmapDistributed
-}
-
-func (a *GomapKVAdapter) Get(k []byte) ([]byte, error) { return a.m.Get(k) }
-func (a *GomapKVAdapter) Put(k, v []byte) error        { return a.m.Add(k, v) }
-func (a *GomapKVAdapter) Delete(k []byte) error        { return a.m.Delete(k) }
-
 type BTreeWrapper struct {
-	t *btree.Tree
-	m *gomap.HashmapDistributed
+	t *btreeonhashdb.Tree
+	m *hashdb.HashDB
 }
 
 func NewBTree(dir string) (*BTreeWrapper, error) {
-	m := &gomap.HashmapDistributed{}
-	if err := m.New(dir); err != nil {
+	m, err := hashdb.Open(dir)
+	if err != nil {
 		return nil, err
 	}
-	adapter := &GomapKVAdapter{m: m}
-	t, err := btree.OpenTree(adapter, "bench")
+	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench")
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +131,7 @@ func (b *BTreeWrapper) Name() string                 { return "BTree" }
 func (b *BTreeWrapper) Set(k, v []byte) error        { return b.t.Put(k, v) }
 func (b *BTreeWrapper) Get(k []byte) ([]byte, error) { return b.t.Get(k) }
 func (b *BTreeWrapper) Delete(k []byte) error        { return b.t.Delete(k) }
-func (b *BTreeWrapper) Close() error                 { return b.m.Flush() }
+func (b *BTreeWrapper) Close() error                 { return b.m.Close() }
 func (b *BTreeWrapper) SupportsScan() bool           { return false }
 func (b *BTreeWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	return nil, errors.New("BTree does not support scan via public API")
@@ -154,143 +141,76 @@ func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
 	return nil, errors.New("BTree does not support batch")
 }
 
-// 3. Legacy TreeDB Wrapper
-type LegacyBatchWrapper struct {
-	b legacycaching.BatchInterface // Use the imported interface
+// 3. TreeDB Wrapper (cached; recommended)
+type treeDBBatch interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	Write() error
+	Close() error
 }
 
-func (w *LegacyBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
-func (w *LegacyBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *LegacyBatchWrapper) Commit() error         { return w.b.Write() } // Legacy batch has Write()
-func (w *LegacyBatchWrapper) Close() error          { return w.b.Close() }
-
-type LegacyTreeDBWrapper struct {
-	db *legacydb.DB
+type TreeDBBatchWrapper struct {
+	b treeDBBatch
 }
 
-func NewLegacyTreeDB(dir string) (*LegacyTreeDBWrapper, error) {
-	opts := legacydb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-	}
-	db, err := legacydb.Open(opts)
+func (w *TreeDBBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
+func (w *TreeDBBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
+func (w *TreeDBBatchWrapper) Commit() error         { return w.b.Write() }
+func (w *TreeDBBatchWrapper) Close() error          { return w.b.Close() }
+
+type TreeDBWrapper struct {
+	db *treedb.DB
+}
+
+func NewTreeDB(dir string) (*TreeDBWrapper, error) {
+	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: 4 * 1024 * 1024}
+	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &LegacyTreeDBWrapper{db: db}, nil
+	return &TreeDBWrapper{db: db}, nil
 }
 
-func (l *LegacyTreeDBWrapper) Name() string                 { return "TreeDB" }
-func (l *LegacyTreeDBWrapper) Set(k, v []byte) error        { return l.db.Set(k, v) }
-func (l *LegacyTreeDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k) }
-func (l *LegacyTreeDBWrapper) Delete(k []byte) error        { return l.db.Delete(k) }
-func (l *LegacyTreeDBWrapper) Close() error                 { return l.db.Close() }
-func (l *LegacyTreeDBWrapper) SupportsScan() bool           { return true }
-func (l *LegacyTreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := l.db.Iterator(start, end)
+func (t *TreeDBWrapper) Name() string                 { return "TreeDB" }
+func (t *TreeDBWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
+func (t *TreeDBWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
+func (t *TreeDBWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
+func (t *TreeDBWrapper) Close() error                 { return t.db.Close() }
+func (t *TreeDBWrapper) SupportsScan() bool           { return true }
+func (t *TreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return t.db.Iterator(start, end)
+}
+func (t *TreeDBWrapper) SupportsBatch() bool { return true }
+func (t *TreeDBWrapper) NewBatch() (BatchInterface, error) {
+	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
+}
+
+// 4. TreeDB Backend Wrapper (uncached; for comparison)
+type TreeDBBackendWrapper struct {
+	db *treedbdb.DB
+}
+
+func NewTreeDBBackend(dir string) (*TreeDBBackendWrapper, error) {
+	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024}
+	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
 	}
-	if gi, ok := interface{}(it).(GenericIterator); ok {
-		return gi, nil
-	}
-	return nil, fmt.Errorf("Legacy Iterator does not satisfy GenericIterator")
-}
-func (l *LegacyTreeDBWrapper) SupportsBatch() bool { return true }
-func (l *LegacyTreeDBWrapper) NewBatch() (BatchInterface, error) {
-	return &LegacyBatchWrapper{b: l.db.NewBatch()}, nil
+	return &TreeDBBackendWrapper{db: db}, nil
 }
 
-// 4. Gemini TreeDB Wrapper
-type GeminiBatchWrapper struct {
-	b geminicaching.BatchInterface
+func (t *TreeDBBackendWrapper) Name() string                 { return "TreeDBBackend" }
+func (t *TreeDBBackendWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
+func (t *TreeDBBackendWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
+func (t *TreeDBBackendWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
+func (t *TreeDBBackendWrapper) Close() error                 { return t.db.Close() }
+func (t *TreeDBBackendWrapper) SupportsScan() bool           { return true }
+func (t *TreeDBBackendWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+	return t.db.Iterator(start, end)
 }
-
-func (w *GeminiBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
-func (w *GeminiBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *GeminiBatchWrapper) Commit() error         { return w.b.Write() }
-func (w *GeminiBatchWrapper) Close() error          { return w.b.Close() }
-
-type GeminiWrapper struct {
-	db *geminidb.DB
-}
-
-func NewGemini(dir string) (*GeminiWrapper, error) {
-	opts := geminidb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-	}
-	db, err := geminidb.Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	return &GeminiWrapper{db: db}, nil
-}
-
-func (g *GeminiWrapper) Name() string                 { return "Gemini" }
-func (g *GeminiWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
-func (g *GeminiWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
-func (g *GeminiWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
-func (g *GeminiWrapper) Close() error                 { return g.db.Close() }
-func (g *GeminiWrapper) SupportsScan() bool           { return true }
-func (g *GeminiWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := g.db.Iterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	if gi, ok := interface{}(it).(GenericIterator); ok {
-		return gi, nil
-	}
-	return nil, fmt.Errorf("Gemini Iterator does not satisfy GenericIterator")
-}
-func (g *GeminiWrapper) SupportsBatch() bool { return true }
-func (g *GeminiWrapper) NewBatch() (BatchInterface, error) {
-	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
-}
-
-type GeminiCachedWrapper struct {
-	db *geminicaching.DB
-}
-
-func NewGeminiCached(dir string) (*GeminiCachedWrapper, error) {
-	opts := geminidb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-		// Explicitly enable caching in options, if it matters (it's implicitly true if OpenCached is called)
-	}
-	// Use geminicaching.Open directly
-	backendDB, err := geminidb.Open(opts) // Open the underlying DB first
-	if err != nil {
-		return nil, err
-	}
-	
-	// geminicaching.Open expects a BackendDB interface, which geminidb.DB implements
-	db, err := geminicaching.Open(dir, backendDB, 4*1024*1024) // 4MB flush threshold
-	if err != nil {
-		backendDB.Close()
-		return nil, err
-	}
-	return &GeminiCachedWrapper{db: db}, nil
-}
-
-func (g *GeminiCachedWrapper) Name() string                 { return "GeminiCached" }
-func (g *GeminiCachedWrapper) Set(k, v []byte) error        { return g.db.Set(k, v) }
-func (g *GeminiCachedWrapper) Get(k []byte) ([]byte, error) { return g.db.Get(k) }
-func (g *GeminiCachedWrapper) Delete(k []byte) error        { return g.db.Delete(k) }
-func (g *GeminiCachedWrapper) Close() error                 { return g.db.Close() }
-func (g *GeminiCachedWrapper) SupportsScan() bool           { return true }
-func (g *GeminiCachedWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	it, err := g.db.Iterator(start, end)
-	if err != nil {
-		return nil, err
-	}
-	// The caching.Iterator already implements the merging.Iterator,
-	// which satisfies our GenericIterator
-	return it, nil
-}
-func (g *GeminiCachedWrapper) SupportsBatch() bool { return true }
-func (g *GeminiCachedWrapper) NewBatch() (BatchInterface, error) {
-	return &GeminiBatchWrapper{b: g.db.NewBatch()}, nil
+func (t *TreeDBBackendWrapper) SupportsBatch() bool { return true }
+func (t *TreeDBBackendWrapper) NewBatch() (BatchInterface, error) {
+	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
 // 5. LevelDB Wrapper
@@ -361,15 +281,16 @@ func (l *LevelDBWrapper) NewBatch() (BatchInterface, error) {
 // --- Benchmark Runner ---
 
 var (
-	numKeys   = flag.Int("keys", 100000, "Number of keys")
-	valSize   = flag.Int("valsize", 128, "Value size in bytes")
-	batchSize = flag.Int("batchsize", 1000, "Size of batches")
+	numKeys      = flag.Int("keys", 100000, "Number of keys")
+	valSize      = flag.Int("valsize", 128, "Value size in bytes")
+	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
-	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
-	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
-	progress  = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
+	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
+	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
+	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 )
 
 type DBInstance struct {
@@ -380,23 +301,31 @@ type DBInstance struct {
 func main() {
 	flag.Parse()
 
+	seedUsed := *seed
+	if seedUsed == 0 {
+		seedUsed = time.Now().UnixNano()
+	}
+	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
+
 	dbsToRun := parseList(*dbsArg)
-	testsToRun := parseList(*testsArg)
+	testsToRun := normalizeTests(parseList(*testsArg))
 
 	// Define Factory Map
 	factories := map[string]func(string) (DBInterface, error){
-		"gomap":  func(d string) (DBInterface, error) { return NewGomap(d) },
-		"btree":  func(d string) (DBInterface, error) { return NewBTree(d) },
-		"treedb": func(d string) (DBInterface, error) { return NewLegacyTreeDB(d) },
-		"gemini": func(d string) (DBInterface, error) { return NewGemini(d) },
-		"geminicached": func(d string) (DBInterface, error) { return NewGeminiCached(d) },
-		"leveldb":      func(d string) (DBInterface, error) { return NewLevelDB(d) },
+		"hashdb":        func(d string) (DBInterface, error) { return NewHashDB(d) },
+		"gomap":         func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
+		"btree":         func(d string) (DBInterface, error) { return NewBTree(d) },
+		"treedb":        func(d string) (DBInterface, error) { return NewTreeDB(d) },        // cached (default)
+		"treedbcached":  func(d string) (DBInterface, error) { return NewTreeDB(d) },        // legacy alias
+		"treedbbackend": func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // uncached
+		"treedbraw":     func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // alias
+		"leveldb":       func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"gomap", "btree", "treedb", "gemini", "geminicached", "leveldb"}
+	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}
@@ -428,10 +357,12 @@ func main() {
 
 	// 2. Define Tests
 	// Map of TestName -> Function
-	type TestFunc func(db DBInterface) float64
+	type TestFunc func(db DBInterface, rng *rand.Rand) float64
+
+	prefixScanBase := 0
 
 	testFuncs := map[string]TestFunc{
-		"write_seq": func(db DBInterface) float64 {
+		"write_seq": func(db DBInterface, _ *rand.Rand) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
 			var k [8]byte // Stack allocation
@@ -443,25 +374,25 @@ func main() {
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"read_rand": func(db DBInterface) float64 {
+		"read_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if _, err := db.Get(k[:]); err != nil {
 					// ignore
 				}
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"scan": func(db DBInterface) float64 {
+		"full_scan": func(db DBInterface, _ *rand.Rand) float64 {
 			if !db.SupportsScan() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
 			iter, err := db.Iterator(nil, nil)
 			if err != nil {
-				log.Fatalf("scan iterator error: %v", err)
+				log.Fatalf("full_scan iterator error: %v", err)
 			}
 			defer iter.Close()
 			count := 0
@@ -472,22 +403,24 @@ func main() {
 				count++
 			}
 			if iter.Error() != nil {
-				log.Fatalf("scan iter error: %v", iter.Error())
+				log.Fatalf("full_scan iter error: %v", iter.Error())
 			}
 			return float64(count) / time.Since(start).Seconds()
 		},
-		"range_scan": func(db DBInterface) float64 {
+		"prefix_scan": func(db DBInterface, rng *rand.Rand) float64 {
 			if !db.SupportsScan() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
+			totalItems := 0
+			maxKey := prefixScanBase + *numKeys
 			for i := 0; i < *rangeQueries; i++ {
-				startIdx := rand.Intn(*numKeys)
+				startIdx := prefixScanBase + rng.Intn(*numKeys)
 				endIdx := startIdx + *rangeSpan
-				if endIdx > *numKeys {
-					endIdx = *numKeys
+				if endIdx > maxKey {
+					endIdx = maxKey
 				}
-				
+
 				var startKeyBuf [8]byte
 				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
 				startKey := startKeyBuf[:]
@@ -498,33 +431,36 @@ func main() {
 
 				iter, err := db.Iterator(startKey, endKey)
 				if err != nil {
-					log.Fatalf("range_scan iterator error: %v", err)
+					log.Fatalf("prefix_scan iterator error: %v", err)
 				}
-				
-				count := 0
+
 				for iter.Valid() {
+					_ = iter.Key()
 					iter.Next()
-					count++
+					totalItems++
+				}
+				if err := iter.Error(); err != nil {
+					log.Fatalf("prefix_scan iter error: %v", err)
 				}
 				iter.Close()
 			}
-			return float64(*rangeQueries) / time.Since(start).Seconds()
+			return float64(totalItems) / time.Since(start).Seconds()
 		},
-		"write_rand": func(db DBInterface) float64 {
+		"write_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if err := db.Set(k[:], val); err != nil {
 					log.Fatalf("write_rand error: %v", err)
 				}
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"batch_write": func(db DBInterface) float64 {
+		"batch_write": func(db DBInterface, _ *rand.Rand) float64 {
 			if !db.SupportsBatch() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
 			val := make([]byte, *valSize)
@@ -553,11 +489,11 @@ func main() {
 			}
 			return float64(total) / time.Since(start).Seconds()
 		},
-		"delete_rand": func(db DBInterface) float64 {
+		"delete_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if err := db.Delete(k[:]); err != nil {
 					// ignore
 				}
@@ -567,7 +503,7 @@ func main() {
 	}
 
 	// Ordered list of tests to run
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "scan", "range_scan"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
 	finalTestOrder := make([]string, 0)
 
 	// Display names for polished output
@@ -575,8 +511,8 @@ func main() {
 		"write_seq":   "Sequential Write",
 		"write_rand":  "Random Write",
 		"read_rand":   "Random Read",
-		"scan":        "Scan",
-		"range_scan":  "Range Scan",
+		"full_scan":   "Full Scan",
+		"prefix_scan": "Prefix Scan",
 		"batch_write": "Batch Write",
 		"delete_rand": "Random Delete",
 	}
@@ -606,11 +542,20 @@ func main() {
 		}
 	}
 
+	// Choose a keyspace for prefix/range scans. If this run only writes via
+	// batch_write, the inserted keys live in [keys, 2*keys), not [0, keys).
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+		prefixScanBase = *numKeys
+	}
+
 	// 3. Run Tests
 	// map[TestName][DBName]Result
 	results := make(map[string]map[string]float64)
-	for _, t := range finalTestOrder {
-		results[t] = make(map[string]float64)
+	for _, testName := range finalTestOrder {
+		results[testName] = make(map[string]float64, len(instances))
+		for _, inst := range instances {
+			results[testName][inst.Wrapper.Name()] = math.NaN()
+		}
 	}
 
 	var live *liveTable
@@ -625,7 +570,8 @@ func main() {
 		for _, inst := range instances {
 			// Run Test
 			// Reset? No, we persist state.
-			res := fn(inst.Wrapper)
+			rng := rand.New(rand.NewSource(testSeed(seedUsed, testName)))
+			res := fn(inst.Wrapper, rng)
 			results[testName][inst.Wrapper.Name()] = res
 			if live != nil {
 				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
@@ -649,6 +595,11 @@ func main() {
 	printResultsTable(instances, finalTestOrder, displayNames, results)
 }
 
+func testSeed(seed int64, testName string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(testName))
+	return seed ^ int64(h.Sum64())
+}
 
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
@@ -712,9 +663,38 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 func parseList(s string) []string {
 	parts := strings.Split(s, ",")
 	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
 	}
 	return parts
+}
+
+func normalizeTests(list []string) []string {
+	if contains(list, "all") {
+		return list
+	}
+	seen := make(map[string]struct{}, len(list))
+	out := make([]string, 0, len(list))
+	for _, t := range list {
+		switch t {
+		case "full_scan":
+			// keep
+		case "scan":
+			t = "full_scan"
+		case "range_scan":
+			t = "prefix_scan"
+		case "prefix_scan":
+			// keep
+		}
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func contains(list []string, item string) bool {
@@ -727,15 +707,15 @@ func contains(list []string, item string) bool {
 }
 
 type liveTable struct {
-	w             io.Writer
-	instances     []*DBInstance
+	w              io.Writer
+	instances      []*DBInstance
 	finalTestOrder []string
-	displayNames  map[string]string
-	printedLines  int
-	enabledVT100  bool
-	colWidths     map[string]int
-	dbColStart    map[string]int
-	testRowIndex  map[string]int
+	displayNames   map[string]string
+	printedLines   int
+	enabledVT100   bool
+	colWidths      map[string]int
+	dbColStart     map[string]int
+	testRowIndex   map[string]int
 }
 
 func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *liveTable {
@@ -747,11 +727,11 @@ func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string,
 	}
 
 	return &liveTable{
-		w:             w,
-		instances:     instances,
+		w:              w,
+		instances:      instances,
 		finalTestOrder: finalTestOrder,
-		displayNames:  displayNames,
-		enabledVT100:  enabledVT100,
+		displayNames:   displayNames,
+		enabledVT100:   enabledVT100,
 	}
 }
 
@@ -821,9 +801,9 @@ func (t *liveTable) UpdateCell(testName, dbName string, val float64) error {
 	// Save cursor, jump to target cell, write, restore cursor.
 	// Cursor is currently below the table after initial Render().
 	_, err := fmt.Fprintf(t.w, "\x1b7\r\x1b[%dA\x1b[%dB\x1b[%dC%s\x1b8",
-		t.printedLines,          // up to top
-		targetLineFromTop-1,     // down to row
-		colStart-1,              // right to col
+		t.printedLines,      // up to top
+		targetLineFromTop-1, // down to row
+		colStart-1,          // right to col
 		cell,
 	)
 	return err
@@ -919,9 +899,12 @@ func renderResultsTableStringWithLayout(instances []*DBInstance, finalTestOrder 
 
 // formatFloat formats a float with commas (e.g. 1,234,567)
 func formatFloat(f float64) string {
-	s := fmt.Sprintf("%.0f", f)
-	if f == 0 { // Explicitly handle 0 for non-supported tests
+	if math.IsNaN(f) {
 		return "-"
+	}
+	s := fmt.Sprintf("%.0f", f)
+	if f == 0 {
+		return "0"
 	}
 	n := len(s)
 	if n <= 3 {

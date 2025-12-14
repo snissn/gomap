@@ -259,7 +259,7 @@
 - [x] Implement `MergingIterator` in `internal/merging`.
     - Layers: `Mutable Memtable` > `Immutable Queue` > `Disk Iterator`.
     - Logic: Pop smallest key, consume shadows (deduplication), filter tombstones.
-- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct value returned.
+- [x] **Test:** Complex scenario unit test: Key A set in Disk, Deleted in Queue, Set in Mutable. Verify correct version returned.
 
 ### 12.3 CachingDB Core Logic
 - [x] Create `caching` package (or extend `treedb`).
@@ -351,3 +351,4 @@
 ### 14.3 Verification
 - [ ] **Benchmark:** Compare Read throughput before/after.
 - [ ] **Safety Test:** Corrupt a page in RAM (via unsafe access) *after* verification and ensure the system (correctly) fails to detect it if cached, but detects it if cache is cleared. (Validates the cache is working).
+

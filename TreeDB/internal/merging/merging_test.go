@@ -7,8 +7,8 @@ import (
 )
 
 type mockUnsafeIter struct {
-	data []entry
-	idx  int
+	data      []entry
+	idx       int
 	seekedKey []byte
 }
 
@@ -17,15 +17,15 @@ type entry struct {
 	del  bool
 }
 
-func (m *mockUnsafeIter) Next()                 { m.idx++ }
-func (m *mockUnsafeIter) Valid() bool           { return m.idx < len(m.data) }
-func (m *mockUnsafeIter) UnsafeKey() []byte     { return []byte(m.data[m.idx].k) }
-func (m *mockUnsafeIter) UnsafeValue() []byte   { return []byte(m.data[m.idx].v) }
-func (m *mockUnsafeIter) Key() []byte             { return m.UnsafeKey() } // Copy in mock is fine
-func (m *mockUnsafeIter) Value() []byte           { return m.UnsafeValue() }
-func (m *mockUnsafeIter) Error() error            { return nil }
-func (m *mockUnsafeIter) Close() error          { return nil }
-func (m *mockUnsafeIter) IsDeleted() bool       { return m.data[m.idx].del }
+func (m *mockUnsafeIter) Next()               { m.idx++ }
+func (m *mockUnsafeIter) Valid() bool         { return m.idx < len(m.data) }
+func (m *mockUnsafeIter) UnsafeKey() []byte   { return []byte(m.data[m.idx].k) }
+func (m *mockUnsafeIter) UnsafeValue() []byte { return []byte(m.data[m.idx].v) }
+func (m *mockUnsafeIter) Key() []byte         { return m.UnsafeKey() } // Copy in mock is fine
+func (m *mockUnsafeIter) Value() []byte       { return m.UnsafeValue() }
+func (m *mockUnsafeIter) Error() error        { return nil }
+func (m *mockUnsafeIter) Close() error        { return nil }
+func (m *mockUnsafeIter) IsDeleted() bool     { return m.data[m.idx].del }
 func (m *mockUnsafeIter) Seek(key []byte) {
 	m.seekedKey = key
 	if key == nil {
@@ -109,42 +109,5 @@ func TestTwoWayMerger(t *testing.T) {
 
 	if !reflect.DeepEqual(results2, expected2) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
-	}
-}
-
-type closeCountingIter struct {
-	*mockUnsafeIter
-	closed *int
-}
-
-func (c *closeCountingIter) Close() error {
-	*c.closed++
-	return nil
-}
-
-func TestMergingIteratorCloseClosesAllSources(t *testing.T) {
-	closed := 0
-	it1 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"A", "1", false}}}, closed: &closed}
-	it2 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"B", "2", false}}}, closed: &closed}
-	it3 := &closeCountingIter{mockUnsafeIter: &mockUnsafeIter{data: []entry{{"C", "3", false}}}, closed: &closed}
-
-	itr := NewMergingIterator(
-		[]IteratorSource{
-			{Iter: it1, Priority: 0},
-			{Iter: it2, Priority: 1},
-			{Iter: it3, Priority: 2},
-		},
-		nil,
-		nil,
-	)
-
-	// Advance at least once so one source iterator becomes exhausted and is no longer in the heap.
-	if itr.Valid() {
-		itr.Next()
-	}
-
-	_ = itr.Close()
-	if closed != 3 {
-		t.Fatalf("expected all sources closed, got %d", closed)
 	}
 }

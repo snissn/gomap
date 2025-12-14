@@ -1,27 +1,31 @@
 package crc
 
 import (
-	"errors"
+	"hash"
 	"hash/crc32"
+	"sync"
 )
 
-var (
-	castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
+var table = crc32.MakeTable(crc32.Castagnoli)
 
-	// ErrChecksumMismatch is returned when Verify detects a mismatch.
-	ErrChecksumMismatch = errors.New("crc32c checksum mismatch")
-)
-
-// Checksum returns the CRC32C Castagnoli checksum of data.
 func Checksum(data []byte) uint32 {
-	return crc32.Checksum(data, castagnoliTable)
+	return crc32.Checksum(data, table)
 }
 
-// Verify checks that data's CRC32C Castagnoli checksum equals want.
-func Verify(data []byte, want uint32) error {
-	if Checksum(data) != want {
-		return ErrChecksumMismatch
+var digestPool = sync.Pool{
+	New: func() any { return crc32.New(table) },
+}
+
+func ChecksumParts(parts ...[]byte) uint32 {
+	d := digestPool.Get().(hash.Hash32)
+	d.Reset()
+	for _, p := range parts {
+		if len(p) == 0 {
+			continue
+		}
+		_, _ = d.Write(p)
 	}
-	return nil
+	sum := d.Sum32()
+	digestPool.Put(d)
+	return sum
 }
-
