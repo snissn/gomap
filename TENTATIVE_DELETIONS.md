@@ -16,14 +16,14 @@ This file is a running list of items that look generated, obsolete, or non-essen
 
 ## Likely Generated Outputs (confirm before deleting)
 
-- `benchmark_results.csv`
-- `results.csv`
-- `get_rps.png`
-- `set_rps.png`
+- `artifacts/benchmark_results.csv`
+- `artifacts/results.csv`
+- `artifacts/get_rps.png`
+- `artifacts/set_rps.png`
 
 ## One-off / Ad-hoc Utilities (confirm before deleting)
 
-- `numpyread.py` (appears to be a local helper script; confirm it’s still used)
+- `scripts/numpyread.py` (appears to be a local helper script; confirm it’s still used)
 
 ## Potentially Obsolete Docs/Scripts (confirm before deleting)
 
