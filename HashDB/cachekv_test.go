@@ -1,27 +1,40 @@
 package hashdb
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
 
 // DummyKV implements KVStore for testing CacheKV.
 type DummyKV struct {
+	mu   sync.RWMutex
 	data map[string][]byte
 }
 
 func (d *DummyKV) Get(key []byte) ([]byte, error) {
-	if v, ok := d.data[string(key)]; ok {
-		return v, nil
+	k := string(key)
+	d.mu.RLock()
+	v, ok := d.data[k]
+	d.mu.RUnlock()
+	if ok {
+		return append([]byte(nil), v...), nil
 	}
 	return nil, nil
 }
 func (d *DummyKV) Put(key, value []byte) error {
-	d.data[string(key)] = append([]byte(nil), value...)
+	k := string(key)
+	valueCopy := append([]byte(nil), value...)
+	d.mu.Lock()
+	d.data[k] = valueCopy
+	d.mu.Unlock()
 	return nil
 }
 func (d *DummyKV) Delete(key []byte) error {
-	delete(d.data, string(key))
+	k := string(key)
+	d.mu.Lock()
+	delete(d.data, k)
+	d.mu.Unlock()
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"strings"
 
 	"github.com/edsrzf/mmap-go"
@@ -27,7 +28,8 @@ func unpackLength(packed uint64) (uint64, uint8) {
 func (h *DB) writeSlab(buf []byte) error {
 	// Check if active segment is full using in-memory size accounting
 	f := h.slabFiles[h.activeSegmentID]
-	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
+	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
+	if h.activeSegmentSize+int64(len(buf)) > maxSegmentSize {
 		// Rotate to a new segment
 		h.activeSegmentID++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
@@ -115,7 +117,8 @@ func (h *DB) addSlab(item Item) (Key, error) {
 
 func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 	f := h.slabFiles[h.activeSegmentID]
-	if h.activeSegmentSize+int64(len(buf)) > MaxSegmentSize {
+	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
+	if h.activeSegmentSize+int64(len(buf)) > maxSegmentSize {
 		h.activeSegmentID++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
@@ -155,7 +158,8 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 	// Check rotation once for batch using in-memory size.
 	// If batch > MaxSegmentSize, this logic needs to be smarter (split batch).
 	// For now assume batch fits.
-	if h.activeSegmentSize+int64(totalBatchSize) > MaxSegmentSize {
+	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
+	if h.activeSegmentSize+int64(totalBatchSize) > maxSegmentSize {
 		h.activeSegmentID++
 		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
 		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)

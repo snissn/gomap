@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -264,9 +265,9 @@ func TestSegmentRotation(t *testing.T) {
 	defer os.RemoveAll(folder)
 
 	// Reduce limit for test
-	originalLimit := MaxSegmentSize
-	MaxSegmentSize = 1024 // 1KB
-	defer func() { MaxSegmentSize = originalLimit }()
+	originalLimit := atomic.LoadInt64(&MaxSegmentSize)
+	atomic.StoreInt64(&MaxSegmentSize, 1024) // 1KB
+	defer atomic.StoreInt64(&MaxSegmentSize, originalLimit)
 
 	var obj DB
 	err := obj.Open(folder)
