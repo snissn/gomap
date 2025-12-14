@@ -89,6 +89,9 @@
   - Made `TreeDB/internal/merging` value-lazy (don’t call `UnsafeValue()` during `Next()`/selection)
   - Early-close exhausted sources to avoid iterator leaks
   - `go test ./...` (`TreeDB/internal/merging`, `TreeDB/caching`): PASS
+- 2025-12-14: TreeDB benchmarks cleanup
+  - Reduced benchmark noise by precomputing keys (avoid per-iteration `fmt.Sprintf` allocations)
+  - `go test ./...` (`TreeDB/db`): PASS
 
 ## Notes / Conventions
 

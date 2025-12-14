@@ -29,6 +29,11 @@ func BenchmarkStress(b *testing.B) {
 	keyRange := 10000
 	valSize := 100
 
+	keys := make([][]byte, keyRange)
+	for i := 0; i < keyRange; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
@@ -38,7 +43,7 @@ func BenchmarkStress(b *testing.B) {
 		for pb.Next() {
 			op := r.Intn(100)
 			k := r.Intn(keyRange)
-			key := []byte(fmt.Sprintf("key-%09d", k))
+			key := keys[k]
 
 			if op < 50 { // 50% Write
 				r.Read(valBuf)
@@ -74,11 +79,16 @@ func BenchmarkGet(b *testing.B) {
 	// Pre-fill 10k items
 	count := 10000
 	val := make([]byte, 100)
+
+	keys := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
 	for i := 0; i < count; i += 1000 {
 		batch := d.NewBatch()
 		for j := 0; j < 1000 && i+j < count; j++ {
-			k := []byte(fmt.Sprintf("key-%09d", i+j))
-			if err := batch.Set(k, val); err != nil {
+			if err := batch.Set(keys[i+j], val); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -91,8 +101,7 @@ func BenchmarkGet(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		for pb.Next() {
-			k := r.Intn(count)
-			key := []byte(fmt.Sprintf("key-%09d", k))
+			key := keys[r.Intn(count)]
 			if _, err := d.Get(key); err != nil {
 				// b.Errorf("Get failed: %v", err)
 			}
@@ -117,11 +126,16 @@ func BenchmarkScan(b *testing.B) {
 	// Pre-fill 10k items
 	count := 10000
 	val := make([]byte, 100)
+
+	keys := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
 	for i := 0; i < count; i += 1000 {
 		batch := d.NewBatch()
 		for j := 0; j < 1000 && i+j < count; j++ {
-			k := []byte(fmt.Sprintf("key-%09d", i+j))
-			if err := batch.Set(k, val); err != nil {
+			if err := batch.Set(keys[i+j], val); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -213,12 +227,16 @@ func BenchmarkLargeVal(b *testing.B) {
 	valBuf := make([]byte, valSize)
 	rand.Read(valBuf)
 
+	keys := make([][]byte, 10000)
+	for i := 0; i < len(keys); i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		for pb.Next() {
-			k := r.Intn(10000)
-			key := []byte(fmt.Sprintf("key-%09d", k))
+			key := keys[r.Intn(len(keys))]
 			if err := d.Set(key, valBuf); err != nil {
 				b.Errorf("Set failed: %v", err)
 			}
