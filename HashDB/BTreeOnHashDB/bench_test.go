@@ -31,11 +31,11 @@ func benchmarkBTreePutGet(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
-		b.Fatalf("init gomap: %v", err)
+		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnGomap(store, "bench")
+	tree, err := NewTreeOnHashDB(store, "bench")
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -76,11 +76,11 @@ func benchmarkBTreeScanAll(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
-		b.Fatalf("init gomap: %v", err)
+		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnGomap(store, "bench-scan")
+	tree, err := NewTreeOnHashDB(store, "bench-scan")
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -129,11 +129,11 @@ func benchmarkBTreePutOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
-		b.Fatalf("init gomap: %v", err)
+		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnGomap(store, "bench-putonly")
+	tree, err := NewTreeOnHashDB(store, "bench-putonly")
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -180,11 +180,11 @@ func benchmarkBTreeGetOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
-		b.Fatalf("init gomap: %v", err)
+		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnGomap(store, "bench-getonly")
+	tree, err := NewTreeOnHashDB(store, "bench-getonly")
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}

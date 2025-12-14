@@ -212,7 +212,7 @@ func TestReverseRange(t *testing.T) {
 	}
 }
 
-func TestPersistenceWithGomap(t *testing.T) {
+func TestPersistenceWithHashDB(t *testing.T) {
 	dir, err := os.MkdirTemp("", "btree-persist-*")
 	if err != nil {
 		t.Fatal(err)
@@ -221,12 +221,12 @@ func TestPersistenceWithGomap(t *testing.T) {
 
 	ref := make(map[string]string)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, 4); err != nil {
-		t.Fatalf("init gomap: %v", err)
+		t.Fatalf("init hashdb: %v", err)
 	}
 
-	tree, err := NewTreeOnGomap(store, "persist")
+	tree, err := NewTreeOnHashDB(store, "persist")
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -245,12 +245,12 @@ func TestPersistenceWithGomap(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	store2 := &hashdb.HashmapDistributed{}
+	store2 := &hashdb.ShardedDB{}
 	if err := store2.NewWithShards(dir, 4); err != nil {
-		t.Fatalf("reopen gomap: %v", err)
+		t.Fatalf("reopen hashdb: %v", err)
 	}
 
-	tree2, err := NewTreeOnGomap(store2, "persist")
+	tree2, err := NewTreeOnHashDB(store2, "persist")
 	if err != nil {
 		t.Fatalf("reopen tree: %v", err)
 	}
@@ -375,23 +375,23 @@ func TestRandomizedOperations(t *testing.T) {
 	}
 }
 
-// TestRandomizedOperationsWithGomap exercises the tree on top of the real
-// gomap backend with mixed put/delete operations, similar to the cosmos-db
+// TestRandomizedOperationsWithHashDB exercises the tree on top of HashDB with
+// mixed put/delete operations, similar to the cosmos-db
 // dbbench mixed phase. This helps catch integration issues that do not
 // appear with the in-memory mockKV.
-func TestRandomizedOperationsWithGomap(t *testing.T) {
-	dir, err := os.MkdirTemp("", "btree-rand-gomap-*")
+func TestRandomizedOperationsWithHashDB(t *testing.T) {
+	dir, err := os.MkdirTemp("", "btree-rand-hashdb-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.HashmapDistributed{}
+	store := &hashdb.ShardedDB{}
 	if err := store.NewWithShards(dir, 8); err != nil {
-		t.Fatalf("init gomap: %v", err)
+		t.Fatalf("init hashdb: %v", err)
 	}
 
-	tree, err := NewTreeOnGomap(store, "rand-gomap")
+	tree, err := NewTreeOnHashDB(store, "rand-hashdb")
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
