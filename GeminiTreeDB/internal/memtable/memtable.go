@@ -91,7 +91,8 @@ func (m *Memtable) Len() int {
 // Iterator iterates over a snapshot of the memtable.
 type Iterator struct {
 	tree *btree.BTree
-	curr *Item
+	items []*Item
+	idx   int
 	valid bool
 }
 
@@ -106,11 +107,15 @@ func (m *Memtable) NewIterator() iterator.UnsafeIterator {
 // Seek positions the iterator to the first key >= target.
 func (it *Iterator) Seek(key []byte) {
 	it.valid = false
+	it.items = it.items[:0]
+	it.idx = 0
+
 	it.tree.AscendGreaterOrEqual(&Item{Key: key}, func(i btree.Item) bool {
-		it.curr = i.(*Item)
-		it.valid = true
-		return false // Stop after 1
+		it.items = append(it.items, i.(*Item))
+		return true
 	})
+
+	it.valid = len(it.items) > 0
 }
 
 // Next advances the iterator.
@@ -118,22 +123,9 @@ func (it *Iterator) Next() {
 	if !it.valid {
 		return // Do nothing if already invalid
 	}
-	start := it.curr
-	it.valid = false // Assume invalid until next is found
-	
-	// Find the entry strictly greater than start.
-	// AscendGreaterOrEqual with 'start' will yield start itself first.
-	// We need to skip it and take the next.
-	skipCurrent := true
-	it.tree.AscendGreaterOrEqual(start, func(i btree.Item) bool {
-		if skipCurrent {
-			skipCurrent = false
-			return true // Continue to next item
-		}
-		it.curr = i.(*Item)
-		it.valid = true
-		return false // Stop after finding the next one
-	})
+
+	it.idx++
+	it.valid = it.idx >= 0 && it.idx < len(it.items)
 }
 
 // Valid returns true if the iterator is currently pointing to a valid item.
@@ -146,7 +138,7 @@ func (it *Iterator) UnsafeKey() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.curr.Key
+	return it.items[it.idx].Key
 }
 
 // UnsafeValue returns a view (no copy) of the current value.
@@ -154,7 +146,7 @@ func (it *Iterator) UnsafeValue() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.curr.Value
+	return it.items[it.idx].Value
 }
 
 // IsDeleted returns true if the current item is a tombstone.
@@ -162,7 +154,7 @@ func (it *Iterator) IsDeleted() bool {
 	if !it.valid {
 		return false
 	}
-	return it.curr.IsDeleted
+	return it.items[it.idx].IsDeleted
 }
 
 // Key returns a copy of the current key.
@@ -182,7 +174,8 @@ func (it *Iterator) Error() error {
 
 // Close closes the iterator.
 func (it *Iterator) Close() error {
-	// No resources to close for in-memory btree iterator
+	it.tree = nil
+	it.items = nil
 	return nil
 }
 
