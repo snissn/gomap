@@ -109,7 +109,7 @@ func TestCompaction(t *testing.T) {
 	// 5. Verify Integrity
 	for i := 0; i < keyCount; i++ {
 		val := getKey(t, conn, reader, i)
-		
+
 		var sb strings.Builder
 		for k := 0; k < 100; k++ {
 			sb.WriteString(fmt.Sprintf("%d-%d-", i, k))
@@ -118,7 +118,7 @@ func TestCompaction(t *testing.T) {
 		if len(padding) < 1024 {
 			padding += strings.Repeat("x", 1024-len(padding))
 		}
-		
+
 		expected := fmt.Sprintf("val-%d-%d-%s", i, updates, padding)
 		if val != expected {
 			// Don't print huge values
@@ -153,7 +153,7 @@ func setKey(t *testing.T, conn net.Conn, reader *bufio.Reader, i, v int) {
 	if len(padding) < 1024 {
 		padding += strings.Repeat("x", 1024-len(padding))
 	}
-	
+
 	val := fmt.Sprintf("val-%d-%d-%s", i, v, padding)
 	cmd := fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 	conn.Write([]byte(cmd))
@@ -173,7 +173,6 @@ func getKey(t *testing.T, conn net.Conn, reader *bufio.Reader, i int) string {
 	valLine, _ := reader.ReadString('\n')
 	return strings.TrimRight(valLine, "\r\n")
 }
-
 
 func getDirSize(t *testing.T, path string) int64 {
 	var size int64

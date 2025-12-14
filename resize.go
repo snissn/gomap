@@ -65,7 +65,7 @@ func (h *Hashmap) startRehash() error {
 	h.hashMap = newMap
 	h.hashMapFile = newFile
 	h.Capacity = newCap
-	
+
 	// Controls
 	ctrlPtr := (*byte)(unsafe.Pointer(&newMap[0]))
 	controls := unsafe.Slice(ctrlPtr, newCap)
@@ -85,7 +85,7 @@ func (h *Hashmap) startRehash() error {
 		// Old format: Controls at 0, Keys start at oldCap
 		tmpCtrl := (*byte)(unsafe.Pointer(&oldMap[0]))
 		oldControls = unsafe.Slice(tmpCtrl, oldCap)
-		
+
 		tmp := (*Key)(unsafe.Pointer(&oldMap[oldCap]))
 		oldKeys = unsafe.Slice(tmp, oldCap)
 	}
@@ -97,7 +97,7 @@ func (h *Hashmap) startRehash() error {
 	return nil
 }
 
-	// rehashStep migrates up to maxToMove buckets from the old table into the new one.
+// rehashStep migrates up to maxToMove buckets from the old table into the new one.
 // It should be called while holding the shard's write lock.
 func (h *Hashmap) rehashStep(maxToMove uint64) error {
 	if !h.rehashInProgress || h.rehashOldCapacity == 0 {

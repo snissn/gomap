@@ -110,25 +110,25 @@ func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte
 	h2 := byte(myhash&0x7f) | 0x80
 
 	idx := h1 % capacity
-	
+
 	probes := uint64(0)
-	
+
 	// Limit probe count to avoid infinite loop in full map (shouldn't happen with resizing)
 	// But strictly, we loop until we find Empty.
-	
+
 	for probes < capacity {
 		group := loadGroup(controls, idx, capacity)
-		
+
 		// Check for matches
 		matchMask := matchH2(h2, group)
-		
+
 		for matchMask != 0 {
 			bitPos := bits.TrailingZeros64(matchMask)
 			groupOffset := uint64(bitPos >> 3)
 			matchMask &= (matchMask - 1) // clear lowest set bit
 
 			candidateIdx := (idx + groupOffset) % capacity
-			
+
 			// Verify candidate
 			bucket := keys[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
@@ -141,7 +141,7 @@ func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte
 				}
 			}
 		}
-		
+
 		// Check for empty slots to terminate search
 		emptyMask := matchEmptyOrDeleted(group)
 		if emptyMask != 0 {
@@ -151,7 +151,7 @@ func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte
 				bitPos := bits.TrailingZeros64(tmpMask)
 				groupOffset := uint64(bitPos >> 3)
 				tmpMask &= (tmpMask - 1) // clear lowest set bit
-				
+
 				candidateIdx := (idx + groupOffset) % capacity
 				if controls[candidateIdx] == ctrlEmpty {
 					// Found empty slot -> Key not found.
@@ -159,7 +159,7 @@ func (h *Hashmap) probe(keys []Key, controls []byte, capacity uint64, key []byte
 				}
 			}
 		}
-		
+
 		idx = (idx + groupSize) % capacity
 		probes += groupSize
 	}
@@ -181,7 +181,7 @@ func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
 
 	for probes < h.Capacity {
 		group := loadGroup(*h.Controls, idx, h.Capacity)
-		
+
 		// 1. Check if key already exists
 		matchMask := matchH2(h2, group)
 		for matchMask != 0 {
@@ -190,7 +190,7 @@ func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
 			matchMask &= (matchMask - 1) // clear lowest set bit
 
 			candidateIdx := (idx + groupOffset) % h.Capacity
-			
+
 			// Verify
 			bucket := (*h.Keys)[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
@@ -210,16 +210,16 @@ func (h *Hashmap) probeForAdd(key []byte) (uint64, bool, error) {
 			// Find the first Empty or Deleted slot
 			// We want to terminate on Empty.
 			// If we find Deleted, we record it (if first) and continue.
-			
+
 			tmpMask := emptyMask
 			for tmpMask != 0 {
 				bitPos := bits.TrailingZeros64(tmpMask)
 				groupOffset := uint64(bitPos >> 3)
 				tmpMask &= (tmpMask - 1) // clear lowest set bit
-				
+
 				candidateIdx := (idx + groupOffset) % h.Capacity
 				ctrl := (*h.Controls)[candidateIdx]
-				
+
 				if ctrl == ctrlEmpty {
 					// Found Empty. Stop search.
 					if foundDeleted {
@@ -287,25 +287,25 @@ func (h *Hashmap) setDeleted(idx uint64) {
 // It returns the index to insert at.
 func (h *Hashmap) probeForRehash(hash uint64) (uint64, error) {
 	h1 := uint64(hash >> 7)
-	
+
 	idx := h1 % h.Capacity
 	probes := uint64(0)
-	
+
 	for probes < h.Capacity {
 		group := loadGroup(*h.Controls, idx, h.Capacity)
-		
+
 		// We look for any Empty or Deleted slot.
 		emptyMask := matchEmptyOrDeleted(group)
-		
+
 		if emptyMask != 0 {
 			// Find first available slot
 			bitPos := bits.TrailingZeros64(emptyMask)
 			groupOffset := uint64(bitPos >> 3)
-			
+
 			candidateIdx := (idx + groupOffset) % h.Capacity
 			return candidateIdx, nil
 		}
-		
+
 		idx = (idx + groupSize) % h.Capacity
 		probes += groupSize
 	}
