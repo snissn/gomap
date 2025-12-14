@@ -43,6 +43,13 @@
   - `go test ./...` passes in `HashDB/`, `TreeDB/`, and `cmd/unified_bench/`
 - 2025-12-14: Build artifacts cleanup
   - Removed checked-in binaries/profiles in `HashDB/BTreeOnHashDB/` and `HashDB/redisserver/` and added ignores
+- 2025-12-14: Repo layout cleanup
+  - Moved top-level specs/notes into `docs/`
+  - Moved loose benchmark outputs into `artifacts/`
+  - Moved one-off scripts into `scripts/`
+- 2025-12-14: Multi-module ergonomics
+  - Added `go.work` for local multi-module development
+  - Rewrote `Makefile` with `help`, `fmt`, `test`, `vet`, `tidy`, `deps`, and `build` targets across modules
 
 ## Notes / Conventions
 
