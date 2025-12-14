@@ -172,6 +172,16 @@ func Open(opts Options) (*DB, error) {
 	}
 	db.state.Store(initialState)
 
+	segments, err := listWALSegments(opts.Dir)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := replayWALIntoBackend(db, segments); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	return db, nil
 }
 
