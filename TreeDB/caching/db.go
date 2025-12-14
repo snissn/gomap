@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -345,6 +346,11 @@ func (db *DB) Print() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	// Match Cosmos DB iterator contract: if start >= end, return an invalid iterator.
+	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+		return merging.NewMergingIterator(nil, start, end), nil
+	}
+
 	db.mu.RLock()
 	defer db.mu.RUnlock() // Need to hold lock while creating iterators?
 	// If we create iterators from memtables, they are snapshots (COW).
@@ -352,8 +358,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var sources []merging.IteratorSource
 
 	// Priority 0: Mutable
+	mutableIter := db.mutable.NewIterator()
+	mutableIter.Seek(start)
 	sources = append(sources, merging.IteratorSource{
-		Iter:     db.mutable.NewIterator(),
+		Iter:     mutableIter,
 		Priority: 0,
 	})
 
@@ -366,8 +374,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
+		queueIter := db.queue[i].NewIterator()
+		queueIter.Seek(start)
 		sources = append(sources, merging.IteratorSource{
-			Iter:     db.queue[i].NewIterator(),
+			Iter:     queueIter,
 			Priority: prio,
 		})
 		prio++
@@ -377,6 +387,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Ensure disk iterator is positioned; most backends already Seek(start), but this keeps behavior consistent.
+	diskIter.Seek(start)
 	sources = append(sources, merging.IteratorSource{
 		Iter:     diskIter,
 		Priority: prio,
