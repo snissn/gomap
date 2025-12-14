@@ -366,6 +366,7 @@ var (
 	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
 	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write)")
 	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
+	progress  = flag.Bool("progress", true, "Print the final results table incrementally (row-by-row)")
 )
 
 type DBInstance struct {
@@ -569,6 +570,13 @@ func main() {
 		results[t] = make(map[string]float64)
 	}
 
+	var printer *tablePrinter
+	if *progress {
+		fmt.Println()
+		printer = newTablePrinter(instances, finalTestOrder, displayNames)
+		printer.PrintHeader()
+	}
+
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
 
@@ -577,6 +585,10 @@ func main() {
 			// Reset? No, we persist state.
 			res := fn(inst.Wrapper)
 			results[testName][inst.Wrapper.Name()] = res
+		}
+
+		if *progress {
+			printer.PrintRow(testName, results[testName])
 		}
 	}
 
@@ -588,9 +600,20 @@ func main() {
 		}
 	}
 
-	// 5. Print Transposed Table
-	fmt.Println()
+	// 5. Print final transposed table (only if not already printed incrementally)
+	if !*progress {
+		fmt.Println()
+		printResultsTable(instances, finalTestOrder, displayNames, results)
+	}
+}
 
+func key(i int) []byte {
+	k := make([]byte, 8)
+	binary.BigEndian.PutUint64(k, uint64(i))
+	return k
+}
+
+func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
 	colNames := []string{"Test"}
 	for _, inst := range instances {
@@ -610,7 +633,7 @@ func main() {
 		}
 	}
 
-	// Update widths based on results
+	// Update widths based on results (or "-" for not-yet-run)
 	for _, testName := range finalTestOrder {
 		for _, inst := range instances {
 			dbName := inst.Wrapper.Name()
@@ -649,12 +672,6 @@ func main() {
 	}
 }
 
-func key(i int) []byte {
-	k := make([]byte, 8)
-	binary.BigEndian.PutUint64(k, uint64(i))
-	return k
-}
-
 func parseList(s string) []string {
 	parts := strings.Split(s, ",")
 	for i := range parts {
@@ -670,6 +687,74 @@ func contains(list []string, item string) bool {
 		}
 	}
 	return false
+}
+
+type tablePrinter struct {
+	instances     []*DBInstance
+	finalTestOrder []string
+	displayNames  map[string]string
+	colWidths     map[string]int
+}
+
+func newTablePrinter(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *tablePrinter {
+	colNames := []string{"Test"}
+	for _, inst := range instances {
+		colNames = append(colNames, inst.Wrapper.Name())
+	}
+
+	colWidths := make(map[string]int)
+	for _, colName := range colNames {
+		colWidths[colName] = len(colName)
+	}
+
+	for _, testName := range finalTestOrder {
+		dispName := displayNames[testName]
+		if len(dispName) > colWidths["Test"] {
+			colWidths["Test"] = len(dispName)
+		}
+	}
+
+	// Use a fixed minimum width so early rows don't misalign vs later large values.
+	// 13 fits up to "9,999,999,999" and gives headroom for typical runs.
+	const minValWidth = 13
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		if colWidths[dbName] < minValWidth {
+			colWidths[dbName] = minValWidth
+		}
+	}
+
+	return &tablePrinter{
+		instances:     instances,
+		finalTestOrder: finalTestOrder,
+		displayNames:  displayNames,
+		colWidths:     colWidths,
+	}
+}
+
+func (p *tablePrinter) PrintHeader() {
+	headerRow := fmt.Sprintf("%*s", p.colWidths["Test"], "Test")
+	for _, inst := range p.instances {
+		dbName := inst.Wrapper.Name()
+		headerRow += fmt.Sprintf("  %*s", p.colWidths[dbName], dbName)
+	}
+	fmt.Println(headerRow)
+
+	separatorRow := fmt.Sprintf("%*s", p.colWidths["Test"], strings.Repeat("-", p.colWidths["Test"]))
+	for _, inst := range p.instances {
+		dbName := inst.Wrapper.Name()
+		separatorRow += fmt.Sprintf("  %*s", p.colWidths[dbName], strings.Repeat("-", p.colWidths[dbName]))
+	}
+	fmt.Println(separatorRow)
+}
+
+func (p *tablePrinter) PrintRow(testName string, row map[string]float64) {
+	dataRow := fmt.Sprintf("%*s", p.colWidths["Test"], p.displayNames[testName])
+	for _, inst := range p.instances {
+		dbName := inst.Wrapper.Name()
+		dataRow += fmt.Sprintf("  %*s", p.colWidths[dbName], formatFloat(row[dbName]))
+	}
+	fmt.Println(dataRow)
 }
 
 // formatFloat formats a float with commas (e.g. 1,234,567)
