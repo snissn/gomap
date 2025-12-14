@@ -120,6 +120,8 @@
 - 2025-12-14: TreeDB exclusive open
   - Added cross-process lock acquisition via `TreeDB/internal/lockfile` and exposed `treedb.ErrLocked`.
   - Integrated locking into `TreeDB/db.Open` (covers cached and backend opens) and made `DB.Close` close all resources.
+- 2025-12-14: TreeDB lock tests
+  - Added in-process and cross-process lock regression tests in `TreeDB/db/lock_test.go`.
 
 ## Notes / Conventions
 
