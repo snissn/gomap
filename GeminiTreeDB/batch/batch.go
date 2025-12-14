@@ -1,7 +1,9 @@
 package batch
 
 import (
+	"bytes"
 	"errors"
+	"sort"
 
 	"github.com/snissn/gomap-gemini/TreeDB/page"
 	"github.com/snissn/gomap-gemini/TreeDB/slab"
@@ -132,13 +134,21 @@ func (b *Batch) SetOps(ops map[string]Entry) error {
 		return err
 	}
 	
-	for k, op := range ops {
+	entries := make([]Entry, 0, len(ops))
+	for _, op := range ops {
+		entries = append(entries, op)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	})
+
+	for _, op := range entries {
 		// If op is already populated with ValuePtr, we trust it?
 		// But CachingDB doesn't populate ValuePtr.
 		// So we must check value size again.
 		
 		if op.Type == OpDelete {
-			b.ops[k] = op
+			b.ops[string(op.Key)] = op
 			b.byteSize += len(op.Key)
 			continue
 		}
@@ -147,7 +157,7 @@ func (b *Batch) SetOps(ops map[string]Entry) error {
 		// If it came from CachingDB, it has Value but maybe not ValuePtr.
 		if op.IsPtr {
 			// Already has pointer (e.g. from compaction or advanced usage)
-			b.ops[k] = op
+			b.ops[string(op.Key)] = op
 			continue
 		}
 		
@@ -175,7 +185,7 @@ func (b *Batch) SetOps(ops map[string]Entry) error {
 			copy(valCopy, value)
 			op.Value = valCopy
 		}
-		b.ops[k] = op
+		b.ops[string(op.Key)] = op
 		b.byteSize += len(key) + len(value)
 	}
 	return nil

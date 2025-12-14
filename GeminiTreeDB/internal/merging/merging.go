@@ -89,7 +89,7 @@ func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
 			heap.Push(h, &heapItem{
 				iter:     src.Iter,
 				priority: src.Priority,
-				key:      append([]byte(nil), src.Iter.UnsafeKey()...), // Copy here
+				key:      append([]byte(nil), src.Iter.UnsafeKey()...), // Copy once per source
 			})
 		}
 	}
@@ -119,7 +119,7 @@ func (mi *MergingIterator) next() {
 		// Advance the winner (UnsafeIterator.Next)
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.key = append([]byte(nil), top.iter.UnsafeKey()...) // Copy here
+			top.key = append(top.key[:0], top.iter.UnsafeKey()...) // Reuse buffer
 			heap.Push(mi.h, top)
 		}
 
@@ -130,7 +130,7 @@ func (mi *MergingIterator) next() {
 				shadowed := heap.Pop(mi.h).(*heapItem)
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = append([]byte(nil), shadowed.iter.UnsafeKey()...)
+					shadowed.key = append(shadowed.key[:0], shadowed.iter.UnsafeKey()...)
 					heap.Push(mi.h, shadowed)
 				}
 			} else {
@@ -144,8 +144,8 @@ func (mi *MergingIterator) next() {
 		}
 
 		// Found valid data: perform final copy for public API
-		mi.key = append([]byte(nil), currentUnsafeKey...)
-		mi.val = append([]byte(nil), currentUnsafeVal...)
+		mi.key = append(mi.key[:0], currentUnsafeKey...)
+		mi.val = append(mi.val[:0], currentUnsafeVal...)
 		mi.valid = true
 		return
 	}

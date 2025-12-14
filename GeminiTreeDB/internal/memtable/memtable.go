@@ -39,7 +39,6 @@ func (m *Memtable) Set(key, value []byte) {
 
 	item := &Item{Key: k, Value: v, IsDeleted: false}
 	old := m.tree.ReplaceOrInsert(item)
-	
 	added := int64(len(k) + len(v))
 	if old != nil {
 		oldItem := old.(*Item)
@@ -90,7 +89,7 @@ func (m *Memtable) Len() int {
 
 // Iterator iterates over a snapshot of the memtable.
 type Iterator struct {
-	tree *btree.BTree
+	tree  *btree.BTree
 	items []*Item
 	idx   int
 	valid bool
@@ -100,6 +99,7 @@ type Iterator struct {
 func (m *Memtable) NewIterator() iterator.UnsafeIterator {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	// COW Clone for iteration safety without locking
 	return &Iterator{tree: m.tree.Clone()}
 }

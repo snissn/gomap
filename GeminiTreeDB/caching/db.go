@@ -1,11 +1,13 @@
 package caching
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
-	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
 	"github.com/snissn/gomap-gemini/TreeDB/internal/memtable"
@@ -17,6 +19,13 @@ import (
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+
+func bytesToStringNoCopy(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
 
 // BatchInterface matches the Batch methods we need from backend.
 type BatchInterface interface {
@@ -42,6 +51,7 @@ type BackendDB interface {
 
 type DB struct {
 	mu sync.RWMutex
+	flushMu sync.Mutex
 
 	// Level 0 (Memory)
 	mutable *memtable.Memtable
@@ -61,6 +71,7 @@ type DB struct {
 
 	// Lifecycle
 	closeCh chan struct{}
+	flushCh chan struct{}
 	wg      sync.WaitGroup
 }
 
@@ -81,6 +92,7 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 		flushThreshold: flushThreshold,
 		mutable:        memtable.New(),
 		closeCh:        make(chan struct{}),
+		flushCh:        make(chan struct{}, 1),
 	}
 
 	// Open initial WAL
@@ -202,7 +214,14 @@ func (db *DB) delete(key []byte, sync bool) error {
 func (db *DB) rotateMemtableLocked() error {
 	db.queue = append(db.queue, db.mutable)
 	db.mutable = memtable.New()
-	return db.rotateWALLocked()
+	if err := db.rotateWALLocked(); err != nil {
+		return err
+	}
+	select {
+	case db.flushCh <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -223,8 +242,6 @@ func (db *DB) rotateWALLocked() error {
 
 func (db *DB) flushLoop() {
 	defer db.wg.Done()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
 
 	for {
 		select {
@@ -232,21 +249,27 @@ func (db *DB) flushLoop() {
 			// Flush all remaining
 			db.flushAll()
 			return
-		case <-ticker.C:
-			db.flushOne()
+		case <-db.flushCh:
+			db.flushAll()
 		}
 	}
 }
 
 func (db *DB) flushAll() {
-	for {
-		if !db.flushOne() {
-			break
-		}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	for db.flushOneLocked() {
 	}
 }
 
 func (db *DB) flushOne() bool {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	return db.flushOneLocked()
+}
+
+func (db *DB) flushOneLocked() bool {
 	db.mu.Lock()
 	if len(db.queue) == 0 {
 		db.mu.Unlock()
@@ -257,22 +280,64 @@ func (db *DB) flushOne() bool {
 
 	// Flush 'mem' to backend
 
-batch := db.backend.NewBatch()
+	backendBatch := db.backend.NewBatch()
 	iter := mem.NewIterator() // Returns iterator.UnsafeIterator
-	iter.Seek(nil)             // Start
-	for iter.Valid() {
-		if iter.IsDeleted() {
-			batch.Delete(iter.UnsafeKey())
-		} else {
-			batch.Set(iter.UnsafeKey(), iter.UnsafeValue())
+	iter.Seek(nil)            // Start
+
+	// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
+	if mem.Len() > 2000 {
+		ops := make(map[string]batch.Entry, mem.Len())
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if iter.IsDeleted() {
+				ops[bytesToStringNoCopy(key)] = batch.Entry{
+					Type: batch.OpDelete,
+					Key:  key,
+				}
+			} else {
+				ops[bytesToStringNoCopy(key)] = batch.Entry{
+					Type:  batch.OpPut,
+					Key:   key,
+					Value: iter.UnsafeValue(),
+				}
+			}
+			iter.Next()
 		}
-		iter.Next()
+		if err := backendBatch.SetOps(ops); err != nil {
+			fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+			_ = iter.Close()
+			_ = backendBatch.Close()
+			return false
+		}
+	} else {
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if iter.IsDeleted() {
+				if err := backendBatch.Delete(key); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
+				}
+			} else {
+				if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
+				}
+			}
+			iter.Next()
+		}
 	}
+	_ = iter.Close()
 	// Commit to disk
-	if err := batch.WriteSync(); err != nil {
+	if err := backendBatch.WriteSync(); err != nil {
 		fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+		_ = backendBatch.Close()
 		return false
 	}
+	_ = backendBatch.Close()
 
 	// Remove from queue and delete old WAL
 	db.mu.Lock()
@@ -486,9 +551,17 @@ func (b *Batch) write(sync bool) error {
 	b.db.mu.Lock()
 	defer b.db.mu.Unlock()
 
+	entries := make([]batch.Entry, 0, len(b.ops))
+	for _, op := range b.ops {
+		entries = append(entries, op)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	})
+
 	// 1. WAL Append loop
-	for k, op := range b.ops {
-		key := []byte(k)
+	for _, op := range entries {
+		key := op.Key
 		var err error
 		if op.Type == batch.OpDelete {
 			err = b.db.wal.Append(wal.OpDelete, key, nil)
@@ -507,8 +580,8 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	// 2. Memtable Update
-	for k, op := range b.ops {
-		key := []byte(k)
+	for _, op := range entries {
+		key := op.Key
 		if op.Type == batch.OpDelete {
 			b.db.mutable.Delete(key)
 		} else {

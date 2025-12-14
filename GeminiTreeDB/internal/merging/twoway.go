@@ -99,8 +99,8 @@ func (m *TwoWayMerger) next() {
 		}
 
 		// Found valid data: perform final copy for public API
-		m.key = append([]byte(nil), currentKey...)
-		m.val = append([]byte(nil), currentValue...)
+		m.key = append(m.key[:0], currentKey...)
+		m.val = append(m.val[:0], currentValue...)
 		m.valid = true
 		return
 	}
