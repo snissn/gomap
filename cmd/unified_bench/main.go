@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strings"
@@ -285,7 +286,7 @@ var (
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
-	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
+	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 )
@@ -299,7 +300,7 @@ func main() {
 	flag.Parse()
 
 	dbsToRun := parseList(*dbsArg)
-	testsToRun := parseList(*testsArg)
+	testsToRun := normalizeTests(parseList(*testsArg))
 
 	// Define Factory Map
 	factories := map[string]func(string) (DBInterface, error){
@@ -350,6 +351,8 @@ func main() {
 	// Map of TestName -> Function
 	type TestFunc func(db DBInterface) float64
 
+	prefixScanBase := 0
+
 	testFuncs := map[string]TestFunc{
 		"write_seq": func(db DBInterface) float64 {
 			start := time.Now()
@@ -374,14 +377,14 @@ func main() {
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"scan": func(db DBInterface) float64 {
+		"full_scan": func(db DBInterface) float64 {
 			if !db.SupportsScan() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
 			iter, err := db.Iterator(nil, nil)
 			if err != nil {
-				log.Fatalf("scan iterator error: %v", err)
+				log.Fatalf("full_scan iterator error: %v", err)
 			}
 			defer iter.Close()
 			count := 0
@@ -392,20 +395,22 @@ func main() {
 				count++
 			}
 			if iter.Error() != nil {
-				log.Fatalf("scan iter error: %v", iter.Error())
+				log.Fatalf("full_scan iter error: %v", iter.Error())
 			}
 			return float64(count) / time.Since(start).Seconds()
 		},
-		"range_scan": func(db DBInterface) float64 {
+		"prefix_scan": func(db DBInterface) float64 {
 			if !db.SupportsScan() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
+			totalItems := 0
+			maxKey := prefixScanBase + *numKeys
 			for i := 0; i < *rangeQueries; i++ {
-				startIdx := rand.Intn(*numKeys)
+				startIdx := prefixScanBase + rand.Intn(*numKeys)
 				endIdx := startIdx + *rangeSpan
-				if endIdx > *numKeys {
-					endIdx = *numKeys
+				if endIdx > maxKey {
+					endIdx = maxKey
 				}
 
 				var startKeyBuf [8]byte
@@ -418,17 +423,20 @@ func main() {
 
 				iter, err := db.Iterator(startKey, endKey)
 				if err != nil {
-					log.Fatalf("range_scan iterator error: %v", err)
+					log.Fatalf("prefix_scan iterator error: %v", err)
 				}
 
-				count := 0
 				for iter.Valid() {
+					_ = iter.Key()
 					iter.Next()
-					count++
+					totalItems++
+				}
+				if err := iter.Error(); err != nil {
+					log.Fatalf("prefix_scan iter error: %v", err)
 				}
 				iter.Close()
 			}
-			return float64(*rangeQueries) / time.Since(start).Seconds()
+			return float64(totalItems) / time.Since(start).Seconds()
 		},
 		"write_rand": func(db DBInterface) float64 {
 			start := time.Now()
@@ -444,7 +452,7 @@ func main() {
 		},
 		"batch_write": func(db DBInterface) float64 {
 			if !db.SupportsBatch() {
-				return 0
+				return math.NaN()
 			}
 			start := time.Now()
 			val := make([]byte, *valSize)
@@ -487,7 +495,7 @@ func main() {
 	}
 
 	// Ordered list of tests to run
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "scan", "range_scan"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
 	finalTestOrder := make([]string, 0)
 
 	// Display names for polished output
@@ -495,8 +503,8 @@ func main() {
 		"write_seq":   "Sequential Write",
 		"write_rand":  "Random Write",
 		"read_rand":   "Random Read",
-		"scan":        "Scan",
-		"range_scan":  "Range Scan",
+		"full_scan":   "Full Scan",
+		"prefix_scan": "Prefix Scan",
 		"batch_write": "Batch Write",
 		"delete_rand": "Random Delete",
 	}
@@ -526,11 +534,20 @@ func main() {
 		}
 	}
 
+	// Choose a keyspace for prefix/range scans. If this run only writes via
+	// batch_write, the inserted keys live in [keys, 2*keys), not [0, keys).
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+		prefixScanBase = *numKeys
+	}
+
 	// 3. Run Tests
 	// map[TestName][DBName]Result
 	results := make(map[string]map[string]float64)
-	for _, t := range finalTestOrder {
-		results[t] = make(map[string]float64)
+	for _, testName := range finalTestOrder {
+		results[testName] = make(map[string]float64, len(instances))
+		for _, inst := range instances {
+			results[testName][inst.Wrapper.Name()] = math.NaN()
+		}
 	}
 
 	var live *liveTable
@@ -631,9 +648,38 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 func parseList(s string) []string {
 	parts := strings.Split(s, ",")
 	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
+		parts[i] = strings.ToLower(strings.TrimSpace(parts[i]))
 	}
 	return parts
+}
+
+func normalizeTests(list []string) []string {
+	if contains(list, "all") {
+		return list
+	}
+	seen := make(map[string]struct{}, len(list))
+	out := make([]string, 0, len(list))
+	for _, t := range list {
+		switch t {
+		case "full_scan":
+			// keep
+		case "scan":
+			t = "full_scan"
+		case "range_scan":
+			t = "prefix_scan"
+		case "prefix_scan":
+			// keep
+		}
+		if t == "" {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
 }
 
 func contains(list []string, item string) bool {
@@ -838,9 +884,12 @@ func renderResultsTableStringWithLayout(instances []*DBInstance, finalTestOrder 
 
 // formatFloat formats a float with commas (e.g. 1,234,567)
 func formatFloat(f float64) string {
-	s := fmt.Sprintf("%.0f", f)
-	if f == 0 { // Explicitly handle 0 for non-supported tests
+	if math.IsNaN(f) {
 		return "-"
+	}
+	s := fmt.Sprintf("%.0f", f)
+	if f == 0 {
+		return "0"
 	}
 	n := len(s)
 	if n <= 3 {

@@ -100,6 +100,10 @@
   - Fixed cached `Batch.Write` streaming path to update backend key-range tracking so `Iterator(nil,nil)` includes backend data
   - Added regression test `TestCachingDB_IteratorIncludesBackendAfterStreamingBatch`
   - `go test ./...` (`TreeDB/caching`): PASS
+- 2025-12-14: unified_bench scan clarity
+  - Renamed benchmark rows to `Full Scan` and `Prefix Scan` (aliases: `scan`, `range_scan`)
+  - `Prefix Scan` now reports items/sec and targets the active keyspace (base keys vs batch_write offset keys)
+  - `-` is now only for unsupported/not-run (uses NaN); real zero results print `0`
 
 ## Notes / Conventions
 
