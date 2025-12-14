@@ -5,9 +5,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/snissn/gomap-gemini/TreeDB/db"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/db"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
 )
 
 type Compactor struct {

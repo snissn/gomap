@@ -7,7 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/google/btree"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator" // Import iterator interface
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator" // Import iterator interface
 )
 
 type Item struct {

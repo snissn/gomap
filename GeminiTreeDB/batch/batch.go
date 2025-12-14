@@ -5,8 +5,8 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
 )
 
 var (

@@ -9,11 +9,11 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/memtable"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/merging"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/wal"
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/memtable"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/merging"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/wal"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
 )
 
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")

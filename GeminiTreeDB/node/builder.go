@@ -3,7 +3,7 @@ package node
 import (
 	"encoding/binary"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 )
 
 // Builder facilitates O(N) sequential construction of a node.

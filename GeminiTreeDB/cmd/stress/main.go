@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/snissn/gomap-gemini/TreeDB/db"
+	"github.com/snissn/gomap/GeminiTreeDB/db"
 )
 
 var (

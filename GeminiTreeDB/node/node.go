@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 )
 
 // Common errors

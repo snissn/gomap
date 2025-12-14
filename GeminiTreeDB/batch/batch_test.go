@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
 )
 
 func TestBatchPreWrite(t *testing.T) {

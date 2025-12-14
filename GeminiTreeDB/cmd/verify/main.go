@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/snissn/gomap-gemini/TreeDB/db"
+	"github.com/snissn/gomap/GeminiTreeDB/db"
 )
 
 var dir = flag.String("dir", "", "Database directory")

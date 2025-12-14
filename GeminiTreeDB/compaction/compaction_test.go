@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/db"
+	"github.com/snissn/gomap/GeminiTreeDB/db"
 )
 
 func TestCompaction(t *testing.T) {

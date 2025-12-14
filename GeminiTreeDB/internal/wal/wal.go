@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/crc"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/crc"
 )
 
 const (

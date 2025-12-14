@@ -103,37 +103,37 @@ Showing top 5 nodes out of 116
 
 goos: darwin
 goarch: arm64
-pkg: github.com/snissn/gomap-gemini/TreeDB/db
+pkg: github.com/snissn/gomap/GeminiTreeDB/db
 cpu: Apple M3
 BenchmarkStress-8   	     553	   3489298 ns/op	    7692 B/op	      98 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.976s
+ok  	github.com/snissn/gomap/GeminiTreeDB/db	8.976s
 goos: darwin
 goarch: arm64
-pkg: github.com/snissn/gomap-gemini/TreeDB/db
+pkg: github.com/snissn/gomap/GeminiTreeDB/db
 cpu: Apple M3
 BenchmarkGet-8   	  704922	      1648 ns/op	   12635 B/op	      11 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.660s
+ok  	github.com/snissn/gomap/GeminiTreeDB/db	8.660s
 goos: darwin
 goarch: arm64
-pkg: github.com/snissn/gomap-gemini/TreeDB/db
+pkg: github.com/snissn/gomap/GeminiTreeDB/db
 cpu: Apple M3
 BenchmarkScan-8   	    3026	    394939 ns/op	 1292637 B/op	   20618 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	10.078s
+ok  	github.com/snissn/gomap/GeminiTreeDB/db	10.078s
 goos: darwin
 goarch: arm64
-pkg: github.com/snissn/gomap-gemini/TreeDB/db
+pkg: github.com/snissn/gomap/GeminiTreeDB/db
 cpu: Apple M3
 BenchmarkBatch-8   	     199	   6318190 ns/op	  841849 B/op	    4389 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.777s
+ok  	github.com/snissn/gomap/GeminiTreeDB/db	8.777s
 goos: darwin
 goarch: arm64
-pkg: github.com/snissn/gomap-gemini/TreeDB/db
+pkg: github.com/snissn/gomap/GeminiTreeDB/db
 cpu: Apple M3
 BenchmarkLargeVal-8   	     170	   7273251 ns/op	   11857 B/op	     196 allocs/op
 PASS
-ok  	github.com/snissn/gomap-gemini/TreeDB/db	8.375s
+ok  	github.com/snissn/gomap/GeminiTreeDB/db	8.375s
 ```

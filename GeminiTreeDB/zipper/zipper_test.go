@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/pager"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
-	"github.com/snissn/gomap-gemini/TreeDB/tree"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/pager"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/tree"
 )
 
 type MockAllocator struct {

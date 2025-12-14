@@ -1,8 +1,8 @@
 package db
 
 import (
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
-	"github.com/snissn/gomap-gemini/TreeDB/caching"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/caching"
 )
 
 // Batch implements the cosmos-db Batch interface.

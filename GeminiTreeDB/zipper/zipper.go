@@ -6,10 +6,10 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/pager"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/pager"
 )
 
 type PageAllocator interface {

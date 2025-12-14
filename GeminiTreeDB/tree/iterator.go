@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 )
 
 type CursorItem struct {

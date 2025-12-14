@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 )
 
 // Split moves the upper half of the items from the receiver node (n)

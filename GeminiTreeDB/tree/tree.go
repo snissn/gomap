@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/pager"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/pager"
 )
 
 var ErrKeyNotFound = errors.New("key not found")

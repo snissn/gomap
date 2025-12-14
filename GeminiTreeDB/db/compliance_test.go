@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
 )
 
 // TestCompliance_GetSetDelete mimics cosmos-db/backend_test.go testBackendGetSetDelete

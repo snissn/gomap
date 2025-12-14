@@ -4,10 +4,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/pager"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/pager"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
 )
 
 func TestIterator(t *testing.T) {

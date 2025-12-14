@@ -7,16 +7,16 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
-	"github.com/snissn/gomap-gemini/TreeDB/caching"
-	"github.com/snissn/gomap-gemini/TreeDB/freelist"
-	"github.com/snissn/gomap-gemini/TreeDB/lifecycle"
-	"github.com/snissn/gomap-gemini/TreeDB/node"
-	"github.com/snissn/gomap-gemini/TreeDB/page"
-	"github.com/snissn/gomap-gemini/TreeDB/pager"
-	"github.com/snissn/gomap-gemini/TreeDB/slab"
-	"github.com/snissn/gomap-gemini/TreeDB/tree"
-	"github.com/snissn/gomap-gemini/TreeDB/zipper"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/caching"
+	"github.com/snissn/gomap/GeminiTreeDB/freelist"
+	"github.com/snissn/gomap/GeminiTreeDB/lifecycle"
+	"github.com/snissn/gomap/GeminiTreeDB/node"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/pager"
+	"github.com/snissn/gomap/GeminiTreeDB/slab"
+	"github.com/snissn/gomap/GeminiTreeDB/tree"
+	"github.com/snissn/gomap/GeminiTreeDB/zipper"
 )
 
 const (

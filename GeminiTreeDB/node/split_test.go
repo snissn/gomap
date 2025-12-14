@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 )
 
 func TestNodeSplit_Leaf(t *testing.T) {

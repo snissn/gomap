@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/snissn/gomap-gemini/TreeDB/page"
+	"github.com/snissn/gomap/GeminiTreeDB/page"
 	"golang.org/x/sys/unix"
 )
 

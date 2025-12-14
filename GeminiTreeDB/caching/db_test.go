@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/snissn/gomap-gemini/TreeDB/batch"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/batch"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
 )
 
 // MockBackend implements BackendDB

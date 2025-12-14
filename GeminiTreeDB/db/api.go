@@ -3,8 +3,8 @@ package db
 import (
 	"fmt"
 
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
-	"github.com/snissn/gomap-gemini/TreeDB/tree"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/tree"
 )
 
 // --- Public API ---

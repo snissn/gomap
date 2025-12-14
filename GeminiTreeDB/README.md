@@ -36,7 +36,7 @@ import (
 
 	"log"
 
-	"github.com/snissn/gomap-gemini/TreeDB/db"
+	"github.com/snissn/gomap/GeminiTreeDB/db"
 )
 
 func main() {

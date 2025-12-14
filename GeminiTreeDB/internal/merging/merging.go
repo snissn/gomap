@@ -3,7 +3,7 @@ package merging
 import (
 	"bytes"
 	"container/heap"
-	"github.com/snissn/gomap-gemini/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/GeminiTreeDB/internal/iterator"
 )
 
 // Iterator represents a generic iterator that yields key-value pairs.
