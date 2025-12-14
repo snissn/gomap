@@ -106,16 +106,30 @@ type Iterator struct {
 	valid bool
 }
 
-// NewIterator returns an iterator.UnsafeIterator.
-func (m *Memtable) NewIterator() iterator.UnsafeIterator {
+// NewIterator returns an iterator.UnsafeIterator restricted to [start, end).
+func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	items := make([]*Item, 0, m.tree.Len())
-	m.tree.Ascend(func(i btree.Item) bool {
+	// Estimated count? We don't know range count easily.
+	// Use heuristic or default.
+	items := make([]*Item, 0, 64)
+
+	iterator := func(i btree.Item) bool {
 		items = append(items, i.(*Item))
 		return true
-	})
+	}
+
+	if start == nil && end == nil {
+		m.tree.Ascend(iterator)
+	} else if start == nil {
+		m.tree.AscendLessThan(&Item{Key: end}, iterator)
+	} else if end == nil {
+		m.tree.AscendGreaterOrEqual(&Item{Key: start}, iterator)
+	} else {
+		m.tree.AscendRange(&Item{Key: start}, &Item{Key: end}, iterator)
+	}
+	
 	return &Iterator{items: items}
 }
 

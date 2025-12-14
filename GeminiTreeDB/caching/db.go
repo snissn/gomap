@@ -396,7 +396,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	// Flush 'mem' to backend
 
 	backendBatch := db.backend.NewBatch()
-	iter := mem.NewIterator() // Returns iterator.UnsafeIterator
+	iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 	iter.Seek(nil)            // Start
 
 	// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
@@ -543,7 +543,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 				return nil, err
 			}
 
-			memIter := db.mutable.NewIterator()
+			memIter := db.mutable.NewIterator(nil, nil)
 			memIter.Seek(nil)
 
 			// Common append-only case: backend max < mutable min.
@@ -561,7 +561,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	// Priority 0: Mutable (always exists, check overlap)
 	if overlapsQuery(start, end, db.mutableRange) {
-		mutableIter := db.mutable.NewIterator()
+		mutableIter := db.mutable.NewIterator(start, end)
 		mutableIter.Seek(start)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     mutableIter,
@@ -573,7 +573,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
 		if overlapsQuery(start, end, db.queueRanges[i]) {
-			qIter := db.queue[i].NewIterator()
+			qIter := db.queue[i].NewIterator(start, end)
 			qIter.Seek(start)
 			sources = append(sources, merging.IteratorSource{
 				Iter:     qIter,
