@@ -139,6 +139,8 @@
   - Fixed BTreeOnHashDB persistence test to close HashDB before reopening.
   - Added in-process and cross-process lock regression tests in `HashDB/lock_test.go`.
   - Documented the new lock behavior in `HashDB/doc.go`.
+- 2025-12-14: HashDB stress tests
+  - Made `HashDB/stress/compaction_test.go` tolerate transient `ENOENT` during size walks while compaction creates/removes `*-compact` dirs (fixes flaky macOS CI failure).
 
 ## Notes / Conventions
 

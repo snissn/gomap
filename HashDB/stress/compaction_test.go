@@ -177,6 +177,12 @@ func getDirSize(t *testing.T, path string) int64 {
 	var size int64
 	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
+			// Compaction creates and removes temporary folders (e.g. *-compact) while
+			// this test is running. Ignore transient missing-path errors so size
+			// sampling is robust under concurrent directory churn.
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 		if !info.IsDir() {
