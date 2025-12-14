@@ -40,3 +40,4 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-progress` live table updates to stderr (default true)
 - `-format` output format: `table` or `markdown`
 - `-suite` named suite (currently: `readme`)
+- `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)

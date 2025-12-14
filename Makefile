@@ -8,6 +8,7 @@ BENCH_VALSIZE ?= 128
 BENCH_BATCHSIZE ?= 1000
 BENCH_RANGE_QUERIES ?= 200
 BENCH_RANGE_SPAN ?= 100
+BENCH_OUTDIR ?= docs/images
 
 .PHONY: help
 help:
@@ -101,7 +102,7 @@ bench: unified-bench
 	./$(BIN_DIR)/unified-bench
 
 bench-readme: unified-bench
-	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -progress=false | go run ./scripts/update_readme_bench.go
+	./$(BIN_DIR)/unified-bench -suite readme -format markdown -seed 1 -keycounts "$(BENCH_KEYCOUNTS)" -valsize "$(BENCH_VALSIZE)" -batchsize "$(BENCH_BATCHSIZE)" -range-queries "$(BENCH_RANGE_QUERIES)" -range-span "$(BENCH_RANGE_SPAN)" -outdir "$(BENCH_OUTDIR)" -progress=false | go run ./scripts/update_readme_bench.go
 
 .PHONY: benchmark-all benchmark-quick
 benchmark-all: build-hashdb
