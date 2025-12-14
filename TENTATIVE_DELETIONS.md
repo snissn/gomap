@@ -5,6 +5,10 @@ This file is a running list of items that look generated, obsolete, or non-essen
 ## Deleted In Cleanup (safe)
 
 - `cmd/unified_bench/benchmarker` (checked-in build artifact; removed and now gitignored)
+- `HashDB/BTreeOnHashDB/btree.test` (checked-in test binary; removed and now gitignored)
+- `HashDB/BTreeOnHashDB/cpu.btree.putonly.out` (profiling output; removed and now gitignored)
+- `HashDB/BTreeOnHashDB/cpu.btree.putonly.png` (profiling output; removed and now gitignored)
+- `HashDB/redisserver/redisserver` (checked-in build artifact; removed and now gitignored)
 
 ## Clearly Safe (delete anytime)
 

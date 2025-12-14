@@ -1,3 +1,7 @@
 bin
 .DS_Store
 cmd/unified_bench/benchmarker
+*.test
+HashDB/redisserver/redisserver
+HashDB/BTreeOnHashDB/cpu.*.out
+HashDB/BTreeOnHashDB/cpu.*.png

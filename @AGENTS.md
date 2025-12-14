@@ -41,6 +41,8 @@
   - Moved the HashDB module into `HashDB/` (including `benchmark/`, `redisserver/`, `stress/`, and cmd tools)
   - Updated CI workflow + `cmd/unified_bench` replace paths for the new layout
   - `go test ./...` passes in `HashDB/`, `TreeDB/`, and `cmd/unified_bench/`
+- 2025-12-14: Build artifacts cleanup
+  - Removed checked-in binaries/profiles in `HashDB/BTreeOnHashDB/` and `HashDB/redisserver/` and added ignores
 
 ## Notes / Conventions
 
