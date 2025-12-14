@@ -117,6 +117,29 @@ func rangesOverlap(a, b keyRange) bool {
 	return true
 }
 
+// overlapsQuery checks if the query range [start, end) overlaps with the keyRange [r.min, r.max].
+// nil start means -inf, nil end means +inf.
+func overlapsQuery(start, end []byte, r keyRange) bool {
+	if !r.valid {
+		return false
+	}
+	// Range is [r.min, r.max]
+	// Query is [start, end)
+
+	// Check if Range is strictly before Query: r.max < start
+	if start != nil && bytes.Compare(r.max, start) < 0 {
+		return false
+	}
+
+	// Check if Range is strictly after Query: r.min >= end
+	// Note: end is exclusive, so if r.min == end, it's outside.
+	if end != nil && bytes.Compare(r.min, end) >= 0 {
+		return false
+	}
+
+	return true
+}
+
 func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	if flushThreshold <= 0 {
 		flushThreshold = 4 * 1024 * 1024 // 4MB default
@@ -536,50 +559,51 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	var sources []merging.IteratorSource
 
-	// Priority 0: Mutable (always exists)
-	mutableIter := db.mutable.NewIterator()
-	mutableIter.Seek(start)
-	sources = append(sources, merging.IteratorSource{
-		Iter:     mutableIter,
-		Priority: 0,
-	})
+	// Priority 0: Mutable (always exists, check overlap)
+	if overlapsQuery(start, end, db.mutableRange) {
+		mutableIter := db.mutable.NewIterator()
+		mutableIter.Seek(start)
+		sources = append(sources, merging.IteratorSource{
+			Iter:     mutableIter,
+			Priority: 0,
+		})
+	}
 
 	// Priority 1..N: Queue (Newest first)
 	prio := 1
 	for i := len(db.queue) - 1; i >= 0; i-- {
-		qIter := db.queue[i].NewIterator()
-		qIter.Seek(start)
-		sources = append(sources, merging.IteratorSource{
-			Iter:     qIter,
-			Priority: prio,
-		})
+		if overlapsQuery(start, end, db.queueRanges[i]) {
+			qIter := db.queue[i].NewIterator()
+			qIter.Seek(start)
+			sources = append(sources, merging.IteratorSource{
+				Iter:     qIter,
+				Priority: prio,
+			})
+		}
 		prio++
 	}
 
 	// Disk Iterator
-	diskIter, err := db.backend.Iterator(start, end)
-	if err != nil {
-		return nil, err
+	// Only skip if we definitively know the range and it doesn't overlap.
+	if !db.backendRangeKnown || overlapsQuery(start, end, db.backendRange) {
+		diskIter, err := db.backend.Iterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+		
+		sources = append(sources, merging.IteratorSource{
+			Iter:     diskIter,
+			Priority: prio,
+		})
 	}
-	// Disk Iterator from backend.Iterator might already be initialized/seeked?
-	// The interface is: Iterator(start, end) returns an iterator.
-	// Usually database iterators are returned in a Valid state pointing to start, or Invalid if empty.
-	// Let's assume backend.Iterator does the right thing (Seek is implied by creation with start/end).
-	// But let's check backend contract.
-	// If backend.Iterator returns a tree.Iterator, it probably does a Seek internally.
-	// But to be safe and consistent with UnsafeIterator interface which usually requires Seek/Next...
-	// Actually, treedb.Iterator(start, end) usually does the initial seek.
-	// Let's verify tree.Iterator in a moment.
-	
-	// Most backends return an iterator already positioned at start; avoid redundant Seek(nil).
-	if start != nil {
-		diskIter.Seek(start)
+
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
 	}
-	
-	sources = append(sources, merging.IteratorSource{
-		Iter:     diskIter,
-		Priority: prio,
-	})
+
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
 
 	return merging.NewMergingIterator(sources, start, end), nil
 }
@@ -1038,3 +1062,63 @@ func (b *Batch) GetByteSize() (int, error) {
 	}
 	return b.size, nil
 }
+
+// singleSourceIterator wraps a single UnsafeIterator to satisfy merging.Iterator,
+// skipping tombstones.
+type singleSourceIterator struct {
+	iter  iterator.UnsafeIterator
+	valid bool
+	start []byte
+	end   []byte
+}
+
+func newSingleSourceIterator(iter iterator.UnsafeIterator, start, end []byte) merging.Iterator {
+	it := &singleSourceIterator{
+		iter:  iter,
+		start: start,
+		end:   end,
+	}
+	// Iterator is already sought to start by the caller
+	it.advance()
+	return it
+}
+
+func (it *singleSourceIterator) advance() {
+	it.valid = false
+	for it.iter.Valid() {
+		if it.iter.IsDeleted() {
+			it.iter.Next()
+			continue
+		}
+		it.valid = true
+		return
+	}
+}
+
+func (it *singleSourceIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	it.iter.Next()
+	it.advance()
+}
+
+func (it *singleSourceIterator) Valid() bool              { return it.valid }
+func (it *singleSourceIterator) Key() []byte              { return it.iter.Key() }
+func (it *singleSourceIterator) Value() []byte            { return it.iter.Value() }
+func (it *singleSourceIterator) Close() error             { return it.iter.Close() }
+func (it *singleSourceIterator) Error() error             { return it.iter.Error() }
+func (it *singleSourceIterator) Domain() ([]byte, []byte) { return it.start, it.end }
+
+// emptyIterator represents an iterator with no elements.
+type emptyIterator struct {
+	start, end []byte
+}
+
+func (it *emptyIterator) Next()                        { panic("iterator invalid") }
+func (it *emptyIterator) Valid() bool                  { return false }
+func (it *emptyIterator) Key() []byte                  { panic("iterator invalid") }
+func (it *emptyIterator) Value() []byte                { panic("iterator invalid") }
+func (it *emptyIterator) Close() error                 { return nil }
+func (it *emptyIterator) Error() error                 { return nil }
+func (it *emptyIterator) Domain() ([]byte, []byte)     { return it.start, it.end }

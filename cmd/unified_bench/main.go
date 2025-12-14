@@ -364,8 +364,10 @@ var (
 	numKeys   = flag.Int("keys", 100000, "Number of keys")
 	valSize   = flag.Int("valsize", 128, "Value size in bytes")
 	batchSize = flag.Int("batchsize", 1000, "Size of batches")
+	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
+	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
 	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
-	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write)")
+	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
 	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
 	progress  = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 )
@@ -474,6 +476,40 @@ func main() {
 			}
 			return float64(count) / time.Since(start).Seconds()
 		},
+		"range_scan": func(db DBInterface) float64 {
+			if !db.SupportsScan() {
+				return 0
+			}
+			start := time.Now()
+			for i := 0; i < *rangeQueries; i++ {
+				startIdx := rand.Intn(*numKeys)
+				endIdx := startIdx + *rangeSpan
+				if endIdx > *numKeys {
+					endIdx = *numKeys
+				}
+				
+				var startKeyBuf [8]byte
+				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
+				startKey := startKeyBuf[:]
+
+				var endKeyBuf [8]byte
+				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
+				endKey := endKeyBuf[:]
+
+				iter, err := db.Iterator(startKey, endKey)
+				if err != nil {
+					log.Fatalf("range_scan iterator error: %v", err)
+				}
+				
+				count := 0
+				for iter.Valid() {
+					iter.Next()
+					count++
+				}
+				iter.Close()
+			}
+			return float64(*rangeQueries) / time.Since(start).Seconds()
+		},
 		"write_rand": func(db DBInterface) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
@@ -531,7 +567,7 @@ func main() {
 	}
 
 	// Ordered list of tests to run
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "scan"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "scan", "range_scan"}
 	finalTestOrder := make([]string, 0)
 
 	// Display names for polished output
@@ -540,6 +576,7 @@ func main() {
 		"write_rand":  "Random Write",
 		"read_rand":   "Random Read",
 		"scan":        "Scan",
+		"range_scan":  "Range Scan",
 		"batch_write": "Batch Write",
 		"delete_rand": "Random Delete",
 	}
