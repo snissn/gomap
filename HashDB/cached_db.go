@@ -5,55 +5,64 @@ import (
 	"time"
 )
 
-// CachedHashmap wraps a single Hashmap with a write-back cache.
+// CachedDB wraps a single DB with a write-back cache.
 // WARNING: no WAL; cached writes are volatile until flushed.
-type CachedHashmap struct {
-	h     *Hashmap
+type CachedDB struct {
+	db    *DB
 	cache *CacheKV
 }
 
-// NewCachedHashmap initializes a new cached Hashmap at the given folder.
+// CachedHashmap is kept as a compatibility alias for older code.
+// New code should use CachedDB.
+type CachedHashmap = CachedDB
+
+// NewCachedDB initializes a new cached DB at the given folder.
 // maxEntries/maxBytes control flush thresholds; flushInterval <=0 disables ticker flush.
-func NewCachedHashmap(folder string, maxEntries, maxBytes int, flushInterval time.Duration) (*CachedHashmap, error) {
-	h := &Hashmap{}
-	if err := h.New(folder); err != nil {
+func NewCachedDB(folder string, maxEntries, maxBytes int, flushInterval time.Duration) (*CachedDB, error) {
+	db := &DB{}
+	if err := db.New(folder); err != nil {
 		return nil, err
 	}
-	kv := &hashmapKVAdapter{h: h}
+	kv := &dbKVAdapter{db: db}
 	cache := NewCacheKV(kv, maxEntries, maxBytes, flushInterval)
-	return &CachedHashmap{h: h, cache: cache}, nil
+	return &CachedDB{db: db, cache: cache}, nil
 }
 
-func (c *CachedHashmap) Get(key []byte) ([]byte, error)     { return c.cache.Get(key) }
-func (c *CachedHashmap) Add(key []byte, value []byte) error { return c.cache.Put(key, value) }
-func (c *CachedHashmap) Delete(key []byte) error            { return c.cache.Delete(key) }
-func (c *CachedHashmap) Flush() error                       { return c.cache.Flush() }
-func (c *CachedHashmap) Close() error                       { return c.cache.Close() }
-
-func (c *CachedHashmap) SetCompression(enabled bool) {
-	c.h.SetCompression(enabled)
+// NewCachedHashmap initializes a new cached DB at the given folder (compatibility wrapper).
+func NewCachedHashmap(folder string, maxEntries, maxBytes int, flushInterval time.Duration) (*CachedHashmap, error) {
+	return NewCachedDB(folder, maxEntries, maxBytes, flushInterval)
 }
 
-func (c *CachedHashmap) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+func (c *CachedDB) Get(key []byte) ([]byte, error)     { return c.cache.Get(key) }
+func (c *CachedDB) Add(key []byte, value []byte) error { return c.cache.Put(key, value) }
+func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
+func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
+func (c *CachedDB) Close() error                       { return c.cache.Close() }
+
+func (c *CachedDB) SetCompression(enabled bool) {
+	c.db.SetCompression(enabled)
+}
+
+func (c *CachedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// For simplicity, bypass cache for read-modify-write to avoid stale reads.
-	return c.h.Update(key, callback)
+	return c.db.Update(key, callback)
 }
 
-func (c *CachedHashmap) Clear() error {
+func (c *CachedDB) Clear() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
-	return c.h.Clear()
+	return c.db.Clear()
 }
 
-func (c *CachedHashmap) Compact() error {
+func (c *CachedDB) Compact() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
-	return c.h.Compact()
+	return c.db.Compact()
 }
 
-func (c *CachedHashmap) AddMany(items []Item) error {
+func (c *CachedDB) AddMany(items []Item) error {
 	// Route batched writes through the write-back cache so they are
 	// coalesced with other pending writes. CacheKV will flush to the
 	// underlying Hashmap using AddMany when thresholds or timers fire.
@@ -65,21 +74,21 @@ func (c *CachedHashmap) AddMany(items []Item) error {
 	return nil
 }
 
-func (c *CachedHashmap) Stats() Stats {
-	return c.h.Stats()
+func (c *CachedDB) Stats() Stats {
+	return c.db.Stats()
 }
 
-// hashmapKVAdapter adapts Hashmap to KVStore.
-type hashmapKVAdapter struct {
-	h *Hashmap
+// dbKVAdapter adapts DB to KVStore.
+type dbKVAdapter struct {
+	db *DB
 }
 
-func (m *hashmapKVAdapter) Get(key []byte) ([]byte, error) { return m.h.Get(key) }
-func (m *hashmapKVAdapter) Put(key, value []byte) error    { return m.h.Add(key, value) }
-func (m *hashmapKVAdapter) Delete(key []byte) error        { return m.h.Delete(key) }
+func (m *dbKVAdapter) Get(key []byte) ([]byte, error) { return m.db.Get(key) }
+func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Add(key, value) }
+func (m *dbKVAdapter) Delete(key []byte) error        { return m.db.Delete(key) }
 
 // PutMany allows CacheKV to batch writes down to the underlying Hashmap using AddMany.
-func (m *hashmapKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
+func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	if len(keys) != len(vals) {
 		return fmt.Errorf("PutMany: keys/vals length mismatch")
 	}
@@ -87,5 +96,5 @@ func (m *hashmapKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	for i := range keys {
 		items[i] = Item{Key: keys[i], Value: vals[i]}
 	}
-	return m.h.AddMany(items)
+	return m.db.AddMany(items)
 }

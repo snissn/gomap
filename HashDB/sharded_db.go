@@ -8,44 +8,45 @@ import (
 	"time"
 )
 
-// HashmapDistributed is a thread-safe, sharded hash map implementation.
-// It partitions keys across multiple underlying Hashmap instances (shards)
-// based on the number of available CPU cores to maximize concurrency.
-type HashmapDistributed struct {
-	maps    []*CachedHashmap
-	mutexes []sync.RWMutex
+// ShardedDB is a thread-safe, sharded key/value store implementation.
+// It partitions keys across multiple underlying DB instances (shards) to
+// maximize concurrency.
+type ShardedDB struct {
+	shards []*CachedDB
+	locks  []sync.RWMutex
 }
 
-// New initializes the distributed hash map with storage in the specified folder.
+// HashmapDistributed is kept as a compatibility alias for older code.
+// New code should use ShardedDB.
+type HashmapDistributed = ShardedDB
+
+// New initializes the sharded store with storage in the specified folder.
 // It creates sub-directories for each partition.
-func (h *HashmapDistributed) New(folder string) error {
+func (h *ShardedDB) New(folder string) error {
 	// 128 shards provides excellent balance for high concurrency
 	return h.NewWithShards(folder, 128)
 }
 
-// NewWithShards initializes the distributed hash map with a specific number of shards.
-func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
+// NewWithShards initializes the sharded store with a specific number of shards.
+func (h *ShardedDB) NewWithShards(folder string, numShards int) error {
 	if numShards <= 0 {
 		numShards = runtime.NumCPU()
 	}
 
-	// Initialize the slice of Hashmap pointers and mutexes
-	h.maps = make([]*CachedHashmap, numShards)
-	h.mutexes = make([]sync.RWMutex, numShards)
+	h.shards = make([]*CachedDB, numShards)
+	h.locks = make([]sync.RWMutex, numShards)
 
-	// Create a new Hashmap for each Shard
 	for i := 0; i < numShards; i++ {
 		partitionFolder := fmt.Sprintf("%s/partition-%d", folder, i)
-		err := os.MkdirAll(partitionFolder, 0755)
-		if err != nil {
+		if err := os.MkdirAll(partitionFolder, 0o755); err != nil {
 			return fmt.Errorf("failed to create directory for partition: %w", err)
 		}
 
-		cached, err := NewCachedHashmap(partitionFolder, 4096, 4<<20, 2*time.Second)
+		cached, err := NewCachedDB(partitionFolder, 4096, 4<<20, 2*time.Second)
 		if err != nil {
 			return err
 		}
-		h.maps[i] = cached
+		h.shards[i] = cached
 	}
 
 	return nil
@@ -53,67 +54,66 @@ func (h *HashmapDistributed) NewWithShards(folder string, numShards int) error {
 
 // SetCompression enables or disables value compression on all shards.
 // It should typically be called during initialization before serving traffic.
-func (h *HashmapDistributed) SetCompression(enabled bool) {
-	for i := 0; i < len(h.maps); i++ {
-		h.mutexes[i].Lock()
-		h.maps[i].SetCompression(enabled)
-		h.mutexes[i].Unlock()
+func (h *ShardedDB) SetCompression(enabled bool) {
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].Lock()
+		h.shards[i].SetCompression(enabled)
+		h.locks[i].Unlock()
 	}
 }
 
 // Get retrieves the value for a given key.
 // It returns nil if the key does not exist.
-func (h *HashmapDistributed) Get(key []byte) ([]byte, error) {
+func (h *ShardedDB) Get(key []byte) ([]byte, error) {
 	hash := hash(key)
-	mapIndex := hash % Hash(len(h.maps))
-	h.mutexes[mapIndex].RLock()         // lock for reading
-	defer h.mutexes[mapIndex].RUnlock() // unlock after reading
-	return h.maps[mapIndex].Get(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].RLock()
+	defer h.locks[shardIndex].RUnlock()
+	return h.shards[shardIndex].Get(key)
 }
 
 // Add inserts or updates a key-value pair.
-func (h *HashmapDistributed) Add(key []byte, value []byte) error {
+func (h *ShardedDB) Add(key []byte, value []byte) error {
 	hash := hash(key)
-	mapIndex := hash % Hash(len(h.maps))
-	h.mutexes[mapIndex].Lock()         // lock for writing
-	defer h.mutexes[mapIndex].Unlock() // unlock after writing
-	return h.maps[mapIndex].Add(key, value)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].Add(key, value)
 }
 
 // Delete removes a key from the map.
-func (h *HashmapDistributed) Delete(key []byte) error {
+func (h *ShardedDB) Delete(key []byte) error {
 	hash := hash(key)
-	mapIndex := hash % Hash(len(h.maps))
-	h.mutexes[mapIndex].Lock()         // lock for writing
-	defer h.mutexes[mapIndex].Unlock() // unlock after writing
-	return h.maps[mapIndex].Delete(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].Delete(key)
 }
 
 // Update performs an atomic read-modify-write operation on a key.
-func (h *HashmapDistributed) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+func (h *ShardedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	hash := hash(key)
-	mapIndex := hash % Hash(len(h.maps))
-	h.mutexes[mapIndex].Lock()         // lock for writing
-	defer h.mutexes[mapIndex].Unlock() // unlock after writing
-	return h.maps[mapIndex].Update(key, callback)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].Update(key, callback)
 }
 
 // Clear wipes all data from all shards.
-func (h *HashmapDistributed) Clear() error {
-	var errGlobal error
-	// Iterate sequentially or parallel?
-	// Sequentially is safer for file ops? Parallel is faster.
-	// Since each shard has its own folder, parallel is fine.
+func (h *ShardedDB) Clear() error {
+	var (
+		errOnce   sync.Once
+		errGlobal error
+	)
 	var wg sync.WaitGroup
-	for i := 0; i < len(h.maps); i++ {
+	for i := 0; i < len(h.shards); i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			h.mutexes[index].Lock()
-			defer h.mutexes[index].Unlock()
-			if err := h.maps[index].Clear(); err != nil {
-				// Race on error assignment, but it's just "an error occurred"
-				errGlobal = err
+			h.locks[index].Lock()
+			defer h.locks[index].Unlock()
+			if err := h.shards[index].Clear(); err != nil {
+				errOnce.Do(func() { errGlobal = err })
 			}
 		}(i)
 	}
@@ -122,12 +122,12 @@ func (h *HashmapDistributed) Clear() error {
 }
 
 // Stats collects and aggregates stats from all shards.
-func (h *HashmapDistributed) Stats() Stats {
+func (h *ShardedDB) Stats() Stats {
 	var total Stats
-	for i := 0; i < len(h.maps); i++ {
-		h.mutexes[i].RLock()
-		s := h.maps[i].Stats()
-		h.mutexes[i].RUnlock()
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].RLock()
+		s := h.shards[i].Stats()
+		h.locks[i].RUnlock()
 
 		total.KeyCount += s.KeyCount
 		total.Capacity += s.Capacity
@@ -138,17 +138,20 @@ func (h *HashmapDistributed) Stats() Stats {
 }
 
 // Compact triggers garbage collection on all shards.
-func (h *HashmapDistributed) Compact() error {
-	var errGlobal error
+func (h *ShardedDB) Compact() error {
+	var (
+		errOnce   sync.Once
+		errGlobal error
+	)
 	var wg sync.WaitGroup
-	for i := 0; i < len(h.maps); i++ {
+	for i := 0; i < len(h.shards); i++ {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			h.mutexes[index].Lock()
-			defer h.mutexes[index].Unlock()
-			if err := h.maps[index].Compact(); err != nil {
-				errGlobal = err
+			h.locks[index].Lock()
+			defer h.locks[index].Unlock()
+			if err := h.shards[index].Compact(); err != nil {
+				errOnce.Do(func() { errGlobal = err })
 			}
 		}(i)
 	}
@@ -159,16 +162,16 @@ func (h *HashmapDistributed) Compact() error {
 // Flush forces all shard-level write-back caches to flush pending writes.
 // This is important before process exit or reopening the same on-disk store
 // to ensure durability of recent writes.
-func (h *HashmapDistributed) Flush() error {
+func (h *ShardedDB) Flush() error {
 	var errGlobal error
-	for i := 0; i < len(h.maps); i++ {
-		h.mutexes[i].Lock()
-		if h.maps[i] != nil {
-			if err := h.maps[i].Flush(); err != nil && errGlobal == nil {
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].Lock()
+		if h.shards[i] != nil {
+			if err := h.shards[i].Flush(); err != nil && errGlobal == nil {
 				errGlobal = err
 			}
 		}
-		h.mutexes[i].Unlock()
+		h.locks[i].Unlock()
 	}
 	return errGlobal
 }
@@ -176,8 +179,8 @@ func (h *HashmapDistributed) Flush() error {
 // GetMany retrieves values for multiple keys efficiently by grouping them per shard.
 // It returns a slice of values aligned with the input keys slice; missing keys map to nil.
 // Errors are returned per key; nil error means the operation for that key succeeded (even if value is nil).
-func (h *HashmapDistributed) GetMany(keys [][]byte) ([][]byte, []error) {
-	numShards := len(h.maps)
+func (h *ShardedDB) GetMany(keys [][]byte) ([][]byte, []error) {
+	numShards := len(h.shards)
 	if numShards == 0 {
 		return make([][]byte, len(keys)), make([]error, len(keys))
 	}
@@ -200,10 +203,10 @@ func (h *HashmapDistributed) GetMany(keys [][]byte) ([][]byte, []error) {
 		wg.Add(1)
 		go func(shard int, idxs []int) {
 			defer wg.Done()
-			h.mutexes[shard].RLock()
-			defer h.mutexes[shard].RUnlock()
+			h.locks[shard].RLock()
+			defer h.locks[shard].RUnlock()
 
-			m := h.maps[shard]
+			m := h.shards[shard]
 			for _, keyIndex := range idxs {
 				val, err := m.Get(keys[keyIndex])
 				if err != nil {
@@ -221,8 +224,8 @@ func (h *HashmapDistributed) GetMany(keys [][]byte) ([][]byte, []error) {
 
 // AddMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
-func (h *HashmapDistributed) AddMany(items []Item) error {
-	numShards := len(h.maps)
+func (h *ShardedDB) AddMany(items []Item) error {
+	numShards := len(h.shards)
 	shardedItems := make([][]Item, numShards)
 	for i := 0; i < numShards; i++ {
 		shardedItems[i] = make([]Item, 0, len(items)/numShards)
@@ -245,9 +248,9 @@ func (h *HashmapDistributed) AddMany(items []Item) error {
 		wg.Add(1)
 		go func(index int, items []Item) {
 			defer wg.Done()
-			h.mutexes[index].Lock()
-			defer h.mutexes[index].Unlock()
-			err := h.maps[index].AddMany(items)
+			h.locks[index].Lock()
+			defer h.locks[index].Unlock()
+			err := h.shards[index].AddMany(items)
 			if err != nil {
 				errOnce.Do(func() {
 					errGlobal = err
