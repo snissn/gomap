@@ -23,6 +23,9 @@
 - 2025-12-14: unified_bench cleanup
   - Removed legacy/gemini DB references; now benchmarks `treedb` and `treedbcached`
   - `go test ./...` (`cmd/unified_bench`): PASS
+- 2025-12-14: Repo formatting + artifacts
+  - Ran `gofmt` across the repo
+  - Removed checked-in build artifact `cmd/unified_bench/benchmarker` (now gitignored)
 
 ## Notes / Conventions
 

@@ -2,6 +2,10 @@
 
 This file is a running list of items that look generated, obsolete, or non-essential, but are **not** being deleted automatically unless they are clearly safe.
 
+## Deleted In Cleanup (safe)
+
+- `cmd/unified_bench/benchmarker` (checked-in build artifact; removed and now gitignored)
+
 ## Clearly Safe (delete anytime)
 
 - `.DS_Store` (macOS metadata; should not be tracked)
