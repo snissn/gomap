@@ -12,6 +12,8 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -398,8 +400,14 @@ var (
 	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
+	keyCountsArg = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
+	keyScaleArg  = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
+	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
+	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
 	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
+	formatArg    = flag.String("format", "table", "Output format: table or markdown")
+	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
@@ -408,6 +416,29 @@ var (
 type DBInstance struct {
 	Wrapper DBInterface
 	Dir     string
+}
+
+type BenchConfig struct {
+	Keys         int
+	ValueSize    int
+	BatchSize    int
+	RangeQueries int
+	RangeSpan    int
+
+	DBsArg   string
+	TestsArg string
+
+	KeepDir  bool
+	Progress bool
+	SeedUsed int64
+}
+
+type BenchRun struct {
+	Config       BenchConfig
+	Instances    []*DBInstance
+	TestOrder    []string
+	DisplayNames map[string]string
+	Results      map[string]map[string]float64
 }
 
 func main() {
@@ -419,10 +450,212 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
-	dbsToRun := parseList(*dbsArg)
-	testsToRun := normalizeTests(parseList(*testsArg))
+	baseCfg := BenchConfig{
+		Keys:         *numKeys,
+		ValueSize:    *valSize,
+		BatchSize:    *batchSize,
+		RangeQueries: *rangeQueries,
+		RangeSpan:    *rangeSpan,
+		DBsArg:       *dbsArg,
+		TestsArg:     *testsArg,
+		KeepDir:      *keepDir,
+		Progress:     *progress,
+		SeedUsed:     seedUsed,
+	}
 
-	// Define Factory Map
+	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
+	if suite != "" {
+		switch suite {
+		case "readme":
+			out, err := runReadmeSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("readme suite: %v", err)
+			}
+			fmt.Print(out)
+		default:
+			log.Fatalf("unknown suite: %q", suite)
+		}
+		return
+	}
+
+	format := strings.ToLower(strings.TrimSpace(*formatArg))
+	keyCounts, err := resolveKeyCounts(*numKeys, *keyCountsArg, *keyScaleArg, *keysMin, *keysMax)
+	if err != nil {
+		log.Fatalf("keycounts: %v", err)
+	}
+
+	if len(keyCounts) == 1 {
+		cfg := baseCfg
+		cfg.Keys = keyCounts[0]
+		if format == "markdown" {
+			cfg.Progress = false
+			run, err := runBenchmark(cfg)
+			if err != nil {
+				log.Fatalf("benchmark: %v", err)
+			}
+			fmt.Print(renderMarkdownSingle(run))
+			return
+		}
+
+		run, err := runBenchmark(cfg)
+		if err != nil {
+			log.Fatalf("benchmark: %v", err)
+		}
+		fmt.Println()
+		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+		return
+	}
+
+	cfg := baseCfg
+	cfg.Progress = false
+	runs, err := runSweep(cfg, keyCounts)
+	if err != nil {
+		log.Fatalf("benchmark sweep: %v", err)
+	}
+
+	switch format {
+	case "table":
+		for _, run := range runs {
+			fmt.Printf("\nkeys=%s valsize=%d batchsize=%d range-queries=%d range-span=%d\n\n",
+				formatInt(run.Config.Keys), run.Config.ValueSize, run.Config.BatchSize, run.Config.RangeQueries, run.Config.RangeSpan)
+			printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+		}
+	case "markdown":
+		fmt.Print(renderMarkdownSweep(runs))
+	default:
+		log.Fatalf("unknown -format: %q", format)
+	}
+}
+
+func resolveKeyCounts(keys int, keyCountsArg, keyScaleArg string, keysMin, keysMax int) ([]int, error) {
+	if strings.TrimSpace(keyCountsArg) != "" {
+		parts := strings.Split(keyCountsArg, ",")
+		out := make([]int, 0, len(parts))
+		for _, p := range parts {
+			v, err := parseKeyCount(p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		return sortUniquePositive(out), nil
+	}
+
+	if strings.TrimSpace(keyScaleArg) != "" {
+		scale := strings.ToLower(strings.TrimSpace(keyScaleArg))
+		if keysMin <= 0 || keysMax <= 0 || keysMin > keysMax {
+			return nil, fmt.Errorf("invalid -keys-min/-keys-max: %d..%d", keysMin, keysMax)
+		}
+
+		var out []int
+		switch scale {
+		case "log10":
+			for v := keysMin; v <= keysMax; {
+				out = append(out, v)
+				if v > keysMax/10 {
+					break
+				}
+				v *= 10
+			}
+		case "doubling":
+			for v := keysMin; v <= keysMax; {
+				out = append(out, v)
+				if v > keysMax/2 {
+					break
+				}
+				v *= 2
+			}
+		default:
+			return nil, fmt.Errorf("unknown -keyscale: %q (supported: log10, doubling)", scale)
+		}
+		return sortUniquePositive(out), nil
+	}
+
+	if keys <= 0 {
+		return nil, fmt.Errorf("invalid -keys: %d", keys)
+	}
+	return []int{keys}, nil
+}
+
+func parseKeyCount(s string) (int, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return 0, fmt.Errorf("empty keycount")
+	}
+
+	multiplier := 1.0
+	switch s[len(s)-1] {
+	case 'k':
+		multiplier = 1e3
+		s = strings.TrimSpace(s[:len(s)-1])
+	case 'm':
+		multiplier = 1e6
+		s = strings.TrimSpace(s[:len(s)-1])
+	case 'g':
+		multiplier = 1e9
+		s = strings.TrimSpace(s[:len(s)-1])
+	}
+
+	s = strings.ReplaceAll(s, "_", "")
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse keycount %q: %w", s, err)
+	}
+	v := int(f * multiplier)
+	if v <= 0 {
+		return 0, fmt.Errorf("invalid keycount %q", s)
+	}
+	return v, nil
+}
+
+func sortUniquePositive(vals []int) []int {
+	if len(vals) == 0 {
+		return nil
+	}
+	sort.Ints(vals)
+	out := vals[:0]
+	for _, v := range vals {
+		if v <= 0 {
+			continue
+		}
+		if len(out) == 0 || v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func runSweep(baseCfg BenchConfig, keyCounts []int) ([]BenchRun, error) {
+	runs := make([]BenchRun, 0, len(keyCounts))
+	for _, kc := range keyCounts {
+		cfg := baseCfg
+		cfg.Keys = kc
+		run, err := runBenchmark(cfg)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, nil
+}
+
+func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+	if cfg.Keys <= 0 {
+		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
+	}
+	if cfg.ValueSize < 0 {
+		return BenchRun{}, fmt.Errorf("invalid valsize: %d", cfg.ValueSize)
+	}
+	if cfg.BatchSize <= 0 {
+		return BenchRun{}, fmt.Errorf("invalid batchsize: %d", cfg.BatchSize)
+	}
+	if cfg.RangeQueries < 0 || cfg.RangeSpan < 0 {
+		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
+	}
+
+	dbsToRun := parseList(cfg.DBsArg)
+	testsToRun := normalizeTests(parseList(cfg.TestsArg))
+
 	factories := map[string]func(string) (DBInterface, error){
 		"hashdb":        func(d string) (DBInterface, error) { return NewHashDB(d) },
 		"gomap":         func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
@@ -435,11 +668,11 @@ func main() {
 		"leveldb":       func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
-	// 1. Initialize DBs
+	// Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
 	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "badger", "leveldb"}
-	if *dbsArg != "all" {
+	if strings.TrimSpace(cfg.DBsArg) != "all" {
 		orderedDBs = dbsToRun
 	}
 
@@ -449,65 +682,119 @@ func main() {
 		}
 		factory, ok := factories[name]
 		if !ok {
-			log.Printf("Unknown DB: %s", name)
-			continue
+			return BenchRun{}, fmt.Errorf("unknown DB: %q", name)
 		}
 
 		dir, err := os.MkdirTemp("", "bench-"+name+"*")
 		if err != nil {
-			log.Fatalf("Temp dir failed: %v", err)
+			return BenchRun{}, fmt.Errorf("temp dir: %w", err)
 		}
 
 		db, err := factory(dir)
 		if err != nil {
-			log.Printf("Failed to init %s: %v", name, err)
-			os.RemoveAll(dir)
-			continue
+			_ = os.RemoveAll(dir)
+			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
 
 		instances = append(instances, &DBInstance{Wrapper: db, Dir: dir})
 	}
+	if len(instances) == 0 {
+		return BenchRun{}, fmt.Errorf("no DBs selected")
+	}
 
-	// 2. Define Tests
-	// Map of TestName -> Function
-	type TestFunc func(db DBInterface, rng *rand.Rand) float64
+	// Define Tests
+	type TestFunc func(db DBInterface, rng *rand.Rand) (float64, error)
 
 	prefixScanBase := 0
-
 	testFuncs := map[string]TestFunc{
-		"write_seq": func(db DBInterface, _ *rand.Rand) float64 {
+		"write_seq": func(db DBInterface, _ *rand.Rand) (float64, error) {
 			start := time.Now()
-			val := make([]byte, *valSize)
-			var k [8]byte // Stack allocation
-			for i := 0; i < *numKeys; i++ {
+			val := make([]byte, cfg.ValueSize)
+			var k [8]byte
+			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(i))
 				if err := db.Set(k[:], val); err != nil {
-					log.Fatalf("write_seq error: %v", err)
+					return 0, fmt.Errorf("write_seq: %w", err)
 				}
 			}
-			return float64(*numKeys) / time.Since(start).Seconds()
+			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"read_rand": func(db DBInterface, rng *rand.Rand) float64 {
+		"write_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+			var k [8]byte
+			for i := 0; i < cfg.Keys; i++ {
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				if err := db.Set(k[:], val); err != nil {
+					return 0, fmt.Errorf("write_rand: %w", err)
+				}
+			}
+			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
+		},
+		"batch_write": func(db DBInterface, _ *rand.Rand) (float64, error) {
+			if !db.SupportsBatch() {
+				return math.NaN(), nil
+			}
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+			total := cfg.Keys
+			var k [8]byte
+			for i := 0; i < total; i += cfg.BatchSize {
+				batch, err := db.NewBatch()
+				if err != nil {
+					return 0, fmt.Errorf("batch_write: new batch: %w", err)
+				}
+
+				end := i + cfg.BatchSize
+				if end > total {
+					end = total
+				}
+				for j := i; j < end; j++ {
+					binary.BigEndian.PutUint64(k[:], uint64(j+cfg.Keys))
+					if err := batch.Set(k[:], val); err != nil {
+						_ = batch.Close()
+						return 0, fmt.Errorf("batch_write: set: %w", err)
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					_ = batch.Close()
+					return 0, fmt.Errorf("batch_write: commit: %w", err)
+				}
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("batch_write: close: %w", err)
+				}
+			}
+			return float64(total) / time.Since(start).Seconds(), nil
+		},
+		"delete_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
-			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
-				if _, err := db.Get(k[:]); err != nil {
-					// ignore
-				}
+			for i := 0; i < cfg.Keys; i++ {
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				_ = db.Delete(k[:])
 			}
-			return float64(*numKeys) / time.Since(start).Seconds()
+			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"full_scan": func(db DBInterface, _ *rand.Rand) float64 {
+		"read_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
+			start := time.Now()
+			var k [8]byte
+			for i := 0; i < cfg.Keys; i++ {
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				_, _ = db.Get(k[:])
+			}
+			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
+		},
+		"full_scan": func(db DBInterface, _ *rand.Rand) (float64, error) {
 			if !db.SupportsScan() {
-				return math.NaN()
+				return math.NaN(), nil
 			}
 			start := time.Now()
 			iter, err := db.Iterator(nil, nil)
 			if err != nil {
-				log.Fatalf("full_scan iterator error: %v", err)
+				return 0, fmt.Errorf("full_scan: iterator: %w", err)
 			}
 			defer iter.Close()
+
 			count := 0
 			for iter.Valid() {
 				_ = iter.Key()
@@ -515,21 +802,21 @@ func main() {
 				iter.Next()
 				count++
 			}
-			if iter.Error() != nil {
-				log.Fatalf("full_scan iter error: %v", iter.Error())
+			if err := iter.Error(); err != nil {
+				return 0, fmt.Errorf("full_scan: %w", err)
 			}
-			return float64(count) / time.Since(start).Seconds()
+			return float64(count) / time.Since(start).Seconds(), nil
 		},
-		"prefix_scan": func(db DBInterface, rng *rand.Rand) float64 {
+		"prefix_scan": func(db DBInterface, rng *rand.Rand) (float64, error) {
 			if !db.SupportsScan() {
-				return math.NaN()
+				return math.NaN(), nil
 			}
 			start := time.Now()
 			totalItems := 0
-			maxKey := prefixScanBase + *numKeys
-			for i := 0; i < *rangeQueries; i++ {
-				startIdx := prefixScanBase + rng.Intn(*numKeys)
-				endIdx := startIdx + *rangeSpan
+			maxKey := prefixScanBase + cfg.Keys
+			for i := 0; i < cfg.RangeQueries; i++ {
+				startIdx := prefixScanBase + rng.Intn(cfg.Keys)
+				endIdx := startIdx + cfg.RangeSpan
 				if endIdx > maxKey {
 					endIdx = maxKey
 				}
@@ -544,7 +831,7 @@ func main() {
 
 				iter, err := db.Iterator(startKey, endKey)
 				if err != nil {
-					log.Fatalf("prefix_scan iterator error: %v", err)
+					return 0, fmt.Errorf("prefix_scan: iterator: %w", err)
 				}
 
 				for iter.Valid() {
@@ -553,73 +840,16 @@ func main() {
 					totalItems++
 				}
 				if err := iter.Error(); err != nil {
-					log.Fatalf("prefix_scan iter error: %v", err)
+					_ = iter.Close()
+					return 0, fmt.Errorf("prefix_scan: %w", err)
 				}
-				iter.Close()
+				_ = iter.Close()
 			}
-			return float64(totalItems) / time.Since(start).Seconds()
-		},
-		"write_rand": func(db DBInterface, rng *rand.Rand) float64 {
-			start := time.Now()
-			val := make([]byte, *valSize)
-			var k [8]byte
-			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
-				if err := db.Set(k[:], val); err != nil {
-					log.Fatalf("write_rand error: %v", err)
-				}
-			}
-			return float64(*numKeys) / time.Since(start).Seconds()
-		},
-		"batch_write": func(db DBInterface, _ *rand.Rand) float64 {
-			if !db.SupportsBatch() {
-				return math.NaN()
-			}
-			start := time.Now()
-			val := make([]byte, *valSize)
-			total := *numKeys
-			var k [8]byte
-			for i := 0; i < total; i += *batchSize {
-				batch, err := db.NewBatch()
-				if err != nil {
-					log.Fatalf("new batch error: %v", err)
-				}
-				end := i + *batchSize
-				if end > total {
-					end = total
-				}
-				for j := i; j < end; j++ {
-					// Use new keys for batch to stress growth/append?
-					// Or overwrite?
-					// Let's use high range keys to append.
-					binary.BigEndian.PutUint64(k[:], uint64(j+*numKeys))
-					batch.Set(k[:], val)
-				}
-				if err := batch.Commit(); err != nil {
-					log.Fatalf("batch commit error: %v", err)
-				}
-				batch.Close()
-			}
-			return float64(total) / time.Since(start).Seconds()
-		},
-		"delete_rand": func(db DBInterface, rng *rand.Rand) float64 {
-			start := time.Now()
-			var k [8]byte
-			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
-				if err := db.Delete(k[:]); err != nil {
-					// ignore
-				}
-			}
-			return float64(*numKeys) / time.Since(start).Seconds()
+			return float64(totalItems) / time.Since(start).Seconds(), nil
 		},
 	}
 
-	// Ordered list of tests to run
 	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
-	finalTestOrder := make([]string, 0)
-
-	// Display names for polished output
 	displayNames := map[string]string{
 		"write_seq":   "Sequential Write",
 		"write_rand":  "Random Write",
@@ -630,39 +860,25 @@ func main() {
 		"delete_rand": "Random Delete",
 	}
 
+	finalTestOrder := make([]string, 0)
 	if contains(testsToRun, "all") {
 		finalTestOrder = allTestOrder
 	} else {
-		// Filter based on input but keep logical order if possible?
-		// Or strictly follow input order?
-		// User said "loop over tests and run one test after another".
-		// We'll follow input order if explicit, otherwise default order filtered.
-		if len(testsToRun) > 0 && testsToRun[0] != "all" {
-			// Actually, let's respect the standard order for consistency in dependencies
-			// (e.g. read after write), unless user explicitly asks for subset.
-			// If user asks for "read_rand,write_seq", we might have issues if read runs first on empty DB.
-			// But we initialized DBs once. They persist.
-			// So if user asks "read_rand" first, it will read 0 keys (or not founds).
-			// We trust user or enforce standard order.
-			// Let's enforce standard order intersection.
-			for _, t := range allTestOrder {
-				if contains(testsToRun, t) {
-					finalTestOrder = append(finalTestOrder, t)
-				}
+		for _, t := range allTestOrder {
+			if contains(testsToRun, t) {
+				finalTestOrder = append(finalTestOrder, t)
 			}
-		} else {
-			finalTestOrder = allTestOrder
 		}
 	}
-
-	// Choose a keyspace for prefix/range scans. If this run only writes via
-	// batch_write, the inserted keys live in [keys, 2*keys), not [0, keys).
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
-		prefixScanBase = *numKeys
+	if len(finalTestOrder) == 0 {
+		return BenchRun{}, fmt.Errorf("no tests selected")
 	}
 
-	// 3. Run Tests
-	// map[TestName][DBName]Result
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+		prefixScanBase = cfg.Keys
+	}
+
+	// Run Tests
 	results := make(map[string]map[string]float64)
 	for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64, len(instances))
@@ -672,19 +888,23 @@ func main() {
 	}
 
 	var live *liveTable
-	if *progress {
+	if cfg.Progress {
 		live = newLiveTable(os.Stderr, instances, finalTestOrder, displayNames)
-		_ = live.Render(results) // placeholder table
+		_ = live.Render(results)
 	}
 
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
+		if fn == nil {
+			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
+		}
 
 		for _, inst := range instances {
-			// Run Test
-			// Reset? No, we persist state.
-			rng := rand.New(rand.NewSource(testSeed(seedUsed, testName)))
-			res := fn(inst.Wrapper, rng)
+			rng := rand.New(rand.NewSource(testSeed(cfg.SeedUsed, testName)))
+			res, err := fn(inst.Wrapper, rng)
+			if err != nil {
+				return BenchRun{}, fmt.Errorf("%s/%s: %w", testName, inst.Wrapper.Name(), err)
+			}
 			results[testName][inst.Wrapper.Name()] = res
 			if live != nil {
 				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
@@ -692,20 +912,250 @@ func main() {
 		}
 	}
 
-	// 4. Cleanup
+	// Cleanup
 	for _, inst := range instances {
-		inst.Wrapper.Close()
-		if !*keepDir {
-			os.RemoveAll(inst.Dir)
+		_ = inst.Wrapper.Close()
+		if !cfg.KeepDir {
+			_ = os.RemoveAll(inst.Dir)
 		}
 	}
-
-	// 5. Print final transposed table once to stdout
 	if live != nil {
 		_ = live.Clear()
 	}
-	fmt.Println()
-	printResultsTable(instances, finalTestOrder, displayNames, results)
+
+	return BenchRun{
+		Config:       cfg,
+		Instances:    instances,
+		TestOrder:    finalTestOrder,
+		DisplayNames: displayNames,
+		Results:      results,
+	}, nil
+}
+
+func renderMarkdownSingle(run BenchRun) string {
+	var sb strings.Builder
+	sb.WriteString("# unified_bench\n\n")
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
+	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
+	sb.WriteString("\n")
+
+	sb.WriteString("```text\n")
+	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+	sb.WriteString(table)
+	sb.WriteString("```\n")
+	return sb.String()
+}
+
+func renderMarkdownSweep(runs []BenchRun) string {
+	if len(runs) == 0 {
+		return ""
+	}
+
+	dbNames := make([]string, 0, len(runs[0].Instances))
+	for _, inst := range runs[0].Instances {
+		dbNames = append(dbNames, inst.Wrapper.Name())
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench sweep\n\n")
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatKeyCounts(runs)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", runs[0].Config.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
+	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
+	sb.WriteString("\n")
+
+	for _, testName := range runs[0].TestOrder {
+		sb.WriteString("## ")
+		sb.WriteString(runs[0].DisplayNames[testName])
+		sb.WriteString("\n\n")
+		sb.WriteString(renderMarkdownTestSweep(testName, runs, dbNames))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func formatKeyCounts(runs []BenchRun) string {
+	parts := make([]string, 0, len(runs))
+	for _, r := range runs {
+		parts = append(parts, formatInt(r.Config.Keys))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func renderMarkdownTestSweep(testName string, runs []BenchRun, dbNames []string) string {
+	var sb strings.Builder
+
+	sb.WriteString("| keys |")
+	for _, db := range dbNames {
+		sb.WriteString(" ")
+		sb.WriteString(db)
+		sb.WriteString(" |")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("|---:|")
+	for range dbNames {
+		sb.WriteString("---:|")
+	}
+	sb.WriteString("\n")
+
+	for _, run := range runs {
+		sb.WriteString("| ")
+		sb.WriteString(formatInt(run.Config.Keys))
+		sb.WriteString(" |")
+
+		maxVal := math.NaN()
+		for _, db := range dbNames {
+			v := run.Results[testName][db]
+			if math.IsNaN(v) {
+				continue
+			}
+			if math.IsNaN(maxVal) || v > maxVal {
+				maxVal = v
+			}
+		}
+
+		for _, db := range dbNames {
+			v := run.Results[testName][db]
+			cell := formatMarkdownValue(v)
+			if !math.IsNaN(maxVal) && !math.IsNaN(v) && v == maxVal {
+				cell = "**" + cell + "**"
+			}
+			sb.WriteString(" ")
+			sb.WriteString(cell)
+			sb.WriteString(" |")
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func formatMarkdownValue(f float64) string {
+	if math.IsNaN(f) {
+		return "—"
+	}
+	return formatFloat(f)
+}
+
+func formatInt(v int) string { return formatFloat(float64(v)) }
+
+func runReadmeSuite(baseCfg BenchConfig) (string, error) {
+	keyCounts := []int{100000, 1000000}
+	if strings.TrimSpace(*keyCountsArg) != "" || strings.TrimSpace(*keyScaleArg) != "" {
+		var err error
+		keyCounts, err = resolveKeyCounts(baseCfg.Keys, *keyCountsArg, *keyScaleArg, *keysMin, *keysMax)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	pointCfg := baseCfg
+	pointCfg.DBsArg = "hashdb,treedb,badger,leveldb"
+	pointCfg.TestsArg = "write_seq,write_rand,read_rand"
+	pointCfg.Progress = false
+
+	scanCfg := baseCfg
+	scanCfg.DBsArg = "treedb,treedbbackend,badger,leveldb"
+	scanCfg.TestsArg = "batch_write,full_scan,prefix_scan"
+	scanCfg.Progress = false
+
+	backendBaselineCfg := baseCfg
+	backendBaselineCfg.Keys = keyCounts[0]
+	backendBaselineCfg.DBsArg = "treedbbackend"
+	backendBaselineCfg.TestsArg = "write_seq,write_rand,read_rand"
+	backendBaselineCfg.Progress = false
+
+	pointRuns, err := runSweep(pointCfg, keyCounts)
+	if err != nil {
+		return "", err
+	}
+	scanRuns, err := runSweep(scanCfg, keyCounts)
+	if err != nil {
+		return "", err
+	}
+	backendBaseline, err := runBenchmark(backendBaselineCfg)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("_Generated by `go run ./cmd/unified_bench -suite readme -format markdown`._\n\n")
+	sb.WriteString(fmt.Sprintf("_Key counts:_ %s (valsize=%d, batchsize=%d, range-queries=%d, range-span=%d)\n\n",
+		formatInt(keyCounts[0])+"…"+formatInt(keyCounts[len(keyCounts)-1]),
+		baseCfg.ValueSize, baseCfg.BatchSize, baseCfg.RangeQueries, baseCfg.RangeSpan))
+
+	sb.WriteString("Notes:\n")
+	sb.WriteString("- Results depend on hardware and OS.\n")
+	sb.WriteString(fmt.Sprintf("- `TreeDBBackend` (uncached) point ops are shown only at %s keys (baseline) and excluded from larger sweeps.\n", formatInt(backendBaseline.Config.Keys)))
+	sb.WriteString("- `HashDB` does not support ordered scans.\n\n")
+
+	sb.WriteString("### Point Ops (writes + gets)\n\n")
+	sb.WriteString(renderMarkdownSuiteSection(pointRuns))
+
+	sb.WriteString("\n### TreeDBBackend baseline (point ops)\n\n")
+	sb.WriteString(renderMarkdownBaseline(backendBaseline))
+
+	sb.WriteString("\n### Batch + Scans\n\n")
+	sb.WriteString(renderMarkdownSuiteSection(scanRuns))
+
+	sb.WriteString("\n### Quick takeaways\n\n")
+	sb.WriteString("- `HashDB`: great for high-throughput point reads/writes; no ordered scan API yet.\n")
+	sb.WriteString("- `TreeDB` (cached): strong default for random-write-heavy workloads; scans include merge overhead.\n")
+	sb.WriteString("- `TreeDBBackend` (uncached): best when you batch writes yourself; slow for per-key writes.\n")
+	sb.WriteString("- `Badger`/`LevelDB`: useful baselines with different storage tradeoffs.\n")
+
+	return sb.String(), nil
+}
+
+func renderMarkdownSuiteSection(runs []BenchRun) string {
+	if len(runs) == 0 {
+		return ""
+	}
+
+	dbNames := make([]string, 0, len(runs[0].Instances))
+	for _, inst := range runs[0].Instances {
+		dbNames = append(dbNames, inst.Wrapper.Name())
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("_Key counts:_ %s\n\n", formatKeyCounts(runs)))
+
+	for _, testName := range runs[0].TestOrder {
+		sb.WriteString("#### ")
+		sb.WriteString(runs[0].DisplayNames[testName])
+		sb.WriteString("\n\n")
+		sb.WriteString(renderMarkdownTestSweep(testName, runs, dbNames))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func renderMarkdownBaseline(run BenchRun) string {
+	if len(run.Instances) == 0 {
+		return ""
+	}
+	dbName := run.Instances[0].Wrapper.Name()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("_Key count:_ %s\n\n", formatInt(run.Config.Keys)))
+	sb.WriteString("| Test | ")
+	sb.WriteString(dbName)
+	sb.WriteString(" |\n")
+	sb.WriteString("|---|---:|\n")
+	for _, testName := range run.TestOrder {
+		sb.WriteString("| ")
+		sb.WriteString(run.DisplayNames[testName])
+		sb.WriteString(" | ")
+		sb.WriteString(formatMarkdownValue(run.Results[testName][dbName]))
+		sb.WriteString(" |\n")
+	}
+	return sb.String()
 }
 
 func testSeed(seed int64, testName string) int64 {
