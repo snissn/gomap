@@ -17,7 +17,7 @@ type connState struct {
 const setBatchSize = 16
 
 type RedisServer struct {
-	store     *hashdb.ShardedDB
+	store     *hashdb.HashDB
 	batchSets bool
 }
 
@@ -26,7 +26,7 @@ func NewRedisServer(dbdir string) *RedisServer {
 		log.Fatalf("failed to create HashDB folder: %v", err)
 	}
 
-	var store hashdb.ShardedDB
+	var store hashdb.HashDB
 	if err := store.New(dbdir); err != nil {
 		log.Fatalf("failed to open HashDB: %v", err)
 	}

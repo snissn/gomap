@@ -7,22 +7,22 @@ import (
 )
 
 // Benchmark the raw hash-based store (no ordering) to gauge baseline performance.
-func BenchmarkShardedDB_PutGet(b *testing.B) {
-	benchmarkShardedDBPutGet(b, 1024, 8)
+func BenchmarkHashDB_PutGet(b *testing.B) {
+	benchmarkHashDBPutGet(b, 1024, 8)
 }
 
-func BenchmarkShardedDB_PutGetSingleShard(b *testing.B) {
-	benchmarkShardedDBPutGet(b, 1024, 1)
+func BenchmarkHashDB_PutGetSingleShard(b *testing.B) {
+	benchmarkHashDBPutGet(b, 1024, 1)
 }
 
-func benchmarkShardedDBPutGet(b *testing.B, numKeys int, shards int) {
+func benchmarkHashDBPutGet(b *testing.B, numKeys int, shards int) {
 	dir, err := os.MkdirTemp("", "hashdb-bench-*")
 	if err != nil {
 		b.Fatalf("tempdir: %v", err)
 	}
 	defer os.RemoveAll(dir)
 
-	h := &ShardedDB{}
+	h := &HashDB{}
 	if err := h.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}

@@ -2,7 +2,7 @@ package hashdb
 
 import "sync"
 
-// BatchWriter buffers writes and flushes them to the underlying ShardedDB using
+// BatchWriter buffers writes and flushes them to the underlying HashDB using
 // PutMany to reduce syscall and hashing overhead.
 //
 // Note: keys are copied into an internal arena so callers may safely reuse key
@@ -10,7 +10,7 @@ import "sync"
 // caller must not mutate the value slice until it has been flushed (explicitly
 // via Flush() or implicitly by reaching the limit).
 type BatchWriter struct {
-	store *ShardedDB
+	store *HashDB
 	limit int
 
 	mu  sync.Mutex
@@ -23,7 +23,7 @@ type BatchWriter struct {
 
 // NewBatchWriter creates a new BatchWriter with the given flush threshold.
 // A zero or negative limit defaults to 1024 items.
-func NewBatchWriter(store *ShardedDB, limit int) *BatchWriter {
+func NewBatchWriter(store *HashDB, limit int) *BatchWriter {
 	if limit <= 0 {
 		limit = 1024
 	}

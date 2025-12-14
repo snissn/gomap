@@ -13,7 +13,7 @@ func TestBatchWriterFlush(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &ShardedDB{}
+	store := &HashDB{}
 	if err := store.NewWithShards(dir, 2); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestBatchWriterReusedKeyBuffer(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &ShardedDB{}
+	store := &HashDB{}
 	if err := store.NewWithShards(dir, 2); err != nil {
 		t.Fatalf("init store: %v", err)
 	}

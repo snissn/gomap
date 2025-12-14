@@ -29,7 +29,7 @@ func runBench(shards, concurrency, ops int) (float64, time.Duration) {
 	dir, _ := os.MkdirTemp("", "shardbench")
 	defer os.RemoveAll(dir)
 
-	var store hashdb.ShardedDB
+	var store hashdb.HashDB
 	if err := store.NewWithShards(dir, shards); err != nil {
 		panic(err)
 	}

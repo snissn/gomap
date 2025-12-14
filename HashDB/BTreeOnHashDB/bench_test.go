@@ -31,7 +31,7 @@ func benchmarkBTreePutGet(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
@@ -76,7 +76,7 @@ func benchmarkBTreeScanAll(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
@@ -129,7 +129,7 @@ func benchmarkBTreePutOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
@@ -180,7 +180,7 @@ func benchmarkBTreeGetOnly(b *testing.B, numKeys int, shards int) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}

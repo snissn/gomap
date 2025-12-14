@@ -78,8 +78,29 @@ func (h *DB) Close() error {
 	return h.closeFPs()
 }
 
-// Open opens (or creates) a DB rooted at dir.
-func Open(dir string) (*DB, error) {
+// Open opens (or creates) the primary HashDB store rooted at dir.
+//
+// This is the sharded/distributed engine (formerly "gomap_distributed").
+func Open(dir string) (*HashDB, error) {
+	db := &HashDB{}
+	if err := db.New(dir); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenWithShards opens the primary HashDB store with an explicit shard count.
+func OpenWithShards(dir string, numShards int) (*HashDB, error) {
+	db := &HashDB{}
+	if err := db.NewWithShards(dir, numShards); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenSingle opens (or creates) a single-shard DB rooted at dir.
+// The single-shard DB is not thread-safe; prefer Open/OpenWithShards in most cases.
+func OpenSingle(dir string) (*DB, error) {
 	db := &DB{}
 	if err := db.Open(dir); err != nil {
 		return nil, err
@@ -161,7 +182,7 @@ func (h *DB) Delete(key []byte) error {
 // The callback receives the current value (or nil if not found) and returns the new value.
 func (h *DB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// Simple implementation: Get then Add.
-	// Since DB is NOT thread-safe, the caller (ShardedDB) must hold the lock.
+	// Since DB is NOT thread-safe, the caller (HashDB) must hold the lock.
 	// So we can just reuse Get logic (or duplicate probing for efficiency) then Add.
 	// But Add appends new slab.
 	// So we can just call Get, run callback, then Add.

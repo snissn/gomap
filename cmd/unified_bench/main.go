@@ -77,12 +77,12 @@ func (b *HashDBBatch) Close() error {
 }
 
 type HashDBWrapper struct {
-	m *hashdb.ShardedDB
+	m *hashdb.HashDB
 }
 
 func NewHashDB(dir string) (*HashDBWrapper, error) {
-	m := &hashdb.ShardedDB{}
-	if err := m.New(dir); err != nil {
+	m, err := hashdb.Open(dir)
+	if err != nil {
 		return nil, err
 	}
 	return &HashDBWrapper{m: m}, nil
@@ -110,12 +110,12 @@ func (g *HashDBWrapper) NewBatch() (BatchInterface, error) {
 // 2. BTree Wrapper
 type BTreeWrapper struct {
 	t *btreeonhashdb.Tree
-	m *hashdb.ShardedDB
+	m *hashdb.HashDB
 }
 
 func NewBTree(dir string) (*BTreeWrapper, error) {
-	m := &hashdb.ShardedDB{}
-	if err := m.New(dir); err != nil {
+	m, err := hashdb.Open(dir)
+	if err != nil {
 		return nil, err
 	}
 	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench")

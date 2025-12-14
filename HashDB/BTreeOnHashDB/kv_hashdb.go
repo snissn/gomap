@@ -6,9 +6,9 @@ import (
 	"github.com/snissn/gomap/HashDB"
 )
 
-// HashDBKV adapts ShardedDB to the KVStore interface.
+// HashDBKV adapts HashDB to the KVStore interface.
 type HashDBKV struct {
-	Store *hashdb.ShardedDB
+	Store *hashdb.HashDB
 }
 
 // PutMany batches multiple puts when available.
@@ -24,7 +24,7 @@ func (g *HashDBKV) PutMany(keys [][]byte, vals [][]byte) error {
 }
 
 // NewTreeOnHashDB constructs a Tree backed by HashDB.
-func NewTreeOnHashDB(store *hashdb.ShardedDB, treeID string) (*Tree, error) {
+func NewTreeOnHashDB(store *hashdb.HashDB, treeID string) (*Tree, error) {
 	kv := &HashDBKV{Store: store}
 	return OpenTree(kv, treeID)
 }

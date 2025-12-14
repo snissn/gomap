@@ -8,32 +8,35 @@ import (
 	"time"
 )
 
-// ShardedDB is a thread-safe, sharded key/value store implementation.
-// It partitions keys across multiple underlying DB instances (shards) to
-// maximize concurrency.
-type ShardedDB struct {
+// HashDB is the primary, thread-safe HashDB implementation.
+//
+// This is what older code called `gomap_distributed`: a sharded store backed by
+// multiple underlying on-disk DB instances to maximize concurrency.
+type HashDB struct {
 	shards []*CachedDB
 	locks  []sync.RWMutex
 }
 
+// ShardedDB is kept as a compatibility alias for older code.
+type ShardedDB = HashDB
+
 // HashmapDistributed is kept as a compatibility alias for older code.
-// New code should use ShardedDB.
-type HashmapDistributed = ShardedDB
+type HashmapDistributed = HashDB
 
 // New initializes the sharded store with storage in the specified folder.
 // It creates sub-directories for each partition.
-func (h *ShardedDB) New(folder string) error {
+func (h *HashDB) New(folder string) error {
 	// 128 shards provides excellent balance for high concurrency
 	return h.NewWithShards(folder, 128)
 }
 
 // Open is a compatibility wrapper for older code.
-func (h *ShardedDB) Open(folder string) error {
+func (h *HashDB) Open(folder string) error {
 	return h.New(folder)
 }
 
 // NewWithShards initializes the sharded store with a specific number of shards.
-func (h *ShardedDB) NewWithShards(folder string, numShards int) error {
+func (h *HashDB) NewWithShards(folder string, numShards int) error {
 	if numShards <= 0 {
 		numShards = runtime.NumCPU()
 	}
@@ -58,13 +61,13 @@ func (h *ShardedDB) NewWithShards(folder string, numShards int) error {
 }
 
 // OpenWithShards is a compatibility wrapper for older code.
-func (h *ShardedDB) OpenWithShards(folder string, numShards int) error {
+func (h *HashDB) OpenWithShards(folder string, numShards int) error {
 	return h.NewWithShards(folder, numShards)
 }
 
 // SetCompression enables or disables value compression on all shards.
 // It should typically be called during initialization before serving traffic.
-func (h *ShardedDB) SetCompression(enabled bool) {
+func (h *HashDB) SetCompression(enabled bool) {
 	for i := 0; i < len(h.shards); i++ {
 		h.locks[i].Lock()
 		h.shards[i].SetCompression(enabled)
@@ -74,7 +77,7 @@ func (h *ShardedDB) SetCompression(enabled bool) {
 
 // Get retrieves the value for a given key.
 // It returns nil if the key does not exist.
-func (h *ShardedDB) Get(key []byte) ([]byte, error) {
+func (h *HashDB) Get(key []byte) ([]byte, error) {
 	hash := hash(key)
 	shardIndex := hash % Hash(len(h.shards))
 	h.locks[shardIndex].RLock()
@@ -83,7 +86,7 @@ func (h *ShardedDB) Get(key []byte) ([]byte, error) {
 }
 
 // Put inserts or updates a key-value pair.
-func (h *ShardedDB) Put(key []byte, value []byte) error {
+func (h *HashDB) Put(key []byte, value []byte) error {
 	hash := hash(key)
 	shardIndex := hash % Hash(len(h.shards))
 	h.locks[shardIndex].Lock()
@@ -92,12 +95,12 @@ func (h *ShardedDB) Put(key []byte, value []byte) error {
 }
 
 // Add is a compatibility wrapper for older code.
-func (h *ShardedDB) Add(key []byte, value []byte) error {
+func (h *HashDB) Add(key []byte, value []byte) error {
 	return h.Put(key, value)
 }
 
 // Delete removes a key from the map.
-func (h *ShardedDB) Delete(key []byte) error {
+func (h *HashDB) Delete(key []byte) error {
 	hash := hash(key)
 	shardIndex := hash % Hash(len(h.shards))
 	h.locks[shardIndex].Lock()
@@ -106,7 +109,7 @@ func (h *ShardedDB) Delete(key []byte) error {
 }
 
 // Update performs an atomic read-modify-write operation on a key.
-func (h *ShardedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
+func (h *HashDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	hash := hash(key)
 	shardIndex := hash % Hash(len(h.shards))
 	h.locks[shardIndex].Lock()
@@ -115,7 +118,7 @@ func (h *ShardedDB) Update(key []byte, callback func([]byte) ([]byte, error)) er
 }
 
 // Clear wipes all data from all shards.
-func (h *ShardedDB) Clear() error {
+func (h *HashDB) Clear() error {
 	var (
 		errOnce   sync.Once
 		errGlobal error
@@ -137,7 +140,7 @@ func (h *ShardedDB) Clear() error {
 }
 
 // Stats collects and aggregates stats from all shards.
-func (h *ShardedDB) Stats() Stats {
+func (h *HashDB) Stats() Stats {
 	var total Stats
 	for i := 0; i < len(h.shards); i++ {
 		h.locks[i].RLock()
@@ -153,7 +156,7 @@ func (h *ShardedDB) Stats() Stats {
 }
 
 // Compact triggers garbage collection on all shards.
-func (h *ShardedDB) Compact() error {
+func (h *HashDB) Compact() error {
 	var (
 		errOnce   sync.Once
 		errGlobal error
@@ -177,7 +180,7 @@ func (h *ShardedDB) Compact() error {
 // Flush forces all shard-level write-back caches to flush pending writes.
 // This is important before process exit or reopening the same on-disk store
 // to ensure durability of recent writes.
-func (h *ShardedDB) Flush() error {
+func (h *HashDB) Flush() error {
 	var errGlobal error
 	for i := 0; i < len(h.shards); i++ {
 		h.locks[i].Lock()
@@ -193,7 +196,7 @@ func (h *ShardedDB) Flush() error {
 
 // Close flushes and closes all shards.
 // It is not safe to call Close concurrently with other operations.
-func (h *ShardedDB) Close() error {
+func (h *HashDB) Close() error {
 	var firstErr error
 	for i := range h.shards {
 		if i < len(h.locks) {
@@ -220,7 +223,7 @@ func (h *ShardedDB) Close() error {
 // GetMany retrieves values for multiple keys efficiently by grouping them per shard.
 // It returns a slice of values aligned with the input keys slice; missing keys map to nil.
 // Errors are returned per key; nil error means the operation for that key succeeded (even if value is nil).
-func (h *ShardedDB) GetMany(keys [][]byte) ([][]byte, []error) {
+func (h *HashDB) GetMany(keys [][]byte) ([][]byte, []error) {
 	numShards := len(h.shards)
 	if numShards == 0 {
 		return make([][]byte, len(keys)), make([]error, len(keys))
@@ -265,7 +268,7 @@ func (h *ShardedDB) GetMany(keys [][]byte) ([][]byte, []error) {
 
 // PutMany inserts multiple key-value pairs efficiently.
 // It buckets items by shard and performs parallel insertion.
-func (h *ShardedDB) PutMany(items []Item) error {
+func (h *HashDB) PutMany(items []Item) error {
 	numShards := len(h.shards)
 	shardedItems := make([][]Item, numShards)
 	for i := 0; i < numShards; i++ {
@@ -305,6 +308,6 @@ func (h *ShardedDB) PutMany(items []Item) error {
 }
 
 // AddMany is a compatibility wrapper for older code.
-func (h *ShardedDB) AddMany(items []Item) error {
+func (h *HashDB) AddMany(items []Item) error {
 	return h.PutMany(items)
 }

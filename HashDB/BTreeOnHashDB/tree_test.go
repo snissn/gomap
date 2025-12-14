@@ -221,7 +221,7 @@ func TestPersistenceWithHashDB(t *testing.T) {
 
 	ref := make(map[string]string)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("init hashdb: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestPersistenceWithHashDB(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	store2 := &hashdb.ShardedDB{}
+	store2 := &hashdb.HashDB{}
 	if err := store2.NewWithShards(dir, 4); err != nil {
 		t.Fatalf("reopen hashdb: %v", err)
 	}
@@ -386,7 +386,7 @@ func TestRandomizedOperationsWithHashDB(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
-	store := &hashdb.ShardedDB{}
+	store := &hashdb.HashDB{}
 	if err := store.NewWithShards(dir, 8); err != nil {
 		t.Fatalf("init hashdb: %v", err)
 	}

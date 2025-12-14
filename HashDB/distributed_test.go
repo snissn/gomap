@@ -10,11 +10,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDistributedHashmapBasic(t *testing.T) {
+func TestHashDBBasic(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
@@ -23,11 +23,11 @@ func TestDistributedHashmapBasic(t *testing.T) {
 	assert.Nil(t, err, "Error should be nil")
 }
 
-func TestDistributedHashmapAddGet1(t *testing.T) {
+func TestHashDBPutGet1(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
@@ -41,11 +41,11 @@ func TestDistributedHashmapAddGet1(t *testing.T) {
 	assert.Equal(t, value, res, "they should be equal")
 }
 
-func TestDistributedHashmapAddGetN(t *testing.T) {
+func TestHashDBPutGetN(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 
 	for i := 0; i < Ntests; i++ {
@@ -60,11 +60,11 @@ func TestDistributedHashmapAddGetN(t *testing.T) {
 		assert.Equal(t, res, value, "they should be equal")
 	}
 }
-func TestDistributedHashmapAddGetNAsync(t *testing.T) {
+func TestHashDBPutGetNAsync(t *testing.T) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 
 	var wg sync.WaitGroup // create a WaitGroup
@@ -103,11 +103,11 @@ func TestDistributedHashmapAddGetNAsync(t *testing.T) {
 	wg.Wait() // wait for all above goroutines to finish
 }
 
-func BenchmarkDistributedHashmapValue(b *testing.B) {
+func BenchmarkHashDBValue(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 	b.ResetTimer()
 
@@ -120,11 +120,11 @@ func BenchmarkDistributedHashmapValue(b *testing.B) {
 	}
 }
 
-func BenchmarkDistributedAddMany(b *testing.B) {
+func BenchmarkHashDBPutMany(b *testing.B) {
 	folder, _ := os.MkdirTemp("", "hash")
 	defer os.RemoveAll(folder)
 
-	var obj ShardedDB
+	var obj HashDB
 	obj.New(folder)
 	N := 1000
 	items := make([]Item, N)
