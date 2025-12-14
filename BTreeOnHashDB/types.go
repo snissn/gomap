@@ -1,4 +1,4 @@
-package btree
+package btreeonhashdb
 
 // MaxKeys defines the maximum number of keys a node can hold before splitting.
 // A fan-out of 128 keeps nodes compact while providing good branching.

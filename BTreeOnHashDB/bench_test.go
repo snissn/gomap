@@ -1,4 +1,4 @@
-package btree
+package btreeonhashdb
 
 import (
 	"math/rand"

@@ -6,7 +6,7 @@
 - [x] Rename `GeminiTreeDB` → `TreeDB` and remove `gemini` references from Go code.
 - [x] Fix `cmd/unified_bench` to match current DB(s) (legacy DB already removed).
 - [ ] Move `gomap` → `HashDB/` module directory.
-- [ ] Rename `btree` → `BTreeOnHashDB`.
+- [x] Rename `btree` → `BTreeOnHashDB`.
 - [ ] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 
@@ -34,6 +34,9 @@
   - Renamed root module/package `gomap` → `HashDB` (`github.com/snissn/gomap/HashDB`, package `hashdb`)
   - Updated internal imports and `cmd/unified_bench` to build against the new module path
   - `go test ./...` (root): PASS
+- 2025-12-14: BTreeOnHashDB rename
+  - Renamed `btree/` → `BTreeOnHashDB/` (package `btreeonhashdb`)
+  - Updated `cmd/unified_bench` import to `github.com/snissn/gomap/HashDB/BTreeOnHashDB`
 
 ## Notes / Conventions
 

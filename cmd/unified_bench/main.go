@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/HashDB"
-	"github.com/snissn/gomap/HashDB/btree"
+	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 
@@ -117,7 +117,7 @@ func (a *GomapKVAdapter) Put(k, v []byte) error        { return a.m.Add(k, v) }
 func (a *GomapKVAdapter) Delete(k []byte) error        { return a.m.Delete(k) }
 
 type BTreeWrapper struct {
-	t *btree.Tree
+	t *btreeonhashdb.Tree
 	m *hashdb.HashmapDistributed
 }
 
@@ -127,7 +127,7 @@ func NewBTree(dir string) (*BTreeWrapper, error) {
 		return nil, err
 	}
 	adapter := &GomapKVAdapter{m: m}
-	t, err := btree.OpenTree(adapter, "bench")
+	t, err := btreeonhashdb.OpenTree(adapter, "bench")
 	if err != nil {
 		return nil, err
 	}
