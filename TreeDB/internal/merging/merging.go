@@ -3,6 +3,7 @@ package merging
 import (
 	"bytes"
 	"container/heap"
+
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
@@ -66,9 +67,11 @@ func (h *iteratorHeap) Pop() interface{} {
 // MergingIterator merges multiple sorted iterators.
 type MergingIterator struct {
 	h     *iteratorHeap
+	cur   *heapItem
 	valid bool
 	key   []byte // Current Key (copy)
 	val   []byte // Current Value (copy)
+	valOK bool
 	err   error
 	start []byte
 	end   []byte
@@ -95,7 +98,7 @@ func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
 	}
 
 	mi := &MergingIterator{h: h, start: start, end: end}
-	mi.next()
+	mi.advance()
 	return mi
 }
 
@@ -103,54 +106,68 @@ func (mi *MergingIterator) Next() {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
-	mi.next()
+
+	if mi.cur != nil {
+		mi.cur.iter.Next()
+		if mi.cur.iter.Valid() {
+			mi.cur.key = append(mi.cur.key[:0], mi.cur.iter.UnsafeKey()...) // Reuse buffer
+			heap.Push(mi.h, mi.cur)
+		} else {
+			_ = mi.cur.iter.Close()
+		}
+		mi.cur = nil
+	}
+
+	mi.advance()
 }
 
-func (mi *MergingIterator) next() {
+func (mi *MergingIterator) advance() {
 	mi.valid = false
+	mi.cur = nil
+	mi.valOK = false
 
 	for mi.h.Len() > 0 {
 		top := heap.Pop(mi.h).(*heapItem)
-		currentUnsafeKey := top.iter.UnsafeKey()
+		currentKey := top.key
 
-		if mi.end != nil && bytes.Compare(currentUnsafeKey, mi.end) >= 0 {
+		if mi.end != nil && bytes.Compare(currentKey, mi.end) >= 0 {
+			// Put it back so Close() can close everything.
+			heap.Push(mi.h, top)
 			return
 		}
 
-		currentUnsafeVal := top.iter.UnsafeValue() // Value might be lazy-loaded here
-
-		isDeleted := top.iter.IsDeleted() // Use IsDeleted from UnsafeIterator
-
-		// Advance the winner (UnsafeIterator.Next)
-		top.iter.Next()
-		if top.iter.Valid() {
-			top.key = append(top.key[:0], top.iter.UnsafeKey()...) // Reuse buffer
-			heap.Push(mi.h, top)
-		}
-
-		// Consume Shadows
+		// Consume shadows (same key, lower precedence).
 		for mi.h.Len() > 0 {
 			next := (*mi.h)[0]
-			if bytes.Equal(next.key, currentUnsafeKey) { // Compare against unsafe key
+			if bytes.Equal(next.key, currentKey) {
 				shadowed := heap.Pop(mi.h).(*heapItem)
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
 					shadowed.key = append(shadowed.key[:0], shadowed.iter.UnsafeKey()...)
 					heap.Push(mi.h, shadowed)
+				} else {
+					_ = shadowed.iter.Close()
 				}
 			} else {
 				break
 			}
 		}
 
-		// If tombstone, continue loop
-		if isDeleted {
+		// If tombstone, advance winner and continue.
+		if top.iter.IsDeleted() {
+			top.iter.Next()
+			if top.iter.Valid() {
+				top.key = append(top.key[:0], top.iter.UnsafeKey()...) // Reuse buffer
+				heap.Push(mi.h, top)
+			} else {
+				_ = top.iter.Close()
+			}
 			continue
 		}
 
-		// Found valid data: perform final copy for public API
-		mi.key = append(mi.key[:0], currentUnsafeKey...)
-		mi.val = append(mi.val[:0], currentUnsafeVal...)
+		// Found current item. Keep the winner positioned here; Value() loads lazily.
+		mi.cur = top
+		mi.key = append(mi.key[:0], currentKey...)
 		mi.valid = true
 		return
 	}
@@ -171,6 +188,14 @@ func (mi *MergingIterator) Value() []byte {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
+	if mi.valOK {
+		return mi.val
+	}
+	if mi.cur == nil {
+		return nil
+	}
+	mi.val = append(mi.val[:0], mi.cur.iter.UnsafeValue()...)
+	mi.valOK = true
 	return mi.val
 }
 
@@ -179,12 +204,22 @@ func (mi *MergingIterator) Error() error {
 }
 
 func (mi *MergingIterator) Close() error {
+	var firstErr error
+
+	if mi.cur != nil {
+		if err := mi.cur.iter.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		mi.cur = nil
+	}
+
 	for _, item := range *mi.h {
-		if err := item.iter.Close(); err != nil { // Call Close() on UnsafeIterator
-			return err
+		if err := item.iter.Close(); err != nil && firstErr == nil { // Call Close() on UnsafeIterator
+			firstErr = err
 		}
 	}
-	return nil
+
+	return firstErr
 }
 
 func (mi *MergingIterator) Domain() (start, end []byte) {

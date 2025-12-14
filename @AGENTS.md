@@ -85,6 +85,10 @@
   - Switched disk iterator to zero-copy pages (`pager.Get`) + verified-checksum cache
   - Avoided per-entry allocations via `GetLeafEntryView`; slab values now load lazily in `UnsafeValue`
   - `go test ./...` (`TreeDB`): PASS
+- 2025-12-14: TreeDB merge iterator perf
+  - Made `TreeDB/internal/merging` value-lazy (don’t call `UnsafeValue()` during `Next()`/selection)
+  - Early-close exhausted sources to avoid iterator leaks
+  - `go test ./...` (`TreeDB/internal/merging`, `TreeDB/caching`): PASS
 
 ## Notes / Conventions
 
