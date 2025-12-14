@@ -10,6 +10,7 @@
 - [x] Consolidate to a single root `go.mod` and keep CI/Makefile aligned.
 - [x] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
+- [ ] Future work: unify TreeDB open + crash recovery (see `TODO.md`).
 
 ## Progress Log
 
@@ -104,6 +105,8 @@
   - Renamed benchmark rows to `Full Scan` and `Prefix Scan` (aliases: `scan`, `range_scan`)
   - `Prefix Scan` now reports items/sec and targets the active keyspace (base keys vs batch_write offset keys)
   - `-` is now only for unsupported/not-run (uses NaN); real zero results print `0`
+- 2025-12-14: Roadmap
+  - Added a detailed plan for unified TreeDB API + exclusive locking + coherent WAL replay recovery in `TODO.md`.
 
 ## Notes / Conventions
 
