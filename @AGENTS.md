@@ -81,6 +81,10 @@
   - Kept the uncached engine available via `treedb.OpenBackend(...)` and `TreeDB/db.Open(...)`
   - Updated `cmd/unified_bench` so `treedb` uses the cached DB by default (added `treedbbackend` for uncached comparisons)
   - `go test ./...` (root): PASS
+- 2025-12-14: TreeDB scan iterator perf
+  - Switched disk iterator to zero-copy pages (`pager.Get`) + verified-checksum cache
+  - Avoided per-entry allocations via `GetLeafEntryView`; slab values now load lazily in `UnsafeValue`
+  - `go test ./...` (`TreeDB`): PASS
 
 ## Notes / Conventions
 

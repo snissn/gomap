@@ -2,7 +2,7 @@ package tree
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -24,6 +24,9 @@ type Iterator struct {
 	err     error
 	currKey []byte
 	currVal []byte
+	currPtr page.ValuePtr
+	flags   byte
+	valOK   bool
 	reverse bool
 }
 
@@ -75,15 +78,15 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 func (it *Iterator) seekRightMost() {
 	it.stack = nil
 	it.valid = false
+	it.err = nil
 	currID := it.tree.rootPageID
 
 	for {
-		data, err := it.tree.pager.ReadPage(currID)
+		n, err := it.loadNode(currID)
 		if err != nil {
 			it.err = err
 			return
 		}
-		n := node.NewNode(data)
 
 		if n.Count() == 0 {
 			it.valid = false
@@ -97,12 +100,12 @@ func (it *Iterator) seekRightMost() {
 			it.loadCurrent()
 			return
 		} else if n.Type() == page.PageTypeInternal {
-			entry, err := n.GetInternalEntry(uint16(index))
+			childID, err := n.GetInternalChildID(uint16(index))
 			if err != nil {
 				it.err = err
 				return
 			}
-			currID = entry.ChildPageID
+			currID = childID
 		} else {
 			it.err = page.ErrInvalidPageType
 			return
@@ -113,21 +116,19 @@ func (it *Iterator) seekRightMost() {
 func (it *Iterator) seek(key []byte) {
 	it.stack = nil
 	it.valid = false
+	it.err = nil
 	it.currKey = nil
 	it.currVal = nil
+	it.currPtr = page.ValuePtr{}
+	it.flags = 0
+	it.valOK = false
 
 	currID := it.tree.rootPageID
 
 	for {
-		data, err := it.tree.pager.ReadPage(currID)
+		n, err := it.loadNode(currID)
 		if err != nil {
 			it.err = err
-			return
-		}
-
-		n := node.NewNode(data)
-		if !n.VerifyChecksum() {
-			it.err = errors.New("checksum mismatch")
 			return
 		}
 
@@ -142,12 +143,12 @@ func (it *Iterator) seek(key []byte) {
 
 			it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
 
-			entry, err := n.GetInternalEntry(uint16(index))
+			childID, err := n.GetInternalChildID(uint16(index))
 			if err != nil {
 				it.err = err
 				return
 			}
-			currID = entry.ChildPageID
+			currID = childID
 
 		} else if n.Type() == page.PageTypeLeaf {
 			if key == nil {
@@ -169,71 +170,72 @@ func (it *Iterator) seek(key []byte) {
 }
 
 func (it *Iterator) loadCurrent() {
-	if len(it.stack) == 0 {
-		it.valid = false
-		return
-	}
-
-	top := it.stack[len(it.stack)-1]
-
-	// Check Bounds
-	if top.Index < 0 {
-		it.stepBackward()
-		return
-	}
-	if top.Index >= int(top.Node.Count()) {
-		it.stepForward()
-		return
-	}
-
-	entry, err := top.Node.GetLeafEntry(uint16(top.Index))
-	if err != nil {
-		it.err = err
-		it.valid = false
-		return
-	}
-
-	// Check Range Limits
-	if !it.reverse {
-		if it.end != nil && bytes.Compare(entry.Key, it.end) >= 0 {
+	for {
+		if len(it.stack) == 0 {
 			it.valid = false
 			return
 		}
-	} else {
-		if it.start != nil && bytes.Compare(entry.Key, it.start) < 0 {
-			it.valid = false
+
+		top := it.stack[len(it.stack)-1]
+
+		// Check Bounds
+		if top.Index < 0 {
+			it.stepBackward()
 			return
 		}
-	}
-
-	// Check Tombstone
-	if entry.Flags&node.FlagTombstone != 0 {
-		if it.reverse {
-			it.stack[len(it.stack)-1].Index--
-		} else {
-			it.stack[len(it.stack)-1].Index++
+		if top.Index >= int(top.Node.Count()) {
+			it.stepForward()
+			return
 		}
-		it.loadCurrent()
-		return
-	}
 
-	it.currKey = entry.Key
-
-	// Lazy Load Logic could go here, but for now eagerly loading as before
-	// to match structure. UnsafeValue will return it.
-	if entry.Flags&node.FlagPointer != 0 {
-		val, err := it.tree.slabReader.Read(entry.ValuePtr)
+		keyView, valView, valPtr, flags, err := top.Node.GetLeafEntryView(uint16(top.Index))
 		if err != nil {
 			it.err = err
 			it.valid = false
 			return
 		}
-		it.currVal = val
-	} else {
-		it.currVal = entry.Value
-	}
 
-	it.valid = true
+		// Check Range Limits
+		if !it.reverse {
+			if it.end != nil && bytes.Compare(keyView, it.end) >= 0 {
+				it.valid = false
+				return
+			}
+		} else {
+			if it.start != nil && bytes.Compare(keyView, it.start) < 0 {
+				it.valid = false
+				return
+			}
+		}
+
+		// Skip tombstones (TreeDB does not currently persist them to disk, but
+		// iterator supports the flag for completeness).
+		if flags&node.FlagTombstone != 0 {
+			if it.reverse {
+				it.stack[len(it.stack)-1].Index--
+			} else {
+				it.stack[len(it.stack)-1].Index++
+			}
+			continue
+		}
+
+		it.currKey = keyView
+		it.flags = flags
+		it.currPtr = valPtr
+
+		// Inline values are a view into the mmap. Pointer values are loaded on
+		// demand in UnsafeValue/Value.
+		if flags&node.FlagPointer != 0 {
+			it.currVal = nil
+			it.valOK = false
+		} else {
+			it.currVal = valView
+			it.valOK = true
+		}
+
+		it.valid = true
+		return
+	}
 }
 
 func (it *Iterator) stepForward() {
@@ -250,22 +252,21 @@ func (it *Iterator) stepForward() {
 				return
 			}
 
-			entry, err := top.Node.GetInternalEntry(uint16(top.Index))
+			childID, err := top.Node.GetInternalChildID(uint16(top.Index))
 			if err != nil {
 				it.err = err
 				it.valid = false
 				return
 			}
-			currID := entry.ChildPageID
+			currID := childID
 
 			for {
-				data, err := it.tree.pager.ReadPage(currID)
+				n, err := it.loadNode(currID)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				n := node.NewNode(data)
 
 				item := CursorItem{PageID: currID, Node: n, Index: 0}
 				it.stack = append(it.stack, item)
@@ -275,13 +276,13 @@ func (it *Iterator) stepForward() {
 					return
 				}
 
-				e, err := n.GetInternalEntry(0)
+				childID, err := n.GetInternalChildID(0)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				currID = e.ChildPageID
+				currID = childID
 			}
 		}
 		it.stack = it.stack[:idx]
@@ -303,22 +304,21 @@ func (it *Iterator) stepBackward() {
 				return
 			}
 
-			entry, err := top.Node.GetInternalEntry(uint16(top.Index))
+			childID, err := top.Node.GetInternalChildID(uint16(top.Index))
 			if err != nil {
 				it.err = err
 				it.valid = false
 				return
 			}
-			currID := entry.ChildPageID
+			currID := childID
 
 			for {
-				data, err := it.tree.pager.ReadPage(currID)
+				n, err := it.loadNode(currID)
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				n := node.NewNode(data)
 
 				if n.Count() == 0 {
 					it.valid = false
@@ -333,13 +333,13 @@ func (it *Iterator) stepBackward() {
 					return
 				}
 
-				e, err := n.GetInternalEntry(uint16(n.Count() - 1))
+				childID, err := n.GetInternalChildID(uint16(n.Count() - 1))
 				if err != nil {
 					it.err = err
 					it.valid = false
 					return
 				}
-				currID = e.ChildPageID
+				currID = childID
 			}
 		}
 		it.stack = it.stack[:idx]
@@ -377,8 +377,21 @@ func (it *Iterator) UnsafeKey() []byte {
 }
 
 func (it *Iterator) UnsafeValue() []byte {
-	if it.currVal == nil {
+	if it.currKey == nil {
 		return nil
+	}
+	if it.flags&node.FlagPointer != 0 {
+		if it.valOK {
+			return it.currVal
+		}
+		val, err := it.tree.slabReader.Read(it.currPtr)
+		if err != nil {
+			it.err = err
+			it.valid = false
+			return nil
+		}
+		it.currVal = val
+		it.valOK = true
 	}
 	return it.currVal
 }
@@ -419,4 +432,23 @@ func (it *Iterator) IsDeleted() bool {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return it.start, it.end
+}
+
+func (it *Iterator) loadNode(pageID uint64) (*node.Node, error) {
+	// Use Get (mmap) instead of ReadPage (copy).
+	data, err := it.tree.pager.Get(pageID)
+	if err != nil {
+		return nil, err
+	}
+	n := node.NewNode(data)
+
+	// Skip checksum verification for pages we've already verified.
+	if !it.tree.pager.IsVerified(pageID) {
+		if !n.VerifyChecksum() {
+			return nil, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		it.tree.pager.MarkVerified(pageID)
+	}
+
+	return n, nil
 }
