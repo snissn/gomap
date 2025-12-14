@@ -130,6 +130,7 @@
   - Expanded CI to run on Linux + macOS.
   - Renamed workflow/job names for clarity in the GitHub Actions UI.
   - Restored `pull_request` trigger for CI.
+  - Quoted job names containing `:` to fix GitHub Actions YAML parsing.
 - 2025-12-14: Docs
   - Documented TreeDB exclusive open (`treedb.ErrLocked`) and added `cmd/unified_bench/README.md`.
 - 2025-12-14: HashDB exclusive open

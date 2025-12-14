@@ -34,7 +34,7 @@ jobs:
           fi
 
   test-root:
-    name: Root module: vet+test (${{ matrix.os }})
+    name: "Root module: vet+test (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -59,7 +59,7 @@ jobs:
         run: go test ./...
 
   test-treedb:
-    name: TreeDB: vet+test (${{ matrix.os }})
+    name: "TreeDB: vet+test (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -86,7 +86,7 @@ jobs:
         run: go test ./...
 
   test-unified-bench:
-    name: unified_bench: vet+test (${{ matrix.os }})
+    name: "unified_bench: vet+test (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
