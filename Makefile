@@ -8,6 +8,7 @@ help:
 	@echo "Common targets:"
 	@echo "  make fmt            - gofmt all tracked .go files"
 	@echo "  make test           - run go test in root + key dirs"
+	@echo "  make hooks          - install local git hooks (gofmt on commit)"
 	@echo "  make vet            - run go vet in root + key dirs"
 	@echo "  make tidy           - go mod tidy (repo root)"
 	@echo "  make deps           - download deps (repo root)"
@@ -19,6 +20,11 @@ help:
 .PHONY: fmt
 fmt:
 	gofmt -w $$(git ls-files '*.go')
+
+.PHONY: hooks
+hooks:
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
 
 .PHONY: test test-root test-hashdb test-treedb test-unified-bench
 test: test-root test-treedb test-unified-bench

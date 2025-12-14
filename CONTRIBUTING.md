@@ -20,6 +20,7 @@ This repo is a dev playground for two storage engines (HashDB + TreeDB) and benc
 
 - `make help`
 - `make fmt`
+- Optional local hook: `make hooks` (runs `gofmt` on staged `.go` files at commit time)
 - `make test`
 - `make vet`
 - `make tidy`
@@ -56,4 +57,3 @@ Be extra careful when touching metadata formats or recovery logic:
 - Add/extend tests that cover crash/reopen and truncated/corrupt tail cases.
 - Prefer versioned metadata changes (explicit version fields).
 - If compatibility is intentionally broken, document it in `docs/API_STABILITY.md` / `CHANGELOG.md`.
-
