@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"math"
@@ -289,6 +290,7 @@ var (
 	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 )
 
 type DBInstance struct {
@@ -298,6 +300,12 @@ type DBInstance struct {
 
 func main() {
 	flag.Parse()
+
+	seedUsed := *seed
+	if seedUsed == 0 {
+		seedUsed = time.Now().UnixNano()
+	}
+	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	dbsToRun := parseList(*dbsArg)
 	testsToRun := normalizeTests(parseList(*testsArg))
@@ -349,12 +357,12 @@ func main() {
 
 	// 2. Define Tests
 	// Map of TestName -> Function
-	type TestFunc func(db DBInterface) float64
+	type TestFunc func(db DBInterface, rng *rand.Rand) float64
 
 	prefixScanBase := 0
 
 	testFuncs := map[string]TestFunc{
-		"write_seq": func(db DBInterface) float64 {
+		"write_seq": func(db DBInterface, _ *rand.Rand) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
 			var k [8]byte // Stack allocation
@@ -366,18 +374,18 @@ func main() {
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"read_rand": func(db DBInterface) float64 {
+		"read_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if _, err := db.Get(k[:]); err != nil {
 					// ignore
 				}
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"full_scan": func(db DBInterface) float64 {
+		"full_scan": func(db DBInterface, _ *rand.Rand) float64 {
 			if !db.SupportsScan() {
 				return math.NaN()
 			}
@@ -399,7 +407,7 @@ func main() {
 			}
 			return float64(count) / time.Since(start).Seconds()
 		},
-		"prefix_scan": func(db DBInterface) float64 {
+		"prefix_scan": func(db DBInterface, rng *rand.Rand) float64 {
 			if !db.SupportsScan() {
 				return math.NaN()
 			}
@@ -407,7 +415,7 @@ func main() {
 			totalItems := 0
 			maxKey := prefixScanBase + *numKeys
 			for i := 0; i < *rangeQueries; i++ {
-				startIdx := prefixScanBase + rand.Intn(*numKeys)
+				startIdx := prefixScanBase + rng.Intn(*numKeys)
 				endIdx := startIdx + *rangeSpan
 				if endIdx > maxKey {
 					endIdx = maxKey
@@ -438,19 +446,19 @@ func main() {
 			}
 			return float64(totalItems) / time.Since(start).Seconds()
 		},
-		"write_rand": func(db DBInterface) float64 {
+		"write_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			val := make([]byte, *valSize)
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if err := db.Set(k[:], val); err != nil {
 					log.Fatalf("write_rand error: %v", err)
 				}
 			}
 			return float64(*numKeys) / time.Since(start).Seconds()
 		},
-		"batch_write": func(db DBInterface) float64 {
+		"batch_write": func(db DBInterface, _ *rand.Rand) float64 {
 			if !db.SupportsBatch() {
 				return math.NaN()
 			}
@@ -481,11 +489,11 @@ func main() {
 			}
 			return float64(total) / time.Since(start).Seconds()
 		},
-		"delete_rand": func(db DBInterface) float64 {
+		"delete_rand": func(db DBInterface, rng *rand.Rand) float64 {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < *numKeys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rand.Intn(*numKeys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(*numKeys)))
 				if err := db.Delete(k[:]); err != nil {
 					// ignore
 				}
@@ -562,7 +570,8 @@ func main() {
 		for _, inst := range instances {
 			// Run Test
 			// Reset? No, we persist state.
-			res := fn(inst.Wrapper)
+			rng := rand.New(rand.NewSource(testSeed(seedUsed, testName)))
+			res := fn(inst.Wrapper, rng)
 			results[testName][inst.Wrapper.Name()] = res
 			if live != nil {
 				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
@@ -584,6 +593,12 @@ func main() {
 	}
 	fmt.Println()
 	printResultsTable(instances, finalTestOrder, displayNames, results)
+}
+
+func testSeed(seed int64, testName string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(testName))
+	return seed ^ int64(h.Sum64())
 }
 
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {

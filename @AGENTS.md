@@ -122,6 +122,8 @@
   - Integrated locking into `TreeDB/db.Open` (covers cached and backend opens) and made `DB.Close` close all resources.
 - 2025-12-14: TreeDB lock tests
   - Added in-process and cross-process lock regression tests in `TreeDB/db/lock_test.go`.
+- 2025-12-14: unified_bench reproducibility
+  - Added `-seed` and made randomized tests use per-test PRNGs so all DBs see the same random key/query sequences.
 
 ## Notes / Conventions
 
