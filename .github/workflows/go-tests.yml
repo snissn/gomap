@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  test-root:
-    name: go test (repo root)
+  gofmt:
+    name: gofmt
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -23,13 +23,47 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  test-root:
+    name: go test (repo root) (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Vet
+        run: go vet ./...
 
       - name: Test
         run: go test ./...
 
   test-treedb:
-    name: go test (TreeDB)
-    runs-on: ubuntu-latest
+    name: go test (TreeDB) (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -42,14 +76,21 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+
+      - name: Vet
+        working-directory: TreeDB
+        run: go vet ./...
 
       - name: Test
         working-directory: TreeDB
         run: go test ./...
 
   test-unified-bench:
-    name: go test (cmd/unified_bench)
-    runs-on: ubuntu-latest
+    name: go test (cmd/unified_bench) (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -62,6 +103,10 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+
+      - name: Vet
+        working-directory: cmd/unified_bench
+        run: go vet ./...
 
       - name: Test
         working-directory: cmd/unified_bench

@@ -124,6 +124,9 @@
   - Added in-process and cross-process lock regression tests in `TreeDB/db/lock_test.go`.
 - 2025-12-14: unified_bench reproducibility
   - Added `-seed` and made randomized tests use per-test PRNGs so all DBs see the same random key/query sequences.
+- 2025-12-14: CI quality gates
+  - Added `gofmt` check and `go vet` steps to `.github/workflows/go-tests.yml`.
+  - Expanded CI to run on Linux + macOS.
 
 ## Notes / Conventions
 
