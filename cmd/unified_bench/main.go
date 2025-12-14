@@ -14,7 +14,7 @@ import (
 
 	"github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
-	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 
 	"github.com/syndtr/goleveldb/leveldb"
@@ -139,7 +139,7 @@ func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
 	return nil, errors.New("BTree does not support batch")
 }
 
-// 3. TreeDB Wrapper
+// 3. TreeDB Wrapper (cached; recommended)
 type treeDBBatch interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
@@ -157,15 +157,12 @@ func (w *TreeDBBatchWrapper) Commit() error         { return w.b.Write() }
 func (w *TreeDBBatchWrapper) Close() error          { return w.b.Close() }
 
 type TreeDBWrapper struct {
-	db *treedbdb.DB
+	db *treedb.DB
 }
 
 func NewTreeDB(dir string) (*TreeDBWrapper, error) {
-	opts := treedbdb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-	}
-	db, err := treedbdb.Open(opts)
+	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: 4 * 1024 * 1024}
+	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
@@ -186,40 +183,31 @@ func (t *TreeDBWrapper) NewBatch() (BatchInterface, error) {
 	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
-// 4. TreeDB Cached Wrapper
-type TreeDBCachedWrapper struct {
-	db *treedbcaching.DB
+// 4. TreeDB Backend Wrapper (uncached; for comparison)
+type TreeDBBackendWrapper struct {
+	db *treedbdb.DB
 }
 
-func NewTreeDBCached(dir string) (*TreeDBCachedWrapper, error) {
-	opts := treedbdb.Options{
-		Dir:       dir,
-		ChunkSize: 64 * 1024 * 1024,
-	}
-	backendDB, err := treedbdb.Open(opts)
+func NewTreeDBBackend(dir string) (*TreeDBBackendWrapper, error) {
+	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024}
+	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
 	}
-
-	db, err := treedbcaching.Open(dir, backendDB, 4*1024*1024) // 4MB flush threshold
-	if err != nil {
-		_ = backendDB.Close()
-		return nil, err
-	}
-	return &TreeDBCachedWrapper{db: db}, nil
+	return &TreeDBBackendWrapper{db: db}, nil
 }
 
-func (t *TreeDBCachedWrapper) Name() string                 { return "TreeDBCached" }
-func (t *TreeDBCachedWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
-func (t *TreeDBCachedWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
-func (t *TreeDBCachedWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
-func (t *TreeDBCachedWrapper) Close() error                 { return t.db.Close() }
-func (t *TreeDBCachedWrapper) SupportsScan() bool           { return true }
-func (t *TreeDBCachedWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+func (t *TreeDBBackendWrapper) Name() string                 { return "TreeDBBackend" }
+func (t *TreeDBBackendWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
+func (t *TreeDBBackendWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
+func (t *TreeDBBackendWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
+func (t *TreeDBBackendWrapper) Close() error                 { return t.db.Close() }
+func (t *TreeDBBackendWrapper) SupportsScan() bool           { return true }
+func (t *TreeDBBackendWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	return t.db.Iterator(start, end)
 }
-func (t *TreeDBCachedWrapper) SupportsBatch() bool { return true }
-func (t *TreeDBCachedWrapper) NewBatch() (BatchInterface, error) {
+func (t *TreeDBBackendWrapper) SupportsBatch() bool { return true }
+func (t *TreeDBBackendWrapper) NewBatch() (BatchInterface, error) {
 	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
 }
 
@@ -296,7 +284,7 @@ var (
 	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbcached,leveldb); 'gomap' is accepted as an alias for 'hashdb'")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
 	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write,range_scan)")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
@@ -315,18 +303,20 @@ func main() {
 
 	// Define Factory Map
 	factories := map[string]func(string) (DBInterface, error){
-		"hashdb":       func(d string) (DBInterface, error) { return NewHashDB(d) },
-		"gomap":        func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
-		"btree":        func(d string) (DBInterface, error) { return NewBTree(d) },
-		"treedb":       func(d string) (DBInterface, error) { return NewTreeDB(d) },
-		"treedbcached": func(d string) (DBInterface, error) { return NewTreeDBCached(d) },
-		"leveldb":      func(d string) (DBInterface, error) { return NewLevelDB(d) },
+		"hashdb":        func(d string) (DBInterface, error) { return NewHashDB(d) },
+		"gomap":         func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
+		"btree":         func(d string) (DBInterface, error) { return NewBTree(d) },
+		"treedb":        func(d string) (DBInterface, error) { return NewTreeDB(d) },        // cached (default)
+		"treedbcached":  func(d string) (DBInterface, error) { return NewTreeDB(d) },        // legacy alias
+		"treedbbackend": func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // uncached
+		"treedbraw":     func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // alias
+		"leveldb":       func(d string) (DBInterface, error) { return NewLevelDB(d) },
 	}
 
 	// 1. Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbcached", "leveldb"}
+	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "leveldb"}
 	if *dbsArg != "all" {
 		orderedDBs = dbsToRun
 	}
