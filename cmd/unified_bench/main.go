@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -366,7 +367,7 @@ var (
 	dbsArg    = flag.String("dbs", "all", "Comma-separated list of DBs to run (gomap,btree,treedb,gemini)")
 	testsArg  = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,scan,batch_write)")
 	keepDir   = flag.Bool("keep", false, "Keep data directories after run")
-	progress  = flag.Bool("progress", true, "Print the final results table incrementally (row-by-row)")
+	progress  = flag.Bool("progress", true, "Live-update a placeholder results table on stderr while running; final table prints once to stdout")
 )
 
 type DBInstance struct {
@@ -570,11 +571,10 @@ func main() {
 		results[t] = make(map[string]float64)
 	}
 
-	var printer *tablePrinter
+	var live *liveTable
 	if *progress {
-		fmt.Println()
-		printer = newTablePrinter(instances, finalTestOrder, displayNames)
-		printer.PrintHeader()
+		live = newLiveTable(os.Stderr, instances, finalTestOrder, displayNames)
+		_ = live.Render(results)
 	}
 
 	for _, testName := range finalTestOrder {
@@ -588,7 +588,7 @@ func main() {
 		}
 
 		if *progress {
-			printer.PrintRow(testName, results[testName])
+			_ = live.Render(results)
 		}
 	}
 
@@ -600,11 +600,9 @@ func main() {
 		}
 	}
 
-	// 5. Print final transposed table (only if not already printed incrementally)
-	if !*progress {
-		fmt.Println()
-		printResultsTable(instances, finalTestOrder, displayNames, results)
-	}
+	// 5. Print final transposed table once to stdout
+	fmt.Println()
+	printResultsTable(instances, finalTestOrder, displayNames, results)
 }
 
 func key(i int) []byte {
@@ -689,14 +687,61 @@ func contains(list []string, item string) bool {
 	return false
 }
 
-type tablePrinter struct {
+type liveTable struct {
+	w             io.Writer
 	instances     []*DBInstance
 	finalTestOrder []string
 	displayNames  map[string]string
-	colWidths     map[string]int
+	printedLines  int
+	enabledVT100  bool
 }
 
-func newTablePrinter(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *tablePrinter {
+func newLiveTable(w io.Writer, instances []*DBInstance, finalTestOrder []string, displayNames map[string]string) *liveTable {
+	enabledVT100 := false
+	if w == os.Stderr {
+		if fi, err := os.Stderr.Stat(); err == nil {
+			enabledVT100 = (fi.Mode() & os.ModeCharDevice) != 0
+		}
+	}
+
+	return &liveTable{
+		w:             w,
+		instances:     instances,
+		finalTestOrder: finalTestOrder,
+		displayNames:  displayNames,
+		enabledVT100:  enabledVT100,
+	}
+}
+
+func (t *liveTable) Render(results map[string]map[string]float64) error {
+	table := renderResultsTableString(t.instances, t.finalTestOrder, t.displayNames, results)
+	lines := 2 + len(t.finalTestOrder) // header + separator + rows
+
+	if t.printedLines == 0 {
+		_, err := fmt.Fprint(t.w, table)
+		if err != nil {
+			return err
+		}
+		t.printedLines = lines
+		return nil
+	}
+
+	if t.enabledVT100 {
+		// Move cursor back up over the previously printed table, clear to end, then reprint.
+		if _, err := fmt.Fprintf(t.w, "\r\x1b[%dA\x1b[J", t.printedLines); err != nil {
+			return err
+		}
+		_, err := fmt.Fprint(t.w, table)
+		return err
+	}
+
+	// Fallback: just print the table again (no in-place update).
+	_, err := fmt.Fprint(t.w, "\n"+table)
+	return err
+}
+
+func renderResultsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) string {
+	// Dynamically determine column widths based on content
 	colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
@@ -714,8 +759,7 @@ func newTablePrinter(instances []*DBInstance, finalTestOrder []string, displayNa
 		}
 	}
 
-	// Use a fixed minimum width so early rows don't misalign vs later large values.
-	// 13 fits up to "9,999,999,999" and gives headroom for typical runs.
+	// Minimum width so early placeholder "-" columns don't shrink.
 	const minValWidth = 13
 	for _, inst := range instances {
 		dbName := inst.Wrapper.Name()
@@ -724,37 +768,50 @@ func newTablePrinter(instances []*DBInstance, finalTestOrder []string, displayNa
 		}
 	}
 
-	return &tablePrinter{
-		instances:     instances,
-		finalTestOrder: finalTestOrder,
-		displayNames:  displayNames,
-		colWidths:     colWidths,
+	// Update widths based on known results so far.
+	for _, testName := range finalTestOrder {
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			valStr := formatFloat(results[testName][dbName])
+			if len(valStr) > colWidths[dbName] {
+				colWidths[dbName] = len(valStr)
+			}
+		}
 	}
-}
 
-func (p *tablePrinter) PrintHeader() {
-	headerRow := fmt.Sprintf("%*s", p.colWidths["Test"], "Test")
-	for _, inst := range p.instances {
-		dbName := inst.Wrapper.Name()
-		headerRow += fmt.Sprintf("  %*s", p.colWidths[dbName], dbName)
-	}
-	fmt.Println(headerRow)
+	var sb strings.Builder
 
-	separatorRow := fmt.Sprintf("%*s", p.colWidths["Test"], strings.Repeat("-", p.colWidths["Test"]))
-	for _, inst := range p.instances {
+	// Header
+	headerRow := fmt.Sprintf("%*s", colWidths["Test"], "Test")
+	for _, inst := range instances {
 		dbName := inst.Wrapper.Name()
-		separatorRow += fmt.Sprintf("  %*s", p.colWidths[dbName], strings.Repeat("-", p.colWidths[dbName]))
+		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName)
 	}
-	fmt.Println(separatorRow)
-}
+	sb.WriteString(headerRow)
+	sb.WriteString("\n")
 
-func (p *tablePrinter) PrintRow(testName string, row map[string]float64) {
-	dataRow := fmt.Sprintf("%*s", p.colWidths["Test"], p.displayNames[testName])
-	for _, inst := range p.instances {
+	// Separator
+	separatorRow := fmt.Sprintf("%*s", colWidths["Test"], strings.Repeat("-", colWidths["Test"]))
+	for _, inst := range instances {
 		dbName := inst.Wrapper.Name()
-		dataRow += fmt.Sprintf("  %*s", p.colWidths[dbName], formatFloat(row[dbName]))
+		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
 	}
-	fmt.Println(dataRow)
+	sb.WriteString(separatorRow)
+	sb.WriteString("\n")
+
+	// Rows
+	for _, testName := range finalTestOrder {
+		dataRow := fmt.Sprintf("%*s", colWidths["Test"], displayNames[testName])
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			val := results[testName][dbName]
+			dataRow += fmt.Sprintf("  %*s", colWidths[dbName], formatFloat(val))
+		}
+		sb.WriteString(dataRow)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }
 
 // formatFloat formats a float with commas (e.g. 1,234,567)
