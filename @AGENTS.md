@@ -76,6 +76,11 @@
   - Switched package-level `hashdb.Open(...)` to open the sharded `HashDB`; added `hashdb.OpenSingle(...)` for the single-shard DB
   - Updated internal callsites (BTreeOnHashDB, redisserver, unified_bench) to prefer `HashDB`
   - `go test ./...` (root): PASS
+- 2025-12-14: Public API polish (TreeDB)
+  - Added root `treedb.Open(...)` / `treedb.OpenCached(...)` returning the cached wrapper (`TreeDB/public.go`)
+  - Kept the uncached engine available via `treedb.OpenBackend(...)` and `TreeDB/db.Open(...)`
+  - Updated `cmd/unified_bench` so `treedb` uses the cached DB by default (added `treedbbackend` for uncached comparisons)
+  - `go test ./...` (root): PASS
 
 ## Notes / Conventions
 
