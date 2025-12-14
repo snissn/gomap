@@ -134,6 +134,7 @@
   - Added directory locking (`hashdb.ErrLocked`) for both `hashdb.Open*` (sharded) and `hashdb.OpenSingle` (single).
   - Updated HashDB crash-recovery test to simulate crashes via a helper subprocess so OS releases locks.
   - Fixed BTreeOnHashDB persistence test to close HashDB before reopening.
+  - Added in-process and cross-process lock regression tests in `HashDB/lock_test.go`.
 
 ## Notes / Conventions
 
