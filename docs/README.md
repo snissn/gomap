@@ -56,3 +56,4 @@ start here:
 ## Legacy / Historical
 
 As the repo is cleaned up, older “planning” docs and one-off scripts may be moved into `docs/legacy/`.
+See `docs/legacy/README.md`.

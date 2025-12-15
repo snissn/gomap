@@ -231,7 +231,7 @@ func (h *DB) deleteWithoutLog(key []byte, keyHash Hash) (bool, error) {
 	foundNew := false
 
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return false, err
 		}
@@ -244,7 +244,7 @@ func (h *DB) deleteWithoutLog(key []byte, keyHash Hash) (bool, error) {
 	}
 
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return false, err
 		}

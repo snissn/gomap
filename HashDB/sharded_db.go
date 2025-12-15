@@ -347,13 +347,17 @@ func (h *HashDB) GetMany(keys [][]byte) ([][]byte, []error) {
 			defer h.locks[shard].RUnlock()
 
 			m := h.shards[shard]
-			for _, keyIndex := range idxs {
-				val, err := m.getWithHash(keys[keyIndex], hashes[keyIndex])
-				if err != nil {
-					errs[keyIndex] = err
-				} else {
-					values[keyIndex] = val
-				}
+			shardKeys := make([][]byte, len(idxs))
+			shardHashes := make([]Hash, len(idxs))
+			for i, keyIndex := range idxs {
+				shardKeys[i] = keys[keyIndex]
+				shardHashes[i] = hashes[keyIndex]
+			}
+
+			shardVals, shardErrs := m.getManyWithHashes(shardKeys, shardHashes)
+			for i, keyIndex := range idxs {
+				values[keyIndex] = shardVals[i]
+				errs[keyIndex] = shardErrs[i]
 			}
 		}(shardIdx, idxs)
 	}

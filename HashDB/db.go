@@ -176,7 +176,7 @@ func (h *DB) Delete(key []byte) error {
 
 	// Delete in the current (new) table.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ func (h *DB) Delete(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -221,7 +221,7 @@ func (h *DB) DeleteSync(key []byte) error {
 
 	// Delete in the current (new) table.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -244,7 +244,7 @@ func (h *DB) DeleteSync(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -510,24 +510,48 @@ func (h *DB) Compact() error {
 	}
 	newH.SetCompression(compressionEnabled)
 
-	keys := h.getKeys()
-	for _, k := range keys {
-		if k.slabOffset == 0 || k.slabOffset == Tombstone {
-			continue
-		}
+	cleanupNew := func(err error) error {
+		_ = newH.closeFPs()
+		_ = os.RemoveAll(tmpFolder)
+		return err
+	}
 
-		item, err := h.unmarshalItemFromSlab(k)
-		if err != nil {
-			_ = newH.closeFPs()
-			_ = os.RemoveAll(tmpFolder)
+	// Bulk-copy into the new DB in bounded batches to avoid excessive syscalls and
+	// to keep memory usage bounded (unmarshalItemFromSlab uses a 4KB optimistic
+	// read, so we copy key/value slices before batching).
+	const (
+		compactBatchItems = 4096
+		compactBatchBytes = 4 << 20 // 4MB
+	)
+
+	batch := make([]Item, 0, compactBatchItems)
+	batchBytes := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := newH.PutMany(batch); err != nil {
 			return err
 		}
+		batch = batch[:0]
+		batchBytes = 0
+		return nil
+	}
 
-		if err := newH.Put(item.Key, item.Value); err != nil {
-			_ = newH.closeFPs()
-			_ = os.RemoveAll(tmpFolder)
-			return err
+	if err := h.ForEach(func(key, value []byte) error {
+		k := append([]byte(nil), key...)
+		v := append([]byte(nil), value...)
+		batch = append(batch, Item{Key: k, Value: v})
+		batchBytes += 16 + len(k) + len(v)
+		if len(batch) >= compactBatchItems || batchBytes >= compactBatchBytes {
+			return flush()
 		}
+		return nil
+	}); err != nil {
+		return cleanupNew(err)
+	}
+	if err := flush(); err != nil {
+		return cleanupNew(err)
 	}
 
 	if err := newH.Close(); err != nil {

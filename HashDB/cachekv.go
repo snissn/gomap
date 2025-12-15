@@ -112,6 +112,70 @@ func (c *CacheKV) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
 	return c.backend.Get(key)
 }
 
+func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error) {
+	values := make([][]byte, len(keys))
+	errs := make([]error, len(keys))
+
+	if len(keys) == 0 {
+		return values, errs
+	}
+
+	useHashes := len(hashes) == len(keys)
+	misses := make([]int, 0, len(keys))
+
+	c.mu.RLock()
+	pending := c.pending
+	flushing := c.flushing
+	for i, key := range keys {
+		k := string(key)
+		if e, ok := pending[k]; ok {
+			if e.del {
+				values[i] = nil
+			} else {
+				values[i] = e.value
+			}
+			continue
+		}
+		if e, ok := flushing[k]; ok {
+			if e.del {
+				values[i] = nil
+			} else {
+				values[i] = e.value
+			}
+			continue
+		}
+		misses = append(misses, i)
+	}
+	c.mu.RUnlock()
+
+	if len(misses) == 0 {
+		return values, errs
+	}
+
+	if hg, ok := c.backend.(hashGetter); ok && useHashes {
+		for _, i := range misses {
+			val, err := hg.getWithHash(keys[i], hashes[i])
+			if err != nil {
+				errs[i] = err
+				continue
+			}
+			values[i] = val
+		}
+		return values, errs
+	}
+
+	for _, i := range misses {
+		val, err := c.backend.Get(keys[i])
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		values[i] = val
+	}
+
+	return values, errs
+}
+
 func (c *CacheKV) Put(key, value []byte) error {
 	k := string(key)
 	c.mu.Lock()
