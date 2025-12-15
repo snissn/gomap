@@ -12,9 +12,11 @@
 // Note on durability:
 // HashDB is tuned for performance and uses an append-only slab value log.
 //
-// - Put/Delete are not guaranteed durable (no fsync).
-// - PutSync/DeleteSync fsync the slab value log so the operation survives a crash/power loss.
-// - ApplyBatch applies a batch atomically in-process; ApplyBatchSync is the durable, crash-atomic variant.
+//   - Put/Delete are not guaranteed durable (no fsync).
+//   - PutSync/DeleteSync fsync the slab value log so the operation survives a crash/power loss.
+//   - ApplyBatch applies a batch atomically in-process; ApplyBatchSync is the durable, crash-atomic variant.
+//   - Export/Restore provide a simple snapshot mechanism built on ForEach + ApplyBatchSync.
+//     Snapshot iteration order is arbitrary.
 //
 // The mmap index files are treated as a derived cache; after an unclean shutdown
 // HashDB rebuilds the index by scanning the slab log (and truncates torn tail records).
