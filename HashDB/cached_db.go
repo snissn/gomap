@@ -2,6 +2,7 @@ package hashdb
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -10,6 +11,9 @@ import (
 type CachedDB struct {
 	db    *DB
 	cache *CacheKV
+
+	// backendMu serializes access to db from the cache flush loop and any direct db calls.
+	backendMu sync.RWMutex
 }
 
 // CachedHashmap is kept as a compatibility alias for older code.
@@ -23,9 +27,10 @@ func NewCachedDB(folder string, maxEntries, maxBytes int, flushInterval time.Dur
 	if err := db.New(folder); err != nil {
 		return nil, err
 	}
-	kv := &dbKVAdapter{db: db}
-	cache := NewCacheKV(kv, maxEntries, maxBytes, flushInterval)
-	return &CachedDB{db: db, cache: cache}, nil
+	c := &CachedDB{db: db}
+	kv := &dbKVAdapter{db: db, mu: &c.backendMu}
+	c.cache = NewCacheKV(kv, maxEntries, maxBytes, flushInterval)
+	return c, nil
 }
 
 // NewCachedHashmap initializes a new cached DB at the given folder (compatibility wrapper).
@@ -48,7 +53,10 @@ func (c *CachedDB) Close() error {
 		firstErr = c.cache.Close()
 	}
 	if c.db != nil {
-		if err := c.db.Close(); err != nil && firstErr == nil {
+		c.backendMu.Lock()
+		err := c.db.Close()
+		c.backendMu.Unlock()
+		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -56,11 +64,18 @@ func (c *CachedDB) Close() error {
 }
 
 func (c *CachedDB) SetCompression(enabled bool) {
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	c.db.SetCompression(enabled)
 }
 
 func (c *CachedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// For simplicity, bypass cache for read-modify-write to avoid stale reads.
+	if err := c.cache.Flush(); err != nil {
+		return err
+	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	return c.db.Update(key, callback)
 }
 
@@ -68,6 +83,8 @@ func (c *CachedDB) Clear() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	return c.db.Clear()
 }
 
@@ -75,6 +92,8 @@ func (c *CachedDB) Compact() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
 	return c.db.Compact()
 }
 
@@ -95,19 +114,44 @@ func (c *CachedDB) AddMany(items []Item) error {
 }
 
 func (c *CachedDB) Stats() Stats {
+	c.backendMu.RLock()
+	defer c.backendMu.RUnlock()
 	return c.db.Stats()
 }
 
 // dbKVAdapter adapts DB to KVStore.
 type dbKVAdapter struct {
 	db *DB
+	mu *sync.RWMutex
 }
 
-func (m *dbKVAdapter) Get(key []byte) ([]byte, error) { return m.db.Get(key) }
-func (m *dbKVAdapter) Put(key, value []byte) error    { return m.db.Put(key, value) }
-func (m *dbKVAdapter) Delete(key []byte) error        { return m.db.Delete(key) }
+func (m *dbKVAdapter) Get(key []byte) ([]byte, error) {
+	if m.mu != nil {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+	}
+	return m.db.Get(key)
+}
+func (m *dbKVAdapter) Put(key, value []byte) error {
+	if m.mu != nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+	}
+	return m.db.Put(key, value)
+}
+func (m *dbKVAdapter) Delete(key []byte) error {
+	if m.mu != nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+	}
+	return m.db.Delete(key)
+}
 
 func (m *dbKVAdapter) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
+	if m.mu != nil {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+	}
 	return m.db.getWithHash(key, keyHash)
 }
 
@@ -119,6 +163,10 @@ func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	items := make([]Item, len(keys))
 	for i := range keys {
 		items[i] = Item{Key: keys[i], Value: vals[i]}
+	}
+	if m.mu != nil {
+		m.mu.Lock()
+		defer m.mu.Unlock()
 	}
 	return m.db.PutMany(items)
 }

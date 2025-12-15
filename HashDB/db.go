@@ -377,85 +377,79 @@ func (h *DB) Stats() Stats {
 // Compact rewrites the database to reclaim space from deleted/updated keys.
 // It creates a new copy of the database and swaps it in.
 func (h *DB) Compact() error {
-	tmpFolder := h.dir + "-compact"
-	_ = os.RemoveAll(tmpFolder) // Clean start
+	if h.dir == "" {
+		return errors.New("compact: db dir required")
+	}
 
+	dir := h.dir
+	capacity := h.capacity
+	compressionEnabled := h.compressionEnabled
+
+	tmpFolder := dir + "-compact"
+	_ = os.RemoveAll(tmpFolder) // clean start (best-effort)
+
+	// Build a compacted copy in tmpFolder.
 	var newH DB
-	// Use same capacity, or maybe shrink if Count << Capacity?
-	// For now maintain capacity.
-	// But we need to know capacity. h.Capacity.
-	if err := newH.New(tmpFolder); err != nil {
+	if err := newH.initN(tmpFolder, capacity); err != nil {
 		return err
 	}
-	// Force capacity to match? New reads capacity from file (doesn't exist) -> Default.
-	// We should init with specific capacity.
-	// Call initN directly on newH?
-	// But New called initN(Default).
-	// We can close newH and re-init? Or just use initN.
-	// Better: Don't use New. Use initN.
+	newH.SetCompression(compressionEnabled)
 
-	// Close newH first (New opened it)
-	newH.closeFPs()
-	_ = os.RemoveAll(tmpFolder)
-
-	if err := newH.initN(tmpFolder, h.capacity); err != nil {
-		return err
-	}
-	newH.SetCompression(h.compressionEnabled)
-
-	// Migrate Data
-	// Iterate through all buckets
 	keys := h.getKeys()
 	for _, k := range keys {
 		if k.slabOffset == 0 || k.slabOffset == Tombstone {
 			continue
 		}
 
-		// Read Item
 		item, err := h.unmarshalItemFromSlab(k)
 		if err != nil {
-			// If corruption, we skip? Or fail?
-			// Fail is safer.
-			newH.closeFPs()
-			os.RemoveAll(tmpFolder)
+			_ = newH.closeFPs()
+			_ = os.RemoveAll(tmpFolder)
 			return err
 		}
 
-		// Write to newH
-		if err := newH.Add(item.Key, item.Value); err != nil {
-			newH.closeFPs()
-			os.RemoveAll(tmpFolder)
+		if err := newH.Put(item.Key, item.Value); err != nil {
+			_ = newH.closeFPs()
+			_ = os.RemoveAll(tmpFolder)
 			return err
 		}
 	}
 
-	// Swap
-	// 1. Close both
-	h.closeFPs()
-	newH.closeFPs()
+	if err := newH.Close(); err != nil {
+		_ = os.RemoveAll(tmpFolder)
+		return err
+	}
 
-	// 2. Rename folders
-	backupFolder := h.dir + "-old"
+	// Swap directories. We fully close h so Windows can rename/delete directories reliably.
+	if err := h.Close(); err != nil {
+		_ = os.RemoveAll(tmpFolder)
+		return err
+	}
+
+	backupFolder := dir + "-old"
 	_ = os.RemoveAll(backupFolder)
 
-	if err := os.Rename(h.dir, backupFolder); err != nil {
-		// Try to reopen h?
+	if err := os.Rename(dir, backupFolder); err != nil {
+		_ = os.RemoveAll(tmpFolder)
+		_ = h.Open(dir)
 		return err
 	}
-	if err := os.Rename(tmpFolder, h.dir); err != nil {
-		// Restore backup
-		os.Rename(backupFolder, h.dir)
-		return err
-	}
-
-	// 3. Re-open h on new files
-	if err := h.initN(h.dir, h.capacity); err != nil {
+	if err := os.Rename(tmpFolder, dir); err != nil {
+		_ = os.Rename(backupFolder, dir)
+		_ = os.RemoveAll(tmpFolder)
+		_ = h.Open(dir)
 		return err
 	}
 
-	// 4. Delete backup
-	os.RemoveAll(backupFolder)
+	if err := h.Open(dir); err != nil {
+		// Best-effort rollback: restore the original directory.
+		_ = os.Rename(dir, tmpFolder)
+		_ = os.Rename(backupFolder, dir)
+		_ = os.RemoveAll(tmpFolder)
+		return err
+	}
 
+	_ = os.RemoveAll(backupFolder)
 	return nil
 }
 

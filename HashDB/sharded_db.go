@@ -148,24 +148,15 @@ func (h *HashDB) Update(key []byte, callback func([]byte) ([]byte, error)) error
 
 // Clear wipes all data from all shards.
 func (h *HashDB) Clear() error {
-	var (
-		errOnce   sync.Once
-		errGlobal error
-	)
-	var wg sync.WaitGroup
 	for i := 0; i < len(h.shards); i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			h.locks[index].Lock()
-			defer h.locks[index].Unlock()
-			if err := h.shards[index].Clear(); err != nil {
-				errOnce.Do(func() { errGlobal = err })
-			}
-		}(i)
+		h.locks[i].Lock()
+		err := h.shards[i].Clear()
+		h.locks[i].Unlock()
+		if err != nil {
+			return err
+		}
 	}
-	wg.Wait()
-	return errGlobal
+	return nil
 }
 
 // Stats collects and aggregates stats from all shards.
@@ -186,24 +177,15 @@ func (h *HashDB) Stats() Stats {
 
 // Compact triggers garbage collection on all shards.
 func (h *HashDB) Compact() error {
-	var (
-		errOnce   sync.Once
-		errGlobal error
-	)
-	var wg sync.WaitGroup
 	for i := 0; i < len(h.shards); i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			h.locks[index].Lock()
-			defer h.locks[index].Unlock()
-			if err := h.shards[index].Compact(); err != nil {
-				errOnce.Do(func() { errGlobal = err })
-			}
-		}(i)
+		h.locks[i].Lock()
+		err := h.shards[i].Compact()
+		h.locks[i].Unlock()
+		if err != nil {
+			return err
+		}
 	}
-	wg.Wait()
-	return errGlobal
+	return nil
 }
 
 // Flush forces all shard-level write-back caches to flush pending writes.
