@@ -17,20 +17,30 @@ import (
 var Ntests int = int(1_000)
 
 func TestBasic(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 }
 
 func TestAdd1(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
 
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("awoiljfasdlfj")
@@ -39,11 +49,16 @@ func TestAdd1(t *testing.T) {
 }
 
 func TestAddGet1(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
 	err = obj.Put(key, value)
@@ -54,11 +69,16 @@ func TestAddGet1(t *testing.T) {
 }
 
 func TestAddResizeGet(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
 	err = obj.Put(key, value)
@@ -82,12 +102,17 @@ func TestAddResizeGet(t *testing.T) {
 }
 
 func TestAddGetN(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -104,12 +129,17 @@ func TestAddGetN(t *testing.T) {
 }
 
 func TestAddGetN_bigt(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 	randomBytes := make([]byte, 1024)
 	rand.Read(randomBytes)
 
@@ -128,12 +158,17 @@ func TestAddGetN_bigt(t *testing.T) {
 }
 
 func TestAddGetN_bigt_batch(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 	randomBytes := make([]byte, 1024)
 	rand.Read(randomBytes)
 
@@ -189,11 +224,16 @@ func BenchmarkGoDefaultHashmap(b *testing.B) {
 }
 
 func TestAddValue(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 	key := []byte("key")
 	value := []byte("bartesttesttest")
 	err = obj.Put(key, value)
@@ -201,11 +241,16 @@ func TestAddValue(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	key := []byte("key")
 	value := []byte("value")
@@ -238,18 +283,23 @@ func TestDelete(t *testing.T) {
 }
 
 func TestCrashRecovery(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 
 	runCrashRecoveryWriter(t, folder)
 
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
-	defer obj.Close()
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
-	err = obj.Recover()
-	assert.NoError(t, err)
+	if err := obj.Recover(); err != nil {
+		t.Fatalf("recover: %v", err)
+	}
 
 	val, err := obj.Get([]byte("keep"))
 	assert.NoError(t, err)
@@ -261,7 +311,10 @@ func TestCrashRecovery(t *testing.T) {
 }
 
 func TestSegmentRotation(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(folder)
 
 	// Reduce limit for test
@@ -270,8 +323,10 @@ func TestSegmentRotation(t *testing.T) {
 	defer atomic.StoreInt64(&MaxSegmentSize, originalLimit)
 
 	var obj DB
-	err := obj.Open(folder)
-	assert.NoError(t, err)
+	if err := obj.Open(folder); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	// Write enough to force rotation
 	// 1KB limit. 100 items of 20 bytes ~ 2KB.

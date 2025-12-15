@@ -17,6 +17,7 @@ func TestBatchWriterFlush(t *testing.T) {
 	if err := store.NewWithShards(dir, 2); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	bw := NewBatchWriter(store, 4)
 
@@ -54,6 +55,7 @@ func TestBatchWriterReusedKeyBuffer(t *testing.T) {
 	if err := store.NewWithShards(dir, 2); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 
 	bw := NewBatchWriter(store, 4)
 

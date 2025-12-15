@@ -11,30 +11,44 @@ import (
 )
 
 func TestHashDBBasic(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj HashDB
-	obj.New(folder)
+	if err := obj.NewWithShards(folder, 4); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("awoiljfasdlfj")
-	err := obj.Put(key, value)
-	assert.Nil(t, err, "Error should be nil")
+	if err := obj.Put(key, value); err != nil {
+		t.Fatalf("put: %v", err)
+	}
 }
 
 func TestHashDBPutGet1(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj HashDB
-	obj.New(folder)
+	if err := obj.NewWithShards(folder, 4); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	key := []byte{'w', 'x', 'r', 'l', 'q'}
 	value := []byte("value")
 
-	err := obj.Put(key, value)
-	assert.Nil(t, err, "Error should be nil")
+	if err := obj.Put(key, value); err != nil {
+		t.Fatalf("put: %v", err)
+	}
 
 	res, err := obj.Get(key)
 	assert.Nil(t, err, "Error should be nil")
@@ -42,11 +56,17 @@ func TestHashDBPutGet1(t *testing.T) {
 }
 
 func TestHashDBPutGetN(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj HashDB
-	obj.New(folder)
+	if err := obj.NewWithShards(folder, 4); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	for i := 0; i < Ntests; i++ {
 		key := []byte(strconv.Itoa(i))
@@ -61,13 +81,20 @@ func TestHashDBPutGetN(t *testing.T) {
 	}
 }
 func TestHashDBPutGetNAsync(t *testing.T) {
-	folder, _ := os.MkdirTemp("", "hash")
+	folder, err := os.MkdirTemp("", "hash")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
 	defer os.RemoveAll(folder)
 
 	var obj HashDB
-	obj.New(folder)
+	if err := obj.NewWithShards(folder, 4); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = obj.Close() })
 
 	var wg sync.WaitGroup // create a WaitGroup
+	errCh := make(chan error, Ntests)
 
 	for i := 0; i < Ntests; i++ {
 		wg.Add(1)        // increment the WaitGroup counter
@@ -77,30 +104,25 @@ func TestHashDBPutGetNAsync(t *testing.T) {
 			key := []byte(strconv.Itoa(i))
 			value := key
 
-			err := obj.Put(key, value)
-
-			assert.Nil(t, err, "Error should be nil")
+			if err := obj.Put(key, value); err != nil {
+				errCh <- err
+			}
 		}(i) // pass loop variable as argument
 	}
 
 	wg.Wait() // wait for all above goroutines to finish
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("put: %v", err)
+	}
 
 	for i := 0; i < 10; i++ {
-		wg.Add(1)        // increment the WaitGroup counter
-		go func(i int) { // capture loop variable
-			defer wg.Done() // defer the Done call
-
-			key := []byte(strconv.Itoa(i))
-			value := key
-
-			res, err := obj.Get(key)
-
-			assert.Nil(t, err, "Error should be nil")
-			assert.Equal(t, res, value, "they should be equal")
-		}(i) // pass loop variable as argument
+		key := []byte(strconv.Itoa(i))
+		value := key
+		res, err := obj.Get(key)
+		assert.Nil(t, err, "Error should be nil")
+		assert.Equal(t, res, value, "they should be equal")
 	}
-
-	wg.Wait() // wait for all above goroutines to finish
 }
 
 func BenchmarkHashDBValue(b *testing.B) {

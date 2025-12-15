@@ -19,6 +19,7 @@ func TestResizeLeak(t *testing.T) {
 	initialCapacity := uint64(10)
 	err = obj.initN(folder, initialCapacity)
 	assert.NoError(t, err)
+	t.Cleanup(func() { _ = obj.Close() })
 
 	// Add enough keys to trigger resize
 	// Capacity 10. Resize check happens BEFORE add.

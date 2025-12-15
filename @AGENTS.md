@@ -173,6 +173,9 @@
 - 2025-12-14: Benchmark plots
   - Added `-outdir` to `cmd/unified_bench` readme suite and generate PNG scaling plots via `gonum/plot`.
   - `make bench-readme` now writes plots to `docs/images/` and embeds them in the README benchmark section.
+- 2025-12-14: Windows CI hardening (HashDB)
+  - Reduced shard count used by HashDB unit tests (avoid default 128 shards) and ensured opened DBs/stores are `Close()`'d via `t.Cleanup`.
+  - This reduces open file handles/background goroutines and improves Windows test stability.
 
 ## Notes / Conventions
 
