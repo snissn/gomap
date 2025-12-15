@@ -1,8 +1,6 @@
 package treedb
 
 import (
-	"errors"
-
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -49,7 +47,7 @@ type DB struct {
 
 func (db *DB) ensureOpen() error {
 	if db == nil || (db.cached == nil && db.backend == nil) {
-		return errors.New("treedb: db is closed")
+		return ErrClosed
 	}
 	return nil
 }
