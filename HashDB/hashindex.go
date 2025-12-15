@@ -20,7 +20,8 @@ const (
 )
 
 func (h *DB) addKey(key []byte, slabOffset Key) error {
-	hkey, isnew, err := h.probeForAdd(key)
+	myhash := hash(key)
+	hkey, isnew, err := h.probeForAddWithHash(key, myhash)
 	if err != nil {
 		return err
 	}
@@ -28,7 +29,7 @@ func (h *DB) addKey(key []byte, slabOffset Key) error {
 	// If rehash is in progress, ensure we mark any existing key in the old table
 	// as Tombstone so it doesn't get migrated and overwrite this new value.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probe(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, myhash)
 		if err != nil {
 			return err
 		}
@@ -41,7 +42,6 @@ func (h *DB) addKey(key []byte, slabOffset Key) error {
 	if isnew {
 		*h.count += 1
 		// Set Control Byte
-		myhash := hash(key)
 		h2 := byte(myhash&0x7f) | 0x80
 		h.controls[hkey] = h2
 	}
@@ -165,6 +165,60 @@ func (h *DB) probeWithHash(keys []Key, controls []byte, capacity uint64, key []b
 	return 0, nil, false, nil
 }
 
+// probeIndexWithHash searches for a key in the provided keys slice using a precomputed hash.
+// It avoids reading values from the slab log and is intended for operations that only need
+// to locate a key (e.g. deletes).
+func (h *DB) probeIndexWithHash(keys []Key, controls []byte, capacity uint64, key []byte, myhash Hash) (uint64, bool, error) {
+	h1 := uint64(myhash >> 7)
+	h2 := byte(myhash&0x7f) | 0x80
+
+	idx := h1 % capacity
+	probes := uint64(0)
+
+	for probes < capacity {
+		group := loadGroup(controls, idx, capacity)
+
+		matchMask := matchH2(h2, group)
+		for matchMask != 0 {
+			bitPos := bits.TrailingZeros64(matchMask)
+			groupOffset := uint64(bitPos >> 3)
+			matchMask &= (matchMask - 1)
+
+			candidateIdx := (idx + groupOffset) % capacity
+
+			bucket := keys[candidateIdx]
+			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
+				slabKey, err := h.unmarshalKeyFromSlab(bucket)
+				if err != nil {
+					return 0, false, err
+				}
+				if bytes.Equal(slabKey, key) {
+					return candidateIdx, true, nil
+				}
+			}
+		}
+
+		emptyMask := matchEmptyOrDeleted(group)
+		if emptyMask != 0 {
+			tmpMask := emptyMask
+			for tmpMask != 0 {
+				bitPos := bits.TrailingZeros64(tmpMask)
+				groupOffset := uint64(bitPos >> 3)
+				tmpMask &= (tmpMask - 1)
+
+				candidateIdx := (idx + groupOffset) % capacity
+				if controls[candidateIdx] == ctrlEmpty {
+					return 0, false, nil
+				}
+			}
+		}
+
+		idx = (idx + groupSize) % capacity
+		probes += groupSize
+	}
+	return 0, false, nil
+}
+
 // probe searches for a key in the provided keys slice.
 // It returns the index, the item (if found), whether it was found, and any error.
 func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (uint64, *Item, bool, error) {
@@ -174,7 +228,10 @@ func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (ui
 // probeForAdd searches for a key or an insertion slot.
 // It returns the index to insert at, and whether the key is new.
 func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
-	myhash := hash(key)
+	return h.probeForAddWithHash(key, hash(key))
+}
+
+func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) {
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
@@ -199,11 +256,11 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 			// Verify
 			bucket := h.keys[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
-				item, err := h.unmarshalItemFromSlab(bucket)
+				slabKey, err := h.unmarshalKeyFromSlab(bucket)
 				if err != nil {
 					return 0, false, err
 				}
-				if bytes.Equal(item.Key, key) {
+				if bytes.Equal(slabKey, key) {
 					return candidateIdx, false, nil // Found existing
 				}
 			}

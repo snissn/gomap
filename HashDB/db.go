@@ -176,7 +176,7 @@ func (h *DB) Delete(key []byte) error {
 
 	// Delete in the current (new) table.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ func (h *DB) Delete(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -221,7 +221,7 @@ func (h *DB) DeleteSync(key []byte) error {
 
 	// Delete in the current (new) table.
 	if len(h.keys) > 0 && h.capacity > 0 {
-		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
 		if err != nil {
 			return err
 		}
@@ -244,7 +244,7 @@ func (h *DB) DeleteSync(key []byte) error {
 	// If rehash in progress, also tombstone any copy in the old table so it
 	// doesn't get resurrected during migration. Do not adjust Count again.
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
-		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
 		if err != nil {
 			return err
 		}

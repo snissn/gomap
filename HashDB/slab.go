@@ -308,6 +308,27 @@ func (h *DB) openSlabSegments() error {
 	return nil
 }
 
+func (h *DB) unmarshalKeyFromSlab(slabValues Key) ([]byte, error) {
+	header, err := h.ReadBytes(slabValues.slabOffset, 16)
+	if err != nil {
+		return nil, err
+	}
+
+	keyLength, _ := decodeuint64(header[0:8])
+	if keyLength == slabKeyLenControl {
+		return nil, fmt.Errorf("unexpected control record at offset %d", slabValues.slabOffset)
+	}
+	if keyLength == 0 {
+		return nil, nil
+	}
+
+	keyBytes, err := h.ReadBytes(slabValues.slabOffset+16, int64(keyLength))
+	if err != nil {
+		return nil, err
+	}
+	return keyBytes, nil
+}
+
 func (h *DB) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	// Optimistic read: pull a full page to cover header + typical key/value with one syscall.
 	const firstReadSize = int64(4096)

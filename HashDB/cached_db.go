@@ -99,6 +99,11 @@ func (c *CachedDB) DeleteSync(key []byte) error {
 func (c *CachedDB) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
 	return c.cache.getWithHash(key, keyHash)
 }
+
+func (c *CachedDB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error) {
+	return c.cache.getManyWithHashes(keys, hashes)
+}
+
 func (c *CachedDB) Close() error {
 	var firstErr error
 	if c.cache != nil {
