@@ -14,6 +14,7 @@
 //
 // - Put/Delete are not guaranteed durable (no fsync).
 // - PutSync/DeleteSync fsync the slab value log so the operation survives a crash/power loss.
+// - ApplyBatch applies a batch atomically in-process; ApplyBatchSync is the durable, crash-atomic variant.
 //
 // The mmap index files are treated as a derived cache; after an unclean shutdown
 // HashDB rebuilds the index by scanning the slab log (and truncates torn tail records).
