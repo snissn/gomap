@@ -190,6 +190,14 @@
   - Added `hashdb.ForEach` iteration API (arbitrary order) with a sharded snapshot implementation that flushes caches before scanning.
   - Added contract tests for snapshot/restore round-trips and basic concurrency/iterator bounds (`internal/contracttest/*`).
   - Added HashDB crash tests validating `ApplyBatchSync` durability and uncommitted batch truncation (`HashDB/applybatch_crash_test.go`).
+- 2025-12-15: HashDB snapshot helpers + GetMany/IO hardening
+  - Added streaming snapshot helpers: `hashdb.(*DB).Export/Restore` and `hashdb.(*HashDB).Export/Restore` (`HashDB/snapshot.go`).
+  - Made slab writes robust to short writes by using `writeAll` in all slab write paths; added a short-write unit test (`HashDB/writeall_test.go`).
+  - Improved `HashDB.GetMany` by coalescing slab `ReadAt` calls per segment (best-effort locality win) via a backend `getManyWithHashes` fast-path (`HashDB/getmany.go`).
+  - Added HashDB sharded contract tests (per-shard batch atomicity on error, `PutSync` overrides cached `Put` on crash, `ForEach` blocks writers) (`internal/contracttest/hashdb_sharded_semantics_test.go`).
+- 2025-12-15: Compression policy + benches
+  - Centralized the compression threshold (`minValueBytesForCompression`) and reused it in all write paths.
+  - Added a small benchmark matrix for compression inputs/sizes (`HashDB/compression_bench_test.go`).
 
 ## Notes / Conventions
 
