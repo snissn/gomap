@@ -24,7 +24,7 @@ More docs:
 
 High-level guidance:
 
-- **HashDB**: best for high-throughput random reads and perf experiments; durability is currently best-effort.
+- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort, and sharded HashDB uses a write-back cache with no WAL).
 - **TreeDB (cached, default)**: best for workloads dominated by many small random writes; use `*Sync` for durability.
 - **TreeDB (backend-only)**: best when you batch writes yourself or want the simplest engine path; scans can be faster.
 
