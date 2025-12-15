@@ -114,3 +114,19 @@ This note summarizes the main engine and benchmark changes made during the recen
 - **Durability and WAL improvements**
   - If stronger durability is desired, add an explicit small WAL (separate from the slab segments) with configurable fsync policies.
   - Keep the current slab-based log as the primary recovery mechanism, but allow stricter durability modes for users who need them.
+
+## Compression Bench Notes (s2)
+
+HashDB compresses values using `klauspost/compress/s2` when enabled and when it is beneficial.
+There is a minimum size threshold (`minValueBytesForCompression`, currently 32 bytes) to avoid overhead on tiny values.
+
+Example run (Apple M3, darwin/arm64):
+
+```text
+go test -run=^$ -bench BenchmarkCompressionMatrix -benchmem ./HashDB -count=1
+
+BenchmarkCompressionMatrix/zeros-32-8      1000000000  1.198 ns/op  26703.10 MB/s  0 B/op    0 allocs/op
+BenchmarkCompressionMatrix/zeros-64-8      1823733     650.3 ns/op  98.42 MB/s     80 B/op   1 allocs/op
+BenchmarkCompressionMatrix/patterned-128-8 1292676     906.1 ns/op  141.26 MB/s    144 B/op  1 allocs/op
+BenchmarkCompressionMatrix/patterned-1024-8 877576     1322 ns/op   774.48 MB/s    1152 B/op 1 allocs/op
+```
