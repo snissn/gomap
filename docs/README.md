@@ -46,6 +46,7 @@ start here:
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
 - `docs/contracts/README.md`
 - `docs/downstream/README.md`
+- `docs/HASHDB_SNAPSHOT.md`
 
 ## Benchmarking
 
