@@ -44,11 +44,11 @@ func (h *DB) writeSlab(buf []byte) error {
 		h.activeSegmentSize = 0
 	}
 
-	n, err := f.Write(buf)
-	if err == nil {
-		h.activeSegmentSize += int64(n)
+	if _, err := writeAll(f, buf); err != nil {
+		return err
 	}
-	return err
+	h.activeSegmentSize += int64(len(buf))
+	return nil
 }
 
 func (h *DB) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
@@ -132,11 +132,11 @@ func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 	}
 
 	offset := *h.slabOffset
-	n, err := f.Write(buf)
-	if err == nil {
-		h.activeSegmentSize += int64(n)
+	if _, err := writeAll(f, buf); err != nil {
+		return 0, err
 	}
-	return offset, err
+	h.activeSegmentSize += int64(len(buf))
+	return offset, nil
 }
 
 func (h *DB) addManySlabs(items []Item) ([]Key, error) {
