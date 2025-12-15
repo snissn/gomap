@@ -83,4 +83,3 @@ func TestVerifiedPageCache_SafetyTradeoff(t *testing.T) {
 		t.Fatalf("expected checksum mismatch after cache cleared, got: %v", err)
 	}
 }
-

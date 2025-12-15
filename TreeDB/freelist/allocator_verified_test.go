@@ -45,4 +45,3 @@ func TestAllocator_AllocClearsVerifiedBit(t *testing.T) {
 		t.Fatalf("expected page 1 to be unverified when reused")
 	}
 }
-

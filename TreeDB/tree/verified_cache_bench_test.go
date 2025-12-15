@@ -148,4 +148,3 @@ func BenchmarkTreeGet_VerifiedCache(b *testing.B) {
 		b.Fatal("unreachable")
 	}
 }
-

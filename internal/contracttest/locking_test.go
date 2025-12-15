@@ -46,4 +46,3 @@ func TestContract_ExclusiveOpenLock(t *testing.T) {
 		})
 	}
 }
-

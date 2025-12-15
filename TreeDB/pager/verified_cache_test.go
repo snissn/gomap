@@ -45,4 +45,3 @@ func TestVerifiedCache_InvalidationOnGetForWriteAndWrite(t *testing.T) {
 		t.Fatalf("expected page %d to be unverified after Write", id)
 	}
 }
-
