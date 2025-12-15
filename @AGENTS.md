@@ -185,6 +185,11 @@
   - Removed “raft” terminology from docs/roadmap and renamed `docs/raft` to `docs/downstream`.
   - Added HashDB `PutSync`/`DeleteSync` durability APIs and rebuild-on-open crash recovery (slab log scan + torn-tail truncation).
   - Added cross-engine durability contract tests (`internal/contracttest`) validating durable writes survive simulated crashes.
+- 2025-12-15: Downstream readiness (batch + snapshot contracts)
+  - Added HashDB `ApplyBatch`/`ApplyBatchSync` with crash-atomic commit markers and recovery handling.
+  - Added `hashdb.ForEach` iteration API (arbitrary order) with a sharded snapshot implementation that flushes caches before scanning.
+  - Added contract tests for snapshot/restore round-trips and basic concurrency/iterator bounds (`internal/contracttest/*`).
+  - Added HashDB crash tests validating `ApplyBatchSync` durability and uncommitted batch truncation (`HashDB/applybatch_crash_test.go`).
 
 ## Notes / Conventions
 
