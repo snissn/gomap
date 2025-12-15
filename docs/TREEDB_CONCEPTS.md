@@ -38,6 +38,42 @@ At a conceptual level, the backend engine stores:
 
 Backend writes are “commit-like”: a batch updates pages + slabs and then updates the active meta page.
 
+### Files and directories
+
+- `Dir/index.db`: the pager file (chunked mmap) containing:
+  - B+Tree pages (internal + leaf nodes)
+  - freelist / lifecycle metadata
+  - redundant meta (“superblock”) pages used for recovery
+- `Dir/data-*.slab`: append-only value log segments (“slabs”) used for storing larger values efficiently.
+- `Dir/wal/`: cached-mode WAL segments (`wal-<seq>.log`) for durable write-back.
+- `Dir/LOCK`: the cross-process exclusive-open lock file.
+
+### Inline vs slab values
+
+TreeDB stores small values inline in leaf pages up to an internal threshold (currently `256` bytes).
+Larger values are stored out-of-line in the slab log and referenced by a pointer stored in the tree.
+
+### Copy-on-write and the “zipper” merge
+
+The backend commit path applies a batch via a copy-on-write merge:
+
+- It walks the tree from the root down, allocating new pages along the modified paths.
+- Unchanged pages are reused by existing readers/snapshots.
+- When a node overflows, it is split and the split key is promoted upward.
+
+In code this is implemented by `TreeDB/zipper`, which applies the batch and returns:
+the new root page ID plus the set of pages eligible for retirement once readers are done.
+
+### Meta pages and crash recovery
+
+TreeDB maintains redundant meta pages (a “superblock” style design). On open it:
+
+- reads/validates both meta pages (checksums),
+- chooses the newest valid commit sequence,
+- and truncates torn tail state where required.
+
+See: `docs/TREEDB_RECOVERY.md`.
+
 ## Cached Mode (Write-Back Layer)
 
 Cached mode is not a read cache. It is a write-back layer used to batch work:
@@ -72,4 +108,3 @@ See: `docs/contracts/DURABILITY.md` and `docs/TREEDB_RECOVERY.md`.
 - Iterators are point-in-time views and must be `Close()`'d.
 
 See: `docs/contracts/CONCURRENCY.md` and `docs/contracts/LOCKING.md`.
-

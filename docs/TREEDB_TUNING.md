@@ -8,6 +8,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 - `ChunkSize`: defaults to 256 MiB (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 4 MiB in cached mode (memtable/WAL rotation threshold)
 - `KeepRecent`: defaults to 10,000 (backend tuning knob)
+- Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
 
 ## Options
 
@@ -62,4 +63,3 @@ TreeDB performance depends heavily on workload shape. Prefer tuning with:
 See:
 - `cmd/unified_bench/README.md`
 - `docs/BENCHMARK_SPEC.md`
-
