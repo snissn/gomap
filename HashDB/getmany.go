@@ -88,15 +88,6 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 			continue
 		}
 
-		fi, err := f.Stat()
-		if err != nil {
-			for _, r := range refs {
-				errs[r.i] = err
-			}
-			continue
-		}
-		segSize := fi.Size()
-
 		sort.Slice(refs, func(i, j int) bool { return refs[i].offset < refs[j].offset })
 
 		// Coalesce reads: read a window that covers multiple nearby offsets when possible.
@@ -108,16 +99,10 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 				continue
 			}
 			chunkEnd := chunkStart + firstReadSize
-			if chunkEnd > segSize {
-				chunkEnd = segSize
-			}
 
 			j := i + 1
 			for j < len(refs) && refs[j].offset < chunkEnd {
 				wantEnd := refs[j].offset + firstReadSize
-				if wantEnd > segSize {
-					wantEnd = segSize
-				}
 				if wantEnd-chunkStart > maxChunkSize {
 					break
 				}
@@ -136,13 +121,21 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 			}
 
 			buf := make([]byte, chunkLen)
-			if _, err := f.ReadAt(buf, chunkStart); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			n, err := f.ReadAt(buf, chunkStart)
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 				for ; i < j; i++ {
 					errs[refs[i].i] = err
 				}
 				i = j
 				continue
 			}
+			if n < 0 {
+				n = 0
+			}
+			if n > len(buf) {
+				n = len(buf)
+			}
+			buf = buf[:n]
 
 			for k := i; k < j; k++ {
 				ref := refs[k]
