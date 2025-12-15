@@ -44,6 +44,37 @@ func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
 
+// ApplyBatch applies a set of operations at the cache layer. Pending cache writes are
+// volatile until flushed; use ApplyBatchSync for a durable commit.
+func (c *CachedDB) ApplyBatch(ops []BatchOp) error {
+	for _, op := range ops {
+		switch op.Type {
+		case BatchOpPut:
+			if err := c.cache.Put(op.Key, op.Value); err != nil {
+				return err
+			}
+		case BatchOpDelete:
+			if err := c.cache.Delete(op.Key); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("apply batch: unknown op type %d", op.Type)
+		}
+	}
+	return nil
+}
+
+// ApplyBatchSync flushes the write-back cache and then performs a durable batch commit
+// on the backend DB.
+func (c *CachedDB) ApplyBatchSync(ops []BatchOp) error {
+	if err := c.cache.Flush(); err != nil {
+		return err
+	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	return c.db.ApplyBatchSync(ops)
+}
+
 // PutSync flushes the write-back cache and then performs a durable write to the backend.
 // Without a WAL, the cache itself is volatile; PutSync is the supported durability path.
 func (c *CachedDB) PutSync(key []byte, value []byte) error {

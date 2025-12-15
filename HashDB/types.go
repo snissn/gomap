@@ -32,6 +32,8 @@ type DB struct {
 
 	opened bool // set to true only after a successful Open
 
+	batchSeq uint64 // monotonically increasing batch ID (process-local)
+
 	controlFile  *os.File
 	controlMap   mmap.MMap
 	keyFile      *os.File

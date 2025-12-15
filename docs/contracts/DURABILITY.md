@@ -52,8 +52,11 @@ HashDB is designed as a high-performance mmap-backed hashmap engine with a slab 
 Durability contract:
 - `Put` / `Delete` are not guaranteed durable (no fsync); writes go through the OS page cache and may be lost on power loss.
 - `PutSync` / `DeleteSync` fsync the slab value log (and the DB directory on slab segment rotation where supported) so the operation survives a crash/power loss.
+- `ApplyBatch`: atomic in-process, but not guaranteed durable (no fsync).
+- `ApplyBatchSync`: atomic and durable; on recovery, either the entire batch is applied or none of it is.
 - The mmap index (`hashctl-*`, `hashkeys-*`) is treated as a derived cache; on open after an unclean shutdown HashDB rebuilds the index by scanning the slab log and truncates torn tail records.
 
 Notes:
 - HashDB’s sharded `Open/OpenWithShards` entrypoint uses a write-back cache without a WAL; pending cache writes are volatile until flushed. `PutSync`/`DeleteSync` flush the cache and then perform a durable backend write.
+- For the sharded `*hashdb.HashDB` entrypoint, `ApplyBatchSync` is atomic per shard, but not atomic across shards.
 - If you need fully integrated WAL-based durability with stronger corruption detection, use TreeDB `*Sync` operations today.

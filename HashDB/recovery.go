@@ -108,6 +108,16 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 
 	var offset = baseOffset
 	var pos int64
+	type pendingOp struct {
+		typ     BatchOpType
+		key     []byte
+		slabOff SlabOffset
+		hash    Hash
+	}
+	inBatch := false
+	var batchID uint64
+	var batchBeginPos int64
+	var pending []pendingOp
 
 	// If it's slab-0 or slab-real, handle sentinel?
 	// Or check sentinel on every file?
@@ -131,6 +141,7 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 
 	header := make([]byte, 16)
 
+scan:
 	for {
 		recordPos := pos
 
@@ -141,7 +152,14 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 			}
 			// Treat a torn tail record as clean truncation and drop it.
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return f.Truncate(recordPos)
+				truncPos := recordPos
+				if inBatch {
+					truncPos = batchBeginPos
+				}
+				if err := f.Truncate(truncPos); err != nil {
+					return err
+				}
+				break
 			}
 			return err
 		}
@@ -149,6 +167,94 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 
 		keyLen := binary.LittleEndian.Uint64(header[:8])
 		valLenPacked := binary.LittleEndian.Uint64(header[8:])
+
+		// Control record (used for batch atomicity markers).
+		if keyLen == slabKeyLenControl {
+			valLen, flags := unpackLength(valLenPacked)
+			totalLen := uint64(16) + valLen
+			remaining := uint64(fi.Size() - recordPos)
+
+			if flags&FlagControl == 0 || totalLen > remaining || valLen < 9 {
+				truncPos := recordPos
+				if inBatch {
+					truncPos = batchBeginPos
+				}
+				if err := f.Truncate(truncPos); err != nil {
+					return err
+				}
+				break
+			}
+
+			payload := make([]byte, int(valLen))
+			if _, err := io.ReadFull(reader, payload); err != nil {
+				truncPos := recordPos
+				if inBatch {
+					truncPos = batchBeginPos
+				}
+				if err2 := f.Truncate(truncPos); err2 != nil {
+					return err2
+				}
+				break
+			}
+			pos += int64(valLen)
+
+			typ := payload[0]
+			id := binary.LittleEndian.Uint64(payload[1:9])
+
+			switch typ {
+			case controlBatchBegin:
+				// Nested begin: treat the previous batch as incomplete and drop it.
+				if inBatch {
+					if err := f.Truncate(batchBeginPos); err != nil {
+						return err
+					}
+					inBatch = false
+					break scan
+				}
+				inBatch = true
+				batchID = id
+				batchBeginPos = recordPos
+				pending = pending[:0]
+			case controlBatchCommit:
+				if !inBatch {
+					break // commit without begin: ignore
+				}
+				if id != batchID {
+					if err := f.Truncate(batchBeginPos); err != nil {
+						return err
+					}
+					inBatch = false
+					break scan
+				}
+				for _, p := range pending {
+					switch p.typ {
+					case BatchOpPut:
+						if err := h.addBucket(p.key, Key{slabOffset: p.slabOff, hash: p.hash}); err != nil {
+							return err
+						}
+					case BatchOpDelete:
+						h.replayDelete(p.key)
+					default:
+						return fmt.Errorf("recover %s: unknown pending op type %d", filename, p.typ)
+					}
+				}
+				inBatch = false
+				batchID = 0
+				pending = pending[:0]
+			default:
+				truncPos := recordPos
+				if inBatch {
+					truncPos = batchBeginPos
+				}
+				if err := f.Truncate(truncPos); err != nil {
+					return err
+				}
+				break scan
+			}
+
+			offset += SlabOffset(totalLen)
+			continue
+		}
 
 		isDelete := valLenPacked == ^uint64(0)
 		var valLen uint64
@@ -161,7 +267,14 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 		if totalLen > remaining {
 			// The record claims bytes beyond the end of the file.
 			// We can't find the next record boundary, so truncate the tail.
-			return f.Truncate(recordPos)
+			truncPos := recordPos
+			if inBatch {
+				truncPos = batchBeginPos
+			}
+			if err := f.Truncate(truncPos); err != nil {
+				return err
+			}
+			break
 		}
 
 		if keyLen > uint64(int(^uint(0)>>1)) {
@@ -170,32 +283,62 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 		key := make([]byte, int(keyLen))
 		if _, err := io.ReadFull(reader, key); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return f.Truncate(recordPos)
+				truncPos := recordPos
+				if inBatch {
+					truncPos = batchBeginPos
+				}
+				if err2 := f.Truncate(truncPos); err2 != nil {
+					return err2
+				}
+				break
 			}
 			return err
 		}
 		pos += int64(keyLen)
 
 		if isDelete {
-			h.replayDelete(key)
+			if inBatch {
+				pending = append(pending, pendingOp{typ: BatchOpDelete, key: key})
+			} else {
+				h.replayDelete(key)
+			}
 		} else {
 			if valLen > uint64(int64(^uint64(0)>>1)) {
 				return fmt.Errorf("recover %s: value length too large: %d", filename, valLen)
 			}
 			if _, err := io.CopyN(io.Discard, reader, int64(valLen)); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					return f.Truncate(recordPos)
+					truncPos := recordPos
+					if inBatch {
+						truncPos = batchBeginPos
+					}
+					if err2 := f.Truncate(truncPos); err2 != nil {
+						return err2
+					}
+					break
 				}
 				return err
 			}
 			pos += int64(valLen)
 
-			if err := h.addBucket(key, Key{slabOffset: offset, hash: hash(key)}); err != nil {
-				return err
+			if inBatch {
+				pending = append(pending, pendingOp{typ: BatchOpPut, key: key, slabOff: offset, hash: hash(key)})
+			} else {
+				if err := h.addBucket(key, Key{slabOffset: offset, hash: hash(key)}); err != nil {
+					return err
+				}
 			}
 		}
 
 		offset += SlabOffset(totalLen)
+	}
+
+	// If the file ends mid-batch (no commit record), drop the entire batch by truncating
+	// back to the begin marker.
+	if inBatch {
+		if err := f.Truncate(batchBeginPos); err != nil {
+			return err
+		}
 	}
 	return nil
 }

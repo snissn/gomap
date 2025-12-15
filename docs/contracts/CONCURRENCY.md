@@ -29,9 +29,9 @@
 
 - `*hashdb.HashDB` is sharded and intended to be safe for concurrent use.
 - Cross-shard operations (e.g. `GetMany`) are implemented by grouping work per shard to reduce lock churn.
+- `ForEach` takes an exclusive snapshot of the store (blocks writers) so iteration sees a stable view.
 
 ### Single-shard
 
 - `*hashdb.DB` (opened by `hashdb.OpenSingle`) is not goroutine-safe.
 - Use it only when single-threaded access is guaranteed.
-

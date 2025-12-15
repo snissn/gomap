@@ -33,6 +33,6 @@
 
 ## HashDB
 
-- HashDB does not currently expose a general ordered iterator.
-- Benchmarks treat HashDB as “no scan” for now.
-
+- HashDB does not expose an ordered iterator.
+- HashDB exposes `ForEach(fn)` which iterates all live keys in arbitrary order.
+  - For the sharded `*hashdb.HashDB` entrypoint, `ForEach` takes an exclusive snapshot (blocks writers, flushes shard caches, then iterates backend state).
