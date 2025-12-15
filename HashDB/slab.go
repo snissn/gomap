@@ -75,8 +75,7 @@ func (h *DB) addSlab(item Item) (Key, error) {
 	// Compress value?
 	var flags uint8
 	if h.compressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
-		compressed := s2.Encode(nil, val)
-		if len(compressed) < len(val) {
+		if compressed, ok := compressValueIfBeneficial(val); ok {
 			val = compressed
 			flags |= FlagCompressed
 		}
@@ -142,38 +141,49 @@ func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 
 func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 	slabOffsets := make([]Key, len(items))
-	if cap(h.slabData) < len(items)*2048 {
-		h.slabData = make([]byte, 0, len(items)*2048)
+	if cap(h.slabData) < 1<<20 {
+		h.slabData = make([]byte, 0, 1<<20) // 1MB starting point; grows as needed.
 	} else {
 		h.slabData = h.slabData[:0]
 	}
 
+	f := h.slabFiles[h.activeSegmentID]
+	if f == nil {
+		return nil, fmt.Errorf("missing slab-%d", h.activeSegmentID)
+	}
+
+	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
+
+	currentOffset := *h.slabOffset
 	var scratch [16]byte
 
-	totalBatchSize := 0
-	for _, item := range items {
-		totalBatchSize += 16 + len(item.Key) + len(item.Value)
-	}
-
-	// Check rotation once for batch using in-memory size.
-	// If batch > MaxSegmentSize, this logic needs to be smarter (split batch).
-	// For now assume batch fits.
-	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
-	if h.activeSegmentSize+int64(totalBatchSize) > maxSegmentSize {
-		h.activeSegmentID++
-		newFilename := fmt.Sprintf("%s/slab-%d", h.dir, h.activeSegmentID)
-		newF, err := os.OpenFile(newFilename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-		if err != nil {
-			return nil, err
+	flush := func() error {
+		if len(h.slabData) == 0 {
+			return nil
 		}
-		h.slabFiles[h.activeSegmentID] = newF
-		*h.slabOffset = SlabOffset(uint64(h.activeSegmentID) << OffsetBits)
-		h.activeSegmentSize = 0
+		if _, err := writeAll(f, h.slabData); err != nil {
+			return err
+		}
+		h.activeSegmentSize += int64(len(h.slabData))
+		h.slabData = h.slabData[:0]
+		*h.slabOffset = currentOffset
+		return nil
 	}
 
-	f := h.slabFiles[h.activeSegmentID]
-	startOffset := *h.slabOffset
-	currentOffset := startOffset
+	rotate := func() error {
+		if err := flush(); err != nil {
+			return err
+		}
+		if err := h.rotateSlabSegment(); err != nil {
+			return err
+		}
+		f = h.slabFiles[h.activeSegmentID]
+		if f == nil {
+			return fmt.Errorf("missing slab-%d after rotation", h.activeSegmentID)
+		}
+		currentOffset = *h.slabOffset
+		return nil
+	}
 
 	for i, item := range items {
 		keyBytes := item.Key
@@ -181,14 +191,21 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 
 		var flags uint8
 		if h.compressionEnabled && len(valueBytes) > 32 {
-			compressed := s2.Encode(nil, valueBytes)
-			if len(compressed) < len(valueBytes) {
+			if compressed, ok := compressValueIfBeneficial(valueBytes); ok {
 				valueBytes = compressed
 				flags |= FlagCompressed
 			}
 		}
 
-		totalLength := 16 + len(keyBytes) + len(valueBytes)
+		recordLen := 16 + len(keyBytes) + len(valueBytes)
+
+		// Ensure we don't write a record across a segment boundary. If it doesn't fit,
+		// flush current buffer and rotate to a new segment.
+		if h.activeSegmentSize+int64(len(h.slabData))+int64(recordLen) > maxSegmentSize {
+			if err := rotate(); err != nil {
+				return nil, err
+			}
+		}
 
 		slabOffsets[i] = Key{slabOffset: currentOffset, hash: hash(keyBytes)}
 
@@ -198,15 +215,13 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 		h.slabData = append(h.slabData, keyBytes...)
 		h.slabData = append(h.slabData, valueBytes...)
 
-		currentOffset += SlabOffset(totalLength)
+		currentOffset += SlabOffset(recordLen)
 	}
 
-	n, err := f.Write(h.slabData)
-	if err != nil {
+	if err := flush(); err != nil {
 		return nil, err
 	}
-	h.activeSegmentSize += int64(n)
-	*h.slabOffset = currentOffset
+
 	return slabOffsets, nil
 }
 
