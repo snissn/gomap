@@ -61,6 +61,11 @@ type DB struct {
 
 	compressionEnabled bool
 
+	// Read-only slab mmaps for sealed segments (segmentID < activeSegmentID).
+	// These are an optimization to reduce syscalls for read-heavy workloads.
+	slabROFiles map[uint16]*os.File
+	slabROMaps  map[uint16]mmap.MMap
+
 	indexMemoryPolicy    IndexMemoryPolicy
 	indexMemoryPolicySet bool
 	controlsLocked       bool

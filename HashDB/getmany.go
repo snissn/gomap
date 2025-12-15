@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 
 	"github.com/klauspost/compress/s2"
 )
@@ -21,6 +22,28 @@ type slabSegmentRef struct {
 	i      int
 	key    []byte
 	offset int64
+}
+
+var getManyChunkBufPool sync.Pool
+
+func getManyChunkBuf(n int64) []byte {
+	if n <= 0 || n > int64(int(^uint(0)>>1)) {
+		return nil
+	}
+	b, _ := getManyChunkBufPool.Get().([]byte)
+	if cap(b) < int(n) {
+		return make([]byte, int(n))
+	}
+	return b[:int(n)]
+}
+
+func putManyChunkBuf(b []byte) {
+	// Keep pool bounded: we never intentionally read chunks > 1MB.
+	const maxKeep = 1 << 20
+	if cap(b) > maxKeep {
+		return
+	}
+	getManyChunkBufPool.Put(b[:0])
 }
 
 func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error) {
@@ -120,22 +143,54 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 				continue
 			}
 
-			buf := make([]byte, chunkLen)
-			n, err := f.ReadAt(buf, chunkStart)
-			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-				for ; i < j; i++ {
-					errs[refs[i].i] = err
+			var (
+				buf    []byte
+				n      int
+				err    error
+				pooled bool
+			)
+
+			// Fast-path: sealed segments may be mmapped read-only.
+			if segmentID < h.activeSegmentID {
+				if m, mapErr := h.slabReadOnlyMap(segmentID); mapErr == nil && m != nil {
+					if chunkStart >= 0 && chunkEnd >= chunkStart && chunkEnd <= int64(len(m)) {
+						if chunkStart <= int64(int(^uint(0)>>1)) && chunkEnd <= int64(int(^uint(0)>>1)) {
+							buf = m[int(chunkStart):int(chunkEnd)]
+						}
+						n = len(buf)
+						err = nil
+					}
 				}
-				i = j
-				continue
 			}
-			if n < 0 {
-				n = 0
+
+			if buf == nil {
+				buf = getManyChunkBuf(chunkLen)
+				if buf == nil {
+					for ; i < j; i++ {
+						errs[refs[i].i] = fmt.Errorf("chunk too large: %d", chunkLen)
+					}
+					i = j
+					continue
+				}
+				pooled = true
+
+				n, err = f.ReadAt(buf, chunkStart)
+				if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+					putManyChunkBuf(buf)
+					for ; i < j; i++ {
+						errs[refs[i].i] = err
+					}
+					i = j
+					continue
+				}
+				if n < 0 {
+					n = 0
+				}
+				if n > len(buf) {
+					n = len(buf)
+				}
+				buf = buf[:n]
 			}
-			if n > len(buf) {
-				n = len(buf)
-			}
-			buf = buf[:n]
 
 			for k := i; k < j; k++ {
 				ref := refs[k]
@@ -157,6 +212,10 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 					continue
 				}
 				values[ref.i] = append([]byte(nil), item.Value...)
+			}
+
+			if pooled {
+				putManyChunkBuf(buf)
 			}
 
 			i = j

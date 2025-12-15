@@ -3,6 +3,7 @@ package hashdb
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,6 +55,28 @@ func (h *DB) writeSlab(buf []byte) error {
 func (h *DB) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	segmentID := uint16(uint64(offset) >> OffsetBits)
 	localOffset := int64(uint64(offset) & ((1 << OffsetBits) - 1))
+
+	// Fast-path: sealed segments may be mmapped read-only.
+	if segmentID < h.activeSegmentID {
+		if m, err := h.slabReadOnlyMap(segmentID); err == nil && m != nil {
+			if localOffset < 0 {
+				return nil, fmt.Errorf("negative offset: %d", localOffset)
+			}
+			end := localOffset + n
+			if end < localOffset {
+				return nil, fmt.Errorf("offset overflow")
+			}
+			if end > int64(len(m)) {
+				return nil, io.EOF
+			}
+			if localOffset > int64(int(^uint(0)>>1)) || end > int64(int(^uint(0)>>1)) {
+				return nil, fmt.Errorf("offset too large")
+			}
+			b := make([]byte, n)
+			copy(b, m[int(localOffset):int(end)])
+			return b, nil
+		}
+	}
 
 	f, ok := h.slabFiles[segmentID]
 	if !ok {

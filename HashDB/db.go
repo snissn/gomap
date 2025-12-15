@@ -17,6 +17,8 @@ func (h *DB) closeFPs() error {
 		}
 	}
 
+	recordErr(h.closeSlabReadOnlyMaps())
+
 	// Unmap before closing files (important for Windows compatibility).
 	if h.controlMap != nil {
 		h.unlockControlsIfNeeded([]byte(h.controlMap))
