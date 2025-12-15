@@ -1,0 +1,221 @@
+package hashdb
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+
+	"github.com/klauspost/compress/s2"
+)
+
+type slabReadRef struct {
+	i      int
+	key    []byte
+	offset SlabOffset
+}
+
+type slabSegmentRef struct {
+	i      int
+	key    []byte
+	offset int64
+}
+
+func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error) {
+	values := make([][]byte, len(keys))
+	errs := make([]error, len(keys))
+
+	if len(keys) == 0 {
+		return values, errs
+	}
+
+	// Find slab offsets for all found keys without reading values.
+	found := make([]slabReadRef, 0, len(keys))
+
+	for i, key := range keys {
+		keyHash := hashes[i]
+
+		if len(h.keys) > 0 && h.capacity > 0 {
+			idx, ok, err := h.probeIndexWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+			if err != nil {
+				errs[i] = err
+				continue
+			}
+			if ok {
+				found = append(found, slabReadRef{i: i, key: key, offset: h.keys[idx].slabOffset})
+				continue
+			}
+		}
+
+		if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+			idx, ok, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+			if err != nil {
+				errs[i] = err
+				continue
+			}
+			if ok {
+				found = append(found, slabReadRef{i: i, key: key, offset: h.rehashOldKeys[idx].slabOffset})
+				continue
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return values, errs
+	}
+
+	// Group found items by segment so we can coalesce ReadAt calls.
+	bySegment := make(map[uint16][]slabSegmentRef)
+	for _, f := range found {
+		segmentID := uint16(uint64(f.offset) >> OffsetBits)
+		localOffset := int64(uint64(f.offset) & ((1 << OffsetBits) - 1))
+		bySegment[segmentID] = append(bySegment[segmentID], slabSegmentRef{i: f.i, key: f.key, offset: localOffset})
+	}
+
+	const (
+		firstReadSize = int64(4096)
+		maxChunkSize  = int64(1 << 20) // 1MB
+	)
+
+	for segmentID, refs := range bySegment {
+		f := h.slabFiles[segmentID]
+		if f == nil {
+			for _, r := range refs {
+				errs[r.i] = fmt.Errorf("segment %d not found", segmentID)
+			}
+			continue
+		}
+
+		fi, err := f.Stat()
+		if err != nil {
+			for _, r := range refs {
+				errs[r.i] = err
+			}
+			continue
+		}
+		segSize := fi.Size()
+
+		sort.Slice(refs, func(i, j int) bool { return refs[i].offset < refs[j].offset })
+
+		// Coalesce reads: read a window that covers multiple nearby offsets when possible.
+		for i := 0; i < len(refs); {
+			chunkStart := refs[i].offset
+			if chunkStart < 0 {
+				errs[refs[i].i] = fmt.Errorf("negative offset: %d", chunkStart)
+				i++
+				continue
+			}
+			chunkEnd := chunkStart + firstReadSize
+			if chunkEnd > segSize {
+				chunkEnd = segSize
+			}
+
+			j := i + 1
+			for j < len(refs) && refs[j].offset < chunkEnd {
+				wantEnd := refs[j].offset + firstReadSize
+				if wantEnd > segSize {
+					wantEnd = segSize
+				}
+				if wantEnd-chunkStart > maxChunkSize {
+					break
+				}
+				if wantEnd > chunkEnd {
+					chunkEnd = wantEnd
+				}
+				j++
+			}
+
+			chunkLen := chunkEnd - chunkStart
+			if chunkLen <= 0 {
+				for ; i < j; i++ {
+					errs[refs[i].i] = fmt.Errorf("invalid chunk length: %d", chunkLen)
+				}
+				continue
+			}
+
+			buf := make([]byte, chunkLen)
+			if _, err := f.ReadAt(buf, chunkStart); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				for ; i < j; i++ {
+					errs[refs[i].i] = err
+				}
+				i = j
+				continue
+			}
+
+			for k := i; k < j; k++ {
+				ref := refs[k]
+				rel := ref.offset - chunkStart
+				val, ok, err := decodeValueFromChunk(buf, rel, ref.key)
+				if err != nil {
+					errs[ref.i] = err
+					continue
+				}
+				if ok {
+					values[ref.i] = val
+					continue
+				}
+
+				// Fallback to the existing per-key reader.
+				item, err := h.unmarshalItemFromSlab(Key{slabOffset: SlabOffset((uint64(segmentID) << OffsetBits) | uint64(ref.offset))})
+				if err != nil {
+					errs[ref.i] = err
+					continue
+				}
+				values[ref.i] = append([]byte(nil), item.Value...)
+			}
+
+			i = j
+		}
+	}
+
+	return values, errs
+}
+
+func decodeValueFromChunk(buf []byte, rel int64, key []byte) ([]byte, bool, error) {
+	if rel < 0 || rel+16 > int64(len(buf)) {
+		return nil, false, nil
+	}
+
+	keyLen := binary.LittleEndian.Uint64(buf[rel : rel+8])
+	if keyLen == slabKeyLenControl {
+		return nil, false, fmt.Errorf("unexpected control record in slab chunk")
+	}
+
+	valLenPacked := binary.LittleEndian.Uint64(buf[rel+8 : rel+16])
+	if valLenPacked == ^uint64(0) {
+		// Delete record.
+		return nil, true, nil
+	}
+	valLen, flags := unpackLength(valLenPacked)
+
+	totalLen := int64(16) + int64(keyLen) + int64(valLen)
+	if rel+totalLen > int64(len(buf)) {
+		return nil, false, nil
+	}
+
+	if keyLen != uint64(len(key)) {
+		return nil, false, nil
+	}
+
+	keyStart := rel + 16
+	keyEnd := keyStart + int64(keyLen)
+	if !bytes.Equal(buf[keyStart:keyEnd], key) {
+		return nil, false, nil
+	}
+
+	valStart := keyEnd
+	valEnd := valStart + int64(valLen)
+	valBytes := buf[valStart:valEnd]
+
+	if flags&FlagCompressed != 0 {
+		decompressed, err := s2.Decode(nil, valBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		return decompressed, true, nil
+	}
+
+	return append([]byte(nil), valBytes...), true, nil
+}

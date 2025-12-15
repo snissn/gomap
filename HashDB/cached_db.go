@@ -212,6 +212,14 @@ func (m *dbKVAdapter) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
 	return m.db.getWithHash(key, keyHash)
 }
 
+func (m *dbKVAdapter) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error) {
+	if m.mu != nil {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+	}
+	return m.db.getManyWithHashes(keys, hashes)
+}
+
 // PutMany allows CacheKV to batch writes down to the underlying DB using PutMany.
 func (m *dbKVAdapter) PutMany(keys [][]byte, vals [][]byte) error {
 	if len(keys) != len(vals) {

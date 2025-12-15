@@ -16,6 +16,10 @@ type hashGetter interface {
 	getWithHash(key []byte, keyHash Hash) ([]byte, error)
 }
 
+type hashManyGetter interface {
+	getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
+}
+
 // cacheEntry stores a pending write or delete.
 type cacheEntry struct {
 	value []byte
@@ -149,6 +153,22 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 	c.mu.RUnlock()
 
 	if len(misses) == 0 {
+		return values, errs
+	}
+
+	if hmg, ok := c.backend.(hashManyGetter); ok && useHashes {
+		missKeys := make([][]byte, len(misses))
+		missHashes := make([]Hash, len(misses))
+		for j, i := range misses {
+			missKeys[j] = keys[i]
+			missHashes[j] = hashes[i]
+		}
+
+		missVals, missErrs := hmg.getManyWithHashes(missKeys, missHashes)
+		for j, i := range misses {
+			values[i] = missVals[j]
+			errs[i] = missErrs[j]
+		}
 		return values, errs
 	}
 
