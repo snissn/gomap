@@ -1068,8 +1068,19 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	scanCfg.TestsArg = "batch_write,full_scan,prefix_scan"
 	scanCfg.Progress = false
 
+	// TreeDBBackend is a useful baseline for point ops, but too slow to include
+	// in larger sweeps. Run it once at a moderately sized keycount so the numbers
+	// are representative without dominating runtime.
+	backendBaselineKeys := 10_000
+	if len(keyCounts) > 0 && keyCounts[len(keyCounts)-1] < backendBaselineKeys {
+		backendBaselineKeys = keyCounts[len(keyCounts)-1]
+	}
+	if backendBaselineKeys <= 0 {
+		backendBaselineKeys = 1
+	}
+
 	backendBaselineCfg := baseCfg
-	backendBaselineCfg.Keys = keyCounts[0]
+	backendBaselineCfg.Keys = backendBaselineKeys
 	backendBaselineCfg.DBsArg = "treedbbackend"
 	backendBaselineCfg.TestsArg = "write_seq,write_rand,read_rand"
 	backendBaselineCfg.Progress = false
