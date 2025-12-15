@@ -181,6 +181,10 @@
   - Reworked `DB.Compact` to close/reopen around directory swap so Windows can rename/delete reliably and lock behavior stays coherent.
   - `redisserver` now supports configurable addr/port and shard count; `COMPACT` runs synchronously (tests use this).
   - `HashDB/stress` tests use an ephemeral loopback addr and smaller shard count for reliable CI.
+- 2025-12-15: Downstream readiness (HashDB + contracts)
+  - Removed “raft” terminology from docs/roadmap and renamed `docs/raft` to `docs/downstream`.
+  - Added HashDB `PutSync`/`DeleteSync` durability APIs and rebuild-on-open crash recovery (slab log scan + torn-tail truncation).
+  - Added cross-engine durability contract tests (`internal/contracttest`) validating durable writes survive simulated crashes.
 
 ## Notes / Conventions
 

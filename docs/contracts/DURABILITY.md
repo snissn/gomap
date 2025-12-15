@@ -3,7 +3,7 @@
 ## TL;DR
 
 - TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) and coherent crash recovery across cached vs backend opens.
-- HashDB is optimized for performance and does not currently provide an explicit durability API contract (no “fsync on commit” operation).
+- HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
 
 ## Who Is This For?
 
@@ -49,9 +49,11 @@ Crash recovery:
 
 HashDB is designed as a high-performance mmap-backed hashmap engine with a slab value log.
 
-Current durability contract:
-- HashDB does not yet provide an explicit “durable commit” API (no `PutSync`/`Sync` semantics).
-- Writes go through the OS page cache and may be lost on power loss.
-- Recovery is slab-log-based, but it should be treated as “best effort” until a stricter durability mode is implemented.
+Durability contract:
+- `Put` / `Delete` are not guaranteed durable (no fsync); writes go through the OS page cache and may be lost on power loss.
+- `PutSync` / `DeleteSync` fsync the slab value log (and the DB directory on slab segment rotation where supported) so the operation survives a crash/power loss.
+- The mmap index (`hashctl-*`, `hashkeys-*`) is treated as a derived cache; on open after an unclean shutdown HashDB rebuilds the index by scanning the slab log and truncates torn tail records.
 
-If you need strict durability (e.g. for a replicated commit path), use TreeDB `*Sync` operations today.
+Notes:
+- HashDB’s sharded `Open/OpenWithShards` entrypoint uses a write-back cache without a WAL; pending cache writes are volatile until flushed. `PutSync`/`DeleteSync` flush the cache and then perform a durable backend write.
+- If you need fully integrated WAL-based durability with stronger corruption detection, use TreeDB `*Sync` operations today.

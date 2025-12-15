@@ -10,7 +10,11 @@
 // return ErrLocked.
 //
 // Note on durability:
-// HashDB is tuned for performance and does not currently expose an explicit
-// “durable commit” API (no PutSync/Sync semantics). Treat durability across
-// power loss as best-effort unless/until stronger durability modes are added.
+// HashDB is tuned for performance and uses an append-only slab value log.
+//
+// - Put/Delete are not guaranteed durable (no fsync).
+// - PutSync/DeleteSync fsync the slab value log so the operation survives a crash/power loss.
+//
+// The mmap index files are treated as a derived cache; after an unclean shutdown
+// HashDB rebuilds the index by scanning the slab log (and truncates torn tail records).
 package hashdb

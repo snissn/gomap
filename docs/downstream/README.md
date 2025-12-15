@@ -32,7 +32,7 @@ Before a downstream system can safely depend on this repo, we need explicit cont
 
 - Use **TreeDB** for anything “committed” that must survive crashes:
   - cached mode is fine, but use `*Sync` operations for durability.
-- Treat **HashDB** as a high-performance engine with evolving durability semantics (great for benchmarking; not yet a strict commit store).
+- Treat **HashDB** as a high-performance engine with explicit `*Sync` durability calls backed by slab-log recovery; prefer TreeDB if you need stronger integrated WAL-based durability and corruption diagnostics.
 
 ## Next Concrete Steps (Repo-Local)
 
