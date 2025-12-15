@@ -80,9 +80,23 @@ func (h *DB) closeFPs() error {
 // Close releases mmap and file descriptors held by the DB.
 func (h *DB) Close() error {
 	var errs []error
+
+	// Best-effort: a clean close should make recent writes durable and avoid
+	// forcing a full recovery scan on next open.
+	if err := h.Sync(); err != nil {
+		errs = append(errs, err)
+	} else if h.opened && h.metadataMap != nil {
+		// Only mark clean if we successfully synced all files. If sync fails, keep
+		// the state "dirty" so the next opener rebuilds the index from the slab log.
+		if err := h.markClean(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if err := h.closeFPs(); err != nil {
 		errs = append(errs, err)
 	}
+	h.opened = false
 	if h.lock != nil {
 		if err := h.lock.Close(); err != nil {
 			errs = append(errs, err)
@@ -197,6 +211,55 @@ func (h *DB) Delete(key []byte) error {
 	return nil
 }
 
+// DeleteSync removes a key and fsyncs the value log so the delete survives a crash.
+//
+// Note: HashDB durability is implemented via the slab value log + crash recovery.
+// The mmap index is treated as a derived cache and may be rebuilt on next open.
+func (h *DB) DeleteSync(key []byte) error {
+	foundNew := false
+	keyHash := hash(key)
+
+	// Delete in the current (new) table.
+	if len(h.keys) > 0 && h.capacity > 0 {
+		idx, _, found, err := h.probeWithHash(h.keys, h.controls, h.capacity, key, keyHash)
+		if err != nil {
+			return err
+		}
+		if found {
+			prevSegmentID := h.activeSegmentID
+			if err := h.addDeleteSlab(key); err != nil {
+				return err
+			}
+			if err := h.syncActiveSegment(prevSegmentID); err != nil {
+				return err
+			}
+
+			h.keys[idx].slabOffset = Tombstone
+			h.setDeleted(idx)
+			*h.count -= 1
+			foundNew = true
+		}
+	}
+
+	// If rehash in progress, also tombstone any copy in the old table so it
+	// doesn't get resurrected during migration. Do not adjust Count again.
+	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
+		idx, _, found, err := h.probeWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, keyHash)
+		if err != nil {
+			return err
+		}
+		if found {
+			h.rehashOldKeys[idx].slabOffset = Tombstone
+		}
+	}
+
+	if !foundNew {
+		// Key not present; no delete slab written.
+		return nil
+	}
+	return nil
+}
+
 // Update performs an atomic read-modify-write operation on a key.
 // The callback receives the current value (or nil if not found) and returns the new value.
 func (h *DB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
@@ -279,6 +342,39 @@ func (h *DB) Put(key []byte, value []byte) error {
 	return err
 }
 
+// PutSync inserts a key/value pair and fsyncs the value log so the write survives a crash.
+//
+// Note: HashDB durability is implemented via the slab value log + crash recovery.
+// The mmap index is treated as a derived cache and may be rebuilt on next open.
+func (h *DB) PutSync(key []byte, value []byte) error {
+	item := Item{Key: key, Value: value}
+
+	startTime := time.Now()
+	prevSegmentID := h.activeSegmentID
+	slabOffset, err := h.addSlab(item)
+	if err != nil {
+		return err
+	}
+	if err := h.syncActiveSegment(prevSegmentID); err != nil {
+		return err
+	}
+	slabTime := time.Since(startTime)
+	h.slabTime += slabTime
+
+	startTime = time.Now()
+	if err := h.addBucket(key, slabOffset); err != nil {
+		return err
+	}
+	if h.rehashInProgress {
+		if err := h.rehashStep(rehashBucketsPerWrite); err != nil {
+			return err
+		}
+	}
+	hashTime := time.Since(startTime)
+	h.hashTime += hashTime
+	return nil
+}
+
 // Add is a compatibility wrapper for older code.
 func (h *DB) Add(key []byte, value []byte) error {
 	return h.Put(key, value)
@@ -308,6 +404,25 @@ func (h *DB) Open(folder string) error {
 		_ = h.Close()
 		return err
 	}
+
+	needsRecovery, err := h.needsRecoveryOnOpen()
+	if err != nil {
+		_ = h.Close()
+		return err
+	}
+	if needsRecovery {
+		if err := h.Recover(); err != nil {
+			_ = h.Close()
+			return err
+		}
+	}
+
+	if err := h.markDirty(); err != nil {
+		_ = h.Close()
+		return err
+	}
+
+	h.opened = true
 	return nil
 }
 

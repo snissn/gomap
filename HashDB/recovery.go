@@ -3,6 +3,7 @@ package hashdb
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -92,15 +93,21 @@ func (h *DB) Recover() error {
 }
 
 func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
-	f, err := os.Open(filename)
+	f, err := os.OpenFile(filename, os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	reader := bufio.NewReader(f)
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReaderSize(f, 128*1024)
 
 	var offset = baseOffset
+	var pos int64
 
 	// If it's slab-0 or slab-real, handle sentinel?
 	// Or check sentinel on every file?
@@ -110,53 +117,82 @@ func (h *DB) recoverFile(filename string, baseOffset SlabOffset) error {
 
 	if baseOffset == 0 {
 		prefix := make([]byte, 6)
-		_, err = io.ReadFull(reader, prefix)
+		n, err := io.ReadFull(reader, prefix)
 		if err == nil && string(prefix) == "offset" {
 			offset += 6
+			pos += int64(n)
 		} else {
-			f.Seek(0, 0)
+			_, _ = f.Seek(0, 0)
 			reader.Reset(f)
 			offset = baseOffset
+			pos = 0
 		}
 	}
 
 	header := make([]byte, 16)
 
 	for {
+		recordPos := pos
+
 		_, err := io.ReadFull(reader, header)
-		if err == io.EOF {
-			break
-		}
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			// Treat a torn tail record as clean truncation and drop it.
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return f.Truncate(recordPos)
+			}
 			return err
 		}
+		pos += 16
 
 		keyLen := binary.LittleEndian.Uint64(header[:8])
-		valLen := binary.LittleEndian.Uint64(header[8:])
+		valLenPacked := binary.LittleEndian.Uint64(header[8:])
 
-		totalLen := 16 + keyLen
-		if valLen != ^uint64(0) {
-			totalLen += valLen
+		isDelete := valLenPacked == ^uint64(0)
+		var valLen uint64
+		if !isDelete {
+			valLen, _ = unpackLength(valLenPacked)
 		}
 
-		key := make([]byte, keyLen)
-		_, err = io.ReadFull(reader, key)
-		if err != nil {
+		totalLen := uint64(16) + keyLen + valLen
+		remaining := uint64(fi.Size() - recordPos)
+		if totalLen > remaining {
+			// The record claims bytes beyond the end of the file.
+			// We can't find the next record boundary, so truncate the tail.
+			return f.Truncate(recordPos)
+		}
+
+		if keyLen > uint64(int(^uint(0)>>1)) {
+			return fmt.Errorf("recover %s: key length too large: %d", filename, keyLen)
+		}
+		key := make([]byte, int(keyLen))
+		if _, err := io.ReadFull(reader, key); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return f.Truncate(recordPos)
+			}
 			return err
 		}
+		pos += int64(keyLen)
 
-		if valLen == ^uint64(0) {
+		if isDelete {
 			h.replayDelete(key)
 		} else {
-			discarded, err := reader.Discard(int(valLen))
-			if err != nil {
+			if valLen > uint64(int64(^uint64(0)>>1)) {
+				return fmt.Errorf("recover %s: value length too large: %d", filename, valLen)
+			}
+			if _, err := io.CopyN(io.Discard, reader, int64(valLen)); err != nil {
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					return f.Truncate(recordPos)
+				}
 				return err
 			}
-			if discarded != int(valLen) {
-				return io.ErrUnexpectedEOF
-			}
+			pos += int64(valLen)
 
-			h.addBucket(key, Key{slabOffset: offset, hash: hash(key)})
+			if err := h.addBucket(key, Key{slabOffset: offset, hash: hash(key)}); err != nil {
+				return err
+			}
 		}
 
 		offset += SlabOffset(totalLen)
