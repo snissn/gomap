@@ -75,11 +75,20 @@ func main() {
 	}
 	defer db.Close()
 
+	// Best-effort write:
 	if err := db.Put([]byte("k"), []byte("v")); err != nil {
+		log.Fatal(err)
+	}
+
+	// Durable write:
+	if err := db.PutSync([]byte("k"), []byte("v2")); err != nil {
 		log.Fatal(err)
 	}
 }
 ```
+
+HashDB snapshots:
+- `docs/HASHDB_SNAPSHOT.md`
 
 ## Unified Bench
 

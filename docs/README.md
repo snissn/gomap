@@ -47,6 +47,8 @@ start here:
 - `docs/contracts/README.md`
 - `docs/downstream/README.md`
 - `docs/HASHDB_SNAPSHOT.md`
+- `docs/HASHDB_CONCEPTS.md`
+- `docs/HASHDB_TUNING.md`
 
 ## Benchmarking
 
