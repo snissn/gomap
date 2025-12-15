@@ -20,4 +20,9 @@
 //
 // The mmap index files are treated as a derived cache; after an unclean shutdown
 // HashDB rebuilds the index by scanning the slab log (and truncates torn tail records).
+//
+// Note on sharded caching:
+// The sharded *HashDB implementation uses a per-shard write-back cache. By default
+// the cache has no WAL (pending writes are volatile until flushed). For advanced
+// usage, a per-shard cache WAL can be enabled via OpenWithOptions/OpenWithShardsAndOptions.
 package hashdb

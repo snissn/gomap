@@ -201,6 +201,11 @@
 - 2025-12-15: Docs (TreeDB)
   - Added TreeDB docs: concepts, recovery, and tuning (`docs/TREEDB_CONCEPTS.md`, `docs/TREEDB_RECOVERY.md`, `docs/TREEDB_TUNING.md`).
   - Updated docs index and the handoff checklist (`docs/README.md`, `docs/HANDOFF_CHECKLIST.md`).
+- 2025-12-15: HashDB perf + optional durability
+  - Reduced read syscalls via sealed-segment slab mmaps and GetMany chunk buffering (`HashDB/slab_ro_mmap.go`, `HashDB/getmany.go`).
+  - Improved GetMany fallback by issuing exact record reads when chunks are incomplete (`HashDB/getmany.go`).
+  - Added optional per-shard cache WAL with configurable fsync policy (default off) and tests (`HashDB/cache_wal.go`, `HashDB/cachekv_wal_test.go`).
+  - Added Linux `pread`-based `readAt` helper (`HashDB/readat_linux.go`).
 
 ## Notes / Conventions
 

@@ -229,12 +229,12 @@ Notes:
 
 ## 9) HashDB Follow-ups (from `docs/DEV_NOTES.md`)
 
-- [ ] Explore low/zero-copy slab reads for read-heavy workloads (mmap slab or shard-local reusable buffers; be careful with slab growth/rotation and caller lifetimes).
+- [x] Explore low/zero-copy slab reads for read-heavy workloads (sealed-segment read-only mmaps + GetMany chunk buffering; avoid mmapping the active growing segment).
 - [x] Deepen `GetMany` by batching slab reads per shard (best-effort locality win via coalesced `ReadAt`).
-- [ ] Optional: deeper `GetMany` batching on Linux (`preadv` / io_uring).
+- [x] Optional: Linux-specific `GetMany` read path (`unix.Pread` for chunk/record reads; io_uring/preadv still optional future work).
 - [x] Compaction correctness + performance for segmented slab design (bounded `PutMany` batches; directory swap is Windows-safe).
 - [x] Compression policy tuning (centralize threshold + add a micro benchmark matrix).
-- [ ] Optional stricter durability: a small WAL with configurable fsync policies (keep slab log as primary recovery).
+- [x] Optional stricter durability: a small WAL with configurable fsync policies (cache WAL for sharded write-back; slab log remains the source of truth for backend recovery).
 
 ### 9.1) HashDB Follow-ups (post-2025-12-15)
 
