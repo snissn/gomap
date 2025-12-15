@@ -132,6 +132,62 @@ func (h *HashDB) PutSync(key []byte, value []byte) error {
 	return h.shards[shardIndex].PutSync(key, value)
 }
 
+// ApplyBatch applies a set of operations by grouping them per shard.
+// It is atomic per shard, but not atomic across shards.
+func (h *HashDB) ApplyBatch(ops []BatchOp) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	numShards := len(h.shards)
+	sharded := make([][]BatchOp, numShards)
+	for _, op := range ops {
+		keyHash := hash(op.Key)
+		shardIndex := keyHash % Hash(numShards)
+		sharded[shardIndex] = append(sharded[shardIndex], op)
+	}
+
+	for shardIndex, shardOps := range sharded {
+		if len(shardOps) == 0 {
+			continue
+		}
+		h.locks[shardIndex].Lock()
+		err := h.shards[shardIndex].ApplyBatch(shardOps)
+		h.locks[shardIndex].Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ApplyBatchSync applies a set of operations durably by grouping them per shard.
+// It is atomic per shard, but not atomic across shards.
+func (h *HashDB) ApplyBatchSync(ops []BatchOp) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	numShards := len(h.shards)
+	sharded := make([][]BatchOp, numShards)
+	for _, op := range ops {
+		keyHash := hash(op.Key)
+		shardIndex := keyHash % Hash(numShards)
+		sharded[shardIndex] = append(sharded[shardIndex], op)
+	}
+
+	for shardIndex, shardOps := range sharded {
+		if len(shardOps) == 0 {
+			continue
+		}
+		h.locks[shardIndex].Lock()
+		err := h.shards[shardIndex].ApplyBatchSync(shardOps)
+		h.locks[shardIndex].Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Add is a compatibility wrapper for older code.
 func (h *HashDB) Add(key []byte, value []byte) error {
 	return h.Put(key, value)
