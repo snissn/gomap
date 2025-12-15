@@ -176,6 +176,11 @@
 - 2025-12-14: Windows CI hardening (HashDB)
   - Reduced shard count used by HashDB unit tests (avoid default 128 shards) and ensured opened DBs/stores are `Close()`'d via `t.Cleanup`.
   - This reduces open file handles/background goroutines and improves Windows test stability.
+- 2025-12-15: Windows CI fixes (HashDB/stress)
+  - Made `CachedDB` safe with background flushes by serializing backend `DB` access (prevents mmap/unsafe crashes and value corruption).
+  - Reworked `DB.Compact` to close/reopen around directory swap so Windows can rename/delete reliably and lock behavior stays coherent.
+  - `redisserver` now supports configurable addr/port and shard count; `COMPACT` runs synchronously (tests use this).
+  - `HashDB/stress` tests use an ephemeral loopback addr and smaller shard count for reliable CI.
 
 ## Notes / Conventions
 
