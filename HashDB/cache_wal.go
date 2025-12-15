@@ -268,15 +268,18 @@ func (w *cacheWAL) rewrite(pending map[string]cacheEntry) error {
 		return err
 	}
 
+	// On Windows, we cannot replace an open file. Close before swapping.
+	if w.f != nil {
+		_ = w.f.Close()
+		w.f = nil
+	}
+
 	if err := replaceFileAtomic(w.path, tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	// Reopen for append.
-	if w.f != nil {
-		_ = w.f.Close()
-	}
 	w.f, err = os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
