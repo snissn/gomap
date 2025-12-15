@@ -44,6 +44,27 @@ func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
 
+// PutSync flushes the write-back cache and then performs a durable write to the backend.
+// Without a WAL, the cache itself is volatile; PutSync is the supported durability path.
+func (c *CachedDB) PutSync(key []byte, value []byte) error {
+	if err := c.cache.Flush(); err != nil {
+		return err
+	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	return c.db.PutSync(key, value)
+}
+
+// DeleteSync flushes the write-back cache and then performs a durable delete on the backend.
+func (c *CachedDB) DeleteSync(key []byte) error {
+	if err := c.cache.Flush(); err != nil {
+		return err
+	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	return c.db.DeleteSync(key)
+}
+
 func (c *CachedDB) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
 	return c.cache.getWithHash(key, keyHash)
 }

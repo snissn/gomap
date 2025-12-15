@@ -30,6 +30,8 @@ type DB struct {
 
 	lock *lockfile.Lock
 
+	opened bool // set to true only after a successful Open
+
 	controlFile  *os.File
 	controlMap   mmap.MMap
 	keyFile      *os.File

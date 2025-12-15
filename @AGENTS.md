@@ -12,7 +12,7 @@
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [x] TreeDB: unify open + coherent crash recovery (cached WAL replay + cleanup; spec tests added).
 - [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
-- [ ] Milestone: Raft-backed database (“RaftDB”) on TreeDB/HashDB (see `TODO.md`).
+- [ ] Milestone: downstream-ready storage primitives (stable surface + contracts; see `TODO.md`).
 - [x] HashDB: add exclusive open lock + tests.
 
 ## Progress Log
@@ -115,7 +115,7 @@
 - 2025-12-14: Roadmap expansion
   - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
 - 2025-12-14: Roadmap expansion
-  - Added a Raft-backed DB (“RaftDB”) milestone and prereqs to `TODO.md`.
+  - Added a downstream-ready storage milestone and prereqs to `TODO.md`.
 - 2025-12-14: Roadmap expansion
   - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
 - 2025-12-14: TreeDB exclusive open
@@ -181,6 +181,10 @@
   - Reworked `DB.Compact` to close/reopen around directory swap so Windows can rename/delete reliably and lock behavior stays coherent.
   - `redisserver` now supports configurable addr/port and shard count; `COMPACT` runs synchronously (tests use this).
   - `HashDB/stress` tests use an ephemeral loopback addr and smaller shard count for reliable CI.
+- 2025-12-15: Downstream readiness (HashDB + contracts)
+  - Removed “raft” terminology from docs/roadmap and renamed `docs/raft` to `docs/downstream`.
+  - Added HashDB `PutSync`/`DeleteSync` durability APIs and rebuild-on-open crash recovery (slab log scan + torn-tail truncation).
+  - Added cross-engine durability contract tests (`internal/contracttest`) validating durable writes survive simulated crashes.
 
 ## Notes / Conventions
 

@@ -8,7 +8,7 @@
 ## Who Is This For?
 
 - Anyone running multiple processes against the same DB directory.
-- Anyone implementing higher-level orchestration (e.g. supervisor, Raft node) that must avoid multi-writer corruption.
+- Anyone implementing higher-level orchestration (e.g. supervisor) that must avoid multi-writer corruption.
 
 ## TreeDB
 
@@ -28,4 +28,3 @@
 
 - Abnormal termination releases the lock when the OS closes file descriptors.
 - There is currently no “read-only shared open” mode; the contract is single-writer.
-

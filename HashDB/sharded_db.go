@@ -123,6 +123,15 @@ func (h *HashDB) Put(key []byte, value []byte) error {
 	return h.shards[shardIndex].Put(key, value)
 }
 
+// PutSync performs a durable write. See CachedDB.PutSync for details.
+func (h *HashDB) PutSync(key []byte, value []byte) error {
+	hash := hash(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].PutSync(key, value)
+}
+
 // Add is a compatibility wrapper for older code.
 func (h *HashDB) Add(key []byte, value []byte) error {
 	return h.Put(key, value)
@@ -135,6 +144,15 @@ func (h *HashDB) Delete(key []byte) error {
 	h.locks[shardIndex].Lock()
 	defer h.locks[shardIndex].Unlock()
 	return h.shards[shardIndex].Delete(key)
+}
+
+// DeleteSync performs a durable delete. See CachedDB.DeleteSync for details.
+func (h *HashDB) DeleteSync(key []byte) error {
+	hash := hash(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].DeleteSync(key)
 }
 
 // Update performs an atomic read-modify-write operation on a key.

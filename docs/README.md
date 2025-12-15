@@ -35,9 +35,9 @@ Commands:
 - **Unified Bench** (`cmd/unified_bench/`)
   - A single binary that runs a consistent workload across HashDB, TreeDB, TreeDB backend-only, etc.
 
-## Contract Docs (Raft-Readiness)
+## Contract Docs (Downstream Readiness)
 
-If you’re building a higher-level system (e.g. Raft replication) on top of these engines,
+If you’re building a higher-level system (e.g. replication/consensus) on top of these engines,
 start here:
 
 - `docs/API_STABILITY.md`
@@ -45,7 +45,7 @@ start here:
 - `docs/REPO_MAP.md`
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
 - `docs/contracts/README.md`
-- `docs/raft/README.md`
+- `docs/downstream/README.md`
 
 ## Benchmarking
 

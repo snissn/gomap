@@ -1,18 +1,19 @@
-# RaftDB Milestone (Roadmap)
+# Downstream Readiness Milestone (Roadmap)
 
 ## TL;DR
 
-The long-term goal is to build a consensus-based KV “database” on top of TreeDB/HashDB.
+The long-term goal is to make TreeDB/HashDB reliable storage primitives that downstream projects
+(including replication/consensus systems) can safely build on.
 This directory collects the repo-local prerequisites and contracts required to make that safe.
 
 ## Who Is This For?
 
-- Anyone building replication/consensus on top of this repo.
-- Contributors who want to evolve TreeDB/HashDB without breaking future RaftDB assumptions.
+- Anyone building higher-level systems on top of this repo.
+- Contributors who want to evolve TreeDB/HashDB without breaking downstream assumptions.
 
-## What Raft Needs From Storage
+## What Downstream Systems Need From Storage
 
-At minimum, a Raft-backed system needs:
+At minimum, a replicated state machine needs:
 
 - **Log store**: append entries, read by index, truncate/compact.
 - **Stable store**: persist term/vote/config.
@@ -20,7 +21,7 @@ At minimum, a Raft-backed system needs:
 
 ## Storage Contracts (Must Be Explicit)
 
-Before a Raft layer can safely depend on this repo, we need explicit contracts for:
+Before a downstream system can safely depend on this repo, we need explicit contracts for:
 
 - `docs/contracts/DURABILITY.md`
 - `docs/contracts/LOCKING.md`
@@ -31,11 +32,10 @@ Before a Raft layer can safely depend on this repo, we need explicit contracts f
 
 - Use **TreeDB** for anything “committed” that must survive crashes:
   - cached mode is fine, but use `*Sync` operations for durability.
-- Treat **HashDB** as a high-performance engine with evolving durability semantics (great for benchmarking; not yet a Raft commit store).
+- Treat **HashDB** as a high-performance engine with explicit `*Sync` durability calls backed by slab-log recovery; prefer TreeDB if you need stronger integrated WAL-based durability and corruption diagnostics.
 
 ## Next Concrete Steps (Repo-Local)
 
 - Add runnable examples for the stable surface (`Example*` tests) and expand GoDoc coverage.
-- Add a “snapshot story” suitable for Raft (consistent full scan + restore) and test it end-to-end.
+- Add a “snapshot story” suitable for replication/consensus (consistent full scan + restore) and test it end-to-end.
 - Decide and document an API stability/versioning policy for the stable surface.
-
