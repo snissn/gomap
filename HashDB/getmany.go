@@ -174,7 +174,7 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 				}
 				pooled = true
 
-				n, err = f.ReadAt(buf, chunkStart)
+				n, err = readAt(f, buf, chunkStart)
 				if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 					putManyChunkBuf(buf)
 					for ; i < j; i++ {
@@ -325,7 +325,7 @@ func (h *DB) readSlabRecord(segmentID uint16, localOffset, n int64) ([]byte, err
 	}
 
 	buf := make([]byte, int(n))
-	readN, err := f.ReadAt(buf, localOffset)
+	readN, err := readAt(f, buf, localOffset)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, err
 	}

@@ -84,7 +84,7 @@ func (h *DB) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	}
 
 	bytes := make([]byte, n)
-	_, err := f.ReadAt(bytes, localOffset)
+	_, err := readAt(f, bytes, localOffset)
 	if err != nil {
 		return nil, err
 	}
