@@ -2,12 +2,14 @@ package hashdb
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 // CachedDB wraps a single DB with a write-back cache.
-// WARNING: no WAL; cached writes are volatile until flushed.
+// By default there is no WAL; cached writes are volatile until flushed.
+// A WAL can be enabled via NewCachedDBWithOptions.
 type CachedDB struct {
 	db    *DB
 	cache *CacheKV
@@ -23,13 +25,32 @@ type CachedHashmap = CachedDB
 // NewCachedDB initializes a new cached DB at the given folder.
 // maxEntries/maxBytes control flush thresholds; flushInterval <=0 disables ticker flush.
 func NewCachedDB(folder string, maxEntries, maxBytes int, flushInterval time.Duration) (*CachedDB, error) {
+	return NewCachedDBWithOptions(folder, maxEntries, maxBytes, flushInterval, CachedDBOptions{})
+}
+
+type CachedDBOptions struct {
+	CacheWAL CacheWALOptions
+}
+
+func NewCachedDBWithOptions(folder string, maxEntries, maxBytes int, flushInterval time.Duration, opts CachedDBOptions) (*CachedDB, error) {
 	db := &DB{}
 	if err := db.New(folder); err != nil {
 		return nil, err
 	}
 	c := &CachedDB{db: db}
 	kv := &dbKVAdapter{db: db, mu: &c.backendMu}
-	c.cache = NewCacheKV(kv, maxEntries, maxBytes, flushInterval)
+
+	if opts.CacheWAL.FsyncPolicy == CacheWALDisabled {
+		c.cache = NewCacheKV(kv, maxEntries, maxBytes, flushInterval)
+		return c, nil
+	}
+
+	cache, err := NewCacheKVWithWAL(kv, maxEntries, maxBytes, flushInterval, filepath.Join(folder, "cache.wal"), opts.CacheWAL)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	c.cache = cache
 	return c, nil
 }
 
@@ -67,6 +88,9 @@ func (c *CachedDB) ApplyBatch(ops []BatchOp) error {
 // ApplyBatchSync flushes the write-back cache and then performs a durable batch commit
 // on the backend DB.
 func (c *CachedDB) ApplyBatchSync(ops []BatchOp) error {
+	if err := c.cache.SyncWAL(); err != nil {
+		return err
+	}
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
@@ -78,6 +102,9 @@ func (c *CachedDB) ApplyBatchSync(ops []BatchOp) error {
 // PutSync flushes the write-back cache and then performs a durable write to the backend.
 // Without a WAL, the cache itself is volatile; PutSync is the supported durability path.
 func (c *CachedDB) PutSync(key []byte, value []byte) error {
+	if err := c.cache.SyncWAL(); err != nil {
+		return err
+	}
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}
@@ -88,6 +115,9 @@ func (c *CachedDB) PutSync(key []byte, value []byte) error {
 
 // DeleteSync flushes the write-back cache and then performs a durable delete on the backend.
 func (c *CachedDB) DeleteSync(key []byte) error {
+	if err := c.cache.SyncWAL(); err != nil {
+		return err
+	}
 	if err := c.cache.Flush(); err != nil {
 		return err
 	}

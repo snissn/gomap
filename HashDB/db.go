@@ -119,10 +119,29 @@ func Open(dir string) (*HashDB, error) {
 	return db, nil
 }
 
+// OpenWithOptions opens the primary HashDB store with additional options.
+// Options are currently intended for advanced durability/perf tuning and may evolve.
+func OpenWithOptions(dir string, opts HashDBOptions) (*HashDB, error) {
+	db := &HashDB{}
+	if err := db.NewWithShardsAndOptions(dir, 128, opts); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
 // OpenWithShards opens the primary HashDB store with an explicit shard count.
 func OpenWithShards(dir string, numShards int) (*HashDB, error) {
 	db := &HashDB{}
 	if err := db.NewWithShards(dir, numShards); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenWithShardsAndOptions opens the primary HashDB store with an explicit shard count and options.
+func OpenWithShardsAndOptions(dir string, numShards int, opts HashDBOptions) (*HashDB, error) {
+	db := &HashDB{}
+	if err := db.NewWithShardsAndOptions(dir, numShards, opts); err != nil {
 		return nil, err
 	}
 	return db, nil

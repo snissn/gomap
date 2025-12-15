@@ -1,6 +1,7 @@
 package hashdb
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -27,7 +28,7 @@ type cacheEntry struct {
 }
 
 // CacheKV buffers writes and flushes them to the underlying store.
-// WARNING: no WAL; pending writes are lost on crash before flush.
+// WARNING: by default there is no WAL; pending writes are lost on crash before flush.
 type CacheKV struct {
 	backend KVStore
 
@@ -38,6 +39,9 @@ type CacheKV struct {
 
 	flushMu sync.Mutex // Serializes Flush operations to backend
 
+	walMu sync.Mutex
+	wal   *cacheWAL
+
 	maxEntries int
 	maxBytes   int
 
@@ -46,9 +50,35 @@ type CacheKV struct {
 	wg            sync.WaitGroup
 }
 
+// SyncWAL fsyncs the cache WAL (if enabled).
+// This is intended to be used by higher-level *Sync operations so the WAL is durable
+// even if a crash occurs during a backend flush.
+func (c *CacheKV) SyncWAL() error {
+	c.walMu.Lock()
+	defer c.walMu.Unlock()
+	if c.wal == nil {
+		return nil
+	}
+	if c.wal.fsync == CacheWALFsyncOnSync {
+		return c.wal.Sync()
+	}
+	return nil
+}
+
 // NewCacheKV wraps a KVStore with a write-back cache.
 // flushInterval <=0 disables timer flushes.
 func NewCacheKV(backend KVStore, maxEntries, maxBytes int, flushInterval time.Duration) *CacheKV {
+	c, err := NewCacheKVWithWAL(backend, maxEntries, maxBytes, flushInterval, "", CacheWALOptions{FsyncPolicy: CacheWALDisabled})
+	if err != nil {
+		// WAL is disabled, so this should never happen. Keep the old signature.
+		panic(err)
+	}
+	return c
+}
+
+// NewCacheKVWithWAL wraps a KVStore with a write-back cache and an optional WAL.
+// When WAL is enabled, pending writes can be recovered after a crash (depending on fsync policy).
+func NewCacheKVWithWAL(backend KVStore, maxEntries, maxBytes int, flushInterval time.Duration, walPath string, walOpts CacheWALOptions) (*CacheKV, error) {
 	if maxEntries <= 0 {
 		maxEntries = 1024
 	}
@@ -57,17 +87,35 @@ func NewCacheKV(backend KVStore, maxEntries, maxBytes int, flushInterval time.Du
 	}
 	c := &CacheKV{
 		backend:       backend,
-		pending:       make(map[string]cacheEntry),
 		maxEntries:    maxEntries,
 		maxBytes:      maxBytes,
 		flushInterval: flushInterval,
 		stopCh:        make(chan struct{}),
 	}
+
+	wal, recovered, err := openCacheWAL(walPath, walOpts.FsyncPolicy)
+	if err != nil {
+		return nil, err
+	}
+	c.wal = wal
+	if recovered != nil {
+		c.pending = recovered
+		for k, e := range recovered {
+			if e.del {
+				c.pendingLen += len(k)
+			} else {
+				c.pendingLen += len(k) + len(e.value)
+			}
+		}
+	} else {
+		c.pending = make(map[string]cacheEntry)
+	}
+
 	if flushInterval > 0 {
 		c.wg.Add(1)
 		go c.flushLoop()
 	}
-	return c
+	return c, nil
 }
 
 func (c *CacheKV) Get(key []byte) ([]byte, error) {
@@ -198,11 +246,20 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 
 func (c *CacheKV) Put(key, value []byte) error {
 	k := string(key)
+
+	c.walMu.Lock()
+	if c.wal != nil {
+		if err := c.wal.appendPut(key, value); err != nil {
+			c.walMu.Unlock()
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.pending[k] = cacheEntry{value: append([]byte(nil), value...)}
 	c.pendingLen += len(k) + len(value)
 	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
 	c.mu.Unlock()
+	c.walMu.Unlock()
 	if shouldFlush {
 		return c.Flush()
 	}
@@ -211,18 +268,27 @@ func (c *CacheKV) Put(key, value []byte) error {
 
 func (c *CacheKV) Delete(key []byte) error {
 	k := string(key)
+
+	c.walMu.Lock()
+	if c.wal != nil {
+		if err := c.wal.appendDelete(key); err != nil {
+			c.walMu.Unlock()
+			return err
+		}
+	}
 	c.mu.Lock()
 	c.pending[k] = cacheEntry{del: true}
 	c.pendingLen += len(k)
 	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
 	c.mu.Unlock()
+	c.walMu.Unlock()
 	if shouldFlush {
 		return c.Flush()
 	}
 	return nil
 }
 
-// Flush writes pending changes to the backend. No WAL; pending data is volatile until flushed.
+// Flush writes pending changes to the backend.
 func (c *CacheKV) Flush() error {
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
@@ -238,9 +304,23 @@ func (c *CacheKV) Flush() error {
 	c.pendingLen = 0
 	c.mu.Unlock()
 
-	// Ensure flushing is cleared even if write fails
+	var backendErr error
 	defer func() {
 		c.mu.Lock()
+		if backendErr != nil {
+			// Restore flushing entries back into pending on error.
+			if c.pending == nil {
+				c.pending = make(map[string]cacheEntry)
+			}
+			for k, e := range c.flushing {
+				c.pending[k] = e
+				if e.del {
+					c.pendingLen += len(k)
+				} else {
+					c.pendingLen += len(k) + len(e.value)
+				}
+			}
+		}
 		c.flushing = nil
 		c.mu.Unlock()
 	}()
@@ -250,7 +330,8 @@ func (c *CacheKV) Flush() error {
 	for k, e := range entries {
 		if e.del {
 			if err := c.backend.Delete([]byte(k)); err != nil {
-				return err
+				backendErr = err
+				return backendErr
 			}
 			continue
 		}
@@ -262,14 +343,36 @@ func (c *CacheKV) Flush() error {
 		if b, ok := c.backend.(interface {
 			PutMany([][]byte, [][]byte) error
 		}); ok {
-			return b.PutMany(batchKeys, batchVals)
-		}
-		for i := range batchKeys {
-			if err := c.backend.Put(batchKeys[i], batchVals[i]); err != nil {
-				return err
+			if err := b.PutMany(batchKeys, batchVals); err != nil {
+				backendErr = err
+				return backendErr
+			}
+		} else {
+			for i := range batchKeys {
+				if err := c.backend.Put(batchKeys[i], batchVals[i]); err != nil {
+					backendErr = err
+					return backendErr
+				}
 			}
 		}
 	}
+
+	// WAL compaction: rewrite to contain only still-pending writes (those that arrived during this flush).
+	if c.wal != nil {
+		c.walMu.Lock()
+		pendingSnapshot := make(map[string]cacheEntry)
+		c.mu.RLock()
+		for k, e := range c.pending {
+			pendingSnapshot[k] = e
+		}
+		c.mu.RUnlock()
+		walErr := c.wal.rewrite(pendingSnapshot)
+		c.walMu.Unlock()
+		if walErr != nil {
+			return walErr
+		}
+	}
+
 	return nil
 }
 
@@ -279,7 +382,11 @@ func (c *CacheKV) Close() error {
 		close(c.stopCh)
 		c.wg.Wait()
 	}
-	return c.Flush()
+	err := c.Flush()
+	c.walMu.Lock()
+	err = errors.Join(err, c.wal.Close())
+	c.walMu.Unlock()
+	return err
 }
 
 func (c *CacheKV) flushLoop() {

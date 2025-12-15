@@ -23,6 +23,10 @@ type HashDB struct {
 	locks  []sync.RWMutex
 }
 
+type HashDBOptions struct {
+	CacheWAL CacheWALOptions
+}
+
 // ShardedDB is kept as a compatibility alias for older code.
 type ShardedDB = HashDB
 
@@ -43,6 +47,10 @@ func (h *HashDB) Open(folder string) error {
 
 // NewWithShards initializes the sharded store with a specific number of shards.
 func (h *HashDB) NewWithShards(folder string, numShards int) (err error) {
+	return h.NewWithShardsAndOptions(folder, numShards, HashDBOptions{})
+}
+
+func (h *HashDB) NewWithShardsAndOptions(folder string, numShards int, opts HashDBOptions) (err error) {
 	if folder == "" {
 		return errors.New("db dir required")
 	}
@@ -79,7 +87,7 @@ func (h *HashDB) NewWithShards(folder string, numShards int) (err error) {
 		}
 
 		var cached *CachedDB
-		cached, err = NewCachedDB(partitionFolder, 4096, 4<<20, 2*time.Second)
+		cached, err = NewCachedDBWithOptions(partitionFolder, 4096, 4<<20, 2*time.Second, CachedDBOptions{CacheWAL: opts.CacheWAL})
 		if err != nil {
 			return err
 		}
