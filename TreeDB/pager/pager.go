@@ -140,13 +140,9 @@ func (p *Pager) MarkVerified(pageID uint64) {
 
 // MarkUnverified marks a page as unverified (dirty/reused).
 func (p *Pager) MarkUnverified(pageID uint64) {
-	p.mu.Lock() // Must be Lock (write)
-	// Caller likely holds Lock?
-	// If caller holds Lock (e.g. GetForWrite), we can't Lock again.
-	// But GetForWrite holds p.mu.Lock.
-	// So we need an internal helper.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.markUnverifiedLocked(pageID)
-	p.mu.Unlock()
 }
 
 func (p *Pager) markUnverifiedLocked(pageID uint64) {

@@ -77,6 +77,10 @@ func (a *Allocator) Alloc() (uint64, error) {
 		// Simpler: Just update Count and Checksum.
 		// The garbage bytes at end are part of checksum.
 		n.UpdateChecksum()
+
+		// This page may have been verified under a previous incarnation. Ensure
+		// it is treated as unverified when reused.
+		a.pager.MarkUnverified(id)
 		return id, nil
 	}
 
@@ -89,6 +93,8 @@ func (a *Allocator) Alloc() (uint64, error) {
 	recycled := a.head
 	a.head = next
 
+	// This page is being repurposed; ensure it is treated as unverified.
+	a.pager.MarkUnverified(recycled)
 	return recycled, nil
 }
 
