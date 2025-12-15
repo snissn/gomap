@@ -8,17 +8,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	ServerPort = 6380
-	KeyCount   = 5000
+	KeyCount     = 5000
+	serverShards = 8
 )
 
 func TestChaos(t *testing.T) {
+	addr := pickFreeTCPAddr(t)
+
 	// 1. Build Server
 	rootDir, _ := os.Getwd()
 	// When running `go test`, the working directory is typically `HashDB/stress`.
@@ -42,14 +45,14 @@ func TestChaos(t *testing.T) {
 	defer os.RemoveAll(dbDir)
 
 	// 2. Start Server
-	serverCmd := startServer(t, serverBin, dbDir)
+	serverCmd := startServer(t, serverBin, dbDir, addr)
 
 	// 3. Write Data
 	ackedKeys := make(map[string]string)
 	done := make(chan bool)
 
 	go func() {
-		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", ServerPort))
+		conn, err := net.Dial("tcp", addr)
 		if err != nil {
 			t.Logf("Client connect failed: %v", err)
 			return
@@ -92,14 +95,14 @@ func TestChaos(t *testing.T) {
 	t.Logf("Wrote %d keys before crash", len(ackedKeys))
 
 	// 5. Restart Server
-	serverCmd = startServer(t, serverBin, dbDir)
+	serverCmd = startServer(t, serverBin, dbDir, addr)
 	defer func() {
 		serverCmd.Process.Kill()
 		serverCmd.Wait()
 	}()
 
 	// 6. Verify
-	conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", ServerPort))
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("Failed to reconnect: %v", err)
 	}
@@ -136,25 +139,43 @@ func TestChaos(t *testing.T) {
 	}
 }
 
-func startServer(t *testing.T, bin string, dbDir string) *exec.Cmd {
-	cmd := exec.Command(bin, "hashdb", dbDir)
+func pickFreeTCPAddr(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	return addr
+}
+
+func startServer(t *testing.T, bin string, dbDir, addr string) *exec.Cmd {
+	cmd := exec.Command(bin, "hashdb", dbDir, addr)
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(),
+		"HASHDB_SHARDS="+strconv.Itoa(serverShards),
+		"GOMAP_SHARDS="+strconv.Itoa(serverShards),
+	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
 	// Wait for port
 	// Simple retry loop
-	for i := 0; i < 100; i++ {
-		conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", ServerPort))
+	for i := 0; i < 400; i++ {
+		conn, err := net.Dial("tcp", addr)
 		if err == nil {
 			conn.Close()
 			return cmd
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 	t.Fatal("Server failed to bind port")
 	return nil
 }

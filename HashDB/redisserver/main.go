@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/snissn/gomap/HashDB/redisserver/badgerredis"
 	"github.com/snissn/gomap/HashDB/redisserver/hashdbredis"
@@ -10,18 +11,33 @@ import (
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir]")
+		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir] [addr-or-port?]")
 		os.Exit(1)
 	}
 
 	mode := os.Args[1]
 	dbdir := os.Args[2]
+	addr := ":6380"
+	if len(os.Args) >= 4 {
+		addr = os.Args[3]
+	} else if v := os.Getenv("HASHDB_REDIS_ADDR"); v != "" {
+		addr = v
+	} else if v := os.Getenv("GOMAP_REDIS_ADDR"); v != "" {
+		addr = v
+	} else if v := os.Getenv("HASHDB_REDIS_PORT"); v != "" {
+		addr = ":" + v
+	} else if v := os.Getenv("GOMAP_REDIS_PORT"); v != "" {
+		addr = ":" + v
+	}
+	if len(addr) > 0 && addr[0] != ':' && !strings.Contains(addr, ":") {
+		addr = ":" + addr
+	}
 
 	switch mode {
 	case "hashdb", "gomap":
 		server := hashdbredis.NewRedisServer(dbdir)
-		fmt.Printf("Starting Redis server using HashDB on :6380 (dbdir=%s)\n", dbdir)
-		if err := server.Serve(":6380"); err != nil {
+		fmt.Printf("Starting Redis server using HashDB on %s (dbdir=%s)\n", addr, dbdir)
+		if err := server.Serve(addr); err != nil {
 			fmt.Println("Server error:", err)
 		}
 
@@ -31,14 +47,14 @@ func main() {
 			fmt.Println("Failed to start Badger server:", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Starting Redis server using Badger on :6380 (dbdir=%s)\n", dbdir)
-		if err := server.Serve(":6380"); err != nil {
+		fmt.Printf("Starting Redis server using Badger on %s (dbdir=%s)\n", addr, dbdir)
+		if err := server.Serve(addr); err != nil {
 			fmt.Println("Server error:", err)
 		}
 
 	default:
 		fmt.Println("Unknown mode:", mode)
-		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir]")
+		fmt.Println("Usage: go run redisserver/main.go [hashdb|badger] [dbdir] [addr-or-port?]")
 		os.Exit(1)
 	}
 }

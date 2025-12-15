@@ -10,10 +10,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestCompaction(t *testing.T) {
+	addr := pickFreeTCPAddr(t)
+
 	// 1. Setup
 	rootDir, _ := os.Getwd()
 	// When running `go test`, the working directory is typically `HashDB/stress`.
@@ -35,13 +36,13 @@ func TestCompaction(t *testing.T) {
 	}
 	defer os.RemoveAll(dbDir)
 
-	serverCmd := startServer(t, serverBin, dbDir)
+	serverCmd := startServer(t, serverBin, dbDir, addr)
 	defer func() {
 		serverCmd.Process.Kill()
 		serverCmd.Wait()
 	}()
 
-	conn, err := net.Dial("tcp", fmt.Sprintf("localhost:%d", ServerPort))
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
@@ -92,19 +93,14 @@ func TestCompaction(t *testing.T) {
 	t.Logf("Size after updates and flush: %d bytes", sizeBloated)
 
 	// 3. Trigger Compaction
-	conn.Write([]byte("*1\r\n$12\r\nBGREWRITEAOF\r\n"))
+	conn.Write([]byte("*1\r\n$7\r\nCOMPACT\r\n"))
 	resp, err = reader.ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resp, "Background") {
+	if !strings.Contains(resp, "OK") {
 		t.Fatalf("Unexpected response: %s", resp)
 	}
-
-	// 4. Wait for compaction
-	// Poll size or just sleep.
-	// Compaction is fast for small DB.
-	time.Sleep(2 * time.Second)
 
 	sizeAfter := getDirSize(t, dbDir)
 	t.Logf("Size after compaction: %d bytes", sizeAfter)

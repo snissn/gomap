@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/HashDB"
 	"github.com/tidwall/redcon"
@@ -27,7 +28,24 @@ func NewRedisServer(dbdir string) *RedisServer {
 	}
 
 	var store hashdb.HashDB
-	if err := store.New(dbdir); err != nil {
+	var shards int
+	if v := strings.TrimSpace(os.Getenv("HASHDB_SHARDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			shards = n
+		}
+	} else if v := strings.TrimSpace(os.Getenv("GOMAP_SHARDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			shards = n
+		}
+	}
+
+	var err error
+	if shards > 0 {
+		err = store.NewWithShards(dbdir, shards)
+	} else {
+		err = store.New(dbdir)
+	}
+	if err != nil {
 		log.Fatalf("failed to open HashDB: %v", err)
 	}
 	// Disable compression by default for the Redis/HashDB server, which is primarily
@@ -260,13 +278,20 @@ func (s *RedisServer) Serve(addr string) error {
 			)
 			conn.WriteBulkString(info)
 
-		case "BGREWRITEAOF", "COMPACT":
+		case "BGREWRITEAOF":
 			go func() {
 				if err := s.store.Compact(); err != nil {
 					log.Printf("Compaction failed: %v", err)
 				}
 			}()
 			conn.WriteString("Background append only file rewriting started")
+
+		case "COMPACT":
+			if err := s.store.Compact(); err != nil {
+				conn.WriteError(err.Error())
+				return
+			}
+			conn.WriteString("OK")
 
 		default:
 			conn.WriteError("unknown command")
