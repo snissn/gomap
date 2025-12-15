@@ -22,6 +22,7 @@
 - Optional race check: `make test-race`
 - Vet: `make vet`
 - Build useful binaries: `make build`
+- Optional: install a local `gofmt` pre-commit hook: `make hooks`
 
 ## Minimal Usage
 
@@ -89,6 +90,17 @@ func main() {
 
 HashDB snapshots:
 - `docs/HASHDB_SNAPSHOT.md`
+
+## Viewing GoDocs
+
+Local:
+
+- Package docs: `go doc github.com/snissn/gomap/TreeDB` (or `.../HashDB`)
+- List exported identifiers: `go doc -all github.com/snissn/gomap/TreeDB`
+
+Online:
+
+- pkg.go.dev will render docs once the module is indexed (requires a recognized OSS license; see `LICENSE`).
 
 ## Unified Bench
 

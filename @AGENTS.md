@@ -198,6 +198,9 @@
 - 2025-12-15: Compression policy + benches
   - Centralized the compression threshold (`minValueBytesForCompression`) and reused it in all write paths.
   - Added a small benchmark matrix for compression inputs/sizes (`HashDB/compression_bench_test.go`).
+- 2025-12-15: Docs (TreeDB)
+  - Added TreeDB docs: concepts, recovery, and tuning (`docs/TREEDB_CONCEPTS.md`, `docs/TREEDB_RECOVERY.md`, `docs/TREEDB_TUNING.md`).
+  - Updated docs index and the handoff checklist (`docs/README.md`, `docs/HANDOFF_CHECKLIST.md`).
 
 ## Notes / Conventions
 

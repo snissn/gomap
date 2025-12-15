@@ -18,6 +18,8 @@ More docs:
 - `docs/README.md`
 - `docs/GETTING_STARTED.md`
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
+- `docs/TREEDB_CONCEPTS.md`
+- `docs/TREEDB_RECOVERY.md`
 - `CONTRIBUTING.md`
 
 ## Choosing An Engine

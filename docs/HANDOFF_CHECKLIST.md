@@ -6,28 +6,28 @@ This checklist exists so a downstream project can depend on this repo without tr
 
 ## Stable Surface
 
-- [ ] The stable public packages are explicitly defined (`docs/API_STABILITY.md`).
-- [ ] Public APIs are small and purposeful; implementation details live behind `internal/`.
+- [x] The stable public packages are explicitly defined (`docs/API_STABILITY.md`).
+- [x] Public APIs are small and purposeful; implementation details live behind `internal/`.
 - [ ] Typed errors exist for key invariants (e.g. `ErrLocked`, `ErrClosed`, `ErrCorrupt` where applicable).
 
 ## Contracts (Pinned by Tests)
 
-- [ ] Durability semantics are documented and tested (`docs/contracts/DURABILITY.md`).
-- [ ] Iterator semantics are documented and tested (`docs/contracts/ITERATION.md`).
-- [ ] Exclusive open is enforced and tested (`docs/contracts/LOCKING.md`).
-- [ ] Concurrency model is documented (`docs/contracts/CONCURRENCY.md`).
+- [x] Durability semantics are documented and tested (`docs/contracts/DURABILITY.md`).
+- [x] Iterator semantics are documented and tested (`docs/contracts/ITERATION.md`).
+- [x] Exclusive open is enforced and tested (`docs/contracts/LOCKING.md`).
+- [x] Concurrency model is documented (`docs/contracts/CONCURRENCY.md`).
 
 ## GoDoc + Examples
 
-- [ ] Package docs (`doc.go`) exist for stable packages and include caveats.
+- [x] Package docs (`doc.go`) exist for stable packages and include caveats.
 - [ ] Exported identifiers that are part of the stable surface have doc comments.
-- [ ] Runnable examples (`Example*`) exist for the primary entrypoints.
+- [x] Runnable examples (`Example*`) exist for the primary entrypoints.
 
 ## Developer Onboarding
 
-- [ ] `docs/README.md` exists as an index (“start here”).
-- [ ] A “repo map” exists (where to look for what).
-- [ ] Benchmark methodology is documented and reproducible.
+- [x] `docs/README.md` exists as an index (“start here”).
+- [x] A “repo map” exists (where to look for what).
+- [x] Benchmark methodology is documented and reproducible.
 
 ## Release / Change Communication
 

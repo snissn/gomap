@@ -278,6 +278,12 @@ One page explaining:
 
 ## B) TreeDB Docs (Highest Priority)
 
+Progress:
+
+- [x] Add TreeDB concepts overview (`docs/TREEDB_CONCEPTS.md`).
+- [x] Add TreeDB crash recovery story (`docs/TREEDB_RECOVERY.md`).
+- [x] Add TreeDB tuning notes (`docs/TREEDB_TUNING.md`).
+
 ### 1) “TreeDB Concepts” (backend engine)
 Explain clearly:
 - Page/Node model, meta pages, slabs, zipper writes (high-level)

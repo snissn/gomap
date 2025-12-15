@@ -44,6 +44,9 @@ start here:
 - `docs/GETTING_STARTED.md`
 - `docs/REPO_MAP.md`
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
+- `docs/TREEDB_CONCEPTS.md`
+- `docs/TREEDB_RECOVERY.md`
+- `docs/TREEDB_TUNING.md`
 - `docs/contracts/README.md`
 - `docs/downstream/README.md`
 - `docs/HASHDB_SNAPSHOT.md`
