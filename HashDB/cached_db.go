@@ -30,10 +30,18 @@ func NewCachedDB(folder string, maxEntries, maxBytes int, flushInterval time.Dur
 
 type CachedDBOptions struct {
 	CacheWAL CacheWALOptions
+
+	// IndexMemoryPolicy applies to the underlying on-disk DB's mmap index.
+	// This must be set before opening the DB.
+	IndexMemoryPolicy    IndexMemoryPolicy
+	IndexMemoryPolicySet bool
 }
 
 func NewCachedDBWithOptions(folder string, maxEntries, maxBytes int, flushInterval time.Duration, opts CachedDBOptions) (*CachedDB, error) {
 	db := &DB{}
+	if opts.IndexMemoryPolicySet {
+		db.SetIndexMemoryPolicy(opts.IndexMemoryPolicy)
+	}
 	if err := db.New(folder); err != nil {
 		return nil, err
 	}

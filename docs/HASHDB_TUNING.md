@@ -58,3 +58,8 @@ HashDB can apply OS memory policies to index mmaps:
 - Apply `madvise` hints for key array access patterns.
 
 See `HashDB/index_memory.go` for `IndexMemoryPolicy`.
+
+To configure for the sharded engine, pass `HashDBOptions.IndexMemoryPolicy` to:
+
+- `hashdb.OpenWithOptions(dir, opts)`
+- `hashdb.OpenWithShardsAndOptions(dir, shards, opts)`

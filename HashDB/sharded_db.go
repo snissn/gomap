@@ -25,6 +25,11 @@ type HashDB struct {
 
 type HashDBOptions struct {
 	CacheWAL CacheWALOptions
+
+	// IndexMemoryPolicy controls memory pinning/advice for the swiss-table index
+	// maps of each shard's backend DB.
+	IndexMemoryPolicy    IndexMemoryPolicy
+	IndexMemoryPolicySet bool
 }
 
 // ShardedDB is kept as a compatibility alias for older code.
@@ -87,7 +92,11 @@ func (h *HashDB) NewWithShardsAndOptions(folder string, numShards int, opts Hash
 		}
 
 		var cached *CachedDB
-		cached, err = NewCachedDBWithOptions(partitionFolder, 4096, 4<<20, 2*time.Second, CachedDBOptions{CacheWAL: opts.CacheWAL})
+		cached, err = NewCachedDBWithOptions(partitionFolder, 4096, 4<<20, 2*time.Second, CachedDBOptions{
+			CacheWAL:             opts.CacheWAL,
+			IndexMemoryPolicy:    opts.IndexMemoryPolicy,
+			IndexMemoryPolicySet: opts.IndexMemoryPolicySet,
+		})
 		if err != nil {
 			return err
 		}
