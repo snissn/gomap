@@ -19,8 +19,8 @@
 - Compaction is concurrent and uses **Move‑and‑Micro‑Batch** locking: under the writer lock it verifies old pointers before setting new ones.
 - Adaptive inline threshold controller is an optional feature but specified and tested.
 
-**Spec/Test mismatch to resolve early:**  
-`spec.md` says dual roots store user keys raw. `test-spec.md` section 1.7 expects an internal key encoding/prefix (`0x01|userKey`) that is stripped on public iteration. Decide the canonical behavior up front and align implementation + tests accordingly (likely follow tests for compatibility unless clarified).
+**Keyspace Canonical Decision (Spec v2.7):**  
+TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores user keys **raw** (no prefixing), and internal metadata lives in the **System** B+Tree. Public iterators iterate the User tree only.
 
 ---
 

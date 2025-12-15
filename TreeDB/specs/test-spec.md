@@ -155,15 +155,15 @@ These tests validate that the adaptive controller is (a) safe, (b) low-overhead,
 
 ### 1.7 Internal Metadata Keyspace & Scalability (Spec v2.7)
 
-* **Namespace Isolation (Internal Encoding):**
+* **Namespace Isolation (Dual Roots):**
     * **Write:** `Set([]byte{0x00, 0x01}, val)`.
     * **Assert:** Success.
-    * **Internal Inspect:** Scan raw B+Tree (debug mode). Verify key is stored as `0x01 0x00 0x01`.
-    * **Iterator Check:** `Iterator(nil, nil)` returns the key as `0x00 0x01` (prefix stripped).
-    * **Meta Isolation:** Ensure internal stats keys (`0x00...`) do NOT appear in the public iterator.
+    * **Internal Inspect:** Scan the raw **User** B+Tree (debug mode) and verify the key is stored as-is (`0x00 0x01`).
+    * **Iterator Check:** `Iterator(nil, nil)` returns the key as `0x00 0x01` (no prefixing/stripping).
+    * **Meta Isolation:** Ensure internal stats keys are stored in the **System** B+Tree and do NOT appear in the public iterator (which iterates the User tree only).
 * **Stat Persistence:**
     * Perform writes to multiple slabs. Commit.
-    * **Internal Inspect:** Read keys starting with `0x00 | "slab"`.
+    * **Internal Inspect:** Scan the raw **System** B+Tree (debug mode) for keys starting with `0x00 | "slab"`.
     * **Assert:** Keys exist for each active slab ID.
     * **Assert:** Values decode to valid `[DeadBytes][TotalBytes]` integers.
 * **Meta Page Overflow Prevention:**
@@ -187,7 +187,7 @@ Focus on the public `DB` interface and ACID properties.
     * `Set([], val)` -> Expect Success (Empty keys allowed).
     * `Set(key, nil)` -> Expect Error (Nil values forbidden).
     * `Delete(nil)` -> Expect Error.
-    * `Set(\x00..., val)` -> Expect Success (Internal encoding handles collision).
+    * `Set(\x00..., val)` -> Expect Success (User keys are stored raw; 0x00 is not reserved in the User tree).
 
 ### 2.2 Iterators (Forward & Reverse)
 
