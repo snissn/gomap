@@ -195,7 +195,7 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 			for k := i; k < j; k++ {
 				ref := refs[k]
 				rel := ref.offset - chunkStart
-				val, ok, err := decodeValueFromChunk(buf, rel, ref.key)
+				val, ok, need, err := decodeValueFromChunk(buf, rel, ref.key)
 				if err != nil {
 					errs[ref.i] = err
 					continue
@@ -205,7 +205,26 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 					continue
 				}
 
-				// Fallback to the existing per-key reader.
+				// If we saw the record header but didn't have enough bytes in this chunk,
+				// issue an exact read for the full record and decode from that.
+				if need > 0 {
+					record, recErr := h.readSlabRecord(segmentID, ref.offset, need)
+					if recErr != nil {
+						errs[ref.i] = recErr
+						continue
+					}
+					val, ok, _, recErr := decodeValueFromChunk(record, 0, ref.key)
+					if recErr != nil {
+						errs[ref.i] = recErr
+						continue
+					}
+					if ok {
+						values[ref.i] = val
+						continue
+					}
+				}
+
+				// Fallback to the existing per-key reader (handles more edge cases).
 				item, err := h.unmarshalItemFromSlab(Key{slabOffset: SlabOffset((uint64(segmentID) << OffsetBits) | uint64(ref.offset))})
 				if err != nil {
 					errs[ref.i] = err
@@ -225,36 +244,40 @@ func (h *DB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 	return values, errs
 }
 
-func decodeValueFromChunk(buf []byte, rel int64, key []byte) ([]byte, bool, error) {
+func decodeValueFromChunk(buf []byte, rel int64, key []byte) ([]byte, bool, int64, error) {
 	if rel < 0 || rel+16 > int64(len(buf)) {
-		return nil, false, nil
+		return nil, false, 0, nil
 	}
 
 	keyLen := binary.LittleEndian.Uint64(buf[rel : rel+8])
 	if keyLen == slabKeyLenControl {
-		return nil, false, fmt.Errorf("unexpected control record in slab chunk")
+		return nil, false, 0, fmt.Errorf("unexpected control record in slab chunk")
 	}
 
 	valLenPacked := binary.LittleEndian.Uint64(buf[rel+8 : rel+16])
 	if valLenPacked == ^uint64(0) {
 		// Delete record.
-		return nil, true, nil
+		totalLen := int64(16) + int64(keyLen)
+		if rel+totalLen > int64(len(buf)) {
+			return nil, false, totalLen, nil
+		}
+		return nil, true, totalLen, nil
 	}
 	valLen, flags := unpackLength(valLenPacked)
 
 	totalLen := int64(16) + int64(keyLen) + int64(valLen)
 	if rel+totalLen > int64(len(buf)) {
-		return nil, false, nil
+		return nil, false, totalLen, nil
 	}
 
 	if keyLen != uint64(len(key)) {
-		return nil, false, nil
+		return nil, false, 0, nil
 	}
 
 	keyStart := rel + 16
 	keyEnd := keyStart + int64(keyLen)
 	if !bytes.Equal(buf[keyStart:keyEnd], key) {
-		return nil, false, nil
+		return nil, false, 0, nil
 	}
 
 	valStart := keyEnd
@@ -264,10 +287,51 @@ func decodeValueFromChunk(buf []byte, rel int64, key []byte) ([]byte, bool, erro
 	if flags&FlagCompressed != 0 {
 		decompressed, err := s2.Decode(nil, valBytes)
 		if err != nil {
-			return nil, false, err
+			return nil, false, 0, err
 		}
-		return decompressed, true, nil
+		return decompressed, true, totalLen, nil
 	}
 
-	return append([]byte(nil), valBytes...), true, nil
+	return append([]byte(nil), valBytes...), true, totalLen, nil
+}
+
+func (h *DB) readSlabRecord(segmentID uint16, localOffset, n int64) ([]byte, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("record length must be positive")
+	}
+	if localOffset < 0 {
+		return nil, fmt.Errorf("negative offset: %d", localOffset)
+	}
+	end := localOffset + n
+	if end < localOffset {
+		return nil, fmt.Errorf("offset overflow")
+	}
+
+	// Sealed segment: slice directly from mmap (no syscall, no allocation for record bytes).
+	if segmentID < h.activeSegmentID {
+		if m, err := h.slabReadOnlyMap(segmentID); err == nil && m != nil {
+			if end <= int64(len(m)) && localOffset <= int64(int(^uint(0)>>1)) && end <= int64(int(^uint(0)>>1)) {
+				return m[int(localOffset):int(end)], nil
+			}
+		}
+	}
+
+	f := h.slabFiles[segmentID]
+	if f == nil {
+		return nil, fmt.Errorf("segment %d not found", segmentID)
+	}
+	if n > int64(int(^uint(0)>>1)) {
+		return nil, fmt.Errorf("record too large: %d", n)
+	}
+
+	buf := make([]byte, int(n))
+	readN, err := f.ReadAt(buf, localOffset)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	// If we couldn't read the full record, treat as incomplete.
+	if readN != len(buf) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return buf, nil
 }
