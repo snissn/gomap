@@ -28,6 +28,10 @@ Before a downstream system can safely depend on this repo, we need explicit cont
 - `docs/contracts/CONCURRENCY.md`
 - `docs/contracts/ITERATION.md`
 
+## Primitives (Interfaces + Engine Choice)
+
+- `docs/downstream/PRIMITIVES.md`
+
 ## Current Recommendation
 
 - Use **TreeDB** for anything “committed” that must survive crashes:

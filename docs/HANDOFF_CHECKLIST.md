@@ -8,7 +8,7 @@ This checklist exists so a downstream project can depend on this repo without tr
 
 - [x] The stable public packages are explicitly defined (`docs/API_STABILITY.md`).
 - [x] Public APIs are small and purposeful; implementation details live behind `internal/`.
-- [ ] Typed errors exist for key invariants (e.g. `ErrLocked`, `ErrClosed`, `ErrCorrupt` where applicable).
+- [x] Typed errors exist for key invariants (e.g. `ErrLocked`, `ErrClosed`, `ErrSnapshotCorrupt` where applicable).
 
 ## Contracts (Pinned by Tests)
 
@@ -31,5 +31,5 @@ This checklist exists so a downstream project can depend on this repo without tr
 
 ## Release / Change Communication
 
-- [ ] A change policy is documented (what can change freely vs what is stable).
+- [x] A change policy is documented (what can change freely vs what is stable).
 - [ ] When ready, tags/releases follow SemVer so downstream repos can pin.

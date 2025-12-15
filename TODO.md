@@ -408,6 +408,11 @@ Quality bar:
 Goal: make `TreeDB` and `HashDB` reliable, well-specified storage primitives that downstream projects
 (including replication/consensus systems and “replicated state machine” style applications) can depend on confidently.
 
+Status (2025-12-15):
+- Contracts are documented under `docs/contracts/` and pinned by tests under `internal/contracttest/`.
+- Stable surface intent and change policy are documented under `docs/API_STABILITY.md`.
+- Downstream primitives (recommended interfaces + engine choice) are documented under `docs/downstream/PRIMITIVES.md`.
+
 ## A) In-repo Prerequisites (Storage Contracts)
 
 These are required before a downstream replication/consensus layer can safely rely on this repo:

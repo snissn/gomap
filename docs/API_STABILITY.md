@@ -46,10 +46,18 @@ Rules of thumb:
   - an explicit version marker in metadata, and
   - a migration story (or a “rebuild required” guarantee).
 
+## Change Policy (Stable Surface)
+
+The intent is to let downstream projects depend on the stable surface without surprises.
+
+Policy:
+- Breaking changes to the stable surface should be reflected in `CHANGELOG.md`.
+- When we start tagging releases, breaking changes will correspond to a SemVer major bump.
+- Non-stable packages/tooling may change freely without guarantees.
+
 ## Documentation + Examples (Go Best Practices)
 
 For the stable surface, the expectation is:
 - Package-level docs (`doc.go`) describing purpose + caveats.
 - Doc comments for exported identifiers that are part of the stable surface.
 - Runnable examples (`Example*` tests) for the primary entrypoints.
-
