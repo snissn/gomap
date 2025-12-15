@@ -64,12 +64,9 @@ func (h *DB) applyBatch(ops []BatchOp, sync bool) error {
 		case BatchOpPut:
 			val := op.Value
 			var flags uint8
-			if h.compressionEnabled && len(val) > 32 {
-				compressed, ok := compressValueIfBeneficial(val)
-				if ok {
-					val = compressed
-					flags |= FlagCompressed
-				}
+			if compressed, ok := compressValueIfEnabled(h.compressionEnabled, val); ok {
+				val = compressed
+				flags |= FlagCompressed
 			}
 			recLen := 16 + len(op.Key) + len(val)
 			prepared = append(prepared, preparedBatchOp{

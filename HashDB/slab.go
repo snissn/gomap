@@ -74,11 +74,9 @@ func (h *DB) addSlab(item Item) (Key, error) {
 
 	// Compress value?
 	var flags uint8
-	if h.compressionEnabled && len(val) > 32 { // Only try compressing if > 32 bytes
-		if compressed, ok := compressValueIfBeneficial(val); ok {
-			val = compressed
-			flags |= FlagCompressed
-		}
+	if compressed, ok := compressValueIfEnabled(h.compressionEnabled, val); ok {
+		val = compressed
+		flags |= FlagCompressed
 	}
 
 	keylen := len(key)
@@ -190,11 +188,9 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 		valueBytes := item.Value
 
 		var flags uint8
-		if h.compressionEnabled && len(valueBytes) > 32 {
-			if compressed, ok := compressValueIfBeneficial(valueBytes); ok {
-				valueBytes = compressed
-				flags |= FlagCompressed
-			}
+		if compressed, ok := compressValueIfEnabled(h.compressionEnabled, valueBytes); ok {
+			valueBytes = compressed
+			flags |= FlagCompressed
 		}
 
 		recordLen := 16 + len(keyBytes) + len(valueBytes)
