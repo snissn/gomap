@@ -8,7 +8,7 @@
 ## Who Is This For?
 
 - Anyone who needs to understand what survives a crash / power loss.
-- Anyone building a consensus/replication layer (Raft) where “committed” must be durable.
+- Anyone building a replication/consensus layer where “committed” must be durable.
 
 ## TreeDB
 
@@ -54,5 +54,4 @@ Current durability contract:
 - Writes go through the OS page cache and may be lost on power loss.
 - Recovery is slab-log-based, but it should be treated as “best effort” until a stricter durability mode is implemented.
 
-If you need strict durability (e.g. for Raft commits), use TreeDB `*Sync` operations today.
-
+If you need strict durability (e.g. for a replicated commit path), use TreeDB `*Sync` operations today.

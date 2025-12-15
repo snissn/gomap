@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-This checklist exists so a future project (e.g. “RaftDB”) can depend on this repo without tribal knowledge.
+This checklist exists so a downstream project can depend on this repo without tribal knowledge.
 
 ## Stable Surface
 
@@ -33,4 +33,3 @@ This checklist exists so a future project (e.g. “RaftDB”) can depend on this
 
 - [ ] A change policy is documented (what can change freely vs what is stable).
 - [ ] When ready, tags/releases follow SemVer so downstream repos can pin.
-

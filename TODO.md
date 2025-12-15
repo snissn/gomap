@@ -389,24 +389,24 @@ Quality bar:
 
 ---
 
-# Milestone: Raft-backed Database (“RaftDB”)
+# Milestone: Downstream-Ready Storage Primitives (Stable Surface + Contracts)
 
-Goal: build a consensus-based “database” on top of `TreeDB` and/or `HashDB` (Raft log + replicated state machine),
-with a stable surface that future projects can depend on confidently.
+Goal: make `TreeDB` and `HashDB` reliable, well-specified storage primitives that downstream projects
+(including replication/consensus systems and “replicated state machine” style applications) can depend on confidently.
 
 ## A) In-repo Prerequisites (Storage Contracts)
 
-These are required before a Raft layer can safely rely on this repo:
+These are required before a downstream replication/consensus layer can safely rely on this repo:
 
 - **Coherent durability + recovery**
   - TreeDB must have a single recovery story (see sections 1–5 above) so crash recovery does not depend on whether the next opener chooses cached vs backend mode.
 - **Exclusive cross-process locking**
-  - `treedb.Open*` must enforce exclusive open; the Raft layer should never “accidentally” open the same dir from multiple processes.
+  - `treedb.Open*` must enforce exclusive open; downstream systems should never “accidentally” open the same dir from multiple processes.
 - **Clear durability API contract**
   - Document exactly what is durable after each call (`Set`, `SetSync`, `Batch.Write`, `Batch.WriteSync`) and what recovery guarantees exist.
-  - Avoid “silent best-effort durability” for anything the Raft layer would treat as committed.
+  - Avoid “silent best-effort durability” for anything a downstream system would treat as committed.
 - **Atomic batch apply**
-  - A Raft state machine apply needs an efficient `ApplyBatch` style path that is atomic and durable when requested.
+  - A replicated state machine apply needs an efficient `ApplyBatch` style path that is atomic and durable when requested.
 - **Snapshot support (consistent read view)**
   - Need a way to create a consistent snapshot for:
     - state machine snapshotting (iterate all keys deterministically), and
@@ -415,7 +415,7 @@ These are required before a Raft layer can safely rely on this repo:
 - **Deterministic iteration**
   - Snapshotting requires stable ordering and clearly defined iterator bounds/semantics.
 - **Concurrency model documented**
-  - Raft will have concurrent goroutines (apply loop, reads, snapshot creation, compaction); DB types must clearly state what’s safe concurrently.
+  - Downstream systems will have concurrent goroutines (apply loop, reads, snapshot creation, compaction); DB types must clearly state what’s safe concurrently.
 
 ## B) “Stable Surface” Requirements (API + Versioning)
 
@@ -428,16 +428,15 @@ These are required before a Raft layer can safely rely on this repo:
   - what can change freely vs what is intended to be stable.
   - later: SemVer tags once the surface stabilizes.
 
-## C) Raft Storage Requirements (Design Targets)
+## C) Downstream Storage Requirements (Design Targets)
 
-At minimum, a Raft-backed DB needs:
+At minimum, a replicated/consensus-backed system needs:
 - **Log store**: append entries, read by index, truncate suffix/prefix, and compact.
 - **Stable store**: persist current term, voted-for, and cluster config.
 - **State machine store**: apply committed commands (KV mutations) atomically and snapshot/restore.
 
 Open questions to decide early:
-- Which Raft implementation to build around (`hashicorp/raft`, `etcd/raft`, or a minimal custom layer)?
-- Which engine stores the Raft log vs the user KV state (TreeDB backend vs cached vs HashDB), and why?
+- Which engine stores the replicated log vs the user KV state (TreeDB backend vs cached vs HashDB), and why?
 - How to encode commands and schema/version them.
 
 ## D) Test Plan (North Star)
@@ -450,7 +449,7 @@ Open questions to decide early:
 
 ## E) Documentation Requirements (Go Best Practices)
 
-Goal: make it hard to misuse the storage engines when building Raft on top.
+Goal: make it hard to misuse the storage engines when building higher-level systems on top.
 
 - **GoDoc-first API docs**
   - Exported packages/types/funcs/methods should have doc comments.
@@ -460,7 +459,7 @@ Goal: make it hard to misuse the storage engines when building Raft on top.
 - **Runnable examples**
   - Add `Example*` tests that appear in `go doc`/pkgsite and are executed by `go test`.
 - **Design docs**
-  - Add a `docs/raft/` section later: log format, snapshot model, recovery pipeline, and operational guidance.
+  - Add a `docs/downstream/` section later: log format, snapshot model, recovery pipeline, and operational guidance.
 
 ## F) Handoff Checklist (“Future Projects Can Adopt This”)
 

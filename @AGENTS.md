@@ -12,7 +12,7 @@
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [x] TreeDB: unify open + coherent crash recovery (cached WAL replay + cleanup; spec tests added).
 - [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
-- [ ] Milestone: Raft-backed database (“RaftDB”) on TreeDB/HashDB (see `TODO.md`).
+- [ ] Milestone: downstream-ready storage primitives (stable surface + contracts; see `TODO.md`).
 - [x] HashDB: add exclusive open lock + tests.
 
 ## Progress Log
@@ -115,7 +115,7 @@
 - 2025-12-14: Roadmap expansion
   - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
 - 2025-12-14: Roadmap expansion
-  - Added a Raft-backed DB (“RaftDB”) milestone and prereqs to `TODO.md`.
+  - Added a downstream-ready storage milestone and prereqs to `TODO.md`.
 - 2025-12-14: Roadmap expansion
   - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
 - 2025-12-14: TreeDB exclusive open
