@@ -48,7 +48,7 @@ Disallow:
 #         - treedb write_seq: 2,119,036 -> 2,200,098 ops/s (+4%)
 #         - treedbbackend full_scan: 1,117,444 -> 1,141,509 items/s (+2%) (still slab/pread bound)
 
-# [ ] TODO-02 Iterator leaf-local fast path: Next() intra-leaf w/o stack traversal or header re-parse
+# [-] TODO-02 Iterator leaf-local fast path: Next() intra-leaf w/o stack traversal or header re-parse
 #     Target: Full Scan
 #     Files: TreeDB/tree/iterator.go
 #     Test Gate:
@@ -57,8 +57,10 @@ Disallow:
 #     Perf Gate:
 #       - Full Scan median >= +20% (incremental)
 #       - no regression >5% elsewhere
-#     Status: pending
+#     Status: rejected (perf regression)
 #     Result:
+#       - Attempted leaf-local `Next()` fast path + pointer-based stack top in `TreeDB/tree/iterator.go`.
+#       - unified-bench treedb regressed (combo run): read_rand ~1.24M (vs 1,315,982) and full_scan ~39.8M (vs 44.4M); rejected.
 
 # [ ] TODO-03 Ensure Iterator.Value() is O(1) and does NOT re-lookup via DB.Get
 #     Target: Full Scan (and Random Read indirectly)
