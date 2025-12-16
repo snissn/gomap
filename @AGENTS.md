@@ -165,28 +165,120 @@
 
 ## Open Things to Investigate in TreeDB
 
+
+
 ### 1. Adaptive Inline Threshold (High Priority)
-*   **The Issue:** The `InlineThreshold` is statically set to **256 bytes**. This creates a sharp "cliff" in performance behavior.
-*   **Pathological Case:** A workload writing **257-byte values** will force *every* value into the Slab file (random I/O, extra pointer overhead), whereas **255-byte values** stay inline in the B-Tree (sequential I/O, better cache locality).
-*   **Solution:** Implement the **Adaptive Controller** (mentioned in `specs/spec.md` but missing in code). It should dynamically adjust the threshold based on "Slab Pressure" vs. "Index Pressure" to smooth out this cliff.
+
+*   **The Issue:** `InlineThreshold` is static (256 bytes). This creates a performance cliff where values slightly larger (e.g., 257 bytes) incur full slab overhead (random I/O), while slightly smaller ones (255 bytes) are fast.
+
+*   **Solution:** Implement the **Adaptive Controller** (specified but not built). It should dynamically adjust the threshold based on "Slab Pressure" vs. "Index Pressure".
+
+*   **Risks:**
+
+    *   **Oscillation:** The controller might thrash between high and low thresholds if the workload variance matches the adjustment period.
+
+    *   **CPU Overhead:** Constant monitoring/calculation might degrade tight-loop performance.
+
+*   **Validation Plan:**
+
+    *   Create a benchmark with mixed payloads (some <256, some >256) and oscillating value sizes.
+
+    *   Measure throughput stability and the "Slab vs Tree" storage ratio.
+
+    *   Assert that the threshold stabilizes for steady-state workloads.
+
+
 
 ### 2. Memtable Memory Layout (Arena Allocation)
-*   **The Issue:** Increasing `FlushThreshold` to 64MB degraded random write performance due to increased CPU cache thrashing and Garbage Collection pressure (managing 64MB of B-Tree nodes).
-*   **Opportunity:** Replace the pointer-heavy B-Tree (`google/btree`) with an **Arena-backed SkipList** or a flat array-based structure.
-*   **Benefit:** This would allow much larger `FlushThresholds` (e.g., 64MB–128MB) for superior disk batching *without* suffering the CPU/GC penalty.
+
+*   **The Issue:** Increasing `FlushThreshold` to 64MB degraded random write performance due to GC pressure (`runtime.scanobject`) and CPU cache thrashing from the pointer-heavy `google/btree`.
+
+*   **Opportunity:** Replace the B-Tree with an **Arena-backed SkipList** or flat array structure to improve cache locality and reduce GC overhead.
+
+*   **Risks:**
+
+    *   **Complexity:** Arena management (unsafe pointers?) is complex and prone to leaks/crashes.
+
+    *   **Fragmentation:** Arenas can waste memory if deletes/updates leave holes that aren't easily reused before flush.
+
+*   **Validation Plan:**
+
+    *   Micro-benchmark `Memtable` operations (insert/get/delete) in isolation.
+
+    *   Measure GC pause times and total heap usage under high `FlushThreshold` (e.g., 64MB-128MB).
+
+    *   Run `unified-bench -tests batch_write_random` with 64MB threshold; it should beat the current 4MB baseline.
+
+
 
 ### 3. "Zero-Copy" Write Path
-*   **The Issue:** Profiling showed `runtime.memmove` consuming **~30% of CPU**. Data is copied multiple times: `User Buffer` -> `Batch Slice` -> `WAL Buffer` -> `Memtable Node`.
-*   **Opportunity:** Investigate a "zero-copy" flow where the Memtable points directly to slices within the `Batch` or `WAL` buffer (pinned until flush), reducing memory bandwidth usage.
+
+*   **The Issue:** Profiling showed `runtime.memmove` consuming ~30% of CPU. Data is copied multiple times (User -> Batch -> WAL -> Memtable).
+
+*   **Opportunity:** Implement a "zero-copy" flow where Memtable nodes point directly to pinned slices in the `Batch` or `WAL` buffer.
+
+*   **Risks:**
+
+    *   **Safety:** Managing the lifetime of pinned buffers is hard; accessing them after release causes panics/corruption.
+
+    *   **Contention:** Locking buffers might introduce new bottlenecks for highly concurrent writers.
+
+*   **Validation Plan:**
+
+    *   Run escape analysis to confirm allocations are avoided.
+
+    *   Benchmark high-concurrency writes (`-parallel`) to detect locking regressions.
+
+    *   Verify memory usage drops significantly for large-value workloads.
+
+
 
 ### 4. Comparison Micro-Optimizations
-*   **The Issue:** `bytes.Compare` (`cmpbody`) consumed **~6% of CPU** in initial profiling.
-*   **Opportunity:** Implement **Prefix Compression** in B-Tree nodes to reduce storage size and comparison time for keys with common prefixes. Alternatively, explore SIMD-optimized comparisons for fixed-length keys.
+
+*   **The Issue:** `bytes.Compare` consumed ~6% of CPU.
+
+*   **Opportunity:** Implement **Prefix Compression** in B-Tree nodes or use SIMD-optimized comparisons.
+
+*   **Risks:**
+
+    *   **CPU Overhead:** Decompression cost might outweigh memory bandwidth savings for *short* keys.
+
+    *   **Code Complexity:** Binary search becomes harder if keys are prefix-compressed (cannot random-access mid-node).
+
+*   **Validation Plan:**
+
+    *   Benchmark with short random keys (regression test) vs. long common-prefix keys (feature test).
+
+    *   Measure CPU usage profile to confirm `cmpbody` reduction.
+
+
 
 ### 5. Heuristic Cleanup
-*   **The Issue:** The system uses a mix of hardcoded and dynamic heuristics (`streamSwitchThreshold`, `InlineThreshold`, `FlushThreshold`).
-*   **Action:** Consolidate these into a unified `WritePolicy` struct. Re-evaluate `streamSwitchThreshold` (32) as it might be redundant or could be derived from other configurable thresholds.
+
+*   **The Issue:** Mixed heuristics (`streamSwitchThreshold=32` const, `FlushThreshold` config, `InlineThreshold` const).
+
+*   **Action:** Centralize into a `WritePolicy` struct. Re-evaluate `streamSwitchThreshold`.
+
+*   **Risks:**
+
+    *   **Regression:** Removing a "magic number" might break a specific edge-case workload it was tuned for.
+
+*   **Validation Plan:**
+
+    *   Run the full `unified-bench` suite (Random, Seq, Scan, Small-Seq) after any change.
+
+    *   Specifically verify `batch_write_small_seq` maintains its 3.3M+ ops/sec performance.
+
+
 
 ### 6. Slab Space Reclamation
-*   **The Issue:** While `slabManager` logic exists, its efficiency for reclaiming fragmented space (e.g., from updates/deletes of large values) was not deeply analyzed.
-*   **Risk:** Heavy workloads with many large value updates/deletes could lead to `*.slab` file fragmentation and inefficient space reuse if the "Graveyard" or "Compaction" logic isn't perfectly aggressive. Ensure efficient reuse of slab holes.
+
+*   **The Issue:** Efficiency of reclaiming fragmented slab space (from large value updates/deletes) is unverified.
+
+*   **Risk:** Long-running nodes might suffer from disk space bloat (Space Amplification) if holes aren't reused efficiently.
+
+*   **Validation Plan:**
+
+    *   Run a long-duration "soak test" with 50% updates/deletes of large values (>256 bytes).
+
+    *   Monitor physical disk usage vs. logical data size over 24+ hours.
