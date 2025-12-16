@@ -144,7 +144,7 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 
 func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	if flushThreshold <= 0 {
-		flushThreshold = 4 * 1024 * 1024 // 4MB default
+		flushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
 
 	// Ensure wal dir exists
@@ -257,18 +257,23 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// 1. Append to WAL
-	if err := db.wal.Append(wal.OpSet, key, value); err != nil {
-		return err
-	}
-	if sync {
-		if err := db.wal.Sync(); err != nil {
+	// 1. Insert to Memtable (Allocates in Arena) -> WAL Write (Reads from Arena)
+	// This avoids reading 'key/value' (User Memory) twice.
+	err := db.mutable.PutWithCallback(key, value, func(kView, vView []byte) error {
+		if err := db.wal.Append(wal.OpSet, kView, vView); err != nil {
 			return err
 		}
+		if sync {
+			if err := db.wal.Sync(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// 2. Insert to Memtable
-	db.mutable.Set(key, value)
 	db.mutableRange.add(key)
 
 	// 3. Check Threshold
@@ -298,18 +303,23 @@ func (db *DB) delete(key []byte, sync bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// 1. WAL
-	if err := db.wal.Append(wal.OpDelete, key, nil); err != nil {
-		return err
-	}
-	if sync {
-		if err := db.wal.Sync(); err != nil {
+	// 1. Memtable -> WAL
+	err := db.mutable.DeleteWithCallback(key, func(kView, vView []byte) error {
+		// Value is empty for delete
+		if err := db.wal.Append(wal.OpDelete, kView, nil); err != nil {
 			return err
 		}
+		if sync {
+			if err := db.wal.Sync(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// 2. Memtable
-	db.mutable.Delete(key)
 	db.mutableRange.add(key)
 
 	// 3. Threshold

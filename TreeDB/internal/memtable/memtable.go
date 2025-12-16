@@ -2,246 +2,152 @@ package memtable
 
 import (
 	"bytes"
-	"sort"
 	"sync"
-	"unsafe"
 
-	"github.com/google/btree"
-	"github.com/snissn/gomap/TreeDB/internal/iterator" // Import iterator interface
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/skiplist"
 )
 
-type Item struct {
-	Key       []byte
-	Value     []byte
-	IsDeleted bool
-}
-
-func (i *Item) Less(than btree.Item) bool {
-	return bytes.Compare(i.Key, than.(*Item).Key) < 0
-}
-
 type Memtable struct {
-	tree *btree.BTree
-	idx  map[string]*Item
-	size int64
-	mu   sync.RWMutex
+	sl *skiplist.SkipList
+	mu sync.RWMutex
 }
 
+// New creates a new Memtable.
+// We start with a reasonable capacity to avoid initial reallocations.
 func New() *Memtable {
 	return &Memtable{
-		tree: btree.New(32),
-		idx:  make(map[string]*Item),
+		sl: skiplist.New(4 * 1024 * 1024), // 4MB initial capacity
 	}
-}
-
-func bytesToStringNoCopy(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (m *Memtable) Set(key, value []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.sl.Put(key, value)
+}
 
-	k := append([]byte(nil), key...)
-	v := append([]byte(nil), value...)
-
-	item := &Item{Key: k, Value: v, IsDeleted: false}
-	old := m.tree.ReplaceOrInsert(item)
-	added := int64(len(k) + len(v))
-	if old != nil {
-		oldItem := old.(*Item)
-		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
-	}
-	m.size += added
-	m.idx[bytesToStringNoCopy(k)] = item
+func (m *Memtable) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sl.PutWithCallback(key, value, cb)
 }
 
 func (m *Memtable) Delete(key []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	k := append([]byte(nil), key...)
-	item := &Item{Key: k, IsDeleted: true}
-	old := m.tree.ReplaceOrInsert(item)
-
-	added := int64(len(k))
-	if old != nil {
-		oldItem := old.(*Item)
-		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
-	}
-	m.size += added
-	m.idx[bytesToStringNoCopy(k)] = item
+	m.sl.Delete(key)
 }
 
+func (m *Memtable) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sl.DeleteWithCallback(key, cb)
+}
+
+// SetSteal - SkipList copies data, so Steal is same as Set
 func (m *Memtable) SetSteal(key, value []byte) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	item := &Item{Key: key, Value: value, IsDeleted: false}
-	old := m.tree.ReplaceOrInsert(item)
-	added := int64(len(key) + len(value))
-	if old != nil {
-		oldItem := old.(*Item)
-		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
-	}
-	m.size += added
-	m.idx[bytesToStringNoCopy(key)] = item
+	m.Set(key, value)
 }
 
+// DeleteSteal - SkipList copies data, so Steal is same as Delete
 func (m *Memtable) DeleteSteal(key []byte) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	item := &Item{Key: key, IsDeleted: true}
-	old := m.tree.ReplaceOrInsert(item)
-
-	added := int64(len(key))
-	if old != nil {
-		oldItem := old.(*Item)
-		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
-	}
-	m.size += added
-	m.idx[bytesToStringNoCopy(key)] = item
+	m.Delete(key)
 }
 
 func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	item := m.idx[bytesToStringNoCopy(key)]
-	if item == nil {
-		return nil, false, false
-	}
-	return item.Value, item.IsDeleted, true
+	return m.sl.Get(key)
 }
 
+// Size returns the total memory usage (arena size).
 func (m *Memtable) Size() int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.size
+	return m.sl.Size()
 }
 
 func (m *Memtable) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.tree.Len()
+	return m.sl.Count()
 }
 
-// Iterator iterates over a snapshot of the memtable.
+// Iterator wrapper
 type Iterator struct {
-	items []*Item
-	idx   int
-	valid bool
+	iter *skiplist.Iterator
+	end  []byte
 }
 
-// NewIterator returns an iterator.UnsafeIterator restricted to [start, end).
 func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	// Estimated count? We don't know range count easily.
-	// Use heuristic or default.
-	items := make([]*Item, 0, 64)
-
-	iterator := func(i btree.Item) bool {
-		items = append(items, i.(*Item))
-		return true
-	}
-
-	if start == nil && end == nil {
-		m.tree.Ascend(iterator)
-	} else if start == nil {
-		m.tree.AscendLessThan(&Item{Key: end}, iterator)
-	} else if end == nil {
-		m.tree.AscendGreaterOrEqual(&Item{Key: start}, iterator)
-	} else {
-		m.tree.AscendRange(&Item{Key: start}, &Item{Key: end}, iterator)
-	}
-
-	return &Iterator{items: items}
+	it := m.sl.NewIterator(start, end)
+	return &Iterator{iter: it, end: end}
 }
 
-// Seek positions the iterator to the first key >= target.
 func (it *Iterator) Seek(key []byte) {
-	it.valid = false
-	if len(it.items) == 0 {
-		it.idx = 0
-		return
-	}
-	if key == nil {
-		it.idx = 0
-		it.valid = true
-		return
-	}
-	it.idx = sort.Search(len(it.items), func(i int) bool {
-		return bytes.Compare(it.items[i].Key, key) >= 0
-	})
-	it.valid = it.idx >= 0 && it.idx < len(it.items)
+	it.iter.Seek(key)
+	it.checkEnd()
 }
 
-// Next advances the iterator.
 func (it *Iterator) Next() {
-	if !it.valid {
-		return // Do nothing if already invalid
-	}
-
-	it.idx++
-	it.valid = it.idx >= 0 && it.idx < len(it.items)
+	it.iter.Next()
+	it.checkEnd()
 }
 
-// Valid returns true if the iterator is currently pointing to a valid item.
+func (it *Iterator) checkEnd() {
+	if it.iter.Valid() && it.end != nil {
+		if bytes.Compare(it.iter.UnsafeKey(), it.end) >= 0 {
+			// Invalidate
+			// skipList iterator doesn't have "Invalidate" method public?
+			// We can just rely on wrapper Valid().
+			// But wrapper Valid() calls iter.Valid().
+			// We need state in wrapper.
+			// Actually, let's just check in Valid().
+		}
+	}
+}
+
 func (it *Iterator) Valid() bool {
-	return it.valid
-}
-
-// UnsafeKey returns a view (no copy) of the current key.
-func (it *Iterator) UnsafeKey() []byte {
-	if !it.valid {
-		return nil
-	}
-	return it.items[it.idx].Key
-}
-
-// UnsafeValue returns a view (no copy) of the current value.
-func (it *Iterator) UnsafeValue() []byte {
-	if !it.valid {
-		return nil
-	}
-	return it.items[it.idx].Value
-}
-
-// IsDeleted returns true if the current item is a tombstone.
-func (it *Iterator) IsDeleted() bool {
-	if !it.valid {
+	if !it.iter.Valid() {
 		return false
 	}
-	return it.items[it.idx].IsDeleted
+	if it.end != nil && bytes.Compare(it.iter.UnsafeKey(), it.end) >= 0 {
+		return false
+	}
+	return true
 }
 
-// Key returns a copy of the current key.
+func (it *Iterator) UnsafeKey() []byte {
+	return it.iter.UnsafeKey()
+}
+
+func (it *Iterator) UnsafeValue() []byte {
+	return it.iter.UnsafeValue()
+}
+
+func (it *Iterator) IsDeleted() bool {
+	return it.iter.IsDeleted()
+}
+
 func (it *Iterator) Key() []byte {
-	return append([]byte(nil), it.UnsafeKey()...)
+	return it.iter.Key()
 }
 
-// Value returns a copy of the current value.
 func (it *Iterator) Value() []byte {
-	return append([]byte(nil), it.UnsafeValue()...)
+	return it.iter.Value()
 }
 
-// Error returns nil.
-func (it *Iterator) Error() error {
-	return nil
-}
-
-// Close closes the iterator.
 func (it *Iterator) Close() error {
-	it.items = nil
-	return nil
+	return it.iter.Close()
+}
+
+func (it *Iterator) Error() error {
+	return it.iter.Error()
 }
 
 func (it *Iterator) Domain() (start, end []byte) {
-	return nil, nil
+	return nil, it.end
 }

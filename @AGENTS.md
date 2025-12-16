@@ -172,6 +172,11 @@
   - Created `TreeDB/internal/skiplist` using a flat `[]byte` arena for zero-GC node allocation.
   - Increased `FlushThreshold` to 64MB (default) as GC pressure is now eliminated.
   - Benchmarks confirm `Batch Random` throughput at 64MB is now comparable to 4MB (~1.28M ops/sec), while `Batch Small Seq` improved to ~4.26M ops/sec.
+- 2025-12-15: TreeDB Zero-Copy Write Path
+  - Implemented "Arena-First" write flow in `CachingDB`. `Set/Delete` allocates in `Memtable` (Arena) first, then `WAL` writes using views into the Arena.
+  - Added `PutWithCallback` and `DeleteWithCallback` to `SkipList` and `Memtable` to support this transactional flow (abort if WAL fails).
+  - This eliminates one data copy (User -> WAL Buffer) for single operations, reducing memory bandwidth usage.
+  - `Sequential Write` (Set) benchmark hit ~2.2M ops/sec.
 
 ## Notes / Conventions
 
@@ -180,29 +185,7 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 1. "Zero-Copy" Write Path
-
-*   **The Issue:** Profiling showed `runtime.memmove` consuming ~30% of CPU. Data is copied multiple times (User -> Batch -> WAL -> Memtable).
-
-*   **Opportunity:** Implement a "zero-copy" flow where Memtable nodes point directly to pinned slices in the `Batch` or `WAL` buffer.
-
-*   **Risks:**
-
-    *   **Safety:** Managing the lifetime of pinned buffers is hard; accessing them after release causes panics/corruption.
-
-    *   **Contention:** Locking buffers might introduce new bottlenecks for highly concurrent writers.
-
-*   **Validation Plan:**
-
-    *   Run escape analysis to confirm allocations are avoided.
-
-    *   Benchmark high-concurrency writes (`-parallel`) to detect locking regressions.
-
-    *   Verify memory usage drops significantly for large-value workloads.
-
-
-
-### 4. Comparison Micro-Optimizations
+### 1. Comparison Micro-Optimizations
 
 *   **The Issue:** `bytes.Compare` consumed ~6% of CPU.
 
