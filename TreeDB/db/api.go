@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -112,6 +113,10 @@ func (it *DBIterator) UnsafeKey() []byte {
 
 func (it *DBIterator) UnsafeValue() []byte {
 	return it.iter.UnsafeValue()
+}
+
+func (it *DBIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.iter.UnsafeEntry()
 }
 
 func (it *DBIterator) IsDeleted() bool {

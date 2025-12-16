@@ -187,6 +187,11 @@
   - Investigated slow `Full Scan` (~110k ops/sec) vs fast `Prefix Scan` (~2.2M ops/sec).
   - **Root Cause:** COW Fragmentation. Random writes scatter B-Tree nodes across the append-only index file, turning logical scans into random disk I/O. `Prefix Scan` targeted a sequentially written region.
   - **Conclusion:** Expected behavior for COW B-Trees without background index compaction. Future work: Implement "Index Compaction" to rewrite the tree sequentially.
+- 2025-12-15: TreeDB Index Compaction
+  - Implemented `CompactIndex` API using a new `bulk.Build` algorithm (`TreeDB/internal/bulk`).
+  - `bulk.Build` constructs a B-Tree bottom-up from a sorted iterator, allocating pages sequentially to the end of the file.
+  - Updated `UnsafeIterator` to expose `UnsafeEntry`, allowing `CompactIndex` to preserve large value pointers without reading from slabs (zero-copy compaction).
+  - This feature restores Full Scan performance by eliminating fragmentation at the cost of file growth (append-only).
 
 ## Notes / Conventions
 
@@ -195,13 +200,7 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 1. Index Compaction (Full Scan Perf)
-*   **The Issue:** `Full Scan` performance degrades over time due to COW fragmentation (nodes scattered on disk).
-*   **Opportunity:** Implement an "Index Compaction" process that rewrites the B-Tree (or subtrees) sequentially to restore scan performance.
-*   **Risks:** High I/O cost during compaction; locking.
-*   **Validation Plan:** Measure `Full Scan` before and after compaction on a fragmented DB.
-
-### 2. Heuristic Cleanup
+### 1. Heuristic Cleanup
 
 *   **The Issue:** Mixed heuristics (`streamSwitchThreshold=32` const, `FlushThreshold` config, `InlineThreshold` const).
 

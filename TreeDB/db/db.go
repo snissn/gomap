@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -44,8 +45,8 @@ type DB struct {
 	lock        *lockfile.Lock
 	adaptive    *adaptive.Controller
 
-	keepRecent      uint64
-	inlineThreshold int
+	keepRecent uint64
+	policy     WritePolicy
 
 	mu         sync.RWMutex
 	meta       page.MetaPageBody
@@ -163,9 +164,12 @@ func Open(opts Options) (*DB, error) {
 		graveyard:       lifecycle.NewGraveyard(),
 		registry:        lifecycle.NewReaderRegistry(),
 		lock:            lock,
-		adaptive:        adaptive.New(),
-		keepRecent:      opts.KeepRecent,
-		inlineThreshold: page.DefaultInlineThreshold,
+		adaptive:   adaptive.New(),
+		keepRecent: opts.KeepRecent,
+		policy: WritePolicy{
+			InlineThreshold: page.DefaultInlineThreshold,
+			FlushThreshold:  opts.FlushThreshold,
+		},
 	}
 
 	if err := db.recover(); err != nil {
@@ -489,7 +493,7 @@ func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	b := batch.New(db.slabManager, db.inlineThreshold)
+	b := batch.New(db.slabManager, db.policy.InlineThreshold)
 
 	// Create temporary tree for verification (using current root)
 	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
@@ -521,4 +525,39 @@ func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 
 	// Commit with sync=true (Compaction should be durable)
 	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true, metrics)
+}
+
+// CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
+// This improves Full Scan performance by restoring physical locality.
+// Note: This operation causes file growth as old pages are not immediately reclaimed
+// (they are leaked to the freelist but not reused during this append-only build).
+func (db *DB) CompactIndex() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Acquire Snapshot
+	state := db.state.Load()
+	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
+
+	// Create Iterator (Full Scan)
+	iter := tr.Iterator(nil, nil)
+	defer iter.Close()
+
+	// Build new tree sequentially
+	alloc := &pagerAllocator{p: db.pager}
+	newRoot, err := bulk.Build(iter, alloc, db.pager)
+	if err != nil {
+		return err
+	}
+
+	// Commit new root
+	return db.commitLocked(newRoot, db.meta.SystemRootPageID, nil, true, adaptive.Metrics{})
+}
+
+type pagerAllocator struct {
+	p *pager.Pager
+}
+
+func (a *pagerAllocator) Alloc() (uint64, error) {
+	return a.p.Alloc(1)
 }

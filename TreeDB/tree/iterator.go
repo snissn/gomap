@@ -396,6 +396,10 @@ func (it *Iterator) UnsafeValue() []byte {
 	return it.currVal
 }
 
+func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.currVal, it.currPtr, it.flags
+}
+
 func (it *Iterator) Key() []byte {
 	k := it.UnsafeKey()
 	if k == nil {

@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -308,6 +310,13 @@ func (it *Iterator) UnsafeKey() []byte {
 
 func (it *Iterator) UnsafeValue() []byte {
 	return it.sl.getValue(it.curr)
+}
+
+func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val := it.sl.getValue(it.curr)
+	flags := it.sl.getFlags(it.curr)
+	// SkipList doesn't use Pointers, so ptr is empty.
+	return val, page.ValuePtr{}, flags
 }
 
 func (it *Iterator) IsDeleted() bool {

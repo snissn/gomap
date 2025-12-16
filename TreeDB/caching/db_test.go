@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // MockBackend implements BackendDB
@@ -80,6 +81,10 @@ func (it *MockIterator) UnsafeValue() []byte {
 	it.backend.mu.RLock()
 	defer it.backend.mu.RUnlock()
 	return it.backend.data[it.keys[it.idx]]
+}
+
+func (it *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
 func (it *MockIterator) IsDeleted() bool          { return false }
@@ -233,6 +238,10 @@ func (it *MockReverseIterator) UnsafeValue() []byte {
 	it.backend.mu.RLock()
 	defer it.backend.mu.RUnlock()
 	return it.backend.data[it.keys[it.idx]]
+}
+
+func (it *MockReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
 func (it *MockReverseIterator) IsDeleted() bool          { return false }
