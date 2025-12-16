@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
@@ -69,15 +68,6 @@ type Options struct {
 	KeepRecent     uint64 // Default 10000
 	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
-}
-
-// OpenCached opens the database with the caching wrapper.
-func OpenCached(opts Options) (*caching.DB, error) {
-	db, err := Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	return caching.Open(opts.Dir, db, opts.FlushThreshold)
 }
 
 type Snapshot struct {

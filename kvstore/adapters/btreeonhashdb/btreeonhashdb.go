@@ -100,6 +100,7 @@ type treeBatch struct {
 	t      *btreeonhashdb.Tree
 	ops    []op
 	closed bool
+	chunk  []byte
 }
 
 type op struct {
@@ -108,11 +109,24 @@ type op struct {
 	val []byte
 }
 
+func (b *treeBatch) add(data []byte) []byte {
+	if len(b.chunk)+len(data) > cap(b.chunk) {
+		size := 64 * 1024
+		if len(data) > size {
+			size = len(data)
+		}
+		b.chunk = make([]byte, 0, size)
+	}
+	start := len(b.chunk)
+	b.chunk = append(b.chunk, data...)
+	return b.chunk[start : start+len(data)]
+}
+
 func (b *treeBatch) Set(key, value []byte) error {
 	if b.closed {
 		return nil
 	}
-	b.ops = append(b.ops, op{key: append([]byte(nil), key...), val: append([]byte(nil), value...)})
+	b.ops = append(b.ops, op{key: b.add(key), val: b.add(value)})
 	return nil
 }
 
@@ -120,7 +134,7 @@ func (b *treeBatch) Delete(key []byte) error {
 	if b.closed {
 		return nil
 	}
-	b.ops = append(b.ops, op{del: true, key: append([]byte(nil), key...)})
+	b.ops = append(b.ops, op{del: true, key: b.add(key)})
 	return nil
 }
 
@@ -128,18 +142,40 @@ func (b *treeBatch) Commit() error {
 	if b.closed {
 		return nil
 	}
+
+	var setKeys [][]byte
+	var setVals [][]byte
+
+	flushSets := func() error {
+		if len(setKeys) > 0 {
+			if err := b.t.PutMany(setKeys, setVals); err != nil {
+				return err
+			}
+			setKeys = nil
+			setVals = nil
+		}
+		return nil
+	}
+
 	for _, op := range b.ops {
 		if op.del {
+			if err := flushSets(); err != nil {
+				return err
+			}
 			if err := b.t.Delete(op.key); err != nil {
 				return err
 			}
-			continue
-		}
-		if err := b.t.Put(op.key, op.val); err != nil {
-			return err
+		} else {
+			setKeys = append(setKeys, op.key)
+			setVals = append(setVals, op.val)
 		}
 	}
+	if err := flushSets(); err != nil {
+		return err
+	}
+
 	b.ops = nil
+	b.chunk = nil
 	return nil
 }
 

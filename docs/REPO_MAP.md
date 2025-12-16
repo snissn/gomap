@@ -1,30 +1,132 @@
-# Repo Map
+# Repo Map & Architecture
 
-## TL;DR
+## Architecture Overview
 
-The stable public packages are `TreeDB` (package `treedb`) and `HashDB` (package `hashdb`).
-Most other directories are internal implementation details or benchmark tooling.
+This repo contains two primary storage engines: **TreeDB** (B+Tree) and **HashDB** (Bit-Sliced Hash Index).
 
-## Top Level
+### 1. TreeDB (Cached Mode)
 
-- `HashDB/` — HashDB engine + redis-style benchmark harness + BTreeOnHashDB
-- `TreeDB/` — TreeDB engine + internal packages
-- `cmd/unified_bench/` — unified benchmark binary
-- `docs/` — design notes, benchmark spec, and stable contracts
-- `scripts/` — small one-off local scripts
-- `artifacts/` — benchmark outputs / plots (non-source)
+The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-throughput write-back layer.
 
-## HashDB
+```ascii
+                                         ┌──────────────┐
+                                         │  User Code   │
+                                         └───────┬──────┘
+                                                 │
+                                     Set / Batch │
+                                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TreeDB (Cached Layer)                                                        │
+│                                                                              │
+│  ┌──────────────┐        ┌──────────────────┐                                │
+│  │   Memtable   │◄───────┤    Log (WAL)     │◄── Write-Ahead Log (Durability)│
+│  │ (SkipList)   │        │   Dir/wal/*.log  │                                │
+│  └──────┬───────┘        └──────────────────┘                                │
+│         │                                                                    │
+│         │ Background Flush (Threshold / Time)                                │
+│         ▼                                                                    │
+│  ┌──────────────────┐                                                        │
+│  │  Backend Batch   │                                                        │
+│  └────────┬─────────┘                                                        │
+└───────────┼──────────────────────────────────────────────────────────────────┘
+            │
+            │ Zipper Merge (Copy-on-Write)
+            ▼
+┌───────────────────────────────────────┐
+│ TreeDB (Backend)                      │
+│                                       │
+│  ┌─────────────┐   ┌──────────────┐   │
+│  │  index.db   │   │ data-*.slab  │   │
+│  │ (B+Tree)    │   │ (Large Vals) │   │
+│  └─────────────┘   └──────────────┘   │
+└───────────────────────────────────────┘
+```
 
-- `HashDB/` — public package `hashdb` (sharded engine + single-shard DB)
-- `HashDB/redisserver/` — redis protocol server wrappers for HashDB/Badger (benchmarking/dev)
-- `HashDB/benchmark/` — benchmark runner/reporting/plots
-- `HashDB/BTreeOnHashDB/` — BTree built on top of HashDB (benchmark/comparison)
+- **Write Path**: `Set` -> Memtable + WAL.
+- **Read Path**: `Get` checks Memtable -> Backend (merged view).
+- **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
 
-## TreeDB
+### 2. HashDB (Sharded)
 
-- `TreeDB/` — public package `treedb` (cached + backend-only behind one API)
-- `TreeDB/db/` — backend B+Tree engine implementation
-- `TreeDB/caching/` — cached write-back layer (memtable + WAL + flush)
-- `TreeDB/internal/` — internal iterators, WAL format, lockfile, etc
+HashDB is optimized for massive random-read throughput using memory-mapped Swiss Tables.
 
+```ascii
+                                    ┌──────────────┐
+                                    │  User Code   │
+                                    └──────┬───────┘
+                                           │
+                               Put / PutSync │ (Sharded by Key Hash)
+                                           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ HashDB (Sharded)                                                     │
+│                                                                      │
+│   Shard 0                   Shard 1 ...             Shard N          │
+│  ┌──────────────────┐      ┌──────────────────┐    ┌──────────────┐  │
+│  │ hashctl (Index)  │      │ ...              │    │ ...          │  │
+│  │ hashkeys (Data)  │      │                  │    │              │  │
+│  │ slab-*.data      │      │                  │    │              │  │
+│  └──────────────────┘      └──────────────────┘    └──────────────┘  │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+- **Index**: `hashctl` file (1 byte per slot, Swiss Table metadata) + `hashkeys` file (keys + slab pointers).
+- **Values**: Stored in append-only `slab` files.
+- **Resizing**: Incremental per-shard rehash (linear hashing style) to avoid latency spikes.
+
+---
+
+## Directory Map
+
+Key directories and their purpose.
+
+```text
+.
+├── HashDB/                     # HashDB Engine (Public Package: hashdb)
+│   ├── BTreeOnHashDB/          # B-Tree layered on HashDB (Benchmark/Comparison)
+│   ├── benchmark/              # Plotting and reporting tools
+│   ├── redisserver/            # Redis protocol wrapper for benchmarking
+│   ├── slab.go                 # Append-only value log implementation
+│   ├── hashindex.go            # Swiss Table index implementation
+│   └── sharded_db.go           # The main sharded engine entrypoint
+│
+├── TreeDB/                     # TreeDB Engine (Public Package: treedb)
+│   ├── caching/                # Cached write-back layer (Memtable + WAL)
+│   ├── db/                     # Backend B+Tree implementation (Pages, Nodes)
+│   ├── internal/
+│   │   ├── memtable/           # Arena-backed SkipList
+│   │   ├── wal/                # Write-Ahead Log format
+│   │   └── zipper/             # Copy-on-Write merge logic
+│   ├── slab/                   # Backend slab manager
+│   └── public.go               # Main public API (Open, Set, Get)
+│
+├── cmd/
+│   └── unified_bench/          # The master benchmark suite (HashDB vs TreeDB vs Badger)
+│
+├── docs/                       # Documentation & Specs
+│   ├── contracts/              # Behavioral contracts (Durability, Locking)
+│   ├── downstream/             # Guides for building systems ON TOP of these engines
+│   └── images/                 # Benchmark graphs and diagrams
+│
+└── internal/                   # Shared internal test helpers
+    └── contracttest/           # Contract validation tests (run against all engines)
+```
+
+## Where Code Lives
+
+### Core Logic
+
+| Component | Path | Description |
+|---|---|---|
+| **TreeDB Backend** | `TreeDB/db/` | The persistent B+Tree engine (pages, meta, freelist). |
+| **TreeDB Caching** | `TreeDB/caching/` | The write-back layer that handles WAL and memtables. |
+| **TreeDB Merge** | `TreeDB/zipper/` | The algorithm that merges a batch into the B+Tree (COW). |
+| **HashDB Index** | `HashDB/hashindex.go` | The memory-mapped Swiss Table implementation. |
+| **HashDB Sharding** | `HashDB/sharded_db.go` | Orchestrates multiple HashDB shards. |
+
+### Tools & Tests
+
+| Component | Path | Description |
+|---|---|---|
+| **Benchmarks** | `cmd/unified_bench/` | Run this to compare performance. |
+| **Redis Wrapper** | `HashDB/redisserver/` | Use this to point `redis-benchmark` at the engines. |
+| **Spec Tests** | `internal/contracttest/` | Black-box tests ensuring durability/iterator correctness. |

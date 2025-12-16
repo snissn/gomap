@@ -24,9 +24,9 @@ func (g *HashDBKV) PutMany(keys [][]byte, vals [][]byte) error {
 }
 
 // NewTreeOnHashDB constructs a Tree backed by HashDB.
-func NewTreeOnHashDB(store *hashdb.HashDB, treeID string) (*Tree, error) {
+func NewTreeOnHashDB(store *hashdb.HashDB, treeID string, opts *Options) (*Tree, error) {
 	kv := &HashDBKV{Store: store}
-	return OpenTree(kv, treeID)
+	return OpenTree(kv, treeID, opts)
 }
 
 func (g *HashDBKV) Get(key []byte) ([]byte, error) {

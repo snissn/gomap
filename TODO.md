@@ -248,6 +248,8 @@ Notes:
 
 # V1 Milestone: “Wow” Documentation
 
+**Status: COMPLETED (2025-12-16)**
+
 Goal: ship documentation that makes a new developer productive in ~15 minutes, and explains
 the major design tradeoffs (esp. TreeDB cached vs backend) with enough clarity to choose
 the right engine and tuning knobs.

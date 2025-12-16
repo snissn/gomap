@@ -31,6 +31,18 @@ type Entry struct {
 	IsPtr    bool          // True if ValuePtr is valid
 }
 
+// Interface defines the contract for a batch operation.
+type Interface interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	SetOps(ops []Entry) error
+	Write() error
+	WriteSync() error
+	Close() error
+	Replay(func(Entry) error) error
+	GetByteSize() (int, error)
+}
+
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
 	entries         []Entry

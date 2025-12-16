@@ -25,7 +25,7 @@ func TestCachingDB_ConcurrentFlushDoesNotPanic(t *testing.T) {
 
 	// Ensure the current mutable memtable is rotated into the flush queue.
 	db.mu.Lock()
-	_ = db.rotateMemtableLocked()
+	_ = db.rotateMemtableLocked(true)
 	db.mu.Unlock()
 
 	// In older versions, concurrent flushers could race and slice an empty queue.

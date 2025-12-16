@@ -1,65 +1,48 @@
-# Documentation
+# Documentation Index
 
-## TL;DR
+Welcome to the `gomap` documentation.
 
-- Start with the root `README.md` for the high-level overview.
-- Use `docs/GETTING_STARTED.md` if you want to run things locally quickly.
-- Use `docs/contracts/` for the “do not surprise me” behavioral contracts (durability, iteration, concurrency, locking).
-- Use `cmd/unified_bench/README.md` for benchmark usage and methodology.
-- For contributing/dev workflow: `CONTRIBUTING.md`.
+## 🚀 Start Here
 
-## Quickstart (dev)
+- **[Getting Started](GETTING_STARTED.md)**: Prerequisites, local workflow, and minimal code examples.
+- **[Repo Map & Architecture](REPO_MAP.md)**: Diagrams and directory layout explaining how the engines work.
+- **[API Stability](API_STABILITY.md)**: What is safe to depend on (Stable Surface) vs what might change.
 
-Prereqs:
-- Go `1.25+` (see `go.mod`)
-- Linux/macOS (TreeDB uses `mmap`; HashDB has some Windows support, but TreeDB is currently Unix-focused)
+## 🌳 TreeDB
 
-Commands:
-- `make test`
-- `make build`
-- `./bin/unified-bench` (after `make unified-bench`)
+TreeDB is a persistent B+Tree with an optional high-throughput cached layer.
 
-## What’s In This Repo
+- **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Slabs, COW Merge).
+- **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: How to choose the right mode for your workload.
+- **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and WAL replay details.
+- **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
 
-- **HashDB** (`HashDB/`, package `hashdb`)
-  - mmap-backed hash index + append-only slab value log.
-  - Optimized for very fast random reads and high throughput.
-  - Provides the Redis-style benchmarking harness (`HashDB/redisserver`, `HashDB/benchmark`).
-- **TreeDB** (`TreeDB/`, package `treedb`)
-  - Persistent B+Tree with a memory-mapped index and slab value log for large values.
-  - Two open modes behind one API:
-    - cached write-back layer (default): `treedb.Open(...)`
-    - backend-only engine: `opts.Mode = treedb.ModeBackend` or `treedb.OpenBackend(...)`
-- **BTreeOnHashDB** (`HashDB/BTreeOnHashDB/`)
-  - A B-Tree implementation layered on top of HashDB (mostly for benchmarking/comparison).
-- **Unified Bench** (`cmd/unified_bench/`)
-  - A single binary that runs a consistent workload across HashDB, TreeDB, TreeDB backend-only, etc.
+## ⚡ HashDB
 
-## Contract Docs (Downstream Readiness)
+HashDB is a high-performance, memory-mapped hash index optimized for random I/O.
 
-If you’re building a higher-level system (e.g. replication/consensus) on top of these engines,
-start here:
+- **[Concepts](HASHDB_CONCEPTS.md)**: Design overview (Swiss Tables, Slab Log).
+- **[Tuning](HASHDB_TUNING.md)**: Memory policies and performance configuration.
+- **[Snapshots](HASHDB_SNAPSHOT.md)**: Export/Restore and consistent iteration.
 
-- `docs/API_STABILITY.md`
-- `docs/GETTING_STARTED.md`
-- `docs/REPO_MAP.md`
-- `docs/TREEDB_CACHED_VS_BACKEND.md`
-- `docs/TREEDB_CONCEPTS.md`
-- `docs/TREEDB_RECOVERY.md`
-- `docs/TREEDB_TUNING.md`
-- `docs/contracts/README.md`
-- `docs/downstream/README.md`
-- `docs/HASHDB_SNAPSHOT.md`
-- `docs/HASHDB_CONCEPTS.md`
-- `docs/HASHDB_TUNING.md`
+## 📜 Contracts & Specifications
 
-## Benchmarking
+Behavioral guarantees for downstream systems (e.g., replication layers).
 
-- `cmd/unified_bench/README.md`
-- `docs/BENCHMARK_SPEC.md`
-- `docs/DEV_NOTES.md` (HashDB perf notes and next-step ideas)
+- **[Contracts Index](contracts/README.md)**
+  - **[Durability](contracts/DURABILITY.md)**: `Set` vs `SetSync` guarantees.
+  - **[Concurrency](contracts/CONCURRENCY.md)**: Writer/Reader models.
+  - **[Locking](contracts/LOCKING.md)**: Cross-process exclusive locking.
+  - **[Iteration](contracts/ITERATION.md)**: Iterator bounds and validity.
+- **[Downstream Primitives](downstream/README.md)**: Building reliable systems on top of these engines.
 
-## Legacy / Historical
+## 📊 Benchmarking
 
-As the repo is cleaned up, older “planning” docs and one-off scripts may be moved into `docs/legacy/`.
-See `docs/legacy/README.md`.
+- **[Benchmark Spec](BENCHMARK_SPEC.md)**: Methodology and test definitions.
+- **[Unified Bench](cmd/unified_bench/README.md)**: Usage guide for the primary benchmark suite.
+- **[Dev Notes](DEV_NOTES.md)**: Performance investigations and future optimization ideas.
+
+## 🏚️ Legacy & Planning
+
+- **[Legacy Docs](legacy/README.md)**: Older design notes and historical context.
+- **[Improvement Plan](IMPROVEMENT_PLAN.md)**: Roadmap pointers.

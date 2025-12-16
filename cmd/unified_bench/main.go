@@ -66,7 +66,7 @@ func NewBTree(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench")
+	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench", &btreeonhashdb.Options{CacheSize: 4096})
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +445,7 @@ var (
 	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
-	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
+	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,random_delete,full_scan,prefix_scan,batch_write,batch_random); aliases: write_seq->sequential_write, write_rand->random_write, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg    = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -501,7 +501,7 @@ func main() {
 		RangeQueries: *rangeQueries,
 		RangeSpan:    *rangeSpan,
 		DBsArg:       *dbsArg,
-		TestsArg:     *testsArg,
+		TestsArg:     *testArg,
 		KeepDir:      *keepDir,
 		Progress:     *progress,
 		SeedUsed:     seedUsed,
@@ -754,26 +754,26 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	expectedFullScanCount := -1
 	checkPrefixCounts := false
 	testFuncs := map[string]TestFunc{
-		"write_seq": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(i))
 				if err := db.Set(k[:], val); err != nil {
-					return 0, fmt.Errorf("write_seq: %w", err)
+					return 0, fmt.Errorf("sequential_write: %w", err)
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"write_rand": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+		"random_write": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				if err := db.Set(k[:], val); err != nil {
-					return 0, fmt.Errorf("write_rand: %w", err)
+					return 0, fmt.Errorf("random_write: %w", err)
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
@@ -814,7 +814,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"batch_write_random": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+		"batch_random": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			batcher, ok := db.(kvstore.Batcher)
 			if !ok {
 				return math.NaN(), nil
@@ -837,7 +837,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			for i := 0; i < total; i += batchSize {
 				batch, err := batcher.NewBatch()
 				if err != nil {
-					return 0, fmt.Errorf("batch_write_random: new batch: %w", err)
+					return 0, fmt.Errorf("batch_random: new batch: %w", err)
 				}
 
 				end := i + batchSize
@@ -847,20 +847,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := i; j < end; j++ {
 					if err := batch.Set(keys[j], val); err != nil {
 						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write_random: set: %w", err)
+						return 0, fmt.Errorf("batch_random: set: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
 					_ = batch.Close()
-					return 0, fmt.Errorf("batch_write_random: commit: %w", err)
+					return 0, fmt.Errorf("batch_random: commit: %w", err)
 				}
 				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_write_random: close: %w", err)
+					return 0, fmt.Errorf("batch_random: close: %w", err)
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"batch_write_small_seq": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+		"batch_small_seq": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			batcher, ok := db.(kvstore.Batcher)
 			if !ok {
 				return math.NaN(), nil
@@ -874,7 +874,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			for i := 0; i < total; i += batchSize {
 				batch, err := batcher.NewBatch()
 				if err != nil {
-					return 0, fmt.Errorf("batch_write_small_seq: new batch: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
 				}
 
 				end := i + batchSize
@@ -885,20 +885,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
 					if err := batch.Set(k[:], val); err != nil {
 						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write_small_seq: set: %w", err)
+						return 0, fmt.Errorf("batch_small_seq: set: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
 					_ = batch.Close()
-					return 0, fmt.Errorf("batch_write_small_seq: commit: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: commit: %w", err)
 				}
 				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_write_small_seq: close: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: close: %w", err)
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"delete_rand": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+		"random_delete": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
@@ -907,7 +907,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"read_rand": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+		"random_read": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
@@ -1004,17 +1004,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "batch_write_random", "batch_write_small_seq", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
-		"write_seq":             "Sequential Write",
-		"write_rand":            "Random Write",
-		"read_rand":             "Random Read",
-		"full_scan":             "Full Scan",
-		"prefix_scan":           "Prefix Scan",
-		"batch_write":           "Batch Write",
-		"batch_write_random":    "Batch Random",
-		"batch_write_small_seq": "Batch Small Seq",
-		"delete_rand":           "Random Delete",
+		"sequential_write": "Sequential Write",
+		"random_write":     "Random Write",
+		"random_read":      "Random Read",
+		"full_scan":        "Full Scan",
+		"prefix_scan":      "Prefix Scan",
+		"batch_write":      "Batch Write",
+		"batch_random":     "Batch Random",
+		"batch_small_seq":  "Batch Small Seq",
+		"random_delete":    "Random Delete",
 	}
 
 	finalTestOrder := make([]string, 0)
@@ -1035,15 +1035,15 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	// preload a baseline dataset. We intentionally keep this setup out of the
 	// per-test timings so that read/scan numbers reflect a populated DB.
 	hasMeasuredWrites := containsAny(finalTestOrder,
-		"write_seq",
-		"write_rand",
+		"sequential_write",
+		"random_write",
 		"batch_write",
-		"batch_write_random",
-		"batch_write_small_seq",
+		"batch_random",
+		"batch_small_seq",
 	)
 	needsExistingData := containsAny(finalTestOrder,
-		"read_rand",
-		"delete_rand",
+		"random_read",
+		"random_delete",
 		"full_scan",
 		"prefix_scan",
 	)
@@ -1076,7 +1076,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 	}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") {
 		prefixScanBase = cfg.Keys
 	}
 
@@ -1278,7 +1278,7 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 
 	pointCfg := baseCfg
 	pointCfg.DBsArg = "hashdb,treedb,badger,leveldb"
-	pointCfg.TestsArg = "write_seq,write_rand,read_rand"
+	pointCfg.TestsArg = "sequential_write,random_write,random_read"
 	pointCfg.Progress = false
 
 	scanCfg := baseCfg
@@ -1300,7 +1300,7 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	backendBaselineCfg := baseCfg
 	backendBaselineCfg.Keys = backendBaselineKeys
 	backendBaselineCfg.DBsArg = "treedbbackend"
-	backendBaselineCfg.TestsArg = "write_seq,write_rand,read_rand"
+	backendBaselineCfg.TestsArg = "sequential_write,random_write,random_read"
 	backendBaselineCfg.Progress = false
 
 	pointRuns, err := runSweep(pointCfg, keyCounts)
@@ -1502,6 +1502,18 @@ func normalizeTests(list []string) []string {
 			t = "prefix_scan"
 		case "prefix_scan":
 			// keep
+		case "write_seq":
+			t = "sequential_write"
+		case "write_rand":
+			t = "random_write"
+		case "read_rand":
+			t = "random_read"
+		case "delete_rand":
+			t = "random_delete"
+		case "batch_write_random":
+			t = "batch_random"
+		case "batch_write_small_seq":
+			t = "batch_small_seq"
 		}
 		if t == "" {
 			continue

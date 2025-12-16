@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/caching"
 )
 
 // Batch implements the cosmos-db Batch interface.
@@ -13,11 +12,11 @@ type Batch struct {
 	batch *batch.Batch
 }
 
-func (db *DB) NewBatch() caching.BatchInterface {
+func (db *DB) NewBatch() batch.Interface {
 	return db.NewBatchWithSize(0)
 }
 
-func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
+func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	threshold := db.policy.InlineThreshold
 	if db.adaptive != nil {
 		threshold = db.adaptive.GetThreshold()

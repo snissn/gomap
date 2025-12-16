@@ -116,7 +116,7 @@ func (m *MockBackend) Print() error             { return nil }
 func (m *MockBackend) Stats() map[string]string { return nil }
 
 // NewBatch returns a struct that satisfies BatchInterface
-func (m *MockBackend) NewBatch() BatchInterface {
+func (m *MockBackend) NewBatch() batch.Interface {
 	return &MockBatch{mb: m}
 }
 

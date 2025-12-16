@@ -35,3 +35,23 @@ jobs:
         working-directory: TreeDB
         run: go test ./...
 
+  race:
+    name: race-check (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Test Race
+        working-directory: TreeDB
+        run: go test -race ./...
+

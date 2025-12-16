@@ -21,3 +21,8 @@ type KVStore interface {
 	Put(key, value []byte) error
 	Delete(key []byte) error
 }
+
+// Options configures the BTree.
+type Options struct {
+	CacheSize int // Number of nodes to keep in memory. Default 128.
+}

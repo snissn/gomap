@@ -32,15 +32,23 @@ type Tree struct {
 	cacheList *list.List
 	cacheCap  int
 	metaDirty bool
+
+	inBatch    bool
+	batchNodes map[NodeID]*Node
 }
 
 // OpenTree loads an existing tree or initializes a new one if no metadata exists.
 // Meta read errors are returned to the caller; only an absent meta entry triggers initialization.
-func OpenTree(kv KVStore, treeID string) (*Tree, error) {
+func OpenTree(kv KVStore, treeID string, opts *Options) (*Tree, error) {
+	cacheSize := 128
+	if opts != nil && opts.CacheSize > 0 {
+		cacheSize = opts.CacheSize
+	}
+
 	t := &Tree{
 		treeID:    treeID,
 		kv:        kv,
-		cacheCap:  128,
+		cacheCap:  cacheSize,
 		nodeCache: make(map[NodeID]*list.Element),
 		cacheList: list.New(),
 	}
@@ -127,6 +135,94 @@ func (t *Tree) Put(key, value []byte) error {
 	}
 
 	return t.saveMetaIfDirty()
+}
+
+// PutMany inserts multiple key/value pairs in a batch.
+func (t *Tree) PutMany(keys, values [][]byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(keys) != len(values) {
+		return fmt.Errorf("keys/values length mismatch")
+	}
+
+	// 1. Batch write user values to the underlying KV.
+	if b, ok := t.kv.(kvBatcher); ok {
+		if err := b.PutMany(keys, values); err != nil {
+			return err
+		}
+	} else {
+		for i := range keys {
+			if err := t.kv.Put(keys[i], values[i]); err != nil {
+				return err
+			}
+		}
+	}
+
+	// 2. Insert into tree structure with deferred node saves.
+	t.inBatch = true
+	t.batchNodes = make(map[NodeID]*Node)
+	defer func() {
+		t.inBatch = false
+		t.batchNodes = nil
+	}()
+
+	opCache := make(map[NodeID]*Node)
+
+	for i := range keys {
+		// Clear opCache for each operation to avoid accumulating too many nodes.
+		for k := range opCache {
+			delete(opCache, k)
+		}
+
+		split, splitKey, rightID, err := t.insertRecursiveCached(t.meta.RootNodeID, keys[i], values[i], t.meta.Height, opCache)
+		if err != nil {
+			return err
+		}
+
+		if split {
+			newRootID := t.meta.NextNodeID
+			t.meta.NextNodeID++
+
+			newRoot := &Node{
+				ID:       newRootID,
+				Type:     NodeInternal,
+				Keys:     [][]byte{splitKey},
+				Children: []NodeID{t.meta.RootNodeID, rightID},
+			}
+			if err := t.saveNode(newRoot); err != nil {
+				return err
+			}
+
+			t.meta.RootNodeID = newRootID
+			t.meta.Height++
+			t.metaDirty = true
+		}
+	}
+
+	// 3. Flush batch nodes
+	if err := t.saveBatchNodes(); err != nil {
+		return err
+	}
+
+	return t.saveMetaIfDirty()
+}
+
+func (t *Tree) saveBatchNodes() error {
+	if len(t.batchNodes) == 0 {
+		return nil
+	}
+
+	nodes := make([]*Node, 0, len(t.batchNodes))
+	for _, n := range t.batchNodes {
+		nodes = append(nodes, n)
+	}
+
+	// Temporarily disable inBatch so saveNodes actually writes them
+	t.inBatch = false
+	err := t.saveNodes(nodes...)
+	t.inBatch = true // Restore
+	return err
 }
 
 // Delete removes a key from the tree. It is a lazy delete and performs no rebalancing.
@@ -315,6 +411,11 @@ func (t *Tree) saveMeta() error {
 }
 
 func (t *Tree) loadNode(id NodeID) (*Node, error) {
+	if t.inBatch && t.batchNodes != nil {
+		if n, ok := t.batchNodes[id]; ok {
+			return n, nil
+		}
+	}
 	if n := t.cacheGet(id); n != nil {
 		return n, nil
 	}
@@ -374,6 +475,13 @@ func (t *Tree) saveMetaIfDirty() error {
 
 func (t *Tree) saveNodes(nodes ...*Node) error {
 	if len(nodes) == 0 {
+		return nil
+	}
+	if t.inBatch && t.batchNodes != nil {
+		for _, n := range nodes {
+			t.batchNodes[n.ID] = n
+			t.cachePut(n)
+		}
 		return nil
 	}
 	keys := make([][]byte, len(nodes))
