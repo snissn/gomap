@@ -401,7 +401,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	opIdx := 0
 
 	for i := uint16(0); i < count; i++ {
-		entry, err := oldNode.GetInternalEntry(i)
+		// Optimization: Use View to avoid alloc
+		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -409,11 +410,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		// Determine End Key for this child
 		var endKey []byte
 		if i+1 < count {
-			nextEntry, err := oldNode.GetInternalEntry(i + 1)
+			nextKey, _, err := oldNode.GetInternalEntryView(i + 1)
 			if err != nil {
 				return 0, nil, nil, err
 			}
-			endKey = nextEntry.Key
+			endKey = nextKey
 		}
 
 		// Identify ops range for this child
@@ -433,7 +434,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		if len(childOps) > 0 {
 			// Recurse
-			ncID, cs, childRet, err := z.writeRecursive(entry.ChildPageID, childOps)
+			ncID, cs, childRet, err := z.writeRecursive(childID, childOps)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -442,7 +443,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			retired = append(retired, childRet...)
 		} else {
 			// Reuse
-			newChildID = entry.ChildPageID
+			newChildID = childID
 		}
 
 		// Add (Key, NewChildID) to target builder
@@ -450,9 +451,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
 
-		err = target.AddInternalChild(entry.Key, newChildID)
+		err = target.AddInternalChild(key, newChildID)
 		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, &splitBufs, entry.Key, newChildID)
+			target, err = z.createNewSplitInternal(target, builder, &splits, &splitBufs, key, newChildID)
 			if err != nil {
 				return 0, nil, nil, err
 			}

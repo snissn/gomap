@@ -63,6 +63,31 @@ func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
 	}, nil
 }
 
+// GetInternalEntryView returns a view of the entry at the given index.
+// The key slice points directly to the node's data.
+func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, err error) {
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	ptr := int(offset)
+	if ptr+10 > len(n.data) {
+		return nil, 0, ErrCorruptedNode
+	}
+
+	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+	childID = binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+
+	ptr += 10
+	if ptr+int(keyLen) > len(n.data) {
+		return nil, 0, ErrCorruptedNode
+	}
+
+	key = n.data[ptr : ptr+int(keyLen)]
+	return key, childID, nil
+}
+
 // SearchInternal performs a binary search for the given key in an Internal Node.
 // Returns the index of the child that covers the range containing key.
 // Logic: Find largest index i such that Entry[i].Key <= key.
