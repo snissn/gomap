@@ -14,15 +14,20 @@ Disallow:
 #   - Perf Gate: unified-bench medians improve per item threshold
 # ==========================================================
 
-# [ ] TODO-00 Baseline + profiling harness + isolate cached vs backend
+# [x] TODO-00 Baseline + profiling harness + isolate cached vs backend
 #     Changes: none (measurement only)
 #     Test Gate: go test ./... ; go test -race ./...
 #     Perf Gate: no regression >5% (should be none)
 #     Steps:
 #       - Run treedb AND treedbbackend read_rand/full_scan/prefix_scan (5×, record medians)
 #       - Capture cpu profiles for read_rand and full_scan; note top symbols
-#     Status: pending
+#     Status: completed
 #     Result:
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb: read_rand=1,267,203 ops/s; full_scan=23,439,652 items/s; prefix_scan=20,743,294 items/s
+#         - treedbbackend: read_rand=644,961 ops/s; full_scan=1,117,444 items/s; prefix_scan=32,681,981 items/s
+#       - pprof treedbbackend read_rand/full_scan: syscall.syscall6 -> internal/poll.(*FD).Pread -> slab.(*SlabFile).Read dominates (value deref via pread)
+#       - pprof treedb read_rand: node.SearchLeaf/SearchInternal + encoding/binary.littleEndian.Uint16; memclrNoHeapPointers
 
 # [ ] TODO-01 Break semantics: make Iterator.Key/Value return zero-copy views + remove per-item alloc
 #     Target: Full Scan

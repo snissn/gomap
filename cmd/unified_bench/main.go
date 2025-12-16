@@ -454,6 +454,8 @@ type BenchConfig struct {
 	KeepDir  bool
 	Progress bool
 	SeedUsed int64
+
+	CPUProfile string
 }
 
 type BenchRun struct {
@@ -466,15 +468,6 @@ type BenchRun struct {
 
 func main() {
 	flag.Parse()
-
-	if *cpuProfile != "" {
-		f, err := os.Create(*cpuProfile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
 
 	seedUsed := *seed
 	if seedUsed == 0 {
@@ -493,6 +486,7 @@ func main() {
 		KeepDir:      *keepDir,
 		Progress:     *progress,
 		SeedUsed:     seedUsed,
+		CPUProfile:   *cpuProfile,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -986,17 +980,63 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 	}
-	if len(finalTestOrder) == 0 {
-		return BenchRun{}, fmt.Errorf("no tests selected")
-	}
+		if len(finalTestOrder) == 0 {
+			return BenchRun{}, fmt.Errorf("no tests selected")
+		}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
-		prefixScanBase = cfg.Keys
-	}
+		// If the user selects only read/scan/delete tests, the DBs are empty unless we
+		// preload a baseline dataset. We intentionally keep this setup out of the
+		// per-test timings so that read/scan numbers reflect a populated DB.
+		hasMeasuredWrites := containsAny(finalTestOrder,
+			"write_seq",
+			"write_rand",
+			"batch_write",
+			"batch_write_random",
+			"batch_write_small_seq",
+		)
+		needsExistingData := containsAny(finalTestOrder,
+			"read_rand",
+			"delete_rand",
+			"full_scan",
+			"prefix_scan",
+		)
+		if needsExistingData && !hasMeasuredWrites {
+			val := make([]byte, cfg.ValueSize)
+			var k [8]byte
+			for _, inst := range instances {
+				for i := 0; i < cfg.Keys; i++ {
+					binary.BigEndian.PutUint64(k[:], uint64(i))
+					if err := inst.Wrapper.Set(k[:], val); err != nil {
+						return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
+					}
+				}
+			}
+		}
 
-	// Run Tests
-	results := make(map[string]map[string]float64)
-	for _, testName := range finalTestOrder {
+		if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+			prefixScanBase = cfg.Keys
+		}
+
+		var cpuProfFile *os.File
+		if cfg.CPUProfile != "" {
+			f, err := os.Create(cfg.CPUProfile)
+			if err != nil {
+				return BenchRun{}, fmt.Errorf("cpuprofile: %w", err)
+			}
+			cpuProfFile = f
+			if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
+				_ = cpuProfFile.Close()
+				return BenchRun{}, fmt.Errorf("cpuprofile start: %w", err)
+			}
+			defer func() {
+				pprof.StopCPUProfile()
+				_ = cpuProfFile.Close()
+			}()
+		}
+
+		// Run Tests
+		results := make(map[string]map[string]float64)
+		for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64, len(instances))
 		for _, inst := range instances {
 			results[testName][inst.Wrapper.Name()] = math.NaN()
@@ -1415,6 +1455,15 @@ func normalizeTests(list []string) []string {
 func contains(list []string, item string) bool {
 	for _, s := range list {
 		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(list []string, items ...string) bool {
+	for _, item := range items {
+		if contains(list, item) {
 			return true
 		}
 	}
