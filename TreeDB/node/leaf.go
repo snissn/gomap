@@ -101,6 +101,7 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 // If key is found, found=true.
 // If key is greater than all entries, returns Count, false.
 func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
+	data := n.data
 	count := n.Count()
 	i, j := 0, int(count)
 
@@ -110,14 +111,14 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
 		// Read key at index h without full decode
 		// We trust offsets are valid (verified at insert/load?)
 		// For speed, we just assume valid for now, panic on bounds if corrupted
-		offset := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+h*2:])
+		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+h*2:])
 		ptr := int(offset)
-		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
 		// Skip ValLen(4) + Flags(1)
 		keyPtr := ptr + 7
 
 		// Compare
-		cmp := bytes.Compare(n.data[keyPtr:keyPtr+int(keyLen)], key)
+		cmp := bytes.Compare(data[keyPtr:keyPtr+int(keyLen)], key)
 		if cmp < 0 {
 			i = h + 1
 		} else {
@@ -127,11 +128,11 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
 
 	if i < int(count) {
 		// Check for equality
-		offset := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+i*2:])
+		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+i*2:])
 		ptr := int(offset)
-		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
 		keyPtr := ptr + 7
-		if bytes.Equal(n.data[keyPtr:keyPtr+int(keyLen)], key) {
+		if bytes.Equal(data[keyPtr:keyPtr+int(keyLen)], key) {
 			return uint16(i), true
 		}
 	}

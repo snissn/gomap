@@ -781,8 +781,6 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
 }
 
-const streamSwitchThreshold = 32
-
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -885,9 +883,12 @@ func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
-	if len(b.entries) < streamSwitchThreshold {
-		return
-	}
+	// The streamSwitchThreshold check is now redundant because the b.size
+	// check against db.flushThreshold effectively handles this.
+	// If a batch is small enough to be under the flush threshold, we want it
+	// to go through the regular memtable path for aggregation, regardless
+	// of sequentiality.
+	
 	// Also require the batch to be large enough to justify a direct write.
 	// Otherwise, small sequential batches bypass the memtable and cause
 	// write amplification in the backend.

@@ -59,6 +59,7 @@ func (b *Batch) Write() error {
 	if err != nil {
 		return err
 	}
+	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 
 	// Commit (System Root is unchanged for now)
 	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, false, metrics)
@@ -73,6 +74,7 @@ func (b *Batch) WriteSync() error {
 	if err != nil {
 		return err
 	}
+	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 
 	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, true, metrics)
 }

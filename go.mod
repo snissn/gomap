@@ -7,7 +7,6 @@ require (
 	github.com/dgraph-io/badger/v4 v4.8.0
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-errors/errors v1.5.1
-	github.com/google/btree v1.1.3
 	github.com/klauspost/compress v1.18.2
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.0

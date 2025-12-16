@@ -36,6 +36,7 @@ type Batch struct {
 	entries         []Entry
 	slabManager     *slab.SlabManager
 	byteSize        int
+	slabWritten     int
 	inlineThreshold int
 	closed          bool
 }
@@ -86,6 +87,7 @@ func (b *Batch) Set(key, value []byte) error {
 		}
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
+		b.slabWritten += int(ptr.Length)
 	} else {
 		// Store inline
 		valCopy := make([]byte, len(value))
@@ -183,6 +185,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			op.ValuePtr = ptr
 			op.IsPtr = true
 			op.Value = nil
+			b.slabWritten += int(ptr.Length)
 		}
 		// No need to copy op.Value if we assume ownership (which we do for SetOps)
 		
@@ -231,4 +234,9 @@ func (b *Batch) Ops() map[string]Entry {
 // ByteSize returns the approximate size of the batch.
 func (b *Batch) ByteSize() int {
 	return b.byteSize
+}
+
+// SlabWriteBytes returns the number of bytes written to the slab file.
+func (b *Batch) SlabWriteBytes() int {
+	return b.slabWritten
 }

@@ -278,7 +278,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		} else {
 			// Compare
 			// Optimization: GetLeafEntryView (Zero Copy)
-			k, _, _, _, err := oldNode.GetLeafEntryView(oldIdx)
+			k, _, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -291,6 +291,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				useBatch = true
 			} else {
 				// Equal: Update (Batch wins)
+				// The old entry is being overwritten or deleted.
+				// If it was a pointer, track it as dead bytes.
+				if f&node.FlagPointer != 0 {
+					metrics.SlabDeadBytes += int(ptr.Length)
+				}
+
 				useBatch = true
 				oldIdx++ // Skip old
 			}

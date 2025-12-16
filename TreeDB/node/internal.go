@@ -93,6 +93,7 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 // Logic: Find largest index i such that Entry[i].Key <= key.
 // If key < Entry[0].Key, returns index 0 (Left-most child rule usually handles this).
 func (n *Node) SearchInternal(key []byte) (uint16, bool) {
+	data := n.data
 	count := n.Count()
 	if count == 0 {
 		return 0, false
@@ -105,14 +106,14 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 	for i < j {
 		h := int(uint(i+j) >> 1)
 
-		offset := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+h*2:])
+		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+h*2:])
 		ptr := int(offset)
-		keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
 		keyPtr := ptr + 10 // Skip KeyLen(2) + ChildID(8)
 
 		// Compare Entry.Key vs Key
 		// We want to find position where Key would be inserted
-		cmp := bytes.Compare(n.data[keyPtr:keyPtr+int(keyLen)], key)
+		cmp := bytes.Compare(data[keyPtr:keyPtr+int(keyLen)], key)
 
 		if cmp <= 0 { // Entry.Key <= Key
 			i = h + 1
