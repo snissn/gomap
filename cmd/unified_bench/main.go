@@ -745,7 +745,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("write_rand: %w", err)
 				}
