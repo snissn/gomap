@@ -112,6 +112,11 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// Get returns the value for a key.
+//
+// Semantics (performance-first): the returned slice may be a read-only view into
+// internal storage (e.g. mmapped slabs) and must not be modified by the caller.
+// If you need stable bytes independent of TreeDB internals, copy the slice.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
