@@ -1,0 +1,161 @@
+User-agent: *
+Disallow:
+
+# ==========================================================
+# TreeDB Performance TODO List (Codex execution plan)
+# Goal: Improve TreeDB Random Read + Full Scan in unified-bench
+# Baseline (keys=1,000,000):
+#   Random Read: 53,616 ops/s
+#   Full Scan:   117,761 items/s
+#   Prefix Scan: 3,382,014 items/s
+#
+# Rule: NO item is accepted unless it passes BOTH:
+#   - Test Gate: go test ./... AND go test -race ./...
+#   - Perf Gate: unified-bench medians improve per item threshold
+# ==========================================================
+
+# [ ] TODO-00 Baseline + profiling harness + isolate cached vs backend
+#     Changes: none (measurement only)
+#     Test Gate: go test ./... ; go test -race ./...
+#     Perf Gate: no regression >5% (should be none)
+#     Steps:
+#       - Run treedb AND treedbbackend read_rand/full_scan/prefix_scan (5×, record medians)
+#       - Capture cpu profiles for read_rand and full_scan; note top symbols
+#     Status: pending
+#     Result:
+
+# [ ] TODO-01 Break semantics: make Iterator.Key/Value return zero-copy views + remove per-item alloc
+#     Target: Full Scan
+#     Files: TreeDB/tree/iterator.go (+ any public iterator wrapper)
+#     Test Gate:
+#       - Add tests: Key/Value lifetime (mutates after Next), tombstone skipping, boundary crossing
+#       - go test -race on tree packages
+#     Perf Gate:
+#       - Full Scan median >= +20%
+#       - allocs/op in scan path should drop materially (validate via pprof/allocs if you add Go benches)
+#       - no regression >5% in Random Read or Seq Write
+#     Status: pending
+#     Result:
+
+# [ ] TODO-02 Iterator leaf-local fast path: Next() intra-leaf w/o stack traversal or header re-parse
+#     Target: Full Scan
+#     Files: TreeDB/tree/iterator.go
+#     Test Gate:
+#       - Tests: leaf boundary cross, reverse iteration (if supported), tombstone dense leaf
+#       - go test -race ./...
+#     Perf Gate:
+#       - Full Scan median >= +20% (incremental)
+#       - no regression >5% elsewhere
+#     Status: pending
+#     Result:
+
+# [ ] TODO-03 Ensure Iterator.Value() is O(1) and does NOT re-lookup via DB.Get
+#     Target: Full Scan (and Random Read indirectly)
+#     Files: TreeDB/tree/iterator.go (+ any iterator->value resolution code)
+#     Test Gate:
+#       - Add test: Value() on iterator does not change correctness across page boundaries
+#     Perf Gate:
+#       - Full Scan median >= +20% if this was the root cause
+#       - no regression >5% elsewhere
+#     Status: pending
+#     Result:
+
+# [ ] TODO-04 Slab optimization: mmap slabs + return value views (no syscalls, no copies)
+#     Target: Random Read + Full Scan
+#     Files: TreeDB/slab/slab.go (or equivalent)
+#     Test Gate:
+#       - Tests: reads within mmap range, reads at end-of-file, active slab fallback path
+#       - No SIGBUS: never slice beyond mapped length
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +20%
+#       - Full Scan median >= +10% (if scan touches slab sequentially)
+#       - no regression >5% in writes
+#     Status: pending
+#     Result:
+
+# [ ] TODO-05 Pager: fold Get + IsVerified into single call (GetAndVerified)
+#     Target: Random Read
+#     Files: TreeDB/pager/pager.go + TreeDB/tree traversal callers
+#     Test Gate:
+#       - Tests pass + -race
+#     Perf Gate:
+#       - Random Read must not regress (>5% regression rejects)
+#       - Prefer >= +5% improvement (if not, accept only if needed for TODO-06/07)
+#     Status: pending
+#     Result:
+
+# [ ] TODO-06 Pager: lock-free verified bitset (atomic) for page verification status
+#     Target: Random Read
+#     Files: TreeDB/pager/pager.go
+#     Test Gate:
+#       - Add concurrency test: concurrent Get/verify/mark while file grows (if growth supported)
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +20% OR clearly reduces top pprof lock symbols
+#       - no regression >5% elsewhere
+#     Status: pending
+#     Result:
+
+# [ ] TODO-07 Pager: lock-free Get() using atomic pointer to chunk table (COW metadata)
+#     Target: Random Read (major win)
+#     Files: TreeDB/pager/pager.go
+#     Test Gate:
+#       - Concurrency stress: readers while allocator/grower runs; -race must pass
+#     Perf Gate:
+#       - Random Read median >= +50% (expected 2–3× if locks dominated)
+#       - no regression >5% in Full Scan / Seq Write
+#     Status: pending
+#     Result:
+
+# [ ] TODO-08 Node: unsafe directory + SearchInternalFast / SearchLeafFast (reduce binary-search overhead)
+#     Target: Random Read + Scan
+#     Files: TreeDB/node/node.go (+ TreeDB/node/unsafe.go)
+#     Test Gate:
+#       - Equivalence tests: SearchFast == SearchSafe across randomized nodes/keys
+#       - Fuzz test if possible
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +10%
+#       - no regression >5% elsewhere
+#     Status: pending
+#     Result:
+
+# [ ] TODO-09 Cached layer: remove string(key) allocs in memtable lookups (if present)
+#     Target: Random Read (cached treedb)
+#     Files: whichever implements overlay/memtable
+#     Test Gate:
+#       - Correctness tests for overlay semantics; -race
+#     Perf Gate:
+#       - Random Read median >= +10% on treedb (cached)
+#       - no regression >5% elsewhere
+#     Status: pending
+#     Result:
+
+# [ ] TODO-10 Optional: internal-node cache (root/upper levels) after pager is lock-free
+#     Target: Random Read (incremental)
+#     Files: TreeDB/db/db.go, TreeDB/tree/tree.go
+#     Test Gate:
+#       - Snapshot/version correctness; -race
+#     Perf Gate:
+#       - Random Read median >= +10% incremental OR reject
+#     Status: pending
+#     Result:
+
+# [ ] TODO-11 Scan prefetch: madvise(MADV_SEQUENTIAL) for pager chunks + slab mappings (best-effort)
+#     Target: Full Scan
+#     Files: TreeDB/pager/pager.go (+ call site), TreeDB/slab/slab.go
+#     Test Gate:
+#       - Build tags/guards for non-unix platforms; tests pass everywhere
+#     Perf Gate:
+#       - Full Scan median >= +10% OR reject
+#     Status: pending
+#     Result:
+
+# [ ] TODO-12 Documentation + cleanup after semantics change
+#     Target: correctness/maintainability
+#     Files: public docs/comments + any callers that assumed copying
+#     Test Gate: go test ./... ; go test -race ./...
+#     Perf Gate: no regression >5%
+#     Status: pending
+#     Result:
