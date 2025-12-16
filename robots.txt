@@ -131,7 +131,7 @@ Disallow:
 #       - Attempted atomic chunk-table + lock-free `Pager.Get()`.
 #       - unified-bench treedb read_rand median regressed: 1,315,982 -> 1,209,738 ops/s (-8%); rejected.
 
-# [ ] TODO-08 Node: unsafe directory + SearchInternalFast / SearchLeafFast (reduce binary-search overhead)
+# [-] TODO-08 Node: unsafe directory + SearchInternalFast / SearchLeafFast (reduce binary-search overhead)
 #     Target: Random Read + Scan
 #     Files: TreeDB/node/node.go (+ TreeDB/node/unsafe.go)
 #     Test Gate:
@@ -141,8 +141,10 @@ Disallow:
 #     Perf Gate:
 #       - Random Read median >= +10%
 #       - no regression >5% elsewhere
-#     Status: pending
+#     Status: rejected (no improvement)
 #     Result:
+#       - Tried LE-only unsafe loads for directory offsets/keyLen (and safe fallback + equivalence tests).
+#       - unified-bench treedb read_rand median decreased to ~1.25M ops/s (baseline 1,315,982); rejected.
 
 # [ ] TODO-09 Cached layer: remove string(key) allocs in memtable lookups (if present)
 #     Target: Random Read (cached treedb)
