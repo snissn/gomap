@@ -197,6 +197,16 @@ func (db *DB) NewBatch() Batch {
 	return db.backend.NewBatch()
 }
 
+func (db *DB) NewBatchWithSize(size int) Batch {
+	if db == nil || (db.cached == nil && db.backend == nil) {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.NewBatchWithSize(size)
+	}
+	return db.backend.NewBatchWithSize(size)
+}
+
 func (db *DB) Stats() map[string]string {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
