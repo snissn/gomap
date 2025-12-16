@@ -192,6 +192,12 @@
   - `bulk.Build` constructs a B-Tree bottom-up from a sorted iterator, allocating pages sequentially to the end of the file.
   - Updated `UnsafeIterator` to expose `UnsafeEntry`, allowing `CompactIndex` to preserve large value pointers without reading from slabs (zero-copy compaction).
   - This feature restores Full Scan performance by eliminating fragmentation at the cost of file growth (append-only).
+- 2025-12-15: TreeDB Read Performance Fix (Lock Contention)
+  - Diagnosed a regression in `Random Read` (~29k ops/sec) caused by lock contention between Readers (`AcquireSnapshot`) and Writers (`Batch.Write`) during heavy flushing cycles.
+  - Implemented `writeMu` to serialize writers without blocking readers during the CPU-intensive `Zipper.Apply` phase.
+  - Refactored `commitLocked` into `finalizeCommit` to perform data and meta syncing OUTSIDE the global lock.
+  - Benchmarks confirm `Random Read` improved to ~51k ops/sec under load (CPU/Latency bound, not Lock bound).
+  - Completed **Heuristic Cleanup**: Removed redundant `streamSwitchThreshold` and centralized policy handling.
 
 ## Notes / Conventions
 
@@ -200,18 +206,4 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 1. Heuristic Cleanup
-
-*   **The Issue:** Mixed heuristics (`streamSwitchThreshold=32` const, `FlushThreshold` config, `InlineThreshold` const).
-
-*   **Action:** Centralize into a `WritePolicy` struct. Re-evaluate `streamSwitchThreshold`.
-
-*   **Risks:**
-
-    *   **Regression:** Removing a "magic number" might break a specific edge-case workload it was tuned for.
-
-*   **Validation Plan:**
-
-    *   Run the full `unified-bench` suite (Random, Seq, Scan, Small-Seq) after any change.
-
-    *   Specifically verify `batch_write_small_seq` maintains its 3.3M+ ops/sec performance.
+(None)
