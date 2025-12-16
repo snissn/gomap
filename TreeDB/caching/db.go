@@ -878,6 +878,12 @@ func (b *Batch) maybeSwitchToStreaming() {
 	if len(b.entries) < streamSwitchThreshold {
 		return
 	}
+	// Also require the batch to be large enough to justify a direct write.
+	// Otherwise, small sequential batches bypass the memtable and cause
+	// write amplification in the backend.
+	if b.size < int(b.db.flushThreshold) {
+		return
+	}
 
 	// Only attempt streaming if the batch is strictly increasing and starts beyond
 	// the maximum key present in the in-memory layers.
