@@ -114,7 +114,7 @@ Disallow:
 #     Status: pending
 #     Result:
 
-# [ ] TODO-07 Pager: lock-free Get() using atomic pointer to chunk table (COW metadata)
+# [-] TODO-07 Pager: lock-free Get() using atomic pointer to chunk table (COW metadata)
 #     Target: Random Read (major win)
 #     Files: TreeDB/pager/pager.go
 #     Test Gate:
@@ -122,8 +122,10 @@ Disallow:
 #     Perf Gate:
 #       - Random Read median >= +50% (expected 2–3× if locks dominated)
 #       - no regression >5% in Full Scan / Seq Write
-#     Status: pending
+#     Status: rejected (perf regression)
 #     Result:
+#       - Attempted atomic chunk-table + lock-free `Pager.Get()`.
+#       - unified-bench treedb read_rand median regressed: 1,315,982 -> 1,209,738 ops/s (-8%); rejected.
 
 # [ ] TODO-08 Node: unsafe directory + SearchInternalFast / SearchLeafFast (reduce binary-search overhead)
 #     Target: Random Read + Scan
