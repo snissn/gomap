@@ -161,15 +161,16 @@ Disallow:
 #     Result:
 #       - No `string(key)` map-lookup pattern found in cached/memtable hot path; memtable uses a skiplist (byte-slice keys).
 
-# [ ] TODO-10 Optional: internal-node cache (root/upper levels) after pager is lock-free
+# [-] TODO-10 Optional: internal-node cache (root/upper levels) after pager is lock-free
 #     Target: Random Read (incremental)
 #     Files: TreeDB/db/db.go, TreeDB/tree/tree.go
 #     Test Gate:
 #       - Snapshot/version correctness; -race
 #     Perf Gate:
 #       - Random Read median >= +10% incremental OR reject
-#     Status: pending
+#     Status: skipped (dependency not met)
 #     Result:
+#       - Skipped because pager lock-free read path (TODO-07) was rejected; root/upper-node caching would need stronger invalidation/versioning work than justified.
 
 # [-] TODO-11 Scan prefetch: madvise(MADV_SEQUENTIAL) for pager chunks + slab mappings (best-effort)
 #     Target: Full Scan
