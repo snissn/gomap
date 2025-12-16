@@ -102,7 +102,7 @@ Disallow:
 #     Status: pending
 #     Result:
 
-# [ ] TODO-06 Pager: lock-free verified bitset (atomic) for page verification status
+# [-] TODO-06 Pager: lock-free verified bitset (atomic) for page verification status
 #     Target: Random Read
 #     Files: TreeDB/pager/pager.go
 #     Test Gate:
@@ -111,8 +111,10 @@ Disallow:
 #     Perf Gate:
 #       - Random Read median >= +20% OR clearly reduces top pprof lock symbols
 #       - no regression >5% elsewhere
-#     Status: pending
+#     Status: rejected (insufficient improvement)
 #     Result:
+#       - Attempted atomic verified-bitset (CAS) + lock-free IsVerified/MarkVerified; `-race` required atomic-per-word copy on resize to avoid races.
+#       - unified-bench treedb read_rand median: 1,315,982 -> 1,324,229 ops/s (+0.6%); below +20% and pprof showed no lock contention to remove.
 
 # [-] TODO-07 Pager: lock-free Get() using atomic pointer to chunk table (COW metadata)
 #     Target: Random Read (major win)
