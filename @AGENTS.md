@@ -157,6 +157,15 @@
   - Improved GetMany fallback by issuing exact record reads when chunks are incomplete (`HashDB/getmany.go`).
   - Added optional per-shard cache WAL with configurable fsync policy (default off) and tests (`HashDB/cache_wal.go`, `HashDB/cachekv_wal_test.go`).
   - Added Linux `pread`-based `readAt` helper (`HashDB/readat_linux.go`).
+- 2025-12-15: TreeDB batch optimizations
+  - **Fixed Pathological Performance:** Optimized `CachingDB` to buffer small/medium random batches in Memtable (via increased `FlushThreshold`-based logic) instead of bypassing to backend. Throughput improved from ~27k to ~1.3M ops/sec.
+  - **Fixed Small Sequential Write Amplification:** Prevented sequential batch streaming for batches smaller than `FlushThreshold`, avoiding massive write amplification. Throughput for 100-key sequential batches hit ~3.3M ops/sec.
+  - **Node Optimization:** Cached `count` and `ptype` in `Node` struct to reduce binary decoding overhead.
+  - **Benchmarking:** Verified `FlushThreshold=4MB` is optimal for CPU-bound random writes (vs 64MB). Added `batch_write_small_seq` regression test.
+- 2025-12-15: TreeDB Adaptive Inline Threshold (Partial)
+  - Implemented the `adaptive.Controller` with EWMA-based logic (`TreeDB/internal/adaptive`).
+  - Integrated controller into `TreeDB/db` (threshold latching) and `TreeDB/zipper` (Index metrics collection).
+  - *Note:* Slab metrics are not yet wired up, so the controller currently optimizes for Index Health (reducing fragmentation).
 
 ## Notes / Conventions
 
@@ -165,29 +174,11 @@
 
 ## Open Things to Investigate in TreeDB
 
-
-
-### 1. Adaptive Inline Threshold (High Priority)
-
-*   **The Issue:** `InlineThreshold` is static (256 bytes). This creates a performance cliff where values slightly larger (e.g., 257 bytes) incur full slab overhead (random I/O), while slightly smaller ones (255 bytes) are fast.
-
-*   **Solution:** Implement the **Adaptive Controller** (specified but not built). It should dynamically adjust the threshold based on "Slab Pressure" vs. "Index Pressure".
-
-*   **Risks:**
-
-    *   **Oscillation:** The controller might thrash between high and low thresholds if the workload variance matches the adjustment period.
-
-    *   **CPU Overhead:** Constant monitoring/calculation might degrade tight-loop performance.
-
-*   **Validation Plan:**
-
-    *   Create a benchmark with mixed payloads (some <256, some >256) and oscillating value sizes.
-
-    *   Measure throughput stability and the "Slab vs Tree" storage ratio.
-
-    *   Assert that the threshold stabilizes for steady-state workloads.
-
-
+### 1. Adaptive Inline Threshold (Completing Implementation)
+*   **Status:** **Partially Implemented.** Controller and Index metrics are live. Slab metrics are missing.
+*   **Next Steps:** Wire up `SlabWriteBytes` and `SlabDeadBytes` from `Batch`/`SlabManager` to the controller.
+*   **The Issue:** Without slab metrics, the controller only sees index pressure and may aggressively lower the threshold, potentially increasing slab usage without backpressure.
+*   **Validation Plan:** Same as before (oscillating workload).
 
 ### 2. Memtable Memory Layout (Arena Allocation)
 
