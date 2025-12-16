@@ -146,7 +146,7 @@ Disallow:
 #       - Tried LE-only unsafe loads for directory offsets/keyLen (and safe fallback + equivalence tests).
 #       - unified-bench treedb read_rand median decreased to ~1.25M ops/s (baseline 1,315,982); rejected.
 
-# [ ] TODO-09 Cached layer: remove string(key) allocs in memtable lookups (if present)
+# [-] TODO-09 Cached layer: remove string(key) allocs in memtable lookups (if present)
 #     Target: Random Read (cached treedb)
 #     Files: whichever implements overlay/memtable
 #     Test Gate:
@@ -154,8 +154,9 @@ Disallow:
 #     Perf Gate:
 #       - Random Read median >= +10% on treedb (cached)
 #       - no regression >5% elsewhere
-#     Status: pending
+#     Status: skipped (not present)
 #     Result:
+#       - No `string(key)` map-lookup pattern found in cached/memtable hot path; memtable uses a skiplist (byte-slice keys).
 
 # [ ] TODO-10 Optional: internal-node cache (root/upper levels) after pager is lock-free
 #     Target: Random Read (incremental)
