@@ -183,6 +183,10 @@
 - 2025-12-15: TreeDB Compaction Liveness Check
   - Implemented liveness check in `Compactor` using `Snapshot.GetEntry`.
   - Compactor now verifies `ValuePtr` matches before moving data to active slab, preventing space amplification from dead records.
+- 2025-12-15: TreeDB Full Scan Analysis
+  - Investigated slow `Full Scan` (~110k ops/sec) vs fast `Prefix Scan` (~2.2M ops/sec).
+  - **Root Cause:** COW Fragmentation. Random writes scatter B-Tree nodes across the append-only index file, turning logical scans into random disk I/O. `Prefix Scan` targeted a sequentially written region.
+  - **Conclusion:** Expected behavior for COW B-Trees without background index compaction. Future work: Implement "Index Compaction" to rewrite the tree sequentially.
 
 ## Notes / Conventions
 
@@ -191,7 +195,13 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 5. Heuristic Cleanup
+### 1. Index Compaction (Full Scan Perf)
+*   **The Issue:** `Full Scan` performance degrades over time due to COW fragmentation (nodes scattered on disk).
+*   **Opportunity:** Implement an "Index Compaction" process that rewrites the B-Tree (or subtrees) sequentially to restore scan performance.
+*   **Risks:** High I/O cost during compaction; locking.
+*   **Validation Plan:** Measure `Full Scan` before and after compaction on a fragmented DB.
+
+### 2. Heuristic Cleanup
 
 *   **The Issue:** Mixed heuristics (`streamSwitchThreshold=32` const, `FlushThreshold` config, `InlineThreshold` const).
 
