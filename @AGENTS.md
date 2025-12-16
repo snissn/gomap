@@ -180,6 +180,9 @@
 - 2025-12-15: TreeDB Micro-optimizations
   - Micro-optimized `SearchLeaf` and `SearchInternal` by caching the `n.data` slice pointer in a local variable, reducing compiler bounds-check overhead.
   - Benchmarked `SearchLeaf` at ~37ns/op (200 items), confirming efficiency close to memory latency.
+- 2025-12-15: TreeDB Compaction Liveness Check
+  - Implemented liveness check in `Compactor` using `Snapshot.GetEntry`.
+  - Compactor now verifies `ValuePtr` matches before moving data to active slab, preventing space amplification from dead records.
 
 ## Notes / Conventions
 
@@ -203,17 +206,3 @@
     *   Run the full `unified-bench` suite (Random, Seq, Scan, Small-Seq) after any change.
 
     *   Specifically verify `batch_write_small_seq` maintains its 3.3M+ ops/sec performance.
-
-
-
-### 6. Slab Space Reclamation
-
-*   **The Issue:** Efficiency of reclaiming fragmented slab space (from large value updates/deletes) is unverified.
-
-*   **Risk:** Long-running nodes might suffer from disk space bloat (Space Amplification) if holes aren't reused efficiently.
-
-*   **Validation Plan:**
-
-    *   Run a long-duration "soak test" with 50% updates/deletes of large values (>256 bytes).
-
-    *   Monitor physical disk usage vs. logical data size over 24+ hours.
