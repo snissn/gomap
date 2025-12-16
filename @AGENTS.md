@@ -162,10 +162,11 @@
   - **Fixed Small Sequential Write Amplification:** Prevented sequential batch streaming for batches smaller than `FlushThreshold`, avoiding massive write amplification. Throughput for 100-key sequential batches hit ~3.3M ops/sec.
   - **Node Optimization:** Cached `count` and `ptype` in `Node` struct to reduce binary decoding overhead.
   - **Benchmarking:** Verified `FlushThreshold=4MB` is optimal for CPU-bound random writes (vs 64MB). Added `batch_write_small_seq` regression test.
-- 2025-12-15: TreeDB Adaptive Inline Threshold (Partial)
+- 2025-12-15: TreeDB Adaptive Inline Threshold (Completed)
   - Implemented the `adaptive.Controller` with EWMA-based logic (`TreeDB/internal/adaptive`).
   - Integrated controller into `TreeDB/db` (threshold latching) and `TreeDB/zipper` (Index metrics collection).
-  - *Note:* Slab metrics are not yet wired up, so the controller currently optimizes for Index Health (reducing fragmentation).
+  - Wired up `SlabWriteBytes` (from `Batch`) and `SlabDeadBytes` (from `Zipper` overwrite detection).
+  - The controller now dynamically tunes `InlineThreshold` based on the balance of Index Pressure (fragmentation) vs. Slab Pressure (waste/compaction need).
 
 ## Notes / Conventions
 
@@ -174,13 +175,7 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 1. Adaptive Inline Threshold (Completing Implementation)
-*   **Status:** **Partially Implemented.** Controller and Index metrics are live. Slab metrics are missing.
-*   **Next Steps:** Wire up `SlabWriteBytes` and `SlabDeadBytes` from `Batch`/`SlabManager` to the controller.
-*   **The Issue:** Without slab metrics, the controller only sees index pressure and may aggressively lower the threshold, potentially increasing slab usage without backpressure.
-*   **Validation Plan:** Same as before (oscillating workload).
-
-### 2. Memtable Memory Layout (Arena Allocation)
+### 1. Memtable Memory Layout (Arena Allocation)
 
 *   **The Issue:** Increasing `FlushThreshold` to 64MB degraded random write performance due to GC pressure (`runtime.scanobject`) and CPU cache thrashing from the pointer-heavy `google/btree`.
 
