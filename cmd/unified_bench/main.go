@@ -832,6 +832,43 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
+		"batch_write_small_seq": func(db DBInterface, rng *rand.Rand) (float64, error) {
+			if !db.SupportsBatch() {
+				return math.NaN(), nil
+			}
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+			total := cfg.Keys
+			batchSize := 100 // Pathological: small enough to hurt if not buffered, sequential to trigger streaming
+			var k [8]byte
+
+			for i := 0; i < total; i += batchSize {
+				batch, err := db.NewBatch()
+				if err != nil {
+					return 0, fmt.Errorf("batch_write_small_seq: new batch: %w", err)
+				}
+
+				end := i + batchSize
+				if end > total {
+					end = total
+				}
+				for j := i; j < end; j++ {
+					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
+					if err := batch.Set(k[:], val); err != nil {
+						_ = batch.Close()
+						return 0, fmt.Errorf("batch_write_small_seq: set: %w", err)
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					_ = batch.Close()
+					return 0, fmt.Errorf("batch_write_small_seq: commit: %w", err)
+				}
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("batch_write_small_seq: close: %w", err)
+				}
+			}
+			return float64(total) / time.Since(start).Seconds(), nil
+		},
 		"delete_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
@@ -915,16 +952,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "batch_write_random", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "batch_write_random", "batch_write_small_seq", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
-		"write_seq":          "Sequential Write",
-		"write_rand":         "Random Write",
-		"read_rand":          "Random Read",
-		"full_scan":          "Full Scan",
-		"prefix_scan":        "Prefix Scan",
-		"batch_write":        "Batch Write",
-		"batch_write_random": "Batch Random",
-		"delete_rand":        "Random Delete",
+		"write_seq":             "Sequential Write",
+		"write_rand":            "Random Write",
+		"read_rand":             "Random Read",
+		"full_scan":             "Full Scan",
+		"prefix_scan":           "Prefix Scan",
+		"batch_write":           "Batch Write",
+		"batch_write_random":    "Batch Random",
+		"batch_write_small_seq": "Batch Small Seq",
+		"delete_rand":           "Random Delete",
 	}
 
 	finalTestOrder := make([]string, 0)
