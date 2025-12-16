@@ -91,7 +91,7 @@ Disallow:
 #         - treedbbackend full_scan: 1,141,509 -> 30,311,565 items/s (+2556%)
 #         - treedb write_seq: 2,200,098 -> 2,236,440 ops/s (+2%)
 
-# [ ] TODO-05 Pager: fold Get + IsVerified into single call (GetAndVerified)
+# [-] TODO-05 Pager: fold Get + IsVerified into single call (GetAndVerified)
 #     Target: Random Read
 #     Files: TreeDB/pager/pager.go + TreeDB/tree traversal callers
 #     Test Gate:
@@ -99,8 +99,10 @@ Disallow:
 #     Perf Gate:
 #       - Random Read must not regress (>5% regression rejects)
 #       - Prefer >= +5% improvement (if not, accept only if needed for TODO-06/07)
-#     Status: pending
+#     Status: rejected (no improvement)
 #     Result:
+#       - Attempted single-lock `GetAndVerified` plumbing (tree + iterator callers).
+#       - unified-bench treedb read_rand median regressed: 1,315,982 -> 1,275,152 ops/s (-3%); rejected.
 
 # [-] TODO-06 Pager: lock-free verified bitset (atomic) for page verification status
 #     Target: Random Read
