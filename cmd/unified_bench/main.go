@@ -109,6 +109,7 @@ type BadgerIterator struct {
 	keyBuf  []byte
 	valBuf  []byte
 	lastErr error
+	reverse bool
 }
 
 func (i *BadgerIterator) Valid() bool {
@@ -117,6 +118,9 @@ func (i *BadgerIterator) Valid() bool {
 	}
 	if i.end == nil {
 		return true
+	}
+	if i.reverse {
+		return bytes.Compare(i.it.Item().Key(), i.end) >= 0
 	}
 	return bytes.Compare(i.it.Item().Key(), i.end) < 0
 }
@@ -228,7 +232,7 @@ func (b *BadgerWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, er
 	if start != nil {
 		startCopy = append([]byte(nil), start...)
 	}
-	return &BadgerIterator{txn: txn, it: it, end: startCopy}, nil
+	return &BadgerIterator{txn: txn, it: it, end: startCopy, reverse: true}, nil
 }
 
 func (b *BadgerWrapper) NewBatch() (kvstore.Batch, error) {
@@ -261,11 +265,18 @@ func (b *LevelDBBatch) Close() error {
 }
 
 type LevelDBIterator struct {
-	it iterator.Iterator
+	it      iterator.Iterator
+	reverse bool
 }
 
-func (i *LevelDBIterator) Valid() bool   { return i.it.Valid() }
-func (i *LevelDBIterator) Next()         { i.it.Next() }
+func (i *LevelDBIterator) Valid() bool { return i.it.Valid() }
+func (i *LevelDBIterator) Next() {
+	if i.reverse {
+		i.it.Prev()
+		return
+	}
+	i.it.Next()
+}
 func (i *LevelDBIterator) Key() []byte   { return i.it.Key() }
 func (i *LevelDBIterator) Value() []byte { return i.it.Value() }
 func (i *LevelDBIterator) KeyCopy(dst []byte) []byte {
@@ -280,6 +291,11 @@ func (i *LevelDBIterator) Error() error { return i.it.Error() }
 type LevelDBWrapper struct {
 	db *leveldb.DB
 }
+
+var (
+	verifyRangePrefix = []byte{0x00, 'u', 'n', 'i', 'b', 'e', 'n', 'c', 'h', '-', 'v', 'e', 'r', 'i', 'f', 'y', 0x00}
+	verifyRangeCount  = 32
+)
 
 func NewLevelDB(dir string) (kvstore.DB, error) {
 	db, err := leveldb.OpenFile(dir, nil)
@@ -301,7 +317,7 @@ func (l *LevelDBWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	}
 	it := l.db.NewIterator(slice, nil)
 	it.First()
-	return &LevelDBIterator{it: it}, nil
+	return &LevelDBIterator{it: it, reverse: false}, nil
 }
 func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
 	var slice *util.Range
@@ -309,11 +325,111 @@ func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, e
 		slice = &util.Range{Start: start, Limit: end}
 	}
 	it := l.db.NewIterator(slice, nil)
-	it.Last()
-	return &LevelDBIterator{it: it}, nil
+	if end == nil {
+		it.Last()
+	} else {
+		it.Seek(end)
+		if it.Valid() {
+			if bytes.Compare(it.Key(), end) >= 0 {
+				it.Prev()
+			}
+		} else {
+			it.Last()
+		}
+	}
+	return &LevelDBIterator{it: it, reverse: true}, nil
 }
 func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
 	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
+}
+
+func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {
+	keys := make([][]byte, n)
+	val := []byte("v")
+	for i := 0; i < n; i++ {
+		k := make([]byte, len(prefix)+8)
+		copy(k, prefix)
+		binary.BigEndian.PutUint64(k[len(prefix):], uint64(i))
+		keys[i] = k
+		if err := db.Set(k, val); err != nil {
+			return fmt.Errorf("verify: set %d: %w", i, err)
+		}
+	}
+
+	cleanup := func() error {
+		var cerr error
+		for _, k := range keys {
+			if err := db.Delete(k); err != nil && cerr == nil {
+				cerr = err
+			}
+		}
+		return cerr
+	}
+	defer func() {
+		if err := cleanup(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("verify: cleanup: %w", err)
+		}
+	}()
+
+	start := append([]byte(nil), prefix...)
+	end := append(append([]byte(nil), prefix...), 0xFF)
+
+	checkIter := func(iter kvstore.Iterator, descending bool) (int, error) {
+		count := 0
+		var prev []byte
+		for iter.Valid() {
+			k := append([]byte(nil), iter.Key()...)
+			if prev != nil {
+				cmp := bytes.Compare(prev, k)
+				if descending && cmp <= 0 {
+					return count, fmt.Errorf("order broke: %x then %x (expected descending)", prev, k)
+				}
+				if !descending && cmp >= 0 {
+					return count, fmt.Errorf("order broke: %x then %x (expected ascending)", prev, k)
+				}
+			}
+			prev = k
+			_ = iter.Value()
+			iter.Next()
+			count++
+		}
+		if err := iter.Error(); err != nil {
+			return count, err
+		}
+		return count, nil
+	}
+
+	fwd, err := rs.Iterator(start, end)
+	if err != nil {
+		return fmt.Errorf("verify: forward iterator: %w", err)
+	}
+	if count, err := checkIter(fwd, false); err != nil {
+		_ = fwd.Close()
+		return fmt.Errorf("verify: forward iterator: %w", err)
+	} else if count != n {
+		_ = fwd.Close()
+		return fmt.Errorf("verify: forward iterator count=%d want %d", count, n)
+	}
+	if err := fwd.Close(); err != nil {
+		return fmt.Errorf("verify: forward close: %w", err)
+	}
+
+	rev, err := rs.ReverseIterator(start, end)
+	if err != nil {
+		return fmt.Errorf("verify: reverse iterator: %w", err)
+	}
+	if count, err := checkIter(rev, true); err != nil {
+		_ = rev.Close()
+		return fmt.Errorf("verify: reverse iterator: %w", err)
+	} else if count != n {
+		_ = rev.Close()
+		return fmt.Errorf("verify: reverse iterator count=%d want %d", count, n)
+	}
+	if err := rev.Close(); err != nil {
+		return fmt.Errorf("verify: reverse close: %w", err)
+	}
+
+	return nil
 }
 
 // --- Benchmark Runner ---
@@ -635,6 +751,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	type TestFunc func(db kvstore.DB, rng *rand.Rand) (float64, error)
 
 	prefixScanBase := 0
+	expectedFullScanCount := -1
+	checkPrefixCounts := false
 	testFuncs := map[string]TestFunc{
 		"write_seq": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
@@ -817,6 +935,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := iter.Error(); err != nil {
 					return 0, fmt.Errorf("full_scan: %w", err)
 				}
+				if expectedFullScanCount >= 0 && count != expectedFullScanCount {
+					return 0, fmt.Errorf("full_scan: expected %d items, got %d", expectedFullScanCount, count)
+				}
 				return float64(count) / time.Since(start).Seconds(), nil
 			}
 
@@ -861,15 +982,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("prefix_scan: iterator: %w", err)
 				}
 
+				expected := endIdx - startIdx
+				itemsThisQuery := 0
 				for iter.Valid() {
 					_ = iter.Key()
 					iter.Next()
-					totalItems++
+					itemsThisQuery++
 				}
 				if err := iter.Error(); err != nil {
 					_ = iter.Close()
 					return 0, fmt.Errorf("prefix_scan: %w", err)
 				}
+				if checkPrefixCounts && itemsThisQuery != expected {
+					_ = iter.Close()
+					return 0, fmt.Errorf("prefix_scan: expected %d items in query %d, got %d", expected, i, itemsThisQuery)
+				}
+				totalItems += itemsThisQuery
 				_ = iter.Close()
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
@@ -919,7 +1047,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"full_scan",
 		"prefix_scan",
 	)
-	if needsExistingData && !hasMeasuredWrites {
+	preloadedOnly := needsExistingData && !hasMeasuredWrites
+	if preloadedOnly {
 		val := make([]byte, cfg.ValueSize)
 		var k [8]byte
 		for _, inst := range instances {
@@ -929,6 +1058,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
 				}
 			}
+		}
+	}
+
+	if preloadedOnly {
+		expectedFullScanCount = cfg.Keys
+		checkPrefixCounts = true
+	}
+
+	for _, inst := range instances {
+		rs, ok := inst.Wrapper.(kvstore.RangeScanner)
+		if !ok {
+			continue
+		}
+		if err := verifyRangeIteration(inst.Wrapper, rs, verifyRangePrefix, verifyRangeCount); err != nil {
+			return BenchRun{}, fmt.Errorf("verify/%s: %w", inst.Wrapper.Name(), err)
 		}
 	}
 
