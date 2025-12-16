@@ -62,7 +62,7 @@ Disallow:
 #       - Attempted leaf-local `Next()` fast path + pointer-based stack top in `TreeDB/tree/iterator.go`.
 #       - unified-bench treedb regressed (combo run): read_rand ~1.24M (vs 1,315,982) and full_scan ~39.8M (vs 44.4M); rejected.
 
-# [ ] TODO-03 Ensure Iterator.Value() is O(1) and does NOT re-lookup via DB.Get
+# [x] TODO-03 Ensure Iterator.Value() is O(1) and does NOT re-lookup via DB.Get
 #     Target: Full Scan (and Random Read indirectly)
 #     Files: TreeDB/tree/iterator.go (+ any iterator->value resolution code)
 #     Test Gate:
@@ -70,8 +70,9 @@ Disallow:
 #     Perf Gate:
 #       - Full Scan median >= +20% if this was the root cause
 #       - no regression >5% elsewhere
-#     Status: pending
+#     Status: completed (already true)
 #     Result:
+#       - `TreeDB/tree/iterator.go` resolves pointer values directly via `slabReader.Read(ValuePtr)` (no tree descent/DB.Get).
 
 # [x] TODO-04 Slab optimization: mmap slabs + return value views (no syscalls, no copies)
 #     Target: Random Read + Full Scan
