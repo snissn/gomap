@@ -71,7 +71,7 @@ Disallow:
 #     Status: pending
 #     Result:
 
-# [ ] TODO-04 Slab optimization: mmap slabs + return value views (no syscalls, no copies)
+# [x] TODO-04 Slab optimization: mmap slabs + return value views (no syscalls, no copies)
 #     Target: Random Read + Full Scan
 #     Files: TreeDB/slab/slab.go (or equivalent)
 #     Test Gate:
@@ -82,8 +82,14 @@ Disallow:
 #       - Random Read median >= +20%
 #       - Full Scan median >= +10% (if scan touches slab sequentially)
 #       - no regression >5% in writes
-#     Status: pending
+#     Status: completed
 #     Result:
+#       - Slab reads now mmap the file (best-effort) and return value views; active-slab reads beyond the mapping fall back to ReadAt.
+#       - CRC verification switched to `crc32.Update` with a shared Castagnoli table (no per-read hasher alloc).
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedbbackend read_rand: 641,127 -> 1,466,587 ops/s (+129%)
+#         - treedbbackend full_scan: 1,141,509 -> 30,311,565 items/s (+2556%)
+#         - treedb write_seq: 2,200,098 -> 2,236,440 ops/s (+2%)
 
 # [ ] TODO-05 Pager: fold Get + IsVerified into single call (GetAndVerified)
 #     Target: Random Read
