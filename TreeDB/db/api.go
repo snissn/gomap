@@ -11,6 +11,9 @@ import (
 // --- Public API ---
 
 // Get returns the value for a key.
+//
+// Semantics (performance-first): the returned slice may be a read-only view into
+// internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()

@@ -184,10 +184,15 @@ Disallow:
 #       - Attempted one-time `unix.Madvise(MADV_SEQUENTIAL)` on pager chunks for full forward scans.
 #       - unified-bench treedb regressed (combo run): read_rand ~1.20M and full_scan ~41.6M; rejected.
 
-# [ ] TODO-12 Documentation + cleanup after semantics change
+# [x] TODO-12 Documentation + cleanup after semantics change
 #     Target: correctness/maintainability
 #     Files: public docs/comments + any callers that assumed copying
 #     Test Gate: go test ./... ; go test -race ./...
 #     Perf Gate: no regression >5%
-#     Status: pending
+#     Status: completed
 #     Result:
+#       - Documented view semantics for `DB.Get()` and iterator lifetimes.
+#       - Test Gate: pass (`go test ./...` and `go test -race ./...`).
+#       - Perf Gate: unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb: read_rand=1,219,928 ops/s; full_scan=41,181,497 items/s; prefix_scan=25,247,202 items/s
+#         - treedbbackend: read_rand=1,380,766 ops/s; full_scan=28,953,337 items/s; prefix_scan=39,451,000 items/s

@@ -598,6 +598,8 @@ func Open(opts Options) (*DB, error)
 
 // Get returns the value for a key, or nil if not found.
 // Contract: Errors on nil key. Returns nil (no error) if key does not exist.
+// Semantics (performance-first): returned slices may be read-only views into internal
+// storage (e.g. mmapped slabs) and must not be modified; copy if stable bytes are needed.
 // Receiver name 'tdb' used to avoid shadowing imported 'db' package.
 func (tdb *DB) Get(key []byte) ([]byte, error)
 
@@ -620,10 +622,12 @@ func (tdb *DB) DeleteSync(key, value []byte) error
 // Iterator returns an iterator over a domain of keys in ascending order.
 // Start is inclusive, End is exclusive.
 // nil start/end represent unbounded domains.
+// Semantics (performance-first): Key/Value may be views valid until Next()/Close(); copy if needed.
 func (tdb *DB) Iterator(start, end []byte) (db.Iterator, error)
 
 // ReverseIterator returns an iterator over a domain of keys in descending order.
 // Start is inclusive, End is exclusive.
+// Semantics (performance-first): Key/Value may be views valid until Next()/Close(); copy if needed.
 func (tdb *DB) ReverseIterator(start, end []byte) (db.Iterator, error)
 
 // Close closes the database.
