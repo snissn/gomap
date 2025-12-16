@@ -5,3 +5,5 @@ cmd/unified_bench/benchmarker
 HashDB/redisserver/redisserver
 HashDB/BTreeOnHashDB/cpu.*.out
 HashDB/BTreeOnHashDB/cpu.*.png
+treedb.prof
+treedb_opt_node.prof
