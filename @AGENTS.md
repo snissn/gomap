@@ -108,21 +108,8 @@
   - Renamed benchmark rows to `Full Scan` and `Prefix Scan` (aliases: `scan`, `range_scan`)
   - `Prefix Scan` now reports items/sec and targets the active keyspace (base keys vs batch_write offset keys)
   - `-` is now only for unsupported/not-run (uses NaN); real zero results print `0`
-- 2025-12-14: Roadmap
-  - Added a detailed plan for unified TreeDB API + exclusive locking + coherent WAL replay recovery in `TODO.md`.
-- 2025-12-14: Docs milestone
-  - Sketched V1 “Wow” documentation requirements in `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added a downstream-ready storage milestone and prereqs to `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
-- 2025-12-14: TreeDB exclusive open
-  - Added cross-process lock acquisition via `TreeDB/internal/lockfile` and exposed `treedb.ErrLocked`.
-  - Integrated locking into `TreeDB/db.Open` (covers cached and backend opens) and made `DB.Close` close all resources.
-- 2025-12-14: TreeDB lock tests
-  - Added in-process and cross-process lock regression tests in `TreeDB/db/lock_test.go`.
+- 2025-12-14: CI (optional)
+  - Added `gofmt` pre-commit hook under `.githooks/` and a `make hooks` installer target.
 - 2025-12-14: unified_bench reproducibility
   - Added `-seed` and made randomized tests use per-test PRNGs so all DBs see the same random key/query sequences.
 - 2025-12-14: CI quality gates
@@ -143,44 +130,8 @@
   - Documented the new lock behavior in `HashDB/doc.go`.
 - 2025-12-14: HashDB stress tests
   - Made `HashDB/stress/compaction_test.go` tolerate transient `ENOENT` during size walks while compaction creates/removes `*-compact` dirs (fixes flaky macOS CI failure).
-- 2025-12-14: TreeDB WAL recovery + unified public Open
-  - Backend `Open` now replays any cached WAL segments in `Dir/wal/` into the backend (sync commit) and removes them.
-  - Cached flush path now tracks and deletes WAL segments after successful flush.
-  - Public `treedb.Open` returns a single `*treedb.DB` wrapper; backend-only mode is `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`).
-  - Added spec tests covering crash recovery + truncated WAL handling in `TreeDB/recovery_spec_test.go`.
-- 2025-12-14: Race hygiene (HashDB)
-  - Made `DummyKV` thread-safe in `HashDB/cachekv_test.go` so `go test -race` passes.
-  - Made `MaxSegmentSize` reads/writes atomic (fixes global race in `TestSegmentRotation` and slab writers).
-- 2025-12-14: CI (optional)
-  - Added `make test-race` and a manual `Race (manual)` GitHub workflow.
-  - Added Windows HashDB `go vet` + `go test` workflow (`HashDB: vet+test (Windows)`).
-- 2025-12-14: Docs (handoff)
-  - Added `CONTRIBUTING.md` and `CHANGELOG.md`; linked from `README.md` and `docs/`.
-- 2025-12-14: Roadmap status
-  - Updated `TODO.md` with CI/-race status notes and a HashDB follow-up status note.
-- 2025-12-14: Tooling
-  - Added an optional `gofmt` pre-commit hook under `.githooks/` and a `make hooks` installer target.
-- 2025-12-14: unified_bench
-  - Added Badger as a benchmark engine (`-dbs badger`) and updated the docs.
-  - Added keycount sweeps (`-keycounts` / `-keyscale`) and markdown output (`-format markdown`).
-  - Added a `-suite readme` mode that produces a README-friendly benchmark summary (includes explicit TreeDBBackend exclusions + baseline).
-- 2025-12-14: README benchmarking automation
-  - Added `make bench-readme` and a script to replace the section between `<!-- BENCHMARK_START -->` and `<!-- BENCHMARK_END -->` in `README.md`.
-- 2025-12-14: Benchmark metadata
-  - `unified_bench -suite readme` now includes generation timestamp + environment summary (OS/arch, Go version, CPUs, RAM, CPU model).
-- 2025-12-14: Windows CI fix
+- 2025-12-15: Windows CI fix
   - Fixed HashDB `stress` tests on Windows by building/execing the redis server binary with a `.exe` suffix and using `localhost:6380` for readiness checks.
-- 2025-12-14: Benchmark plots
-  - Added `-outdir` to `cmd/unified_bench` readme suite and generate PNG scaling plots via `gonum/plot`.
-  - `make bench-readme` now writes plots to `docs/images/` and embeds them in the README benchmark section.
-- 2025-12-14: Windows CI hardening (HashDB)
-  - Reduced shard count used by HashDB unit tests (avoid default 128 shards) and ensured opened DBs/stores are `Close()`'d via `t.Cleanup`.
-  - This reduces open file handles/background goroutines and improves Windows test stability.
-- 2025-12-15: Windows CI fixes (HashDB/stress)
-  - Made `CachedDB` safe with background flushes by serializing backend `DB` access (prevents mmap/unsafe crashes and value corruption).
-  - Reworked `DB.Compact` to close/reopen around directory swap so Windows can rename/delete reliably and lock behavior stays coherent.
-  - `redisserver` now supports configurable addr/port and shard count; `COMPACT` runs synchronously (tests use this).
-  - `HashDB/stress` tests use an ephemeral loopback addr and smaller shard count for reliable CI.
 - 2025-12-15: Downstream readiness (HashDB + contracts)
   - Removed “raft” terminology from docs/roadmap and renamed `docs/raft` to `docs/downstream`.
   - Added HashDB `PutSync`/`DeleteSync` durability APIs and rebuild-on-open crash recovery (slab log scan + torn-tail truncation).
@@ -211,3 +162,31 @@
 
 - Prefer small, reviewable commits; run relevant tests before/after each.
 - Keep renames “modest”: mostly package/module names and imports; avoid large API churn unless tests demand it.
+
+## Open Things to Investigate in TreeDB
+
+### 1. Adaptive Inline Threshold (High Priority)
+*   **The Issue:** The `InlineThreshold` is statically set to **256 bytes**. This creates a sharp "cliff" in performance behavior.
+*   **Pathological Case:** A workload writing **257-byte values** will force *every* value into the Slab file (random I/O, extra pointer overhead), whereas **255-byte values** stay inline in the B-Tree (sequential I/O, better cache locality).
+*   **Solution:** Implement the **Adaptive Controller** (mentioned in `specs/spec.md` but missing in code). It should dynamically adjust the threshold based on "Slab Pressure" vs. "Index Pressure" to smooth out this cliff.
+
+### 2. Memtable Memory Layout (Arena Allocation)
+*   **The Issue:** Increasing `FlushThreshold` to 64MB degraded random write performance due to increased CPU cache thrashing and Garbage Collection pressure (managing 64MB of B-Tree nodes).
+*   **Opportunity:** Replace the pointer-heavy B-Tree (`google/btree`) with an **Arena-backed SkipList** or a flat array-based structure.
+*   **Benefit:** This would allow much larger `FlushThresholds` (e.g., 64MB–128MB) for superior disk batching *without* suffering the CPU/GC penalty.
+
+### 3. "Zero-Copy" Write Path
+*   **The Issue:** Profiling showed `runtime.memmove` consuming **~30% of CPU**. Data is copied multiple times: `User Buffer` -> `Batch Slice` -> `WAL Buffer` -> `Memtable Node`.
+*   **Opportunity:** Investigate a "zero-copy" flow where the Memtable points directly to slices within the `Batch` or `WAL` buffer (pinned until flush), reducing memory bandwidth usage.
+
+### 4. Comparison Micro-Optimizations
+*   **The Issue:** `bytes.Compare` (`cmpbody`) consumed **~6% of CPU** in initial profiling.
+*   **Opportunity:** Implement **Prefix Compression** in B-Tree nodes to reduce storage size and comparison time for keys with common prefixes. Alternatively, explore SIMD-optimized comparisons for fixed-length keys.
+
+### 5. Heuristic Cleanup
+*   **The Issue:** The system uses a mix of hardcoded and dynamic heuristics (`streamSwitchThreshold`, `InlineThreshold`, `FlushThreshold`).
+*   **Action:** Consolidate these into a unified `WritePolicy` struct. Re-evaluate `streamSwitchThreshold` (32) as it might be redundant or could be derived from other configurable thresholds.
+
+### 6. Slab Space Reclamation
+*   **The Issue:** While `slabManager` logic exists, its efficiency for reclaiming fragmented space (e.g., from updates/deletes of large values) was not deeply analyzed.
+*   **Risk:** Heavy workloads with many large value updates/deletes could lead to `*.slab` file fragmentation and inefficient space reuse if the "Graveyard" or "Compaction" logic isn't perfectly aggressive. Ensure efficient reuse of slab holes.
