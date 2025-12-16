@@ -459,6 +459,11 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
 }
 
+// GetEntry returns the raw entry from snapshot.
+func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	return s.tree.GetEntry(key)
+}
+
 // Getters
 func (db *DB) Pager() *pager.Pager {
 	return db.pager

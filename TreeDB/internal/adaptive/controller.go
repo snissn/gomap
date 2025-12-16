@@ -28,8 +28,8 @@ type Controller struct {
 	commitsSinceUpdate int
 
 	// EWMA State (Exponentially Weighted Moving Averages)
-	leafFillAvg     float64
-	splitRateAvg    float64
+	leafFillAvg      float64
+	splitRateAvg     float64
 	slabDeadRatioAvg float64
 
 	// Config (Weights)
@@ -60,7 +60,7 @@ func (c *Controller) RecordCommit(m Metrics) {
 	c.leafFillAvg = ewma(c.leafFillAvg, m.LeafFill, c.alpha)
 	// Split rate is abstract, maybe per commit?
 	c.splitRateAvg = ewma(c.splitRateAvg, float64(m.Splits), c.alpha)
-	
+
 	slabDeadRatio := 0.0
 	if m.SlabWriteBytes > 0 { // Avoid div by zero, approximate
 		// This is tricky. Dead bytes vs Total bytes written?
@@ -88,10 +88,10 @@ func (c *Controller) adjustThreshold() {
 	// Weights (Index weights higher)
 	w1 := 2.0 // Leaf Fill
 	w2 := 2.0 // Split Rate
-	
+
 	v1 := 1.0 // Slab Dead Ratio
 
-	indexPressure := w1*max(0, targetLeafFill-c.leafFillAvg) + 
+	indexPressure := w1*max(0, targetLeafFill-c.leafFillAvg) +
 		w2*max(0, c.splitRateAvg-targetSplitRate)
 
 	slabPressure := v1 * max(0, c.slabDeadRatioAvg-targetSlabDead)
@@ -99,7 +99,7 @@ func (c *Controller) adjustThreshold() {
 	// Update Rule
 	delta := 0
 	diff := slabPressure - indexPressure
-	
+
 	// If diff is significant, move step
 	// We use a simple heuristic: if difference > 0.1?
 	if diff > 0.1 {

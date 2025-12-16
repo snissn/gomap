@@ -429,7 +429,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			// backendBatch.Write consumes them.
 			// All within flushOneLocked (or until backendBatch.Write returns).
 			// So this is safe.
-			
+
 			if iter.IsDeleted() {
 				ops = append(ops, batch.Entry{
 					Type: batch.OpDelete,
@@ -888,7 +888,7 @@ func (b *Batch) maybeSwitchToStreaming() {
 	// If a batch is small enough to be under the flush threshold, we want it
 	// to go through the regular memtable path for aggregation, regardless
 	// of sequentiality.
-	
+
 	// Also require the batch to be large enough to justify a direct write.
 	// Otherwise, small sequential batches bypass the memtable and cause
 	// write amplification in the backend.
@@ -1121,7 +1121,7 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 	if b.backend != nil {
 		return b.backend.Replay(fn)
 	}
-	
+
 	for _, entry := range b.entries {
 		if err := fn(entry); err != nil {
 			return err

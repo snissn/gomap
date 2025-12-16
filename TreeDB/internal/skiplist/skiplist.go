@@ -15,11 +15,11 @@ const (
 
 // SkipList is an arena-backed skiplist.
 type SkipList struct {
-	data []byte
-	head uint32
-	rnd  *rand.Rand
-	size int64 // Logical size (approx)
-	count int  // Number of items
+	data  []byte
+	head  uint32
+	rnd   *rand.Rand
+	size  int64 // Logical size (approx)
+	count int   // Number of items
 }
 
 // New creates a new SkipList with pre-allocated capacity.
@@ -44,10 +44,10 @@ func (s *SkipList) alloc(n int) uint32 {
 	if cap(s.data) < needed {
 		// Allocator logic: if we run out of cap, we grow.
 		// Go's append handles this.
-		// NOTE: If we exceed FlushThreshold, we just grow. 
+		// NOTE: If we exceed FlushThreshold, we just grow.
 		// Memtable flush logic will trigger later.
 	}
-	
+
 	// Append n zero bytes
 	s.data = append(s.data, make([]byte, n)...)
 	return off
@@ -146,9 +146,9 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 					copy(s.data[vOffset:], value)
 					return nil
 				}
-				
+
 				// Must replace node.
-				break 
+				break
 			}
 			x = next
 		}
@@ -167,7 +167,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			copy(s.data[vOffset:], value)
 			return nil
 		}
-		
+
 		// Unlink logic:
 		oldHeight := int(s.data[next])
 		for i := 0; i < oldHeight; i++ {
@@ -198,7 +198,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 		s.setNext(newNode, i, s.getNext(prev[i], i))
 		s.setNext(prev[i], i, newNode)
 	}
-	
+
 	s.size += int64(len(key) + len(value))
 	s.count++
 	return nil
@@ -271,7 +271,7 @@ func (it *Iterator) Seek(key []byte) {
 		it.valid = it.curr != 0
 		return
 	}
-	
+
 	x := it.sl.head
 	for i := maxHeight - 1; i >= 0; i-- {
 		for {

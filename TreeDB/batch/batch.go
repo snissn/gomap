@@ -169,7 +169,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 	for _, op := range ops {
 		// Logic to handle large values if op came from raw map?
 		// Assuming op is already processed or we need to check.
-		
+
 		if op.Type == OpDelete || op.IsPtr {
 			b.entries = append(b.entries, op)
 			b.byteSize += len(op.Key) + len(op.Value) // Value might be nil if Ptr
@@ -188,7 +188,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			b.slabWritten += int(ptr.Length)
 		}
 		// No need to copy op.Value if we assume ownership (which we do for SetOps)
-		
+
 		b.entries = append(b.entries, op)
 		b.byteSize += len(op.Key) + len(op.Value)
 	}

@@ -796,13 +796,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
 			var k [8]byte
-			
+
 			keys := make([][]byte, total)
 			for i := 0; i < total; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 				keys[i] = append([]byte(nil), k[:]...)
 			}
-			
+
 			// Reset timer to exclude setup
 			start = time.Now()
 

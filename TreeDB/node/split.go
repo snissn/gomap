@@ -51,7 +51,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 		if n.Type() == page.PageTypeLeaf {
 			// Leaf
 			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-			
+
 			// Extract Key for Pivot (only need first one)
 			if i == 0 {
 				key = make([]byte, keyLen)
