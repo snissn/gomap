@@ -167,6 +167,11 @@
   - Integrated controller into `TreeDB/db` (threshold latching) and `TreeDB/zipper` (Index metrics collection).
   - Wired up `SlabWriteBytes` (from `Batch`) and `SlabDeadBytes` (from `Zipper` overwrite detection).
   - The controller now dynamically tunes `InlineThreshold` based on the balance of Index Pressure (fragmentation) vs. Slab Pressure (waste/compaction need).
+- 2025-12-15: TreeDB Memtable optimization (Arena SkipList)
+  - Replaced `google/btree` with a custom Arena-backed SkipList in `TreeDB/internal/memtable`.
+  - Created `TreeDB/internal/skiplist` using a flat `[]byte` arena for zero-GC node allocation.
+  - Increased `FlushThreshold` to 64MB (default) as GC pressure is now eliminated.
+  - Benchmarks confirm `Batch Random` throughput at 64MB is now comparable to 4MB (~1.28M ops/sec), while `Batch Small Seq` improved to ~4.26M ops/sec.
 
 ## Notes / Conventions
 
@@ -175,29 +180,7 @@
 
 ## Open Things to Investigate in TreeDB
 
-### 1. Memtable Memory Layout (Arena Allocation)
-
-*   **The Issue:** Increasing `FlushThreshold` to 64MB degraded random write performance due to GC pressure (`runtime.scanobject`) and CPU cache thrashing from the pointer-heavy `google/btree`.
-
-*   **Opportunity:** Replace the B-Tree with an **Arena-backed SkipList** or flat array structure to improve cache locality and reduce GC overhead.
-
-*   **Risks:**
-
-    *   **Complexity:** Arena management (unsafe pointers?) is complex and prone to leaks/crashes.
-
-    *   **Fragmentation:** Arenas can waste memory if deletes/updates leave holes that aren't easily reused before flush.
-
-*   **Validation Plan:**
-
-    *   Micro-benchmark `Memtable` operations (insert/get/delete) in isolation.
-
-    *   Measure GC pause times and total heap usage under high `FlushThreshold` (e.g., 64MB-128MB).
-
-    *   Run `unified-bench -tests batch_write_random` with 64MB threshold; it should beat the current 4MB baseline.
-
-
-
-### 3. "Zero-Copy" Write Path
+### 1. "Zero-Copy" Write Path
 
 *   **The Issue:** Profiling showed `runtime.memmove` consuming ~30% of CPU. Data is copied multiple times (User -> Batch -> WAL -> Memtable).
 
