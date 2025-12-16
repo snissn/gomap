@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 )
@@ -16,7 +18,7 @@ func (db *DB) NewBatch() caching.BatchInterface {
 }
 
 func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
-	threshold := db.inlineThreshold
+	threshold := db.policy.InlineThreshold
 	if db.adaptive != nil {
 		threshold = db.adaptive.GetThreshold()
 	}
@@ -39,44 +41,59 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 }
 
 func (b *Batch) Write() error {
-	// 1. Apply via Zipper
-	// We need a write lock on the DB for the Commit phase?
-	// The Zipper itself (Phase 2) reads old pages and allocates new ones.
-	// It relies on COW.
-	// But concurrent writers?
-	// Spec says: "Single-Writer / Multi-Reader (SWMR)".
-	// So we need a global write lock.
+	// Serialize writers
+	b.db.writeMu.Lock()
+	defer b.db.writeMu.Unlock()
 
-	b.db.mu.Lock()
-	defer b.db.mu.Unlock()
-
-	// Get current root
-	// We need latest committed root.
+	// Get current root (Read Lock)
+	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	b.db.mu.RUnlock()
 
-	// Zipper Apply
+	// Zipper Apply (No DB Lock, runs concurrently with Readers)
 	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 
+	// Commit (Write Lock)
+	b.db.mu.Lock()
+	if b.db.meta.UserRootPageID != rootID {
+		// This should not happen if writeMu is held and we are the only writer
+		b.db.mu.Unlock()
+		return fmt.Errorf("concurrent modification detected during batch write")
+	}
+	sysRoot := b.db.meta.SystemRootPageID
+	b.db.mu.Unlock()
+
 	// Commit (System Root is unchanged for now)
-	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, false, metrics)
+	return b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics)
 }
 
 func (b *Batch) WriteSync() error {
-	b.db.mu.Lock()
-	defer b.db.mu.Unlock()
+	b.db.writeMu.Lock()
+	defer b.db.writeMu.Unlock()
 
+	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	b.db.mu.RUnlock()
+
 	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 
-	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, true, metrics)
+	b.db.mu.Lock()
+	if b.db.meta.UserRootPageID != rootID {
+		b.db.mu.Unlock()
+		return fmt.Errorf("concurrent modification detected during batch write")
+	}
+	sysRoot := b.db.meta.SystemRootPageID
+	b.db.mu.Unlock()
+
+	return b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
 }
 
 func (b *Batch) Close() error {

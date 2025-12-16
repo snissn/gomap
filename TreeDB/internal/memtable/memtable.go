@@ -6,6 +6,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/skiplist"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type Memtable struct {
@@ -126,6 +127,10 @@ func (it *Iterator) UnsafeKey() []byte {
 
 func (it *Iterator) UnsafeValue() []byte {
 	return it.iter.UnsafeValue()
+}
+
+func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.iter.UnsafeEntry()
 }
 
 func (it *Iterator) IsDeleted() bool {
