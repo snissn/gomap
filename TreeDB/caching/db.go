@@ -985,13 +985,14 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 2. Memtable Update
 	for _, op := range b.entries {
-		key := op.Key
+		// We use Steal methods because b.entries owns the key/value copies
+		// created in Batch.Set/Delete. We transfer ownership to Memtable.
 		if op.Type == batch.OpDelete {
-			b.db.mutable.Delete(key)
+			b.db.mutable.DeleteSteal(op.Key)
 		} else {
-			b.db.mutable.Set(key, op.Value)
+			b.db.mutable.SetSteal(op.Key, op.Value)
 		}
-		b.db.mutableRange.add(key)
+		b.db.mutableRange.add(op.Key)
 	}
 
 	// 3. Threshold Check

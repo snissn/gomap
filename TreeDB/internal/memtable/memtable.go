@@ -76,6 +76,37 @@ func (m *Memtable) Delete(key []byte) {
 	m.idx[bytesToStringNoCopy(k)] = item
 }
 
+func (m *Memtable) SetSteal(key, value []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	item := &Item{Key: key, Value: value, IsDeleted: false}
+	old := m.tree.ReplaceOrInsert(item)
+	added := int64(len(key) + len(value))
+	if old != nil {
+		oldItem := old.(*Item)
+		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
+	}
+	m.size += added
+	m.idx[bytesToStringNoCopy(key)] = item
+}
+
+func (m *Memtable) DeleteSteal(key []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	item := &Item{Key: key, IsDeleted: true}
+	old := m.tree.ReplaceOrInsert(item)
+
+	added := int64(len(key))
+	if old != nil {
+		oldItem := old.(*Item)
+		m.size -= int64(len(oldItem.Key) + len(oldItem.Value))
+	}
+	m.size += added
+	m.idx[bytesToStringNoCopy(key)] = item
+}
+
 func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

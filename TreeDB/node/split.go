@@ -46,24 +46,12 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 			return nil, ErrCorruptedNode
 		}
 
-		var entrySize int
 		var key []byte
 
 		if n.Type() == page.PageTypeLeaf {
 			// Leaf
 			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-			valLen := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
-			flags := n.data[ptr+6]
-
-			// Total Size
-			// Header (7) + Key + Value (or Ptr)
-			entrySize = 7 + int(keyLen)
-			if flags&FlagPointer != 0 {
-				entrySize += page.ValuePtrSize
-			} else {
-				entrySize += int(valLen)
-			}
-
+			
 			// Extract Key for Pivot (only need first one)
 			if i == 0 {
 				key = make([]byte, keyLen)
@@ -74,7 +62,6 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 		} else {
 			// Internal
 			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-			entrySize = 10 + int(keyLen)
 
 			if i == 0 {
 				key = make([]byte, keyLen)
@@ -96,22 +83,21 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 		// High-level requires decoding.
 
 		if n.Type() == page.PageTypeLeaf {
-			entry, err := n.GetLeafEntry(srcIdx)
+			key, val, ptr, flags, err := n.GetLeafEntryView(srcIdx)
 			if err != nil {
 				return nil, err
 			}
-			// Note: AddLeafEntry signature: (key, value, flags, valPtr)
-			// For pointer, value is nil.
-			err = newNode.AddLeafEntry(entry.Key, entry.Value, entry.Flags, entry.ValuePtr)
+			// AddLeafEntry copies data, so Views are safe here.
+			err = newNode.AddLeafEntry(key, val, flags, ptr)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			entry, err := n.GetInternalEntry(srcIdx)
+			key, childID, err := n.GetInternalEntryView(srcIdx)
 			if err != nil {
 				return nil, err
 			}
-			err = newNode.AddInternalChild(entry.Key, entry.ChildPageID)
+			err = newNode.AddInternalChild(key, childID)
 			if err != nil {
 				return nil, err
 			}
