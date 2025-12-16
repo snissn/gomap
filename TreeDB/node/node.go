@@ -28,18 +28,30 @@ const (
 // Node is a wrapper around a raw page byte slice.
 // It implements the Slotted Page layout.
 type Node struct {
-	data []byte // The raw page data (4096 bytes)
+	data  []byte        // The raw page data (4096 bytes)
+	count uint16        // Cached count
+	ptype page.PageType // Cached type
 }
 
 // NewNode creates a Node wrapper around the given page data.
 func NewNode(data []byte) *Node {
-	return &Node{data: data}
+	n := &Node{data: data}
+	if len(data) >= NodeHeaderSize {
+		n.ptype = page.PageType(binary.LittleEndian.Uint16(data[12:14]))
+		n.count = binary.LittleEndian.Uint16(data[14:16])
+	}
+	return n
 }
 
 // NewNodeView wraps the given page data without allocating a *Node.
 // It is useful in hot paths that store Node values directly (e.g. iterators).
 func NewNodeView(data []byte) Node {
-	return Node{data: data}
+	n := Node{data: data}
+	if len(data) >= NodeHeaderSize {
+		n.ptype = page.PageType(binary.LittleEndian.Uint16(data[12:14]))
+		n.count = binary.LittleEndian.Uint16(data[14:16])
+	}
+	return n
 }
 
 // Data returns the underlying byte slice.
@@ -59,21 +71,23 @@ func (n *Node) SetPageID(id uint64) {
 
 // Type returns the page type from the header.
 func (n *Node) Type() page.PageType {
-	return page.PageType(binary.LittleEndian.Uint16(n.data[12:14]))
+	return n.ptype
 }
 
 // SetType sets the page type in the header.
 func (n *Node) SetType(t page.PageType) {
+	n.ptype = t
 	binary.LittleEndian.PutUint16(n.data[12:14], uint16(t))
 }
 
 // Count returns the number of items in the node.
 func (n *Node) Count() uint16 {
-	return binary.LittleEndian.Uint16(n.data[14:16])
+	return n.count
 }
 
 // SetCount sets the number of items in the node.
 func (n *Node) SetCount(c uint16) {
+	n.count = c
 	binary.LittleEndian.PutUint16(n.data[14:16], c)
 }
 
@@ -95,7 +109,7 @@ func (n *Node) VerifyChecksum() bool {
 
 // getOffset returns the offset for the item at the given index.
 func (n *Node) getOffset(index uint16) (uint16, error) {
-	if index >= n.Count() {
+	if index >= n.count {
 		return 0, errors.New("index out of bounds")
 	}
 	// Directory starts at NodeHeaderSize

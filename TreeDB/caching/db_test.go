@@ -125,16 +125,20 @@ func (b *MockBatch) Delete(key []byte) error {
 	b.mb.mu.Unlock()
 	return nil
 }
-func (b *MockBatch) SetOps(ops map[string]batch.Entry) error {
+func (b *MockBatch) SetOps(ops []batch.Entry) error {
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
-	for k, op := range ops {
+	for _, op := range ops {
 		if op.Type == batch.OpDelete {
-			delete(b.mb.data, k)
+			delete(b.mb.data, string(op.Key))
 		} else {
-			b.mb.data[k] = op.Value
+			b.mb.data[string(op.Key)] = op.Value
 		}
 	}
+	return nil
+}
+
+func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 	return nil
 }
 

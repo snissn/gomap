@@ -949,7 +949,10 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	// Optimization: Bypass for Large Batches
-	if len(b.entries) >= 512 {
+	// Generalization: Only bypass if the batch is large enough to be comparable
+	// to a memtable flush. Small/Medium random batches cause high write amplification
+	// if written directly to the COW backend.
+	if b.size >= int(b.db.flushThreshold) {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
