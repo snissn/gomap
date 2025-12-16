@@ -144,7 +144,7 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 
 func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	if flushThreshold <= 0 {
-		flushThreshold = 64 * 1024 * 1024 // 64MB default
+		flushThreshold = 4 * 1024 * 1024 // 4MB default
 	}
 
 	// Ensure wal dir exists
