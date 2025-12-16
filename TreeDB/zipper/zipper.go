@@ -3,7 +3,6 @@ package zipper
 import (
 	"bytes"
 	"errors"
-	"sort"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -51,14 +50,12 @@ func (z *Zipper) putPooledBuf(b *[]byte) {
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID and list of retired pages.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) {
-	ops := b.Ops()
-	keys := make([]string, 0, len(ops))
-	for k := range ops {
-		keys = append(keys, k)
+	ops := b.SortedEntries()
+	if len(ops) == 0 {
+		return rootID, nil, nil
 	}
-	sort.Strings(keys)
 
-	newRoot, splits, retired, err := z.writeRecursive(rootID, keys, ops)
+	newRoot, splits, retired, err := z.writeRecursive(rootID, ops)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -160,7 +157,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, error) 
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
-func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]batch.Entry) (uint64, []Split, []uint64, error) {
+func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry) (uint64, []Split, []uint64, error) {
 	// 1. Allocate New Page (COW)
 	newPageID, err := z.allocator.Alloc()
 	if err != nil {
@@ -190,7 +187,7 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 
 	if oldNode.Type() == page.PageTypeLeaf {
 		// Merge Leaf
-		nr, splits, err := z.mergeLeaf(oldNode, builder, keys, ops)
+		nr, splits, err := z.mergeLeaf(oldNode, builder, ops)
 		if err == nil {
 			n := builder.Finish() // Finish writes header/checksum
 			if werr := z.pager.Write(newPageID, n.Data()); werr != nil {
@@ -202,7 +199,7 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, keys, ops)
+		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops)
 		if err != nil {
 			z.putPooledBuf(buf)
 			return 0, nil, nil, err
@@ -224,7 +221,7 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 			builder = node.NewBuilder(newData, page.PageTypeLeaf)
 			builder.SetPageID(newPageID)
 
-			nr, splits, err := z.mergeLeaf(oldNode, builder, keys, ops)
+			nr, splits, err := z.mergeLeaf(oldNode, builder, ops)
 			if err == nil {
 				n := builder.Finish()
 				if werr := z.pager.Write(newPageID, n.Data()); werr != nil {
@@ -240,10 +237,10 @@ func (z *Zipper) writeRecursive(pageID uint64, keys []string, ops map[string]bat
 	}
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []string, ops map[string]batch.Entry) (uint64, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry) (uint64, []Split, error) {
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
-	keyIdx := 0
+	opIdx := 0
 
 	var splits []Split
 
@@ -259,16 +256,16 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []str
 	target := builder
 
 	for {
-		// Pick next key: min(oldNode[oldIdx], keys[keyIdx])
+		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
 
-		if oldIdx >= oldCount && keyIdx >= len(keys) {
+		if oldIdx >= oldCount && opIdx >= len(ops) {
 			break
 		}
 
 		if oldIdx >= oldCount {
 			useBatch = true
-		} else if keyIdx >= len(keys) {
+		} else if opIdx >= len(ops) {
 			// useOld = true
 		} else {
 			// Compare
@@ -277,7 +274,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []str
 			if err != nil {
 				return 0, nil, err
 			}
-			batchKey := []byte(keys[keyIdx])
+			batchKey := ops[opIdx].Key
 
 			cmp := bytes.Compare(k, batchKey)
 			if cmp < 0 {
@@ -297,8 +294,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []str
 		var valPtr page.ValuePtr
 
 		if useBatch {
-			op := ops[keys[keyIdx]]
-			keyIdx++
+			op := ops[opIdx]
+			opIdx++
 			if op.Type == batch.OpDelete {
 				continue // Skip insert
 			}
@@ -387,7 +384,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, keys []str
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, keys []string, ops map[string]batch.Entry) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 
 	var splits []Split
@@ -401,14 +398,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, keys [
 	target := builder
 	var retired []uint64
 
-	keyIdx := 0
+	opIdx := 0
 
 	for i := uint16(0); i < count; i++ {
-		// Optimization: View
-		// But InternalEntry doesn't have a View method yet?
-		// Check node/internal.go. Yes, GetInternalEntry does copy.
-		// GetInternalChildID and SearchInternal use offsets.
-		// Let's use GetInternalEntry for now, can optimize later.
 		entry, err := oldNode.GetInternalEntry(i)
 		if err != nil {
 			return 0, nil, nil, err
@@ -424,24 +416,24 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, keys [
 			endKey = nextEntry.Key
 		}
 
-		// Collect keys for this child
-		var childKeys []string
-		for keyIdx < len(keys) {
-			k := keys[keyIdx]
-			if endKey == nil || bytes.Compare([]byte(k), endKey) < 0 {
-				childKeys = append(childKeys, k)
-				keyIdx++
+		// Identify ops range for this child
+		// ops[opIdx] ... until op.Key >= endKey
+		startOpIdx := opIdx
+		for opIdx < len(ops) {
+			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+				opIdx++
 			} else {
 				break
 			}
 		}
+		childOps := ops[startOpIdx:opIdx]
 
 		var newChildID uint64
 		var childSplits []Split
 
-		if len(childKeys) > 0 {
+		if len(childOps) > 0 {
 			// Recurse
-			ncID, cs, childRet, err := z.writeRecursive(entry.ChildPageID, childKeys, ops)
+			ncID, cs, childRet, err := z.writeRecursive(entry.ChildPageID, childOps)
 			if err != nil {
 				return 0, nil, nil, err
 			}

@@ -30,7 +30,7 @@ func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
 }
 
-func (b *Batch) SetOps(ops map[string]batch.Entry) error {
+func (b *Batch) SetOps(ops []batch.Entry) error {
 	return b.batch.SetOps(ops)
 }
 
@@ -76,6 +76,10 @@ func (b *Batch) WriteSync() error {
 func (b *Batch) Close() error {
 	b.batch = nil
 	return nil
+}
+
+func (b *Batch) Replay(fn func(batch.Entry) error) error {
+	return b.batch.Replay(fn)
 }
 
 func (b *Batch) GetByteSize() (int, error) {

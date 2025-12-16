@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -35,6 +36,8 @@ type Batch interface {
 	Write() error
 	WriteSync() error
 	Close() error
+	Replay(func(batch.Entry) error) error
+	GetByteSize() (int, error)
 }
 
 // DB is the public TreeDB handle. It can represent either cached mode (default)
