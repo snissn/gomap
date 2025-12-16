@@ -412,29 +412,24 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if mem.Len() > 2000 {
 		ops := make([]batch.Entry, 0, mem.Len())
 		for iter.Valid() {
-			key := iter.UnsafeKey()
-			// Need to copy key? batch.Entry in flush context usually owns key if passed to backend?
-			// Backend Batch SetOps copies or appends.
-			// UnsafeKey is view. Backend might hold it?
-			// Backend.SetOps appends to its internal slice. 
-			// If we pass UnsafeKey, and backend appends it, and then we Close iter...
-			// Wait, backend batch persists until Write. Iter closes here.
-			// So we MUST copy keys here.
-			
-			k := append([]byte(nil), key...)
+			// Zero-copy: UnsafeKey/Value point to memtable nodes (heap).
+			// They are valid as long as memtable is reachable.
+			// flushOneLocked holds 'mem' reference.
+			// backendBatch.SetOps appends Entry structs (shallow copy of slices).
+			// backendBatch.Write consumes them.
+			// All within flushOneLocked (or until backendBatch.Write returns).
+			// So this is safe.
 			
 			if iter.IsDeleted() {
 				ops = append(ops, batch.Entry{
 					Type: batch.OpDelete,
-					Key:  k,
+					Key:  iter.UnsafeKey(),
 				})
 			} else {
-				// Copy value too?
-				v := append([]byte(nil), iter.UnsafeValue()...)
 				ops = append(ops, batch.Entry{
 					Type:  batch.OpPut,
-					Key:   k,
-					Value: v,
+					Key:   iter.UnsafeKey(),
+					Value: iter.UnsafeValue(),
 				})
 			}
 			iter.Next()

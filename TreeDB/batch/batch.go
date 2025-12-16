@@ -183,12 +183,9 @@ func (b *Batch) SetOps(ops []Entry) error {
 			op.ValuePtr = ptr
 			op.IsPtr = true
 			op.Value = nil
-		} else {
-			// Ensure copy
-			valCopy := make([]byte, len(op.Value))
-			copy(valCopy, op.Value)
-			op.Value = valCopy
 		}
+		// No need to copy op.Value if we assume ownership (which we do for SetOps)
+		
 		b.entries = append(b.entries, op)
 		b.byteSize += len(op.Key) + len(op.Value)
 	}
