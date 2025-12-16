@@ -171,15 +171,17 @@ Disallow:
 #     Status: pending
 #     Result:
 
-# [ ] TODO-11 Scan prefetch: madvise(MADV_SEQUENTIAL) for pager chunks + slab mappings (best-effort)
+# [-] TODO-11 Scan prefetch: madvise(MADV_SEQUENTIAL) for pager chunks + slab mappings (best-effort)
 #     Target: Full Scan
 #     Files: TreeDB/pager/pager.go (+ call site), TreeDB/slab/slab.go
 #     Test Gate:
 #       - Build tags/guards for non-unix platforms; tests pass everywhere
 #     Perf Gate:
 #       - Full Scan median >= +10% OR reject
-#     Status: pending
+#     Status: rejected (perf regression)
 #     Result:
+#       - Attempted one-time `unix.Madvise(MADV_SEQUENTIAL)` on pager chunks for full forward scans.
+#       - unified-bench treedb regressed (combo run): read_rand ~1.20M and full_scan ~41.6M; rejected.
 
 # [ ] TODO-12 Documentation + cleanup after semantics change
 #     Target: correctness/maintainability
