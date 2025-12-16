@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -41,6 +42,7 @@ type DB struct {
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
 	lock        *lockfile.Lock
+	adaptive    *adaptive.Controller
 
 	keepRecent      uint64
 	inlineThreshold int
@@ -161,6 +163,7 @@ func Open(opts Options) (*DB, error) {
 		graveyard:       lifecycle.NewGraveyard(),
 		registry:        lifecycle.NewReaderRegistry(),
 		lock:            lock,
+		adaptive:        adaptive.New(),
 		keepRecent:      opts.KeepRecent,
 		inlineThreshold: page.DefaultInlineThreshold,
 	}
@@ -360,7 +363,7 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // commitLocked persists the new root.
 // Caller must hold db.mu.
-func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool) error {
+func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {
 			return err
@@ -419,6 +422,10 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 		db.slabManager.ReleaseSlabs(oldState.SlabSet)
 	}
 
+	if db.adaptive != nil {
+		db.adaptive.RecordCommit(metrics)
+	}
+
 	return nil
 }
 
@@ -430,7 +437,7 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 func (db *DB) Commit(newRootID uint64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.commitLocked(newRootID, db.meta.SystemRootPageID, nil, true)
+	return db.commitLocked(newRootID, db.meta.SystemRootPageID, nil, true, adaptive.Metrics{})
 }
 
 // Prune reclaims pages from the graveyard.
@@ -502,11 +509,11 @@ func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 	}
 
 	rootID := db.meta.UserRootPageID
-	newRoot, retired, err := db.zipper.Apply(rootID, b)
+	newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
 	if err != nil {
 		return err
 	}
 
 	// Commit with sync=true (Compaction should be durable)
-	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true)
+	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true, metrics)
 }

@@ -16,9 +16,13 @@ func (db *DB) NewBatch() caching.BatchInterface {
 }
 
 func (db *DB) NewBatchWithSize(size int) caching.BatchInterface {
+	threshold := db.inlineThreshold
+	if db.adaptive != nil {
+		threshold = db.adaptive.GetThreshold()
+	}
 	return &Batch{
 		db:    db,
-		batch: batch.New(db.slabManager, db.inlineThreshold),
+		batch: batch.New(db.slabManager, threshold),
 	}
 }
 
@@ -51,13 +55,13 @@ func (b *Batch) Write() error {
 	rootID := b.db.meta.UserRootPageID
 
 	// Zipper Apply
-	newRoot, retired, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 
 	// Commit (System Root is unchanged for now)
-	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, false)
+	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, false, metrics)
 }
 
 func (b *Batch) WriteSync() error {
@@ -65,12 +69,12 @@ func (b *Batch) WriteSync() error {
 	defer b.db.mu.Unlock()
 
 	rootID := b.db.meta.UserRootPageID
-	newRoot, retired, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
 
-	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, true)
+	return b.db.commitLocked(newRoot, b.db.meta.SystemRootPageID, retired, true, metrics)
 }
 
 func (b *Batch) Close() error {

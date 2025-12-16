@@ -1,0 +1,130 @@
+package adaptive
+
+import (
+	"sync"
+)
+
+const (
+	DefaultInlineThreshold = 256
+	InlineHardMin          = 64
+	InlineHardMax          = 2048
+	DefaultStep            = 64
+	UpdateInterval         = 100 // K commits
+)
+
+// Metrics represents the telemetry gathered during a single commit.
+type Metrics struct {
+	LeafFill        float64 // 0..1
+	Splits          int
+	IndexWriteBytes int
+	SlabWriteBytes  int
+	SlabDeadBytes   int
+}
+
+// Controller manages the adaptive inline threshold.
+type Controller struct {
+	mu                 sync.Mutex
+	currentThreshold   int
+	commitsSinceUpdate int
+
+	// EWMA State (Exponentially Weighted Moving Averages)
+	leafFillAvg     float64
+	splitRateAvg    float64
+	slabDeadRatioAvg float64
+
+	// Config (Weights)
+	alpha float64 // EWMA alpha
+}
+
+func New() *Controller {
+	return &Controller{
+		currentThreshold: DefaultInlineThreshold,
+		leafFillAvg:      0.85, // Assume healthy
+		alpha:            0.1,  // Roughly 10-20 commits half-life?
+	}
+}
+
+// GetThreshold returns the current threshold to use for a new batch.
+func (c *Controller) GetThreshold() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.currentThreshold
+}
+
+// RecordCommit updates the controller with metrics from a completed commit.
+func (c *Controller) RecordCommit(m Metrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 1. Update EWMAs
+	c.leafFillAvg = ewma(c.leafFillAvg, m.LeafFill, c.alpha)
+	// Split rate is abstract, maybe per commit?
+	c.splitRateAvg = ewma(c.splitRateAvg, float64(m.Splits), c.alpha)
+	
+	slabDeadRatio := 0.0
+	if m.SlabWriteBytes > 0 { // Avoid div by zero, approximate
+		// This is tricky. Dead bytes vs Total bytes written?
+		// Spec says "slab_dead_ratio: sum(DeadBytes) / sum(TotalBytes)"
+		// If we track it per commit:
+		slabDeadRatio = float64(m.SlabDeadBytes) / float64(m.SlabWriteBytes)
+	}
+	c.slabDeadRatioAvg = ewma(c.slabDeadRatioAvg, slabDeadRatio, c.alpha)
+
+	// 2. Check Interval
+	c.commitsSinceUpdate++
+	if c.commitsSinceUpdate >= UpdateInterval {
+		c.adjustThreshold()
+		c.commitsSinceUpdate = 0
+	}
+}
+
+func (c *Controller) adjustThreshold() {
+	// Pressure Functions (from spec)
+	// Defaults:
+	targetLeafFill := 0.85
+	targetSplitRate := 0.0 // Ideal
+	targetSlabDead := 0.35
+
+	// Weights (Index weights higher)
+	w1 := 2.0 // Leaf Fill
+	w2 := 2.0 // Split Rate
+	
+	v1 := 1.0 // Slab Dead Ratio
+
+	indexPressure := w1*max(0, targetLeafFill-c.leafFillAvg) + 
+		w2*max(0, c.splitRateAvg-targetSplitRate)
+
+	slabPressure := v1 * max(0, c.slabDeadRatioAvg-targetSlabDead)
+
+	// Update Rule
+	delta := 0
+	diff := slabPressure - indexPressure
+	
+	// If diff is significant, move step
+	// We use a simple heuristic: if difference > 0.1?
+	if diff > 0.1 {
+		delta = DefaultStep
+	} else if diff < -0.1 {
+		delta = -DefaultStep
+	}
+
+	newT := c.currentThreshold + delta
+	if newT < InlineHardMin {
+		newT = InlineHardMin
+	}
+	if newT > InlineHardMax {
+		newT = InlineHardMax
+	}
+	c.currentThreshold = newT
+}
+
+func ewma(old, new, alpha float64) float64 {
+	return (1-alpha)*old + alpha*new
+}
+
+func max(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
