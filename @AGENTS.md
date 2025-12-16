@@ -108,21 +108,8 @@
   - Renamed benchmark rows to `Full Scan` and `Prefix Scan` (aliases: `scan`, `range_scan`)
   - `Prefix Scan` now reports items/sec and targets the active keyspace (base keys vs batch_write offset keys)
   - `-` is now only for unsupported/not-run (uses NaN); real zero results print `0`
-- 2025-12-14: Roadmap
-  - Added a detailed plan for unified TreeDB API + exclusive locking + coherent WAL replay recovery in `TODO.md`.
-- 2025-12-14: Docs milestone
-  - Sketched V1 “Wow” documentation requirements in `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added CI/benchmark reproducibility/doc cleanup/HashDB follow-ups to `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added a downstream-ready storage milestone and prereqs to `TODO.md`.
-- 2025-12-14: Roadmap expansion
-  - Added an explicit “handoff checklist” for stable APIs + docs to `TODO.md`.
-- 2025-12-14: TreeDB exclusive open
-  - Added cross-process lock acquisition via `TreeDB/internal/lockfile` and exposed `treedb.ErrLocked`.
-  - Integrated locking into `TreeDB/db.Open` (covers cached and backend opens) and made `DB.Close` close all resources.
-- 2025-12-14: TreeDB lock tests
-  - Added in-process and cross-process lock regression tests in `TreeDB/db/lock_test.go`.
+- 2025-12-14: CI (optional)
+  - Added `gofmt` pre-commit hook under `.githooks/` and a `make hooks` installer target.
 - 2025-12-14: unified_bench reproducibility
   - Added `-seed` and made randomized tests use per-test PRNGs so all DBs see the same random key/query sequences.
 - 2025-12-14: CI quality gates
@@ -143,44 +130,8 @@
   - Documented the new lock behavior in `HashDB/doc.go`.
 - 2025-12-14: HashDB stress tests
   - Made `HashDB/stress/compaction_test.go` tolerate transient `ENOENT` during size walks while compaction creates/removes `*-compact` dirs (fixes flaky macOS CI failure).
-- 2025-12-14: TreeDB WAL recovery + unified public Open
-  - Backend `Open` now replays any cached WAL segments in `Dir/wal/` into the backend (sync commit) and removes them.
-  - Cached flush path now tracks and deletes WAL segments after successful flush.
-  - Public `treedb.Open` returns a single `*treedb.DB` wrapper; backend-only mode is `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`).
-  - Added spec tests covering crash recovery + truncated WAL handling in `TreeDB/recovery_spec_test.go`.
-- 2025-12-14: Race hygiene (HashDB)
-  - Made `DummyKV` thread-safe in `HashDB/cachekv_test.go` so `go test -race` passes.
-  - Made `MaxSegmentSize` reads/writes atomic (fixes global race in `TestSegmentRotation` and slab writers).
-- 2025-12-14: CI (optional)
-  - Added `make test-race` and a manual `Race (manual)` GitHub workflow.
-  - Added Windows HashDB `go vet` + `go test` workflow (`HashDB: vet+test (Windows)`).
-- 2025-12-14: Docs (handoff)
-  - Added `CONTRIBUTING.md` and `CHANGELOG.md`; linked from `README.md` and `docs/`.
-- 2025-12-14: Roadmap status
-  - Updated `TODO.md` with CI/-race status notes and a HashDB follow-up status note.
-- 2025-12-14: Tooling
-  - Added an optional `gofmt` pre-commit hook under `.githooks/` and a `make hooks` installer target.
-- 2025-12-14: unified_bench
-  - Added Badger as a benchmark engine (`-dbs badger`) and updated the docs.
-  - Added keycount sweeps (`-keycounts` / `-keyscale`) and markdown output (`-format markdown`).
-  - Added a `-suite readme` mode that produces a README-friendly benchmark summary (includes explicit TreeDBBackend exclusions + baseline).
-- 2025-12-14: README benchmarking automation
-  - Added `make bench-readme` and a script to replace the section between `<!-- BENCHMARK_START -->` and `<!-- BENCHMARK_END -->` in `README.md`.
-- 2025-12-14: Benchmark metadata
-  - `unified_bench -suite readme` now includes generation timestamp + environment summary (OS/arch, Go version, CPUs, RAM, CPU model).
-- 2025-12-14: Windows CI fix
+- 2025-12-15: Windows CI fix
   - Fixed HashDB `stress` tests on Windows by building/execing the redis server binary with a `.exe` suffix and using `localhost:6380` for readiness checks.
-- 2025-12-14: Benchmark plots
-  - Added `-outdir` to `cmd/unified_bench` readme suite and generate PNG scaling plots via `gonum/plot`.
-  - `make bench-readme` now writes plots to `docs/images/` and embeds them in the README benchmark section.
-- 2025-12-14: Windows CI hardening (HashDB)
-  - Reduced shard count used by HashDB unit tests (avoid default 128 shards) and ensured opened DBs/stores are `Close()`'d via `t.Cleanup`.
-  - This reduces open file handles/background goroutines and improves Windows test stability.
-- 2025-12-15: Windows CI fixes (HashDB/stress)
-  - Made `CachedDB` safe with background flushes by serializing backend `DB` access (prevents mmap/unsafe crashes and value corruption).
-  - Reworked `DB.Compact` to close/reopen around directory swap so Windows can rename/delete reliably and lock behavior stays coherent.
-  - `redisserver` now supports configurable addr/port and shard count; `COMPACT` runs synchronously (tests use this).
-  - `HashDB/stress` tests use an ephemeral loopback addr and smaller shard count for reliable CI.
 - 2025-12-15: Downstream readiness (HashDB + contracts)
   - Removed “raft” terminology from docs/roadmap and renamed `docs/raft` to `docs/downstream`.
   - Added HashDB `PutSync`/`DeleteSync` durability APIs and rebuild-on-open crash recovery (slab log scan + torn-tail truncation).
@@ -206,8 +157,53 @@
   - Improved GetMany fallback by issuing exact record reads when chunks are incomplete (`HashDB/getmany.go`).
   - Added optional per-shard cache WAL with configurable fsync policy (default off) and tests (`HashDB/cache_wal.go`, `HashDB/cachekv_wal_test.go`).
   - Added Linux `pread`-based `readAt` helper (`HashDB/readat_linux.go`).
+- 2025-12-15: TreeDB batch optimizations
+  - **Fixed Pathological Performance:** Optimized `CachingDB` to buffer small/medium random batches in Memtable (via increased `FlushThreshold`-based logic) instead of bypassing to backend. Throughput improved from ~27k to ~1.3M ops/sec.
+  - **Fixed Small Sequential Write Amplification:** Prevented sequential batch streaming for batches smaller than `FlushThreshold`, avoiding massive write amplification. Throughput for 100-key sequential batches hit ~3.3M ops/sec.
+  - **Node Optimization:** Cached `count` and `ptype` in `Node` struct to reduce binary decoding overhead.
+  - **Benchmarking:** Verified `FlushThreshold=4MB` is optimal for CPU-bound random writes (vs 64MB). Added `batch_write_small_seq` regression test.
+- 2025-12-15: TreeDB Adaptive Inline Threshold (Completed)
+  - Implemented the `adaptive.Controller` with EWMA-based logic (`TreeDB/internal/adaptive`).
+  - Integrated controller into `TreeDB/db` (threshold latching) and `TreeDB/zipper` (Index metrics collection).
+  - Wired up `SlabWriteBytes` (from `Batch`) and `SlabDeadBytes` (from `Zipper` overwrite detection).
+  - The controller now dynamically tunes `InlineThreshold` based on the balance of Index Pressure (fragmentation) vs. Slab Pressure (waste/compaction need).
+- 2025-12-15: TreeDB Memtable optimization (Arena SkipList)
+  - Replaced `google/btree` with a custom Arena-backed SkipList in `TreeDB/internal/memtable`.
+  - Created `TreeDB/internal/skiplist` using a flat `[]byte` arena for zero-GC node allocation.
+  - Increased `FlushThreshold` to 64MB (default) as GC pressure is now eliminated.
+  - Benchmarks confirm `Batch Random` throughput at 64MB is now comparable to 4MB (~1.28M ops/sec), while `Batch Small Seq` improved to ~4.26M ops/sec.
+- 2025-12-15: TreeDB Zero-Copy Write Path
+  - Implemented "Arena-First" write flow in `CachingDB`. `Set/Delete` allocates in `Memtable` (Arena) first, then `WAL` writes using views into the Arena.
+  - Added `PutWithCallback` and `DeleteWithCallback` to `SkipList` and `Memtable` to support this transactional flow (abort if WAL fails).
+  - This eliminates one data copy (User -> WAL Buffer) for single operations, reducing memory bandwidth usage.
+  - `Sequential Write` (Set) benchmark hit ~2.2M ops/sec.
+- 2025-12-15: TreeDB Micro-optimizations
+  - Micro-optimized `SearchLeaf` and `SearchInternal` by caching the `n.data` slice pointer in a local variable, reducing compiler bounds-check overhead.
+  - Benchmarked `SearchLeaf` at ~37ns/op (200 items), confirming efficiency close to memory latency.
+- 2025-12-15: TreeDB Compaction Liveness Check
+  - Implemented liveness check in `Compactor` using `Snapshot.GetEntry`.
+  - Compactor now verifies `ValuePtr` matches before moving data to active slab, preventing space amplification from dead records.
+- 2025-12-15: TreeDB Full Scan Analysis
+  - Investigated slow `Full Scan` (~110k ops/sec) vs fast `Prefix Scan` (~2.2M ops/sec).
+  - **Root Cause:** COW Fragmentation. Random writes scatter B-Tree nodes across the append-only index file, turning logical scans into random disk I/O. `Prefix Scan` targeted a sequentially written region.
+  - **Conclusion:** Expected behavior for COW B-Trees without background index compaction. Future work: Implement "Index Compaction" to rewrite the tree sequentially.
+- 2025-12-15: TreeDB Index Compaction
+  - Implemented `CompactIndex` API using a new `bulk.Build` algorithm (`TreeDB/internal/bulk`).
+  - `bulk.Build` constructs a B-Tree bottom-up from a sorted iterator, allocating pages sequentially to the end of the file.
+  - Updated `UnsafeIterator` to expose `UnsafeEntry`, allowing `CompactIndex` to preserve large value pointers without reading from slabs (zero-copy compaction).
+  - This feature restores Full Scan performance by eliminating fragmentation at the cost of file growth (append-only).
+- 2025-12-15: TreeDB Read Performance Fix (Lock Contention)
+  - Diagnosed a regression in `Random Read` (~29k ops/sec) caused by lock contention between Readers (`AcquireSnapshot`) and Writers (`Batch.Write`) during heavy flushing cycles.
+  - Implemented `writeMu` to serialize writers without blocking readers during the CPU-intensive `Zipper.Apply` phase.
+  - Refactored `commitLocked` into `finalizeCommit` to perform data and meta syncing OUTSIDE the global lock.
+  - Benchmarks confirm `Random Read` improved to ~51k ops/sec under load (CPU/Latency bound, not Lock bound).
+  - Completed **Heuristic Cleanup**: Removed redundant `streamSwitchThreshold` and centralized policy handling.
 
 ## Notes / Conventions
 
 - Prefer small, reviewable commits; run relevant tests before/after each.
 - Keep renames “modest”: mostly package/module names and imports; avoid large API churn unless tests demand it.
+
+## Open Things to Investigate in TreeDB
+
+(None)

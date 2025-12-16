@@ -10,6 +10,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -41,12 +43,14 @@ type DB struct {
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
 	lock        *lockfile.Lock
+	adaptive    *adaptive.Controller
 
-	keepRecent      uint64
-	inlineThreshold int
+	keepRecent uint64
+	policy     WritePolicy
 
-	mu         sync.RWMutex
-	meta       page.MetaPageBody
+	mu      sync.RWMutex
+	writeMu sync.Mutex
+	meta    page.MetaPageBody
 	metaPageID uint64
 
 	state atomic.Pointer[DBState]
@@ -161,8 +165,12 @@ func Open(opts Options) (*DB, error) {
 		graveyard:       lifecycle.NewGraveyard(),
 		registry:        lifecycle.NewReaderRegistry(),
 		lock:            lock,
-		keepRecent:      opts.KeepRecent,
-		inlineThreshold: page.DefaultInlineThreshold,
+		adaptive:   adaptive.New(),
+		keepRecent: opts.KeepRecent,
+		policy: WritePolicy{
+			InlineThreshold: page.DefaultInlineThreshold,
+			FlushThreshold:  opts.FlushThreshold,
+		},
 	}
 
 	if err := db.recover(); err != nil {
@@ -358,9 +366,9 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	return nil
 }
 
-// commitLocked persists the new root.
-// Caller must hold db.mu.
-func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool) error {
+// finalizeCommit handles durability and state updates with minimal lock contention.
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	// 1. Sync Data (Slabs + Index Pages) - No DB Lock
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {
 			return err
@@ -370,6 +378,8 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 		}
 	}
 
+	// 2. Prepare Meta - Short Lock
+	db.mu.Lock()
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -383,23 +393,28 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 	if db.metaPageID == 0 {
 		targetPageID = 1
 	}
+	db.mu.Unlock()
 
+	// 3. Write Meta - No DB Lock
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return err
 	}
 
+	// 4. Sync Meta - No DB Lock
 	if sync {
 		if err := db.pager.Sync(); err != nil {
 			return err
 		}
 	}
 
+	// 5. Update State (Visible) - Short Lock
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 
 	// Add retired pages to Graveyard
-	// Note: We use nextMeta.CommitSeq (the seq we just committed).
-	// These pages were replaced by this commit.
 	db.graveyard.Add(nextMeta.CommitSeq, retired)
 
 	// Prune
@@ -419,6 +434,10 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 		db.slabManager.ReleaseSlabs(oldState.SlabSet)
 	}
 
+	if db.adaptive != nil {
+		db.adaptive.RecordCommit(metrics)
+	}
+
 	return nil
 }
 
@@ -428,9 +447,22 @@ func (db *DB) commitLocked(newRootID uint64, sysRootID uint64, retired []uint64,
 // If external user calls Commit, they might not know retired pages.
 // We'll accept nil for retired if manual.
 func (db *DB) Commit(newRootID uint64) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	return db.commitLocked(newRootID, db.meta.SystemRootPageID, nil, true)
+	// Public Commit assumes the caller has built a new tree.
+	// We need to serialize with other writers.
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	// Since we are committing a root provided by caller, we assume they based it on current state?
+	// If caller is external, they might have read old state.
+	// But Commit(newRoot) implies "Force Set Root".
+	// We just commit it.
+
+	// Need sysRootID.
+	db.mu.RLock()
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{})
 }
 
 // Prune reclaims pages from the graveyard.
@@ -450,6 +482,11 @@ func (db *DB) Prune() {
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
+}
+
+// GetEntry returns the raw entry from snapshot.
+func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	return s.tree.GetEntry(key)
 }
 
 // Getters
@@ -474,13 +511,15 @@ type CompactionOp struct {
 
 // ApplyCompaction applies pointer updates atomically.
 func (db *DB) ApplyCompaction(ops []CompactionOp) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
 
-	b := batch.New(db.slabManager, db.inlineThreshold)
+	b := batch.New(db.slabManager, db.policy.InlineThreshold)
 
+	db.mu.RLock()
 	// Create temporary tree for verification (using current root)
 	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
+	rootID := db.meta.UserRootPageID
 
 	for _, op := range ops {
 		entry, err := tr.GetEntry(op.Key)
@@ -491,22 +530,77 @@ func (db *DB) ApplyCompaction(ops []CompactionOp) error {
 		if entry.Flags&node.FlagPointer != 0 {
 			if entry.ValuePtr == op.OldPtr {
 				if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+					db.mu.RUnlock()
 					return err
 				}
 			}
 		}
 	}
+	db.mu.RUnlock()
 
 	if len(b.Ops()) == 0 {
 		return nil
 	}
 
-	rootID := db.meta.UserRootPageID
-	newRoot, retired, err := db.zipper.Apply(rootID, b)
+	newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
 	if err != nil {
 		return err
 	}
 
+	db.mu.Lock()
+	if db.meta.UserRootPageID != rootID {
+		db.mu.Unlock()
+		return fmt.Errorf("concurrent modification detected during compaction")
+	}
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.Unlock()
+
 	// Commit with sync=true (Compaction should be durable)
-	return db.commitLocked(newRoot, db.meta.SystemRootPageID, retired, true)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
+}
+
+// CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
+// This improves Full Scan performance by restoring physical locality.
+// Note: This operation causes file growth as old pages are not immediately reclaimed
+// (they are leaked to the freelist but not reused during this append-only build).
+func (db *DB) CompactIndex() error {
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	// Acquire Snapshot
+	db.mu.RLock()
+	state := db.state.Load()
+	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
+	rootID := state.RootPageID
+	db.mu.RUnlock()
+
+	// Create Iterator (Full Scan)
+	iter := tr.Iterator(nil, nil)
+	defer iter.Close()
+
+	// Build new tree sequentially
+	alloc := &pagerAllocator{p: db.pager}
+	newRoot, err := bulk.Build(iter, alloc, db.pager)
+	if err != nil {
+		return err
+	}
+
+	db.mu.Lock()
+	if db.meta.UserRootPageID != rootID {
+		db.mu.Unlock()
+		return fmt.Errorf("concurrent modification detected during compaction")
+	}
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.Unlock()
+
+	// Commit new root
+	return db.finalizeCommit(newRoot, sysRoot, nil, true, adaptive.Metrics{})
+}
+
+type pagerAllocator struct {
+	p *pager.Pager
+}
+
+func (a *pagerAllocator) Alloc() (uint64, error) {
+	return a.p.Alloc(1)
 }

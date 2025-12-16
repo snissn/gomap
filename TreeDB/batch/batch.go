@@ -33,9 +33,10 @@ type Entry struct {
 
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
-	ops             map[string]Entry
+	entries         []Entry
 	slabManager     *slab.SlabManager
 	byteSize        int
+	slabWritten     int
 	inlineThreshold int
 	closed          bool
 }
@@ -46,7 +47,7 @@ func New(sm *slab.SlabManager, threshold int) *Batch {
 		threshold = page.DefaultInlineThreshold
 	}
 	return &Batch{
-		ops:             make(map[string]Entry),
+		entries:         make([]Entry, 0, 16),
 		slabManager:     sm,
 		inlineThreshold: threshold,
 	}
@@ -68,20 +69,25 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
+	// Copy key to ensure immutability
+	k := make([]byte, len(key))
+	copy(k, key)
+
 	entry := Entry{
 		Type: OpPut,
-		Key:  key,
+		Key:  k,
 	}
 
 	// Check threshold
 	if len(value) > b.inlineThreshold {
 		// Write to slab
-		ptr, err := b.slabManager.Append(key, value)
+		ptr, err := b.slabManager.Append(k, value)
 		if err != nil {
 			return err
 		}
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
+		b.slabWritten += int(ptr.Length)
 	} else {
 		// Store inline
 		valCopy := make([]byte, len(value))
@@ -89,9 +95,9 @@ func (b *Batch) Set(key, value []byte) error {
 		entry.Value = valCopy
 	}
 
-	b.ops[string(key)] = entry
+	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
-	b.byteSize += len(key) + len(value)
+	b.byteSize += len(k) + len(value)
 	return nil
 }
 
@@ -101,13 +107,17 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		return errors.New("key cannot be empty")
 	}
 
+	// Copy key
+	k := make([]byte, len(key))
+	copy(k, key)
+
 	entry := Entry{
 		Type:     OpPut,
-		Key:      key,
+		Key:      k,
 		ValuePtr: ptr,
 		IsPtr:    true,
 	}
-	b.ops[string(key)] = entry
+	b.entries = append(b.entries, entry)
 	return nil
 }
 
@@ -120,83 +130,113 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	b.ops[string(key)] = Entry{
+	// Copy key
+	k := make([]byte, len(key))
+	copy(k, key)
+
+	b.entries = append(b.entries, Entry{
 		Type: OpDelete,
-		Key:  key,
-	}
-	b.byteSize += len(key)
+		Key:  k,
+	})
+	b.byteSize += len(k)
 	return nil
 }
 
-// SetOps merges a map of operations into the batch.
-func (b *Batch) SetOps(ops map[string]Entry) error {
+// Replay iterates over the batch entries.
+func (b *Batch) Replay(fn func(Entry) error) error {
+	for _, entry := range b.entries {
+		if entry.IsPtr && entry.Value == nil {
+			val, err := b.slabManager.Read(entry.ValuePtr)
+			if err != nil {
+				return err
+			}
+			entry.Value = val
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetOps merges a slice of operations into the batch.
+func (b *Batch) SetOps(ops []Entry) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
 
-	entries := make([]Entry, 0, len(ops))
+	// Just append them. Deduplication happens at Ops() time.
 	for _, op := range ops {
-		entries = append(entries, op)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
-	})
+		// Logic to handle large values if op came from raw map?
+		// Assuming op is already processed or we need to check.
 
-	for _, op := range entries {
-		// If op is already populated with ValuePtr, we trust it?
-		// But CachingDB doesn't populate ValuePtr.
-		// So we must check value size again.
-
-		if op.Type == OpDelete {
-			b.ops[string(op.Key)] = op
-			b.byteSize += len(op.Key)
+		if op.Type == OpDelete || op.IsPtr {
+			b.entries = append(b.entries, op)
+			b.byteSize += len(op.Key) + len(op.Value) // Value might be nil if Ptr
 			continue
 		}
 
-		// OpPut
-		// If it came from CachingDB, it has Value but maybe not ValuePtr.
-		if op.IsPtr {
-			// Already has pointer (e.g. from compaction or advanced usage)
-			b.ops[string(op.Key)] = op
-			continue
-		}
-
-		key := op.Key
-		value := op.Value
-
-		// Check threshold
-		if len(value) > b.inlineThreshold {
-			// Write to slab
-			ptr, err := b.slabManager.Append(key, value)
+		// Check threshold for Put with Inline value
+		if len(op.Value) > b.inlineThreshold {
+			ptr, err := b.slabManager.Append(op.Key, op.Value)
 			if err != nil {
 				return err
 			}
 			op.ValuePtr = ptr
 			op.IsPtr = true
-			op.Value = nil // Clear inline
-		} else {
-			// Ensure inline copy?
-			// If ops came from another batch, value might be shared?
-			// But CachingDB creates fresh batch.
-			// Let's copy to be safe if we want independent batch lifecycle,
-			// but for performance we might skip copy if we know ownership transfers.
-			// Standard Set() does copy. Let's do copy.
-			valCopy := make([]byte, len(value))
-			copy(valCopy, value)
-			op.Value = valCopy
+			op.Value = nil
+			b.slabWritten += int(ptr.Length)
 		}
-		b.ops[string(op.Key)] = op
-		b.byteSize += len(key) + len(value)
+		// No need to copy op.Value if we assume ownership (which we do for SetOps)
+
+		b.entries = append(b.entries, op)
+		b.byteSize += len(op.Key) + len(op.Value)
 	}
 	return nil
 }
 
+// SortedEntries returns the operations sorted by key.
+// Duplicate keys are resolved (last write wins).
+// This modifies the internal entries slice (sorts and compacts).
+func (b *Batch) SortedEntries() []Entry {
+	sort.SliceStable(b.entries, func(i, j int) bool {
+		return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
+	})
+
+	if len(b.entries) == 0 {
+		return nil
+	}
+
+	// Compact in place: keep only the last entry for each key
+	out := b.entries[:0]
+	for i := 0; i < len(b.entries); i++ {
+		// If next is same key, skip this one (it's overwritten by next)
+		if i+1 < len(b.entries) && bytes.Equal(b.entries[i].Key, b.entries[i+1].Key) {
+			continue
+		}
+		out = append(out, b.entries[i])
+	}
+	b.entries = out
+	return b.entries
+}
+
 // Ops returns the map of operations.
+// WARNING: This constructs the map on demand. Duplicate keys in the batch
+// are resolved so the last one wins.
 func (b *Batch) Ops() map[string]Entry {
-	return b.ops
+	ops := make(map[string]Entry, len(b.entries))
+	for _, e := range b.entries {
+		ops[string(e.Key)] = e
+	}
+	return ops
 }
 
 // ByteSize returns the approximate size of the batch.
 func (b *Batch) ByteSize() int {
 	return b.byteSize
+}
+
+// SlabWriteBytes returns the number of bytes written to the slab file.
+func (b *Batch) SlabWriteBytes() int {
+	return b.slabWritten
 }

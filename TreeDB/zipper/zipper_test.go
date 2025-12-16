@@ -60,7 +60,7 @@ func TestZipperInsertSplit(t *testing.T) {
 		b.Set(key, val)
 	}
 
-	newRootID, _, err := z.Apply(rootID, b)
+	newRootID, _, _, err := z.Apply(rootID, b)
 	if err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestZipperUpdates(t *testing.T) {
 	b1.Set([]byte("A"), []byte("valA"))
 	b1.Set([]byte("B"), []byte("valB"))
 
-	root2, _, err := z.Apply(rootID, b1)
+	root2, _, _, err := z.Apply(rootID, b1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestZipperUpdates(t *testing.T) {
 	b2.Delete([]byte("B"))
 	b2.Set([]byte("C"), []byte("valC"))
 
-	root3, _, err := z.Apply(root2, b2)
+	root3, _, _, err := z.Apply(root2, b2)
 	if err != nil {
 		t.Fatal(err)
 	}

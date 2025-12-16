@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"os"
+	"sync"
 	"sync/atomic"
 )
 
@@ -12,6 +13,8 @@ const (
 	// HeaderSize: CRC(4) + KeyLen(2) + ValueLen(4)
 	HeaderSize = 10
 )
+
+var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 var (
 	// MaxSlabSize is 4GB (hard limit for rotation).
@@ -33,6 +36,9 @@ type SlabFile struct {
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
+
+	mmapMu   sync.Mutex
+	mmapData []byte // Read-only mapping (best-effort), sized once and never resized.
 }
 
 // OpenSlab opens or creates a slab file.
@@ -57,6 +63,12 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 }
 
 func (s *SlabFile) Close() error {
+	s.mmapMu.Lock()
+	if s.mmapData != nil {
+		_ = munmap(s.mmapData)
+		s.mmapData = nil
+	}
+	s.mmapMu.Unlock()
 	return s.File.Close()
 }
 
@@ -81,8 +93,14 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 		return nil, errors.New("invalid slab offset")
 	}
 
-	// 1. Read Header (10 bytes)
-	headerBuf := make([]byte, HeaderSize)
+	// Fast path: mmap view (best-effort, read-only).
+	if val, err, ok := s.readViaMmap(realStart); ok {
+		return val, err
+	}
+
+	// Fallback path: pread into buffers.
+	var headerArr [HeaderSize]byte
+	headerBuf := headerArr[:]
 	if _, err := s.File.ReadAt(headerBuf, realStart); err != nil {
 		return nil, err
 	}
@@ -91,25 +109,20 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 	keyLen := binary.LittleEndian.Uint16(headerBuf[4:6])
 	valLen := binary.LittleEndian.Uint32(headerBuf[6:10])
 
-	totalLen := int(keyLen) + int(valLen)
+	totalLen64 := int64(keyLen) + int64(valLen)
+	if totalLen64 < 0 || totalLen64 > int64(int(totalLen64)) {
+		return nil, ErrRecordTooLarge
+	}
+	totalLen := int(totalLen64)
 
-	// 2. Read Data (Key + Value)
 	dataBuf := make([]byte, totalLen)
 	if _, err := s.File.ReadAt(dataBuf, realStart+HeaderSize); err != nil {
 		return nil, err
 	}
 
-	// 3. Verify CRC
-	// CRC covers KeyLen(2) + ValueLen(4) + KeyBytes + ValBytes.
-	// We need to reconstruct the byte stream for CRC calculation OR feed parts.
-	// Spec says: "CRC32C (Castagnoli) of (KeyLen..ValueBytes)"
-	// So we need bytes [4:10] of header + dataBuf.
-
-	crcHasher := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-	crcHasher.Write(headerBuf[4:10])
-	crcHasher.Write(dataBuf)
-
-	if crcHasher.Sum32() != crc {
+	sum := crc32.Update(0, crc32cTable, headerBuf[4:10])
+	sum = crc32.Update(sum, crc32cTable, dataBuf)
+	if sum != crc {
 		return nil, ErrChecksumMismatch
 	}
 
@@ -120,6 +133,58 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 	// So we just return the value.
 
 	return dataBuf[keyLen:], nil
+}
+
+func (s *SlabFile) readViaMmap(realStart int64) ([]byte, error, bool) {
+	data := s.mmapData
+	if data == nil {
+		s.mmapMu.Lock()
+		if s.mmapData == nil {
+			info, err := s.File.Stat()
+			if err == nil && info.Size() > 0 && info.Size() <= int64(int(info.Size())) {
+				b, err := mmapReadOnly(s.File, int(info.Size()))
+				if err == nil {
+					s.mmapData = b
+				}
+			}
+		}
+		data = s.mmapData
+		s.mmapMu.Unlock()
+	}
+	if data == nil {
+		return nil, nil, false
+	}
+
+	// Bounds checks to prevent SIGBUS/panics.
+	if realStart < 0 || realStart+HeaderSize > int64(len(data)) {
+		return nil, nil, false
+	}
+
+	header := data[realStart : realStart+HeaderSize]
+	crc := binary.LittleEndian.Uint32(header[0:4])
+	keyLen := binary.LittleEndian.Uint16(header[4:6])
+	valLen := binary.LittleEndian.Uint32(header[6:10])
+
+	totalLen64 := int64(keyLen) + int64(valLen)
+	if totalLen64 < 0 || totalLen64 > int64(int(totalLen64)) {
+		return nil, ErrRecordTooLarge, true
+	}
+	dataStart := realStart + HeaderSize
+	dataEnd := dataStart + totalLen64
+	if dataEnd > int64(len(data)) {
+		// Mapping doesn't cover this record (active slab grew, etc); fall back to ReadAt.
+		return nil, nil, false
+	}
+
+	record := data[dataStart:dataEnd]
+	sum := crc32.Update(0, crc32cTable, header[4:10])
+	sum = crc32.Update(sum, crc32cTable, record)
+	if sum != crc {
+		return nil, ErrChecksumMismatch, true
+	}
+
+	valStart := int64(keyLen)
+	return record[valStart:], nil, true
 }
 
 // Write appends a record to the slab and returns the offset.

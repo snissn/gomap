@@ -31,11 +31,12 @@ func bytesToStringNoCopy(b []byte) string {
 type BatchInterface interface {
 	Set(key, value []byte) error
 	Delete(key []byte) error
-	SetOps(ops map[string]batch.Entry) error // New method
+	SetOps(ops []batch.Entry) error // New method
 	Write() error
 	WriteSync() error
 	Close() error
 	GetByteSize() (int, error)
+	Replay(func(batch.Entry) error) error
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
@@ -143,7 +144,7 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 
 func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	if flushThreshold <= 0 {
-		flushThreshold = 4 * 1024 * 1024 // 4MB default
+		flushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
 
 	// Ensure wal dir exists
@@ -256,18 +257,23 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// 1. Append to WAL
-	if err := db.wal.Append(wal.OpSet, key, value); err != nil {
-		return err
-	}
-	if sync {
-		if err := db.wal.Sync(); err != nil {
+	// 1. Insert to Memtable (Allocates in Arena) -> WAL Write (Reads from Arena)
+	// This avoids reading 'key/value' (User Memory) twice.
+	err := db.mutable.PutWithCallback(key, value, func(kView, vView []byte) error {
+		if err := db.wal.Append(wal.OpSet, kView, vView); err != nil {
 			return err
 		}
+		if sync {
+			if err := db.wal.Sync(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// 2. Insert to Memtable
-	db.mutable.Set(key, value)
 	db.mutableRange.add(key)
 
 	// 3. Check Threshold
@@ -297,18 +303,23 @@ func (db *DB) delete(key []byte, sync bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// 1. WAL
-	if err := db.wal.Append(wal.OpDelete, key, nil); err != nil {
-		return err
-	}
-	if sync {
-		if err := db.wal.Sync(); err != nil {
+	// 1. Memtable -> WAL
+	err := db.mutable.DeleteWithCallback(key, func(kView, vView []byte) error {
+		// Value is empty for delete
+		if err := db.wal.Append(wal.OpDelete, kView, nil); err != nil {
 			return err
 		}
+		if sync {
+			if err := db.wal.Sync(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// 2. Memtable
-	db.mutable.Delete(key)
 	db.mutableRange.add(key)
 
 	// 3. Threshold
@@ -409,20 +420,27 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 	// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
 	if mem.Len() > 2000 {
-		ops := make(map[string]batch.Entry, mem.Len())
+		ops := make([]batch.Entry, 0, mem.Len())
 		for iter.Valid() {
-			key := iter.UnsafeKey()
+			// Zero-copy: UnsafeKey/Value point to memtable nodes (heap).
+			// They are valid as long as memtable is reachable.
+			// flushOneLocked holds 'mem' reference.
+			// backendBatch.SetOps appends Entry structs (shallow copy of slices).
+			// backendBatch.Write consumes them.
+			// All within flushOneLocked (or until backendBatch.Write returns).
+			// So this is safe.
+
 			if iter.IsDeleted() {
-				ops[bytesToStringNoCopy(key)] = batch.Entry{
+				ops = append(ops, batch.Entry{
 					Type: batch.OpDelete,
-					Key:  key,
-				}
+					Key:  iter.UnsafeKey(),
+				})
 			} else {
-				ops[bytesToStringNoCopy(key)] = batch.Entry{
+				ops = append(ops, batch.Entry{
 					Type:  batch.OpPut,
-					Key:   key,
+					Key:   iter.UnsafeKey(),
 					Value: iter.UnsafeValue(),
-				}
+				})
 			}
 			iter.Next()
 		}
@@ -696,6 +714,20 @@ func (it *concatUnsafeIterator) Value() []byte {
 	return it.cur.Value()
 }
 
+func (it *concatUnsafeIterator) KeyCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.KeyCopy(dst)
+}
+
+func (it *concatUnsafeIterator) ValueCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.ValueCopy(dst)
+}
+
 func (it *concatUnsafeIterator) Close() error {
 	var firstErr error
 	if it.first != nil {
@@ -743,7 +775,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 type Batch struct {
 	db      *DB
-	ops     map[string]batch.Entry
+	entries []batch.Entry
 	backend BatchInterface
 	size    int
 
@@ -756,14 +788,12 @@ type Batch struct {
 }
 
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, ops: make(map[string]batch.Entry), streamEligible: true}
+	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	return &Batch{db: db, ops: make(map[string]batch.Entry, size), streamEligible: true}
+	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
 }
-
-const streamSwitchThreshold = 32
 
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
@@ -797,11 +827,11 @@ func (b *Batch) Set(key, value []byte) error {
 	// We don't know about slabs/thresholds here, so we just store inline.
 	// Backend will handle promotion to slab if needed during writeBypass,
 	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
-	b.ops[string(key)] = batch.Entry{
+	b.entries = append(b.entries, batch.Entry{
 		Type:  batch.OpPut,
 		Key:   key,
 		Value: value,
-	}
+	})
 	b.size += len(key) + len(value)
 
 	b.maybeSwitchToStreaming()
@@ -834,17 +864,17 @@ func (b *Batch) Delete(key []byte) error {
 			b.lastKey = append(b.lastKey[:0], key...)
 		}
 	}
-	b.ops[string(key)] = batch.Entry{
+	b.entries = append(b.entries, batch.Entry{
 		Type: batch.OpDelete,
 		Key:  key,
-	}
+	})
 	b.size += len(key)
 
 	b.maybeSwitchToStreaming()
 	return nil
 }
 
-func (b *Batch) SetOps(ops map[string]batch.Entry) error {
+func (b *Batch) SetOps(ops []batch.Entry) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
@@ -855,8 +885,8 @@ func (b *Batch) SetOps(ops map[string]batch.Entry) error {
 		}
 		return b.backend.SetOps(ops)
 	}
-	for k, op := range ops {
-		b.ops[k] = op
+	for _, op := range ops {
+		b.entries = append(b.entries, op)
 		b.size += len(op.Key) + len(op.Value)
 		b.batchRange.add(op.Key)
 	}
@@ -867,7 +897,16 @@ func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
-	if len(b.ops) < streamSwitchThreshold {
+	// The streamSwitchThreshold check is now redundant because the b.size
+	// check against db.flushThreshold effectively handles this.
+	// If a batch is small enough to be under the flush threshold, we want it
+	// to go through the regular memtable path for aggregation, regardless
+	// of sequentiality.
+
+	// Also require the batch to be large enough to justify a direct write.
+	// Otherwise, small sequential batches bypass the memtable and cause
+	// write amplification in the backend.
+	if b.size < int(b.db.flushThreshold) {
 		return
 	}
 
@@ -894,12 +933,12 @@ func (b *Batch) maybeSwitchToStreaming() {
 	}
 
 	backendBatch := b.db.backend.NewBatch()
-	if err := backendBatch.SetOps(b.ops); err != nil {
+	if err := backendBatch.SetOps(b.entries); err != nil {
 		_ = backendBatch.Close()
 		return
 	}
 	b.backend = backendBatch
-	b.ops = nil
+	b.entries = nil
 }
 
 func (b *Batch) Write() error {
@@ -941,7 +980,10 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	// Optimization: Bypass for Large Batches
-	if len(b.ops) >= 512 {
+	// Generalization: Only bypass if the batch is large enough to be comparable
+	// to a memtable flush. Small/Medium random batches cause high write amplification
+	// if written directly to the COW backend.
+	if b.size >= int(b.db.flushThreshold) {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
@@ -951,17 +993,14 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Lock()
 	defer b.db.mu.Unlock()
 
-	entries := make([]batch.Entry, 0, len(b.ops))
-	for _, op := range b.ops {
-		entries = append(entries, op)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].Key, entries[j].Key) < 0
+	// entries is already a slice. Sort it.
+	sort.SliceStable(b.entries, func(i, j int) bool {
+		return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
 	})
 
 	// 1. WAL Append loop
-	records := make([]wal.Record, 0, len(entries))
-	for _, op := range entries {
+	records := make([]wal.Record, 0, len(b.entries))
+	for _, op := range b.entries {
 		if op.Type == batch.OpDelete {
 			records = append(records, wal.Record{Op: wal.OpDelete, Key: op.Key})
 		} else {
@@ -979,14 +1018,15 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 
 	// 2. Memtable Update
-	for _, op := range entries {
-		key := op.Key
+	for _, op := range b.entries {
+		// We use Steal methods because b.entries owns the key/value copies
+		// created in Batch.Set/Delete. We transfer ownership to Memtable.
 		if op.Type == batch.OpDelete {
-			b.db.mutable.Delete(key)
+			b.db.mutable.DeleteSteal(op.Key)
 		} else {
-			b.db.mutable.Set(key, op.Value)
+			b.db.mutable.SetSteal(op.Key, op.Value)
 		}
-		b.db.mutableRange.add(key)
+		b.db.mutableRange.add(op.Key)
 	}
 
 	// 3. Threshold Check
@@ -1012,7 +1052,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	// Cheap append-only check: if the batch key range does not overlap with any
 	// in-memory key ranges, it cannot be shadowed.
 	batchRange := keyRange{}
-	for _, op := range b.ops {
+	for _, op := range b.entries {
 		key := op.Key
 		batchRange.add(key)
 	}
@@ -1029,7 +1069,7 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	if overlaps {
 		// Slow path: verify no individual key exists in memory (handles sparse overlap).
-		for _, op := range b.ops {
+		for _, op := range b.entries {
 			key := op.Key
 			if _, _, found := mutable.Get(key); found {
 				return b.writeRegular(sync)
@@ -1046,7 +1086,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	backendBatch := b.db.backend.NewBatch()
 
 	// Use SetOps for bulk transfer (checking slabs internally in backend)
-	if err := backendBatch.SetOps(b.ops); err != nil {
+	if err := backendBatch.SetOps(b.entries); err != nil {
 		return err
 	}
 
@@ -1080,10 +1120,26 @@ func (b *Batch) Close() error {
 		return nil
 	}
 	b.closed = true
-	b.ops = nil
+	b.entries = nil
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil
+	}
+	return nil
+}
+
+func (b *Batch) Replay(fn func(batch.Entry) error) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if b.backend != nil {
+		return b.backend.Replay(fn)
+	}
+
+	for _, entry := range b.entries {
+		if err := fn(entry); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1138,9 +1194,13 @@ func (it *singleSourceIterator) Next() {
 	it.advance()
 }
 
-func (it *singleSourceIterator) Valid() bool              { return it.valid }
-func (it *singleSourceIterator) Key() []byte              { return it.iter.Key() }
-func (it *singleSourceIterator) Value() []byte            { return it.iter.Value() }
+func (it *singleSourceIterator) Valid() bool               { return it.valid }
+func (it *singleSourceIterator) Key() []byte               { return it.iter.Key() }
+func (it *singleSourceIterator) Value() []byte             { return it.iter.Value() }
+func (it *singleSourceIterator) KeyCopy(dst []byte) []byte { return it.iter.KeyCopy(dst) }
+func (it *singleSourceIterator) ValueCopy(dst []byte) []byte {
+	return it.iter.ValueCopy(dst)
+}
 func (it *singleSourceIterator) Close() error             { return it.iter.Close() }
 func (it *singleSourceIterator) Error() error             { return it.iter.Error() }
 func (it *singleSourceIterator) Domain() ([]byte, []byte) { return it.start, it.end }
@@ -1150,10 +1210,12 @@ type emptyIterator struct {
 	start, end []byte
 }
 
-func (it *emptyIterator) Next()                    { panic("iterator invalid") }
-func (it *emptyIterator) Valid() bool              { return false }
-func (it *emptyIterator) Key() []byte              { panic("iterator invalid") }
-func (it *emptyIterator) Value() []byte            { panic("iterator invalid") }
-func (it *emptyIterator) Close() error             { return nil }
-func (it *emptyIterator) Error() error             { return nil }
-func (it *emptyIterator) Domain() ([]byte, []byte) { return it.start, it.end }
+func (it *emptyIterator) Next()                     { panic("iterator invalid") }
+func (it *emptyIterator) Valid() bool               { return false }
+func (it *emptyIterator) Key() []byte               { panic("iterator invalid") }
+func (it *emptyIterator) Value() []byte             { panic("iterator invalid") }
+func (it *emptyIterator) KeyCopy(_ []byte) []byte   { panic("iterator invalid") }
+func (it *emptyIterator) ValueCopy(_ []byte) []byte { panic("iterator invalid") }
+func (it *emptyIterator) Close() error              { return nil }
+func (it *emptyIterator) Error() error              { return nil }
+func (it *emptyIterator) Domain() ([]byte, []byte)  { return it.start, it.end }

@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -17,12 +18,17 @@ const (
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
-// Both cached and backend implementations satisfy it.
+//
+// Semantics (performance-first; callers must treat slices as read-only):
+//   - Key() and Value() return views valid until the next Next()/Close().
+//   - Use KeyCopy/ValueCopy if you need stable bytes.
 type Iterator interface {
 	Valid() bool
 	Next()
 	Key() []byte
 	Value() []byte
+	KeyCopy(dst []byte) []byte
+	ValueCopy(dst []byte) []byte
 	Close() error
 	Error() error
 }
@@ -35,6 +41,8 @@ type Batch interface {
 	Write() error
 	WriteSync() error
 	Close() error
+	Replay(func(batch.Entry) error) error
+	GetByteSize() (int, error)
 }
 
 // DB is the public TreeDB handle. It can represent either cached mode (default)
@@ -104,6 +112,11 @@ func (db *DB) Close() error {
 	return nil
 }
 
+// Get returns the value for a key.
+//
+// Semantics (performance-first): the returned slice may be a read-only view into
+// internal storage (e.g. mmapped slabs) and must not be modified by the caller.
+// If you need stable bytes independent of TreeDB internals, copy the slice.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
@@ -192,6 +205,16 @@ func (db *DB) NewBatch() Batch {
 		return db.cached.NewBatch()
 	}
 	return db.backend.NewBatch()
+}
+
+func (db *DB) NewBatchWithSize(size int) Batch {
+	if db == nil || (db.cached == nil && db.backend == nil) {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.NewBatchWithSize(size)
+	}
+	return db.backend.NewBatchWithSize(size)
 }
 
 func (db *DB) Stats() map[string]string {

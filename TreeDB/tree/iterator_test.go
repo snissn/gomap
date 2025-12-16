@@ -3,6 +3,7 @@ package tree
 import (
 	"path/filepath"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -130,4 +131,80 @@ func TestIterator(t *testing.T) {
 		}
 		it.Close()
 	})
+
+	t.Run("ViewSemantics", func(t *testing.T) {
+		it := tr.Iterator(nil, nil)
+		if !it.Valid() {
+			t.Fatalf("expected iterator to be valid")
+		}
+
+		k := it.Key()
+		uk := it.UnsafeKey()
+		if len(k) == 0 || len(uk) == 0 {
+			t.Fatalf("expected non-empty key views")
+		}
+		if unsafe.Pointer(&k[0]) != unsafe.Pointer(&uk[0]) {
+			t.Fatalf("expected Key() to be a view (same backing) as UnsafeKey()")
+		}
+
+		v := it.Value()
+		uv := it.UnsafeValue()
+		if len(v) == 0 || len(uv) == 0 {
+			t.Fatalf("expected non-empty value views")
+		}
+		if unsafe.Pointer(&v[0]) != unsafe.Pointer(&uv[0]) {
+			t.Fatalf("expected Value() to be a view (same backing) as UnsafeValue()")
+		}
+
+		kc := it.KeyCopy(nil)
+		vc := it.ValueCopy(nil)
+		if len(kc) == 0 || len(vc) == 0 {
+			t.Fatalf("expected KeyCopy/ValueCopy to return bytes")
+		}
+		if unsafe.Pointer(&kc[0]) == unsafe.Pointer(&k[0]) {
+			t.Fatalf("expected KeyCopy to allocate a distinct buffer")
+		}
+		if unsafe.Pointer(&vc[0]) == unsafe.Pointer(&v[0]) {
+			t.Fatalf("expected ValueCopy to allocate a distinct buffer")
+		}
+		it.Close()
+	})
+}
+
+func TestIterator_SkipsTombstones(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	sm, err := slab.NewSlabManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sm.Close()
+
+	p.Alloc(1) // 0
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), []byte("valA"), node.FlagInline, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("B"), nil, node.FlagTombstone, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), []byte("valC"), node.FlagInline, page.ValuePtr{})
+	n0.UpdateChecksum()
+
+	tr := New(p, sm, 0)
+
+	it := tr.Iterator(nil, nil)
+	got := make([]string, 0, 2)
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+	}
+	_ = it.Close()
+
+	if len(got) != 2 || got[0] != "A" || got[1] != "C" {
+		t.Fatalf("expected [A C], got %v", got)
+	}
 }

@@ -4,12 +4,16 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // --- Public API ---
 
 // Get returns the value for a key.
+//
+// Semantics (performance-first): the returned slice may be a read-only view into
+// internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
@@ -87,6 +91,14 @@ func (it *DBIterator) Value() []byte {
 	return it.iter.Value()
 }
 
+func (it *DBIterator) KeyCopy(dst []byte) []byte {
+	return it.iter.KeyCopy(dst)
+}
+
+func (it *DBIterator) ValueCopy(dst []byte) []byte {
+	return it.iter.ValueCopy(dst)
+}
+
 func (it *DBIterator) Error() error {
 	return it.iter.Error()
 }
@@ -112,6 +124,10 @@ func (it *DBIterator) UnsafeKey() []byte {
 
 func (it *DBIterator) UnsafeValue() []byte {
 	return it.iter.UnsafeValue()
+}
+
+func (it *DBIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.iter.UnsafeEntry()
 }
 
 func (it *DBIterator) IsDeleted() bool {

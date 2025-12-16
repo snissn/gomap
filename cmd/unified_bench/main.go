@@ -12,6 +12,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -432,6 +433,7 @@ var (
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
+	cpuProfile   = flag.String("cpuprofile", "", "write cpu profile to file")
 )
 
 type DBInstance struct {
@@ -452,6 +454,8 @@ type BenchConfig struct {
 	KeepDir  bool
 	Progress bool
 	SeedUsed int64
+
+	CPUProfile string
 }
 
 type BenchRun struct {
@@ -482,6 +486,7 @@ func main() {
 		KeepDir:      *keepDir,
 		Progress:     *progress,
 		SeedUsed:     seedUsed,
+		CPUProfile:   *cpuProfile,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -745,7 +750,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("write_rand: %w", err)
 				}
@@ -783,6 +788,88 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				if err := batch.Close(); err != nil {
 					return 0, fmt.Errorf("batch_write: close: %w", err)
+				}
+			}
+			return float64(total) / time.Since(start).Seconds(), nil
+		},
+		"batch_write_random": func(db DBInterface, rng *rand.Rand) (float64, error) {
+			if !db.SupportsBatch() {
+				return math.NaN(), nil
+			}
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+			total := cfg.Keys
+			batchSize := 1000 // Using typical batch size
+			var k [8]byte
+
+			keys := make([][]byte, total)
+			for i := 0; i < total; i++ {
+				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
+				keys[i] = append([]byte(nil), k[:]...)
+			}
+
+			// Reset timer to exclude setup
+			start = time.Now()
+
+			for i := 0; i < total; i += batchSize {
+				batch, err := db.NewBatch()
+				if err != nil {
+					return 0, fmt.Errorf("batch_write_random: new batch: %w", err)
+				}
+
+				end := i + batchSize
+				if end > total {
+					end = total
+				}
+				for j := i; j < end; j++ {
+					if err := batch.Set(keys[j], val); err != nil {
+						_ = batch.Close()
+						return 0, fmt.Errorf("batch_write_random: set: %w", err)
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					_ = batch.Close()
+					return 0, fmt.Errorf("batch_write_random: commit: %w", err)
+				}
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("batch_write_random: close: %w", err)
+				}
+			}
+			return float64(total) / time.Since(start).Seconds(), nil
+		},
+		"batch_write_small_seq": func(db DBInterface, rng *rand.Rand) (float64, error) {
+			if !db.SupportsBatch() {
+				return math.NaN(), nil
+			}
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+			total := cfg.Keys
+			batchSize := 100 // Pathological: small enough to hurt if not buffered, sequential to trigger streaming
+			var k [8]byte
+
+			for i := 0; i < total; i += batchSize {
+				batch, err := db.NewBatch()
+				if err != nil {
+					return 0, fmt.Errorf("batch_write_small_seq: new batch: %w", err)
+				}
+
+				end := i + batchSize
+				if end > total {
+					end = total
+				}
+				for j := i; j < end; j++ {
+					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
+					if err := batch.Set(k[:], val); err != nil {
+						_ = batch.Close()
+						return 0, fmt.Errorf("batch_write_small_seq: set: %w", err)
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					_ = batch.Close()
+					return 0, fmt.Errorf("batch_write_small_seq: commit: %w", err)
+				}
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("batch_write_small_seq: close: %w", err)
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
@@ -870,15 +957,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "batch_write_random", "batch_write_small_seq", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
-		"write_seq":   "Sequential Write",
-		"write_rand":  "Random Write",
-		"read_rand":   "Random Read",
-		"full_scan":   "Full Scan",
-		"prefix_scan": "Prefix Scan",
-		"batch_write": "Batch Write",
-		"delete_rand": "Random Delete",
+		"write_seq":             "Sequential Write",
+		"write_rand":            "Random Write",
+		"read_rand":             "Random Read",
+		"full_scan":             "Full Scan",
+		"prefix_scan":           "Prefix Scan",
+		"batch_write":           "Batch Write",
+		"batch_write_random":    "Batch Random",
+		"batch_write_small_seq": "Batch Small Seq",
+		"delete_rand":           "Random Delete",
 	}
 
 	finalTestOrder := make([]string, 0)
@@ -891,17 +980,63 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 	}
-	if len(finalTestOrder) == 0 {
-		return BenchRun{}, fmt.Errorf("no tests selected")
-	}
+		if len(finalTestOrder) == 0 {
+			return BenchRun{}, fmt.Errorf("no tests selected")
+		}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
-		prefixScanBase = cfg.Keys
-	}
+		// If the user selects only read/scan/delete tests, the DBs are empty unless we
+		// preload a baseline dataset. We intentionally keep this setup out of the
+		// per-test timings so that read/scan numbers reflect a populated DB.
+		hasMeasuredWrites := containsAny(finalTestOrder,
+			"write_seq",
+			"write_rand",
+			"batch_write",
+			"batch_write_random",
+			"batch_write_small_seq",
+		)
+		needsExistingData := containsAny(finalTestOrder,
+			"read_rand",
+			"delete_rand",
+			"full_scan",
+			"prefix_scan",
+		)
+		if needsExistingData && !hasMeasuredWrites {
+			val := make([]byte, cfg.ValueSize)
+			var k [8]byte
+			for _, inst := range instances {
+				for i := 0; i < cfg.Keys; i++ {
+					binary.BigEndian.PutUint64(k[:], uint64(i))
+					if err := inst.Wrapper.Set(k[:], val); err != nil {
+						return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
+					}
+				}
+			}
+		}
 
-	// Run Tests
-	results := make(map[string]map[string]float64)
-	for _, testName := range finalTestOrder {
+		if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
+			prefixScanBase = cfg.Keys
+		}
+
+		var cpuProfFile *os.File
+		if cfg.CPUProfile != "" {
+			f, err := os.Create(cfg.CPUProfile)
+			if err != nil {
+				return BenchRun{}, fmt.Errorf("cpuprofile: %w", err)
+			}
+			cpuProfFile = f
+			if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
+				_ = cpuProfFile.Close()
+				return BenchRun{}, fmt.Errorf("cpuprofile start: %w", err)
+			}
+			defer func() {
+				pprof.StopCPUProfile()
+				_ = cpuProfFile.Close()
+			}()
+		}
+
+		// Run Tests
+		results := make(map[string]map[string]float64)
+		for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64, len(instances))
 		for _, inst := range instances {
 			results[testName][inst.Wrapper.Name()] = math.NaN()
@@ -1320,6 +1455,15 @@ func normalizeTests(list []string) []string {
 func contains(list []string, item string) bool {
 	for _, s := range list {
 		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(list []string, items ...string) bool {
+	for _, item := range items {
+		if contains(list, item) {
 			return true
 		}
 	}

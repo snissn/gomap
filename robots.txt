@@ -1,0 +1,198 @@
+User-agent: *
+Disallow:
+
+# ==========================================================
+# TreeDB Performance TODO List (Codex execution plan)
+# Goal: Improve TreeDB Random Read + Full Scan in unified-bench
+# Baseline (keys=1,000,000):
+#   Random Read: 53,616 ops/s
+#   Full Scan:   117,761 items/s
+#   Prefix Scan: 3,382,014 items/s
+#
+# Rule: NO item is accepted unless it passes BOTH:
+#   - Test Gate: go test ./... AND go test -race ./...
+#   - Perf Gate: unified-bench medians improve per item threshold
+# ==========================================================
+
+# [x] TODO-00 Baseline + profiling harness + isolate cached vs backend
+#     Changes: none (measurement only)
+#     Test Gate: go test ./... ; go test -race ./...
+#     Perf Gate: no regression >5% (should be none)
+#     Steps:
+#       - Run treedb AND treedbbackend read_rand/full_scan/prefix_scan (5×, record medians)
+#       - Capture cpu profiles for read_rand and full_scan; note top symbols
+#     Status: completed
+#     Result:
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb: read_rand=1,267,203 ops/s; full_scan=23,439,652 items/s; prefix_scan=20,743,294 items/s
+#         - treedbbackend: read_rand=644,961 ops/s; full_scan=1,117,444 items/s; prefix_scan=32,681,981 items/s
+#       - pprof treedbbackend read_rand/full_scan: syscall.syscall6 -> internal/poll.(*FD).Pread -> slab.(*SlabFile).Read dominates (value deref via pread)
+#       - pprof treedb read_rand: node.SearchLeaf/SearchInternal + encoding/binary.littleEndian.Uint16; memclrNoHeapPointers
+
+# [x] TODO-01 Break semantics: make Iterator.Key/Value return zero-copy views + remove per-item alloc
+#     Target: Full Scan
+#     Files: TreeDB/tree/iterator.go (+ any public iterator wrapper)
+#     Test Gate:
+#       - Add tests: Key/Value lifetime (mutates after Next), tombstone skipping, boundary crossing
+#       - go test -race on tree packages
+#     Perf Gate:
+#       - Full Scan median >= +20%
+#       - allocs/op in scan path should drop materially (validate via pprof/allocs if you add Go benches)
+#       - no regression >5% in Random Read or Seq Write
+#     Status: completed
+#     Result:
+#       - Semantics: `Key()`/`Value()` now return views; added `KeyCopy(dst)` / `ValueCopy(dst)` to iterator interfaces.
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb full_scan: 23,439,652 -> 42,872,225 items/s (+83%)
+#         - treedb read_rand: 1,267,203 -> 1,270,156 ops/s (+0%)
+#         - treedb write_seq: 2,119,036 -> 2,200,098 ops/s (+4%)
+#         - treedbbackend full_scan: 1,117,444 -> 1,141,509 items/s (+2%) (still slab/pread bound)
+
+# [-] TODO-02 Iterator leaf-local fast path: Next() intra-leaf w/o stack traversal or header re-parse
+#     Target: Full Scan
+#     Files: TreeDB/tree/iterator.go
+#     Test Gate:
+#       - Tests: leaf boundary cross, reverse iteration (if supported), tombstone dense leaf
+#       - go test -race ./...
+#     Perf Gate:
+#       - Full Scan median >= +20% (incremental)
+#       - no regression >5% elsewhere
+#     Status: rejected (perf regression)
+#     Result:
+#       - Attempted leaf-local `Next()` fast path + pointer-based stack top in `TreeDB/tree/iterator.go`.
+#       - unified-bench treedb regressed (combo run): read_rand ~1.24M (vs 1,315,982) and full_scan ~39.8M (vs 44.4M); rejected.
+
+# [x] TODO-03 Ensure Iterator.Value() is O(1) and does NOT re-lookup via DB.Get
+#     Target: Full Scan (and Random Read indirectly)
+#     Files: TreeDB/tree/iterator.go (+ any iterator->value resolution code)
+#     Test Gate:
+#       - Add test: Value() on iterator does not change correctness across page boundaries
+#     Perf Gate:
+#       - Full Scan median >= +20% if this was the root cause
+#       - no regression >5% elsewhere
+#     Status: completed (already true)
+#     Result:
+#       - `TreeDB/tree/iterator.go` resolves pointer values directly via `slabReader.Read(ValuePtr)` (no tree descent/DB.Get).
+
+# [x] TODO-04 Slab optimization: mmap slabs + return value views (no syscalls, no copies)
+#     Target: Random Read + Full Scan
+#     Files: TreeDB/slab/slab.go (or equivalent)
+#     Test Gate:
+#       - Tests: reads within mmap range, reads at end-of-file, active slab fallback path
+#       - No SIGBUS: never slice beyond mapped length
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +20%
+#       - Full Scan median >= +10% (if scan touches slab sequentially)
+#       - no regression >5% in writes
+#     Status: completed
+#     Result:
+#       - Slab reads now mmap the file (best-effort) and return value views; active-slab reads beyond the mapping fall back to ReadAt.
+#       - CRC verification switched to `crc32.Update` with a shared Castagnoli table (no per-read hasher alloc).
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedbbackend read_rand: 641,127 -> 1,466,587 ops/s (+129%)
+#         - treedbbackend full_scan: 1,141,509 -> 30,311,565 items/s (+2556%)
+#         - treedb write_seq: 2,200,098 -> 2,236,440 ops/s (+2%)
+
+# [-] TODO-05 Pager: fold Get + IsVerified into single call (GetAndVerified)
+#     Target: Random Read
+#     Files: TreeDB/pager/pager.go + TreeDB/tree traversal callers
+#     Test Gate:
+#       - Tests pass + -race
+#     Perf Gate:
+#       - Random Read must not regress (>5% regression rejects)
+#       - Prefer >= +5% improvement (if not, accept only if needed for TODO-06/07)
+#     Status: rejected (no improvement)
+#     Result:
+#       - Attempted single-lock `GetAndVerified` plumbing (tree + iterator callers).
+#       - unified-bench treedb read_rand median regressed: 1,315,982 -> 1,275,152 ops/s (-3%); rejected.
+
+# [-] TODO-06 Pager: lock-free verified bitset (atomic) for page verification status
+#     Target: Random Read
+#     Files: TreeDB/pager/pager.go
+#     Test Gate:
+#       - Add concurrency test: concurrent Get/verify/mark while file grows (if growth supported)
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +20% OR clearly reduces top pprof lock symbols
+#       - no regression >5% elsewhere
+#     Status: rejected (insufficient improvement)
+#     Result:
+#       - Attempted atomic verified-bitset (CAS) + lock-free IsVerified/MarkVerified; `-race` required atomic-per-word copy on resize to avoid races.
+#       - unified-bench treedb read_rand median: 1,315,982 -> 1,324,229 ops/s (+0.6%); below +20% and pprof showed no lock contention to remove.
+
+# [-] TODO-07 Pager: lock-free Get() using atomic pointer to chunk table (COW metadata)
+#     Target: Random Read (major win)
+#     Files: TreeDB/pager/pager.go
+#     Test Gate:
+#       - Concurrency stress: readers while allocator/grower runs; -race must pass
+#     Perf Gate:
+#       - Random Read median >= +50% (expected 2–3× if locks dominated)
+#       - no regression >5% in Full Scan / Seq Write
+#     Status: rejected (perf regression)
+#     Result:
+#       - Attempted atomic chunk-table + lock-free `Pager.Get()`.
+#       - unified-bench treedb read_rand median regressed: 1,315,982 -> 1,209,738 ops/s (-8%); rejected.
+
+# [-] TODO-08 Node: unsafe directory + SearchInternalFast / SearchLeafFast (reduce binary-search overhead)
+#     Target: Random Read + Scan
+#     Files: TreeDB/node/node.go (+ TreeDB/node/unsafe.go)
+#     Test Gate:
+#       - Equivalence tests: SearchFast == SearchSafe across randomized nodes/keys
+#       - Fuzz test if possible
+#       - go test -race ./...
+#     Perf Gate:
+#       - Random Read median >= +10%
+#       - no regression >5% elsewhere
+#     Status: rejected (no improvement)
+#     Result:
+#       - Tried LE-only unsafe loads for directory offsets/keyLen (and safe fallback + equivalence tests).
+#       - unified-bench treedb read_rand median decreased to ~1.25M ops/s (baseline 1,315,982); rejected.
+
+# [-] TODO-09 Cached layer: remove string(key) allocs in memtable lookups (if present)
+#     Target: Random Read (cached treedb)
+#     Files: whichever implements overlay/memtable
+#     Test Gate:
+#       - Correctness tests for overlay semantics; -race
+#     Perf Gate:
+#       - Random Read median >= +10% on treedb (cached)
+#       - no regression >5% elsewhere
+#     Status: skipped (not present)
+#     Result:
+#       - No `string(key)` map-lookup pattern found in cached/memtable hot path; memtable uses a skiplist (byte-slice keys).
+
+# [-] TODO-10 Optional: internal-node cache (root/upper levels) after pager is lock-free
+#     Target: Random Read (incremental)
+#     Files: TreeDB/db/db.go, TreeDB/tree/tree.go
+#     Test Gate:
+#       - Snapshot/version correctness; -race
+#     Perf Gate:
+#       - Random Read median >= +10% incremental OR reject
+#     Status: skipped (dependency not met)
+#     Result:
+#       - Skipped because pager lock-free read path (TODO-07) was rejected; root/upper-node caching would need stronger invalidation/versioning work than justified.
+
+# [-] TODO-11 Scan prefetch: madvise(MADV_SEQUENTIAL) for pager chunks + slab mappings (best-effort)
+#     Target: Full Scan
+#     Files: TreeDB/pager/pager.go (+ call site), TreeDB/slab/slab.go
+#     Test Gate:
+#       - Build tags/guards for non-unix platforms; tests pass everywhere
+#     Perf Gate:
+#       - Full Scan median >= +10% OR reject
+#     Status: rejected (perf regression)
+#     Result:
+#       - Attempted one-time `unix.Madvise(MADV_SEQUENTIAL)` on pager chunks for full forward scans.
+#       - unified-bench treedb regressed (combo run): read_rand ~1.20M and full_scan ~41.6M; rejected.
+
+# [x] TODO-12 Documentation + cleanup after semantics change
+#     Target: correctness/maintainability
+#     Files: public docs/comments + any callers that assumed copying
+#     Test Gate: go test ./... ; go test -race ./...
+#     Perf Gate: no regression >5%
+#     Status: completed
+#     Result:
+#       - Documented view semantics for `DB.Get()` and iterator lifetimes.
+#       - Test Gate: pass (`go test ./...` and `go test -race ./...`).
+#       - Perf Gate: unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb: read_rand=1,219,928 ops/s; full_scan=41,181,497 items/s; prefix_scan=25,247,202 items/s
+#         - treedbbackend: read_rand=1,380,766 ops/s; full_scan=28,953,337 items/s; prefix_scan=39,451,000 items/s

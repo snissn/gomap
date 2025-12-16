@@ -8,12 +8,14 @@ import (
 )
 
 // Iterator represents a generic iterator that yields key-value pairs.
-// It matches the public Cosmos-DB interface contract (returns copies).
+// Key/Value are views, valid until the next Next()/Close().
 type Iterator interface {
 	Next()
 	Valid() bool
 	Key() []byte
 	Value() []byte
+	KeyCopy(dst []byte) []byte
+	ValueCopy(dst []byte) []byte
 	Close() error
 	Error() error
 	Domain() (start, end []byte)
@@ -197,6 +199,20 @@ func (mi *MergingIterator) Value() []byte {
 	mi.val = append(mi.val[:0], mi.cur.iter.UnsafeValue()...)
 	mi.valOK = true
 	return mi.val
+}
+
+func (mi *MergingIterator) KeyCopy(dst []byte) []byte {
+	if !mi.valid {
+		panic("merging iterator invalid")
+	}
+	return append(dst[:0], mi.key...)
+}
+
+func (mi *MergingIterator) ValueCopy(dst []byte) []byte {
+	if !mi.valid {
+		panic("merging iterator invalid")
+	}
+	return append(dst[:0], mi.Value()...)
 }
 
 func (mi *MergingIterator) Error() error {

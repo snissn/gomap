@@ -126,6 +126,20 @@ func (m *TwoWayMerger) Value() []byte {
 	return m.val
 }
 
+func (m *TwoWayMerger) KeyCopy(dst []byte) []byte {
+	if !m.valid {
+		panic("iterator invalid")
+	}
+	return append(dst[:0], m.key...)
+}
+
+func (m *TwoWayMerger) ValueCopy(dst []byte) []byte {
+	if !m.valid {
+		panic("iterator invalid")
+	}
+	return append(dst[:0], m.Value()...)
+}
+
 func (m *TwoWayMerger) Error() error {
 	return m.err
 }

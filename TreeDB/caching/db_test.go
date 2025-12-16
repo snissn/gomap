@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // MockBackend implements BackendDB
@@ -82,12 +83,20 @@ func (it *MockIterator) UnsafeValue() []byte {
 	return it.backend.data[it.keys[it.idx]]
 }
 
-func (it *MockIterator) IsDeleted() bool          { return false }
-func (it *MockIterator) Error() error             { return nil }
-func (it *MockIterator) Close() error             { return nil }
-func (it *MockIterator) Domain() ([]byte, []byte) { return nil, nil }
-func (it *MockIterator) Key() []byte              { return it.UnsafeKey() }
-func (it *MockIterator) Value() []byte            { return it.UnsafeValue() }
+func (it *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
+}
+
+func (it *MockIterator) IsDeleted() bool           { return false }
+func (it *MockIterator) Error() error              { return nil }
+func (it *MockIterator) Close() error              { return nil }
+func (it *MockIterator) Domain() ([]byte, []byte)  { return nil, nil }
+func (it *MockIterator) Key() []byte               { return it.UnsafeKey() }
+func (it *MockIterator) Value() []byte             { return it.UnsafeValue() }
+func (it *MockIterator) KeyCopy(dst []byte) []byte { return append(dst[:0], it.UnsafeKey()...) }
+func (it *MockIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
 
 func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	m.mu.RLock()
@@ -125,16 +134,20 @@ func (b *MockBatch) Delete(key []byte) error {
 	b.mb.mu.Unlock()
 	return nil
 }
-func (b *MockBatch) SetOps(ops map[string]batch.Entry) error {
+func (b *MockBatch) SetOps(ops []batch.Entry) error {
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
-	for k, op := range ops {
+	for _, op := range ops {
 		if op.Type == batch.OpDelete {
-			delete(b.mb.data, k)
+			delete(b.mb.data, string(op.Key))
 		} else {
-			b.mb.data[k] = op.Value
+			b.mb.data[string(op.Key)] = op.Value
 		}
 	}
+	return nil
+}
+
+func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 	return nil
 }
 
@@ -231,12 +244,20 @@ func (it *MockReverseIterator) UnsafeValue() []byte {
 	return it.backend.data[it.keys[it.idx]]
 }
 
-func (it *MockReverseIterator) IsDeleted() bool          { return false }
-func (it *MockReverseIterator) Error() error             { return nil }
-func (it *MockReverseIterator) Close() error             { return nil }
-func (it *MockReverseIterator) Domain() ([]byte, []byte) { return nil, nil }
-func (it *MockReverseIterator) Key() []byte              { return it.UnsafeKey() }
-func (it *MockReverseIterator) Value() []byte            { return it.UnsafeValue() }
+func (it *MockReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.UnsafeValue(), page.ValuePtr{}, 0
+}
+
+func (it *MockReverseIterator) IsDeleted() bool           { return false }
+func (it *MockReverseIterator) Error() error              { return nil }
+func (it *MockReverseIterator) Close() error              { return nil }
+func (it *MockReverseIterator) Domain() ([]byte, []byte)  { return nil, nil }
+func (it *MockReverseIterator) Key() []byte               { return it.UnsafeKey() }
+func (it *MockReverseIterator) Value() []byte             { return it.UnsafeValue() }
+func (it *MockReverseIterator) KeyCopy(dst []byte) []byte { return append(dst[:0], it.UnsafeKey()...) }
+func (it *MockReverseIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
 
 func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	dir := t.TempDir()
