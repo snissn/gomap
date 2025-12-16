@@ -87,12 +87,16 @@ func (it *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
-func (it *MockIterator) IsDeleted() bool          { return false }
-func (it *MockIterator) Error() error             { return nil }
-func (it *MockIterator) Close() error             { return nil }
-func (it *MockIterator) Domain() ([]byte, []byte) { return nil, nil }
-func (it *MockIterator) Key() []byte              { return it.UnsafeKey() }
-func (it *MockIterator) Value() []byte            { return it.UnsafeValue() }
+func (it *MockIterator) IsDeleted() bool           { return false }
+func (it *MockIterator) Error() error              { return nil }
+func (it *MockIterator) Close() error              { return nil }
+func (it *MockIterator) Domain() ([]byte, []byte)  { return nil, nil }
+func (it *MockIterator) Key() []byte               { return it.UnsafeKey() }
+func (it *MockIterator) Value() []byte             { return it.UnsafeValue() }
+func (it *MockIterator) KeyCopy(dst []byte) []byte { return append(dst[:0], it.UnsafeKey()...) }
+func (it *MockIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
 
 func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	m.mu.RLock()
@@ -244,12 +248,16 @@ func (it *MockReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
-func (it *MockReverseIterator) IsDeleted() bool          { return false }
-func (it *MockReverseIterator) Error() error             { return nil }
-func (it *MockReverseIterator) Close() error             { return nil }
-func (it *MockReverseIterator) Domain() ([]byte, []byte) { return nil, nil }
-func (it *MockReverseIterator) Key() []byte              { return it.UnsafeKey() }
-func (it *MockReverseIterator) Value() []byte            { return it.UnsafeValue() }
+func (it *MockReverseIterator) IsDeleted() bool           { return false }
+func (it *MockReverseIterator) Error() error              { return nil }
+func (it *MockReverseIterator) Close() error              { return nil }
+func (it *MockReverseIterator) Domain() ([]byte, []byte)  { return nil, nil }
+func (it *MockReverseIterator) Key() []byte               { return it.UnsafeKey() }
+func (it *MockReverseIterator) Value() []byte             { return it.UnsafeValue() }
+func (it *MockReverseIterator) KeyCopy(dst []byte) []byte { return append(dst[:0], it.UnsafeKey()...) }
+func (it *MockReverseIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
 
 func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	dir := t.TempDir()

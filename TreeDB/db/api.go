@@ -88,6 +88,14 @@ func (it *DBIterator) Value() []byte {
 	return it.iter.Value()
 }
 
+func (it *DBIterator) KeyCopy(dst []byte) []byte {
+	return it.iter.KeyCopy(dst)
+}
+
+func (it *DBIterator) ValueCopy(dst []byte) []byte {
+	return it.iter.ValueCopy(dst)
+}
+
 func (it *DBIterator) Error() error {
 	return it.iter.Error()
 }

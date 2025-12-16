@@ -18,12 +18,17 @@ const (
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
-// Both cached and backend implementations satisfy it.
+//
+// Semantics (performance-first; callers must treat slices as read-only):
+//   - Key() and Value() return views valid until the next Next()/Close().
+//   - Use KeyCopy/ValueCopy if you need stable bytes.
 type Iterator interface {
 	Valid() bool
 	Next()
 	Key() []byte
 	Value() []byte
+	KeyCopy(dst []byte) []byte
+	ValueCopy(dst []byte) []byte
 	Close() error
 	Error() error
 }

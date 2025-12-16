@@ -37,6 +37,8 @@ func (m *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 func (m *MockIterator) Seek(key []byte)             {}
 func (m *MockIterator) Key() []byte                 { return m.UnsafeKey() }
 func (m *MockIterator) Value() []byte               { return m.UnsafeValue() }
+func (m *MockIterator) KeyCopy(dst []byte) []byte   { return append(dst[:0], m.UnsafeKey()...) }
+func (m *MockIterator) ValueCopy(dst []byte) []byte { return append(dst[:0], m.UnsafeValue()...) }
 func (m *MockIterator) IsDeleted() bool             { return false }
 func (m *MockIterator) Error() error                { return nil }
 func (m *MockIterator) Close() error                { return nil }

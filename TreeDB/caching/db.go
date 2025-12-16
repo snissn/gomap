@@ -714,6 +714,20 @@ func (it *concatUnsafeIterator) Value() []byte {
 	return it.cur.Value()
 }
 
+func (it *concatUnsafeIterator) KeyCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.KeyCopy(dst)
+}
+
+func (it *concatUnsafeIterator) ValueCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.ValueCopy(dst)
+}
+
 func (it *concatUnsafeIterator) Close() error {
 	var firstErr error
 	if it.first != nil {
@@ -1180,9 +1194,13 @@ func (it *singleSourceIterator) Next() {
 	it.advance()
 }
 
-func (it *singleSourceIterator) Valid() bool              { return it.valid }
-func (it *singleSourceIterator) Key() []byte              { return it.iter.Key() }
-func (it *singleSourceIterator) Value() []byte            { return it.iter.Value() }
+func (it *singleSourceIterator) Valid() bool               { return it.valid }
+func (it *singleSourceIterator) Key() []byte               { return it.iter.Key() }
+func (it *singleSourceIterator) Value() []byte             { return it.iter.Value() }
+func (it *singleSourceIterator) KeyCopy(dst []byte) []byte { return it.iter.KeyCopy(dst) }
+func (it *singleSourceIterator) ValueCopy(dst []byte) []byte {
+	return it.iter.ValueCopy(dst)
+}
 func (it *singleSourceIterator) Close() error             { return it.iter.Close() }
 func (it *singleSourceIterator) Error() error             { return it.iter.Error() }
 func (it *singleSourceIterator) Domain() ([]byte, []byte) { return it.start, it.end }
@@ -1192,10 +1210,12 @@ type emptyIterator struct {
 	start, end []byte
 }
 
-func (it *emptyIterator) Next()                    { panic("iterator invalid") }
-func (it *emptyIterator) Valid() bool              { return false }
-func (it *emptyIterator) Key() []byte              { panic("iterator invalid") }
-func (it *emptyIterator) Value() []byte            { panic("iterator invalid") }
-func (it *emptyIterator) Close() error             { return nil }
-func (it *emptyIterator) Error() error             { return nil }
-func (it *emptyIterator) Domain() ([]byte, []byte) { return it.start, it.end }
+func (it *emptyIterator) Next()                     { panic("iterator invalid") }
+func (it *emptyIterator) Valid() bool               { return false }
+func (it *emptyIterator) Key() []byte               { panic("iterator invalid") }
+func (it *emptyIterator) Value() []byte             { panic("iterator invalid") }
+func (it *emptyIterator) KeyCopy(_ []byte) []byte   { panic("iterator invalid") }
+func (it *emptyIterator) ValueCopy(_ []byte) []byte { panic("iterator invalid") }
+func (it *emptyIterator) Close() error              { return nil }
+func (it *emptyIterator) Error() error              { return nil }
+func (it *emptyIterator) Domain() ([]byte, []byte)  { return it.start, it.end }

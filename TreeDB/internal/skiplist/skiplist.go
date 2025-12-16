@@ -328,11 +328,27 @@ func (it *Iterator) Close() error {
 }
 
 func (it *Iterator) Key() []byte {
-	return append([]byte(nil), it.UnsafeKey()...)
+	return it.UnsafeKey()
 }
 
 func (it *Iterator) Value() []byte {
-	return append([]byte(nil), it.UnsafeValue()...)
+	return it.UnsafeValue()
+}
+
+func (it *Iterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *Iterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
 }
 
 func (it *Iterator) Error() error {

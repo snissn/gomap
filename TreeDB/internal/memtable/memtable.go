@@ -145,6 +145,22 @@ func (it *Iterator) Value() []byte {
 	return it.iter.Value()
 }
 
+func (it *Iterator) KeyCopy(dst []byte) []byte {
+	k := it.iter.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *Iterator) ValueCopy(dst []byte) []byte {
+	v := it.iter.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
 func (it *Iterator) Close() error {
 	return it.iter.Close()
 }

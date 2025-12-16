@@ -401,23 +401,27 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 }
 
 func (it *Iterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *Iterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *Iterator) KeyCopy(dst []byte) []byte {
 	k := it.UnsafeKey()
 	if k == nil {
 		return nil
 	}
-	ck := make([]byte, len(k))
-	copy(ck, k)
-	return ck
+	return append(dst[:0], k...)
 }
 
-func (it *Iterator) Value() []byte {
+func (it *Iterator) ValueCopy(dst []byte) []byte {
 	v := it.UnsafeValue()
 	if v == nil {
 		return nil
 	}
-	cv := make([]byte, len(v))
-	copy(cv, v)
-	return cv
+	return append(dst[:0], v...)
 }
 
 func (it *Iterator) Close() error {

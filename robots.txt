@@ -29,7 +29,7 @@ Disallow:
 #       - pprof treedbbackend read_rand/full_scan: syscall.syscall6 -> internal/poll.(*FD).Pread -> slab.(*SlabFile).Read dominates (value deref via pread)
 #       - pprof treedb read_rand: node.SearchLeaf/SearchInternal + encoding/binary.littleEndian.Uint16; memclrNoHeapPointers
 
-# [ ] TODO-01 Break semantics: make Iterator.Key/Value return zero-copy views + remove per-item alloc
+# [x] TODO-01 Break semantics: make Iterator.Key/Value return zero-copy views + remove per-item alloc
 #     Target: Full Scan
 #     Files: TreeDB/tree/iterator.go (+ any public iterator wrapper)
 #     Test Gate:
@@ -39,8 +39,14 @@ Disallow:
 #       - Full Scan median >= +20%
 #       - allocs/op in scan path should drop materially (validate via pprof/allocs if you add Go benches)
 #       - no regression >5% in Random Read or Seq Write
-#     Status: pending
+#     Status: completed
 #     Result:
+#       - Semantics: `Key()`/`Value()` now return views; added `KeyCopy(dst)` / `ValueCopy(dst)` to iterator interfaces.
+#       - unified-bench medians (5×, keys=1,000,000, seed=1):
+#         - treedb full_scan: 23,439,652 -> 42,872,225 items/s (+83%)
+#         - treedb read_rand: 1,267,203 -> 1,270,156 ops/s (+0%)
+#         - treedb write_seq: 2,119,036 -> 2,200,098 ops/s (+4%)
+#         - treedbbackend full_scan: 1,117,444 -> 1,141,509 items/s (+2%) (still slab/pread bound)
 
 # [ ] TODO-02 Iterator leaf-local fast path: Next() intra-leaf w/o stack traversal or header re-parse
 #     Target: Full Scan

@@ -26,11 +26,17 @@ func (m *mockUnsafeIter) UnsafeValue() []byte { return []byte(m.data[m.idx].v) }
 func (m *mockUnsafeIter) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return m.UnsafeValue(), page.ValuePtr{}, 0
 }
-func (m *mockUnsafeIter) Key() []byte         { return m.UnsafeKey() } // Copy in mock is fine
-func (m *mockUnsafeIter) Value() []byte       { return m.UnsafeValue() }
-func (m *mockUnsafeIter) Error() error        { return nil }
-func (m *mockUnsafeIter) Close() error        { return nil }
-func (m *mockUnsafeIter) IsDeleted() bool     { return m.data[m.idx].del }
+func (m *mockUnsafeIter) Key() []byte   { return m.UnsafeKey() } // Copy in mock is fine
+func (m *mockUnsafeIter) Value() []byte { return m.UnsafeValue() }
+func (m *mockUnsafeIter) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], m.UnsafeKey()...)
+}
+func (m *mockUnsafeIter) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], m.UnsafeValue()...)
+}
+func (m *mockUnsafeIter) Error() error    { return nil }
+func (m *mockUnsafeIter) Close() error    { return nil }
+func (m *mockUnsafeIter) IsDeleted() bool { return m.data[m.idx].del }
 func (m *mockUnsafeIter) Seek(key []byte) {
 	m.seekedKey = key
 	if key == nil {
