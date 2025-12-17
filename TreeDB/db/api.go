@@ -75,6 +75,10 @@ type DBIterator struct {
 	iter iterator.UnsafeIterator
 }
 
+func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
+	return 0, 1
+}
+
 func (it *DBIterator) Next() {
 	it.iter.Next()
 }

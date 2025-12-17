@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -19,6 +20,16 @@ import (
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+
+const maxQueuedMemtables = 4
+
+var iteratorDebugEnabled atomic.Bool
+
+// SetIteratorDebug toggles attaching debug metadata to iterators returned by
+// CachingDB.Iterator. It is intended for benchmarking/diagnostics.
+func SetIteratorDebug(enabled bool) {
+	iteratorDebugEnabled.Store(enabled)
+}
 
 func bytesToStringNoCopy(b []byte) string {
 	if len(b) == 0 {
@@ -243,7 +254,6 @@ func (db *DB) SetSync(key, value []byte) error {
 
 func (db *DB) set(key, value []byte, sync bool) error {
 	db.mu.Lock()
-	defer db.mu.Unlock()
 
 	// 1. Insert to Memtable (Allocates in Arena) -> WAL Write (Reads from Arena)
 	// This avoids reading 'key/value' (User Memory) twice.
@@ -259,16 +269,28 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		return nil
 	})
 	if err != nil {
+		db.mu.Unlock()
 		return err
 	}
 
 	db.mutableRange.add(key)
 
 	// 3. Check Threshold
+	needsBackpressureFlush := false
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
 			return err
 		}
+		needsBackpressureFlush = len(db.queue) > maxQueuedMemtables
+	}
+	db.mu.Unlock()
+
+	// Backpressure: if writers outrun the background flusher, the queue grows and
+	// each range iterator becomes a k-way merge. Force a durable flush to cap
+	// merge fanout and preserve scan performance.
+	if needsBackpressureFlush {
+		db.flushAll(true)
 	}
 	return nil
 }
@@ -289,7 +311,6 @@ func (db *DB) DeleteSync(key []byte) error {
 
 func (db *DB) delete(key []byte, sync bool) error {
 	db.mu.Lock()
-	defer db.mu.Unlock()
 
 	// 1. Memtable -> WAL
 	err := db.mutable.DeleteWithCallback(key, func(kView, vView []byte) error {
@@ -305,16 +326,25 @@ func (db *DB) delete(key []byte, sync bool) error {
 		return nil
 	})
 	if err != nil {
+		db.mu.Unlock()
 		return err
 	}
 
 	db.mutableRange.add(key)
 
 	// 3. Threshold
+	needsBackpressureFlush := false
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
 			return err
 		}
+		needsBackpressureFlush = len(db.queue) > maxQueuedMemtables
+	}
+	db.mu.Unlock()
+
+	if needsBackpressureFlush {
+		db.flushAll(true)
 	}
 	return nil
 }
@@ -594,6 +624,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
+	queueLen := len(db.queue)
+
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
 	if start == nil && end == nil {
@@ -609,6 +641,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			// mutable is empty. So we just return diskIter?
 			// Wait, if len(queue) == 0 and mutable.Size() == 0 (from rotate check logic),
 			// then there is no memory data.
+			if iteratorDebugEnabled.Load() {
+				return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
+			}
 			return diskIter, nil
 		}
 	}
@@ -645,14 +680,36 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	if len(sources) == 0 {
-		return &emptyIterator{start: start, end: end}, nil
+		out := merging.Iterator(&emptyIterator{start: start, end: end})
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 0}
+		}
+		return out, nil
 	}
 
 	if len(sources) == 1 {
-		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 1}
+		}
+		return out, nil
 	}
 
-	return merging.NewMergingIterator(sources, start, end), nil
+	out := merging.NewMergingIterator(sources, start, end)
+	if iteratorDebugEnabled.Load() {
+		out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: len(sources)}
+	}
+	return out, nil
+}
+
+type debugIterator struct {
+	merging.Iterator
+	queueLen    int
+	sourcesUsed int
+}
+
+func (it *debugIterator) DebugStats() (queueLen int, sourcesUsed int) {
+	return it.queueLen, it.sourcesUsed
 }
 
 type concatUnsafeIterator struct {
@@ -1005,7 +1062,6 @@ func (b *Batch) write(sync bool) error {
 
 func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Lock()
-	defer b.db.mu.Unlock()
 
 	// entries is already a slice. Sort it.
 	sort.SliceStable(b.entries, func(i, j int) bool {
@@ -1022,11 +1078,13 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 	}
 	if err := b.db.wal.AppendBatch(records); err != nil {
+		b.db.mu.Unlock()
 		return err
 	}
 
 	if sync {
 		if err := b.db.wal.Sync(); err != nil {
+			b.db.mu.Unlock()
 			return err
 		}
 	}
@@ -1044,10 +1102,19 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 
 	// 3. Threshold Check
+	needsBackpressureFlush := false
 	if b.db.mutable.Size() > b.db.flushThreshold {
 		if err := b.db.rotateMemtableLocked(true); err != nil {
+			b.db.mu.Unlock()
 			return err
 		}
+		needsBackpressureFlush = len(b.db.queue) > maxQueuedMemtables
+	}
+
+	b.db.mu.Unlock()
+
+	if needsBackpressureFlush {
+		b.db.flushAll(true)
 	}
 
 	return b.Close()

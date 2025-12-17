@@ -11,7 +11,9 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/kvstore"
 	btreeadapter "github.com/snissn/gomap/kvstore/adapters/btreeonhashdb"
 	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
@@ -74,7 +77,8 @@ func NewBTree(dir string) (kvstore.DB, error) {
 }
 
 func NewTreeDB(dir string) (kvstore.DB, error) {
-	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: 4 * 1024 * 1024}
+	treedbcaching.SetIteratorDebug(*treedbIterDebug)
+	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: *treedbFlushThreshold}
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
@@ -453,6 +457,16 @@ var (
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 	cpuProfile   = flag.String("cpuprofile", "", "write cpu profile to file")
+
+	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
+	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
+	mutexProfile = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
+	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
+	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
+
+	treedbFlushThreshold = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbIterDebug      = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
+	treedbIterDebugLimit = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 )
 
 type DBInstance struct {
@@ -475,6 +489,15 @@ type BenchConfig struct {
 	SeedUsed int64
 
 	CPUProfile string
+
+	BlockProfile         string
+	BlockProfileRate     int
+	MutexProfile         string
+	MutexProfileFraction int
+	TraceProfile         string
+
+	TreeDBIterDebug      bool
+	TreeDBIterDebugLimit int
 }
 
 type BenchRun struct {
@@ -495,17 +518,24 @@ func main() {
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	baseCfg := BenchConfig{
-		Keys:         *numKeys,
-		ValueSize:    *valSize,
-		BatchSize:    *batchSize,
-		RangeQueries: *rangeQueries,
-		RangeSpan:    *rangeSpan,
-		DBsArg:       *dbsArg,
-		TestsArg:     *testArg,
-		KeepDir:      *keepDir,
-		Progress:     *progress,
-		SeedUsed:     seedUsed,
-		CPUProfile:   *cpuProfile,
+		Keys:                 *numKeys,
+		ValueSize:            *valSize,
+		BatchSize:            *batchSize,
+		RangeQueries:         *rangeQueries,
+		RangeSpan:            *rangeSpan,
+		DBsArg:               *dbsArg,
+		TestsArg:             *testArg,
+		KeepDir:              *keepDir,
+		Progress:             *progress,
+		SeedUsed:             seedUsed,
+		CPUProfile:           *cpuProfile,
+		BlockProfile:         *blockProfile,
+		BlockProfileRate:     *blockRate,
+		MutexProfile:         *mutexProfile,
+		MutexProfileFraction: *mutexFrac,
+		TraceProfile:         *traceProfile,
+		TreeDBIterDebug:      *treedbIterDebug,
+		TreeDBIterDebugLimit: *treedbIterDebugLimit,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -527,6 +557,11 @@ func main() {
 	keyCounts, err := resolveKeyCounts(*numKeys, *keyCountsArg, *keyScaleArg, *keysMin, *keysMax)
 	if err != nil {
 		log.Fatalf("keycounts: %v", err)
+	}
+
+	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
+	if hasAnyProfiling && len(keyCounts) > 1 {
+		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
 
 	if len(keyCounts) == 1 {
@@ -960,6 +995,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return math.NaN(), nil
 			}
 			start := time.Now()
+			var totalBuild time.Duration
+			var totalIter time.Duration
+			var debugQueueSum int
+			var debugSourcesSum int
+			var debugStatsCount int
 			totalItems := 0
 			maxKey := prefixScanBase + cfg.Keys
 			for i := 0; i < cfg.RangeQueries; i++ {
@@ -977,18 +1017,24 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
 				endKey := endKeyBuf[:]
 
+				buildStart := time.Now()
 				iter, err := rs.Iterator(startKey, endKey)
 				if err != nil {
 					return 0, fmt.Errorf("prefix_scan: iterator: %w", err)
 				}
+				buildDur := time.Since(buildStart)
+				totalBuild += buildDur
 
 				expected := endIdx - startIdx
 				itemsThisQuery := 0
+				iterStart := time.Now()
 				for iter.Valid() {
 					_ = iter.Key()
 					iter.Next()
 					itemsThisQuery++
 				}
+				iterDur := time.Since(iterStart)
+				totalIter += iterDur
 				if err := iter.Error(); err != nil {
 					_ = iter.Close()
 					return 0, fmt.Errorf("prefix_scan: %w", err)
@@ -998,7 +1044,38 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("prefix_scan: expected %d items in query %d, got %d", expected, i, itemsThisQuery)
 				}
 				totalItems += itemsThisQuery
+
+				type debugStats interface {
+					DebugStats() (queueLen int, sourcesUsed int)
+				}
+				if ds, ok := iter.(debugStats); ok {
+					q, s := ds.DebugStats()
+					debugQueueSum += q
+					debugSourcesSum += s
+					debugStatsCount++
+					if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
+						fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s queue=%d sources=%d\n",
+							db.Name(), i, itemsThisQuery, buildDur, iterDur, q, s)
+					}
+				} else if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s\n",
+						db.Name(), i, itemsThisQuery, buildDur, iterDur)
+				}
+
 				_ = iter.Close()
+			}
+			if cfg.TreeDBIterDebug && cfg.RangeQueries > 0 {
+				avgBuild := totalBuild / time.Duration(cfg.RangeQueries)
+				avgIter := totalIter / time.Duration(cfg.RangeQueries)
+				if debugStatsCount > 0 {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s queue_avg=%.2f sources_avg=%.2f\n",
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
+						float64(debugQueueSum)/float64(debugStatsCount),
+						float64(debugSourcesSum)/float64(debugStatsCount))
+				} else {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s\n",
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
+				}
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
 		},
@@ -1078,6 +1155,57 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") {
 		prefixScanBase = cfg.Keys
+	}
+
+	if cfg.BlockProfile != "" {
+		rate := cfg.BlockProfileRate
+		if rate <= 0 {
+			rate = 1
+		}
+		runtime.SetBlockProfileRate(rate)
+		defer runtime.SetBlockProfileRate(0)
+
+		f, err := os.Create(cfg.BlockProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("blockprofile: %w", err)
+		}
+		defer func() {
+			_ = pprof.Lookup("block").WriteTo(f, 0)
+			_ = f.Close()
+		}()
+	}
+
+	if cfg.MutexProfile != "" {
+		frac := cfg.MutexProfileFraction
+		if frac <= 0 {
+			frac = 1
+		}
+		runtime.SetMutexProfileFraction(frac)
+		defer runtime.SetMutexProfileFraction(0)
+
+		f, err := os.Create(cfg.MutexProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("mutexprofile: %w", err)
+		}
+		defer func() {
+			_ = pprof.Lookup("mutex").WriteTo(f, 0)
+			_ = f.Close()
+		}()
+	}
+
+	if cfg.TraceProfile != "" {
+		f, err := os.Create(cfg.TraceProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("trace: %w", err)
+		}
+		if err := trace.Start(f); err != nil {
+			_ = f.Close()
+			return BenchRun{}, fmt.Errorf("trace start: %w", err)
+		}
+		defer func() {
+			trace.Stop()
+			_ = f.Close()
+		}()
 	}
 
 	var cpuProfFile *os.File

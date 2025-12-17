@@ -35,9 +35,13 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-batchsize` batch size (default 1000)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
+- `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
+- `-treedb-iter-debug` print prefix scan iterator timing + debug stats
+- `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-progress` live table updates to stderr (default true)
 - `-format` output format: `table` or `markdown`
+- `-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
 - `-suite` named suite (currently: `readme`)
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
