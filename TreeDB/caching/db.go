@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -1062,11 +1061,6 @@ func (b *Batch) write(sync bool) error {
 
 func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Lock()
-
-	// entries is already a slice. Sort it.
-	sort.SliceStable(b.entries, func(i, j int) bool {
-		return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
-	})
 
 	// 1. WAL Append loop
 	records := make([]wal.Record, 0, len(b.entries))

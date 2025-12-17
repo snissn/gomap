@@ -37,21 +37,25 @@ func New(capacity int) *SkipList {
 
 func (s *SkipList) alloc(n int) uint32 {
 	off := uint32(len(s.data))
-	// Extend data efficiently
-	// We can't resize "cap" easily, but we can append.
-	// To avoid zeroing overhead for large allocs, maybe grow manually?
-	// append is optimized.
-	// But we need to return offset.
+
 	needed := len(s.data) + n
 	if cap(s.data) < needed {
-		// Allocator logic: if we run out of cap, we grow.
-		// Go's append handles this.
-		// NOTE: If we exceed FlushThreshold, we just grow.
-		// Memtable flush logic will trigger later.
+		newCap := cap(s.data)
+		if newCap == 0 {
+			newCap = 64 * 1024
+		}
+		for newCap < needed {
+			newCap *= 2
+		}
+		newData := make([]byte, len(s.data), newCap)
+		copy(newData, s.data)
+		s.data = newData
 	}
 
-	// Append n zero bytes
-	s.data = append(s.data, make([]byte, n)...)
+	// We intentionally do not zero the newly exposed bytes here. Every field that
+	// is later read is explicitly written before use (header, next pointers for
+	// all levels < height, key/value bytes, flags).
+	s.data = s.data[:needed]
 	return off
 }
 
