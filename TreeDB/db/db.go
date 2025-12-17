@@ -68,6 +68,11 @@ type Options struct {
 	KeepRecent     uint64 // Default 10000
 	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
+	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
+	// layer will allow before applying backpressure (i.e. forcing flush work on
+	// writers). A negative value disables backpressure entirely (higher short-term
+	// ingest, but potentially unbounded flush debt). Zero uses the default.
+	MaxQueuedMemtables int
 }
 
 type Snapshot struct {

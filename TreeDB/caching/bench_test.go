@@ -21,7 +21,7 @@ func BenchmarkRepeatedIterator(b *testing.B) {
 	defer backend.Close()
 
 	// Default flush threshold
-	cached, err := Open(dir, backend, 64*1024*1024)
+	cached, err := Open(dir, backend, 64*1024*1024, 0)
 	if err != nil {
 		b.Fatal(err)
 	}

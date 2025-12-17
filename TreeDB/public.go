@@ -72,7 +72,7 @@ func Open(opts Options) (*DB, error) {
 		return &DB{mode: ModeBackend, backend: backend}, nil
 	}
 
-	cached, err := caching.Open(opts.Dir, backend, opts.FlushThreshold)
+	cached, err := caching.Open(opts.Dir, backend, opts.FlushThreshold, opts.MaxQueuedMemtables)
 	if err != nil {
 		_ = backend.Close()
 		return nil, err

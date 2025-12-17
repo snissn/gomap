@@ -78,7 +78,12 @@ func NewBTree(dir string) (kvstore.DB, error) {
 
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
-	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: *treedbFlushThreshold}
+	opts := treedb.Options{
+		Dir:              dir,
+		ChunkSize:         64 * 1024 * 1024,
+		FlushThreshold:    *treedbFlushThreshold,
+		MaxQueuedMemtables: *treedbMaxQueuedMems,
+	}
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
@@ -465,6 +470,7 @@ var (
 	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
 
 	treedbFlushThreshold = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbMaxQueuedMems  = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
 	treedbIterDebug      = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 )

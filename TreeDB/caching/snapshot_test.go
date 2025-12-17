@@ -21,7 +21,7 @@ func TestIteratorSnapshotIsolation(t *testing.T) {
 	defer backend.Close()
 
 	// Use a large threshold so we rely on the mutable memtable
-	cached, err := Open(dir, backend, 1024*1024)
+	cached, err := Open(dir, backend, 1024*1024, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,8 +20,6 @@ var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 
-const maxQueuedMemtables = 4
-
 var iteratorDebugEnabled atomic.Bool
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -70,8 +68,9 @@ type DB struct {
 	backend BackendDB
 
 	// Config
-	dir            string
-	flushThreshold int64
+	dir              string
+	flushThreshold   int64
+	maxQueuedMemtables int
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -140,9 +139,12 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 	return true
 }
 
-func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
+func Open(dir string, backend BackendDB, flushThreshold int64, maxQueuedMemtables int) (*DB, error) {
 	if flushThreshold <= 0 {
 		flushThreshold = 64 * 1024 * 1024 // 64MB default
+	}
+	if maxQueuedMemtables == 0 {
+		maxQueuedMemtables = 4
 	}
 
 	// Ensure wal dir exists
@@ -152,12 +154,13 @@ func Open(dir string, backend BackendDB, flushThreshold int64) (*DB, error) {
 	}
 
 	db := &DB{
-		dir:            walDir,
-		backend:        backend,
-		flushThreshold: flushThreshold,
-		mutable:        memtable.New(),
-		closeCh:        make(chan struct{}),
-		flushCh:        make(chan struct{}, 1),
+		dir:               walDir,
+		backend:           backend,
+		flushThreshold:    flushThreshold,
+		maxQueuedMemtables: maxQueuedMemtables,
+		mutable:           memtable.New(),
+		closeCh:           make(chan struct{}),
+		flushCh:           make(chan struct{}, 1),
 	}
 
 	// Open initial WAL
@@ -303,7 +306,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = len(db.queue) > maxQueuedMemtables
+		needsBackpressureFlush = db.maxQueuedMemtables >= 0 && len(db.queue) > db.maxQueuedMemtables
 	}
 	db.mu.Unlock()
 
@@ -360,7 +363,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 			db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = len(db.queue) > maxQueuedMemtables
+		needsBackpressureFlush = db.maxQueuedMemtables >= 0 && len(db.queue) > db.maxQueuedMemtables
 	}
 	db.mu.Unlock()
 
@@ -1124,7 +1127,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = len(b.db.queue) > maxQueuedMemtables
+		needsBackpressureFlush = b.db.maxQueuedMemtables >= 0 && len(b.db.queue) > b.db.maxQueuedMemtables
 	}
 
 	b.db.mu.Unlock()
