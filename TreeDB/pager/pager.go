@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	"golang.org/x/sys/unix"
@@ -20,7 +21,7 @@ type Pager struct {
 	file         *os.File
 	chunks       [][]byte
 	chunkSize    int64
-	numPages     uint64 // The number of pages logically allocated
+	numPages     atomic.Uint64 // The number of pages logically allocated
 	dirtyChunks  map[int]struct{}
 	mu           sync.RWMutex
 	path         string
@@ -31,9 +32,6 @@ type Pager struct {
 // If the file doesn't exist, it creates it.
 // chunkSize determines the size of each mmap region.
 func Open(path string, chunkSize int64) (*Pager, error) {
-	if chunkSize%page.PageSize != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
-	}
 	if chunkSize%page.PageSize != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
 	}
@@ -86,10 +84,10 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		}
 
 		// Initial guess for numPages (will be corrected by DB recovery)
-		p.numPages = uint64(size / page.PageSize)
+		p.numPages.Store(uint64(size / page.PageSize))
 
 		// Initialize Bitset
-		p.resizeBitset(p.numPages)
+		p.resizeBitset(p.numPages.Load())
 	} else {
 		// Initialize Bitset (empty)
 		p.verifiedBits = make([]uint64, 0)
@@ -158,15 +156,13 @@ func (p *Pager) markUnverifiedLocked(pageID uint64) {
 func (p *Pager) SetPageCount(count uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.numPages = count
+	p.numPages.Store(count)
 	p.resizeBitset(count)
 }
 
 // PageCount returns the current logical number of pages.
 func (p *Pager) PageCount() uint64 {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.numPages
+	return p.numPages.Load()
 }
 
 // Close closes the pager and unmaps memory.
@@ -186,9 +182,7 @@ func (p *Pager) Close() error {
 // Truncate resizes the file to the specified number of pages.
 // Safety: Shrinking is forbidden. Only growing is allowed.
 func (p *Pager) Truncate(targetPages uint64) error {
-	p.mu.Lock()
-	currentPages := p.numPages
-	p.mu.Unlock()
+	currentPages := p.numPages.Load()
 
 	if targetPages < currentPages {
 		return fmt.Errorf("truncation (shrinking) is forbidden: current %d, target %d", currentPages, targetPages)
@@ -210,7 +204,7 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	startID := p.numPages
+	startID := p.numPages.Load()
 	newTotal := startID + uint64(count)
 
 	// Check if we need to grow physical file
@@ -240,7 +234,7 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 		}
 	}
 
-	p.numPages = newTotal
+	p.numPages.Store(newTotal)
 	p.resizeBitset(newTotal)
 	return startID, nil
 }
@@ -250,7 +244,7 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if pageID >= p.numPages {
+	if pageID >= p.numPages.Load() {
 		return nil, ErrPageOutOfBounds
 	}
 
@@ -277,7 +271,7 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if pageID >= p.numPages {
+	if pageID >= p.numPages.Load() {
 		return nil, ErrPageOutOfBounds
 	}
 
@@ -311,7 +305,7 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if pageID >= p.numPages {
+	if pageID >= p.numPages.Load() {
 		return ErrPageOutOfBounds
 	}
 

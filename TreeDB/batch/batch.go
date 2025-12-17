@@ -72,6 +72,39 @@ func (b *Batch) ensureOpen() error {
 	return nil
 }
 
+// SetView is an internal-performance helper that records a Put without copying
+// key/value bytes. Callers must treat key/value as immutable until the batch is
+// committed (Write/WriteSync) or closed.
+func (b *Batch) SetView(key, value []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if key == nil {
+		return ErrKeyEmpty
+	}
+
+	entry := Entry{
+		Type: OpPut,
+		Key:  key,
+	}
+
+	if len(value) > b.inlineThreshold {
+		ptr, err := b.slabManager.Append(key, value)
+		if err != nil {
+			return err
+		}
+		entry.ValuePtr = ptr
+		entry.IsPtr = true
+		b.slabWritten += int(ptr.Length)
+	} else {
+		entry.Value = value
+	}
+
+	b.entries = append(b.entries, entry)
+	b.byteSize += len(key) + len(value)
+	return nil
+}
+
 // Set adds or replaces a key/value operation.
 func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
@@ -110,6 +143,25 @@ func (b *Batch) Set(key, value []byte) error {
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
 	b.byteSize += len(k) + len(value)
+	return nil
+}
+
+// DeleteView is an internal-performance helper that records a Delete without
+// copying the key bytes. Callers must treat key as immutable until the batch is
+// committed (Write/WriteSync) or closed.
+func (b *Batch) DeleteView(key []byte) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if key == nil {
+		return ErrKeyEmpty
+	}
+
+	b.entries = append(b.entries, Entry{
+		Type: OpDelete,
+		Key:  key,
+	})
+	b.byteSize += len(key)
 	return nil
 }
 

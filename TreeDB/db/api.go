@@ -35,38 +35,38 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Set(key, value); err != nil {
+	b := db.NewBatch().(*Batch)
+	if err := b.batch.SetView(key, value); err != nil {
 		return err
 	}
-	return batch.Write() // Using Write for better throughput (async)
+	return b.Write() // Using Write for better throughput (async)
 }
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Set(key, value); err != nil {
+	b := db.NewBatch().(*Batch)
+	if err := b.batch.SetView(key, value); err != nil {
 		return err
 	}
-	return batch.WriteSync()
+	return b.WriteSync()
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Delete(key); err != nil {
+	b := db.NewBatch().(*Batch)
+	if err := b.batch.DeleteView(key); err != nil {
 		return err
 	}
-	return batch.Write() // Using Write for better throughput (async)
+	return b.Write() // Using Write for better throughput (async)
 }
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
-	batch := db.NewBatch()
-	if err := batch.Delete(key); err != nil {
+	b := db.NewBatch().(*Batch)
+	if err := b.batch.DeleteView(key); err != nil {
 		return err
 	}
-	return batch.WriteSync()
+	return b.WriteSync()
 }
 
 // DBIterator wraps tree.Iterator and holds a Snapshot.

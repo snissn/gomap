@@ -6,7 +6,7 @@ import (
 
 const (
 	DefaultInlineThreshold = 256
-	InlineHardMin          = 64
+	InlineHardMin          = DefaultInlineThreshold
 	InlineHardMax          = 2048
 	DefaultStep            = 64
 	UpdateInterval         = 100 // K commits
@@ -31,6 +31,7 @@ type Controller struct {
 	leafFillAvg      float64
 	splitRateAvg     float64
 	slabDeadRatioAvg float64
+	slabWriteBytesAvg float64
 
 	// Config (Weights)
 	alpha float64 // EWMA alpha
@@ -69,6 +70,7 @@ func (c *Controller) RecordCommit(m Metrics) {
 		slabDeadRatio = float64(m.SlabDeadBytes) / float64(m.SlabWriteBytes)
 	}
 	c.slabDeadRatioAvg = ewma(c.slabDeadRatioAvg, slabDeadRatio, c.alpha)
+	c.slabWriteBytesAvg = ewma(c.slabWriteBytesAvg, float64(m.SlabWriteBytes), c.alpha)
 
 	// 2. Check Interval
 	c.commitsSinceUpdate++
@@ -84,17 +86,25 @@ func (c *Controller) adjustThreshold() {
 	targetLeafFill := 0.85
 	targetSplitRate := 0.0 // Ideal
 	targetSlabDead := 0.35
+	targetSlabWriteBytes := 64.0
 
 	// Weights (Index weights higher)
 	w1 := 2.0 // Leaf Fill
 	w2 := 2.0 // Split Rate
 
 	v1 := 1.0 // Slab Dead Ratio
+	v2 := 1.0 // Slab Write Bytes
 
 	indexPressure := w1*max(0, targetLeafFill-c.leafFillAvg) +
 		w2*max(0, c.splitRateAvg-targetSplitRate)
 
-	slabPressure := v1 * max(0, c.slabDeadRatioAvg-targetSlabDead)
+	slabWritePressure := 0.0
+	if targetSlabWriteBytes > 0 {
+		slabWritePressure = max(0, (c.slabWriteBytesAvg/targetSlabWriteBytes)-1.0)
+	}
+
+	slabPressure := v1*max(0, c.slabDeadRatioAvg-targetSlabDead) +
+		v2*slabWritePressure
 
 	// Update Rule
 	delta := 0
