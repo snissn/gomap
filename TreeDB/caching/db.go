@@ -224,11 +224,33 @@ func (db *DB) Close() error {
 	db.wg.Wait()
 
 	db.mu.Lock()
-	defer db.mu.Unlock()
-
 	if db.wal != nil {
-		db.wal.Close()
+		_ = db.wal.Close()
+		db.wal = nil
 	}
+	walDir := db.dir
+	db.mu.Unlock()
+
+	segments, hasNonEmptySegments := listNonEmptyWALSegments(walDir)
+	if hasNonEmptySegments {
+		backendBatch := db.backend.NewBatch()
+		db.flushMu.Lock()
+		err := backendBatch.WriteSync()
+		db.flushMu.Unlock()
+		if cerr := backendBatch.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, path := range segments {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+		}
+	}
+
 	return db.backend.Close()
 }
 func (db *DB) Set(key, value []byte) error {
@@ -286,10 +308,10 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	db.mu.Unlock()
 
 	// Backpressure: if writers outrun the background flusher, the queue grows and
-	// each range iterator becomes a k-way merge. Force a durable flush to cap
-	// merge fanout and preserve scan performance.
+	// each range iterator becomes a k-way merge. Force a flush to cap merge fanout
+	// and preserve scan performance.
 	if needsBackpressureFlush {
-		db.flushAll(true)
+		db.flushAll(false)
 	}
 	return nil
 }
@@ -343,7 +365,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	db.mu.Unlock()
 
 	if needsBackpressureFlush {
-		db.flushAll(true)
+		db.flushAll(false)
 	}
 	return nil
 }
@@ -406,9 +428,9 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
-			// Background flush uses synced backend commits so we can safely
-			// retire WAL segments as they are applied.
-			db.flushAll(true)
+			// Background flush is intentionally async (no backend sync). The WAL is
+			// retained so the backend can recover up to the last synced boundary.
+			db.flushAll(false)
 		}
 	}
 }
@@ -550,7 +572,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	}
 	db.mu.Unlock()
 
-	if walPath != "" && !inUse {
+	if sync && walPath != "" && !inUse {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
 		}
@@ -1108,10 +1130,37 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Unlock()
 
 	if needsBackpressureFlush {
-		b.db.flushAll(true)
+		b.db.flushAll(false)
 	}
 
 	return b.Close()
+}
+
+func listNonEmptyWALSegments(walDir string) (paths []string, anyNonEmpty bool) {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		return nil, false
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) < len("wal-000000.log") || name[:4] != "wal-" || filepath.Ext(name) != ".log" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(walDir, name)
+		paths = append(paths, path)
+		if info.Size() > 0 {
+			anyNonEmpty = true
+		}
+	}
+	return paths, anyNonEmpty
 }
 
 func (b *Batch) writeBypass(sync bool) error {
