@@ -18,6 +18,9 @@ type PageAllocator interface {
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
+
+	leafReserveBytes     int
+	internalReserveBytes int
 }
 
 type Split struct {
@@ -25,11 +28,49 @@ type Split struct {
 	NodeID uint64
 }
 
+type internalEntry struct {
+	key   []byte
+	child uint64
+}
+
 func New(p *pager.Pager, a PageAllocator) *Zipper {
 	return &Zipper{
 		pager:     p,
 		allocator: a,
 	}
+}
+
+// SetFillTargets configures soft-full thresholds for newly written pages.
+// Targets are in parts-per-million where 1_000_000 means "allow full pages".
+func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
+	z.leafReserveBytes = reserveBytesFromPPM(leafPPM)
+	z.internalReserveBytes = reserveBytesFromPPM(internalPPM)
+}
+
+func reserveBytesFromPPM(ppm uint32) int {
+	if ppm >= 1_000_000 {
+		return 0
+	}
+	// Reserve a fixed fraction of the page size.
+	reserve := int((uint64(page.PageSize) * uint64(1_000_000-ppm)) / 1_000_000)
+	if reserve < 0 {
+		return 0
+	}
+	return reserve
+}
+
+func (z *Zipper) leafSoftFull(b *node.Builder, entrySize int) bool {
+	if z.leafReserveBytes <= 0 || b == nil || b.Count() == 0 {
+		return false
+	}
+	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.leafReserveBytes
+}
+
+func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
+	if z.internalReserveBytes <= 0 || b == nil || b.Count() == 0 {
+		return false
+	}
+	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.internalReserveBytes
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -41,7 +82,20 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		return rootID, nil, metrics, nil
 	}
 
-	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, &metrics)
+	// Underfull merge/rebalance maintenance is only beneficial when:
+	//   - the batch includes deletes (can create empty/underfull pages), or
+	//   - the caller configured soft-full targets (reserve bytes), which implies
+	//     a preference for more balanced/less churny pages even on updates.
+	hasDeletes := false
+	for _, op := range ops {
+		if op.Type == batch.OpDelete {
+			hasDeletes = true
+			break
+		}
+	}
+	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0
+
+	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -89,7 +143,13 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				}
 
 				// Add child
-				err := currentBuilder.AddInternalChild(child.Key, child.NodeID)
+				childSize := 2 + 8 + len(child.Key)
+				var err error
+				if z.internalSoftFull(currentBuilder, childSize) {
+					err = node.ErrNodeFull
+				} else {
+					err = currentBuilder.AddInternalChild(child.Key, child.NodeID)
+				}
 				if err == node.ErrNodeFull {
 					// Finish current
 					_ = currentBuilder.Finish()
@@ -134,7 +194,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
-func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
+func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
 	// 1. Allocate New Page (COW)
 	newPageID, err := z.allocator.Alloc()
 	if err != nil {
@@ -175,15 +235,27 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, metrics *adapt
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, metrics)
+		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
 
-		_ = builder.Finish()
+		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
 
 		retired = append(retired, childRetired...)
+
+		// If this internal page collapsed to a single child and produced no splits,
+		// skip writing the redundant level by returning the child directly.
+		// This helps delete-heavy workloads shrink tree height without requiring
+		// an explicit vacuum.
+		if len(splits) == 0 && n.Count() == 1 {
+			childID, err := n.GetInternalChildID(0)
+			if err == nil {
+				retired = append(retired, nr)
+				return childID, nil, retired, nil
+			}
+		}
 		return nr, splits, retired, nil
 	} else {
 		// Handle Page 0 / Empty / New Tree case
@@ -246,6 +318,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				// If it was a pointer, track it as dead bytes.
 				if f&node.FlagPointer != 0 {
 					metrics.SlabDeadBytes += int(ptr.Length)
+					if metrics.SlabDeadBytesByFile == nil {
+						metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+					}
+					metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 				}
 
 				useBatch = true
@@ -293,7 +369,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		err := target.AddLeafEntry(key, val, flags, valPtr)
+		entrySize := 7 + len(key)
+		if flags&node.FlagPointer != 0 {
+			entrySize += page.ValuePtrSize
+		} else {
+			entrySize += len(val)
+		}
+		var err error
+		if z.leafSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddLeafEntry(key, val, flags, valPtr)
+		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
 
@@ -349,15 +436,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 
 	var splits []Split
 
-	target := builder
 	var retired []uint64
 
+	var err error
+
 	opIdx := 0
+
+	entries := make([]internalEntry, 0, int(count)+4)
 
 	for i := uint16(0); i < count; i++ {
 		// Optimization: Use View to avoid alloc
@@ -393,7 +483,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		if len(childOps) > 0 {
 			// Recurse
-			ncID, cs, childRet, err := z.writeRecursive(childID, childOps, metrics)
+			ncID, cs, childRet, err := z.writeRecursive(childID, childOps, maintenance, metrics)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -405,32 +495,59 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			newChildID = childID
 		}
 
-		// Add (Key, NewChildID) to target builder
 		if newChildID >= z.pager.PageCount() {
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
+		entries = append(entries, internalEntry{key: append([]byte(nil), key...), child: newChildID})
 
-		err = target.AddInternalChild(key, newChildID)
+		// Add sibling splits
+		for _, s := range childSplits {
+			if s.NodeID >= z.pager.PageCount() {
+				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
+			}
+			entries = append(entries, internalEntry{key: append([]byte(nil), s.Key...), child: s.NodeID})
+		}
+	}
+
+	coalesced := entries
+	if maintenance {
+		var extraRetired []uint64
+		coalesced, extraRetired, err = z.coalesceLeafChildren(entries, metrics)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if len(extraRetired) > 0 {
+			retired = append(retired, extraRetired...)
+		}
+
+		coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, metrics)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if len(extraRetired) > 0 {
+			retired = append(retired, extraRetired...)
+		}
+	}
+
+	// Write final internal entries, splitting if needed.
+	target := builder
+	for i, e := range coalesced {
+		if i == 0 && (e.key == nil) {
+			e.key = []byte{}
+		}
+		entrySize := 2 + 8 + len(e.key)
+		if z.internalSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddInternalChild(e.key, e.child)
+		}
 		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, key, newChildID, metrics)
+			target, err = z.createNewSplitInternal(target, builder, &splits, e.key, e.child, metrics)
 			if err != nil {
 				return 0, nil, nil, err
 			}
 		} else if err != nil {
 			return 0, nil, nil, err
-		}
-
-		// Add sibling splits
-		for _, s := range childSplits {
-			err = target.AddInternalChild(s.Key, s.NodeID)
-			if err == node.ErrNodeFull {
-				target, err = z.createNewSplitInternal(target, builder, &splits, s.Key, s.NodeID, metrics)
-				if err != nil {
-					return 0, nil, nil, err
-				}
-			} else if err != nil {
-				return 0, nil, nil, err
-			}
 		}
 	}
 
@@ -442,6 +559,621 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	// builder finalized by caller.
 	return builder.PageID(), splits, retired, nil
+}
+
+func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+	if len(entries) < 2 {
+		return entries, nil, nil
+	}
+
+	var retired []uint64
+
+	loadLeaf := func(id uint64) (*node.Node, bool, error) {
+		data, err := z.pager.Get(id)
+		if err != nil {
+			return nil, false, err
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeLeaf {
+			return nil, false, nil
+		}
+		return n, true, nil
+	}
+
+	// First pass: prune empty leaf children (except keep the first slot).
+	out := entries[:0]
+	for i, e := range entries {
+		if i == 0 {
+			out = append(out, e)
+			continue
+		}
+		n, ok, err := loadLeaf(e.child)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && n.Count() == 0 {
+			retired = append(retired, e.child)
+			continue
+		}
+		out = append(out, e)
+	}
+	entries = out
+	if len(entries) < 2 {
+		return entries, retired, nil
+	}
+
+	const underfullPPM = 350_000
+	pageCap := page.PageSize - node.NodeHeaderSize
+
+	leafEntryBytes := func(key, val []byte, ptr page.ValuePtr, flags byte) int {
+		entrySize := 7 + len(key)
+		if flags&node.FlagPointer != 0 {
+			entrySize += page.ValuePtrSize
+		} else {
+			entrySize += len(val)
+		}
+		return entrySize + node.DirectoryEntrySize
+	}
+
+	leafRequiredBytes := func(n *node.Node) (int, error) {
+		sum := 0
+		for i := uint16(0); i < n.Count(); i++ {
+			k, v, ptr, flags, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return 0, err
+			}
+			if flags&node.FlagTombstone != 0 {
+				continue
+			}
+			sum += leafEntryBytes(k, v, ptr, flags)
+			if sum > pageCap {
+				return sum, nil
+			}
+		}
+		return sum, nil
+	}
+
+	fillPPM := func(n *node.Node) uint32 {
+		used := page.PageSize - n.FreeSpace()
+		return uint32((used * 1_000_000) / page.PageSize)
+	}
+
+	buildMergedLeaf := func(left, right *node.Node) (uint64, bool, error) {
+		pid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, false, err
+		}
+		data, err := z.pager.GetForWrite(pid)
+		if err != nil {
+			return 0, false, err
+		}
+		b := node.NewBuilder(data, page.PageTypeLeaf)
+		b.SetPageID(pid)
+
+		addAll := func(n *node.Node) error {
+			for i := uint16(0); i < n.Count(); i++ {
+				k, v, ptr, flags, err := n.GetLeafEntryView(i)
+				if err != nil {
+					return err
+				}
+				if flags&node.FlagTombstone != 0 {
+					continue
+				}
+				if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		if err := addAll(left); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+		if err := addAll(right); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+
+		n := b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		return pid, true, nil
+	}
+
+	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+		lid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		ldata, err := z.pager.GetForWrite(lid)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
+		lb.SetPageID(lid)
+
+		rid, err := z.allocator.Alloc()
+		if err != nil {
+			retired = append(retired, lid)
+			return 0, 0, nil, false, err
+		}
+		rdata, err := z.pager.GetForWrite(rid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+
+		// Collect combined entries in-order without copying.
+		type ev struct {
+			k     []byte
+			v     []byte
+			ptr   page.ValuePtr
+			flags byte
+			size  int
+		}
+		combined := make([]ev, 0, int(left.Count()+right.Count()))
+		for _, src := range []*node.Node{left, right} {
+			for i := uint16(0); i < src.Count(); i++ {
+				k, v, ptr, flags, err := src.GetLeafEntryView(i)
+				if err != nil {
+					retired = append(retired, lid, rid)
+					return 0, 0, nil, false, err
+				}
+				if flags&node.FlagTombstone != 0 {
+					continue
+				}
+				combined = append(combined, ev{k: k, v: v, ptr: ptr, flags: flags, size: leafEntryBytes(k, v, ptr, flags)})
+			}
+		}
+		if len(combined) < 2 {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		// Choose a split point by bytes (closest to 50/50) to avoid repeated
+		// underfull siblings and to guarantee the rebalance fits.
+		prefixBytes := make([]int, len(combined)+1)
+		for i, e := range combined {
+			prefixBytes[i+1] = prefixBytes[i] + e.size
+		}
+		totalBytes := prefixBytes[len(combined)]
+
+		// Enforce the configured soft-full reserve (if any) by ensuring the
+		// constructed pages leave at least leafReserveBytes free space.
+		cap := pageCap
+		if z.leafReserveBytes > 0 && z.leafReserveBytes < pageCap {
+			cap = pageCap - z.leafReserveBytes
+		}
+
+		bestSplitAt := -1
+		bestDelta := int(^uint(0) >> 1) // MaxInt
+		for splitAt := 1; splitAt < len(combined); splitAt++ {
+			leftBytes := prefixBytes[splitAt]
+			rightBytes := totalBytes - leftBytes
+			if leftBytes > cap || rightBytes > cap {
+				continue
+			}
+			delta := leftBytes - rightBytes
+			if delta < 0 {
+				delta = -delta
+			}
+			if delta < bestDelta {
+				bestDelta = delta
+				bestSplitAt = splitAt
+			}
+		}
+		if bestSplitAt <= 0 || bestSplitAt >= len(combined) {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		rb := node.NewBuilder(rdata, page.PageTypeLeaf)
+		rb.SetPageID(rid)
+
+		for i := 0; i < bestSplitAt; i++ {
+			if err := lb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, err
+			}
+		}
+		rightStart = append([]byte(nil), combined[bestSplitAt].k...)
+		for i := bestSplitAt; i < len(combined); i++ {
+			if err := rb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, err
+			}
+		}
+
+		ln := lb.Finish()
+		rn := rb.Finish()
+		metrics.IndexWriteBytes += 2 * page.PageSize
+		metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
+		return lid, rid, rightStart, true, nil
+	}
+
+	// Second pass: attempt sibling merge/rebalance for underfull adjacent leaves.
+	i := 0
+	for i < len(entries)-1 {
+		leftID := entries[i].child
+		rightID := entries[i+1].child
+
+		left, okL, err := loadLeaf(leftID)
+		if err != nil {
+			return nil, nil, err
+		}
+		right, okR, err := loadLeaf(rightID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !okL || !okR {
+			i++
+			continue
+		}
+
+		if left.Count() == 0 {
+			// If this is a non-first child it would have been pruned already.
+			i++
+			continue
+		}
+
+		leftFill := fillPPM(left)
+		rightFill := fillPPM(right)
+		if leftFill >= underfullPPM && rightFill >= underfullPPM {
+			i++
+			continue
+		}
+
+		leftBytes, err := leafRequiredBytes(left)
+		if err != nil {
+			return nil, nil, err
+		}
+		rightBytes, err := leafRequiredBytes(right)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		mergeCap := pageCap
+		if z.leafReserveBytes > 0 && z.leafReserveBytes < pageCap {
+			mergeCap = pageCap - z.leafReserveBytes
+		}
+		if leftBytes+rightBytes <= mergeCap {
+			mergedID, ok, err := buildMergedLeaf(left, right)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				retired = append(retired, leftID, rightID)
+				entries[i].child = mergedID
+				copy(entries[i+1:], entries[i+2:])
+				entries = entries[:len(entries)-1]
+				if i > 0 {
+					i--
+				}
+				continue
+			}
+		}
+
+		// If merge isn't possible, attempt a bounded rebalance.
+		leftNewID, rightNewID, rightStart, ok, err := rebalanceLeaves(left, right)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && len(rightStart) > 0 {
+			retired = append(retired, leftID, rightID)
+			entries[i].child = leftNewID
+			entries[i+1].child = rightNewID
+			entries[i+1].key = rightStart
+		}
+		i++
+	}
+
+	return entries, retired, nil
+}
+
+func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+	if len(entries) < 2 {
+		return entries, nil, nil
+	}
+
+	var retired []uint64
+
+	loadInternal := func(id uint64) (*node.Node, bool, error) {
+		data, err := z.pager.Get(id)
+		if err != nil {
+			return nil, false, err
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeInternal {
+			return nil, false, nil
+		}
+		return n, true, nil
+	}
+
+	fillPPM := func(n *node.Node) uint32 {
+		used := page.PageSize - n.FreeSpace()
+		return uint32((used * 1_000_000) / page.PageSize)
+	}
+
+	pageCap := page.PageSize - node.NodeHeaderSize
+	internalEntryBytes := func(key []byte) int {
+		if key == nil {
+			key = []byte{}
+		}
+		// Internal entry: keylen(uint16) + child(uint64) + key bytes + directory entry.
+		return (2 + 8 + len(key)) + node.DirectoryEntrySize
+	}
+	internalRequiredBytes := func(n *node.Node) (int, error) {
+		sum := 0
+		for i := uint16(0); i < n.Count(); i++ {
+			k, _, err := n.GetInternalEntryView(i)
+			if err != nil {
+				return 0, err
+			}
+			sum += internalEntryBytes(k)
+			if sum > pageCap {
+				return sum, nil
+			}
+		}
+		return sum, nil
+	}
+
+	buildMergedInternal := func(left, right *node.Node) (uint64, bool, error) {
+		pid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, false, err
+		}
+		data, err := z.pager.GetForWrite(pid)
+		if err != nil {
+			return 0, false, err
+		}
+		b := node.NewBuilder(data, page.PageTypeInternal)
+		b.SetPageID(pid)
+
+		addAll := func(n *node.Node) error {
+			for i := uint16(0); i < n.Count(); i++ {
+				k, child, err := n.GetInternalEntryView(i)
+				if err != nil {
+					return err
+				}
+				if k == nil {
+					k = []byte{}
+				}
+				entrySize := 2 + 8 + len(k)
+				if z.internalSoftFull(b, entrySize) {
+					return node.ErrNodeFull
+				}
+				if err := b.AddInternalChild(k, child); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		if err := addAll(left); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+		if err := addAll(right); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+
+		_ = b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		return pid, true, nil
+	}
+
+	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+		lid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		ldata, err := z.pager.GetForWrite(lid)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+
+		rid, err := z.allocator.Alloc()
+		if err != nil {
+			retired = append(retired, lid)
+			return 0, 0, nil, false, err
+		}
+		rdata, err := z.pager.GetForWrite(rid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+
+		combined := make([]internalEntry, 0, int(left.Count()+right.Count()))
+		for _, src := range []*node.Node{left, right} {
+			for i := uint16(0); i < src.Count(); i++ {
+				k, child, err := src.GetInternalEntryView(i)
+				if err != nil {
+					retired = append(retired, lid, rid)
+					return 0, 0, nil, false, err
+				}
+				combined = append(combined, internalEntry{key: k, child: child})
+			}
+		}
+		if len(combined) < 2 {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		splitAt := len(combined) / 2
+		if splitAt < 1 {
+			splitAt = 1
+		}
+		if splitAt >= len(combined) {
+			splitAt = len(combined) - 1
+		}
+
+		build := func(b *node.Builder, list []internalEntry) error {
+			for i, e := range list {
+				k := e.key
+				if k == nil {
+					k = []byte{}
+				}
+				entrySize := 2 + 8 + len(k)
+				if i > 0 && z.internalSoftFull(b, entrySize) {
+					return node.ErrNodeFull
+				}
+				if err := b.AddInternalChild(k, e.child); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		try := func(splitAt int) ([]byte, bool, error) {
+			lb2 := node.NewBuilder(ldata, page.PageTypeInternal)
+			lb2.SetPageID(lid)
+			rb2 := node.NewBuilder(rdata, page.PageTypeInternal)
+			rb2.SetPageID(rid)
+
+			if err := build(lb2, combined[:splitAt]); err != nil {
+				if err == node.ErrNodeFull {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+			if err := build(rb2, combined[splitAt:]); err != nil {
+				if err == node.ErrNodeFull {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+			lb2.Finish()
+			rb2.Finish()
+			rs := combined[splitAt].key
+			if rs == nil {
+				rs = []byte{}
+			}
+			return append([]byte(nil), rs...), true, nil
+		}
+
+		// Adjust split point until both sides fit.
+		rightStart, ok, err = try(splitAt)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+		if !ok {
+			for d := 1; d < len(combined)-1; d++ {
+				if splitAt-d >= 1 {
+					if rs, ok2, err2 := try(splitAt - d); err2 != nil {
+						retired = append(retired, lid, rid)
+						return 0, 0, nil, false, err2
+					} else if ok2 {
+						rightStart = rs
+						ok = true
+						break
+					}
+				}
+				if splitAt+d < len(combined) {
+					if rs, ok2, err2 := try(splitAt + d); err2 != nil {
+						retired = append(retired, lid, rid)
+						return 0, 0, nil, false, err2
+					} else if ok2 {
+						rightStart = rs
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, nil
+			}
+		}
+
+		metrics.IndexWriteBytes += 2 * page.PageSize
+		return lid, rid, rightStart, true, nil
+	}
+
+	const underfullPPM = 350_000
+
+	i := 0
+	for i < len(entries)-1 {
+		leftID := entries[i].child
+		rightID := entries[i+1].child
+
+		left, okL, err := loadInternal(leftID)
+		if err != nil {
+			return nil, nil, err
+		}
+		right, okR, err := loadInternal(rightID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !okL || !okR {
+			i++
+			continue
+		}
+
+		leftFill := fillPPM(left)
+		rightFill := fillPPM(right)
+		if leftFill >= underfullPPM && rightFill >= underfullPPM {
+			i++
+			continue
+		}
+
+		leftBytes, err := internalRequiredBytes(left)
+		if err != nil {
+			return nil, nil, err
+		}
+		rightBytes, err := internalRequiredBytes(right)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Attempt a full sibling merge when the combined entries should fit in one page
+		// while still respecting the configured soft-full reserve (if any).
+		if leftBytes+rightBytes <= pageCap-z.internalReserveBytes {
+			mergedID, ok, err := buildMergedInternal(left, right)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				retired = append(retired, leftID, rightID)
+				entries[i].child = mergedID
+				copy(entries[i+1:], entries[i+2:])
+				entries = entries[:len(entries)-1]
+				if i > 0 {
+					i--
+				}
+				continue
+			}
+		}
+
+		leftNewID, rightNewID, rightStart, ok, err := rebalanceInternals(left, right)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && len(rightStart) > 0 {
+			retired = append(retired, leftID, rightID)
+			entries[i].child = leftNewID
+			entries[i+1].child = rightNewID
+			entries[i+1].key = rightStart
+		}
+		i++
+	}
+
+	return entries, retired, nil
 }
 
 func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, key []byte, val uint64, metrics *adaptive.Metrics) (*node.Builder, error) {

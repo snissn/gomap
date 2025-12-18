@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,9 @@ type DB struct {
 
 	keepRecent uint64
 	policy     WritePolicy
+	// repairSlabTailOnOpen enables tail-record repair during recovery. This
+	// protects against torn/partial slab record tails after crashes.
+	repairSlabTailOnOpen bool
 
 	mu         sync.RWMutex
 	writeMu    sync.Mutex
@@ -69,6 +73,20 @@ type Options struct {
 	KeepRecent     uint64 // Default 10000
 	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
+	// PreferAppendAlloc makes the page allocator ignore the freelist and append
+	// new pages instead. This can improve scan locality under churn at the cost
+	// of file growth (space is reclaimed later via vacuum).
+	PreferAppendAlloc bool
+
+	// LeafFillTargetPPM and InternalFillTargetPPM control how full newly-written
+	// B+Tree pages are allowed to become before forcing a split (soft-full).
+	// Lower values reduce split churn and slow re-fragmentation under updates, at
+	// the cost of higher page count (more index bytes).
+	//
+	// Values are in parts-per-million where 1_000_000 means "allow full pages"
+	// (current behavior). Zero uses the default (1_000_000).
+	LeafFillTargetPPM     uint32
+	InternalFillTargetPPM uint32
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -90,6 +108,12 @@ type Options struct {
 	// WriterFlushMaxDuration bounds how long a writer will spend helping flush per
 	// write when backpressure is active (0 disables the time bound).
 	WriterFlushMaxDuration time.Duration
+
+	// DisableSlabTailRepairOnOpen disables best-effort recovery that truncates
+	// partial/corrupt tail records on the active slab. Disabling may reduce open
+	// latency for very large slabs but risks starting up with committed pointers
+	// that decode to checksum errors after a crash.
+	DisableSlabTailRepairOnOpen bool
 }
 
 type Snapshot struct {
@@ -141,6 +165,12 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 {
 		opts.KeepRecent = 10000
 	}
+	if opts.LeafFillTargetPPM == 0 {
+		opts.LeafFillTargetPPM = 1_000_000
+	}
+	if opts.InternalFillTargetPPM == 0 {
+		opts.InternalFillTargetPPM = 1_000_000
+	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
@@ -168,22 +198,25 @@ func Open(opts Options) (*DB, error) {
 	// We'll init with 0 and update after recovery.
 
 	alloc := freelist.New(p, 0)
+	alloc.SetPreferAppend(opts.PreferAppendAlloc)
 
 	db := &DB{
-		pager:       p,
-		slabManager: sm,
-		zipper:      zipper.New(p, alloc),
-		allocator:   alloc,
-		graveyard:   lifecycle.NewGraveyard(),
-		registry:    lifecycle.NewReaderRegistry(),
-		lock:        lock,
-		adaptive:    adaptive.New(),
-		keepRecent:  opts.KeepRecent,
+		pager:                p,
+		slabManager:          sm,
+		zipper:               zipper.New(p, alloc),
+		allocator:            alloc,
+		graveyard:            lifecycle.NewGraveyard(),
+		registry:             lifecycle.NewReaderRegistry(),
+		lock:                 lock,
+		adaptive:             adaptive.New(),
+		keepRecent:           opts.KeepRecent,
+		repairSlabTailOnOpen: !opts.DisableSlabTailRepairOnOpen,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 	}
+	db.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -298,50 +331,105 @@ func (db *DB) recover() error {
 	m0, valid0 := db.readMeta(MetaPage0ID)
 	m1, valid1 := db.readMeta(MetaPage1ID)
 
-	var activeMeta page.MetaPageBody
-	var activeID uint64
+	if valid0 && !db.metaSlabTailValid(m0) {
+		valid0 = false
+	}
+	if valid1 && !db.metaSlabTailValid(m1) {
+		valid1 = false
+	}
 
-	if !valid0 && !valid1 {
+	type metaCandidate struct {
+		id   uint64
+		meta page.MetaPageBody
+	}
+	var candidates []metaCandidate
+	if valid0 {
+		candidates = append(candidates, metaCandidate{id: MetaPage0ID, meta: m0})
+	}
+	if valid1 {
+		candidates = append(candidates, metaCandidate{id: MetaPage1ID, meta: m1})
+	}
+	if len(candidates) == 0 {
 		return errors.New("both meta pages corrupted")
-	} else if valid0 && !valid1 {
-		activeMeta = m0
-		activeID = MetaPage0ID
-	} else if !valid0 && valid1 {
-		activeMeta = m1
-		activeID = MetaPage1ID
-	} else {
-		if m0.CommitSeq >= m1.CommitSeq {
-			activeMeta = m0
-			activeID = MetaPage0ID
-		} else {
-			activeMeta = m1
-			activeID = MetaPage1ID
+	}
+	// Prefer the highest CommitSeq, but fall back if the active slab tail is not
+	// actually readable (e.g. torn last record).
+	if len(candidates) == 2 && candidates[0].meta.CommitSeq < candidates[1].meta.CommitSeq {
+		candidates[0], candidates[1] = candidates[1], candidates[0]
+	}
+
+	var chosen *metaCandidate
+	for i := range candidates {
+		c := &candidates[i]
+
+		// Re-check slab tail against current size (note: prior iterations may have
+		// truncated the slab).
+		path := db.slabManager.GetSlabPath(c.meta.ActiveSlabID)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
 		}
+		if c.meta.ActiveSlabTail > uint64(info.Size()) {
+			continue
+		}
+
+		if err := db.slabManager.SetActiveSlab(c.meta.ActiveSlabID); err != nil {
+			continue
+		}
+		if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
+			return err
+		}
+
+		if db.repairSlabTailOnOpen {
+			repairedTail, err := db.slabManager.RepairActiveSlabTail()
+			if err != nil {
+				return err
+			}
+			if repairedTail < c.meta.ActiveSlabTail {
+				// This commit's meta tail was beyond the last checksum-valid record;
+				// reject it and fall back to an older meta page.
+				continue
+			}
+		}
+
+		chosen = c
+		break
+	}
+	if chosen == nil {
+		return errors.New("no meta page with durable slab tail")
 	}
 
-	db.meta = activeMeta
-	db.metaPageID = activeID
+	db.meta = chosen.meta
+	db.metaPageID = chosen.id
 
-	if err := db.slabManager.SetActiveSlab(activeMeta.ActiveSlabID); err != nil {
-		return err
-	}
-	if err := db.slabManager.TruncateActiveSlab(activeMeta.ActiveSlabTail); err != nil {
-		return err
-	}
-	if err := db.slabManager.PruneSlabs(activeMeta.ActiveSlabID); err != nil {
+	if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
 		return err
 	}
 
-	if activeMeta.TotalPages > 0 {
-		// Debug print
-		fmt.Printf("DEBUG db.recover: Setting pager page count to %d (from activeMeta.TotalPages)\n", activeMeta.TotalPages)
-		db.pager.SetPageCount(activeMeta.TotalPages)
+	if chosen.meta.TotalPages > 0 {
+		db.pager.SetPageCount(chosen.meta.TotalPages)
 	}
 
 	// Update Allocator Head
-	db.allocator.SetHead(activeMeta.FreelistHeadID)
+	db.allocator.SetHead(chosen.meta.FreelistHeadID)
 
 	return nil
+}
+
+func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
+	// ActiveSlabTail must not exceed the on-disk slab size; otherwise we'd end up
+	// pointing reads at bytes that were never durable (possible after a crash on
+	// async writes where index meta reached disk but slab didn't).
+	path := db.slabManager.GetSlabPath(m.ActiveSlabID)
+	info, err := os.Stat(path)
+	if err != nil {
+		// For empty/new DBs, active slab should exist; treat missing as invalid.
+		return false
+	}
+	if m.ActiveSlabTail > uint64(info.Size()) {
+		return false
+	}
+	return true
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
@@ -380,6 +468,19 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	// 0. Update System metadata tree (slab stats, etc) before sync/meta.
+	//
+	// This mutates index pages, so it must run before any Sync() durability
+	// boundary.
+	if nextSysRoot, sysRetired, err := db.applySystemStatsUpdates(sysRootID, metrics); err != nil {
+		return err
+	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
+		sysRootID = nextSysRoot
+		if len(sysRetired) > 0 {
+			retired = append(retired, sysRetired...)
+		}
+	}
+
 	// 1. Sync Data (Slabs + Index Pages) - No DB Lock
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {
@@ -515,60 +616,125 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+// RefreshSlabSet publishes a new DBState with the current SlabSet (excluding
+// zombies) without creating a new commit. This is used by background compaction
+// so that future snapshots stop pinning compacted slabs immediately.
+func (db *DB) RefreshSlabSet() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	oldState := db.state.Load()
+	if oldState == nil {
+		return nil
+	}
+
+	newState := &DBState{
+		CommitSeq:        oldState.CommitSeq,
+		RootPageID:       oldState.RootPageID,
+		SystemRootPageID: oldState.SystemRootPageID,
+		SlabSet:          db.slabManager.CurrentSlabSet(),
+	}
+	db.state.Store(newState)
+
+	return db.slabManager.ReleaseSlabs(oldState.SlabSet)
+}
+
 type CompactionOp struct {
 	Key    []byte
 	OldPtr page.ValuePtr
 	NewPtr page.ValuePtr
 }
 
-// ApplyCompaction applies pointer updates atomically.
+const defaultCompactionMicroBatchSize = 256
+
+// ApplyCompaction applies pointer updates to the current tree. It uses
+// micro-batching to bound time under the writer lock.
 func (db *DB) ApplyCompaction(ops []CompactionOp) error {
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	return db.ApplyCompactionMicroBatches(ops, defaultCompactionMicroBatchSize)
+}
 
-	b := batch.New(db.slabManager, db.policy.InlineThreshold)
+// ApplyCompactionMicroBatches applies compaction pointer updates in chunks of at
+// most maxOps per commit. This bounds writer pauses and keeps the system
+// responsive under large compactions.
+func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	if maxOps <= 0 {
+		maxOps = defaultCompactionMicroBatchSize
+	}
 
-	db.mu.RLock()
-	// Create temporary tree for verification (using current root)
-	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
-	rootID := db.meta.UserRootPageID
+	for start := 0; start < len(ops); start += maxOps {
+		end := start + maxOps
+		if end > len(ops) {
+			end = len(ops)
+		}
+		chunk := ops[start:end]
 
-	for _, op := range ops {
-		entry, err := tr.GetEntry(op.Key)
-		if err != nil {
-			continue // Skip if not found
+		db.writeMu.Lock()
+
+		// Snapshot roots under DB lock.
+		db.mu.RLock()
+		rootID := db.meta.UserRootPageID
+		sysRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+
+		// Build a micro-batch of still-live pointer updates.
+		tr := tree.New(db.pager, db.slabManager, rootID)
+		b := batch.New(db.slabManager, db.policy.InlineThreshold)
+		var slabWritesByFile map[uint32]int64
+
+		for _, op := range chunk {
+			entry, err := tr.GetEntry(op.Key)
+			if err != nil {
+				continue
+			}
+			if entry.Flags&node.FlagPointer == 0 {
+				continue
+			}
+			if entry.ValuePtr != op.OldPtr {
+				continue
+			}
+			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+				db.writeMu.Unlock()
+				return err
+			}
+			if slabWritesByFile == nil {
+				slabWritesByFile = make(map[uint32]int64, 4)
+			}
+			slabWritesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
 		}
 
-		if entry.Flags&node.FlagPointer != 0 {
-			if entry.ValuePtr == op.OldPtr {
-				if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
-					db.mu.RUnlock()
-					return err
+		if len(b.Ops()) == 0 {
+			db.writeMu.Unlock()
+			continue
+		}
+
+		newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
+		if err != nil {
+			db.writeMu.Unlock()
+			return err
+		}
+		if len(slabWritesByFile) > 0 {
+			if metrics.SlabWriteBytesByFile == nil {
+				metrics.SlabWriteBytesByFile = slabWritesByFile
+			} else {
+				for id, n := range slabWritesByFile {
+					metrics.SlabWriteBytesByFile[id] += n
 				}
 			}
 		}
-	}
-	db.mu.RUnlock()
 
-	if len(b.Ops()) == 0 {
-		return nil
-	}
+		// Commit without forcing Sync; compaction can be lazily durable.
+		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+			db.writeMu.Unlock()
+			return err
+		}
 
-	newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
-	if err != nil {
-		return err
+		db.writeMu.Unlock()
 	}
 
-	db.mu.Lock()
-	if db.meta.UserRootPageID != rootID {
-		db.mu.Unlock()
-		return fmt.Errorf("concurrent modification detected during compaction")
-	}
-	sysRoot := db.meta.SystemRootPageID
-	db.mu.Unlock()
-
-	// Commit with sync=true (Compaction should be durable)
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
+	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
@@ -585,6 +751,12 @@ func (db *DB) CompactIndex() error {
 	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
+
+	// Collect pages in the old tree so they can be retired after the swap.
+	retired, err := tr.CollectPageIDs()
+	if err != nil {
+		return err
+	}
 
 	// Create Iterator (Full Scan)
 	iter := tr.Iterator(nil, nil)
@@ -605,8 +777,8 @@ func (db *DB) CompactIndex() error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.Unlock()
 
-	// Commit new root
-	return db.finalizeCommit(newRoot, sysRoot, nil, true, adaptive.Metrics{})
+	// Commit new root and retire the old tree pages.
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
 }
 
 type pagerAllocator struct {

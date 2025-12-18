@@ -820,8 +820,79 @@ func (db *DB) Stats() map[string]string {
 	return stats
 }
 
+// TriggerFlush schedules a background flush pass (best-effort).
+func (db *DB) TriggerFlush() {
+	select {
+	case db.flushCh <- struct{}{}:
+	default:
+	}
+}
+
+// QueueBacklogBytes returns the current queued memtable backlog in bytes.
+func (db *DB) QueueBacklogBytes() int64 {
+	return db.queueBacklogBytes.Load()
+}
+
+// CompactionAssist performs bounded flush work when backpressure triggers. It is
+// intended to be called by background maintenance (e.g. slab compaction) so that
+// flush debt does not grow unbounded in the absence of foreground writes.
+func (db *DB) CompactionAssist() {
+	// Ensure the background flusher is scheduled even if this call ends up doing
+	// no synchronous work (e.g. due to low backlog).
+	db.TriggerFlush()
+
+	// Adaptive policy: thresholds based on queued backlog bytes.
+	if db.adaptiveBackpressureEnabled() {
+		db.bpMu.Lock()
+		slowdownBytes, stopBytes, _ := db.thresholdsLocked()
+		db.bpMu.Unlock()
+
+		backlog := db.queueBacklogBytes.Load()
+		if stopBytes > 0 && backlog >= stopBytes {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		if slowdownBytes > 0 && backlog > slowdownBytes {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		return
+	}
+
+	// Legacy policy: thresholds based on queue length.
+	if db.maxQueuedMemtables >= 0 {
+		db.mu.RLock()
+		needs := len(db.queue) > db.maxQueuedMemtables
+		db.mu.RUnlock()
+		if needs {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		}
+	}
+}
+
 func (db *DB) Print() error {
 	return db.backend.Print()
+}
+
+// Drain flushes all currently buffered writes (mutable + queued memtables) to the
+// backend. It is intended for maintenance operations that require a fully
+// materialized backend state (e.g. index vacuum).
+//
+// Drain does not provide mutual exclusion against concurrent writers; callers
+// should ensure no writes occur concurrently if they require a fully drained
+// state.
+func (db *DB) Drain() error {
+	db.mu.Lock()
+	if db.mutable.Len() > 0 {
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+	return nil
 }
 
 // Iterator implements DB.Iterator

@@ -105,7 +105,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 
 	offset, err := sm.activeSlab.Write(key, value)
 	if err == ErrSlabFull {
-		if err := sm.rotate(); err != nil {
+		if err := sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
 		}
 		offset, err = sm.activeSlab.Write(key, value)
@@ -124,7 +124,17 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	}, nil
 }
 
-func (sm *SlabManager) rotate() error {
+// Rotate forces creation of a new active slab.
+func (sm *SlabManager) Rotate() (*SlabFile, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if err := sm.rotateLocked(); err != nil {
+		return nil, err
+	}
+	return sm.activeSlab, nil
+}
+
+func (sm *SlabManager) rotateLocked() error {
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
@@ -140,6 +150,12 @@ func (sm *SlabManager) rotate() error {
 
 	sm.slabs[newID] = newSlab
 	sm.activeSlab = newSlab
+
+	// Ensure the directory entry is durable (best-effort).
+	if dir, err := os.Open(sm.dir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 
 	return nil
 }
@@ -186,6 +202,20 @@ func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	return sm.activeSlab.Truncate(int64(offset))
 }
 
+// RepairActiveSlabTail scans and truncates any partial/corrupt tail records on
+// the active slab (best-effort crash recovery).
+func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.activeSlab == nil {
+		return 0, fmt.Errorf("no active slab")
+	}
+	if err := sm.activeSlab.RepairTail(); err != nil {
+		return 0, err
+	}
+	return uint64(sm.activeSlab.Size), nil
+}
+
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -224,6 +254,9 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 
 	files := make(map[uint32]*SlabFile, len(sm.slabs))
 	for k, v := range sm.slabs {
+		if v.IsZombie.Load() {
+			continue
+		}
 		files[k] = v
 		v.RefCount.Add(1) // Pin files for this Set
 	}
@@ -278,4 +311,48 @@ func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
 		}
 	}
 	return err
+}
+
+// MarkZombie removes a slab from the active set so future snapshots stop
+// pinning it. The file is deleted once all snapshots release it.
+func (sm *SlabManager) MarkZombie(id uint32) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.activeSlab != nil && sm.activeSlab.ID == id {
+		return fmt.Errorf("cannot mark active slab %d as zombie", id)
+	}
+	s, ok := sm.slabs[id]
+	if !ok {
+		return fmt.Errorf("slab file %d not found", id)
+	}
+	s.IsZombie.Store(true)
+	return nil
+}
+
+// RemoveSlab deletes a slab file from disk and unregisters it from the manager.
+// It is only safe to call when the slab is not referenced by any snapshots.
+func (sm *SlabManager) RemoveSlab(id uint32) error {
+	sm.mu.Lock()
+	if sm.activeSlab != nil && sm.activeSlab.ID == id {
+		sm.mu.Unlock()
+		return fmt.Errorf("cannot remove active slab %d", id)
+	}
+	s, ok := sm.slabs[id]
+	if !ok {
+		sm.mu.Unlock()
+		return nil
+	}
+	if s.RefCount.Load() != 0 {
+		sm.mu.Unlock()
+		return fmt.Errorf("cannot remove slab %d: still pinned", id)
+	}
+	delete(sm.slabs, id)
+	sm.mu.Unlock()
+
+	_ = s.Close()
+	if err := os.Remove(s.Path); err != nil {
+		return err
+	}
+	return nil
 }

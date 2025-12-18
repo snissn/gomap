@@ -37,6 +37,14 @@ func (b *Builder) PageID() uint64 {
 	return b.pageID
 }
 
+func (b *Builder) Count() uint16 {
+	return b.count
+}
+
+func (b *Builder) FreeSpace() int {
+	return b.heapStart - b.dirEnd
+}
+
 // Data returns the underlying buffer.
 func (b *Builder) Data() []byte {
 	return b.data

@@ -3,6 +3,7 @@ package treedb
 import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -63,6 +64,15 @@ func (db *DB) ensureOpen() error {
 // Open opens TreeDB. By default it enables caching (write-back layer).
 // To open the backend-only engine, set opts.Mode = ModeBackend.
 func Open(opts Options) (*DB, error) {
+	// Cached mode writes to the backend in large flush batches, so commit sequence
+	// advances much more slowly than "number of writes". A large KeepRecent value
+	// can therefore delay page reuse for a very long time (and cause index.db to
+	// balloon under update-heavy workloads). Default to aggressive reuse in cached
+	// mode unless the caller specifies otherwise.
+	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
+		opts.KeepRecent = 1
+	}
+
 	backend, err := db.Open(opts)
 	if err != nil {
 		return nil, err
@@ -243,4 +253,51 @@ func (db *DB) Print() error {
 		return db.cached.Print()
 	}
 	return db.backend.Print()
+}
+
+// CompactCandidates runs slab compaction based on the provided selection options.
+// In cached mode it will also perform bounded flush assist when the caching layer
+// is under backpressure, so compaction does not starve the foreground flush path.
+func (db *DB) CompactCandidates(opts compaction.Options) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+
+	if db.cached != nil {
+		// Kick the flusher once up front, and wire compaction to periodically
+		// perform bounded flush assist when backlog is high.
+		db.cached.CompactionAssist()
+		userAssist := opts.Assist
+		opts.Assist = func() {
+			db.cached.CompactionAssist()
+			if userAssist != nil {
+				userAssist()
+			}
+		}
+	}
+
+	c := compaction.New(db.backend)
+	return c.CompactCandidates(opts)
+}
+
+// CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.
+// In cached mode it first drains the caching layer so the backend reflects all
+// buffered writes before rebuilding.
+func (db *DB) CompactIndex() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+
+	if db.cached != nil {
+		if err := db.cached.Drain(); err != nil {
+			return err
+		}
+	}
+	return db.backend.CompactIndex()
 }
