@@ -410,7 +410,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - yield between micro-batches to bound tail latency.
 - [x] Ensure crash safety: compactor is restartable/idempotent (re-copy safe; apply verifies pointers).
 - [ ] **Gates (before 15.4):**
-  - [ ] Concurrency test: foreground writes can proceed between micro-batches (no deadlocks; bounded wait).
+  - [x] Concurrency test: foreground writes can proceed between micro-batches (no deadlocks; bounded wait).
   - [ ] Integration test: partial apply (stop after 1 micro-batch) leaves DB consistent and resumable.
   - [ ] Bench smoke: `random_write` not regressed >10% vs baseline (expected small overhead from more commits/locking).
 
@@ -418,7 +418,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Add compaction IO throttling (bytes/sec limiter) and expose config knobs.
 - [ ] Integrate with caching-layer backpressure so compaction does not starve foreground flush and vice-versa (bounded “assist” only under overload).
 - [ ] **Gates (before 15.5):**
-  - [ ] Unit test: throttler enforces upper bound (time-based; allow small tolerance).
+  - [x] Unit test: throttler enforces upper bound (time-based; allow small tolerance).
   - [ ] Integration test: compaction under sustained writes does not exceed configured writer-latency budget (bounded blocking).
   - [ ] Bench smoke with compaction enabled: completes without stalls/timeouts.
 
@@ -428,7 +428,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [ ] Optionally support a full offline rewrite (`index.db.new` swap) for maximum physical locality (requires robust open/rename protocol).
 - [ ] **Gates (before 15.6):**
   - [x] Integration test: vacuum preserves all key/value pairs and iteration order.
-  - [ ] Structural test: post-vacuum live page span/locality meets target (e.g. `span <= 1.2x livePages`).
+  - [x] Structural test: post-vacuum live page span/locality meets target (e.g. `span <= 1.2x livePages`).
   - [ ] Benchmark gate (fragmentation stress): after a churn-heavy run, vacuum + “settled scans” improves `full_scan/prefix_scan` vs pre-vacuum on the same dataset.
 
 ### 15.6 Allocation Locality (Reduce Re-Fragmentation)
