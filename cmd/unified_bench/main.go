@@ -575,6 +575,16 @@ type BenchRun struct {
 	Results      map[string]map[string]float64
 }
 
+type scanDiag struct {
+	dbName              string
+	queueBacklogBytes   string
+	queueLen            string
+	flushThresholdBytes string
+	maxQueuedMemtables  string
+	backpressureMode    string
+	flushBpsEWMA        string
+}
+
 func main() {
 	flag.Parse()
 
@@ -1453,6 +1463,36 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		_ = live.Render(results)
 	}
 
+	// Capture cache backlog stats at scan start so scan results can be interpreted.
+	var scanDiagnostics []scanDiag
+	scanDiagnosticsCaptured := false
+	captureScanDiagnostics := func() {
+		scanDiagnosticsCaptured = true
+		for _, inst := range instances {
+			sp, ok := inst.Wrapper.(kvstore.StatsProvider)
+			if !ok {
+				continue
+			}
+			stats := sp.Stats()
+			if stats == nil {
+				continue
+			}
+			backlog := stats["treedb.cache.queue_backlog_bytes"]
+			if backlog == "" {
+				continue
+			}
+			scanDiagnostics = append(scanDiagnostics, scanDiag{
+				dbName:              inst.Wrapper.Name(),
+				queueBacklogBytes:   backlog,
+				queueLen:            stats["treedb.cache.queue_len"],
+				flushThresholdBytes: stats["treedb.cache.flush_threshold_bytes"],
+				maxQueuedMemtables:  stats["treedb.cache.max_queued_memtables"],
+				backpressureMode:    stats["treedb.cache.backpressure_mode"],
+				flushBpsEWMA:        stats["treedb.cache.flush_bps_ewma"],
+			})
+		}
+	}
+
 	settled := false
 	compactTreeDBs := func() error {
 		if !cfg.TreeDBCompactBeforeScans {
@@ -1543,6 +1583,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			settled = true
 		}
 
+		if !scanDiagnosticsCaptured && (testName == "full_scan" || testName == "prefix_scan") {
+			captureScanDiagnostics()
+		}
+
 		for _, inst := range instances {
 			rng := rand.New(rand.NewSource(testSeed(cfg.SeedUsed, testName)))
 			res, err := fn(inst.Wrapper, rng)
@@ -1565,6 +1609,31 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 	if live != nil {
 		_ = live.Clear()
+	}
+
+	if len(scanDiagnostics) > 0 {
+		anyBacklog := false
+		for _, diag := range scanDiagnostics {
+			if n, err := strconv.ParseInt(diag.queueBacklogBytes, 10, 64); err == nil && n > 0 {
+				anyBacklog = true
+				break
+			}
+		}
+		if anyBacklog && !cfg.SettleBeforeScans {
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(os.Stderr, "scan note: TreeDB scan tests ran with cached write-back backlog present; use -settle-before-scans to measure settled scan performance")
+			for _, diag := range scanDiagnostics {
+				fmt.Fprintf(os.Stderr, "  %s: queue_backlog_bytes=%s queue_len=%s flush_threshold_bytes=%s max_queued_memtables=%s backpressure_mode=%s flush_bps_ewma=%s\n",
+					diag.dbName,
+					diag.queueBacklogBytes,
+					diag.queueLen,
+					diag.flushThresholdBytes,
+					diag.maxQueuedMemtables,
+					diag.backpressureMode,
+					diag.flushBpsEWMA,
+				)
+			}
+		}
 	}
 
 	return BenchRun{
