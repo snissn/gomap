@@ -294,31 +294,31 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 		// Insert into target builder
 		err := target.AddLeafEntry(key, val, flags, valPtr)
-			if err == node.ErrNodeFull {
-				// SPLIT!
+		if err == node.ErrNodeFull {
+			// SPLIT!
 
-				// 1. Finish current target (writes header/checksum)
-				if target != builder {
-					n := target.Finish()
-					metrics.IndexWriteBytes += page.PageSize
-					metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
-					metrics.Splits++
-				}
+			// 1. Finish current target (writes header/checksum)
+			if target != builder {
+				n := target.Finish()
+				metrics.IndexWriteBytes += page.PageSize
+				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+				metrics.Splits++
+			}
 
 			// 2. Allocate NEW split node
 			sid, err := z.allocator.Alloc()
-				if err != nil {
-					return 0, nil, err
-				}
+			if err != nil {
+				return 0, nil, err
+			}
 
-				sdata, err := z.pager.GetForWrite(sid)
-				if err != nil {
-					return 0, nil, err
-				}
+			sdata, err := z.pager.GetForWrite(sid)
+			if err != nil {
+				return 0, nil, err
+			}
 
-				// New Builder
-				splitBuilder := node.NewBuilder(sdata, page.PageTypeLeaf)
-				splitBuilder.SetPageID(sid)
+			// New Builder
+			splitBuilder := node.NewBuilder(sdata, page.PageTypeLeaf)
+			splitBuilder.SetPageID(sid)
 
 			// Record split
 			splitKey := append([]byte(nil), key...) // Deep copy

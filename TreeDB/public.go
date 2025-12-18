@@ -73,13 +73,13 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
-		FlushThreshold:           opts.FlushThreshold,
-		MaxQueuedMemtables:       opts.MaxQueuedMemtables,
-		SlowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
-		StopBacklogSeconds:       opts.StopBacklogSeconds,
-		MaxBacklogBytes:          opts.MaxBacklogBytes,
-		WriterFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
-		WriterFlushMaxDuration:   opts.WriterFlushMaxDuration,
+		FlushThreshold:          opts.FlushThreshold,
+		MaxQueuedMemtables:      opts.MaxQueuedMemtables,
+		SlowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
+		StopBacklogSeconds:      opts.StopBacklogSeconds,
+		MaxBacklogBytes:         opts.MaxBacklogBytes,
+		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
+		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
 	})
 	if err != nil {
 		_ = backend.Close()

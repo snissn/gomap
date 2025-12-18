@@ -79,13 +79,13 @@ func NewBTree(dir string) (kvstore.DB, error) {
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 	opts := treedb.Options{
-		Dir:              dir,
-		ChunkSize:         64 * 1024 * 1024,
-		FlushThreshold:    *treedbFlushThreshold,
-		MaxQueuedMemtables: *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds: *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:     *treedbStopBacklogSeconds,
-		MaxBacklogBytes:        *treedbMaxBacklogBytes,
+		Dir:                     dir,
+		ChunkSize:               64 * 1024 * 1024,
+		FlushThreshold:          *treedbFlushThreshold,
+		MaxQueuedMemtables:      *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:      *treedbStopBacklogSeconds,
+		MaxBacklogBytes:         *treedbMaxBacklogBytes,
 		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
@@ -476,15 +476,15 @@ var (
 	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
 	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
 
-	treedbFlushThreshold = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
-	treedbMaxQueuedMems  = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
+	treedbFlushThreshold         = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbMaxQueuedMems          = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
 	treedbSlowdownBacklogSeconds = flag.Float64("treedb-slowdown-backlog-seconds", 0, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
 	treedbStopBacklogSeconds     = flag.Float64("treedb-stop-backlog-seconds", 0, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
 	treedbMaxBacklogBytes        = flag.Int64("treedb-max-backlog-bytes", 0, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
 	treedbWriterFlushMaxMems     = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs       = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
-	treedbIterDebug      = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
-	treedbIterDebugLimit = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
+	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
+	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 )
 
 type DBInstance struct {

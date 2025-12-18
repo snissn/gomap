@@ -28,9 +28,9 @@ type Controller struct {
 	commitsSinceUpdate int
 
 	// EWMA State (Exponentially Weighted Moving Averages)
-	leafFillAvg      float64
-	splitRateAvg     float64
-	slabDeadRatioAvg float64
+	leafFillAvg       float64
+	splitRateAvg      float64
+	slabDeadRatioAvg  float64
 	slabWriteBytesAvg float64
 
 	// Config (Weights)

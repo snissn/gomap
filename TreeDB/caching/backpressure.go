@@ -62,4 +62,3 @@ func computeBackpressureThresholds(p backpressureParams) (slowdownBytes, stopByt
 
 	return slowdownBytes, stopBytes, resumeBytes
 }
-

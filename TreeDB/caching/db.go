@@ -89,18 +89,18 @@ type DB struct {
 	backend BackendDB
 
 	// Config
-	dir              string
-	flushThreshold   int64
-	maxQueuedMemtables int
-	slowdownBacklogSeconds float64
-	stopBacklogSeconds     float64
-	maxBacklogBytes        int64
+	dir                     string
+	flushThreshold          int64
+	maxQueuedMemtables      int
+	slowdownBacklogSeconds  float64
+	stopBacklogSeconds      float64
+	maxBacklogBytes         int64
 	writerFlushMaxMemtables int
 	writerFlushMaxDuration  time.Duration
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
-	flushBpsEWMA       float64
+	flushBpsEWMA      float64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -187,18 +187,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	db := &DB{
-		dir:               walDir,
-		backend:           backend,
-		flushThreshold:           opts.FlushThreshold,
-		maxQueuedMemtables:       opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:       opts.StopBacklogSeconds,
-		maxBacklogBytes:          opts.MaxBacklogBytes,
-		writerFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:   opts.WriterFlushMaxDuration,
-		mutable:           memtable.New(),
-		closeCh:           make(chan struct{}),
-		flushCh:           make(chan struct{}, 1),
+		dir:                     walDir,
+		backend:                 backend,
+		flushThreshold:          opts.FlushThreshold,
+		maxQueuedMemtables:      opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:      opts.StopBacklogSeconds,
+		maxBacklogBytes:         opts.MaxBacklogBytes,
+		writerFlushMaxMemtables: opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:  opts.WriterFlushMaxDuration,
+		mutable:                 memtable.New(),
+		closeCh:                 make(chan struct{}),
+		flushCh:                 make(chan struct{}, 1),
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 
@@ -268,12 +268,12 @@ func (db *DB) thresholdsLocked() (slowdownBytes, stopBytes, resumeBytes int64) {
 		flushBps = float64(db.flushThreshold)
 	}
 	return computeBackpressureThresholds(backpressureParams{
-		flushBps:                flushBps,
-		flushThreshold:          db.flushThreshold,
-		slowdownBacklogSeconds:  db.slowdownBacklogSeconds,
-		stopBacklogSeconds:      db.stopBacklogSeconds,
-		maxBacklogBytes:         db.maxBacklogBytes,
-		stopResumeFraction:      stopResumeFraction,
+		flushBps:               flushBps,
+		flushThreshold:         db.flushThreshold,
+		slowdownBacklogSeconds: db.slowdownBacklogSeconds,
+		stopBacklogSeconds:     db.stopBacklogSeconds,
+		maxBacklogBytes:        db.maxBacklogBytes,
+		stopResumeFraction:     stopResumeFraction,
 	})
 }
 

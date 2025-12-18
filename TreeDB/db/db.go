@@ -48,9 +48,9 @@ type DB struct {
 	keepRecent uint64
 	policy     WritePolicy
 
-	mu      sync.RWMutex
-	writeMu sync.Mutex
-	meta    page.MetaPageBody
+	mu         sync.RWMutex
+	writeMu    sync.Mutex
+	meta       page.MetaPageBody
 	metaPageID uint64
 
 	state atomic.Pointer[DBState]
@@ -170,15 +170,15 @@ func Open(opts Options) (*DB, error) {
 	alloc := freelist.New(p, 0)
 
 	db := &DB{
-		pager:           p,
-		slabManager:     sm,
-		zipper:          zipper.New(p, alloc),
-		allocator:       alloc,
-		graveyard:       lifecycle.NewGraveyard(),
-		registry:        lifecycle.NewReaderRegistry(),
-		lock:            lock,
-		adaptive:   adaptive.New(),
-		keepRecent: opts.KeepRecent,
+		pager:       p,
+		slabManager: sm,
+		zipper:      zipper.New(p, alloc),
+		allocator:   alloc,
+		graveyard:   lifecycle.NewGraveyard(),
+		registry:    lifecycle.NewReaderRegistry(),
+		lock:        lock,
+		adaptive:    adaptive.New(),
+		keepRecent:  opts.KeepRecent,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,

@@ -41,11 +41,11 @@ func TestComputeBackpressureThresholds_Seconds(t *testing.T) {
 
 func TestComputeBackpressureThresholds_MaxBytesCapsSeconds(t *testing.T) {
 	_, stop, _ := computeBackpressureThresholds(backpressureParams{
-		flushBps:               100,
-		flushThreshold:         1,
-		stopBacklogSeconds:     100,
-		maxBacklogBytes:        1234,
-		stopResumeFraction:     0.7,
+		flushBps:           100,
+		flushThreshold:     1,
+		stopBacklogSeconds: 100,
+		maxBacklogBytes:    1234,
+		stopResumeFraction: 0.7,
 	})
 	if stop != 1234 {
 		t.Fatalf("stop=%d want 1234", stop)
@@ -67,4 +67,3 @@ func TestComputeBackpressureThresholds_StopClampsSlowdown(t *testing.T) {
 		t.Fatalf("slowdown=%d want 500 (clamped to stop)", slow)
 	}
 }
-
