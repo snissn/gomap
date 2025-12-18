@@ -13,6 +13,11 @@ type Allocator struct {
 	pager *pager.Pager
 	head  uint64
 	mu    sync.Mutex
+
+	// preferAppend makes Alloc ignore the freelist and allocate new pages by
+	// extending the file. This improves locality at the cost of reclaiming space
+	// later via vacuum.
+	preferAppend bool
 }
 
 func New(p *pager.Pager, head uint64) *Allocator {
@@ -34,10 +39,20 @@ func (a *Allocator) SetHead(h uint64) {
 	a.head = h
 }
 
+func (a *Allocator) SetPreferAppend(prefer bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.preferAppend = prefer
+}
+
 // Alloc allocates a single page.
 func (a *Allocator) Alloc() (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if a.preferAppend {
+		return a.pager.Alloc(1)
+	}
 
 	if a.head == 0 {
 		return a.pager.Alloc(1)

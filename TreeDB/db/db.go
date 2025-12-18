@@ -69,6 +69,10 @@ type Options struct {
 	KeepRecent     uint64 // Default 10000
 	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
+	// PreferAppendAlloc makes the page allocator ignore the freelist and append
+	// new pages instead. This can improve scan locality under churn at the cost
+	// of file growth (space is reclaimed later via vacuum).
+	PreferAppendAlloc bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -168,6 +172,7 @@ func Open(opts Options) (*DB, error) {
 	// We'll init with 0 and update after recovery.
 
 	alloc := freelist.New(p, 0)
+	alloc.SetPreferAppend(opts.PreferAppendAlloc)
 
 	db := &DB{
 		pager:       p,
