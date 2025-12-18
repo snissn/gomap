@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/snissn/gomap/HashDB"
+	hashdb "github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
@@ -592,6 +592,7 @@ func main() {
 	if seedUsed == 0 {
 		seedUsed = time.Now().UnixNano()
 	}
+	fmt.Fprintf(os.Stderr, "Throughput Benchmark (Operations per second)\n")
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	baseCfg := BenchConfig{
@@ -686,7 +687,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("benchmark: %v", err)
 		}
-		fmt.Println()
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 		return
 	}
