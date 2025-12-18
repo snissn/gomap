@@ -13,8 +13,9 @@ import (
 
 // MockBackend implements BackendDB
 type MockBackend struct {
-	mu   sync.RWMutex
-	data map[string][]byte
+	mu         sync.RWMutex
+	data       map[string][]byte
+	writeCalls int
 }
 
 func NewMockBackend() *MockBackend {
@@ -151,8 +152,20 @@ func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 	return nil
 }
 
-func (b *MockBatch) Write() error              { return nil }
-func (b *MockBatch) WriteSync() error          { return nil }
+func (b *MockBatch) Write() error {
+	b.mb.mu.Lock()
+	b.mb.writeCalls++
+	b.mb.mu.Unlock()
+	return nil
+}
+
+func (b *MockBatch) WriteSync() error {
+	b.mb.mu.Lock()
+	b.mb.writeCalls++
+	b.mb.mu.Unlock()
+	return nil
+}
+
 func (b *MockBatch) Close() error              { return nil }
 func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
 
@@ -198,6 +211,66 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 		if string(backend.data[k]) != fmt.Sprintf("v%d", i) {
 			t.Errorf("Backend missing %s", k)
 		}
+	}
+}
+
+func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 60})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	db.mu.Lock()
+	db.mutable.Set([]byte("k"), []byte("v1"))
+	db.mutableRange.add([]byte("k"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mutable.Set([]byte("k"), []byte("v2"))
+	db.mutableRange.add([]byte("k"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mutable.Set([]byte("k2"), []byte("v3"))
+	db.mutableRange.add([]byte("k2"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	backend.mu.RUnlock()
+	if writeCalls != 1 {
+		t.Fatalf("expected 1 backend batch commit, got %d", writeCalls)
+	}
+
+	got, err := db.backend.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("backend.Get: %v", err)
+	}
+	if string(got) != "v2" {
+		t.Fatalf("backend.Get(k): got %q want %q", got, "v2")
+	}
+
+	got, err = db.backend.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("backend.Get: %v", err)
+	}
+	if string(got) != "v3" {
+		t.Fatalf("backend.Get(k2): got %q want %q", got, "v3")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
