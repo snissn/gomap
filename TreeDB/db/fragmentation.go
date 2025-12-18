@@ -16,9 +16,10 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	db.mu.RLock()
 	state := db.state.Load()
 	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
-	freelistHead := db.meta.FreelistHeadID
-	totalPages := db.pager.PageCount()
 	db.mu.RUnlock()
+
+	freelistHead := db.allocator.Head()
+	totalPages := db.pager.PageCount()
 
 	var pages uint64
 	var leafPages uint64

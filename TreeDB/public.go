@@ -108,6 +108,11 @@ func OpenCached(opts Options) (*DB, error) {
 // OpenBackend opens TreeDB in backend-only mode (no caching).
 func OpenBackend(opts Options) (*DB, error) {
 	opts.Mode = ModeBackend
+	// Backend-only mode is primarily used for correctness tests and profiling the
+	// core engine. Keep background pruning off by default to avoid introducing
+	// concurrent allocator work into single-op write benchmarks (callers can opt
+	// in by using Open with ModeBackend).
+	opts.DisableBackgroundPrune = true
 	return Open(opts)
 }
 

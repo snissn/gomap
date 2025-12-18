@@ -45,6 +45,7 @@ type DB struct {
 	registry    *lifecycle.ReaderRegistry
 	lock        *lockfile.Lock
 	adaptive    *adaptive.Controller
+	pruner      pruneWorker
 
 	keepRecent uint64
 	policy     WritePolicy
@@ -68,11 +69,24 @@ const (
 )
 
 type Options struct {
-	Dir            string
-	ChunkSize      int64  // Default 256MB
-	KeepRecent     uint64 // Default 10000
-	Mode           Mode   // Default ModeCached
-	FlushThreshold int64
+	Dir        string
+	ChunkSize  int64  // Default 256MB
+	KeepRecent uint64 // Default 10000
+	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
+	// behavior). When false (default), a bounded background pruner frees pages
+	// asynchronously to reduce commit latency under churn.
+	DisableBackgroundPrune bool
+	// PruneInterval controls how often the background pruner wakes up (0 uses a
+	// default).
+	PruneInterval time.Duration
+	// PruneMaxPages bounds how many pages are freed per pruner tick (0 uses a
+	// default; <0 means unlimited).
+	PruneMaxPages int
+	// PruneMaxDuration bounds how long a pruner tick may run (0 uses a default;
+	// <0 means unlimited).
+	PruneMaxDuration time.Duration
+	Mode             Mode // Default ModeCached
+	FlushThreshold   int64
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -171,6 +185,15 @@ func Open(opts Options) (*DB, error) {
 	if opts.InternalFillTargetPPM == 0 {
 		opts.InternalFillTargetPPM = 1_000_000
 	}
+	if opts.PruneInterval == 0 {
+		opts.PruneInterval = 250 * time.Millisecond
+	}
+	if opts.PruneMaxPages == 0 {
+		opts.PruneMaxPages = 4096
+	}
+	if opts.PruneMaxDuration == 0 {
+		opts.PruneMaxDuration = 25 * time.Millisecond
+	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
@@ -242,10 +265,19 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
+	db.pruner.Start(db, pruneWorkerOptions{
+		enabled:     !opts.DisableBackgroundPrune,
+		interval:    opts.PruneInterval,
+		maxPages:    opts.PruneMaxPages,
+		maxDuration: opts.PruneMaxDuration,
+	})
+
 	return db, nil
 }
 
 func (db *DB) Close() error {
+	db.pruner.Stop()
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -530,8 +562,13 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	// Add retired pages to Graveyard
 	db.graveyard.Add(nextMeta.CommitSeq, retired)
 
-	// Prune
-	db.Prune()
+	// Prune asynchronously to keep commit latency stable under churn.
+	// If background pruning is disabled, fall back to legacy on-commit pruning.
+	if db.pruner.Enabled() {
+		db.pruner.Kick()
+	} else {
+		db.Prune()
+	}
 
 	// Update State
 	oldState := db.state.Load()
