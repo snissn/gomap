@@ -441,7 +441,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - [ ] Structural test: scan locality (live span) stays within target after post-vacuum rewrite + moderate churn.
 
 ### 15.7 B+Tree Maintenance Policies (Prevent Index Bloat)
-- [ ] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
+- [x] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
 - [ ] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
 - [ ] **Gates (before 15.8):**
   - [ ] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
@@ -466,6 +466,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 ### 15.10 Production Durability/Footguns (Related Hardening)
 - [x] `fsync` the directory on slab rotation (persist new file entry).
 - [x] Preallocate pager growth (`fallocate`) before mapping new chunks to fail fast on ENOSPC.
+- [x] Recovery: reject meta pages whose `ActiveSlabTail` exceeds slab file size (roll back to older meta).
 - [ ] Slab tail repair on open: detect and truncate partial/corrupt tail records (common crash case).
 - [ ] **Gates (completion):**
   - [ ] Recovery tests cover: torn slab tail, mid-rotation crash, and meta consistency.
