@@ -91,6 +91,7 @@ func Open(opts Options) (*DB, error) {
 		MaxBacklogBytes:         opts.MaxBacklogBytes,
 		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
+		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
 	})
 	if err != nil {
 		_ = backend.Close()

@@ -135,6 +135,10 @@ type Options struct {
 	// WriterFlushMaxDuration bounds how long a writer will spend helping flush per
 	// write when backpressure is active (0 disables the time bound).
 	WriterFlushMaxDuration time.Duration
+	// FlushBuildConcurrency controls how many goroutines may be used to build a
+	// combined flush batch from multiple immutable memtables in cached mode.
+	// Values <= 1 disable parallelism.
+	FlushBuildConcurrency int
 
 	// DisableSlabTailRepairOnOpen disables best-effort recovery that truncates
 	// partial/corrupt tail records on the active slab. Disabling may reduce open
