@@ -81,6 +81,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	opts := treedb.Options{
 		Dir:                     dir,
 		ChunkSize:               64 * 1024 * 1024,
+		PreferAppendAlloc:       *treedbPreferAppendAlloc,
 		FlushThreshold:          *treedbFlushThreshold,
 		MaxQueuedMemtables:      *treedbMaxQueuedMems,
 		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
@@ -99,7 +100,11 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 }
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
-	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024}
+	opts := treedb.Options{
+		Dir:               dir,
+		ChunkSize:         64 * 1024 * 1024,
+		PreferAppendAlloc: *treedbPreferAppendAlloc,
+	}
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
@@ -483,6 +488,7 @@ var (
 	treedbMaxBacklogBytes        = flag.Int64("treedb-max-backlog-bytes", 0, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
 	treedbWriterFlushMaxMems     = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs       = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
+	treedbPreferAppendAlloc      = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
 	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	settleBeforeScans            = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
