@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -36,6 +37,27 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 
 	snap := c.db.AcquireSnapshot()
 	defer snap.Close()
+
+	assist := opts.Assist
+	lastAssist := time.Now()
+	bytesSinceAssist := int64(0)
+	maybeAssist := func(force bool) {
+		if assist == nil {
+			return
+		}
+		// Avoid calling too frequently in tight loops; also force at useful phase
+		// boundaries (e.g. before/after apply).
+		if !force {
+			const assistEveryBytes = 4 << 20
+			const assistEveryDur = 250 * time.Millisecond
+			if bytesSinceAssist < assistEveryBytes && time.Since(lastAssist) < assistEveryDur {
+				return
+			}
+		}
+		assist()
+		lastAssist = time.Now()
+		bytesSinceAssist = 0
+	}
 
 	path := c.db.SlabManager().GetSlabPath(id)
 	f, err := os.Open(path)
@@ -123,6 +145,8 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 		}
 
 		lim.Wait(int(totalLen))
+		bytesSinceAssist += totalLen
+		maybeAssist(false)
 
 		// Append to the current active slab.
 		newPtr, err := c.db.SlabManager().Append(key, value)
@@ -141,19 +165,23 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 
 		// Apply periodically to bound memory and writer pauses.
 		if len(ops) >= microBatch {
+			maybeAssist(true)
 			if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 				return err
 			}
 			ops = ops[:0]
+			maybeAssist(true)
 		}
 
 		offset += totalLen
 	}
 
 	if len(ops) > 0 {
+		maybeAssist(true)
 		if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 			return err
 		}
+		maybeAssist(true)
 	}
 
 	// Now that pointers have been moved, remove the old slab from future

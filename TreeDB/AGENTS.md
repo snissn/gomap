@@ -416,9 +416,10 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 ### 15.4 Throttling + Backpressure Integration
 - [x] Add compaction IO throttling (bytes/sec limiter) and expose config knobs.
-- [ ] Integrate with caching-layer backpressure so compaction does not starve foreground flush and vice-versa (bounded “assist” only under overload).
+- [x] Integrate with caching-layer backpressure so compaction does not starve foreground flush and vice-versa (bounded “assist” only under overload).
 - [ ] **Gates (before 15.5):**
   - [x] Unit test: throttler enforces upper bound (time-based; allow small tolerance).
+  - [x] Integration test: cached-mode compaction triggers bounded flush assist under backlog (no deadlock; backlog drains).
   - [ ] Integration test: compaction under sustained writes does not exceed configured writer-latency budget (bounded blocking).
   - [ ] Bench smoke with compaction enabled: completes without stalls/timeouts.
 

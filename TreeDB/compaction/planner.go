@@ -24,6 +24,12 @@ type Options struct {
 	MaxSlabs           int
 	MicroBatchSize     int
 
+	// Assist is an optional hook invoked periodically during compaction work.
+	// It must be fast and must not assume any compaction locks are held.
+	// Typical use: coordinate with caching-layer backpressure by triggering a
+	// bounded flush when backlog grows.
+	Assist func()
+
 	// RotateBeforeWrite forces a slab rotation once before moving any records.
 	// This can reduce interference with the current active slab, but will create
 	// a new slab file even if compaction ends up being a no-op.

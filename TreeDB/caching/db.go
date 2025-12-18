@@ -820,6 +820,56 @@ func (db *DB) Stats() map[string]string {
 	return stats
 }
 
+// TriggerFlush schedules a background flush pass (best-effort).
+func (db *DB) TriggerFlush() {
+	select {
+	case db.flushCh <- struct{}{}:
+	default:
+	}
+}
+
+// QueueBacklogBytes returns the current queued memtable backlog in bytes.
+func (db *DB) QueueBacklogBytes() int64 {
+	return db.queueBacklogBytes.Load()
+}
+
+// CompactionAssist performs bounded flush work when backpressure triggers. It is
+// intended to be called by background maintenance (e.g. slab compaction) so that
+// flush debt does not grow unbounded in the absence of foreground writes.
+func (db *DB) CompactionAssist() {
+	// Ensure the background flusher is scheduled even if this call ends up doing
+	// no synchronous work (e.g. due to low backlog).
+	db.TriggerFlush()
+
+	// Adaptive policy: thresholds based on queued backlog bytes.
+	if db.adaptiveBackpressureEnabled() {
+		db.bpMu.Lock()
+		slowdownBytes, stopBytes, _ := db.thresholdsLocked()
+		db.bpMu.Unlock()
+
+		backlog := db.queueBacklogBytes.Load()
+		if stopBytes > 0 && backlog >= stopBytes {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		if slowdownBytes > 0 && backlog > slowdownBytes {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		return
+	}
+
+	// Legacy policy: thresholds based on queue length.
+	if db.maxQueuedMemtables >= 0 {
+		db.mu.RLock()
+		needs := len(db.queue) > db.maxQueuedMemtables
+		db.mu.RUnlock()
+		if needs {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		}
+	}
+}
+
 func (db *DB) Print() error {
 	return db.backend.Print()
 }

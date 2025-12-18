@@ -3,6 +3,7 @@ package treedb
 import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -243,4 +244,32 @@ func (db *DB) Print() error {
 		return db.cached.Print()
 	}
 	return db.backend.Print()
+}
+
+// CompactCandidates runs slab compaction based on the provided selection options.
+// In cached mode it will also perform bounded flush assist when the caching layer
+// is under backpressure, so compaction does not starve the foreground flush path.
+func (db *DB) CompactCandidates(opts compaction.Options) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+
+	if db.cached != nil {
+		// Kick the flusher once up front, and wire compaction to periodically
+		// perform bounded flush assist when backlog is high.
+		db.cached.CompactionAssist()
+		userAssist := opts.Assist
+		opts.Assist = func() {
+			db.cached.CompactionAssist()
+			if userAssist != nil {
+				userAssist()
+			}
+		}
+	}
+
+	c := compaction.New(db.backend)
+	return c.CompactCandidates(opts)
 }
