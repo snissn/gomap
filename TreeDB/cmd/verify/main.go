@@ -15,6 +15,9 @@ var report = flag.Bool("report", false, "Print fragmentation report and stats")
 var compactDeadRatio = flag.Float64("compact-dead-ratio", 0, "If >0, compact slabs with dead ratio >= this threshold before verification")
 var compactMinBytes = flag.Uint64("compact-min-bytes", 0, "Minimum slab total bytes to consider for compaction")
 var compactMaxSlabs = flag.Int("compact-max-slabs", 1, "Maximum slabs to compact per run (0=unlimited)")
+var compactMicroBatch = flag.Int("compact-microbatch", 256, "Compaction apply micro-batch size (keys per commit)")
+var compactCopyBps = flag.Int64("compact-copy-bps", 0, "Compaction copy throttling (bytes/sec), 0=disabled")
+var compactCopyBurst = flag.Int64("compact-copy-burst", 0, "Compaction copy throttling burst (bytes), 0=default")
 
 func main() {
 	flag.Parse()
@@ -37,7 +40,9 @@ func main() {
 			DeadRatioThreshold: *compactDeadRatio,
 			MinTotalBytes:      *compactMinBytes,
 			MaxSlabs:           *compactMaxSlabs,
-			MicroBatchSize:     256,
+			MicroBatchSize:     *compactMicroBatch,
+			CopyBytesPerSec:    *compactCopyBps,
+			CopyBurstBytes:     *compactCopyBurst,
 		}); err != nil {
 			fmt.Printf("Compaction failed: %v\n", err)
 			os.Exit(1)

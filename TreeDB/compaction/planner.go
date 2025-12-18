@@ -27,6 +27,11 @@ type Options struct {
 	// This can reduce interference with the current active slab, but will create
 	// a new slab file even if compaction ends up being a no-op.
 	RotateBeforeWrite bool
+
+	// CopyBytesPerSec limits compaction copy IO. 0 disables throttling.
+	CopyBytesPerSec int64
+	// CopyBurstBytes is the limiter burst size. 0 uses a 1-second burst.
+	CopyBurstBytes int64
 }
 
 var slabStatsKeyPrefix = []byte{0x00, 's', 'l', 'a', 'b'}
@@ -162,7 +167,7 @@ func (c *Compactor) CompactCandidates(opts Options) error {
 	}
 
 	for _, cand := range cands {
-		if err := c.CompactSlab(cand.FileID); err != nil {
+		if err := c.CompactSlabWithOptions(cand.FileID, opts); err != nil {
 			return err
 		}
 	}

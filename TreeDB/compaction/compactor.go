@@ -23,6 +23,11 @@ func New(d *db.DB) *Compactor {
 // CompactSlab performs compaction on a specific slab file.
 // It rewrites live records to a new slab and updates pointers in micro-batches.
 func (c *Compactor) CompactSlab(id uint32) error {
+	return c.CompactSlabWithOptions(id, Options{})
+}
+
+// CompactSlabWithOptions compacts a slab using the provided options.
+func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 	// Never compact the active slab: new writes could create new live pointers
 	// into it while we're scanning.
 	if c.db.SlabManager().ActiveSlabID() == id {
@@ -46,6 +51,13 @@ func (c *Compactor) CompactSlab(id uint32) error {
 		return err
 	}
 	size := info.Size()
+
+	microBatch := opts.MicroBatchSize
+	if microBatch <= 0 {
+		microBatch = 256
+	}
+
+	lim := newLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
 
 	var ops []db.CompactionOp
 	offset := int64(0)
@@ -110,6 +122,8 @@ func (c *Compactor) CompactSlab(id uint32) error {
 			continue
 		}
 
+		lim.Wait(int(totalLen))
+
 		// Append to the current active slab.
 		newPtr, err := c.db.SlabManager().Append(key, value)
 		if err != nil {
@@ -126,8 +140,8 @@ func (c *Compactor) CompactSlab(id uint32) error {
 		})
 
 		// Apply periodically to bound memory and writer pauses.
-		if len(ops) >= 256 {
-			if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
+		if len(ops) >= microBatch {
+			if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 				return err
 			}
 			ops = ops[:0]
@@ -137,7 +151,7 @@ func (c *Compactor) CompactSlab(id uint32) error {
 	}
 
 	if len(ops) > 0 {
-		if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
+		if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 			return err
 		}
 	}
