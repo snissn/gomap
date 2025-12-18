@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/slab"
@@ -151,5 +152,71 @@ func TestCompaction_SnapshotKeepsOldSlabPinnedUntilClosed(t *testing.T) {
 	}
 	if !bytes.Equal(val, valA) {
 		t.Fatalf("A mismatch after compaction")
+	}
+}
+
+func TestCompaction_AllowsConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	opts := db.Options{Dir: dir}
+	d, err := db.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	// Populate slab 0 with many live pointer values.
+	val := bytes.Repeat([]byte("V"), 300)
+	for i := 0; i < 200; i++ {
+		k := []byte{byte(i >> 8), byte(i)}
+		if err := d.Set(k, val); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	// Make slab 1 active so slab 0 is eligible for compaction.
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected active slab != 0 after rotation")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		otherVal := bytes.Repeat([]byte("W"), 300)
+		for i := 0; i < 200; i++ {
+			k := []byte{0xFF, byte(i)}
+			if err := d.Set(k, otherVal); err != nil {
+				writeDone <- err
+				return
+			}
+		}
+		writeDone <- nil
+	}()
+
+	compactDone := make(chan error, 1)
+	go func() {
+		c := New(d)
+		compactDone <- c.CompactSlabWithOptions(0, Options{MicroBatchSize: 1})
+	}()
+
+	timeout := 5 * time.Second
+
+	select {
+	case err := <-compactDone:
+		if err != nil {
+			t.Fatalf("CompactSlab: %v", err)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("compaction timed out (possible deadlock)")
+	}
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("writer failed: %v", err)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("writer timed out (possible starvation/deadlock)")
 	}
 }
