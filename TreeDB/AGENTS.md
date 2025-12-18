@@ -445,7 +445,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
 - [ ] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
 - [ ] **Gates (before 15.8):**
-  - [ ] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
+  - [x] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
   - [ ] Structural test: average leaf fill-factor remains above target band after churn (with maintenance enabled).
 
 ### 15.8 Slotted-Page Defragmentation (In-Page Holes)
