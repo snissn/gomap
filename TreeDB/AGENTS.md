@@ -460,7 +460,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - record backlog/queue stats at each phase boundary.
 - [x] Add a “fragmentation report” command/tool: leaf fill percentiles, freelist reclaimable pages, live page span, and slab dead ratios.
 - [ ] **Gates (before 15.10):**
-  - [ ] `unified-bench` can run a churn suite that optionally settles before scans (deterministic, comparable).
+  - [x] `unified-bench` can run a churn suite that optionally settles before scans (deterministic, comparable).
   - [ ] “fragmentation report” validates invariants (no missing pages; sane histograms) and is used in tests.
 
 ### 15.10 Production Durability/Footguns (Related Hardening)
