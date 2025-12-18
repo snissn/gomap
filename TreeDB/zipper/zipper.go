@@ -490,6 +490,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		retired = append(retired, extraRetired...)
 	}
 
+	coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, metrics)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(extraRetired) > 0 {
+		retired = append(retired, extraRetired...)
+	}
+
 	// Write final internal entries, splitting if needed.
 	target := builder
 	for i, e := range coalesced {
@@ -800,6 +808,308 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 
 		// If merge isn't possible, attempt a bounded rebalance.
 		leftNewID, rightNewID, rightStart, ok, err := rebalanceLeaves(left, right)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && len(rightStart) > 0 {
+			retired = append(retired, leftID, rightID)
+			entries[i].child = leftNewID
+			entries[i+1].child = rightNewID
+			entries[i+1].key = rightStart
+		}
+		i++
+	}
+
+	return entries, retired, nil
+}
+
+func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+	if len(entries) < 2 {
+		return entries, nil, nil
+	}
+
+	var retired []uint64
+
+	loadInternal := func(id uint64) (*node.Node, bool, error) {
+		data, err := z.pager.Get(id)
+		if err != nil {
+			return nil, false, err
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeInternal {
+			return nil, false, nil
+		}
+		return n, true, nil
+	}
+
+	fillPPM := func(n *node.Node) uint32 {
+		used := page.PageSize - n.FreeSpace()
+		return uint32((used * 1_000_000) / page.PageSize)
+	}
+
+	pageCap := page.PageSize - node.NodeHeaderSize
+	internalEntryBytes := func(key []byte) int {
+		if key == nil {
+			key = []byte{}
+		}
+		// Internal entry: keylen(uint16) + child(uint64) + key bytes + directory entry.
+		return (2 + 8 + len(key)) + node.DirectoryEntrySize
+	}
+	internalRequiredBytes := func(n *node.Node) (int, error) {
+		sum := 0
+		for i := uint16(0); i < n.Count(); i++ {
+			k, _, err := n.GetInternalEntryView(i)
+			if err != nil {
+				return 0, err
+			}
+			sum += internalEntryBytes(k)
+			if sum > pageCap {
+				return sum, nil
+			}
+		}
+		return sum, nil
+	}
+
+	buildMergedInternal := func(left, right *node.Node) (uint64, bool, error) {
+		pid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, false, err
+		}
+		data, err := z.pager.GetForWrite(pid)
+		if err != nil {
+			return 0, false, err
+		}
+		b := node.NewBuilder(data, page.PageTypeInternal)
+		b.SetPageID(pid)
+
+		addAll := func(n *node.Node) error {
+			for i := uint16(0); i < n.Count(); i++ {
+				k, child, err := n.GetInternalEntryView(i)
+				if err != nil {
+					return err
+				}
+				if k == nil {
+					k = []byte{}
+				}
+				entrySize := 2 + 8 + len(k)
+				if z.internalSoftFull(b, entrySize) {
+					return node.ErrNodeFull
+				}
+				if err := b.AddInternalChild(k, child); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		if err := addAll(left); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+		if err := addAll(right); err != nil {
+			retired = append(retired, pid)
+			if err == node.ErrNodeFull {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+
+		_ = b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		return pid, true, nil
+	}
+
+	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+		lid, err := z.allocator.Alloc()
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		ldata, err := z.pager.GetForWrite(lid)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		lb := node.NewBuilder(ldata, page.PageTypeInternal)
+		lb.SetPageID(lid)
+
+		rid, err := z.allocator.Alloc()
+		if err != nil {
+			retired = append(retired, lid)
+			return 0, 0, nil, false, err
+		}
+		rdata, err := z.pager.GetForWrite(rid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+		rb := node.NewBuilder(rdata, page.PageTypeInternal)
+		rb.SetPageID(rid)
+
+		combined := make([]internalEntry, 0, int(left.Count()+right.Count()))
+		for _, src := range []*node.Node{left, right} {
+			for i := uint16(0); i < src.Count(); i++ {
+				k, child, err := src.GetInternalEntryView(i)
+				if err != nil {
+					retired = append(retired, lid, rid)
+					return 0, 0, nil, false, err
+				}
+				combined = append(combined, internalEntry{key: k, child: child})
+			}
+		}
+		if len(combined) < 2 {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		splitAt := len(combined) / 2
+		if splitAt < 1 {
+			splitAt = 1
+		}
+		if splitAt >= len(combined) {
+			splitAt = len(combined) - 1
+		}
+
+		build := func(b *node.Builder, list []internalEntry) error {
+			for i, e := range list {
+				k := e.key
+				if k == nil {
+					k = []byte{}
+				}
+				entrySize := 2 + 8 + len(k)
+				if i > 0 && z.internalSoftFull(b, entrySize) {
+					return node.ErrNodeFull
+				}
+				if err := b.AddInternalChild(k, e.child); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		try := func(splitAt int) ([]byte, bool, error) {
+			lb2 := node.NewBuilder(ldata, page.PageTypeInternal)
+			lb2.SetPageID(lid)
+			rb2 := node.NewBuilder(rdata, page.PageTypeInternal)
+			rb2.SetPageID(rid)
+
+			if err := build(lb2, combined[:splitAt]); err != nil {
+				if err == node.ErrNodeFull {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+			if err := build(rb2, combined[splitAt:]); err != nil {
+				if err == node.ErrNodeFull {
+					return nil, false, nil
+				}
+				return nil, false, err
+			}
+			lb2.Finish()
+			rb2.Finish()
+			rs := combined[splitAt].key
+			if rs == nil {
+				rs = []byte{}
+			}
+			return append([]byte(nil), rs...), true, nil
+		}
+
+		// Adjust split point until both sides fit.
+		rightStart, ok, err = try(splitAt)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+		if !ok {
+			for d := 1; d < len(combined)-1; d++ {
+				if splitAt-d >= 1 {
+					if rs, ok2, err2 := try(splitAt - d); err2 != nil {
+						retired = append(retired, lid, rid)
+						return 0, 0, nil, false, err2
+					} else if ok2 {
+						rightStart = rs
+						ok = true
+						break
+					}
+				}
+				if splitAt+d < len(combined) {
+					if rs, ok2, err2 := try(splitAt + d); err2 != nil {
+						retired = append(retired, lid, rid)
+						return 0, 0, nil, false, err2
+					} else if ok2 {
+						rightStart = rs
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, nil
+			}
+		}
+
+		metrics.IndexWriteBytes += 2 * page.PageSize
+		return lid, rid, rightStart, true, nil
+	}
+
+	const underfullPPM = 350_000
+
+	i := 0
+	for i < len(entries)-1 {
+		leftID := entries[i].child
+		rightID := entries[i+1].child
+
+		left, okL, err := loadInternal(leftID)
+		if err != nil {
+			return nil, nil, err
+		}
+		right, okR, err := loadInternal(rightID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !okL || !okR {
+			i++
+			continue
+		}
+
+		leftFill := fillPPM(left)
+		rightFill := fillPPM(right)
+		if leftFill >= underfullPPM && rightFill >= underfullPPM {
+			i++
+			continue
+		}
+
+		leftBytes, err := internalRequiredBytes(left)
+		if err != nil {
+			return nil, nil, err
+		}
+		rightBytes, err := internalRequiredBytes(right)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Attempt a full sibling merge when the combined entries should fit in one page
+		// while still respecting the configured soft-full reserve (if any).
+		if leftBytes+rightBytes <= pageCap-z.internalReserveBytes {
+			mergedID, ok, err := buildMergedInternal(left, right)
+			if err != nil {
+				return nil, nil, err
+			}
+			if ok {
+				retired = append(retired, leftID, rightID)
+				entries[i].child = mergedID
+				copy(entries[i+1:], entries[i+2:])
+				entries = entries[:len(entries)-1]
+				if i > 0 {
+					i--
+				}
+				continue
+			}
+		}
+
+		leftNewID, rightNewID, rightStart, ok, err := rebalanceInternals(left, right)
 		if err != nil {
 			return nil, nil, err
 		}

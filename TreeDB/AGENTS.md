@@ -446,10 +446,11 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
   - [x] Prune empty leaf children from internal nodes (delete-all collapses leaf pages).
   - [x] Merge/redistribute non-empty underfull leaf siblings (bounded, best-effort).
-  - [ ] Merge/redistribute internal siblings (not implemented; consider as follow-up if needed).
+  - [x] Merge/redistribute internal siblings (bounded, best-effort).
 - [ ] **Gates (before 15.8):**
   - [x] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
   - [x] Structural test: average leaf fill-factor remains above target band after churn (with maintenance enabled).
+  - [x] Structural test: delete-most collapses leaf + internal fanout (see `TestDeleteMostKeys_MergesUnderfullLeafSiblings` and `TestDeleteMostKeys_MergesUnderfullInternalSiblings`).
 
 ### 15.8 Slotted-Page Defragmentation (In-Page Holes)
 - [x] Implement heap compaction for leaf/internal pages on overwrite/update (defrag on demand when a page reports full).
