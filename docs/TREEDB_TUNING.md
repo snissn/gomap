@@ -113,6 +113,20 @@ TreeDB can optionally run slab compaction in the background (off by default):
 Stats keys:
 - `treedb.bg_compaction.*`
 
+### Offline index vacuum (backend index)
+
+TreeDB’s `index.db` is **append-only** at the file level: it grows in chunks and never shrinks.
+After heavy churn, this can leave `index.db` much larger than the live tree needs, and page IDs
+can become scattered (hurting scan locality).
+
+TreeDB provides an **offline** rewrite operation that rebuilds `index.db` into a fresh file and
+swaps it in using a crash-safe protocol:
+
+- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
+- Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
+- Crash safety: `treedb.Open`/`treedb.OpenBackend` will automatically recover from a partial swap
+  (e.g. if the process crashed mid-vacuum).
+
 ## Benchmark-Driven Tuning
 
 TreeDB performance depends heavily on workload shape. Prefer tuning with:

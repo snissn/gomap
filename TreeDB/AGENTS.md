@@ -523,9 +523,16 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [ ] **Bench gates:** `random_write` at small flush thresholds should not regress; mutex/block profiles should not worsen.
 
 ### 16.8 Offline Vacuum Rewrite + Allocator Locality (Phase 15 Deferred Items)
-- [ ] Implement an offline vacuum mode (`index.db.new` swap) with a crash-safe protocol:
-  - write new file, fsync, rename atomically, fsync directory, reopen.
-  - add tests that simulate “crash between steps” by stopping after each stage and verifying recovery.
+- [x] Implement an offline vacuum mode (`index.db.new` swap) with a crash-safe protocol:
+  - **Implementation:** `TreeDB/db/vacuum_offline.go` (`VacuumIndexOffline`)
+  - **Recovery:** `TreeDB/db/index_swap.go` (`recoverIndexSwap`), invoked on backend `Open` before paging.
+  - **Protocol artifacts:**
+    - `index.db.new` (new file being built)
+    - `index.db.new.ready` (durability marker after syncing new file)
+    - `index.db.bak` (backup of old index during the swap window)
+  - **Crash points tested:** after new sync, after ready marker, after rename old, after rename new.
+  - **Public API:** `treedb.VacuumIndexOffline(opts)` (offline; acquires exclusive lock on `opts.Dir`).
+  - **Gates:** `go test ./...`, `go test -race ./...`, `./bin/unified-bench -suite flushthrash`, `./bin/unified-bench -suite longmix`.
 - [ ] Investigate allocator locality beyond LIFO freelist reuse:
   - extent/segment freelist bins, or
   - allocate-near-sibling hints during splits/rebalances.
