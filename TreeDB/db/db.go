@@ -534,54 +534,82 @@ type CompactionOp struct {
 	NewPtr page.ValuePtr
 }
 
-// ApplyCompaction applies pointer updates atomically.
+const defaultCompactionMicroBatchSize = 256
+
+// ApplyCompaction applies pointer updates to the current tree. It uses
+// micro-batching to bound time under the writer lock.
 func (db *DB) ApplyCompaction(ops []CompactionOp) error {
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	return db.ApplyCompactionMicroBatches(ops, defaultCompactionMicroBatchSize)
+}
 
-	b := batch.New(db.slabManager, db.policy.InlineThreshold)
-
-	db.mu.RLock()
-	// Create temporary tree for verification (using current root)
-	tr := tree.New(db.pager, db.slabManager, db.meta.UserRootPageID)
-	rootID := db.meta.UserRootPageID
-
-	for _, op := range ops {
-		entry, err := tr.GetEntry(op.Key)
-		if err != nil {
-			continue // Skip if not found
-		}
-
-		if entry.Flags&node.FlagPointer != 0 {
-			if entry.ValuePtr == op.OldPtr {
-				if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
-					db.mu.RUnlock()
-					return err
-				}
-			}
-		}
-	}
-	db.mu.RUnlock()
-
-	if len(b.Ops()) == 0 {
+// ApplyCompactionMicroBatches applies compaction pointer updates in chunks of at
+// most maxOps per commit. This bounds writer pauses and keeps the system
+// responsive under large compactions.
+func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error {
+	if len(ops) == 0 {
 		return nil
 	}
-
-	newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
-	if err != nil {
-		return err
+	if maxOps <= 0 {
+		maxOps = defaultCompactionMicroBatchSize
 	}
 
-	db.mu.Lock()
-	if db.meta.UserRootPageID != rootID {
-		db.mu.Unlock()
-		return fmt.Errorf("concurrent modification detected during compaction")
-	}
-	sysRoot := db.meta.SystemRootPageID
-	db.mu.Unlock()
+	for start := 0; start < len(ops); start += maxOps {
+		end := start + maxOps
+		if end > len(ops) {
+			end = len(ops)
+		}
+		chunk := ops[start:end]
 
-	// Commit with sync=true (Compaction should be durable)
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
+		db.writeMu.Lock()
+
+		// Snapshot roots under DB lock.
+		db.mu.RLock()
+		rootID := db.meta.UserRootPageID
+		sysRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+
+		// Build a micro-batch of still-live pointer updates.
+		tr := tree.New(db.pager, db.slabManager, rootID)
+		b := batch.New(db.slabManager, db.policy.InlineThreshold)
+
+		for _, op := range chunk {
+			entry, err := tr.GetEntry(op.Key)
+			if err != nil {
+				continue
+			}
+			if entry.Flags&node.FlagPointer == 0 {
+				continue
+			}
+			if entry.ValuePtr != op.OldPtr {
+				continue
+			}
+			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+				db.writeMu.Unlock()
+				return err
+			}
+		}
+
+		if len(b.Ops()) == 0 {
+			db.writeMu.Unlock()
+			continue
+		}
+
+		newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
+		if err != nil {
+			db.writeMu.Unlock()
+			return err
+		}
+
+		// Commit without forcing Sync; compaction can be lazily durable.
+		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+			db.writeMu.Unlock()
+			return err
+		}
+
+		db.writeMu.Unlock()
+	}
+
+	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
