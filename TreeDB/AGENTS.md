@@ -400,7 +400,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [ ] **Gates (before 15.3):**
   - [x] Integration test: compaction preserves data for pointer values (Get).
   - [x] Integration test: snapshot safety (old slab not deleted while pinned).
-  - [ ] Integration test: compaction is restartable/idempotent (rerun does not corrupt; second run is no-op-ish).
+  - [x] Integration test: compaction is restartable/idempotent (rerun does not corrupt; second run is no-op-ish).
   - [ ] Bench smoke: write/read/scan unchanged when compaction is idle (no >5% regression vs baseline).
 
 ### 15.3 Micro-Batched Apply (Bound Writer Pauses)
