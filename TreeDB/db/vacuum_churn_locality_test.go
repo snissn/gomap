@@ -10,10 +10,10 @@ func TestVacuumThenModerateChurn_PreferAppendAlloc_PreservesLocality(t *testing.
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:               dir,
-		KeepRecent:         1,
-		PreferAppendAlloc:  true,
-		LeafFillTargetPPM:  850_000,
+		Dir:                   dir,
+		KeepRecent:            1,
+		PreferAppendAlloc:     true,
+		LeafFillTargetPPM:     850_000,
 		InternalFillTargetPPM: 900_000,
 	})
 	if err != nil {

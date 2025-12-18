@@ -10,9 +10,9 @@ func TestMaintenance_RepeatedOverwrite_DoesNotExplodePageCount(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:               dir,
-		KeepRecent:         1,
-		LeafFillTargetPPM:  850_000,
+		Dir:                   dir,
+		KeepRecent:            1,
+		LeafFillTargetPPM:     850_000,
 		InternalFillTargetPPM: 900_000,
 	})
 	if err != nil {
