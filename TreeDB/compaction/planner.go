@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -99,6 +100,12 @@ func (c *Compactor) Candidates(opts Options) ([]Candidate, error) {
 			continue
 		}
 		if fileID == activeID {
+			it.Next()
+			continue
+		}
+		// Stats can outlive the physical slab file (after zombie deletion). Skip
+		// missing slabs so compaction remains idempotent.
+		if _, err := os.Stat(c.db.SlabManager().GetSlabPath(fileID)); err != nil {
 			it.Next()
 			continue
 		}
