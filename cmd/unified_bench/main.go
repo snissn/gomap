@@ -592,6 +592,12 @@ func main() {
 				log.Fatalf("readme suite: %v", err)
 			}
 			fmt.Print(out)
+		case "churn":
+			out, err := runChurnSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("churn suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -1566,6 +1572,21 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString("- `Badger`/`LevelDB`: useful baselines with different storage tradeoffs.\n")
 
 	return sb.String(), nil
+}
+
+func runChurnSuite(baseCfg BenchConfig) (string, error) {
+	// Default churn suite parameters (override via regular flags like -keys, -valsize).
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan"
+	cfg.SettleBeforeScans = true
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+	return renderMarkdownSingle(run), nil
 }
 
 func renderMarkdownSuiteSection(runs []BenchRun) string {
