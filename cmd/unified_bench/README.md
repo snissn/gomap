@@ -50,5 +50,11 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-progress` live table updates to stderr (default true)
 - `-format` output format: `table` or `markdown`
 - `-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
-- `-suite` named suite (currently: `readme`)
+- `-suite` named suite:
+  - `readme` — generates the README graphs + sweep tables
+  - `churn` — churn + settled scans (`treedb,leveldb`)
+  - `churnvacuum` — churn + settled scans, then VACUUM and scan again
+  - `churnmaint` — churn + settled scans, then slab compaction + VACUUM and scan again
+  - `flushthrash` — forces a small TreeDB flush threshold; catches flush thrash / runaway backlog regressions
+  - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)

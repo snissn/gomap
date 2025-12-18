@@ -25,6 +25,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
 	btreeadapter "github.com/snissn/gomap/kvstore/adapters/btreeonhashdb"
 	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
@@ -653,6 +654,18 @@ func main() {
 				log.Fatalf("churnmaint suite: %v", err)
 			}
 			fmt.Print(out)
+		case "flushthrash":
+			out, err := runFlushThrashSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("flushthrash suite: %v", err)
+			}
+			fmt.Print(out)
+		case "longmix":
+			out, err := runLongMixSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("longmix suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -920,6 +933,36 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}); err != nil {
 				return 0, fmt.Errorf("compact_slabs: %w", err)
 			}
+			return math.NaN(), nil
+		},
+		"fragmentation_report_pre": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			td, ok := db.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				return math.NaN(), nil
+			}
+			rep, err := td.DB.FragmentationReport()
+			if err != nil {
+				return 0, fmt.Errorf("fragmentation_report_pre: %w", err)
+			}
+			if err := treedbdb.ValidateFragmentationReport(rep); err != nil {
+				return 0, fmt.Errorf("fragmentation_report_pre validate: %w", err)
+			}
+			printFragmentationReport(os.Stderr, "pre_settle", db.Name(), rep)
+			return math.NaN(), nil
+		},
+		"fragmentation_report_post": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			td, ok := db.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				return math.NaN(), nil
+			}
+			rep, err := td.DB.FragmentationReport()
+			if err != nil {
+				return 0, fmt.Errorf("fragmentation_report_post: %w", err)
+			}
+			if err := treedbdb.ValidateFragmentationReport(rep); err != nil {
+				return 0, fmt.Errorf("fragmentation_report_post validate: %w", err)
+			}
+			printFragmentationReport(os.Stderr, "post_settle", db.Name(), rep)
 			return math.NaN(), nil
 		},
 		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
@@ -1298,19 +1341,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
-		"vacuum_index":     "VACUUM (Index)",
-		"compact_slabs":    "COMPACT (Slabs)",
-		"sequential_write": "Sequential Write",
-		"random_write":     "Random Write",
-		"random_read":      "Random Read",
-		"full_scan":        "Full Scan",
-		"full_scan2":       "Full Scan (After VACUUM)",
-		"prefix_scan":      "Prefix Scan",
-		"prefix_scan2":     "Prefix Scan (After VACUUM)",
-		"batch_write":      "Batch Write",
-		"batch_random":     "Batch Random",
-		"batch_small_seq":  "Batch Small Seq",
-		"random_delete":    "Random Delete",
+		"vacuum_index":              "VACUUM (Index)",
+		"compact_slabs":             "COMPACT (Slabs)",
+		"fragmentation_report_pre":  "Fragmentation Report (Pre-Settle)",
+		"fragmentation_report_post": "Fragmentation Report (Post-Settle)",
+		"sequential_write":          "Sequential Write",
+		"random_write":              "Random Write",
+		"random_read":               "Random Read",
+		"full_scan":                 "Full Scan",
+		"full_scan2":                "Full Scan (After VACUUM)",
+		"prefix_scan":               "Prefix Scan",
+		"prefix_scan2":              "Prefix Scan (After VACUUM)",
+		"batch_write":               "Batch Write",
+		"batch_random":              "Batch Random",
+		"batch_small_seq":           "Batch Small Seq",
+		"random_delete":             "Random Delete",
 	}
 
 	finalTestOrder := make([]string, 0)
@@ -1562,7 +1607,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
 		}
 
-		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan") {
+		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
 			if err := settle(); err != nil {
 				return BenchRun{}, err
 			}
@@ -1570,7 +1615,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if live != nil {
 				_ = live.Render(results)
 			}
-		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan") {
+		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
 			// If the caller didn't ask to settle, still allow an optional compaction
 			// pass before scans so scan regressions after churn can be studied in a
 			// "compacted values" state.
@@ -1643,6 +1688,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		DisplayNames: displayNames,
 		Results:      results,
 	}, nil
+}
+
+func printFragmentationReport(w io.Writer, phase, dbName string, rep map[string]string) {
+	keys := make([]string, 0, len(rep))
+	for k := range rep {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "fragmentation report (%s): %s\n", phase, dbName)
+	for _, k := range keys {
+		fmt.Fprintf(w, "  %s=%s\n", k, rep[k])
+	}
 }
 
 func renderMarkdownSingle(run BenchRun) string {
@@ -1917,6 +1976,137 @@ func runChurnMaintSuite(baseCfg BenchConfig) (string, error) {
 		return "", err
 	}
 	return renderMarkdownSingle(run), nil
+}
+
+func runFlushThrashSuite(baseCfg BenchConfig) (string, error) {
+	// Stress cached-mode flush batching by forcing many small flushes.
+	// This suite exists to catch regressions where a small flush threshold causes
+	// runaway memory usage or severe commit thrash.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.KeepDir = true
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "random_write,batch_write"
+
+	// If the caller didn't specify -keys (default is 100k), use a larger default
+	// so the suite exercises long-run behavior. Tests can override cfg.Keys.
+	if cfg.Keys == 100_000 {
+		cfg.Keys = 5_000_000
+	}
+
+	const thrashFlushThresholdBytes = 6_108_864
+	prevFlush := *treedbFlushThreshold
+	*treedbFlushThreshold = thrashFlushThresholdBytes
+	defer func() { *treedbFlushThreshold = prevFlush }()
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	diag, diagErr := suiteTreeDBCacheStats(run.Instances)
+	cleanErr := suiteCleanupDirs(run.Instances)
+	if diagErr != nil {
+		return "", diagErr
+	}
+	if cleanErr != nil {
+		return "", cleanErr
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: flushthrash\n\n")
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- treedb-flush-threshold: %d\n", thrashFlushThresholdBytes))
+	sb.WriteString("\n")
+
+	sb.WriteString("```text\n")
+	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+	sb.WriteString(table)
+	sb.WriteString("```\n\n")
+
+	if diag != "" {
+		sb.WriteString("## TreeDB cache stats (post-run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(diag)
+		sb.WriteString("```\n")
+	}
+
+	return sb.String(), nil
+}
+
+func runLongMixSuite(baseCfg BenchConfig) (string, error) {
+	// Long-ish mixed workload with an explicit settle boundary plus fragmentation
+	// reports before/after settle to make scan regressions diagnosable.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "random_write,random_delete,random_write,fragmentation_report_pre,fragmentation_report_post,full_scan,prefix_scan"
+	cfg.SettleBeforeScans = true
+
+	// If the caller didn't specify -keys (default is 100k), use a larger default.
+	if cfg.Keys == 100_000 {
+		cfg.Keys = 1_000_000
+	}
+	// Prefer pointer values so the workload is representative for compaction/vacuum.
+	if cfg.ValueSize < 2048 {
+		cfg.ValueSize = 2048
+	}
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: longmix\n\n")
+	sb.WriteString(renderMarkdownSingle(run))
+	return sb.String(), nil
+}
+
+func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
+	var sb strings.Builder
+	for _, inst := range instances {
+		if inst == nil || inst.Name != "treedb" {
+			continue
+		}
+		db, err := NewTreeDB(inst.Dir)
+		if err != nil {
+			return "", fmt.Errorf("suite: reopen treedb for stats: %w", err)
+		}
+		sp, ok := db.(kvstore.StatsProvider)
+		if ok {
+			stats := sp.Stats()
+			keys := make([]string, 0, len(stats))
+			for k := range stats {
+				if strings.HasPrefix(k, "treedb.cache.") {
+					keys = append(keys, k)
+				}
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				sb.WriteString(k)
+				sb.WriteString("=")
+				sb.WriteString(stats[k])
+				sb.WriteString("\n")
+			}
+		}
+		_ = db.Close()
+	}
+	return sb.String(), nil
+}
+
+func suiteCleanupDirs(instances []*DBInstance) error {
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		if err := os.RemoveAll(inst.Dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func renderMarkdownSuiteSection(runs []BenchRun) string {
