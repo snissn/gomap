@@ -1,0 +1,34 @@
+name: "unified_bench: suites (gates)"
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: suites (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Build unified-bench
+        run: make unified-bench
+
+      - name: Suite: flushthrash
+        run: ./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false
+
+      - name: Suite: longmix
+        run: ./bin/unified-bench -suite longmix -keys 100000 -seed 1 -progress=false
