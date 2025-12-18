@@ -82,6 +82,8 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		Dir:                     dir,
 		ChunkSize:               64 * 1024 * 1024,
 		PreferAppendAlloc:       *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:       uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:   uint32(clampPPM(*treedbInternalFillPPM)),
 		FlushThreshold:          *treedbFlushThreshold,
 		MaxQueuedMemtables:      *treedbMaxQueuedMems,
 		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
@@ -101,9 +103,11 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 	opts := treedb.Options{
-		Dir:               dir,
-		ChunkSize:         64 * 1024 * 1024,
-		PreferAppendAlloc: *treedbPreferAppendAlloc,
+		Dir:                   dir,
+		ChunkSize:             64 * 1024 * 1024,
+		PreferAppendAlloc:     *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
 	}
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
@@ -489,10 +493,22 @@ var (
 	treedbWriterFlushMaxMems     = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs       = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
 	treedbPreferAppendAlloc      = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
+	treedbLeafFillPPM            = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
+	treedbInternalFillPPM        = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	settleBeforeScans            = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 )
+
+func clampPPM(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 1_000_000 {
+		return 1_000_000
+	}
+	return v
+}
 
 type DBInstance struct {
 	Name    string
