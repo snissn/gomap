@@ -443,9 +443,10 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 ### 15.7 B+Tree Maintenance Policies (Prevent Index Bloat)
 - [x] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
-- [ ] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
+- [x] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
   - [x] Prune empty leaf children from internal nodes (delete-all collapses leaf pages).
-  - [ ] Merge/redistribute non-empty underfull siblings (still pending).
+  - [x] Merge/redistribute non-empty underfull leaf siblings (bounded, best-effort).
+  - [ ] Merge/redistribute internal siblings (not implemented; consider as follow-up if needed).
 - [ ] **Gates (before 15.8):**
   - [x] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
   - [x] Structural test: average leaf fill-factor remains above target band after churn (with maintenance enabled).

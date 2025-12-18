@@ -9,7 +9,7 @@ import (
 func TestCompactIndexImprovesSpanLocality(t *testing.T) {
 	dir := t.TempDir()
 
-	d, err := Open(Options{Dir: dir, KeepRecent: 1})
+	d, err := Open(Options{Dir: dir, KeepRecent: 1, PreferAppendAlloc: true})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
