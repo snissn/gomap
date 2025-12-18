@@ -439,7 +439,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Add “append-only / sequential alloc mode” as an option for vacuum and large rebuild operations (see `Options.PreferAppendAlloc` and vacuum allocator).
 - [ ] **Gates (before 15.7):**
   - [x] Unit test: sequential alloc mode produces mostly monotonic page IDs during bulk build.
-  - [ ] Structural test: scan locality (live span) stays within target after post-vacuum rewrite + moderate churn.
+  - [x] Structural test: scan locality (live span) stays within target after post-vacuum rewrite + moderate churn.
 
 ### 15.7 B+Tree Maintenance Policies (Prevent Index Bloat)
 - [x] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
