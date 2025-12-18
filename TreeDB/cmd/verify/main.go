@@ -59,6 +59,10 @@ func main() {
 				fmt.Printf("FragmentationReport error: %v\n", err)
 				os.Exit(1)
 			}
+			if err := db.ValidateFragmentationReport(rep); err != nil {
+				fmt.Printf("FragmentationReport invalid: %v\n", err)
+				os.Exit(1)
+			}
 			rk := make([]string, 0, len(rep))
 			for k := range rep {
 				rk = append(rk, k)
@@ -91,6 +95,10 @@ func main() {
 		rep, err := d.FragmentationReport()
 		if err != nil {
 			fmt.Printf("FragmentationReport error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := db.ValidateFragmentationReport(rep); err != nil {
+			fmt.Printf("FragmentationReport invalid: %v\n", err)
 			os.Exit(1)
 		}
 		rk := make([]string, 0, len(rep))
