@@ -273,3 +273,22 @@ func (db *DB) CompactCandidates(opts compaction.Options) error {
 	c := compaction.New(db.backend)
 	return c.CompactCandidates(opts)
 }
+
+// CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.
+// In cached mode it first drains the caching layer so the backend reflects all
+// buffered writes before rebuilding.
+func (db *DB) CompactIndex() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+
+	if db.cached != nil {
+		if err := db.cached.Drain(); err != nil {
+			return err
+		}
+	}
+	return db.backend.CompactIndex()
+}

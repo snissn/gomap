@@ -506,6 +506,7 @@ var (
 	treedbCompactRotateBeforeWrite = flag.Bool("treedb-compact-rotate-before-write", false, "TreeDB: rotate to a fresh active slab before copying live records")
 	treedbCompactCopyBps         = flag.Int64("treedb-compact-copy-bps", 0, "TreeDB: compaction copy throttling (bytes/sec), 0=disabled")
 	treedbCompactCopyBurst       = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
+	treedbVacuumBeforeScans      = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
 	settleBeforeScans            = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 )
 
@@ -560,6 +561,7 @@ type BenchConfig struct {
 	TreeDBCompactRotateBeforeWrite bool
 	TreeDBCompactCopyBps           int64
 	TreeDBCompactCopyBurst         int64
+	TreeDBVacuumBeforeScans        bool
 }
 
 type BenchRun struct {
@@ -607,6 +609,7 @@ func main() {
 		TreeDBCompactRotateBeforeWrite: *treedbCompactRotateBeforeWrite,
 		TreeDBCompactCopyBps:           *treedbCompactCopyBps,
 		TreeDBCompactCopyBurst:         *treedbCompactCopyBurst,
+		TreeDBVacuumBeforeScans:        *treedbVacuumBeforeScans,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -1342,6 +1345,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return nil
 	}
 
+	vacuumTreeDBs := func() error {
+		if !cfg.TreeDBVacuumBeforeScans {
+			return nil
+		}
+		for _, inst := range instances {
+			td, ok := inst.Wrapper.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				continue
+			}
+			if err := td.DB.CompactIndex(); err != nil {
+				return fmt.Errorf("vacuum %s: %w", inst.Wrapper.Name(), err)
+			}
+		}
+		return nil
+	}
+
 	settle := func() error {
 		for _, inst := range instances {
 			_ = inst.Wrapper.Close()
@@ -1354,6 +1373,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return fmt.Errorf("reopen %s: %w", inst.Name, err)
 			}
 			inst.Wrapper = db
+		}
+		if err := vacuumTreeDBs(); err != nil {
+			return err
 		}
 		if err := compactTreeDBs(); err != nil {
 			return err
@@ -1375,10 +1397,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if live != nil {
 				_ = live.Render(results)
 			}
-		} else if cfg.TreeDBCompactBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan") {
+		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan") {
 			// If the caller didn't ask to settle, still allow an optional compaction
 			// pass before scans so scan regressions after churn can be studied in a
 			// "compacted values" state.
+			if err := vacuumTreeDBs(); err != nil {
+				return BenchRun{}, err
+			}
 			if err := compactTreeDBs(); err != nil {
 				return BenchRun{}, err
 			}

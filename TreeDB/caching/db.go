@@ -874,6 +874,27 @@ func (db *DB) Print() error {
 	return db.backend.Print()
 }
 
+// Drain flushes all currently buffered writes (mutable + queued memtables) to the
+// backend. It is intended for maintenance operations that require a fully
+// materialized backend state (e.g. index vacuum).
+//
+// Drain does not provide mutual exclusion against concurrent writers; callers
+// should ensure no writes occur concurrently if they require a fully drained
+// state.
+func (db *DB) Drain() error {
+	db.mu.Lock()
+	if db.mutable.Len() > 0 {
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+	return nil
+}
+
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Lock()
