@@ -1,6 +1,8 @@
 package compaction
 
 import (
+	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -29,6 +31,12 @@ func (c *Compactor) CompactSlab(id uint32) error {
 
 // CompactSlabWithOptions compacts a slab using the provided options.
 func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
+	return c.CompactSlabWithContext(context.Background(), id, opts)
+}
+
+// CompactSlabWithContext compacts a slab using the provided options and context.
+// If ctx is canceled, compaction aborts promptly and returns ctx.Err().
+func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts Options) error {
 	// Never compact the active slab: new writes could create new live pointers
 	// into it while we're scanning.
 	if c.db.SlabManager().ActiveSlabID() == id {
@@ -83,16 +91,26 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 
 	var ops []db.CompactionOp
 	offset := int64(0)
-	// Buffer for header
+
+	const readerSize = 256 << 10
+	section := io.NewSectionReader(f, 0, size)
+	r := bufio.NewReaderSize(section, readerSize)
+
 	var headerBuf [slab.HeaderSize]byte
+	var dataBuf []byte
 
 	for {
-		// Read Header
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if offset >= size {
 			break
 		}
-		if _, err := f.ReadAt(headerBuf[:], offset); err != nil {
-			if err == io.EOF {
+		if _, err := io.ReadFull(r, headerBuf[:]); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				break
 			}
 			return err
@@ -109,8 +127,16 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 
 		// Read Key and Value
 		// We need them to check liveness and re-append
-		dataBuf := make([]byte, int(keyLen)+int(valLen))
-		if _, err := f.ReadAt(dataBuf, offset+int64(slab.HeaderSize)); err != nil {
+		recordBytes := int(keyLen) + int(valLen)
+		if cap(dataBuf) < recordBytes {
+			dataBuf = make([]byte, recordBytes)
+		} else {
+			dataBuf = dataBuf[:recordBytes]
+		}
+		if _, err := io.ReadFull(r, dataBuf); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
 			return err
 		}
 
@@ -144,7 +170,9 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 			continue
 		}
 
-		lim.Wait(int(totalLen))
+		if err := lim.Wait(ctx, int(totalLen)); err != nil {
+			return err
+		}
 		bytesSinceAssist += totalLen
 		maybeAssist(false)
 

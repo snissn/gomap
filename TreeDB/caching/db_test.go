@@ -274,6 +274,81 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	}
 }
 
+func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 60, FlushBuildConcurrency: 4})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	const keys = 1000
+
+	db.mu.Lock()
+	for i := 0; i < keys; i++ {
+		k := []byte(fmt.Sprintf("k%04d", i))
+		db.mutable.Set(k, []byte("v1"))
+		db.mutableRange.add(k)
+	}
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	for i := 0; i < keys; i++ {
+		k := []byte(fmt.Sprintf("k%04d", i))
+		db.mutable.Set(k, []byte("v2"))
+		db.mutableRange.add(k)
+	}
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	for i := 0; i < keys; i++ {
+		k := []byte(fmt.Sprintf("k%04d", i))
+		if i%2 == 0 {
+			db.mutable.Delete(k)
+		} else {
+			db.mutable.Set(k, []byte("v3"))
+		}
+		db.mutableRange.add(k)
+	}
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+
+	// Even keys should be deleted, odd keys should be v3 (newest memtable).
+	got0, err := db.backend.Get([]byte("k0000"))
+	if err != nil {
+		t.Fatalf("backend.Get: %v", err)
+	}
+	if got0 != nil {
+		t.Fatalf("expected k0000 deleted, got %q", got0)
+	}
+	got1, err := db.backend.Get([]byte("k0001"))
+	if err != nil {
+		t.Fatalf("backend.Get: %v", err)
+	}
+	if string(got1) != "v3" {
+		t.Fatalf("expected k0001=v3, got %q", got1)
+	}
+	got999, err := db.backend.Get([]byte("k0999"))
+	if err != nil {
+		t.Fatalf("backend.Get: %v", err)
+	}
+	if string(got999) != "v3" {
+		t.Fatalf("expected k0999=v3, got %q", got999)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 type MockReverseIterator struct {
 	backend *MockBackend
 	keys    []string
