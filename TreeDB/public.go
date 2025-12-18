@@ -301,3 +301,19 @@ func (db *DB) CompactIndex() error {
 	}
 	return db.backend.CompactIndex()
 }
+
+// FragmentationReport returns best-effort structural stats about the on-disk user
+// index that help diagnose scan regressions after churn.
+//
+// Note: In cached mode this reflects the backend state only; queued memtables are
+// not included unless the caller has explicitly drained the cache (e.g. via
+// close+reopen or a maintenance operation that drains).
+func (db *DB) FragmentationReport() (map[string]string, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.backend == nil {
+		return nil, ErrClosed
+	}
+	return db.backend.FragmentationReport()
+}

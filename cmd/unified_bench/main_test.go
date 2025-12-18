@@ -184,3 +184,45 @@ func TestRunChurnMaintSuite_Smoke(t *testing.T) {
 		t.Fatalf("expected non-empty output")
 	}
 }
+
+func TestRunFlushThrashSuite_Smoke(t *testing.T) {
+	out, err := runFlushThrashSuite(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "all",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runFlushThrashSuite: %v", err)
+	}
+	if out == "" {
+		t.Fatalf("expected non-empty output")
+	}
+}
+
+func TestRunLongMixSuite_Smoke(t *testing.T) {
+	out, err := runLongMixSuite(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "all",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runLongMixSuite: %v", err)
+	}
+	if out == "" {
+		t.Fatalf("expected non-empty output")
+	}
+}
