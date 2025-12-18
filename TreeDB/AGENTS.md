@@ -421,7 +421,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - [x] Unit test: throttler enforces upper bound (time-based; allow small tolerance).
   - [x] Integration test: cached-mode compaction triggers bounded flush assist under backlog (no deadlock; backlog drains).
   - [ ] Integration test: compaction under sustained writes does not exceed configured writer-latency budget (bounded blocking).
-  - [ ] Bench smoke with compaction enabled: completes without stalls/timeouts.
+  - [x] Bench smoke with compaction enabled: completes without stalls/timeouts (see `./bin/unified-bench -settle-before-scans -treedb-compact-before-scans ...`).
 
 ### 15.5 Index “VACUUM” / Rebuild (Fast Locality Reset)
 - [x] Add an in-place “vacuum” that bulk-rebuilds the user B+Tree into freshly allocated pages (append-only allocator to keep pages contiguous).

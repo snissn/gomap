@@ -24,6 +24,7 @@ import (
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/kvstore"
 	btreeadapter "github.com/snissn/gomap/kvstore/adapters/btreeonhashdb"
 	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
@@ -497,6 +498,14 @@ var (
 	treedbInternalFillPPM        = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
+	treedbCompactBeforeScans     = flag.Bool("treedb-compact-before-scans", false, "TreeDB: run slab compaction before scan tests (typically used with -settle-before-scans)")
+	treedbCompactDeadRatio       = flag.Float64("treedb-compact-dead-ratio", 0.50, "TreeDB: slab compaction candidate dead ratio threshold")
+	treedbCompactMinBytes        = flag.Uint64("treedb-compact-min-bytes", 1*1024*1024, "TreeDB: minimum slab total bytes to consider for compaction")
+	treedbCompactMaxSlabs        = flag.Int("treedb-compact-max-slabs", 1, "TreeDB: maximum slabs to compact per run (0=unlimited)")
+	treedbCompactMicroBatch      = flag.Int("treedb-compact-microbatch", 256, "TreeDB: compaction apply micro-batch size (keys per commit)")
+	treedbCompactRotateBeforeWrite = flag.Bool("treedb-compact-rotate-before-write", false, "TreeDB: rotate to a fresh active slab before copying live records")
+	treedbCompactCopyBps         = flag.Int64("treedb-compact-copy-bps", 0, "TreeDB: compaction copy throttling (bytes/sec), 0=disabled")
+	treedbCompactCopyBurst       = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
 	settleBeforeScans            = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 )
 
@@ -542,6 +551,15 @@ type BenchConfig struct {
 
 	TreeDBIterDebug      bool
 	TreeDBIterDebugLimit int
+
+	TreeDBCompactBeforeScans       bool
+	TreeDBCompactDeadRatio         float64
+	TreeDBCompactMinBytes          uint64
+	TreeDBCompactMaxSlabs          int
+	TreeDBCompactMicroBatch        int
+	TreeDBCompactRotateBeforeWrite bool
+	TreeDBCompactCopyBps           int64
+	TreeDBCompactCopyBurst         int64
 }
 
 type BenchRun struct {
@@ -581,6 +599,14 @@ func main() {
 		SettleBeforeScans:    *settleBeforeScans,
 		TreeDBIterDebug:      *treedbIterDebug,
 		TreeDBIterDebugLimit: *treedbIterDebugLimit,
+		TreeDBCompactBeforeScans:       *treedbCompactBeforeScans,
+		TreeDBCompactDeadRatio:         *treedbCompactDeadRatio,
+		TreeDBCompactMinBytes:          *treedbCompactMinBytes,
+		TreeDBCompactMaxSlabs:          *treedbCompactMaxSlabs,
+		TreeDBCompactMicroBatch:        *treedbCompactMicroBatch,
+		TreeDBCompactRotateBeforeWrite: *treedbCompactRotateBeforeWrite,
+		TreeDBCompactCopyBps:           *treedbCompactCopyBps,
+		TreeDBCompactCopyBurst:         *treedbCompactCopyBurst,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -1292,6 +1318,30 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	settled := false
+	compactTreeDBs := func() error {
+		if !cfg.TreeDBCompactBeforeScans {
+			return nil
+		}
+		for _, inst := range instances {
+			td, ok := inst.Wrapper.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				continue
+			}
+			if err := td.DB.CompactCandidates(compaction.Options{
+				DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
+				MinTotalBytes:      cfg.TreeDBCompactMinBytes,
+				MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
+				MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
+				RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
+				CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
+				CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
+			}); err != nil {
+				return fmt.Errorf("compact %s: %w", inst.Wrapper.Name(), err)
+			}
+		}
+		return nil
+	}
+
 	settle := func() error {
 		for _, inst := range instances {
 			_ = inst.Wrapper.Close()
@@ -1304,6 +1354,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return fmt.Errorf("reopen %s: %w", inst.Name, err)
 			}
 			inst.Wrapper = db
+		}
+		if err := compactTreeDBs(); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -1322,6 +1375,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if live != nil {
 				_ = live.Render(results)
 			}
+		} else if cfg.TreeDBCompactBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan") {
+			// If the caller didn't ask to settle, still allow an optional compaction
+			// pass before scans so scan regressions after churn can be studied in a
+			// "compacted values" state.
+			if err := compactTreeDBs(); err != nil {
+				return BenchRun{}, err
+			}
+			settled = true
 		}
 
 		for _, inst := range instances {
