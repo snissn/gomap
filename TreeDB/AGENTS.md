@@ -367,3 +367,63 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 ### 14.3 Verification
 - [x] **Benchmark:** Compare Read throughput before/after.
 - [x] **Safety Test:** Corrupt a page in RAM (via unsafe access) *after* verification and ensure the system (correctly) fails to detect it if cached, but detects it if cache is cleared. (Validates the cache is working).
+
+## Phase 15: Compaction/Vacuum + Fragmentation Controls
+
+**Goal:** Sustain high throughput and predictable scan latency under long-running random write/delete workloads by actively controlling index + value-log fragmentation.
+
+### 15.1 Telemetry + Triggers (Foundations)
+- [ ] Persist per-slab stats `[DeadBytes][TotalBytes]` in the System tree and update on overwrite/delete (not just per-commit metrics).
+- [ ] Add stats for index health: leaf fill-factor distribution, page count growth rate, freelist size, and “live tree region” hints.
+- [ ] Define compaction/vacuum triggers:
+  - slab dead ratio threshold + minimum bytes,
+  - index page growth / fill-factor threshold,
+  - manual “run once” hooks for ops.
+
+### 15.2 Slab Compaction v2 (Actually Reclaims Space)
+- [ ] Implement “rewrite to NEW slab” compaction (do not append to the active slab):
+  - copy live records from candidate slab → new slab file,
+  - build `[]CompactionOp{Key,OldPtr,NewPtr}` as you copy.
+- [ ] Add a compaction planner that picks candidate slabs by dead ratio / age, and skips active slab by default.
+- [ ] Mark compacted slabs **zombie** and delete only when unpinned (snapshot-safe).
+
+### 15.3 Micro-Batched Apply (Bound Writer Pauses)
+- [ ] Change compaction apply to commit in micro-batches under `writeMu`:
+  - verify current pointer matches `OldPtr`,
+  - apply pointer update (batch of N keys),
+  - yield between micro-batches to bound tail latency.
+- [ ] Ensure crash safety: compactor must be restartable and idempotent (re-copy safe; apply verifies pointers).
+
+### 15.4 Throttling + Backpressure Integration
+- [ ] Add compaction IO throttling (bytes/sec limiter) and expose config knobs.
+- [ ] Integrate with caching-layer backpressure so compaction does not starve foreground flush and vice-versa (bounded “assist” only under overload).
+
+### 15.5 Index “VACUUM” / Rebuild (Fast Locality Reset)
+- [ ] Add an in-place “vacuum” that bulk-rebuilds the user B+Tree into freshly allocated pages (append-only allocator to keep pages contiguous).
+- [ ] Atomically swap the root to the rebuilt tree and retire the old pages to the graveyard for pruning.
+- [ ] Optionally support a full offline rewrite (`index.db.new` swap) for maximum physical locality (requires robust open/rename protocol).
+
+### 15.6 Allocation Locality (Reduce Re-Fragmentation)
+- [ ] Improve allocator locality beyond LIFO freelist reuse:
+  - extent/segment allocation, or
+  - allocate-near-sibling hints during zipper splits and vacuum builds.
+- [ ] Add “append-only / sequential alloc mode” as an option for vacuum and large rebuild operations.
+
+### 15.7 B+Tree Maintenance Policies (Prevent Index Bloat)
+- [ ] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
+- [ ] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
+
+### 15.8 Slotted-Page Defragmentation (In-Page Holes)
+- [ ] Implement heap compaction / hole reuse for leaf pages on overwrite/update (current slotted-page write path leaks heap holes).
+- [ ] Add targeted tests for repeated overwrite workloads to ensure stable fill-factor and page count.
+
+### 15.9 Benchmarking + Diagnostics
+- [ ] Add benchmark modes that separate “ingest” vs “settled” scans:
+  - optional flush/drain or close/reopen before scan tests,
+  - record backlog/queue stats at each phase boundary.
+- [ ] Add a “fragmentation report” command/tool: leaf fill histogram, slab dead ratios, freelist pages, live page span.
+
+### 15.10 Production Durability/Footguns (Related Hardening)
+- [ ] `fsync` the directory on slab rotation (persist new file entry).
+- [ ] Preallocate pager growth (`fallocate`) before mapping new chunks to fail fast on ENOSPC.
+- [ ] Slab tail repair on open: detect and truncate partial/corrupt tail records (common crash case).
