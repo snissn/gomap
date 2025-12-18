@@ -18,6 +18,9 @@ type PageAllocator interface {
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
+
+	leafReserveBytes     int
+	internalReserveBytes int
 }
 
 type Split struct {
@@ -30,6 +33,39 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 		pager:     p,
 		allocator: a,
 	}
+}
+
+// SetFillTargets configures soft-full thresholds for newly written pages.
+// Targets are in parts-per-million where 1_000_000 means "allow full pages".
+func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
+	z.leafReserveBytes = reserveBytesFromPPM(leafPPM)
+	z.internalReserveBytes = reserveBytesFromPPM(internalPPM)
+}
+
+func reserveBytesFromPPM(ppm uint32) int {
+	if ppm >= 1_000_000 {
+		return 0
+	}
+	// Reserve a fixed fraction of the page size.
+	reserve := int((uint64(page.PageSize) * uint64(1_000_000-ppm)) / 1_000_000)
+	if reserve < 0 {
+		return 0
+	}
+	return reserve
+}
+
+func (z *Zipper) leafSoftFull(b *node.Builder, entrySize int) bool {
+	if z.leafReserveBytes <= 0 || b == nil || b.Count() == 0 {
+		return false
+	}
+	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.leafReserveBytes
+}
+
+func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
+	if z.internalReserveBytes <= 0 || b == nil || b.Count() == 0 {
+		return false
+	}
+	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.internalReserveBytes
 }
 
 // Apply applies the batch to the tree rooted at rootID.
@@ -89,7 +125,13 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				}
 
 				// Add child
-				err := currentBuilder.AddInternalChild(child.Key, child.NodeID)
+				childSize := 2 + 8 + len(child.Key)
+				var err error
+				if z.internalSoftFull(currentBuilder, childSize) {
+					err = node.ErrNodeFull
+				} else {
+					err = currentBuilder.AddInternalChild(child.Key, child.NodeID)
+				}
 				if err == node.ErrNodeFull {
 					// Finish current
 					_ = currentBuilder.Finish()
@@ -297,7 +339,18 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		err := target.AddLeafEntry(key, val, flags, valPtr)
+		entrySize := 7 + len(key)
+		if flags&node.FlagPointer != 0 {
+			entrySize += page.ValuePtrSize
+		} else {
+			entrySize += len(val)
+		}
+		var err error
+		if z.leafSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddLeafEntry(key, val, flags, valPtr)
+		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
 
@@ -414,7 +467,12 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
 
-		err = target.AddInternalChild(key, newChildID)
+		entrySize := 2 + 8 + len(key)
+		if z.internalSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddInternalChild(key, newChildID)
+		}
 		if err == node.ErrNodeFull {
 			target, err = z.createNewSplitInternal(target, builder, &splits, key, newChildID, metrics)
 			if err != nil {
@@ -426,7 +484,12 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		// Add sibling splits
 		for _, s := range childSplits {
-			err = target.AddInternalChild(s.Key, s.NodeID)
+			entrySize := 2 + 8 + len(s.Key)
+			if z.internalSoftFull(target, entrySize) {
+				err = node.ErrNodeFull
+			} else {
+				err = target.AddInternalChild(s.Key, s.NodeID)
+			}
 			if err == node.ErrNodeFull {
 				target, err = z.createNewSplitInternal(target, builder, &splits, s.Key, s.NodeID, metrics)
 				if err != nil {

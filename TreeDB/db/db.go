@@ -73,6 +73,16 @@ type Options struct {
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
 	PreferAppendAlloc bool
+
+	// LeafFillTargetPPM and InternalFillTargetPPM control how full newly-written
+	// B+Tree pages are allowed to become before forcing a split (soft-full).
+	// Lower values reduce split churn and slow re-fragmentation under updates, at
+	// the cost of higher page count (more index bytes).
+	//
+	// Values are in parts-per-million where 1_000_000 means "allow full pages"
+	// (current behavior). Zero uses the default (1_000_000).
+	LeafFillTargetPPM     uint32
+	InternalFillTargetPPM uint32
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -145,6 +155,12 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 {
 		opts.KeepRecent = 10000
 	}
+	if opts.LeafFillTargetPPM == 0 {
+		opts.LeafFillTargetPPM = 1_000_000
+	}
+	if opts.InternalFillTargetPPM == 0 {
+		opts.InternalFillTargetPPM = 1_000_000
+	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
@@ -189,6 +205,7 @@ func Open(opts Options) (*DB, error) {
 			FlushThreshold:  opts.FlushThreshold,
 		},
 	}
+	db.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 
 	if err := db.recover(); err != nil {
 		db.Close()
