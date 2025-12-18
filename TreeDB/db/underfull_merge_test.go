@@ -10,7 +10,7 @@ func TestDeleteMostKeys_MergesUnderfullLeafSiblings(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:                  dir,
+		Dir:                   dir,
 		KeepRecent:            1,
 		LeafFillTargetPPM:     850_000,
 		InternalFillTargetPPM: 900_000,
@@ -119,4 +119,3 @@ func TestDeleteMostKeys_MergesUnderfullLeafSiblings(t *testing.T) {
 		}
 	}
 }
-

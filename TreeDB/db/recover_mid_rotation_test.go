@@ -57,4 +57,3 @@ func TestRecover_MidRotationCrash_PrunesGhostSlab(t *testing.T) {
 		t.Fatalf("value mismatch after recovery")
 	}
 }
-

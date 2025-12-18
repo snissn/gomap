@@ -11,7 +11,7 @@ func TestMaintenance_ModerateChurn_KeepsLeafFillReasonable(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:                  dir,
+		Dir:                   dir,
 		KeepRecent:            1,
 		LeafFillTargetPPM:     850_000,
 		InternalFillTargetPPM: 900_000,
@@ -111,4 +111,3 @@ func TestMaintenance_ModerateChurn_KeepsLeafFillReasonable(t *testing.T) {
 		t.Fatalf("expected leaf fill avg >= 450k ppm, got %d", avg)
 	}
 }
-

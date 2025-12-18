@@ -48,4 +48,3 @@ func TestCompactIndex_AllocatesNewPagesByAppending(t *testing.T) {
 		t.Fatalf("expected appended allocations, got minID=%d beforeTotal=%d", minID, beforeTotal)
 	}
 }
-

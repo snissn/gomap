@@ -91,4 +91,3 @@ func TestRecover_TornSlabTail_RollsBackMeta(t *testing.T) {
 		t.Fatalf("expected slab truncated after repair, before=%d after=%d", before, after)
 	}
 }
-

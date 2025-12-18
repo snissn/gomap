@@ -12,10 +12,10 @@ func TestCompactCandidates_CachedMode_AssistsFlushBackpressure(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:                  dir,
-		Mode:                 ModeCached,
-		FlushThreshold:        64 * 1024,
-		MaxQueuedMemtables:    1,
+		Dir:                     dir,
+		Mode:                    ModeCached,
+		FlushThreshold:          64 * 1024,
+		MaxQueuedMemtables:      1,
 		WriterFlushMaxMemtables: 100,
 	})
 	if err != nil {
@@ -93,4 +93,3 @@ func TestCompactCandidates_CachedMode_AssistsFlushBackpressure(t *testing.T) {
 	}
 	t.Fatalf("expected backlog to drain, start=%d now=%d", startBacklog, d.cached.QueueBacklogBytes())
 }
-

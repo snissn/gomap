@@ -201,15 +201,15 @@ func Open(opts Options) (*DB, error) {
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
 
 	db := &DB{
-		pager:       p,
-		slabManager: sm,
-		zipper:      zipper.New(p, alloc),
-		allocator:   alloc,
-		graveyard:   lifecycle.NewGraveyard(),
-		registry:    lifecycle.NewReaderRegistry(),
-		lock:        lock,
-		adaptive:    adaptive.New(),
-		keepRecent:  opts.KeepRecent,
+		pager:                p,
+		slabManager:          sm,
+		zipper:               zipper.New(p, alloc),
+		allocator:            alloc,
+		graveyard:            lifecycle.NewGraveyard(),
+		registry:             lifecycle.NewReaderRegistry(),
+		lock:                 lock,
+		adaptive:             adaptive.New(),
+		keepRecent:           opts.KeepRecent,
 		repairSlabTailOnOpen: !opts.DisableSlabTailRepairOnOpen,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
