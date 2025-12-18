@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -73,6 +74,22 @@ type Options struct {
 	// writers). A negative value disables backpressure entirely (higher short-term
 	// ingest, but potentially unbounded flush debt). Zero uses the default.
 	MaxQueuedMemtables int
+
+	// SlowdownBacklogSeconds begins applying writer backpressure when queued flush
+	// backlog exceeds this many seconds of estimated flush work (0 disables).
+	SlowdownBacklogSeconds float64
+	// StopBacklogSeconds blocks writers when queued flush backlog exceeds this many
+	// seconds of estimated flush work (0 disables).
+	StopBacklogSeconds float64
+	// MaxBacklogBytes is an absolute cap on queued flush backlog bytes (0 disables).
+	MaxBacklogBytes int64
+
+	// WriterFlushMaxMemtables bounds how much queued work a writer will help flush
+	// per write when backpressure is active (0 uses a default).
+	WriterFlushMaxMemtables int
+	// WriterFlushMaxDuration bounds how long a writer will spend helping flush per
+	// write when backpressure is active (0 disables the time bound).
+	WriterFlushMaxDuration time.Duration
 }
 
 type Snapshot struct {

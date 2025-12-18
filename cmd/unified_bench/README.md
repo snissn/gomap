@@ -37,6 +37,11 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-range-span` number of keys per range (default 100)
 - `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
 - `-treedb-max-queued-memtables` TreeDB (cached) max queued immutable memtables before applying backpressure flush (`0`=default, `<0`=disable)
+- `-treedb-slowdown-backlog-seconds` TreeDB (cached) start backpressure when queued backlog exceeds this many seconds of flush work
+- `-treedb-stop-backlog-seconds` TreeDB (cached) block writers when queued backlog exceeds this many seconds of flush work
+- `-treedb-max-backlog-bytes` TreeDB (cached) absolute cap on queued backlog bytes
+- `-treedb-writer-flush-max-memtables` TreeDB (cached) max memtables a writer will help flush per op
+- `-treedb-writer-flush-max-ms` TreeDB (cached) max time (ms) a writer will help flush per op
 - `-treedb-iter-debug` print prefix scan iterator timing + debug stats
 - `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)

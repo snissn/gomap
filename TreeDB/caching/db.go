@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -46,9 +47,29 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type Options struct {
+	FlushThreshold int64
+
+	// Legacy backpressure knob: queue length limit.
+	// 0 uses the default (4). <0 disables writer backpressure entirely.
+	MaxQueuedMemtables int
+
+	// Adaptive backpressure knobs (seconds/bytes). If any of these are non-zero,
+	// the caching layer uses backlog-bytes thresholds instead of queue length.
+	SlowdownBacklogSeconds float64
+	StopBacklogSeconds     float64
+	MaxBacklogBytes        int64
+
+	// Writer flush assist limits when backpressure triggers.
+	WriterFlushMaxMemtables int
+	WriterFlushMaxDuration  time.Duration
+}
+
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
+	bpMu    sync.Mutex
+	bpCond  *sync.Cond
 
 	// Level 0 (Memory)
 	mutable           *memtable.Memtable
@@ -71,6 +92,15 @@ type DB struct {
 	dir              string
 	flushThreshold   int64
 	maxQueuedMemtables int
+	slowdownBacklogSeconds float64
+	stopBacklogSeconds     float64
+	maxBacklogBytes        int64
+	writerFlushMaxMemtables int
+	writerFlushMaxDuration  time.Duration
+
+	// Backpressure state
+	queueBacklogBytes atomic.Int64
+	flushBpsEWMA       float64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -139,12 +169,15 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 	return true
 }
 
-func Open(dir string, backend BackendDB, flushThreshold int64, maxQueuedMemtables int) (*DB, error) {
-	if flushThreshold <= 0 {
-		flushThreshold = 64 * 1024 * 1024 // 64MB default
+func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
+	if opts.FlushThreshold <= 0 {
+		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
-	if maxQueuedMemtables == 0 {
-		maxQueuedMemtables = 4
+	if opts.MaxQueuedMemtables == 0 {
+		opts.MaxQueuedMemtables = 4
+	}
+	if opts.WriterFlushMaxMemtables == 0 {
+		opts.WriterFlushMaxMemtables = 1
 	}
 
 	// Ensure wal dir exists
@@ -156,12 +189,18 @@ func Open(dir string, backend BackendDB, flushThreshold int64, maxQueuedMemtable
 	db := &DB{
 		dir:               walDir,
 		backend:           backend,
-		flushThreshold:    flushThreshold,
-		maxQueuedMemtables: maxQueuedMemtables,
+		flushThreshold:           opts.FlushThreshold,
+		maxQueuedMemtables:       opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:       opts.StopBacklogSeconds,
+		maxBacklogBytes:          opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:   opts.WriterFlushMaxDuration,
 		mutable:           memtable.New(),
 		closeCh:           make(chan struct{}),
 		flushCh:           make(chan struct{}, 1),
 	}
+	db.bpCond = sync.NewCond(&db.bpMu)
 
 	// Open initial WAL
 	if err := db.rotateWALLocked(); err != nil {
@@ -216,6 +255,126 @@ func (db *DB) initBackendRange() error {
 	return nil
 }
 
+const stopResumeFraction = 0.70
+
+func (db *DB) adaptiveBackpressureEnabled() bool {
+	return db.slowdownBacklogSeconds > 0 || db.stopBacklogSeconds > 0 || db.maxBacklogBytes > 0
+}
+
+func (db *DB) thresholdsLocked() (slowdownBytes, stopBytes, resumeBytes int64) {
+	flushBps := db.flushBpsEWMA
+	if flushBps <= 0 && db.flushThreshold > 0 {
+		// Fallback until we have real measurements: assume ~1 memtable/sec.
+		flushBps = float64(db.flushThreshold)
+	}
+	return computeBackpressureThresholds(backpressureParams{
+		flushBps:                flushBps,
+		flushThreshold:          db.flushThreshold,
+		slowdownBacklogSeconds:  db.slowdownBacklogSeconds,
+		stopBacklogSeconds:      db.stopBacklogSeconds,
+		maxBacklogBytes:         db.maxBacklogBytes,
+		stopResumeFraction:      stopResumeFraction,
+	})
+}
+
+func (db *DB) waitForStop() {
+	if !db.adaptiveBackpressureEnabled() {
+		return
+	}
+
+	for {
+		db.bpMu.Lock()
+		_, stopBytes, resumeBytes := db.thresholdsLocked()
+		if stopBytes <= 0 {
+			db.bpMu.Unlock()
+			return
+		}
+		backlog := db.queueBacklogBytes.Load()
+		if backlog < stopBytes {
+			db.bpMu.Unlock()
+			return
+		}
+		db.bpMu.Unlock()
+
+		// Ensure progress even if the background flusher isn't currently scheduled
+		// (e.g. backlog driven by iterator rotations). This still "blocks" the write
+		// in the sense that we don't accept new ops until backlog drops, but lets the
+		// caller contribute bounded flush work.
+		db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+
+		db.bpMu.Lock()
+		for {
+			_, stopBytes, resumeBytes = db.thresholdsLocked()
+			if stopBytes <= 0 {
+				db.bpMu.Unlock()
+				return
+			}
+			backlog = db.queueBacklogBytes.Load()
+			if backlog < stopBytes {
+				db.bpMu.Unlock()
+				return
+			}
+			if backlog < resumeBytes {
+				break
+			}
+			db.bpCond.Wait()
+		}
+		db.bpMu.Unlock()
+	}
+}
+
+func (db *DB) maybeAssistFlush() {
+	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
+		return
+	}
+
+	// Adaptive policy: thresholds based on queued backlog bytes.
+	if db.adaptiveBackpressureEnabled() {
+		db.bpMu.Lock()
+		slowdownBytes, _, _ := db.thresholdsLocked()
+		db.bpMu.Unlock()
+
+		if slowdownBytes > 0 && db.queueBacklogBytes.Load() > slowdownBytes {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		}
+		return
+	}
+
+	// Legacy policy: thresholds based on queue length.
+	if db.maxQueuedMemtables >= 0 {
+		db.mu.RLock()
+		needs := len(db.queue) > db.maxQueuedMemtables
+		db.mu.RUnlock()
+		if needs {
+			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		}
+	}
+}
+
+func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) {
+	if maxMemtables <= 0 && maxDuration <= 0 {
+		return
+	}
+	start := time.Now()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	flushed := 0
+	for {
+		if maxMemtables > 0 && flushed >= maxMemtables {
+			return
+		}
+		if maxDuration > 0 && time.Since(start) >= maxDuration {
+			return
+		}
+		if !db.flushOneLocked(sync) {
+			return
+		}
+		flushed++
+	}
+}
+
 func (db *DB) Close() error {
 	db.mu.Lock()
 	if db.mutable.Len() > 0 {
@@ -263,6 +422,7 @@ func (db *DB) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForStop()
 	return db.set(key, value, false)
 }
 
@@ -273,6 +433,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForStop()
 	return db.set(key, value, true)
 }
 
@@ -300,22 +461,15 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	db.mutableRange.add(key)
 
 	// 3. Check Threshold
-	needsBackpressureFlush := false
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = db.maxQueuedMemtables >= 0 && len(db.queue) > db.maxQueuedMemtables
 	}
 	db.mu.Unlock()
 
-	// Backpressure: if writers outrun the background flusher, the queue grows and
-	// each range iterator becomes a k-way merge. Force a flush to cap merge fanout
-	// and preserve scan performance.
-	if needsBackpressureFlush {
-		db.flushAll(false)
-	}
+	db.maybeAssistFlush()
 	return nil
 }
 
@@ -323,6 +477,7 @@ func (db *DB) Delete(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForStop()
 	return db.delete(key, false)
 }
 
@@ -330,6 +485,7 @@ func (db *DB) DeleteSync(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForStop()
 	return db.delete(key, true)
 }
 
@@ -357,25 +513,23 @@ func (db *DB) delete(key []byte, sync bool) error {
 	db.mutableRange.add(key)
 
 	// 3. Threshold
-	needsBackpressureFlush := false
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = db.maxQueuedMemtables >= 0 && len(db.queue) > db.maxQueuedMemtables
 	}
 	db.mu.Unlock()
 
-	if needsBackpressureFlush {
-		db.flushAll(false)
-	}
+	db.maybeAssistFlush()
 	return nil
 }
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	walPath := db.walPath
+	memBytes := db.mutable.Size()
 	db.queue = append(db.queue, db.mutable)
+	db.queueBacklogBytes.Add(memBytes)
 	db.queueRanges = append(db.queueRanges, db.mutableRange)
 	db.queueWALPaths = append(db.queueWALPaths, walPath)
 	db.mutable = memtable.New()
@@ -402,6 +556,9 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 		default:
 		}
 	}
+	db.bpMu.Lock()
+	db.bpCond.Broadcast()
+	db.bpMu.Unlock()
 	return nil
 }
 
@@ -459,6 +616,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		return false
 	}
 	mem := db.queue[0]
+	memBytes := mem.Size()
+	memLen := mem.Len()
 	memRange := keyRange{}
 	if len(db.queueRanges) > 0 {
 		memRange = db.queueRanges[0]
@@ -470,7 +629,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	db.mu.Unlock()
 
 	// Optimization: Skip flush for empty memtables (e.g. from frequent Iterator creation)
-	if mem.Len() > 0 {
+	flushStart := time.Time{}
+	flushed := false
+	if memLen > 0 {
+		flushStart = time.Now()
 		// Flush 'mem' to backend
 		backendBatch := db.backend.NewBatch()
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
@@ -543,6 +705,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			return false
 		}
 		_ = backendBatch.Close()
+		flushed = true
+	}
+	flushDur := time.Duration(0)
+	if flushed {
+		flushDur = time.Since(flushStart)
 	}
 
 	// Remove from queue and delete old WAL
@@ -560,6 +727,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueWALPaths) > 0 {
 		db.queueWALPaths = db.queueWALPaths[1:]
 	}
+	db.queueBacklogBytes.Add(-memBytes)
 
 	// Check if WAL is still in use
 	inUse := false
@@ -579,6 +747,22 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
 		}
+	}
+
+	if flushed && flushDur > 0 && memBytes > 0 {
+		sample := float64(memBytes) / flushDur.Seconds()
+		db.bpMu.Lock()
+		if db.flushBpsEWMA <= 0 {
+			db.flushBpsEWMA = sample
+		} else {
+			db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+		}
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+	} else {
+		db.bpMu.Lock()
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
 	}
 	return true
 }
@@ -625,7 +809,15 @@ func (db *DB) Has(key []byte) (bool, error) {
 }
 
 func (db *DB) Stats() map[string]string {
-	return db.backend.Stats()
+	stats := db.backend.Stats()
+	if stats == nil {
+		stats = make(map[string]string)
+	}
+	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
+	db.bpMu.Lock()
+	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
+	db.bpMu.Unlock()
+	return stats
 }
 
 func (db *DB) Print() error {
@@ -1048,6 +1240,7 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.db.waitForStop()
 
 	if b.backend != nil {
 		var err error
@@ -1121,20 +1314,16 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 
 	// 3. Threshold Check
-	needsBackpressureFlush := false
 	if b.db.mutable.Size() > b.db.flushThreshold {
 		if err := b.db.rotateMemtableLocked(true); err != nil {
 			b.db.mu.Unlock()
 			return err
 		}
-		needsBackpressureFlush = b.db.maxQueuedMemtables >= 0 && len(b.db.queue) > b.db.maxQueuedMemtables
 	}
 
 	b.db.mu.Unlock()
 
-	if needsBackpressureFlush {
-		b.db.flushAll(false)
-	}
+	b.db.maybeAssistFlush()
 
 	return b.Close()
 }

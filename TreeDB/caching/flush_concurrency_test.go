@@ -11,7 +11,7 @@ func TestCachingDB_ConcurrentFlushDoesNotPanic(t *testing.T) {
 	backend := NewMockBackend()
 
 	// Low threshold to create queued memtables quickly.
-	db, err := Open(dir, backend, 1, 0)
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

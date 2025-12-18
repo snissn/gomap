@@ -163,7 +163,7 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 	backend := NewMockBackend()
 
 	// Threshold 1 byte to trigger flush
-	db, err := Open(dir, backend, 1, 0)
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	backend := NewMockBackend()
 
 	// Large threshold so nothing flushes from memtable; we want the batch fast-path.
-	db, err := Open(dir, backend, 1<<30, 0)
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 30})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
