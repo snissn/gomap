@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 
@@ -20,8 +21,14 @@ func New(d *db.DB) *Compactor {
 }
 
 // CompactSlab performs compaction on a specific slab file.
-// It moves live records to the active slab and updates the index.
+// It rewrites live records to a new slab and updates pointers in micro-batches.
 func (c *Compactor) CompactSlab(id uint32) error {
+	// Never compact the active slab: new writes could create new live pointers
+	// into it while we're scanning.
+	if c.db.SlabManager().ActiveSlabID() == id {
+		return errors.New("compaction: cannot compact active slab")
+	}
+
 	snap := c.db.AcquireSnapshot()
 	defer snap.Close()
 
@@ -32,26 +39,46 @@ func (c *Compactor) CompactSlab(id uint32) error {
 	}
 	defer f.Close()
 
+	out, err := c.db.SlabManager().CreateCompactionSlab()
+	if err != nil {
+		return err
+	}
+
+	// Determine source size once. If the file grows concurrently (it shouldn't,
+	// since we don't compact the active slab), we ignore the tail.
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	size := info.Size()
+
 	var ops []db.CompactionOp
 	offset := int64(0)
+	appliedAny := false
 
 	// Buffer for header
-	headerBuf := make([]byte, slab.HeaderSize)
+	var headerBuf [slab.HeaderSize]byte
 
 	for {
 		// Read Header
-		if _, err := f.ReadAt(headerBuf, offset); err != nil {
+		if offset >= size {
+			break
+		}
+		if _, err := f.ReadAt(headerBuf[:], offset); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return err
 		}
 
-		// Parse Header
-		// CRC(4) | KeyLen(2) | ValLen(4)
+		// Parse Header: CRC(4) | KeyLen(2) | ValLen(4)
 		keyLen := binary.LittleEndian.Uint16(headerBuf[4:6])
 		valLen := binary.LittleEndian.Uint32(headerBuf[6:10])
 		totalLen := int64(slab.HeaderSize) + int64(keyLen) + int64(valLen)
+		if totalLen <= 0 || offset+totalLen > size {
+			// Partial tail record; stop (common crash case).
+			break
+		}
 
 		// Read Key and Value
 		// We need them to check liveness and re-append
@@ -74,8 +101,8 @@ func (c *Compactor) CompactSlab(id uint32) error {
 		}
 
 		// Check Liveness (Optimistic)
-		// We verify against the snapshot. If it's dead in snapshot, it's definitely dead.
-		// If it's live in snapshot, we assume live and move it.
+		// We verify against the snapshot. Since we never compact the active slab,
+		// no new live pointers into this slab can be created after the snapshot.
 		// ApplyCompaction will verify again against latest state to ensure safety.
 		entry, err := snap.GetEntry(key)
 		if err != nil {
@@ -90,21 +117,49 @@ func (c *Compactor) CompactSlab(id uint32) error {
 			continue
 		}
 
-		// Append to Active Slab
-		newPtr, err := c.db.SlabManager().Append(key, value)
+		// Append to the new slab.
+		newOff, err := out.Write(key, value)
 		if err != nil {
 			return err
 		}
+		newPtr := page.ValuePtr{
+			Offset: uint64(newOff + 4),
+			Length: uint32(totalLen - 4),
+			FileID: out.ID,
+		}
 
+		keyCopy := append([]byte(nil), key...)
 		ops = append(ops, db.CompactionOp{
-			Key:    key,
+			Key:    keyCopy,
 			OldPtr: oldPtr,
 			NewPtr: newPtr,
 		})
 
+		// Apply periodically to bound memory and writer pauses.
+		if len(ops) >= 256 {
+			if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
+				return err
+			}
+			appliedAny = true
+			ops = ops[:0]
+		}
+
 		offset += totalLen
 	}
 
-	// Apply Atomic Update
-	return c.db.ApplyCompaction(ops)
+	if len(ops) > 0 {
+		if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
+			return err
+		}
+		appliedAny = true
+	}
+
+	if !appliedAny {
+		// Nothing was moved; avoid leaving an empty slab behind.
+		_ = c.db.SlabManager().RemoveSlab(out.ID)
+	}
+
+	// Now that pointers have been moved, remove the old slab from future
+	// snapshots. It will be deleted once no snapshots reference it.
+	return c.db.SlabManager().MarkZombie(id)
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestCompaction(t *testing.T) {
@@ -16,23 +17,15 @@ func TestCompaction(t *testing.T) {
 	}
 	defer d.Close()
 
-	// 1. Fill Slab 0
-	// We need to force rotation. MaxSlabSize is 4GB default.
-	// We can't easily force it without writing 4GB.
-	// But `SlabManager` doesn't expose `ForceRotate`.
-	// However, we can create a new SlabManager with small max size?
-	// Or we can rely on `CompactSlab(0)` working even if Slab 0 is active?
-	// If Slab 0 is active, `Append` writes to Slab 0.
-	// Compaction reads from 0, writes to 0.
-	// This is effectively a "Rewrite" / GC.
-	// `ApplyCompaction` will update pointers.
-	// Pointers will change (offset increases).
-	// This tests the logic correctly.
+	// Force slab rotation so we can compact a non-active slab.
+	oldMax := slab.MaxSlabSize
+	slab.MaxSlabSize = 1000
+	t.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	// Insert A, B
 	valA := bytes.Repeat([]byte("A"), 300) // > 256 -> Pointer
 	d.Set([]byte("A"), valA)
-	d.Set([]byte("B"), []byte("valB")) // Inline (ignored by slab compaction usually? No, "Slab Record" format is for large values only?
+	d.Set([]byte("B"), []byte("valB")) // Inline
 	// Spec 2.1.1: "Only values stored out-of-line ... are appended as slab records".
 	// My `Batch` respects this.
 	// So "B" is inline. Slab 0 only has "A".
@@ -45,26 +38,13 @@ func TestCompaction(t *testing.T) {
 	// Old A is dead.
 	d.Set([]byte("A"), bytes.Repeat([]byte("A2"), 300))
 
-	// Current Slab 0 contains:
-	// 1. A (Dead)
-	// 2. C (Live)
-	// 3. A2 (Live)
+	// Trigger rotation: the next large write should move active to slab 1.
+	d.Set([]byte("D"), bytes.Repeat([]byte("D"), 300))
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected slab rotation, active slab still %d", got)
+	}
 
 	// Compact Slab 0
-	// This will scan 0.
-	// 1. Read A. Check Tree. Tree has A2. Mismatch. Skip (actually `ApplyCompaction` skips).
-	// 2. Read C. Check Tree. Match. Append C to Slab 0 (end). Update Tree.
-	// 3. Read A2. Match. Append A2 to Slab 0 (end). Update Tree.
-
-	// Wait, if I append C, it moves to end.
-	// Then I append A2, it moves to end.
-	// So I duplicate live data at the end of the file.
-	// This grows the file.
-	// But `ApplyCompaction` updates the index.
-	// So old space becomes dead.
-	// This confirms the Mechanism works.
-	// (Real compaction moves to *different* slab usually, or creates new file).
-
 	c := New(d)
 	if err := c.CompactSlab(0); err != nil {
 		t.Fatalf("CompactSlab failed: %v", err)

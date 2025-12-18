@@ -224,6 +224,9 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 
 	files := make(map[uint32]*SlabFile, len(sm.slabs))
 	for k, v := range sm.slabs {
+		if v.IsZombie.Load() {
+			continue
+		}
 		files[k] = v
 		v.RefCount.Add(1) // Pin files for this Set
 	}
@@ -278,4 +281,70 @@ func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
 		}
 	}
 	return err
+}
+
+// CreateCompactionSlab creates a new slab file (not the active slab) and
+// registers it as live in the manager.
+func (sm *SlabManager) CreateCompactionSlab() (*SlabFile, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var maxID uint32
+	for id := range sm.slabs {
+		if id >= maxID {
+			maxID = id
+		}
+	}
+	newID := maxID + 1
+	path := filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", newID))
+	s, err := OpenSlab(path, newID)
+	if err != nil {
+		return nil, err
+	}
+	sm.slabs[newID] = s
+	return s, nil
+}
+
+// MarkZombie removes a slab from the active set so future snapshots stop
+// pinning it. The file is deleted once all snapshots release it.
+func (sm *SlabManager) MarkZombie(id uint32) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.activeSlab != nil && sm.activeSlab.ID == id {
+		return fmt.Errorf("cannot mark active slab %d as zombie", id)
+	}
+	s, ok := sm.slabs[id]
+	if !ok {
+		return fmt.Errorf("slab file %d not found", id)
+	}
+	s.IsZombie.Store(true)
+	return nil
+}
+
+// RemoveSlab deletes a slab file from disk and unregisters it from the manager.
+// It is only safe to call when the slab is not referenced by any snapshots.
+func (sm *SlabManager) RemoveSlab(id uint32) error {
+	sm.mu.Lock()
+	if sm.activeSlab != nil && sm.activeSlab.ID == id {
+		sm.mu.Unlock()
+		return fmt.Errorf("cannot remove active slab %d", id)
+	}
+	s, ok := sm.slabs[id]
+	if !ok {
+		sm.mu.Unlock()
+		return nil
+	}
+	if s.RefCount.Load() != 0 {
+		sm.mu.Unlock()
+		return fmt.Errorf("cannot remove slab %d: still pinned", id)
+	}
+	delete(sm.slabs, id)
+	sm.mu.Unlock()
+
+	_ = s.Close()
+	if err := os.Remove(s.Path); err != nil {
+		return err
+	}
+	return nil
 }
