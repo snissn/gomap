@@ -78,6 +78,18 @@ func main() {
 }
 ```
 
+## Tuning (Cached Mode)
+
+`treedb.Open` defaults to cached mode (memtable + WAL + background flush). The most important knobs:
+
+- `Options.FlushThreshold` + `Options.MaxQueuedMemtables` (throughput vs. backlog/memory)
+- Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
+- Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
+- Optional background slab compaction: `BackgroundCompactionInterval` + related knobs
+- Optional flush build parallelism: `FlushBuildConcurrency`
+
+Details: `docs/TREEDB_TUNING.md`.
+
 ### Exclusive Open (Process Lock)
 
 TreeDB acquires an **exclusive** lock on `Options.Dir`. If another process has the database open,
