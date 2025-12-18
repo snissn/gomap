@@ -633,6 +633,12 @@ func main() {
 				log.Fatalf("churnvacuum suite: %v", err)
 			}
 			fmt.Print(out)
+		case "churnmaint":
+			out, err := runChurnMaintSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("churnmaint suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -882,6 +888,24 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			if err := td.DB.CompactIndex(); err != nil {
 				return 0, fmt.Errorf("vacuum_index: %w", err)
+			}
+			return math.NaN(), nil
+		},
+		"compact_slabs": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			td, ok := db.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				return math.NaN(), nil
+			}
+			if err := td.DB.CompactCandidates(compaction.Options{
+				DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
+				MinTotalBytes:      cfg.TreeDBCompactMinBytes,
+				MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
+				MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
+				RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
+				CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
+				CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
+			}); err != nil {
+				return 0, fmt.Errorf("compact_slabs: %w", err)
 			}
 			return math.NaN(), nil
 		},
@@ -1262,6 +1286,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":     "VACUUM (Index)",
+		"compact_slabs":    "COMPACT (Slabs)",
 		"sequential_write": "Sequential Write",
 		"random_write":     "Random Write",
 		"random_read":      "Random Read",
@@ -1787,6 +1812,33 @@ func runChurnVacuumSuite(baseCfg BenchConfig) (string, error) {
 	cfg.DBsArg = "treedb,leveldb"
 	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,vacuum_index,full_scan2,prefix_scan2"
 	cfg.SettleBeforeScans = true
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+	return renderMarkdownSingle(run), nil
+}
+
+func runChurnMaintSuite(baseCfg BenchConfig) (string, error) {
+	// Churn + settled scans, then value-log compaction + VACUUM and scan again.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,compact_slabs,vacuum_index,full_scan2,prefix_scan2"
+	cfg.SettleBeforeScans = true
+
+	// Ensure compaction has permissive defaults so the suite is effective even if
+	// the caller didn't pass compaction flags.
+	if cfg.TreeDBCompactDeadRatio == 0 {
+		cfg.TreeDBCompactDeadRatio = 0.10
+	}
+	if cfg.TreeDBCompactMinBytes == 0 {
+		cfg.TreeDBCompactMinBytes = 1
+	}
+	if cfg.TreeDBCompactMicroBatch == 0 {
+		cfg.TreeDBCompactMicroBatch = 256
+	}
 
 	run, err := runBenchmark(cfg)
 	if err != nil {
