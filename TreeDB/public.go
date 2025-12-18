@@ -52,6 +52,7 @@ type DB struct {
 	mode    Mode
 	cached  *caching.DB
 	backend *db.DB
+	bgComp  bgCompactionWorker
 }
 
 func (db *DB) ensureOpen() error {
@@ -96,7 +97,36 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{mode: ModeCached, cached: cached, backend: backend}, nil
+	out := &DB{mode: ModeCached, cached: cached, backend: backend}
+
+	// Background compaction is opt-in (interval > 0).
+	if opts.BackgroundCompactionInterval > 0 {
+		co := compaction.Options{
+			MaxSlabs:           opts.BackgroundCompactionMaxSlabs,
+			DeadRatioThreshold: opts.BackgroundCompactionDeadRatio,
+			MinTotalBytes:      opts.BackgroundCompactionMinBytes,
+			MicroBatchSize:     opts.BackgroundCompactionMicroBatch,
+			CopyBytesPerSec:    opts.BackgroundCompactionCopyBytesPerSec,
+			CopyBurstBytes:     opts.BackgroundCompactionCopyBurstBytes,
+			RotateBeforeWrite:  opts.BackgroundCompactionRotateBeforeWrite,
+		}
+		// Reasonable effective defaults for background mode.
+		if co.MaxSlabs == 0 {
+			co.MaxSlabs = 1
+		}
+		if co.DeadRatioThreshold == 0 {
+			co.DeadRatioThreshold = 0.10
+		}
+		if co.MinTotalBytes == 0 {
+			co.MinTotalBytes = 1
+		}
+		if co.MicroBatchSize == 0 {
+			co.MicroBatchSize = 256
+		}
+		out.bgComp.Start(out, opts.BackgroundCompactionInterval, co)
+	}
+
+	return out, nil
 }
 
 // OpenCached is an explicit cached-mode opener (alias of Open with ModeCached).
@@ -121,6 +151,7 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgComp.Stop()
 	if db.cached != nil {
 		err := db.cached.Close()
 		db.cached = nil
@@ -245,9 +276,19 @@ func (db *DB) Stats() map[string]string {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.Stats()
+		stats := db.cached.Stats()
+		if stats == nil {
+			stats = make(map[string]string)
+		}
+		bgCompactionStatsInto(stats, &db.bgComp)
+		return stats
 	}
-	return db.backend.Stats()
+	stats := db.backend.Stats()
+	if stats == nil {
+		stats = make(map[string]string)
+	}
+	bgCompactionStatsInto(stats, &db.bgComp)
+	return stats
 }
 
 func (db *DB) Print() error {

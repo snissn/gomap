@@ -85,8 +85,21 @@ type Options struct {
 	// PruneMaxDuration bounds how long a pruner tick may run (0 uses a default;
 	// <0 means unlimited).
 	PruneMaxDuration time.Duration
-	Mode             Mode // Default ModeCached
-	FlushThreshold   int64
+
+	// BackgroundCompactionInterval enables background slab compaction when > 0.
+	// Background compaction is managed by the public wrapper (TreeDB/Open) so it
+	// can coordinate with the caching layer.
+	BackgroundCompactionInterval          time.Duration
+	BackgroundCompactionMaxSlabs          int
+	BackgroundCompactionDeadRatio         float64
+	BackgroundCompactionMinBytes          uint64
+	BackgroundCompactionMicroBatch        int
+	BackgroundCompactionCopyBytesPerSec   int64
+	BackgroundCompactionCopyBurstBytes    int64
+	BackgroundCompactionRotateBeforeWrite bool
+
+	Mode           Mode // Default ModeCached
+	FlushThreshold int64
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
