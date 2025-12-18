@@ -48,6 +48,9 @@ type DB struct {
 
 	keepRecent uint64
 	policy     WritePolicy
+	// repairSlabTailOnOpen enables tail-record repair during recovery. This
+	// protects against torn/partial slab record tails after crashes.
+	repairSlabTailOnOpen bool
 
 	mu         sync.RWMutex
 	writeMu    sync.Mutex
@@ -105,6 +108,12 @@ type Options struct {
 	// WriterFlushMaxDuration bounds how long a writer will spend helping flush per
 	// write when backpressure is active (0 disables the time bound).
 	WriterFlushMaxDuration time.Duration
+
+	// DisableSlabTailRepairOnOpen disables best-effort recovery that truncates
+	// partial/corrupt tail records on the active slab. Disabling may reduce open
+	// latency for very large slabs but risks starting up with committed pointers
+	// that decode to checksum errors after a crash.
+	DisableSlabTailRepairOnOpen bool
 }
 
 type Snapshot struct {
@@ -201,6 +210,7 @@ func Open(opts Options) (*DB, error) {
 		lock:        lock,
 		adaptive:    adaptive.New(),
 		keepRecent:  opts.KeepRecent,
+		repairSlabTailOnOpen: !opts.DisableSlabTailRepairOnOpen,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -328,46 +338,80 @@ func (db *DB) recover() error {
 		valid1 = false
 	}
 
-	var activeMeta page.MetaPageBody
-	var activeID uint64
-
-	if !valid0 && !valid1 {
+	type metaCandidate struct {
+		id   uint64
+		meta page.MetaPageBody
+	}
+	var candidates []metaCandidate
+	if valid0 {
+		candidates = append(candidates, metaCandidate{id: MetaPage0ID, meta: m0})
+	}
+	if valid1 {
+		candidates = append(candidates, metaCandidate{id: MetaPage1ID, meta: m1})
+	}
+	if len(candidates) == 0 {
 		return errors.New("both meta pages corrupted")
-	} else if valid0 && !valid1 {
-		activeMeta = m0
-		activeID = MetaPage0ID
-	} else if !valid0 && valid1 {
-		activeMeta = m1
-		activeID = MetaPage1ID
-	} else {
-		if m0.CommitSeq >= m1.CommitSeq {
-			activeMeta = m0
-			activeID = MetaPage0ID
-		} else {
-			activeMeta = m1
-			activeID = MetaPage1ID
+	}
+	// Prefer the highest CommitSeq, but fall back if the active slab tail is not
+	// actually readable (e.g. torn last record).
+	if len(candidates) == 2 && candidates[0].meta.CommitSeq < candidates[1].meta.CommitSeq {
+		candidates[0], candidates[1] = candidates[1], candidates[0]
+	}
+
+	var chosen *metaCandidate
+	for i := range candidates {
+		c := &candidates[i]
+
+		// Re-check slab tail against current size (note: prior iterations may have
+		// truncated the slab).
+		path := db.slabManager.GetSlabPath(c.meta.ActiveSlabID)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
 		}
+		if c.meta.ActiveSlabTail > uint64(info.Size()) {
+			continue
+		}
+
+		if err := db.slabManager.SetActiveSlab(c.meta.ActiveSlabID); err != nil {
+			continue
+		}
+		if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
+			return err
+		}
+
+		if db.repairSlabTailOnOpen {
+			repairedTail, err := db.slabManager.RepairActiveSlabTail()
+			if err != nil {
+				return err
+			}
+			if repairedTail < c.meta.ActiveSlabTail {
+				// This commit's meta tail was beyond the last checksum-valid record;
+				// reject it and fall back to an older meta page.
+				continue
+			}
+		}
+
+		chosen = c
+		break
+	}
+	if chosen == nil {
+		return errors.New("no meta page with durable slab tail")
 	}
 
-	db.meta = activeMeta
-	db.metaPageID = activeID
+	db.meta = chosen.meta
+	db.metaPageID = chosen.id
 
-	if err := db.slabManager.SetActiveSlab(activeMeta.ActiveSlabID); err != nil {
-		return err
-	}
-	if err := db.slabManager.TruncateActiveSlab(activeMeta.ActiveSlabTail); err != nil {
-		return err
-	}
-	if err := db.slabManager.PruneSlabs(activeMeta.ActiveSlabID); err != nil {
+	if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
 		return err
 	}
 
-	if activeMeta.TotalPages > 0 {
-		db.pager.SetPageCount(activeMeta.TotalPages)
+	if chosen.meta.TotalPages > 0 {
+		db.pager.SetPageCount(chosen.meta.TotalPages)
 	}
 
 	// Update Allocator Head
-	db.allocator.SetHead(activeMeta.FreelistHeadID)
+	db.allocator.SetHead(chosen.meta.FreelistHeadID)
 
 	return nil
 }

@@ -202,6 +202,20 @@ func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	return sm.activeSlab.Truncate(int64(offset))
 }
 
+// RepairActiveSlabTail scans and truncates any partial/corrupt tail records on
+// the active slab (best-effort crash recovery).
+func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.activeSlab == nil {
+		return 0, fmt.Errorf("no active slab")
+	}
+	if err := sm.activeSlab.RepairTail(); err != nil {
+		return 0, err
+	}
+	return uint64(sm.activeSlab.Size), nil
+}
+
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
