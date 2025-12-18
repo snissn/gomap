@@ -87,6 +87,7 @@ func main() {
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional background slab compaction: `BackgroundCompactionInterval` + related knobs
 - Optional flush build parallelism: `FlushBuildConcurrency`
+- Offline index vacuum (backend index): `treedb.VacuumIndexOffline(opts)` (requires the DB to be closed)
 
 Details: `docs/TREEDB_TUNING.md`.
 
