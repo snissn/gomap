@@ -461,13 +461,13 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Add a “fragmentation report” command/tool: leaf fill percentiles, freelist reclaimable pages, live page span, and slab dead ratios.
 - [ ] **Gates (before 15.10):**
   - [x] `unified-bench` can run a churn suite that optionally settles before scans (deterministic, comparable).
-  - [ ] “fragmentation report” validates invariants (no missing pages; sane histograms) and is used in tests.
+  - [x] “fragmentation report” validates invariants (no missing pages; sane histograms) and is used in tests.
 
 ### 15.10 Production Durability/Footguns (Related Hardening)
 - [x] `fsync` the directory on slab rotation (persist new file entry).
 - [x] Preallocate pager growth (`fallocate`) before mapping new chunks to fail fast on ENOSPC.
 - [x] Recovery: reject meta pages whose `ActiveSlabTail` exceeds slab file size (roll back to older meta).
-- [ ] Slab tail repair on open: detect and truncate partial/corrupt tail records (common crash case).
+- [x] Slab tail repair on open: detect and truncate partial/corrupt tail records (common crash case).
 - [ ] **Gates (completion):**
-  - [ ] Recovery tests cover: torn slab tail, mid-rotation crash, and meta consistency.
+  - [x] Recovery tests cover: torn slab tail, mid-rotation crash, and meta consistency.
   - [ ] End-to-end bench: long mixed workload + settle + scans shows stable scan throughput (no “collapsed” prefix_scan).
