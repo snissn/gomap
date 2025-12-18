@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -320,6 +321,13 @@ func (db *DB) recover() error {
 	m0, valid0 := db.readMeta(MetaPage0ID)
 	m1, valid1 := db.readMeta(MetaPage1ID)
 
+	if valid0 && !db.metaSlabTailValid(m0) {
+		valid0 = false
+	}
+	if valid1 && !db.metaSlabTailValid(m1) {
+		valid1 = false
+	}
+
 	var activeMeta page.MetaPageBody
 	var activeID uint64
 
@@ -364,6 +372,22 @@ func (db *DB) recover() error {
 	db.allocator.SetHead(activeMeta.FreelistHeadID)
 
 	return nil
+}
+
+func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
+	// ActiveSlabTail must not exceed the on-disk slab size; otherwise we'd end up
+	// pointing reads at bytes that were never durable (possible after a crash on
+	// async writes where index meta reached disk but slab didn't).
+	path := db.slabManager.GetSlabPath(m.ActiveSlabID)
+	info, err := os.Stat(path)
+	if err != nil {
+		// For empty/new DBs, active slab should exist; treat missing as invalid.
+		return false
+	}
+	if m.ActiveSlabTail > uint64(info.Size()) {
+		return false
+	}
+	return true
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
