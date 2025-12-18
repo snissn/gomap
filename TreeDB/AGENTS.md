@@ -372,6 +372,12 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 **Goal:** Sustain high throughput and predictable scan latency under long-running random write/delete workloads by actively controlling index + value-log fragmentation.
 
+### 15.0 Phase Gates (Always-On)
+- [ ] **Correctness:** `go test ./...` passes (no skipped new tests).
+- [ ] **Race safety (when supported):** `go test -race ./...` passes.
+- [ ] **Bench smoke:** `make unified-bench && ./bin/unified-bench -dbs treedb -keys 300000 -seed 1 -progress=false` completes without errors.
+- [ ] **Baseline capture (local, before code changes):** record the above smoke output + commit hash for phase15 comparisons.
+
 ### 15.1 Telemetry + Triggers (Foundations)
 - [ ] Persist per-slab stats `[DeadBytes][TotalBytes]` in the System tree and update on overwrite/delete (not just per-commit metrics).
 - [ ] Add stats for index health: leaf fill-factor distribution, page count growth rate, freelist size, and “live tree region” hints.
@@ -379,6 +385,10 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - slab dead ratio threshold + minimum bytes,
   - index page growth / fill-factor threshold,
   - manual “run once” hooks for ops.
+- [ ] **Gates (before 15.2):**
+  - [ ] Unit test: slab stats encode/decode + persistence across reopen.
+  - [ ] Unit test: stats reflect overwrite/delete (dead bytes increases; total bytes monotonic).
+  - [ ] Bench smoke: `./bin/unified-bench -dbs treedb -keys 300000 -seed 1 -progress=false` within ±5% of baseline for write tests (unless intentionally changed).
 
 ### 15.2 Slab Compaction v2 (Actually Reclaims Space)
 - [ ] Implement “rewrite to NEW slab” compaction (do not append to the active slab):
@@ -386,6 +396,11 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - build `[]CompactionOp{Key,OldPtr,NewPtr}` as you copy.
 - [ ] Add a compaction planner that picks candidate slabs by dead ratio / age, and skips active slab by default.
 - [ ] Mark compacted slabs **zombie** and delete only when unpinned (snapshot-safe).
+- [ ] **Gates (before 15.3):**
+  - [ ] Integration test: compaction preserves data for pointer values (Get + iterator).
+  - [ ] Integration test: snapshot safety (old slab not deleted while pinned).
+  - [ ] Integration test: compaction is restartable/idempotent (rerun does not corrupt; second run is no-op-ish).
+  - [ ] Bench smoke: write/read/scan unchanged when compaction is idle (no >5% regression vs baseline).
 
 ### 15.3 Micro-Batched Apply (Bound Writer Pauses)
 - [ ] Change compaction apply to commit in micro-batches under `writeMu`:
@@ -393,37 +408,64 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - apply pointer update (batch of N keys),
   - yield between micro-batches to bound tail latency.
 - [ ] Ensure crash safety: compactor must be restartable and idempotent (re-copy safe; apply verifies pointers).
+- [ ] **Gates (before 15.4):**
+  - [ ] Concurrency test: foreground writes can proceed between micro-batches (no deadlocks; bounded wait).
+  - [ ] Integration test: partial apply (stop after 1 micro-batch) leaves DB consistent and resumable.
+  - [ ] Bench smoke: `random_write` not regressed >10% vs baseline (expected small overhead from more commits/locking).
 
 ### 15.4 Throttling + Backpressure Integration
 - [ ] Add compaction IO throttling (bytes/sec limiter) and expose config knobs.
 - [ ] Integrate with caching-layer backpressure so compaction does not starve foreground flush and vice-versa (bounded “assist” only under overload).
+- [ ] **Gates (before 15.5):**
+  - [ ] Unit test: throttler enforces upper bound (time-based; allow small tolerance).
+  - [ ] Integration test: compaction under sustained writes does not exceed configured writer-latency budget (bounded blocking).
+  - [ ] Bench smoke with compaction enabled: completes without stalls/timeouts.
 
 ### 15.5 Index “VACUUM” / Rebuild (Fast Locality Reset)
 - [ ] Add an in-place “vacuum” that bulk-rebuilds the user B+Tree into freshly allocated pages (append-only allocator to keep pages contiguous).
 - [ ] Atomically swap the root to the rebuilt tree and retire the old pages to the graveyard for pruning.
 - [ ] Optionally support a full offline rewrite (`index.db.new` swap) for maximum physical locality (requires robust open/rename protocol).
+- [ ] **Gates (before 15.6):**
+  - [ ] Integration test: vacuum preserves all key/value pairs and iteration order.
+  - [ ] Structural test: post-vacuum live page span/locality meets target (e.g. `span <= 1.2x livePages`).
+  - [ ] Benchmark gate (fragmentation stress): after a churn-heavy run, vacuum + “settled scans” improves `full_scan/prefix_scan` vs pre-vacuum on the same dataset.
 
 ### 15.6 Allocation Locality (Reduce Re-Fragmentation)
 - [ ] Improve allocator locality beyond LIFO freelist reuse:
   - extent/segment allocation, or
   - allocate-near-sibling hints during zipper splits and vacuum builds.
 - [ ] Add “append-only / sequential alloc mode” as an option for vacuum and large rebuild operations.
+- [ ] **Gates (before 15.7):**
+  - [ ] Unit test: sequential alloc mode produces mostly monotonic page IDs during bulk build.
+  - [ ] Structural test: scan locality (live span) stays within target after post-vacuum rewrite + moderate churn.
 
 ### 15.7 B+Tree Maintenance Policies (Prevent Index Bloat)
 - [ ] Add a configurable leaf/internal **fill-factor target** (avoid “pack to 100% then split” churn).
 - [ ] Implement underfull-page merge/rebalance after deletes/overwrites (merge siblings or redistribute entries below a threshold).
+- [ ] **Gates (before 15.8):**
+  - [ ] Unit/integration test: repeated overwrite workload does not grow page count unbounded (with maintenance enabled).
+  - [ ] Structural test: average leaf fill-factor remains above target band after churn (with maintenance enabled).
 
 ### 15.8 Slotted-Page Defragmentation (In-Page Holes)
 - [ ] Implement heap compaction / hole reuse for leaf pages on overwrite/update (current slotted-page write path leaks heap holes).
 - [ ] Add targeted tests for repeated overwrite workloads to ensure stable fill-factor and page count.
+- [ ] **Gates (before 15.9):**
+  - [ ] Unit test: repeated overwrite in a single leaf reuses space / compacts (does not hit `ErrNodeFull` prematurely).
+  - [ ] Benchmark gate: fewer splits and higher leaf fill under update-heavy workloads (vs baseline).
 
 ### 15.9 Benchmarking + Diagnostics
 - [ ] Add benchmark modes that separate “ingest” vs “settled” scans:
   - optional flush/drain or close/reopen before scan tests,
   - record backlog/queue stats at each phase boundary.
 - [ ] Add a “fragmentation report” command/tool: leaf fill histogram, slab dead ratios, freelist pages, live page span.
+- [ ] **Gates (before 15.10):**
+  - [ ] `unified-bench` can run a churn suite that optionally settles before scans (deterministic, comparable).
+  - [ ] “fragmentation report” validates invariants (no missing pages; sane histograms) and is used in tests.
 
 ### 15.10 Production Durability/Footguns (Related Hardening)
 - [ ] `fsync` the directory on slab rotation (persist new file entry).
 - [ ] Preallocate pager growth (`fallocate`) before mapping new chunks to fail fast on ENOSPC.
 - [ ] Slab tail repair on open: detect and truncate partial/corrupt tail records (common crash case).
+- [ ] **Gates (completion):**
+  - [ ] Recovery tests cover: torn slab tail, mid-rotation crash, and meta consistency.
+  - [ ] End-to-end bench: long mixed workload + settle + scans shows stable scan throughput (no “collapsed” prefix_scan).
