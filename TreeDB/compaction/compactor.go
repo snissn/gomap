@@ -39,13 +39,6 @@ func (c *Compactor) CompactSlab(id uint32) error {
 	}
 	defer f.Close()
 
-	// Rotate to a fresh active slab so compaction IO doesn't interleave with
-	// existing slab contents and (critically) so the new slab ID is persisted in
-	// meta by subsequent commits.
-	if _, err := c.db.SlabManager().Rotate(); err != nil {
-		return err
-	}
-
 	// Determine source size once. If the file grows concurrently (it shouldn't,
 	// since we don't compact the active slab), we ignore the tail.
 	info, err := f.Stat()
@@ -117,7 +110,7 @@ func (c *Compactor) CompactSlab(id uint32) error {
 			continue
 		}
 
-		// Append to the current active slab (newly rotated at start).
+		// Append to the current active slab.
 		newPtr, err := c.db.SlabManager().Append(key, value)
 		if err != nil {
 			return err

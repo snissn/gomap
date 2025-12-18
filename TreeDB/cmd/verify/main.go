@@ -6,11 +6,15 @@ import (
 	"os"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
 var dir = flag.String("dir", "", "Database directory")
 var report = flag.Bool("report", false, "Print fragmentation report and stats")
+var compactDeadRatio = flag.Float64("compact-dead-ratio", 0, "If >0, compact slabs with dead ratio >= this threshold before verification")
+var compactMinBytes = flag.Uint64("compact-min-bytes", 0, "Minimum slab total bytes to consider for compaction")
+var compactMaxSlabs = flag.Int("compact-max-slabs", 1, "Maximum slabs to compact per run (0=unlimited)")
 
 func main() {
 	flag.Parse()
@@ -26,6 +30,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer d.Close()
+
+	if *compactDeadRatio > 0 {
+		c := compaction.New(d)
+		if err := c.CompactCandidates(compaction.Options{
+			DeadRatioThreshold: *compactDeadRatio,
+			MinTotalBytes:      *compactMinBytes,
+			MaxSlabs:           *compactMaxSlabs,
+			MicroBatchSize:     256,
+		}); err != nil {
+			fmt.Printf("Compaction failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	if *report {
 		stats := d.Stats()
