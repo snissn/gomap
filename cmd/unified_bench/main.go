@@ -627,6 +627,12 @@ func main() {
 				log.Fatalf("churn suite: %v", err)
 			}
 			fmt.Print(out)
+		case "churnvacuum":
+			out, err := runChurnVacuumSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("churnvacuum suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -869,6 +875,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	expectedFullScanCount := -1
 	checkPrefixCounts := false
 	testFuncs := map[string]TestFunc{
+		"vacuum_index": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			td, ok := db.(*treedbadapter.DB)
+			if !ok || td == nil || td.DB == nil {
+				return math.NaN(), nil
+			}
+			if err := td.DB.CompactIndex(); err != nil {
+				return 0, fmt.Errorf("vacuum_index: %w", err)
+			}
+			return math.NaN(), nil
+		},
 		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
@@ -1069,6 +1085,41 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			return math.NaN(), nil
 		},
+		"full_scan2": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			start := time.Now()
+			if rs, ok := db.(kvstore.RangeScanner); ok {
+				iter, err := rs.Iterator(nil, nil)
+				if err != nil {
+					return 0, fmt.Errorf("full_scan2: iterator: %w", err)
+				}
+				defer func() { _ = iter.Close() }()
+
+				count := 0
+				for iter.Valid() {
+					_ = iter.Key()
+					_ = iter.Value()
+					iter.Next()
+					count++
+				}
+				if err := iter.Error(); err != nil {
+					return 0, fmt.Errorf("full_scan2: %w", err)
+				}
+				return float64(count) / time.Since(start).Seconds(), nil
+			}
+
+			if fe, ok := db.(kvstore.ForEacher); ok {
+				count := 0
+				if err := fe.ForEach(func(_ []byte, _ []byte) error {
+					count++
+					return nil
+				}); err != nil {
+					return 0, fmt.Errorf("full_scan2: foreach: %w", err)
+				}
+				return float64(count) / time.Since(start).Seconds(), nil
+			}
+
+			return math.NaN(), nil
+		},
 		"prefix_scan": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			rs, ok := db.(kvstore.RangeScanner)
 			if !ok {
@@ -1159,15 +1210,65 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
 		},
+		"prefix_scan2": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			rs, ok := db.(kvstore.RangeScanner)
+			if !ok {
+				return math.NaN(), nil
+			}
+			start := time.Now()
+			totalItems := 0
+			maxKey := prefixScanBase + cfg.Keys
+			for i := 0; i < cfg.RangeQueries; i++ {
+				startIdx := prefixScanBase + rng.Intn(cfg.Keys)
+				endIdx := startIdx + cfg.RangeSpan
+				if endIdx > maxKey {
+					endIdx = maxKey
+				}
+
+				var startKeyBuf [8]byte
+				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
+				startKey := startKeyBuf[:]
+
+				var endKeyBuf [8]byte
+				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
+				endKey := endKeyBuf[:]
+
+				iter, err := rs.Iterator(startKey, endKey)
+				if err != nil {
+					return 0, fmt.Errorf("prefix_scan2: iterator: %w", err)
+				}
+
+				itemsThisQuery := 0
+				for iter.Valid() {
+					_ = iter.Key()
+					_ = iter.Value()
+					iter.Next()
+					itemsThisQuery++
+				}
+				if err := iter.Error(); err != nil {
+					_ = iter.Close()
+					return 0, fmt.Errorf("prefix_scan2: %w", err)
+				}
+				if err := iter.Close(); err != nil {
+					return 0, fmt.Errorf("prefix_scan2: close: %w", err)
+				}
+
+				totalItems += itemsThisQuery
+			}
+			return float64(totalItems) / time.Since(start).Seconds(), nil
+		},
 	}
 
 	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
+		"vacuum_index":     "VACUUM (Index)",
 		"sequential_write": "Sequential Write",
 		"random_write":     "Random Write",
 		"random_read":      "Random Read",
 		"full_scan":        "Full Scan",
+		"full_scan2":       "Full Scan (After VACUUM)",
 		"prefix_scan":      "Prefix Scan",
+		"prefix_scan2":     "Prefix Scan (After VACUUM)",
 		"batch_write":      "Batch Write",
 		"batch_random":     "Batch Random",
 		"batch_small_seq":  "Batch Small Seq",
@@ -1178,10 +1279,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if contains(testsToRun, "all") {
 		finalTestOrder = allTestOrder
 	} else {
-		for _, t := range allTestOrder {
-			if contains(testsToRun, t) {
-				finalTestOrder = append(finalTestOrder, t)
+		for _, t := range testsToRun {
+			if t == "" {
+				continue
 			}
+			if _, ok := testFuncs[t]; !ok {
+				return BenchRun{}, fmt.Errorf("unknown test: %q", t)
+			}
+			finalTestOrder = append(finalTestOrder, t)
 		}
 	}
 	if len(finalTestOrder) == 0 {
@@ -1666,6 +1771,21 @@ func runChurnSuite(baseCfg BenchConfig) (string, error) {
 	cfg.Progress = false
 	cfg.DBsArg = "treedb,leveldb"
 	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan"
+	cfg.SettleBeforeScans = true
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+	return renderMarkdownSingle(run), nil
+}
+
+func runChurnVacuumSuite(baseCfg BenchConfig) (string, error) {
+	// Churn + settled scans, then VACUUM and scan again on the same dataset.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,vacuum_index,full_scan2,prefix_scan2"
 	cfg.SettleBeforeScans = true
 
 	run, err := runBenchmark(cfg)
