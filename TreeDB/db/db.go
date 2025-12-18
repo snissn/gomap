@@ -533,6 +533,29 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+// RefreshSlabSet publishes a new DBState with the current SlabSet (excluding
+// zombies) without creating a new commit. This is used by background compaction
+// so that future snapshots stop pinning compacted slabs immediately.
+func (db *DB) RefreshSlabSet() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	oldState := db.state.Load()
+	if oldState == nil {
+		return nil
+	}
+
+	newState := &DBState{
+		CommitSeq:        oldState.CommitSeq,
+		RootPageID:       oldState.RootPageID,
+		SystemRootPageID: oldState.SystemRootPageID,
+		SlabSet:          db.slabManager.CurrentSlabSet(),
+	}
+	db.state.Store(newState)
+
+	return db.slabManager.ReleaseSlabs(oldState.SlabSet)
+}
+
 type CompactionOp struct {
 	Key    []byte
 	OldPtr page.ValuePtr

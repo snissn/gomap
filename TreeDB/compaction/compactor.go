@@ -158,5 +158,8 @@ func (c *Compactor) CompactSlabWithOptions(id uint32, opts Options) error {
 
 	// Now that pointers have been moved, remove the old slab from future
 	// snapshots. It will be deleted once no snapshots reference it.
-	return c.db.SlabManager().MarkZombie(id)
+	if err := c.db.SlabManager().MarkZombie(id); err != nil {
+		return err
+	}
+	return c.db.RefreshSlabSet()
 }
