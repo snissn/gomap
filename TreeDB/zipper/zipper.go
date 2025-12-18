@@ -227,10 +227,22 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, metrics *adapt
 			return 0, nil, nil, err
 		}
 
-		_ = builder.Finish()
+		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
 
 		retired = append(retired, childRetired...)
+
+		// If this internal page collapsed to a single child and produced no splits,
+		// skip writing the redundant level by returning the child directly.
+		// This helps delete-heavy workloads shrink tree height without requiring
+		// an explicit vacuum.
+		if len(splits) == 0 && n.Count() == 1 {
+			childID, err := n.GetInternalChildID(0)
+			if err == nil {
+				retired = append(retired, nr)
+				return childID, nil, retired, nil
+			}
+		}
 		return nr, splits, retired, nil
 	} else {
 		// Handle Page 0 / Empty / New Tree case
@@ -931,8 +943,6 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
-		lb := node.NewBuilder(ldata, page.PageTypeInternal)
-		lb.SetPageID(lid)
 
 		rid, err := z.allocator.Alloc()
 		if err != nil {
@@ -944,8 +954,6 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 			retired = append(retired, lid, rid)
 			return 0, 0, nil, false, err
 		}
-		rb := node.NewBuilder(rdata, page.PageTypeInternal)
-		rb.SetPageID(rid)
 
 		combined := make([]internalEntry, 0, int(left.Count()+right.Count()))
 		for _, src := range []*node.Node{left, right} {
