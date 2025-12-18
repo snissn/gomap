@@ -17,6 +17,7 @@ var compactDeadRatio = flag.Float64("compact-dead-ratio", 0, "If >0, compact sla
 var compactMinBytes = flag.Uint64("compact-min-bytes", 0, "Minimum slab total bytes to consider for compaction")
 var compactMaxSlabs = flag.Int("compact-max-slabs", 1, "Maximum slabs to compact per run (0=unlimited)")
 var compactMicroBatch = flag.Int("compact-microbatch", 256, "Compaction apply micro-batch size (keys per commit)")
+var compactRotateBeforeWrite = flag.Bool("compact-rotate-before-write", false, "If set, rotate to a fresh active slab before copying live records")
 var compactCopyBps = flag.Int64("compact-copy-bps", 0, "Compaction copy throttling (bytes/sec), 0=disabled")
 var compactCopyBurst = flag.Int64("compact-copy-burst", 0, "Compaction copy throttling burst (bytes), 0=default")
 
@@ -42,6 +43,7 @@ func main() {
 			MinTotalBytes:      *compactMinBytes,
 			MaxSlabs:           *compactMaxSlabs,
 			MicroBatchSize:     *compactMicroBatch,
+			RotateBeforeWrite:  *compactRotateBeforeWrite,
 			CopyBytesPerSec:    *compactCopyBps,
 			CopyBurstBytes:     *compactCopyBurst,
 		}); err != nil {
