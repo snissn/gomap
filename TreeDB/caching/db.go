@@ -174,7 +174,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
 	if opts.MaxQueuedMemtables == 0 {
-		opts.MaxQueuedMemtables = 4
+		// Keep the default queued backlog roughly stable in bytes when callers
+		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
+		// length of 4 => ~256MB backlog.
+		opts.MaxQueuedMemtables = defaultMaxQueuedMemtables(opts.FlushThreshold)
 	}
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
@@ -599,7 +602,7 @@ func (db *DB) flushAll(sync bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 
-	for db.flushOneLocked(sync) {
+	for db.flushCombinedLocked(sync) {
 	}
 }
 
@@ -607,6 +610,220 @@ func (db *DB) flushOne() bool {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 	return db.flushOneLocked(true)
+}
+
+const (
+	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
+	flushCombineMaxMemtables       = 32
+)
+
+func (db *DB) flushCombinedLocked(sync bool) bool {
+	db.mu.Lock()
+	queueLen := len(db.queue)
+	if queueLen == 0 {
+		db.mu.Unlock()
+		return false
+	}
+
+	max := queueLen
+	if max > flushCombineMaxMemtables {
+		max = flushCombineMaxMemtables
+	}
+
+	mems := make([]*memtable.Memtable, max)
+	ranges := make([]keyRange, max)
+	walPaths := make([]string, max)
+	copy(mems, db.queue[:max])
+	copy(ranges, db.queueRanges[:max])
+	copy(walPaths, db.queueWALPaths[:max])
+	db.mu.Unlock()
+
+	targetBytes := flushCombineTargetBytes
+	if db.flushThreshold > targetBytes {
+		targetBytes = db.flushThreshold
+	}
+
+	type flushUnit struct {
+		mem      *memtable.Memtable
+		memBytes int64
+		memLen   int
+		memRange keyRange
+		walPath  string
+	}
+
+	units := make([]flushUnit, 0, max)
+	var totalBytes int64
+	var totalLen int
+	for i := 0; i < max; i++ {
+		mem := mems[i]
+		memBytes := mem.Size()
+		memLen := mem.Len()
+
+		if len(units) > 0 && totalBytes >= targetBytes {
+			break
+		}
+		units = append(units, flushUnit{
+			mem:      mem,
+			memBytes: memBytes,
+			memLen:   memLen,
+			memRange: ranges[i],
+			walPath:  walPaths[i],
+		})
+		totalBytes += memBytes
+		totalLen += memLen
+	}
+
+	// Optimization: Skip flush if the selected memtables have no entries.
+	flushStart := time.Time{}
+	flushed := false
+	if totalLen > 0 {
+		flushStart = time.Now()
+
+		backendBatch := db.backend.NewBatch()
+
+		if totalLen > 2000 {
+			ops := make([]batch.Entry, 0, totalLen)
+			for _, unit := range units {
+				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
+				iter.Seek(nil)                         // Start
+				for iter.Valid() {
+					if iter.IsDeleted() {
+						ops = append(ops, batch.Entry{
+							Type: batch.OpDelete,
+							Key:  iter.UnsafeKey(),
+						})
+					} else {
+						ops = append(ops, batch.Entry{
+							Type:  batch.OpPut,
+							Key:   iter.UnsafeKey(),
+							Value: iter.UnsafeValue(),
+						})
+					}
+					iter.Next()
+				}
+				_ = iter.Close()
+			}
+
+			if err := backendBatch.SetOps(ops); err != nil {
+				fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+				_ = backendBatch.Close()
+				return false
+			}
+		} else {
+			for _, unit := range units {
+				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
+				iter.Seek(nil)                         // Start
+				for iter.Valid() {
+					key := iter.UnsafeKey()
+					if iter.IsDeleted() {
+						if err := backendBatch.Delete(key); err != nil {
+							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					} else {
+						if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
+							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
+					iter.Next()
+				}
+				_ = iter.Close()
+			}
+		}
+
+		// Commit to backend
+		var err error
+		if sync {
+			err = backendBatch.WriteSync()
+		} else {
+			err = backendBatch.Write()
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+			_ = backendBatch.Close()
+			return false
+		}
+		_ = backendBatch.Close()
+		flushed = true
+	}
+	flushDur := time.Duration(0)
+	if flushed {
+		flushDur = time.Since(flushStart)
+	}
+
+	// Remove from queue and delete old WAL segments.
+	db.mu.Lock()
+	for _, unit := range units {
+		if unit.memRange.valid {
+			db.backendRange.add(unit.memRange.min)
+			db.backendRange.add(unit.memRange.max)
+		}
+	}
+
+	if len(db.queue) >= len(units) {
+		db.queue = db.queue[len(units):]
+	}
+	if len(db.queueRanges) >= len(units) {
+		db.queueRanges = db.queueRanges[len(units):]
+	}
+	if len(db.queueWALPaths) >= len(units) {
+		db.queueWALPaths = db.queueWALPaths[len(units):]
+	}
+	db.queueBacklogBytes.Add(-totalBytes)
+
+	deletable := make([]string, 0, len(units))
+	if sync {
+		for _, unit := range units {
+			walPath := unit.walPath
+			if walPath == "" {
+				continue
+			}
+
+			inUse := false
+			if db.walPath == walPath {
+				inUse = true
+			} else {
+				for _, p := range db.queueWALPaths {
+					if p == walPath {
+						inUse = true
+						break
+					}
+				}
+			}
+			if !inUse {
+				deletable = append(deletable, walPath)
+			}
+		}
+	}
+	db.mu.Unlock()
+
+	for _, walPath := range deletable {
+		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+		}
+	}
+
+	if flushed && flushDur > 0 && totalBytes > 0 {
+		sample := float64(totalBytes) / flushDur.Seconds()
+		db.bpMu.Lock()
+		if db.flushBpsEWMA <= 0 {
+			db.flushBpsEWMA = sample
+		} else {
+			db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+		}
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+	} else {
+		db.bpMu.Lock()
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+	}
+	return true
 }
 
 func (db *DB) flushOneLocked(sync bool) bool {
@@ -813,6 +1030,17 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	db.mu.RLock()
+	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", len(db.queue))
+	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutable.Size())
+	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
+	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
+	if db.adaptiveBackpressureEnabled() {
+		stats["treedb.cache.backpressure_mode"] = "adaptive"
+	} else {
+		stats["treedb.cache.backpressure_mode"] = "queue_len"
+	}
+	db.mu.RUnlock()
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)

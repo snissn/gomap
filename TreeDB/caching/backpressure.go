@@ -9,6 +9,25 @@ type backpressureParams struct {
 	stopResumeFraction     float64
 }
 
+const defaultLegacyBacklogBytes int64 = 256 * 1024 * 1024
+
+func defaultMaxQueuedMemtables(flushThreshold int64) int {
+	if flushThreshold <= 0 {
+		return 4
+	}
+	n := int((defaultLegacyBacklogBytes + flushThreshold - 1) / flushThreshold)
+	if n < 1 {
+		n = 1
+	}
+	// Guard against pathological configurations where FlushThreshold is set
+	// extremely small: queue length backpressure is cheap, but iterators may
+	// degrade with thousands of in-memory sources. Keep the default bounded.
+	if n > 1024 {
+		n = 1024
+	}
+	return n
+}
+
 func computeBackpressureThresholds(p backpressureParams) (slowdownBytes, stopBytes, resumeBytes int64) {
 	// Convert seconds -> bytes via the observed (EWMA) flush throughput.
 	if p.flushBps > 0 {
