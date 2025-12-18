@@ -485,9 +485,11 @@ var (
 	treedbWriterFlushMaxMs       = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
 	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
+	settleBeforeScans            = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 )
 
 type DBInstance struct {
+	Name    string
 	Wrapper kvstore.DB
 	Dir     string
 }
@@ -513,6 +515,8 @@ type BenchConfig struct {
 	MutexProfile         string
 	MutexProfileFraction int
 	TraceProfile         string
+
+	SettleBeforeScans bool
 
 	TreeDBIterDebug      bool
 	TreeDBIterDebugLimit int
@@ -552,6 +556,7 @@ func main() {
 		MutexProfile:         *mutexProfile,
 		MutexProfileFraction: *mutexFrac,
 		TraceProfile:         *traceProfile,
+		SettleBeforeScans:    *settleBeforeScans,
 		TreeDBIterDebug:      *treedbIterDebug,
 		TreeDBIterDebugLimit: *treedbIterDebugLimit,
 	}
@@ -794,7 +799,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
 
-		instances = append(instances, &DBInstance{Wrapper: db, Dir: dir})
+		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -1258,10 +1263,37 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		_ = live.Render(results)
 	}
 
+	settled := false
+	settle := func() error {
+		for _, inst := range instances {
+			_ = inst.Wrapper.Close()
+			factory, ok := factories[inst.Name]
+			if !ok {
+				return fmt.Errorf("unknown DB factory: %q", inst.Name)
+			}
+			db, err := factory(inst.Dir)
+			if err != nil {
+				return fmt.Errorf("reopen %s: %w", inst.Name, err)
+			}
+			inst.Wrapper = db
+		}
+		return nil
+	}
+
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
 		if fn == nil {
 			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
+		}
+
+		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan") {
+			if err := settle(); err != nil {
+				return BenchRun{}, err
+			}
+			settled = true
+			if live != nil {
+				_ = live.Render(results)
+			}
 		}
 
 		for _, inst := range instances {
