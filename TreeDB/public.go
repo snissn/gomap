@@ -349,6 +349,14 @@ func (db *DB) CompactIndex() error {
 	return db.backend.CompactIndex()
 }
 
+// VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.
+// This is intended to reclaim space and restore locality after long churn.
+//
+// It is an offline operation: it acquires the exclusive open lock for opts.Dir.
+func VacuumIndexOffline(opts Options) error {
+	return db.VacuumIndexOffline(opts)
+}
+
 // FragmentationReport returns best-effort structural stats about the on-disk user
 // index that help diagnose scan regressions after churn.
 //

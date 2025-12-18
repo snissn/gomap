@@ -216,18 +216,28 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	db, err := openWithLock(opts, lock)
+	if err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+	if err := recoverIndexSwap(opts.Dir); err != nil {
+		return nil, err
+	}
 
 	idxPath := filepath.Join(opts.Dir, "index.db")
 	p, err := pager.Open(idxPath, opts.ChunkSize)
 	if err != nil {
-		_ = lock.Close()
 		return nil, err
 	}
 
 	sm, err := slab.NewSlabManager(opts.Dir)
 	if err != nil {
 		p.Close()
-		_ = lock.Close()
 		return nil, err
 	}
 
