@@ -11,7 +11,7 @@
 - [x] Apply Go best practices (gofmt, clearer naming, simpler APIs) without breaking tests/features.
 - [ ] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [x] TreeDB: unify open + coherent crash recovery (cached WAL replay + cleanup; spec tests added).
-- [ ] V1 milestone: “Wow” documentation (see `TODO.md`).
+- [x] V1 milestone: “Wow” documentation (see `TODO.md`).
 - [ ] Milestone: downstream-ready storage primitives (stable surface + contracts; see `TODO.md`).
 - [x] HashDB: add exclusive open lock + tests.
 
@@ -180,6 +180,29 @@
 - 2025-12-15: TreeDB Micro-optimizations
   - Micro-optimized `SearchLeaf` and `SearchInternal` by caching the `n.data` slice pointer in a local variable, reducing compiler bounds-check overhead.
   - Benchmarked `SearchLeaf` at ~37ns/op (200 items), confirming efficiency close to memory latency.
+- 2025-12-16: BTreeOnHashDB batch optimization
+  - Diagnosed slow batch writes (~260k ops/sec) due to GC pressure from per-op allocations.
+  - Implemented an Arena allocator in `treeBatch` to chunk key/value copies.
+  - Added `PutMany` to `BTreeOnHashDB/Tree` to batch HashDB writes and buffer B-Tree node updates.
+  - Throughput improved to ~1.4M ops/sec.
+  - Added regression tests in `kvstore/adapters/btreeonhashdb/btree_test.go`.
+- 2025-12-16: TreeDB Snapshot Isolation & Architecture Fix
+  - Fixed Snapshot Isolation violation in `TreeDB` (Cached) iterators. Iterators now force a memtable rotation to capture a point-in-time view.
+  - Resolved circular dependency (`TreeDB/db` <-> `TreeDB/caching`) by moving `BatchInterface` to `TreeDB/batch`.
+  - Added regression test `TestIteratorSnapshotIsolation`.
+- 2025-12-16: V1 Documentation Complete
+  - Added architecture diagrams to `docs/REPO_MAP.md`.
+  - Refactored `docs/README.md` into a proper index.
+  - Added runnable examples to `TreeDB/example_test.go`.
+  - Updated `docs/BENCHMARK_SPEC.md` to match reality.
+- 2025-12-16: Validation & Cleanup
+  - Verified contract tests (`internal/contracttest`) pass.
+  - Verified race detection (`go test -race`).
+  - Left `TreeDB/caching/snapshot_test.go` as a permanent regression test.
+- 2025-12-16: TreeDB Atomic Batch Durability (WAL)
+  - Refactored `TreeDB/internal/wal` to use checksummed segments.
+  - `AppendBatch` now writes a single atomic segment; recovery sees all or nothing.
+  - Meets "Downstream-Ready" requirement for atomic application of replication logs.
 - 2025-12-15: TreeDB Compaction Liveness Check
   - Implemented liveness check in `Compactor` using `Snapshot.GetEntry`.
   - Compactor now verifies `ValuePtr` matches before moving data to active slab, preventing space amplification from dead records.

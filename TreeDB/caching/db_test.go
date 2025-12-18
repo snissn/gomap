@@ -116,7 +116,7 @@ func (m *MockBackend) Print() error             { return nil }
 func (m *MockBackend) Stats() map[string]string { return nil }
 
 // NewBatch returns a struct that satisfies BatchInterface
-func (m *MockBackend) NewBatch() BatchInterface {
+func (m *MockBackend) NewBatch() batch.Interface {
 	return &MockBatch{mb: m}
 }
 
@@ -163,7 +163,7 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 	backend := NewMockBackend()
 
 	// Threshold 1 byte to trigger flush
-	db, err := Open(dir, backend, 1)
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	backend := NewMockBackend()
 
 	// Large threshold so nothing flushes from memtable; we want the batch fast-path.
-	db, err := Open(dir, backend, 1<<30)
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 30})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

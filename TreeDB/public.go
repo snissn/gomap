@@ -72,7 +72,15 @@ func Open(opts Options) (*DB, error) {
 		return &DB{mode: ModeBackend, backend: backend}, nil
 	}
 
-	cached, err := caching.Open(opts.Dir, backend, opts.FlushThreshold)
+	cached, err := caching.Open(opts.Dir, backend, caching.Options{
+		FlushThreshold:          opts.FlushThreshold,
+		MaxQueuedMemtables:      opts.MaxQueuedMemtables,
+		SlowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
+		StopBacklogSeconds:      opts.StopBacklogSeconds,
+		MaxBacklogBytes:         opts.MaxBacklogBytes,
+		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
+		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
+	})
 	if err != nil {
 		_ = backend.Close()
 		return nil, err

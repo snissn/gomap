@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -12,7 +11,9 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,69 +23,18 @@ import (
 	"github.com/snissn/gomap/HashDB"
 	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/kvstore"
+	btreeadapter "github.com/snissn/gomap/kvstore/adapters/btreeonhashdb"
+	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
+	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
-// --- Interfaces ---
-
-// GenericIterator defines a common interface for iterators
-type GenericIterator interface {
-	Valid() bool
-	Next()
-	Key() []byte
-	Value() []byte
-	Close() error
-	Error() error
-}
-
-// BatchInterface defines a common interface for batches
-type BatchInterface interface {
-	Set(key, value []byte) error
-	Delete(key []byte) error
-	Commit() error
-	Close() error
-}
-
-// DBInterface defines the common benchmark interface
-type DBInterface interface {
-	Name() string
-	Set(key, value []byte) error
-	Get(key []byte) ([]byte, error)
-	Delete(key []byte) error
-	Close() error
-	SupportsScan() bool
-	Iterator(start, end []byte) (GenericIterator, error)
-	SupportsBatch() bool
-	NewBatch() (BatchInterface, error)
-}
-
-// --- Wrappers ---
-
-// 1. HashDB Wrapper
-type HashDBBatch struct {
-	bw *hashdb.BatchWriter
-}
-
-func (b *HashDBBatch) Set(key, value []byte) error {
-	return b.bw.Add(key, value)
-}
-func (b *HashDBBatch) Delete(key []byte) error {
-	return errors.New("HashDB batch delete not supported")
-}
-func (b *HashDBBatch) Commit() error {
-	return b.bw.Flush()
-}
-func (b *HashDBBatch) Close() error {
-	// BatchWriter doesn't need explicit close, but we ensure flush in Commit
-	return nil
-}
-
-type HashDBWrapper struct {
-	m *hashdb.HashDB
-}
+// --- Engine Openers (kvstore) ---
 
 var (
 	hashdbLockControls       = flag.Bool("hashdb-lock-controls", true, "HashDB: best-effort lock (mlock/VirtualLock) the SwissHash control bytes")
@@ -106,135 +56,55 @@ func openHashDBForBench(dir string) (*hashdb.HashDB, error) {
 	return hashdb.OpenWithOptions(dir, opts)
 }
 
-func NewHashDB(dir string) (*HashDBWrapper, error) {
+func NewHashDB(dir string) (kvstore.DB, error) {
 	m, err := openHashDBForBench(dir)
 	if err != nil {
 		return nil, err
 	}
-	return &HashDBWrapper{m: m}, nil
+	return hashdbadapter.WrapNamed(m, "HashDB"), nil
 }
 
-func (g *HashDBWrapper) Name() string                 { return "HashDB" }
-func (g *HashDBWrapper) Set(k, v []byte) error        { return g.m.Put(k, v) }
-func (g *HashDBWrapper) Get(k []byte) ([]byte, error) { return g.m.Get(k) }
-func (g *HashDBWrapper) Delete(k []byte) error        { return g.m.Delete(k) }
-func (g *HashDBWrapper) Close() error                 { return g.m.Close() }
-func (g *HashDBWrapper) SupportsScan() bool           { return false }
-func (g *HashDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return nil, errors.New("HashDB does not support scan")
-}
-func (g *HashDBWrapper) SupportsBatch() bool { return true }
-func (g *HashDBWrapper) NewBatch() (BatchInterface, error) {
-	// Use global batchSize flag if possible, or default
-	bs := 1000
-	if batchSize != nil {
-		bs = *batchSize
-	}
-	return &HashDBBatch{bw: hashdb.NewBatchWriter(g.m, bs)}, nil
-}
-
-// 2. BTree Wrapper
-type BTreeWrapper struct {
-	t *btreeonhashdb.Tree
-	m *hashdb.HashDB
-}
-
-func NewBTree(dir string) (*BTreeWrapper, error) {
+func NewBTree(dir string) (kvstore.DB, error) {
 	m, err := openHashDBForBench(dir)
 	if err != nil {
 		return nil, err
 	}
-	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench")
+	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench", &btreeonhashdb.Options{CacheSize: 4096})
 	if err != nil {
 		return nil, err
 	}
-	return &BTreeWrapper{t: t, m: m}, nil
+	return btreeadapter.WrapNamed(m, t, "BTree"), nil
 }
 
-func (b *BTreeWrapper) Name() string                 { return "BTree" }
-func (b *BTreeWrapper) Set(k, v []byte) error        { return b.t.Put(k, v) }
-func (b *BTreeWrapper) Get(k []byte) ([]byte, error) { return b.t.Get(k) }
-func (b *BTreeWrapper) Delete(k []byte) error        { return b.t.Delete(k) }
-func (b *BTreeWrapper) Close() error                 { return b.m.Close() }
-func (b *BTreeWrapper) SupportsScan() bool           { return false }
-func (b *BTreeWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return nil, errors.New("BTree does not support scan via public API")
-}
-func (b *BTreeWrapper) SupportsBatch() bool { return false }
-func (b *BTreeWrapper) NewBatch() (BatchInterface, error) {
-	return nil, errors.New("BTree does not support batch")
-}
-
-// 3. TreeDB Wrapper (cached; recommended)
-type treeDBBatch interface {
-	Set(key, value []byte) error
-	Delete(key []byte) error
-	Write() error
-	Close() error
-}
-
-type TreeDBBatchWrapper struct {
-	b treeDBBatch
-}
-
-func (w *TreeDBBatchWrapper) Set(k, v []byte) error { return w.b.Set(k, v) }
-func (w *TreeDBBatchWrapper) Delete(k []byte) error { return w.b.Delete(k) }
-func (w *TreeDBBatchWrapper) Commit() error         { return w.b.Write() }
-func (w *TreeDBBatchWrapper) Close() error          { return w.b.Close() }
-
-type TreeDBWrapper struct {
-	db *treedb.DB
-}
-
-func NewTreeDB(dir string) (*TreeDBWrapper, error) {
-	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024, FlushThreshold: 4 * 1024 * 1024}
+func NewTreeDB(dir string) (kvstore.DB, error) {
+	treedbcaching.SetIteratorDebug(*treedbIterDebug)
+	opts := treedb.Options{
+		Dir:                     dir,
+		ChunkSize:               64 * 1024 * 1024,
+		FlushThreshold:          *treedbFlushThreshold,
+		MaxQueuedMemtables:      *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:      *treedbStopBacklogSeconds,
+		MaxBacklogBytes:         *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+	}
+	if *treedbWriterFlushMaxMs > 0 {
+		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
+	}
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &TreeDBWrapper{db: db}, nil
+	return treedbadapter.WrapNamed(db, "TreeDB"), nil
 }
 
-func (t *TreeDBWrapper) Name() string                 { return "TreeDB" }
-func (t *TreeDBWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
-func (t *TreeDBWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
-func (t *TreeDBWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
-func (t *TreeDBWrapper) Close() error                 { return t.db.Close() }
-func (t *TreeDBWrapper) SupportsScan() bool           { return true }
-func (t *TreeDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return t.db.Iterator(start, end)
-}
-func (t *TreeDBWrapper) SupportsBatch() bool { return true }
-func (t *TreeDBWrapper) NewBatch() (BatchInterface, error) {
-	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
-}
-
-// 4. TreeDB Backend Wrapper (uncached; for comparison)
-type TreeDBBackendWrapper struct {
-	db *treedb.DB
-}
-
-func NewTreeDBBackend(dir string) (*TreeDBBackendWrapper, error) {
+func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024 * 1024}
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &TreeDBBackendWrapper{db: db}, nil
-}
-
-func (t *TreeDBBackendWrapper) Name() string                 { return "TreeDBBackend" }
-func (t *TreeDBBackendWrapper) Set(k, v []byte) error        { return t.db.Set(k, v) }
-func (t *TreeDBBackendWrapper) Get(k []byte) ([]byte, error) { return t.db.Get(k) }
-func (t *TreeDBBackendWrapper) Delete(k []byte) error        { return t.db.Delete(k) }
-func (t *TreeDBBackendWrapper) Close() error                 { return t.db.Close() }
-func (t *TreeDBBackendWrapper) SupportsScan() bool           { return true }
-func (t *TreeDBBackendWrapper) Iterator(start, end []byte) (GenericIterator, error) {
-	return t.db.Iterator(start, end)
-}
-func (t *TreeDBBackendWrapper) SupportsBatch() bool { return true }
-func (t *TreeDBBackendWrapper) NewBatch() (BatchInterface, error) {
-	return &TreeDBBatchWrapper{b: t.db.NewBatch()}, nil
+	return treedbadapter.WrapNamed(db, "TreeDBBackend"), nil
 }
 
 // 5. Badger Wrapper
@@ -245,6 +115,7 @@ type BadgerBatch struct {
 func (b *BadgerBatch) Set(key, value []byte) error { return b.wb.Set(key, value) }
 func (b *BadgerBatch) Delete(key []byte) error     { return b.wb.Delete(key) }
 func (b *BadgerBatch) Commit() error               { return b.wb.Flush() }
+func (b *BadgerBatch) CommitSync() error           { return b.wb.Flush() }
 func (b *BadgerBatch) Close() error                { b.wb.Cancel(); return nil }
 
 type BadgerIterator struct {
@@ -254,6 +125,7 @@ type BadgerIterator struct {
 	keyBuf  []byte
 	valBuf  []byte
 	lastErr error
+	reverse bool
 }
 
 func (i *BadgerIterator) Valid() bool {
@@ -262,6 +134,9 @@ func (i *BadgerIterator) Valid() bool {
 	}
 	if i.end == nil {
 		return true
+	}
+	if i.reverse {
+		return bytes.Compare(i.it.Item().Key(), i.end) >= 0
 	}
 	return bytes.Compare(i.it.Item().Key(), i.end) < 0
 }
@@ -278,6 +153,10 @@ func (i *BadgerIterator) Value() []byte {
 	}
 	return i.valBuf
 }
+
+func (i *BadgerIterator) KeyCopy(dst []byte) []byte   { return append(dst, i.Key()...) }
+func (i *BadgerIterator) ValueCopy(dst []byte) []byte { return append(dst, i.Value()...) }
+
 func (i *BadgerIterator) Close() error {
 	i.it.Close()
 	i.txn.Discard()
@@ -289,7 +168,7 @@ type BadgerWrapper struct {
 	db *badger.DB
 }
 
-func NewBadger(dir string) (*BadgerWrapper, error) {
+func NewBadger(dir string) (kvstore.DB, error) {
 	opts := badger.DefaultOptions(dir).WithLogger(nil)
 	db, err := badger.Open(opts)
 	if err != nil {
@@ -324,9 +203,9 @@ func (b *BadgerWrapper) Delete(k []byte) error {
 		return txn.Delete(k)
 	})
 }
-func (b *BadgerWrapper) Close() error       { return b.db.Close() }
-func (b *BadgerWrapper) SupportsScan() bool { return true }
-func (b *BadgerWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+func (b *BadgerWrapper) Close() error { return b.db.Close() }
+
+func (b *BadgerWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	txn := b.db.NewTransaction(false)
 	opts := badger.DefaultIteratorOptions
 	opts.PrefetchValues = true
@@ -343,8 +222,36 @@ func (b *BadgerWrapper) Iterator(start, end []byte) (GenericIterator, error) {
 	}
 	return &BadgerIterator{txn: txn, it: it, end: endCopy}, nil
 }
-func (b *BadgerWrapper) SupportsBatch() bool { return true }
-func (b *BadgerWrapper) NewBatch() (BatchInterface, error) {
+
+func (b *BadgerWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
+	txn := b.db.NewTransaction(false)
+	opts := badger.DefaultIteratorOptions
+	opts.PrefetchValues = true
+	opts.Reverse = true
+	it := txn.NewIterator(opts)
+
+	if end == nil {
+		it.Rewind()
+	} else {
+		it.Seek(end)
+		if it.Valid() {
+			item := it.Item()
+			if bytes.Compare(item.Key(), end) >= 0 {
+				it.Next()
+			}
+		} else {
+			it.Rewind()
+		}
+	}
+
+	var startCopy []byte
+	if start != nil {
+		startCopy = append([]byte(nil), start...)
+	}
+	return &BadgerIterator{txn: txn, it: it, end: startCopy, reverse: true}, nil
+}
+
+func (b *BadgerWrapper) NewBatch() (kvstore.Batch, error) {
 	return &BadgerBatch{wb: b.db.NewWriteBatch()}, nil
 }
 
@@ -365,27 +272,48 @@ func (b *LevelDBBatch) Delete(key []byte) error {
 func (b *LevelDBBatch) Commit() error {
 	return b.db.Write(b.batch, nil)
 }
+func (b *LevelDBBatch) CommitSync() error {
+	return b.db.Write(b.batch, nil)
+}
 func (b *LevelDBBatch) Close() error {
 	b.batch.Reset()
 	return nil
 }
 
 type LevelDBIterator struct {
-	it iterator.Iterator
+	it      iterator.Iterator
+	reverse bool
 }
 
-func (i *LevelDBIterator) Valid() bool   { return i.it.Valid() }
-func (i *LevelDBIterator) Next()         { i.it.Next() }
+func (i *LevelDBIterator) Valid() bool { return i.it.Valid() }
+func (i *LevelDBIterator) Next() {
+	if i.reverse {
+		i.it.Prev()
+		return
+	}
+	i.it.Next()
+}
 func (i *LevelDBIterator) Key() []byte   { return i.it.Key() }
 func (i *LevelDBIterator) Value() []byte { return i.it.Value() }
-func (i *LevelDBIterator) Close() error  { i.it.Release(); return nil }
-func (i *LevelDBIterator) Error() error  { return i.it.Error() }
+func (i *LevelDBIterator) KeyCopy(dst []byte) []byte {
+	return append(dst, i.Key()...)
+}
+func (i *LevelDBIterator) ValueCopy(dst []byte) []byte {
+	return append(dst, i.Value()...)
+}
+func (i *LevelDBIterator) Close() error { i.it.Release(); return nil }
+func (i *LevelDBIterator) Error() error { return i.it.Error() }
 
 type LevelDBWrapper struct {
 	db *leveldb.DB
 }
 
-func NewLevelDB(dir string) (*LevelDBWrapper, error) {
+var (
+	verifyRangePrefix = []byte{0x00, 'u', 'n', 'i', 'b', 'e', 'n', 'c', 'h', '-', 'v', 'e', 'r', 'i', 'f', 'y', 0x00}
+	verifyRangeCount  = 32
+)
+
+func NewLevelDB(dir string) (kvstore.DB, error) {
 	db, err := leveldb.OpenFile(dir, nil)
 	if err != nil {
 		return nil, err
@@ -398,19 +326,126 @@ func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, n
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
 func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
 func (l *LevelDBWrapper) Close() error                 { return l.db.Close() }
-func (l *LevelDBWrapper) SupportsScan() bool           { return true }
-func (l *LevelDBWrapper) Iterator(start, end []byte) (GenericIterator, error) {
+func (l *LevelDBWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	var slice *util.Range
 	if start != nil || end != nil {
 		slice = &util.Range{Start: start, Limit: end}
 	}
 	it := l.db.NewIterator(slice, nil)
 	it.First()
-	return &LevelDBIterator{it: it}, nil
+	return &LevelDBIterator{it: it, reverse: false}, nil
 }
-func (l *LevelDBWrapper) SupportsBatch() bool { return true }
-func (l *LevelDBWrapper) NewBatch() (BatchInterface, error) {
+func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
+	var slice *util.Range
+	if start != nil || end != nil {
+		slice = &util.Range{Start: start, Limit: end}
+	}
+	it := l.db.NewIterator(slice, nil)
+	if end == nil {
+		it.Last()
+	} else {
+		it.Seek(end)
+		if it.Valid() {
+			if bytes.Compare(it.Key(), end) >= 0 {
+				it.Prev()
+			}
+		} else {
+			it.Last()
+		}
+	}
+	return &LevelDBIterator{it: it, reverse: true}, nil
+}
+func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
 	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
+}
+
+func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {
+	keys := make([][]byte, n)
+	val := []byte("v")
+	for i := 0; i < n; i++ {
+		k := make([]byte, len(prefix)+8)
+		copy(k, prefix)
+		binary.BigEndian.PutUint64(k[len(prefix):], uint64(i))
+		keys[i] = k
+		if err := db.Set(k, val); err != nil {
+			return fmt.Errorf("verify: set %d: %w", i, err)
+		}
+	}
+
+	cleanup := func() error {
+		var cerr error
+		for _, k := range keys {
+			if err := db.Delete(k); err != nil && cerr == nil {
+				cerr = err
+			}
+		}
+		return cerr
+	}
+	defer func() {
+		if err := cleanup(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("verify: cleanup: %w", err)
+		}
+	}()
+
+	start := append([]byte(nil), prefix...)
+	end := append(append([]byte(nil), prefix...), 0xFF)
+
+	checkIter := func(iter kvstore.Iterator, descending bool) (int, error) {
+		count := 0
+		var prev []byte
+		for iter.Valid() {
+			k := append([]byte(nil), iter.Key()...)
+			if prev != nil {
+				cmp := bytes.Compare(prev, k)
+				if descending && cmp <= 0 {
+					return count, fmt.Errorf("order broke: %x then %x (expected descending)", prev, k)
+				}
+				if !descending && cmp >= 0 {
+					return count, fmt.Errorf("order broke: %x then %x (expected ascending)", prev, k)
+				}
+			}
+			prev = k
+			_ = iter.Value()
+			iter.Next()
+			count++
+		}
+		if err := iter.Error(); err != nil {
+			return count, err
+		}
+		return count, nil
+	}
+
+	fwd, err := rs.Iterator(start, end)
+	if err != nil {
+		return fmt.Errorf("verify: forward iterator: %w", err)
+	}
+	if count, err := checkIter(fwd, false); err != nil {
+		_ = fwd.Close()
+		return fmt.Errorf("verify: forward iterator: %w", err)
+	} else if count != n {
+		_ = fwd.Close()
+		return fmt.Errorf("verify: forward iterator count=%d want %d", count, n)
+	}
+	if err := fwd.Close(); err != nil {
+		return fmt.Errorf("verify: forward close: %w", err)
+	}
+
+	rev, err := rs.ReverseIterator(start, end)
+	if err != nil {
+		return fmt.Errorf("verify: reverse iterator: %w", err)
+	}
+	if count, err := checkIter(rev, true); err != nil {
+		_ = rev.Close()
+		return fmt.Errorf("verify: reverse iterator: %w", err)
+	} else if count != n {
+		_ = rev.Close()
+		return fmt.Errorf("verify: reverse iterator count=%d want %d", count, n)
+	}
+	if err := rev.Close(); err != nil {
+		return fmt.Errorf("verify: reverse close: %w", err)
+	}
+
+	return nil
 }
 
 // --- Benchmark Runner ---
@@ -426,7 +461,7 @@ var (
 	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
-	testsArg     = flag.String("tests", "all", "Comma-separated list of tests (write_seq,read_rand,write_rand,delete_rand,full_scan,prefix_scan,batch_write); aliases: scan->full_scan, range_scan->prefix_scan")
+	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,random_delete,full_scan,prefix_scan,batch_write,batch_random); aliases: write_seq->sequential_write, write_rand->random_write, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg    = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -434,10 +469,26 @@ var (
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
 	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 	cpuProfile   = flag.String("cpuprofile", "", "write cpu profile to file")
+
+	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
+	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
+	mutexProfile = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
+	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
+	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
+
+	treedbFlushThreshold         = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbMaxQueuedMems          = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
+	treedbSlowdownBacklogSeconds = flag.Float64("treedb-slowdown-backlog-seconds", 0, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbStopBacklogSeconds     = flag.Float64("treedb-stop-backlog-seconds", 0, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbMaxBacklogBytes        = flag.Int64("treedb-max-backlog-bytes", 0, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
+	treedbWriterFlushMaxMems     = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
+	treedbWriterFlushMaxMs       = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
+	treedbIterDebug              = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
+	treedbIterDebugLimit         = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 )
 
 type DBInstance struct {
-	Wrapper DBInterface
+	Wrapper kvstore.DB
 	Dir     string
 }
 
@@ -456,6 +507,15 @@ type BenchConfig struct {
 	SeedUsed int64
 
 	CPUProfile string
+
+	BlockProfile         string
+	BlockProfileRate     int
+	MutexProfile         string
+	MutexProfileFraction int
+	TraceProfile         string
+
+	TreeDBIterDebug      bool
+	TreeDBIterDebugLimit int
 }
 
 type BenchRun struct {
@@ -476,17 +536,24 @@ func main() {
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	baseCfg := BenchConfig{
-		Keys:         *numKeys,
-		ValueSize:    *valSize,
-		BatchSize:    *batchSize,
-		RangeQueries: *rangeQueries,
-		RangeSpan:    *rangeSpan,
-		DBsArg:       *dbsArg,
-		TestsArg:     *testsArg,
-		KeepDir:      *keepDir,
-		Progress:     *progress,
-		SeedUsed:     seedUsed,
-		CPUProfile:   *cpuProfile,
+		Keys:                 *numKeys,
+		ValueSize:            *valSize,
+		BatchSize:            *batchSize,
+		RangeQueries:         *rangeQueries,
+		RangeSpan:            *rangeSpan,
+		DBsArg:               *dbsArg,
+		TestsArg:             *testArg,
+		KeepDir:              *keepDir,
+		Progress:             *progress,
+		SeedUsed:             seedUsed,
+		CPUProfile:           *cpuProfile,
+		BlockProfile:         *blockProfile,
+		BlockProfileRate:     *blockRate,
+		MutexProfile:         *mutexProfile,
+		MutexProfileFraction: *mutexFrac,
+		TraceProfile:         *traceProfile,
+		TreeDBIterDebug:      *treedbIterDebug,
+		TreeDBIterDebugLimit: *treedbIterDebugLimit,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -508,6 +575,11 @@ func main() {
 	keyCounts, err := resolveKeyCounts(*numKeys, *keyCountsArg, *keyScaleArg, *keysMin, *keysMax)
 	if err != nil {
 		log.Fatalf("keycounts: %v", err)
+	}
+
+	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
+	if hasAnyProfiling && len(keyCounts) > 1 {
+		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
 
 	if len(keyCounts) == 1 {
@@ -682,16 +754,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	dbsToRun := parseList(cfg.DBsArg)
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
 
-	factories := map[string]func(string) (DBInterface, error){
-		"hashdb":        func(d string) (DBInterface, error) { return NewHashDB(d) },
-		"gomap":         func(d string) (DBInterface, error) { return NewHashDB(d) }, // legacy alias
-		"btree":         func(d string) (DBInterface, error) { return NewBTree(d) },
-		"treedb":        func(d string) (DBInterface, error) { return NewTreeDB(d) },        // cached (default)
-		"treedbcached":  func(d string) (DBInterface, error) { return NewTreeDB(d) },        // legacy alias
-		"treedbbackend": func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // uncached
-		"treedbraw":     func(d string) (DBInterface, error) { return NewTreeDBBackend(d) }, // alias
-		"badger":        func(d string) (DBInterface, error) { return NewBadger(d) },
-		"leveldb":       func(d string) (DBInterface, error) { return NewLevelDB(d) },
+	factories := map[string]func(string) (kvstore.DB, error){
+		"hashdb":        func(d string) (kvstore.DB, error) { return NewHashDB(d) },
+		"gomap":         func(d string) (kvstore.DB, error) { return NewHashDB(d) }, // legacy alias
+		"btree":         func(d string) (kvstore.DB, error) { return NewBTree(d) },
+		"treedb":        func(d string) (kvstore.DB, error) { return NewTreeDB(d) },        // cached (default)
+		"treedbcached":  func(d string) (kvstore.DB, error) { return NewTreeDB(d) },        // legacy alias
+		"treedbbackend": func(d string) (kvstore.DB, error) { return NewTreeDBBackend(d) }, // uncached
+		"treedbraw":     func(d string) (kvstore.DB, error) { return NewTreeDBBackend(d) }, // alias
+		"badger":        func(d string) (kvstore.DB, error) { return NewBadger(d) },
+		"leveldb":       func(d string) (kvstore.DB, error) { return NewLevelDB(d) },
 	}
 
 	// Initialize DBs
@@ -729,36 +801,39 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	// Define Tests
-	type TestFunc func(db DBInterface, rng *rand.Rand) (float64, error)
+	type TestFunc func(db kvstore.DB, rng *rand.Rand) (float64, error)
 
 	prefixScanBase := 0
+	expectedFullScanCount := -1
+	checkPrefixCounts := false
 	testFuncs := map[string]TestFunc{
-		"write_seq": func(db DBInterface, _ *rand.Rand) (float64, error) {
+		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(i))
 				if err := db.Set(k[:], val); err != nil {
-					return 0, fmt.Errorf("write_seq: %w", err)
+					return 0, fmt.Errorf("sequential_write: %w", err)
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"write_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
+		"random_write": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				if err := db.Set(k[:], val); err != nil {
-					return 0, fmt.Errorf("write_rand: %w", err)
+					return 0, fmt.Errorf("random_write: %w", err)
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"batch_write": func(db DBInterface, _ *rand.Rand) (float64, error) {
-			if !db.SupportsBatch() {
+		"batch_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			batcher, ok := db.(kvstore.Batcher)
+			if !ok {
 				return math.NaN(), nil
 			}
 			start := time.Now()
@@ -766,7 +841,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			total := cfg.Keys
 			var k [8]byte
 			for i := 0; i < total; i += cfg.BatchSize {
-				batch, err := db.NewBatch()
+				batch, err := batcher.NewBatch()
 				if err != nil {
 					return 0, fmt.Errorf("batch_write: new batch: %w", err)
 				}
@@ -792,8 +867,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"batch_write_random": func(db DBInterface, rng *rand.Rand) (float64, error) {
-			if !db.SupportsBatch() {
+		"batch_random": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			batcher, ok := db.(kvstore.Batcher)
+			if !ok {
 				return math.NaN(), nil
 			}
 			start := time.Now()
@@ -812,9 +888,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start = time.Now()
 
 			for i := 0; i < total; i += batchSize {
-				batch, err := db.NewBatch()
+				batch, err := batcher.NewBatch()
 				if err != nil {
-					return 0, fmt.Errorf("batch_write_random: new batch: %w", err)
+					return 0, fmt.Errorf("batch_random: new batch: %w", err)
 				}
 
 				end := i + batchSize
@@ -824,21 +900,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := i; j < end; j++ {
 					if err := batch.Set(keys[j], val); err != nil {
 						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write_random: set: %w", err)
+						return 0, fmt.Errorf("batch_random: set: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
 					_ = batch.Close()
-					return 0, fmt.Errorf("batch_write_random: commit: %w", err)
+					return 0, fmt.Errorf("batch_random: commit: %w", err)
 				}
 				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_write_random: close: %w", err)
+					return 0, fmt.Errorf("batch_random: close: %w", err)
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"batch_write_small_seq": func(db DBInterface, rng *rand.Rand) (float64, error) {
-			if !db.SupportsBatch() {
+		"batch_small_seq": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			batcher, ok := db.(kvstore.Batcher)
+			if !ok {
 				return math.NaN(), nil
 			}
 			start := time.Now()
@@ -848,9 +925,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			var k [8]byte
 
 			for i := 0; i < total; i += batchSize {
-				batch, err := db.NewBatch()
+				batch, err := batcher.NewBatch()
 				if err != nil {
-					return 0, fmt.Errorf("batch_write_small_seq: new batch: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
 				}
 
 				end := i + batchSize
@@ -861,20 +938,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
 					if err := batch.Set(k[:], val); err != nil {
 						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write_small_seq: set: %w", err)
+						return 0, fmt.Errorf("batch_small_seq: set: %w", err)
 					}
 				}
 				if err := batch.Commit(); err != nil {
 					_ = batch.Close()
-					return 0, fmt.Errorf("batch_write_small_seq: commit: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: commit: %w", err)
 				}
 				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_write_small_seq: close: %w", err)
+					return 0, fmt.Errorf("batch_small_seq: close: %w", err)
 				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
-		"delete_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
+		"random_delete": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
@@ -883,7 +960,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"read_rand": func(db DBInterface, rng *rand.Rand) (float64, error) {
+		"random_read": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
@@ -892,34 +969,55 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
-		"full_scan": func(db DBInterface, _ *rand.Rand) (float64, error) {
-			if !db.SupportsScan() {
-				return math.NaN(), nil
-			}
+		"full_scan": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
-			iter, err := db.Iterator(nil, nil)
-			if err != nil {
-				return 0, fmt.Errorf("full_scan: iterator: %w", err)
-			}
-			defer iter.Close()
+			if rs, ok := db.(kvstore.RangeScanner); ok {
+				iter, err := rs.Iterator(nil, nil)
+				if err != nil {
+					return 0, fmt.Errorf("full_scan: iterator: %w", err)
+				}
+				defer func() { _ = iter.Close() }()
 
-			count := 0
-			for iter.Valid() {
-				_ = iter.Key()
-				_ = iter.Value()
-				iter.Next()
-				count++
+				count := 0
+				for iter.Valid() {
+					_ = iter.Key()
+					_ = iter.Value()
+					iter.Next()
+					count++
+				}
+				if err := iter.Error(); err != nil {
+					return 0, fmt.Errorf("full_scan: %w", err)
+				}
+				if expectedFullScanCount >= 0 && count != expectedFullScanCount {
+					return 0, fmt.Errorf("full_scan: expected %d items, got %d", expectedFullScanCount, count)
+				}
+				return float64(count) / time.Since(start).Seconds(), nil
 			}
-			if err := iter.Error(); err != nil {
-				return 0, fmt.Errorf("full_scan: %w", err)
+
+			if fe, ok := db.(kvstore.ForEacher); ok {
+				count := 0
+				if err := fe.ForEach(func(_ []byte, _ []byte) error {
+					count++
+					return nil
+				}); err != nil {
+					return 0, fmt.Errorf("full_scan: foreach: %w", err)
+				}
+				return float64(count) / time.Since(start).Seconds(), nil
 			}
-			return float64(count) / time.Since(start).Seconds(), nil
+
+			return math.NaN(), nil
 		},
-		"prefix_scan": func(db DBInterface, rng *rand.Rand) (float64, error) {
-			if !db.SupportsScan() {
+		"prefix_scan": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			rs, ok := db.(kvstore.RangeScanner)
+			if !ok {
 				return math.NaN(), nil
 			}
 			start := time.Now()
+			var totalBuild time.Duration
+			var totalIter time.Duration
+			var debugQueueSum int
+			var debugSourcesSum int
+			var debugStatsCount int
 			totalItems := 0
 			maxKey := prefixScanBase + cfg.Keys
 			for i := 0; i < cfg.RangeQueries; i++ {
@@ -937,37 +1035,81 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
 				endKey := endKeyBuf[:]
 
-				iter, err := db.Iterator(startKey, endKey)
+				buildStart := time.Now()
+				iter, err := rs.Iterator(startKey, endKey)
 				if err != nil {
 					return 0, fmt.Errorf("prefix_scan: iterator: %w", err)
 				}
+				buildDur := time.Since(buildStart)
+				totalBuild += buildDur
 
+				expected := endIdx - startIdx
+				itemsThisQuery := 0
+				iterStart := time.Now()
 				for iter.Valid() {
 					_ = iter.Key()
 					iter.Next()
-					totalItems++
+					itemsThisQuery++
 				}
+				iterDur := time.Since(iterStart)
+				totalIter += iterDur
 				if err := iter.Error(); err != nil {
 					_ = iter.Close()
 					return 0, fmt.Errorf("prefix_scan: %w", err)
 				}
+				if checkPrefixCounts && itemsThisQuery != expected {
+					_ = iter.Close()
+					return 0, fmt.Errorf("prefix_scan: expected %d items in query %d, got %d", expected, i, itemsThisQuery)
+				}
+				totalItems += itemsThisQuery
+
+				type debugStats interface {
+					DebugStats() (queueLen int, sourcesUsed int)
+				}
+				if ds, ok := iter.(debugStats); ok {
+					q, s := ds.DebugStats()
+					debugQueueSum += q
+					debugSourcesSum += s
+					debugStatsCount++
+					if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
+						fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s queue=%d sources=%d\n",
+							db.Name(), i, itemsThisQuery, buildDur, iterDur, q, s)
+					}
+				} else if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s\n",
+						db.Name(), i, itemsThisQuery, buildDur, iterDur)
+				}
+
 				_ = iter.Close()
+			}
+			if cfg.TreeDBIterDebug && cfg.RangeQueries > 0 {
+				avgBuild := totalBuild / time.Duration(cfg.RangeQueries)
+				avgIter := totalIter / time.Duration(cfg.RangeQueries)
+				if debugStatsCount > 0 {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s queue_avg=%.2f sources_avg=%.2f\n",
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
+						float64(debugQueueSum)/float64(debugStatsCount),
+						float64(debugSourcesSum)/float64(debugStatsCount))
+				} else {
+					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s\n",
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
+				}
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
 		},
 	}
 
-	allTestOrder := []string{"write_seq", "write_rand", "batch_write", "batch_write_random", "batch_write_small_seq", "delete_rand", "read_rand", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
-		"write_seq":             "Sequential Write",
-		"write_rand":            "Random Write",
-		"read_rand":             "Random Read",
-		"full_scan":             "Full Scan",
-		"prefix_scan":           "Prefix Scan",
-		"batch_write":           "Batch Write",
-		"batch_write_random":    "Batch Random",
-		"batch_write_small_seq": "Batch Small Seq",
-		"delete_rand":           "Random Delete",
+		"sequential_write": "Sequential Write",
+		"random_write":     "Random Write",
+		"random_read":      "Random Read",
+		"full_scan":        "Full Scan",
+		"prefix_scan":      "Prefix Scan",
+		"batch_write":      "Batch Write",
+		"batch_random":     "Batch Random",
+		"batch_small_seq":  "Batch Small Seq",
+		"random_delete":    "Random Delete",
 	}
 
 	finalTestOrder := make([]string, 0)
@@ -980,63 +1122,130 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 	}
-		if len(finalTestOrder) == 0 {
-			return BenchRun{}, fmt.Errorf("no tests selected")
-		}
+	if len(finalTestOrder) == 0 {
+		return BenchRun{}, fmt.Errorf("no tests selected")
+	}
 
-		// If the user selects only read/scan/delete tests, the DBs are empty unless we
-		// preload a baseline dataset. We intentionally keep this setup out of the
-		// per-test timings so that read/scan numbers reflect a populated DB.
-		hasMeasuredWrites := containsAny(finalTestOrder,
-			"write_seq",
-			"write_rand",
-			"batch_write",
-			"batch_write_random",
-			"batch_write_small_seq",
-		)
-		needsExistingData := containsAny(finalTestOrder,
-			"read_rand",
-			"delete_rand",
-			"full_scan",
-			"prefix_scan",
-		)
-		if needsExistingData && !hasMeasuredWrites {
-			val := make([]byte, cfg.ValueSize)
-			var k [8]byte
-			for _, inst := range instances {
-				for i := 0; i < cfg.Keys; i++ {
-					binary.BigEndian.PutUint64(k[:], uint64(i))
-					if err := inst.Wrapper.Set(k[:], val); err != nil {
-						return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
-					}
+	// If the user selects only read/scan/delete tests, the DBs are empty unless we
+	// preload a baseline dataset. We intentionally keep this setup out of the
+	// per-test timings so that read/scan numbers reflect a populated DB.
+	hasMeasuredWrites := containsAny(finalTestOrder,
+		"sequential_write",
+		"random_write",
+		"batch_write",
+		"batch_random",
+		"batch_small_seq",
+	)
+	needsExistingData := containsAny(finalTestOrder,
+		"random_read",
+		"random_delete",
+		"full_scan",
+		"prefix_scan",
+	)
+	preloadedOnly := needsExistingData && !hasMeasuredWrites
+	if preloadedOnly {
+		val := make([]byte, cfg.ValueSize)
+		var k [8]byte
+		for _, inst := range instances {
+			for i := 0; i < cfg.Keys; i++ {
+				binary.BigEndian.PutUint64(k[:], uint64(i))
+				if err := inst.Wrapper.Set(k[:], val); err != nil {
+					return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
 				}
 			}
 		}
+	}
 
-		if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "write_seq") && !contains(finalTestOrder, "write_rand") {
-			prefixScanBase = cfg.Keys
+	if preloadedOnly {
+		expectedFullScanCount = cfg.Keys
+		checkPrefixCounts = true
+	}
+
+	for _, inst := range instances {
+		rs, ok := inst.Wrapper.(kvstore.RangeScanner)
+		if !ok {
+			continue
 		}
-
-		var cpuProfFile *os.File
-		if cfg.CPUProfile != "" {
-			f, err := os.Create(cfg.CPUProfile)
-			if err != nil {
-				return BenchRun{}, fmt.Errorf("cpuprofile: %w", err)
-			}
-			cpuProfFile = f
-			if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
-				_ = cpuProfFile.Close()
-				return BenchRun{}, fmt.Errorf("cpuprofile start: %w", err)
-			}
-			defer func() {
-				pprof.StopCPUProfile()
-				_ = cpuProfFile.Close()
-			}()
+		if err := verifyRangeIteration(inst.Wrapper, rs, verifyRangePrefix, verifyRangeCount); err != nil {
+			return BenchRun{}, fmt.Errorf("verify/%s: %w", inst.Wrapper.Name(), err)
 		}
+	}
 
-		// Run Tests
-		results := make(map[string]map[string]float64)
-		for _, testName := range finalTestOrder {
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") {
+		prefixScanBase = cfg.Keys
+	}
+
+	if cfg.BlockProfile != "" {
+		rate := cfg.BlockProfileRate
+		if rate <= 0 {
+			rate = 1
+		}
+		runtime.SetBlockProfileRate(rate)
+		defer runtime.SetBlockProfileRate(0)
+
+		f, err := os.Create(cfg.BlockProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("blockprofile: %w", err)
+		}
+		defer func() {
+			_ = pprof.Lookup("block").WriteTo(f, 0)
+			_ = f.Close()
+		}()
+	}
+
+	if cfg.MutexProfile != "" {
+		frac := cfg.MutexProfileFraction
+		if frac <= 0 {
+			frac = 1
+		}
+		runtime.SetMutexProfileFraction(frac)
+		defer runtime.SetMutexProfileFraction(0)
+
+		f, err := os.Create(cfg.MutexProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("mutexprofile: %w", err)
+		}
+		defer func() {
+			_ = pprof.Lookup("mutex").WriteTo(f, 0)
+			_ = f.Close()
+		}()
+	}
+
+	if cfg.TraceProfile != "" {
+		f, err := os.Create(cfg.TraceProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("trace: %w", err)
+		}
+		if err := trace.Start(f); err != nil {
+			_ = f.Close()
+			return BenchRun{}, fmt.Errorf("trace start: %w", err)
+		}
+		defer func() {
+			trace.Stop()
+			_ = f.Close()
+		}()
+	}
+
+	var cpuProfFile *os.File
+	if cfg.CPUProfile != "" {
+		f, err := os.Create(cfg.CPUProfile)
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("cpuprofile: %w", err)
+		}
+		cpuProfFile = f
+		if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
+			_ = cpuProfFile.Close()
+			return BenchRun{}, fmt.Errorf("cpuprofile start: %w", err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			_ = cpuProfFile.Close()
+		}()
+	}
+
+	// Run Tests
+	results := make(map[string]map[string]float64)
+	for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64, len(instances))
 		for _, inst := range instances {
 			results[testName][inst.Wrapper.Name()] = math.NaN()
@@ -1215,7 +1424,7 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 
 	pointCfg := baseCfg
 	pointCfg.DBsArg = "hashdb,treedb,badger,leveldb"
-	pointCfg.TestsArg = "write_seq,write_rand,read_rand"
+	pointCfg.TestsArg = "sequential_write,random_write,random_read"
 	pointCfg.Progress = false
 
 	scanCfg := baseCfg
@@ -1237,7 +1446,7 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	backendBaselineCfg := baseCfg
 	backendBaselineCfg.Keys = backendBaselineKeys
 	backendBaselineCfg.DBsArg = "treedbbackend"
-	backendBaselineCfg.TestsArg = "write_seq,write_rand,read_rand"
+	backendBaselineCfg.TestsArg = "sequential_write,random_write,random_read"
 	backendBaselineCfg.Progress = false
 
 	pointRuns, err := runSweep(pointCfg, keyCounts)
@@ -1439,6 +1648,18 @@ func normalizeTests(list []string) []string {
 			t = "prefix_scan"
 		case "prefix_scan":
 			// keep
+		case "write_seq":
+			t = "sequential_write"
+		case "write_rand":
+			t = "random_write"
+		case "read_rand":
+			t = "random_read"
+		case "delete_rand":
+			t = "random_delete"
+		case "batch_write_random":
+			t = "batch_random"
+		case "batch_write_small_seq":
+			t = "batch_small_seq"
 		}
 		if t == "" {
 			continue

@@ -18,7 +18,7 @@ type Memtable struct {
 // We start with a reasonable capacity to avoid initial reallocations.
 func New() *Memtable {
 	return &Memtable{
-		sl: skiplist.New(4 * 1024 * 1024), // 4MB initial capacity
+		sl: skiplist.New(64 * 1024), // Start small (64KB) to allow cheap rotation
 	}
 }
 

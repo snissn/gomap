@@ -42,7 +42,7 @@ func (m *mockKV) Delete(key []byte) error {
 }
 
 func TestBasicCRUD(t *testing.T) {
-	tree, err := OpenTree(newMockKV(), "basic")
+	tree, err := OpenTree(newMockKV(), "basic", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestBasicCRUD(t *testing.T) {
 }
 
 func TestSplitAndOrdering(t *testing.T) {
-	tree, err := OpenTree(newMockKV(), "split")
+	tree, err := OpenTree(newMockKV(), "split", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestSplitAndOrdering(t *testing.T) {
 }
 
 func TestRangeQueries(t *testing.T) {
-	tree, err := OpenTree(newMockKV(), "range")
+	tree, err := OpenTree(newMockKV(), "range", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRangeQueries(t *testing.T) {
 }
 
 func TestReverseRange(t *testing.T) {
-	tree, err := OpenTree(newMockKV(), "rev_range")
+	tree, err := OpenTree(newMockKV(), "rev_range", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestPersistenceWithHashDB(t *testing.T) {
 		t.Fatalf("init hashdb: %v", err)
 	}
 
-	tree, err := NewTreeOnHashDB(store, "persist")
+	tree, err := NewTreeOnHashDB(store, "persist", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestPersistenceWithHashDB(t *testing.T) {
 	}
 	defer store2.Close()
 
-	tree2, err := NewTreeOnHashDB(store2, "persist")
+	tree2, err := NewTreeOnHashDB(store2, "persist", nil)
 	if err != nil {
 		t.Fatalf("reopen tree: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestPersistenceWithHashDB(t *testing.T) {
 }
 
 func TestRandomizedOperations(t *testing.T) {
-	tree, err := OpenTree(newMockKV(), "rand")
+	tree, err := OpenTree(newMockKV(), "rand", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestRandomizedOperationsWithHashDB(t *testing.T) {
 		t.Fatalf("init hashdb: %v", err)
 	}
 
-	tree, err := NewTreeOnHashDB(store, "rand-hashdb")
+	tree, err := NewTreeOnHashDB(store, "rand-hashdb", nil)
 	if err != nil {
 		t.Fatalf("OpenTree: %v", err)
 	}

@@ -58,4 +58,3 @@ func TestRunBenchmark_PrefixScanMatchesBatchWriteKeyRange(t *testing.T) {
 		t.Fatalf("expected prefix_scan > 0, got %v", prefix)
 	}
 }
-

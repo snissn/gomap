@@ -1,53 +1,73 @@
-# Benchmark & Stress Test Specification
+# Benchmark Specification
 
-This document outlines the plan for advanced benchmarking and stress testing of `gomap` to validate its performance under realistic workloads and its durability under failure conditions.
+The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent workload across multiple engines (HashDB, TreeDB, Badger, LevelDB).
 
-## 1. Advanced Performance Benchmark ("Realistic Workload")
-**Objective:** Measure throughput and latency under conditions that mimic production use cases, moving beyond simple burst SET/GET.
+## Methodology
 
-### Configurations
-*   **Mixed Workload:** 80% GET, 20% SET.
-*   **Value Sizes:** 
-    *   Small: 32 bytes (Testing index/lock overhead).
-    *   Medium: 1 KB (Testing memory copy/allocations).
-    *   Large: 100 KB (Testing disk I/O bandwidth and compression).
-*   **Key Distribution:**
-    *   Uniform Random: Standard distribution.
-    *   Zipfian/Pareto: 20% of keys accessed 80% of the time (Hot keys).
-*   **Concurrency:** High concurrency (e.g., 200 clients) with Pipelining (16 commands/batch).
+- **Cold Start**: Each test run creates a fresh, empty DB directory (unless `--keep` is used).
+- **Preloading**: For read-only tests (`read_rand`, `full_scan`), the DB is pre-populated with sequential keys if no write test preceded it.
+- **Timing**: Throughput (ops/sec) is calculated as `Count / Duration`. Duration includes the full loop but excludes DB open/close time.
+- **Keys**: 8-byte big-endian integers (lexicographically sorted).
+- **Values**: 128 bytes (default) of uniform random data (or zeros if faster allocation is needed; currently zeroed buffer for speed).
 
-### Implementation Strategy
-*   Extend `benchmark/config.go` to support defining "Scenarios".
-*   Each Scenario defines: `Command` (e.g., `redis-benchmark`), `Args` (flags for size, randomness), and `Description`.
-*   Run scenarios sequentially and report results.
+## Test Definitions
 
-## 2. Durability Stress Test ("Chaos Monkey")
-**Objective:** Verify that `Recover()` correctly restores the database state after an unclean shutdown (`kill -9`), ensuring no data corruption and minimal data loss (ACKed writes must exist).
+### Point Operations
 
-### Test Logic
-1.  **Setup:** Start `gomap` server.
-2.  **Load:** Spawn N workers writing unique keys (e.g., `key-0` to `key-1000000`) continuously.
-3.  **Chaos:** After a random duration (e.g., 2-5 seconds), send `SIGKILL` to the server process.
-4.  **Verification:**
-    *   Restart server.
-    *   The server should start successfully (auto-recovery).
-    *   Read all keys that were *successfully* written (client received "OK").
-    *   **Assertion:** 100% of ACKed keys must exist and have correct values.
-5.  **Repeat:** Run this cycle 10 times.
+1.  **Sequential Write** (`write_seq`)
+    - Writes `N` keys from `0` to `N-1` in increasing order.
+    - Simulates bulk loading or log-structured ingestion.
 
-### Implementation Strategy
-*   New Go test file: `stress/chaos_test.go`.
-*   Uses `exec.Command` to manage the server process lifecycle.
-*   Uses a Go Redis client to push load and track ACKed writes.
+2.  **Random Write** (`write_rand`)
+    - Writes `N` keys randomly selected from `[0, 10*N)`.
+    - The sparse keyspace (10x) forces internal fragmentation and defeats simple append-only optimizations.
 
-## 3. Compaction Stress Test ("GC Lag")
-**Objective:** Measure the impact of the Stop-the-World `Compact()` operation on read latency.
+3.  **Random Read** (`read_rand`)
+    - Reads `N` keys randomly selected from `[0, N)`.
+    - Targets the populated keyspace.
 
-### Test Logic
-1.  **Fill:** Write 1GB of data (updating the same 100k keys repeatedly to generate garbage).
-2.  **Load:** Start a reader loop measuring latency of `GET` operations.
-3.  **Trigger:** Send `BGREWRITEAOF` (triggers `Compact`).
-4.  **Measure:** Record latency spike magnitude and duration during compaction.
+4.  **Random Delete** (`delete_rand`)
+    - Deletes `N` keys randomly selected from `[0, N)`.
 
-### Implementation Strategy
-*   Script/Test that outputs a histogram of latencies during the compaction window.
+### Batch Operations
+
+1.  **Batch Write** (`batch_write`)
+    - Writes `N` keys sequentially in batches of size `1000` (default).
+    - Tests the amortized write path (WAL commit / Transaction commit).
+
+2.  **Batch Random** (`batch_write_random`)
+    - Writes `N` keys randomly selected from `[0, 10*N)` in batches.
+    - Tests batch processing under fragmentation pressure.
+
+### Scans
+
+1.  **Full Scan** (`full_scan`)
+    - Iterates over **all** keys in the database `[0, ∞)`.
+    - Measures pure iteration throughput (Next/Value overhead).
+
+2.  **Prefix Scan** (`prefix_scan`)
+    - Performs `M` short range queries (default 200 queries of 100 keys each).
+    - Measures "seek + short scan" performance, critical for range queries.
+
+## Comparison Baselines
+
+- **TreeDB (Cached)**: `treedb`
+  - Default mode. Memtable + WAL -> Async Flush.
+- **TreeDB (Backend)**: `treedbbackend`
+  - Direct B+Tree writes. No memtable.
+- **HashDB**: `hashdb`
+  - Mmap-based hash index. No ordered scans.
+- **BadgerDB**: `badger` (v4)
+  - Pure Go LSM tree.
+- **LevelDB**: `leveldb` (goleveldb)
+  - Classic LSM tree.
+
+## Running
+
+```bash
+# Run all tests on all DBs with 1 million keys
+./bin/unified-bench -keys 1000000
+
+# Run specific tests
+./bin/unified-bench -tests write_seq,read_rand -dbs treedb,hashdb
+```

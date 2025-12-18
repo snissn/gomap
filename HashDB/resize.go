@@ -194,7 +194,7 @@ func (h *DB) rehashStep(maxToMove uint64) error {
 		// Do not modify Count; logical key cardinality doesn't change.
 
 		// Mark old bucket as migrated so we don't revisit it.
-		h.rehashOldKeys[idx].slabOffset = 0
+		h.rehashOldKeys[idx].slabOffset = Tombstone
 		moved++
 	}
 

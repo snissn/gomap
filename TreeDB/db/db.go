@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
@@ -48,9 +48,9 @@ type DB struct {
 	keepRecent uint64
 	policy     WritePolicy
 
-	mu      sync.RWMutex
-	writeMu sync.Mutex
-	meta    page.MetaPageBody
+	mu         sync.RWMutex
+	writeMu    sync.Mutex
+	meta       page.MetaPageBody
 	metaPageID uint64
 
 	state atomic.Pointer[DBState]
@@ -69,15 +69,27 @@ type Options struct {
 	KeepRecent     uint64 // Default 10000
 	Mode           Mode   // Default ModeCached
 	FlushThreshold int64
-}
+	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
+	// layer will allow before applying backpressure (i.e. forcing flush work on
+	// writers). A negative value disables backpressure entirely (higher short-term
+	// ingest, but potentially unbounded flush debt). Zero uses the default.
+	MaxQueuedMemtables int
 
-// OpenCached opens the database with the caching wrapper.
-func OpenCached(opts Options) (*caching.DB, error) {
-	db, err := Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	return caching.Open(opts.Dir, db, opts.FlushThreshold)
+	// SlowdownBacklogSeconds begins applying writer backpressure when queued flush
+	// backlog exceeds this many seconds of estimated flush work (0 disables).
+	SlowdownBacklogSeconds float64
+	// StopBacklogSeconds blocks writers when queued flush backlog exceeds this many
+	// seconds of estimated flush work (0 disables).
+	StopBacklogSeconds float64
+	// MaxBacklogBytes is an absolute cap on queued flush backlog bytes (0 disables).
+	MaxBacklogBytes int64
+
+	// WriterFlushMaxMemtables bounds how much queued work a writer will help flush
+	// per write when backpressure is active (0 uses a default).
+	WriterFlushMaxMemtables int
+	// WriterFlushMaxDuration bounds how long a writer will spend helping flush per
+	// write when backpressure is active (0 disables the time bound).
+	WriterFlushMaxDuration time.Duration
 }
 
 type Snapshot struct {
@@ -158,15 +170,15 @@ func Open(opts Options) (*DB, error) {
 	alloc := freelist.New(p, 0)
 
 	db := &DB{
-		pager:           p,
-		slabManager:     sm,
-		zipper:          zipper.New(p, alloc),
-		allocator:       alloc,
-		graveyard:       lifecycle.NewGraveyard(),
-		registry:        lifecycle.NewReaderRegistry(),
-		lock:            lock,
-		adaptive:   adaptive.New(),
-		keepRecent: opts.KeepRecent,
+		pager:       p,
+		slabManager: sm,
+		zipper:      zipper.New(p, alloc),
+		allocator:   alloc,
+		graveyard:   lifecycle.NewGraveyard(),
+		registry:    lifecycle.NewReaderRegistry(),
+		lock:        lock,
+		adaptive:    adaptive.New(),
+		keepRecent:  opts.KeepRecent,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,

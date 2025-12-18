@@ -1,9 +1,22 @@
 #!/bin/bash
 set -e
 
+# verify_treedb_crash.sh
+# Runs a crash recovery loop for TreeDB.
+# Usage: ./scripts/verify_treedb_crash.sh
+
+# Ensure we are in root
+if [ ! -d "TreeDB" ]; then
+    echo "Please run from repo root."
+    exit 1
+fi
+
+mkdir -p bin
+
 # Build tools
-go build -o stress ./cmd/stress
-go build -o verify ./cmd/verify
+echo "Building stress tools..."
+go build -o bin/treedb-stress ./TreeDB/cmd/stress
+go build -o bin/treedb-verify ./TreeDB/cmd/verify
 
 TEST_DIR=$(mktemp -d)
 echo "Test Dir: $TEST_DIR"
@@ -11,7 +24,7 @@ echo "Test Dir: $TEST_DIR"
 for i in {1..5}; do
     echo "Iteration $i..."
     # Start stress in background
-    ./stress -dir "$TEST_DIR" -duration 10s -workers 4 &
+    ./bin/treedb-stress -dir "$TEST_DIR" -duration 10s -workers 4 &
     PID=$!
     
     # Let it run for a bit
@@ -24,7 +37,7 @@ for i in {1..5}; do
     
     # Verify
     echo "Verifying..."
-    ./verify -dir "$TEST_DIR"
+    ./bin/treedb-verify -dir "$TEST_DIR"
     
     if [ $? -ne 0 ]; then
         echo "Verification failed!"
@@ -34,5 +47,4 @@ for i in {1..5}; do
 done
 
 rm -rf "$TEST_DIR"
-rm stress verify
 echo "Crash test passed."

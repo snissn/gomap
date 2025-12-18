@@ -35,13 +35,13 @@ func writeReadmePlots(outDir string, pointRuns, scanRuns []BenchRun) (pointOpsPa
 
 	if err := writePlotGridPNG(pointOpsFile, [][]plotSpec{
 		{
-			{Title: "Sequential Write", TestName: "write_seq", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}, ShowLegend: true},
+			{Title: "Sequential Write", TestName: "sequential_write", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}, ShowLegend: true},
 		},
 		{
-			{Title: "Random Write", TestName: "write_rand", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}},
+			{Title: "Random Write", TestName: "random_write", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}},
 		},
 		{
-			{Title: "Random Read", TestName: "read_rand", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}},
+			{Title: "Random Read", TestName: "random_read", Engines: []string{"HashDB", "TreeDB", "Badger", "LevelDB"}},
 		},
 	}, pointRuns); err != nil {
 		return "", "", err

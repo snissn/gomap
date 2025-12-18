@@ -35,7 +35,7 @@ func benchmarkBTreePutGet(b *testing.B, numKeys int, shards int) {
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnHashDB(store, "bench")
+	tree, err := NewTreeOnHashDB(store, "bench", nil)
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -80,7 +80,7 @@ func benchmarkBTreeScanAll(b *testing.B, numKeys int, shards int) {
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnHashDB(store, "bench-scan")
+	tree, err := NewTreeOnHashDB(store, "bench-scan", nil)
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -133,7 +133,7 @@ func benchmarkBTreePutOnly(b *testing.B, numKeys int, shards int) {
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnHashDB(store, "bench-putonly")
+	tree, err := NewTreeOnHashDB(store, "bench-putonly", nil)
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
@@ -184,7 +184,7 @@ func benchmarkBTreeGetOnly(b *testing.B, numKeys int, shards int) {
 	if err := store.NewWithShards(dir, shards); err != nil {
 		b.Fatalf("init hashdb: %v", err)
 	}
-	tree, err := NewTreeOnHashDB(store, "bench-getonly")
+	tree, err := NewTreeOnHashDB(store, "bench-getonly", nil)
 	if err != nil {
 		b.Fatalf("init tree: %v", err)
 	}
