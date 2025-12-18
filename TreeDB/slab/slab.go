@@ -334,11 +334,23 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	// Ideally SlabManager handles serialization, so s.Size is accurate.
 
 	offset := s.Size
-	n, err := s.File.Write(buf)
-	if err != nil {
-		return 0, err
+	written := 0
+	for written < len(buf) {
+		n, err := s.File.Write(buf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			// Best-effort: remove any partial tail bytes so the active tail stays aligned.
+			_ = s.Truncate(offset)
+			return 0, err
+		}
+		if n == 0 {
+			_ = s.Truncate(offset)
+			return 0, errors.New("short write")
+		}
 	}
 
-	s.Size += int64(n)
+	s.Size += int64(written)
 	return offset, nil
 }

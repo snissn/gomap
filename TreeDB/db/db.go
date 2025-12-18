@@ -363,8 +363,6 @@ func (db *DB) recover() error {
 	}
 
 	if activeMeta.TotalPages > 0 {
-		// Debug print
-		fmt.Printf("DEBUG db.recover: Setting pager page count to %d (from activeMeta.TotalPages)\n", activeMeta.TotalPages)
 		db.pager.SetPageCount(activeMeta.TotalPages)
 	}
 
