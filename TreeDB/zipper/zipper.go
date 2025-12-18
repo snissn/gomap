@@ -462,6 +462,35 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			newChildID = childID
 		}
 
+		// Maintenance: drop empty leaf children so delete-heavy workloads can
+		// reclaim leaf pages without requiring a full vacuum. Always keep the
+		// first child slot so the internal node remains well-formed even when the
+		// subtree becomes empty.
+		if newChildID != 0 {
+			data, err := z.pager.Get(newChildID)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			cn := node.NewNode(data)
+			if cn.Type() == page.PageTypeLeaf && cn.Count() == 0 {
+				if i == 0 {
+					// Ensure first key remains the empty sentinel.
+					key = nil
+				} else {
+					// If we reused an empty leaf without rewriting it, ensure it becomes
+					// unreachable in the new tree by retiring it.
+					if newChildID == childID {
+						retired = append(retired, childID)
+					} else {
+						// If the child was rewritten to an empty leaf, also retire the new
+						// page so it can be reclaimed later.
+						retired = append(retired, newChildID)
+					}
+					continue
+				}
+			}
+		}
+
 		// Add (Key, NewChildID) to target builder
 		if newChildID >= z.pager.PageCount() {
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
