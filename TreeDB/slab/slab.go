@@ -82,6 +82,110 @@ func (s *SlabFile) Truncate(size int64) error {
 		return err
 	}
 	s.Size = size
+
+	// If we had an mmap, it may now be larger than the file. Clear it to avoid
+	// SIGBUS on reads and to allow remapping to the new size.
+	s.mmapMu.Lock()
+	if s.mmapData != nil {
+		_ = munmap(s.mmapData)
+		s.mmapData = nil
+	}
+	s.mmapMu.Unlock()
+
+	return nil
+}
+
+// RepairTail scans the slab file to find the last complete (and checksummed)
+// record and truncates any partial/corrupt tail bytes. This is primarily a
+// crash-recovery helper.
+func (s *SlabFile) RepairTail() error {
+	info, err := s.File.Stat()
+	if err != nil {
+		return err
+	}
+	size := info.Size()
+	if size == 0 {
+		s.Size = 0
+		return nil
+	}
+
+	// Track the last few record starts so we can drop a corrupted tail record
+	// without needing a second full scan.
+	const keepStarts = 4
+	var starts [keepStarts]int64
+	var startsN int
+
+	var headerArr [HeaderSize]byte
+	offset := int64(0)
+	lastGoodEnd := int64(0)
+
+	for {
+		if offset+HeaderSize > size {
+			break
+		}
+		if _, err := s.File.ReadAt(headerArr[:], offset); err != nil {
+			break
+		}
+		keyLen := binary.LittleEndian.Uint16(headerArr[4:6])
+		valLen := binary.LittleEndian.Uint32(headerArr[6:10])
+		recLen := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+		if recLen <= HeaderSize || offset+recLen > size {
+			break
+		}
+
+		// Record this start in a ring.
+		starts[startsN%keepStarts] = offset
+		startsN++
+
+		offset += recLen
+		lastGoodEnd = offset
+	}
+
+	trimTo := lastGoodEnd
+	// Verify CRC for the last complete record; if it fails, drop it (and retry
+	// a few times using our ring buffer).
+	for tries := 0; tries < keepStarts; tries++ {
+		if startsN == 0 {
+			trimTo = 0
+			break
+		}
+		start := starts[(startsN-1-tries)%keepStarts]
+		if start < 0 || start+HeaderSize > trimTo {
+			continue
+		}
+		if _, err := s.File.ReadAt(headerArr[:], start); err != nil {
+			continue
+		}
+		crc := binary.LittleEndian.Uint32(headerArr[0:4])
+		keyLen := binary.LittleEndian.Uint16(headerArr[4:6])
+		valLen := binary.LittleEndian.Uint32(headerArr[6:10])
+		dataLen := int64(keyLen) + int64(valLen)
+		dataStart := start + HeaderSize
+		dataEnd := dataStart + dataLen
+		if dataEnd > trimTo || dataLen < 0 || dataLen > int64(int(dataLen)) {
+			trimTo = start
+			continue
+		}
+		payload := make([]byte, int(dataLen))
+		if _, err := s.File.ReadAt(payload, dataStart); err != nil {
+			trimTo = start
+			continue
+		}
+		sum := crc32.Update(0, crc32cTable, headerArr[4:10])
+		sum = crc32.Update(sum, crc32cTable, payload)
+		if sum == crc {
+			// Tail record is valid.
+			break
+		}
+		trimTo = start
+	}
+
+	if trimTo < size {
+		if err := s.Truncate(trimTo); err != nil {
+			return err
+		}
+	}
+	s.Size = trimTo
 	return nil
 }
 

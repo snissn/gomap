@@ -105,7 +105,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 
 	offset, err := sm.activeSlab.Write(key, value)
 	if err == ErrSlabFull {
-		if err := sm.rotate(); err != nil {
+		if err := sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
 		}
 		offset, err = sm.activeSlab.Write(key, value)
@@ -124,7 +124,17 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	}, nil
 }
 
-func (sm *SlabManager) rotate() error {
+// Rotate forces creation of a new active slab.
+func (sm *SlabManager) Rotate() (*SlabFile, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if err := sm.rotateLocked(); err != nil {
+		return nil, err
+	}
+	return sm.activeSlab, nil
+}
+
+func (sm *SlabManager) rotateLocked() error {
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
@@ -140,6 +150,12 @@ func (sm *SlabManager) rotate() error {
 
 	sm.slabs[newID] = newSlab
 	sm.activeSlab = newSlab
+
+	// Ensure the directory entry is durable (best-effort).
+	if dir, err := os.Open(sm.dir); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 
 	return nil
 }
@@ -183,7 +199,10 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	return sm.activeSlab.Truncate(int64(offset))
+	if err := sm.activeSlab.Truncate(int64(offset)); err != nil {
+		return err
+	}
+	return sm.activeSlab.RepairTail()
 }
 
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {
@@ -281,28 +300,6 @@ func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
 		}
 	}
 	return err
-}
-
-// CreateCompactionSlab creates a new slab file (not the active slab) and
-// registers it as live in the manager.
-func (sm *SlabManager) CreateCompactionSlab() (*SlabFile, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	var maxID uint32
-	for id := range sm.slabs {
-		if id >= maxID {
-			maxID = id
-		}
-	}
-	newID := maxID + 1
-	path := filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", newID))
-	s, err := OpenSlab(path, newID)
-	if err != nil {
-		return nil, err
-	}
-	sm.slabs[newID] = s
-	return s, nil
 }
 
 // MarkZombie removes a slab from the active set so future snapshots stop

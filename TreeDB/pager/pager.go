@@ -219,6 +219,11 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 		newCapacity := currentCapacity + (chunksNeeded * p.chunkSize)
 
 		// Grow file
+		// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
+		// on mmap writes (platform/filesystem dependent).
+		if err := preallocateFile(p.file, newCapacity); err != nil {
+			return 0, err
+		}
 		if err := p.file.Truncate(newCapacity); err != nil {
 			return 0, err
 		}

@@ -39,8 +39,10 @@ func (c *Compactor) CompactSlab(id uint32) error {
 	}
 	defer f.Close()
 
-	out, err := c.db.SlabManager().CreateCompactionSlab()
-	if err != nil {
+	// Rotate to a fresh active slab so compaction IO doesn't interleave with
+	// existing slab contents and (critically) so the new slab ID is persisted in
+	// meta by subsequent commits.
+	if _, err := c.db.SlabManager().Rotate(); err != nil {
 		return err
 	}
 
@@ -54,8 +56,6 @@ func (c *Compactor) CompactSlab(id uint32) error {
 
 	var ops []db.CompactionOp
 	offset := int64(0)
-	appliedAny := false
-
 	// Buffer for header
 	var headerBuf [slab.HeaderSize]byte
 
@@ -117,16 +117,13 @@ func (c *Compactor) CompactSlab(id uint32) error {
 			continue
 		}
 
-		// Append to the new slab.
-		newOff, err := out.Write(key, value)
+		// Append to the current active slab (newly rotated at start).
+		newPtr, err := c.db.SlabManager().Append(key, value)
 		if err != nil {
 			return err
 		}
-		newPtr := page.ValuePtr{
-			Offset: uint64(newOff + 4),
-			Length: uint32(totalLen - 4),
-			FileID: out.ID,
-		}
+		// Sanity: the record sizes should match (same key/value).
+		_ = totalLen
 
 		keyCopy := append([]byte(nil), key...)
 		ops = append(ops, db.CompactionOp{
@@ -140,7 +137,6 @@ func (c *Compactor) CompactSlab(id uint32) error {
 			if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
 				return err
 			}
-			appliedAny = true
 			ops = ops[:0]
 		}
 
@@ -151,12 +147,6 @@ func (c *Compactor) CompactSlab(id uint32) error {
 		if err := c.db.ApplyCompactionMicroBatches(ops, 256); err != nil {
 			return err
 		}
-		appliedAny = true
-	}
-
-	if !appliedAny {
-		// Nothing was moved; avoid leaving an empty slab behind.
-		_ = c.db.SlabManager().RemoveSlab(out.ID)
 	}
 
 	// Now that pointers have been moved, remove the old slab from future
