@@ -167,7 +167,12 @@ func (n *Node) AddInternalChild(key []byte, childPageID uint64) error {
 	// Check space
 	needed := entrySize + DirectoryEntrySize // Assuming new entry
 	if n.FreeSpace() < needed {
-		return ErrNodeFull
+		if err := n.Compact(); err != nil {
+			return err
+		}
+		if n.FreeSpace() < needed {
+			return ErrNodeFull
+		}
 	}
 
 	// Allocate

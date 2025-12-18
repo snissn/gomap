@@ -171,8 +171,13 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	}
 
 	if n.FreeSpace() < needed {
-		// For now, just error.
-		return ErrNodeFull
+		// Try to reclaim space from heap holes created by overwrites.
+		if err := n.Compact(); err != nil {
+			return err
+		}
+		if n.FreeSpace() < needed {
+			return ErrNodeFull
+		}
 	}
 
 	// Prepare Entry Data
