@@ -246,6 +246,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				// If it was a pointer, track it as dead bytes.
 				if f&node.FlagPointer != 0 {
 					metrics.SlabDeadBytes += int(ptr.Length)
+					if metrics.SlabDeadBytesByFile == nil {
+						metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+					}
+					metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 				}
 
 				useBatch = true

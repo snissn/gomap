@@ -19,6 +19,13 @@ type Metrics struct {
 	IndexWriteBytes int
 	SlabWriteBytes  int
 	SlabDeadBytes   int
+
+	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
+	// commit (keyed by FileID).
+	SlabWriteBytesByFile map[uint32]int64
+	// SlabDeadBytesByFile tracks bytes that became dead in each slab file during
+	// this commit due to overwrite/delete of pointer values.
+	SlabDeadBytesByFile map[uint32]int64
 }
 
 // Controller manages the adaptive inline threshold.

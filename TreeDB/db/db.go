@@ -380,6 +380,19 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	// 0. Update System metadata tree (slab stats, etc) before sync/meta.
+	//
+	// This mutates index pages, so it must run before any Sync() durability
+	// boundary.
+	if nextSysRoot, sysRetired, err := db.applySystemStatsUpdates(sysRootID, metrics); err != nil {
+		return err
+	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
+		sysRootID = nextSysRoot
+		if len(sysRetired) > 0 {
+			retired = append(retired, sysRetired...)
+		}
+	}
+
 	// 1. Sync Data (Slabs + Index Pages) - No DB Lock
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {

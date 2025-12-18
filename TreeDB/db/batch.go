@@ -55,6 +55,15 @@ func (b *Batch) Write() error {
 		return err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
+	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
+		if metrics.SlabWriteBytesByFile == nil {
+			metrics.SlabWriteBytesByFile = byFile
+		} else {
+			for id, n := range byFile {
+				metrics.SlabWriteBytesByFile[id] += n
+			}
+		}
+	}
 
 	// Commit (Write Lock)
 	b.db.mu.Lock()
@@ -83,6 +92,15 @@ func (b *Batch) WriteSync() error {
 		return err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
+	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
+		if metrics.SlabWriteBytesByFile == nil {
+			metrics.SlabWriteBytesByFile = byFile
+		} else {
+			for id, n := range byFile {
+				metrics.SlabWriteBytesByFile[id] += n
+			}
+		}
+	}
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {

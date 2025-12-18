@@ -49,6 +49,7 @@ type Batch struct {
 	slabManager     *slab.SlabManager
 	byteSize        int
 	slabWritten     int
+	slabWrittenByID map[uint32]int64
 	inlineThreshold int
 	closed          bool
 }
@@ -96,6 +97,10 @@ func (b *Batch) SetView(key, value []byte) error {
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
 		b.slabWritten += int(ptr.Length)
+		if b.slabWrittenByID == nil {
+			b.slabWrittenByID = make(map[uint32]int64, 4)
+		}
+		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
 	} else {
 		entry.Value = value
 	}
@@ -133,6 +138,10 @@ func (b *Batch) Set(key, value []byte) error {
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
 		b.slabWritten += int(ptr.Length)
+		if b.slabWrittenByID == nil {
+			b.slabWrittenByID = make(map[uint32]int64, 4)
+		}
+		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
 	} else {
 		// Store inline
 		valCopy := make([]byte, len(value))
@@ -250,6 +259,10 @@ func (b *Batch) SetOps(ops []Entry) error {
 			op.IsPtr = true
 			op.Value = nil
 			b.slabWritten += int(ptr.Length)
+			if b.slabWrittenByID == nil {
+				b.slabWrittenByID = make(map[uint32]int64, 4)
+			}
+			b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
 		}
 		// No need to copy op.Value if we assume ownership (which we do for SetOps)
 
@@ -303,4 +316,10 @@ func (b *Batch) ByteSize() int {
 // SlabWriteBytes returns the number of bytes written to the slab file.
 func (b *Batch) SlabWriteBytes() int {
 	return b.slabWritten
+}
+
+// SlabWriteBytesByFile returns a per-slab breakdown of bytes appended during
+// this batch. The returned map must be treated as read-only by callers.
+func (b *Batch) SlabWriteBytesByFile() map[uint32]int64 {
+	return b.slabWrittenByID
 }
