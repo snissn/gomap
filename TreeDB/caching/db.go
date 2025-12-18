@@ -174,7 +174,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
 	if opts.MaxQueuedMemtables == 0 {
-		opts.MaxQueuedMemtables = 4
+		// Keep the default queued backlog roughly stable in bytes when callers
+		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
+		// length of 4 => ~256MB backlog.
+		opts.MaxQueuedMemtables = defaultMaxQueuedMemtables(opts.FlushThreshold)
 	}
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
@@ -813,6 +816,17 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	db.mu.RLock()
+	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", len(db.queue))
+	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutable.Size())
+	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
+	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
+	if db.adaptiveBackpressureEnabled() {
+		stats["treedb.cache.backpressure_mode"] = "adaptive"
+	} else {
+		stats["treedb.cache.backpressure_mode"] = "queue_len"
+	}
+	db.mu.RUnlock()
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
