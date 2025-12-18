@@ -399,7 +399,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Mark compacted slabs **zombie** and delete only when unpinned (snapshot-safe).
 - [ ] **Gates (before 15.3):**
   - [x] Integration test: compaction preserves data for pointer values (Get).
-  - [ ] Integration test: snapshot safety (old slab not deleted while pinned).
+  - [x] Integration test: snapshot safety (old slab not deleted while pinned).
   - [ ] Integration test: compaction is restartable/idempotent (rerun does not corrupt; second run is no-op-ish).
   - [ ] Bench smoke: write/read/scan unchanged when compaction is idle (no >5% regression vs baseline).
 
@@ -411,7 +411,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Ensure crash safety: compactor is restartable/idempotent (re-copy safe; apply verifies pointers).
 - [ ] **Gates (before 15.4):**
   - [x] Concurrency test: foreground writes can proceed between micro-batches (no deadlocks; bounded wait).
-  - [ ] Integration test: partial apply (stop after 1 micro-batch) leaves DB consistent and resumable.
+  - [x] Integration test: partial apply (stop after 1 micro-batch) leaves DB consistent and resumable.
   - [ ] Bench smoke: `random_write` not regressed >10% vs baseline (expected small overhead from more commits/locking).
 
 ### 15.4 Throttling + Backpressure Integration
