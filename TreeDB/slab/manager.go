@@ -199,10 +199,7 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if err := sm.activeSlab.Truncate(int64(offset)); err != nil {
-		return err
-	}
-	return sm.activeSlab.RepairTail()
+	return sm.activeSlab.Truncate(int64(offset))
 }
 
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {

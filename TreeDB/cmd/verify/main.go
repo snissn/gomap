@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
 var dir = flag.String("dir", "", "Database directory")
+var report = flag.Bool("report", false, "Print fragmentation report and stats")
 
 func main() {
 	flag.Parse()
@@ -24,6 +26,34 @@ func main() {
 		os.Exit(1)
 	}
 	defer d.Close()
+
+	if *report {
+		stats := d.Stats()
+		keys := make([]string, 0, len(stats))
+		for k := range stats {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Println("Stats:")
+		for _, k := range keys {
+			fmt.Printf("  %s=%s\n", k, stats[k])
+		}
+
+		rep, err := d.FragmentationReport()
+		if err != nil {
+			fmt.Printf("FragmentationReport error: %v\n", err)
+			os.Exit(1)
+		}
+		rk := make([]string, 0, len(rep))
+		for k := range rep {
+			rk = append(rk, k)
+		}
+		sort.Strings(rk)
+		fmt.Println("Fragmentation:")
+		for _, k := range rk {
+			fmt.Printf("  %s=%s\n", k, rep[k])
+		}
+	}
 
 	it, err := d.Iterator(nil, nil)
 	if err != nil {

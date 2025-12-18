@@ -641,6 +641,12 @@ func (db *DB) CompactIndex() error {
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 
+	// Collect pages in the old tree so they can be retired after the swap.
+	retired, err := tr.CollectPageIDs()
+	if err != nil {
+		return err
+	}
+
 	// Create Iterator (Full Scan)
 	iter := tr.Iterator(nil, nil)
 	defer iter.Close()
@@ -660,8 +666,8 @@ func (db *DB) CompactIndex() error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.Unlock()
 
-	// Commit new root
-	return db.finalizeCommit(newRoot, sysRoot, nil, true, adaptive.Metrics{})
+	// Commit new root and retire the old tree pages.
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
 }
 
 type pagerAllocator struct {
