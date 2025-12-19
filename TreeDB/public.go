@@ -52,6 +52,7 @@ type DB struct {
 	mode    Mode
 	cached  *caching.DB
 	backend *db.DB
+	bgComp  bgCompactionWorker
 }
 
 func (db *DB) ensureOpen() error {
@@ -90,13 +91,43 @@ func Open(opts Options) (*DB, error) {
 		MaxBacklogBytes:         opts.MaxBacklogBytes,
 		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
+		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
 	})
 	if err != nil {
 		_ = backend.Close()
 		return nil, err
 	}
 
-	return &DB{mode: ModeCached, cached: cached, backend: backend}, nil
+	out := &DB{mode: ModeCached, cached: cached, backend: backend}
+
+	// Background compaction is opt-in (interval > 0).
+	if opts.BackgroundCompactionInterval > 0 {
+		co := compaction.Options{
+			MaxSlabs:           opts.BackgroundCompactionMaxSlabs,
+			DeadRatioThreshold: opts.BackgroundCompactionDeadRatio,
+			MinTotalBytes:      opts.BackgroundCompactionMinBytes,
+			MicroBatchSize:     opts.BackgroundCompactionMicroBatch,
+			CopyBytesPerSec:    opts.BackgroundCompactionCopyBytesPerSec,
+			CopyBurstBytes:     opts.BackgroundCompactionCopyBurstBytes,
+			RotateBeforeWrite:  opts.BackgroundCompactionRotateBeforeWrite,
+		}
+		// Reasonable effective defaults for background mode.
+		if co.MaxSlabs == 0 {
+			co.MaxSlabs = 1
+		}
+		if co.DeadRatioThreshold == 0 {
+			co.DeadRatioThreshold = 0.10
+		}
+		if co.MinTotalBytes == 0 {
+			co.MinTotalBytes = 1
+		}
+		if co.MicroBatchSize == 0 {
+			co.MicroBatchSize = 256
+		}
+		out.bgComp.Start(out, opts.BackgroundCompactionInterval, co)
+	}
+
+	return out, nil
 }
 
 // OpenCached is an explicit cached-mode opener (alias of Open with ModeCached).
@@ -108,6 +139,11 @@ func OpenCached(opts Options) (*DB, error) {
 // OpenBackend opens TreeDB in backend-only mode (no caching).
 func OpenBackend(opts Options) (*DB, error) {
 	opts.Mode = ModeBackend
+	// Backend-only mode is primarily used for correctness tests and profiling the
+	// core engine. Keep background pruning off by default to avoid introducing
+	// concurrent allocator work into single-op write benchmarks (callers can opt
+	// in by using Open with ModeBackend).
+	opts.DisableBackgroundPrune = true
 	return Open(opts)
 }
 
@@ -116,6 +152,7 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgComp.Stop()
 	if db.cached != nil {
 		err := db.cached.Close()
 		db.cached = nil
@@ -240,9 +277,19 @@ func (db *DB) Stats() map[string]string {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.Stats()
+		stats := db.cached.Stats()
+		if stats == nil {
+			stats = make(map[string]string)
+		}
+		bgCompactionStatsInto(stats, &db.bgComp)
+		return stats
 	}
-	return db.backend.Stats()
+	stats := db.backend.Stats()
+	if stats == nil {
+		stats = make(map[string]string)
+	}
+	bgCompactionStatsInto(stats, &db.bgComp)
+	return stats
 }
 
 func (db *DB) Print() error {
@@ -253,6 +300,27 @@ func (db *DB) Print() error {
 		return db.cached.Print()
 	}
 	return db.backend.Print()
+}
+
+// Checkpoint forces a durable backend boundary and trims cached-mode WAL
+// segments, so long-running cached-mode workloads do not accumulate unbounded
+// `wal/` growth.
+//
+// In cached mode this flushes queued memtables with backend sync and resets the
+// WAL to a fresh segment. In backend mode it forces a sync boundary.
+func (db *DB) Checkpoint() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Checkpoint()
+	}
+	b := db.backend.NewBatch()
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
 }
 
 // CompactCandidates runs slab compaction based on the provided selection options.
@@ -300,6 +368,14 @@ func (db *DB) CompactIndex() error {
 		}
 	}
 	return db.backend.CompactIndex()
+}
+
+// VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.
+// This is intended to reclaim space and restore locality after long churn.
+//
+// It is an offline operation: it acquires the exclusive open lock for opts.Dir.
+func VacuumIndexOffline(opts Options) error {
+	return db.VacuumIndexOffline(opts)
 }
 
 // FragmentationReport returns best-effort structural stats about the on-disk user

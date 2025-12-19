@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 func TestLimiter_DisabledReturnsImmediately(t *testing.T) {
 	l := newLimiter(0, 0)
 	start := time.Now()
-	l.Wait(10_000_000)
+	_ = l.Wait(context.Background(), 10_000_000)
 	if time.Since(start) > 10*time.Millisecond {
 		t.Fatalf("expected disabled limiter to return immediately")
 	}
@@ -19,7 +20,7 @@ func TestLimiter_SleepsWhenExceedingBurst(t *testing.T) {
 	// Waiting for 1100 bytes should incur ~100ms sleep.
 	l := newLimiter(1000, 0)
 	start := time.Now()
-	l.Wait(1100)
+	_ = l.Wait(context.Background(), 1100)
 	elapsed := time.Since(start)
 
 	// Allow wide tolerance for scheduler jitter on loaded systems.

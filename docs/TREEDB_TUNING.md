@@ -6,8 +6,10 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 ## TL;DR Defaults
 
 - `ChunkSize`: defaults to 256 MiB (mmap chunk size for `index.db`)
-- `FlushThreshold`: defaults to 4 MiB in cached mode (memtable/WAL rotation threshold)
-- `KeepRecent`: defaults to 10,000 (backend tuning knob)
+- `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/WAL rotation threshold)
+- `KeepRecent`:
+  - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
+  - backend mode (`treedb.OpenBackend`): defaults to `10,000`
 - Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
 
 ## Options
@@ -48,10 +50,82 @@ Lower threshold:
 - less memory/WAL footprint,
 - but potentially lower write throughput due to more frequent flush work.
 
+### `Options.MaxQueuedMemtables` (cached mode)
+
+Controls how many immutable memtables may be queued for flush before applying backpressure.
+
+- `0` uses a default derived from `FlushThreshold` (targets a roughly stable backlog in bytes).
+- `<0` disables backpressure entirely (not recommended in production).
+
+### Adaptive backpressure (cached mode)
+
+If any of these are non-zero, cached mode switches from a queue-length limit to a bytes-based
+backpressure policy driven by an estimated flush throughput:
+
+- `Options.SlowdownBacklogSeconds`
+- `Options.StopBacklogSeconds`
+- `Options.MaxBacklogBytes`
+
+Related bounds for writer-assisted flush work:
+
+- `Options.WriterFlushMaxMemtables`
+- `Options.WriterFlushMaxDuration`
+
+### `Options.FlushBuildConcurrency` (cached mode)
+
+When flushing a combined batch (multiple immutable memtables in one backend commit), TreeDB can
+optionally build the `SetOps` batch in parallel:
+
+- `<=1` disables parallelism (default).
+- `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
+  (oldest → newest) to preserve “newest wins” semantics.
+
 ### `Options.KeepRecent` (backend engine)
 
 Backend knob used to influence internal lifecycle/retention behavior.
 If you’re changing this, you should validate it with `cmd/unified_bench` and TreeDB’s tests.
+
+### Background pruning (backend engine)
+
+TreeDB reclaims retired index pages asynchronously to keep commit latency stable under churn.
+
+- `Options.DisableBackgroundPrune` keeps pruning on the commit path (legacy behavior).
+- `Options.PruneInterval`, `Options.PruneMaxPages`, `Options.PruneMaxDuration` bound the worker.
+
+Stats keys:
+- `treedb.prune.*`
+
+### Background slab compaction (cached wrapper; optional)
+
+TreeDB can optionally run slab compaction in the background (off by default):
+
+- Enable: `Options.BackgroundCompactionInterval > 0`
+- Selection knobs:
+  - `Options.BackgroundCompactionMaxSlabs`
+  - `Options.BackgroundCompactionDeadRatio`
+  - `Options.BackgroundCompactionMinBytes`
+- Apply/copy knobs:
+  - `Options.BackgroundCompactionMicroBatch`
+  - `Options.BackgroundCompactionCopyBytesPerSec`
+  - `Options.BackgroundCompactionCopyBurstBytes`
+  - `Options.BackgroundCompactionRotateBeforeWrite`
+
+Stats keys:
+- `treedb.bg_compaction.*`
+
+### Offline index vacuum (backend index)
+
+TreeDB’s `index.db` is **append-only** at the file level: it grows in chunks and never shrinks.
+After heavy churn, this can leave `index.db` much larger than the live tree needs, and page IDs
+can become scattered (hurting scan locality).
+
+TreeDB provides an **offline** rewrite operation that rebuilds `index.db` into a fresh file and
+swaps it in using a crash-safe protocol:
+
+- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
+- Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
+- Crash safety: `treedb.Open`/`treedb.OpenBackend` will automatically recover from a partial swap
+  (e.g. if the process crashed mid-vacuum).
 
 ## Benchmark-Driven Tuning
 
@@ -59,6 +133,11 @@ TreeDB performance depends heavily on workload shape. Prefer tuning with:
 
 - `./bin/unified-bench` (after `make unified-bench`)
 - `make bench-readme` (reproducible suite; prints environment metadata)
+
+Recommended “gate-style” suites:
+
+- `./bin/unified-bench -suite flushthrash` (catches small-flush-threshold regressions)
+- `./bin/unified-bench -suite longmix` (mixed churn + settle + scans, with fragmentation diagnostics)
 
 See:
 - `cmd/unified_bench/README.md`

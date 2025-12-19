@@ -172,6 +172,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.slabs.active_id"] = fmt.Sprintf("%d", db.slabManager.ActiveSlabID())
 	stats["treedb.slabs.zombies"] = fmt.Sprintf("%d", db.slabManager.ZombieCount())
 
+	pruneStatsInto(stats, &db.pruner)
+
 	// Best-effort slab fragmentation stats (derived from persisted System tree).
 	var total, dead uint64
 	sysTree := tree.New(db.pager, state.SlabSet, state.SystemRootPageID)

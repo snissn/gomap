@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -165,6 +166,10 @@ func (c *Compactor) Candidates(opts Options) ([]Candidate, error) {
 }
 
 func (c *Compactor) CompactCandidates(opts Options) error {
+	return c.CompactCandidatesWithContext(context.Background(), opts)
+}
+
+func (c *Compactor) CompactCandidatesWithContext(ctx context.Context, opts Options) error {
 	cands, err := c.Candidates(opts)
 	if err != nil {
 		return err
@@ -180,7 +185,7 @@ func (c *Compactor) CompactCandidates(opts Options) error {
 	}
 
 	for _, cand := range cands {
-		if err := c.CompactSlabWithOptions(cand.FileID, opts); err != nil {
+		if err := c.CompactSlabWithContext(ctx, cand.FileID, opts); err != nil {
 			return err
 		}
 	}

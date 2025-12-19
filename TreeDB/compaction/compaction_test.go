@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -201,6 +202,76 @@ func TestCompaction_AllowsConcurrentWrites(t *testing.T) {
 	}()
 
 	timeout := 5 * time.Second
+
+	select {
+	case err := <-compactDone:
+		if err != nil {
+			t.Fatalf("CompactSlab: %v", err)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("compaction timed out (possible deadlock)")
+	}
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("writer failed: %v", err)
+		}
+	case <-time.After(timeout):
+		t.Fatalf("writer timed out (possible starvation/deadlock)")
+	}
+}
+
+func TestCompaction_WriterLatencyBudget(t *testing.T) {
+	dir := t.TempDir()
+	opts := db.Options{Dir: dir}
+	d, err := db.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	// Populate slab 0 with enough pointer values that compaction takes multiple
+	// micro-batches to apply.
+	val := bytes.Repeat([]byte("V"), 300)
+	for i := 0; i < 2_000; i++ {
+		k := []byte{byte(i >> 8), byte(i)}
+		if err := d.Set(k, val); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	// Make slab 1 active so slab 0 is eligible for compaction.
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+
+	compactDone := make(chan error, 1)
+	go func() {
+		c := New(d)
+		compactDone <- c.CompactSlabWithOptions(0, Options{MicroBatchSize: 16})
+	}()
+
+	writeDone := make(chan error, 1)
+	go func() {
+		otherVal := bytes.Repeat([]byte("W"), 300)
+		const perOpMax = 1 * time.Second
+		for i := 0; i < 1_000; i++ {
+			start := time.Now()
+			k := []byte{0xFF, byte(i >> 8), byte(i)}
+			if err := d.Set(k, otherVal); err != nil {
+				writeDone <- err
+				return
+			}
+			if dur := time.Since(start); dur > perOpMax {
+				writeDone <- fmt.Errorf("write latency budget exceeded: dur=%s cap=%s", dur, perOpMax)
+				return
+			}
+		}
+		writeDone <- nil
+	}()
+
+	timeout := 15 * time.Second
 
 	select {
 	case err := <-compactDone:

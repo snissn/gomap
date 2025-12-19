@@ -387,16 +387,32 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Cached write-back layer: adaptive backlog-bytes backpressure, stable default backlog sizing, combined background flush commits.
 
 **Deferred / rolled into Phase 16:**
-- Missing “always-on” benchmark/race gates as automated, repeatable suites.
-- Explicit regression suite for “small `FlushThreshold` + large keycount” (avoid runaway RAM/stalls).
+- (Done in Phase 16) Always-on benchmark/race gates as automated, repeatable suites.
+- (Done in Phase 16) Explicit regression suites for “small `FlushThreshold` + large keycount” (avoid runaway RAM/stalls).
 - Long mixed-workload suite that demonstrates stable scans over time (no scan collapse).
-- Compaction “writer-latency budget” test under sustained writes.
+- (Done in Phase 16) Compaction “writer-latency budget” test under sustained writes.
 - Optional offline vacuum rewrite (`index.db.new` swap) + allocator locality improvements beyond LIFO freelist reuse.
 - Production tuning docs for cached-mode knobs.
 
 ## Phase 16: Concurrency Optimizations + Phase 15 Rollup
 
 **Goal:** Improve multi-core throughput and tail latency with bounded background work (prune/compaction scheduling) and reduced lock contention, without breaking SWMR semantics or snapshot correctness.
+
+### Phase 16 Near-Term RC (Prioritized Remaining Work)
+
+**Goal:** Before attempting higher-risk concurrency or allocator changes, add hard regression signals so future Phase 16 work can’t “silently” reintroduce stalls, RAM runaway, or scan collapse.
+
+- [x] **Guardrail suite for “big keycount + small flush threshold”** (prevents the 5M–10M key stall/RAM-runaway class)
+  - Suite: `cmd/unified_bench/main.go` (`-suite bigkeys_guard`)
+  - Guardrail flags:
+    - `-max-wall` (abort the run if wall time exceeds the cap)
+    - `-max-rss-mb` (Linux-only; reads `/proc/self/status` `VmRSS`)
+  - CI: `.github/workflows/unified-bench-suites.yml` runs `bigkeys_guard` with wall + RSS caps.
+- [x] **Compaction “writer-latency budget” test**
+  - Test: `TreeDB/compaction/compaction_test.go` (`TestCompaction_WriterLatencyBudget`)
+  - Gate: compaction and concurrent writers both complete under deadlines; per-op write latency stays under a generous cap.
+- [x] **Documentation for suite intent + CI usage**
+  - Updated: `cmd/unified_bench/README.md` (documents suites + guardrail flags).
 
 ### 16.0 Work Rules (Non‑Negotiables)
 - **SWMR stays SWMR:** backend commits remain serialized under `db.writeMu` unless a subphase explicitly changes the architecture *and* adds new proofs/tests.
@@ -441,22 +457,22 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - **Gate:** no panics, no data corruption, and no obvious latency blowups vs baseline on the same machine.
 
 ### 16.3 Phase 15 Rollup: Make “Long-Run Stability” a First-Class Gate
-- [ ] Update `cmd/unified_bench/README.md` to document all supported suites (`readme`, `churn`, `churnvacuum`, `churnmaint`) and what they validate.
-- [ ] Add a new `unified-bench` suite: `flushthrash` (or similar) to catch the prior “small flush threshold + large key count” failure mode.
+- [x] Update `cmd/unified_bench/README.md` to document all supported suites and what they validate.
+- [x] Add a new `unified-bench` suite: `flushthrash` (or similar) to catch the prior “small flush threshold + large key count” failure mode.
   - **Implementation notes:**
     - Add a `case` in the suite switch in `cmd/unified_bench/main.go`.
     - Configure TreeDB cached with a small flush threshold (e.g. `6_108_864` bytes) and a large key count (e.g. `5_000_000` or `10_000_000`).
     - Run at least `random_write` and `batch_write`; optionally run scans both “ingest” and “settled”.
     - Print TreeDB cache stats at the end (queue backlog bytes, max queued memtables, backpressure mode).
   - **Gate:** suite completes without stalls and prints a full result table for TreeDB.
-- [ ] Add a new `unified-bench` suite: `longmix` to validate scan stability over time.
+- [x] Add a new `unified-bench` suite: `longmix` to validate scan stability over time.
   - **Implementation notes:**
     - Phase 1: ingest (`random_write`) for N keys.
     - Phase 2: churn (overwrite + delete + read mix) for M operations (or seconds).
     - Phase 3: settle (`-settle-before-scans` behavior) and run `full_scan` + `prefix_scan`.
     - Emit a fragmentation report before and after settle (so regressions have a signature).
   - **Gate:** scan QPS does not collapse vs baseline on the same dataset, and fragmentation report looks sane.
-- [ ] Add a compaction “writer-latency budget” test (Phase 15 deferred gate).
+- [x] Add a compaction “writer-latency budget” test (Phase 15 deferred gate).
   - **Suggested location:** `TreeDB/compaction/compaction_test.go` or `TreeDB/compaction_backpressure_test.go`.
   - **Suggested approach:**
     - start compaction in a goroutine with small `MicroBatchSize` (e.g. 16–64),
@@ -464,76 +480,65 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
     - assert the test completes within a fixed deadline and latency stays under a generous budget (avoid flakiness; prefer timeouts over strict percentiles).
 
 ### 16.4 Background Pruning (Move Page Free Work Off the Commit Critical Path)
-- [ ] **Outcome:** reduce tail latency of commits by removing `Prune()` work from the `finalizeCommit` critical path.
-- [ ] **Files to touch:** `TreeDB/db/db.go`, `TreeDB/lifecycle/graveyard.go` (if adding quotas), plus new/updated tests under `TreeDB/db/*_test.go`.
-- [ ] **Implementation steps (backend DB):**
-  1. Add a background-worker lifecycle to `db.DB` (`closeCh`, `bgWg`, and a best-effort `pruneCh` signal channel).
-  2. Start `go db.pruneLoop()` in `db.Open()` (or behind a new option like `Options.BackgroundPrune`).
-  3. In `finalizeCommit`, remove the synchronous `db.Prune()` call; instead, signal `pruneCh` after state/meta are updated.
-  4. Implement `pruneLoop` as a bounded loop:
-     - waits on `pruneCh` or a `time.Ticker` (e.g. 250ms),
-     - calls `pruneSome(maxPages, maxDuration)` and returns.
-  5. `pruneSome` must not take `db.mu` for long; it should:
-     - read `currentSeq` from `db.state.Load().CommitSeq`,
-     - read `minPinnedSeq` from `db.registry.MinPinnedSeq()`,
-     - call `db.graveyard.Extract(...)` and free pages via `db.allocator.Free`.
-  6. If a quota is needed (recommended), extend `Graveyard` with an “extract up to N IDs” method so the worker can free incrementally without leaking pages.
-- [ ] **Observability:** add stats counters (e.g. `treedb.prune.runs`, `treedb.prune.pages_freed`, `treedb.prune.last_run_unix`, `treedb.prune.last_err`).
-- [ ] **Tests:**
-  - Add an integration test that:
-    - writes enough to generate retired pages,
-    - closes/reopens to ensure no corruption,
-    - asserts the background pruner makes progress (via the stats counters).
-  - Add a “no goroutine leaks” test: Open → Close should return quickly; the pruner goroutine must exit.
-- [ ] **Bench gates:** `cmd/unified_bench` smoke unchanged; multi-worker stress should show reduced p95/p99 commit latency (capture before/after).
+- [x] **Outcome:** reduce tail latency of commits by moving pruning off the commit critical path (bounded background pruner).
+- [x] **Implementation:** `TreeDB/db/prune.go` worker + wiring in `TreeDB/db/db.go` (started on Open, stopped on Close).
+- [x] **Observability:** `treedb.prune.*` stats (enabled, interval, max pages/duration, runs, pages freed, last error).
+- [x] **Tests:** `TreeDB/db/background_prune_test.go` (progress + stop-on-close).
+- [x] **Gates:** `go test -race ./...` + `./bin/unified-bench -suite longmix` (post-settle fragmentation report remains sane).
 
 ### 16.5 Background Compaction Scheduler (Optional, But Bounded)
-- [ ] **Outcome:** make compaction “always eventually happens” in production without operator scripts, while staying within a strict CPU/IO budget.
-- [ ] **Files to touch:** likely `TreeDB/db/db.go` (lifecycle), `TreeDB/compaction/planner.go` + `TreeDB/compaction/compactor.go`, and `TreeDB/public.go` (cached-mode wiring).
-- [ ] **Implementation steps:**
-  1. Add `Options.BackgroundCompaction` + knobs (interval, max slabs/run, dead ratio/min bytes, copy bps, microbatch size).
-  2. Start a single compaction goroutine in `db.Open()` (or in cached wrapper) that:
-     - periodically runs the planner,
-     - runs at most one compaction at a time,
-     - respects throttling and writer-assist (cached mode should call `cached.CompactionAssist`).
-  3. Ensure the scheduler backs off if the cached flush backlog is high (do not starve flush).
-- [ ] **Observability:** add stats counters (runs, slabs compacted, bytes copied, last error, last duration).
-- [ ] **Tests:** cached-mode test that runs sustained writes + background compaction and asserts:
-  - no deadlocks,
-  - backlog drains,
-  - at least one zombie slab is created and then unpinned safely.
-- [ ] **Bench gate:** churn suite completes without stalls; “settled scans” remain stable.
+- [x] **Outcome:** optional background slab compaction scheduler with strict bounds + stop-on-close safety.
+- [x] **Implementation:** `TreeDB/bg_compaction.go` + wiring in `TreeDB/public.go` via `Options.BackgroundCompactionInterval` and related knobs.
+- [x] **Observability:** `treedb.bg_compaction.*` stats (enabled/interval/runs/last error).
+- [x] **Tests:** `TreeDB/background_compaction_test.go` (runs + stop-on-close).
+- [x] **Gates:** `./bin/unified-bench -suite longmix` (churn + settle + scans).
 
 ### 16.6 Compaction Copy Pipeline Optimizations (Profile-Driven)
-- [ ] **Outcome:** reduce CPU + allocations during compaction copy (most wins come from fewer allocations and more sequential IO).
-- [ ] **Implementation steps:**
-  1. Replace per-record `ReadAt` + `make([]byte, ...)` with a sequential reader + reusable scratch buffers.
-  2. Keep limiter semantics identical (bytes/sec).
-  3. Only after the sequential rewrite, consider a bounded worker pool for decode/liveness checks if CPU-bound.
-- [ ] **Tests:** existing compaction idempotence + snapshot safety tests must continue to pass.
-- [ ] **Bench gates:** add (or run) a compaction-focused benchmark; compare wall time and allocations (use `-cpuprofile`).
+- [x] **Outcome:** reduce CPU + allocations during compaction copy (sequential buffered reads, fewer allocs, context-cancellable throttling).
+- [x] **Implementation:** `TreeDB/compaction/compactor.go` (sequential reads), `TreeDB/compaction/limiter.go` (ctx-cancellable Wait), `TreeDB/compaction/planner.go` (context entrypoints).
+- [x] **Gates:** existing compaction + snapshot-safety tests + `go test -race ./...`.
 
 ### 16.7 Cached Flush Concurrency (Only If Profiles Show It Matters)
-- [ ] **Outcome:** speed up very large combined flushes without increasing memory or breaking “newest wins” semantics.
-- [ ] **Implementation sketch:**
-  - Parallelize *per-memtable* iteration only (one goroutine per memtable, bounded by a worker pool).
-  - Each goroutine returns a `[]batch.Entry` slice; the caller concatenates in **oldest → newest** order.
-  - Keep the existing size caps (target bytes / max memtables) and do not affect writer-assist bounds.
-- [ ] **Tests:** add a correctness test that multiple memtables with overlapping keys flush correctly under parallel build.
-- [ ] **Bench gates:** `random_write` at small flush thresholds should not regress; mutex/block profiles should not worsen.
+- [x] **Outcome:** opt-in parallel build of combined flush batches without breaking “newest wins” semantics.
+- [x] **Implementation:** `TreeDB/caching/db.go` (`Options.FlushBuildConcurrency`).
+- [x] **Correctness test:** `TreeDB/caching/db_test.go` (`TestCachingDB_FlushAllParallelBuildPreservesNewestWins`).
+- [x] **Gates:** `./bin/unified-bench -suite flushthrash` (small flush threshold), plus `go test -race ./...`.
 
 ### 16.8 Offline Vacuum Rewrite + Allocator Locality (Phase 15 Deferred Items)
-- [ ] Implement an offline vacuum mode (`index.db.new` swap) with a crash-safe protocol:
-  - write new file, fsync, rename atomically, fsync directory, reopen.
-  - add tests that simulate “crash between steps” by stopping after each stage and verifying recovery.
-- [ ] Investigate allocator locality beyond LIFO freelist reuse:
+- [x] Implement an offline vacuum mode (`index.db.new` swap) with a crash-safe protocol:
+  - **Implementation:** `TreeDB/db/vacuum_offline.go` (`VacuumIndexOffline`)
+  - **Recovery:** `TreeDB/db/index_swap.go` (`recoverIndexSwap`), invoked on backend `Open` before paging.
+  - **Protocol artifacts:**
+    - `index.db.new` (new file being built)
+    - `index.db.new.ready` (durability marker after syncing new file)
+    - `index.db.bak` (backup of old index during the swap window)
+  - **Crash points tested:** after new sync, after ready marker, after rename old, after rename new.
+  - **Public API:** `treedb.VacuumIndexOffline(opts)` (offline; acquires exclusive lock on `opts.Dir`).
+  - **Gates:** `go test ./...`, `go test -race ./...`, `./bin/unified-bench -suite flushthrash`, `./bin/unified-bench -suite longmix`.
+- [ ] (Moved to Phase 17) Investigate allocator locality beyond LIFO freelist reuse:
   - extent/segment freelist bins, or
   - allocate-near-sibling hints during splits/rebalances.
-- [ ] Bench gate: after churn, locality and settled scans must improve vs baseline.
+  - **Gate:** churn→settle scan stability improves vs baseline and `FragmentationReport` span density improves (lower `span_ratio_ppm`).
 
 ### 16.9 Production Tuning Docs (Phase 15 Deferred Item)
-- [ ] Add a “Cached Mode Tuning” section to `TreeDB/README.md` describing:
-  - `FlushThreshold` and how it interacts with throughput vs scan behavior,
-  - adaptive backlog knobs (`SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`),
-  - writer-assist bounds and recommended defaults,
-  - when to use `-settle-before-scans` in benchmarking and what it means for production.
+- [x] Production tuning docs updated (`TreeDB/README.md`, `docs/TREEDB_TUNING.md`) to cover cached-mode knobs and operational guidance.
+
+## Phase 17 (Future Milestone): Allocator Locality + Deeper Concurrency
+
+**Goal:** Improve physical locality (scan stability under churn) and multi-core performance without sacrificing tail latency or memory bounds.
+
+### 17.1 Allocator Locality Beyond LIFO
+- [ ] Add a locality-aware free-page policy (choose one; implement and measure):
+  - **Extent/segment bins:** categorize freed pages by “region” (e.g. `pageID / regionSize`) and prefer allocating within the most-recently-written region(s), or
+  - **Allocate-near hints:** when splitting/merging nodes, bias allocation toward sibling/parent vicinity.
+- [ ] Add explicit locality metrics + tests:
+  - use `FragmentationReport` (`treedb.user.pages.span_ratio_ppm`) as a gate on churn tests,
+  - add a “churn + settle + scans + locality assert” integration test (timeboxed).
+
+### 17.2 Concurrency Experiments (Profile-Driven)
+- [ ] Audit lock contention via mutex/block profiles and runtime trace for representative workloads.
+- [ ] Propose and test one concurrency change at a time (examples):
+  - bounded worker pool in compaction copy decode path (only if CPU-bound after 16.6),
+  - scan prefetching / read-ahead if IO-bound and safe,
+  - further decoupling of maintenance work from writer lock (strict quotas + observability).
+- [ ] **Gates:** Phase 16 RC gate set + contention/profile comparison; no scan collapse; no tail-latency blowups.

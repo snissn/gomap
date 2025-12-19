@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"context"
 	"time"
 )
 
@@ -28,9 +29,17 @@ func newLimiter(bytesPerSec int64, burstBytes int64) *limiter {
 	}
 }
 
-func (l *limiter) Wait(n int) {
+func (l *limiter) Wait(ctx context.Context, n int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if l.rate <= 0 || n <= 0 {
-		return
+		return nil
 	}
 
 	now := time.Now()
@@ -45,13 +54,20 @@ func (l *limiter) Wait(n int) {
 	need := float64(n)
 	if l.tokens >= need {
 		l.tokens -= need
-		return
+		return nil
 	}
 
 	deficit := need - l.tokens
 	sleep := time.Duration(deficit / float64(l.rate) * float64(time.Second)) // ceil-ish not needed
 	if sleep > 0 {
-		time.Sleep(sleep)
+		timer := time.NewTimer(sleep)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	l.tokens = 0
+	return nil
 }

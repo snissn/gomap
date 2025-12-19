@@ -63,6 +63,11 @@ type Options struct {
 	// Writer flush assist limits when backpressure triggers.
 	WriterFlushMaxMemtables int
 	WriterFlushMaxDuration  time.Duration
+
+	// FlushBuildConcurrency controls how many goroutines may be used to build a
+	// combined flush batch from multiple immutable memtables. Values <= 1 disable
+	// parallelism.
+	FlushBuildConcurrency int
 }
 
 type DB struct {
@@ -70,6 +75,10 @@ type DB struct {
 	flushMu sync.Mutex
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
+
+	checkpointMu   sync.Mutex
+	checkpointCond *sync.Cond
+	checkpointing  atomic.Bool
 
 	// Level 0 (Memory)
 	mutable           *memtable.Memtable
@@ -97,6 +106,7 @@ type DB struct {
 	maxBacklogBytes         int64
 	writerFlushMaxMemtables int
 	writerFlushMaxDuration  time.Duration
+	flushBuildConcurrency   int
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
@@ -182,6 +192,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
 	}
+	if opts.FlushBuildConcurrency <= 0 {
+		opts.FlushBuildConcurrency = 1
+	}
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
@@ -199,11 +212,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxBacklogBytes:         opts.MaxBacklogBytes,
 		writerFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:  opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:   opts.FlushBuildConcurrency,
 		mutable:                 memtable.New(),
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial WAL
 	if err := db.rotateWALLocked(); err != nil {
@@ -278,6 +293,93 @@ func (db *DB) thresholdsLocked() (slowdownBytes, stopBytes, resumeBytes int64) {
 		maxBacklogBytes:        db.maxBacklogBytes,
 		stopResumeFraction:     stopResumeFraction,
 	})
+}
+
+func (db *DB) waitForCheckpoint() {
+	if !db.checkpointing.Load() {
+		return
+	}
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.checkpointMu.Unlock()
+}
+
+// Checkpoint forces a durable backend boundary and trims the WAL so long-running
+// cached-mode runs do not accumulate unbounded `wal/` growth.
+//
+// It blocks writers while it:
+//   - rotates the current mutable memtable (if non-empty),
+//   - rotates to a fresh WAL segment,
+//   - flushes all queued memtables with backend sync,
+//   - forces a backend sync boundary (even if the queue is empty),
+//   - removes all older WAL segments (keeping only the currently-open one).
+func (db *DB) Checkpoint() error {
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+
+	defer func() {
+		db.checkpointMu.Lock()
+		db.checkpointing.Store(false)
+		db.checkpointCond.Broadcast()
+		db.checkpointMu.Unlock()
+	}()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	// Rotate mutable into the flush queue and ensure future writes land in a fresh
+	// WAL segment (so all older segments can be trimmed after the sync boundary).
+	db.mu.Lock()
+	if db.mutable.Len() > 0 {
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	if err := db.rotateWALLocked(); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	walDir := db.dir
+	db.mu.Unlock()
+
+	// Flush all queued memtables with backend sync.
+	for db.flushCombinedLocked(true) {
+	}
+
+	segments, hasNonEmptySegments := listNonEmptyWALSegments(walDir)
+	if hasNonEmptySegments {
+		backendBatch := db.backend.NewBatch()
+		err := backendBatch.WriteSync()
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	db.mu.RLock()
+	currentWAL := db.walPath
+	db.mu.RUnlock()
+
+	for _, path := range segments {
+		if path == currentWAL {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) waitForStop() {
@@ -425,6 +527,7 @@ func (db *DB) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.set(key, value, false)
 }
@@ -436,6 +539,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.set(key, value, true)
 }
@@ -480,6 +584,7 @@ func (db *DB) Delete(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.delete(key, false)
 }
@@ -488,6 +593,7 @@ func (db *DB) DeleteSync(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.delete(key, true)
 }
@@ -682,10 +788,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		backendBatch := db.backend.NewBatch()
 
 		if totalLen > 2000 {
-			ops := make([]batch.Entry, 0, totalLen)
-			for _, unit := range units {
-				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-				iter.Seek(nil)                         // Start
+			// Preserve "newest wins" semantics by concatenating per-memtable ops
+			// in queue order (oldest -> newest). Within a single memtable there are
+			// no duplicate keys.
+			collectOps := func(mem *memtable.Memtable, estLen int) ([]batch.Entry, error) {
+				ops := make([]batch.Entry, 0, estLen)
+				iter := mem.NewIterator(nil, nil)
+				iter.Seek(nil)
 				for iter.Valid() {
 					if iter.IsDeleted() {
 						ops = append(ops, batch.Entry{
@@ -701,13 +810,79 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					}
 					iter.Next()
 				}
-				_ = iter.Close()
+				err := iter.Close()
+				if err == nil {
+					err = iter.Error()
+				}
+				return ops, err
 			}
 
-			if err := backendBatch.SetOps(ops); err != nil {
-				fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
-				_ = backendBatch.Close()
-				return false
+			buildConcurrency := db.flushBuildConcurrency
+			if buildConcurrency <= 1 || len(units) <= 1 {
+				ops := make([]batch.Entry, 0, totalLen)
+				for _, unit := range units {
+					memOps, err := collectOps(unit.mem, unit.memLen)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+						_ = backendBatch.Close()
+						return false
+					}
+					ops = append(ops, memOps...)
+				}
+
+				if err := backendBatch.SetOps(ops); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					_ = backendBatch.Close()
+					return false
+				}
+			} else {
+				sem := make(chan struct{}, buildConcurrency)
+				unitOps := make([][]batch.Entry, len(units))
+				done := make(chan struct{}, len(units))
+				errCh := make(chan error, 1)
+
+				for i := range units {
+					i := i
+					unit := units[i]
+					go func() {
+						sem <- struct{}{}
+						defer func() { <-sem }()
+
+						ops, err := collectOps(unit.mem, unit.memLen)
+						if err != nil {
+							select {
+							case errCh <- err:
+							default:
+							}
+							done <- struct{}{}
+							return
+						}
+						unitOps[i] = ops
+						done <- struct{}{}
+					}()
+				}
+				for range units {
+					<-done
+				}
+
+				select {
+				case err := <-errCh:
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+					_ = backendBatch.Close()
+					return false
+				default:
+				}
+
+				ops := make([]batch.Entry, 0, totalLen)
+				for i := range unitOps {
+					ops = append(ops, unitOps[i]...)
+				}
+
+				if err := backendBatch.SetOps(ops); err != nil {
+					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					_ = backendBatch.Close()
+					return false
+				}
 			}
 		} else {
 			for _, unit := range units {
@@ -1539,6 +1714,7 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.db.waitForCheckpoint()
 	b.db.waitForStop()
 
 	if b.backend != nil {
