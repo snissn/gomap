@@ -1,6 +1,8 @@
 package treedb
 
 import (
+	"time"
+
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
@@ -99,6 +101,21 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	out := &DB{mode: ModeCached, cached: cached, backend: backend}
+
+	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
+	// bounded for long-running workloads, aligning operational expectations with
+	// typical LSM engines (log segments do not grow without bound).
+	autoInterval := opts.BackgroundCheckpointInterval
+	if autoInterval == 0 {
+		autoInterval = 30 * time.Second
+	}
+	maxWALBytes := opts.MaxWALBytes
+	if maxWALBytes == 0 {
+		maxWALBytes = 2 << 30 // 2GiB
+	}
+	if autoInterval > 0 {
+		cached.StartAutoCheckpoint(autoInterval, maxWALBytes)
+	}
 
 	// Background compaction is opt-in (interval > 0).
 	if opts.BackgroundCompactionInterval > 0 {

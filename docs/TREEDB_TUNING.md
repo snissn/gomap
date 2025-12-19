@@ -11,6 +11,9 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
   - backend mode (`treedb.OpenBackend`): defaults to `10,000`
 - Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
+- Cached-mode auto checkpointing:
+  - `BackgroundCheckpointInterval`: defaults to 30s
+  - `MaxWALBytes`: defaults to 2 GiB
 
 ## Options
 
@@ -79,6 +82,27 @@ optionally build the `SetOps` batch in parallel:
 - `<=1` disables parallelism (default).
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
+
+### Cached-mode auto checkpointing (cached wrapper)
+
+TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the default
+`Set`/`Batch.Write` path does not force an `fsync` per operation.
+
+To keep `wal/` from growing without bound in long-running workloads, TreeDB enables a
+periodic cached-mode checkpoint by default:
+
+- `Options.BackgroundCheckpointInterval` (default 30s): how often to consider checkpointing
+- `Options.MaxWALBytes` (default 2 GiB): size trigger for checkpointing
+
+A checkpoint:
+- blocks writers briefly,
+- rotates to a fresh WAL segment,
+- flushes queued memtables to the backend with `WriteSync`,
+- trims old WAL segments.
+
+Tuning/disable:
+- Set `BackgroundCheckpointInterval <= 0` to disable periodic checkpoints.
+- Set `MaxWALBytes < 0` to disable the size trigger (interval-only).
 
 ### `Options.KeepRecent` (backend engine)
 

@@ -84,6 +84,7 @@ func main() {
 
 - `Options.FlushThreshold` + `Options.MaxQueuedMemtables` (throughput vs. backlog/memory)
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
+- Cached-mode auto checkpointing: `BackgroundCheckpointInterval`, `MaxWALBytes`
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional background slab compaction: `BackgroundCompactionInterval` + related knobs
 - Optional flush build parallelism: `FlushBuildConcurrency`

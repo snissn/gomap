@@ -145,6 +145,16 @@ type Options struct {
 	// latency for very large slabs but risks starting up with committed pointers
 	// that decode to checksum errors after a crash.
 	DisableSlabTailRepairOnOpen bool
+
+	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
+	// mode when > 0. A checkpoint creates a backend sync boundary and trims
+	// cached-mode WAL segments to keep `wal/` growth bounded.
+	BackgroundCheckpointInterval time.Duration
+	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
+	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
+	// size trigger). This is an operational safety cap; it does not make each
+	// individual write durable (use *Sync APIs for that).
+	MaxWALBytes int64
 }
 
 type Snapshot struct {
