@@ -387,10 +387,10 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [x] Cached write-back layer: adaptive backlog-bytes backpressure, stable default backlog sizing, combined background flush commits.
 
 **Deferred / rolled into Phase 16:**
-- Missing “always-on” benchmark/race gates as automated, repeatable suites.
-- Explicit regression suite for “small `FlushThreshold` + large keycount” (avoid runaway RAM/stalls).
+- (Done in Phase 16) Always-on benchmark/race gates as automated, repeatable suites.
+- (Done in Phase 16) Explicit regression suites for “small `FlushThreshold` + large keycount” (avoid runaway RAM/stalls).
 - Long mixed-workload suite that demonstrates stable scans over time (no scan collapse).
-- Compaction “writer-latency budget” test under sustained writes.
+- (Done in Phase 16) Compaction “writer-latency budget” test under sustained writes.
 - Optional offline vacuum rewrite (`index.db.new` swap) + allocator locality improvements beyond LIFO freelist reuse.
 - Production tuning docs for cached-mode knobs.
 
@@ -402,24 +402,17 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 **Goal:** Before attempting higher-risk concurrency or allocator changes, add hard regression signals so future Phase 16 work can’t “silently” reintroduce stalls, RAM runaway, or scan collapse.
 
-1. **Guardrail suites for “big keycount + small flush threshold”** (prevents the 5M–10M key stall/RAM-runaway class)
-   - Add a `cmd/unified_bench` suite (suggest name: `bigkeys_guard`) that is explicitly designed to fail fast if TreeDB stops applying backpressure or grows memory/backlog unbounded.
-   - **Implementation requirements (to make it CI-safe and deterministic):**
-     - Add optional `unified-bench` flags:
-       - `-max-wall` (e.g. `10m`): abort and report if exceeded.
-       - `-max-rss-mb` (Linux-only is acceptable for CI; read `/proc/self/status` `VmRSS`): abort and report if exceeded.
-     - Suite setup:
-       - cached TreeDB with small `-treedb-flush-threshold` (e.g. `6_108_864` bytes),
-       - keycount sized for CI runtime (suggest `1_000_000`–`2_000_000`; keep it under `-max-wall`),
-       - include at least `random_write` and `batch_write`.
-     - Suite must print (and CI must retain) cache stats at end (queue backlog bytes, queue len, backpressure mode).
-   - **Gate (CI):** suite completes within wall cap, does not exceed RSS cap, prints a full TreeDB table.
-2. **Compaction “writer-latency budget” test**
-   - Add a deterministic test that runs slab compaction in the background while foreground writes continue.
-   - **Gate:** test completes under a deadline (timeboxed), no deadlocks, and foreground writes do not stall indefinitely.
-3. **Documentation for suite intent + CI usage**
-   - Update `cmd/unified_bench/README.md` to describe all suites and which failure modes they are intended to catch.
-   - Ensure CI workflows run the “RC gate set” and keep runtime bounded.
+- [x] **Guardrail suite for “big keycount + small flush threshold”** (prevents the 5M–10M key stall/RAM-runaway class)
+  - Suite: `cmd/unified_bench/main.go` (`-suite bigkeys_guard`)
+  - Guardrail flags:
+    - `-max-wall` (abort the run if wall time exceeds the cap)
+    - `-max-rss-mb` (Linux-only; reads `/proc/self/status` `VmRSS`)
+  - CI: `.github/workflows/unified-bench-suites.yml` runs `bigkeys_guard` with wall + RSS caps.
+- [x] **Compaction “writer-latency budget” test**
+  - Test: `TreeDB/compaction/compaction_test.go` (`TestCompaction_WriterLatencyBudget`)
+  - Gate: compaction and concurrent writers both complete under deadlines; per-op write latency stays under a generous cap.
+- [x] **Documentation for suite intent + CI usage**
+  - Updated: `cmd/unified_bench/README.md` (documents suites + guardrail flags).
 
 ### 16.0 Work Rules (Non‑Negotiables)
 - **SWMR stays SWMR:** backend commits remain serialized under `db.writeMu` unless a subphase explicitly changes the architecture *and* adds new proofs/tests.
@@ -464,7 +457,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - **Gate:** no panics, no data corruption, and no obvious latency blowups vs baseline on the same machine.
 
 ### 16.3 Phase 15 Rollup: Make “Long-Run Stability” a First-Class Gate
-- [ ] Update `cmd/unified_bench/README.md` to document all supported suites and what they validate.
+- [x] Update `cmd/unified_bench/README.md` to document all supported suites and what they validate.
 - [x] Add a new `unified-bench` suite: `flushthrash` (or similar) to catch the prior “small flush threshold + large key count” failure mode.
   - **Implementation notes:**
     - Add a `case` in the suite switch in `cmd/unified_bench/main.go`.
@@ -479,7 +472,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
     - Phase 3: settle (`-settle-before-scans` behavior) and run `full_scan` + `prefix_scan`.
     - Emit a fragmentation report before and after settle (so regressions have a signature).
   - **Gate:** scan QPS does not collapse vs baseline on the same dataset, and fragmentation report looks sane.
-- [ ] Add a compaction “writer-latency budget” test (Phase 15 deferred gate).
+- [x] Add a compaction “writer-latency budget” test (Phase 15 deferred gate).
   - **Suggested location:** `TreeDB/compaction/compaction_test.go` or `TreeDB/compaction_backpressure_test.go`.
   - **Suggested approach:**
     - start compaction in a goroutine with small `MicroBatchSize` (e.g. 16–64),
