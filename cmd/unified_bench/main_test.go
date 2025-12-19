@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
@@ -221,6 +222,29 @@ func TestRunLongMixSuite_Smoke(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("runLongMixSuite: %v", err)
+	}
+	if out == "" {
+		t.Fatalf("expected non-empty output")
+	}
+}
+
+func TestRunBigKeysGuardSuite_Smoke(t *testing.T) {
+	out, err := runBigKeysGuardSuite(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "all",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		MaxWall: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("runBigKeysGuardSuite: %v", err)
 	}
 	if out == "" {
 		t.Fatalf("expected non-empty output")
