@@ -52,6 +52,9 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
+- `-checkpoint-between-tests` TreeDB: force a durable checkpoint between tests (flush+sync+trim WAL; cached mode only)
+- `-checkpoint-every-ops` TreeDB: force a durable checkpoint every N ops during write-heavy tests (cached mode only)
+- `-checkpoint-every-bytes` TreeDB: force a durable checkpoint every N approx bytes during write-heavy tests (cached mode only)
 - `-suite` named suite:
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)

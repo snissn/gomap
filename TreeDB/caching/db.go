@@ -76,6 +76,10 @@ type DB struct {
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
+	checkpointMu   sync.Mutex
+	checkpointCond *sync.Cond
+	checkpointing  atomic.Bool
+
 	// Level 0 (Memory)
 	mutable           *memtable.Memtable
 	queue             []*memtable.Memtable
@@ -214,6 +218,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCh:                 make(chan struct{}, 1),
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial WAL
 	if err := db.rotateWALLocked(); err != nil {
@@ -288,6 +293,93 @@ func (db *DB) thresholdsLocked() (slowdownBytes, stopBytes, resumeBytes int64) {
 		maxBacklogBytes:        db.maxBacklogBytes,
 		stopResumeFraction:     stopResumeFraction,
 	})
+}
+
+func (db *DB) waitForCheckpoint() {
+	if !db.checkpointing.Load() {
+		return
+	}
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.checkpointMu.Unlock()
+}
+
+// Checkpoint forces a durable backend boundary and trims the WAL so long-running
+// cached-mode runs do not accumulate unbounded `wal/` growth.
+//
+// It blocks writers while it:
+//   - rotates the current mutable memtable (if non-empty),
+//   - rotates to a fresh WAL segment,
+//   - flushes all queued memtables with backend sync,
+//   - forces a backend sync boundary (even if the queue is empty),
+//   - removes all older WAL segments (keeping only the currently-open one).
+func (db *DB) Checkpoint() error {
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+
+	defer func() {
+		db.checkpointMu.Lock()
+		db.checkpointing.Store(false)
+		db.checkpointCond.Broadcast()
+		db.checkpointMu.Unlock()
+	}()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	// Rotate mutable into the flush queue and ensure future writes land in a fresh
+	// WAL segment (so all older segments can be trimmed after the sync boundary).
+	db.mu.Lock()
+	if db.mutable.Len() > 0 {
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	if err := db.rotateWALLocked(); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	walDir := db.dir
+	db.mu.Unlock()
+
+	// Flush all queued memtables with backend sync.
+	for db.flushCombinedLocked(true) {
+	}
+
+	segments, hasNonEmptySegments := listNonEmptyWALSegments(walDir)
+	if hasNonEmptySegments {
+		backendBatch := db.backend.NewBatch()
+		err := backendBatch.WriteSync()
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	db.mu.RLock()
+	currentWAL := db.walPath
+	db.mu.RUnlock()
+
+	for _, path := range segments {
+		if path == currentWAL {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+		}
+	}
+
+	return nil
 }
 
 func (db *DB) waitForStop() {
@@ -435,6 +527,7 @@ func (db *DB) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.set(key, value, false)
 }
@@ -446,6 +539,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.set(key, value, true)
 }
@@ -490,6 +584,7 @@ func (db *DB) Delete(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.delete(key, false)
 }
@@ -498,6 +593,7 @@ func (db *DB) DeleteSync(key []byte) error {
 	if key == nil {
 		return ErrKeyEmpty
 	}
+	db.waitForCheckpoint()
 	db.waitForStop()
 	return db.delete(key, true)
 }
@@ -1618,6 +1714,7 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	b.db.waitForCheckpoint()
 	b.db.waitForStop()
 
 	if b.backend != nil {
