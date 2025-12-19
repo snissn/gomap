@@ -116,6 +116,9 @@ type DB struct {
 	closeCh chan struct{}
 	flushCh chan struct{}
 	wg      sync.WaitGroup
+
+	autoCheckpointOnceCh chan struct{}
+	autoCheckpointOn     atomic.Bool
 }
 
 type keyRange struct {
@@ -216,6 +219,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutable:                 memtable.New(),
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
+		autoCheckpointOnceCh:    make(chan struct{}, 1),
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -236,6 +240,94 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	return db, nil
+}
+
+// StartAutoCheckpoint enables a background loop that periodically forces a
+// durable boundary and trims cached-mode WAL segments.
+//
+// interval must be > 0. maxWALBytes is a safety cap: if > 0, the loop will also
+// checkpoint promptly when the non-empty WAL segment bytes exceed this cap. A
+// negative maxWALBytes disables the size trigger (interval-only).
+//
+// This does not make each individual write durable; it bounds the window of
+// unsynced writes for long-running workloads.
+func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64) {
+	if db == nil || interval <= 0 {
+		return
+	}
+	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
+		return
+	}
+	db.wg.Add(1)
+	go db.autoCheckpointLoop(interval, maxWALBytes)
+}
+
+// TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
+func (db *DB) TriggerAutoCheckpoint() {
+	if db == nil || !db.autoCheckpointOn.Load() {
+		return
+	}
+	select {
+	case db.autoCheckpointOnceCh <- struct{}{}:
+	default:
+	}
+}
+
+func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64) {
+	defer db.wg.Done()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-db.closeCh:
+			return
+		case <-ticker.C:
+			db.maybeAutoCheckpoint(maxWALBytes, false)
+		case <-db.autoCheckpointOnceCh:
+			db.maybeAutoCheckpoint(maxWALBytes, true)
+		}
+	}
+}
+
+func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, force bool) {
+	walDir := db.dir
+
+	db.mu.RLock()
+	currentWALPath := db.walPath
+	currentWALLogicalBytes := int64(0)
+	if db.wal != nil {
+		currentWALLogicalBytes = db.wal.Size()
+	}
+	db.mu.RUnlock()
+
+	segments, nonEmptyBytes := listNonEmptyWALSegments(walDir)
+	if nonEmptyBytes <= 0 && currentWALLogicalBytes <= 0 {
+		return
+	}
+
+	// Prefer a logical byte count that includes the current WAL's buffered bytes
+	// (which may not yet be reflected in file size). Exclude the current WAL's
+	// on-disk size from nonEmptyBytes to avoid double counting.
+	effectiveBytes := currentWALLogicalBytes
+	for _, seg := range segments {
+		if seg.path == currentWALPath {
+			continue
+		}
+		effectiveBytes += seg.size
+	}
+
+	if effectiveBytes <= 0 {
+		return
+	}
+
+	if !force && maxWALBytes > 0 && effectiveBytes < maxWALBytes {
+		return
+	}
+	// Best-effort: failures here should be surfaced via normal write paths or
+	// explicit maintenance calls. Avoid printing from background maintenance.
+	_ = db.Checkpoint()
 }
 
 func (db *DB) initBackendRange() error {
@@ -353,8 +445,8 @@ func (db *DB) Checkpoint() error {
 	for db.flushCombinedLocked(true) {
 	}
 
-	segments, hasNonEmptySegments := listNonEmptyWALSegments(walDir)
-	if hasNonEmptySegments {
+	segments, nonEmptyBytes := listNonEmptyWALSegments(walDir)
+	if nonEmptyBytes > 0 {
 		backendBatch := db.backend.NewBatch()
 		err := backendBatch.WriteSync()
 		cerr := backendBatch.Close()
@@ -370,7 +462,8 @@ func (db *DB) Checkpoint() error {
 	currentWAL := db.walPath
 	db.mu.RUnlock()
 
-	for _, path := range segments {
+	for _, seg := range segments {
+		path := seg.path
 		if path == currentWAL {
 			continue
 		}
@@ -498,8 +591,8 @@ func (db *DB) Close() error {
 	walDir := db.dir
 	db.mu.Unlock()
 
-	segments, hasNonEmptySegments := listNonEmptyWALSegments(walDir)
-	if hasNonEmptySegments {
+	segments, nonEmptyBytes := listNonEmptyWALSegments(walDir)
+	if nonEmptyBytes > 0 {
 		backendBatch := db.backend.NewBatch()
 		db.flushMu.Lock()
 		err := backendBatch.WriteSync()
@@ -512,7 +605,8 @@ func (db *DB) Close() error {
 		}
 	}
 
-	for _, path := range segments {
+	for _, seg := range segments {
+		path := seg.path
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
 		}
@@ -1803,10 +1897,15 @@ func (b *Batch) writeRegular(sync bool) error {
 	return b.Close()
 }
 
-func listNonEmptyWALSegments(walDir string) (paths []string, anyNonEmpty bool) {
+type walSegmentInfo struct {
+	path string
+	size int64
+}
+
+func listNonEmptyWALSegments(walDir string) (segments []walSegmentInfo, nonEmptyBytes int64) {
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
-		return nil, false
+		return nil, 0
 	}
 
 	for _, entry := range entries {
@@ -1822,12 +1921,12 @@ func listNonEmptyWALSegments(walDir string) (paths []string, anyNonEmpty bool) {
 			continue
 		}
 		path := filepath.Join(walDir, name)
-		paths = append(paths, path)
+		segments = append(segments, walSegmentInfo{path: path, size: info.Size()})
 		if info.Size() > 0 {
-			anyNonEmpty = true
+			nonEmptyBytes += info.Size()
 		}
 	}
-	return paths, anyNonEmpty
+	return segments, nonEmptyBytes
 }
 
 func (b *Batch) writeBypass(sync bool) error {
