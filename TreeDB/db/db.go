@@ -152,9 +152,20 @@ type Options struct {
 	DisableSlabTailRepairOnOpen bool
 
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
-	// mode when > 0. A checkpoint creates a backend sync boundary and trims
+	// mode. A checkpoint creates a backend sync boundary and trims
 	// cached-mode WAL segments to keep `wal/` growth bounded.
+	//
+	// Semantics:
+	// - `0` uses a default.
+	// - `<0` disables auto-checkpointing entirely (cached mode).
 	BackgroundCheckpointInterval time.Duration
+	// BackgroundCheckpointIdleDuration triggers an opportunistic checkpoint after
+	// a period of write-idleness in cached mode.
+	//
+	// Semantics:
+	// - `0` uses a default.
+	// - `<0` disables the idle trigger.
+	BackgroundCheckpointIdleDuration time.Duration
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each

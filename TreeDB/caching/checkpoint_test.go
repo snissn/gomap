@@ -77,7 +77,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	db.StartAutoCheckpoint(5*time.Millisecond, 1<<20 /* 1MiB */)
+	db.StartAutoCheckpoint(5*time.Millisecond, 1<<20 /* 1MiB */, 0)
 
 	val := bytes.Repeat([]byte("v"), 512<<10) // 512KiB
 	for i := 0; i < 40; i++ {

@@ -117,8 +117,9 @@ type DB struct {
 	flushCh chan struct{}
 	wg      sync.WaitGroup
 
-	autoCheckpointOnceCh chan struct{}
-	autoCheckpointOn     atomic.Bool
+	autoCheckpointOnceCh  chan struct{}
+	autoCheckpointWriteCh chan struct{}
+	autoCheckpointOn      atomic.Bool
 }
 
 type keyRange struct {
@@ -220,6 +221,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
+		autoCheckpointWriteCh:   make(chan struct{}, 1),
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -243,15 +245,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
-// durable boundary and trims cached-mode WAL segments.
+// durable boundary and trims cached-mode WAL segments. When idleInterval > 0,
+// it also triggers an opportunistic checkpoint after a period of write-idleness.
 //
 // interval must be > 0. maxWALBytes is a safety cap: if > 0, the loop will also
-// checkpoint promptly when the non-empty WAL segment bytes exceed this cap. A
-// negative maxWALBytes disables the size trigger (interval-only).
+// attempt to checkpoint when the effective WAL bytes exceed this cap (in
+// addition to the periodic/idle triggers). maxWALBytes <= 0 disables the size
+// trigger.
 //
 // This does not make each individual write durable; it bounds the window of
 // unsynced writes for long-running workloads.
-func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64) {
+func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil || interval <= 0 {
 		return
 	}
@@ -259,7 +263,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64) {
 		return
 	}
 	db.wg.Add(1)
-	go db.autoCheckpointLoop(interval, maxWALBytes)
+	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }
 
 // TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
@@ -273,25 +277,93 @@ func (db *DB) TriggerAutoCheckpoint() {
 	}
 }
 
-func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64) {
+func (db *DB) noteWrite() {
+	if db == nil || !db.autoCheckpointOn.Load() {
+		return
+	}
+	select {
+	case db.autoCheckpointWriteCh <- struct{}{}:
+	default:
+	}
+}
+
+type autoCheckpointMode uint8
+
+const (
+	autoCheckpointModeInterval autoCheckpointMode = iota
+	autoCheckpointModeIdle
+	autoCheckpointModeSize
+	autoCheckpointModeForce
+)
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if t == nil {
+		return
+	}
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	defer db.wg.Done()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	var sizeTicker *time.Ticker
+	sizeCh := (<-chan time.Time)(nil)
+	if maxWALBytes > 0 && interval > time.Second {
+		sizeTicker = time.NewTicker(time.Second)
+		sizeCh = sizeTicker.C
+		defer sizeTicker.Stop()
+	}
+
+	var idleTimer *time.Timer
+	idleCh := (<-chan time.Time)(nil)
+	if idleInterval > 0 {
+		idleTimer = time.NewTimer(idleInterval)
+		if !idleTimer.Stop() {
+			<-idleTimer.C
+		}
+		idleCh = idleTimer.C
+	}
+
+	hadWriteSinceSizeCheck := false
 
 	for {
 		select {
 		case <-db.closeCh:
 			return
 		case <-ticker.C:
-			db.maybeAutoCheckpoint(maxWALBytes, false)
+			hadWriteSinceSizeCheck = false
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
+		case <-sizeCh:
+			if !hadWriteSinceSizeCheck {
+				continue
+			}
+			hadWriteSinceSizeCheck = false
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
 		case <-db.autoCheckpointOnceCh:
-			db.maybeAutoCheckpoint(maxWALBytes, true)
+			hadWriteSinceSizeCheck = false
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
+		case <-db.autoCheckpointWriteCh:
+			hadWriteSinceSizeCheck = true
+			if idleTimer != nil {
+				resetTimer(idleTimer, idleInterval)
+			}
+		case <-idleCh:
+			hadWriteSinceSizeCheck = false
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeIdle)
 		}
 	}
 }
 
-func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, force bool) {
+func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	walDir := db.dir
 
 	db.mu.RLock()
@@ -322,7 +394,15 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, force bool) {
 		return
 	}
 
-	if !force && maxWALBytes > 0 && effectiveBytes < maxWALBytes {
+	switch mode {
+	case autoCheckpointModeInterval, autoCheckpointModeIdle, autoCheckpointModeForce:
+		// proceed
+	case autoCheckpointModeSize:
+		if maxWALBytes <= 0 || effectiveBytes < maxWALBytes {
+			return
+		}
+	default:
+		// Unknown mode: be conservative and do nothing.
 		return
 	}
 	// Best-effort: failures here should be surfaced via normal write paths or
@@ -670,6 +750,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	}
 	db.mu.Unlock()
 
+	db.noteWrite()
 	db.maybeAssistFlush()
 	return nil
 }
@@ -724,6 +805,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	}
 	db.mu.Unlock()
 
+	db.noteWrite()
 	db.maybeAssistFlush()
 	return nil
 }
@@ -1833,6 +1915,9 @@ func (b *Batch) write(sync bool) error {
 		}
 		b.backend = nil
 		b.closed = true
+		if err == nil && b.size > 0 {
+			b.db.noteWrite()
+		}
 		return err
 	}
 
@@ -1892,6 +1977,9 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	b.db.mu.Unlock()
 
+	if b.size > 0 {
+		b.db.noteWrite()
+	}
 	b.db.maybeAssistFlush()
 
 	return b.Close()
@@ -2002,6 +2090,9 @@ func (b *Batch) writeBypass(sync bool) error {
 	}
 	b.db.mu.Unlock()
 
+	if b.size > 0 {
+		b.db.noteWrite()
+	}
 	return b.Close()
 }
 
