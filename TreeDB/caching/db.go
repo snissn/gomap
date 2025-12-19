@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,6 +95,10 @@ type DB struct {
 	wal     *wal.Writer
 	walPath string
 	walSeq  int // Sequence number for WAL files
+	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
+	// segment bytes. It is updated on WAL rotation and segment deletion.
+	walClosedBytes int64
+	walClosedSizes map[string]int64
 
 	// Level 1 (Disk)
 	backend BackendDB
@@ -117,8 +123,17 @@ type DB struct {
 	flushCh chan struct{}
 	wg      sync.WaitGroup
 
-	autoCheckpointOnceCh chan struct{}
-	autoCheckpointOn     atomic.Bool
+	autoCheckpointOnceCh  chan struct{}
+	autoCheckpointWriteCh chan struct{}
+	autoCheckpointOn      atomic.Bool
+
+	autoCheckpointCount          atomic.Uint64
+	autoCheckpointLastReason     atomic.Uint32
+	autoCheckpointLastUnixNano   atomic.Int64
+	autoCheckpointLastDurNanos   atomic.Int64
+	autoCheckpointLastWALBefore  atomic.Int64
+	autoCheckpointLastWALAfter   atomic.Int64
+	autoCheckpointLastWALTrimmed atomic.Int64
 }
 
 type keyRange struct {
@@ -204,6 +219,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		return nil, err
 	}
+	segments, _ := listNonEmptyWALSegments(walDir)
+	maxWALSeq := 0
+	for _, seg := range segments {
+		seq, ok := parseWALSeq(filepath.Base(seg.path))
+		if ok && seq > maxWALSeq {
+			maxWALSeq = seq
+		}
+	}
 
 	db := &DB{
 		dir:                     walDir,
@@ -220,6 +243,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
+		autoCheckpointWriteCh:   make(chan struct{}, 1),
+		walSeq:                  maxWALSeq,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -227,6 +252,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Open initial WAL
 	if err := db.rotateWALLocked(); err != nil {
 		return nil, err
+	}
+	if len(segments) > 0 {
+		db.mu.Lock()
+		if db.walClosedSizes == nil {
+			db.walClosedSizes = make(map[string]int64, len(segments))
+		}
+		for _, seg := range segments {
+			if seg.path == db.walPath {
+				continue
+			}
+			db.walClosedSizes[seg.path] = seg.size
+			db.walClosedBytes += seg.size
+		}
+		db.mu.Unlock()
 	}
 
 	// Start background flusher
@@ -243,23 +282,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
-// durable boundary and trims cached-mode WAL segments.
+// durable boundary and trims cached-mode WAL segments. When idleInterval > 0,
+// it also triggers an opportunistic checkpoint after a period of write-idleness.
 //
-// interval must be > 0. maxWALBytes is a safety cap: if > 0, the loop will also
-// checkpoint promptly when the non-empty WAL segment bytes exceed this cap. A
-// negative maxWALBytes disables the size trigger (interval-only).
+// interval > 0 enables periodic checkpoints. maxWALBytes is a safety cap: if > 0,
+// the loop will attempt to checkpoint when the effective WAL bytes exceed this
+// cap. maxWALBytes <= 0 disables the size trigger.
 //
 // This does not make each individual write durable; it bounds the window of
 // unsynced writes for long-running workloads.
-func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64) {
-	if db == nil || interval <= 0 {
+func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
+	if db == nil {
+		return
+	}
+	if interval <= 0 && idleInterval <= 0 && maxWALBytes <= 0 {
 		return
 	}
 	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
 		return
 	}
 	db.wg.Add(1)
-	go db.autoCheckpointLoop(interval, maxWALBytes)
+	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }
 
 // TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
@@ -273,61 +316,184 @@ func (db *DB) TriggerAutoCheckpoint() {
 	}
 }
 
-func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64) {
+func (db *DB) noteWrite() {
+	if db == nil || !db.autoCheckpointOn.Load() {
+		return
+	}
+	select {
+	case db.autoCheckpointWriteCh <- struct{}{}:
+	default:
+	}
+}
+
+type autoCheckpointMode uint8
+
+const (
+	autoCheckpointModeInterval autoCheckpointMode = iota
+	autoCheckpointModeIdle
+	autoCheckpointModeSize
+	autoCheckpointModeForce
+)
+
+const (
+	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
+	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
+	autoCheckpointMinIdleInterval          = 10 * time.Second
+)
+
+func autoCheckpointReasonString(v uint32) string {
+	switch autoCheckpointMode(v) {
+	case autoCheckpointModeInterval:
+		return "interval"
+	case autoCheckpointModeIdle:
+		return "idle"
+	case autoCheckpointModeSize:
+		return "size"
+	case autoCheckpointModeForce:
+		return "force"
+	default:
+		return "unknown"
+	}
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if t == nil {
+		return
+	}
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+func (db *DB) effectiveWALBytes() int64 {
+	if db == nil {
+		return 0
+	}
+	db.mu.RLock()
+	bytes := db.walClosedBytes
+	if db.wal != nil {
+		bytes += db.wal.Size()
+	}
+	db.mu.RUnlock()
+	return bytes
+}
+
+func (db *DB) minIdleCheckpointWALBytes() int64 {
+	if db == nil {
+		return autoCheckpointMinIdleWALBytesMin
+	}
+	db.mu.RLock()
+	ft := db.flushThreshold
+	db.mu.RUnlock()
+	min := ft / 16
+	if min < autoCheckpointMinIdleWALBytesMin {
+		min = autoCheckpointMinIdleWALBytesMin
+	}
+	if min > autoCheckpointMinIdleWALBytesMax {
+		min = autoCheckpointMinIdleWALBytesMax
+	}
+	return min
+}
+
+func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	defer db.wg.Done()
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	var intervalTicker *time.Ticker
+	intervalCh := (<-chan time.Time)(nil)
+	if interval > 0 {
+		intervalTicker = time.NewTicker(interval)
+		intervalCh = intervalTicker.C
+		defer intervalTicker.Stop()
+	}
+
+	var idleTimer *time.Timer
+	idleCh := (<-chan time.Time)(nil)
+	if idleInterval > 0 {
+		idleTimer = time.NewTimer(idleInterval)
+		if !idleTimer.Stop() {
+			<-idleTimer.C
+		}
+		idleCh = idleTimer.C
+	}
 
 	for {
 		select {
 		case <-db.closeCh:
 			return
-		case <-ticker.C:
-			db.maybeAutoCheckpoint(maxWALBytes, false)
+		case <-intervalCh:
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.autoCheckpointOnceCh:
-			db.maybeAutoCheckpoint(maxWALBytes, true)
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
+		case <-db.autoCheckpointWriteCh:
+			if maxWALBytes > 0 {
+				db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
+			}
+			if idleTimer != nil {
+				resetTimer(idleTimer, idleInterval)
+			}
+		case <-idleCh:
+			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeIdle)
 		}
 	}
 }
 
-func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, force bool) {
-	walDir := db.dir
-
-	db.mu.RLock()
-	currentWALPath := db.walPath
-	currentWALLogicalBytes := int64(0)
-	if db.wal != nil {
-		currentWALLogicalBytes = db.wal.Size()
-	}
-	db.mu.RUnlock()
-
-	segments, nonEmptyBytes := listNonEmptyWALSegments(walDir)
-	if nonEmptyBytes <= 0 && currentWALLogicalBytes <= 0 {
-		return
-	}
-
-	// Prefer a logical byte count that includes the current WAL's buffered bytes
-	// (which may not yet be reflected in file size). Exclude the current WAL's
-	// on-disk size from nonEmptyBytes to avoid double counting.
-	effectiveBytes := currentWALLogicalBytes
-	for _, seg := range segments {
-		if seg.path == currentWALPath {
-			continue
-		}
-		effectiveBytes += seg.size
-	}
-
+func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
+	effectiveBytes := db.effectiveWALBytes()
 	if effectiveBytes <= 0 {
 		return
 	}
 
-	if !force && maxWALBytes > 0 && effectiveBytes < maxWALBytes {
+	// Avoid thrashing the checkpoint path when workloads are mostly idle but
+	// produce tiny write bursts.
+	if mode == autoCheckpointModeIdle {
+		if effectiveBytes < db.minIdleCheckpointWALBytes() {
+			return
+		}
+		last := db.autoCheckpointLastUnixNano.Load()
+		if last > 0 && time.Since(time.Unix(0, last)) < autoCheckpointMinIdleInterval {
+			return
+		}
+	}
+
+	switch mode {
+	case autoCheckpointModeInterval, autoCheckpointModeIdle, autoCheckpointModeForce:
+		// proceed
+	case autoCheckpointModeSize:
+		if maxWALBytes <= 0 || effectiveBytes < maxWALBytes {
+			return
+		}
+	default:
+		// Unknown mode: be conservative and do nothing.
 		return
 	}
+
+	before := effectiveBytes
+	start := time.Now()
+	err := db.Checkpoint()
+	dur := time.Since(start)
+	after := db.effectiveWALBytes()
+	trimmed := before - after
+	if trimmed < 0 {
+		trimmed = 0
+	}
+
 	// Best-effort: failures here should be surfaced via normal write paths or
 	// explicit maintenance calls. Avoid printing from background maintenance.
-	_ = db.Checkpoint()
+	if err != nil {
+		return
+	}
+
+	db.autoCheckpointCount.Add(1)
+	db.autoCheckpointLastReason.Store(uint32(mode))
+	db.autoCheckpointLastUnixNano.Store(time.Now().UnixNano())
+	db.autoCheckpointLastDurNanos.Store(dur.Nanoseconds())
+	db.autoCheckpointLastWALBefore.Store(before)
+	db.autoCheckpointLastWALAfter.Store(after)
+	db.autoCheckpointLastWALTrimmed.Store(trimmed)
 }
 
 func (db *DB) initBackendRange() error {
@@ -469,7 +635,11 @@ func (db *DB) Checkpoint() error {
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			continue
 		}
+		db.mu.Lock()
+		db.untrackWALSegmentLocked(path)
+		db.mu.Unlock()
 	}
 
 	return nil
@@ -609,7 +779,11 @@ func (db *DB) Close() error {
 		path := seg.path
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			continue
 		}
+		db.mu.Lock()
+		db.untrackWALSegmentLocked(path)
+		db.mu.Unlock()
 	}
 
 	return db.backend.Close()
@@ -670,6 +844,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	}
 	db.mu.Unlock()
 
+	db.noteWrite()
 	db.maybeAssistFlush()
 	return nil
 }
@@ -724,6 +899,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	}
 	db.mu.Unlock()
 
+	db.noteWrite()
 	db.maybeAssistFlush()
 	return nil
 }
@@ -767,7 +943,17 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 
 func (db *DB) rotateWALLocked() error {
 	if db.wal != nil {
-		db.wal.Close()
+		oldPath := db.walPath
+		oldSize := db.wal.Size()
+		_ = db.wal.Close()
+		if oldPath != "" {
+			if db.walClosedSizes == nil {
+				db.walClosedSizes = make(map[string]int64)
+			}
+			prev := db.walClosedSizes[oldPath]
+			db.walClosedSizes[oldPath] = oldSize
+			db.walClosedBytes += oldSize - prev
+		}
 	}
 	db.walSeq++
 	name := fmt.Sprintf("wal-%06d.log", db.walSeq)
@@ -779,6 +965,21 @@ func (db *DB) rotateWALLocked() error {
 	db.wal = w
 	db.walPath = path
 	return nil
+}
+
+func (db *DB) untrackWALSegmentLocked(path string) {
+	if db.walClosedSizes == nil || path == "" {
+		return
+	}
+	size, ok := db.walClosedSizes[path]
+	if !ok {
+		return
+	}
+	delete(db.walClosedSizes, path)
+	db.walClosedBytes -= size
+	if db.walClosedBytes < 0 {
+		db.walClosedBytes = 0
+	}
 }
 
 func (db *DB) flushLoop() {
@@ -1074,7 +1275,11 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	for _, walPath := range deletable {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+			continue
 		}
+		db.mu.Lock()
+		db.untrackWALSegmentLocked(walPath)
+		db.mu.Unlock()
 	}
 
 	if flushed && flushDur > 0 && totalBytes > 0 {
@@ -1232,6 +1437,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if sync && walPath != "" && !inUse {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+		} else {
+			db.mu.Lock()
+			db.untrackWALSegmentLocked(walPath)
+			db.mu.Unlock()
 		}
 	}
 
@@ -1304,6 +1513,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutable.Size())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
+	walCurrentBytes := int64(0)
+	if db.wal != nil {
+		walCurrentBytes = db.wal.Size()
+	}
+	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes+walCurrentBytes)
+	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes)
+	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
 	if db.adaptiveBackpressureEnabled() {
 		stats["treedb.cache.backpressure_mode"] = "adaptive"
 	} else {
@@ -1314,6 +1530,14 @@ func (db *DB) Stats() map[string]string {
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
+
+	stats["treedb.cache.auto_checkpoint.count"] = fmt.Sprintf("%d", db.autoCheckpointCount.Load())
+	stats["treedb.cache.auto_checkpoint.last_reason"] = autoCheckpointReasonString(db.autoCheckpointLastReason.Load())
+	stats["treedb.cache.auto_checkpoint.last_duration_ms"] = fmt.Sprintf("%.3f", float64(db.autoCheckpointLastDurNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.auto_checkpoint.last_wal_bytes_before"] = fmt.Sprintf("%d", db.autoCheckpointLastWALBefore.Load())
+	stats["treedb.cache.auto_checkpoint.last_wal_bytes_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALAfter.Load())
+	stats["treedb.cache.auto_checkpoint.last_wal_bytes_trimmed"] = fmt.Sprintf("%d", db.autoCheckpointLastWALTrimmed.Load())
+	stats["treedb.cache.auto_checkpoint.last_unix_nano"] = fmt.Sprintf("%d", db.autoCheckpointLastUnixNano.Load())
 	return stats
 }
 
@@ -1833,6 +2057,9 @@ func (b *Batch) write(sync bool) error {
 		}
 		b.backend = nil
 		b.closed = true
+		if err == nil && b.size > 0 {
+			b.db.noteWrite()
+		}
 		return err
 	}
 
@@ -1892,6 +2119,9 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	b.db.mu.Unlock()
 
+	if b.size > 0 {
+		b.db.noteWrite()
+	}
 	b.db.maybeAssistFlush()
 
 	return b.Close()
@@ -1927,6 +2157,21 @@ func listNonEmptyWALSegments(walDir string) (segments []walSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func parseWALSeq(name string) (int, bool) {
+	if len(name) < len("wal-000000.log") || !strings.HasPrefix(name, "wal-") || filepath.Ext(name) != ".log" {
+		return 0, false
+	}
+	core := strings.TrimSuffix(strings.TrimPrefix(name, "wal-"), ".log")
+	if core == "" {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(core)
+	if err != nil {
+		return 0, false
+	}
+	return seq, true
 }
 
 func (b *Batch) writeBypass(sync bool) error {
@@ -2002,6 +2247,9 @@ func (b *Batch) writeBypass(sync bool) error {
 	}
 	b.db.mu.Unlock()
 
+	if b.size > 0 {
+		b.db.noteWrite()
+	}
 	return b.Close()
 }
 

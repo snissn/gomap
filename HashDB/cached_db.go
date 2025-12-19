@@ -72,6 +72,20 @@ func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key,
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
 func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
 func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
+func (c *CachedDB) Sync() error {
+	if c == nil || c.cache == nil || c.db == nil {
+		return nil
+	}
+	if err := c.cache.SyncWAL(); err != nil {
+		return err
+	}
+	if err := c.cache.Flush(); err != nil {
+		return err
+	}
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	return c.db.Sync()
+}
 
 // ApplyBatch applies a set of operations at the cache layer. Pending cache writes are
 // volatile until flushed; use ApplyBatchSync for a durable commit.

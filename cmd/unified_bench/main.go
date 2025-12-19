@@ -191,6 +191,12 @@ func NewBadger(dir string) (kvstore.DB, error) {
 }
 
 func (b *BadgerWrapper) Name() string { return "Badger" }
+func (b *BadgerWrapper) Checkpoint() error {
+	if b == nil || b.db == nil {
+		return nil
+	}
+	return b.db.Sync()
+}
 func (b *BadgerWrapper) Set(k, v []byte) error {
 	return b.db.Update(func(txn *badger.Txn) error {
 		return txn.Set(k, v)
@@ -318,7 +324,8 @@ func (i *LevelDBIterator) Close() error { i.it.Release(); return nil }
 func (i *LevelDBIterator) Error() error { return i.it.Error() }
 
 type LevelDBWrapper struct {
-	db *leveldb.DB
+	db  *leveldb.DB
+	dir string
 }
 
 var (
@@ -331,7 +338,7 @@ func NewLevelDB(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &LevelDBWrapper{db: db}, nil
+	return &LevelDBWrapper{db: db, dir: dir}, nil
 }
 
 func (l *LevelDBWrapper) Name() string                 { return "LevelDB" }
@@ -339,6 +346,20 @@ func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, n
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
 func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
 func (l *LevelDBWrapper) Close() error                 { return l.db.Close() }
+func (l *LevelDBWrapper) Checkpoint() error {
+	if l == nil || l.db == nil {
+		return nil
+	}
+	if err := l.db.Close(); err != nil {
+		return err
+	}
+	db, err := leveldb.OpenFile(l.dir, nil)
+	if err != nil {
+		return err
+	}
+	l.db = db
+	return nil
+}
 func (l *LevelDBWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	var slice *util.Range
 	if start != nil || end != nil {
@@ -492,9 +513,9 @@ var (
 	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
-	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a TreeDB checkpoint between each benchmark test (flush+sync+trim WAL; cached mode only)")
-	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a TreeDB checkpoint every N ops during write-heavy tests (0=disabled; cached mode only)")
-	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a TreeDB checkpoint every N approx bytes during write-heavy tests (0=disabled; cached mode only)")
+	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
+	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
+	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
 	treedbFlushThreshold           = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
 	treedbKeepRecent               = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
@@ -588,6 +609,10 @@ type BenchRun struct {
 	TestOrder    []string
 	DisplayNames map[string]string
 	Results      map[string]map[string]float64
+
+	// CheckpointDurations records per-test checkpoint time when
+	// Config.CheckpointBetweenTests is enabled. Keyed by test name, then DB name.
+	CheckpointDurations map[string]map[string]time.Duration
 }
 
 type scanDiag struct {
@@ -726,6 +751,10 @@ func main() {
 			log.Fatalf("benchmark: %v", err)
 		}
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+		if len(run.CheckpointDurations) > 0 {
+			fmt.Println()
+			printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
+		}
 		return
 	}
 
@@ -742,6 +771,10 @@ func main() {
 			fmt.Printf("\nkeys=%s valsize=%d batchsize=%d range-queries=%d range-span=%d\n\n",
 				formatInt(run.Config.Keys), run.Config.ValueSize, run.Config.BatchSize, run.Config.RangeQueries, run.Config.RangeSpan)
 			printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+			if len(run.CheckpointDurations) > 0 {
+				fmt.Println()
+				printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
+			}
 		}
 	case "markdown":
 		fmt.Print(renderMarkdownSweep(runs))
@@ -1021,6 +1054,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	type TestFunc func(db kvstore.DB, rng *rand.Rand) (float64, error)
 
 	guard := newBenchGuard(cfg)
+	checkpointDurations := make(map[string]map[string]time.Duration)
 
 	prefixScanBase := 0
 	expectedFullScanCount := -1
@@ -1843,17 +1877,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 	}
 
-	checkpointTreeDBs := func() error {
+	checkpointDBs := func() (map[string]time.Duration, error) {
+		durs := make(map[string]time.Duration, len(instances))
 		for _, inst := range instances {
 			cp, ok := inst.Wrapper.(checkpointer)
 			if !ok {
 				continue
 			}
-			if err := cp.Checkpoint(); err != nil {
-				return fmt.Errorf("checkpoint %s: %w", inst.Wrapper.Name(), err)
+			start := time.Now()
+			err := cp.Checkpoint()
+			durs[inst.Wrapper.Name()] = time.Since(start)
+			if err != nil {
+				return durs, fmt.Errorf("checkpoint %s: %w", inst.Wrapper.Name(), err)
 			}
 		}
-		return nil
+		return durs, nil
 	}
 
 	for _, testName := range finalTestOrder {
@@ -1900,9 +1938,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 
 		if cfg.CheckpointBetweenTests && testMutatesState(testName) {
-			if err := checkpointTreeDBs(); err != nil {
+			durs, err := checkpointDBs()
+			if err != nil {
 				return BenchRun{}, err
 			}
+			checkpointDurations[testName] = durs
 		}
 	}
 
@@ -1943,11 +1983,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	return BenchRun{
-		Config:       cfg,
-		Instances:    instances,
-		TestOrder:    finalTestOrder,
-		DisplayNames: displayNames,
-		Results:      results,
+		Config:              cfg,
+		Instances:           instances,
+		TestOrder:           finalTestOrder,
+		DisplayNames:        displayNames,
+		Results:             results,
+		CheckpointDurations: checkpointDurations,
 	}, nil
 }
 
@@ -1979,6 +2020,14 @@ func renderMarkdownSingle(run BenchRun) string {
 	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 	sb.WriteString(table)
 	sb.WriteString("```\n")
+
+	if len(run.CheckpointDurations) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Checkpoint Time (Between Tests)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
+		sb.WriteString("```\n")
+	}
 	return sb.String()
 }
 
@@ -2546,6 +2595,110 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 		}
 		fmt.Println(dataRow)
 	}
+}
+
+func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
+	rows := make([]string, 0, len(finalTestOrder))
+	for _, testName := range finalTestOrder {
+		if _, ok := durs[testName]; ok {
+			rows = append(rows, testName)
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+
+	colNames := []string{"After Test"}
+	for _, inst := range instances {
+		colNames = append(colNames, inst.Wrapper.Name())
+	}
+
+	colWidths := make(map[string]int, len(colNames))
+	for _, colName := range colNames {
+		colWidths[colName] = len(colName)
+	}
+
+	for _, testName := range rows {
+		disp := displayNames[testName]
+		if len(disp) > colWidths["After Test"] {
+			colWidths["After Test"] = len(disp)
+		}
+	}
+
+	for _, testName := range rows {
+		perDB := durs[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if d, ok := perDB[dbName]; ok {
+					cell = formatDuration(d)
+				}
+			}
+			if len(cell) > colWidths[dbName] {
+				colWidths[dbName] = len(cell)
+			}
+		}
+	}
+
+	var sb strings.Builder
+
+	headerRow := fmt.Sprintf("%*s", colWidths["After Test"], "After Test")
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName)
+	}
+	sb.WriteString(headerRow)
+	sb.WriteString("\n")
+
+	separatorRow := fmt.Sprintf("%*s", colWidths["After Test"], strings.Repeat("-", colWidths["After Test"]))
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
+	}
+	sb.WriteString(separatorRow)
+	sb.WriteString("\n")
+
+	for _, testName := range rows {
+		dataRow := fmt.Sprintf("%*s", colWidths["After Test"], displayNames[testName])
+		perDB := durs[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if d, ok := perDB[dbName]; ok {
+					cell = formatDuration(d)
+				}
+			}
+			dataRow += fmt.Sprintf("  %*s", colWidths[dbName], cell)
+		}
+		sb.WriteString(dataRow)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func printCheckpointDurationsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) {
+	table := renderCheckpointDurationsTableString(instances, finalTestOrder, displayNames, durs)
+	if table == "" {
+		return
+	}
+	fmt.Println("Checkpoint Time (Between Tests)")
+	fmt.Print(table)
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d >= time.Second {
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	}
+	if d >= time.Millisecond {
+		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
+	}
+	return fmt.Sprintf("%dµs", d.Microseconds())
 }
 
 func parseList(s string) []string {

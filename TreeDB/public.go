@@ -109,12 +109,25 @@ func Open(opts Options) (*DB, error) {
 	if autoInterval == 0 {
 		autoInterval = 30 * time.Second
 	}
+	if autoInterval < 0 {
+		autoInterval = 0
+	}
 	maxWALBytes := opts.MaxWALBytes
 	if maxWALBytes == 0 {
 		maxWALBytes = 2 << 30 // 2GiB
 	}
-	if autoInterval > 0 {
-		cached.StartAutoCheckpoint(autoInterval, maxWALBytes)
+	if maxWALBytes < 0 {
+		maxWALBytes = 0
+	}
+	idleInterval := opts.BackgroundCheckpointIdleDuration
+	if idleInterval == 0 {
+		idleInterval = 2 * time.Second
+	}
+	if idleInterval < 0 {
+		idleInterval = 0
+	}
+	if autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0 {
+		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
 	// Background compaction is opt-in (interval > 0).

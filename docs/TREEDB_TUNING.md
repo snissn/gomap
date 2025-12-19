@@ -13,6 +13,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 - Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
+  - `BackgroundCheckpointIdleDuration`: defaults to 2s
   - `MaxWALBytes`: defaults to 2 GiB
 
 ## Options
@@ -91,8 +92,9 @@ TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the de
 To keep `wal/` from growing without bound in long-running workloads, TreeDB enables a
 periodic cached-mode checkpoint by default:
 
-- `Options.BackgroundCheckpointInterval` (default 30s): how often to consider checkpointing
-- `Options.MaxWALBytes` (default 2 GiB): size trigger for checkpointing
+- `Options.BackgroundCheckpointInterval` (default 30s): periodic checkpoint cadence
+- `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic checkpoint after write-idle
+- `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger checkpointing early
 
 A checkpoint:
 - blocks writers briefly,
@@ -101,8 +103,10 @@ A checkpoint:
 - trims old WAL segments.
 
 Tuning/disable:
-- Set `BackgroundCheckpointInterval <= 0` to disable periodic checkpoints.
-- Set `MaxWALBytes < 0` to disable the size trigger (interval-only).
+- Set `BackgroundCheckpointInterval < 0` to disable periodic checkpoints.
+- Set `BackgroundCheckpointIdleDuration < 0` to disable the idle trigger.
+- Set `MaxWALBytes < 0` to disable the size trigger.
+- To disable auto-checkpointing entirely, set all three to `< 0`.
 
 ### `Options.KeepRecent` (backend engine)
 

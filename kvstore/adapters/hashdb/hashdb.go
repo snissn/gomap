@@ -52,6 +52,8 @@ func (d *DB) Stats() map[string]string {
 	}
 }
 
+func (d *DB) Checkpoint() error { return d.DB.Sync() }
+
 func (d *DB) ForEach(fn func(key, value []byte) error) error { return d.DB.ForEach(fn) }
 
 func (d *DB) NewBatch() (kvstore.Batch, error) { return &batch{db: d.DB}, nil }
