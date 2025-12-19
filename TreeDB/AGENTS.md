@@ -527,21 +527,102 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 **Goal:** Improve physical locality (scan stability under churn) and multi-core performance without sacrificing tail latency or memory bounds.
 
+### 17.0 Phase 17 Work Rules (Non‑Negotiables)
+
+- **No silent format changes:** any on-disk format change must be explicitly called out in the PR title/body and include a migration/recovery story. Prefer metadata-only or policy-only changes.
+- **Keep SWMR:** do not introduce concurrent writers to the backend engine unless a subphase explicitly does so *and* adds new correctness proofs + stress tests.
+- **No writer lock in reads:** `Get`, iterators, and snapshots must remain lock-free-ish (atomics + `RLock` only). Any new read-path lock contention needs profiling evidence and a rollback plan.
+- **Bounded background work:** any new goroutine must stop on `Close()` and have explicit per-tick quotas (time and/or bytes and/or items).
+- **No “helpful” regressions:** allocator/locality work must not increase worst-case memory usage or cause long stalls under overload (validate with `bigkeys_guard` and RSS/wall caps).
+- **One change at a time:** Phase 17 is high risk; implement one policy change per sprint branch, behind an option/flag when feasible.
+
+### 17.0.1 Sprint Workflow (Phase 17)
+
+- Create a sprint branch from the active RC (or `main` if Phase 16 is fully merged): `git checkout -b phase17-sprint-XX`.
+- Before coding, run **17.0.2 Baseline Gates** and paste results into the PR description.
+- Implement exactly one subphase per sprint branch (keep diffs reviewable).
+- After coding, re-run **17.0.2 Baseline Gates** + the subphase-specific gates.
+- Include artifacts (profiles + fragmentation report output) and stop for human approval before merge.
+
+### 17.0.2 Baseline Gates (Run Before/After Every Phase 17 Sprint)
+
+**If you see “no space left on device” from Go tests on macOS, run tests with a local TMPDIR:**
+- `mkdir -p .tmp && TMPDIR=\"$PWD/.tmp\" go test ./... -count=1`
+
+**Always run:**
+- Tests: `go test ./... -count=1`
+- Race: `go test -race ./... -count=1` (skip only if toolchain/platform cannot run it; note why)
+- Build bench: `make unified-bench`
+
+**Bench smoke (cached + backend):**
+- `./bin/unified-bench -dbs treedb -keys 300000 -seed 1 -progress=false`
+- `./bin/unified-bench -dbs treedbbackend -keys 300000 -seed 1 -progress=false`
+- Settled scans (catch scan collapse): `./bin/unified-bench -dbs treedb -keys 300000 -seed 1 -progress=false -settle-before-scans`
+
+**Guardrail suites (must not fail / time out):**
+- `./bin/unified-bench -suite flushthrash -progress=false`
+- `./bin/unified-bench -suite bigkeys_guard -progress=false` (Linux-only enforces `-max-rss-mb`; still useful elsewhere for wall-cap behavior)
+- `./bin/unified-bench -suite longmix -progress=false` (includes fragmentation reports pre/post settle)
+
+**If the sprint touches scans / allocator locality / compaction / vacuum, also run:**
+- `./bin/unified-bench -suite churnmaint -progress=false`
+
+### 17.0.3 Required Evidence in PRs
+
+- Paste the full benchmark tables for smoke + suites (before/after) into the PR.
+- Include the `FragmentationReport` output emitted by `longmix` (pre/post settle) and call out `treedb.user.pages.span_ratio_ppm`.
+- If touching locks/concurrency: include at least one of (before + after):
+  - `-mutexprofile before.mutex.pprof` / `after.mutex.pprof`
+  - `-blockprofile before.block.pprof` / `after.block.pprof`
+  - `-trace before.trace` / `after.trace`
+  - Use `go tool pprof -top ./bin/unified-bench before.mutex.pprof` (and after) for quick comparisons.
+
 ### 17.1 Allocator Locality Beyond LIFO
-- [ ] Add a locality-aware free-page policy (choose one; implement and measure):
-  - **Extent/segment bins:** categorize freed pages by “region” (e.g. `pageID / regionSize`) and prefer allocating within the most-recently-written region(s), or
-  - **Allocate-near hints:** when splitting/merging nodes, bias allocation toward sibling/parent vicinity.
-- [ ] Add explicit locality metrics + tests:
-  - use `FragmentationReport` (`treedb.user.pages.span_ratio_ppm`) as a gate on churn tests,
-  - add a “churn + settle + scans + locality assert” integration test (timeboxed).
+
+**Goal:** Improve scan stability under churn by reducing page-ID scattering without resorting to `PreferAppendAlloc` (which trades locality for file growth).
+
+- [ ] **Design choice (pick one per sprint):**
+  - **Extent/segment bins:** maintain freelist buckets by region (e.g. `region = pageID / regionPages`) and allocate from the “hot” region(s) first, or
+  - **Allocate-near hints:** thread an “allocate near X” hint through split/merge/rebalance so newly-created pages cluster near siblings/parents.
+- [ ] **Implementation notes:**
+  - Keep the existing allocator invariants (no double-free, no invalid IDs, crash-safe freelist head persistence).
+  - Prefer implementing behind a new option (e.g. `AllocatorPolicy` / `FreelistPolicy`) so we can A/B compare and roll back quickly.
+  - Add stats for allocator behavior (e.g. allocations by region, cache hit rate if using bins).
+- [ ] **Correctness gates:**
+  - `go test -race ./...` (required).
+  - Add a unit test for the new policy’s allocator bookkeeping (no leaks, no duplicates) if adding new data structures.
+- [ ] **Locality gates (required before merge):**
+  - Existing deterministic tests must pass (they already assert locality bounds):
+    - `TreeDB/db/vacuum_locality_test.go`
+    - `TreeDB/db/vacuum_churn_locality_test.go`
+  - `./bin/unified-bench -suite longmix -progress=false` must show **no worse** `treedb.user.pages.span_ratio_ppm` after churn/settle than the baseline for the same workload (call out numbers in PR).
+
+**Stop condition:** if scans regress (full/prefix scan throughput drops materially) or span density worsens, revert or keep the policy behind an explicit opt-in.
 
 ### 17.2 Concurrency Experiments (Profile-Driven)
-- [ ] Audit lock contention via mutex/block profiles and runtime trace for representative workloads.
-- [ ] Propose and test one concurrency change at a time (examples):
-  - bounded worker pool in compaction copy decode path (only if CPU-bound after 16.6),
-  - scan prefetching / read-ahead if IO-bound and safe,
-  - further decoupling of maintenance work from writer lock (strict quotas + observability).
-- [ ] **Gates:** Phase 16 RC gate set + contention/profile comparison; no scan collapse; no tail-latency blowups.
+
+**Goal:** Increase multi-core throughput and reduce tail latency without introducing contention regressions.
+
+- [ ] **Audit first (required):**
+  - Collect profiles on a representative workload **before changing code**:
+    - `./bin/unified-bench -suite longmix -dbs treedb -progress=false -mutexprofile before.mutex.pprof -blockprofile before.block.pprof`
+    - Optional: `-trace before.trace` (useful for scheduling/GC + lock interaction)
+  - Identify top contended sites and classify:
+    - backend writer serialization (`db.writeMu`) vs
+    - cached layer locks (`flushMu`, `bpMu`, iterator-rotation effects) vs
+    - GC/allocation hotspots.
+- [ ] **Change policy:**
+  - Implement exactly one concurrency change per sprint branch.
+  - Prefer bounded parallelism (worker pools, limited goroutines) over “goroutine per op”.
+  - Any new goroutine must be `Close()`-stoppable and have a “no leaks” test.
+- [ ] **Example safe targets (only if profiles justify):**
+  - bounded parallel decode/copy in slab compaction *outside* the writer lock (commit remains serialized),
+  - scan prefetch/read-ahead with strict memory bounds and easy disable,
+  - further moving maintenance work off the commit critical path (always with quotas + stats).
+- [ ] **Gates (required):**
+  - Run **17.0.2 Baseline Gates** (before/after).
+  - Compare `before` vs `after` profiles and explicitly call out improvements/regressions.
+  - No scan collapse: `-settle-before-scans` results must remain sane; `longmix` scans must not crater.
 
 ### 17.3 Operational Defaults & Guardrails (LevelDB-like) (Moved from Phase 16.10)
 
