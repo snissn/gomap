@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -217,6 +219,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		return nil, err
 	}
+	segments, _ := listNonEmptyWALSegments(walDir)
+	maxWALSeq := 0
+	for _, seg := range segments {
+		seq, ok := parseWALSeq(filepath.Base(seg.path))
+		if ok && seq > maxWALSeq {
+			maxWALSeq = seq
+		}
+	}
 
 	db := &DB{
 		dir:                     walDir,
@@ -234,6 +244,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
 		autoCheckpointWriteCh:   make(chan struct{}, 1),
+		walSeq:                  maxWALSeq,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -241,6 +252,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Open initial WAL
 	if err := db.rotateWALLocked(); err != nil {
 		return nil, err
+	}
+	if len(segments) > 0 {
+		db.mu.Lock()
+		if db.walClosedSizes == nil {
+			db.walClosedSizes = make(map[string]int64, len(segments))
+		}
+		for _, seg := range segments {
+			if seg.path == db.walPath {
+				continue
+			}
+			db.walClosedSizes[seg.path] = seg.size
+			db.walClosedBytes += seg.size
+		}
+		db.mu.Unlock()
 	}
 
 	// Start background flusher
@@ -2132,6 +2157,21 @@ func listNonEmptyWALSegments(walDir string) (segments []walSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func parseWALSeq(name string) (int, bool) {
+	if len(name) < len("wal-000000.log") || !strings.HasPrefix(name, "wal-") || filepath.Ext(name) != ".log" {
+		return 0, false
+	}
+	core := strings.TrimSuffix(strings.TrimPrefix(name, "wal-"), ".log")
+	if core == "" {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(core)
+	if err != nil {
+		return 0, false
+	}
+	return seq, true
 }
 
 func (b *Batch) writeBypass(sync bool) error {

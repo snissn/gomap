@@ -274,3 +274,65 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
 	}
 }
+
+func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	preexisting := filepath.Join(walDir, "wal-000010.log")
+	if err := os.WriteFile(preexisting, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {
+		t.Fatalf("WriteFile(preexisting WAL): %v", err)
+	}
+
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stats := db.Stats()
+		if stats == nil {
+			t.Fatalf("Stats() returned nil")
+		}
+		n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+		if err != nil {
+			t.Fatalf("parse auto checkpoint count: %v", err)
+		}
+		if n > 0 {
+			if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "size" {
+				t.Fatalf("expected last reason size, got %q", reason)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for size auto checkpoint to run")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ents, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("ReadDir(wal): %v", err)
+	}
+	walFiles := 0
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
+		}
+		walFiles++
+	}
+	if walFiles != 1 {
+		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+	}
+}
