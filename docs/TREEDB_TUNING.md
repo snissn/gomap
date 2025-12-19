@@ -103,9 +103,10 @@ A checkpoint:
 - trims old WAL segments.
 
 Tuning/disable:
-- Set `BackgroundCheckpointInterval < 0` to disable auto-checkpointing entirely.
+- Set `BackgroundCheckpointInterval < 0` to disable periodic checkpoints.
 - Set `BackgroundCheckpointIdleDuration < 0` to disable the idle trigger.
-- Set `MaxWALBytes < 0` to disable the size trigger (interval/idle only).
+- Set `MaxWALBytes < 0` to disable the size trigger.
+- To disable auto-checkpointing entirely, set all three to `< 0`.
 
 ### `Options.KeepRecent` (backend engine)
 

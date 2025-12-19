@@ -157,7 +157,7 @@ type Options struct {
 	//
 	// Semantics:
 	// - `0` uses a default.
-	// - `<0` disables auto-checkpointing entirely (cached mode).
+	// - `<0` disables the periodic interval trigger.
 	BackgroundCheckpointInterval time.Duration
 	// BackgroundCheckpointIdleDuration triggers an opportunistic checkpoint after
 	// a period of write-idleness in cached mode.
