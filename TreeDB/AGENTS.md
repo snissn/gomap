@@ -523,70 +523,6 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 ### 16.9 Production Tuning Docs (Phase 15 Deferred Item)
 - [x] Production tuning docs updated (`TreeDB/README.md`, `docs/TREEDB_TUNING.md`) to cover cached-mode knobs and operational guidance.
 
-### 16.10 Operational Defaults & Guardrails (LevelDB-like)
-
-**Goal:** Reduce “operator footguns” in cached mode by enabling safe defaults, adding visibility, and adding guardrails so long-running workloads don’t silently accumulate unbounded debt (WAL, flush backlog, disk usage, fragmentation).
-
-#### 16.10.1 Library Defaults for Cached-Mode Backpressure (not just unified-bench)
-- [ ] **Outcome:** `treedb.Open` in cached mode has safe default backpressure knobs even when callers don’t set them.
-- [ ] **Implementation:**
-  - In `TreeDB/public.go`, when `opts.Mode != ModeBackend` and caller leaves them at zero, set:
-    - `opts.SlowdownBacklogSeconds = 1`
-    - `opts.StopBacklogSeconds = 2`
-    - `opts.MaxBacklogBytes = 2<<30` (2GiB)
-  - Preserve “explicit disable” semantics:
-    - if caller sets all three to `0` intentionally, they get disabled only if we add an explicit `DisableBackpressure` knob (or use negative sentinel values). Decide and document.
-  - Ensure this does not conflict with `opts.MaxQueuedMemtables` legacy mode; adaptive should take precedence when any adaptive knob is enabled.
-- [ ] **Tests:** add a small unit/integration test that proves defaults are applied and that backlog is capped under a forced slow-flush scenario.
-- [ ] **Bench gates:** `./bin/unified-bench -suite flushthrash` must not regress beyond agreed tolerance vs baseline; ensure no runaway RSS in a long random-write run.
-
-#### 16.10.2 Cached-Mode Operational Stats (Explain “why am I slow?”)
-- [ ] **Outcome:** Operators can see WAL growth and checkpoint/backpressure behavior via `Stats()`.
-- [ ] **Implementation (cached mode `TreeDB/caching/db.go`):**
-  - Add stats keys:
-    - `treedb.cache.wal_bytes` (logical: include current WAL buffered bytes)
-    - `treedb.cache.wal_segments`
-    - `treedb.cache.last_checkpoint_unix`
-    - `treedb.cache.last_checkpoint_ms`
-    - `treedb.cache.last_checkpoint_err` (string; empty if none)
-    - `treedb.cache.auto_checkpoint_interval_ms`
-    - `treedb.cache.auto_checkpoint_max_wal_bytes`
-  - Track last checkpoint outcome in `caching.DB` (atomic/locked fields).
-- [ ] **Tests:** unit test that stats keys are present/non-empty when auto-checkpointing is enabled and after at least one checkpoint attempt.
-- [ ] **Gates:** `go test -race ./...` must pass; add a small benchmark smoke that enables auto-checkpoint and confirms WAL stays bounded.
-
-#### 16.10.3 Conservative Default Background Slab Compaction
-- [ ] **Outcome:** Values/slabs don’t silently accumulate extreme dead space over long churn; compaction runs gently by default.
-- [ ] **Implementation:**
-  - Pick conservative defaults in `TreeDB/public.go` (cached mode):
-    - `BackgroundCompactionInterval` default (e.g. 10m) with strict bounds: `MaxSlabs=1`, low `CopyBytesPerSec`, small microbatch.
-  - Integrate with cache backpressure: do not run compaction if cache backlog is above slowdown/stop thresholds; or call `CompactionAssist()` to avoid starving flush.
-  - Provide a clear disable knob (`BackgroundCompactionInterval <= 0`).
-- [ ] **Tests:** existing background compaction tests + add a “does not run under extreme backlog” test if implementing gating.
-- [ ] **Bench gates:** `./bin/unified-bench -suite longmix` must show stable/ improved fragmentation and no scan collapse.
-
-#### 16.10.4 Disk-Usage Guardrails (Fail Fast vs Fill Disk)
-- [ ] **Outcome:** Avoid catastrophic “disk full” incidents by adding a configurable cap/guard that triggers maintenance and then fails writes clearly.
-- [ ] **Implementation:**
-  - Add options (public `treedb.Options`) such as:
-    - `MinFreeDiskBytes` (preferred; uses filesystem free-space query)
-    - or `MaxTotalBytes` (sum of index + slabs + wal)
-  - Enforce on write path (cached + backend): check periodically (e.g. every N commits) to avoid per-op syscall overhead.
-  - When tripped:
-    - attempt a best-effort `Checkpoint()` (cached),
-    - attempt bounded compaction (if enabled),
-    - if still over/under threshold, return a clear error (`ErrDiskBudgetExceeded`) and surface via stats.
-- [ ] **Tests:** fake filesystem stat layer or dependency injection for disk budget checks; unit test for “maintenance attempted then error returned”.
-- [ ] **Gates:** add a CI-only “small disk budget” test using temp dir that triggers the guard without requiring huge data.
-
-#### 16.10.5 Auto-Checkpoint Hysteresis / Thrash Avoidance
-- [ ] **Outcome:** Under sustained ingest near the WAL cap, we avoid checkpointing too frequently.
-- [ ] **Implementation:**
-  - Add a hysteresis policy: trigger at `MaxWALBytes`, then do not run again until `wal_bytes < MaxWALBytes * 0.5` (or a configurable fraction).
-  - Ensure “force” triggers still work (explicit `Checkpoint()` and bench flags).
-- [ ] **Tests:** unit test that repeated size-trigger checks do not run checkpoint when within hysteresis window.
-- [ ] **Bench gates:** ensure throughput doesn’t degrade due to checkpoint thrash in a sustained random write test near the cap.
-
 ## Phase 17 (Future Milestone): Allocator Locality + Deeper Concurrency
 
 **Goal:** Improve physical locality (scan stability under churn) and multi-core performance without sacrificing tail latency or memory bounds.
@@ -606,3 +542,67 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
   - scan prefetching / read-ahead if IO-bound and safe,
   - further decoupling of maintenance work from writer lock (strict quotas + observability).
 - [ ] **Gates:** Phase 16 RC gate set + contention/profile comparison; no scan collapse; no tail-latency blowups.
+
+### 17.3 Operational Defaults & Guardrails (LevelDB-like) (Moved from Phase 16.10)
+
+**Goal:** Reduce “operator footguns” in cached mode by enabling safe defaults, adding visibility, and adding guardrails so long-running workloads don’t silently accumulate unbounded debt (WAL, flush backlog, disk usage, fragmentation).
+
+#### 17.3.1 Library Defaults for Cached-Mode Backpressure (not just unified-bench)
+- [ ] **Outcome:** `treedb.Open` in cached mode has safe default backpressure knobs even when callers don’t set them.
+- [ ] **Implementation:**
+  - In `TreeDB/public.go`, when `opts.Mode != ModeBackend` and caller leaves them at zero, set:
+    - `opts.SlowdownBacklogSeconds = 1`
+    - `opts.StopBacklogSeconds = 2`
+    - `opts.MaxBacklogBytes = 2<<30` (2GiB)
+  - Preserve “explicit disable” semantics:
+    - if caller sets all three to `0` intentionally, they get disabled only if we add an explicit `DisableBackpressure` knob (or use negative sentinel values). Decide and document.
+  - Ensure this does not conflict with `opts.MaxQueuedMemtables` legacy mode; adaptive should take precedence when any adaptive knob is enabled.
+- [ ] **Tests:** add a small unit/integration test that proves defaults are applied and that backlog is capped under a forced slow-flush scenario.
+- [ ] **Bench gates:** `./bin/unified-bench -suite flushthrash` must not regress beyond agreed tolerance vs baseline; ensure no runaway RSS in a long random-write run.
+
+#### 17.3.2 Cached-Mode Operational Stats (Explain “why am I slow?”)
+- [ ] **Outcome:** Operators can see WAL growth and checkpoint/backpressure behavior via `Stats()`.
+- [ ] **Implementation (cached mode `TreeDB/caching/db.go`):**
+  - Add stats keys:
+    - `treedb.cache.wal_bytes` (logical: include current WAL buffered bytes)
+    - `treedb.cache.wal_segments`
+    - `treedb.cache.last_checkpoint_unix`
+    - `treedb.cache.last_checkpoint_ms`
+    - `treedb.cache.last_checkpoint_err` (string; empty if none)
+    - `treedb.cache.auto_checkpoint_interval_ms`
+    - `treedb.cache.auto_checkpoint_max_wal_bytes`
+  - Track last checkpoint outcome in `caching.DB` (atomic/locked fields).
+- [ ] **Tests:** unit test that stats keys are present/non-empty when auto-checkpointing is enabled and after at least one checkpoint attempt.
+- [ ] **Gates:** `go test -race ./...` must pass; add a small benchmark smoke that enables auto-checkpoint and confirms WAL stays bounded.
+
+#### 17.3.3 Conservative Default Background Slab Compaction
+- [ ] **Outcome:** Values/slabs don’t silently accumulate extreme dead space over long churn; compaction runs gently by default.
+- [ ] **Implementation:**
+  - Pick conservative defaults in `TreeDB/public.go` (cached mode):
+    - `BackgroundCompactionInterval` default (e.g. 10m) with strict bounds: `MaxSlabs=1`, low `CopyBytesPerSec`, small microbatch.
+  - Integrate with cache backpressure: do not run compaction if cache backlog is above slowdown/stop thresholds; or call `CompactionAssist()` to avoid starving flush.
+  - Provide a clear disable knob (`BackgroundCompactionInterval <= 0`).
+- [ ] **Tests:** existing background compaction tests + add a “does not run under extreme backlog” test if implementing gating.
+- [ ] **Bench gates:** `./bin/unified-bench -suite longmix` must show stable/ improved fragmentation and no scan collapse.
+
+#### 17.3.4 Disk-Usage Guardrails (Fail Fast vs Fill Disk)
+- [ ] **Outcome:** Avoid catastrophic “disk full” incidents by adding a configurable cap/guard that triggers maintenance and then fails writes clearly.
+- [ ] **Implementation:**
+  - Add options (public `treedb.Options`) such as:
+    - `MinFreeDiskBytes` (preferred; uses filesystem free-space query)
+    - or `MaxTotalBytes` (sum of index + slabs + wal)
+  - Enforce on write path (cached + backend): check periodically (e.g. every N commits) to avoid per-op syscall overhead.
+  - When tripped:
+    - attempt a best-effort `Checkpoint()` (cached),
+    - attempt bounded compaction (if enabled),
+    - if still over/under threshold, return a clear error (`ErrDiskBudgetExceeded`) and surface via stats.
+- [ ] **Tests:** fake filesystem stat layer or dependency injection for disk budget checks; unit test for “maintenance attempted then error returned”.
+- [ ] **Gates:** add a CI-only “small disk budget” test using temp dir that triggers the guard without requiring huge data.
+
+#### 17.3.5 Auto-Checkpoint Hysteresis / Thrash Avoidance
+- [ ] **Outcome:** Under sustained ingest near the WAL cap, we avoid checkpointing too frequently.
+- [ ] **Implementation:**
+  - Add a hysteresis policy: trigger at `MaxWALBytes`, then do not run again until `wal_bytes < MaxWALBytes * 0.5` (or a configurable fraction).
+  - Ensure “force” triggers still work (explicit `Checkpoint()` and bench flags).
+- [ ] **Tests:** unit test that repeated size-trigger checks do not run checkpoint when within hysteresis window.
+- [ ] **Bench gates:** ensure throughput doesn’t degrade due to checkpoint thrash in a sustained random write test near the cap.
