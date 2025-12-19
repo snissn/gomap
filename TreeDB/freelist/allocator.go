@@ -14,6 +14,10 @@ type Allocator struct {
 	head  uint64
 	mu    sync.Mutex
 
+	lastAlloc    uint64
+	regionPages  uint64
+	regionRadius int
+
 	// preferAppend makes Alloc ignore the freelist and allocate new pages by
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
@@ -45,17 +49,37 @@ func (a *Allocator) SetPreferAppend(prefer bool) {
 	a.preferAppend = prefer
 }
 
+func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if pages == 0 || radius <= 0 {
+		a.regionPages = 0
+		a.regionRadius = 0
+		return
+	}
+	a.regionPages = pages
+	a.regionRadius = radius
+}
+
 // Alloc allocates a single page.
 func (a *Allocator) Alloc() (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if a.preferAppend {
-		return a.pager.Alloc(1)
+		id, err := a.pager.Alloc(1)
+		if err == nil {
+			a.lastAlloc = id
+		}
+		return id, err
 	}
 
 	if a.head == 0 {
-		return a.pager.Alloc(1)
+		id, err := a.pager.Alloc(1)
+		if err == nil {
+			a.lastAlloc = id
+		}
+		return id, err
 	}
 
 	// Read Head
@@ -78,6 +102,41 @@ func (a *Allocator) Alloc() (uint64, error) {
 		// Pop from body
 		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
 		id := body.FreeIDs[count-1]
+		if a.regionPages > 0 && a.regionRadius > 0 && a.lastAlloc != 0 {
+			targetRegion := a.lastAlloc / a.regionPages
+			idx := -1
+			for i := int(count) - 1; i >= 0; i-- {
+				candidate := body.FreeIDs[i]
+				candidateRegion := candidate / a.regionPages
+				var diff uint64
+				if candidateRegion >= targetRegion {
+					diff = candidateRegion - targetRegion
+				} else {
+					diff = targetRegion - candidateRegion
+				}
+				if diff <= uint64(a.regionRadius) {
+					idx = i
+					id = candidate
+					break
+				}
+			}
+			if idx >= 0 {
+				lastIdx := int(count) - 1
+				if idx != lastIdx {
+					body.FreeIDs[idx] = body.FreeIDs[lastIdx]
+				}
+				body.FreeIDs = body.FreeIDs[:lastIdx]
+				body.Encode(data[page.PageHeaderSize:])
+				n.SetCount(count - 1)
+				n.UpdateChecksum()
+
+				// This page may have been verified under a previous incarnation. Ensure
+				// it is treated as unverified when reused.
+				a.pager.MarkUnverified(id)
+				a.lastAlloc = id
+				return id, nil
+			}
+		}
 
 		// Update page
 		n.SetCount(count - 1)
@@ -96,6 +155,7 @@ func (a *Allocator) Alloc() (uint64, error) {
 		// This page may have been verified under a previous incarnation. Ensure
 		// it is treated as unverified when reused.
 		a.pager.MarkUnverified(id)
+		a.lastAlloc = id
 		return id, nil
 	}
 
@@ -110,6 +170,7 @@ func (a *Allocator) Alloc() (uint64, error) {
 
 	// This page is being repurposed; ensure it is treated as unverified.
 	a.pager.MarkUnverified(recycled)
+	a.lastAlloc = recycled
 	return recycled, nil
 }
 

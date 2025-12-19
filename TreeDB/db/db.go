@@ -104,6 +104,10 @@ type Options struct {
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
 	PreferAppendAlloc bool
+	// FreelistRegionPages and FreelistRegionRadius bias freelist reuse toward
+	// nearby page regions to improve locality (0 disables).
+	FreelistRegionPages  uint64
+	FreelistRegionRadius int
 
 	// LeafFillTargetPPM and InternalFillTargetPPM control how full newly-written
 	// B+Tree pages are allowed to become before forcing a split (soft-full).
@@ -259,6 +263,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
+	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	db := &DB{
 		pager:                p,
