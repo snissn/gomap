@@ -492,12 +492,16 @@ var (
 	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
+	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a TreeDB checkpoint between each benchmark test (flush+sync+trim WAL; cached mode only)")
+	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a TreeDB checkpoint every N ops during write-heavy tests (0=disabled; cached mode only)")
+	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a TreeDB checkpoint every N approx bytes during write-heavy tests (0=disabled; cached mode only)")
+
 	treedbFlushThreshold           = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
 	treedbKeepRecent               = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems            = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
-	treedbSlowdownBacklogSeconds   = flag.Float64("treedb-slowdown-backlog-seconds", 0, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbStopBacklogSeconds       = flag.Float64("treedb-stop-backlog-seconds", 0, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbMaxBacklogBytes          = flag.Int64("treedb-max-backlog-bytes", 0, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
+	treedbSlowdownBacklogSeconds   = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbStopBacklogSeconds       = flag.Float64("treedb-stop-backlog-seconds", 2, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbMaxBacklogBytes          = flag.Int64("treedb-max-backlog-bytes", 2<<30, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
 	treedbWriterFlushMaxMems       = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs         = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
 	treedbPreferAppendAlloc        = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
@@ -557,6 +561,10 @@ type BenchConfig struct {
 
 	MaxWall  time.Duration
 	MaxRSSMB int
+
+	CheckpointBetweenTests bool
+	CheckpointEveryOps     int
+	CheckpointEveryBytes   int64
 
 	SettleBeforeScans bool
 
@@ -621,6 +629,9 @@ func main() {
 		TraceProfile:                   *traceProfile,
 		MaxWall:                        *maxWall,
 		MaxRSSMB:                       *maxRSSMB,
+		CheckpointBetweenTests:         *checkpointBetweenTests,
+		CheckpointEveryOps:             *checkpointEveryOps,
+		CheckpointEveryBytes:           *checkpointEveryBytes,
 		SettleBeforeScans:              *settleBeforeScans,
 		TreeDBIterDebug:                *treedbIterDebug,
 		TreeDBIterDebugLimit:           *treedbIterDebugLimit,
@@ -895,6 +906,54 @@ func (g *benchGuard) Checkpoint() error {
 	return nil
 }
 
+type checkpointer interface {
+	Checkpoint() error
+}
+
+type periodicCheckpoint struct {
+	everyOps   int
+	everyBytes int64
+
+	ops   int
+	bytes int64
+}
+
+func newPeriodicCheckpoint(cfg BenchConfig) *periodicCheckpoint {
+	if cfg.CheckpointEveryOps <= 0 && cfg.CheckpointEveryBytes <= 0 {
+		return nil
+	}
+	return &periodicCheckpoint{
+		everyOps:   cfg.CheckpointEveryOps,
+		everyBytes: cfg.CheckpointEveryBytes,
+	}
+}
+
+func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) error {
+	if p == nil {
+		return nil
+	}
+	if p.everyOps <= 0 && p.everyBytes <= 0 {
+		return nil
+	}
+	p.ops += opsDelta
+	p.bytes += bytesDelta
+
+	hitOps := p.everyOps > 0 && p.ops >= p.everyOps
+	hitBytes := p.everyBytes > 0 && p.bytes >= p.everyBytes
+	if !hitOps && !hitBytes {
+		return nil
+	}
+
+	p.ops = 0
+	p.bytes = 0
+
+	cp, ok := db.(checkpointer)
+	if !ok {
+		return nil
+	}
+	return cp.Checkpoint()
+}
+
 func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
@@ -1028,6 +1087,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8 + len(val))
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
@@ -1039,12 +1100,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("sequential_write: %w", err)
 				}
+				if err := pc.Add(db, 1, perOpBytes); err != nil {
+					return 0, fmt.Errorf("sequential_write checkpoint: %w", err)
+				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
 		"random_write": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8 + len(val))
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
@@ -1056,6 +1122,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("random_write: %w", err)
 				}
+				if err := pc.Add(db, 1, perOpBytes); err != nil {
+					return 0, fmt.Errorf("random_write checkpoint: %w", err)
+				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
@@ -1066,6 +1135,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8 + len(val))
 			total := cfg.Keys
 			var k [8]byte
 			for i := 0; i < total; i += cfg.BatchSize {
@@ -1097,6 +1168,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := batch.Close(); err != nil {
 					return 0, fmt.Errorf("batch_write: close: %w", err)
 				}
+				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
+					return 0, fmt.Errorf("batch_write checkpoint: %w", err)
+				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
@@ -1124,6 +1198,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			// Reset timer to exclude setup
 			start = time.Now()
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8 + len(val))
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -1153,6 +1229,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := batch.Close(); err != nil {
 					return 0, fmt.Errorf("batch_random: close: %w", err)
 				}
+				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
+					return 0, fmt.Errorf("batch_random checkpoint: %w", err)
+				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
@@ -1163,6 +1242,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8 + len(val))
 			total := cfg.Keys
 			batchSize := 100 // Pathological: small enough to hurt if not buffered, sequential to trigger streaming
 			var k [8]byte
@@ -1196,11 +1277,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err := batch.Close(); err != nil {
 					return 0, fmt.Errorf("batch_small_seq: close: %w", err)
 				}
+				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
+					return 0, fmt.Errorf("batch_small_seq checkpoint: %w", err)
+				}
 			}
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
 		"random_delete": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(8)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
@@ -1210,6 +1296,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
 				_ = db.Delete(k[:])
+				if err := pc.Add(db, 1, perOpBytes); err != nil {
+					return 0, fmt.Errorf("random_delete checkpoint: %w", err)
+				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
@@ -1743,6 +1832,30 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return nil
 	}
 
+	testMutatesState := func(testName string) bool {
+		switch testName {
+		case "sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete":
+			return true
+		case "vacuum_index", "compact_slabs":
+			return true
+		default:
+			return false
+		}
+	}
+
+	checkpointTreeDBs := func() error {
+		for _, inst := range instances {
+			cp, ok := inst.Wrapper.(checkpointer)
+			if !ok {
+				continue
+			}
+			if err := cp.Checkpoint(); err != nil {
+				return fmt.Errorf("checkpoint %s: %w", inst.Wrapper.Name(), err)
+			}
+		}
+		return nil
+	}
+
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
 		if fn == nil {
@@ -1783,6 +1896,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			results[testName][inst.Wrapper.Name()] = res
 			if live != nil {
 				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
+			}
+		}
+
+		if cfg.CheckpointBetweenTests && testMutatesState(testName) {
+			if err := checkpointTreeDBs(); err != nil {
+				return BenchRun{}, err
 			}
 		}
 	}

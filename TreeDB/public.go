@@ -302,6 +302,27 @@ func (db *DB) Print() error {
 	return db.backend.Print()
 }
 
+// Checkpoint forces a durable backend boundary and trims cached-mode WAL
+// segments, so long-running cached-mode workloads do not accumulate unbounded
+// `wal/` growth.
+//
+// In cached mode this flushes queued memtables with backend sync and resets the
+// WAL to a fresh segment. In backend mode it forces a sync boundary.
+func (db *DB) Checkpoint() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Checkpoint()
+	}
+	b := db.backend.NewBatch()
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
+}
+
 // CompactCandidates runs slab compaction based on the provided selection options.
 // In cached mode it will also perform bounded flush assist when the caching layer
 // is under backpressure, so compaction does not starve the foreground flush path.
