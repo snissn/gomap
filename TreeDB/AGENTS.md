@@ -283,17 +283,17 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 **Goal:** Make write-back caching behavior tunable and safe under sustained overload by budgeting flush debt in time/bytes instead of a fixed queue depth.
 
-- [ ] Add caching options:
+- [x] Add caching options:
   - `SlowdownBacklogSeconds`: begin applying backpressure when backlog exceeds this many seconds of estimated flush work.
   - `StopBacklogSeconds`: block writers when backlog exceeds this many seconds (hard cap).
   - `MaxBacklogBytes`: absolute cap regardless of throughput estimate (safety net).
-- [ ] Track backlog bytes (`mutable.Size + sum(queue.Size)`) and maintain EWMA of observed flush throughput (bytes/sec).
-- [ ] Compute dynamic allowed backlog bytes from EWMA * seconds (with min/max clamps) and apply:
+- [x] Track queued backlog bytes (`sum(queue.Size)`) and maintain EWMA of observed flush throughput (bytes/sec).
+- [x] Compute dynamic allowed backlog bytes from EWMA * seconds (with min/max clamps) and apply:
   - slowdown: writers help flush (bounded work per call or time budget).
   - stop: writers wait until backlog drops below a hysteresis threshold.
-- [ ] Expose benchmark knobs in `unified-bench` to compare buffered ingest vs sustained throughput.
-- [ ] Add stats/telemetry keys for backlog bytes and estimated flush throughput.
-- [ ] Add unit tests for slowdown/stop thresholds and `MaxBacklogBytes` behavior.
+- [x] Expose benchmark knobs in `unified-bench` to compare buffered ingest vs sustained throughput.
+- [x] Add stats/telemetry keys for backlog bytes and estimated flush throughput.
+- [x] Add unit tests for slowdown/stop thresholds and `MaxBacklogBytes` behavior.
 
 ---
 

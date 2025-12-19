@@ -20,7 +20,7 @@ This checklist exists so a downstream project can depend on this repo without tr
 ## GoDoc + Examples
 
 - [x] Package docs (`doc.go`) exist for stable packages and include caveats.
-- [ ] Exported identifiers that are part of the stable surface have doc comments.
+- [ ] Exported identifiers that are part of the stable surface have doc comments (missing in `TreeDB/public.go` and `HashDB/cached_db.go`, plus cache WAL and batch constants).
 - [x] Runnable examples (`Example*`) exist for the primary entrypoints.
 
 ## Developer Onboarding
