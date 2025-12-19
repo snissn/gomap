@@ -105,7 +105,8 @@ type Options struct {
 	// of file growth (space is reclaimed later via vacuum).
 	PreferAppendAlloc bool
 	// FreelistRegionPages and FreelistRegionRadius bias freelist reuse toward
-	// nearby page regions to improve locality (0 disables).
+	// nearby page regions to improve locality. FreelistRegionPages == 0 uses a
+	// default, while FreelistRegionRadius < 0 disables the bias entirely.
 	FreelistRegionPages  uint64
 	FreelistRegionRadius int
 
@@ -224,6 +225,17 @@ func Open(opts Options) (*DB, error) {
 	}
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
+	}
+	if opts.FreelistRegionRadius < 0 {
+		opts.FreelistRegionPages = 0
+		opts.FreelistRegionRadius = 0
+	} else {
+		if opts.FreelistRegionPages == 0 {
+			opts.FreelistRegionPages = 8192
+		}
+		if opts.FreelistRegionRadius == 0 {
+			opts.FreelistRegionRadius = 1
+		}
 	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
