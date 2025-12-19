@@ -27,7 +27,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 ## Common flags
 
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,treedbbackend,badger,leveldb`
-- `-tests` (`all` or CSV): see list above
+- `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
 - `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
@@ -50,11 +50,14 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-progress` live table updates to stderr (default true)
 - `-format` output format: `table` or `markdown`
 - `-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
+- `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
+- `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
 - `-suite` named suite:
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)
   - `churnvacuum` — churn + settled scans, then VACUUM and scan again
   - `churnmaint` — churn + settled scans, then slab compaction + VACUUM and scan again
   - `flushthrash` — forces a small TreeDB flush threshold; catches flush thrash / runaway backlog regressions
+  - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)

@@ -32,3 +32,6 @@ jobs:
 
       - name: Suite: longmix
         run: ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false
+
+      - name: Suite: bigkeys_guard
+        run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096

@@ -489,6 +489,9 @@ var (
 	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
 	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
 
+	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
+	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
+
 	treedbFlushThreshold           = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
 	treedbKeepRecent               = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems            = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
@@ -552,6 +555,9 @@ type BenchConfig struct {
 	MutexProfileFraction int
 	TraceProfile         string
 
+	MaxWall  time.Duration
+	MaxRSSMB int
+
 	SettleBeforeScans bool
 
 	TreeDBIterDebug      bool
@@ -613,6 +619,8 @@ func main() {
 		MutexProfile:                   *mutexProfile,
 		MutexProfileFraction:           *mutexFrac,
 		TraceProfile:                   *traceProfile,
+		MaxWall:                        *maxWall,
+		MaxRSSMB:                       *maxRSSMB,
 		SettleBeforeScans:              *settleBeforeScans,
 		TreeDBIterDebug:                *treedbIterDebug,
 		TreeDBIterDebugLimit:           *treedbIterDebugLimit,
@@ -658,6 +666,12 @@ func main() {
 			out, err := runFlushThrashSuite(baseCfg)
 			if err != nil {
 				log.Fatalf("flushthrash suite: %v", err)
+			}
+			fmt.Print(out)
+		case "bigkeys_guard":
+			out, err := runBigKeysGuardSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("bigkeys_guard suite: %v", err)
 			}
 			fmt.Print(out)
 		case "longmix":
@@ -837,6 +851,50 @@ func runSweep(baseCfg BenchConfig, keyCounts []int) ([]BenchRun, error) {
 	return runs, nil
 }
 
+type benchGuard struct {
+	maxWall  time.Duration
+	deadline time.Time
+
+	maxRSSMB    int
+	maxRSSBytes uint64
+}
+
+func newBenchGuard(cfg BenchConfig) *benchGuard {
+	g := &benchGuard{
+		maxWall:  cfg.MaxWall,
+		maxRSSMB: cfg.MaxRSSMB,
+	}
+	if cfg.MaxWall > 0 {
+		g.deadline = time.Now().Add(cfg.MaxWall)
+	}
+	if cfg.MaxRSSMB > 0 {
+		g.maxRSSBytes = uint64(cfg.MaxRSSMB) * 1024 * 1024
+	}
+	return g
+}
+
+func (g *benchGuard) Checkpoint() error {
+	if g == nil {
+		return nil
+	}
+	if !g.deadline.IsZero() && time.Now().After(g.deadline) {
+		return fmt.Errorf("guard: max-wall exceeded (%s)", g.maxWall)
+	}
+	if g.maxRSSBytes > 0 {
+		rss, ok, err := currentRSSBytes()
+		if err != nil {
+			return fmt.Errorf("guard: rss: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("guard: max-rss-mb is only supported on linux")
+		}
+		if rss > g.maxRSSBytes {
+			return fmt.Errorf("guard: max-rss-mb exceeded (rss=%dMiB cap=%dMiB)", rss/(1024*1024), g.maxRSSMB)
+		}
+	}
+	return nil
+}
+
 func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
@@ -902,6 +960,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Define Tests
 	type TestFunc func(db kvstore.DB, rng *rand.Rand) (float64, error)
+
+	guard := newBenchGuard(cfg)
 
 	prefixScanBase := 0
 	expectedFullScanCount := -1
@@ -970,6 +1030,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				binary.BigEndian.PutUint64(k[:], uint64(i))
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("sequential_write: %w", err)
@@ -982,6 +1047,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			val := make([]byte, cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				if err := db.Set(k[:], val); err != nil {
 					return 0, fmt.Errorf("random_write: %w", err)
@@ -999,6 +1069,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			total := cfg.Keys
 			var k [8]byte
 			for i := 0; i < total; i += cfg.BatchSize {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
 					return 0, fmt.Errorf("batch_write: new batch: %w", err)
@@ -1038,6 +1113,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			keys := make([][]byte, total)
 			for i := 0; i < total; i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 				keys[i] = append([]byte(nil), k[:]...)
 			}
@@ -1046,6 +1126,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start = time.Now()
 
 			for i := 0; i < total; i += batchSize {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
 					return 0, fmt.Errorf("batch_random: new batch: %w", err)
@@ -1083,6 +1168,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			var k [8]byte
 
 			for i := 0; i < total; i += batchSize {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
 					return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
@@ -1113,6 +1203,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
 				_ = db.Delete(k[:])
 			}
@@ -1122,6 +1217,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			start := time.Now()
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
 				_, _ = db.Get(k[:])
 			}
@@ -1138,6 +1238,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 				count := 0
 				for iter.Valid() {
+					if count&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return 0, err
+						}
+					}
 					_ = iter.Key()
 					_ = iter.Value()
 					iter.Next()
@@ -1156,6 +1261,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				count := 0
 				if err := fe.ForEach(func(_ []byte, _ []byte) error {
 					count++
+					if count&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return err
+						}
+					}
 					return nil
 				}); err != nil {
 					return 0, fmt.Errorf("full_scan: foreach: %w", err)
@@ -1176,6 +1286,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 				count := 0
 				for iter.Valid() {
+					if count&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return 0, err
+						}
+					}
 					_ = iter.Key()
 					_ = iter.Value()
 					iter.Next()
@@ -1191,6 +1306,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				count := 0
 				if err := fe.ForEach(func(_ []byte, _ []byte) error {
 					count++
+					if count&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return err
+						}
+					}
 					return nil
 				}); err != nil {
 					return 0, fmt.Errorf("full_scan2: foreach: %w", err)
@@ -1214,6 +1334,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			totalItems := 0
 			maxKey := prefixScanBase + cfg.Keys
 			for i := 0; i < cfg.RangeQueries; i++ {
+				if i&1023 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				startIdx := prefixScanBase + rng.Intn(cfg.Keys)
 				endIdx := startIdx + cfg.RangeSpan
 				if endIdx > maxKey {
@@ -1240,6 +1365,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				itemsThisQuery := 0
 				iterStart := time.Now()
 				for iter.Valid() {
+					if itemsThisQuery&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							_ = iter.Close()
+							return 0, err
+						}
+					}
 					_ = iter.Key()
 					iter.Next()
 					itemsThisQuery++
@@ -1299,6 +1430,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			totalItems := 0
 			maxKey := prefixScanBase + cfg.Keys
 			for i := 0; i < cfg.RangeQueries; i++ {
+				if i&1023 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
 				startIdx := prefixScanBase + rng.Intn(cfg.Keys)
 				endIdx := startIdx + cfg.RangeSpan
 				if endIdx > maxKey {
@@ -1320,6 +1456,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 				itemsThisQuery := 0
 				for iter.Valid() {
+					if itemsThisQuery&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							_ = iter.Close()
+							return 0, err
+						}
+					}
 					_ = iter.Key()
 					_ = iter.Value()
 					iter.Next()
@@ -2019,6 +2161,74 @@ func runFlushThrashSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- treedb-flush-threshold: %d\n", thrashFlushThresholdBytes))
+	sb.WriteString("\n")
+
+	sb.WriteString("```text\n")
+	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
+	sb.WriteString(table)
+	sb.WriteString("```\n\n")
+
+	if diag != "" {
+		sb.WriteString("## TreeDB cache stats (post-run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(diag)
+		sb.WriteString("```\n")
+	}
+
+	return sb.String(), nil
+}
+
+func runBigKeysGuardSuite(baseCfg BenchConfig) (string, error) {
+	// Guardrail suite for the prior failure mode where small FlushThreshold +
+	// big keycount led to stalls or runaway memory/backlog.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.KeepDir = true
+	cfg.DBsArg = "treedb"
+	cfg.TestsArg = "random_write,batch_write"
+
+	// If the caller didn't specify -keys (default is 100k), use a larger default.
+	if cfg.Keys == 100_000 {
+		cfg.Keys = 1_000_000
+	}
+
+	// Ensure the suite never runs unbounded even if the caller forgets to set
+	// -max-wall (CI should still set it explicitly).
+	if cfg.MaxWall == 0 {
+		cfg.MaxWall = 15 * time.Minute
+	}
+
+	const guardFlushThresholdBytes = 6_108_864
+	prevFlush := *treedbFlushThreshold
+	*treedbFlushThreshold = guardFlushThresholdBytes
+	defer func() { *treedbFlushThreshold = prevFlush }()
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+
+	diag, diagErr := suiteTreeDBCacheStats(run.Instances)
+	cleanErr := suiteCleanupDirs(run.Instances)
+	if diagErr != nil {
+		return "", diagErr
+	}
+	if cleanErr != nil {
+		return "", cleanErr
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: bigkeys_guard\n\n")
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- treedb-flush-threshold: %d\n", guardFlushThresholdBytes))
+	if run.Config.MaxWall > 0 {
+		sb.WriteString(fmt.Sprintf("- max-wall: %s\n", run.Config.MaxWall))
+	}
+	if run.Config.MaxRSSMB > 0 {
+		sb.WriteString(fmt.Sprintf("- max-rss-mb: %d\n", run.Config.MaxRSSMB))
+	}
 	sb.WriteString("\n")
 
 	sb.WriteString("```text\n")
