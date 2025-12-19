@@ -14,6 +14,7 @@ import (
 	"github.com/klauspost/compress/s2"
 )
 
+// FlagCompressed marks slab records with s2-compressed payloads.
 const FlagCompressed = 0x80
 
 func packLength(len uint64, flags uint8) uint64 {
@@ -52,6 +53,7 @@ func (h *DB) writeSlab(buf []byte) error {
 	return nil
 }
 
+// ReadBytes reads raw bytes from the slab at the given offset.
 func (h *DB) ReadBytes(offset SlabOffset, n int64) ([]byte, error) {
 	segmentID := uint16(uint64(offset) >> OffsetBits)
 	localOffset := int64(uint64(offset) & ((1 << OffsetBits) - 1))

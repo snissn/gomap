@@ -11,6 +11,7 @@ import (
 const (
 	slabKeyLenControl = ^uint64(0)
 
+	// FlagControl marks slab records used for batch begin/commit markers.
 	FlagControl = 0x40
 
 	controlBatchBegin  = 1

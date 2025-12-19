@@ -16,10 +16,16 @@ type batchApplier interface {
 	ApplyBatchSync(ops []BatchOp) error
 }
 
-func (h *HashDB) NewBatch() *Batch   { return &Batch{applier: h} }
-func (h *DB) NewBatch() *Batch       { return &Batch{applier: h} }
+// NewBatch returns a new batch for the sharded HashDB.
+func (h *HashDB) NewBatch() *Batch { return &Batch{applier: h} }
+
+// NewBatch returns a new batch for the single-shard DB.
+func (h *DB) NewBatch() *Batch { return &Batch{applier: h} }
+
+// NewBatch returns a new batch for the cached DB wrapper.
 func (c *CachedDB) NewBatch() *Batch { return &Batch{applier: c} }
 
+// Set adds a put operation to the batch.
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return nil
@@ -30,6 +36,7 @@ func (b *Batch) Set(key, value []byte) error {
 	return nil
 }
 
+// Delete adds a delete operation to the batch.
 func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return nil
@@ -39,6 +46,7 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
+// Commit applies the batch without forcing durability.
 func (b *Batch) Commit() error {
 	if b.closed {
 		return nil
@@ -48,6 +56,7 @@ func (b *Batch) Commit() error {
 	return b.applier.ApplyBatch(ops)
 }
 
+// CommitSync applies the batch and forces durability.
 func (b *Batch) CommitSync() error {
 	if b.closed {
 		return nil
@@ -57,6 +66,7 @@ func (b *Batch) CommitSync() error {
 	return b.applier.ApplyBatchSync(ops)
 }
 
+// Close releases batch resources and prevents further use.
 func (b *Batch) Close() error {
 	b.closed = true
 	b.ops = nil

@@ -10,6 +10,7 @@ import (
 
 const snapshotMagicV1 = "HASHDBSNAP1\n"
 
+// ErrSnapshotCorrupt indicates a snapshot stream failed validation.
 var ErrSnapshotCorrupt = errors.New("hashdb: snapshot corrupt")
 
 // Export writes a snapshot of all live key/value pairs to w.

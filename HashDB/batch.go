@@ -4,7 +4,9 @@ package hashdb
 type BatchOpType uint8
 
 const (
+	// BatchOpPut represents a put/update operation in a batch.
 	BatchOpPut BatchOpType = iota
+	// BatchOpDelete represents a delete operation in a batch.
 	BatchOpDelete
 )
 
@@ -15,10 +17,12 @@ type BatchOp struct {
 	Value []byte // only for BatchOpPut
 }
 
+// PutOp constructs a put batch operation for ApplyBatch/ApplyBatchSync.
 func PutOp(key, value []byte) BatchOp {
 	return BatchOp{Type: BatchOpPut, Key: key, Value: value}
 }
 
+// DeleteOp constructs a delete batch operation for ApplyBatch/ApplyBatchSync.
 func DeleteOp(key []byte) BatchOp {
 	return BatchOp{Type: BatchOpDelete, Key: key}
 }

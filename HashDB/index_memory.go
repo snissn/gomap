@@ -14,6 +14,7 @@ type IndexMemoryPolicy struct {
 	AdviseKeysRandom   bool
 }
 
+// DefaultIndexMemoryPolicy is the default memory pinning/advice configuration.
 var DefaultIndexMemoryPolicy = IndexMemoryPolicy{
 	LockControls:       true,
 	LockControlsStrict: false,

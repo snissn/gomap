@@ -23,6 +23,7 @@ type HashDB struct {
 	locks  []sync.RWMutex
 }
 
+// HashDBOptions configures sharded HashDB behavior.
 type HashDBOptions struct {
 	CacheWAL CacheWALOptions
 
@@ -55,6 +56,7 @@ func (h *HashDB) NewWithShards(folder string, numShards int) (err error) {
 	return h.NewWithShardsAndOptions(folder, numShards, HashDBOptions{})
 }
 
+// NewWithShardsAndOptions initializes the sharded store with explicit options.
 func (h *HashDB) NewWithShardsAndOptions(folder string, numShards int, opts HashDBOptions) (err error) {
 	if folder == "" {
 		return errors.New("db dir required")

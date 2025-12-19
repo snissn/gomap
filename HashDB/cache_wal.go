@@ -10,14 +10,19 @@ import (
 	"path/filepath"
 )
 
+// CacheWALFsyncPolicy controls fsync behavior for the cache WAL.
 type CacheWALFsyncPolicy uint8
 
 const (
+	// CacheWALDisabled disables the cache WAL entirely.
 	CacheWALDisabled CacheWALFsyncPolicy = iota
+	// CacheWALFsyncOnSync fsyncs the WAL only when SyncWAL is called.
 	CacheWALFsyncOnSync
+	// CacheWALFsyncAlways fsyncs the WAL after each append.
 	CacheWALFsyncAlways
 )
 
+// CacheWALOptions configures the optional cache WAL.
 type CacheWALOptions struct {
 	FsyncPolicy CacheWALFsyncPolicy
 }
@@ -145,6 +150,7 @@ scan:
 	return &cacheWAL{path: path, fsync: policy, f: f, workingDir: dir}, entries, nil
 }
 
+// Close closes the underlying WAL file.
 func (w *cacheWAL) Close() error {
 	if w == nil || w.f == nil {
 		return nil
@@ -154,6 +160,7 @@ func (w *cacheWAL) Close() error {
 	return err
 }
 
+// Sync fsyncs the underlying WAL file.
 func (w *cacheWAL) Sync() error {
 	if w == nil || w.f == nil {
 		return nil

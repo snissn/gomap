@@ -118,6 +118,7 @@ func NewCacheKVWithWAL(backend KVStore, maxEntries, maxBytes int, flushInterval 
 	return c, nil
 }
 
+// Get returns the cached value for a key (or fetches it from the backend).
 func (c *CacheKV) Get(key []byte) ([]byte, error) {
 	k := string(key)
 	c.mu.RLock()
@@ -244,6 +245,7 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 	return values, errs
 }
 
+// Put inserts or updates a key in the write-back cache.
 func (c *CacheKV) Put(key, value []byte) error {
 	k := string(key)
 
@@ -266,6 +268,7 @@ func (c *CacheKV) Put(key, value []byte) error {
 	return nil
 }
 
+// Delete removes a key via the write-back cache.
 func (c *CacheKV) Delete(key []byte) error {
 	k := string(key)
 
@@ -289,6 +292,7 @@ func (c *CacheKV) Delete(key []byte) error {
 }
 
 // Flush writes pending changes to the backend.
+// Flush flushes queued cache entries to the backend.
 func (c *CacheKV) Flush() error {
 	c.flushMu.Lock()
 	defer c.flushMu.Unlock()
@@ -377,6 +381,7 @@ func (c *CacheKV) Flush() error {
 }
 
 // Close stops the flush loop and flushes remaining writes.
+// Close stops background workers and closes the cache WAL if present.
 func (c *CacheKV) Close() error {
 	if c.flushInterval > 0 {
 		close(c.stopCh)

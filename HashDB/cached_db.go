@@ -28,6 +28,7 @@ func NewCachedDB(folder string, maxEntries, maxBytes int, flushInterval time.Dur
 	return NewCachedDBWithOptions(folder, maxEntries, maxBytes, flushInterval, CachedDBOptions{})
 }
 
+// CachedDBOptions configures CachedDB behavior.
 type CachedDBOptions struct {
 	CacheWAL CacheWALOptions
 
@@ -37,6 +38,7 @@ type CachedDBOptions struct {
 	IndexMemoryPolicySet bool
 }
 
+// NewCachedDBWithOptions opens a cached DB with explicit caching and WAL options.
 func NewCachedDBWithOptions(folder string, maxEntries, maxBytes int, flushInterval time.Duration, opts CachedDBOptions) (*CachedDB, error) {
 	db := &DB{}
 	if opts.IndexMemoryPolicySet {
@@ -67,11 +69,22 @@ func NewCachedHashmap(folder string, maxEntries, maxBytes int, flushInterval tim
 	return NewCachedDB(folder, maxEntries, maxBytes, flushInterval)
 }
 
-func (c *CachedDB) Get(key []byte) ([]byte, error)     { return c.cache.Get(key) }
+// Get returns the value for a key, consulting the write-back cache first.
+func (c *CachedDB) Get(key []byte) ([]byte, error) { return c.cache.Get(key) }
+
+// Put inserts or updates a key in the write-back cache.
 func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key, value) }
+
+// Add is a compatibility alias for Put.
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
-func (c *CachedDB) Delete(key []byte) error            { return c.cache.Delete(key) }
-func (c *CachedDB) Flush() error                       { return c.cache.Flush() }
+
+// Delete removes a key from the write-back cache.
+func (c *CachedDB) Delete(key []byte) error { return c.cache.Delete(key) }
+
+// Flush flushes cached writes to the backend without forcing an fsync.
+func (c *CachedDB) Flush() error { return c.cache.Flush() }
+
+// Sync flushes cached writes and fsyncs the backend for durability.
 func (c *CachedDB) Sync() error {
 	if c == nil || c.cache == nil || c.db == nil {
 		return nil
@@ -156,6 +169,7 @@ func (c *CachedDB) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []
 	return c.cache.getManyWithHashes(keys, hashes)
 }
 
+// Close flushes cached writes and closes the underlying backend.
 func (c *CachedDB) Close() error {
 	var firstErr error
 	if c.cache != nil {
@@ -172,12 +186,14 @@ func (c *CachedDB) Close() error {
 	return firstErr
 }
 
+// SetCompression enables or disables backend compression for values.
 func (c *CachedDB) SetCompression(enabled bool) {
 	c.backendMu.Lock()
 	defer c.backendMu.Unlock()
 	c.db.SetCompression(enabled)
 }
 
+// Update performs a read-modify-write against the backend with cache flush.
 func (c *CachedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// For simplicity, bypass cache for read-modify-write to avoid stale reads.
 	if err := c.cache.Flush(); err != nil {
@@ -188,6 +204,7 @@ func (c *CachedDB) Update(key []byte, callback func([]byte) ([]byte, error)) err
 	return c.db.Update(key, callback)
 }
 
+// Clear removes all keys from the backend after flushing the cache.
 func (c *CachedDB) Clear() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
@@ -197,6 +214,7 @@ func (c *CachedDB) Clear() error {
 	return c.db.Clear()
 }
 
+// Compact triggers a backend compaction after flushing the cache.
 func (c *CachedDB) Compact() error {
 	if err := c.cache.Flush(); err != nil {
 		return err
@@ -206,6 +224,7 @@ func (c *CachedDB) Compact() error {
 	return c.db.Compact()
 }
 
+// PutMany inserts a batch of items into the write-back cache.
 func (c *CachedDB) PutMany(items []Item) error {
 	// Route batched writes through the write-back cache so they are
 	// coalesced with other pending writes. CacheKV will flush to the
@@ -218,10 +237,12 @@ func (c *CachedDB) PutMany(items []Item) error {
 	return nil
 }
 
+// AddMany is a compatibility alias for PutMany.
 func (c *CachedDB) AddMany(items []Item) error {
 	return c.PutMany(items)
 }
 
+// Stats returns backend stats with cache synchronization.
 func (c *CachedDB) Stats() Stats {
 	c.backendMu.RLock()
 	defer c.backendMu.RUnlock()
@@ -234,6 +255,7 @@ type dbKVAdapter struct {
 	mu *sync.RWMutex
 }
 
+// Get returns the value for a key with serialized access to the underlying DB.
 func (m *dbKVAdapter) Get(key []byte) ([]byte, error) {
 	if m.mu != nil {
 		m.mu.RLock()
@@ -241,6 +263,8 @@ func (m *dbKVAdapter) Get(key []byte) ([]byte, error) {
 	}
 	return m.db.Get(key)
 }
+
+// Put inserts or updates a key in the underlying DB with serialized access.
 func (m *dbKVAdapter) Put(key, value []byte) error {
 	if m.mu != nil {
 		m.mu.Lock()
@@ -248,6 +272,8 @@ func (m *dbKVAdapter) Put(key, value []byte) error {
 	}
 	return m.db.Put(key, value)
 }
+
+// Delete removes a key from the underlying DB with serialized access.
 func (m *dbKVAdapter) Delete(key []byte) error {
 	if m.mu != nil {
 		m.mu.Lock()

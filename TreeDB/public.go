@@ -16,7 +16,9 @@ type Options = db.Options
 type Mode = db.Mode
 
 const (
-	ModeCached  = db.ModeCached
+	// ModeCached opens TreeDB with the write-back caching layer enabled.
+	ModeCached = db.ModeCached
+	// ModeBackend opens TreeDB in backend-only mode (no caching layer).
 	ModeBackend = db.ModeBackend
 )
 
@@ -212,6 +214,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return db.backend.Get(key)
 }
 
+// Has reports whether a key exists in the database.
 func (db *DB) Has(key []byte) (bool, error) {
 	if err := db.ensureOpen(); err != nil {
 		return false, err
@@ -222,6 +225,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return db.backend.Has(key)
 }
 
+// Set writes a key/value pair without forcing an fsync boundary.
 func (db *DB) Set(key, value []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -232,6 +236,7 @@ func (db *DB) Set(key, value []byte) error {
 	return db.backend.Set(key, value)
 }
 
+// SetSync writes a key/value pair and forces a durability boundary.
 func (db *DB) SetSync(key, value []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -242,6 +247,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	return db.backend.SetSync(key, value)
 }
 
+// Delete removes a key without forcing an fsync boundary.
 func (db *DB) Delete(key []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -252,6 +258,7 @@ func (db *DB) Delete(key []byte) error {
 	return db.backend.Delete(key)
 }
 
+// DeleteSync removes a key and forces a durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -262,6 +269,7 @@ func (db *DB) DeleteSync(key []byte) error {
 	return db.backend.DeleteSync(key)
 }
 
+// Iterator returns a forward iterator over the range [start, end).
 func (db *DB) Iterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
@@ -272,6 +280,7 @@ func (db *DB) Iterator(start, end []byte) (Iterator, error) {
 	return db.backend.Iterator(start, end)
 }
 
+// ReverseIterator returns a reverse iterator over the range [start, end).
 func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
@@ -282,6 +291,7 @@ func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	return db.backend.ReverseIterator(start, end)
 }
 
+// NewBatch creates a new batch for buffered writes.
 func (db *DB) NewBatch() Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
@@ -292,6 +302,7 @@ func (db *DB) NewBatch() Batch {
 	return db.backend.NewBatch()
 }
 
+// NewBatchWithSize creates a new batch with a hint for the expected entry size.
 func (db *DB) NewBatchWithSize(size int) Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
@@ -302,6 +313,7 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	return db.backend.NewBatchWithSize(size)
 }
 
+// Stats returns diagnostic stats for the active backend and cached layer.
 func (db *DB) Stats() map[string]string {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
@@ -322,6 +334,7 @@ func (db *DB) Stats() map[string]string {
 	return stats
 }
 
+// Print dumps best-effort debug output for the underlying backend.
 func (db *DB) Print() error {
 	if err := db.ensureOpen(); err != nil {
 		return err

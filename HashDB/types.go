@@ -8,15 +8,19 @@ import (
 	"github.com/snissn/gomap/HashDB/internal/lockfile"
 )
 
+// SlabOffset encodes a segment ID and byte offset within a slab file.
 type SlabOffset uint64
 
+// Tombstone is a sentinel slab offset representing a deleted key.
 const Tombstone SlabOffset = 0xFFFFFFFFFFFFFFFF
 
+// Hash is the 64-bit hash value used for key placement.
 type Hash uint64
 
 // DefaultCapacity is used when no capacity metadata exists on disk.
 const DefaultCapacity uint64 = 32 * 1024
 
+// Key holds metadata for a stored key in the hash index.
 type Key struct {
 	slabOffset SlabOffset
 	hash       Hash
@@ -88,6 +92,7 @@ type DB struct {
 // New code should use DB.
 type Hashmap = DB
 
+// Stats captures high-level storage metrics for a DB instance.
 type Stats struct {
 	KeyCount uint64
 	Capacity uint64
@@ -96,12 +101,16 @@ type Stats struct {
 }
 
 const (
+	// SegmentBits encodes the slab segment ID width within a SlabOffset.
 	SegmentBits = 16
-	OffsetBits  = 48
+	// OffsetBits encodes the byte-offset width within a SlabOffset.
+	OffsetBits = 48
 )
 
+// MaxSegmentSize controls the maximum bytes per slab segment.
 var MaxSegmentSize int64 = 64 * 1024 * 1024 // 64MB
 
+// Item represents a key/value pair used in batch-style APIs.
 type Item struct {
 	Key   []byte
 	Value []byte

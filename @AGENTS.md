@@ -12,7 +12,7 @@
 - [x] Track any “safe to delete” candidates in `TENTATIVE_DELETIONS.md` (do not delete unless clearly unneeded).
 - [x] TreeDB: unify open + coherent crash recovery (cached WAL replay + cleanup; spec tests added).
 - [x] V1 milestone: “Wow” documentation (see `TODO.md`).
-- [ ] Milestone: downstream-ready storage primitives (stable surface + contracts; see `TODO.md`; remaining items include GoDoc coverage + SemVer tags in `docs/HANDOFF_CHECKLIST.md`).
+- [ ] Milestone: downstream-ready storage primitives (stable surface + contracts; see `TODO.md`; remaining items include SemVer tags in `docs/HANDOFF_CHECKLIST.md`).
 - [x] HashDB: add exclusive open lock + tests.
 
 ## Progress Log

@@ -28,6 +28,7 @@ type bgCompactionWorker struct {
 	lastErr     atomic.Value // string
 }
 
+// Start launches the background compaction loop with the provided interval.
 func (w *bgCompactionWorker) Start(db *DB, interval time.Duration, opts compaction.Options) {
 	if interval <= 0 || db == nil {
 		w.enabled.Store(false)
@@ -64,10 +65,12 @@ func (w *bgCompactionWorker) Start(db *DB, interval time.Duration, opts compacti
 	}()
 }
 
+// Enabled reports whether the background compaction loop is running.
 func (w *bgCompactionWorker) Enabled() bool {
 	return w.enabled.Load()
 }
 
+// Kick requests an immediate compaction pass (best-effort).
 func (w *bgCompactionWorker) Kick() {
 	if !w.Enabled() || w.kickCh == nil {
 		return
@@ -78,6 +81,7 @@ func (w *bgCompactionWorker) Kick() {
 	}
 }
 
+// Stop terminates the background compaction loop and waits for it to exit.
 func (w *bgCompactionWorker) Stop() {
 	if !w.Enabled() {
 		return
@@ -134,6 +138,7 @@ func (w *bgCompactionWorker) runOnce(ctx context.Context, db *DB) {
 	}
 }
 
+// Stats returns a snapshot of background compaction state and recent run info.
 func (w *bgCompactionWorker) Stats() (enabled bool, interval time.Duration, runs uint64, lastRunUnix int64, lastErr string) {
 	enabled = w.Enabled()
 	interval = w.interval
