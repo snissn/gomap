@@ -536,13 +536,40 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - **No “helpful” regressions:** allocator/locality work must not increase worst-case memory usage or cause long stalls under overload (validate with `bigkeys_guard` and RSS/wall caps).
 - **One change at a time:** Phase 17 is high risk; implement one policy change per sprint branch, behind an option/flag when feasible.
 
+### 17.0.0 Branching Model (Phase 17)
+
+**Why:** Phase 17 changes are high risk and must be easy to bisect and roll back.
+
+- RC branch (always green): `phase17-rc-01`
+  - Create it from `main` when starting Phase 17:
+    - `git checkout main && git pull`
+    - `git checkout -b phase17-rc-01`
+    - `git push -u origin phase17-rc-01`
+- Sprint branches: `phase17-sprint-01`, `phase17-sprint-02`, ...
+  - Always branch from the current RC tip:
+    - `git checkout phase17-rc-01 && git pull`
+    - `git checkout -b phase17-sprint-XX`
+- Merge workflow:
+  - Sprint → RC:
+    - `git checkout phase17-rc-01`
+    - `git merge --no-ff origin/phase17-sprint-XX -m "phase17-rc-01: merge sprint-XX"`
+    - `git push origin phase17-rc-01`
+  - RC → main happens only after explicit human approval with benchmark evidence.
+
 ### 17.0.1 Sprint Workflow (Phase 17)
 
-- Create a sprint branch from the active RC (or `main` if Phase 16 is fully merged): `git checkout -b phase17-sprint-XX`.
-- Before coding, run **17.0.2 Baseline Gates** and paste results into the PR description.
-- Implement exactly one subphase per sprint branch (keep diffs reviewable).
-- After coding, re-run **17.0.2 Baseline Gates** + the subphase-specific gates.
-- Include artifacts (profiles + fragmentation report output) and stop for human approval before merge.
+- Start each sprint from `phase17-rc-01` (see 17.0.0).
+- Before coding:
+  - Run **17.0.2 Baseline Gates** (and save outputs to files for PR copy/paste).
+  - Write a 1–2 sentence “risk hypothesis” in the PR description:
+    - what might regress (scans? RAM? durability?),
+    - and what specific gate(s) would catch it.
+- During coding:
+  - Implement exactly one subphase per sprint branch.
+  - Keep diffs reviewable (prefer adding a new option and keeping default behavior unchanged until proven).
+- After coding:
+  - Re-run **17.0.2 Baseline Gates** + any subphase-specific gates.
+  - Summarize deltas (before/after) and explicitly state “mergeable?”.
 
 ### 17.0.2 Baseline Gates (Run Before/After Every Phase 17 Sprint)
 
@@ -567,6 +594,16 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 **If the sprint touches scans / allocator locality / compaction / vacuum, also run:**
 - `./bin/unified-bench -suite churnmaint -progress=false`
 
+**Output capture (required for Phase 17 PRs):**
+- Redirect each suite to a file so the PR can include exact text:
+  - `./bin/unified-bench -suite longmix -progress=false > before.longmix.md`
+  - `./bin/unified-bench -suite longmix -progress=false > after.longmix.md`
+  - Repeat for `flushthrash`, `bigkeys_guard`, `churnmaint` as applicable.
+- “Pass” means:
+  - suites complete without `guard:` aborts,
+  - TreeDB does not show `-` for core tests (write/read/scan) in the final table,
+  - `longmix` prints valid fragmentation reports (no validation errors).
+
 ### 17.0.3 Required Evidence in PRs
 
 - Paste the full benchmark tables for smoke + suites (before/after) into the PR.
@@ -581,48 +618,102 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 **Goal:** Improve scan stability under churn by reducing page-ID scattering without resorting to `PreferAppendAlloc` (which trades locality for file growth).
 
-- [ ] **Design choice (pick one per sprint):**
-  - **Extent/segment bins:** maintain freelist buckets by region (e.g. `region = pageID / regionPages`) and allocate from the “hot” region(s) first, or
-  - **Allocate-near hints:** thread an “allocate near X” hint through split/merge/rebalance so newly-created pages cluster near siblings/parents.
-- [ ] **Implementation notes:**
-  - Keep the existing allocator invariants (no double-free, no invalid IDs, crash-safe freelist head persistence).
-  - Prefer implementing behind a new option (e.g. `AllocatorPolicy` / `FreelistPolicy`) so we can A/B compare and roll back quickly.
-  - Add stats for allocator behavior (e.g. allocations by region, cache hit rate if using bins).
-- [ ] **Correctness gates:**
-  - `go test -race ./...` (required).
-  - Add a unit test for the new policy’s allocator bookkeeping (no leaks, no duplicates) if adding new data structures.
-- [ ] **Locality gates (required before merge):**
-  - Existing deterministic tests must pass (they already assert locality bounds):
-    - `TreeDB/db/vacuum_locality_test.go`
-    - `TreeDB/db/vacuum_churn_locality_test.go`
-  - `./bin/unified-bench -suite longmix -progress=false` must show **no worse** `treedb.user.pages.span_ratio_ppm` after churn/settle than the baseline for the same workload (call out numbers in PR).
+**Key metric:** `treedb.user.pages.span_ratio_ppm` from `FragmentationReport`.
+- Interpreting it: `(live_span_pages / live_pages) * 1_000_000`. Lower is better.
+- Existing bounds in deterministic tests:
+  - after vacuum: expect `<= 1_200_000` (`TreeDB/db/vacuum_locality_test.go`)
+  - after moderate churn with `PreferAppendAlloc`: expect `<= 3_000_000` (`TreeDB/db/vacuum_churn_locality_test.go`)
 
-**Stop condition:** if scans regress (full/prefix scan throughput drops materially) or span density worsens, revert or keep the policy behind an explicit opt-in.
+#### 17.1.0 Baseline (mandatory before changing allocator policy)
+- [ ] Capture baseline locality + scans with defaults (no `PreferAppendAlloc`):
+  - `./bin/unified-bench -suite longmix -progress=false > before.longmix.md`
+  - Record `treedb.user.pages.span_ratio_ppm` pre/post settle in the PR.
+- [ ] Capture an “upper bound” locality run with append-only allocation (optional but recommended):
+  - `./bin/unified-bench -suite longmix -progress=false -treedb-prefer-append-alloc > before.append.longmix.md`
+
+#### 17.1.1 Sprint candidate A (recommended first): Region-biased selection within freelist head (no on-disk format change)
+
+**Goal:** Improve locality without changing freelist page format by *choosing which free page to pop* from the freelist head page.
+
+- [ ] **Implementation plan (exact):**
+  1. Add a new allocator policy knob (opt-in first):
+     - `treedb.Options` (in `TreeDB/db/db.go`), e.g.:
+       - `FreelistRegionPages uint64` (0 disables; start with 8192 pages ≈ 32MiB)
+       - `FreelistRegionRadius int` (0 disables; start with 1 region)
+     - Wire it in `TreeDB/db/db.go` when constructing the allocator (`alloc := freelist.New(...)`).
+  2. Extend `TreeDB/freelist/allocator.go`:
+     - Track `lastAlloc uint64` in `Allocator` (protected by `mu`).
+     - In `Alloc()` (when using freelist head), if `lastAlloc != 0` and region knobs enabled:
+       - decode head freelist `FreeIDs` (up to `Count`),
+       - scan from the end for the first ID whose `region(id)` is within `±FreelistRegionRadius` of `region(lastAlloc)`,
+       - remove it by swapping with the last element and decrementing `Count`,
+       - write the modified body back (`FreelistPageBody.Encode`) and update checksum,
+       - return the chosen ID.
+     - Otherwise fall back to current behavior (LIFO pop).
+     - Update `lastAlloc` on every successful allocation (freelist or append).
+  3. Keep `PreferAppendAlloc` semantics unchanged (it should bypass this entirely).
+- [ ] **Required new unit tests (exact):**
+  - Add `TreeDB/freelist/allocator_locality_test.go`:
+    - Construct a freelist head page with a mix of IDs from multiple regions.
+    - Set allocator `lastAlloc` to a target region.
+    - Assert `Alloc()` returns a same-region (or radius-near) page even when it’s not the LIFO element.
+    - Assert fallback to LIFO when no candidate matches.
+    - Assert `VerifyChecksumNonMutating` stays true for modified freelist head pages.
+- [ ] **Acceptance (merge criteria):**
+  - All Phase 17 baseline gates pass.
+  - `TreeDB/db/vacuum_locality_test.go` and `TreeDB/db/vacuum_churn_locality_test.go` pass unchanged.
+  - `longmix` does not show worse `span_ratio_ppm` than baseline by more than ~10% (call out numbers).
+  - Scan throughput in `longmix` (full/prefix) does not crater (no “collapsed scans” symptom).
+
+#### 17.1.2 Sprint candidate B (later): Allocate-near hints from tree operations
+
+**Goal:** Allocate new pages near the page being split/merged (stronger locality), but this is higher risk and should only happen after 17.1.1 is stable.
+
+- [ ] Thread an “allocate near pageID” hint through:
+  - B+Tree split/merge/rebalance code paths (likely in `TreeDB/zipper` / `TreeDB/tree`),
+  - into the allocator (new method like `AllocNear(hint uint64)`).
+- [ ] Add an integration test that churns a small keyspace with deletes/overwrites and asserts locality metrics remain stable.
+
+**Stop / rollback rule:** if scans regress materially or span density worsens, keep the policy opt-in and do not flip defaults.
 
 ### 17.2 Concurrency Experiments (Profile-Driven)
 
 **Goal:** Increase multi-core throughput and reduce tail latency without introducing contention regressions.
 
-- [ ] **Audit first (required):**
-  - Collect profiles on a representative workload **before changing code**:
-    - `./bin/unified-bench -suite longmix -dbs treedb -progress=false -mutexprofile before.mutex.pprof -blockprofile before.block.pprof`
-    - Optional: `-trace before.trace` (useful for scheduling/GC + lock interaction)
-  - Identify top contended sites and classify:
-    - backend writer serialization (`db.writeMu`) vs
-    - cached layer locks (`flushMu`, `bpMu`, iterator-rotation effects) vs
-    - GC/allocation hotspots.
-- [ ] **Change policy:**
-  - Implement exactly one concurrency change per sprint branch.
-  - Prefer bounded parallelism (worker pools, limited goroutines) over “goroutine per op”.
-  - Any new goroutine must be `Close()`-stoppable and have a “no leaks” test.
-- [ ] **Example safe targets (only if profiles justify):**
-  - bounded parallel decode/copy in slab compaction *outside* the writer lock (commit remains serialized),
-  - scan prefetch/read-ahead with strict memory bounds and easy disable,
-  - further moving maintenance work off the commit critical path (always with quotas + stats).
-- [ ] **Gates (required):**
-  - Run **17.0.2 Baseline Gates** (before/after).
-  - Compare `before` vs `after` profiles and explicitly call out improvements/regressions.
-  - No scan collapse: `-settle-before-scans` results must remain sane; `longmix` scans must not crater.
+#### 17.2.0 Profiling Baseline (Sprint candidate: audit-only)
+- [ ] Collect CPU + contention profiles on a fixed workload before changing code:
+  - `make unified-bench`
+  - `./bin/unified-bench -suite longmix -dbs treedb -keys 1000000 -seed 1 -progress=false -cpuprofile before.cpu.pprof -mutexprofile before.mutex.pprof -blockprofile before.block.pprof > before.longmix.md`
+  - Optional trace (bigger artifact): `-trace before.trace`
+- [ ] Quick reads (copy/paste top 20 into PR):
+  - CPU: `go tool pprof -top ./bin/unified-bench before.cpu.pprof`
+  - Mutex: `go tool pprof -top ./bin/unified-bench before.mutex.pprof`
+  - Block: `go tool pprof -top ./bin/unified-bench before.block.pprof`
+- [ ] Categorize top issues (pick exactly one category for the next sprint):
+  1. **CPU bound** (e.g. CRC, memmove, iterator merges): prefer algorithmic/alloc reductions.
+  2. **Lock contention** (mutex/block profiles dominated by one lock): reduce critical sections or add bounded parallelism.
+  3. **IO bound** (syscalls, msync/fsync): add batching, reduce sync frequency, or add background maintenance with strict quotas.
+
+#### 17.2.1 Concurrency Change Template (one change per sprint)
+- [ ] **Scope:** only one concurrency change in the sprint branch; everything else must be refactors required for that change.
+- [ ] **Always add a knob first (opt-in):**
+  - add `treedb.Options` field(s) for the concurrency behavior (0 = default, <0 = disable, >0 = enable/tune),
+  - wire through `TreeDB/public.go` and/or `TreeDB/caching/db.go` as appropriate.
+- [ ] **Always add a stop-on-close test:**
+  - if you add a goroutine: add a unit test that opens, enables it, then closes and asserts it stops (pattern matches existing bg workers).
+- [ ] **Always re-profile:**
+  - run the same command as 17.2.0 but write `after.*.pprof` and `after.longmix.md`.
+  - PR must include top-20 deltas (before vs after) for CPU + mutex + block.
+
+#### 17.2.2 Allowed Targets (ordered; pick the first that profiles justify)
+1. Reduce lock hold time in cached layer flush/checkpoint paths (prefer lock narrowing over new goroutines).
+2. Add bounded worker pool to compaction copy/decode path (outside writer lock), with a hard cap on goroutines and memory.
+3. Iterator/scan prefetching *only if* IO-bound and it can be disabled with one option (and must have a memory cap).
+
+#### 17.2.3 Gates (required)
+- [ ] Run **17.0.2 Baseline Gates** (before/after).
+- [ ] No scan collapse: `-settle-before-scans` results must remain sane; `longmix` full/prefix scan ops/s must not crater.
+- [ ] No runaway memory: `bigkeys_guard` must complete without `guard:` aborts (and without excessive RSS growth if running on Linux with `-max-rss-mb`).
 
 ### 17.3 Operational Defaults & Guardrails (LevelDB-like) (Moved from Phase 16.10)
 
@@ -630,60 +721,93 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 #### 17.3.1 Library Defaults for Cached-Mode Backpressure (not just unified-bench)
 - [ ] **Outcome:** `treedb.Open` in cached mode has safe default backpressure knobs even when callers don’t set them.
-- [ ] **Implementation:**
-  - In `TreeDB/public.go`, when `opts.Mode != ModeBackend` and caller leaves them at zero, set:
-    - `opts.SlowdownBacklogSeconds = 1`
-    - `opts.StopBacklogSeconds = 2`
-    - `opts.MaxBacklogBytes = 2<<30` (2GiB)
-  - Preserve “explicit disable” semantics:
-    - if caller sets all three to `0` intentionally, they get disabled only if we add an explicit `DisableBackpressure` knob (or use negative sentinel values). Decide and document.
-  - Ensure this does not conflict with `opts.MaxQueuedMemtables` legacy mode; adaptive should take precedence when any adaptive knob is enabled.
+- [ ] **Implementation (unambiguous semantics):**
+  - Treat `0` as “use defaults”, and `<0` as “disable”.
+    - If any of `{SlowdownBacklogSeconds, StopBacklogSeconds}` is `<0` OR `MaxBacklogBytes < 0`: disable adaptive backpressure (set all three to `0`).
+    - Else if all three are `0`: set defaults:
+      - `SlowdownBacklogSeconds = 1`
+      - `StopBacklogSeconds = 2`
+      - `MaxBacklogBytes = 2<<30` (2GiB)
+    - Else: respect caller-provided values (including enabling partial knobs).
+  - Implement the defaulting in `TreeDB/public.go` (cached mode only) so all callers benefit (not just unified-bench).
+  - Document the new semantics in `docs/TREEDB_TUNING.md` (0=default, <0=disable).
+  - Ensure this does not conflict with legacy `MaxQueuedMemtables` mode; adaptive takes precedence when enabled.
 - [ ] **Tests:** add a small unit/integration test that proves defaults are applied and that backlog is capped under a forced slow-flush scenario.
 - [ ] **Bench gates:** `./bin/unified-bench -suite flushthrash` must not regress beyond agreed tolerance vs baseline; ensure no runaway RSS in a long random-write run.
 
 #### 17.3.2 Cached-Mode Operational Stats (Explain “why am I slow?”)
 - [ ] **Outcome:** Operators can see WAL growth and checkpoint/backpressure behavior via `Stats()`.
-- [ ] **Implementation (cached mode `TreeDB/caching/db.go`):**
-  - Add stats keys:
-    - `treedb.cache.wal_bytes` (logical: include current WAL buffered bytes)
-    - `treedb.cache.wal_segments`
-    - `treedb.cache.last_checkpoint_unix`
-    - `treedb.cache.last_checkpoint_ms`
-    - `treedb.cache.last_checkpoint_err` (string; empty if none)
-    - `treedb.cache.auto_checkpoint_interval_ms`
-    - `treedb.cache.auto_checkpoint_max_wal_bytes`
-  - Track last checkpoint outcome in `caching.DB` (atomic/locked fields).
+- [ ] **Implementation plan (exact; cached mode `TreeDB/caching/db.go`):**
+  1. Add fields to `caching.DB`:
+     - config: `autoCheckpointInterval time.Duration`, `autoCheckpointMaxWALBytes int64`
+     - last run telemetry:
+       - `lastCheckpointUnix atomic.Int64` (unix seconds)
+       - `lastCheckpointMs atomic.Int64` (duration ms of last checkpoint attempt)
+       - `lastCheckpointErr atomic.Value` (stores `string`; empty means success/no error)
+  2. Update `StartAutoCheckpoint` to store interval/max bytes into the DB fields (for stats).
+  3. Update `Checkpoint()` to record:
+     - start time,
+     - duration,
+     - error string (if any),
+     - and set `lastCheckpointUnix` even on error (so operators see it is trying).
+  4. Add stats keys in `Stats()`:
+     - `treedb.cache.wal_bytes`:
+       - compute as `(currentWalLogicalBytes + sum(on-disk segment sizes excluding current))`
+       - reuse the existing `listNonEmptyWALSegments` helper
+     - `treedb.cache.wal_segments`: `len(segments)` (include the current segment even if size=0)
+     - `treedb.cache.last_checkpoint_unix`, `treedb.cache.last_checkpoint_ms`, `treedb.cache.last_checkpoint_err`
+     - `treedb.cache.auto_checkpoint_interval_ms`, `treedb.cache.auto_checkpoint_max_wal_bytes`
+  5. Ensure Stats computation is safe under concurrent writers (use existing locks/atomics; Stats can do best-effort os.ReadDir/stat).
 - [ ] **Tests:** unit test that stats keys are present/non-empty when auto-checkpointing is enabled and after at least one checkpoint attempt.
 - [ ] **Gates:** `go test -race ./...` must pass; add a small benchmark smoke that enables auto-checkpoint and confirms WAL stays bounded.
 
 #### 17.3.3 Conservative Default Background Slab Compaction
 - [ ] **Outcome:** Values/slabs don’t silently accumulate extreme dead space over long churn; compaction runs gently by default.
-- [ ] **Implementation:**
-  - Pick conservative defaults in `TreeDB/public.go` (cached mode):
-    - `BackgroundCompactionInterval` default (e.g. 10m) with strict bounds: `MaxSlabs=1`, low `CopyBytesPerSec`, small microbatch.
-  - Integrate with cache backpressure: do not run compaction if cache backlog is above slowdown/stop thresholds; or call `CompactionAssist()` to avoid starving flush.
-  - Provide a clear disable knob (`BackgroundCompactionInterval <= 0`).
+- [ ] **Implementation plan (exact):**
+  1. Adopt the same “0=default, <0=disable” convention used by auto-checkpointing:
+     - If `BackgroundCompactionInterval == 0`, set it to a conservative default: `10 * time.Minute`.
+     - If `BackgroundCompactionInterval < 0`, disable background compaction.
+  2. In `TreeDB/public.go` (cached mode):
+     - keep `MaxSlabs=1` (already defaulted),
+     - keep selection defaults conservative (recommend keeping current `DeadRatioThreshold=0.10`, `MinTotalBytes=1`, `MicroBatchSize=256`),
+     - set a background copy throttle by default to avoid IO spikes:
+       - if `CopyBytesPerSec == 0`, set `CopyBytesPerSec = 32<<20` (32MiB/s)
+       - if `CopyBurstBytes == 0`, set `CopyBurstBytes = 64<<20` (64MiB)
+  3. Backpressure interaction (pick one and document in code):
+     - either: skip running background compaction when cache backlog is above stop threshold, OR
+     - always run but call `cached.CompactionAssist()` periodically (existing hook) so foreground flush is not starved.
+  4. Ensure the worker stops on `DB.Close()` (existing bg compaction worker already has stop-on-close tests).
 - [ ] **Tests:** existing background compaction tests + add a “does not run under extreme backlog” test if implementing gating.
 - [ ] **Bench gates:** `./bin/unified-bench -suite longmix` must show stable/ improved fragmentation and no scan collapse.
 
 #### 17.3.4 Disk-Usage Guardrails (Fail Fast vs Fill Disk)
 - [ ] **Outcome:** Avoid catastrophic “disk full” incidents by adding a configurable cap/guard that triggers maintenance and then fails writes clearly.
-- [ ] **Implementation:**
-  - Add options (public `treedb.Options`) such as:
-    - `MinFreeDiskBytes` (preferred; uses filesystem free-space query)
-    - or `MaxTotalBytes` (sum of index + slabs + wal)
-  - Enforce on write path (cached + backend): check periodically (e.g. every N commits) to avoid per-op syscall overhead.
-  - When tripped:
-    - attempt a best-effort `Checkpoint()` (cached),
-    - attempt bounded compaction (if enabled),
-    - if still over/under threshold, return a clear error (`ErrDiskBudgetExceeded`) and surface via stats.
+- [ ] **Implementation plan (exact):**
+  1. Add options (public `treedb.Options`):
+     - `MinFreeDiskBytes int64` (0 disables; default remains disabled until proven safe)
+     - `DiskGuardCheckInterval time.Duration` (0 default to 1s; <0 disables checks entirely)
+  2. Implement a platform helper in `TreeDB/internal` (or `TreeDB/db`) to read free bytes:
+     - On unix: `syscall.Statfs(dir)` and compute `Bavail * Bsize`.
+     - On unsupported platforms: return `(ok=false)`; guardrail is a no-op.
+  3. Enforce in cached write path:
+     - before accepting a write (or every N ops), if the interval elapsed:
+       - check free bytes,
+       - if under `MinFreeDiskBytes`, run best-effort maintenance (`Checkpoint()` + bounded compaction if enabled),
+       - re-check; if still under, return `ErrDiskBudgetExceeded`.
+  4. Enforce in backend write path similarly on commit boundaries (`finalizeCommit` or batch write path) to avoid per-op syscalls.
+  5. Add stats keys so operators can see “disk guard tripped” and last error.
 - [ ] **Tests:** fake filesystem stat layer or dependency injection for disk budget checks; unit test for “maintenance attempted then error returned”.
 - [ ] **Gates:** add a CI-only “small disk budget” test using temp dir that triggers the guard without requiring huge data.
 
 #### 17.3.5 Auto-Checkpoint Hysteresis / Thrash Avoidance
 - [ ] **Outcome:** Under sustained ingest near the WAL cap, we avoid checkpointing too frequently.
-- [ ] **Implementation:**
-  - Add a hysteresis policy: trigger at `MaxWALBytes`, then do not run again until `wal_bytes < MaxWALBytes * 0.5` (or a configurable fraction).
-  - Ensure “force” triggers still work (explicit `Checkpoint()` and bench flags).
+- [ ] **Implementation plan (exact):**
+  1. Implement hysteresis in `caching.DB.autoCheckpointLoop` (size-trigger path only):
+     - Track an `armed` boolean (protected by the DB’s existing checkpoint/auto-checkpoint state).
+     - When `effectiveWalBytes >= MaxWALBytes` and `armed == true`: run `Checkpoint()` and set `armed = false`.
+     - Rearm only when `effectiveWalBytes < MaxWALBytes/2`.
+  2. Do not apply hysteresis to explicit user triggers:
+     - explicit `DB.Checkpoint()` calls should always run,
+     - unified-bench `-checkpoint-*` should always run.
 - [ ] **Tests:** unit test that repeated size-trigger checks do not run checkpoint when within hysteresis window.
 - [ ] **Bench gates:** ensure throughput doesn’t degrade due to checkpoint thrash in a sustained random write test near the cap.
