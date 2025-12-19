@@ -296,6 +296,22 @@ func (h *HashDB) Flush() error {
 	return errGlobal
 }
 
+// Sync flushes write-back caches and fsyncs shard-level storage.
+// It is safe to call multiple times.
+func (h *HashDB) Sync() error {
+	var errGlobal error
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].Lock()
+		if h.shards[i] != nil {
+			if err := h.shards[i].Sync(); err != nil && errGlobal == nil {
+				errGlobal = err
+			}
+		}
+		h.locks[i].Unlock()
+	}
+	return errGlobal
+}
+
 // Close flushes and closes all shards.
 // It is not safe to call Close concurrently with other operations.
 func (h *HashDB) Close() error {

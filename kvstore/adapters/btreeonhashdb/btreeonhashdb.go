@@ -36,6 +36,8 @@ func (d *DB) Set(key, value []byte) error { return d.Tree.Put(key, value) }
 
 func (d *DB) Delete(key []byte) error { return d.Tree.Delete(key) }
 
+func (d *DB) Checkpoint() error { return d.Store.Sync() }
+
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	it, err := d.Tree.Range(start, end)
 	if err != nil {
