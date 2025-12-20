@@ -99,6 +99,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		RelaxedSync:                  *treedbRelaxedSync,
 		DisableReadChecksum:          *treedbDisableReadChecksum,
 		BackgroundCompactionInterval: *treedbBgCompactionInterval,
+		DisablePiggybackCompaction:   *treedbDisablePiggyback,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
@@ -563,11 +564,12 @@ var (
 
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
-	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
-	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
-)
-
-func clampPPM(v int) int {
+		treedbDisableReadChecksum      = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+		treedbBgCompactionInterval     = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
+		treedbDisablePiggyback         = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+	)
+	
+	func clampPPM(v int) int {
 	if v < 0 {
 		return 0
 	}
@@ -631,6 +633,7 @@ type BenchConfig struct {
 	TreeDBRelaxedSync          bool
 	TreeDBDisableReadChecksum  bool
 	TreeDBBgCompactionInterval time.Duration
+	TreeDBDisablePiggybackCompaction bool
 }
 
 type BenchRun struct {
@@ -703,6 +706,7 @@ func main() {
 		TreeDBRelaxedSync:              *treedbRelaxedSync,
 		TreeDBDisableReadChecksum:      *treedbDisableReadChecksum,
 		TreeDBBgCompactionInterval:     *treedbBgCompactionInterval,
+		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
