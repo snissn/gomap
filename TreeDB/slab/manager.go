@@ -12,14 +12,17 @@ import (
 
 // SlabSet is an immutable list of SlabFiles active at a specific point in time.
 type SlabSet struct {
-	Files    map[uint32]*SlabFile
-	RefCount atomic.Int64
+	Files               map[uint32]*SlabFile
+	RefCount            atomic.Int64
+	disableReadChecksum bool
 }
 type SlabManager struct {
 	dir        string
 	activeSlab *SlabFile
 	slabs      map[uint32]*SlabFile // The master list of all live + zombie slabs
 	mu         sync.RWMutex
+	
+	disableReadChecksum bool
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
@@ -66,6 +69,12 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 	return sm, nil
 }
 
+func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.disableReadChecksum = disable
+}
+
 func (sm *SlabManager) Close() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -90,13 +99,14 @@ func (sm *SlabManager) GetSlabPath(id uint32) string {
 func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
+	verifyCRC := !sm.disableReadChecksum
 	sm.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
 	}
 
-	return s.Read(int64(ptr.Offset))
+	return s.Read(int64(ptr.Offset), verifyCRC)
 }
 
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
@@ -260,7 +270,10 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 		files[k] = v
 		v.RefCount.Add(1) // Pin files for this Set
 	}
-	s := &SlabSet{Files: files}
+	s := &SlabSet{
+		Files:               files,
+		disableReadChecksum: sm.disableReadChecksum,
+	}
 	s.RefCount.Store(1) // Manager owns one reference
 	return s
 }
@@ -269,7 +282,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
 	}
-	return f.Read(int64(ptr.Offset))
+	return f.Read(int64(ptr.Offset), !s.disableReadChecksum)
 }
 
 // AcquireSlabs increments the RefCount for the Set (O(1)).

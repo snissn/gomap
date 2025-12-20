@@ -83,18 +83,22 @@ func NewBTree(dir string) (kvstore.DB, error) {
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 	opts := treedb.Options{
-		Dir:                     dir,
-		ChunkSize:               64 * 1024 * 1024,
-		KeepRecent:              *treedbKeepRecent,
-		PreferAppendAlloc:       *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:       uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:   uint32(clampPPM(*treedbInternalFillPPM)),
-		FlushThreshold:          *treedbFlushThreshold,
-		MaxQueuedMemtables:      *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:      *treedbStopBacklogSeconds,
-		MaxBacklogBytes:         *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+		Dir:                          dir,
+		ChunkSize:                    64 * 1024 * 1024,
+		KeepRecent:                   *treedbKeepRecent,
+		PreferAppendAlloc:            *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:            uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:        uint32(clampPPM(*treedbInternalFillPPM)),
+		FlushThreshold:               *treedbFlushThreshold,
+		MaxQueuedMemtables:           *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:       *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:           *treedbStopBacklogSeconds,
+		MaxBacklogBytes:              *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:      *treedbWriterFlushMaxMems,
+		DisableWAL:                   *treedbDisableWAL,
+		RelaxedSync:                  *treedbRelaxedSync,
+		DisableReadChecksum:          *treedbDisableReadChecksum,
+		BackgroundCompactionInterval: *treedbBgCompactionInterval,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
@@ -556,6 +560,11 @@ var (
 	treedbCompactCopyBurst         = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
 	treedbVacuumBeforeScans        = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
 	settleBeforeScans              = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+
+	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
+	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
+	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
 )
 
 func clampPPM(v int) int {
@@ -617,6 +626,11 @@ type BenchConfig struct {
 	TreeDBCompactCopyBps           int64
 	TreeDBCompactCopyBurst         int64
 	TreeDBVacuumBeforeScans        bool
+
+	TreeDBDisableWAL           bool
+	TreeDBRelaxedSync          bool
+	TreeDBDisableReadChecksum  bool
+	TreeDBBgCompactionInterval time.Duration
 }
 
 type BenchRun struct {
@@ -685,6 +699,10 @@ func main() {
 		TreeDBCompactCopyBps:           *treedbCompactCopyBps,
 		TreeDBCompactCopyBurst:         *treedbCompactCopyBurst,
 		TreeDBVacuumBeforeScans:        *treedbVacuumBeforeScans,
+		TreeDBDisableWAL:               *treedbDisableWAL,
+		TreeDBRelaxedSync:              *treedbRelaxedSync,
+		TreeDBDisableReadChecksum:      *treedbDisableReadChecksum,
+		TreeDBBgCompactionInterval:     *treedbBgCompactionInterval,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))

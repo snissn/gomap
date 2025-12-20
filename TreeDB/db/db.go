@@ -162,6 +162,11 @@ type Options struct {
 	// crash consistency (OS buffer cache), not true durability.
 	RelaxedSync bool
 
+	// DisableReadChecksum skips CRC verification on slab reads.
+	// This improves read performance (especially for large values) but risks
+	// returning silent data corruption if the disk/memory is compromised.
+	DisableReadChecksum bool
+
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
 	// mode. A checkpoint creates a backend sync boundary and trims
 	// cached-mode WAL segments to keep `wal/` growth bounded.
@@ -288,6 +293,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		p.Close()
 		return nil, err
 	}
+	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
 	// Allocator initialized after recovery (needs Meta)
 

@@ -190,7 +190,7 @@ func (s *SlabFile) RepairTail() error {
 }
 
 // ReadAt reads a record at the given offset (which points to KeyLen, skipping CRC).
-func (s *SlabFile) Read(offset int64) ([]byte, error) {
+func (s *SlabFile) Read(offset int64, verifyCRC bool) ([]byte, error) {
 	// Offset points to KeyLen. CRC is at Offset - 4.
 	realStart := offset - 4
 	if realStart < 0 {
@@ -198,7 +198,7 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 	}
 
 	// Fast path: mmap view (best-effort, read-only).
-	if val, err, ok := s.readViaMmap(realStart); ok {
+	if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
 		return val, err
 	}
 
@@ -209,7 +209,6 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 		return nil, err
 	}
 
-	crc := binary.LittleEndian.Uint32(headerBuf[0:4])
 	keyLen := binary.LittleEndian.Uint16(headerBuf[4:6])
 	valLen := binary.LittleEndian.Uint32(headerBuf[6:10])
 
@@ -224,22 +223,20 @@ func (s *SlabFile) Read(offset int64) ([]byte, error) {
 		return nil, err
 	}
 
-	sum := crc32.Update(0, crc32cTable, headerBuf[4:10])
-	sum = crc32.Update(sum, crc32cTable, dataBuf)
-	if sum != crc {
-		return nil, ErrChecksumMismatch
+	if verifyCRC {
+		crc := binary.LittleEndian.Uint32(headerBuf[0:4])
+		sum := crc32.Update(0, crc32cTable, headerBuf[4:10])
+		sum = crc32.Update(sum, crc32cTable, dataBuf)
+		if sum != crc {
+			return nil, ErrChecksumMismatch
+		}
 	}
 
 	// Return only Value (skipping Key).
-	// Spec says Read(valuePtr) returns Value.
-	// But we read the whole record.
-	// Do we verify Key? The pointer doesn't store the key.
-	// So we just return the value.
-
 	return dataBuf[keyLen:], nil
 }
 
-func (s *SlabFile) readViaMmap(realStart int64) ([]byte, error, bool) {
+func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool) {
 	data := s.mmapData
 	
 	// Fast check: if data exists and covers the request, use it.
@@ -258,15 +255,18 @@ func (s *SlabFile) readViaMmap(realStart int64) ([]byte, error, bool) {
 		if dataEnd <= int64(len(data)) {
 			// All good, perform read
 			record := data[realStart+HeaderSize : dataEnd]
-			// Optimize: Single CRC pass over header-fields + payload
-			// Header CRC is at 0:4. Fields are 4:10.
-			sum := crc32.Update(0, crc32cTable, header[4:10])
-			sum = crc32.Update(sum, crc32cTable, record)
 			
-			// Verify against stored CRC
-			crc := binary.LittleEndian.Uint32(header[0:4])
-			if sum != crc {
-				return nil, ErrChecksumMismatch, true
+			if verifyCRC {
+				// Optimize: Single CRC pass over header-fields + payload
+				// Header CRC is at 0:4. Fields are 4:10.
+				sum := crc32.Update(0, crc32cTable, header[4:10])
+				sum = crc32.Update(sum, crc32cTable, record)
+				
+				// Verify against stored CRC
+				crc := binary.LittleEndian.Uint32(header[0:4])
+				if sum != crc {
+					return nil, ErrChecksumMismatch, true
+				}
 			}
 			return record[int64(keyLen):], nil, true
 		}
@@ -318,11 +318,14 @@ func (s *SlabFile) readViaMmap(realStart int64) ([]byte, error, bool) {
 	}
 	
 	record := data[realStart+HeaderSize : dataEnd]
-	sum := crc32.Update(0, crc32cTable, header[4:10])
-	sum = crc32.Update(sum, crc32cTable, record)
-	crc := binary.LittleEndian.Uint32(header[0:4])
-	if sum != crc {
-		return nil, ErrChecksumMismatch, true
+	
+	if verifyCRC {
+		sum := crc32.Update(0, crc32cTable, header[4:10])
+		sum = crc32.Update(sum, crc32cTable, record)
+		crc := binary.LittleEndian.Uint32(header[0:4])
+		if sum != crc {
+			return nil, ErrChecksumMismatch, true
+		}
 	}
 	
 	return record[int64(keyLen):], nil, true
