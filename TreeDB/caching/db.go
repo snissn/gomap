@@ -70,6 +70,11 @@ type Options struct {
 	// combined flush batch from multiple immutable memtables. Values <= 1 disable
 	// parallelism.
 	FlushBuildConcurrency int
+
+	// DisableWAL disables the Write-Ahead Log.
+	DisableWAL bool
+	// RelaxedSync disables fsync on Sync operations.
+	RelaxedSync bool
 }
 
 type DB struct {
@@ -115,6 +120,9 @@ type DB struct {
 	writerFlushMaxMemtables int
 	writerFlushMaxDuration  time.Duration
 	flushBuildConcurrency   int
+
+	disableWAL  bool
+	relaxedSync bool
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
@@ -241,6 +249,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:  opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:   opts.FlushBuildConcurrency,
+		disableWAL:              opts.DisableWAL,
+		relaxedSync:             opts.RelaxedSync,
 		mutable:                 memtable.New(),
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
@@ -252,22 +262,24 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial WAL
-	if err := db.rotateWALLocked(); err != nil {
-		return nil, err
-	}
-	if len(segments) > 0 {
-		db.mu.Lock()
-		if db.walClosedSizes == nil {
-			db.walClosedSizes = make(map[string]int64, len(segments))
+	if !db.disableWAL {
+		if err := db.rotateWALLocked(); err != nil {
+			return nil, err
 		}
-		for _, seg := range segments {
-			if seg.path == db.walPath {
-				continue
+		if len(segments) > 0 {
+			db.mu.Lock()
+			if db.walClosedSizes == nil {
+				db.walClosedSizes = make(map[string]int64, len(segments))
 			}
-			db.walClosedSizes[seg.path] = seg.size
-			db.walClosedBytes += seg.size
+			for _, seg := range segments {
+				if seg.path == db.walPath {
+					continue
+				}
+				db.walClosedSizes[seg.path] = seg.size
+				db.walClosedBytes += seg.size
+			}
+			db.mu.Unlock()
 		}
-		db.mu.Unlock()
 	}
 
 	// Start background flusher
@@ -859,12 +871,14 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	// 1. Insert to Memtable (Allocates in Arena) -> WAL Write (Reads from Arena)
 	// This avoids reading 'key/value' (User Memory) twice.
 	err := db.mutable.PutWithCallback(key, value, func(kView, vView []byte) error {
-		if err := db.wal.Append(wal.OpSet, kView, vView); err != nil {
-			return err
-		}
-		if sync {
-			if err := db.wal.Sync(); err != nil {
+		if !db.disableWAL {
+			if err := db.wal.Append(wal.OpSet, kView, vView); err != nil {
 				return err
+			}
+			if sync && !db.relaxedSync {
+				if err := db.wal.Sync(); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -914,12 +928,14 @@ func (db *DB) delete(key []byte, sync bool) error {
 	// 1. Memtable -> WAL
 	err := db.mutable.DeleteWithCallback(key, func(kView, vView []byte) error {
 		// Value is empty for delete
-		if err := db.wal.Append(wal.OpDelete, kView, nil); err != nil {
-			return err
-		}
-		if sync {
-			if err := db.wal.Sync(); err != nil {
+		if !db.disableWAL {
+			if err := db.wal.Append(wal.OpDelete, kView, nil); err != nil {
 				return err
+			}
+			if sync && !db.relaxedSync {
+				if err := db.wal.Sync(); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -957,19 +973,25 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
-	if db.wal != nil && db.wal.Size() < 10*1024*1024 {
-		if triggerFlush {
-			select {
-			case db.flushCh <- struct{}{}:
-			default:
+	if !db.disableWAL {
+		if db.wal != nil && db.wal.Size() < 10*1024*1024 {
+			if triggerFlush {
+				select {
+				case db.flushCh <- struct{}{}:
+				default:
+				}
 			}
+			return nil
 		}
-		return nil
+
+		if err := db.rotateWALLocked(); err != nil {
+			return err
+		}
+	} else {
+		// WAL disabled: just trigger flush if needed
+		db.walPath = "" // Ensure no WAL path is tracked
 	}
 
-	if err := db.rotateWALLocked(); err != nil {
-		return err
-	}
 	if triggerFlush {
 		select {
 		case db.flushCh <- struct{}{}:
@@ -983,6 +1005,9 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 }
 
 func (db *DB) rotateWALLocked() error {
+	if db.disableWAL {
+		return nil
+	}
 	if db.wal != nil {
 		oldPath := db.walPath
 		oldSize := db.wal.Size()
@@ -2122,23 +2147,25 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.mu.Lock()
 
 	// 1. WAL Append loop
-	records := make([]wal.Record, 0, len(b.entries))
-	for _, op := range b.entries {
-		if op.Type == batch.OpDelete {
-			records = append(records, wal.Record{Op: wal.OpDelete, Key: op.Key})
-		} else {
-			records = append(records, wal.Record{Op: wal.OpSet, Key: op.Key, Value: op.Value})
+	if !b.db.disableWAL {
+		records := make([]wal.Record, 0, len(b.entries))
+		for _, op := range b.entries {
+			if op.Type == batch.OpDelete {
+				records = append(records, wal.Record{Op: wal.OpDelete, Key: op.Key})
+			} else {
+				records = append(records, wal.Record{Op: wal.OpSet, Key: op.Key, Value: op.Value})
+			}
 		}
-	}
-	if err := b.db.wal.AppendBatch(records); err != nil {
-		b.db.mu.Unlock()
-		return err
-	}
-
-	if sync {
-		if err := b.db.wal.Sync(); err != nil {
+		if err := b.db.wal.AppendBatch(records); err != nil {
 			b.db.mu.Unlock()
 			return err
+		}
+
+		if sync && !b.db.relaxedSync {
+			if err := b.db.wal.Sync(); err != nil {
+				b.db.mu.Unlock()
+				return err
+			}
 		}
 	}
 
@@ -2271,7 +2298,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	}
 
 	var err error
-	if sync {
+	if sync && !b.db.relaxedSync {
 		b.db.flushMu.Lock()
 		err = backendBatch.WriteSync()
 		b.db.flushMu.Unlock()

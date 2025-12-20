@@ -151,6 +151,16 @@ type Options struct {
 	// that decode to checksum errors after a crash.
 	DisableSlabTailRepairOnOpen bool
 
+	// DisableWAL disables the Write-Ahead Log in cached mode.
+	// This improves performance but sacrifices durability: a crash will revert
+	// the database to the last Checkpoint (backend flush).
+	DisableWAL bool
+
+	// RelaxedSync disables fsync on CommitSync and SetSync operations.
+	// This improves performance for synchronous workloads but provides only
+	// crash consistency (OS buffer cache), not true durability.
+	RelaxedSync bool
+
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
 	// mode. A checkpoint creates a backend sync boundary and trims
 	// cached-mode WAL segments to keep `wal/` growth bounded.
