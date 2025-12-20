@@ -34,7 +34,7 @@ func TestAllocator_AllocClearsVerifiedBit(t *testing.T) {
 		t.Fatalf("expected page 1 to remain verified until reused")
 	}
 
-	got, err := a.Alloc()
+	got, err := a.Alloc(0)
 	if err != nil {
 		t.Fatalf("Alloc(): %v", err)
 	}

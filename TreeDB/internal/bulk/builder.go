@@ -8,7 +8,7 @@ import (
 )
 
 type Allocator interface {
-	Alloc() (uint64, error)
+	Alloc(hint uint64) (uint64, error)
 }
 
 type levelBuilder struct {
@@ -20,7 +20,7 @@ type levelBuilder struct {
 func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint64, error) {
 	if !iter.Valid() {
 		// Empty tree? Return a new empty root.
-		rootID, err := alloc.Alloc()
+		rootID, err := alloc.Alloc(0)
 		if err != nil {
 			return 0, err
 		}
@@ -39,7 +39,7 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 
 	ensureLevel := func(lvl int) error {
 		for len(levels) <= lvl {
-			pid, err := alloc.Alloc()
+			pid, err := alloc.Alloc(0)
 			if err != nil {
 				return err
 			}
@@ -114,7 +114,7 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 		}
 
 		// Reset current level builder
-		pid, err := alloc.Alloc()
+		pid, err := alloc.Alloc(0)
 		if err != nil {
 			return err
 		}
