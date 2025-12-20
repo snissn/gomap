@@ -294,7 +294,7 @@ func (b *LevelDBBatch) Commit() error {
 	return b.db.Write(b.batch, nil)
 }
 func (b *LevelDBBatch) CommitSync() error {
-	return b.db.Write(b.batch, nil)
+	return b.db.Write(b.batch, &opt.WriteOptions{Sync: true})
 }
 func (b *LevelDBBatch) Close() error {
 	b.batch.Reset()
