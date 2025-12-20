@@ -167,11 +167,10 @@ type Options struct {
 	// returning silent data corruption if the disk/memory is compromised.
 	DisableReadChecksum bool
 
-	// PiggybackCompaction enables opportunistic defragmentation during writes.
-	// When writing a node, if its siblings are physically distant, they are
-	// moved (rewritten) to be closer. This reduces fragmentation over time
-	// at the cost of increased write amplification.
-	PiggybackCompaction bool
+	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
+	// When false (default), nodes are rewritten if their siblings are physically
+	// distant, keeping the tree clustered. Set to true to maximize write speed.
+	DisablePiggybackCompaction bool
 
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
 	// mode. A checkpoint creates a backend sync boundary and trims
@@ -328,7 +327,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		},
 	}
 	db.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
-	db.zipper.SetPiggybackCompaction(opts.PiggybackCompaction)
+	db.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -911,6 +910,6 @@ type pagerAllocator struct {
 	p *pager.Pager
 }
 
-func (a *pagerAllocator) Alloc() (uint64, error) {
+func (a *pagerAllocator) Alloc(hint uint64) (uint64, error) {
 	return a.p.Alloc(1)
 }

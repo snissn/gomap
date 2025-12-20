@@ -2,6 +2,7 @@ package bulk
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -14,10 +15,14 @@ import (
 
 // MockAllocator
 type MockAllocator struct {
-	p *pager.Pager
+	p    *pager.Pager
+	fail bool
 }
 
-func (m *MockAllocator) Alloc() (uint64, error) {
+func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
+	if m.fail {
+		return 0, errors.New("mock allocation failed")
+	}
 	return m.p.Alloc(1)
 }
 
