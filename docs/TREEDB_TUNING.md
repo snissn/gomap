@@ -63,8 +63,14 @@ Controls how many immutable memtables may be queued for flush before applying ba
 
 ### Adaptive backpressure (cached mode)
 
+Cached mode enables adaptive backpressure by default in `treedb.Open`:
+- `SlowdownBacklogSeconds=1`
+- `StopBacklogSeconds=2`
+- `MaxBacklogBytes=2GiB`
+
 If any of these are non-zero, cached mode switches from a queue-length limit to a bytes-based
-backpressure policy driven by an estimated flush throughput:
+backpressure policy driven by an estimated flush throughput. Set all three to `0` to keep the
+queue-length policy (or pass negative values, which are treated as `0` in `treedb.Open`).
 
 - `Options.SlowdownBacklogSeconds`
 - `Options.StopBacklogSeconds`
