@@ -74,6 +74,9 @@ func Open(opts Options) (*DB, error) {
 	// can therefore delay page reuse for a very long time (and cause index.db to
 	// balloon under update-heavy workloads). Default to aggressive reuse in cached
 	// mode unless the caller specifies otherwise.
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = 64 * 1024 * 1024
+	}
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}

@@ -5,7 +5,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 
 ## TL;DR Defaults
 
-- `ChunkSize`: defaults to 256 MiB (mmap chunk size for `index.db`)
+- `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/WAL rotation threshold)
 - `KeepRecent`:
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
