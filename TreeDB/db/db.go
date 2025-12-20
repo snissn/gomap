@@ -105,8 +105,9 @@ type Options struct {
 	// of file growth (space is reclaimed later via vacuum).
 	PreferAppendAlloc bool
 	// FreelistRegionPages and FreelistRegionRadius bias freelist reuse toward
-	// nearby page regions to improve locality. FreelistRegionPages == 0 uses a
-	// default, while FreelistRegionRadius < 0 disables the bias entirely.
+	// nearby page regions to improve locality. Leave both at 0 to disable the
+	// bias (default). If either is set, missing values will use defaults.
+	// Set FreelistRegionRadius < 0 to force-disable the bias.
 	FreelistRegionPages  uint64
 	FreelistRegionRadius int
 
@@ -229,7 +230,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.FreelistRegionRadius < 0 {
 		opts.FreelistRegionPages = 0
 		opts.FreelistRegionRadius = 0
-	} else {
+	} else if opts.FreelistRegionPages > 0 || opts.FreelistRegionRadius > 0 {
 		if opts.FreelistRegionPages == 0 {
 			opts.FreelistRegionPages = 8192
 		}
