@@ -2001,7 +2001,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
 		}
 
-		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
+		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read") {
 			if err := settle(); err != nil {
 				return BenchRun{}, err
 			}
@@ -2009,17 +2009,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if live != nil {
 				_ = live.Render(results)
 			}
-		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
+		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read") {
 			// If the caller didn't ask to settle, still allow an optional compaction
 			// pass before scans so scan regressions after churn can be studied in a
 			// "compacted values" state.
+			fmt.Fprintf(os.Stderr, "[Bench] Triggering maintenance before %s...\n", testName)
 			if err := vacuumTreeDBs(); err != nil {
 				return BenchRun{}, err
 			}
 			if err := compactTreeDBs(); err != nil {
 				return BenchRun{}, err
 			}
-			settled = true
 		}
 
 		if !scanDiagnosticsCaptured && (testName == "full_scan" || testName == "prefix_scan") {
