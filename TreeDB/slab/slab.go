@@ -37,8 +37,9 @@ type SlabFile struct {
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
 
-	mmapMu   sync.Mutex
-	mmapData []byte // Read-only mapping (best-effort), sized once and never resized.
+	mmapMu       sync.Mutex
+	mmapData     []byte   // Current Read-only mapping
+	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
 }
 
 // OpenSlab opens or creates a slab file.
@@ -68,6 +69,10 @@ func (s *SlabFile) Close() error {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
 	}
+	for _, b := range s.deadMappings {
+		_ = munmap(b)
+	}
+	s.deadMappings = nil
 	s.mmapMu.Unlock()
 	return s.File.Close()
 }
@@ -288,7 +293,9 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 	if data == nil || int64(len(data)) < currentSize {
 		// Remap
 		if data != nil {
-			_ = munmap(data)
+			// Don't unmap immediately; existing readers might hold views!
+			// We rely on 64-bit VIRT abundance and OS page cache sharing.
+			s.deadMappings = append(s.deadMappings, data)
 		}
 		if currentSize > 0 && currentSize <= int64(int(currentSize)) {
 			b, err := mmapReadOnly(s.File, int(currentSize))
