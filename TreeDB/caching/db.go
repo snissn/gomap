@@ -90,6 +90,8 @@ type DB struct {
 	queueWALPaths     []string
 	backendRange      keyRange
 	backendRangeKnown bool
+	backendRangeInit  sync.Once
+	backendRangeErr   error
 
 	// Durability
 	wal     *wal.Writer
@@ -271,12 +273,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
-
-	// Initialize backend key range for safe scan fast-path decisions.
-	if err := db.initBackendRange(); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 
 	return db, nil
 }
@@ -496,10 +492,36 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	db.autoCheckpointLastWALTrimmed.Store(trimmed)
 }
 
-func (db *DB) initBackendRange() error {
+func (db *DB) ensureBackendRange() error {
+	if db == nil {
+		return nil
+	}
+	db.backendRangeInit.Do(func() {
+		r, known, err := db.computeBackendRange()
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		if err != nil {
+			db.backendRangeErr = err
+			db.backendRangeKnown = false
+			return
+		}
+		if r.valid {
+			db.backendRange.add(r.min)
+			db.backendRange.add(r.max)
+		}
+		db.backendRangeKnown = known
+	})
+
+	db.mu.RLock()
+	err := db.backendRangeErr
+	db.mu.RUnlock()
+	return err
+}
+
+func (db *DB) computeBackendRange() (keyRange, bool, error) {
 	minIter, err := db.backend.Iterator(nil, nil)
 	if err != nil {
-		return err
+		return keyRange{}, false, err
 	}
 	defer minIter.Close()
 	minIter.Seek(nil)
@@ -512,11 +534,7 @@ func (db *DB) initBackendRange() error {
 	maxIter, err := db.backend.ReverseIterator(nil, nil)
 	if err != nil {
 		// Backend doesn't support reverse iteration; disable backend-range-dependent optimizations.
-		db.mu.Lock()
-		db.backendRange = keyRange{}
-		db.backendRangeKnown = false
-		db.mu.Unlock()
-		return nil
+		return r, false, nil
 	}
 	defer maxIter.Close()
 
@@ -524,11 +542,7 @@ func (db *DB) initBackendRange() error {
 		r.add(maxIter.UnsafeKey())
 	}
 
-	db.mu.Lock()
-	db.backendRange = r
-	db.backendRangeKnown = true
-	db.mu.Unlock()
-	return nil
+	return r, true, nil
 }
 
 const stopResumeFraction = 0.70
@@ -744,25 +758,45 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 }
 
 func (db *DB) Close() error {
+	hadMemtables := false
 	db.mu.Lock()
 	if db.mutable.Len() > 0 {
+		hadMemtables = true
 		_ = db.rotateMemtableLocked(true)
+	} else if len(db.queue) > 0 {
+		hadMemtables = true
 	}
 	db.mu.Unlock()
 
 	close(db.closeCh)
 	db.wg.Wait()
 
+	var walBytes int64
+	var walPaths []string
+
 	db.mu.Lock()
+	walBytes = db.walClosedBytes
+	if len(db.walClosedSizes) > 0 {
+		walPaths = make([]string, 0, len(db.walClosedSizes)+1)
+		for path := range db.walClosedSizes {
+			walPaths = append(walPaths, path)
+		}
+	} else {
+		walPaths = make([]string, 0, 1)
+	}
 	if db.wal != nil {
+		walBytes += db.wal.Size()
+		if db.walPath != "" {
+			walPaths = append(walPaths, db.walPath)
+		}
 		_ = db.wal.Close()
 		db.wal = nil
+	} else if db.walPath != "" {
+		walPaths = append(walPaths, db.walPath)
 	}
-	walDir := db.dir
 	db.mu.Unlock()
 
-	segments, nonEmptyBytes := listNonEmptyWALSegments(walDir)
-	if nonEmptyBytes > 0 {
+	if walBytes > 0 && !hadMemtables {
 		backendBatch := db.backend.NewBatch()
 		db.flushMu.Lock()
 		err := backendBatch.WriteSync()
@@ -775,8 +809,15 @@ func (db *DB) Close() error {
 		}
 	}
 
-	for _, seg := range segments {
-		path := seg.path
+	seen := make(map[string]struct{}, len(walPaths))
+	for _, path := range walPaths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
 			continue
@@ -1618,6 +1659,10 @@ func (db *DB) Drain() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	if err := db.ensureBackendRange(); err != nil {
+		return nil, err
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
