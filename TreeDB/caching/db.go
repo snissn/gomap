@@ -67,6 +67,7 @@ func memtableCapacity(flushThreshold int64) int {
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
+	Has(key []byte) (bool, error)
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	NewBatch() batch.Interface
@@ -2257,8 +2258,23 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
-	v, err := db.Get(key)
-	return v != nil, err
+	db.mu.RLock()
+	_, deleted, found := db.mutable.Get(key)
+	if found {
+		db.mu.RUnlock()
+		return !deleted, nil
+	}
+
+	for i := len(db.queue) - 1; i >= 0; i-- {
+		_, deleted, found = db.queue[i].Get(key)
+		if found {
+			db.mu.RUnlock()
+			return !deleted, nil
+		}
+	}
+	db.mu.RUnlock()
+
+	return db.backend.Has(key)
 }
 
 func (db *DB) Stats() map[string]string {

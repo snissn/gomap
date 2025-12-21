@@ -32,6 +32,13 @@ func (m *MockBackend) Get(key []byte) ([]byte, error) {
 	return val, nil
 }
 
+func (m *MockBackend) Has(key []byte) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.data[string(key)]
+	return ok, nil
+}
+
 func (m *MockBackend) Set(key, val []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

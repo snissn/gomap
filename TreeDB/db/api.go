@@ -27,11 +27,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	val, err := db.Get(key)
-	if err != nil {
-		return false, err
-	}
-	return val != nil, nil
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	return snap.Has(key)
 }
 
 // Set sets the value for a key.
