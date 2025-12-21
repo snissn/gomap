@@ -274,6 +274,100 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	}
 }
 
+func TestCachingDB_DeleteRange_DisableWAL_CoversInMemoryDeletesBackend(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.Set([]byte("a"), []byte("va"))
+	backend.Set([]byte("b"), []byte("vb"))
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("c"), []byte("vc")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Set([]byte("d"), []byte("vd")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := db.DeleteRange(nil, nil); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+
+	for _, key := range [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")} {
+		val, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if val != nil {
+			t.Fatalf("expected %q to be deleted, got %q", key, val)
+		}
+	}
+
+	if got := len(backend.data); got != 0 {
+		t.Fatalf("expected backend to be empty, got %d keys", got)
+	}
+	if backend.writeCalls == 0 {
+		t.Fatalf("expected backend batch write to be used")
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCachingDB_DeleteRange_DisableWAL_PartialRangeUsesTombstones(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Set([]byte("z"), []byte("vz")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := db.DeleteRange([]byte("a"), []byte("m")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+
+	val, err := db.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected %q to be deleted, got %q", "a", val)
+	}
+
+	val, err = db.Get([]byte("z"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(val) != "vz" {
+		t.Fatalf("expected %q, got %q", "vz", val)
+	}
+
+	if backend.writeCalls != 0 {
+		t.Fatalf("expected no backend writes, got %d", backend.writeCalls)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
