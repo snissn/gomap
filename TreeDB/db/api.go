@@ -16,16 +16,9 @@ import (
 // Semantics (performance-first): the returned slice may be a read-only view into
 // internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	// Point reads intentionally run under db.mu.RLock (instead of per-call
-	// snapshots) to avoid reader-registry churn and slab pin/unpin overhead.
-	//
-	// This makes point Get/Has linearizable w.r.t. commits (reads do not race
-	// with a root swap) while keeping long-lived scans/iterators on snapshots.
-	db.mu.RLock()
-	state := db.state.Load()
-	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
-	val, err := tr.Get(key)
-	db.mu.RUnlock()
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	val, err := snap.Get(key)
 	if err == tree.ErrKeyNotFound {
 		return nil, nil
 	}
@@ -34,12 +27,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	db.mu.RLock()
-	state := db.state.Load()
-	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
-	ok, err := tr.Has(key)
-	db.mu.RUnlock()
-	return ok, err
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	return snap.Has(key)
 }
 
 // Set sets the value for a key.
