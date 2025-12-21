@@ -19,6 +19,7 @@ const (
 type SkipList struct {
 	data  []byte
 	head  uint32
+	tail  [maxHeight]uint32
 	rnd   *rand.Rand
 	size  int64 // Logical size (approx)
 	count int   // Number of items
@@ -32,6 +33,9 @@ func New(capacity int) *SkipList {
 	}
 	// Allocate dummy head (height=maxHeight, key=empty, val=empty)
 	s.head = s.allocNode(0, 0, maxHeight)
+	for i := range s.tail {
+		s.tail[i] = s.head
+	}
 	return s
 }
 
@@ -122,7 +126,56 @@ func (s *SkipList) DeleteWithCallback(key []byte, cb func(k, v []byte) error) er
 	return s.put(key, nil, flagDeleted, cb)
 }
 
+func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte) error, prev *[maxHeight]uint32, updateTail bool) error {
+	h := s.randomHeight()
+	newNode := s.allocNode(len(key), len(value), h)
+	copy(s.getKey(newNode), key)
+	copy(s.getValue(newNode), value)
+	s.setFlags(newNode, flags)
+
+	// Callback (Before linking)
+	if cb != nil {
+		kView := s.getKey(newNode)
+		vView := s.getValue(newNode)
+		if err := cb(kView, vView); err != nil {
+			return err // Abort: New node allocated but not linked.
+		}
+	}
+
+	for i := 0; i < h; i++ {
+		s.setNext(newNode, i, s.getNext(prev[i], i))
+		s.setNext(prev[i], i, newNode)
+		if updateTail {
+			s.tail[i] = newNode
+		}
+	}
+
+	s.size += int64(len(key) + len(value))
+	s.count++
+	return nil
+}
+
 func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+	if s.count == 0 {
+		var prev [maxHeight]uint32
+		for i := 0; i < maxHeight; i++ {
+			prev[i] = s.tail[i]
+		}
+		return s.insertNew(key, value, flags, cb, &prev, true)
+	}
+
+	last := s.tail[0]
+	if last != s.head {
+		lastKey := s.getKey(last)
+		if bytes.Compare(lastKey, key) < 0 {
+			var prev [maxHeight]uint32
+			for i := 0; i < maxHeight; i++ {
+				prev[i] = s.tail[i]
+			}
+			return s.insertNew(key, value, flags, cb, &prev, true)
+		}
+	}
+
 	var prev [maxHeight]uint32
 	x := s.head
 	for i := maxHeight - 1; i >= 0; i-- {
@@ -163,7 +216,9 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 
 	// Check if x.next is target (at level 0)
 	next := s.getNext(x, 0)
+	replaceTail := false
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
+		replaceTail = next == s.tail[0]
 		oldValLen := int(binary.LittleEndian.Uint32(s.data[next+3:]))
 		// Check inplace again (for level 0 case)
 		if cb == nil && len(value) <= oldValLen {
@@ -181,33 +236,17 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 				s.setNext(prev[i], i, s.getNext(next, i))
 			}
 		}
+		if replaceTail {
+			for i := 0; i < oldHeight; i++ {
+				if s.tail[i] == next {
+					s.tail[i] = prev[i]
+				}
+			}
+		}
 		// Now OldNode is gone.
 	}
 
-	// Insert New Node
-	h := s.randomHeight()
-	newNode := s.allocNode(len(key), len(value), h)
-	copy(s.getKey(newNode), key)
-	copy(s.getValue(newNode), value)
-	s.setFlags(newNode, flags)
-
-	// Callback (Before linking)
-	if cb != nil {
-		kView := s.getKey(newNode)
-		vView := s.getValue(newNode)
-		if err := cb(kView, vView); err != nil {
-			return err // Abort: New node allocated but not linked.
-		}
-	}
-
-	for i := 0; i < h; i++ {
-		s.setNext(newNode, i, s.getNext(prev[i], i))
-		s.setNext(prev[i], i, newNode)
-	}
-
-	s.size += int64(len(key) + len(value))
-	s.count++
-	return nil
+	return s.insertNew(key, value, flags, cb, &prev, replaceTail)
 }
 
 func (s *SkipList) randomHeight() int {
