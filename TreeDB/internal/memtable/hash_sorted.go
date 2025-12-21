@@ -6,6 +6,7 @@ import (
 	"sync"
 	"unsafe"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -29,6 +30,21 @@ type HashSorted struct {
 func NewHashSorted() *HashSorted {
 	return &HashSorted{
 		items: make(map[string]*hashEntry),
+	}
+}
+
+func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			m.deleteStealLocked(op.Key)
+		} else {
+			m.setStealLocked(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
 	}
 }
 

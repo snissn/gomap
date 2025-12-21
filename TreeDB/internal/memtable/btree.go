@@ -5,6 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -31,6 +32,56 @@ type BTree struct {
 
 func NewBTree() *BTree {
 	return NewBTreeWithDegree(btreeDefaultDegree)
+}
+
+func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, op := range entries {
+		keyStr := bytesToStringNoCopy(op.Key)
+		var prev btreeEntry
+		var replaced bool
+
+		if op.Type == batchpkg.OpDelete {
+			if m.hasLast && keyStr > m.lastKey {
+				prev, replaced = m.tree.Load(keyStr, btreeEntry{deleted: true})
+			} else {
+				prev, replaced = m.tree.Set(keyStr, btreeEntry{deleted: true})
+			}
+			if replaced {
+				if !prev.deleted {
+					m.sizeBytes -= int64(len(prev.value))
+				}
+			} else {
+				m.sizeBytes += int64(len(op.Key))
+			}
+		} else {
+			entry := btreeEntry{value: op.Value}
+			if m.hasLast && keyStr > m.lastKey {
+				prev, replaced = m.tree.Load(keyStr, entry)
+			} else {
+				prev, replaced = m.tree.Set(keyStr, entry)
+			}
+			if replaced {
+				oldLen := len(prev.value)
+				if prev.deleted {
+					oldLen = 0
+				}
+				m.sizeBytes += int64(len(op.Value) - oldLen)
+			} else {
+				m.sizeBytes += int64(len(op.Key) + len(op.Value))
+			}
+		}
+
+		if !m.hasLast || keyStr > m.lastKey {
+			m.lastKey = keyStr
+			m.hasLast = true
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
 }
 
 func NewBTreeWithDegree(degree int) *BTree {

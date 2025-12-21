@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/skiplist"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -58,12 +59,22 @@ type Table interface {
 	Freeze()
 }
 
+// SortedBatchApplier is an optional fast path for applying a strictly-increasing
+// batch under a single memtable lock.
+//
+// Callers should only use this when they know the entries are already in
+// increasing key order.
+type SortedBatchApplier interface {
+	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex
 }
 
 const defaultMemtableCapacity = 64 * 1024
+const maxInitialMemtableCapacity = 4 * 1024 * 1024
 
 // New creates a new Memtable (skiplist).
 func New() *Memtable {
@@ -75,6 +86,9 @@ func New() *Memtable {
 func NewWithCapacity(capacity int) *Memtable {
 	if capacity <= 0 {
 		capacity = defaultMemtableCapacity
+	}
+	if capacity > maxInitialMemtableCapacity {
+		capacity = maxInitialMemtableCapacity
 	}
 	return &Memtable{
 		sl: skiplist.New(capacity),
@@ -116,6 +130,42 @@ func (m *Memtable) DeleteWithCallback(key []byte, cb func(k, v []byte) error) er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sl.DeleteWithCallback(key, cb)
+}
+
+func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Fast path: if the batch keys are strictly increasing (guaranteed by the
+	// caller when using SortedBatchApplier) and start after the current max key,
+	// we can append without per-op comparisons/traversal.
+	if len(entries) > 0 {
+		last := m.sl.LastKey()
+		if last == nil || bytes.Compare(entries[0].Key, last) > 0 {
+			for _, op := range entries {
+				if op.Type == batchpkg.OpDelete {
+					m.sl.AppendDelete(op.Key)
+				} else {
+					m.sl.Append(op.Key, op.Value)
+				}
+				if onKey != nil {
+					onKey(op.Key)
+				}
+			}
+			return
+		}
+	}
+
+	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			m.sl.Delete(op.Key)
+		} else {
+			m.sl.Put(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
 }
 
 // SetSteal - SkipList copies data, so Steal is same as Set.

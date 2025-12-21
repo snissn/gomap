@@ -2176,6 +2176,7 @@ type Batch struct {
 	entries []batch.Entry
 	backend batch.Interface
 	size    int
+	walBuf  []wal.Record
 
 	closed         bool
 	streamEligible bool
@@ -2397,7 +2398,10 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 1. WAL Append loop
 	if !b.db.disableWAL {
-		records := make([]wal.Record, 0, len(b.entries))
+		records := b.walBuf[:0]
+		if cap(records) < len(b.entries) {
+			records = make([]wal.Record, 0, len(b.entries))
+		}
 		for _, op := range b.entries {
 			if op.Type == batch.OpDelete {
 				records = append(records, wal.Record{Op: wal.OpDelete, Key: op.Key})
@@ -2405,6 +2409,7 @@ func (b *Batch) writeRegular(sync bool) error {
 				records = append(records, wal.Record{Op: wal.OpSet, Key: op.Key, Value: op.Value})
 			}
 		}
+		b.walBuf = records
 
 		b.db.mu.RLock()
 		w := b.db.wal
@@ -2428,16 +2433,32 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	b.db.mu.Lock()
 	// 2. Memtable Update
-	for _, op := range b.entries {
-		// We use Steal methods because b.entries owns the key/value copies
-		// created in Batch.Set/Delete. We transfer ownership to Memtable.
-		if op.Type == batch.OpDelete {
-			b.db.mutable.DeleteSteal(op.Key)
+	onKey := func(key []byte) {
+		b.db.noteWriteKeyLocked(key)
+		b.db.mutableRange.add(key)
+	}
+	if b.streamEligible {
+		if applier, ok := b.db.mutable.(memtable.SortedBatchApplier); ok {
+			applier.ApplyStealSortedBatch(b.entries, onKey)
 		} else {
-			b.db.mutable.SetSteal(op.Key, op.Value)
+			for _, op := range b.entries {
+				if op.Type == batch.OpDelete {
+					b.db.mutable.DeleteSteal(op.Key)
+				} else {
+					b.db.mutable.SetSteal(op.Key, op.Value)
+				}
+				onKey(op.Key)
+			}
 		}
-		b.db.noteWriteKeyLocked(op.Key)
-		b.db.mutableRange.add(op.Key)
+	} else {
+		for _, op := range b.entries {
+			if op.Type == batch.OpDelete {
+				b.db.mutable.DeleteSteal(op.Key)
+			} else {
+				b.db.mutable.SetSteal(op.Key, op.Value)
+			}
+			onKey(op.Key)
+		}
 	}
 
 	// 3. Threshold Check

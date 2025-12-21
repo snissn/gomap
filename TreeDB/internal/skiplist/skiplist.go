@@ -124,6 +124,42 @@ func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error
 	return s.put(key, value, 0, cb)
 }
 
+// LastKey returns the largest key currently in the skiplist, or nil if empty.
+//
+// The returned slice is a view into the skiplist arena and is only valid as long
+// as the skiplist is not mutated.
+func (s *SkipList) LastKey() []byte {
+	last := s.tail[0]
+	if last == 0 || last == s.head {
+		return nil
+	}
+	return s.getKey(last)
+}
+
+// AppendWithCallback inserts a new entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+//
+// Callers must only use this when they have already established key ordering.
+func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+	var prev [maxHeight]uint32
+	for i := 0; i < maxHeight; i++ {
+		prev[i] = s.tail[i]
+	}
+	return s.insertNew(key, value, flags, cb, &prev, true)
+}
+
+// Append inserts a new key/value entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+func (s *SkipList) Append(key, value []byte) {
+	_ = s.AppendWithCallback(key, value, 0, nil)
+}
+
+// AppendDelete inserts a tombstone for key assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+func (s *SkipList) AppendDelete(key []byte) {
+	_ = s.AppendWithCallback(key, nil, flagDeleted, nil)
+}
+
 // Delete marks a key as deleted (tombstone).
 func (s *SkipList) Delete(key []byte) {
 	s.put(key, nil, flagDeleted, nil)
