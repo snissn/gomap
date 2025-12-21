@@ -35,7 +35,7 @@ func TestRepairTail_TruncatesPartialGarbage(t *testing.T) {
 		t.Fatalf("expected size %d after repair, got %d", sizeBefore, s.Size)
 	}
 
-	got, err := s.Read(off + 4, true)
+	got, err := s.Read(off+4, true)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}

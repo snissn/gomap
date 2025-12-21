@@ -21,7 +21,7 @@ type SlabManager struct {
 	activeSlab *SlabFile
 	slabs      map[uint32]*SlabFile // The master list of all live + zombie slabs
 	mu         sync.RWMutex
-	
+
 	disableReadChecksum bool
 }
 

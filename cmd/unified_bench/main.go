@@ -564,12 +564,12 @@ var (
 
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
-		treedbDisableReadChecksum      = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
-		treedbBgCompactionInterval     = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
-		treedbDisablePiggyback         = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
-	)
-	
-	func clampPPM(v int) int {
+	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
+	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+)
+
+func clampPPM(v int) int {
 	if v < 0 {
 		return 0
 	}
@@ -629,10 +629,10 @@ type BenchConfig struct {
 	TreeDBCompactCopyBurst         int64
 	TreeDBVacuumBeforeScans        bool
 
-	TreeDBDisableWAL           bool
-	TreeDBRelaxedSync          bool
-	TreeDBDisableReadChecksum  bool
-	TreeDBBgCompactionInterval time.Duration
+	TreeDBDisableWAL                 bool
+	TreeDBRelaxedSync                bool
+	TreeDBDisableReadChecksum        bool
+	TreeDBBgCompactionInterval       time.Duration
 	TreeDBDisablePiggybackCompaction bool
 }
 
@@ -669,43 +669,43 @@ func main() {
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	baseCfg := BenchConfig{
-		Keys:                           *numKeys,
-		ValueSize:                      *valSize,
-		BatchSize:                      *batchSize,
-		RangeQueries:                   *rangeQueries,
-		RangeSpan:                      *rangeSpan,
-		DBsArg:                         *dbsArg,
-		TestsArg:                       *testArg,
-		KeepDir:                        *keepDir,
-		Progress:                       *progress,
-		SeedUsed:                       seedUsed,
-		CPUProfile:                     *cpuProfile,
-		BlockProfile:                   *blockProfile,
-		BlockProfileRate:               *blockRate,
-		MutexProfile:                   *mutexProfile,
-		MutexProfileFraction:           *mutexFrac,
-		TraceProfile:                   *traceProfile,
-		MaxWall:                        *maxWall,
-		MaxRSSMB:                       *maxRSSMB,
-		CheckpointBetweenTests:         *checkpointBetweenTests,
-		CheckpointEveryOps:             *checkpointEveryOps,
-		CheckpointEveryBytes:           *checkpointEveryBytes,
-		SettleBeforeScans:              *settleBeforeScans,
-		TreeDBIterDebug:                *treedbIterDebug,
-		TreeDBIterDebugLimit:           *treedbIterDebugLimit,
-		TreeDBCompactBeforeScans:       *treedbCompactBeforeScans,
-		TreeDBCompactDeadRatio:         *treedbCompactDeadRatio,
-		TreeDBCompactMinBytes:          *treedbCompactMinBytes,
-		TreeDBCompactMaxSlabs:          *treedbCompactMaxSlabs,
-		TreeDBCompactMicroBatch:        *treedbCompactMicroBatch,
-		TreeDBCompactRotateBeforeWrite: *treedbCompactRotateBeforeWrite,
-		TreeDBCompactCopyBps:           *treedbCompactCopyBps,
-		TreeDBCompactCopyBurst:         *treedbCompactCopyBurst,
-		TreeDBVacuumBeforeScans:        *treedbVacuumBeforeScans,
-		TreeDBDisableWAL:               *treedbDisableWAL,
-		TreeDBRelaxedSync:              *treedbRelaxedSync,
-		TreeDBDisableReadChecksum:      *treedbDisableReadChecksum,
-		TreeDBBgCompactionInterval:     *treedbBgCompactionInterval,
+		Keys:                             *numKeys,
+		ValueSize:                        *valSize,
+		BatchSize:                        *batchSize,
+		RangeQueries:                     *rangeQueries,
+		RangeSpan:                        *rangeSpan,
+		DBsArg:                           *dbsArg,
+		TestsArg:                         *testArg,
+		KeepDir:                          *keepDir,
+		Progress:                         *progress,
+		SeedUsed:                         seedUsed,
+		CPUProfile:                       *cpuProfile,
+		BlockProfile:                     *blockProfile,
+		BlockProfileRate:                 *blockRate,
+		MutexProfile:                     *mutexProfile,
+		MutexProfileFraction:             *mutexFrac,
+		TraceProfile:                     *traceProfile,
+		MaxWall:                          *maxWall,
+		MaxRSSMB:                         *maxRSSMB,
+		CheckpointBetweenTests:           *checkpointBetweenTests,
+		CheckpointEveryOps:               *checkpointEveryOps,
+		CheckpointEveryBytes:             *checkpointEveryBytes,
+		SettleBeforeScans:                *settleBeforeScans,
+		TreeDBIterDebug:                  *treedbIterDebug,
+		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
+		TreeDBCompactBeforeScans:         *treedbCompactBeforeScans,
+		TreeDBCompactDeadRatio:           *treedbCompactDeadRatio,
+		TreeDBCompactMinBytes:            *treedbCompactMinBytes,
+		TreeDBCompactMaxSlabs:            *treedbCompactMaxSlabs,
+		TreeDBCompactMicroBatch:          *treedbCompactMicroBatch,
+		TreeDBCompactRotateBeforeWrite:   *treedbCompactRotateBeforeWrite,
+		TreeDBCompactCopyBps:             *treedbCompactCopyBps,
+		TreeDBCompactCopyBurst:           *treedbCompactCopyBurst,
+		TreeDBVacuumBeforeScans:          *treedbVacuumBeforeScans,
+		TreeDBDisableWAL:                 *treedbDisableWAL,
+		TreeDBRelaxedSync:                *treedbRelaxedSync,
+		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
+		TreeDBBgCompactionInterval:       *treedbBgCompactionInterval,
 		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
 

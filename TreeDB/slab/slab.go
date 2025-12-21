@@ -243,11 +243,11 @@ func (s *SlabFile) Read(offset int64, verifyCRC bool) ([]byte, error) {
 
 func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool) {
 	data := s.mmapData
-	
+
 	// Fast check: if data exists and covers the request, use it.
 	// We don't know totalLen64 yet, but we check if we can at least read the header.
 	canReadHeader := data != nil && realStart >= 0 && realStart+HeaderSize <= int64(len(data))
-	
+
 	if canReadHeader {
 		header := data[realStart : realStart+HeaderSize]
 		keyLen := binary.LittleEndian.Uint16(header[4:6])
@@ -260,13 +260,13 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 		if dataEnd <= int64(len(data)) {
 			// All good, perform read
 			record := data[realStart+HeaderSize : dataEnd]
-			
+
 			if verifyCRC {
 				// Optimize: Single CRC pass over header-fields + payload
 				// Header CRC is at 0:4. Fields are 4:10.
 				sum := crc32.Update(0, crc32cTable, header[4:10])
 				sum = crc32.Update(sum, crc32cTable, record)
-				
+
 				// Verify against stored CRC
 				crc := binary.LittleEndian.Uint32(header[0:4])
 				if sum != crc {
@@ -280,7 +280,7 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 	// Slow path: Remap if needed
 	s.mmapMu.Lock()
 	defer s.mmapMu.Unlock()
-	
+
 	// Double check under lock
 	data = s.mmapData
 	// We need file size to know if remapping is worth it
@@ -289,7 +289,7 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 		return nil, nil, false
 	}
 	currentSize := info.Size()
-	
+
 	if data == nil || int64(len(data)) < currentSize {
 		// Remap
 		if data != nil {
@@ -305,11 +305,11 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 			}
 		}
 	}
-	
+
 	if data == nil {
 		return nil, nil, false
 	}
-	
+
 	// Retry logic with new data
 	if realStart < 0 || realStart+HeaderSize > int64(len(data)) {
 		return nil, nil, false
@@ -318,14 +318,14 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 	keyLen := binary.LittleEndian.Uint16(header[4:6])
 	valLen := binary.LittleEndian.Uint32(header[6:10])
 	totalLen64 := int64(keyLen) + int64(valLen)
-	
+
 	dataEnd := realStart + HeaderSize + totalLen64
 	if dataEnd > int64(len(data)) {
 		return nil, nil, false
 	}
-	
+
 	record := data[realStart+HeaderSize : dataEnd]
-	
+
 	if verifyCRC {
 		sum := crc32.Update(0, crc32cTable, header[4:10])
 		sum = crc32.Update(sum, crc32cTable, record)
@@ -334,7 +334,7 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 			return nil, ErrChecksumMismatch, true
 		}
 	}
-	
+
 	return record[int64(keyLen):], nil, true
 }
 

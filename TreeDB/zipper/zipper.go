@@ -687,217 +687,219 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 			return 0, false, err
 		}
 
-		        n := b.Finish()
-				metrics.IndexWriteBytes += page.PageSize
-				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
-				return pid, true, nil
+		n := b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		return pid, true, nil
+	}
+
+	copyLeaf := func(id uint64, hint uint64) (uint64, error) {
+		n, ok, err := loadLeaf(id)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, errors.New("copyLeaf: not a leaf")
+		}
+
+		pid, err := z.allocator.Alloc(hint)
+		if err != nil {
+			return 0, err
+		}
+		data, err := z.pager.GetForWrite(pid)
+		if err != nil {
+			return 0, err
+		}
+		b := node.NewBuilder(data, page.PageTypeLeaf)
+		b.SetPageID(pid)
+
+		for i := uint16(0); i < n.Count(); i++ {
+			k, v, ptr, flags, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return 0, err
 			}
-		
-			copyLeaf := func(id uint64, hint uint64) (uint64, error) {
-				n, ok, err := loadLeaf(id)
-				if err != nil {
-					return 0, err
-				}
-				if !ok {
-					return 0, errors.New("copyLeaf: not a leaf")
-				}
-		
-				pid, err := z.allocator.Alloc(hint)
-				if err != nil {
-					return 0, err
-				}
-				data, err := z.pager.GetForWrite(pid)
-				if err != nil {
-					return 0, err
-				}
-				b := node.NewBuilder(data, page.PageTypeLeaf)
-				b.SetPageID(pid)
-		
-				for i := uint16(0); i < n.Count(); i++ {
-					k, v, ptr, flags, err := n.GetLeafEntryView(i)
-					if err != nil {
-						return 0, err
-					}
-					if flags&node.FlagTombstone != 0 {
-						continue
-					}
-					if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
-						return 0, err
-					}
-				}
-				b.Finish()
-				metrics.IndexWriteBytes += page.PageSize
-				return pid, nil
+			if flags&node.FlagTombstone != 0 {
+				continue
 			}
-		
-			rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-				lid, err := z.allocator.Alloc(left.PageID())
-				if err != nil {
-					return 0, 0, nil, false, err
-				}
-				ldata, err := z.pager.GetForWrite(lid)
-				if err != nil {
-					return 0, 0, nil, false, err
-				}
-				lb := node.NewBuilder(ldata, page.PageTypeLeaf)
-				lb.SetPageID(lid)
-		
-				rid, err := z.allocator.Alloc(lid)
-				if err != nil {
-					retired = append(retired, lid)
-					return 0, 0, nil, false, err
-				}
-				rdata, err := z.pager.GetForWrite(rid)
+			if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+				return 0, err
+			}
+		}
+		b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		return pid, nil
+	}
+
+	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+		lid, err := z.allocator.Alloc(left.PageID())
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		ldata, err := z.pager.GetForWrite(lid)
+		if err != nil {
+			return 0, 0, nil, false, err
+		}
+		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
+		lb.SetPageID(lid)
+
+		rid, err := z.allocator.Alloc(lid)
+		if err != nil {
+			retired = append(retired, lid)
+			return 0, 0, nil, false, err
+		}
+		rdata, err := z.pager.GetForWrite(rid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, err
+		}
+
+		// Collect combined entries in-order without copying.
+		type ev struct {
+			k     []byte
+			v     []byte
+			ptr   page.ValuePtr
+			flags byte
+			size  int
+		}
+		combined := make([]ev, 0, int(left.Count()+right.Count()))
+		for _, src := range []*node.Node{left, right} {
+			for i := uint16(0); i < src.Count(); i++ {
+				k, v, ptr, flags, err := src.GetLeafEntryView(i)
 				if err != nil {
 					retired = append(retired, lid, rid)
 					return 0, 0, nil, false, err
 				}
-		
-				// Collect combined entries in-order without copying.
-				type ev struct {
-					k     []byte
-					v     []byte
-					ptr   page.ValuePtr
-					flags byte
-					size  int
+				if flags&node.FlagTombstone != 0 {
+					continue
 				}
-				combined := make([]ev, 0, int(left.Count()+right.Count()))
-				for _, src := range []*node.Node{left, right} {
-					for i := uint16(0); i < src.Count(); i++ {
-						k, v, ptr, flags, err := src.GetLeafEntryView(i)
-						if err != nil {
-							retired = append(retired, lid, rid)
-							return 0, 0, nil, false, err
-						}
-						if flags&node.FlagTombstone != 0 {
-							continue
-						}
-						combined = append(combined, ev{k: k, v: v, ptr: ptr, flags: flags, size: leafEntryBytes(k, v, ptr, flags)})
-					}
-				}
-				if len(combined) < 2 {
-					retired = append(retired, lid, rid)
-					return 0, 0, nil, false, nil
-				}
-		
-				// Choose a split point by bytes (closest to 50/50) to avoid repeated
-				// underfull siblings and to guarantee the rebalance fits.
-				prefixBytes := make([]int, len(combined)+1)
-				for i, e := range combined {
-					prefixBytes[i+1] = prefixBytes[i] + e.size
-				}
-				totalBytes := prefixBytes[len(combined)]
-		
-				// Enforce the configured soft-full reserve (if any) by ensuring the
-				// constructed pages leave at least leafReserveBytes free space.
-				cap := pageCap
-				if z.leafReserveBytes > 0 && z.leafReserveBytes < pageCap {
-					cap = pageCap - z.leafReserveBytes
-				}
-		
-				bestSplitAt := -1
-				bestDelta := int(^uint(0) >> 1) // MaxInt
-				for splitAt := 1; splitAt < len(combined); splitAt++ {
-					leftBytes := prefixBytes[splitAt]
-					rightBytes := totalBytes - leftBytes
-					if leftBytes > cap || rightBytes > cap {
-						continue
-					}
-					delta := leftBytes - rightBytes
-					if delta < 0 {
-						delta = -delta
-					}
-					if delta < bestDelta {
-						bestDelta = delta
-						bestSplitAt = splitAt
-					}
-				}
-				if bestSplitAt <= 0 || bestSplitAt >= len(combined) {
-					retired = append(retired, lid, rid)
-					return 0, 0, nil, false, nil
-				}
-		
-				rb := node.NewBuilder(rdata, page.PageTypeLeaf)
-				rb.SetPageID(rid)
-		
-				for i := 0; i < bestSplitAt; i++ {
-					if err := lb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
-						retired = append(retired, lid, rid)
-						return 0, 0, nil, false, err
-					}
-				}
-				rightStart = append([]byte(nil), combined[bestSplitAt].k...)
-				for i := bestSplitAt; i < len(combined); i++ {
-					if err := rb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
-						retired = append(retired, lid, rid)
-						return 0, 0, nil, false, err
-					}
-				}
-		
-				ln := lb.Finish()
-				rn := rb.Finish()
-				metrics.IndexWriteBytes += 2 * page.PageSize
-				metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
-				metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
-				return lid, rid, rightStart, true, nil
+				combined = append(combined, ev{k: k, v: v, ptr: ptr, flags: flags, size: leafEntryBytes(k, v, ptr, flags)})
 			}
-		
-			// Second pass: attempt sibling merge/rebalance for underfull adjacent leaves.
-			i := 0
-			for i < len(entries)-1 {
-				leftID := entries[i].child
-				rightID := entries[i+1].child
-		
-				left, okL, err := loadLeaf(leftID)
-				if err != nil {
-					return nil, nil, err
+		}
+		if len(combined) < 2 {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		// Choose a split point by bytes (closest to 50/50) to avoid repeated
+		// underfull siblings and to guarantee the rebalance fits.
+		prefixBytes := make([]int, len(combined)+1)
+		for i, e := range combined {
+			prefixBytes[i+1] = prefixBytes[i] + e.size
+		}
+		totalBytes := prefixBytes[len(combined)]
+
+		// Enforce the configured soft-full reserve (if any) by ensuring the
+		// constructed pages leave at least leafReserveBytes free space.
+		cap := pageCap
+		if z.leafReserveBytes > 0 && z.leafReserveBytes < pageCap {
+			cap = pageCap - z.leafReserveBytes
+		}
+
+		bestSplitAt := -1
+		bestDelta := int(^uint(0) >> 1) // MaxInt
+		for splitAt := 1; splitAt < len(combined); splitAt++ {
+			leftBytes := prefixBytes[splitAt]
+			rightBytes := totalBytes - leftBytes
+			if leftBytes > cap || rightBytes > cap {
+				continue
+			}
+			delta := leftBytes - rightBytes
+			if delta < 0 {
+				delta = -delta
+			}
+			if delta < bestDelta {
+				bestDelta = delta
+				bestSplitAt = splitAt
+			}
+		}
+		if bestSplitAt <= 0 || bestSplitAt >= len(combined) {
+			retired = append(retired, lid, rid)
+			return 0, 0, nil, false, nil
+		}
+
+		rb := node.NewBuilder(rdata, page.PageTypeLeaf)
+		rb.SetPageID(rid)
+
+		for i := 0; i < bestSplitAt; i++ {
+			if err := lb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, err
+			}
+		}
+		rightStart = append([]byte(nil), combined[bestSplitAt].k...)
+		for i := bestSplitAt; i < len(combined); i++ {
+			if err := rb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+				retired = append(retired, lid, rid)
+				return 0, 0, nil, false, err
+			}
+		}
+
+		ln := lb.Finish()
+		rn := rb.Finish()
+		metrics.IndexWriteBytes += 2 * page.PageSize
+		metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
+		return lid, rid, rightStart, true, nil
+	}
+
+	// Second pass: attempt sibling merge/rebalance for underfull adjacent leaves.
+	i := 0
+	for i < len(entries)-1 {
+		leftID := entries[i].child
+		rightID := entries[i+1].child
+
+		left, okL, err := loadLeaf(leftID)
+		if err != nil {
+			return nil, nil, err
+		}
+		right, okR, err := loadLeaf(rightID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !okL || !okR {
+			i++
+			continue
+		}
+
+		if left.Count() == 0 {
+			// If this is a non-first child it would have been pruned already.
+			i++
+			continue
+		}
+
+		leftFill := fillPPM(left)
+		rightFill := fillPPM(right)
+		if leftFill >= underfullPPM && rightFill >= underfullPPM {
+			// If not merging/rebalancing, check piggyback
+			if z.piggybackCompaction {
+				const distanceThreshold = 2500 // ~10MB
+				dist := int64(leftID) - int64(rightID)
+				if dist < 0 {
+					dist = -dist
 				}
-				right, okR, err := loadLeaf(rightID)
-				if err != nil {
-					return nil, nil, err
-				}
-				if !okL || !okR {
-					i++
-					continue
-				}
-		
-				if left.Count() == 0 {
-					// If this is a non-first child it would have been pruned already.
-					i++
-					continue
-				}
-		
-				leftFill := fillPPM(left)
-				rightFill := fillPPM(right)
-				if leftFill >= underfullPPM && rightFill >= underfullPPM {
-					// If not merging/rebalancing, check piggyback
-					if z.piggybackCompaction {
-						const distanceThreshold = 2500 // ~10MB
-						dist := int64(leftID) - int64(rightID)
-						if dist < 0 { dist = -dist }
-						
-						if dist > distanceThreshold {
-							// Move the "older" one (lower ID) towards the newer one.
-							if leftID < rightID {
-								newID, err := copyLeaf(leftID, rightID)
-								if err == nil {
-									retired = append(retired, leftID)
-									entries[i].child = newID
-								}
-							} else {
-								newID, err := copyLeaf(rightID, leftID)
-								if err == nil {
-									retired = append(retired, rightID)
-									entries[i+1].child = newID
-								}
-							}
+
+				if dist > distanceThreshold {
+					// Move the "older" one (lower ID) towards the newer one.
+					if leftID < rightID {
+						newID, err := copyLeaf(leftID, rightID)
+						if err == nil {
+							retired = append(retired, leftID)
+							entries[i].child = newID
+						}
+					} else {
+						newID, err := copyLeaf(rightID, leftID)
+						if err == nil {
+							retired = append(retired, rightID)
+							entries[i+1].child = newID
 						}
 					}
-					i++
-					continue
 				}
-		
-				leftBytes, err := leafRequiredBytes(left)
+			}
+			i++
+			continue
+		}
+
+		leftBytes, err := leafRequiredBytes(left)
 		if err != nil {
 			return nil, nil, err
 		}

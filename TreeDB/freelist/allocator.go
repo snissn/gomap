@@ -104,7 +104,7 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 		// Pop from body
 		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
 		id := body.FreeIDs[count-1]
-		
+
 		target := hint
 		if target == 0 {
 			target = a.lastAlloc

@@ -87,7 +87,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 			}
 			p.chunks[i] = data
 		}
-		
+
 		p.atomicChunks.Store(&chunkList{data: p.chunks})
 
 		// Initial guess for numPages (will be corrected by DB recovery)
@@ -246,7 +246,7 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 			}
 			p.chunks = append(p.chunks, data)
 		}
-		
+
 		// Update atomicChunks for lock-free readers
 		// Make a copy of the slice header to ensure safety if append reallocated
 		newChunks := make([][]byte, len(p.chunks))
@@ -304,7 +304,7 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	// Reader reads numPages (100).
 	// If chunkIdx=9, OK.
 	// So order in Reader doesn't strictly matter as long as bounds check uses the loaded chunks len.
-	
+
 	limit := p.numPages.Load()
 	if pageID >= limit {
 		return nil, ErrPageOutOfBounds
