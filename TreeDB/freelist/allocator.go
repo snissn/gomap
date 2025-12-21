@@ -62,7 +62,9 @@ func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
 }
 
 // Alloc allocates a single page.
-func (a *Allocator) Alloc() (uint64, error) {
+// hint is a page ID that the caller would like the new page to be close to.
+// If hint is 0, the allocator uses its own heuristics (e.g. lastAlloc).
+func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -102,8 +104,14 @@ func (a *Allocator) Alloc() (uint64, error) {
 		// Pop from body
 		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
 		id := body.FreeIDs[count-1]
-		if a.regionPages > 0 && a.regionRadius > 0 && a.lastAlloc != 0 {
-			targetRegion := a.lastAlloc / a.regionPages
+
+		target := hint
+		if target == 0 {
+			target = a.lastAlloc
+		}
+
+		if a.regionPages > 0 && a.regionRadius > 0 && target != 0 {
+			targetRegion := target / a.regionPages
 			idx := -1
 			for i := int(count) - 1; i >= 0; i-- {
 				candidate := body.FreeIDs[i]

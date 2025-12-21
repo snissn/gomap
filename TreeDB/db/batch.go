@@ -31,8 +31,23 @@ func (b *Batch) Set(key, value []byte) error {
 	return b.batch.Set(key, value)
 }
 
+// SetView records a Put without copying key/value bytes. Callers must treat
+// key/value as immutable until the batch is written or closed.
+//
+// This is intentionally not part of the public batch.Interface; it is a
+// best-effort optimization used by higher-level layers (e.g. cached streaming).
+func (b *Batch) SetView(key, value []byte) error {
+	return b.batch.SetView(key, value)
+}
+
 func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
+}
+
+// DeleteView records a Delete without copying the key bytes. Callers must treat
+// key as immutable until the batch is written or closed.
+func (b *Batch) DeleteView(key []byte) error {
+	return b.batch.DeleteView(key)
 }
 
 func (b *Batch) SetOps(ops []batch.Entry) error {
@@ -43,6 +58,10 @@ func (b *Batch) Write() error {
 	// Serialize writers
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
+
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
 
 	// Get current root (Read Lock)
 	b.db.mu.RLock()
@@ -83,6 +102,10 @@ func (b *Batch) WriteSync() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	b.db.mu.RUnlock()
@@ -116,6 +139,14 @@ func (b *Batch) WriteSync() error {
 func (b *Batch) Close() error {
 	b.batch = nil
 	return nil
+}
+
+// Reset clears the batch for reuse.
+func (b *Batch) Reset() {
+	if b == nil || b.batch == nil {
+		return
+	}
+	b.batch.Reset()
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

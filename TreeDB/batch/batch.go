@@ -51,6 +51,8 @@ type Batch struct {
 	slabWritten     int
 	slabWrittenByID map[uint32]int64
 	inlineThreshold int
+	sorted          bool
+	lastKey         []byte
 	closed          bool
 }
 
@@ -63,6 +65,7 @@ func New(sm *slab.SlabManager, threshold int) *Batch {
 		entries:         make([]Entry, 0, 16),
 		slabManager:     sm,
 		inlineThreshold: threshold,
+		sorted:          true,
 	}
 }
 
@@ -71,6 +74,40 @@ func (b *Batch) ensureOpen() error {
 		return ErrBatchClosed
 	}
 	return nil
+}
+
+// Reset clears the batch for reuse without releasing its internal buffers.
+func (b *Batch) Reset() {
+	if b == nil {
+		return
+	}
+	if b.closed {
+		// Keep behavior simple: Reset is only valid on an open batch.
+		return
+	}
+	if b.entries != nil {
+		b.entries = b.entries[:0]
+	}
+	b.byteSize = 0
+	b.slabWritten = 0
+	if b.slabWrittenByID != nil {
+		for id := range b.slabWrittenByID {
+			delete(b.slabWrittenByID, id)
+		}
+	}
+	b.sorted = true
+	b.lastKey = nil
+}
+
+func (b *Batch) noteKeyOrder(key []byte) {
+	if !b.sorted {
+		return
+	}
+	if b.lastKey != nil && bytes.Compare(b.lastKey, key) > 0 {
+		b.sorted = false
+		return
+	}
+	b.lastKey = key
 }
 
 // SetView is an internal-performance helper that records a Put without copying
@@ -107,6 +144,7 @@ func (b *Batch) SetView(key, value []byte) error {
 
 	b.entries = append(b.entries, entry)
 	b.byteSize += len(key) + len(value)
+	b.noteKeyOrder(entry.Key)
 	return nil
 }
 
@@ -152,6 +190,7 @@ func (b *Batch) Set(key, value []byte) error {
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
 	b.byteSize += len(k) + len(value)
+	b.noteKeyOrder(entry.Key)
 	return nil
 }
 
@@ -171,6 +210,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Key:  key,
 	})
 	b.byteSize += len(key)
+	b.noteKeyOrder(key)
 	return nil
 }
 
@@ -191,6 +231,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		IsPtr:    true,
 	}
 	b.entries = append(b.entries, entry)
+	b.noteKeyOrder(entry.Key)
 	return nil
 }
 
@@ -212,6 +253,7 @@ func (b *Batch) Delete(key []byte) error {
 		Key:  k,
 	})
 	b.byteSize += len(k)
+	b.noteKeyOrder(k)
 	return nil
 }
 
@@ -240,6 +282,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 
 	// Just append them. Deduplication happens at Ops() time.
 	for _, op := range ops {
+		b.noteKeyOrder(op.Key)
 		// Logic to handle large values if op came from raw map?
 		// Assuming op is already processed or we need to check.
 
@@ -276,12 +319,14 @@ func (b *Batch) SetOps(ops []Entry) error {
 // Duplicate keys are resolved (last write wins).
 // This modifies the internal entries slice (sorts and compacts).
 func (b *Batch) SortedEntries() []Entry {
-	sort.SliceStable(b.entries, func(i, j int) bool {
-		return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
-	})
-
 	if len(b.entries) == 0 {
 		return nil
+	}
+	if !b.sorted {
+		sort.SliceStable(b.entries, func(i, j int) bool {
+			return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
+		})
+		b.sorted = true
 	}
 
 	// Compact in place: keep only the last entry for each key
@@ -294,6 +339,9 @@ func (b *Batch) SortedEntries() []Entry {
 		out = append(out, b.entries[i])
 	}
 	b.entries = out
+	if len(b.entries) > 0 {
+		b.lastKey = b.entries[len(b.entries)-1].Key
+	}
 	return b.entries
 }
 

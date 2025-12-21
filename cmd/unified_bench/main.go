@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	crand "crypto/rand"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -83,18 +84,25 @@ func NewBTree(dir string) (kvstore.DB, error) {
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 	opts := treedb.Options{
-		Dir:                     dir,
-		ChunkSize:               64 * 1024 * 1024,
-		KeepRecent:              *treedbKeepRecent,
-		PreferAppendAlloc:       *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:       uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:   uint32(clampPPM(*treedbInternalFillPPM)),
-		FlushThreshold:          *treedbFlushThreshold,
-		MaxQueuedMemtables:      *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:      *treedbStopBacklogSeconds,
-		MaxBacklogBytes:         *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		KeepRecent:                        *treedbKeepRecent,
+		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		FlushThreshold:                    *treedbFlushThreshold,
+		MaxQueuedMemtables:                *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:            *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:                *treedbStopBacklogSeconds,
+		MaxBacklogBytes:                   *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:           *treedbWriterFlushMaxMems,
+		DisableWAL:                        *treedbDisableWAL,
+		RelaxedSync:                       *treedbRelaxedSync,
+		DisableReadChecksum:               *treedbDisableReadChecksum,
+		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
+		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
+		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
+		DisablePiggybackCompaction:        *treedbDisablePiggyback,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
@@ -108,12 +116,14 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 	opts := treedb.Options{
-		Dir:                   dir,
-		ChunkSize:             64 * 1024 * 1024,
-		KeepRecent:            *treedbKeepRecent,
-		PreferAppendAlloc:     *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		KeepRecent:                        *treedbKeepRecent,
+		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
+		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
@@ -343,6 +353,7 @@ var (
 func leveldbBenchOptions() *opt.Options {
 	return &opt.Options{
 		Filter:                 filter.NewBloomFilter(10),
+		DisableSeeksCompaction: true,
 		OpenFilesCacheCapacity: leveldbMinHandles,
 		BlockCacheCapacity:     (leveldbMinCacheMB / 2) * opt.MiB,
 		WriteBuffer:            (leveldbMinCacheMB / 4) * opt.MiB,
@@ -511,7 +522,7 @@ var (
 	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
-	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg    = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -556,6 +567,14 @@ var (
 	treedbCompactCopyBurst         = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
 	treedbVacuumBeforeScans        = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
 	settleBeforeScans              = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+
+	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
+	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
+	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
+	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+	treedbBgVacuumInterval     = flag.Duration("treedb-bg-vacuum-interval", 0, "TreeDB: background index vacuum interval (0=disabled)")
+	treedbBgVacuumSpanPPM      = flag.Uint64("treedb-bg-vacuum-span-ppm", 0, "TreeDB: background index vacuum span ratio threshold (ppm), 0=default")
 )
 
 func clampPPM(v int) int {
@@ -566,6 +585,13 @@ func clampPPM(v int) int {
 		return 1_000_000
 	}
 	return v
+}
+
+func clampUint32(v uint64) uint32 {
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 type DBInstance struct {
@@ -617,6 +643,12 @@ type BenchConfig struct {
 	TreeDBCompactCopyBps           int64
 	TreeDBCompactCopyBurst         int64
 	TreeDBVacuumBeforeScans        bool
+
+	TreeDBDisableWAL                 bool
+	TreeDBRelaxedSync                bool
+	TreeDBDisableReadChecksum        bool
+	TreeDBBgCompactionInterval       time.Duration
+	TreeDBDisablePiggybackCompaction bool
 }
 
 type BenchRun struct {
@@ -652,39 +684,44 @@ func main() {
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
 	baseCfg := BenchConfig{
-		Keys:                           *numKeys,
-		ValueSize:                      *valSize,
-		BatchSize:                      *batchSize,
-		RangeQueries:                   *rangeQueries,
-		RangeSpan:                      *rangeSpan,
-		DBsArg:                         *dbsArg,
-		TestsArg:                       *testArg,
-		KeepDir:                        *keepDir,
-		Progress:                       *progress,
-		SeedUsed:                       seedUsed,
-		CPUProfile:                     *cpuProfile,
-		BlockProfile:                   *blockProfile,
-		BlockProfileRate:               *blockRate,
-		MutexProfile:                   *mutexProfile,
-		MutexProfileFraction:           *mutexFrac,
-		TraceProfile:                   *traceProfile,
-		MaxWall:                        *maxWall,
-		MaxRSSMB:                       *maxRSSMB,
-		CheckpointBetweenTests:         *checkpointBetweenTests,
-		CheckpointEveryOps:             *checkpointEveryOps,
-		CheckpointEveryBytes:           *checkpointEveryBytes,
-		SettleBeforeScans:              *settleBeforeScans,
-		TreeDBIterDebug:                *treedbIterDebug,
-		TreeDBIterDebugLimit:           *treedbIterDebugLimit,
-		TreeDBCompactBeforeScans:       *treedbCompactBeforeScans,
-		TreeDBCompactDeadRatio:         *treedbCompactDeadRatio,
-		TreeDBCompactMinBytes:          *treedbCompactMinBytes,
-		TreeDBCompactMaxSlabs:          *treedbCompactMaxSlabs,
-		TreeDBCompactMicroBatch:        *treedbCompactMicroBatch,
-		TreeDBCompactRotateBeforeWrite: *treedbCompactRotateBeforeWrite,
-		TreeDBCompactCopyBps:           *treedbCompactCopyBps,
-		TreeDBCompactCopyBurst:         *treedbCompactCopyBurst,
-		TreeDBVacuumBeforeScans:        *treedbVacuumBeforeScans,
+		Keys:                             *numKeys,
+		ValueSize:                        *valSize,
+		BatchSize:                        *batchSize,
+		RangeQueries:                     *rangeQueries,
+		RangeSpan:                        *rangeSpan,
+		DBsArg:                           *dbsArg,
+		TestsArg:                         *testArg,
+		KeepDir:                          *keepDir,
+		Progress:                         *progress,
+		SeedUsed:                         seedUsed,
+		CPUProfile:                       *cpuProfile,
+		BlockProfile:                     *blockProfile,
+		BlockProfileRate:                 *blockRate,
+		MutexProfile:                     *mutexProfile,
+		MutexProfileFraction:             *mutexFrac,
+		TraceProfile:                     *traceProfile,
+		MaxWall:                          *maxWall,
+		MaxRSSMB:                         *maxRSSMB,
+		CheckpointBetweenTests:           *checkpointBetweenTests,
+		CheckpointEveryOps:               *checkpointEveryOps,
+		CheckpointEveryBytes:             *checkpointEveryBytes,
+		SettleBeforeScans:                *settleBeforeScans,
+		TreeDBIterDebug:                  *treedbIterDebug,
+		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
+		TreeDBCompactBeforeScans:         *treedbCompactBeforeScans,
+		TreeDBCompactDeadRatio:           *treedbCompactDeadRatio,
+		TreeDBCompactMinBytes:            *treedbCompactMinBytes,
+		TreeDBCompactMaxSlabs:            *treedbCompactMaxSlabs,
+		TreeDBCompactMicroBatch:          *treedbCompactMicroBatch,
+		TreeDBCompactRotateBeforeWrite:   *treedbCompactRotateBeforeWrite,
+		TreeDBCompactCopyBps:             *treedbCompactCopyBps,
+		TreeDBCompactCopyBurst:           *treedbCompactCopyBurst,
+		TreeDBVacuumBeforeScans:          *treedbVacuumBeforeScans,
+		TreeDBDisableWAL:                 *treedbDisableWAL,
+		TreeDBRelaxedSync:                *treedbRelaxedSync,
+		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
+		TreeDBBgCompactionInterval:       *treedbBgCompactionInterval,
+		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -1072,6 +1109,54 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	guard := newBenchGuard(cfg)
 	checkpointDurations := make(map[string]map[string]time.Duration)
 
+	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
+	datasetKeySize := 32
+	datasetValSize := cfg.ValueSize
+	datasetCount := cfg.Keys
+	var (
+		datasetRandomKeys [][]byte
+		datasetRandomVals [][]byte
+		datasetSortedKeys [][]byte
+		datasetSortedVals [][]byte
+		datasetErr        error
+	)
+	makeWriteDataset := func(count, ksize, vsize int, order bool) ([][]byte, [][]byte, error) {
+		keys := make([][]byte, count)
+		vals := make([][]byte, count)
+		for i := 0; i < count; i++ {
+			k := make([]byte, ksize)
+			if _, err := io.ReadFull(crand.Reader, k); err != nil {
+				return nil, nil, fmt.Errorf("dataset key %d: %w", i, err)
+			}
+			v := make([]byte, vsize)
+			if _, err := io.ReadFull(crand.Reader, v); err != nil {
+				return nil, nil, fmt.Errorf("dataset val %d: %w", i, err)
+			}
+			keys[i] = k
+			vals[i] = v
+		}
+		if order {
+			sort.Slice(keys, func(i, j int) bool {
+				return bytes.Compare(keys[i], keys[j]) < 0
+			})
+		}
+		return keys, vals, nil
+	}
+	ensureWriteDatasets := func() error {
+		if datasetErr != nil {
+			return datasetErr
+		}
+		if datasetRandomKeys != nil && datasetSortedKeys != nil {
+			return nil
+		}
+		datasetRandomKeys, datasetRandomVals, datasetErr = makeWriteDataset(datasetCount, datasetKeySize, datasetValSize, false)
+		if datasetErr != nil {
+			return datasetErr
+		}
+		datasetSortedKeys, datasetSortedVals, datasetErr = makeWriteDataset(datasetCount, datasetKeySize, datasetValSize, true)
+		return datasetErr
+	}
+
 	prefixScanBase := 0
 	expectedFullScanCount := -1
 	checkPrefixCounts := false
@@ -1177,6 +1262,50 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
+		},
+		"dataset_write_random": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			if err := ensureWriteDatasets(); err != nil {
+				return 0, fmt.Errorf("dataset_write_random: %w", err)
+			}
+			start := time.Now()
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(datasetKeySize + cfg.ValueSize)
+			for i := 0; i < len(datasetRandomKeys); i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
+				if err := db.Set(datasetRandomKeys[i], datasetRandomVals[i]); err != nil {
+					return 0, fmt.Errorf("dataset_write_random: %w", err)
+				}
+				if err := pc.Add(db, 1, perOpBytes); err != nil {
+					return 0, fmt.Errorf("dataset_write_random checkpoint: %w", err)
+				}
+			}
+			return float64(len(datasetRandomKeys)) / time.Since(start).Seconds(), nil
+		},
+		"dataset_write_sorted": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			if err := ensureWriteDatasets(); err != nil {
+				return 0, fmt.Errorf("dataset_write_sorted: %w", err)
+			}
+			start := time.Now()
+			pc := newPeriodicCheckpoint(cfg)
+			perOpBytes := int64(datasetKeySize + cfg.ValueSize)
+			for i := 0; i < len(datasetSortedKeys); i++ {
+				if i&8191 == 0 {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+				}
+				if err := db.Set(datasetSortedKeys[i], datasetSortedVals[i]); err != nil {
+					return 0, fmt.Errorf("dataset_write_sorted: %w", err)
+				}
+				if err := pc.Add(db, 1, perOpBytes); err != nil {
+					return 0, fmt.Errorf("dataset_write_sorted checkpoint: %w", err)
+				}
+			}
+			return float64(len(datasetSortedKeys)) / time.Since(start).Seconds(), nil
 		},
 		"batch_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			batcher, ok := db.(kvstore.Batcher)
@@ -1686,7 +1815,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":              "VACUUM (Index)",
 		"compact_slabs":             "COMPACT (Slabs)",
@@ -1694,6 +1823,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"fragmentation_report_post": "Fragmentation Report (Post-Settle)",
 		"sequential_write":          "Sequential Write",
 		"random_write":              "Random Write",
+		"dataset_write_random":      "Dataset Write (Random)",
+		"dataset_write_sorted":      "Dataset Write (Sorted)",
 		"random_read":               "Random Read",
 		"full_scan":                 "Full Scan",
 		"full_scan2":                "Full Scan (After VACUUM)",
@@ -1730,6 +1861,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	hasMeasuredWrites := containsAny(finalTestOrder,
 		"sequential_write",
 		"random_write",
+		"dataset_write_random",
+		"dataset_write_sorted",
 		"batch_write",
 		"batch_random",
 		"batch_small_seq",
@@ -1769,7 +1902,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}
 	}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") {
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") && !contains(finalTestOrder, "dataset_write_random") && !contains(finalTestOrder, "dataset_write_sorted") {
 		prefixScanBase = cfg.Keys
 	}
 
@@ -1951,7 +2084,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	testMutatesState := func(testName string) bool {
 		switch testName {
-		case "sequential_write", "random_write", "batch_write", "batch_random", "batch_small_seq", "update_fork_choice", "random_delete":
+		case "sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_small_seq", "update_fork_choice", "random_delete":
 			return true
 		case "vacuum_index", "compact_slabs":
 			return true
@@ -1983,7 +2116,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
 		}
 
-		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
+		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read") {
 			if err := settle(); err != nil {
 				return BenchRun{}, err
 			}
@@ -1991,17 +2124,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if live != nil {
 				_ = live.Render(results)
 			}
-		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post") {
+		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read") {
 			// If the caller didn't ask to settle, still allow an optional compaction
 			// pass before scans so scan regressions after churn can be studied in a
 			// "compacted values" state.
+			fmt.Fprintf(os.Stderr, "[Bench] Triggering maintenance before %s...\n", testName)
 			if err := vacuumTreeDBs(); err != nil {
 				return BenchRun{}, err
 			}
 			if err := compactTreeDBs(); err != nil {
 				return BenchRun{}, err
 			}
-			settled = true
 		}
 
 		if !scanDiagnosticsCaptured && (testName == "full_scan" || testName == "prefix_scan") {
@@ -2814,6 +2947,10 @@ func normalizeTests(list []string) []string {
 			t = "sequential_write"
 		case "write_rand":
 			t = "random_write"
+		case "write_sorted":
+			t = "dataset_write_sorted"
+		case "write_dataset":
+			t = "dataset_write_random"
 		case "read_rand":
 			t = "random_read"
 		case "delete_rand":

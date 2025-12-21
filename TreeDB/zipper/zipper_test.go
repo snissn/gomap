@@ -18,7 +18,7 @@ type MockAllocator struct {
 	p *pager.Pager
 }
 
-func (m *MockAllocator) Alloc() (uint64, error) {
+func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 	return m.p.Alloc(1)
 }
 

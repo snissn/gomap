@@ -18,11 +18,15 @@ const (
 var ErrCorrupt = errors.New("wal: corrupt record")
 
 type Writer struct {
-	f       *os.File
-	bw      *bufio.Writer
-	scratch []byte
-	size    int64
+	f          *os.File
+	bw         *bufio.Writer
+	scratch    []byte
+	pending    []byte
+	size       int64
+	segmentMax int
 }
+
+const defaultWALBufferSize = 4 << 20
 
 type Record struct {
 	Op    byte
@@ -36,9 +40,11 @@ func NewWriter(path string) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:       f,
-		bw:      bufio.NewWriterSize(f, 1<<20), // 1MB buffer
-		scratch: make([]byte, 0, 1<<20),
+		f:          f,
+		bw:         bufio.NewWriterSize(f, defaultWALBufferSize),
+		scratch:    make([]byte, 0, defaultWALBufferSize),
+		pending:    make([]byte, 0, defaultWALBufferSize),
+		segmentMax: defaultWALBufferSize,
 	}, nil
 }
 
@@ -60,29 +66,71 @@ func (w *Writer) writeSegment(payload []byte) error {
 	return nil
 }
 
+func (w *Writer) flushPending() error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	if err := w.writeSegment(w.pending); err != nil {
+		return err
+	}
+	w.pending = w.pending[:0]
+	return nil
+}
+
 // Append writes a single record as an atomic segment.
 func (w *Writer) Append(op byte, key, value []byte) error {
 	// Encode record into scratch
 	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
 	size := 1 + 2 + 4 + len(key) + len(value)
-	if cap(w.scratch) < size {
-		w.scratch = make([]byte, size)
+	if size > w.segmentMax {
+		if err := w.flushPending(); err != nil {
+			return err
+		}
+		if cap(w.scratch) < size {
+			w.scratch = make([]byte, size)
+		}
+		buf := w.scratch[:size]
+		buf[0] = op
+		binary.LittleEndian.PutUint16(buf[1:3], uint16(len(key)))
+		binary.LittleEndian.PutUint32(buf[3:7], uint32(len(value)))
+		copy(buf[7:], key)
+		copy(buf[7+len(key):], value)
+		return w.writeSegment(buf)
 	}
-	buf := w.scratch[:size]
 
+	if len(w.pending)+size > w.segmentMax {
+		if err := w.flushPending(); err != nil {
+			return err
+		}
+	}
+	need := len(w.pending) + size
+	if cap(w.pending) < need {
+		newCap := w.segmentMax
+		if newCap < need {
+			newCap = need
+		}
+		next := make([]byte, len(w.pending), newCap)
+		copy(next, w.pending)
+		w.pending = next
+	}
+	off := len(w.pending)
+	w.pending = w.pending[:need]
+	buf := w.pending[off:need]
 	buf[0] = op
 	binary.LittleEndian.PutUint16(buf[1:3], uint16(len(key)))
 	binary.LittleEndian.PutUint32(buf[3:7], uint32(len(value)))
 	copy(buf[7:], key)
 	copy(buf[7+len(key):], value)
-
-	return w.writeSegment(buf)
+	return nil
 }
 
 // AppendBatch writes multiple records as a single atomic segment.
 func (w *Writer) AppendBatch(records []Record) error {
 	if len(records) == 0 {
 		return nil
+	}
+	if err := w.flushPending(); err != nil {
+		return err
 	}
 
 	// Calculate total size
@@ -110,10 +158,16 @@ func (w *Writer) AppendBatch(records []Record) error {
 }
 
 func (w *Writer) Size() int64 {
-	return w.size
+	if len(w.pending) == 0 {
+		return w.size
+	}
+	return w.size + int64(len(w.pending)) + 8
 }
 
 func (w *Writer) Sync() error {
+	if err := w.flushPending(); err != nil {
+		return err
+	}
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
@@ -121,6 +175,10 @@ func (w *Writer) Sync() error {
 }
 
 func (w *Writer) Close() error {
+	if err := w.flushPending(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
 	if err := w.bw.Flush(); err != nil {
 		_ = w.f.Close()
 		return err

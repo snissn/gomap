@@ -30,7 +30,7 @@ func TestAllocator_PreferAppendAlloc_IgnoresFreelist(t *testing.T) {
 
 	a.SetPreferAppend(true)
 
-	got, err := a.Alloc()
+	got, err := a.Alloc(0)
 	if err != nil {
 		t.Fatalf("Alloc(): %v", err)
 	}
@@ -61,14 +61,14 @@ func TestAllocator_PreferAppendAlloc_CanToggleBack(t *testing.T) {
 	}
 
 	a.SetPreferAppend(true)
-	if got, err := a.Alloc(); err != nil {
+	if got, err := a.Alloc(0); err != nil {
 		t.Fatalf("Alloc(prefer): %v", err)
 	} else if got != 3 {
 		t.Fatalf("expected appended page 3, got %d", got)
 	}
 
 	a.SetPreferAppend(false)
-	got, err := a.Alloc()
+	got, err := a.Alloc(0)
 	if err != nil {
 		t.Fatalf("Alloc(freelist): %v", err)
 	}

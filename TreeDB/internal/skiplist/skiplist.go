@@ -10,29 +10,68 @@ import (
 )
 
 const (
-	maxHeight      = 20
-	nodeHeaderBase = 1 + 2 + 4 + 1 // Height + KeyLen + ValLen + Flags
-	flagDeleted    = 1
+	maxHeight = 20
+
+	nodeHeightOff  = 0
+	nodeKeyLenOff  = 1
+	nodeValLenOff  = 3
+	nodeFlagsOff   = 7
+	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
+
+	flagDeleted = 1
 )
 
 // SkipList is an arena-backed skiplist.
 type SkipList struct {
-	data  []byte
-	head  uint32
-	rnd   *rand.Rand
-	size  int64 // Logical size (approx)
-	count int   // Number of items
+	data   []byte
+	head   uint32
+	tail   [maxHeight]uint32
+	rnd    *rand.Rand
+	height int
+	size   int64 // Logical size (approx)
+	count  int   // Number of items
 }
 
 // New creates a new SkipList with pre-allocated capacity.
 func New(capacity int) *SkipList {
 	s := &SkipList{
-		data: make([]byte, 0, capacity),
-		rnd:  rand.New(rand.NewSource(time.Now().UnixNano())),
+		data:   make([]byte, 0, capacity),
+		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		height: 1,
 	}
 	// Allocate dummy head (height=maxHeight, key=empty, val=empty)
 	s.head = s.allocNode(0, 0, maxHeight)
+	for i := range s.tail {
+		s.tail[i] = s.head
+	}
 	return s
+}
+
+// Reset clears all entries while retaining the allocated arena capacity.
+//
+// The skiplist becomes empty and ready for reuse. Any iterators or views into the
+// previous contents become invalid.
+func (s *SkipList) Reset() {
+	for i := 0; i < maxHeight; i++ {
+		s.setNext(s.head, i, 0)
+		s.tail[i] = s.head
+	}
+	s.height = 1
+	s.size = 0
+	s.count = 0
+
+	h := int(s.data[s.head+nodeHeightOff])
+	kLen := int(binary.LittleEndian.Uint16(s.data[s.head+nodeKeyLenOff:]))
+	vLen := int(binary.LittleEndian.Uint32(s.data[s.head+nodeValLenOff:]))
+	headSize := nodeHeaderBase + (4 * h) + kLen + vLen
+	if headSize < 0 {
+		headSize = 0
+	}
+	if headSize > cap(s.data) {
+		headSize = cap(s.data)
+	}
+	s.data = s.data[:headSize]
+	s.setFlags(s.head, 0)
 }
 
 func (s *SkipList) alloc(n int) uint32 {
@@ -63,33 +102,33 @@ func (s *SkipList) allocNode(keyLen, valLen, height int) uint32 {
 	size := nodeHeaderBase + (4 * height) + keyLen + valLen
 	off := s.alloc(size)
 
-	s.data[off] = uint8(height)
-	binary.LittleEndian.PutUint16(s.data[off+1:], uint16(keyLen))
-	binary.LittleEndian.PutUint32(s.data[off+3:], uint32(valLen))
+	s.data[off+nodeHeightOff] = uint8(height)
+	binary.LittleEndian.PutUint16(s.data[off+nodeKeyLenOff:], uint16(keyLen))
+	binary.LittleEndian.PutUint32(s.data[off+nodeValLenOff:], uint32(valLen))
 	return off
 }
 
 func (s *SkipList) getKey(node uint32) []byte {
-	h := int(s.data[node])
-	kLen := int(binary.LittleEndian.Uint16(s.data[node+1:]))
+	h := int(s.data[node+nodeHeightOff])
+	kLen := int(binary.LittleEndian.Uint16(s.data[node+nodeKeyLenOff:]))
 	offset := node + uint32(nodeHeaderBase) + uint32(4*h)
 	return s.data[offset : offset+uint32(kLen)]
 }
 
 func (s *SkipList) getValue(node uint32) []byte {
-	h := int(s.data[node])
-	kLen := int(binary.LittleEndian.Uint16(s.data[node+1:]))
-	vLen := int(binary.LittleEndian.Uint32(s.data[node+3:]))
+	h := int(s.data[node+nodeHeightOff])
+	kLen := int(binary.LittleEndian.Uint16(s.data[node+nodeKeyLenOff:]))
+	vLen := int(binary.LittleEndian.Uint32(s.data[node+nodeValLenOff:]))
 	offset := node + uint32(nodeHeaderBase) + uint32(4*h) + uint32(kLen)
 	return s.data[offset : offset+uint32(vLen)]
 }
 
 func (s *SkipList) getFlags(node uint32) uint8 {
-	return s.data[node+7]
+	return s.data[node+nodeFlagsOff]
 }
 
 func (s *SkipList) setFlags(node uint32, f uint8) {
-	s.data[node+7] = f
+	s.data[node+nodeFlagsOff] = f
 }
 
 func (s *SkipList) getNext(node uint32, level int) uint32 {
@@ -112,6 +151,42 @@ func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error
 	return s.put(key, value, 0, cb)
 }
 
+// LastKey returns the largest key currently in the skiplist, or nil if empty.
+//
+// The returned slice is a view into the skiplist arena and is only valid as long
+// as the skiplist is not mutated.
+func (s *SkipList) LastKey() []byte {
+	last := s.tail[0]
+	if last == 0 || last == s.head {
+		return nil
+	}
+	return s.getKey(last)
+}
+
+// AppendWithCallback inserts a new entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+//
+// Callers must only use this when they have already established key ordering.
+func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+	var prev [maxHeight]uint32
+	for i := 0; i < maxHeight; i++ {
+		prev[i] = s.tail[i]
+	}
+	return s.insertNew(key, value, flags, cb, &prev, true)
+}
+
+// Append inserts a new key/value entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+func (s *SkipList) Append(key, value []byte) {
+	_ = s.AppendWithCallback(key, value, 0, nil)
+}
+
+// AppendDelete inserts a tombstone for key assuming the key is strictly greater
+// than the current maximum key in the skiplist.
+func (s *SkipList) AppendDelete(key []byte) {
+	_ = s.AppendWithCallback(key, nil, flagDeleted, nil)
+}
+
 // Delete marks a key as deleted (tombstone).
 func (s *SkipList) Delete(key []byte) {
 	s.put(key, nil, flagDeleted, nil)
@@ -122,70 +197,11 @@ func (s *SkipList) DeleteWithCallback(key []byte, cb func(k, v []byte) error) er
 	return s.put(key, nil, flagDeleted, cb)
 }
 
-func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
-	var prev [maxHeight]uint32
-	x := s.head
-	for i := maxHeight - 1; i >= 0; i-- {
-		for {
-			next := s.getNext(x, i)
-			if next == 0 {
-				break
-			}
-			k := s.getKey(next)
-			cmp := bytes.Compare(k, key)
-			if cmp > 0 {
-				break
-			}
-			if cmp == 0 {
-				// Update existing node
-				// If fits, inplace. Else replace.
-				// Exception: If cb != nil, we MUST alloc new to allow rollback.
-				oldValLen := int(binary.LittleEndian.Uint32(s.data[next+3:]))
-				if cb == nil && len(value) <= oldValLen {
-					// Inplace update
-					// Write new value len
-					binary.LittleEndian.PutUint32(s.data[next+3:], uint32(len(value)))
-					// Write flags
-					s.setFlags(next, flags)
-					// Copy value
-					vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.data[next])) + uint32(len(key))
-					copy(s.data[vOffset:], value)
-					return nil
-				}
-
-				// Must replace node.
-				break
-			}
-			x = next
-		}
-		prev[i] = x
-	}
-
-	// Check if x.next is target (at level 0)
-	next := s.getNext(x, 0)
-	if next != 0 && bytes.Equal(s.getKey(next), key) {
-		oldValLen := int(binary.LittleEndian.Uint32(s.data[next+3:]))
-		// Check inplace again (for level 0 case)
-		if cb == nil && len(value) <= oldValLen {
-			binary.LittleEndian.PutUint32(s.data[next+3:], uint32(len(value)))
-			s.setFlags(next, flags)
-			vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.data[next])) + uint32(len(key))
-			copy(s.data[vOffset:], value)
-			return nil
-		}
-
-		// Unlink logic:
-		oldHeight := int(s.data[next])
-		for i := 0; i < oldHeight; i++ {
-			if s.getNext(prev[i], i) == next {
-				s.setNext(prev[i], i, s.getNext(next, i))
-			}
-		}
-		// Now OldNode is gone.
-	}
-
-	// Insert New Node
+func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte) error, prev *[maxHeight]uint32, updateTail bool) error {
 	h := s.randomHeight()
+	if h > s.height {
+		s.height = h
+	}
 	newNode := s.allocNode(len(key), len(value), h)
 	copy(s.getKey(newNode), key)
 	copy(s.getValue(newNode), value)
@@ -203,11 +219,115 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	for i := 0; i < h; i++ {
 		s.setNext(newNode, i, s.getNext(prev[i], i))
 		s.setNext(prev[i], i, newNode)
+		if updateTail {
+			s.tail[i] = newNode
+		}
 	}
 
 	s.size += int64(len(key) + len(value))
 	s.count++
 	return nil
+}
+
+func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+	if s.count == 0 {
+		var prev [maxHeight]uint32
+		for i := 0; i < maxHeight; i++ {
+			prev[i] = s.tail[i]
+		}
+		return s.insertNew(key, value, flags, cb, &prev, true)
+	}
+
+	last := s.tail[0]
+	if last != s.head {
+		if bytes.Compare(s.getKey(last), key) < 0 {
+			var prev [maxHeight]uint32
+			for i := 0; i < maxHeight; i++ {
+				prev[i] = s.tail[i]
+			}
+			return s.insertNew(key, value, flags, cb, &prev, true)
+		}
+	}
+
+	var prev [maxHeight]uint32
+	for i := range prev {
+		prev[i] = s.head
+	}
+	x := s.head
+	top := s.height
+	if top < 1 {
+		top = 1
+	}
+	for i := top - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			k := s.getKey(next)
+			cmp := bytes.Compare(k, key)
+			if cmp > 0 {
+				break
+			}
+			if cmp == 0 {
+				// Update existing node
+				// If fits, inplace. Else replace.
+				// Exception: If cb != nil, we MUST alloc new to allow rollback.
+				oldValLen := int(binary.LittleEndian.Uint32(s.data[next+nodeValLenOff:]))
+				if cb == nil && len(value) <= oldValLen {
+					// Inplace update
+					// Write new value len
+					binary.LittleEndian.PutUint32(s.data[next+nodeValLenOff:], uint32(len(value)))
+					// Write flags
+					s.setFlags(next, flags)
+					// Copy value
+					kLen := int(binary.LittleEndian.Uint16(s.data[next+nodeKeyLenOff:]))
+					vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.data[next+nodeHeightOff])) + uint32(kLen)
+					copy(s.data[vOffset:], value)
+					return nil
+				}
+
+				// Must replace node.
+				break
+			}
+			x = next
+		}
+		prev[i] = x
+	}
+
+	// Check if x.next is target (at level 0)
+	next := s.getNext(x, 0)
+	replaceTail := false
+	if next != 0 && bytes.Equal(s.getKey(next), key) {
+		replaceTail = next == s.tail[0]
+		oldValLen := int(binary.LittleEndian.Uint32(s.data[next+3:]))
+		// Check inplace again (for level 0 case)
+		if cb == nil && len(value) <= oldValLen {
+			binary.LittleEndian.PutUint32(s.data[next+3:], uint32(len(value)))
+			s.setFlags(next, flags)
+			vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.data[next])) + uint32(len(key))
+			copy(s.data[vOffset:], value)
+			return nil
+		}
+
+		// Unlink logic:
+		oldHeight := int(s.data[next])
+		for i := 0; i < oldHeight; i++ {
+			if s.getNext(prev[i], i) == next {
+				s.setNext(prev[i], i, s.getNext(next, i))
+			}
+		}
+		if replaceTail {
+			for i := 0; i < oldHeight; i++ {
+				if s.tail[i] == next {
+					s.tail[i] = prev[i]
+				}
+			}
+		}
+		// Now OldNode is gone.
+	}
+
+	return s.insertNew(key, value, flags, cb, &prev, replaceTail)
 }
 
 func (s *SkipList) randomHeight() int {

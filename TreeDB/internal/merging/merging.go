@@ -71,9 +71,6 @@ type MergingIterator struct {
 	h     *iteratorHeap
 	cur   *heapItem
 	valid bool
-	key   []byte // Current Key (copy)
-	val   []byte // Current Value (copy)
-	valOK bool
 	err   error
 	start []byte
 	end   []byte
@@ -126,7 +123,6 @@ func (mi *MergingIterator) Next() {
 func (mi *MergingIterator) advance() {
 	mi.valid = false
 	mi.cur = nil
-	mi.valOK = false
 
 	for mi.h.Len() > 0 {
 		top := heap.Pop(mi.h).(*heapItem)
@@ -169,7 +165,6 @@ func (mi *MergingIterator) advance() {
 
 		// Found current item. Keep the winner positioned here; Value() loads lazily.
 		mi.cur = top
-		mi.key = append(mi.key[:0], currentKey...)
 		mi.valid = true
 		return
 	}
@@ -183,29 +178,24 @@ func (mi *MergingIterator) Key() []byte {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
-	return mi.key
+	return mi.cur.key
 }
 
 func (mi *MergingIterator) Value() []byte {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
-	if mi.valOK {
-		return mi.val
-	}
 	if mi.cur == nil {
 		return nil
 	}
-	mi.val = append(mi.val[:0], mi.cur.iter.UnsafeValue()...)
-	mi.valOK = true
-	return mi.val
+	return mi.cur.iter.UnsafeValue()
 }
 
 func (mi *MergingIterator) KeyCopy(dst []byte) []byte {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
-	return append(dst[:0], mi.key...)
+	return append(dst[:0], mi.Key()...)
 }
 
 func (mi *MergingIterator) ValueCopy(dst []byte) []byte {

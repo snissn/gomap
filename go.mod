@@ -9,7 +9,7 @@ require (
 	github.com/go-errors/errors v1.5.1
 	github.com/klauspost/compress v1.18.2
 	github.com/stretchr/testify v1.11.1
-	github.com/syndtr/goleveldb v1.0.0
+	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/redcon v1.6.2
 	golang.org/x/sys v0.39.0
 	gonum.org/v1/plot v0.16.0
@@ -28,10 +28,10 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
-	github.com/golang/snappy v0.0.0-20180518054509-2e65f85255db // indirect
+	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/tidwall/btree v1.1.0 // indirect
+	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect

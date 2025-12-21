@@ -11,6 +11,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
   - backend mode (`treedb.OpenBackend`): defaults to `10,000`
 - Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
+- Background index vacuum: defaults to 30s interval (auto-on) with span ratio threshold `1_200_000`
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
   - `BackgroundCheckpointIdleDuration`: defaults to 2s
@@ -146,6 +147,22 @@ TreeDB can optionally run slab compaction in the background (off by default):
 
 Stats keys:
 - `treedb.bg_compaction.*`
+
+### Background index vacuum (cached or backend; default on)
+
+TreeDB rebuilds the user index in the background when fragmentation
+gets high. This restores scan locality and uses a short writer pause for the
+final swap while the bulk of the work runs online. It grows `index.db` (old pages
+are reclaimed later).
+
+- Enable: `Options.BackgroundIndexVacuumInterval > 0` (default: 30s)
+- Trigger threshold: `Options.BackgroundIndexVacuumSpanRatioPPM`
+  - `0` uses the default (`1_200_000` ppm)
+  - larger values make the vacuum less frequent
+  - set interval `< 0` to disable
+
+Stats keys:
+- `treedb.bg_vacuum.*`
 
 ### Offline index vacuum (backend index)
 

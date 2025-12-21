@@ -229,4 +229,22 @@
 
 ## Open Things to Investigate in TreeDB
 
-(None)
+### TreeDB vs LevelDB parity (op-geth)
+
+- [ ] Reproduce + profile the failing case (priority: `WriteRandom`):
+  - `cd ~/dev/snissn/op-geth`
+  - `go test -run '^$' -bench 'BenchmarkTreeDB/^Write1M/WriteRandom$' ./ethdb/treedb -benchtime=1x -count=5 -cpuprofile cpu.prof -mutexprofile mutex.prof -blockprofile block.prof`
+  - Inspect: `go tool pprof -top cpu.prof`, `go tool pprof -top -cum mutex.prof`, `go tool pprof -top -cum block.prof`, then `list` the top non-runtime functions.
+- [ ] Add `MemtableMode` option (`skiplist`, `hash_sorted`, `btree`) and plumb it through the TreeDB cached DB open path used by the op-geth adapter.
+- [ ] Implement `hash_sorted` memtable (aimed at speeding up random point writes):
+   - Writes/point reads backed by a hash map (arena-backed key/value storage).
+   - On memtable rotation/freeze, build and cache `sortedKeys` once; iterators reuse it (no per-iterator sort).
+   - Flush uses the cached ordering (or a one-time sort) to produce sorted `batch.Entry` ops.
+- [ ] Benchmark matrix in op-geth for each memtable mode (capture CPU + mutex + block profiles):
+  - `go test -run . -bench 'BenchmarkTreeDB/^Write1M/WriteSorted' ./ethdb/treedb`
+  - `go test -run . -bench 'BenchmarkTreeDB/^Write1M/WriteRandom' ./ethdb/treedb`
+  - `go test -run . -bench 'BenchmarkTreeDB/^BatchWrite1M/WriteSorted' ./ethdb/treedb`
+  - `go test -run . -bench 'BenchmarkTreeDB/^BatchWrite1M/WriteRandom' ./ethdb/treedb`
+- [ ] If iterators/range scans are hot in the trace data, implement `btree` memtable mode (ordered iterators without sorting) and re-run the same matrix.
+- [ ] Only if needed: explore hybrid/dual-index approaches (hash + ordered index) and make iterator correctness explicit (barrier on iterator creation vs merge-on-iterate).
+- [ ] Optional: “adaptive per-rotation” memtable selection (choose next memtable mode at rotate boundaries based on recent iterator/write counters; avoid mid-memtable switching).

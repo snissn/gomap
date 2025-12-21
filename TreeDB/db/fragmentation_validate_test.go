@@ -18,31 +18,36 @@ func TestValidateFragmentationReport_EndToEnd(t *testing.T) {
 	valB := bytes.Repeat([]byte("b"), 48)
 
 	// Create enough churn to produce internal pages and a non-trivial freelist.
+	//
+	// Use non-sync operations: this test is validating internal accounting and
+	// invariants (FragmentationReport + ValidateFragmentationReport), not
+	// durability. Forcing an fsync per operation (SetSync/DeleteSync) is
+	// unnecessarily slow on some environments and can cause unit test timeouts.
 	const n = 20000
 	for i := 0; i < n; i++ {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.SetSync(k, valA); err != nil {
+		if err := d.Set(k, valA); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 	}
 	for i := 0; i < n; i += 2 {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.DeleteSync(k); err != nil {
+		if err := d.Delete(k); err != nil {
 			t.Fatalf("del: %v", err)
 		}
 	}
 	for i := 1; i < n; i += 2 {
 		k := []byte{byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i)}
-		if err := d.SetSync(k, valB); err != nil {
+		if err := d.Set(k, valB); err != nil {
 			t.Fatalf("set2: %v", err)
 		}
 	}
 
 	// Advance commit seq enough for KeepRecent=1 pruning to take effect.
-	if err := d.SetSync([]byte{0xFF, 0xFF, 0x00, 0x00}, valA); err != nil {
+	if err := d.Set([]byte{0xFF, 0xFF, 0x00, 0x00}, valA); err != nil {
 		t.Fatalf("set3: %v", err)
 	}
-	if err := d.SetSync([]byte{0xFF, 0xFF, 0x00, 0x01}, valA); err != nil {
+	if err := d.Set([]byte{0xFF, 0xFF, 0x00, 0x01}, valA); err != nil {
 		t.Fatalf("set4: %v", err)
 	}
 

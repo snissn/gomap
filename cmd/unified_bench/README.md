@@ -44,6 +44,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-treedb-writer-flush-max-ms` TreeDB (cached) max time (ms) a writer will help flush per op
 - `-treedb-iter-debug` print prefix scan iterator timing + debug stats
 - `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
+- `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
+- `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state

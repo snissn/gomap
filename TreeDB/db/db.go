@@ -47,14 +47,19 @@ type DB struct {
 	adaptive    *adaptive.Controller
 	pruner      pruneWorker
 
-	keepRecent uint64
-	policy     WritePolicy
+	keepRecent            uint64
+	policy                WritePolicy
+	leafFillTargetPPM     uint32
+	internalFillTargetPPM uint32
+	piggybackCompaction   bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
 
 	mu         sync.RWMutex
 	writeMu    sync.Mutex
+	vacuumMu   sync.Mutex
+	vacuum     vacuumRecorder
 	meta       page.MetaPageBody
 	metaPageID uint64
 
@@ -97,9 +102,19 @@ type Options struct {
 	BackgroundCompactionCopyBytesPerSec   int64
 	BackgroundCompactionCopyBurstBytes    int64
 	BackgroundCompactionRotateBeforeWrite bool
+	// BackgroundIndexVacuumInterval enables background index vacuum when > 0.
+	// The worker uses FragmentationReport span ratio to decide if a rebuild is
+	// warranted; see BackgroundIndexVacuumSpanRatioPPM.
+	BackgroundIndexVacuumInterval time.Duration
+	// BackgroundIndexVacuumSpanRatioPPM is the span ratio threshold (ppm) that
+	// triggers a background index vacuum. Zero uses a default.
+	BackgroundIndexVacuumSpanRatioPPM uint32
 
 	Mode           Mode // Default ModeCached
 	FlushThreshold int64
+	// MemtableMode selects the cached-mode memtable implementation.
+	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
+	MemtableMode string
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -161,6 +176,16 @@ type Options struct {
 	// This improves performance for synchronous workloads but provides only
 	// crash consistency (OS buffer cache), not true durability.
 	RelaxedSync bool
+
+	// DisableReadChecksum skips CRC verification on slab reads.
+	// This improves read performance (especially for large values) but risks
+	// returning silent data corruption if the disk/memory is compromised.
+	DisableReadChecksum bool
+
+	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
+	// When false (default), nodes are rewritten if their siblings are physically
+	// distant, keeping the tree clustered. Set to true to maximize write speed.
+	DisablePiggybackCompaction bool
 
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
 	// mode. A checkpoint creates a backend sync boundary and trims
@@ -288,6 +313,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		p.Close()
 		return nil, err
 	}
+	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
 	// Allocator initialized after recovery (needs Meta)
 
@@ -300,22 +326,26 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	db := &DB{
-		pager:                p,
-		slabManager:          sm,
-		zipper:               zipper.New(p, alloc),
-		allocator:            alloc,
-		graveyard:            lifecycle.NewGraveyard(),
-		registry:             lifecycle.NewReaderRegistry(),
-		lock:                 lock,
-		adaptive:             adaptive.New(),
-		keepRecent:           opts.KeepRecent,
-		repairSlabTailOnOpen: !opts.DisableSlabTailRepairOnOpen,
+		pager:                 p,
+		slabManager:           sm,
+		zipper:                zipper.New(p, alloc),
+		allocator:             alloc,
+		graveyard:             lifecycle.NewGraveyard(),
+		registry:              lifecycle.NewReaderRegistry(),
+		lock:                  lock,
+		adaptive:              adaptive.New(),
+		keepRecent:            opts.KeepRecent,
+		leafFillTargetPPM:     opts.LeafFillTargetPPM,
+		internalFillTargetPPM: opts.InternalFillTargetPPM,
+		piggybackCompaction:   !opts.DisablePiggybackCompaction,
+		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 	}
 	db.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
+	db.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -898,6 +928,6 @@ type pagerAllocator struct {
 	p *pager.Pager
 }
 
-func (a *pagerAllocator) Alloc() (uint64, error) {
+func (a *pagerAllocator) Alloc(hint uint64) (uint64, error) {
 	return a.p.Alloc(1)
 }

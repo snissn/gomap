@@ -40,7 +40,7 @@ func TestAllocator_RegionBiasedAlloc_SelectsNearby(t *testing.T) {
 	a.lastAlloc = 9
 	a.mu.Unlock()
 
-	got, err := a.Alloc()
+	got, err := a.Alloc(0)
 	if err != nil {
 		t.Fatalf("Alloc(): %v", err)
 	}
@@ -90,7 +90,7 @@ func TestAllocator_RegionBiasedAlloc_FallsBackToLIFO(t *testing.T) {
 	a.lastAlloc = 52
 	a.mu.Unlock()
 
-	got, err := a.Alloc()
+	got, err := a.Alloc(0)
 	if err != nil {
 		t.Fatalf("Alloc(): %v", err)
 	}

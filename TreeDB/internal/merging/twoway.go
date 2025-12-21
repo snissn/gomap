@@ -17,9 +17,6 @@ type TwoWayMerger struct {
 	cur iterator.UnsafeIterator
 
 	valid bool
-	key   []byte
-	val   []byte
-	valOK bool
 	err   error
 	start []byte
 	end   []byte
@@ -49,7 +46,6 @@ func (m *TwoWayMerger) Next() {
 func (m *TwoWayMerger) advance() {
 	m.valid = false // Assume invalid until an item is found
 	m.cur = nil
-	m.valOK = false
 
 	for m.src1.Valid() || m.src2.Valid() {
 		var winner iterator.UnsafeIterator
@@ -93,7 +89,6 @@ func (m *TwoWayMerger) advance() {
 		// Found current item. Keep the winner positioned here; Value() will load
 		// lazily if needed.
 		m.cur = winner
-		m.key = append(m.key[:0], k...)
 		m.valid = true
 		return
 	}
@@ -107,30 +102,26 @@ func (m *TwoWayMerger) Key() []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
-	return m.key
+	// Zero-copy: UnsafeKey is valid until Next()
+	return m.cur.UnsafeKey()
 }
 
 func (m *TwoWayMerger) Value() []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
-	if m.valOK {
-		return m.val
-	}
-
+	// Zero-copy: UnsafeValue is valid until Next()
 	if m.cur == nil {
 		return nil
 	}
-	m.val = append(m.val[:0], m.cur.UnsafeValue()...)
-	m.valOK = true
-	return m.val
+	return m.cur.UnsafeValue()
 }
 
 func (m *TwoWayMerger) KeyCopy(dst []byte) []byte {
 	if !m.valid {
 		panic("iterator invalid")
 	}
-	return append(dst[:0], m.key...)
+	return append(dst[:0], m.Key()...)
 }
 
 func (m *TwoWayMerger) ValueCopy(dst []byte) []byte {

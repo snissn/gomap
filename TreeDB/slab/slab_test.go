@@ -176,7 +176,7 @@ func TestSlabRead_UsesMmapWhenAvailable(t *testing.T) {
 	}
 }
 
-func TestSlabRead_FallsBackWhenOutOfMappedRange(t *testing.T) {
+func TestSlabRead_RemapsWhenOutOfMappedRange(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
@@ -220,14 +220,15 @@ func TestSlabRead_FallsBackWhenOutOfMappedRange(t *testing.T) {
 		t.Fatalf("Value 2 mismatch: got %q", string(val2))
 	}
 
-	if len(s.mmapData) != mmapLen {
-		t.Fatalf("expected mmap length to remain unchanged (got %d, want %d)", len(s.mmapData), mmapLen)
+	// Optimization: Now we expect the mapping to grow!
+	if len(s.mmapData) <= mmapLen {
+		t.Fatalf("expected mmap length to grow (got %d, was %d)", len(s.mmapData), mmapLen)
 	}
 
 	base := uintptr(unsafe.Pointer(&s.mmapData[0]))
 	end := base + uintptr(len(s.mmapData))
 	p := uintptr(unsafe.Pointer(&val2[0]))
-	if p >= base && p < end {
-		t.Fatalf("expected Read() to fall back (val2 unexpectedly backed by mmap)")
+	if p < base || p >= end {
+		t.Fatalf("expected Read() value to be backed by NEW mmap (ptr=%#x not in [%#x,%#x))", p, base, end)
 	}
 }

@@ -18,7 +18,11 @@ func TestCompactIndex_AllocatesNewPagesByAppending(t *testing.T) {
 	val := bytes.Repeat([]byte("x"), 16)
 	for i := 0; i < 5000; i++ {
 		k := []byte{byte(i >> 8), byte(i)}
-		if err := d.SetSync(k, val); err != nil {
+		// Use non-sync writes here: the test only needs enough pages to exist in
+		// the file for CompactIndex to rebuild them append-only. Forcing an fsync
+		// per key (SetSync) can be extremely slow on some environments and makes
+		// the unit test flaky/time out.
+		if err := d.Set(k, val); err != nil {
 			t.Fatalf("set: %v", err)
 		}
 	}

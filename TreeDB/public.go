@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"context"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -57,6 +58,7 @@ type DB struct {
 	cached  *caching.DB
 	backend *db.DB
 	bgComp  bgCompactionWorker
+	bgVac   bgIndexVacuumWorker
 }
 
 func (db *DB) ensureOpen() error {
@@ -104,9 +106,13 @@ func Open(opts Options) (*DB, error) {
 		opts.StopBacklogSeconds = 2
 		opts.MaxBacklogBytes = 2 << 30
 	}
+	if opts.MemtableMode == "" {
+		opts.MemtableMode = "adaptive"
+	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:          opts.FlushThreshold,
+		MemtableMode:            opts.MemtableMode,
 		MaxQueuedMemtables:      opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:      opts.StopBacklogSeconds,
@@ -114,6 +120,8 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
+		DisableWAL:              opts.DisableWAL,
+		RelaxedSync:             opts.RelaxedSync,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -146,7 +154,9 @@ func Open(opts Options) (*DB, error) {
 	if idleInterval < 0 {
 		idleInterval = 0
 	}
-	if autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0 {
+	// Auto checkpointing only manages cached-mode WAL segments. If WAL is
+	// disabled, skip starting the background loop to avoid unnecessary work.
+	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -177,6 +187,21 @@ func Open(opts Options) (*DB, error) {
 		out.bgComp.Start(out, opts.BackgroundCompactionInterval, co)
 	}
 
+	vacuumInterval := opts.BackgroundIndexVacuumInterval
+	if vacuumInterval == 0 {
+		vacuumInterval = 30 * time.Second
+	}
+	if vacuumInterval < 0 {
+		vacuumInterval = 0
+	}
+	if vacuumInterval > 0 {
+		spanRatioPPM := opts.BackgroundIndexVacuumSpanRatioPPM
+		if spanRatioPPM == 0 {
+			spanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
+		}
+		out.bgVac.Start(out, vacuumInterval, spanRatioPPM)
+	}
+
 	return out, nil
 }
 
@@ -202,6 +227,7 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgVac.Stop()
 	db.bgComp.Stop()
 	if db.cached != nil {
 		err := db.cached.Close()
@@ -276,6 +302,40 @@ func (db *DB) Delete(key []byte) error {
 	return db.backend.Delete(key)
 }
 
+// DeleteRange removes all keys in the range [start, end).
+//
+// This is primarily used by benchmark suites and maintenance tooling. In cached
+// mode, it may use fast paths that avoid per-key tombstones when safe.
+func (db *DB) DeleteRange(start, end []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.DeleteRange(start, end)
+	}
+	// Backend-only mode: fall back to iterating keys and issuing deletes.
+	it, err := db.backend.Iterator(start, end)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+
+	b := db.backend.NewBatch()
+	defer b.Close()
+	for it.Valid() {
+		if !it.IsDeleted() {
+			if err := b.Delete(it.UnsafeKey()); err != nil {
+				return err
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return b.Write()
+}
+
 // DeleteSync removes a key and forces a durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
 	if err := db.ensureOpen(); err != nil {
@@ -342,6 +402,7 @@ func (db *DB) Stats() map[string]string {
 			stats = make(map[string]string)
 		}
 		bgCompactionStatsInto(stats, &db.bgComp)
+		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		return stats
 	}
 	stats := db.backend.Stats()
@@ -349,6 +410,7 @@ func (db *DB) Stats() map[string]string {
 		stats = make(map[string]string)
 	}
 	bgCompactionStatsInto(stats, &db.bgComp)
+	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	return stats
 }
 
@@ -429,6 +491,18 @@ func (db *DB) CompactIndex() error {
 		}
 	}
 	return db.backend.CompactIndex()
+}
+
+// VacuumIndexOnline rebuilds the user index in the background and swaps it in
+// with a short writer pause.
+func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+	return db.backend.VacuumIndexOnline(ctx)
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.

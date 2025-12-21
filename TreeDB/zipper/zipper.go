@@ -12,7 +12,7 @@ import (
 )
 
 type PageAllocator interface {
-	Alloc() (uint64, error)
+	Alloc(hint uint64) (uint64, error)
 }
 
 type Zipper struct {
@@ -21,6 +21,7 @@ type Zipper struct {
 
 	leafReserveBytes     int
 	internalReserveBytes int
+	piggybackCompaction  bool
 }
 
 type Split struct {
@@ -45,6 +46,10 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
 	z.leafReserveBytes = reserveBytesFromPPM(leafPPM)
 	z.internalReserveBytes = reserveBytesFromPPM(internalPPM)
+}
+
+func (z *Zipper) SetPiggybackCompaction(enabled bool) {
+	z.piggybackCompaction = enabled
 }
 
 func reserveBytesFromPPM(ppm uint32) int {
@@ -93,7 +98,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 			break
 		}
 	}
-	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0
+	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
 
 	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics)
 	if err != nil {
@@ -127,7 +132,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 			for i, child := range currentLevelNodes {
 				if currentBuilder == nil {
 					// Start new node
-					pid, err := z.allocator.Alloc()
+					pid, err := z.allocator.Alloc(newRoot)
 					if err != nil {
 						return 0, nil, metrics, err
 					}
@@ -157,7 +162,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
 
 					// Start new for THIS child (retry)
-					pid, err := z.allocator.Alloc()
+					pid, err := z.allocator.Alloc(currentBuilder.PageID())
 					if err != nil {
 						return 0, nil, metrics, err
 					}
@@ -196,7 +201,8 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 // Returns: newPageID, splits, retiredPages, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
 	// 1. Allocate New Page (COW)
-	newPageID, err := z.allocator.Alloc()
+	// Hint: Try to stay near the old page to preserve general tree locality structure
+	newPageID, err := z.allocator.Alloc(pageID)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -393,7 +399,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// 2. Allocate NEW split node
-			sid, err := z.allocator.Alloc()
+			sid, err := z.allocator.Alloc(builder.PageID())
 			if err != nil {
 				return 0, nil, err
 			}
@@ -639,7 +645,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	}
 
 	buildMergedLeaf := func(left, right *node.Node) (uint64, bool, error) {
-		pid, err := z.allocator.Alloc()
+		pid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, false, err
 		}
@@ -687,8 +693,45 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		return pid, true, nil
 	}
 
+	copyLeaf := func(id uint64, hint uint64) (uint64, error) {
+		n, ok, err := loadLeaf(id)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, errors.New("copyLeaf: not a leaf")
+		}
+
+		pid, err := z.allocator.Alloc(hint)
+		if err != nil {
+			return 0, err
+		}
+		data, err := z.pager.GetForWrite(pid)
+		if err != nil {
+			return 0, err
+		}
+		b := node.NewBuilder(data, page.PageTypeLeaf)
+		b.SetPageID(pid)
+
+		for i := uint16(0); i < n.Count(); i++ {
+			k, v, ptr, flags, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return 0, err
+			}
+			if flags&node.FlagTombstone != 0 {
+				continue
+			}
+			if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+				return 0, err
+			}
+		}
+		b.Finish()
+		metrics.IndexWriteBytes += page.PageSize
+		return pid, nil
+	}
+
 	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc()
+		lid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
@@ -699,7 +742,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
 		lb.SetPageID(lid)
 
-		rid, err := z.allocator.Alloc()
+		rid, err := z.allocator.Alloc(lid)
 		if err != nil {
 			retired = append(retired, lid)
 			return 0, 0, nil, false, err
@@ -827,6 +870,31 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		leftFill := fillPPM(left)
 		rightFill := fillPPM(right)
 		if leftFill >= underfullPPM && rightFill >= underfullPPM {
+			// If not merging/rebalancing, check piggyback
+			if z.piggybackCompaction {
+				const distanceThreshold = 2500 // ~10MB
+				dist := int64(leftID) - int64(rightID)
+				if dist < 0 {
+					dist = -dist
+				}
+
+				if dist > distanceThreshold {
+					// Move the "older" one (lower ID) towards the newer one.
+					if leftID < rightID {
+						newID, err := copyLeaf(leftID, rightID)
+						if err == nil {
+							retired = append(retired, leftID)
+							entries[i].child = newID
+						}
+					} else {
+						newID, err := copyLeaf(rightID, leftID)
+						if err == nil {
+							retired = append(retired, rightID)
+							entries[i+1].child = newID
+						}
+					}
+				}
+			}
 			i++
 			continue
 		}
@@ -926,7 +994,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 	}
 
 	buildMergedInternal := func(left, right *node.Node) (uint64, bool, error) {
-		pid, err := z.allocator.Alloc()
+		pid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, false, err
 		}
@@ -978,7 +1046,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 	}
 
 	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc()
+		lid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
@@ -987,7 +1055,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 			return 0, 0, nil, false, err
 		}
 
-		rid, err := z.allocator.Alloc()
+		rid, err := z.allocator.Alloc(lid)
 		if err != nil {
 			retired = append(retired, lid)
 			return 0, 0, nil, false, err
@@ -1184,7 +1252,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 	}
 
 	// 2. Alloc new
-	sid, err := z.allocator.Alloc()
+	sid, err := z.allocator.Alloc(currentTarget.PageID())
 	if err != nil {
 		return nil, err
 	}

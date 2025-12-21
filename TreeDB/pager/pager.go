@@ -16,10 +16,15 @@ var (
 	ErrFileSize        = errors.New("file size is not a multiple of chunk size")
 )
 
+type chunkList struct {
+	data [][]byte
+}
+
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
 	file         *os.File
 	chunks       [][]byte
+	atomicChunks atomic.Pointer[chunkList] // Lock-free view for Get
 	chunkSize    int64
 	numPages     atomic.Uint64 // The number of pages logically allocated
 	dirtyChunks  map[int]struct{}
@@ -83,6 +88,8 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 			p.chunks[i] = data
 		}
 
+		p.atomicChunks.Store(&chunkList{data: p.chunks})
+
 		// Initial guess for numPages (will be corrected by DB recovery)
 		p.numPages.Store(uint64(size / page.PageSize))
 
@@ -91,6 +98,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	} else {
 		// Initialize Bitset (empty)
 		p.verifiedBits = make([]uint64, 0)
+		p.atomicChunks.Store(&chunkList{data: nil})
 	}
 
 	return p, nil
@@ -176,6 +184,7 @@ func (p *Pager) Close() error {
 		}
 	}
 	p.chunks = nil
+	p.atomicChunks.Store(nil)
 	return p.file.Close()
 }
 
@@ -237,6 +246,12 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 			}
 			p.chunks = append(p.chunks, data)
 		}
+
+		// Update atomicChunks for lock-free readers
+		// Make a copy of the slice header to ensure safety if append reallocated
+		newChunks := make([][]byte, len(p.chunks))
+		copy(newChunks, p.chunks)
+		p.atomicChunks.Store(&chunkList{data: newChunks})
 	}
 
 	p.numPages.Store(newTotal)
@@ -273,22 +288,43 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
 func (p *Pager) Get(pageID uint64) ([]byte, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	// Optimization: Lock-free read path
+	// p.numPages is atomic. p.atomicChunks is atomic.
+	// We read chunks THEN numPages to ensure if numPages says OK, chunks must be ready.
+	// Wait, earlier I said "Alloc MUST update chunks first, THEN numPages".
+	// So Reader must read numPages first?
+	// If reader reads numPages=100.
+	// Then reads chunks. If chunks hasn't been updated yet?
+	// Impossible if Alloc updates chunks BEFORE numPages.
+	// So Reader reads numPages -> 100.
+	// Alloc updated chunks (len=10) -> numPages=100.
+	// Reader reads chunks -> len=10. OK.
+	// What if reader reads chunks first?
+	// Reader reads chunks (len=10).
+	// Reader reads numPages (100).
+	// If chunkIdx=9, OK.
+	// So order in Reader doesn't strictly matter as long as bounds check uses the loaded chunks len.
 
-	if pageID >= p.numPages.Load() {
+	limit := p.numPages.Load()
+	if pageID >= limit {
 		return nil, ErrPageOutOfBounds
 	}
 
 	byteOffset := int64(pageID) * int64(page.PageSize)
-	chunkIdx := byteOffset / p.chunkSize
+	chunkIdx := int(byteOffset / p.chunkSize)
 	offsetInChunk := byteOffset % p.chunkSize
 
-	if int(chunkIdx) >= len(p.chunks) {
+	cl := p.atomicChunks.Load()
+	if cl == nil {
+		return nil, ErrPageOutOfBounds
+	}
+	chunks := cl.data
+
+	if chunkIdx >= len(chunks) {
 		return nil, ErrPageOutOfBounds
 	}
 
-	chunk := p.chunks[chunkIdx]
+	chunk := chunks[chunkIdx]
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
