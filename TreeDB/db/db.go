@@ -112,6 +112,9 @@ type Options struct {
 
 	Mode           Mode // Default ModeCached
 	FlushThreshold int64
+	// MemtableMode selects the cached-mode memtable implementation.
+	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
+	MemtableMode string
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
