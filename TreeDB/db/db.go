@@ -64,11 +64,6 @@ type DB struct {
 	metaPageID uint64
 
 	state atomic.Pointer[DBState]
-
-	// fastSnapshot backs point Get/Has calls with a shared, refcounted snapshot to
-	// avoid per-call slab pin/unpin and reader-registry churn.
-	fastMu   sync.RWMutex
-	fastSnap atomic.Pointer[fastSnapshot]
 }
 
 type Mode uint8
@@ -221,42 +216,25 @@ type Snapshot struct {
 	registryID int64
 }
 
-type fastSnapshot struct {
-	state   *DBState
-	snap    *Snapshot
-	refs    atomic.Int64
-	retired atomic.Bool
-}
-
-func (fs *fastSnapshot) closeIfRetiredAndUnused() {
-	if fs == nil {
-		return
-	}
-	if fs.retired.Load() && fs.refs.Load() == 0 {
-		_ = fs.snap.Close()
-	}
-}
-
-func (db *DB) newSnapshotForState(state *DBState) *Snapshot {
-	if state.SlabSet != nil {
-		db.slabManager.AcquireSlabs(state.SlabSet) // Pins the Set (O(1)), not files.
-	}
-	id := db.registry.Register(state.CommitSeq)
-	return &Snapshot{
-		db:         db,
-		state:      state,
-		tree:       tree.New(db.pager, state.SlabSet, state.RootPageID),
-		registryID: id,
-	}
-}
-
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
 	state := db.state.Load()
-	return db.newSnapshotForState(state)
+	if state.SlabSet != nil {
+		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
+	}
+
+	// Register Reader
+	id := db.registry.Register(state.CommitSeq)
+
+	return &Snapshot{
+		db:         db,
+		state:      state,
+		tree:       tree.New(db.pager, state.SlabSet, state.RootPageID),
+		registryID: id,
+	}
 }
 
 // Close releases the snapshot.
@@ -267,67 +245,6 @@ func (s *Snapshot) Close() error {
 	}
 	s.db.registry.Unregister(s.registryID)
 	return err
-}
-
-func (db *DB) acquireFastSnapshot() *fastSnapshot {
-	current := db.state.Load()
-
-	db.fastMu.RLock()
-	fs := db.fastSnap.Load()
-	if fs != nil && fs.state == current {
-		fs.refs.Add(1)
-		db.fastMu.RUnlock()
-		return fs
-	}
-	db.fastMu.RUnlock()
-
-	db.fastMu.Lock()
-	defer db.fastMu.Unlock()
-
-	current = db.state.Load()
-	fs = db.fastSnap.Load()
-	if fs == nil || fs.state != current {
-		newSnap := db.newSnapshotForState(current)
-		newFS := &fastSnapshot{state: current, snap: newSnap}
-		db.fastSnap.Store(newFS)
-		if fs != nil {
-			fs.retired.Store(true)
-			fs.closeIfRetiredAndUnused()
-		}
-		fs = newFS
-	}
-
-	fs.refs.Add(1)
-	return fs
-}
-
-func (db *DB) releaseFastSnapshot(fs *fastSnapshot) {
-	if fs == nil {
-		return
-	}
-	if fs.refs.Add(-1) == 0 && fs.retired.Load() {
-		_ = fs.snap.Close()
-	}
-}
-
-func (db *DB) refreshFastSnapshot() {
-	db.fastMu.Lock()
-	defer db.fastMu.Unlock()
-
-	current := db.state.Load()
-	fs := db.fastSnap.Load()
-	if fs != nil && fs.state == current {
-		return
-	}
-
-	newSnap := db.newSnapshotForState(current)
-	newFS := &fastSnapshot{state: current, snap: newSnap}
-	db.fastSnap.Store(newFS)
-
-	if fs != nil {
-		fs.retired.Store(true)
-		fs.closeIfRetiredAndUnused()
-	}
 }
 
 // Open opens the database.
@@ -466,18 +383,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 func (db *DB) Close() error {
 	db.pruner.Stop()
-
-	// Best-effort: release any shared read snapshot before tearing down IO.
-	if fs := db.fastSnap.Load(); fs != nil {
-		db.fastMu.Lock()
-		fs = db.fastSnap.Swap(nil)
-		db.fastMu.Unlock()
-		if fs != nil {
-			fs.retired.Store(true)
-			// Force close regardless of refs; Close() implies no concurrent readers.
-			_ = fs.snap.Close()
-		}
-	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -755,6 +660,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 
 	// 5. Update State (Visible) - Short Lock
 	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
@@ -788,11 +694,6 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		db.adaptive.RecordCommit(metrics)
 	}
 
-	db.mu.Unlock()
-
-	// Keep the shared read snapshot aligned with the latest committed state so
-	// read-heavy workloads don't pay refresh cost on the first post-commit read.
-	db.refreshFastSnapshot()
 	return nil
 }
 
@@ -867,10 +768,10 @@ func (db *DB) State() *DBState {
 // so that future snapshots stop pinning compacted slabs immediately.
 func (db *DB) RefreshSlabSet() error {
 	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	oldState := db.state.Load()
 	if oldState == nil {
-		db.mu.Unlock()
 		return nil
 	}
 
@@ -882,13 +783,7 @@ func (db *DB) RefreshSlabSet() error {
 	}
 	db.state.Store(newState)
 
-	err := db.slabManager.ReleaseSlabs(oldState.SlabSet)
-	db.mu.Unlock()
-
-	// Refresh the shared read snapshot so future reads stop pinning compacted
-	// slabs immediately.
-	db.refreshFastSnapshot()
-	return err
+	return db.slabManager.ReleaseSlabs(oldState.SlabSet)
 }
 
 type CompactionOp struct {

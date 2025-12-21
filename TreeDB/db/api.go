@@ -16,10 +16,9 @@ import (
 // Semantics (performance-first): the returned slice may be a read-only view into
 // internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	fs := db.acquireFastSnapshot()
-	defer db.releaseFastSnapshot(fs)
-
-	val, err := fs.snap.Get(key)
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	val, err := snap.Get(key)
 	if err == tree.ErrKeyNotFound {
 		return nil, nil
 	}
@@ -28,9 +27,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	fs := db.acquireFastSnapshot()
-	defer db.releaseFastSnapshot(fs)
-	return fs.snap.Has(key)
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	return snap.Has(key)
 }
 
 // Set sets the value for a key.
