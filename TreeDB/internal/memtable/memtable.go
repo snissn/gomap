@@ -14,11 +14,21 @@ type Memtable struct {
 	mu sync.RWMutex
 }
 
+const defaultMemtableCapacity = 64 * 1024
+
 // New creates a new Memtable.
-// We start with a reasonable capacity to avoid initial reallocations.
 func New() *Memtable {
+	return NewWithCapacity(defaultMemtableCapacity)
+}
+
+// NewWithCapacity creates a new Memtable with the requested arena capacity.
+// A non-positive capacity uses a small default to keep rotations cheap.
+func NewWithCapacity(capacity int) *Memtable {
+	if capacity <= 0 {
+		capacity = defaultMemtableCapacity
+	}
 	return &Memtable{
-		sl: skiplist.New(64 * 1024), // Start small (64KB) to allow cheap rotation
+		sl: skiplist.New(capacity),
 	}
 }
 

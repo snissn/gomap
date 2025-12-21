@@ -24,6 +24,8 @@ type Writer struct {
 	size    int64
 }
 
+const defaultWALBufferSize = 4 << 20
+
 type Record struct {
 	Op    byte
 	Key   []byte
@@ -37,8 +39,8 @@ func NewWriter(path string) (*Writer, error) {
 	}
 	return &Writer{
 		f:       f,
-		bw:      bufio.NewWriterSize(f, 1<<20), // 1MB buffer
-		scratch: make([]byte, 0, 1<<20),
+		bw:      bufio.NewWriterSize(f, defaultWALBufferSize),
+		scratch: make([]byte, 0, defaultWALBufferSize),
 	}, nil
 }
 

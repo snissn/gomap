@@ -25,6 +25,11 @@ var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 
 var iteratorDebugEnabled atomic.Bool
 
+const (
+	minMemtablePrealloc = 64 * 1024
+	maxMemtablePrealloc = 256 << 20
+)
+
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
 // CachingDB.Iterator. It is intended for benchmarking/diagnostics.
 func SetIteratorDebug(enabled bool) {
@@ -36,6 +41,24 @@ func bytesToStringNoCopy(b []byte) string {
 		return ""
 	}
 	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+func memtableCapacity(flushThreshold int64) int {
+	if flushThreshold <= 0 {
+		return 0
+	}
+	capBytes := flushThreshold + flushThreshold/4 // +25% to cover skiplist overhead.
+	if capBytes < minMemtablePrealloc {
+		capBytes = minMemtablePrealloc
+	}
+	if capBytes > maxMemtablePrealloc {
+		capBytes = maxMemtablePrealloc
+	}
+	maxInt := int64(int(^uint(0) >> 1))
+	if capBytes > maxInt {
+		capBytes = maxInt
+	}
+	return int(capBytes)
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
@@ -116,6 +139,7 @@ type DB struct {
 	// Config
 	dir                     string
 	flushThreshold          int64
+	memtableCap             int
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
 	stopBacklogSeconds      float64
@@ -216,6 +240,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.FlushThreshold <= 0 {
 		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
 	}
+	memCap := memtableCapacity(opts.FlushThreshold)
 	if opts.MaxQueuedMemtables == 0 {
 		// Keep the default queued backlog roughly stable in bytes when callers
 		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
@@ -247,6 +272,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		dir:                     walDir,
 		backend:                 backend,
 		flushThreshold:          opts.FlushThreshold,
+		memtableCap:             memCap,
 		maxQueuedMemtables:      opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:      opts.StopBacklogSeconds,
@@ -256,7 +282,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildConcurrency:   opts.FlushBuildConcurrency,
 		disableWAL:              opts.DisableWAL,
 		relaxedSync:             opts.RelaxedSync,
-		mutable:                 memtable.New(),
+		mutable:                 memtable.NewWithCapacity(memCap),
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
@@ -1045,7 +1071,7 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	db.queueBacklogBytes.Add(memBytes)
 	db.queueRanges = append(db.queueRanges, db.mutableRange)
 	db.queueWALPaths = append(db.queueWALPaths, walPath)
-	db.mutable = memtable.New()
+	db.mutable = memtable.NewWithCapacity(db.memtableCap)
 	db.mutableRange = keyRange{}
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
