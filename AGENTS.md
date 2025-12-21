@@ -137,3 +137,23 @@ When `NewIterator(start,end)` is called on a `hash_sorted` memtable:
 - Background indexing overhead is bounded and does not regress pure write throughput significantly.
 - No goroutine leaks across memtable rotation/reset.
 - Correctness holds under snapshot isolation and WAL-disabled paths.
+
+## TODO / Punch List (op-geth + Coinbase base-bench)
+
+### Read-heavy validator red flag (`sload-readheavy`)
+
+- Investigate `validator chain/storage/reads.50-percentile` spike (avg ~501k ns vs ~23k ns leveldb; single-block outlier ~2.4ms) and `latency/update_fork_choice` regression (+59%).
+- Confirm whether the spike correlates with pager CRC verification caching / lock contention, or with DB-level cache misses (process cache / prefetch).
+- Add a repeatable local loop:
+  - rebuild `/Users/michaelseiler/dev/snissn/op-geth/build/bin/geth`
+  - run only `sload-readheavy` via `/Users/michaelseiler/dev/snissn/benchmark/run-bench-geth-kv-both.sh`
+  - diff `metrics-validator.json` for `chain/storage/reads.50-percentile`, `engine/forkchoice/*`, `latency/update_fork_choice`.
+
+### Likely high-impact optimizations (pending)
+
+- Pager verified-bitset: remove per-page `RWMutex` contention on `IsVerified/MarkVerified` during read-heavy workloads (make verification cache lock-free and growth amortized).
+- Implement `Has` without `Get` (avoid slab reads + value copies) for:
+  - backend `TreeDB/db` and
+  - cached `TreeDB/caching` path (requires backend `Has` support).
+- If still regressed after above:
+  - profile validator `--pprof` during `sload-readheavy` to confirm hot spots (CRC verification, page traversal, value copies, slab read paths).
