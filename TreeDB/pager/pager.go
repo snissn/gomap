@@ -36,8 +36,16 @@ type Pager struct {
 	numPages     atomic.Uint64 // The number of pages logically allocated
 	dirtyChunks  map[int]struct{}
 	mu           sync.RWMutex
+	allocMu      sync.Mutex
 	path         string
 	verified     atomic.Pointer[verifiedBitset]
+
+	growMu       sync.Mutex
+	growStopOnce sync.Once
+	growStop     chan struct{}
+	growWake     chan struct{}
+	growDone     chan struct{}
+	growTarget   atomic.Int64 // byte capacity target (aligned to chunkSize by grower)
 }
 
 // Open opens the pager at the given path.
@@ -108,6 +116,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		p.atomicChunks.Store(&chunkList{data: nil})
 	}
 
+	p.startGrower()
 	return p, nil
 }
 
@@ -237,6 +246,8 @@ func (p *Pager) PageCount() uint64 {
 
 // Close closes the pager and unmaps memory.
 func (p *Pager) Close() error {
+	p.stopGrower()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -272,52 +283,29 @@ func (p *Pager) Truncate(targetPages uint64) error {
 // Alloc allocates `count` new pages and returns the ID of the first one.
 // It grows the file if necessary.
 func (p *Pager) Alloc(count int) (uint64, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.allocMu.Lock()
+	defer p.allocMu.Unlock()
 
+	p.mu.Lock()
 	startID := p.numPages.Load()
 	newTotal := startID + uint64(count)
 
 	// Check if we need to grow physical file
 	requiredBytes := int64(newTotal) * int64(page.PageSize)
 	currentCapacity := int64(len(p.chunks)) * p.chunkSize
+	p.mu.Unlock()
 
 	if requiredBytes > currentCapacity {
-		// Calculate how many new chunks needed
-		// We align to ChunkSize
-		needed := requiredBytes - currentCapacity
-		chunksNeeded := (needed + p.chunkSize - 1) / p.chunkSize
-		newCapacity := currentCapacity + (chunksNeeded * p.chunkSize)
-
-		// Grow file
-		// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
-		// on mmap writes (platform/filesystem dependent).
-		if err := preallocateFile(p.file, newCapacity); err != nil {
+		if err := p.growToCapacity(requiredBytes); err != nil {
 			return 0, err
 		}
-		if err := p.file.Truncate(newCapacity); err != nil {
-			return 0, err
-		}
-
-		// Map new chunks
-		for i := int64(0); i < chunksNeeded; i++ {
-			offset := currentCapacity + (i * p.chunkSize)
-			data, err := unix.Mmap(int(p.file.Fd()), offset, int(p.chunkSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-			if err != nil {
-				return 0, err
-			}
-			p.chunks = append(p.chunks, data)
-		}
-
-		// Update atomicChunks for lock-free readers
-		// Make a copy of the slice header to ensure safety if append reallocated
-		newChunks := make([][]byte, len(p.chunks))
-		copy(newChunks, p.chunks)
-		p.atomicChunks.Store(&chunkList{data: newChunks})
 	}
 
+	p.mu.Lock()
 	p.numPages.Store(newTotal)
 	p.ensureVerifiedCapacityLocked(newTotal)
+	p.mu.Unlock()
+	p.maybeSchedulePreGrow(requiredBytes)
 	return startID, nil
 }
 
