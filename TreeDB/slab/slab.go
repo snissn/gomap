@@ -37,8 +37,16 @@ type SlabFile struct {
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
 
-	mmapMu       sync.RWMutex
-	mmapData     []byte   // Current Read-only mapping
+	closed atomic.Bool
+
+	// mmapData holds the current read-only mapping. Readers load it without taking
+	// locks; remaps publish a new mapping and keep the old mapping alive until
+	// Close to avoid use-after-free.
+	mmapData atomic.Value // stores []byte (may be nil slice)
+
+	remapMu        sync.Mutex
+	remapRequested atomic.Bool
+
 	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
 }
 
@@ -55,25 +63,31 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	return &SlabFile{
+	sf := &SlabFile{
 		ID:   id,
 		Path: path,
 		File: f,
 		Size: info.Size(),
-	}, nil
+	}
+	// Initialize atomic.Value with the concrete type so Load is safe.
+	sf.mmapData.Store([]byte(nil))
+	return sf, nil
 }
 
 func (s *SlabFile) Close() error {
-	s.mmapMu.Lock()
-	if s.mmapData != nil {
-		_ = munmap(s.mmapData)
-		s.mmapData = nil
+	s.closed.Store(true)
+
+	s.remapMu.Lock()
+	data, _ := s.mmapData.Load().([]byte)
+	if data != nil {
+		_ = munmap(data)
 	}
 	for _, b := range s.deadMappings {
 		_ = munmap(b)
 	}
 	s.deadMappings = nil
-	s.mmapMu.Unlock()
+	s.mmapData.Store([]byte(nil))
+	s.remapMu.Unlock()
 	return s.File.Close()
 }
 
@@ -90,12 +104,13 @@ func (s *SlabFile) Truncate(size int64) error {
 
 	// If we had an mmap, it may now be larger than the file. Clear it to avoid
 	// SIGBUS on reads and to allow remapping to the new size.
-	s.mmapMu.Lock()
-	if s.mmapData != nil {
-		_ = munmap(s.mmapData)
-		s.mmapData = nil
+	s.remapMu.Lock()
+	data, _ := s.mmapData.Load().([]byte)
+	if data != nil {
+		_ = munmap(data)
 	}
-	s.mmapMu.Unlock()
+	s.mmapData.Store([]byte(nil))
+	s.remapMu.Unlock()
 
 	return nil
 }
@@ -242,9 +257,7 @@ func (s *SlabFile) Read(offset int64, verifyCRC bool) ([]byte, error) {
 }
 
 func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool) {
-	s.mmapMu.RLock()
-	data := s.mmapData
-	s.mmapMu.RUnlock()
+	data, _ := s.mmapData.Load().([]byte)
 
 	// Fast check: if data exists and covers the request, use it.
 	// We don't know totalLen64 yet, but we check if we can at least read the header.
@@ -279,65 +292,61 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 		}
 	}
 
-	// Slow path: Remap if needed
-	s.mmapMu.Lock()
-	defer s.mmapMu.Unlock()
+	// Mapping missing or too small. Remap asynchronously and fall back to pread.
+	s.maybeScheduleRemap()
+	return nil, nil, false
+}
 
-	// Double check under lock
-	data = s.mmapData
-	// We need file size to know if remapping is worth it
+func (s *SlabFile) maybeScheduleRemap() {
+	if s == nil || s.closed.Load() {
+		return
+	}
+	if !s.remapRequested.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.remapRequested.Store(false)
+		s.remapToFileSize()
+	}()
+}
+
+func (s *SlabFile) remapToFileSize() {
+	if s == nil || s.closed.Load() {
+		return
+	}
+
+	// Serialize with Close/Truncate and other remaps.
+	s.remapMu.Lock()
+	defer s.remapMu.Unlock()
+
+	if s.closed.Load() {
+		return
+	}
+
 	info, err := s.File.Stat()
 	if err != nil {
-		return nil, nil, false
+		return
 	}
 	currentSize := info.Size()
-
-	if data == nil || int64(len(data)) < currentSize {
-		// Remap
-		if data != nil {
-			// Don't unmap immediately; existing readers might hold views!
-			// We rely on 64-bit VIRT abundance and OS page cache sharing.
-			s.deadMappings = append(s.deadMappings, data)
-		}
-		if currentSize > 0 && currentSize <= int64(int(currentSize)) {
-			b, err := mmapReadOnly(s.File, int(currentSize))
-			if err == nil {
-				s.mmapData = b
-				data = b
-			}
-		}
+	if currentSize <= 0 || currentSize > int64(int(currentSize)) {
+		return
 	}
 
-	if data == nil {
-		return nil, nil, false
+	data, _ := s.mmapData.Load().([]byte)
+	if data != nil && int64(len(data)) >= currentSize {
+		return
 	}
 
-	// Retry logic with new data
-	if realStart < 0 || realStart+HeaderSize > int64(len(data)) {
-		return nil, nil, false
-	}
-	header := data[realStart : realStart+HeaderSize]
-	keyLen := binary.LittleEndian.Uint16(header[4:6])
-	valLen := binary.LittleEndian.Uint32(header[6:10])
-	totalLen64 := int64(keyLen) + int64(valLen)
-
-	dataEnd := realStart + HeaderSize + totalLen64
-	if dataEnd > int64(len(data)) {
-		return nil, nil, false
+	if data != nil {
+		// Don't unmap immediately; existing readers might hold views.
+		s.deadMappings = append(s.deadMappings, data)
 	}
 
-	record := data[realStart+HeaderSize : dataEnd]
-
-	if verifyCRC {
-		sum := crc32.Update(0, crc32cTable, header[4:10])
-		sum = crc32.Update(sum, crc32cTable, record)
-		crc := binary.LittleEndian.Uint32(header[0:4])
-		if sum != crc {
-			return nil, ErrChecksumMismatch, true
-		}
+	b, err := mmapReadOnly(s.File, int(currentSize))
+	if err != nil {
+		return
 	}
-
-	return record[int64(keyLen):], nil, true
+	s.mmapData.Store(b)
 }
 
 // Write appends a record to the slab and returns the offset.

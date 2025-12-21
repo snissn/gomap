@@ -5,8 +5,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 )
+
+func waitForMmap(t *testing.T, s *SlabFile) []byte {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := s.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			return data
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("expected slab mmap to be available")
+	return nil
+}
 
 func TestSlabRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -164,12 +180,16 @@ func TestSlabRead_UsesMmapWhenAvailable(t *testing.T) {
 	}
 
 	s := sm.slabs[ptr.FileID]
-	if s.mmapData == nil || len(s.mmapData) == 0 {
-		t.Fatalf("expected slab to have an mmap after first Read")
+	mmapData := waitForMmap(t, s)
+
+	// Re-read to ensure we hit the mmap path (async remap may have used pread).
+	val, err = sm.Read(ptr)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
 	}
 
-	base := uintptr(unsafe.Pointer(&s.mmapData[0]))
-	end := base + uintptr(len(s.mmapData))
+	base := uintptr(unsafe.Pointer(&mmapData[0]))
+	end := base + uintptr(len(mmapData))
 	p := uintptr(unsafe.Pointer(&val[0]))
 	if p < base || p >= end {
 		t.Fatalf("expected Read() value to be backed by mmap (ptr=%#x not in [%#x,%#x))", p, base, end)
@@ -202,16 +222,15 @@ func TestSlabRead_RemapsWhenOutOfMappedRange(t *testing.T) {
 	}
 
 	s := sm.slabs[ptr1.FileID]
-	if s.mmapData == nil || len(s.mmapData) == 0 {
-		t.Fatalf("expected slab to have an mmap after first Read")
-	}
-	mmapLen := len(s.mmapData)
+	mmapData := waitForMmap(t, s)
+	mmapLen := len(mmapData)
 
 	ptr2, err := sm.Append([]byte("k2"), []byte("v2")) // grows the file beyond the existing mapping
 	if err != nil {
 		t.Fatalf("Append 2 failed: %v", err)
 	}
 
+	// First read may fall back to pread and schedule a remap.
 	val2, err := sm.Read(ptr2)
 	if err != nil {
 		t.Fatalf("Read 2 failed: %v", err)
@@ -220,13 +239,28 @@ func TestSlabRead_RemapsWhenOutOfMappedRange(t *testing.T) {
 		t.Fatalf("Value 2 mismatch: got %q", string(val2))
 	}
 
-	// Optimization: Now we expect the mapping to grow!
-	if len(s.mmapData) <= mmapLen {
-		t.Fatalf("expected mmap length to grow (got %d, was %d)", len(s.mmapData), mmapLen)
+	// Wait for the mapping to grow.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		newData, _ := s.mmapData.Load().([]byte)
+		if len(newData) > mmapLen {
+			mmapData = newData
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(mmapData) <= mmapLen {
+		t.Fatalf("expected mmap length to grow (got %d, was %d)", len(mmapData), mmapLen)
 	}
 
-	base := uintptr(unsafe.Pointer(&s.mmapData[0]))
-	end := base + uintptr(len(s.mmapData))
+	// Re-read to ensure we hit the new mmap mapping.
+	val2, err = sm.Read(ptr2)
+	if err != nil {
+		t.Fatalf("Read 2 failed: %v", err)
+	}
+
+	base := uintptr(unsafe.Pointer(&mmapData[0]))
+	end := base + uintptr(len(mmapData))
 	p := uintptr(unsafe.Pointer(&val2[0]))
 	if p < base || p >= end {
 		t.Fatalf("expected Read() value to be backed by NEW mmap (ptr=%#x not in [%#x,%#x))", p, base, end)
