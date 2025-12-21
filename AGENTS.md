@@ -151,9 +151,8 @@ When `NewIterator(start,end)` is called on a `hash_sorted` memtable:
 
 ### Likely high-impact optimizations (pending)
 
-- Pager verified-bitset: remove per-page `RWMutex` contention on `IsVerified/MarkVerified` during read-heavy workloads (make verification cache lock-free and growth amortized).
-- Implement `Has` without `Get` (avoid slab reads + value copies) for:
-  - backend `TreeDB/db` and
-  - cached `TreeDB/caching` path (requires backend `Has` support).
-- If still regressed after above:
-  - profile validator `--pprof` during `sload-readheavy` to confirm hot spots (CRC verification, page traversal, value copies, slab read paths).
+- Done: pager verified-bitset is now lock-free (removes `RWMutex` contention on `IsVerified/MarkVerified`).
+- Done: implement `Has` without `Get` in both backend and cached layers (avoids value copy/slab read on existence checks).
+- Done: reduce snapshot bookkeeping overhead by replacing `ReaderRegistry` map with a reusable slice + cached-min recompute.
+- Next: capture pprof from the validator during `sload-readheavy` (CPU + mutex) to confirm dominant costs (page traversal, checksum, alloc/copy, slab reads, lock contention).
+- Next (potentially high impact, higher risk): add an opt-in *read-only zero-copy* path for trie-node reads (return views into mmapped pages/slabs) and wire it into op-geth’s trie node fetcher (callers must treat returned bytes as immutable).
