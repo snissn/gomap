@@ -63,6 +63,7 @@ type HashSorted struct {
 	sortedKeys  []string
 	sortedValid bool
 	frozen      bool
+	hasDeletes  bool
 	arena       hashArena
 
 	// Incremental ordering:
@@ -76,14 +77,21 @@ type HashSorted struct {
 }
 
 type hashSortedIndex struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	done   map[uint64]struct{}
-	doneTo uint64
+	mu      sync.Mutex
+	cond    *sync.Cond
+	waiters int
+	done    map[uint64]struct{}
+	doneTo  uint64
 
 	// runs stores sorted key chunks indexed by sequence number (seq-1).
 	// When doneTo >= N, runs[0:N] are populated.
 	runs [][]string
+
+	// compacted caches a single globally sorted key slice for a fully indexed
+	// frozen memtable. It is built lazily on the first iterator/flush that needs
+	// ordered traversal and then reused.
+	compactedTo uint64
+	compacted   []string
 }
 
 func NewHashSorted() *HashSorted {
@@ -126,6 +134,7 @@ func (m *HashSorted) Reset() {
 	m.sortedKeys = m.sortedKeys[:0]
 	m.sortedValid = true
 	m.frozen = false
+	m.hasDeletes = false
 	m.pendingKeys = nil
 	m.pendingBytes = 0
 	m.nextSeq = 0
@@ -252,6 +261,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	var seq uint64
 
 	m.mu.Lock()
+	m.hasDeletes = true
 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
@@ -329,10 +339,21 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RUnlock()
 
 	if frozen && !small {
-		runs, endKey, hasEnd := m.ensureIndexFrozen(end)
-		return &hashRunsIterator{
+		keys, endKey, hasEnd := m.ensureIndexFrozenKeys(end)
+		startKey := ""
+		if start != nil {
+			startKey = bytesToStringNoCopy(start)
+		}
+		idx := 0
+		if startKey != "" && len(keys) > 0 {
+			idx = sort.Search(len(keys), func(i int) bool {
+				return keys[i] >= startKey
+			})
+		}
+		return &hashIterator{
 			mt:     m,
-			runs:   runs,
+			keys:   keys,
+			idx:    idx,
 			end:    endKey,
 			hasEnd: hasEnd,
 		}
@@ -390,7 +411,7 @@ func (m *HashSorted) ensureSortedLocked() {
 	m.sortedValid = true
 }
 
-func (m *HashSorted) ensureIndexFrozen(end []byte) (runs [][]string, endKey string, hasEnd bool) {
+func (m *HashSorted) ensureIndexFrozenKeys(end []byte) (keys []string, endKey string, hasEnd bool) {
 	m.mu.Lock()
 	target := m.nextSeq
 	pending := m.pendingKeys
@@ -414,12 +435,12 @@ func (m *HashSorted) ensureIndexFrozen(end []byte) (runs [][]string, endKey stri
 		m.mu.Unlock()
 	}
 
-	runs = m.index.snapshotRuns(target)
+	keys = m.index.compact(target)
 	if end != nil {
 		endKey = bytesToStringNoCopy(end)
 		hasEnd = true
 	}
-	return runs, endKey, hasEnd
+	return keys, endKey, hasEnd
 }
 
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
@@ -461,6 +482,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 	if key == nil {
 		return nil, 0
 	}
+	m.hasDeletes = true
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
 		storedKey := bytesToStringNoCopy(ent.key)
@@ -482,6 +504,8 @@ func (idx *hashSortedIndex) reset() {
 	idx.mu.Lock()
 	idx.runs = nil
 	idx.doneTo = 0
+	idx.compactedTo = 0
+	idx.compacted = nil
 	if idx.done != nil {
 		clear(idx.done)
 	}
@@ -494,7 +518,9 @@ func (idx *hashSortedIndex) wait(target uint64) {
 	}
 	idx.mu.Lock()
 	for idx.doneTo < target {
+		idx.waiters++
 		idx.cond.Wait()
+		idx.waiters--
 	}
 	idx.mu.Unlock()
 }
@@ -510,8 +536,15 @@ func (idx *hashSortedIndex) apply(seq uint64, keys []string) {
 		idx.runs = newRuns
 	}
 	idx.runs[seq-1] = keys
+	if seq > idx.compactedTo {
+		// Invalidate any cached compaction when new runs arrive.
+		idx.compactedTo = 0
+		idx.compacted = nil
+	}
 	idx.markDoneLocked(seq)
-	idx.cond.Broadcast()
+	if idx.waiters > 0 {
+		idx.cond.Broadcast()
+	}
 	idx.mu.Unlock()
 }
 
@@ -556,13 +589,156 @@ func (idx *hashSortedIndex) snapshotRuns(target uint64) [][]string {
 	return out
 }
 
+func (idx *hashSortedIndex) compact(target uint64) []string {
+	if target == 0 {
+		return nil
+	}
+
+	idx.mu.Lock()
+	if idx.compactedTo >= target {
+		keys := idx.compacted
+		idx.mu.Unlock()
+		return keys
+	}
+	if int(target) > len(idx.runs) {
+		target = uint64(len(idx.runs))
+	}
+
+	runs := make([][]string, 0, target)
+	total := 0
+	for i := uint64(0); i < target; i++ {
+		run := idx.runs[i]
+		if len(run) == 0 {
+			continue
+		}
+		runs = append(runs, run)
+		total += len(run)
+	}
+	idx.mu.Unlock()
+
+	if len(runs) == 0 {
+		idx.mu.Lock()
+		if idx.compactedTo < target {
+			idx.compactedTo = target
+			idx.compacted = nil
+		}
+		idx.mu.Unlock()
+		return nil
+	}
+	if len(runs) == 1 {
+		idx.mu.Lock()
+		if idx.compactedTo < target {
+			idx.compactedTo = target
+			idx.compacted = runs[0]
+		}
+		keys := idx.compacted
+		idx.mu.Unlock()
+		return keys
+	}
+
+	merged := mergeSortedStringRuns(runs, total)
+
+	idx.mu.Lock()
+	if idx.compactedTo < target {
+		idx.compactedTo = target
+		idx.compacted = merged
+		// Drop per-chunk runs; keep only the merged view.
+		for i := uint64(0); i < target && i < uint64(len(idx.runs)); i++ {
+			idx.runs[i] = nil
+		}
+		if len(idx.runs) == 0 {
+			idx.runs = [][]string{merged}
+		} else {
+			idx.runs[0] = merged
+		}
+	}
+	keys := idx.compacted
+	idx.mu.Unlock()
+	return keys
+}
+
+type hashRunMergeItem struct {
+	key string
+	run int
+	pos int
+}
+
+func mergeSortedStringRuns(runs [][]string, total int) []string {
+	h := make([]hashRunMergeItem, 0, len(runs))
+	for runIdx, run := range runs {
+		if len(run) == 0 {
+			continue
+		}
+		h = heapPushMerge(h, hashRunMergeItem{key: run[0], run: runIdx, pos: 0})
+	}
+
+	out := make([]string, 0, total)
+	for len(h) > 0 {
+		var item hashRunMergeItem
+		item, h = heapPopMerge(h)
+		out = append(out, item.key)
+
+		run := runs[item.run]
+		nextPos := item.pos + 1
+		if nextPos < len(run) {
+			h = heapPushMerge(h, hashRunMergeItem{key: run[nextPos], run: item.run, pos: nextPos})
+		}
+	}
+	return out
+}
+
+func heapPushMerge(h []hashRunMergeItem, item hashRunMergeItem) []hashRunMergeItem {
+	h = append(h, item)
+	i := len(h) - 1
+	for i > 0 {
+		p := (i - 1) / 2
+		if h[p].key <= h[i].key {
+			break
+		}
+		h[p], h[i] = h[i], h[p]
+		i = p
+	}
+	return h
+}
+
+func heapPopMerge(h []hashRunMergeItem) (hashRunMergeItem, []hashRunMergeItem) {
+	n := len(h)
+	out := h[0]
+	last := h[n-1]
+	h = h[:n-1]
+	if n-1 == 0 {
+		return out, h
+	}
+	h[0] = last
+	i := 0
+	for {
+		l := 2*i + 1
+		r := l + 1
+		if l >= len(h) {
+			break
+		}
+		small := l
+		if r < len(h) && h[r].key < h[l].key {
+			small = r
+		}
+		if h[i].key <= h[small].key {
+			break
+		}
+		h[i], h[small] = h[small], h[i]
+		i = small
+	}
+	return out, h
+}
+
 type hashIterator struct {
 	mt     *HashSorted
 	keys   []string
 	idx    int
 	end    string
 	hasEnd bool
+	curKey string
 	cur    hashEntry
+	loaded bool
 	valid  bool
 }
 
@@ -587,6 +763,7 @@ type hashRunsIterator struct {
 func (it *hashIterator) Seek(key []byte) {
 	if it.keys == nil {
 		it.valid = false
+		it.loaded = false
 		return
 	}
 	seekKey := bytesToStringNoCopy(key)
@@ -605,9 +782,6 @@ func (it *hashIterator) Valid() bool {
 	if !it.valid {
 		return false
 	}
-	if it.hasEnd && strings.Compare(it.keys[it.idx], it.end) >= 0 {
-		return false
-	}
 	return true
 }
 
@@ -615,13 +789,17 @@ func (it *hashIterator) UnsafeKey() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.cur.key
+	if it.loaded {
+		return it.cur.key
+	}
+	return stringToBytesNoCopy(it.curKey)
 }
 
 func (it *hashIterator) UnsafeValue() []byte {
 	if !it.valid {
 		return nil
 	}
+	it.ensureLoaded()
 	return it.cur.value
 }
 
@@ -629,6 +807,7 @@ func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.valid {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
+	it.ensureLoaded()
 	if it.cur.deleted {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
@@ -663,6 +842,10 @@ func (it *hashIterator) IsDeleted() bool {
 	if !it.valid {
 		return false
 	}
+	if !it.mt.hasDeletes {
+		return false
+	}
+	it.ensureLoaded()
 	return it.cur.deleted
 }
 
@@ -683,19 +866,32 @@ func (it *hashIterator) Domain() (start, end []byte) {
 
 func (it *hashIterator) refresh() {
 	it.valid = false
+	it.loaded = false
+	it.curKey = ""
 	if it.idx < 0 || it.idx >= len(it.keys) {
 		return
 	}
 	if it.hasEnd && strings.Compare(it.keys[it.idx], it.end) >= 0 {
 		return
 	}
-	key := it.keys[it.idx]
-	ent, ok := it.mt.items[key]
+	it.curKey = it.keys[it.idx]
+	it.valid = true
+}
+
+func (it *hashIterator) ensureLoaded() {
+	if it.loaded {
+		return
+	}
+	if !it.valid || it.curKey == "" {
+		return
+	}
+	ent, ok := it.mt.items[it.curKey]
 	if !ok {
+		it.valid = false
 		return
 	}
 	it.cur = ent
-	it.valid = true
+	it.loaded = true
 }
 
 func (it *hashRunsIterator) Seek(key []byte) {
