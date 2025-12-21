@@ -248,7 +248,6 @@ func (m *HashSorted) Freeze() {
 		return
 	}
 	m.frozen = true
-	m.ensureSortedLocked()
 }
 
 func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
@@ -296,13 +295,13 @@ func (m *HashSorted) ensureSortedLocked() {
 	if m.sortedValid {
 		return
 	}
-	keys := make([]string, 0, len(m.items))
+	keys := make([]string, len(m.items))
+	i := 0
 	for k := range m.items {
-		keys = append(keys, k)
+		keys[i] = k
+		i++
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return strings.Compare(keys[i], keys[j]) < 0
-	})
+	sort.Strings(keys)
 	m.sortedKeys = keys
 	m.sortedValid = true
 }
@@ -317,7 +316,7 @@ func (m *HashSorted) maybeTrackNewKeyLocked(key string) {
 	}
 	if len(m.sortedKeys) <= 4096 {
 		i := sort.Search(len(m.sortedKeys), func(i int) bool {
-			return strings.Compare(m.sortedKeys[i], key) >= 0
+			return m.sortedKeys[i] >= key
 		})
 		if i < len(m.sortedKeys) && m.sortedKeys[i] == key {
 			return

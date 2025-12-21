@@ -2225,8 +2225,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.writeMu.Lock()
 	db.mu.Lock()
 	db.noteIteratorLocked(start, end)
-	db.writeMu.Unlock()
-	defer db.mu.Unlock()
 
 	// Snapshot Isolation:
 	// To ensure the iterator sees a consistent point-in-time view, we rotate the
@@ -2235,27 +2233,32 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// mutable memtable which this iterator ignores.
 	if db.mutable.Len() > 0 {
 		if err := db.rotateMemtableLocked(false); err != nil {
+			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return nil, err
 		}
 	}
 
 	queueLen := len(db.queue)
+	queue := append([]memtable.Table(nil), db.queue...)
+	queueRanges := append([]keyRange(nil), db.queueRanges...)
+	backendRangeKnown := db.backendRangeKnown
+	backendRange := db.backendRange
+
+	db.mu.Unlock()
+	db.writeMu.Unlock()
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
 	if start == nil && end == nil {
 		// Only do this when the queue is empty; queued memtables imply the backend
 		// might not yet include older keys, making disjoint-range checks unreliable.
-		if db.backendRangeKnown && len(db.queue) == 0 && db.mutableRange.valid && db.backendRange.valid && !rangesOverlap(db.mutableRange, db.backendRange) {
+		if backendRangeKnown && len(queue) == 0 && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
 				return nil, err
 			}
 
-			// Since we rotated or mutable is empty, and queue is empty (checked above),
-			// mutable is empty. So we just return diskIter?
-			// Wait, if len(queue) == 0 and mutable.Size() == 0 (from rotate check logic),
-			// then there is no memory data.
 			if iteratorDebugEnabled.Load() {
 				return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
 			}
@@ -2268,9 +2271,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Priority 0..N: Queue (Newest first)
 	// Note: We skip db.mutable because we just rotated it (so it's empty) or it was already empty.
 	prio := 0
-	for i := len(db.queue) - 1; i >= 0; i-- {
-		if overlapsQuery(start, end, db.queueRanges[i]) {
-			qIter := db.queue[i].NewIterator(start, end)
+	for i := len(queue) - 1; i >= 0; i-- {
+		if overlapsQuery(start, end, queueRanges[i]) {
+			qIter := queue[i].NewIterator(start, end)
 			qIter.Seek(start)
 			sources = append(sources, merging.IteratorSource{
 				Iter:     qIter,
@@ -2282,7 +2285,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	// Disk Iterator
 	// Only skip if we definitively know the range and it doesn't overlap.
-	if !db.backendRangeKnown || overlapsQuery(start, end, db.backendRange) {
+	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
 			return nil, err
