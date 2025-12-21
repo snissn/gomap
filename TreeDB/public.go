@@ -120,6 +120,8 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
+		DisableWAL:              opts.DisableWAL,
+		RelaxedSync:             opts.RelaxedSync,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -152,7 +154,9 @@ func Open(opts Options) (*DB, error) {
 	if idleInterval < 0 {
 		idleInterval = 0
 	}
-	if autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0 {
+	// Auto checkpointing only manages cached-mode WAL segments. If WAL is
+	// disabled, skip starting the background loop to avoid unnecessary work.
+	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -296,6 +300,40 @@ func (db *DB) Delete(key []byte) error {
 		return db.cached.Delete(key)
 	}
 	return db.backend.Delete(key)
+}
+
+// DeleteRange removes all keys in the range [start, end).
+//
+// This is primarily used by benchmark suites and maintenance tooling. In cached
+// mode, it may use fast paths that avoid per-key tombstones when safe.
+func (db *DB) DeleteRange(start, end []byte) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.DeleteRange(start, end)
+	}
+	// Backend-only mode: fall back to iterating keys and issuing deletes.
+	it, err := db.backend.Iterator(start, end)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+
+	b := db.backend.NewBatch()
+	defer b.Close()
+	for it.Valid() {
+		if !it.IsDeleted() {
+			if err := b.Delete(it.UnsafeKey()); err != nil {
+				return err
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return b.Write()
 }
 
 // DeleteSync removes a key and forces a durability boundary.

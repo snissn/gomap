@@ -47,6 +47,33 @@ func New(capacity int) *SkipList {
 	return s
 }
 
+// Reset clears all entries while retaining the allocated arena capacity.
+//
+// The skiplist becomes empty and ready for reuse. Any iterators or views into the
+// previous contents become invalid.
+func (s *SkipList) Reset() {
+	for i := 0; i < maxHeight; i++ {
+		s.setNext(s.head, i, 0)
+		s.tail[i] = s.head
+	}
+	s.height = 1
+	s.size = 0
+	s.count = 0
+
+	h := int(s.data[s.head+nodeHeightOff])
+	kLen := int(binary.LittleEndian.Uint16(s.data[s.head+nodeKeyLenOff:]))
+	vLen := int(binary.LittleEndian.Uint32(s.data[s.head+nodeValLenOff:]))
+	headSize := nodeHeaderBase + (4 * h) + kLen + vLen
+	if headSize < 0 {
+		headSize = 0
+	}
+	if headSize > cap(s.data) {
+		headSize = cap(s.data)
+	}
+	s.data = s.data[:headSize]
+	s.setFlags(s.head, 0)
+}
+
 func (s *SkipList) alloc(n int) uint32 {
 	off := uint32(len(s.data))
 

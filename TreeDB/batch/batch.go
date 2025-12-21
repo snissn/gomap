@@ -76,6 +76,29 @@ func (b *Batch) ensureOpen() error {
 	return nil
 }
 
+// Reset clears the batch for reuse without releasing its internal buffers.
+func (b *Batch) Reset() {
+	if b == nil {
+		return
+	}
+	if b.closed {
+		// Keep behavior simple: Reset is only valid on an open batch.
+		return
+	}
+	if b.entries != nil {
+		b.entries = b.entries[:0]
+	}
+	b.byteSize = 0
+	b.slabWritten = 0
+	if b.slabWrittenByID != nil {
+		for id := range b.slabWrittenByID {
+			delete(b.slabWrittenByID, id)
+		}
+	}
+	b.sorted = true
+	b.lastKey = nil
+}
+
 func (b *Batch) noteKeyOrder(key []byte) {
 	if !b.sorted {
 		return

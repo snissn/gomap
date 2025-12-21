@@ -28,6 +28,7 @@ type BTree struct {
 	arena     *btreeArena
 	lastKey   string
 	hasLast   bool
+	degree    int
 }
 
 func NewBTree() *BTree {
@@ -89,10 +90,25 @@ func NewBTreeWithDegree(degree int) *BTree {
 		degree = btreeDefaultDegree
 	}
 	return &BTree{
-		tree: btree.NewMap[string, btreeEntry](degree),
+		tree:   btree.NewMap[string, btreeEntry](degree),
+		degree: degree,
 		arena: &btreeArena{
 			chunkSize: btreeArenaChunkSize,
 		},
+	}
+}
+
+// Reset clears all entries while retaining internal allocations.
+func (m *BTree) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.tree = btree.NewMap[string, btreeEntry](m.degree)
+	m.sizeBytes = 0
+	m.lastKey = ""
+	m.hasLast = false
+	if m.arena != nil {
+		m.arena.resetKeepFirstChunk()
 	}
 }
 
@@ -394,6 +410,21 @@ type btreeArena struct {
 	chunkSize int
 	chunks    [][]byte
 	offset    int
+}
+
+func (a *btreeArena) resetKeepFirstChunk() {
+	if a == nil {
+		return
+	}
+	if len(a.chunks) == 0 {
+		a.offset = 0
+		return
+	}
+	first := a.chunks[0]
+	first = first[:len(first)]
+	a.chunks = a.chunks[:1]
+	a.chunks[0] = first
+	a.offset = 0
 }
 
 func (a *btreeArena) Copy(src []byte) []byte {

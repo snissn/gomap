@@ -71,3 +71,15 @@ func (b *batch) Commit() error { return b.b.Write() }
 func (b *batch) CommitSync() error { return b.b.WriteSync() }
 
 func (b *batch) Close() error { return b.b.Close() }
+
+// Reset is an optional fast-path used by higher-level adapters to recycle batch
+// buffers without reallocation. If the underlying TreeDB batch doesn't support
+// it, Reset is a no-op and callers can fall back to Close/NewBatch.
+func (b *batch) Reset() {
+	if b == nil || b.b == nil {
+		return
+	}
+	if r, ok := b.b.(interface{ Reset() }); ok {
+		r.Reset()
+	}
+}

@@ -18,19 +18,88 @@ type hashEntry struct {
 	deleted bool
 }
 
+type hashArena struct {
+	chunks  [][]byte
+	cur     []byte
+	off     int
+	nextCap int
+}
+
+func (a *hashArena) alloc(n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.off < n {
+		c := a.nextCap
+		if c < 64*1024 {
+			c = 64 * 1024
+		}
+		if c < n {
+			c = n
+		}
+		a.cur = make([]byte, c)
+		a.chunks = append(a.chunks, a.cur)
+		a.off = 0
+		a.nextCap = c * 2
+	}
+	b := a.cur[a.off : a.off+n]
+	a.off += n
+	return b
+}
+
+func (a *hashArena) copyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := a.alloc(len(src))
+	copy(dst, src)
+	return dst
+}
+
 type HashSorted struct {
 	mu          sync.RWMutex
-	items       map[string]*hashEntry
+	items       map[string]hashEntry
 	sizeBytes   int64
 	sortedKeys  []string
 	sortedValid bool
 	frozen      bool
+	arena       hashArena
 }
 
 func NewHashSorted() *HashSorted {
 	return &HashSorted{
-		items: make(map[string]*hashEntry),
+		items:       make(map[string]hashEntry),
+		sortedValid: true,
 	}
+}
+
+func (a *hashArena) resetKeepFirstChunk() {
+	if len(a.chunks) == 0 {
+		a.cur = nil
+		a.off = 0
+		a.nextCap = 0
+		return
+	}
+	first := a.chunks[0]
+	first = first[:cap(first)]
+	a.chunks = a.chunks[:1]
+	a.chunks[0] = first
+	a.cur = first
+	a.off = 0
+	a.nextCap = cap(first) * 2
+}
+
+// Reset clears all entries while retaining internal allocations.
+func (m *HashSorted) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	clear(m.items)
+	m.sizeBytes = 0
+	m.sortedKeys = m.sortedKeys[:0]
+	m.sortedValid = true
+	m.frozen = false
+	m.arena.resetKeepFirstChunk()
 }
 
 func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
@@ -74,7 +143,8 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		valCopy := append([]byte(nil), value...)
+		storedKey := bytesToStringNoCopy(ent.key)
+		valCopy := m.arena.copyBytes(value)
 		if cb != nil {
 			if err := cb(ent.key, valCopy); err != nil {
 				return err
@@ -84,21 +154,21 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		ent.value = valCopy
 		ent.deleted = false
 		m.sizeBytes += int64(len(valCopy) - oldLen)
-		m.sortedValid = false
+		m.items[storedKey] = ent
 		return nil
 	}
 
-	keyCopy := append([]byte(nil), key...)
-	valCopy := append([]byte(nil), value...)
+	keyCopy := m.arena.copyBytes(key)
+	valCopy := m.arena.copyBytes(value)
 	if cb != nil {
 		if err := cb(keyCopy, valCopy); err != nil {
 			return err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = &hashEntry{key: keyCopy, value: valCopy}
+	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-	m.sortedValid = false
+	m.maybeTrackNewKeyLocked(keyStored)
 	return nil
 }
 
@@ -121,6 +191,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
+		storedKey := bytesToStringNoCopy(ent.key)
 		if cb != nil {
 			if err := cb(ent.key, nil); err != nil {
 				return err
@@ -131,20 +202,20 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			ent.value = nil
 			ent.deleted = true
 		}
-		m.sortedValid = false
+		m.items[storedKey] = ent
 		return nil
 	}
 
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := m.arena.copyBytes(key)
 	if cb != nil {
 		if err := cb(keyCopy, nil); err != nil {
 			return err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = &hashEntry{key: keyCopy, deleted: true}
+	m.items[keyStored] = hashEntry{key: keyCopy, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
-	m.sortedValid = false
+	m.maybeTrackNewKeyLocked(keyStored)
 	return nil
 }
 
@@ -236,23 +307,47 @@ func (m *HashSorted) ensureSortedLocked() {
 	m.sortedValid = true
 }
 
+func (m *HashSorted) maybeTrackNewKeyLocked(key string) {
+	if !m.sortedValid {
+		return
+	}
+	if len(m.sortedKeys) == 0 || strings.Compare(m.sortedKeys[len(m.sortedKeys)-1], key) < 0 {
+		m.sortedKeys = append(m.sortedKeys, key)
+		return
+	}
+	if len(m.sortedKeys) <= 4096 {
+		i := sort.Search(len(m.sortedKeys), func(i int) bool {
+			return strings.Compare(m.sortedKeys[i], key) >= 0
+		})
+		if i < len(m.sortedKeys) && m.sortedKeys[i] == key {
+			return
+		}
+		m.sortedKeys = append(m.sortedKeys, "")
+		copy(m.sortedKeys[i+1:], m.sortedKeys[i:])
+		m.sortedKeys[i] = key
+		return
+	}
+	m.sortedValid = false
+}
+
 func (m *HashSorted) setStealLocked(key, value []byte) {
 	if key == nil {
 		return
 	}
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
+		storedKey := bytesToStringNoCopy(ent.key)
 		oldLen := len(ent.value)
 		ent.value = value
 		ent.deleted = false
 		m.sizeBytes += int64(len(value) - oldLen)
-		m.sortedValid = false
+		m.items[storedKey] = ent
 		return
 	}
 	keyStored := bytesToStringNoCopy(key)
-	m.items[keyStored] = &hashEntry{key: key, value: value}
+	m.items[keyStored] = hashEntry{key: key, value: value}
 	m.sizeBytes += int64(len(key) + len(value))
-	m.sortedValid = false
+	m.maybeTrackNewKeyLocked(keyStored)
 }
 
 func (m *HashSorted) deleteStealLocked(key []byte) {
@@ -261,18 +356,19 @@ func (m *HashSorted) deleteStealLocked(key []byte) {
 	}
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
+		storedKey := bytesToStringNoCopy(ent.key)
 		if !ent.deleted {
 			m.sizeBytes -= int64(len(ent.value))
 			ent.value = nil
 			ent.deleted = true
 		}
-		m.sortedValid = false
+		m.items[storedKey] = ent
 		return
 	}
 	keyStored := bytesToStringNoCopy(key)
-	m.items[keyStored] = &hashEntry{key: key, deleted: true}
+	m.items[keyStored] = hashEntry{key: key, deleted: true}
 	m.sizeBytes += int64(len(key))
-	m.sortedValid = false
+	m.maybeTrackNewKeyLocked(keyStored)
 }
 
 type hashIterator struct {
@@ -281,7 +377,7 @@ type hashIterator struct {
 	idx    int
 	end    string
 	hasEnd bool
-	cur    *hashEntry
+	cur    hashEntry
 	valid  bool
 }
 
@@ -313,21 +409,21 @@ func (it *hashIterator) Valid() bool {
 }
 
 func (it *hashIterator) UnsafeKey() []byte {
-	if it.cur == nil {
+	if !it.valid {
 		return nil
 	}
 	return it.cur.key
 }
 
 func (it *hashIterator) UnsafeValue() []byte {
-	if it.cur == nil {
+	if !it.valid {
 		return nil
 	}
 	return it.cur.value
 }
 
 func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if it.cur == nil {
+	if !it.valid {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
 	if it.cur.deleted {
@@ -361,7 +457,7 @@ func (it *hashIterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *hashIterator) IsDeleted() bool {
-	if it.cur == nil {
+	if !it.valid {
 		return false
 	}
 	return it.cur.deleted
@@ -384,7 +480,6 @@ func (it *hashIterator) Domain() (start, end []byte) {
 
 func (it *hashIterator) refresh() {
 	it.valid = false
-	it.cur = nil
 	if it.idx < 0 || it.idx >= len(it.keys) {
 		return
 	}
@@ -392,9 +487,10 @@ func (it *hashIterator) refresh() {
 		return
 	}
 	key := it.keys[it.idx]
-	it.cur = it.mt.items[key]
-	if it.cur == nil {
+	ent, ok := it.mt.items[key]
+	if !ok {
 		return
 	}
+	it.cur = ent
 	it.valid = true
 }

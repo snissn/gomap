@@ -199,6 +199,13 @@ func (m *Memtable) Len() int {
 
 func (m *Memtable) Freeze() {}
 
+// Reset clears the memtable while retaining its arena capacity.
+func (m *Memtable) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sl.Reset()
+}
+
 // Iterator wrapper
 type Iterator struct {
 	iter *skiplist.Iterator
