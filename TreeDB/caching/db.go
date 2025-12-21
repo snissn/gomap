@@ -258,6 +258,24 @@ func overlapsQuery(start, end []byte, r keyRange) bool {
 	return true
 }
 
+// queryCoversRange reports whether the query domain [start,end) fully covers the
+// inclusive key range [r.min,r.max]. A nil bound is treated as -/+ infinity.
+//
+// Note: since end is exclusive, it must be strictly greater than r.max to cover
+// the max key.
+func queryCoversRange(start, end []byte, r keyRange) bool {
+	if !r.valid {
+		return true
+	}
+	if start != nil && bytes.Compare(start, r.min) > 0 {
+		return false
+	}
+	if end != nil && bytes.Compare(end, r.max) <= 0 {
+		return false
+	}
+	return true
+}
+
 func (db *DB) noteWriteKeyLocked(key []byte) {
 	if !db.memtableAdaptive {
 		return
@@ -1296,100 +1314,234 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		db.writeMu.Lock()
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
+		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
+		coversInMemory := queryCoversRange(start, end, db.mutableRange)
+		for _, r := range db.queueRanges {
+			if !queryCoversRange(start, end, r) {
+				coversInMemory = false
+				break
+			}
+		}
+
+		// Fast path (DisableWAL only): if the delete range covers all buffered
+		// in-memory keys, clear the in-memory layers and delete directly from the
+		// backend. This avoids building large tombstone sets and avoids per-key
+		// copies into an intermediate slice.
+		if coversInMemory {
+			curMode := db.memtableMode
+			nextMode := curMode
+			if db.memtableAdaptive {
+				nextMode = db.chooseAdaptiveMemtableModeLocked()
+				db.memtableMode = nextMode
+				db.memtableWarmupActive = false
+				db.resetMemtableStatsLocked()
+			}
+
+			reused := false
+			if nextMode == curMode {
+				if r, ok := any(db.mutable).(interface{ Reset() }); ok {
+					r.Reset()
+					reused = true
+				}
+			}
+			if !reused {
+				mt, err := memtable.NewWithCapacityMode(0, nextMode)
+				if err != nil {
+					db.mu.Unlock()
+					return err
+				}
+				db.mutable = mt
+			}
+			db.queue = nil
+			db.queueRanges = nil
+			db.queueWALPaths = nil
+			db.mutableRange = keyRange{}
+			db.queueBacklogBytes.Store(0)
+			db.mu.Unlock()
+
+			it, err := db.backend.Iterator(start, end)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = it.Close() }()
+
+			b := db.backend.NewBatch()
+			defer func() { _ = b.Close() }()
+
+			for it.Valid() {
+				if err := b.Delete(it.Key()); err != nil {
+					return err
+				}
+				it.Next()
+			}
+			if err := it.Error(); err != nil {
+				return err
+			}
+			if err := b.Write(); err != nil {
+				return err
+			}
+
+			// Best-effort: backend range can shrink; force recompute later.
+			db.mu.Lock()
+			db.backendRangeKnown = false
+			db.backendRange = keyRange{}
+			db.mu.Unlock()
+
+			db.noteWrite()
+			return nil
+		}
+
 		backendRange := db.backendRange
+
+		// If we need to enumerate keys from the current mutable memtable, rotate it
+		// first so we never mutate a memtable while iterating it.
+		if overlapsQuery(start, end, db.mutableRange) && db.mutable != nil && db.mutable.Len() > 0 {
+			if queryCoversRange(start, end, db.mutableRange) {
+				if r, ok := any(db.mutable).(interface{ Reset() }); ok {
+					r.Reset()
+				} else {
+					mt, err := memtable.NewWithCapacityMode(0, db.memtableMode)
+					if err != nil {
+						db.mu.Unlock()
+						return err
+					}
+					db.mutable = mt
+				}
+				db.mutableRange = keyRange{}
+			} else {
+				if err := db.rotateMemtableLocked(false); err != nil {
+					db.mu.Unlock()
+					return err
+				}
+			}
+		}
+
+		// Drop fully-covered queued memtables without enumerating their keys.
+		if len(db.queue) > 0 {
+			dstQueue := db.queue[:0]
+			dstRanges := db.queueRanges[:0]
+			dstWALPaths := db.queueWALPaths[:0]
+			for i, mem := range db.queue {
+				r := keyRange{}
+				if i < len(db.queueRanges) {
+					r = db.queueRanges[i]
+				}
+				if queryCoversRange(start, end, r) {
+					db.queueBacklogBytes.Add(-mem.Size())
+					continue
+				}
+				dstQueue = append(dstQueue, mem)
+				dstRanges = append(dstRanges, r)
+				if i < len(db.queueWALPaths) {
+					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
+				} else {
+					dstWALPaths = append(dstWALPaths, "")
+				}
+			}
+			db.queue = dstQueue
+			db.queueRanges = dstRanges
+			db.queueWALPaths = dstWALPaths
+		}
+
+		// Snapshot sources after any rotations/drops.
 		mutable := db.mutable
 		mutableRange := db.mutableRange
 		queue := append([]memtable.Table(nil), db.queue...)
 		queueRanges := append([]keyRange(nil), db.queueRanges...)
 		db.mu.Unlock()
 
-		// Collect keys first (copying bytes) so we can safely apply deletes without
-		// mutating memtables while iterating them.
-		keys := make([][]byte, 0, 1024)
-		collectKey := func(k []byte) {
-			keys = append(keys, append([]byte(nil), k...))
-		}
+		var (
+			backendIter iterator.UnsafeIterator
+			queueIters  []iterator.UnsafeIterator
+			mutableIter iterator.UnsafeIterator
+		)
 
-		// 1) Mutable memtable (may overlap the query)
-		if overlapsQuery(start, end, mutableRange) && mutable != nil {
-			iter := mutable.NewIterator(start, end)
-			iter.Seek(start)
-			for iter.Valid() {
-				if !iter.IsDeleted() {
-					collectKey(iter.UnsafeKey())
-				}
-				iter.Next()
-			}
-			err := iter.Close()
-			if err == nil {
-				err = iter.Error()
-			}
-			if err != nil {
-				db.writeMu.Unlock()
-				return err
-			}
-		}
-
-		// 2) Backend (fast, range-seekable)
 		if overlapsQuery(start, end, backendRange) {
-			bit, err := db.backend.Iterator(start, end)
+			it, err := db.backend.Iterator(start, end)
 			if err != nil {
-				db.writeMu.Unlock()
 				return err
 			}
-			for bit.Valid() {
-				collectKey(bit.Key())
-				bit.Next()
-			}
-			err = bit.Error()
-			_ = bit.Close()
-			if err != nil {
-				db.writeMu.Unlock()
-				return err
-			}
+			backendIter = it
+			defer func() { _ = backendIter.Close() }()
 		}
 
-		// 3) Queued memtables (immutable)
+		if overlapsQuery(start, end, mutableRange) && mutable != nil {
+			it := mutable.NewIterator(start, end)
+			mutableIter = it
+			mutableIter.Seek(start)
+			defer func() { _ = mutableIter.Close() }()
+		}
+
 		for i, mem := range queue {
 			if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
 				continue
 			}
-			iter := mem.NewIterator(start, end)
-			iter.Seek(start)
-			for iter.Valid() {
-				if !iter.IsDeleted() {
-					collectKey(iter.UnsafeKey())
+			it := mem.NewIterator(start, end)
+			it.Seek(start)
+			queueIters = append(queueIters, it)
+			defer func(it iterator.UnsafeIterator) { _ = it.Close() }(it)
+		}
+
+		db.mu.Lock()
+		applyDelete := func(key []byte) error {
+			db.mutable.Delete(key)
+			db.mutableRange.add(key)
+			if db.mutable.Size() > db.mutableFlushThresholdLocked() {
+				if err := db.rotateMemtableLocked(true); err != nil {
+					return err
 				}
-				iter.Next()
 			}
-			err := iter.Close()
-			if err == nil {
-				err = iter.Error()
+			return nil
+		}
+
+		if mutableIter != nil {
+			for mutableIter.Valid() {
+				if !mutableIter.IsDeleted() {
+					if err := applyDelete(mutableIter.UnsafeKey()); err != nil {
+						db.mu.Unlock()
+						return err
+					}
+				}
+				mutableIter.Next()
 			}
-			if err != nil {
-				db.writeMu.Unlock()
+			if err := mutableIter.Error(); err != nil {
+				db.mu.Unlock()
 				return err
 			}
 		}
 
-		db.mu.Lock()
-		for _, key := range keys {
-			db.mutable.Delete(key)
-			db.mutableRange.add(key)
-			db.noteWriteKeyLocked(key)
-
-			if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-				if err := db.rotateMemtableLocked(true); err != nil {
+		if backendIter != nil {
+			for backendIter.Valid() {
+				if err := applyDelete(backendIter.Key()); err != nil {
 					db.mu.Unlock()
-					db.writeMu.Unlock()
 					return err
 				}
+				backendIter.Next()
+			}
+			if err := backendIter.Error(); err != nil {
+				db.mu.Unlock()
+				return err
+			}
+		}
+
+		for _, it := range queueIters {
+			for it.Valid() {
+				if !it.IsDeleted() {
+					if err := applyDelete(it.UnsafeKey()); err != nil {
+						db.mu.Unlock()
+						return err
+					}
+				}
+				it.Next()
+			}
+			if err := it.Error(); err != nil {
+				db.mu.Unlock()
+				return err
 			}
 		}
 		db.mu.Unlock()
-		db.writeMu.Unlock()
 
 		db.noteWrite()
 		db.maybeAssistFlush()
