@@ -148,7 +148,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 		t.Fatalf("expected multiple WAL segments before idle checkpoint, got %d", walFilesBefore)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
 	for {
 		ents, err := os.ReadDir(walDir)
 		if err != nil {
@@ -184,6 +184,13 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 	if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "idle" {
 		t.Fatalf("expected last reason idle, got %q", reason)
 	}
+}
+
+func withRaceTimeout(d time.Duration) time.Duration {
+	if testRaceEnabled {
+		return d * 5
+	}
+	return d
 }
 
 func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {

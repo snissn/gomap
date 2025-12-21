@@ -37,7 +37,7 @@ type SlabFile struct {
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
 
-	mmapMu       sync.Mutex
+	mmapMu       sync.RWMutex
 	mmapData     []byte   // Current Read-only mapping
 	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
 }
@@ -242,7 +242,9 @@ func (s *SlabFile) Read(offset int64, verifyCRC bool) ([]byte, error) {
 }
 
 func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool) {
+	s.mmapMu.RLock()
 	data := s.mmapData
+	s.mmapMu.RUnlock()
 
 	// Fast check: if data exists and covers the request, use it.
 	// We don't know totalLen64 yet, but we check if we can at least read the header.
