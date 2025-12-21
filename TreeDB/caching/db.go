@@ -806,7 +806,9 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	}
 	start := time.Now()
 
-	db.flushMu.Lock()
+	if !db.flushMu.TryLock() {
+		return
+	}
 	defer db.flushMu.Unlock()
 
 	flushed := 0
