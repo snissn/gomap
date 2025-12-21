@@ -44,9 +44,9 @@ This works because:
   - `pendingKeys []string` and `pendingBytes int`:
     - append **only on map-miss** (first-seen key).
   - `indexMu sync.Mutex` + `indexCond sync.Cond`:
-    - protects index state (`levels`, `doneSeq`) and provides a wait primitive for iterators/flush.
-  - `levels [][]string`:
-    - binomial/leveled runs; each level holds 0 or 1 sorted run slice (doubles in size per level).
+    - protects index state (`runs`, `doneSeq`) and provides a wait primitive for iterators/flush.
+  - `runs [][]string` (seq-indexed):
+    - each sealed chunk becomes one sorted run stored at `runs[seq-1]` once background sorting finishes.
   - `indexSeq uint64` and `doneSeq uint64`:
     - monotonic sequence counters so iterators/flush can wait until indexing is “caught up”.
 
@@ -58,10 +58,10 @@ Use a **global indexer** (package-level) to avoid per-memtable goroutine lifetim
 
 - reads sealed key chunks from a buffered work queue (sends are chunk-granularity, not per-write)
 - sorts chunk keys (`sort.Strings`)
-- inserts the sorted chunk run into the memtable’s `levels` using a binomial merge (carry/merge until a level is empty)
-- updates `doneSeq` and signals `indexCond`
+- stores the sorted run into `runs[seq-1]`
+- updates `doneSeq` (with hole-tracking) and signals `indexCond`
 
-Compaction is done as part of insert (binomial merge), so a second goroutine is optional.
+Run compaction/merging is intentionally deferred; iteration/flush uses a k-way merge iterator across runs to avoid repeated copying of keys.
 
 Bound goroutine count:
 
@@ -84,9 +84,7 @@ When `NewIterator(start,end)` is called on a `hash_sorted` memtable:
 - For a *frozen* memtable:
   - seal any remaining `pendingKeys` immediately,
   - wait until `doneSeq >= indexSeq` (all keys indexed),
-  - iterate via:
-    - either a single fully-merged run, or
-    - a small number of runs + k-way merge (bounded by compactor).
+  - iterate via a k-way merge iterator across runs (no 1M-key materialized slice).
 - For a *mutable* memtable (rare; but exists in some paths like WAL-disabled `DeleteRange` enumeration):
   - prefer to avoid waiting on background work while writes could be ongoing.
   - acceptable options (choose one explicitly in implementation):
@@ -108,17 +106,14 @@ When `NewIterator(start,end)` is called on a `hash_sorted` memtable:
   - append to `pendingKeys` only on map miss (Set/Delete).
 - [ ] Implement sealing (swap + async send) with byte-based threshold.
 - [ ] Add a single background sorter goroutine:
-  - consumes sealed chunks, sorts, appends to `runs`.
-- [ ] Iterator uses k-way merge across `runs` + optional pending tail; correctness first.
+  - consumes sealed chunks, sorts, stores into `runs[seq-1]`.
+- [ ] Iterator uses k-way merge across runs + optional pending tail; correctness first.
 - [ ] Add instrumentation counters (debug stats):
   - `pending_keys`, `pending_bytes`, `runs`, `index_lag_keys`, `seal_queue_depth`.
 
-### Phase 2 — Run compactor (smooth iteration/flush cost)
+### Phase 2 — Optional run compaction (if needed)
 
-- [ ] Implement background compaction worker:
-  - leveled/binomial merges; keep run count bounded.
-- [ ] Ensure merges do not block writers:
-  - merges run under `runsMu`, not under memtable `mu`.
+- [ ] Only if k-way merge overhead is too high: add a compactor to merge runs in the background, but avoid repeatedly copying all keys.
 
 ### Phase 3 — Barriers and fallback safety
 
