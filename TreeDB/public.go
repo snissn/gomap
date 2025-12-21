@@ -106,6 +106,9 @@ func Open(opts Options) (*DB, error) {
 		opts.StopBacklogSeconds = 2
 		opts.MaxBacklogBytes = 2 << 30
 	}
+	if opts.MemtableMode == "" {
+		opts.MemtableMode = "adaptive"
+	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:          opts.FlushThreshold,

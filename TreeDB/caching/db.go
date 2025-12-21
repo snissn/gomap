@@ -327,6 +327,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	memCap := memtableCapacity(opts.FlushThreshold)
 	modeStr := opts.MemtableMode
+	if modeStr == "" {
+		modeStr = "adaptive"
+	}
 	adaptive := false
 	if modeStr == "adaptive" || modeStr == "auto" {
 		adaptive = true
