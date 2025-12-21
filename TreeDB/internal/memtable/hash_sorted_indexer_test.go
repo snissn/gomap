@@ -75,3 +75,41 @@ func TestHashSortedIncrementalIndexing_ResetWaitsAndClears(t *testing.T) {
 		t.Fatalf("expected empty iterator after reset")
 	}
 }
+
+func TestHashSortedIterator_TombstonesRemainVisible(t *testing.T) {
+	m := NewHashSorted()
+	m.Set([]byte("a"), []byte("v"))
+	m.Delete([]byte("b"))
+
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	it.Seek(nil)
+
+	if !it.Valid() {
+		t.Fatalf("expected iterator valid")
+	}
+	if got := string(it.UnsafeKey()); got != "a" {
+		t.Fatalf("unexpected first key: %q", got)
+	}
+	if it.IsDeleted() {
+		t.Fatalf("unexpected tombstone for key a")
+	}
+	if got := string(it.UnsafeValue()); got != "v" {
+		t.Fatalf("unexpected value for key a: %q", got)
+	}
+
+	it.Next()
+	if !it.Valid() {
+		t.Fatalf("expected iterator valid for key b")
+	}
+	if got := string(it.UnsafeKey()); got != "b" {
+		t.Fatalf("unexpected second key: %q", got)
+	}
+	if !it.IsDeleted() {
+		t.Fatalf("expected tombstone for key b")
+	}
+	if got := it.UnsafeValue(); got != nil {
+		t.Fatalf("expected nil value for tombstone, got %q", string(got))
+	}
+}
