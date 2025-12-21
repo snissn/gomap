@@ -1624,7 +1624,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	return nil
 }
 
-func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
+func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
 	walPath := db.walPath
 	memBytes := db.mutable.Size()
 	db.mutable.Freeze()
@@ -1638,7 +1638,10 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 	}
-	mt, err := memtable.NewWithCapacityMode(db.memtableCap, db.memtableMode)
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
+	mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
 	if err != nil {
 		return err
 	}
@@ -1679,6 +1682,10 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	db.bpCond.Broadcast()
 	db.bpMu.Unlock()
 	return nil
+}
+
+func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
+	return db.rotateMemtableLockedWithCapacity(triggerFlush, -1)
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -2384,7 +2391,11 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// only the queue and the backend. Any subsequent writes will go to a new
 	// mutable memtable which this iterator ignores.
 	if db.mutable.Len() > 0 {
-		if err := db.rotateMemtableLocked(false); err != nil {
+		// Rotating is required for snapshot semantics, but allocating a large arena
+		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
+		// not write concurrently). Use a small initial capacity and allow it to grow
+		// if/when writes resume.
+		if err := db.rotateMemtableLockedWithCapacity(false, minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
 			return nil, err
@@ -2605,7 +2616,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Lock()
 	db.noteIteratorLocked(start, end)
 	if db.mutable.Len() > 0 {
-		_ = db.rotateMemtableLocked(true) // Flush to backend
+		_ = db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc) // Flush to backend
 	}
 	db.mu.Unlock()
 	db.writeMu.Unlock()
