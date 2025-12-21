@@ -170,19 +170,27 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	stats := db.Stats()
-	if stats == nil {
-		t.Fatalf("Stats() returned nil")
-	}
-	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse auto checkpoint count: %v", err)
-	}
-	if n == 0 {
-		t.Fatalf("expected at least one auto checkpoint, got %d", n)
-	}
-	if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "idle" {
-		t.Fatalf("expected last reason idle, got %q", reason)
+	// The WAL directory can reflect a completed trim slightly before the
+	// auto-checkpoint goroutine updates its counters. Poll stats to avoid a
+	// timing-dependent flake.
+	deadline = time.Now().Add(withRaceTimeout(2 * time.Second))
+	for {
+		stats := db.Stats()
+		if stats == nil {
+			t.Fatalf("Stats() returned nil")
+		}
+		n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+		if err != nil {
+			t.Fatalf("parse auto checkpoint count: %v", err)
+		}
+		reason := stats["treedb.cache.auto_checkpoint.last_reason"]
+		if n > 0 && reason == "idle" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for idle auto checkpoint stats (count=%d reason=%q)", n, reason)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

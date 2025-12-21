@@ -78,6 +78,25 @@ func main() {
 }
 ```
 
+## Profiles (Durable / Fast / Bench)
+
+If you want a simple, documented “bundle” of options, start with a profile and
+then override a few workload-specific knobs:
+
+```go
+opts := treedb.OptionsFor(treedb.ProfileDurable, "./my-db-data")
+opts.FlushThreshold = 128 << 20 // optional tuning
+db, err := treedb.Open(opts)
+```
+
+Profiles are intended to make intent explicit:
+
+- `ProfileDurable`: safest defaults (recommended).
+- `ProfileFast`: relax durability/integrity knobs for throughput.
+- `ProfileBench`: deterministic benchmarking profile (not production).
+
+Details: `docs/TREEDB_PROFILES.md`.
+
 ## Tuning (Cached Mode)
 
 `treedb.Open` defaults to cached mode (memtable + WAL + background flush). The most important knobs:
