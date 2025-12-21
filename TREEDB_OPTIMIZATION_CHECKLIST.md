@@ -1,0 +1,142 @@
+# TreeDB Optimization Checklist (Punch Sheet)
+
+This is a one-page checklist to guide high-leverage TreeDB optimizations, with:
+
+- the *exact benchmark(s)* that should move,
+- the *metric(s) to watch* (and whether higher/lower is better),
+- the *expected profile signature*,
+- and the *likely code hotspots* to inspect/change.
+
+## Reading `benchmark/out.bench` (avoid sign confusion)
+
+`/Users/michaelseiler/dev/snissn/benchmark/out.bench` is produced by:
+
+- `/Users/michaelseiler/dev/snissn/benchmark/mike.sh`
+- `/Users/michaelseiler/dev/snissn/benchmark/run-bench-geth-kv-scenarios.sh`
+- `/Users/michaelseiler/dev/snissn/benchmark/scripts/kv-db-summary.py`
+
+In `kv-db-summary.py`, `diff` is always:
+
+`diff = (treedb - leveldb) / leveldb`
+
+So:
+
+- `latency/* (ms)` tables: **lower is better** (positive diff is worse for treedb)
+- `chain/*` and `engine/*` “DB-ish” tables: most entries are geth **ResettingTimers** in **nanoseconds** (lower is better even though printed as “raw units”)
+- `gas/per_second`: **higher is better**
+
+## Baselines to run (repeatable)
+
+### Microbenches (op-geth)
+
+From `/Users/michaelseiler/dev/snissn/op-geth`:
+
+- Iteration: `go test ./ethdb/treedb -run '^$' -bench '^BenchmarkTreeDB/Iteration/IterationRandom$' -count=5`
+- Mixed batch ops: `go test ./ethdb/treedb -run '^$' -bench '^BenchmarkTreeDB/BatchMixedOps/BatchMixedOps10k$' -count=5`
+- WriteRandom (primary): `go test ./ethdb/treedb -run '^$' -bench '^BenchmarkTreeDB/Write1M/WriteRandom$' -count=5 -benchtime=1x`
+
+For profiles (microbench):
+
+- CPU: add `-cpuprofile /tmp/treedb.prof`
+- Alloc: add `-memprofile /tmp/treedb.mem -memprofilerate=1`
+- Mutex: add `-mutexprofile /tmp/treedb.mutex -mutexprofilefraction=1`
+- Block: add `-blockprofile /tmp/treedb.block -blockprofilerate=1`
+
+### Scenario bench (base-bench)
+
+From `/Users/michaelseiler/dev/snissn/benchmark`:
+
+- `GETH_BIN=/Users/michaelseiler/dev/snissn/op-geth/build/bin/geth ./run-bench-geth-kv-scenarios.sh > out.bench`
+
+Scenarios inside:
+
+- `sload-readheavy` (read stress)
+- `sstore-writeheavy` (write stress)
+- `sstore-manytx` (write churn)
+
+## Punch sheet (prioritized targets)
+
+### 1) DisableWAL `DeleteRange` is allocation-dominant (BatchMixedOps10k)
+
+- [ ] **Benchmark(s) that should move**
+  - `BenchmarkTreeDB/BatchMixedOps/BatchMixedOps10k` (primary)
+  - `BenchmarkTreeDB/DeleteRange/*` (secondary)
+- [ ] **Metric(s) to watch**
+  - `ns/op`: lower is better
+  - `B/op` and `allocs/op`: lower is better (this is currently extremely high)
+- [ ] **Expected current profile signature**
+  - `alloc_space`: `TreeDB/caching.(*DB).DeleteRange` dominates (disableWAL path collecting/copying keys)
+  - CPU: `DeleteRange` dominates end-to-end time
+- [ ] **Likely hot code**
+  - `TreeDB/caching/db.go` in `(*DB).DeleteRange` (disableWAL path)
+- [ ] **Change direction**
+  - Make delete-range streaming (avoid building `[][]byte` of copied keys).
+  - Avoid mutating a memtable while iterating it (rotate first, then apply deletes to the new mutable).
+- [ ] **Acceptance check**
+  - `B/op` and `allocs/op` drop by ~10× in `BatchMixedOps10k`.
+  - `alloc_space` top entries no longer include a key-copy loop.
+
+### 2) IterationRandom dominated by hash_sorted run iteration overhead
+
+- [ ] **Benchmark(s) that should move**
+  - `BenchmarkTreeDB/Iteration/IterationRandom` (primary)
+  - Secondary correlation targets: `benchmark/out.bench` storage-read timers (below)
+- [ ] **Metric(s) to watch**
+  - `ns/op`: lower is better
+  - `B/op`, `allocs/op`: lower is better
+- [ ] **Expected current profile signature**
+  - CPU: `(*hashRunsIterator).advance` + heap ops + `runtime.mapaccess2_faststr`
+  - Indicates per-key overhead from: k-way merge + map lookup per key
+- [ ] **Likely hot code**
+  - `TreeDB/internal/memtable/hash_sorted.go`
+  - `TreeDB/internal/memtable/hash_sorted_indexer.go`
+- [ ] **Change direction**
+  - Reduce run-count (background run compaction / leveled merging) to cut k-way heap work.
+  - Avoid per-key map lookup during frozen iteration: store a stable reference per sorted entry (e.g. arena offset / entry pointer) at seal-time.
+- [ ] **Acceptance check**
+  - CPU top shifts away from `hashRunsIterator.*` and `mapaccess2_faststr`.
+  - `IterationRandom` moves materially toward `IterationSorted` (or at least closes the gap substantially).
+
+### 3) Scenario read regressions: `chain/storage/reads` and forkchoice latency
+
+Observed in `/Users/michaelseiler/dev/snissn/benchmark/out.bench`:
+
+- `sload-readheavy`: sequencer + validator `latency/update_fork_choice` much worse for treedb; validator `chain/storage/reads.50-percentile` hugely worse.
+- `sstore-writeheavy` and `sstore-manytx`: `chain/storage/reads.50-percentile` often worse for treedb (even when other timers improve).
+
+- [ ] **Scenario metric(s) to watch (lower is better unless stated)**
+  - `Sequencer latency/update_fork_choice (ms)`
+  - `Validator latency/update_fork_choice (ms)`
+  - `Sequencer chain/storage/reads.50-percentile` (ns)
+  - `Validator chain/storage/reads.50-percentile` (ns)
+  - Throughput sanity: `gas/per_second` (higher is better)
+- [ ] **Working hypothesis**
+  - Iterator creation/merge/index readiness is impacting read-heavy paths and/or triggering stalls during forkchoice.
+- [ ] **Change direction**
+  - Anything that improves `IterationRandom` and reduces iterator/merge overhead should reflect here.
+  - Ensure iterator creation does not hold global locks during expensive work (already partially addressed; verify end-to-end).
+- [ ] **Acceptance check**
+  - `sload-readheavy` forkchoice latency gap shrinks materially without hurting `gas/per_second`.
+
+### 4) WriteRandom throughput (still a top-line goal, but don’t regress it)
+
+- [ ] **Benchmark(s) to keep stable**
+  - `BenchmarkTreeDB/Write1M/WriteRandom`
+  - `BenchmarkTreeDB/BatchWrite1M/WriteRandom`
+- [ ] **Metric(s)**
+  - `MB/s`: higher is better
+  - `B/op`, `allocs/op`: lower is better
+- [ ] **Expected risk areas**
+  - Any background indexing that copies keys/allocates per key can hurt `WriteRandom`.
+- [ ] **Guardrails**
+  - Keep per-write overhead O(1) and allocation-free when possible.
+  - Prefer chunk-level work and pooling over per-key allocations.
+
+## “Profile-to-fix” loop (per target)
+
+- [ ] Reproduce with `-count=5` (stabilize variance).
+- [ ] Capture `cpu` + `alloc_space` first; add `mutex` only if contention suspected.
+- [ ] Record: top-5 CPU and top-5 alloc frames (paths + symbols) in the PR notes.
+- [ ] Implement the smallest change that deletes those frames from the top.
+- [ ] Re-run the same benchmark(s) and verify the profile signature moved.
+
