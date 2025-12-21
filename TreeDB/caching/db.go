@@ -80,6 +80,7 @@ type Options struct {
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
+	writeMu sync.Mutex
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
@@ -104,7 +105,9 @@ type DB struct {
 	walSeq  int // Sequence number for WAL files
 	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
 	// segment bytes. It is updated on WAL rotation and segment deletion.
-	walClosedBytes int64
+	walClosedBytes atomic.Int64
+	// walLiveBytes tracks the current WAL size to avoid lock contention.
+	walLiveBytes   atomic.Int64
 	walClosedSizes map[string]int64
 
 	// Level 1 (Disk)
@@ -144,6 +147,8 @@ type DB struct {
 	autoCheckpointLastWALBefore  atomic.Int64
 	autoCheckpointLastWALAfter   atomic.Int64
 	autoCheckpointLastWALTrimmed atomic.Int64
+	autoCheckpointLastWALBytes   atomic.Int64
+	autoCheckpointMaxWALBytes    atomic.Int64
 }
 
 type keyRange struct {
@@ -276,7 +281,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 					continue
 				}
 				db.walClosedSizes[seg.path] = seg.size
-				db.walClosedBytes += seg.size
+				db.walClosedBytes.Add(seg.size)
 			}
 			db.mu.Unlock()
 		}
@@ -303,6 +308,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	if db == nil {
 		return
 	}
+	db.autoCheckpointMaxWALBytes.Store(maxWALBytes)
 	if interval <= 0 && idleInterval <= 0 && maxWALBytes <= 0 {
 		return
 	}
@@ -327,6 +333,39 @@ func (db *DB) TriggerAutoCheckpoint() {
 func (db *DB) noteWrite() {
 	if db == nil || !db.autoCheckpointOn.Load() {
 		return
+	}
+	if db.disableWAL {
+		return
+	}
+	const autoCheckpointWriteEveryBytes int64 = 1 << 20
+	current := db.effectiveWALBytes()
+	if current <= 0 {
+		return
+	}
+	threshold := autoCheckpointWriteEveryBytes
+	if max := db.autoCheckpointMaxWALBytes.Load(); max > 0 {
+		scaled := max / 4
+		if scaled < 4*1024 {
+			scaled = 4 * 1024
+		}
+		if scaled < threshold {
+			threshold = scaled
+		}
+	}
+	for {
+		last := db.autoCheckpointLastWALBytes.Load()
+		if current < last {
+			if db.autoCheckpointLastWALBytes.CompareAndSwap(last, current) {
+				return
+			}
+			continue
+		}
+		if current-last < threshold {
+			return
+		}
+		if db.autoCheckpointLastWALBytes.CompareAndSwap(last, current) {
+			break
+		}
 	}
 	select {
 	case db.autoCheckpointWriteCh <- struct{}{}:
@@ -381,13 +420,7 @@ func (db *DB) effectiveWALBytes() int64 {
 	if db == nil {
 		return 0
 	}
-	db.mu.RLock()
-	bytes := db.walClosedBytes
-	if db.wal != nil {
-		bytes += db.wal.Size()
-	}
-	db.mu.RUnlock()
-	return bytes
+	return db.walClosedBytes.Load() + db.walLiveBytes.Load()
 }
 
 func (db *DB) minIdleCheckpointWALBytes() int64 {
@@ -405,6 +438,26 @@ func (db *DB) minIdleCheckpointWALBytes() int64 {
 		min = autoCheckpointMinIdleWALBytesMax
 	}
 	return min
+}
+
+const (
+	walSegmentHeaderBytes = 8
+	walRecordHeaderBytes  = 1 + 2 + 4
+)
+
+func walRecordSize(key, value []byte) int64 {
+	return int64(walSegmentHeaderBytes + walRecordHeaderBytes + len(key) + len(value))
+}
+
+func walBatchSize(records []wal.Record) int64 {
+	if len(records) == 0 {
+		return 0
+	}
+	total := walSegmentHeaderBytes
+	for _, r := range records {
+		total += walRecordHeaderBytes + len(r.Key) + len(r.Value)
+	}
+	return int64(total)
 }
 
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
@@ -616,6 +669,8 @@ func (db *DB) Checkpoint() error {
 
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
@@ -771,6 +826,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 
 func (db *DB) Close() error {
 	hadMemtables := false
+	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutable.Len() > 0 {
 		hadMemtables = true
@@ -779,6 +835,7 @@ func (db *DB) Close() error {
 		hadMemtables = true
 	}
 	db.mu.Unlock()
+	db.writeMu.Unlock()
 
 	close(db.closeCh)
 	db.wg.Wait()
@@ -787,7 +844,7 @@ func (db *DB) Close() error {
 	var walPaths []string
 
 	db.mu.Lock()
-	walBytes = db.walClosedBytes
+	walBytes = db.walClosedBytes.Load()
 	if len(db.walClosedSizes) > 0 {
 		walPaths = make([]string, 0, len(db.walClosedSizes)+1)
 		for path := range db.walClosedSizes {
@@ -798,6 +855,7 @@ func (db *DB) Close() error {
 	}
 	if db.wal != nil {
 		walBytes += db.wal.Size()
+		db.walLiveBytes.Store(0)
 		if db.walPath != "" {
 			walPaths = append(walPaths, db.walPath)
 		}
@@ -866,27 +924,31 @@ func (db *DB) SetSync(key, value []byte) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	db.mu.Lock()
+	db.writeMu.Lock()
 
-	// 1. Insert to Memtable (Allocates in Arena) -> WAL Write (Reads from Arena)
-	// This avoids reading 'key/value' (User Memory) twice.
-	err := db.mutable.PutWithCallback(key, value, func(kView, vView []byte) error {
-		if !db.disableWAL {
-			if err := db.wal.Append(wal.OpSet, kView, vView); err != nil {
+	if !db.disableWAL {
+		db.mu.RLock()
+		w := db.wal
+		relaxedSync := db.relaxedSync
+		db.mu.RUnlock()
+
+		if w != nil {
+			if err := w.Append(wal.OpSet, key, value); err != nil {
+				db.writeMu.Unlock()
 				return err
 			}
-			if sync && !db.relaxedSync {
-				if err := db.wal.Sync(); err != nil {
+			db.walLiveBytes.Add(walRecordSize(key, value))
+			if sync && !relaxedSync {
+				if err := w.Sync(); err != nil {
+					db.writeMu.Unlock()
 					return err
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		db.mu.Unlock()
-		return err
 	}
+
+	db.mu.Lock()
+	db.mutable.Set(key, value)
 
 	db.mutableRange.add(key)
 
@@ -894,10 +956,12 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
 	db.mu.Unlock()
+	db.writeMu.Unlock()
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -923,27 +987,31 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
-	db.mu.Lock()
+	db.writeMu.Lock()
 
-	// 1. Memtable -> WAL
-	err := db.mutable.DeleteWithCallback(key, func(kView, vView []byte) error {
-		// Value is empty for delete
-		if !db.disableWAL {
-			if err := db.wal.Append(wal.OpDelete, kView, nil); err != nil {
+	if !db.disableWAL {
+		db.mu.RLock()
+		w := db.wal
+		relaxedSync := db.relaxedSync
+		db.mu.RUnlock()
+
+		if w != nil {
+			if err := w.Append(wal.OpDelete, key, nil); err != nil {
+				db.writeMu.Unlock()
 				return err
 			}
-			if sync && !db.relaxedSync {
-				if err := db.wal.Sync(); err != nil {
+			db.walLiveBytes.Add(walRecordSize(key, nil))
+			if sync && !relaxedSync {
+				if err := w.Sync(); err != nil {
+					db.writeMu.Unlock()
 					return err
 				}
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		db.mu.Unlock()
-		return err
 	}
+
+	db.mu.Lock()
+	db.mutable.Delete(key)
 
 	db.mutableRange.add(key)
 
@@ -951,10 +1019,12 @@ func (db *DB) delete(key []byte, sync bool) error {
 	if db.mutable.Size() > db.flushThreshold {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
 	db.mu.Unlock()
+	db.writeMu.Unlock()
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -974,7 +1044,7 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
 	if !db.disableWAL {
-		if db.wal != nil && db.wal.Size() < 10*1024*1024 {
+		if db.wal != nil && db.walLiveBytes.Load() < 10*1024*1024 {
 			if triggerFlush {
 				select {
 				case db.flushCh <- struct{}{}:
@@ -1012,13 +1082,14 @@ func (db *DB) rotateWALLocked() error {
 		oldPath := db.walPath
 		oldSize := db.wal.Size()
 		_ = db.wal.Close()
+		db.walLiveBytes.Store(0)
 		if oldPath != "" {
 			if db.walClosedSizes == nil {
 				db.walClosedSizes = make(map[string]int64)
 			}
 			prev := db.walClosedSizes[oldPath]
 			db.walClosedSizes[oldPath] = oldSize
-			db.walClosedBytes += oldSize - prev
+			db.walClosedBytes.Add(oldSize - prev)
 		}
 	}
 	db.walSeq++
@@ -1030,6 +1101,7 @@ func (db *DB) rotateWALLocked() error {
 	}
 	db.wal = w
 	db.walPath = path
+	db.walLiveBytes.Store(0)
 	return nil
 }
 
@@ -1042,9 +1114,15 @@ func (db *DB) untrackWALSegmentLocked(path string) {
 		return
 	}
 	delete(db.walClosedSizes, path)
-	db.walClosedBytes -= size
-	if db.walClosedBytes < 0 {
-		db.walClosedBytes = 0
+	for {
+		cur := db.walClosedBytes.Load()
+		next := cur - size
+		if next < 0 {
+			next = 0
+		}
+		if db.walClosedBytes.CompareAndSwap(cur, next) {
+			break
+		}
 	}
 }
 
@@ -1579,12 +1657,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutable.Size())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
-	walCurrentBytes := int64(0)
-	if db.wal != nil {
-		walCurrentBytes = db.wal.Size()
-	}
-	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes+walCurrentBytes)
-	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes)
+	walCurrentBytes := db.walLiveBytes.Load()
+	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load()+walCurrentBytes)
+	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load())
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
 	if db.adaptiveBackpressureEnabled() {
 		stats["treedb.cache.backpressure_mode"] = "adaptive"
@@ -1669,14 +1744,17 @@ func (db *DB) Print() error {
 // should ensure no writes occur concurrently if they require a fully drained
 // state.
 func (db *DB) Drain() error {
+	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutable.Len() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
 	db.mu.Unlock()
+	db.writeMu.Unlock()
 
 	db.flushAll(false)
 	return nil
@@ -1688,7 +1766,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 
+	db.writeMu.Lock()
 	db.mu.Lock()
+	db.writeMu.Unlock()
 	defer db.mu.Unlock()
 
 	// Snapshot Isolation:
@@ -1909,11 +1989,13 @@ func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
+	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutable.Len() > 0 {
 		_ = db.rotateMemtableLocked(true) // Flush to backend
 	}
 	db.mu.Unlock()
+	db.writeMu.Unlock()
 	db.flushAll(false)
 
 	return db.backend.ReverseIterator(start, end)
@@ -2144,7 +2226,7 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeRegular(sync bool) error {
-	b.db.mu.Lock()
+	b.db.writeMu.Lock()
 
 	// 1. WAL Append loop
 	if !b.db.disableWAL {
@@ -2156,19 +2238,28 @@ func (b *Batch) writeRegular(sync bool) error {
 				records = append(records, wal.Record{Op: wal.OpSet, Key: op.Key, Value: op.Value})
 			}
 		}
-		if err := b.db.wal.AppendBatch(records); err != nil {
-			b.db.mu.Unlock()
-			return err
-		}
 
-		if sync && !b.db.relaxedSync {
-			if err := b.db.wal.Sync(); err != nil {
-				b.db.mu.Unlock()
+		b.db.mu.RLock()
+		w := b.db.wal
+		relaxedSync := b.db.relaxedSync
+		b.db.mu.RUnlock()
+
+		if w != nil {
+			if err := w.AppendBatch(records); err != nil {
+				b.db.writeMu.Unlock()
 				return err
+			}
+			b.db.walLiveBytes.Add(walBatchSize(records))
+			if sync && !relaxedSync {
+				if err := w.Sync(); err != nil {
+					b.db.writeMu.Unlock()
+					return err
+				}
 			}
 		}
 	}
 
+	b.db.mu.Lock()
 	// 2. Memtable Update
 	for _, op := range b.entries {
 		// We use Steal methods because b.entries owns the key/value copies
@@ -2185,11 +2276,13 @@ func (b *Batch) writeRegular(sync bool) error {
 	if b.db.mutable.Size() > b.db.flushThreshold {
 		if err := b.db.rotateMemtableLocked(true); err != nil {
 			b.db.mu.Unlock()
+			b.db.writeMu.Unlock()
 			return err
 		}
 	}
 
 	b.db.mu.Unlock()
+	b.db.writeMu.Unlock()
 
 	if b.size > 0 {
 		b.db.noteWrite()
