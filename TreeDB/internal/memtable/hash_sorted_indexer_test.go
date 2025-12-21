@@ -1,0 +1,77 @@
+package memtable
+
+import (
+	"bytes"
+	"fmt"
+	"testing"
+)
+
+func TestHashSortedIncrementalIndexing_FrozenIteratorSorted(t *testing.T) {
+	m := NewHashSorted()
+
+	// Force at least one sealed chunk using long-ish keys so the test stays small.
+	const (
+		keyLen = 96
+		nKeys  = 16384 // ~1.5MiB of key bytes
+	)
+
+	keys := make([][]byte, 0, nKeys)
+	for i := 0; i < nKeys; i++ {
+		k := []byte(fmt.Sprintf("%0*x", keyLen, i))
+		keys = append(keys, k)
+	}
+
+	// Insert in reverse order to ensure we aren't benefiting from append-only key order.
+	for i := len(keys) - 1; i >= 0; i-- {
+		m.Set(keys[i], []byte("v"))
+	}
+
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	it.Seek(nil)
+
+	var prev []byte
+	count := 0
+	for it.Valid() {
+		k := it.UnsafeKey()
+		if prev != nil && bytes.Compare(prev, k) > 0 {
+			t.Fatalf("iterator not sorted: prev=%q cur=%q", string(prev), string(k))
+		}
+		prev = append(prev[:0], k...)
+		count++
+		it.Next()
+	}
+
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if count != m.Len() {
+		t.Fatalf("iterator count mismatch: got=%d want=%d", count, m.Len())
+	}
+}
+
+func TestHashSortedIncrementalIndexing_ResetWaitsAndClears(t *testing.T) {
+	m := NewHashSorted()
+
+	const (
+		keyLen = 96
+		nKeys  = 16384 // ensure at least one sealed chunk
+	)
+	for i := 0; i < nKeys; i++ {
+		m.Set([]byte(fmt.Sprintf("%0*x", keyLen, i)), []byte("v"))
+	}
+
+	m.Reset()
+	if m.Len() != 0 {
+		t.Fatalf("expected empty after reset, got %d", m.Len())
+	}
+
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	it.Seek(nil)
+	if it.Valid() {
+		t.Fatalf("expected empty iterator after reset")
+	}
+}
