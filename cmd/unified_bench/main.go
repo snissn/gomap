@@ -83,23 +83,25 @@ func NewBTree(dir string) (kvstore.DB, error) {
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 	opts := treedb.Options{
-		Dir:                          dir,
-		ChunkSize:                    64 * 1024 * 1024,
-		KeepRecent:                   *treedbKeepRecent,
-		PreferAppendAlloc:            *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:            uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:        uint32(clampPPM(*treedbInternalFillPPM)),
-		FlushThreshold:               *treedbFlushThreshold,
-		MaxQueuedMemtables:           *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:       *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:           *treedbStopBacklogSeconds,
-		MaxBacklogBytes:              *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables:      *treedbWriterFlushMaxMems,
-		DisableWAL:                   *treedbDisableWAL,
-		RelaxedSync:                  *treedbRelaxedSync,
-		DisableReadChecksum:          *treedbDisableReadChecksum,
-		BackgroundCompactionInterval: *treedbBgCompactionInterval,
-		DisablePiggybackCompaction:   *treedbDisablePiggyback,
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		KeepRecent:                        *treedbKeepRecent,
+		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		FlushThreshold:                    *treedbFlushThreshold,
+		MaxQueuedMemtables:                *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:            *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:                *treedbStopBacklogSeconds,
+		MaxBacklogBytes:                   *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:           *treedbWriterFlushMaxMems,
+		DisableWAL:                        *treedbDisableWAL,
+		RelaxedSync:                       *treedbRelaxedSync,
+		DisableReadChecksum:               *treedbDisableReadChecksum,
+		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
+		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
+		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
+		DisablePiggybackCompaction:        *treedbDisablePiggyback,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
@@ -113,12 +115,14 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 	opts := treedb.Options{
-		Dir:                   dir,
-		ChunkSize:             64 * 1024 * 1024,
-		KeepRecent:            *treedbKeepRecent,
-		PreferAppendAlloc:     *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		KeepRecent:                        *treedbKeepRecent,
+		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
+		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
@@ -567,6 +571,8 @@ var (
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
 	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
 	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+	treedbBgVacuumInterval     = flag.Duration("treedb-bg-vacuum-interval", 0, "TreeDB: background index vacuum interval (0=disabled)")
+	treedbBgVacuumSpanPPM      = flag.Uint64("treedb-bg-vacuum-span-ppm", 0, "TreeDB: background index vacuum span ratio threshold (ppm), 0=default")
 )
 
 func clampPPM(v int) int {
@@ -577,6 +583,13 @@ func clampPPM(v int) int {
 		return 1_000_000
 	}
 	return v
+}
+
+func clampUint32(v uint64) uint32 {
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 type DBInstance struct {

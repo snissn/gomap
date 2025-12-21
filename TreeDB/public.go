@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"context"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -57,6 +58,7 @@ type DB struct {
 	cached  *caching.DB
 	backend *db.DB
 	bgComp  bgCompactionWorker
+	bgVac   bgIndexVacuumWorker
 }
 
 func (db *DB) ensureOpen() error {
@@ -177,6 +179,21 @@ func Open(opts Options) (*DB, error) {
 		out.bgComp.Start(out, opts.BackgroundCompactionInterval, co)
 	}
 
+	vacuumInterval := opts.BackgroundIndexVacuumInterval
+	if vacuumInterval == 0 {
+		vacuumInterval = 30 * time.Second
+	}
+	if vacuumInterval < 0 {
+		vacuumInterval = 0
+	}
+	if vacuumInterval > 0 {
+		spanRatioPPM := opts.BackgroundIndexVacuumSpanRatioPPM
+		if spanRatioPPM == 0 {
+			spanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
+		}
+		out.bgVac.Start(out, vacuumInterval, spanRatioPPM)
+	}
+
 	return out, nil
 }
 
@@ -202,6 +219,7 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgVac.Stop()
 	db.bgComp.Stop()
 	if db.cached != nil {
 		err := db.cached.Close()
@@ -342,6 +360,7 @@ func (db *DB) Stats() map[string]string {
 			stats = make(map[string]string)
 		}
 		bgCompactionStatsInto(stats, &db.bgComp)
+		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		return stats
 	}
 	stats := db.backend.Stats()
@@ -349,6 +368,7 @@ func (db *DB) Stats() map[string]string {
 		stats = make(map[string]string)
 	}
 	bgCompactionStatsInto(stats, &db.bgComp)
+	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	return stats
 }
 
@@ -429,6 +449,18 @@ func (db *DB) CompactIndex() error {
 		}
 	}
 	return db.backend.CompactIndex()
+}
+
+// VacuumIndexOnline rebuilds the user index in the background and swaps it in
+// with a short writer pause.
+func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+	return db.backend.VacuumIndexOnline(ctx)
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.

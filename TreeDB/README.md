@@ -86,6 +86,7 @@ func main() {
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
 - Cached-mode auto checkpointing: `BackgroundCheckpointInterval`, `BackgroundCheckpointIdleDuration`, `MaxWALBytes`
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
+- Background index vacuum: `BackgroundIndexVacuumInterval`, `BackgroundIndexVacuumSpanRatioPPM`
 - Optional background slab compaction: `BackgroundCompactionInterval` + related knobs
 - Optional flush build parallelism: `FlushBuildConcurrency`
 - Offline index vacuum (backend index): `treedb.VacuumIndexOffline(opts)` (requires the DB to be closed)

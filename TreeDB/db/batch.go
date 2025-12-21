@@ -44,6 +44,10 @@ func (b *Batch) Write() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+
 	// Get current root (Read Lock)
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
@@ -82,6 +86,10 @@ func (b *Batch) Write() error {
 func (b *Batch) WriteSync() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
+
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID

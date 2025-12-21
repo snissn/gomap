@@ -47,14 +47,19 @@ type DB struct {
 	adaptive    *adaptive.Controller
 	pruner      pruneWorker
 
-	keepRecent uint64
-	policy     WritePolicy
+	keepRecent            uint64
+	policy                WritePolicy
+	leafFillTargetPPM     uint32
+	internalFillTargetPPM uint32
+	piggybackCompaction   bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
 
 	mu         sync.RWMutex
 	writeMu    sync.Mutex
+	vacuumMu   sync.Mutex
+	vacuum     vacuumRecorder
 	meta       page.MetaPageBody
 	metaPageID uint64
 
@@ -97,6 +102,13 @@ type Options struct {
 	BackgroundCompactionCopyBytesPerSec   int64
 	BackgroundCompactionCopyBurstBytes    int64
 	BackgroundCompactionRotateBeforeWrite bool
+	// BackgroundIndexVacuumInterval enables background index vacuum when > 0.
+	// The worker uses FragmentationReport span ratio to decide if a rebuild is
+	// warranted; see BackgroundIndexVacuumSpanRatioPPM.
+	BackgroundIndexVacuumInterval time.Duration
+	// BackgroundIndexVacuumSpanRatioPPM is the span ratio threshold (ppm) that
+	// triggers a background index vacuum. Zero uses a default.
+	BackgroundIndexVacuumSpanRatioPPM uint32
 
 	Mode           Mode // Default ModeCached
 	FlushThreshold int64
@@ -311,16 +323,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
 	db := &DB{
-		pager:                p,
-		slabManager:          sm,
-		zipper:               zipper.New(p, alloc),
-		allocator:            alloc,
-		graveyard:            lifecycle.NewGraveyard(),
-		registry:             lifecycle.NewReaderRegistry(),
-		lock:                 lock,
-		adaptive:             adaptive.New(),
-		keepRecent:           opts.KeepRecent,
-		repairSlabTailOnOpen: !opts.DisableSlabTailRepairOnOpen,
+		pager:                 p,
+		slabManager:           sm,
+		zipper:                zipper.New(p, alloc),
+		allocator:             alloc,
+		graveyard:             lifecycle.NewGraveyard(),
+		registry:              lifecycle.NewReaderRegistry(),
+		lock:                  lock,
+		adaptive:              adaptive.New(),
+		keepRecent:            opts.KeepRecent,
+		leafFillTargetPPM:     opts.LeafFillTargetPPM,
+		internalFillTargetPPM: opts.InternalFillTargetPPM,
+		piggybackCompaction:   !opts.DisablePiggybackCompaction,
+		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
