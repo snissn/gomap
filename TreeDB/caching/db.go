@@ -780,11 +780,16 @@ func (db *DB) maybeAssistFlush() {
 	// Adaptive policy: thresholds based on queued backlog bytes.
 	if db.adaptiveBackpressureEnabled() {
 		db.bpMu.Lock()
-		slowdownBytes, _, _ := db.thresholdsLocked()
+		slowdownBytes, stopBytes, _ := db.thresholdsLocked()
 		db.bpMu.Unlock()
 
-		if slowdownBytes > 0 && db.queueBacklogBytes.Load() > slowdownBytes {
+		backlog := db.queueBacklogBytes.Load()
+		if stopBytes > 0 && backlog >= stopBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		if slowdownBytes > 0 && backlog > slowdownBytes {
+			db.TriggerFlush()
 		}
 		return
 	}
@@ -795,7 +800,7 @@ func (db *DB) maybeAssistFlush() {
 		needs := len(db.queue) > db.maxQueuedMemtables
 		db.mu.RUnlock()
 		if needs {
-			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			db.TriggerFlush()
 		}
 	}
 }
