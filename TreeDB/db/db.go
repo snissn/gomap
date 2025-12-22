@@ -43,9 +43,16 @@ type DB struct {
 	allocator   *freelist.Allocator
 	graveyard   *lifecycle.Graveyard
 	registry    *lifecycle.ReaderRegistry
-	lock        *lockfile.Lock
-	adaptive    *adaptive.Controller
-	pruner      pruneWorker
+	// pruneMu serializes page frees (allocator.Free) with page readers that do not
+	// participate in the ReaderRegistry (e.g. short-lived point reads).
+	//
+	// Long-lived readers/iterators still register and are protected via
+	// MinPinnedSeq; pruneMu only prevents freeing pages concurrently with an
+	// in-flight page traversal.
+	pruneMu  sync.RWMutex
+	lock     *lockfile.Lock
+	adaptive *adaptive.Controller
+	pruner   pruneWorker
 
 	keepRecent            uint64
 	policy                WritePolicy
@@ -729,6 +736,8 @@ func (db *DB) Prune() {
 	freed := db.graveyard.Extract(min, current, db.keepRecent)
 
 	if len(freed) > 0 {
+		db.pruneMu.Lock()
+		defer db.pruneMu.Unlock()
 		for _, id := range freed {
 			_ = db.allocator.Free(id) // Ignore error?
 		}

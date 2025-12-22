@@ -168,9 +168,13 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 
 		for bi := range batches {
 			b := batches[bi]
+
+			// Serialize frees with unregistered page traversals.
+			db.pruneMu.Lock()
 			for i, id := range b.IDs {
 				select {
 				case <-stopCh:
+					db.pruneMu.Unlock()
 					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
 						db.graveyard.Reinsert(rest.Seq, rest.IDs)
@@ -180,6 +184,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 				}
 
 				if !deadline.IsZero() && time.Now().After(deadline) {
+					db.pruneMu.Unlock()
 					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
 						db.graveyard.Reinsert(rest.Seq, rest.IDs)
@@ -188,6 +193,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 				}
 
 				if err := db.allocator.Free(id); err != nil {
+					db.pruneMu.Unlock()
 					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
 						db.graveyard.Reinsert(rest.Seq, rest.IDs)
@@ -196,9 +202,11 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 				}
 				freedPages++
 				if maxPages > 0 && freedPages >= maxPages {
+					db.pruneMu.Unlock()
 					return freedPages, nil
 				}
 			}
+			db.pruneMu.Unlock()
 		}
 	}
 }
