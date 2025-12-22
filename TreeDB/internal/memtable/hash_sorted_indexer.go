@@ -10,6 +10,7 @@ const (
 
 	hashSortedPendingKeysInitCap          = 256
 	hashSortedPendingKeysUpgradeThreshold = 1 << 12 // 4096 keys before preallocating to the seal size
+	hashSortedSortedKeysInitCap           = 1024
 
 	// Work items are chunk-granularity, so a fairly large buffer is cheap and
 	// avoids backpressure on writers.

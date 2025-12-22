@@ -514,6 +514,16 @@ func (m *HashSorted) startFinalize() {
 
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
+	if len(m.items) > cap(m.sortedKeys) {
+		newCap := cap(m.sortedKeys)
+		if newCap < hashSortedSortedKeysInitCap {
+			newCap = hashSortedSortedKeysInitCap
+		}
+		for newCap < len(m.items) {
+			newCap *= 2
+		}
+		m.sortedKeys = make([]string, 0, newCap)
+	}
 	if m.pendingKeys == nil {
 		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitCap)
 	}
