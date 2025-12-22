@@ -27,7 +27,6 @@ Commands:
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix
   dump            Alias for scan
-  compact-index   Rebuild user index sequentially
   vacuum          Rebuild index (rewrite+swap)
   compact         Compact slab files (by candidate selection or slab id)
 
@@ -69,8 +68,6 @@ func main() {
 		runKeys(dir, args)
 	case "scan", "dump":
 		runScan(dir, args)
-	case "compact-index":
-		runCompactIndex(dir, args)
 	case "vacuum":
 		runVacuum(dir, args)
 	case "compact":
@@ -280,19 +277,6 @@ func runScan(dir string, args []string) {
 	}
 	if err := it.Error(); err != nil {
 		fatalf("Iterator error: %v", err)
-	}
-}
-
-func runCompactIndex(dir string, args []string) {
-	fs := flag.NewFlagSet("compact-index", flag.ExitOnError)
-	backend := fs.Bool("backend", true, "Open backend-only (skip cached layer)")
-	_ = fs.Parse(args)
-
-	db := openTreeDB(dir, *backend)
-	defer closeTreeDB(db)
-
-	if err := db.CompactIndex(); err != nil {
-		fatalf("CompactIndex error: %v", err)
 	}
 }
 
