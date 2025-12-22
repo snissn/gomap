@@ -63,6 +63,11 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 		return sysRootID, nil, nil
 	}
 
+	idx := db.idx.Load()
+	if idx == nil {
+		return 0, nil, errors.New("missing index")
+	}
+
 	// Determine which slab IDs are touched this commit.
 	ids := make([]uint32, 0, len(metrics.SlabWriteBytesByFile)+len(metrics.SlabDeadBytesByFile))
 	seen := make(map[uint32]struct{}, len(metrics.SlabWriteBytesByFile)+len(metrics.SlabDeadBytesByFile))
@@ -78,7 +83,7 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	sysTree := tree.New(db.pager, db.slabManager, sysRootID)
+	sysTree := tree.New(idx.pager, db.slabManager, sysRootID)
 	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
 
 	for _, id := range ids {
@@ -107,7 +112,7 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 		}
 	}
 
-	newSysRoot, sysRetired, _, err := db.zipper.Apply(sysRootID, sysBatch)
+	newSysRoot, sysRetired, _, err := idx.zipper.Apply(sysRootID, sysBatch)
 	if err != nil {
 		return 0, nil, err
 	}

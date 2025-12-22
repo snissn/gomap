@@ -14,7 +14,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -37,15 +36,25 @@ type DBState struct {
 }
 
 type DB struct {
-	pager       *pager.Pager
 	slabManager *slab.SlabManager
-	zipper      *zipper.Zipper
-	allocator   *freelist.Allocator
-	graveyard   *lifecycle.Graveyard
-	registry    *lifecycle.ReaderRegistry
 	lock        *lockfile.Lock
 	adaptive    *adaptive.Controller
 	pruner      pruneWorker
+
+	// idx is the current index generation (pager + MVCC lifecycle state).
+	// It may be swapped during online vacuum; old generations remain alive until
+	// pinned readers drain.
+	idx atomic.Pointer[indexGen]
+
+	idxMu   sync.Mutex
+	idxAll  map[uint64]*indexGen
+	idxNext uint64
+
+	dir                  string
+	chunkSize            int64
+	preferAppendAlloc    bool
+	freelistRegionPages  uint64
+	freelistRegionRadius int
 
 	keepRecent            uint64
 	policy                WritePolicy
@@ -56,12 +65,12 @@ type DB struct {
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
 
-	mu         sync.RWMutex
-	writeMu    sync.Mutex
-	vacuumMu   sync.Mutex
-	vacuum     vacuumRecorder
-	meta       page.MetaPageBody
-	metaPageID uint64
+	mu               sync.RWMutex
+	writeMu          sync.Mutex
+	vacuumInProgress atomic.Bool
+	vacuum           vacuumRecorder
+	meta             page.MetaPageBody
+	metaPageID       uint64
 
 	state atomic.Pointer[DBState]
 }
@@ -211,9 +220,24 @@ type Options struct {
 
 type Snapshot struct {
 	db         *DB
+	idx        *indexGen
 	state      *DBState
 	tree       *tree.Tree
 	registryID int64
+}
+
+func (s *Snapshot) Pager() *pager.Pager {
+	if s == nil || s.idx == nil {
+		return nil
+	}
+	return s.idx.pager
+}
+
+func (s *Snapshot) State() *DBState {
+	if s == nil {
+		return nil
+	}
+	return s.state
 }
 
 // AcquireSnapshot returns a new snapshot.
@@ -221,18 +245,30 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	idx := db.idx.Load()
 	state := db.state.Load()
 	if state.SlabSet != nil {
 		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
 	}
 
 	// Register Reader
-	id := db.registry.Register(state.CommitSeq)
+	if idx != nil {
+		idx.acquire()
+	}
+	id := int64(0)
+	if idx != nil {
+		id = idx.registry.Register(state.CommitSeq)
+	}
+	var tr *tree.Tree
+	if idx != nil {
+		tr = tree.New(idx.pager, state.SlabSet, state.RootPageID)
+	}
 
 	return &Snapshot{
 		db:         db,
+		idx:        idx,
 		state:      state,
-		tree:       tree.New(db.pager, state.SlabSet, state.RootPageID),
+		tree:       tr,
 		registryID: id,
 	}
 }
@@ -243,7 +279,10 @@ func (s *Snapshot) Close() error {
 	if s.state != nil && s.state.SlabSet != nil {
 		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
 	}
-	s.db.registry.Unregister(s.registryID)
+	if s.idx != nil {
+		s.idx.registry.Unregister(s.registryID)
+		s.db.releaseIndex(s.idx)
+	}
 	return err
 }
 
@@ -315,23 +354,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
-	// Allocator initialized after recovery (needs Meta)
-
-	// But Zipper needs it.
-
-	// We'll init with 0 and update after recovery.
-
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
 
+	z := zipper.New(p, alloc)
+
+	gen := newIndexGen(1, p, alloc, z)
+
 	db := &DB{
-		pager:                 p,
 		slabManager:           sm,
-		zipper:                zipper.New(p, alloc),
-		allocator:             alloc,
-		graveyard:             lifecycle.NewGraveyard(),
-		registry:              lifecycle.NewReaderRegistry(),
 		lock:                  lock,
 		adaptive:              adaptive.New(),
 		keepRecent:            opts.KeepRecent,
@@ -339,13 +371,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
+		dir:                   opts.Dir,
+		chunkSize:             opts.ChunkSize,
+		preferAppendAlloc:     opts.PreferAppendAlloc,
+		freelistRegionPages:   opts.FreelistRegionPages,
+		freelistRegionRadius:  opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
+
+		idxAll:  map[uint64]*indexGen{gen.id: gen},
+		idxNext: gen.id + 1,
 	}
-	db.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
-	db.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	db.idx.Store(gen)
+
+	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
+	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -385,48 +427,49 @@ func (db *DB) Close() error {
 	db.pruner.Stop()
 
 	db.mu.Lock()
-	defer db.mu.Unlock()
+	sm := db.slabManager
+	db.slabManager = nil
+	lock := db.lock
+	db.lock = nil
+	db.mu.Unlock()
 
 	var errs []error
-
-	if db.pager != nil {
-		if err := db.pager.Close(); err != nil {
+	if err := db.closeAllIndexes(); err != nil {
+		errs = append(errs, err)
+	}
+	if sm != nil {
+		if err := sm.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		db.pager = nil
 	}
-
-	if db.slabManager != nil {
-		if err := db.slabManager.Close(); err != nil {
+	if lock != nil {
+		if err := lock.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		db.slabManager = nil
 	}
-
-	if db.lock != nil {
-		if err := db.lock.Close(); err != nil {
-			errs = append(errs, err)
-		}
-		db.lock = nil
-	}
-
 	return errors.Join(errs...)
 }
 
 // recover reads meta pages and restores state.
 func (db *DB) recover() error {
-	if db.pager.PageCount() < 2 {
-		if _, err := db.pager.Alloc(2); err != nil {
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil {
+		return errors.New("missing pager")
+	}
+	p := idx.pager
+
+	if p.PageCount() < 2 {
+		if _, err := p.Alloc(2); err != nil {
 			return err
 		}
 		db.meta = page.MetaPageBody{}
 		db.metaPageID = MetaPage1ID
 
-		rootID, err := db.pager.Alloc(1)
+		rootID, err := p.Alloc(1)
 		if err != nil {
 			return err
 		}
-		data, err := db.pager.GetForWrite(rootID)
+		data, err := p.GetForWrite(rootID)
 		if err != nil {
 			return err
 		}
@@ -439,11 +482,11 @@ func (db *DB) recover() error {
 		db.meta.UserRootPageID = rootID
 
 		// Init System Root
-		sysRootID, err := db.pager.Alloc(1)
+		sysRootID, err := p.Alloc(1)
 		if err != nil {
 			return err
 		}
-		dataSys, err := db.pager.GetForWrite(sysRootID)
+		dataSys, err := p.GetForWrite(sysRootID)
 		if err != nil {
 			return err
 		}
@@ -545,11 +588,11 @@ func (db *DB) recover() error {
 	}
 
 	if chosen.meta.TotalPages > 0 {
-		db.pager.SetPageCount(chosen.meta.TotalPages)
+		p.SetPageCount(chosen.meta.TotalPages)
 	}
 
 	// Update Allocator Head
-	db.allocator.SetHead(chosen.meta.FreelistHeadID)
+	idx.allocator.SetHead(chosen.meta.FreelistHeadID)
 
 	return nil
 }
@@ -571,17 +614,22 @@ func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
-	data, err := db.pager.Get(pageID)
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil {
+		return page.MetaPageBody{}, false
+	}
+
+	data, err := idx.pager.Get(pageID)
 	if err != nil {
 		return page.MetaPageBody{}, false
 	}
 	n := node.NewNode(data)
 
-	if !db.pager.IsVerified(pageID) {
+	if !idx.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return page.MetaPageBody{}, false
 		}
-		db.pager.MarkVerified(pageID)
+		idx.pager.MarkVerified(pageID)
 	}
 
 	if n.Type() != page.PageTypeMeta {
@@ -591,7 +639,12 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
-	data, err := db.pager.GetForWrite(pageID)
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil {
+		return errors.New("missing pager")
+	}
+
+	data, err := idx.pager.GetForWrite(pageID)
 	if err != nil {
 		return err
 	}
@@ -606,6 +659,11 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	idx := db.idx.Load()
+	if idx == nil {
+		return errors.New("missing index")
+	}
+
 	// 0. Update System metadata tree (slab stats, etc) before sync/meta.
 	//
 	// This mutates index pages, so it must run before any Sync() durability
@@ -624,7 +682,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		if err := db.slabManager.Sync(); err != nil {
 			return err
 		}
-		if err := db.pager.Sync(); err != nil {
+		if err := idx.pager.Sync(); err != nil {
 			return err
 		}
 	}
@@ -635,10 +693,10 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
 	nextMeta.SystemRootPageID = sysRootID
-	nextMeta.FreelistHeadID = db.allocator.Head()
+	nextMeta.FreelistHeadID = idx.allocator.Head()
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
-	nextMeta.TotalPages = db.pager.PageCount()
+	nextMeta.TotalPages = idx.pager.PageCount()
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -653,7 +711,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 
 	// 4. Sync Meta - No DB Lock
 	if sync {
-		if err := db.pager.Sync(); err != nil {
+		if err := idx.pager.Sync(); err != nil {
 			return err
 		}
 	}
@@ -666,7 +724,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	db.metaPageID = targetPageID
 
 	// Add retired pages to Graveyard
-	db.graveyard.Add(nextMeta.CommitSeq, retired)
+	idx.graveyard.Add(nextMeta.CommitSeq, retired)
 
 	// Prune asynchronously to keep commit latency stable under churn.
 	// If background pruning is disabled, fall back to legacy on-commit pruning.
@@ -723,14 +781,21 @@ func (db *DB) Commit(newRootID uint64) error {
 
 // Prune reclaims pages from the graveyard.
 func (db *DB) Prune() {
-	min := db.registry.MinPinnedSeq()
+	idx := db.idx.Load()
+	if idx == nil {
+		return
+	}
+	idx.acquire()
+	defer db.releaseIndex(idx)
+
+	min := idx.registry.MinPinnedSeq()
 	current := db.meta.CommitSeq
 
-	freed := db.graveyard.Extract(min, current, db.keepRecent)
+	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 
 	if len(freed) > 0 {
 		for _, id := range freed {
-			_ = db.allocator.Free(id) // Ignore error?
+			_ = idx.allocator.Free(id) // Ignore error?
 		}
 	}
 }
@@ -751,13 +816,21 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 
 // Getters
 func (db *DB) Pager() *pager.Pager {
-	return db.pager
+	idx := db.idx.Load()
+	if idx == nil {
+		return nil
+	}
+	return idx.pager
 }
 func (db *DB) SlabManager() *slab.SlabManager {
 	return db.slabManager
 }
 func (db *DB) Zipper() *zipper.Zipper {
-	return db.zipper
+	idx := db.idx.Load()
+	if idx == nil {
+		return nil
+	}
+	return idx.zipper
 }
 func (db *DB) State() *DBState {
 	return db.state.Load()
@@ -819,6 +892,11 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		chunk := ops[start:end]
 
 		db.writeMu.Lock()
+		idx := db.idx.Load()
+		if idx == nil {
+			db.writeMu.Unlock()
+			return errors.New("missing index")
+		}
 
 		// Snapshot roots under DB lock.
 		db.mu.RLock()
@@ -827,7 +905,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		db.mu.RUnlock()
 
 		// Build a micro-batch of still-live pointer updates.
-		tr := tree.New(db.pager, db.slabManager, rootID)
+		tr := tree.New(idx.pager, db.slabManager, rootID)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
 		var slabWritesByFile map[uint32]int64
 
@@ -857,7 +935,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			continue
 		}
 
-		newRoot, retired, metrics, err := db.zipper.Apply(rootID, b)
+		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 		if err != nil {
 			db.writeMu.Unlock()
 			return err
@@ -892,10 +970,15 @@ func (db *DB) CompactIndex() error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
+	idx := db.idx.Load()
+	if idx == nil {
+		return errors.New("missing index")
+	}
+
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
+	tr := tree.New(idx.pager, state.SlabSet, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 
@@ -910,8 +993,8 @@ func (db *DB) CompactIndex() error {
 	defer iter.Close()
 
 	// Build new tree sequentially
-	alloc := &pagerAllocator{p: db.pager}
-	newRoot, err := bulk.Build(iter, alloc, db.pager)
+	alloc := &pagerAllocator{p: idx.pager}
+	newRoot, err := bulk.Build(iter, alloc, idx.pager)
 	if err != nil {
 		return err
 	}

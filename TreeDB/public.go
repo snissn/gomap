@@ -493,8 +493,9 @@ func (db *DB) CompactIndex() error {
 	return db.backend.CompactIndex()
 }
 
-// VacuumIndexOnline rebuilds the user index in the background and swaps it in
-// with a short writer pause.
+// VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
+// a short writer pause. Disk space from the old index is reclaimed once any old
+// snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if err := db.ensureOpen(); err != nil {
 		return err

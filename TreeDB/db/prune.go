@@ -128,6 +128,13 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 		return 0, nil
 	}
 
+	idx := db.idx.Load()
+	if idx == nil {
+		return 0, nil
+	}
+	idx.acquire()
+	defer db.releaseIndex(idx)
+
 	var deadline time.Time
 	if maxDuration > 0 {
 		deadline = time.Now().Add(maxDuration)
@@ -150,7 +157,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 			return freedPages, nil
 		}
 		currentSeq := state.CommitSeq
-		minPinned := db.registry.MinPinnedSeq()
+		minPinned := idx.registry.MinPinnedSeq()
 
 		remaining := maxPages
 		if maxPages > 0 {
@@ -161,7 +168,7 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 		}
 
 		// Extract a bounded amount so a single tick can't grab unbounded memory.
-		batches := db.graveyard.ExtractBatchesUpTo(minPinned, currentSeq, db.keepRecent, remaining)
+		batches := idx.graveyard.ExtractBatchesUpTo(minPinned, currentSeq, db.keepRecent, remaining)
 		if len(batches) == 0 {
 			return freedPages, nil
 		}
@@ -171,26 +178,26 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 			for i, id := range b.IDs {
 				select {
 				case <-stopCh:
-					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
+					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
-						db.graveyard.Reinsert(rest.Seq, rest.IDs)
+						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 					}
 					return freedPages, nil
 				default:
 				}
 
 				if !deadline.IsZero() && time.Now().After(deadline) {
-					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
+					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
-						db.graveyard.Reinsert(rest.Seq, rest.IDs)
+						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 					}
 					return freedPages, nil
 				}
 
-				if err := db.allocator.Free(id); err != nil {
-					db.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				if err := idx.allocator.Free(id); err != nil {
+					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
 					for _, rest := range batches[bi+1:] {
-						db.graveyard.Reinsert(rest.Seq, rest.IDs)
+						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 					}
 					return freedPages, err
 				}

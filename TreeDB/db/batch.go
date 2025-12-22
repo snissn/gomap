@@ -59,6 +59,11 @@ func (b *Batch) Write() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
+	idx := b.db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
@@ -69,7 +74,7 @@ func (b *Batch) Write() error {
 	b.db.mu.RUnlock()
 
 	// Zipper Apply (No DB Lock, runs concurrently with Readers)
-	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
@@ -102,6 +107,11 @@ func (b *Batch) WriteSync() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
+	idx := b.db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
@@ -110,7 +120,7 @@ func (b *Batch) WriteSync() error {
 	rootID := b.db.meta.UserRootPageID
 	b.db.mu.RUnlock()
 
-	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}

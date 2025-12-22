@@ -22,7 +22,11 @@ func TestCompactIndexRetiresOldPages(t *testing.T) {
 		}
 	}
 
-	oldHead := d.allocator.Head()
+	idx := d.idx.Load()
+	if idx == nil {
+		t.Fatalf("missing index")
+	}
+	oldHead := idx.allocator.Head()
 
 	if err := d.CompactIndex(); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -37,7 +41,7 @@ func TestCompactIndexRetiresOldPages(t *testing.T) {
 		t.Fatalf("set2: %v", err)
 	}
 
-	newHead := d.allocator.Head()
+	newHead := d.idx.Load().allocator.Head()
 	if oldHead == 0 && newHead == 0 {
 		t.Fatalf("expected freelist to become non-empty after compact + pruning")
 	}
