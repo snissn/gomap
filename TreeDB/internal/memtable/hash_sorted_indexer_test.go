@@ -113,3 +113,32 @@ func TestHashSortedIterator_TombstonesRemainVisible(t *testing.T) {
 		t.Fatalf("expected nil value for tombstone, got %q", string(got))
 	}
 }
+
+func TestHashSortedFrozenIterator_ReusesSortedKeysBuffer(t *testing.T) {
+	m := NewHashSorted()
+
+	// Force multiple sealed chunks using long-ish keys so the test stays small.
+	const (
+		keyLen = 96
+		nKeys  = 25000
+	)
+
+	for i := nKeys - 1; i >= 0; i-- {
+		m.Set([]byte(fmt.Sprintf("%0*x", keyLen, i)), []byte("v"))
+	}
+
+	if len(m.sortedKeys) == 0 {
+		t.Fatalf("expected non-empty key buffer")
+	}
+	before := &m.sortedKeys[0]
+
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	defer it.Close()
+	it.Seek(nil)
+
+	after := &m.sortedKeys[0]
+	if before != after {
+		t.Fatalf("expected sortedKeys buffer reuse; before=%p after=%p", before, after)
+	}
+}
