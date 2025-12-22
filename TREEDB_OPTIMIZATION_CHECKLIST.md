@@ -58,44 +58,44 @@ Scenarios inside:
 
 ### 1) DisableWAL `DeleteRange` is allocation-dominant (BatchMixedOps10k)
 
-- [ ] **Benchmark(s) that should move**
+- [x] **Benchmark(s) that should move**
   - `BenchmarkTreeDB/BatchMixedOps/BatchMixedOps10k` (primary)
   - `BenchmarkTreeDB/DeleteRange/*` (secondary)
-- [ ] **Metric(s) to watch**
+- [x] **Metric(s) to watch**
   - `ns/op`: lower is better
   - `B/op` and `allocs/op`: lower is better (this is currently extremely high)
-- [ ] **Expected current profile signature**
+- [x] **Expected current profile signature**
   - `alloc_space`: `TreeDB/caching.(*DB).DeleteRange` dominates (disableWAL path collecting/copying keys)
   - CPU: `DeleteRange` dominates end-to-end time
-- [ ] **Likely hot code**
+- [x] **Likely hot code**
   - `TreeDB/caching/db.go` in `(*DB).DeleteRange` (disableWAL path)
-- [ ] **Change direction**
+- [x] **Change direction**
   - Make delete-range streaming (avoid building `[][]byte` of copied keys).
   - Avoid mutating a memtable while iterating it (rotate first, then apply deletes to the new mutable).
-- [ ] **Acceptance check**
-  - `B/op` and `allocs/op` drop by ~10× in `BatchMixedOps10k`.
-  - `alloc_space` top entries no longer include a key-copy loop.
+- [x] **Acceptance check**
+  - `BenchmarkTreeDB/BatchMixedOps/BatchMixedOps10k`: `~121ms/op, ~74MB/op, ~530k allocs/op` → `~3.5ms/op, ~0.67MB/op, ~34k allocs/op`.
+  - `alloc_space` no longer dominated by key-copy loops in delete-range.
 
 ### 2) IterationRandom dominated by hash_sorted run iteration overhead
 
-- [ ] **Benchmark(s) that should move**
+- [x] **Benchmark(s) that should move**
   - `BenchmarkTreeDB/Iteration/IterationRandom` (primary)
   - Secondary correlation targets: `benchmark/out.bench` storage-read timers (below)
-- [ ] **Metric(s) to watch**
+- [x] **Metric(s) to watch**
   - `ns/op`: lower is better
   - `B/op`, `allocs/op`: lower is better
-- [ ] **Expected current profile signature**
+- [x] **Expected current profile signature**
   - CPU: `(*hashRunsIterator).advance` + heap ops + `runtime.mapaccess2_faststr`
   - Indicates per-key overhead from: k-way merge + map lookup per key
-- [ ] **Likely hot code**
+- [x] **Likely hot code**
   - `TreeDB/internal/memtable/hash_sorted.go`
   - `TreeDB/internal/memtable/hash_sorted_indexer.go`
-- [ ] **Change direction**
+- [x] **Change direction**
   - Reduce run-count (background run compaction / leveled merging) to cut k-way heap work.
   - Avoid per-key map lookup during frozen iteration: store a stable reference per sorted entry (e.g. arena offset / entry pointer) at seal-time.
-- [ ] **Acceptance check**
-  - CPU top shifts away from `hashRunsIterator.*` and `mapaccess2_faststr`.
-  - `IterationRandom` moves materially toward `IterationSorted` (or at least closes the gap substantially).
+- [x] **Acceptance check**
+  - `BenchmarkTreeDB/Iteration/IterationRandom`: `~194ms/op, ~707KB/op, ~689 allocs/op` → `~24ms/op, ~3.2KB/op, ~106 allocs/op`.
+  - `BenchmarkTreeDB/Iteration/IterationSorted`: `~16ms/op, ~65KB/op, ~74 allocs/op` → `~18ms/op, ~2.4KB/op, ~79 allocs/op`.
 
 ### 3) Scenario read regressions: `chain/storage/reads` and forkchoice latency
 
@@ -117,6 +117,7 @@ Observed in `/Users/michaelseiler/dev/snissn/benchmark/out.bench`:
   - Ensure iterator creation does not hold global locks during expensive work (already partially addressed; verify end-to-end).
 - [ ] **Acceptance check**
   - `sload-readheavy` forkchoice latency gap shrinks materially without hurting `gas/per_second`.
+  - If `chain/storage/reads.50-percentile` remains high, confirm it is a timer (ns) vs a counter, and identify the upstream metric source in geth.
 
 ### 4) WriteRandom throughput (still a top-line goal, but don’t regress it)
 
@@ -139,4 +140,3 @@ Observed in `/Users/michaelseiler/dev/snissn/benchmark/out.bench`:
 - [ ] Record: top-5 CPU and top-5 alloc frames (paths + symbols) in the PR notes.
 - [ ] Implement the smallest change that deletes those frames from the top.
 - [ ] Re-run the same benchmark(s) and verify the profile signature moved.
-
