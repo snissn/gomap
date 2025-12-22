@@ -20,6 +20,13 @@ type chunkList struct {
 	data [][]byte
 }
 
+type verifiedBitset struct {
+	chunks [][]uint64
+}
+
+const verifiedChunkPages = 1 << 16 // 65536 pages per chunk (8KiB bitset)
+const verifiedChunkWords = verifiedChunkPages / 64
+
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
 	file         *os.File
@@ -29,8 +36,16 @@ type Pager struct {
 	numPages     atomic.Uint64 // The number of pages logically allocated
 	dirtyChunks  map[int]struct{}
 	mu           sync.RWMutex
+	allocMu      sync.Mutex
 	path         string
-	verifiedBits []uint64 // Bitset: 1 = Verified, 0 = Unverified
+	verified     atomic.Pointer[verifiedBitset]
+
+	growMu       sync.Mutex
+	growStopOnce sync.Once
+	growStop     chan struct{}
+	growWake     chan struct{}
+	growDone     chan struct{}
+	growTarget   atomic.Int64 // byte capacity target (aligned to chunkSize by grower)
 }
 
 // Open opens the pager at the given path.
@@ -93,25 +108,43 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		// Initial guess for numPages (will be corrected by DB recovery)
 		p.numPages.Store(uint64(size / page.PageSize))
 
-		// Initialize Bitset
-		p.resizeBitset(p.numPages.Load())
+		// Initialize verified bitset
+		p.ensureVerifiedCapacityLocked(p.numPages.Load())
 	} else {
-		// Initialize Bitset (empty)
-		p.verifiedBits = make([]uint64, 0)
+		// Initialize verified bitset (empty)
+		p.ensureVerifiedCapacityLocked(0)
 		p.atomicChunks.Store(&chunkList{data: nil})
 	}
 
+	p.startGrower()
 	return p, nil
 }
 
-func (p *Pager) resizeBitset(numPages uint64) {
-	needed := (numPages + 63) / 64
-	current := uint64(len(p.verifiedBits))
-	if needed > current {
-		newBits := make([]uint64, needed)
-		copy(newBits, p.verifiedBits)
-		p.verifiedBits = newBits
+func (p *Pager) ensureVerifiedCapacityLocked(numPages uint64) {
+	needChunks := int((numPages + verifiedChunkPages - 1) / verifiedChunkPages)
+	if needChunks <= 0 {
+		if p.verified.Load() == nil {
+			p.verified.Store(&verifiedBitset{chunks: nil})
+		}
+		return
 	}
+
+	cur := p.verified.Load()
+	if cur != nil && len(cur.chunks) >= needChunks {
+		return
+	}
+
+	var oldChunks [][]uint64
+	if cur != nil {
+		oldChunks = cur.chunks
+	}
+
+	newChunks := make([][]uint64, needChunks)
+	copy(newChunks, oldChunks)
+	for i := len(oldChunks); i < needChunks; i++ {
+		newChunks[i] = make([]uint64, verifiedChunkWords)
+	}
+	p.verified.Store(&verifiedBitset{chunks: newChunks})
 }
 
 // IsVerified returns true if the page has passed CRC verification.
@@ -119,29 +152,51 @@ func (p *Pager) resizeBitset(numPages uint64) {
 // but Pager methods usually hold lock).
 // Currently Pager.Get holds RLock.
 func (p *Pager) IsVerified(pageID uint64) bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.isVerifiedLocked(pageID)
-}
-
-func (p *Pager) isVerifiedLocked(pageID uint64) bool {
-	idx := pageID / 64
-	bit := uint64(1) << (pageID % 64)
-	if idx < uint64(len(p.verifiedBits)) {
-		return (p.verifiedBits[idx] & bit) != 0
+	vb := p.verified.Load()
+	if vb == nil {
+		return false
 	}
-	return false
+	chunkIdx := int(pageID / verifiedChunkPages)
+	if chunkIdx < 0 || chunkIdx >= len(vb.chunks) {
+		return false
+	}
+	wordIdx := (pageID % verifiedChunkPages) / 64
+	bit := uint64(1) << (pageID % 64)
+	word := atomic.LoadUint64(&vb.chunks[chunkIdx][wordIdx])
+	return (word & bit) != 0
 }
 
 // MarkVerified marks a page as verified.
 func (p *Pager) MarkVerified(pageID uint64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	for {
+		vb := p.verified.Load()
+		if vb == nil {
+			p.mu.Lock()
+			p.ensureVerifiedCapacityLocked(pageID + 1)
+			p.mu.Unlock()
+			continue
+		}
+		chunkIdx := int(pageID / verifiedChunkPages)
+		if chunkIdx < 0 || chunkIdx >= len(vb.chunks) {
+			p.mu.Lock()
+			p.ensureVerifiedCapacityLocked(pageID + 1)
+			p.mu.Unlock()
+			continue
+		}
 
-	p.resizeBitset(pageID + 1) // Ensure capacity
-	idx := pageID / 64
-	bit := uint64(1) << (pageID % 64)
-	p.verifiedBits[idx] |= bit
+		wordIdx := (pageID % verifiedChunkPages) / 64
+		bit := uint64(1) << (pageID % 64)
+		addr := &vb.chunks[chunkIdx][wordIdx]
+		for {
+			old := atomic.LoadUint64(addr)
+			if old&bit != 0 {
+				return
+			}
+			if atomic.CompareAndSwapUint64(addr, old, old|bit) {
+				return
+			}
+		}
+	}
 }
 
 // MarkUnverified marks a page as unverified (dirty/reused).
@@ -152,10 +207,26 @@ func (p *Pager) MarkUnverified(pageID uint64) {
 }
 
 func (p *Pager) markUnverifiedLocked(pageID uint64) {
-	idx := pageID / 64
+	p.ensureVerifiedCapacityLocked(pageID + 1)
+	vb := p.verified.Load()
+	if vb == nil {
+		return
+	}
+	chunkIdx := int(pageID / verifiedChunkPages)
+	if chunkIdx < 0 || chunkIdx >= len(vb.chunks) {
+		return
+	}
+	wordIdx := (pageID % verifiedChunkPages) / 64
 	bit := uint64(1) << (pageID % 64)
-	if idx < uint64(len(p.verifiedBits)) {
-		p.verifiedBits[idx] &^= bit
+	addr := &vb.chunks[chunkIdx][wordIdx]
+	for {
+		old := atomic.LoadUint64(addr)
+		if old&bit == 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint64(addr, old, old&^bit) {
+			return
+		}
 	}
 }
 
@@ -165,7 +236,7 @@ func (p *Pager) SetPageCount(count uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.numPages.Store(count)
-	p.resizeBitset(count)
+	p.ensureVerifiedCapacityLocked(count)
 }
 
 // PageCount returns the current logical number of pages.
@@ -175,6 +246,8 @@ func (p *Pager) PageCount() uint64 {
 
 // Close closes the pager and unmaps memory.
 func (p *Pager) Close() error {
+	p.stopGrower()
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -210,52 +283,29 @@ func (p *Pager) Truncate(targetPages uint64) error {
 // Alloc allocates `count` new pages and returns the ID of the first one.
 // It grows the file if necessary.
 func (p *Pager) Alloc(count int) (uint64, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.allocMu.Lock()
+	defer p.allocMu.Unlock()
 
+	p.mu.Lock()
 	startID := p.numPages.Load()
 	newTotal := startID + uint64(count)
 
 	// Check if we need to grow physical file
 	requiredBytes := int64(newTotal) * int64(page.PageSize)
 	currentCapacity := int64(len(p.chunks)) * p.chunkSize
+	p.mu.Unlock()
 
 	if requiredBytes > currentCapacity {
-		// Calculate how many new chunks needed
-		// We align to ChunkSize
-		needed := requiredBytes - currentCapacity
-		chunksNeeded := (needed + p.chunkSize - 1) / p.chunkSize
-		newCapacity := currentCapacity + (chunksNeeded * p.chunkSize)
-
-		// Grow file
-		// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
-		// on mmap writes (platform/filesystem dependent).
-		if err := preallocateFile(p.file, newCapacity); err != nil {
+		if err := p.growToCapacity(requiredBytes); err != nil {
 			return 0, err
 		}
-		if err := p.file.Truncate(newCapacity); err != nil {
-			return 0, err
-		}
-
-		// Map new chunks
-		for i := int64(0); i < chunksNeeded; i++ {
-			offset := currentCapacity + (i * p.chunkSize)
-			data, err := unix.Mmap(int(p.file.Fd()), offset, int(p.chunkSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-			if err != nil {
-				return 0, err
-			}
-			p.chunks = append(p.chunks, data)
-		}
-
-		// Update atomicChunks for lock-free readers
-		// Make a copy of the slice header to ensure safety if append reallocated
-		newChunks := make([][]byte, len(p.chunks))
-		copy(newChunks, p.chunks)
-		p.atomicChunks.Store(&chunkList{data: newChunks})
 	}
 
+	p.mu.Lock()
 	p.numPages.Store(newTotal)
-	p.resizeBitset(newTotal)
+	p.ensureVerifiedCapacityLocked(newTotal)
+	p.mu.Unlock()
+	p.maybeSchedulePreGrow(requiredBytes)
 	return startID, nil
 }
 

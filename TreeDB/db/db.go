@@ -740,6 +740,10 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
 }
 
+func (s *Snapshot) Has(key []byte) (bool, error) {
+	return s.tree.Has(key)
+}
+
 // GetEntry returns the raw entry from snapshot.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntry(key)

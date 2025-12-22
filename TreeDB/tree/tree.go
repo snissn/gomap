@@ -114,3 +114,14 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	copy(val, entry.Value)
 	return val, nil
 }
+
+func (t *Tree) Has(key []byte) (bool, error) {
+	entry, err := t.GetEntry(key)
+	if err != nil {
+		if err == ErrKeyNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return entry.Flags&node.FlagTombstone == 0, nil
+}
