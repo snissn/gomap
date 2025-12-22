@@ -16,20 +16,76 @@ import (
 // Semantics (performance-first): the returned slice may be a read-only view into
 // internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	val, err := snap.Get(key)
-	if err == tree.ErrKeyNotFound {
+	// Fast path for point reads:
+	// - pins slabs under db.mu.RLock to avoid racing commit slab-set release,
+	// - blocks page frees during traversal via pruneMu (avoids per-read registry),
+	// - does slab IO outside the prune barrier.
+
+	db.mu.RLock()
+	state := db.state.Load()
+	if state == nil {
+		db.mu.RUnlock()
 		return nil, nil
 	}
+	if state.SlabSet != nil {
+		db.slabManager.AcquireSlabs(state.SlabSet)
+	}
+	rootID := state.RootPageID
+	slabSet := state.SlabSet
+	db.mu.RUnlock()
+	if slabSet != nil {
+		defer func() { _ = db.slabManager.ReleaseSlabs(slabSet) }()
+	}
+
+	db.pruneMu.RLock()
+	t := tree.New(db.pager, slabSet, rootID)
+	entry, err := t.GetEntry(key)
+	if err != nil {
+		db.pruneMu.RUnlock()
+		if err == tree.ErrKeyNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		db.pruneMu.RUnlock()
+		return nil, nil
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		val := make([]byte, len(entry.Value))
+		copy(val, entry.Value)
+		db.pruneMu.RUnlock()
+		return val, nil
+	}
+	ptr := entry.ValuePtr
+	db.pruneMu.RUnlock()
+
+	if slabSet == nil {
+		return nil, fmt.Errorf("missing slab set for pointer value")
+	}
+	val, err := slabSet.Read(ptr)
 	return val, err
 }
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	return snap.Has(key)
+	// Point-existence checks don't need slab access; avoid slab pinning.
+	state := db.state.Load()
+	if state == nil {
+		return false, nil
+	}
+
+	db.pruneMu.RLock()
+	t := tree.New(db.pager, nil, state.RootPageID)
+	entry, err := t.GetEntry(key)
+	db.pruneMu.RUnlock()
+	if err != nil {
+		if err == tree.ErrKeyNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	return entry.Flags&node.FlagTombstone == 0, nil
 }
 
 // Set sets the value for a key.
