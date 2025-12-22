@@ -42,6 +42,7 @@ Primary tool: `cmd/unified_bench/` (side-by-side: HashDB, TreeDB, Badger, LevelD
 - Run: `make unified-bench && ./bin/unified-bench`
 - Sweep key counts (markdown output): `./bin/unified-bench -format markdown -keycounts 100000,1000000`
 - Update the README benchmark snapshot: `make bench-readme`
+  - One-off benchmarks (custom `-dbs`/`-test`): add `-suite none`
 
 More details:
 

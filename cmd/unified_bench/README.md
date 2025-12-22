@@ -5,8 +5,12 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 ## Run
 
 - Build: `make unified-bench` (writes `bin/unified-bench`)
-- Run: `./bin/unified-bench`
+- Run (default full suite): `./bin/unified-bench`
 - Or: `go run ./cmd/unified_bench`
+
+To run a one-off benchmark (instead of a suite), use `-suite none` plus `-dbs`/`-test`, e.g.:
+
+- `./bin/unified-bench -suite none -dbs treedb,leveldb -test sequential_write,random_read -keys 300000 -valsize 2048 -settle-before-scans`
 
 ## Reproducibility
 
@@ -58,6 +62,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-checkpoint-every-ops` force a best-effort durability checkpoint every N ops during write-heavy tests (DBs that support `Checkpoint()`)
 - `-checkpoint-every-bytes` force a best-effort durability checkpoint every N approx bytes during write-heavy tests (DBs that support `Checkpoint()`)
 - `-suite` named suite:
+  - `full` — default: `sload_readheavy` + big-value point reads + settled scans
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)
   - `churnvacuum` — churn + settled scans, then VACUUM and scan again
@@ -66,4 +71,5 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with pointer values (exercises slab reads) + forkchoice-style batch commits
+  - `none`/`off` — disable suites; run a single benchmark via `-dbs`/`-test`
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
