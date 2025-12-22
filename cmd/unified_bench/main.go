@@ -537,7 +537,7 @@ var (
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
 	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
-	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
+	suiteArg     = flag.String("suite", "full", "Named benchmark suite (default: full). Use -suite none to run a one-off benchmark via -dbs/-test.")
 	outDirArg    = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
 	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
 	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
@@ -738,8 +738,17 @@ func main() {
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
+	if suite == "none" || suite == "off" {
+		suite = ""
+	}
 	if suite != "" {
 		switch suite {
+		case "full":
+			out, err := runFullSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("full suite: %v", err)
+			}
+			fmt.Print(out)
 		case "readme":
 			out, err := runReadmeSuite(baseCfg)
 			if err != nil {
@@ -2332,8 +2341,19 @@ func printFragmentationReport(w io.Writer, phase, dbName string, rep map[string]
 }
 
 func renderMarkdownSingle(run BenchRun) string {
+	return renderMarkdownSingleWithHeading("# unified_bench", run)
+}
+
+func renderMarkdownSingleWithHeading(heading string, run BenchRun) string {
 	var sb strings.Builder
-	sb.WriteString("# unified_bench\n\n")
+	if strings.TrimSpace(heading) == "" {
+		heading = "# unified_bench"
+	}
+	sb.WriteString(heading)
+	if !strings.HasSuffix(heading, "\n") {
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
@@ -2783,6 +2803,87 @@ func runSloadReadHeavySuite(baseCfg BenchConfig) (string, error) {
 		return "", err
 	}
 	return renderMarkdownSingle(run), nil
+}
+
+func runFullSuite(baseCfg BenchConfig) (string, error) {
+	// Full suite: a small set of scenarios that should stay actionable for TreeDB
+	// perf work and align reasonably with the base-bench harness.
+	generatedAt := time.Now().UTC()
+	env := getHostInfo()
+
+	dbs := strings.TrimSpace(baseCfg.DBsArg)
+	if dbs == "" || strings.EqualFold(dbs, "all") {
+		dbs = "treedb,leveldb"
+	}
+
+	largeValueSize := baseCfg.ValueSize
+	if largeValueSize < 2048 {
+		largeValueSize = 2048
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: full\n\n")
+	sb.WriteString(fmt.Sprintf("_Generated at:_ %s\n", generatedAt.Format(time.RFC3339)))
+	sb.WriteString(fmt.Sprintf("_Environment:_ %s\n", env.MarkdownSummary()))
+	sb.WriteString(fmt.Sprintf("_Seed:_ %d\n", baseCfg.SeedUsed))
+	sb.WriteString(fmt.Sprintf("_DBs:_ %s\n\n", dbs))
+
+	// 1) geth-like sload_readheavy: dataset keys + forkchoice-style commit batches.
+	sloadCfg := baseCfg
+	sloadCfg.Progress = false
+	sloadCfg.DBsArg = dbs
+	sloadCfg.TestsArg = "dataset_write_random,dataset_update_fork_choice,dataset_read_random"
+	sloadCfg.SettleBeforeScans = true
+
+	sload, err := runBenchmark(sloadCfg)
+	if err != nil {
+		return "", err
+	}
+	sb.WriteString(renderMarkdownSingleWithHeading(fmt.Sprintf("## sload_readheavy (valsize=%d)", sloadCfg.ValueSize), sload))
+	sb.WriteString("\n\n")
+
+	// 1b) Optional big-value variant to stress slab/page reads.
+	if largeValueSize != sloadCfg.ValueSize {
+		sloadCfgBig := sloadCfg
+		sloadCfgBig.ValueSize = largeValueSize
+		sloadBig, err := runBenchmark(sloadCfgBig)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(renderMarkdownSingleWithHeading(fmt.Sprintf("## sload_readheavy (valsize=%d)", sloadCfgBig.ValueSize), sloadBig))
+		sb.WriteString("\n\n")
+	}
+
+	// 2) Settled point reads with big values (captures slab path deltas clearly).
+	pointCfg := baseCfg
+	pointCfg.Progress = false
+	pointCfg.DBsArg = dbs
+	pointCfg.TestsArg = "sequential_write,random_read"
+	pointCfg.SettleBeforeScans = true
+	pointCfg.ValueSize = largeValueSize
+
+	pointRun, err := runBenchmark(pointCfg)
+	if err != nil {
+		return "", err
+	}
+	sb.WriteString(renderMarkdownSingleWithHeading(fmt.Sprintf("## point_reads_settled (valsize=%d)", pointCfg.ValueSize), pointRun))
+	sb.WriteString("\n\n")
+
+	// 3) Settled scans (batch fill → settle → iterate).
+	scanCfg := baseCfg
+	scanCfg.Progress = false
+	scanCfg.DBsArg = dbs
+	scanCfg.TestsArg = "batch_write,full_scan,prefix_scan"
+	scanCfg.SettleBeforeScans = true
+
+	scanRun, err := runBenchmark(scanCfg)
+	if err != nil {
+		return "", err
+	}
+	sb.WriteString(renderMarkdownSingleWithHeading(fmt.Sprintf("## scans_settled (valsize=%d)", scanCfg.ValueSize), scanRun))
+	sb.WriteString("\n")
+
+	return sb.String(), nil
 }
 
 func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
