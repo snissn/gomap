@@ -65,4 +65,5 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
   - `flushthrash` — forces a small TreeDB flush threshold; catches flush thrash / runaway backlog regressions
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
+  - `sload_readheavy` — settled point reads with pointer values (exercises slab reads) + forkchoice-style batch commits
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
