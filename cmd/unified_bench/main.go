@@ -769,6 +769,12 @@ func main() {
 				log.Fatalf("longmix suite: %v", err)
 			}
 			fmt.Print(out)
+		case "sload_readheavy", "sload-readheavy":
+			out, err := runSloadReadHeavySuite(baseCfg)
+			if err != nil {
+				log.Fatalf("sload_readheavy suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -2657,6 +2663,29 @@ func runLongMixSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString("# unified_bench suite: longmix\n\n")
 	sb.WriteString(renderMarkdownSingle(run))
 	return sb.String(), nil
+}
+
+func runSloadReadHeavySuite(baseCfg BenchConfig) (string, error) {
+	// Read-heavy suite intended to exercise slab-backed point reads on a settled
+	// dataset (close+reopen before reads), similar in spirit to the base-bench
+	// "sload-readheavy" scenario.
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb,leveldb"
+	cfg.TestsArg = "sequential_write,update_fork_choice,random_read"
+	cfg.SettleBeforeScans = true
+
+	// If the caller didn't specify -valsize (default is 128), force pointer
+	// values so reads exercise the slab path.
+	if cfg.ValueSize == 128 {
+		cfg.ValueSize = 2048
+	}
+
+	run, err := runBenchmark(cfg)
+	if err != nil {
+		return "", err
+	}
+	return renderMarkdownSingle(run), nil
 }
 
 func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
