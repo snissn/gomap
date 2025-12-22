@@ -8,6 +8,9 @@ const (
 	hashSortedSealBytesThreshold = 1 << 20 // 1 MiB of new-key bytes
 	hashSortedSealKeysThreshold  = 1 << 15 // 32768 new keys
 
+	hashSortedPendingKeysInitCap          = 256
+	hashSortedPendingKeysUpgradeThreshold = 1 << 12 // 4096 keys before preallocating to the seal size
+
 	// Work items are chunk-granularity, so a fairly large buffer is cheap and
 	// avoids backpressure on writers.
 	hashSortedIndexerQueueSize = 256

@@ -127,18 +127,32 @@ func TestHashSortedFrozenIterator_ReusesSortedKeysBuffer(t *testing.T) {
 		m.Set([]byte(fmt.Sprintf("%0*x", keyLen, i)), []byte("v"))
 	}
 
-	if len(m.sortedKeys) == 0 {
-		t.Fatalf("expected non-empty key buffer")
-	}
-	before := &m.sortedKeys[0]
-
 	m.Freeze()
 	it := m.NewIterator(nil, nil)
-	defer it.Close()
 	it.Seek(nil)
+
+	if len(m.sortedKeys) == 0 {
+		t.Fatalf("expected non-empty key buffer after freeze")
+	}
+	before := &m.sortedKeys[0]
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	m.Reset()
+	for i := nKeys - 1; i >= 0; i-- {
+		m.Set([]byte(fmt.Sprintf("%0*x", keyLen, i)), []byte("v"))
+	}
+
+	m.Freeze()
+	it2 := m.NewIterator(nil, nil)
+	it2.Seek(nil)
 
 	after := &m.sortedKeys[0]
 	if before != after {
 		t.Fatalf("expected sortedKeys buffer reuse; before=%p after=%p", before, after)
+	}
+	if err := it2.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
 	}
 }

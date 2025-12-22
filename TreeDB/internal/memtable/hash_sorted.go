@@ -471,8 +471,13 @@ func (m *HashSorted) ensureIndexFrozen() {
 		return
 	}
 
-	if len(dst) != total || cap(dst) < total {
-		// Fallback: rebuild the key set directly.
+	dst = mergeSortedStringRunsInto(dst, runs, total)
+
+	m.mu.Lock()
+	if len(m.items) != total {
+		m.mu.Unlock()
+
+		// Safety fallback: if indexing missed keys, rebuild directly from the map.
 		keys := make([]string, 0, len(m.items))
 		m.mu.RLock()
 		for k := range m.items {
@@ -480,6 +485,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 		}
 		m.mu.RUnlock()
 		sort.Strings(keys)
+
 		m.mu.Lock()
 		m.sortedKeys = keys
 		m.sortedValid = true
@@ -487,10 +493,6 @@ func (m *HashSorted) ensureIndexFrozen() {
 		m.index.dropRuns()
 		return
 	}
-
-	dst = mergeSortedStringRunsInto(dst, runs, total)
-
-	m.mu.Lock()
 	m.sortedKeys = dst
 	m.sortedValid = true
 	m.mu.Unlock()
@@ -512,8 +514,15 @@ func (m *HashSorted) startFinalize() {
 
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
-	m.sortedKeys = append(m.sortedKeys, key)
+	if m.pendingKeys == nil {
+		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitCap)
+	}
 	m.pendingKeys = append(m.pendingKeys, key)
+	if len(m.pendingKeys) == hashSortedPendingKeysUpgradeThreshold && cap(m.pendingKeys) < hashSortedSealKeysThreshold {
+		expanded := make([]string, len(m.pendingKeys), hashSortedSealKeysThreshold)
+		copy(expanded, m.pendingKeys)
+		m.pendingKeys = expanded
+	}
 	m.pendingBytes += len(key)
 	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
 		return nil, 0
