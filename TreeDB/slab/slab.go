@@ -48,6 +48,10 @@ type SlabFile struct {
 	remapRequested atomic.Bool
 
 	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
+
+	// writeScratch is a reusable buffer for appending records. SlabManager
+	// serializes writers, so this is safe without additional locking.
+	writeScratch []byte
 }
 
 // OpenSlab opens or creates a slab file.
@@ -359,27 +363,31 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 		return 0, ErrSlabFull
 	}
 
-	// Calculate CRC
-	crcHasher := crc32.New(crc32.MakeTable(crc32.Castagnoli))
-
-	// Write KeyLen/ValLen to CRC
-	lenBuf := make([]byte, 6)
-	binary.LittleEndian.PutUint16(lenBuf[0:2], uint16(keyLen))
-	binary.LittleEndian.PutUint32(lenBuf[2:6], uint32(valLen))
-	crcHasher.Write(lenBuf)
-
-	// Write Data to CRC
-	crcHasher.Write(key)
-	crcHasher.Write(value)
-
-	checksum := crcHasher.Sum32()
-
-	// Prepare full record buffer
 	recordLen := HeaderSize + keyLen + valLen
-	buf := make([]byte, recordLen)
+	var lenArr [6]byte
+	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+
+	// CRC(header-fields + payload)
+	checksum := crc32.Update(0, crc32cTable, lenArr[:])
+	checksum = crc32.Update(checksum, crc32cTable, key)
+	checksum = crc32.Update(checksum, crc32cTable, value)
+
+	// Prepare record buffer. Reuse scratch for common case to avoid allocating per record.
+	// Cap reuse so a single large value doesn't pin a huge buffer forever.
+	const maxScratch = 1 << 20 // 1 MiB
+	var buf []byte
+	if recordLen <= maxScratch {
+		if cap(s.writeScratch) < recordLen {
+			s.writeScratch = make([]byte, recordLen)
+		}
+		buf = s.writeScratch[:recordLen]
+	} else {
+		buf = make([]byte, recordLen)
+	}
 
 	binary.LittleEndian.PutUint32(buf[0:4], checksum)
-	copy(buf[4:10], lenBuf)
+	copy(buf[4:10], lenArr[:])
 	copy(buf[10:10+keyLen], key)
 	copy(buf[10+keyLen:], value)
 
