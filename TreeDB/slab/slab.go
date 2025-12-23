@@ -420,3 +420,35 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	s.Size += int64(written)
 	return offset, nil
 }
+
+// WriteBatch appends a pre-built record stream to the slab and returns the
+// starting file offset. Thread-safety: This should be called by a single writer
+// (SlabManager mutex).
+func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
+	if len(buf) == 0 {
+		return s.Size, nil
+	}
+	if int64(s.Size)+int64(len(buf)) > MaxSlabSize {
+		return 0, ErrSlabFull
+	}
+
+	offset := s.Size
+	written := 0
+	for written < len(buf) {
+		n, err := s.File.Write(buf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			_ = s.Truncate(offset)
+			return 0, err
+		}
+		if n == 0 {
+			_ = s.Truncate(offset)
+			return 0, errors.New("short write")
+		}
+	}
+
+	s.Size += int64(written)
+	return offset, nil
+}
