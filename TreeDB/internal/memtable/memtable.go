@@ -74,7 +74,7 @@ type Memtable struct {
 }
 
 const defaultMemtableCapacity = 64 * 1024
-const maxInitialMemtableCapacity = 4 * 1024 * 1024
+const maxInitialMemtableCapacity = 256 << 20
 
 // New creates a new Memtable (skiplist).
 func New() *Memtable {
