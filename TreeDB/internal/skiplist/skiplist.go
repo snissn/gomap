@@ -30,8 +30,7 @@ const (
 
 // SkipList is an arena-backed skiplist using chunked memory to eliminate resizing copy costs.
 type SkipList struct {
-	// chunks maps virtual 64KB pages to physical memory.
-	// chunks[i] is a slice starting at the beginning of the physical chunk.
+	// chunks maps virtual chunk IDs to physical memory slices.
 	chunks [][]byte
 
 	// allocated holds the underlying memory allocations to allow reuse on Reset.
@@ -91,6 +90,57 @@ func (s *SkipList) Reset() {
 	s.curChunkOff = headSize
 }
 
+/*
+### The 4GB Limit & Panic Explanation
+
+#### 1. Why 4GB? (The Technical Constraint)
+The limit comes from how the SkipList addresses memory. To save RAM, it uses **32-bit integers (`uint32`)** as "pointers" instead of standard 64-bit pointers.
+
+-   **Standard 64-bit pointer:** 8 bytes per link.
+-   **This implementation:** 4 bytes per link.
+
+Since a SkipList has many links (up to 20 per node), saving 4 bytes per link is significant.
+
+The 32 bits are split:
+-   **High 16 bits:** Chunk Index (0 to 65,535)
+-   **Low 16 bits:** Offset within Chunk (0 to 65,535 bytes)
+
+Math: `65,536 chunks * 65,536 bytes/chunk = 4,294,967,296 bytes` (**4GB**).
+
+#### 2. When can this panic?
+It panics if the **total active data** in a single Memtable exceeds 4GB.
+This happens when `s.curChunkIdx > 0xFFFF`.
+
+#### 3. Will it ever happen?
+**In normal operation: No.**
+In an LSM-tree (like TreeDB), Memtables are temporary buffers. They are typically flushed to disk when they reach **4MB to 128MB**.
+-   **Scenario A (Normal):** User writes 64MB -> Memtable flushes -> Reset -> Empty.
+-   **Scenario B (The Panic):** User configures `FlushThreshold` to 5GB, or the flush process hangs indefinitely while the user continues to pump data into the *same* in-memory table.
+
+#### 4. Alternatives to Panic
+The panic is a "fail-fast" mechanism for an impossible state, but there are alternatives:
+
+**A. Return an Error (Safe but intrusive)**
+Change `alloc()` to return `(uint32, error)`.
+-   **Pros:** The application doesn't crash; it just gets an error like `errMemtableFull`.
+-   **Cons:** Requires refactoring every internal method (`put`, `insertNew`, `allocNode`) to handle errors, which complicates the code significantly for a scenario that "should never happen."
+
+**B. Use 64-bit Pointers (Unlimited size)**
+Change the pointer type to `uint64`.
+-   **Pros:** Limit becomes 18 exabytes.
+-   **Cons:** Doubles the memory overhead for pointers. A node with height 20 would grow from ~80 bytes of links to ~160 bytes.
+
+**C. Early Hard Cap (Best Practice)**
+Instead of panicking *during* allocation, enforce a configuration limit.
+-   **Constraint:** `if Config.FlushThreshold > 3GB { return Error }`.
+-   **Runtime Check:** In `Put`, check `if s.Size() > 3GB { return ErrMemtableFull }` *before* attempting to allocate. This is cleaner than a panic deep in the allocator.
+
+### Summary
+The panic exists because **addressing more than 4GB is mathematically impossible** with the current 32-bit optimized design. It acts as a final guard rail against memory corruption.
+
+Given that Memtables are meant to be small (MBs, not GBs), this design tradeoff (half the pointer memory usage vs. 4GB max size) is usually considered the right choice for high-performance databases.
+*/
+
 // alloc allocates n bytes in the arena and returns the virtual offset.
 // Pointer format: (ChunkIndex << 16) | Offset
 func (s *SkipList) alloc(n int) uint32 {
@@ -109,6 +159,9 @@ func (s *SkipList) alloc(n int) uint32 {
 		s.curChunkIdx += chunksNeeded
 		s.curChunkOff = 0
 
+		if s.curChunkIdx > 0xFFFF {
+			panic("skiplist arena size exceeded 4GB")
+		}
 		return uint32(startIdx) << chunkShift
 	}
 
@@ -120,6 +173,10 @@ func (s *SkipList) alloc(n int) uint32 {
 	}
 
 	s.ensureSpace(s.curChunkIdx, chunkSize)
+
+	if s.curChunkIdx > 0xFFFF {
+		panic("skiplist arena size exceeded 4GB")
+	}
 
 	off := (uint32(s.curChunkIdx) << chunkShift) | uint32(s.curChunkOff)
 	s.curChunkOff += n
@@ -164,6 +221,8 @@ func (s *SkipList) ensureSpace(idx, size int) {
 		if end > allocSize {
 			end = allocSize
 		}
+		// slice[i:j:k] sets capacity to k-i. This ensures that for huge allocations,
+		// the slice has enough capacity to allow bytesAt to read past the 64KB boundary.
 		s.chunks[idx+i] = buf[start:end:allocSize]
 	}
 }
@@ -193,8 +252,8 @@ func (s *SkipList) setValAt(ptr uint32, off int, val byte) {
 func (s *SkipList) bytesAt(ptr uint32, len int) []byte {
 	idx := ptr >> chunkShift
 	off := ptr & chunkMask
-	// Note: For huge items, this slice extends beyond the standard 64KB chunk boundary.
-	// This works because ensureSpace sets the capacity of the slice to the full huge buffer.
+	// Note: For huge items, this slice extends beyond the standard 64KB chunk boundary
+	// into the capacity of the backing buffer.
 	return s.chunks[idx][off : off+uint32(len)]
 }
 
@@ -252,7 +311,8 @@ func (s *SkipList) LastKey() []byte {
 	return s.getKey(last)
 }
 
-// AppendWithCallback inserts a new entry assuming the key is strictly greater.
+// AppendWithCallback inserts a new entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
 func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
 	var prev [maxHeight]uint32
 	for i := 0; i < maxHeight; i++ {
@@ -261,18 +321,24 @@ func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k,
 	return s.insertNew(key, value, flags, cb, &prev, true)
 }
 
+// Append inserts a new key/value entry assuming the key is strictly greater
+// than the current maximum key in the skiplist.
 func (s *SkipList) Append(key, value []byte) {
 	_ = s.AppendWithCallback(key, value, 0, nil)
 }
 
+// AppendDelete inserts a tombstone for key assuming the key is strictly greater
+// than the current maximum key in the skiplist.
 func (s *SkipList) AppendDelete(key []byte) {
 	_ = s.AppendWithCallback(key, nil, flagDeleted, nil)
 }
 
+// Delete marks a key as deleted (tombstone).
 func (s *SkipList) Delete(key []byte) {
 	s.put(key, nil, flagDeleted, nil)
 }
 
+// DeleteWithCallback marks deleted with callback.
 func (s *SkipList) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
 	return s.put(key, nil, flagDeleted, cb)
 }
@@ -287,9 +353,12 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 	copy(s.getValue(newNode), value)
 	s.setFlags(newNode, flags)
 
+	// Callback (Before linking)
 	if cb != nil {
-		if err := cb(s.getKey(newNode), s.getValue(newNode)); err != nil {
-			return err
+		kView := s.getKey(newNode)
+		vView := s.getValue(newNode)
+		if err := cb(kView, vView); err != nil {
+			return err // Abort: New node allocated but not linked.
 		}
 	}
 
@@ -347,9 +416,11 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 				break
 			}
 			if cmp == 0 {
-				// Update existing node (inplace if fits, else replace)
+				// Update existing node
+				// If fits, inplace. Else replace.
 				oldValLen := int(binary.LittleEndian.Uint32(s.bytesAt(next+nodeValLenOff, 4)))
 				if cb == nil && len(value) <= oldValLen {
+					// Inplace update
 					binary.LittleEndian.PutUint32(s.bytesAt(next+nodeValLenOff, 4), uint32(len(value)))
 					s.setFlags(next, flags)
 					kLen := int(binary.LittleEndian.Uint16(s.bytesAt(next+nodeKeyLenOff, 2)))
@@ -357,6 +428,8 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 					copy(s.bytesAt(vOffset, len(value)), value)
 					return nil
 				}
+
+				// Must replace node.
 				break
 			}
 			x = next
@@ -370,6 +443,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
 		replaceTail = next == s.tail[0]
 		oldValLen := int(binary.LittleEndian.Uint32(s.bytesAt(next+nodeValLenOff, 4)))
+		// Check inplace again (for level 0 case)
 		if cb == nil && len(value) <= oldValLen {
 			binary.LittleEndian.PutUint32(s.bytesAt(next+nodeValLenOff, 4), uint32(len(value)))
 			s.setFlags(next, flags)
@@ -379,6 +453,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			return nil
 		}
 
+		// Unlink logic:
 		oldHeight := int(s.valAt(next, nodeHeightOff))
 		for i := 0; i < oldHeight; i++ {
 			if s.getNext(prev[i], i) == next {
@@ -392,6 +467,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 				}
 			}
 		}
+		// Now OldNode is gone.
 	}
 
 	return s.insertNew(key, value, flags, cb, &prev, replaceTail)
