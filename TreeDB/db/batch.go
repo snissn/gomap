@@ -64,10 +64,6 @@ func (b *Batch) Write() error {
 		return fmt.Errorf("missing index")
 	}
 
-	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
-	}
-
 	// Get current root (Read Lock)
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
@@ -100,7 +96,13 @@ func (b *Batch) Write() error {
 	b.db.mu.Unlock()
 
 	// Commit (System Root is unchanged for now)
-	return b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics)
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+		return err
+	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+	return nil
 }
 
 func (b *Batch) WriteSync() error {
@@ -110,10 +112,6 @@ func (b *Batch) WriteSync() error {
 	idx := b.db.idx.Load()
 	if idx == nil {
 		return fmt.Errorf("missing index")
-	}
-
-	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
 
 	b.db.mu.RLock()
@@ -143,7 +141,13 @@ func (b *Batch) WriteSync() error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	return b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics); err != nil {
+		return err
+	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+	return nil
 }
 
 func (b *Batch) Close() error {
