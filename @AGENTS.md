@@ -248,3 +248,25 @@
 - [ ] If iterators/range scans are hot in the trace data, implement `btree` memtable mode (ordered iterators without sorting) and re-run the same matrix.
 - [ ] Only if needed: explore hybrid/dual-index approaches (hash + ordered index) and make iterator correctness explicit (barrier on iterator creation vs merge-on-iterate).
 - [ ] Optional: “adaptive per-rotation” memtable selection (choose next memtable mode at rotate boundaries based on recent iterator/write counters; avoid mid-memtable switching).
+
+### Potential Optimization: Batched Slab Appends (reduce per-value syscalls)
+
+- **Observation (from iavl-bench treedb-v1 pprof):** `batch.(*Batch).SetOps` spends most of its time in `slabManager.Append` -> `SlabFile.Write`, which currently performs (roughly) **one `write(2)` syscall per large value** (values above `InlineThreshold`), even though index updates are batched.
+- **Hypothesis:** For workloads with many large values, we may be **syscall/CPU-overhead bound** (or at least paying avoidable syscall overhead). Coalescing multiple slab records into fewer syscalls (larger writes) could materially improve throughput.
+- **Design sketch:**
+  - Add an optional **buffered slab writer** inside `SlabManager`/`SlabFile` that batches multiple `(key,value)` records into a contiguous buffer and issues a single `Write`/`Writev` when:
+    - buffer exceeds `N` bytes, or
+    - record count exceeds `K`, or
+    - a sync boundary is required (`CommitSync`/`Checkpoint`/vacuum boundary), or
+    - on slab rotation.
+  - Preserve API semantics by returning the final `ValuePtr` offsets for each appended record (offsets are deterministic: baseOffset + recordPrefixSum).
+  - Keep crash safety via existing tail-repair: ensure the buffered writer only updates in-memory offset bookkeeping after successful write; on error, truncate to previous durable tail.
+  - Consider `writev` to avoid extra copies when per-record data already exists in memory slices.
+- **Tradeoffs / risks:**
+  - Larger buffering reduces syscalls but increases transient memory usage and can change write latency distribution.
+  - Must be careful about interactions with `O_APPEND` and offset accounting; ideally maintain an explicit tail offset under the writer lock and rely on serialized writes.
+  - Ensure durability boundaries (especially `Checkpoint`) flush buffered slab bytes before index meta publishes pointers to them.
+- **Validation ideas:**
+  - Microbench: compare slab append throughput for many small “large values” (e.g. 1–4KB) under `Append` vs buffered append.
+  - End-to-end: re-run `iavl-bench` treedb-v1 with `pprof` and confirm `syscall.write` share drops and ops/sec rises.
+  - Correctness tests: crash-simulated partial writes + `RepairTail` + pointer validity; ensure no missing values after reopen.
