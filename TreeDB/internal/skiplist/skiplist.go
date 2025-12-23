@@ -21,11 +21,11 @@ const (
 	flagDeleted = 1
 
 	// Arena Constants
-	// We use 64KB chunks. With uint32 pointers, this allows for 65,536 chunks,
-	// providing a total addressable arena of 4GB.
-	chunkShift = 16
-	chunkSize  = 1 << chunkShift // 65536 bytes
-	chunkMask  = chunkSize - 1   // 0xFFFF
+	// We use 1MiB chunks. With uint32 pointers, this provides a total addressable
+	// arena of 4GiB.
+	chunkShift = 20
+	chunkSize  = 1 << chunkShift // 1 MiB
+	chunkMask  = chunkSize - 1
 )
 
 // SkipList is an arena-backed skiplist using chunked memory to eliminate resizing copy costs.
@@ -46,6 +46,12 @@ type SkipList struct {
 	// Allocator state
 	curChunkIdx int
 	curChunkOff int
+}
+
+func maxChunkIndex() int {
+	// Upper bits store chunk index, lower bits store offset within chunk.
+	// maxIndex = 2^(32-chunkShift) - 1
+	return (1 << (32 - chunkShift)) - 1
 }
 
 // New creates a new SkipList.
@@ -142,7 +148,7 @@ Given that Memtables are meant to be small (MBs, not GBs), this design tradeoff 
 */
 
 // alloc allocates n bytes in the arena and returns the virtual offset.
-// Pointer format: (ChunkIndex << 16) | Offset
+// Pointer format: (ChunkIndex << chunkShift) | Offset
 func (s *SkipList) alloc(n int) uint32 {
 	// 1. Handle Huge Allocations (> 64KB)
 	// We allocate a contiguous block and consume enough virtual chunks to cover it.
@@ -159,7 +165,7 @@ func (s *SkipList) alloc(n int) uint32 {
 		s.curChunkIdx += chunksNeeded
 		s.curChunkOff = 0
 
-		if s.curChunkIdx > 0xFFFF {
+		if s.curChunkIdx > maxChunkIndex() {
 			panic("skiplist arena size exceeded 4GB")
 		}
 		return uint32(startIdx) << chunkShift
@@ -174,7 +180,7 @@ func (s *SkipList) alloc(n int) uint32 {
 
 	s.ensureSpace(s.curChunkIdx, chunkSize)
 
-	if s.curChunkIdx > 0xFFFF {
+	if s.curChunkIdx > maxChunkIndex() {
 		panic("skiplist arena size exceeded 4GB")
 	}
 
