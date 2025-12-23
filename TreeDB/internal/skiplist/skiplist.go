@@ -324,7 +324,7 @@ func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k,
 	for i := 0; i < maxHeight; i++ {
 		prev[i] = s.tail[i]
 	}
-	return s.insertNew(key, value, flags, cb, &prev, true)
+	return s.insertNew(key, value, flags, cb, &prev)
 }
 
 // Append inserts a new key/value entry assuming the key is strictly greater
@@ -349,7 +349,7 @@ func (s *SkipList) DeleteWithCallback(key []byte, cb func(k, v []byte) error) er
 	return s.put(key, nil, flagDeleted, cb)
 }
 
-func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte) error, prev *[maxHeight]uint32, updateTail bool) error {
+func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte) error, prev *[maxHeight]uint32) error {
 	h := s.randomHeight()
 	if h > s.height {
 		s.height = h
@@ -369,9 +369,10 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 	}
 
 	for i := 0; i < h; i++ {
-		s.setNext(newNode, i, s.getNext(prev[i], i))
+		next := s.getNext(prev[i], i)
+		s.setNext(newNode, i, next)
 		s.setNext(prev[i], i, newNode)
-		if updateTail {
+		if next == 0 {
 			s.tail[i] = newNode
 		}
 	}
@@ -387,7 +388,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 		for i := 0; i < maxHeight; i++ {
 			prev[i] = s.tail[i]
 		}
-		return s.insertNew(key, value, flags, cb, &prev, true)
+		return s.insertNew(key, value, flags, cb, &prev)
 	}
 
 	last := s.tail[0]
@@ -397,7 +398,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			for i := 0; i < maxHeight; i++ {
 				prev[i] = s.tail[i]
 			}
-			return s.insertNew(key, value, flags, cb, &prev, true)
+			return s.insertNew(key, value, flags, cb, &prev)
 		}
 	}
 
@@ -445,9 +446,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 
 	// Check level 0
 	next := s.getNext(x, 0)
-	replaceTail := false
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
-		replaceTail = next == s.tail[0]
 		oldValLen := int(binary.LittleEndian.Uint32(s.bytesAt(next+nodeValLenOff, 4)))
 		// Check inplace again (for level 0 case)
 		if cb == nil && len(value) <= oldValLen {
@@ -465,18 +464,14 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			if s.getNext(prev[i], i) == next {
 				s.setNext(prev[i], i, s.getNext(next, i))
 			}
-		}
-		if replaceTail {
-			for i := 0; i < oldHeight; i++ {
-				if s.tail[i] == next {
-					s.tail[i] = prev[i]
-				}
+			if s.tail[i] == next {
+				s.tail[i] = prev[i]
 			}
 		}
 		// Now OldNode is gone.
 	}
 
-	return s.insertNew(key, value, flags, cb, &prev, replaceTail)
+	return s.insertNew(key, value, flags, cb, &prev)
 }
 
 func (s *SkipList) randomHeight() int {
