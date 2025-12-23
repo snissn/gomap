@@ -3,14 +3,16 @@ package db
 import (
 	"context"
 	"errors"
-	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -23,12 +25,11 @@ const (
 	vacuumCatchupKeyTarget   = 4096
 	vacuumCutoverMaxKeys     = 8192
 	vacuumCutoverMaxDefers   = 3
-	vacuumRetireBatchSize    = 4096
 	vacuumInlineThresholdMax = int(^uint(0) >> 1)
 )
 
 type vacuumRecorder struct {
-	active atomicBool
+	active atomic.Bool
 	mu     sync.Mutex
 	keys   map[string]struct{}
 }
@@ -76,75 +77,104 @@ func (r *vacuumRecorder) Drain() map[string]struct{} {
 	return out
 }
 
-type atomicBool struct{ v uint32 }
-
-func (b *atomicBool) Load() bool {
-	return atomic.LoadUint32(&b.v) == 1
-}
-
-func (b *atomicBool) Store(v bool) {
-	if v {
-		atomic.StoreUint32(&b.v, 1)
-		return
-	}
-	atomic.StoreUint32(&b.v, 0)
-}
-
-// VacuumIndexOnline rebuilds the user index in the background and swaps it in
-// with a short writer pause. It records backend writes during the build and
-// applies a delta replay before the swap. Old tree pages are retired
-// asynchronously after the swap.
+// VacuumIndexOnline rebuilds the index into a new file and swaps it in with a
+// short writer pause. Old snapshots remain valid by pinning the previous index
+// generation until readers drain; disk space is reclaimed once the old mmap is
+// closed.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	db.vacuumMu.Lock()
-	defer db.vacuumMu.Unlock()
-
-	if db.vacuum.Active() {
+	if !db.vacuumInProgress.CompareAndSwap(false, true) {
 		return ErrVacuumInProgress
 	}
-	db.vacuum.Start()
-	defer db.vacuum.Stop()
+	defer db.vacuumInProgress.Store(false)
 
-	// Build a fresh tree from a stable snapshot.
-	snap := db.AcquireSnapshot()
-	iter := snap.tree.Iterator(nil, nil)
-	alloc := &pagerAllocator{p: db.pager}
-	newRoot, err := bulk.Build(iter, alloc, db.pager)
-	_ = iter.Close()
-	snap.Close()
+	if db.dir == "" {
+		return errors.New("vacuum: missing db dir")
+	}
+
+	indexPath := filepath.Join(db.dir, indexFileName)
+	newPath := filepath.Join(db.dir, indexNewFileName)
+	bakPath := filepath.Join(db.dir, indexBakFileName)
+	readyPath := filepath.Join(db.dir, indexReadyFileName)
+
+	// Clean up any previous partial artifacts (best-effort).
+	_ = os.Remove(newPath)
+	_ = os.Remove(readyPath)
+
+	newPager, err := pager.Open(newPath, db.chunkSize)
 	if err != nil {
 		return err
 	}
+	cleanupNewPager := func() {
+		_ = newPager.Close()
+		_ = os.Remove(newPath)
+		_ = os.Remove(readyPath)
+	}
 
-	z := zipper.New(db.pager, alloc)
-	z.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
-	z.SetPiggybackCompaction(db.piggybackCompaction)
+	if _, err := newPager.Alloc(2); err != nil {
+		cleanupNewPager()
+		return err
+	}
 
-	var retired []uint64
+	newAlloc := freelist.New(newPager, 0)
+	newAlloc.SetPreferAppend(db.preferAppendAlloc)
+	newAlloc.SetFreelistRegion(db.freelistRegionPages, db.freelistRegionRadius)
+
+	newZ := zipper.New(newPager, newAlloc)
+	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
+	newZ.SetPiggybackCompaction(db.piggybackCompaction)
+
+	db.vacuum.Start()
+	defer db.vacuum.Stop()
+
+	// Build a fresh user tree from a stable snapshot.
+	baseSnap := db.AcquireSnapshot()
+	baseIter := baseSnap.tree.Iterator(nil, nil)
+	newRoot, err := bulk.Build(baseIter, newAlloc, newPager)
+	_ = baseIter.Close()
+	_ = baseSnap.Close()
+	if err != nil {
+		cleanupNewPager()
+		return err
+	}
+
+	freeRetired := func(retired []uint64) {
+		for _, id := range retired {
+			_ = newAlloc.Free(id)
+		}
+	}
+
+	// Online catch-up: replay recorded keys in bounded passes.
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
+			cleanupNewPager()
 			return err
 		}
 		keys := db.vacuum.Drain()
 		if len(keys) == 0 {
 			break
 		}
-		newRoot, retired, err = db.applyVacuumDelta(newRoot, keys, z, retired)
+		var retired []uint64
+		newRoot, retired, err = db.applyVacuumDelta(newRoot, keys, newZ, nil)
 		if err != nil {
+			cleanupNewPager()
 			return err
 		}
+		freeRetired(retired)
 		if len(keys) <= vacuumCatchupKeyTarget {
 			break
 		}
 	}
 
-	// Final cutover: stop recording, apply the tail, then swap roots.
+	// Final cutover: stop recording, apply the tail, rebuild the System tree in
+	// the new file, then swap index.db on disk and publish a new index generation.
 	defers := 0
 	for {
 		if err := ctx.Err(); err != nil {
+			cleanupNewPager()
 			return err
 		}
 
@@ -155,36 +185,142 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			db.vacuum.Start()
 			db.writeMu.Unlock()
 			defers++
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, z, retired)
+
+			var retired []uint64
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, newZ, nil)
 			if err != nil {
+				cleanupNewPager()
 				return err
 			}
+			freeRetired(retired)
 			continue
 		}
 
 		if len(finalKeys) > 0 {
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, z, retired)
+			var retired []uint64
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, newZ, nil)
 			if err != nil {
 				db.writeMu.Unlock()
+				cleanupNewPager()
 				return err
 			}
+			freeRetired(retired)
 		}
 
-		oldSnap := db.AcquireSnapshot()
-		oldRoot := oldSnap.state.RootPageID
-		sysRoot := oldSnap.state.SystemRootPageID
-
-		if err := db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}); err != nil {
+		// Snapshot current roots/meta while writers are paused.
+		db.mu.RLock()
+		oldGen := db.idx.Load()
+		state := db.state.Load()
+		baseMeta := db.meta
+		db.mu.RUnlock()
+		if oldGen == nil || state == nil {
 			db.writeMu.Unlock()
-			oldSnap.Close()
+			cleanupNewPager()
+			return errors.New("vacuum: missing db state")
+		}
+
+		sysIter := tree.New(oldGen.pager, state.SlabSet, state.SystemRootPageID).Iterator(nil, nil)
+		newSysRoot, err := bulk.Build(sysIter, newAlloc, newPager)
+		_ = sysIter.Close()
+		if err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
 			return err
 		}
+
+		// Prepare new meta.
+		nextMeta := baseMeta
+		nextMeta.CommitSeq++
+		nextMeta.UserRootPageID = newRoot
+		nextMeta.SystemRootPageID = newSysRoot
+		nextMeta.FreelistHeadID = newAlloc.Head()
+		nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
+		nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
+		nextMeta.TotalPages = newPager.PageCount()
+
+		// Ensure slab tail referenced by meta is durable before publishing the
+		// new index. Vacuum is treated as a durability boundary.
+		if err := db.slabManager.Sync(); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+
+		// Write redundant Meta pages (0/1) to the new file and sync it.
+		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if err := writeMetaToPager(newPager, MetaPage1ID, nextMeta); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if err := newPager.Sync(); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+
+		if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if dir, err := os.Open(db.dir); err == nil {
+			_ = dir.Sync()
+			_ = dir.Close()
+		}
+
+		// Swap index.db -> index.db.bak, index.db.new -> index.db.
+		_ = os.Remove(bakPath)
+		if err := os.Rename(indexPath, bakPath); err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if err := os.Rename(newPath, indexPath); err != nil {
+			_ = os.Rename(bakPath, indexPath)
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+
+		_ = os.Remove(readyPath)
+		_ = os.Remove(bakPath)
+		if dir, err := os.Open(db.dir); err == nil {
+			_ = dir.Sync()
+			_ = dir.Close()
+		}
+
+		// Publish the new index generation (old readers keep oldGen pinned).
+		newGen := newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
+		db.trackIndex(newGen)
+
+		var oldState *DBState
+		db.mu.Lock()
+		oldState = db.state.Load()
+		db.idx.Store(newGen)
+		db.meta = nextMeta
+		db.metaPageID = MetaPage0ID
+		db.state.Store(&DBState{
+			CommitSeq:        nextMeta.CommitSeq,
+			RootPageID:       nextMeta.UserRootPageID,
+			SystemRootPageID: nextMeta.SystemRootPageID,
+			SlabSet:          db.slabManager.CurrentSlabSet(),
+		})
+		db.mu.Unlock()
+
 		db.writeMu.Unlock()
 
-		seq := db.state.Load().CommitSeq
-		if err := db.retireVacuumRoot(oldSnap, oldRoot, seq); err != nil {
-			return err
+		if oldState != nil {
+			_ = db.slabManager.ReleaseSlabs(oldState.SlabSet)
 		}
+
+		// Drop the DB-held reference to the previous generation outside the
+		// writer pause; closing the old mmap can be expensive.
+		db.releaseIndex(oldGen)
 
 		return nil
 	}
@@ -197,7 +333,7 @@ func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.
 
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	tr := tree.New(db.pager, snap.state.SlabSet, snap.state.RootPageID)
+	tr := tree.New(snap.idx.pager, snap.state.SlabSet, snap.state.RootPageID)
 
 	ops := make([]batch.Entry, 0, vacuumDeltaBatchSize)
 	applyOps := func() error {
@@ -264,33 +400,4 @@ func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.
 	}
 
 	return root, retired, nil
-}
-
-func (db *DB) retireVacuumRoot(snap *Snapshot, rootID uint64, seq uint64) error {
-	defer snap.Close()
-
-	tr := tree.New(db.pager, snap.state.SlabSet, rootID)
-	batchIDs := make([]uint64, 0, vacuumRetireBatchSize)
-
-	err := tr.WalkPages(func(pageID uint64, _ node.Node) error {
-		batchIDs = append(batchIDs, pageID)
-		if len(batchIDs) >= vacuumRetireBatchSize {
-			db.graveyard.Add(seq, batchIDs)
-			batchIDs = batchIDs[:0]
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("vacuum retire walk: %w", err)
-	}
-	if len(batchIDs) > 0 {
-		db.graveyard.Add(seq, batchIDs)
-	}
-
-	if db.pruner.Enabled() {
-		db.pruner.Kick()
-	} else {
-		db.Prune()
-	}
-	return nil
 }

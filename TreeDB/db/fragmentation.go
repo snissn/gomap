@@ -7,19 +7,25 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // FragmentationReport returns best-effort structural stats about the user index
 // that help diagnose scan regressions after churn.
 func (db *DB) FragmentationReport() (map[string]string, error) {
-	db.mu.RLock()
-	state := db.state.Load()
-	tr := tree.New(db.pager, state.SlabSet, state.RootPageID)
-	db.mu.RUnlock()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil || snap.tree == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return nil, fmt.Errorf("missing index")
+	}
+	defer func() { _ = snap.Close() }()
 
-	freelistHead := db.allocator.Head()
-	totalPages := db.pager.PageCount()
+	idx := snap.idx
+	tr := snap.tree
+
+	freelistHead := idx.allocator.Head()
+	totalPages := idx.pager.PageCount()
 
 	var pages uint64
 	var leafPages uint64
@@ -102,7 +108,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 	out["treedb.freelist.head"] = fmt.Sprintf("%d", freelistHead)
 	if freelistHead != 0 && totalPages > 0 {
-		fs, err := readFreelistStats(db.pager, freelistHead, totalPages)
+		fs, err := readFreelistStats(idx.pager, freelistHead, totalPages)
 		if err != nil {
 			out["treedb.freelist.error"] = err.Error()
 		} else {

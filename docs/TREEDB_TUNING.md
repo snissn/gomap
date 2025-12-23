@@ -152,8 +152,13 @@ Stats keys:
 
 TreeDB rebuilds the user index in the background when fragmentation
 gets high. This restores scan locality and uses a short writer pause for the
-final swap while the bulk of the work runs online. It grows `index.db` (old pages
-are reclaimed later).
+final swap while the bulk of the work runs online.
+
+The vacuum rewrites the index into `index.db.new` and swaps it in, so `index.db`
+typically shrinks after a successful run. While the vacuum is running it will
+temporarily consume additional disk space (old `index.db` + `index.db.new`), and
+disk blocks from the previous mmap are reclaimed once all old
+snapshots/iterators drain.
 
 - Enable: `Options.BackgroundIndexVacuumInterval > 0` (default: 30s)
 - Trigger threshold: `Options.BackgroundIndexVacuumSpanRatioPPM`
@@ -166,12 +171,12 @@ Stats keys:
 
 ### Offline index vacuum (backend index)
 
-TreeDB’s `index.db` is **append-only** at the file level: it grows in chunks and never shrinks.
-After heavy churn, this can leave `index.db` much larger than the live tree needs, and page IDs
-can become scattered (hurting scan locality).
+TreeDB’s `index.db` grows in chunks and does not shrink in-place. Reclaiming
+index disk space requires rewriting the index into a fresh file and swapping it
+in.
 
-TreeDB provides an **offline** rewrite operation that rebuilds `index.db` into a fresh file and
-swaps it in using a crash-safe protocol:
+TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
+`index.db` into a fresh file and swaps it in using a crash-safe protocol:
 
 - Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
 - Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)

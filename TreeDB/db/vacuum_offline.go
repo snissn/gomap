@@ -93,7 +93,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	alloc := &pagerAllocator{p: newPager}
 
-	sysIter := tree.New(d.pager, state.SlabSet, state.SystemRootPageID).Iterator(nil, nil)
+	sysIter := tree.New(d.Pager(), state.SlabSet, state.SystemRootPageID).Iterator(nil, nil)
 	sysRoot, err := bulk.Build(sysIter, alloc, newPager)
 	_ = sysIter.Close()
 	if err != nil {
@@ -102,7 +102,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 
-	userIter := tree.New(d.pager, state.SlabSet, state.RootPageID).Iterator(nil, nil)
+	userIter := tree.New(d.Pager(), state.SlabSet, state.RootPageID).Iterator(nil, nil)
 	userRoot, err := bulk.Build(userIter, alloc, newPager)
 	_ = userIter.Close()
 	if err != nil {

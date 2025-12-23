@@ -59,8 +59,9 @@ func (b *Batch) Write() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
-	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
+	idx := b.db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
 	}
 
 	// Get current root (Read Lock)
@@ -69,7 +70,7 @@ func (b *Batch) Write() error {
 	b.db.mu.RUnlock()
 
 	// Zipper Apply (No DB Lock, runs concurrently with Readers)
-	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
@@ -95,22 +96,29 @@ func (b *Batch) Write() error {
 	b.db.mu.Unlock()
 
 	// Commit (System Root is unchanged for now)
-	return b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics)
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+		return err
+	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+	return nil
 }
 
 func (b *Batch) WriteSync() error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
-	if b.db.vacuum.Active() {
-		b.db.vacuum.RecordOps(b.batch.Ops())
+	idx := b.db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
 	}
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	b.db.mu.RUnlock()
 
-	newRoot, retired, metrics, err := b.db.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
 		return err
 	}
@@ -133,7 +141,13 @@ func (b *Batch) WriteSync() error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	return b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics)
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics); err != nil {
+		return err
+	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
+	return nil
 }
 
 func (b *Batch) Close() error {

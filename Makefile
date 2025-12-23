@@ -77,7 +77,7 @@ tidy:
 deps:
 	go mod download
 
-.PHONY: build build-hashdb build-treedb unified-bench
+.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench
 build: build-hashdb build-treedb unified-bench
 
 build-hashdb:
@@ -92,6 +92,14 @@ build-treedb:
 	mkdir -p $(BIN_DIR)
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-stress ./cmd/stress
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-verify ./cmd/verify
+	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treemap ./cmd/treemap
+
+treemap:
+	go build -o treemap ./TreeDB/cmd/treemap
+
+treemap-bin:
+	mkdir -p $(BIN_DIR)
+	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treemap ./cmd/treemap
 
 unified-bench:
 	mkdir -p $(BIN_DIR)

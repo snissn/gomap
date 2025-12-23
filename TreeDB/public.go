@@ -493,8 +493,9 @@ func (db *DB) CompactIndex() error {
 	return db.backend.CompactIndex()
 }
 
-// VacuumIndexOnline rebuilds the user index in the background and swaps it in
-// with a short writer pause.
+// VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
+// a short writer pause. Disk space from the old index is reclaimed once any old
+// snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
@@ -502,6 +503,18 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.backend == nil {
 		return ErrClosed
 	}
+
+	// In cached mode, ensure the backend reflects all buffered writes before
+	// rebuilding/switching the index file. This avoids exposing a backend state
+	// that temporarily "forgets" keys that only existed in memtables/WAL, which
+	// can break higher layers that assume a stable durable boundary (e.g. IAVL
+	// node storage during version application).
+	if db.cached != nil {
+		if err := db.cached.Checkpoint(); err != nil {
+			return err
+		}
+	}
+
 	return db.backend.VacuumIndexOnline(ctx)
 }
 

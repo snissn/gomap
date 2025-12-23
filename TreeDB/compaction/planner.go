@@ -82,17 +82,15 @@ func (c *Compactor) Candidates(opts Options) ([]Candidate, error) {
 		opts.DeadRatioThreshold = 1
 	}
 
-	state := c.db.State()
+	snap := c.db.AcquireSnapshot()
+	defer snap.Close()
+
+	state := snap.State()
 	if state == nil {
 		return nil, fmt.Errorf("compaction: missing db state")
 	}
-	// Pin slabs while reading system tree.
-	if state.SlabSet != nil {
-		c.db.SlabManager().AcquireSlabs(state.SlabSet)
-		defer c.db.SlabManager().ReleaseSlabs(state.SlabSet)
-	}
 
-	sysTree := tree.New(c.db.Pager(), state.SlabSet, state.SystemRootPageID)
+	sysTree := tree.New(snap.Pager(), state.SlabSet, state.SystemRootPageID)
 	it := sysTree.Iterator(slabStatsKeyPrefix, slabStatsPrefixEnd())
 	defer it.Close()
 

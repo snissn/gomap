@@ -160,12 +160,23 @@ func (db *DB) Stats() map[string]string {
 	stats := make(map[string]string)
 	stats["cosmos.db.type"] = "treedb"
 
-	state := db.state.Load()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return stats
+	}
+	defer func() { _ = snap.Close() }()
+
+	state := snap.state
+	idx := snap.idx
+
 	stats["treedb.commit_seq"] = fmt.Sprintf("%d", state.CommitSeq)
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
-	stats["treedb.pages.total"] = fmt.Sprintf("%d", db.pager.PageCount())
+	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
 
 	stats["treedb.slabs.active_id"] = fmt.Sprintf("%d", db.slabManager.ActiveSlabID())
 	stats["treedb.slabs.zombies"] = fmt.Sprintf("%d", db.slabManager.ZombieCount())
@@ -174,7 +185,7 @@ func (db *DB) Stats() map[string]string {
 
 	// Best-effort slab fragmentation stats (derived from persisted System tree).
 	var total, dead uint64
-	sysTree := tree.New(db.pager, state.SlabSet, state.SystemRootPageID)
+	sysTree := tree.New(idx.pager, state.SlabSet, state.SystemRootPageID)
 	it := sysTree.Iterator(slabStatsKeyPrefix, slabStatsPrefixEnd())
 	for it.Valid() {
 		_, vPtr, flags := it.UnsafeEntry()
