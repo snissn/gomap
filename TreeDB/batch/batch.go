@@ -280,37 +280,51 @@ func (b *Batch) SetOps(ops []Entry) error {
 		return err
 	}
 
-	// Just append them. Deduplication happens at Ops() time.
-	for _, op := range ops {
-		b.noteKeyOrder(op.Key)
-		// Logic to handle large values if op came from raw map?
-		// Assuming op is already processed or we need to check.
-
-		if op.Type == OpDelete || op.IsPtr {
-			b.entries = append(b.entries, op)
-			b.byteSize += len(op.Key) + len(op.Value) // Value might be nil if Ptr
+	// Convert large inline values to slab pointers in bulk to amortize syscalls.
+	var largeIdx []int
+	for i := range ops {
+		op := &ops[i]
+		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
-
-		// Check threshold for Put with Inline value
 		if len(op.Value) > b.inlineThreshold {
-			ptr, err := b.slabManager.Append(op.Key, op.Value)
-			if err != nil {
-				return err
-			}
+			largeIdx = append(largeIdx, i)
+		}
+	}
+
+	if len(largeIdx) > 0 {
+		keys := make([][]byte, len(largeIdx))
+		values := make([][]byte, len(largeIdx))
+		for i, idx := range largeIdx {
+			keys[i] = ops[idx].Key
+			values[i] = ops[idx].Value
+		}
+
+		ptrs, err := b.slabManager.AppendMany(keys, values)
+		if err != nil {
+			return err
+		}
+
+		for i, idx := range largeIdx {
+			ptr := ptrs[i]
+			op := &ops[idx]
 			op.ValuePtr = ptr
 			op.IsPtr = true
 			op.Value = nil
+
 			b.slabWritten += int(ptr.Length)
 			if b.slabWrittenByID == nil {
 				b.slabWrittenByID = make(map[uint32]int64, 4)
 			}
 			b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
 		}
-		// No need to copy op.Value if we assume ownership (which we do for SetOps)
+	}
 
+	// Just append them. Deduplication happens at Ops() time.
+	for _, op := range ops {
+		b.noteKeyOrder(op.Key)
 		b.entries = append(b.entries, op)
-		b.byteSize += len(op.Key) + len(op.Value)
+		b.byteSize += len(op.Key) + len(op.Value) // Value is nil for slab pointers.
 	}
 	return nil
 }

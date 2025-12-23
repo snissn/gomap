@@ -73,3 +73,56 @@ func TestBatchPreWrite(t *testing.T) {
 		t.Errorf("Expected OpDelete, got %v", entry.Type)
 	}
 }
+
+func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := slab.NewSlabManager(dir)
+	if err != nil {
+		t.Fatalf("SlabManager init failed: %v", err)
+	}
+	defer sm.Close()
+
+	b := New(sm, page.DefaultInlineThreshold)
+
+	largeVal1 := bytes.Repeat([]byte("A"), page.DefaultInlineThreshold+10)
+	largeVal2 := bytes.Repeat([]byte("B"), page.DefaultInlineThreshold+11)
+	smallVal := []byte("small")
+
+	ops := []Entry{
+		{Type: OpPut, Key: []byte("k1"), Value: largeVal1},
+		{Type: OpPut, Key: []byte("k2"), Value: smallVal},
+		{Type: OpPut, Key: []byte("k3"), Value: largeVal2},
+	}
+	if err := b.SetOps(ops); err != nil {
+		t.Fatalf("SetOps failed: %v", err)
+	}
+
+	got := b.Ops()
+	if !got["k1"].IsPtr || !got["k3"].IsPtr {
+		t.Fatalf("expected large values to be stored as pointers")
+	}
+	if got["k2"].IsPtr || !bytes.Equal(got["k2"].Value, smallVal) {
+		t.Fatalf("expected small value to be stored inline")
+	}
+
+	read1, err := sm.Read(got["k1"].ValuePtr)
+	if err != nil {
+		t.Fatalf("Read k1 failed: %v", err)
+	}
+	if !bytes.Equal(read1, largeVal1) {
+		t.Fatalf("k1 value mismatch")
+	}
+
+	read3, err := sm.Read(got["k3"].ValuePtr)
+	if err != nil {
+		t.Fatalf("Read k3 failed: %v", err)
+	}
+	if !bytes.Equal(read3, largeVal2) {
+		t.Fatalf("k3 value mismatch")
+	}
+
+	wantSlabBytes := int(got["k1"].ValuePtr.Length + got["k3"].ValuePtr.Length)
+	if b.SlabWriteBytes() != wantSlabBytes {
+		t.Fatalf("unexpected slab write bytes: got %d want %d", b.SlabWriteBytes(), wantSlabBytes)
+	}
+}
