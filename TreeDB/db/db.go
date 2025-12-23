@@ -805,6 +805,12 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
 }
 
+// GetUnsafe returns a zero-copy view of the value from the snapshot.
+// The slice is valid until the snapshot is closed.
+func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
+	return s.tree.GetUnsafe(key)
+}
+
 func (s *Snapshot) Has(key []byte) (bool, error) {
 	return s.tree.Has(key)
 }

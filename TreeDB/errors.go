@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 var (
@@ -12,4 +13,7 @@ var (
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = errors.New("treedb: db is closed")
+
+	// ErrKeyNotFound indicates the key does not exist.
+	ErrKeyNotFound = tree.ErrKeyNotFound
 )

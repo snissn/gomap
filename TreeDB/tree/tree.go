@@ -91,7 +91,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	return node.LeafEntry{}, errors.New("tree too deep")
 }
 
-func (t *Tree) Get(key []byte) ([]byte, error) {
+func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 	entry, err := t.GetEntry(key)
 	if err != nil {
 		return nil, err
@@ -109,10 +109,21 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 		return val, nil
 	}
 
+	return entry.Value, nil
+}
+
+func (t *Tree) Get(key []byte) ([]byte, error) {
+	val, err := t.GetUnsafe(key)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
 	// Copy value before returning to user
-	val := make([]byte, len(entry.Value))
-	copy(val, entry.Value)
-	return val, nil
+	cpy := make([]byte, len(val))
+	copy(cpy, val)
+	return cpy, nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {

@@ -13,8 +13,7 @@ import (
 
 // Get returns the value for a key.
 //
-// Semantics (performance-first): the returned slice may be a read-only view into
-// internal storage (e.g. mmapped slabs). Callers must not modify it; copy if needed.
+// Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
@@ -23,6 +22,33 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return val, err
+}
+
+// GetUnsafe returns the value for a key.
+//
+// Semantics (performance-first): The returned slice may be a read-only view into
+// internal storage (e.g. memtables). Callers must not modify it.
+//
+// Note: In backend-only mode (direct DB), this falls back to a safe copy because
+// the underlying storage (mmap) cannot be safely exposed without a pinned Snapshot.
+// To get true zero-copy access to disk data, use AcquireSnapshot() -> Snapshot.GetUnsafe().
+func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
+	return db.Get(key)
+}
+
+// GetAppend appends the value for the key to dst and returns the new slice.
+// If the key is not found, it returns dst and ErrKeyNotFound.
+func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+	val, err := snap.GetUnsafe(key)
+	if err == tree.ErrKeyNotFound {
+		return dst, err
+	}
+	if err != nil {
+		return dst, err
+	}
+	return append(dst, val...), nil
 }
 
 // Has checks if a key exists.

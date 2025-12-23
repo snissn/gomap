@@ -245,9 +245,7 @@ func (db *DB) Close() error {
 
 // Get returns the value for a key.
 //
-// Semantics (performance-first): the returned slice may be a read-only view into
-// internal storage (e.g. mmapped slabs) and must not be modified by the caller.
-// If you need stable bytes independent of TreeDB internals, copy the slice.
+// Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
@@ -256,6 +254,34 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return db.cached.Get(key)
 	}
 	return db.backend.Get(key)
+}
+
+// GetUnsafe returns the value for a key.
+//
+// Semantics (performance-first): the returned slice may be a read-only view into
+// internal storage (e.g. mmapped slabs) and must not be modified by the caller.
+// If you need stable bytes independent of TreeDB internals, copy the slice.
+func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.GetUnsafe(key)
+	}
+	return db.backend.GetUnsafe(key)
+}
+
+// GetAppend appends the value for the key to dst and returns the new slice.
+// It avoids internal allocations by using the provided buffer.
+// If the key is not found, it returns dst and ErrKeyNotFound.
+func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	if err := db.ensureOpen(); err != nil {
+		return dst, err
+	}
+	if db.cached != nil {
+		return db.cached.GetAppend(key, dst)
+	}
+	return db.backend.GetAppend(key, dst)
 }
 
 // Has reports whether a key exists in the database.

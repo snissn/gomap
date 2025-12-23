@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
@@ -67,6 +68,8 @@ func memtableCapacity(flushThreshold int64) int {
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
+	GetUnsafe(key []byte) ([]byte, error)
+	GetAppend(key, dst []byte) ([]byte, error)
 	Has(key []byte) (bool, error)
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
@@ -2226,21 +2229,19 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	return true
 }
 
-// Get implements DB.Get using Merging logic logic conceptually,
-// but optimized: check mutable, then queue (newest to oldest), then disk.
-func (db *DB) Get(key []byte) ([]byte, error) {
+func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	db.mu.RLock()
 	// check mutable
 	val, deleted, found := db.mutable.Get(key)
 	if found {
 		db.mu.RUnlock()
 		if deleted {
-			return nil, nil
+			return nil, true, nil
 		}
 		if val == nil {
-			return []byte{}, nil
+			return []byte{}, true, nil
 		}
-		return val, nil
+		return val, true, nil
 	}
 
 	// check queue backwards (newest first)
@@ -2249,17 +2250,84 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if found {
 			db.mu.RUnlock()
 			if deleted {
-				return nil, nil
+				return nil, true, nil
 			}
 			if val == nil {
-				return []byte{}, nil
+				return []byte{}, true, nil
 			}
-			return val, nil
+			return val, true, nil
 		}
 	}
 	db.mu.RUnlock()
+	return nil, false, nil
+}
 
+// GetUnsafe implements DB.GetUnsafe using Merging logic logic conceptually,
+// but optimized: check mutable, then queue (newest to oldest), then disk.
+// Returns a view that must not be modified.
+func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return val, nil
+	}
+	return db.backend.GetUnsafe(key)
+}
+
+// Get returns a safe copy of the value.
+func (db *DB) Get(key []byte) ([]byte, error) {
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		if val == nil {
+			return nil, nil
+		}
+		cpy := make([]byte, len(val))
+		copy(cpy, val)
+		return cpy, nil
+	}
 	return db.backend.Get(key)
+}
+
+// GetAppend appends the value for the key to dst and returns the new slice.
+// If the key is not found, it returns dst and ErrKeyNotFound.
+func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	// 1. Memtable (Zero Copy)
+	val, found, err := db.getMemtable(key)
+	if err != nil {
+		return dst, err
+	}
+	if found {
+		if val == nil {
+			// Found tombstone or empty?
+			// getMemtable returns val=nil for deleted.
+			// Deleted means "Not Found" effectively for GetAppend?
+			// Yes.
+			// Wait, getMemtable returns found=true if tombstone OR value exists.
+			// If deleted (tombstone), val=nil.
+			// So if val==nil && found==true -> Key is Deleted.
+			// GetAppend should return ErrKeyNotFound.
+			// Wait, tree.ErrKeyNotFound is in tree package.
+			// caching package imports tree/tree? No.
+			// But db package imports it.
+			// We can define ErrKeyNotFound in caching or use a sentinel.
+			// Actually caching package doesn't seem to import tree.
+			// But DB struct has backend.
+			// I should probably import "github.com/snissn/gomap/TreeDB/tree" or define it.
+			// Let's assume tree import is fine or check imports.
+			// The file header imports internal/memtable etc.
+			// I will add the import.
+			return dst, tree.ErrKeyNotFound
+		}
+		return append(dst, val...), nil
+	}
+
+	// 2. Backend
+	return db.backend.GetAppend(key, dst)
 }
 
 func (db *DB) Has(key []byte) (bool, error) {

@@ -29,7 +29,30 @@ func (m *MockBackend) Get(key []byte) ([]byte, error) {
 	if !ok {
 		return nil, nil
 	}
+	// Mimic safe copy for Get
+	ret := make([]byte, len(val))
+	copy(ret, val)
+	return ret, nil
+}
+
+func (m *MockBackend) GetUnsafe(key []byte) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	val, ok := m.data[string(key)]
+	if !ok {
+		return nil, nil
+	}
 	return val, nil
+}
+
+func (m *MockBackend) GetAppend(key, dst []byte) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	val, ok := m.data[string(key)]
+	if !ok {
+		return dst, fmt.Errorf("mock: key not found") // Use error to match contract, though tests might not check type strictly
+	}
+	return append(dst, val...), nil
 }
 
 func (m *MockBackend) Has(key []byte) (bool, error) {
