@@ -1,7 +1,9 @@
 package slab
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +25,8 @@ type SlabManager struct {
 	mu         sync.RWMutex
 
 	disableReadChecksum bool
+
+	appendManyScratch []byte
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
@@ -132,6 +136,166 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		Length: uint32(length),
 		FileID: sm.activeSlab.ID,
 	}, nil
+}
+
+type appendManyMeta struct {
+	idx    int
+	start  int
+	keyLen int
+	valLen int
+}
+
+// AppendMany appends multiple records while amortizing system calls. It returns
+// a pointer for each key/value pair (same order as inputs).
+//
+// Thread-safety: This is serialized by the SlabManager mutex.
+func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValuePtr, error) {
+	if len(keys) != len(values) {
+		return nil, fmt.Errorf("AppendMany: keys/values length mismatch (%d != %d)", len(keys), len(values))
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	// Keep buffers bounded so we don't double memory usage for extremely large
+	// batches or values.
+	const maxBatchBytes = 8 << 20   // 8 MiB
+	const maxKeepScratch = 16 << 20 // 16 MiB
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	ptrs := make([]page.ValuePtr, len(keys))
+
+	buf := sm.appendManyScratch[:0]
+	metas := make([]appendManyMeta, 0, min(len(keys), 1024))
+
+	flush := func() error {
+		if len(buf) == 0 {
+			return nil
+		}
+		s := sm.activeSlab
+		id := s.ID
+
+		for {
+			base, err := s.WriteBatch(buf)
+			if err == ErrSlabFull {
+				// Should be rare (pre-checked), but handle if MaxSlabSize changed or
+				// the slab was concurrently advanced by another writer.
+				if err := sm.rotateLocked(); err != nil {
+					return err
+				}
+				s = sm.activeSlab
+				id = s.ID
+				continue
+			}
+			if err != nil {
+				return err
+			}
+
+			for _, meta := range metas {
+				ptrs[meta.idx] = page.ValuePtr{
+					Offset: uint64(base + int64(meta.start) + 4),
+					Length: uint32(2 + 4 + meta.keyLen + meta.valLen),
+					FileID: id,
+				}
+			}
+
+			buf = buf[:0]
+			metas = metas[:0]
+			return nil
+		}
+	}
+
+	growBuf := func(target int) {
+		if cap(buf) >= target {
+			return
+		}
+		newCap := cap(buf) * 2
+		if newCap < target {
+			newCap = target
+		}
+		if newCap < 1024 {
+			newCap = 1024
+		}
+		nb := make([]byte, len(buf), newCap)
+		copy(nb, buf)
+		buf = nb
+	}
+
+	var lenArr [6]byte
+
+	for i := 0; i < len(keys); i++ {
+		key := keys[i]
+		value := values[i]
+
+		keyLen := len(key)
+		valLen := len(value)
+
+		if keyLen > int(^uint16(0)) {
+			return nil, ErrRecordTooLarge
+		}
+		recordLen := HeaderSize + keyLen + valLen
+		if int64(recordLen) < 0 || int64(recordLen) > MaxSlabSize {
+			return nil, ErrRecordTooLarge
+		}
+
+		// Ensure the record fits in the active slab, flushing/rotating as needed.
+		if int64(sm.activeSlab.Size)+int64(len(buf))+int64(recordLen) > MaxSlabSize {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			if int64(sm.activeSlab.Size)+int64(recordLen) > MaxSlabSize {
+				if err := sm.rotateLocked(); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		// Bound the in-memory buffer size.
+		if len(buf) >= maxBatchBytes {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		}
+
+		start := len(buf)
+		end := start + recordLen
+		growBuf(end)
+		buf = buf[:end]
+		rec := buf[start:end]
+
+		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+		binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+
+		sum := crc32.Update(0, crc32cTable, lenArr[:])
+		sum = crc32.Update(sum, crc32cTable, key)
+		sum = crc32.Update(sum, crc32cTable, value)
+
+		binary.LittleEndian.PutUint32(rec[0:4], sum)
+		copy(rec[4:10], lenArr[:])
+		copy(rec[10:10+keyLen], key)
+		copy(rec[10+keyLen:], value)
+
+		metas = append(metas, appendManyMeta{
+			idx:    i,
+			start:  start,
+			keyLen: keyLen,
+			valLen: valLen,
+		})
+	}
+
+	if err := flush(); err != nil {
+		return nil, err
+	}
+
+	if cap(buf) > maxKeepScratch {
+		sm.appendManyScratch = nil
+	} else {
+		sm.appendManyScratch = buf[:0]
+	}
+
+	return ptrs, nil
 }
 
 // Rotate forces creation of a new active slab.

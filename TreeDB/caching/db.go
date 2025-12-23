@@ -1693,10 +1693,16 @@ func (db *DB) rotateWALLocked() error {
 	if db.disableWAL {
 		return nil
 	}
+	db.walSeq++
+	name := fmt.Sprintf("wal-%06d.log", db.walSeq)
+	path := filepath.Join(db.dir, name)
+
 	if db.wal != nil {
 		oldPath := db.walPath
 		oldSize := db.wal.Size()
-		_ = db.wal.Close()
+		if err := db.wal.RotateTo(path); err != nil {
+			return err
+		}
 		db.walLiveBytes.Store(0)
 		if oldPath != "" {
 			if db.walClosedSizes == nil {
@@ -1706,15 +1712,14 @@ func (db *DB) rotateWALLocked() error {
 			db.walClosedSizes[oldPath] = oldSize
 			db.walClosedBytes.Add(oldSize - prev)
 		}
+	} else {
+		w, err := wal.NewWriter(path)
+		if err != nil {
+			return err
+		}
+		db.wal = w
+		db.walLiveBytes.Store(0)
 	}
-	db.walSeq++
-	name := fmt.Sprintf("wal-%06d.log", db.walSeq)
-	path := filepath.Join(db.dir, name)
-	w, err := wal.NewWriter(path)
-	if err != nil {
-		return err
-	}
-	db.wal = w
 	db.walPath = path
 	db.walLiveBytes.Store(0)
 	return nil

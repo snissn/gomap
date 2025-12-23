@@ -48,6 +48,45 @@ func NewWriter(path string) (*Writer, error) {
 	}, nil
 }
 
+// RotateTo flushes and closes the current WAL file, then opens (or creates) the
+// provided path and reuses the writer's buffers for future appends.
+func (w *Writer) RotateTo(path string) error {
+	if w == nil {
+		return errors.New("wal: nil writer")
+	}
+
+	if w.f != nil {
+		if err := w.flushPending(); err != nil {
+			_ = w.f.Close()
+			return err
+		}
+		if err := w.bw.Flush(); err != nil {
+			_ = w.f.Close()
+			return err
+		}
+		if err := w.f.Close(); err != nil {
+			return err
+		}
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+
+	w.f = f
+	w.bw.Reset(f)
+	w.size = info.Size()
+	w.pending = w.pending[:0]
+	// Keep scratch for reuse; next Append/AppendBatch will resize as needed.
+	return nil
+}
+
 // writeSegment writes a chunk of data as a checksummed segment.
 // Format: [Length 4][CRC 4][Payload...]
 func (w *Writer) writeSegment(payload []byte) error {
