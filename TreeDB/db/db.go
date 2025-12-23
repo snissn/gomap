@@ -50,6 +50,9 @@ type DB struct {
 	idxAll  map[uint64]*indexGen
 	idxNext uint64
 
+	snapPool     *SnapshotPool
+	ghostManager *indexGhostManager
+
 	dir                  string
 	chunkSize            int64
 	preferAppendAlloc    bool
@@ -264,13 +267,13 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		tr = tree.New(idx.pager, state.SlabSet, state.RootPageID)
 	}
 
-	return &Snapshot{
-		db:         db,
-		idx:        idx,
-		state:      state,
-		tree:       tr,
-		registryID: id,
-	}
+	snap := db.snapPool.Get()
+	snap.db = db
+	snap.idx = idx
+	snap.state = state
+	snap.tree = tr
+	snap.registryID = id
+	return snap
 }
 
 // Close releases the snapshot.
@@ -282,6 +285,9 @@ func (s *Snapshot) Close() error {
 	if s.idx != nil {
 		s.idx.registry.Unregister(s.registryID)
 		s.db.releaseIndex(s.idx)
+	}
+	if s.db != nil {
+		s.db.snapPool.Put(s)
 	}
 	return err
 }
@@ -383,6 +389,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 		idxAll:  map[uint64]*indexGen{gen.id: gen},
 		idxNext: gen.id + 1,
+
+		snapPool:     NewSnapshotPool(),
+		ghostManager: &indexGhostManager{},
 	}
 	db.idx.Store(gen)
 
