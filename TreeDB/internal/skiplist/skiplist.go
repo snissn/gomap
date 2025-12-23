@@ -21,10 +21,10 @@ const (
 	flagDeleted = 1
 
 	// Arena Constants
-	// We use 1MiB chunks. With uint32 pointers, this provides a total addressable
+	// We use 4MiB chunks. With uint32 pointers, this provides a total addressable
 	// arena of 4GiB.
-	chunkShift = 20
-	chunkSize  = 1 << chunkShift // 1 MiB
+	chunkShift = 22
+	chunkSize  = 1 << chunkShift // 4 MiB
 	chunkMask  = chunkSize - 1
 )
 
@@ -108,10 +108,10 @@ The limit comes from how the SkipList addresses memory. To save RAM, it uses **3
 Since a SkipList has many links (up to 20 per node), saving 4 bytes per link is significant.
 
 The 32 bits are split:
--   **High 16 bits:** Chunk Index (0 to 65,535)
--   **Low 16 bits:** Offset within Chunk (0 to 65,535 bytes)
+-   **High (32 - chunkShift) bits:** Chunk Index
+-   **Low chunkShift bits:** Offset within Chunk (0 to (chunkSize - 1) bytes)
 
-Math: `65,536 chunks * 65,536 bytes/chunk = 4,294,967,296 bytes` (**4GB**).
+Math: `2^(32-chunkShift) chunks * 2^chunkShift bytes/chunk = 2^32 bytes` (**4GB**).
 
 #### 2. When can this panic?
 It panics if the **total active data** in a single Memtable exceeds 4GB.
@@ -150,7 +150,7 @@ Given that Memtables are meant to be small (MBs, not GBs), this design tradeoff 
 // alloc allocates n bytes in the arena and returns the virtual offset.
 // Pointer format: (ChunkIndex << chunkShift) | Offset
 func (s *SkipList) alloc(n int) uint32 {
-	// 1. Handle Huge Allocations (> 64KB)
+	// 1. Handle Huge Allocations (> chunkSize)
 	// We allocate a contiguous block and consume enough virtual chunks to cover it.
 	if n > chunkSize {
 		// Align to the next chunk boundary
@@ -512,8 +512,9 @@ func (s *SkipList) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (s *SkipList) Size() int64 {
-	// Approximation based on allocated chunks
-	return int64(len(s.allocated)) * chunkSize
+	// Approximation based on the high-water mark within the virtual arena.
+	// This intentionally does not account for spare capacity in the current chunk.
+	return int64(s.curChunkIdx)*chunkSize + int64(s.curChunkOff)
 }
 
 func (s *SkipList) Count() int {
