@@ -1091,7 +1091,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	// Initialize DBs
 	instances := make([]*DBInstance, 0)
 	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"hashdb", "btree", "treedb", "treedbbackend", "badger", "leveldb"}
+	orderedDBs := []string{"hashdb", "btree", "treedb", "badger", "leveldb"}
 	if strings.TrimSpace(cfg.DBsArg) != "all" {
 		orderedDBs = dbsToRun
 	}
