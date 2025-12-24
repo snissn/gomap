@@ -261,34 +261,22 @@ Owner and dates are optional; add them if you use a team workflow.
 ## Performance & Scalability
 
 ### AUD-015: Global write lock serialization
-- Status: MITIGATED
+- Status: FIXED
 - Severity: P2 (performance)
 - Evidence:
-  - `TreeDB/db/batch.go`: `writeMu` serializes writers.
+  - `TreeDB/db/batch.go`: optimistic write path uses `writeMu.RLock` + `commitMu` with CAS on `UserRootPageID`.
+  - `TreeDB/db/alloc_tracker.go`: tracks allocated pages and frees on conflicts.
+  - `TreeDB/zipper/zipper.go`: `CloneWithAllocator` preserves zipper config with tracked allocations.
+  - `TreeDB/db/concurrent_write_test.go`: concurrent writer correctness test.
   - `TreeDB/caching/db.go`: write paths use `writeMu` as an `RWMutex` with WAL-level locking.
   - `TreeDB/caching/db_test.go`: `TestCachingDB_SetDoesNotBlockOnWriteMuRLock`.
   - `docs/TREEDB_TUNING.md`: write concurrency limits and mitigations documented.
 - Risk:
   - Multi-writer workloads do not scale with cores.
-- Plan (Phase 2: full fix):
-  1) Baseline & targets:
-     - Re-run `BenchmarkWriteParallel` (backend) + `BenchmarkWriteParallelCached` + `BenchmarkReadUnderWrite*`.
-     - Define success: multi-writer throughput scales vs G=1 (>=1.5x at G=4), and read p95 stays within +50% under write load.
-  2) Backend-only optimistic commit:
-     - Move `Batch.Write/WriteSync` to optimistic mode: snapshot current root under `db.mu.RLock`, run `zipper.Apply` without `writeMu`, then commit under `db.mu.Lock` with compare-and-swap on `UserRootPageID`.
-     - On mismatch, retry a bounded number of times, then fall back to serialized path.
-     - Ensure retired pages + metrics are only applied when CAS succeeds.
-     - Add tests: concurrent writers + forced root change; verify no lost updates and correct values.
-  3) Cached-mode memtable sharding:
-     - Introduce N shard memtables (hash key -> shard), each with its own lock/arena.
-     - WAL append remains serialized via `walMu`; memtable updates become parallel per shard.
-     - Flush: snapshot all shards into a combined queue and k-way merge during flush.
-     - Iterator: merge shard iterators while preserving snapshot semantics.
-     - Backpressure thresholds apply to total backlog across shards.
-  4) Validation:
-     - Update benchmarks to compare pre/post.
-     - Add race tests with writers + iterators across shards.
-     - Monitor WAL ordering and snapshot isolation across shards.
+- Resolution:
+  - Backend writes use optimistic apply + CAS commit with bounded retries and a serialized fallback.
+  - Allocation tracking frees pages on conflicts to avoid index growth from abandoned attempts.
+  - Concurrent writer test validates no lost updates.
 - Investigation:
   1) Benchmark multi-writer ingestion; capture CPU contention profile.
 - Fix options:
@@ -365,6 +353,6 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-012 | FIXED |  |  | Dead mapping cap enforced; remap suppression test added. |
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
-| AUD-015 | MITIGATED |  |  | Cached writes allow concurrent RLock; backend remains single-writer. |
+| AUD-015 | FIXED |  |  | Backend uses optimistic apply + CAS commit; concurrent writer test added. |
 | AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
 | AUD-017 | FIXED |  |  | Default region bias enabled + tests. |

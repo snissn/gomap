@@ -69,7 +69,8 @@ type DB struct {
 	repairSlabTailOnOpen bool
 
 	mu               sync.RWMutex
-	writeMu          sync.Mutex
+	writeMu          sync.RWMutex
+	commitMu         sync.Mutex
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody

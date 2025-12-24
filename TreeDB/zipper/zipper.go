@@ -41,6 +41,18 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 	}
 }
 
+// CloneWithAllocator returns a zipper that shares config/pager with z but uses
+// the provided allocator.
+func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
+	return &Zipper{
+		pager:                z.pager,
+		allocator:            a,
+		leafReserveBytes:     z.leafReserveBytes,
+		internalReserveBytes: z.internalReserveBytes,
+		piggybackCompaction:  z.piggybackCompaction,
+	}
+}
+
 // SetFillTargets configures soft-full thresholds for newly written pages.
 // Targets are in parts-per-million where 1_000_000 means "allow full pages".
 func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
