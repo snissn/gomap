@@ -360,12 +360,12 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 		m.mu.RLock()
 		keys := m.sortedKeys
-		m.mu.RUnlock()
 		it := &hashIterator{
 			mt:     m,
 			keys:   keys,
 			end:    endKey,
 			hasEnd: hasEnd,
+			mu:     &m.mu,
 		}
 		it.Seek(start)
 		return it
@@ -390,7 +390,6 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 	m.mu.RLock()
 	keys := m.sortedKeys
-	m.mu.RUnlock()
 
 	idx := 0
 	if startKey != "" {
@@ -405,6 +404,7 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		idx:    idx,
 		end:    endKey,
 		hasEnd: hasEnd,
+		mu:     &m.mu,
 	}
 }
 
@@ -778,6 +778,8 @@ type hashIterator struct {
 	cur    hashEntry
 	loaded bool
 	valid  bool
+	mu     *sync.RWMutex
+	once   sync.Once
 }
 
 func (it *hashIterator) Seek(key []byte) {
@@ -874,6 +876,11 @@ func (it *hashIterator) Error() error {
 }
 
 func (it *hashIterator) Close() error {
+	it.once.Do(func() {
+		if it.mu != nil {
+			it.mu.RUnlock()
+		}
+	})
 	return nil
 }
 

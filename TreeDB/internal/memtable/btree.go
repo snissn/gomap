@@ -261,7 +261,6 @@ func (m *BTree) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 	m.mu.RLock()
 	iter := m.tree.Iter()
-	m.mu.RUnlock()
 
 	valid := false
 	if startKey == "" {
@@ -275,6 +274,7 @@ func (m *BTree) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		end:    endKey,
 		hasEnd: hasEnd,
 		valid:  valid,
+		mu:     &m.mu,
 	}
 	it.refresh()
 	return it
@@ -287,6 +287,8 @@ type btreeIterator struct {
 	valid  bool
 	cur    btreeEntry
 	hasCur bool
+	mu     *sync.RWMutex
+	once   sync.Once
 }
 
 func (it *btreeIterator) Seek(key []byte) {
@@ -369,6 +371,11 @@ func (it *btreeIterator) Error() error {
 }
 
 func (it *btreeIterator) Close() error {
+	it.once.Do(func() {
+		if it.mu != nil {
+			it.mu.RUnlock()
+		}
+	})
 	return nil
 }
 

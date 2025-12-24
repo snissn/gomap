@@ -91,7 +91,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - DB-level GetUnsafe returns safe copies; Snapshot.GetUnsafe remains view-scoped.
 
 ### AUD-005: Memtable iterator race
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
   - `TreeDB/internal/memtable/memtable.go`: `NewIterator` releases lock before returning iterator.
@@ -105,6 +105,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Provide explicit `NewIteratorUnsafe` with lifetime constraints.
 - Acceptance criteria:
   - `-race` clean and no panics in concurrent iteration test.
+  - Iterator holds read lock until Close; regression test verifies writer blocking.
 
 ### AUD-006: WAL rotation missing fsync
 - Status: OPEN
@@ -313,7 +314,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-002 | FIXED |  |  | Safe default copies; mutation tests added. |
 | AUD-003 | NOT_APPLICABLE |  |  |  |
 | AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
-| AUD-005 | OPEN |  |  |  |
+| AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
 | AUD-006 | OPEN |  |  |  |
 | AUD-007 | OPEN |  |  |  |
 | AUD-008 | OPEN |  |  |  |

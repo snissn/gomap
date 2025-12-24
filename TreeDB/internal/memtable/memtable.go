@@ -210,13 +210,14 @@ func (m *Memtable) Reset() {
 type Iterator struct {
 	iter *skiplist.Iterator
 	end  []byte
+	mu   *sync.RWMutex
+	once sync.Once
 }
 
 func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	it := m.sl.NewIterator(start, end)
-	return &Iterator{iter: it, end: end}
+	return &Iterator{iter: it, end: end, mu: &m.mu}
 }
 
 func (it *Iterator) Seek(key []byte) {
@@ -293,6 +294,11 @@ func (it *Iterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *Iterator) Close() error {
+	it.once.Do(func() {
+		if it.mu != nil {
+			it.mu.RUnlock()
+		}
+	})
 	return it.iter.Close()
 }
 
