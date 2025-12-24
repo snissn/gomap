@@ -1000,6 +1000,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return
 	}
+	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
 	if !db.flushMu.TryLock() {
@@ -1884,14 +1885,25 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
-			// Background flush is intentionally async (no backend sync). The WAL is
-			// retained so the backend can recover up to the last synced boundary.
+			// Background flush is async when WAL is enabled. Without a WAL, we
+			// upgrade to a synced flush unless RelaxedSync is set.
 			db.flushAll(false)
 		}
 	}
 }
 
+func (db *DB) flushSyncRequested(sync bool) bool {
+	if sync {
+		return true
+	}
+	if db.disableWAL && !db.relaxedSync {
+		return true
+	}
+	return false
+}
+
 func (db *DB) flushAll(sync bool) {
+	sync = db.flushSyncRequested(sync)
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 

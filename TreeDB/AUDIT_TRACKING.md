@@ -138,11 +138,11 @@ Owner and dates are optional; add them if you use a team workflow.
   - Tests verify directory sync is invoked after rename paths.
 
 ### AUD-008: Background flush without sync when WAL disabled
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
-  - `TreeDB/caching/db.go`: background flush uses `sync=false`.
-  - `TreeDB/profiles.go`: ProfileFast disables WAL and relaxes sync.
+  - `TreeDB/caching/db.go`: background flush upgrades to synced writes when WAL is disabled (unless RelaxedSync).
+  - `TreeDB/caching/db_test.go`: `TestCachingDB_FlushSyncsWhenWALDisabled`.
 - Risk:
   - Operations appear successful but are not durable in WAL-disabled mode.
 - Investigation:
@@ -152,7 +152,8 @@ Owner and dates are optional; add them if you use a team workflow.
   - Force sync in some code paths or gate background flush in unsafe modes.
   - Label ProfileFast as unsafe in API docs and README.
 - Acceptance criteria:
-  - Tests clarify behavior; docs are explicit about non-durability.
+  - Background flush syncs when WAL is disabled (unit test).
+  - RelaxedSync retains opt-out behavior for durability.
 
 ### AUD-009: Corruption-induced panics in leaf search
 - Status: FIXED
@@ -324,7 +325,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
 | AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
 | AUD-007 | FIXED |  |  | recoverIndexSwap syncs parent dir; tests added. |
-| AUD-008 | OPEN |  |  |  |
+| AUD-008 | FIXED |  |  | WAL-disabled flushes sync unless RelaxedSync. |
 | AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
 | AUD-010 | FIXED |  |  | Default perms tightened; test added. |
 | AUD-011 | FIXED |  |  | NotifyError hook + Close reports background errors. |

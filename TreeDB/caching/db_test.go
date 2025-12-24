@@ -18,6 +18,7 @@ type MockBackend struct {
 	mu         sync.RWMutex
 	data       map[string][]byte
 	writeCalls int
+	writeSyncs int
 	writeErr   error
 	setOpsErr  error
 	setErr     error
@@ -213,6 +214,7 @@ func (b *MockBatch) WriteSync() error {
 	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
+	b.mb.writeSyncs++
 	b.mb.mu.Unlock()
 	return nil
 }
@@ -262,6 +264,37 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 		if string(backend.data[k]) != fmt.Sprintf("v%d", i) {
 			t.Errorf("Backend missing %s", k)
 		}
+	}
+}
+
+func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{DisableWAL: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := db.Drain(); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	backend.mu.RLock()
+	writeSyncs := backend.writeSyncs
+	writeCalls := backend.writeCalls
+	backend.mu.RUnlock()
+
+	if writeCalls == 0 {
+		t.Fatalf("expected backend writes")
+	}
+	if writeSyncs == 0 {
+		t.Fatalf("expected WriteSync when WAL is disabled")
 	}
 }
 
