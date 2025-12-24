@@ -383,6 +383,11 @@ Phase 0: Reduce read-path contention without changing write semantics.
    - Allocation tests for `Has`/`Iterator`/`writeBypass` with queued memtables.
    - Race test that `Has` does not block while `db.mu` is held (lock-free read path).
 
+Phase 0 status:
+- Implemented RCU memtable snapshots and lock-free `getMemtable`/`Has` reads (`TreeDB/caching/db.go`).
+- Iterator and `writeBypass` now use the published snapshot to avoid per-call queue copies (`TreeDB/caching/db.go`).
+- Added tests for snapshot updates, immutability, and allocation behavior (`TreeDB/caching/rcu_snapshot_test.go`).
+
 Phase 1: Memtable sharding (true write concurrency).
 1) Data structures + config:
    - Add `memShard` struct: `mu`, `mt memtable.Interface`, `rng keyRange`, `bytes atomic.Int64`.

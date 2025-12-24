@@ -129,8 +129,12 @@ type DB struct {
 	checkpointing  atomic.Bool
 
 	// Level 0 (Memory)
-	mutable           memtable.Table
-	queue             []memtable.Table
+	mutable memtable.Table
+	queue   []memtable.Table
+
+	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
+	// Readers load it atomically to avoid holding db.mu around memtable access.
+	memtables         atomic.Pointer[memtableView]
 	mutableRange      keyRange
 	queueRanges       []keyRange
 	queueWALPaths     []string
@@ -204,6 +208,31 @@ type keyRange struct {
 	valid bool
 	min   []byte
 	max   []byte
+}
+
+// memtableView is an immutable snapshot of the in-memory layers.
+// It is published via atomic.Pointer and treated as read-only by readers.
+type memtableView struct {
+	mutable     memtable.Table
+	queue       []memtable.Table
+	queueRanges []keyRange
+}
+
+// publishMemtablesLocked publishes a new memtable snapshot.
+// Caller must hold db.mu with a writer lock.
+func (db *DB) publishMemtablesLocked() {
+	view := &memtableView{mutable: db.mutable}
+	if len(db.queue) > 0 {
+		q := make([]memtable.Table, len(db.queue))
+		copy(q, db.queue)
+		view.queue = q
+	}
+	if len(db.queueRanges) > 0 {
+		qr := make([]keyRange, len(db.queueRanges))
+		copy(qr, db.queueRanges)
+		view.queueRanges = qr
+	}
+	db.memtables.Store(view)
 }
 
 type memtableStats struct {
@@ -301,7 +330,7 @@ func (db *DB) noteWriteKeyLocked(key []byte) {
 	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
 		stats.seqWrites++
 	}
-	stats.lastKey = key
+	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
 }
 
@@ -458,6 +487,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			db.mu.Unlock()
 		}
 	}
+
+	// Publish initial memtable snapshot for lock-free reads.
+	db.mu.Lock()
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -1391,6 +1425,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueWALPaths = nil
 			db.mutableRange = keyRange{}
 			db.queueBacklogBytes.Store(0)
+			db.publishMemtablesLocked()
 
 			db.mu.Unlock()
 			db.flushMu.Unlock()
@@ -1457,6 +1492,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueWALPaths = nil
 			db.mutableRange = keyRange{}
 			db.queueBacklogBytes.Store(0)
+			db.publishMemtablesLocked()
 			db.mu.Unlock()
 
 			it, err := db.backend.Iterator(start, end)
@@ -1542,6 +1578,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 		}
+		db.publishMemtablesLocked()
 
 		// Snapshot sources after any rotations/drops.
 		mutable := db.mutable
@@ -1755,6 +1792,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	if db.memtableAdaptive {
 		db.resetMemtableStatsLocked()
 	}
+	db.publishMemtablesLocked()
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
@@ -1822,6 +1860,7 @@ func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
 	if db.memtableAdaptive {
 		db.resetMemtableStatsLocked()
 	}
+	db.publishMemtablesLocked()
 
 	db.bpMu.Lock()
 	db.bpCond.Broadcast()
@@ -2177,6 +2216,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		db.queueWALPaths = db.queueWALPaths[len(units):]
 	}
 	db.queueBacklogBytes.Add(-totalBytes)
+	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(units))
 	if sync {
@@ -2351,6 +2391,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.queueWALPaths = db.queueWALPaths[1:]
 	}
 	db.queueBacklogBytes.Add(-memBytes)
+	db.publishMemtablesLocked()
 
 	// Check if WAL is still in use
 	inUse := false
@@ -2395,25 +2436,29 @@ func (db *DB) flushOneLocked(sync bool) bool {
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
-	db.mu.RLock()
-	// check mutable
-	val, deleted, found := db.mutable.Get(key)
-	if found {
+	view := db.memtables.Load()
+	var (
+		mutable memtable.Table
+		queue   []memtable.Table
+	)
+	if view != nil {
+		mutable = view.mutable
+		queue = view.queue
+	} else {
+		// Defensive fallback: should not happen after Open(), but keep safe
+		// behavior for zero-value DBs and tests.
+		db.mu.RLock()
+		mutable = db.mutable
+		if len(db.queue) > 0 {
+			queue = append([]memtable.Table(nil), db.queue...)
+		}
 		db.mu.RUnlock()
-		if deleted {
-			return nil, true, nil
-		}
-		if val == nil {
-			return []byte{}, true, nil
-		}
-		return val, true, nil
 	}
 
-	// check queue backwards (newest first)
-	for i := len(db.queue) - 1; i >= 0; i-- {
-		val, deleted, found = db.queue[i].Get(key)
+	// check mutable
+	if mutable != nil {
+		val, deleted, found := mutable.Get(key)
 		if found {
-			db.mu.RUnlock()
 			if deleted {
 				return nil, true, nil
 			}
@@ -2423,7 +2468,20 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			return val, true, nil
 		}
 	}
-	db.mu.RUnlock()
+
+	// check queue backwards (newest first)
+	for i := len(queue) - 1; i >= 0; i-- {
+		val, deleted, found := queue[i].Get(key)
+		if found {
+			if deleted {
+				return nil, true, nil
+			}
+			if val == nil {
+				return []byte{}, true, nil
+			}
+			return val, true, nil
+		}
+	}
 	return nil, false, nil
 }
 
@@ -2487,21 +2545,36 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
-	db.mu.RLock()
-	_, deleted, found := db.mutable.Get(key)
-	if found {
+	view := db.memtables.Load()
+	var (
+		mutable memtable.Table
+		queue   []memtable.Table
+	)
+	if view != nil {
+		mutable = view.mutable
+		queue = view.queue
+	} else {
+		db.mu.RLock()
+		mutable = db.mutable
+		if len(db.queue) > 0 {
+			queue = append([]memtable.Table(nil), db.queue...)
+		}
 		db.mu.RUnlock()
-		return !deleted, nil
 	}
 
-	for i := len(db.queue) - 1; i >= 0; i-- {
-		_, deleted, found = db.queue[i].Get(key)
+	if mutable != nil {
+		_, deleted, found := mutable.Get(key)
 		if found {
-			db.mu.RUnlock()
 			return !deleted, nil
 		}
 	}
-	db.mu.RUnlock()
+
+	for i := len(queue) - 1; i >= 0; i-- {
+		_, deleted, found := queue[i].Get(key)
+		if found {
+			return !deleted, nil
+		}
+	}
 
 	return db.backend.Has(key)
 }
@@ -2645,13 +2718,26 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	queueLen := len(db.queue)
-	queue := append([]memtable.Table(nil), db.queue...)
-	queueRanges := append([]keyRange(nil), db.queueRanges...)
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
 
 	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	var queue []memtable.Table
+	var queueRanges []keyRange
+	if view != nil {
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
+		// for zero-value DBs and tests.
+		db.mu.RLock()
+		queue = append([]memtable.Table(nil), db.queue...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		db.mu.RUnlock()
+	}
+	queueLen := len(queue)
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
@@ -2677,14 +2763,16 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Note: We skip db.mutable because we just rotated it (so it's empty) or it was already empty.
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if overlapsQuery(start, end, queueRanges[i]) {
-			qIter := queue[i].NewIterator(start, end)
-			qIter.Seek(start)
-			sources = append(sources, merging.IteratorSource{
-				Iter:     qIter,
-				Priority: prio,
-			})
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+			prio++
+			continue
 		}
+		qIter := queue[i].NewIterator(start, end)
+		qIter.Seek(start)
+		sources = append(sources, merging.IteratorSource{
+			Iter:     qIter,
+			Priority: prio,
+		})
 		prio++
 	}
 
@@ -3300,13 +3388,6 @@ func parseWALSeq(name string) (int, bool) {
 func (b *Batch) writeBypass(sync bool) error {
 	// Fast path: if none of these keys exist in mutable/queue, we can write directly
 	// to the backend without flushing (no in-memory shadowing possible).
-	b.db.mu.RLock()
-	mutable := b.db.mutable
-	queue := append([]memtable.Table(nil), b.db.queue...)
-	mutableRange := b.db.mutableRange
-	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
-	b.db.mu.RUnlock()
-
 	// Cheap append-only check: if the batch key range does not overlap with any
 	// in-memory key ranges, it cannot be shadowed.
 	batchRange := keyRange{}
@@ -3315,12 +3396,42 @@ func (b *Batch) writeBypass(sync bool) error {
 		batchRange.add(key)
 	}
 
-	overlaps := rangesOverlap(batchRange, mutableRange)
+	var (
+		mutable     memtable.Table
+		queue       []memtable.Table
+		queueRanges []keyRange
+		overlaps    bool
+	)
+
+	b.db.mu.RLock()
+	view := b.db.memtables.Load()
+	overlaps = rangesOverlap(batchRange, b.db.mutableRange)
+	if view != nil {
+		mutable = view.mutable
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		// Defensive fallback: should not happen after Open(), but keep safe
+		// behavior for zero-value DBs and tests.
+		mutable = b.db.mutable
+		if len(b.db.queue) > 0 {
+			queue = append([]memtable.Table(nil), b.db.queue...)
+		}
+		if len(b.db.queueRanges) > 0 {
+			queueRanges = append([]keyRange(nil), b.db.queueRanges...)
+		}
+	}
+	b.db.mu.RUnlock()
+
 	if !overlaps {
-		for _, r := range queueRanges {
-			if rangesOverlap(batchRange, r) {
-				overlaps = true
-				break
+		if len(queueRanges) == 0 && len(queue) > 0 {
+			overlaps = true
+		} else {
+			for _, r := range queueRanges {
+				if rangesOverlap(batchRange, r) {
+					overlaps = true
+					break
+				}
 			}
 		}
 	}
@@ -3329,8 +3440,10 @@ func (b *Batch) writeBypass(sync bool) error {
 		// Slow path: verify no individual key exists in memory (handles sparse overlap).
 		for _, op := range b.entries {
 			key := op.Key
-			if _, _, found := mutable.Get(key); found {
-				return b.writeRegular(sync)
+			if mutable != nil {
+				if _, _, found := mutable.Get(key); found {
+					return b.writeRegular(sync)
+				}
 			}
 			for i := len(queue) - 1; i >= 0; i-- {
 				if _, _, found := queue[i].Get(key); found {
