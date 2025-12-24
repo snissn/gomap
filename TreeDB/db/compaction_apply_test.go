@@ -101,3 +101,88 @@ func TestApplyCompactionMicroBatches_PartialResumeIsSafe(t *testing.T) {
 	// Avoid unused import if slab changes; keep at least one reference.
 	_ = slab.MaxSlabSize
 }
+
+func TestApplyCompactionMicroBatches_SkipsStalePointer(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("k")
+	val1 := bytes.Repeat([]byte("A"), 300)
+	val2 := bytes.Repeat([]byte("B"), 300)
+
+	if err := d.Set(key, val1); err != nil {
+		t.Fatalf("set val1: %v", err)
+	}
+
+	// Rotate so compaction targets a non-active slab.
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected active slab != 0 after rotation")
+	}
+
+	snap := d.AcquireSnapshot()
+	entry1, err := snap.GetEntry(key)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry val1: %v", err)
+	}
+	if entry1.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer entry for key %q", key)
+	}
+
+	if err := d.Set(key, val2); err != nil {
+		t.Fatalf("set val2: %v", err)
+	}
+
+	snap2 := d.AcquireSnapshot()
+	entry2, err := snap2.GetEntry(key)
+	_ = snap2.Close()
+	if err != nil {
+		t.Fatalf("GetEntry val2: %v", err)
+	}
+	if entry2.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer entry for key %q", key)
+	}
+
+	newPtr, err := d.SlabManager().Append(key, val1)
+	if err != nil {
+		t.Fatalf("append compaction ptr: %v", err)
+	}
+	if newPtr == entry2.ValuePtr {
+		t.Fatalf("expected compaction ptr to differ from latest pointer")
+	}
+
+	op := CompactionOp{
+		Key:    append([]byte(nil), key...),
+		OldPtr: entry1.ValuePtr,
+		NewPtr: newPtr,
+	}
+
+	if err := d.ApplyCompactionMicroBatches([]CompactionOp{op}, 1); err != nil {
+		t.Fatalf("ApplyCompactionMicroBatches: %v", err)
+	}
+
+	snap3 := d.AcquireSnapshot()
+	entry3, err := snap3.GetEntry(key)
+	_ = snap3.Close()
+	if err != nil {
+		t.Fatalf("GetEntry after compaction: %v", err)
+	}
+	if entry3.ValuePtr != entry2.ValuePtr {
+		t.Fatalf("expected pointer to remain at latest value")
+	}
+
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, val2) {
+		t.Fatalf("expected latest value to survive compaction")
+	}
+}

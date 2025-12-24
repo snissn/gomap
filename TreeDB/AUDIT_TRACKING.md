@@ -41,10 +41,10 @@ Owner and dates are optional; add them if you use a team workflow.
 - Status: FIXED
 - Severity: P0
 - Evidence:
-  - `TreeDB/db/api.go`: `DB.Set`/`Delete` call `SetView`/`DeleteView`.
-  - `TreeDB/batch/batch.go`: `SetView` and `DeleteView` store caller slices directly.
-  - `TreeDB/caching/db.go`: cached batch stores slices by reference and feeds `SetSteal` to memtables.
-  - `TreeDB/internal/memtable/hash_sorted.go`: `SetSteal` stores slices directly in map entries.
+  - `TreeDB/db/api.go`: `DB.Set`/`Delete` use `batch.Set`/`Delete` (copying inputs).
+  - `TreeDB/batch/batch.go`: `Set`/`Delete` copy key/value bytes; `SetView`/`DeleteView` are explicit unsafe views.
+  - `TreeDB/caching/db.go`: cached `Batch.Set` copies inputs; `SetView` is only used with owned copies.
+  - `TreeDB/internal/memtable/hash_sorted.go`: `SetSteal` stores slices; callers now pass owned copies.
 - Risk:
   - Common user pattern (reused buffers) can corrupt pending writes and WAL/memtable state.
 - Investigation:
@@ -64,6 +64,7 @@ Owner and dates are optional; add them if you use a team workflow.
 - Severity: P0 (historical)
 - Evidence:
   - `TreeDB/db/db.go` `ApplyCompactionMicroBatches`: re-reads entry and checks `ValuePtr == OldPtr` before update; protected by `writeMu`.
+  - `TreeDB/db/compaction_apply_test.go`: `TestApplyCompactionMicroBatches_SkipsStalePointer`.
 - Risk:
   - The original check-then-act race is mitigated by CAS-like logic.
 - Validation tasks:
@@ -79,8 +80,8 @@ Owner and dates are optional; add them if you use a team workflow.
 - Status: FIXED
 - Severity: P1
 - Evidence:
-  - `TreeDB/db/api.go`: `GetUnsafe` acquires snapshot then closes it before returning the view.
-  - `TreeDB/slab/manager.go`: zombie slabs are closed when snapshot refcount reaches 0.
+  - `TreeDB/db/api.go`: `GetUnsafe` returns a safe copy (delegates to `Get`).
+  - `TreeDB/api_alloc_test.go`: `TestGetUnsafe_BackendReturnsValue` and `TestGetUnsafe_CachedReturnsCopy`.
 - Risk:
   - Returned slices can point to mmap pages unmapped after snapshot release; potential SIGSEGV.
 - Investigation:
@@ -330,7 +331,7 @@ Owner and dates are optional; add them if you use a team workflow.
 |---|---|---|---|---|
 | AUD-001 | FIXED |  |  | Pop path encodes body; tests + spec invariant added. |
 | AUD-002 | FIXED |  |  | Safe default copies; mutation tests added. |
-| AUD-003 | NOT_APPLICABLE |  |  |  |
+| AUD-003 | NOT_APPLICABLE |  |  | CAS skip test added. |
 | AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
 | AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
 | AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
