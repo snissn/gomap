@@ -68,7 +68,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
 	b := db.NewBatch().(*Batch)
-	if err := b.batch.SetView(key, value); err != nil {
+	if err := b.batch.Set(key, value); err != nil {
 		return err
 	}
 	return b.Write() // Using Write for better throughput (async)
@@ -77,7 +77,7 @@ func (db *DB) Set(key, value []byte) error {
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
 	b := db.NewBatch().(*Batch)
-	if err := b.batch.SetView(key, value); err != nil {
+	if err := b.batch.Set(key, value); err != nil {
 		return err
 	}
 	return b.WriteSync()
@@ -86,7 +86,7 @@ func (db *DB) SetSync(key, value []byte) error {
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
 	b := db.NewBatch().(*Batch)
-	if err := b.batch.DeleteView(key); err != nil {
+	if err := b.batch.Delete(key); err != nil {
 		return err
 	}
 	return b.Write() // Using Write for better throughput (async)
@@ -95,7 +95,7 @@ func (db *DB) Delete(key []byte) error {
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
 	b := db.NewBatch().(*Batch)
-	if err := b.batch.DeleteView(key); err != nil {
+	if err := b.batch.Delete(key); err != nil {
 		return err
 	}
 	return b.WriteSync()

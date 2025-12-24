@@ -35,7 +35,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Confirmed pop path writes body updates (implemented) and regression test added.
 
 ### AUD-002: API no-copy hazards (Set/Delete and memtables)
-- Status: OPEN
+- Status: FIXED
 - Severity: P0
 - Evidence:
   - `TreeDB/db/api.go`: `DB.Set`/`Delete` call `SetView`/`DeleteView`.
@@ -54,6 +54,7 @@ Owner and dates are optional; add them if you use a team workflow.
 - Acceptance criteria:
   - New tests demonstrate safe default behavior.
   - View methods are clearly documented and only used in safe contexts.
+  - Cached batch Set/Delete copy inputs and tests cover mutation-after-Set.
 
 ### AUD-003: Compaction pointer race (CAS)
 - Status: NOT_APPLICABLE
@@ -308,7 +309,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | ID | Status | Owner | Target | Notes |
 |---|---|---|---|---|
 | AUD-001 | IN_PROGRESS |  |  | Pop path now rewrites body; tests pending. |
-| AUD-002 | OPEN |  |  |  |
+| AUD-002 | FIXED |  |  | Safe default copies; mutation tests added. |
 | AUD-003 | NOT_APPLICABLE |  |  |  |
 | AUD-004 | OPEN |  |  |  |
 | AUD-005 | OPEN |  |  |  |

@@ -2862,29 +2862,27 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
+	keyCopy := append([]byte(nil), key...)
+	valCopy := append([]byte(nil), value...)
 	if b.backend != nil {
-		b.batchRange.add(key)
-		b.size += len(key) + len(value)
-		// Prefer no-copy writes when the backend batch supports it. This avoids
-		// per-entry key/value allocations when streaming large batches to the
-		// backend (e.g. geth's BatchWrite1M workload).
+		b.batchRange.add(keyCopy)
+		b.size += len(keyCopy) + len(valCopy)
+		// Use the backend's view method with owned copies to avoid aliasing.
 		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
-			return sv.SetView(key, value)
+			return sv.SetView(keyCopy, valCopy)
 		}
-		return b.backend.Set(key, value)
+		return b.backend.Set(keyCopy, valCopy)
 	}
 
 	if b.streamEligible {
 		if b.firstKey == nil {
-			// We already store key/value by reference in b.entries, so stream eligibility
-			// tracking can also use references without extra copying.
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	// We don't know about slabs/thresholds here, so we just store inline.
@@ -2892,10 +2890,10 @@ func (b *Batch) Set(key, value []byte) error {
 	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
 	b.entries = append(b.entries, batch.Entry{
 		Type:  batch.OpPut,
-		Key:   key,
-		Value: value,
+		Key:   keyCopy,
+		Value: valCopy,
 	})
-	b.size += len(key) + len(value)
+	b.size += len(keyCopy) + len(valCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -2909,31 +2907,32 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
+	keyCopy := append([]byte(nil), key...)
 	if b.backend != nil {
-		b.batchRange.add(key)
-		b.size += len(key)
+		b.batchRange.add(keyCopy)
+		b.size += len(keyCopy)
 		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
-			return dv.DeleteView(key)
+			return dv.DeleteView(keyCopy)
 		}
-		return b.backend.Delete(key)
+		return b.backend.Delete(keyCopy)
 	}
 
 	if b.streamEligible {
 		if b.firstKey == nil {
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
 		Type: batch.OpDelete,
-		Key:  key,
+		Key:  keyCopy,
 	})
-	b.size += len(key)
+	b.size += len(keyCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -2944,15 +2943,27 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		return ErrBatchClosed
 	}
 	if b.backend != nil {
-		for _, op := range ops {
-			b.size += len(op.Key) + len(op.Value)
-			b.batchRange.add(op.Key)
+		copied := make([]batch.Entry, len(ops))
+		for i, op := range ops {
+			copiedOp := op
+			copiedOp.Key = append([]byte(nil), op.Key...)
+			if op.Value != nil {
+				copiedOp.Value = append([]byte(nil), op.Value...)
+			}
+			copied[i] = copiedOp
+			b.size += len(copiedOp.Key) + len(copiedOp.Value)
+			b.batchRange.add(copiedOp.Key)
 		}
-		return b.backend.SetOps(ops)
+		return b.backend.SetOps(copied)
 	}
 	for _, op := range ops {
-		b.entries = append(b.entries, op)
-		b.size += len(op.Key) + len(op.Value)
+		copied := op
+		copied.Key = append([]byte(nil), op.Key...)
+		if op.Value != nil {
+			copied.Value = append([]byte(nil), op.Value...)
+		}
+		b.entries = append(b.entries, copied)
+		b.size += len(copied.Key) + len(copied.Value)
 	}
 	return nil
 }
