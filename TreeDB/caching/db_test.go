@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -17,6 +18,10 @@ type MockBackend struct {
 	mu         sync.RWMutex
 	data       map[string][]byte
 	writeCalls int
+	writeErr   error
+	setOpsErr  error
+	setErr     error
+	deleteErr  error
 }
 
 func NewMockBackend() *MockBackend {
@@ -157,16 +162,25 @@ type MockBatch struct {
 }
 
 func (b *MockBatch) Set(key, value []byte) error {
+	if b.mb.setErr != nil {
+		return b.mb.setErr
+	}
 	b.mb.Set(key, value)
 	return nil
 }
 func (b *MockBatch) Delete(key []byte) error {
+	if b.mb.deleteErr != nil {
+		return b.mb.deleteErr
+	}
 	b.mb.mu.Lock()
 	delete(b.mb.data, string(key))
 	b.mb.mu.Unlock()
 	return nil
 }
 func (b *MockBatch) SetOps(ops []batch.Entry) error {
+	if b.mb.setOpsErr != nil {
+		return b.mb.setOpsErr
+	}
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
 	for _, op := range ops {
@@ -184,6 +198,9 @@ func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *MockBatch) Write() error {
+	if b.mb.writeErr != nil {
+		return b.mb.writeErr
+	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
 	b.mb.mu.Unlock()
@@ -191,6 +208,9 @@ func (b *MockBatch) Write() error {
 }
 
 func (b *MockBatch) WriteSync() error {
+	if b.mb.writeErr != nil {
+		return b.mb.writeErr
+	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
 	b.mb.mu.Unlock()
@@ -573,6 +593,45 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	}
 	if got != 64 {
 		t.Fatalf("expected %d keys, got %d", 64, got)
+	}
+}
+
+func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.writeErr = errors.New("write failed")
+
+	errCh := make(chan error, 1)
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1,
+		NotifyError: func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.flushAll(false)
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatalf("expected non-nil error callback")
+		}
+	default:
+		t.Fatalf("expected NotifyError to be called")
+	}
+
+	backend.writeErr = nil
+	if err := db.Close(); err == nil {
+		t.Fatalf("expected Close to return background error")
 	}
 }
 

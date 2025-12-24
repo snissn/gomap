@@ -2,6 +2,8 @@ package treedb
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -54,11 +56,14 @@ type Batch interface {
 // DB is the public TreeDB handle. It can represent either cached mode (default)
 // or backend-only mode depending on Options.
 type DB struct {
-	mode    Mode
-	cached  *caching.DB
-	backend *db.DB
-	bgComp  bgCompactionWorker
-	bgVac   bgIndexVacuumWorker
+	mode        Mode
+	cached      *caching.DB
+	backend     *db.DB
+	bgComp      bgCompactionWorker
+	bgVac       bgIndexVacuumWorker
+	notifyError func(error)
+	bgErrMu     sync.Mutex
+	bgErr       error
 }
 
 func (db *DB) ensureOpen() error {
@@ -89,7 +94,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend}, nil
+		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -122,13 +127,14 @@ func Open(opts Options) (*DB, error) {
 		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
 		DisableWAL:              opts.DisableWAL,
 		RelaxedSync:             opts.RelaxedSync,
+		NotifyError:             opts.NotifyError,
 	})
 	if err != nil {
 		_ = backend.Close()
 		return nil, err
 	}
 
-	out := &DB{mode: ModeCached, cached: cached, backend: backend}
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -229,18 +235,39 @@ func (db *DB) Close() error {
 	}
 	db.bgVac.Stop()
 	db.bgComp.Stop()
+	var err error
 	if db.cached != nil {
-		err := db.cached.Close()
+		err = db.cached.Close()
 		db.cached = nil
 		db.backend = nil
-		return err
+		return errors.Join(err, db.backgroundError())
 	}
 	if db.backend != nil {
-		err := db.backend.Close()
+		err = db.backend.Close()
 		db.backend = nil
-		return err
+		return errors.Join(err, db.backgroundError())
 	}
-	return nil
+	return db.backgroundError()
+}
+
+func (db *DB) reportError(err error) {
+	if err == nil {
+		return
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
+	db.bgErrMu.Lock()
+	if db.bgErr == nil {
+		db.bgErr = err
+	}
+	db.bgErrMu.Unlock()
+}
+
+func (db *DB) backgroundError() error {
+	db.bgErrMu.Lock()
+	defer db.bgErrMu.Unlock()
+	return db.bgErr
 }
 
 // Get returns the value for a key.

@@ -193,7 +193,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - New test asserts owner-only permissions on index/slab/lock and wal dir.
 
 ### AUD-011: Background error visibility
-- Status: OPEN
+- Status: FIXED
 - Severity: P2
 - Evidence:
   - `TreeDB/caching/db.go`: errors logged to stderr and discarded.
@@ -207,6 +207,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Store error state and return on `Close()` or via health check.
 - Acceptance criteria:
   - Errors surfaced to user code and tests validate callback is invoked.
+  - Close returns stored background error when no other errors are present.
 
 ### AUD-012: VM map count exhaustion
 - Status: OPEN
@@ -324,7 +325,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-008 | OPEN |  |  |  |
 | AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
 | AUD-010 | FIXED |  |  | Default perms tightened; test added. |
-| AUD-011 | OPEN |  |  |  |
+| AUD-011 | FIXED |  |  | NotifyError hook + Close reports background errors. |
 | AUD-012 | OPEN |  |  |  |
 | AUD-013 | OPEN |  |  |  |
 | AUD-014 | NOT_APPLICABLE |  |  |  |

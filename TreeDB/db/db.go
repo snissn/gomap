@@ -76,6 +76,10 @@ type DB struct {
 	metaPageID       uint64
 
 	state atomic.Pointer[DBState]
+
+	notifyError func(error)
+	bgErrMu     sync.Mutex
+	bgErr       error
 }
 
 type Mode uint8
@@ -188,6 +192,9 @@ type Options struct {
 	// This improves performance for synchronous workloads but provides only
 	// crash consistency (OS buffer cache), not true durability.
 	RelaxedSync bool
+
+	// NotifyError is an optional hook for background maintenance failures.
+	NotifyError func(error)
 
 	// DisableReadChecksum skips CRC verification on slab reads.
 	// This improves read performance (especially for large values) but risks
@@ -390,6 +397,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 		snapPool:     NewSnapshotPool(),
 		ghostManager: &indexGhostManager{},
+		notifyError:  opts.NotifyError,
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
@@ -458,7 +466,30 @@ func (db *DB) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if bgErr := db.backgroundError(); bgErr != nil {
+		errs = append(errs, bgErr)
+	}
 	return errors.Join(errs...)
+}
+
+func (db *DB) reportError(err error) {
+	if err == nil {
+		return
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
+	db.bgErrMu.Lock()
+	if db.bgErr == nil {
+		db.bgErr = err
+	}
+	db.bgErrMu.Unlock()
+}
+
+func (db *DB) backgroundError() error {
+	db.bgErrMu.Lock()
+	defer db.bgErrMu.Unlock()
+	return db.bgErr
 }
 
 // recover reads meta pages and restores state.

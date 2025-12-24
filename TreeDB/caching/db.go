@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -110,6 +111,9 @@ type Options struct {
 	DisableWAL bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
+
+	// NotifyError is an optional hook for background maintenance failures.
+	NotifyError func(error)
 }
 
 type DB struct {
@@ -167,6 +171,9 @@ type DB struct {
 
 	disableWAL  bool
 	relaxedSync bool
+	notifyError func(error)
+	bgErrMu     sync.Mutex
+	bgErr       error
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
@@ -419,6 +426,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildConcurrency:   opts.FlushBuildConcurrency,
 		disableWAL:              opts.DisableWAL,
 		relaxedSync:             opts.RelaxedSync,
+		notifyError:             opts.NotifyError,
 		mutable:                 mt,
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
@@ -455,6 +463,26 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	go db.flushLoop()
 
 	return db, nil
+}
+
+func (db *DB) reportError(err error) {
+	if err == nil {
+		return
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
+	db.bgErrMu.Lock()
+	if db.bgErr == nil {
+		db.bgErr = err
+	}
+	db.bgErrMu.Unlock()
+}
+
+func (db *DB) backgroundError() error {
+	db.bgErrMu.Lock()
+	defer db.bgErrMu.Unlock()
+	return db.bgErr
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
@@ -878,7 +906,7 @@ func (db *DB) Checkpoint() error {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
 		db.mu.Lock()
@@ -995,6 +1023,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 }
 
 func (db *DB) Close() error {
+	var errs []error
 	hadMemtables := false
 	db.writeMu.Lock()
 	db.mu.Lock()
@@ -1045,7 +1074,7 @@ func (db *DB) Close() error {
 			err = cerr
 		}
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
@@ -1059,7 +1088,7 @@ func (db *DB) Close() error {
 		}
 		seen[path] = struct{}{}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
 		db.mu.Lock()
@@ -1067,7 +1096,13 @@ func (db *DB) Close() error {
 		db.mu.Unlock()
 	}
 
-	return db.backend.Close()
+	if err := db.backend.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if bgErr := db.backgroundError(); bgErr != nil {
+		errs = append(errs, bgErr)
+	}
+	return errors.Join(errs...)
 }
 func (db *DB) Set(key, value []byte) error {
 	if key == nil {
@@ -1975,7 +2010,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				for _, unit := range units {
 					memOps, err := collectOps(unit.mem, unit.memLen)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 						_ = backendBatch.Close()
 						return false
 					}
@@ -1983,7 +2018,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
 					return false
 				}
@@ -2019,7 +2054,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 				select {
 				case err := <-errCh:
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 					_ = backendBatch.Close()
 					return false
 				default:
@@ -2031,7 +2066,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
 					return false
 				}
@@ -2044,14 +2079,14 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					key := iter.UnsafeKey()
 					if iter.IsDeleted() {
 						if err := backendBatch.Delete(key); err != nil {
-							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+							db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
 							return false
 						}
 					} else {
 						if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
-							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
 							return false
@@ -2071,7 +2106,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			err = backendBatch.Write()
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 			_ = backendBatch.Close()
 			return false
 		}
@@ -2131,7 +2166,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	for _, walPath := range deletable {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
 		db.mu.Lock()
@@ -2213,7 +2248,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				iter.Next()
 			}
 			if err := backendBatch.SetOps(ops); err != nil {
-				fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
 				return false
@@ -2223,14 +2258,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				key := iter.UnsafeKey()
 				if iter.IsDeleted() {
 					if err := backendBatch.Delete(key); err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
 					}
 				} else {
 					if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
@@ -2248,7 +2283,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			err = backendBatch.Write()
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 			_ = backendBatch.Close()
 			return false
 		}
@@ -2293,7 +2328,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 	if sync && walPath != "" && !inUse {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 		} else {
 			db.mu.Lock()
 			db.untrackWALSegmentLocked(walPath)

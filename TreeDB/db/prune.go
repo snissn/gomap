@@ -71,6 +71,7 @@ func (w *pruneWorker) Start(db *DB, opts pruneWorkerOptions) {
 			w.lastRunUnix.Store(time.Now().Unix())
 			if err != nil {
 				w.lastErr.Store(err.Error())
+				db.reportError(err)
 			} else {
 				w.lastErr.Store("")
 			}
