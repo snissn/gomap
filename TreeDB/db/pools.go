@@ -56,10 +56,11 @@ type ghostIndex struct {
 }
 
 type indexGhostManager struct {
-	mu     sync.Mutex
-	ghosts []ghostIndex
-	stopCh chan struct{}
-	doneCh chan struct{}
+	mu       sync.Mutex
+	ghosts   []ghostIndex
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func (m *indexGhostManager) start() {
@@ -119,9 +120,13 @@ func (m *indexGhostManager) scavenge(maxAge time.Duration) {
 }
 
 func (m *indexGhostManager) stop() {
-	if m.stopCh != nil {
-		close(m.stopCh)
-		<-m.doneCh
+	stopCh := m.stopCh
+	doneCh := m.doneCh
+	if stopCh != nil {
+		m.stopOnce.Do(func() { close(stopCh) })
+	}
+	if doneCh != nil {
+		<-doneCh
 	}
 	m.closeAll()
 }

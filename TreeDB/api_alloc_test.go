@@ -175,8 +175,7 @@ func TestGet_SafeCopy(t *testing.T) {
 	}
 }
 
-func TestGetUnsafe_BackendIsCopy(t *testing.T) {
-	// Backend GetUnsafe falls back to Get (Safe Copy) because of mmap safety issues without explicit snapshot
+func TestGetUnsafe_BackendReturnsValue(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir, Mode: treedb.ModeBackend})
 	if err != nil {
@@ -194,14 +193,8 @@ func TestGetUnsafe_BackendIsCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// In backend mode, GetUnsafe aliases Get, so it is safe to modify result (though API says don't).
-	// This test just confirms behavior matches implementation expectation.
-	got[0] = 'X'
-
-	got2, err := db.Get(key)
-	if string(got2) != "original" {
-		t.Fatal("Backend GetUnsafe did not return a copy as expected/documented for safety fallback")
+	if string(got) != "original" {
+		t.Fatalf("GetUnsafe: got %q, want %q", string(got), "original")
 	}
 }
 

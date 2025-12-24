@@ -1162,6 +1162,56 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	db.waitForCheckpoint()
 	db.waitForStop()
 
+	// WAL-enabled mode: do a snapshot scan and apply per-key deletes directly.
+	// We intentionally avoid buffering deletes into a Batch: iterator keys are
+	// ephemeral views and must not be stored by reference.
+	if !db.disableWAL {
+		db.writeMu.Lock()
+		defer db.writeMu.Unlock()
+
+		it, err := db.Iterator(start, end)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = it.Close() }()
+
+		db.mu.RLock()
+		w := db.wal
+		db.mu.RUnlock()
+
+		for it.Valid() {
+			key := it.Key()
+
+			if w != nil {
+				if err := w.Append(wal.OpDelete, key, nil); err != nil {
+					return err
+				}
+				db.walLiveBytes.Add(walRecordSize(key, nil))
+			}
+
+			db.mu.Lock()
+			db.mutable.Delete(key)
+			db.mutableRange.add(key)
+			db.noteWriteKeyLocked(key)
+			if db.mutable.Size() > db.mutableFlushThresholdLocked() {
+				if err := db.rotateMemtableLocked(true); err != nil {
+					db.mu.Unlock()
+					return err
+				}
+			}
+			db.mu.Unlock()
+
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			return err
+		}
+
+		db.noteWrite()
+		db.maybeAssistFlush()
+		return nil
+	}
+
 	// Ensure we know whether the backend currently contains any keys so that we
 	// can safely take the "clear memtables" fast path on empty backends.
 	if err := db.ensureBackendRange(); err != nil {
@@ -1682,6 +1732,46 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		default:
 		}
 	}
+	db.bpMu.Lock()
+	db.bpCond.Broadcast()
+	db.bpMu.Unlock()
+	return nil
+}
+
+// rotateMemtableLockedForIterator rotates the current mutable memtable into the
+// immutable queue for snapshot iteration without rotating the WAL segment.
+//
+// This is important for concurrency: iterator creation should not need to
+// serialize behind writeMu just to protect WAL rotation.
+//
+// Caller must hold db.mu.
+func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
+	walPath := db.walPath
+	memBytes := db.mutable.Size()
+	db.mutable.Freeze()
+	db.queue = append(db.queue, db.mutable)
+	db.queueBacklogBytes.Add(memBytes)
+	db.queueRanges = append(db.queueRanges, db.mutableRange)
+	db.queueWALPaths = append(db.queueWALPaths, walPath)
+	if db.memtableAdaptive {
+		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
+	}
+	if db.memtableWarmupActive {
+		db.memtableWarmupActive = false
+	}
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
+	mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+	if err != nil {
+		return err
+	}
+	db.mutable = mt
+	db.mutableRange = keyRange{}
+	if db.memtableAdaptive {
+		db.resetMemtableStatsLocked()
+	}
+
 	db.bpMu.Lock()
 	db.bpCond.Broadcast()
 	db.bpMu.Unlock()
@@ -2470,7 +2560,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 
-	db.writeMu.Lock()
 	db.mu.Lock()
 	db.noteIteratorLocked(start, end)
 
@@ -2484,9 +2573,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
 		// if/when writes resume.
-		if err := db.rotateMemtableLockedWithCapacity(false, minMemtablePrealloc); err != nil {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
-			db.writeMu.Unlock()
 			return nil, err
 		}
 	}
@@ -2498,7 +2586,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	backendRange := db.backendRange
 
 	db.mu.Unlock()
-	db.writeMu.Unlock()
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
