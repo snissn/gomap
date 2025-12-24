@@ -270,6 +270,25 @@ Owner and dates are optional; add them if you use a team workflow.
   - `docs/TREEDB_TUNING.md`: write concurrency limits and mitigations documented.
 - Risk:
   - Multi-writer workloads do not scale with cores.
+- Plan (Phase 2: full fix):
+  1) Baseline & targets:
+     - Re-run `BenchmarkWriteParallel` (backend) + `BenchmarkWriteParallelCached` + `BenchmarkReadUnderWrite*`.
+     - Define success: multi-writer throughput scales vs G=1 (>=1.5x at G=4), and read p95 stays within +50% under write load.
+  2) Backend-only optimistic commit:
+     - Move `Batch.Write/WriteSync` to optimistic mode: snapshot current root under `db.mu.RLock`, run `zipper.Apply` without `writeMu`, then commit under `db.mu.Lock` with compare-and-swap on `UserRootPageID`.
+     - On mismatch, retry a bounded number of times, then fall back to serialized path.
+     - Ensure retired pages + metrics are only applied when CAS succeeds.
+     - Add tests: concurrent writers + forced root change; verify no lost updates and correct values.
+  3) Cached-mode memtable sharding:
+     - Introduce N shard memtables (hash key -> shard), each with its own lock/arena.
+     - WAL append remains serialized via `walMu`; memtable updates become parallel per shard.
+     - Flush: snapshot all shards into a combined queue and k-way merge during flush.
+     - Iterator: merge shard iterators while preserving snapshot semantics.
+     - Backpressure thresholds apply to total backlog across shards.
+  4) Validation:
+     - Update benchmarks to compare pre/post.
+     - Add race tests with writers + iterators across shards.
+     - Monitor WAL ordering and snapshot isolation across shards.
 - Investigation:
   1) Benchmark multi-writer ingestion; capture CPU contention profile.
 - Fix options:
