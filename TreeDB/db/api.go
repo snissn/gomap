@@ -26,21 +26,10 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 // GetUnsafe returns the value for a key.
 //
-// Semantics (performance-first): The returned slice may be a read-only view into
-// internal storage (e.g. memtables or mmap slabs). Callers must not modify it.
-//
-// Note: This uses a Snapshot internally and closes it before returning. The
-// returned view is safe to use as long as the index generation is not unmapped.
-// TreeDB uses "Index Ghosting" to defer unmapping for several seconds after
-// retirement, making this safe for ephemeral use.
+// Semantics: Returns a safe copy of the value. For zero-copy views tied to a
+// snapshot lifetime, use Snapshot.GetUnsafe.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	val, err := snap.GetUnsafe(key)
-	if err == tree.ErrKeyNotFound {
-		return nil, nil
-	}
-	return val, err
+	return db.Get(key)
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

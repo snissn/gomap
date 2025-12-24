@@ -73,7 +73,7 @@ Owner and dates are optional; add them if you use a team workflow.
 ## P1 Stability, Crash Safety, Concurrency
 
 ### AUD-004: Use-after-unmap from `GetUnsafe`
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
   - `TreeDB/db/api.go`: `GetUnsafe` acquires snapshot then closes it before returning the view.
@@ -88,6 +88,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Remove or restrict `GetUnsafe` to iterators with scoped lifetime.
 - Acceptance criteria:
   - Deterministic test or benchmark shows safety or required API changes.
+  - DB-level GetUnsafe returns safe copies; Snapshot.GetUnsafe remains view-scoped.
 
 ### AUD-005: Memtable iterator race
 - Status: OPEN
@@ -311,7 +312,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-001 | IN_PROGRESS |  |  | Pop path now rewrites body; tests pending. |
 | AUD-002 | FIXED |  |  | Safe default copies; mutation tests added. |
 | AUD-003 | NOT_APPLICABLE |  |  |  |
-| AUD-004 | OPEN |  |  |  |
+| AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
 | AUD-005 | OPEN |  |  |  |
 | AUD-006 | OPEN |  |  |  |
 | AUD-007 | OPEN |  |  |  |

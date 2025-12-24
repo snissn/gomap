@@ -2352,18 +2352,9 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
-// GetUnsafe implements DB.GetUnsafe using Merging logic logic conceptually,
-// but optimized: check mutable, then queue (newest to oldest), then disk.
-// Returns a view that must not be modified.
+// GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	val, found, err := db.getMemtable(key)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		return val, nil
-	}
-	return db.backend.GetUnsafe(key)
+	return db.Get(key)
 }
 
 // Get returns a safe copy of the value.

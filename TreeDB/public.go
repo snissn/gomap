@@ -258,9 +258,8 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 
 // GetUnsafe returns the value for a key.
 //
-// Semantics (performance-first): the returned slice may be a read-only view into
-// internal storage (e.g. mmapped slabs) and must not be modified by the caller.
-// If you need stable bytes independent of TreeDB internals, copy the slice.
+// Semantics: Returns a safe copy of the value. For zero-copy views tied to a
+// snapshot lifetime, use AcquireSnapshot().GetUnsafe.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
