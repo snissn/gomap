@@ -294,3 +294,71 @@ func TestSlabRead_RemapsWhenOutOfMappedRange(t *testing.T) {
 		t.Fatalf("expected Read() value to be backed by NEW mmap (ptr=%#x not in [%#x,%#x))", p, base, end)
 	}
 }
+
+func TestSlabRemap_CapsDeadMappings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	originalMax := MaxDeadMappings
+	MaxDeadMappings = 1
+	defer func() { MaxDeadMappings = originalMax }()
+
+	dir := t.TempDir()
+	sm, err := NewSlabManager(dir)
+	if err != nil {
+		t.Fatalf("NewSlabManager failed: %v", err)
+	}
+	defer sm.Close()
+
+	ptr1, err := sm.Append([]byte("k1"), []byte("v1"))
+	if err != nil {
+		t.Fatalf("Append 1 failed: %v", err)
+	}
+
+	_, err = sm.Read(ptr1)
+	if err != nil {
+		t.Fatalf("Read 1 failed: %v", err)
+	}
+
+	s := sm.slabs[ptr1.FileID]
+	s.remapToFileSize()
+	data1, _ := s.mmapData.Load().([]byte)
+	if len(data1) == 0 {
+		t.Fatalf("expected initial mmap")
+	}
+
+	ptr2, err := sm.Append([]byte("k2"), []byte("v2v2v2v2"))
+	if err != nil {
+		t.Fatalf("Append 2 failed: %v", err)
+	}
+	_, err = sm.Read(ptr2)
+	if err != nil {
+		t.Fatalf("Read 2 failed: %v", err)
+	}
+	s.remapToFileSize()
+	data2, _ := s.mmapData.Load().([]byte)
+	if len(s.deadMappings) != 1 {
+		t.Fatalf("expected 1 dead mapping, got %d", len(s.deadMappings))
+	}
+	if len(data2) <= len(data1) {
+		t.Fatalf("expected mmap to grow after first remap")
+	}
+
+	ptr3, err := sm.Append([]byte("k3"), []byte("v3v3v3v3v3v3"))
+	if err != nil {
+		t.Fatalf("Append 3 failed: %v", err)
+	}
+	_, err = sm.Read(ptr3)
+	if err != nil {
+		t.Fatalf("Read 3 failed: %v", err)
+	}
+	s.remapToFileSize()
+	data3, _ := s.mmapData.Load().([]byte)
+	if len(s.deadMappings) != 1 {
+		t.Fatalf("expected dead mappings capped at 1, got %d", len(s.deadMappings))
+	}
+	if len(data3) != len(data2) {
+		t.Fatalf("expected remap suppressed once cap reached")
+	}
+}

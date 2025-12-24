@@ -23,6 +23,9 @@ var (
 	// MaxRecordSize bounds a single slab record (header + key + value).
 	// Set <= 0 to disable the cap.
 	MaxRecordSize int64 = 64 * 1024 * 1024
+	// MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
+	// vm.max_map_count. Set <= 0 to disable the cap.
+	MaxDeadMappings = 64
 )
 
 var (
@@ -384,6 +387,12 @@ func (s *SlabFile) remapToFileSize() {
 
 	data, _ := s.mmapData.Load().([]byte)
 	if data != nil && int64(len(data)) >= currentSize {
+		return
+	}
+
+	if data != nil && MaxDeadMappings > 0 && len(s.deadMappings) >= MaxDeadMappings {
+		// Keep the current mapping to avoid unbounded map growth; reads beyond it
+		// will fall back to pread.
 		return
 	}
 

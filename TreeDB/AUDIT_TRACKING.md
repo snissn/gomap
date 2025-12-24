@@ -211,10 +211,11 @@ Owner and dates are optional; add them if you use a team workflow.
   - Close returns stored background error when no other errors are present.
 
 ### AUD-012: VM map count exhaustion
-- Status: OPEN
+- Status: FIXED
 - Severity: P2
 - Evidence:
-  - `TreeDB/slab/slab.go`: `deadMappings` retained until Close.
+  - `TreeDB/slab/slab.go`: `MaxDeadMappings` cap prevents unbounded remap retention.
+  - `TreeDB/slab/slab_test.go`: `TestSlabRemap_CapsDeadMappings`.
 - Risk:
   - Long-running processes can exhaust `vm.max_map_count`.
 - Investigation:
@@ -223,7 +224,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Bound `deadMappings` by age or count.
   - Add scoped unsafe reads that explicitly pin and release mappings.
 - Acceptance criteria:
-  - Mapping count plateaus under sustained growth.
+  - Dead mappings are capped and remaps are suppressed once the cap is hit.
 
 ### AUD-013: OOM on corrupted slab headers
 - Status: FIXED
@@ -329,7 +330,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
 | AUD-010 | FIXED |  |  | Default perms tightened; test added. |
 | AUD-011 | FIXED |  |  | NotifyError hook + Close reports background errors. |
-| AUD-012 | OPEN |  |  |  |
+| AUD-012 | FIXED |  |  | Dead mapping cap enforced; remap suppression test added. |
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
 | AUD-015 | OPEN |  |  |  |
