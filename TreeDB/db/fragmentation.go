@@ -13,7 +13,7 @@ import (
 // that help diagnose scan regressions after churn.
 func (db *DB) FragmentationReport() (map[string]string, error) {
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.idx == nil || snap.state == nil || snap.tree == nil {
+	if snap == nil || snap.idx == nil || snap.state == nil {
 		if snap != nil {
 			_ = snap.Close()
 		}

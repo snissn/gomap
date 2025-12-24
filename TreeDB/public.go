@@ -417,6 +417,17 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	return db.backend.NewBatchWithSize(size)
 }
 
+// Snapshot is a consistent point-in-time view of the database.
+type Snapshot = db.Snapshot
+
+// AcquireSnapshot returns a new snapshot.
+func (db *DB) AcquireSnapshot() *Snapshot {
+	if db == nil || db.backend == nil {
+		return nil
+	}
+	return db.backend.AcquireSnapshot()
+}
+
 // Stats returns diagnostic stats for the active backend and cached layer.
 func (db *DB) Stats() map[string]string {
 	if db == nil || (db.cached == nil && db.backend == nil) {

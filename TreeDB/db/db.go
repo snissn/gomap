@@ -225,7 +225,7 @@ type Snapshot struct {
 	db         *DB
 	idx        *indexGen
 	state      *DBState
-	tree       *tree.Tree
+	tree       tree.Tree
 	registryID int64
 }
 
@@ -262,16 +262,14 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if idx != nil {
 		id = idx.registry.Register(state.CommitSeq)
 	}
-	var tr *tree.Tree
-	if idx != nil {
-		tr = tree.New(idx.pager, state.SlabSet, state.RootPageID)
-	}
 
 	snap := db.snapPool.Get()
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
-	snap.tree = tr
+	if idx != nil {
+		snap.tree.Reset(idx.pager, state.SlabSet, state.RootPageID)
+	}
 	snap.registryID = id
 	return snap
 }
@@ -393,6 +391,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		snapPool:     NewSnapshotPool(),
 		ghostManager: &indexGhostManager{},
 	}
+	db.ghostManager.start()
 	db.idx.Store(gen)
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
@@ -434,6 +433,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 func (db *DB) Close() error {
 	db.pruner.Stop()
+	if db.ghostManager != nil {
+		db.ghostManager.stop()
+	}
 
 	db.mu.Lock()
 	sm := db.slabManager

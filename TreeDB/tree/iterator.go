@@ -384,7 +384,7 @@ func (it *Iterator) UnsafeValue() []byte {
 		if it.valOK {
 			return it.currVal
 		}
-		val, err := it.tree.slabReader.Read(it.currPtr)
+		val, err := it.tree.slabReader.ReadUnsafe(it.currPtr)
 		if err != nil {
 			it.err = err
 			it.valid = false

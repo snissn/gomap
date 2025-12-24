@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"time"
 )
 
 func (db *DB) nextIndexID() uint64 {
@@ -55,8 +54,6 @@ func (db *DB) releaseIndex(gen *indexGen) {
 	// Ghost instead of immediate close
 	if db.ghostManager != nil {
 		db.ghostManager.add(gen)
-		// Opportunistically scavenge old ghosts
-		db.ghostManager.scavenge(5 * time.Second)
 	} else {
 		_ = gen.close()
 	}
@@ -71,10 +68,6 @@ func (db *DB) closeAllIndexes() error {
 	db.idxAll = nil
 	db.idx.Store(nil)
 	db.idxMu.Unlock()
-
-	if db.ghostManager != nil {
-		db.ghostManager.closeAll()
-	}
 
 	var errs []error
 	for _, g := range gens {

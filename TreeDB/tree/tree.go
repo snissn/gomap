@@ -13,6 +13,7 @@ var ErrKeyNotFound = errors.New("key not found")
 
 type SlabReader interface {
 	Read(ptr page.ValuePtr) ([]byte, error)
+	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
 type Tree struct {
@@ -27,6 +28,13 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		slabReader: sr,
 		rootPageID: root,
 	}
+}
+
+// Reset re-initializes the tree with new parameters for reuse.
+func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
+	t.pager = p
+	t.slabReader = sr
+	t.rootPageID = root
 }
 
 // SetRoot updates the root page ID.
@@ -102,7 +110,7 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 	}
 
 	if entry.Flags&node.FlagPointer != 0 {
-		val, err := t.slabReader.Read(entry.ValuePtr)
+		val, err := t.slabReader.ReadUnsafe(entry.ValuePtr)
 		if err != nil {
 			return nil, err
 		}

@@ -45,7 +45,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.db = nil
 	s.idx = nil
 	s.state = nil
-	s.tree = nil
+	s.tree.Reset(nil, nil, 0)
 	s.registryID = 0
 	p.pool.Put(s)
 }
@@ -58,6 +58,29 @@ type ghostIndex struct {
 type indexGhostManager struct {
 	mu     sync.Mutex
 	ghosts []ghostIndex
+	stopCh chan struct{}
+	doneCh chan struct{}
+}
+
+func (m *indexGhostManager) start() {
+	m.stopCh = make(chan struct{})
+	m.doneCh = make(chan struct{})
+	go m.loop()
+}
+
+func (m *indexGhostManager) loop() {
+	defer close(m.doneCh)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.scavenge(5 * time.Second)
+		}
+	}
 }
 
 func (m *indexGhostManager) add(gen *indexGen) {
@@ -71,18 +94,36 @@ func (m *indexGhostManager) add(gen *indexGen) {
 
 func (m *indexGhostManager) scavenge(maxAge time.Duration) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if len(m.ghosts) == 0 {
+		m.mu.Unlock()
+		return
+	}
 
 	now := time.Now()
 	var keep []ghostIndex
+	var toClose []*indexGen
+
 	for _, g := range m.ghosts {
 		if now.Sub(g.retiredAt) > maxAge {
-			_ = g.gen.close() // Close the underlying pager/mmap
+			toClose = append(toClose, g.gen)
 		} else {
 			keep = append(keep, g)
 		}
 	}
 	m.ghosts = keep
+	m.mu.Unlock()
+
+	for _, gen := range toClose {
+		_ = gen.close()
+	}
+}
+
+func (m *indexGhostManager) stop() {
+	if m.stopCh != nil {
+		close(m.stopCh)
+		<-m.doneCh
+	}
+	m.closeAll()
 }
 
 func (m *indexGhostManager) closeAll() {

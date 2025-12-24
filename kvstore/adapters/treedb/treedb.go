@@ -26,6 +26,10 @@ func (d *DB) Close() error { return d.DB.Close() }
 
 func (d *DB) Get(key []byte) ([]byte, error) { return d.DB.Get(key) }
 
+func (d *DB) GetUnsafe(key []byte) ([]byte, error) { return d.DB.GetUnsafe(key) }
+
+func (d *DB) GetAppend(key, dst []byte) ([]byte, error) { return d.DB.GetAppend(key, dst) }
+
 func (d *DB) Set(key, value []byte) error { return d.DB.Set(key, value) }
 
 func (d *DB) Delete(key []byte) error { return d.DB.Delete(key) }

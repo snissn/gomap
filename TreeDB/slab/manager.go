@@ -113,6 +113,19 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	return s.Read(int64(ptr.Offset), verifyCRC)
 }
 
+func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	sm.mu.RLock()
+	s, ok := sm.slabs[ptr.FileID]
+	verifyCRC := !sm.disableReadChecksum
+	sm.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
+	}
+
+	return s.ReadUnsafe(int64(ptr.Offset), verifyCRC)
+}
+
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -447,6 +460,14 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
 	}
 	return f.Read(int64(ptr.Offset), !s.disableReadChecksum)
+}
+
+func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
+	}
+	return f.ReadUnsafe(int64(ptr.Offset), !s.disableReadChecksum)
 }
 
 // AcquireSlabs increments the RefCount for the Set (O(1)).

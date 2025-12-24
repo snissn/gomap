@@ -215,15 +215,37 @@ func (s *SlabFile) RepairTail() error {
 
 // ReadAt reads a record at the given offset (which points to KeyLen, skipping CRC).
 func (s *SlabFile) Read(offset int64, verifyCRC bool) ([]byte, error) {
+	return s.read(offset, verifyCRC, false)
+}
+
+// ReadUnsafe returns a zero-copy view of the record. It forces a synchronous
+// remap if the current mapping does not cover the record.
+func (s *SlabFile) ReadUnsafe(offset int64, verifyCRC bool) ([]byte, error) {
+	return s.read(offset, verifyCRC, true)
+}
+
+func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, error) {
 	// Offset points to KeyLen. CRC is at Offset - 4.
 	realStart := offset - 4
 	if realStart < 0 {
 		return nil, errors.New("invalid slab offset")
 	}
 
-	// Fast path: mmap view (best-effort, read-only).
-	if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
-		return val, err
+	if !unsafe {
+		// Fast path: mmap view (best-effort, read-only).
+		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
+			return val, err
+		}
+	} else {
+		// Guaranteed zero-copy path: force remap if needed.
+		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
+			return val, err
+		}
+		s.remapToFileSize()
+		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
+			return val, err
+		}
+		// If still not ok (e.g. file shrunk or offset really out of bounds), fall back.
 	}
 
 	// Fallback path: pread into buffers.
