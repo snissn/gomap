@@ -59,7 +59,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
 	}
 
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
 	}

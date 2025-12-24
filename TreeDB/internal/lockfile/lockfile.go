@@ -39,7 +39,7 @@ func Acquire(path string) (*Lock, error) {
 	processLocks[path] = struct{}{}
 	processMu.Unlock()
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		processMu.Lock()
 		delete(processLocks, path)

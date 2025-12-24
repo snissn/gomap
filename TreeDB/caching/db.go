@@ -379,7 +379,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
+	if err := os.MkdirAll(walDir, 0700); err != nil {
 		return nil, err
 	}
 	segments, _ := listNonEmptyWALSegments(walDir)

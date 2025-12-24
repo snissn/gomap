@@ -56,7 +56,7 @@ type SlabFile struct {
 
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}

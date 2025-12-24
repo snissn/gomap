@@ -174,7 +174,7 @@ Owner and dates are optional; add them if you use a team workflow.
 ## Operational Security & Robustness
 
 ### AUD-010: File permissions too permissive
-- Status: OPEN
+- Status: FIXED
 - Severity: P2 (security)
 - Evidence:
   - `TreeDB/pager/pager.go`: index file 0644
@@ -190,6 +190,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Add option to override for explicit shared-read deployments.
 - Acceptance criteria:
   - Tests or manual checks confirm modes.
+  - New test asserts owner-only permissions on index/slab/lock and wal dir.
 
 ### AUD-011: Background error visibility
 - Status: OPEN
@@ -322,7 +323,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-007 | FIXED |  |  | recoverIndexSwap syncs parent dir; tests added. |
 | AUD-008 | OPEN |  |  |  |
 | AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
-| AUD-010 | OPEN |  |  |  |
+| AUD-010 | FIXED |  |  | Default perms tightened; test added. |
 | AUD-011 | OPEN |  |  |  |
 | AUD-012 | OPEN |  |  |  |
 | AUD-013 | OPEN |  |  |  |
