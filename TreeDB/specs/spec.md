@@ -179,6 +179,7 @@ Used to recycle space within `index.db`.
   * **Header:** Standard Header.
   * **NextPageID (8b):** Pointer to the next Freelist page (forming a linked list).
   * **Body:** Array of `PageID (uint64)`.
+  * **Invariant:** Header `Count` is authoritative; entries beyond `Count` may contain stale data and MUST be ignored. Implementations SHOULD clear or rewrite popped slots before updating the checksum.
 
 ### 3.5 Internal Metadata Keyspace (Namespace Isolation)
 

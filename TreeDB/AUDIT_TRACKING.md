@@ -16,10 +16,13 @@ Owner and dates are optional; add them if you use a team workflow.
 ## P0 / P1 Data Integrity and Safety
 
 ### AUD-001: Freelist pop does not encode body (double allocation risk)
-- Status: IN_PROGRESS
+- Status: FIXED
 - Severity: P0
 - Evidence:
-  - `TreeDB/freelist/allocator.go`: common pop path decrements count and updates checksum without rewriting body. The region-locality path does encode the body.
+  - `TreeDB/freelist/allocator.go`: pop path encodes body and clears popped slot.
+  - `TreeDB/freelist/allocator_body_test.go`: verifies slot clearing after alloc.
+  - `TreeDB/freelist/allocator_invariant_test.go`: no duplicate allocations after frees.
+  - `TreeDB/specs/spec.md`: freelist Count invariant documented.
 - Risk:
   - If any decode path relies on stale tail bytes or ignores Count, pages can be reissued. Even if Count is authoritative, this is brittle and future changes could violate the invariant.
 - Investigation:
@@ -319,7 +322,7 @@ Owner and dates are optional; add them if you use a team workflow.
 
 | ID | Status | Owner | Target | Notes |
 |---|---|---|---|---|
-| AUD-001 | IN_PROGRESS |  |  | Pop path now rewrites body; tests pending. |
+| AUD-001 | FIXED |  |  | Pop path encodes body; tests + spec invariant added. |
 | AUD-002 | FIXED |  |  | Safe default copies; mutation tests added. |
 | AUD-003 | NOT_APPLICABLE |  |  |  |
 | AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
