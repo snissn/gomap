@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -206,6 +208,53 @@ func BenchmarkBatch(b *testing.B) {
 		if err := batch.WriteSync(); err != nil {
 			b.Fatalf("Batch write failed: %v", err)
 		}
+	}
+}
+
+func BenchmarkWriteParallel(b *testing.B) {
+	workers := []int{1, 2, 4, 8}
+	val := make([]byte, 128)
+	keys := make([][]byte, 1024)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
+	for _, n := range workers {
+		b.Run(fmt.Sprintf("G=%d", n), func(b *testing.B) {
+			tmpDir, err := os.MkdirTemp("", "treedb-bench-write-*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			d, err := Open(Options{Dir: tmpDir})
+			if err != nil {
+				b.Fatalf("Failed to open DB: %v", err)
+			}
+			defer d.Close()
+
+			var counter uint64
+			b.ResetTimer()
+
+			var wg sync.WaitGroup
+			wg.Add(n)
+			for i := 0; i < n; i++ {
+				go func(id int) {
+					defer wg.Done()
+					for {
+						idx := int(atomic.AddUint64(&counter, 1)) - 1
+						if idx >= b.N {
+							return
+						}
+						key := keys[idx%len(keys)]
+						if err := d.Set(key, val); err != nil {
+							b.Fatalf("Set failed: %v", err)
+						}
+					}
+				}(i)
+			}
+			wg.Wait()
+		})
 	}
 }
 
