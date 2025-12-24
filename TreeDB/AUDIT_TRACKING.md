@@ -368,21 +368,22 @@ Key findings:
 - `BenchmarkReadUnderWriteCached/W=4` profiles show dominant contention in `caching.(*DB).set` on `db.mu.Lock`/`Unlock`.
 - Reads (`getMemtable`) take `db.mu.RLock`; writers block them during memtable updates.
 
-Proposed approach:
-1) Memtable sharding:
-   - Split mutable memtable into N shards keyed by hash(key).
-   - Each shard has its own lock/arena/range tracker.
-   - WAL append remains serialized via `walMu`.
-2) Range tracking + flush:
-   - Track per-shard key ranges; aggregate when enqueueing for flush.
-   - Flush iterates/merges shard memtables in key order.
-3) Iteration and snapshots:
-   - Snapshot captures shard pointers + ranges.
-   - Iterator merges shard iterators + immutable queue + backend.
-4) Backpressure:
-   - Total backlog counts across shards; flush scheduling uses aggregated sizes.
+Proposed approach (phased, inspired by earlier RCU-style work where it is a clear win):
+Phase 0: Reduce read-path contention without changing write semantics.
+1) RCU snapshot for memtables:
+   - Add `memtableView{mutable, queue, queueRanges}` stored in an `atomic.Pointer`.
+   - Publish a new snapshot on any queue mutation or mutable rotation (flush, DeleteRange drops, rotate).
+   - `getMemtable`/`Has` load the snapshot and never take `db.mu`; no per-read slice copies.
+2) Iterator/writeBypass snapshots:
+   - `Iterator` and `Batch.writeBypass` use the published snapshot for queue slices to avoid per-call copies.
+3) Safety fix with clear concurrency benefit:
+   - Copy keys in `noteWriteKeyLocked` to avoid retaining caller slices in adaptive stats.
+4) Tests:
+   - Snapshot update + immutability tests for queue/queueRanges.
+   - Allocation tests for `Has`/`Iterator`/`writeBypass` with queued memtables.
+   - Race test that `Has` does not block while `db.mu` is held (lock-free read path).
 
-Phase 1 implementation plan (sharded mutable memtable only):
+Phase 1: Memtable sharding (true write concurrency).
 1) Data structures + config:
    - Add `memShard` struct: `mu`, `mt memtable.Interface`, `rng keyRange`, `bytes atomic.Int64`.
    - Add `mutableShards []memShard` to caching DB; choose shard count (power-of-two) with a default (e.g., `min(8, GOMAXPROCS*2)`), and keep a `shardMask`.
@@ -391,10 +392,10 @@ Phase 1 implementation plan (sharded mutable memtable only):
    - Compute shard index from key hash (reuse existing hash helper or add a fast FNV32).
    - Keep `walMu` for WAL append as-is; then lock only the target shard to call `mt.Set/Delete`.
    - Update shard range + shard bytes; atomically add to `mutableBytes`.
-   - Replace `db.mu.Lock()` critical section with shard lock + minimal db.mu usage (only when checking rotate state or queue metadata).
+   - Keep `db.mu` only for queue metadata or rotate state, not for the memtable mutation.
 3) Read path changes (`getMemtable`):
    - Check the key’s shard first under shard RLock.
-   - Snapshot queue slices under `db.mu.RLock` (copy `db.queue` and `db.queueRanges`) and iterate outside the lock.
+   - Use the RCU snapshot for queued memtables and iterate outside `db.mu`.
    - Keep semantics: newest-first over queue, then backend.
 4) Rotation + flush:
    - `rotateMemtableLocked` acquires `writeMu.Lock()` to block writers.
@@ -408,6 +409,10 @@ Phase 1 implementation plan (sharded mutable memtable only):
    - Add a cached-layer concurrency test: multiple writers to distinct shards + reader loop, `-race` clean.
    - Update `BenchmarkWriteParallelCached` + `BenchmarkReadUnderWriteCached` as primary KPIs (already present).
    - Add a focused unit test to verify rotate + flush correctness with sharded mutables.
+
+Guardrails (to avoid adopting unsafe older changes):
+- Do not move `mutable.Set/Delete` outside `db.mu` unless rotations are fully serialized against writers (iterator-triggered rotations currently do not take `writeMu`).
+- Prefer the RCU snapshot for reads/queue access; it reduces contention without weakening rotation safety.
 
 Acceptance criteria:
 - `BenchmarkWriteParallelCached`: G=4 at least 1.5x throughput vs G=1.
