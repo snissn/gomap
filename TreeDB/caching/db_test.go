@@ -704,3 +704,31 @@ func TestCachingDB_IteratorDoesNotBlockOnWriteMu(t *testing.T) {
 		t.Fatalf("iterator creation blocked behind writeMu")
 	}
 }
+
+func TestCachingDB_SetDoesNotBlockOnWriteMuRLock(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	db.writeMu.RLock()
+	defer db.writeMu.RUnlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.Set([]byte("k2"), []byte("v2"))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Set blocked behind writeMu RLock")
+	}
+}

@@ -119,7 +119,8 @@ type Options struct {
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
-	writeMu sync.Mutex
+	writeMu sync.RWMutex
+	walMu   sync.Mutex
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
@@ -1130,7 +1131,8 @@ func (db *DB) SetSync(key, value []byte) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	db.writeMu.Lock()
+	db.writeMu.RLock()
+	needRotate := false
 
 	if !db.disableWAL {
 		db.mu.RLock()
@@ -1139,17 +1141,21 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		db.mu.RUnlock()
 
 		if w != nil {
+			db.walMu.Lock()
 			if err := w.Append(wal.OpSet, key, value); err != nil {
-				db.writeMu.Unlock()
+				db.walMu.Unlock()
+				db.writeMu.RUnlock()
 				return err
 			}
 			db.walLiveBytes.Add(walRecordSize(key, value))
 			if sync && !relaxedSync {
 				if err := w.Sync(); err != nil {
-					db.writeMu.Unlock()
+					db.walMu.Unlock()
+					db.writeMu.RUnlock()
 					return err
 				}
 			}
+			db.walMu.Unlock()
 		}
 	}
 
@@ -1161,14 +1167,16 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	// 3. Check Threshold
 	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-		if err := db.rotateMemtableLocked(true); err != nil {
-			db.mu.Unlock()
-			db.writeMu.Unlock()
+		needRotate = true
+	}
+	db.mu.Unlock()
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.rotateMemtableIfNeeded(true); err != nil {
 			return err
 		}
 	}
-	db.mu.Unlock()
-	db.writeMu.Unlock()
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -1669,7 +1677,8 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
-	db.writeMu.Lock()
+	db.writeMu.RLock()
+	needRotate := false
 
 	if !db.disableWAL {
 		db.mu.RLock()
@@ -1678,17 +1687,21 @@ func (db *DB) delete(key []byte, sync bool) error {
 		db.mu.RUnlock()
 
 		if w != nil {
+			db.walMu.Lock()
 			if err := w.Append(wal.OpDelete, key, nil); err != nil {
-				db.writeMu.Unlock()
+				db.walMu.Unlock()
+				db.writeMu.RUnlock()
 				return err
 			}
 			db.walLiveBytes.Add(walRecordSize(key, nil))
 			if sync && !relaxedSync {
 				if err := w.Sync(); err != nil {
-					db.writeMu.Unlock()
+					db.walMu.Unlock()
+					db.writeMu.RUnlock()
 					return err
 				}
 			}
+			db.walMu.Unlock()
 		}
 	}
 
@@ -1700,14 +1713,16 @@ func (db *DB) delete(key []byte, sync bool) error {
 
 	// 3. Threshold
 	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-		if err := db.rotateMemtableLocked(true); err != nil {
-			db.mu.Unlock()
-			db.writeMu.Unlock()
+		needRotate = true
+	}
+	db.mu.Unlock()
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.rotateMemtableIfNeeded(true); err != nil {
 			return err
 		}
 	}
-	db.mu.Unlock()
-	db.writeMu.Unlock()
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -1816,6 +1831,19 @@ func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 	return db.rotateMemtableLockedWithCapacity(triggerFlush, -1)
+}
+
+func (db *DB) rotateMemtableIfNeeded(triggerFlush bool) error {
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.mutable.Size() <= db.mutableFlushThresholdLocked() {
+		return nil
+	}
+	return db.rotateMemtableLocked(triggerFlush)
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -3127,7 +3155,8 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeRegular(sync bool) error {
-	b.db.writeMu.Lock()
+	b.db.writeMu.RLock()
+	needRotate := false
 
 	// 1. WAL Append loop
 	if !b.db.disableWAL {
@@ -3150,17 +3179,21 @@ func (b *Batch) writeRegular(sync bool) error {
 		b.db.mu.RUnlock()
 
 		if w != nil {
+			b.db.walMu.Lock()
 			if err := w.AppendBatch(records); err != nil {
-				b.db.writeMu.Unlock()
+				b.db.walMu.Unlock()
+				b.db.writeMu.RUnlock()
 				return err
 			}
 			b.db.walLiveBytes.Add(walBatchSize(records))
 			if sync && !relaxedSync {
 				if err := w.Sync(); err != nil {
-					b.db.writeMu.Unlock()
+					b.db.walMu.Unlock()
+					b.db.writeMu.RUnlock()
 					return err
 				}
 			}
+			b.db.walMu.Unlock()
 		}
 	}
 
@@ -3196,15 +3229,17 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 3. Threshold Check
 	if b.db.mutable.Size() > b.db.mutableFlushThresholdLocked() {
-		if err := b.db.rotateMemtableLocked(true); err != nil {
-			b.db.mu.Unlock()
-			b.db.writeMu.Unlock()
-			return err
-		}
+		needRotate = true
 	}
 
 	b.db.mu.Unlock()
-	b.db.writeMu.Unlock()
+	b.db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := b.db.rotateMemtableIfNeeded(true); err != nil {
+			return err
+		}
+	}
 
 	if b.size > 0 {
 		b.db.noteWrite()

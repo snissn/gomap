@@ -333,6 +333,9 @@ func Open(opts Options) (*DB, error) {
 		if opts.FreelistRegionRadius == 0 {
 			opts.FreelistRegionRadius = 1
 		}
+	} else if !opts.PreferAppendAlloc {
+		opts.FreelistRegionPages = 8192
+		opts.FreelistRegionRadius = 1
 	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))

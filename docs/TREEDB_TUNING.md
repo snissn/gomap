@@ -192,7 +192,8 @@ fragmentation under churn:
 - `Options.FreelistRegionPages` + `Options.FreelistRegionRadius`
   - Biases freelist reuse toward pages near the most recent allocations.
   - Useful when you want reuse without scattering page IDs.
-  - Set both to 0 to disable (default), or set radius < 0 to force-disable.
+  - Default when `PreferAppendAlloc=false`: 8192 pages, radius 1.
+  - Set radius < 0 to force-disable.
 - `Options.LeafFillTargetPPM` / `Options.InternalFillTargetPPM`
   - Lowering fill targets reduces split churn and can slow re-fragmentation,
     at the cost of more pages.

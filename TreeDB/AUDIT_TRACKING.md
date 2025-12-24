@@ -265,7 +265,8 @@ Owner and dates are optional; add them if you use a team workflow.
 - Severity: P2 (performance)
 - Evidence:
   - `TreeDB/db/batch.go`: `writeMu` serializes writers.
-  - `TreeDB/caching/db.go`: write paths use `writeMu`.
+  - `TreeDB/caching/db.go`: write paths use `writeMu` as an `RWMutex` with WAL-level locking.
+  - `TreeDB/caching/db_test.go`: `TestCachingDB_SetDoesNotBlockOnWriteMuRLock`.
   - `docs/TREEDB_TUNING.md`: write concurrency limits and mitigations documented.
 - Risk:
   - Multi-writer workloads do not scale with cores.
@@ -291,9 +292,11 @@ Owner and dates are optional; add them if you use a team workflow.
   - Stats counters to verify skipped lookups.
 
 ### AUD-017: Freelist churn / fragmentation
-- Status: MITIGATED
+- Status: FIXED
 - Severity: P2
 - Evidence:
+  - `TreeDB/db/db.go`: default freelist region bias enabled when reuse is active.
+  - `TreeDB/db/freelist_region_defaults_test.go`: defaults and disable behavior tests.
   - Background index vacuum uses fragmentation span ratio to trigger rebuilds (default on).
   - Allocator locality knobs: `PreferAppendAlloc`, `FreelistRegionPages`, `FreelistRegionRadius`.
   - `FragmentationReport()` exposes span ratio + fill stats; tests cover churn/locality.
@@ -343,6 +346,6 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-012 | FIXED |  |  | Dead mapping cap enforced; remap suppression test added. |
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
-| AUD-015 | MITIGATED |  |  | Single-writer design documented; batching recommended. |
+| AUD-015 | MITIGATED |  |  | Cached writes allow concurrent RLock; backend remains single-writer. |
 | AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
-| AUD-017 | MITIGATED |  |  | Background vacuum + allocator locality knobs documented. |
+| AUD-017 | FIXED |  |  | Default region bias enabled + tests. |
