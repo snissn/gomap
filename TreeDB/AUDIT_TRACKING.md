@@ -155,7 +155,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Tests clarify behavior; docs are explicit about non-durability.
 
 ### AUD-009: Corruption-induced panics in leaf search
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
   - `TreeDB/node/leaf.go`: `SearchLeaf` reads offsets without bounds checks.
@@ -167,6 +167,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Add bounds checks for offset, keyLen, and payload bounds; return `ErrCorruptedNode`.
 - Acceptance criteria:
   - Corruption tests pass and no panics under fuzz.
+  - SearchLeaf returns ErrCorruptedNode on invalid offsets; tests added.
 
 ---
 
@@ -320,7 +321,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
 | AUD-007 | FIXED |  |  | recoverIndexSwap syncs parent dir; tests added. |
 | AUD-008 | OPEN |  |  |  |
-| AUD-009 | OPEN |  |  |  |
+| AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
 | AUD-010 | OPEN |  |  |  |
 | AUD-011 | OPEN |  |  |  |
 | AUD-012 | OPEN |  |  |  |

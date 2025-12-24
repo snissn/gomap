@@ -100,7 +100,7 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 // Returns the index of the first entry where Entry.Key >= key.
 // If key is found, found=true.
 // If key is greater than all entries, returns Count, false.
-func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
+func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	data := n.data
 	count := n.Count()
 	i, j := 0, int(count)
@@ -109,13 +109,22 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
 		h := int(uint(i+j) >> 1) // avoid overflow
 
 		// Read key at index h without full decode
-		// We trust offsets are valid (verified at insert/load?)
-		// For speed, we just assume valid for now, panic on bounds if corrupted
-		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+h*2:])
+		// Validate bounds to avoid panics on corrupted pages.
+		dirOff := NodeHeaderSize + h*2
+		if dirOff+2 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
+		if ptr < NodeHeaderSize || ptr+7 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
 		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
 		// Skip ValLen(4) + Flags(1)
 		keyPtr := ptr + 7
+		if keyPtr+int(keyLen) > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
 
 		// Compare
 		cmp := bytes.Compare(data[keyPtr:keyPtr+int(keyLen)], key)
@@ -128,16 +137,26 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool) {
 
 	if i < int(count) {
 		// Check for equality
-		offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+i*2:])
+		dirOff := NodeHeaderSize + i*2
+		if dirOff+2 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
+		if ptr < NodeHeaderSize || ptr+7 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
 		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
 		keyPtr := ptr + 7
+		if keyPtr+int(keyLen) > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
 		if bytes.Equal(data[keyPtr:keyPtr+int(keyLen)], key) {
-			return uint16(i), true
+			return uint16(i), true, nil
 		}
 	}
 
-	return uint16(i), false
+	return uint16(i), false, nil
 }
 
 // AddLeafEntry inserts a new entry into the Leaf Node.
@@ -163,7 +182,10 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	// Check directory space (2 bytes) + Entry space
 	// Need to check if we are updating existing key (no new directory slot)
 	// or inserting new (new directory slot).
-	idx, found := n.SearchLeaf(key)
+	idx, found, err := n.SearchLeaf(key)
+	if err != nil {
+		return err
+	}
 
 	needed := entrySize
 	if !found {

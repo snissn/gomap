@@ -2,6 +2,8 @@ package node
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -49,14 +51,36 @@ func TestLeafNode(t *testing.T) {
 	}
 
 	// Verify Search
-	idx, found := n.SearchLeaf([]byte("key2"))
+	idx, found, err := n.SearchLeaf([]byte("key2"))
+	if err != nil {
+		t.Fatalf("Search key2: %v", err)
+	}
 	if !found || idx != 1 {
 		t.Errorf("Search key2: expected found=true idx=1, got found=%v idx=%d", found, idx)
 	}
 
-	idx, found = n.SearchLeaf([]byte("key1.5"))
+	idx, found, err = n.SearchLeaf([]byte("key1.5"))
+	if err != nil {
+		t.Fatalf("Search key1.5: %v", err)
+	}
 	if found || idx != 1 {
 		t.Errorf("Search key1.5: expected found=false idx=1, got found=%v idx=%d", found, idx)
+	}
+}
+
+func TestLeafSearch_CorruptedOffsetsReturnError(t *testing.T) {
+	data := make([]byte, page.PageSize)
+	n := NewNode(data)
+	n.SetType(page.PageTypeLeaf)
+	n.SetPageID(1)
+	n.SetCount(1)
+
+	dirOff := NodeHeaderSize
+	binary.LittleEndian.PutUint16(data[dirOff:dirOff+2], uint16(page.PageSize-1))
+
+	_, _, err := n.SearchLeaf([]byte("key"))
+	if !errors.Is(err, ErrCorruptedNode) {
+		t.Fatalf("expected ErrCorruptedNode, got %v", err)
 	}
 }
 

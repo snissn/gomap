@@ -55,7 +55,10 @@ func TestVerifiedPageCache_SafetyTradeoff(t *testing.T) {
 	// inline value byte so lookups still succeed but CRC would fail.
 	dataCorrupt, _ := p.Get(0)
 	nCorrupt := node.NewNode(dataCorrupt)
-	idx, found := nCorrupt.SearchLeaf([]byte("k"))
+	idx, found, err := nCorrupt.SearchLeaf([]byte("k"))
+	if err != nil {
+		t.Fatalf("SearchLeaf: %v", err)
+	}
 	if !found {
 		t.Fatalf("expected key to be present")
 	}

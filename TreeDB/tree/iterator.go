@@ -154,8 +154,11 @@ func (it *Iterator) seek(key []byte) {
 			if key == nil {
 				index = 0
 			} else {
-				idx, found := n.SearchLeaf(key)
-				_ = found
+				idx, _, err := n.SearchLeaf(key)
+				if err != nil {
+					it.err = err
+					return
+				}
 				index = int(idx)
 			}
 			it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
