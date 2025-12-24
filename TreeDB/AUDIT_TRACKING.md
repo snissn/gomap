@@ -108,7 +108,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Iterator holds read lock until Close; regression test verifies writer blocking.
 
 ### AUD-006: WAL rotation missing fsync
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
   - `TreeDB/internal/wal/wal.go`: `RotateTo` flushes buffers but does not call `Sync()` before close.
@@ -120,6 +120,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Add `f.Sync()` before close or expose a durability contract (and test it).
 - Acceptance criteria:
   - Crash-recovery test proves WAL durability across rotation.
+  - RotateTo sync call verified by unit test.
 
 ### AUD-007: Index swap rename lacks directory fsync
 - Status: OPEN
@@ -315,7 +316,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-003 | NOT_APPLICABLE |  |  |  |
 | AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
 | AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
-| AUD-006 | OPEN |  |  |  |
+| AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
 | AUD-007 | OPEN |  |  |  |
 | AUD-008 | OPEN |  |  |  |
 | AUD-009 | OPEN |  |  |  |

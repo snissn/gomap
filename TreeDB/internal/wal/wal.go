@@ -24,6 +24,7 @@ type Writer struct {
 	pending    []byte
 	size       int64
 	segmentMax int
+	syncFn     func(*os.File) error
 }
 
 const defaultWALBufferSize = 4 << 20
@@ -45,6 +46,7 @@ func NewWriter(path string) (*Writer, error) {
 		scratch:    make([]byte, 0, defaultWALBufferSize),
 		pending:    make([]byte, 0, defaultWALBufferSize),
 		segmentMax: defaultWALBufferSize,
+		syncFn:     func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
@@ -63,6 +65,12 @@ func (w *Writer) RotateTo(path string) error {
 		if err := w.bw.Flush(); err != nil {
 			_ = w.f.Close()
 			return err
+		}
+		if w.syncFn != nil {
+			if err := w.syncFn(w.f); err != nil {
+				_ = w.f.Close()
+				return err
+			}
 		}
 		if err := w.f.Close(); err != nil {
 			return err
