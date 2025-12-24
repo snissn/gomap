@@ -382,6 +382,33 @@ Proposed approach:
 4) Backpressure:
    - Total backlog counts across shards; flush scheduling uses aggregated sizes.
 
+Phase 1 implementation plan (sharded mutable memtable only):
+1) Data structures + config:
+   - Add `memShard` struct: `mu`, `mt memtable.Interface`, `rng keyRange`, `bytes atomic.Int64`.
+   - Add `mutableShards []memShard` to caching DB; choose shard count (power-of-two) with a default (e.g., `min(8, GOMAXPROCS*2)`), and keep a `shardMask`.
+   - Add `mutableBytes atomic.Int64` to track total mutable size; remove reliance on `db.mutable.Size()` in hot paths.
+2) Write path changes (`set`/`delete`):
+   - Compute shard index from key hash (reuse existing hash helper or add a fast FNV32).
+   - Keep `walMu` for WAL append as-is; then lock only the target shard to call `mt.Set/Delete`.
+   - Update shard range + shard bytes; atomically add to `mutableBytes`.
+   - Replace `db.mu.Lock()` critical section with shard lock + minimal db.mu usage (only when checking rotate state or queue metadata).
+3) Read path changes (`getMemtable`):
+   - Check the key’s shard first under shard RLock.
+   - Snapshot queue slices under `db.mu.RLock` (copy `db.queue` and `db.queueRanges`) and iterate outside the lock.
+   - Keep semantics: newest-first over queue, then backend.
+4) Rotation + flush:
+   - `rotateMemtableLocked` acquires `writeMu.Lock()` to block writers.
+   - Lock all shards in index order, freeze each shard memtable, and move them into the queue as a group.
+   - Aggregate shard ranges into one queue range entry (min/max).
+   - Reset shards with new memtables and zero ranges/bytes; reset `mutableBytes`.
+5) Iterator + snapshots:
+   - Snapshot should capture the current queue slice plus shard pointers (or force a rotation when creating iterators, as today).
+   - Ensure iterator merges shard immutables + queue + backend in key order.
+6) Tests + benchmarks:
+   - Add a cached-layer concurrency test: multiple writers to distinct shards + reader loop, `-race` clean.
+   - Update `BenchmarkWriteParallelCached` + `BenchmarkReadUnderWriteCached` as primary KPIs (already present).
+   - Add a focused unit test to verify rotate + flush correctness with sharded mutables.
+
 Acceptance criteria:
 - `BenchmarkWriteParallelCached`: G=4 at least 1.5x throughput vs G=1.
 - `BenchmarkReadUnderWriteCached`: W=4 p95 latency within +50% of W=0.
