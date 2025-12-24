@@ -169,6 +169,25 @@ snapshots/iterators drain.
 Stats keys:
 - `treedb.bg_vacuum.*`
 
+### Allocator locality and fragmentation knobs
+
+TreeDB exposes a few knobs that directly influence page-ID locality and index
+fragmentation under churn:
+
+- `Options.PreferAppendAlloc` (default: false in durable profile, true in fast)
+  - Bypasses freelist reuse and appends new pages to preserve scan locality.
+  - Trades disk growth for better sequential layout; vacuum reclaims space later.
+- `Options.FreelistRegionPages` + `Options.FreelistRegionRadius`
+  - Biases freelist reuse toward pages near the most recent allocations.
+  - Useful when you want reuse without scattering page IDs.
+  - Set both to 0 to disable (default), or set radius < 0 to force-disable.
+- `Options.LeafFillTargetPPM` / `Options.InternalFillTargetPPM`
+  - Lowering fill targets reduces split churn and can slow re-fragmentation,
+    at the cost of more pages.
+
+Use `db.FragmentationReport()` to observe index span ratio and fill percentiles,
+and let background index vacuum handle high-fragmentation recovery.
+
 ### Offline index vacuum (backend index)
 
 TreeDB’s `index.db` grows in chunks and does not shrink in-place. Reclaiming

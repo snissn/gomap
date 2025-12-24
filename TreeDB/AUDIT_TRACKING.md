@@ -289,10 +289,12 @@ Owner and dates are optional; add them if you use a team workflow.
   - Stats counters to verify skipped lookups.
 
 ### AUD-017: Freelist churn / fragmentation
-- Status: OPEN
+- Status: MITIGATED
 - Severity: P2
 - Evidence:
-  - Basic freelist allocator; relies on vacuum for compaction.
+  - Background index vacuum uses fragmentation span ratio to trigger rebuilds (default on).
+  - Allocator locality knobs: `PreferAppendAlloc`, `FreelistRegionPages`, `FreelistRegionRadius`.
+  - `FragmentationReport()` exposes span ratio + fill stats; tests cover churn/locality.
 - Risk:
   - Long-term fragmentation degrades tree locality and performance.
 - Investigation:
@@ -341,4 +343,4 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-014 | NOT_APPLICABLE |  |  |  |
 | AUD-015 | OPEN |  |  |  |
 | AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
-| AUD-017 | OPEN |  |  |  |
+| AUD-017 | MITIGATED |  |  | Background vacuum + allocator locality knobs documented. |
