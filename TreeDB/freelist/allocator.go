@@ -135,6 +135,8 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 				}
 				body.FreeIDs = body.FreeIDs[:lastIdx]
 				body.Encode(data[page.PageHeaderSize:])
+				slotOff := page.PageHeaderSize + 8 + lastIdx*8
+				clear(data[slotOff : slotOff+8])
 				n.SetCount(count - 1)
 				n.UpdateChecksum()
 
@@ -146,18 +148,13 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 			}
 		}
 
-		// Update page
+		// Update page body and header.
+		lastIdx := int(count) - 1
+		body.FreeIDs = body.FreeIDs[:lastIdx]
+		body.Encode(data[page.PageHeaderSize:])
+		slotOff := page.PageHeaderSize + 8 + lastIdx*8
+		clear(data[slotOff : slotOff+8])
 		n.SetCount(count - 1)
-		// No need to resize slice, just update count.
-		// Encode back?
-		// We only need to update header checksum if we rely on it.
-		// And Body isn't changed structurally, just logical count.
-		// But checksum covers body. Body bytes for popped item are stale.
-		// We should zero them? Not strictly needed if Count is authority.
-		// But checksum calculation covers them.
-		// So we must Encode back or Zero.
-		// Simpler: Just update Count and Checksum.
-		// The garbage bytes at end are part of checksum.
 		n.UpdateChecksum()
 
 		// This page may have been verified under a previous incarnation. Ensure
