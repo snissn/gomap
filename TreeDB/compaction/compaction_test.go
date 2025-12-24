@@ -156,6 +156,54 @@ func TestCompaction_SnapshotKeepsOldSlabPinnedUntilClosed(t *testing.T) {
 	}
 }
 
+func TestCompaction_LiveSetSkipsTreeLookups(t *testing.T) {
+	dir := t.TempDir()
+	opts := db.Options{Dir: dir}
+	d, err := db.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	val := bytes.Repeat([]byte("V"), 300)
+	for i := 0; i < 200; i++ {
+		k := []byte{byte(i >> 8), byte(i)}
+		if err := d.Set(k, val); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected active slab != 0 after rotation")
+	}
+
+	stats := Stats{}
+	c := New(d)
+	if err := c.CompactSlabWithOptions(0, Options{
+		MicroBatchSize:    16,
+		LiveSetMaxEntries: 1000,
+		Stats:             &stats,
+	}); err != nil {
+		t.Fatalf("CompactSlab: %v", err)
+	}
+
+	if stats.LiveSetAborted {
+		t.Fatalf("expected live set to complete (aborted)")
+	}
+	if stats.LiveSetEntries == 0 {
+		t.Fatalf("expected live set entries")
+	}
+	if stats.TreeLookups != 0 {
+		t.Fatalf("expected tree lookups to be skipped, got %d", stats.TreeLookups)
+	}
+	if stats.TreeLookupsSkipped == 0 {
+		t.Fatalf("expected skipped lookups")
+	}
+}
+
 func TestCompaction_AllowsConcurrentWrites(t *testing.T) {
 	dir := t.TempDir()
 	opts := db.Options{Dir: dir}

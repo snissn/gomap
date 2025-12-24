@@ -274,16 +274,19 @@ Owner and dates are optional; add them if you use a team workflow.
   - Consider a concurrent skiplist or partitioned writer queues.
 
 ### AUD-016: Compaction per-record lookup overhead
-- Status: OPEN
+- Status: FIXED
 - Severity: P2
 - Evidence:
-  - `TreeDB/compaction/compactor.go`: liveness check per record uses tree lookup.
+  - `TreeDB/compaction/compactor.go`: compaction builds a live pointer set and skips per-record tree lookups.
+  - `TreeDB/compaction/compaction_test.go`: `TestCompaction_LiveSetSkipsTreeLookups`.
 - Risk:
   - High CPU during compaction on large slabs.
 - Investigation:
   1) Profile compaction CPU time; capture hot functions.
 - Fix options:
   - Bloom filters, prefix hints, or cursor-based traversal.
+  - Live pointer set for the target slab.
+  - Stats counters to verify skipped lookups.
 
 ### AUD-017: Freelist churn / fragmentation
 - Status: OPEN
@@ -337,5 +340,5 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
 | AUD-015 | OPEN |  |  |  |
-| AUD-016 | OPEN |  |  |  |
+| AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
 | AUD-017 | OPEN |  |  |  |

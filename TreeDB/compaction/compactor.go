@@ -13,11 +13,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type Compactor struct {
 	db *db.DB
 }
+
+const defaultLiveSetMaxEntries = 1_000_000
 
 func New(d *db.DB) *Compactor {
 	return &Compactor{db: d}
@@ -45,6 +48,15 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 
 	snap := c.db.AcquireSnapshot()
 	defer snap.Close()
+
+	liveSetMax := opts.LiveSetMaxEntries
+	if liveSetMax == 0 {
+		liveSetMax = defaultLiveSetMaxEntries
+	}
+	liveSet, err := c.buildLiveSet(ctx, snap, id, liveSetMax, opts.Stats)
+	if err != nil {
+		return err
+	}
 
 	assist := opts.Assist
 	lastAssist := time.Now()
@@ -153,21 +165,38 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			FileID: id,
 		}
 
-		// Check Liveness (Optimistic)
-		// We verify against the snapshot. Since we never compact the active slab,
-		// no new live pointers into this slab can be created after the snapshot.
-		// ApplyCompaction will verify again against latest state to ensure safety.
-		entry, err := snap.GetEntry(key)
-		if err != nil {
-			// Not found or error -> Assume dead
-			offset += totalLen
-			continue
-		}
-
-		// Must be a pointer and match exactly
-		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != oldPtr {
-			offset += totalLen
-			continue
+		// Check liveness (optimistic):
+		// - If a live set is present, use it to skip per-record tree lookups.
+		// - Otherwise, verify against the snapshot. Since we never compact the
+		//   active slab, no new live pointers into this slab can be created after
+		//   the snapshot. ApplyCompaction will verify again against latest state
+		//   to ensure safety.
+		if liveSet != nil {
+			if _, ok := liveSet[oldPtr]; !ok {
+				if opts.Stats != nil {
+					opts.Stats.TreeLookupsSkipped++
+				}
+				offset += totalLen
+				continue
+			}
+			if opts.Stats != nil {
+				opts.Stats.TreeLookupsSkipped++
+			}
+		} else {
+			if opts.Stats != nil {
+				opts.Stats.TreeLookups++
+			}
+			entry, err := snap.GetEntry(key)
+			if err != nil {
+				// Not found or error -> Assume dead
+				offset += totalLen
+				continue
+			}
+			// Must be a pointer and match exactly.
+			if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != oldPtr {
+				offset += totalLen
+				continue
+			}
 		}
 
 		if err := lim.Wait(ctx, int(totalLen)); err != nil {
@@ -218,4 +247,49 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		return err
 	}
 	return c.db.RefreshSlabSet()
+}
+
+func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint32, maxEntries int, stats *Stats) (map[page.ValuePtr]struct{}, error) {
+	if maxEntries < 0 {
+		return nil, nil
+	}
+	state := snap.State()
+	if state == nil {
+		return nil, errors.New("compaction: missing db state")
+	}
+
+	tr := tree.New(snap.Pager(), state.SlabSet, state.RootPageID)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	liveSet := make(map[page.ValuePtr]struct{})
+
+	for it.Valid() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && ptr.FileID == id {
+			liveSet[ptr] = struct{}{}
+			if maxEntries > 0 && len(liveSet) > maxEntries {
+				if stats != nil {
+					stats.LiveSetAborted = true
+				}
+				return nil, nil
+			}
+		}
+		it.Next()
+	}
+
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+
+	if stats != nil {
+		stats.LiveSetEntries = uint64(len(liveSet))
+	}
+	return liveSet, nil
 }
