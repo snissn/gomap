@@ -260,11 +260,12 @@ Owner and dates are optional; add them if you use a team workflow.
 ## Performance & Scalability
 
 ### AUD-015: Global write lock serialization
-- Status: OPEN
+- Status: MITIGATED
 - Severity: P2 (performance)
 - Evidence:
   - `TreeDB/db/batch.go`: `writeMu` serializes writers.
   - `TreeDB/caching/db.go`: write paths use `writeMu`.
+  - `docs/TREEDB_TUNING.md`: write concurrency limits and mitigations documented.
 - Risk:
   - Multi-writer workloads do not scale with cores.
 - Investigation:
@@ -341,6 +342,6 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-012 | FIXED |  |  | Dead mapping cap enforced; remap suppression test added. |
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
-| AUD-015 | OPEN |  |  |  |
+| AUD-015 | MITIGATED |  |  | Single-writer design documented; batching recommended. |
 | AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
 | AUD-017 | MITIGATED |  |  | Background vacuum + allocator locality knobs documented. |

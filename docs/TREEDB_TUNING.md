@@ -91,6 +91,18 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### Write concurrency (current limits)
+
+TreeDB currently serializes write commits per DB handle (a single writer at a
+time). This keeps WAL ordering and B+Tree root updates simple and safe, but it
+means multi-core write throughput is gated by one writer lock.
+
+Mitigations:
+- Batch writes (`db.NewBatch`, `batch.Set`, `batch.Write`) to amortize lock hold
+  time and reduce per-write overhead.
+- Use cached mode (memtables + WAL) to absorb bursts and keep read latency
+  stable under write-heavy workloads.
+
 ### Cached-mode auto checkpointing (cached wrapper)
 
 TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the default
