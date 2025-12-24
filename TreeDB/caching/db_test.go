@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -572,5 +573,42 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	}
 	if got != 64 {
 		t.Fatalf("expected %d keys, got %d", 64, got)
+	}
+}
+
+func TestCachingDB_IteratorDoesNotBlockOnWriteMu(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		it, err := db.Iterator(nil, nil)
+		if err != nil {
+			done <- err
+			return
+		}
+		done <- it.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Iterator: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("iterator creation blocked behind writeMu")
 	}
 }

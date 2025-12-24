@@ -30,6 +30,25 @@ func runCrashRecoveryWriter(t *testing.T, dir string) {
 	}
 }
 
+func runCrashRecoveryDeleteRangeWriter(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCrashRecoveryDeleteRangeWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
 func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
 		t.Skip("helper")
@@ -50,6 +69,34 @@ func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	_ = db.DeleteSync([]byte("delete"))
 
 	// Simulate a crash by exiting without calling Close() (no defers run, but OS releases locks).
+	os.Exit(0)
+}
+
+func TestHelperTreeDBCrashRecoveryDeleteRangeWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	_ = db.SetSync([]byte("a"), []byte("1"))
+	_ = db.SetSync([]byte("b"), []byte("2"))
+	_ = db.SetSync([]byte("c"), []byte("3"))
+
+	// DeleteRange itself is not a Sync operation. Add a subsequent Sync write so
+	// the WAL (including the range delete tombstones) is persisted before we
+	// simulate a crash.
+	_ = db.DeleteRange([]byte("b"), []byte("d"))
+	_ = db.SetSync([]byte("z"), []byte("9"))
+
 	os.Exit(0)
 }
 
@@ -108,6 +155,49 @@ func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 	}
 	if string(val) != "val1" {
 		t.Fatalf("get keep (cached): got %q, want %q", string(val), "val1")
+	}
+}
+
+func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
+	dir := t.TempDir()
+	runCrashRecoveryDeleteRangeWriter(t, dir)
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("get a: %v", err)
+	}
+	if string(val) != "1" {
+		t.Fatalf("get a: got %q, want %q", string(val), "1")
+	}
+
+	val, err = backend.Get([]byte("b"))
+	if err != nil {
+		t.Fatalf("get b: %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected deleted key b to be absent, got %q", string(val))
+	}
+
+	val, err = backend.Get([]byte("c"))
+	if err != nil {
+		t.Fatalf("get c: %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected deleted key c to be absent, got %q", string(val))
+	}
+
+	val, err = backend.Get([]byte("z"))
+	if err != nil {
+		t.Fatalf("get z: %v", err)
+	}
+	if string(val) != "9" {
+		t.Fatalf("get z: got %q, want %q", string(val), "9")
 	}
 }
 

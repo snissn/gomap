@@ -424,19 +424,9 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			}
 			if cmp == 0 {
 				// Update existing node
-				// If fits, inplace. Else replace.
-				oldValLen := int(binary.LittleEndian.Uint32(s.bytesAt(next+nodeValLenOff, 4)))
-				if cb == nil && len(value) <= oldValLen {
-					// Inplace update
-					binary.LittleEndian.PutUint32(s.bytesAt(next+nodeValLenOff, 4), uint32(len(value)))
-					s.setFlags(next, flags)
-					kLen := int(binary.LittleEndian.Uint16(s.bytesAt(next+nodeKeyLenOff, 2)))
-					vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.valAt(next, nodeHeightOff))) + uint32(kLen)
-					copy(s.bytesAt(vOffset, len(value)), value)
-					return nil
-				}
-
-				// Must replace node.
+				// Always replace nodes on update. This avoids mutating existing
+				// key/value bytes in-place, which can race with readers that may hold
+				// views beyond the SkipList mutex critical section (e.g. GetAppend).
 				break
 			}
 			x = next
@@ -447,17 +437,6 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	// Check level 0
 	next := s.getNext(x, 0)
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
-		oldValLen := int(binary.LittleEndian.Uint32(s.bytesAt(next+nodeValLenOff, 4)))
-		// Check inplace again (for level 0 case)
-		if cb == nil && len(value) <= oldValLen {
-			binary.LittleEndian.PutUint32(s.bytesAt(next+nodeValLenOff, 4), uint32(len(value)))
-			s.setFlags(next, flags)
-			kLen := int(binary.LittleEndian.Uint16(s.bytesAt(next+nodeKeyLenOff, 2)))
-			vOffset := next + uint32(nodeHeaderBase) + uint32(4*int(s.valAt(next, nodeHeightOff))) + uint32(kLen)
-			copy(s.bytesAt(vOffset, len(value)), value)
-			return nil
-		}
-
 		// Unlink logic:
 		oldHeight := int(s.valAt(next, nodeHeightOff))
 		for i := 0; i < oldHeight; i++ {
