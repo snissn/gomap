@@ -261,7 +261,7 @@ Owner and dates are optional; add them if you use a team workflow.
 ## Performance & Scalability
 
 ### AUD-015: Global write lock serialization
-- Status: FIXED
+- Status: MITIGATED
 - Severity: P2 (performance)
 - Evidence:
   - `TreeDB/db/batch.go`: optimistic write path uses `writeMu.RLock` + `commitMu` with CAS on `UserRootPageID`.
@@ -277,6 +277,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - Backend writes use optimistic apply + CAS commit with bounded retries and a serialized fallback.
   - Allocation tracking frees pages on conflicts to avoid index growth from abandoned attempts.
   - Concurrent writer test validates no lost updates.
+  - Cached writes still contend on `db.mu` during memtable updates; see the cached write concurrency milestone below.
 - Investigation:
   1) Benchmark multi-writer ingestion; capture CPU contention profile.
 - Fix options:
@@ -353,6 +354,35 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-012 | FIXED |  |  | Dead mapping cap enforced; remap suppression test added. |
 | AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
-| AUD-015 | FIXED |  |  | Backend uses optimistic apply + CAS commit; concurrent writer test added. |
+| AUD-015 | MITIGATED |  |  | Backend uses optimistic apply + CAS commit; cached layer still contends on db.mu. |
 | AUD-016 | FIXED |  |  | Live-set optimization + lookup skip test. |
 | AUD-017 | FIXED |  |  | Default region bias enabled + tests. |
+
+---
+
+## Milestone: Cached Write Concurrency (Post-Audit)
+
+Goal: remove `db.mu` write serialization in cached mode while preserving WAL ordering, snapshot isolation, and flush correctness.
+
+Key findings:
+- `BenchmarkReadUnderWriteCached/W=4` profiles show dominant contention in `caching.(*DB).set` on `db.mu.Lock`/`Unlock`.
+- Reads (`getMemtable`) take `db.mu.RLock`; writers block them during memtable updates.
+
+Proposed approach:
+1) Memtable sharding:
+   - Split mutable memtable into N shards keyed by hash(key).
+   - Each shard has its own lock/arena/range tracker.
+   - WAL append remains serialized via `walMu`.
+2) Range tracking + flush:
+   - Track per-shard key ranges; aggregate when enqueueing for flush.
+   - Flush iterates/merges shard memtables in key order.
+3) Iteration and snapshots:
+   - Snapshot captures shard pointers + ranges.
+   - Iterator merges shard iterators + immutable queue + backend.
+4) Backpressure:
+   - Total backlog counts across shards; flush scheduling uses aggregated sizes.
+
+Acceptance criteria:
+- `BenchmarkWriteParallelCached`: G=4 at least 1.5x throughput vs G=1.
+- `BenchmarkReadUnderWriteCached`: W=4 p95 latency within +50% of W=0.
+- Race tests pass; no lost updates; WAL ordering preserved; flush correctness intact.
