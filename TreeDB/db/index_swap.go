@@ -14,6 +14,15 @@ const (
 	indexReadyFileName = "index.db.new.ready"
 )
 
+var syncDirFn = func(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
+}
+
 // recoverIndexSwap is a best-effort recovery helper for crash-safe offline
 // vacuum swaps.
 //
@@ -50,6 +59,7 @@ func recoverIndexSwap(dir string) error {
 		if readyExists {
 			_ = os.Remove(readyPath)
 		}
+		_ = syncDirFn(dir)
 		// Keep bak around as a safety net; it will be removed by a successful
 		// vacuum run.
 		return nil
@@ -89,6 +99,7 @@ func recoverIndexSwap(dir string) error {
 			return err
 		}
 		_ = os.Remove(readyPath)
+		_ = syncDirFn(dir)
 		return nil
 	}
 
@@ -97,6 +108,7 @@ func recoverIndexSwap(dir string) error {
 		if err := os.Rename(bakPath, indexPath); err != nil {
 			return err
 		}
+		_ = syncDirFn(dir)
 		return nil
 	}
 

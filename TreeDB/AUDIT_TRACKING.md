@@ -123,7 +123,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - RotateTo sync call verified by unit test.
 
 ### AUD-007: Index swap rename lacks directory fsync
-- Status: OPEN
+- Status: FIXED
 - Severity: P1
 - Evidence:
   - `TreeDB/db/index_swap.go`: rename operations without directory fsync.
@@ -135,6 +135,7 @@ Owner and dates are optional; add them if you use a team workflow.
   - `fsync` parent directory after rename and after removing ready marker.
 - Acceptance criteria:
   - Crash tests confirm recovery works after simulated power loss.
+  - Tests verify directory sync is invoked after rename paths.
 
 ### AUD-008: Background flush without sync when WAL disabled
 - Status: OPEN
@@ -317,7 +318,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-004 | FIXED |  |  | GetUnsafe returns safe copy; tests updated. |
 | AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
 | AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
-| AUD-007 | OPEN |  |  |  |
+| AUD-007 | FIXED |  |  | recoverIndexSwap syncs parent dir; tests added. |
 | AUD-008 | OPEN |  |  |  |
 | AUD-009 | OPEN |  |  |  |
 | AUD-010 | OPEN |  |  |  |
