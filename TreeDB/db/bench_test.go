@@ -237,23 +237,34 @@ func BenchmarkWriteParallel(b *testing.B) {
 			b.ResetTimer()
 
 			var wg sync.WaitGroup
+			var failed atomic.Bool
+			errCh := make(chan error, 1)
 			wg.Add(n)
 			for i := 0; i < n; i++ {
 				go func(id int) {
 					defer wg.Done()
 					for {
+						if failed.Load() {
+							return
+						}
 						idx := int(atomic.AddUint64(&counter, 1)) - 1
 						if idx >= b.N {
 							return
 						}
 						key := keys[idx%len(keys)]
 						if err := d.Set(key, val); err != nil {
-							b.Fatalf("Set failed: %v", err)
+							if failed.CompareAndSwap(false, true) {
+								errCh <- err
+							}
+							return
 						}
 					}
 				}(i)
 			}
 			wg.Wait()
+			if failed.Load() {
+				b.Fatalf("Set failed: %v", <-errCh)
+			}
 		})
 	}
 }
