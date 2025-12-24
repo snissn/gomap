@@ -1,6 +1,8 @@
 package slab
 
 import (
+	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -151,6 +153,32 @@ func TestDataCorruption(t *testing.T) {
 	_, err = sm2.Read(ptr)
 	if err != ErrChecksumMismatch {
 		t.Errorf("Expected ErrChecksumMismatch, got %v", err)
+	}
+}
+
+func TestSlabRead_RejectsOversizedHeader(t *testing.T) {
+	originalMax := MaxRecordSize
+	MaxRecordSize = 64
+	defer func() { MaxRecordSize = originalMax }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data-0000.slab")
+	s, err := OpenSlab(path, 0)
+	if err != nil {
+		t.Fatalf("OpenSlab failed: %v", err)
+	}
+	defer s.Close()
+
+	var header [HeaderSize]byte
+	binary.LittleEndian.PutUint16(header[4:6], 8)
+	binary.LittleEndian.PutUint32(header[6:10], 80)
+
+	if _, err := s.File.Write(header[:]); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	if _, err := s.Read(4, false); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
 	}
 }
 

@@ -225,10 +225,11 @@ Owner and dates are optional; add them if you use a team workflow.
   - Mapping count plateaus under sustained growth.
 
 ### AUD-013: OOM on corrupted slab headers
-- Status: OPEN
+- Status: FIXED
 - Severity: P1/P2 (robustness)
 - Evidence:
-  - `TreeDB/slab/slab.go`: fallback alloc uses `keyLen+valLen` without a hard cap.
+  - `TreeDB/slab/slab.go`: `MaxRecordSize` cap enforced in mmap and pread read paths; write paths reject oversized records.
+  - `TreeDB/slab/slab_test.go`: `TestSlabRead_RejectsOversizedHeader`.
 - Risk:
   - Corrupt headers can trigger massive allocations and OOM.
 - Investigation:
@@ -236,7 +237,8 @@ Owner and dates are optional; add them if you use a team workflow.
 - Fix tasks:
   - Add a max record size cap (configurable) and return `ErrRecordTooLarge` if exceeded.
 - Acceptance criteria:
-  - Fuzz test avoids OOM and returns errors on oversized records.
+  - Oversized headers are rejected without allocating (unit test).
+  - Read and write paths honor the cap and return `ErrRecordTooLarge`.
 
 ### AUD-014: Endianness and unsafe casts
 - Status: NOT_APPLICABLE (latent)
@@ -327,7 +329,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-010 | FIXED |  |  | Default perms tightened; test added. |
 | AUD-011 | FIXED |  |  | NotifyError hook + Close reports background errors. |
 | AUD-012 | OPEN |  |  |  |
-| AUD-013 | OPEN |  |  |  |
+| AUD-013 | FIXED |  |  | MaxRecordSize cap enforced + oversized header test. |
 | AUD-014 | NOT_APPLICABLE |  |  |  |
 | AUD-015 | OPEN |  |  |  |
 | AUD-016 | OPEN |  |  |  |
