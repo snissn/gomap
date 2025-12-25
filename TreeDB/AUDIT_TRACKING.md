@@ -429,3 +429,14 @@ Acceptance criteria:
 - `BenchmarkWriteParallelCached`: G=4 at least 1.5x throughput vs G=1.
 - `BenchmarkReadUnderWriteCached`: W=4 p95 latency within +50% of W=0.
 - Race tests pass; no lost updates; WAL ordering preserved; flush correctness intact.
+
+---
+
+## Milestone: WAL + Slab Dedup (Value Log)
+
+Goal: eliminate cached-mode large-value “double write” (WAL write + slab write) by turning cached-mode WAL segments into a random-access **value log** whose records can be referenced directly by the backend index via `ValuePtr`.
+
+Status: PLANNED (design review).
+
+Design + phased TODO list:
+- `TreeDB/specs/value-log.md`
