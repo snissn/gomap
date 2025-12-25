@@ -13,7 +13,7 @@ import (
 
 func TestDB_HasDoesNotBlockOnGlobalMu(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestDB_HasDoesNotBlockOnGlobalMu(t *testing.T) {
 
 func TestDB_HasNoAllocsWithQueuedMemtables(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDB_HasNoAllocsWithQueuedMemtables(t *testing.T) {
 
 func TestDB_MemtableSnapshotUpdatesOnRotate(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestDB_MemtableSnapshotUpdatesOnRotate(t *testing.T) {
 
 func TestDB_MemtableSnapshotUpdatesOnFlush(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestDB_MemtableSnapshotUpdatesOnFlush(t *testing.T) {
 
 func TestDB_MemtableSnapshotImmutableAcrossInPlaceQueueCompaction(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestDB_MemtableSnapshotImmutableAcrossInPlaceQueueCompaction(t *testing.T) 
 
 func TestDB_IteratorAllocsIndependentOfQueueLen(t *testing.T) {
 	backend := NewMockBackend()
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestDB_IteratorAllocsIndependentOfQueueLen(t *testing.T) {
 
 func TestDB_BatchWriteBypassAllocsIndependentOfQueueLen(t *testing.T) {
 	backend := &noAllocBackend{}
-	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist"})
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

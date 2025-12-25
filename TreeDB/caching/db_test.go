@@ -29,6 +29,30 @@ func NewMockBackend() *MockBackend {
 	return &MockBackend{data: make(map[string][]byte)}
 }
 
+func setMutable(db *DB, key, value []byte) {
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Set(key, value)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	shard.mu.Unlock()
+	db.mutableBytes.Add(delta)
+}
+
+func deleteMutable(db *DB, key []byte) {
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Delete(key)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	shard.mu.Unlock()
+	db.mutableBytes.Add(delta)
+}
+
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -308,20 +332,17 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	db.mutable.Set([]byte("k"), []byte("v1"))
-	db.mutableRange.add([]byte("k"))
+	setMutable(db, []byte("k"), []byte("v1"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
 	}
-	db.mutable.Set([]byte("k"), []byte("v2"))
-	db.mutableRange.add([]byte("k"))
+	setMutable(db, []byte("k"), []byte("v2"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
 	}
-	db.mutable.Set([]byte("k2"), []byte("v3"))
-	db.mutableRange.add([]byte("k2"))
+	setMutable(db, []byte("k2"), []byte("v3"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
@@ -466,8 +487,7 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	db.mu.Lock()
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
-		db.mutable.Set(k, []byte("v1"))
-		db.mutableRange.add(k)
+		setMutable(db, k, []byte("v1"))
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
@@ -475,8 +495,7 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	}
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
-		db.mutable.Set(k, []byte("v2"))
-		db.mutableRange.add(k)
+		setMutable(db, k, []byte("v2"))
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
@@ -485,11 +504,10 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
 		if i%2 == 0 {
-			db.mutable.Delete(k)
+			deleteMutable(db, k)
 		} else {
-			db.mutable.Set(k, []byte("v3"))
+			setMutable(db, k, []byte("v3"))
 		}
-		db.mutableRange.add(k)
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
