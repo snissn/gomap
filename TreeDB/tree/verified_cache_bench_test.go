@@ -88,7 +88,10 @@ func getNoCache(p *pager.Pager, sr SlabReader, root uint64, key []byte) ([]byte,
 			}
 			currID = childID
 		case page.PageTypeLeaf:
-			idx, found := n.SearchLeaf(key)
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return nil, err
+			}
 			if !found {
 				return nil, ErrKeyNotFound
 			}

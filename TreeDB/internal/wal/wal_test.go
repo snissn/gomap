@@ -72,6 +72,11 @@ func TestWALWriterRotateTo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
+	syncCalled := false
+	w.syncFn = func(_ *os.File) error {
+		syncCalled = true
+		return nil
+	}
 
 	pendingCap := cap(w.pending)
 	scratchCap := cap(w.scratch)
@@ -81,6 +86,9 @@ func TestWALWriterRotateTo(t *testing.T) {
 	}
 	if err := w.RotateTo(path2); err != nil {
 		t.Fatalf("RotateTo: %v", err)
+	}
+	if !syncCalled {
+		t.Fatalf("expected RotateTo to sync before closing")
 	}
 	if cap(w.pending) != pendingCap || cap(w.scratch) != scratchCap {
 		t.Fatalf("expected buffers to be reused across RotateTo")

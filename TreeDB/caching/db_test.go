@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -17,10 +18,39 @@ type MockBackend struct {
 	mu         sync.RWMutex
 	data       map[string][]byte
 	writeCalls int
+	writeSyncs int
+	writeErr   error
+	setOpsErr  error
+	setErr     error
+	deleteErr  error
 }
 
 func NewMockBackend() *MockBackend {
 	return &MockBackend{data: make(map[string][]byte)}
+}
+
+func setMutable(db *DB, key, value []byte) {
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Set(key, value)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	shard.mu.Unlock()
+	db.mutableBytes.Add(delta)
+}
+
+func deleteMutable(db *DB, key []byte) {
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Delete(key)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	shard.mu.Unlock()
+	db.mutableBytes.Add(delta)
 }
 
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
@@ -157,16 +187,25 @@ type MockBatch struct {
 }
 
 func (b *MockBatch) Set(key, value []byte) error {
+	if b.mb.setErr != nil {
+		return b.mb.setErr
+	}
 	b.mb.Set(key, value)
 	return nil
 }
 func (b *MockBatch) Delete(key []byte) error {
+	if b.mb.deleteErr != nil {
+		return b.mb.deleteErr
+	}
 	b.mb.mu.Lock()
 	delete(b.mb.data, string(key))
 	b.mb.mu.Unlock()
 	return nil
 }
 func (b *MockBatch) SetOps(ops []batch.Entry) error {
+	if b.mb.setOpsErr != nil {
+		return b.mb.setOpsErr
+	}
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
 	for _, op := range ops {
@@ -184,6 +223,9 @@ func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *MockBatch) Write() error {
+	if b.mb.writeErr != nil {
+		return b.mb.writeErr
+	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
 	b.mb.mu.Unlock()
@@ -191,8 +233,12 @@ func (b *MockBatch) Write() error {
 }
 
 func (b *MockBatch) WriteSync() error {
+	if b.mb.writeErr != nil {
+		return b.mb.writeErr
+	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
+	b.mb.writeSyncs++
 	b.mb.mu.Unlock()
 	return nil
 }
@@ -245,6 +291,37 @@ func TestCachingDB_WriteAndFlush(t *testing.T) {
 	}
 }
 
+func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{DisableWAL: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	if err := db.Drain(); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	backend.mu.RLock()
+	writeSyncs := backend.writeSyncs
+	writeCalls := backend.writeCalls
+	backend.mu.RUnlock()
+
+	if writeCalls == 0 {
+		t.Fatalf("expected backend writes")
+	}
+	if writeSyncs == 0 {
+		t.Fatalf("expected WriteSync when WAL is disabled")
+	}
+}
+
 func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -255,20 +332,17 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	db.mutable.Set([]byte("k"), []byte("v1"))
-	db.mutableRange.add([]byte("k"))
+	setMutable(db, []byte("k"), []byte("v1"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
 	}
-	db.mutable.Set([]byte("k"), []byte("v2"))
-	db.mutableRange.add([]byte("k"))
+	setMutable(db, []byte("k"), []byte("v2"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
 	}
-	db.mutable.Set([]byte("k2"), []byte("v3"))
-	db.mutableRange.add([]byte("k2"))
+	setMutable(db, []byte("k2"), []byte("v3"))
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
@@ -413,8 +487,7 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	db.mu.Lock()
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
-		db.mutable.Set(k, []byte("v1"))
-		db.mutableRange.add(k)
+		setMutable(db, k, []byte("v1"))
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
@@ -422,8 +495,7 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	}
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
-		db.mutable.Set(k, []byte("v2"))
-		db.mutableRange.add(k)
+		setMutable(db, k, []byte("v2"))
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
@@ -432,11 +504,10 @@ func TestCachingDB_FlushAllParallelBuildPreservesNewestWins(t *testing.T) {
 	for i := 0; i < keys; i++ {
 		k := []byte(fmt.Sprintf("k%04d", i))
 		if i%2 == 0 {
-			db.mutable.Delete(k)
+			deleteMutable(db, k)
 		} else {
-			db.mutable.Set(k, []byte("v3"))
+			setMutable(db, k, []byte("v3"))
 		}
-		db.mutableRange.add(k)
 	}
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
@@ -576,6 +647,45 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 	}
 }
 
+func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.writeErr = errors.New("write failed")
+
+	errCh := make(chan error, 1)
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1,
+		NotifyError: func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.flushAll(false)
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatalf("expected non-nil error callback")
+		}
+	default:
+		t.Fatalf("expected NotifyError to be called")
+	}
+
+	backend.writeErr = nil
+	if err := db.Close(); err == nil {
+		t.Fatalf("expected Close to return background error")
+	}
+}
+
 func TestCachingDB_IteratorDoesNotBlockOnWriteMu(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -610,5 +720,33 @@ func TestCachingDB_IteratorDoesNotBlockOnWriteMu(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("iterator creation blocked behind writeMu")
+	}
+}
+
+func TestCachingDB_SetDoesNotBlockOnWriteMuRLock(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	db.writeMu.RLock()
+	defer db.writeMu.RUnlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.Set([]byte("k2"), []byte("v2"))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Set blocked behind writeMu RLock")
 	}
 }

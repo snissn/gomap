@@ -12,6 +12,8 @@ type Batch struct {
 	batch *batch.Batch
 }
 
+const optimisticWriteMaxAttempts = 3
+
 func (db *DB) NewBatch() batch.Interface {
 	return db.NewBatchWithSize(0)
 }
@@ -55,24 +57,48 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 }
 
 func (b *Batch) Write() error {
-	// Serialize writers
-	b.db.writeMu.Lock()
-	defer b.db.writeMu.Unlock()
+	return b.write(false)
+}
 
+func (b *Batch) WriteSync() error {
+	return b.write(true)
+}
+
+func (b *Batch) write(sync bool) error {
+	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
+		committed, err := b.writeOptimistic(sync)
+		if err != nil {
+			return err
+		}
+		if committed {
+			return nil
+		}
+	}
+	return b.writeSerialized(sync)
+}
+
+func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+	b.db.writeMu.RLock()
 	idx := b.db.idx.Load()
 	if idx == nil {
-		return fmt.Errorf("missing index")
+		b.db.writeMu.RUnlock()
+		return false, fmt.Errorf("missing index")
 	}
 
-	// Get current root (Read Lock)
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	b.db.mu.RUnlock()
 
-	// Zipper Apply (No DB Lock, runs concurrently with Readers)
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	tracker := newAllocTracker(idx.allocator)
+	z := idx.zipper.CloneWithAllocator(tracker)
+	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
 	if err != nil {
-		return err
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
@@ -85,27 +111,35 @@ func (b *Batch) Write() error {
 		}
 	}
 
-	// Commit (Write Lock)
-	b.db.mu.Lock()
-	if b.db.meta.UserRootPageID != rootID {
-		// This should not happen if writeMu is held and we are the only writer
-		b.db.mu.Unlock()
-		return fmt.Errorf("concurrent modification detected during batch write")
-	}
+	b.db.commitMu.Lock()
+	b.db.mu.RLock()
+	currentRoot := b.db.meta.UserRootPageID
 	sysRoot := b.db.meta.SystemRootPageID
-	b.db.mu.Unlock()
+	b.db.mu.RUnlock()
+	if currentRoot != rootID {
+		b.db.commitMu.Unlock()
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, nil
+	}
 
-	// Commit (System Root is unchanged for now)
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
-		return err
+	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics)
+	b.db.commitMu.Unlock()
+	if err != nil {
+		b.db.writeMu.RUnlock()
+		return false, err
 	}
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
-	return nil
+	b.db.writeMu.RUnlock()
+	return true, nil
 }
 
-func (b *Batch) WriteSync() error {
+func (b *Batch) writeSerialized(sync bool) error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
@@ -135,13 +169,14 @@ func (b *Batch) WriteSync() error {
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
+		// This should not happen if writeMu is held and we are the only writer.
 		b.db.mu.Unlock()
 		return fmt.Errorf("concurrent modification detected during batch write")
 	}
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, true, metrics); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {

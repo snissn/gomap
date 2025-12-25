@@ -3,6 +3,7 @@ package memtable
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestMemtableCRUD(t *testing.T) {
@@ -53,5 +54,37 @@ func TestMemtableIterator(t *testing.T) {
 	it.Next()
 	if !it.Valid() || string(it.UnsafeKey()) != "k6" {
 		t.Errorf("Next after k5 failed, got %s", string(it.UnsafeKey()))
+	}
+}
+
+func TestMemtableIteratorBlocksWritesUntilClose(t *testing.T) {
+	m := New()
+	m.Set([]byte("a"), []byte("1"))
+
+	it := m.NewIterator(nil, nil)
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		m.Set([]byte("b"), []byte("2"))
+		close(done)
+	}()
+	<-started
+
+	select {
+	case <-done:
+		t.Fatalf("expected writer to block while iterator is open")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("writer did not proceed after iterator closed")
 	}
 }

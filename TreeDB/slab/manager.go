@@ -245,13 +245,17 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		keyLen := len(key)
 		valLen := len(value)
 
-		if keyLen > int(^uint16(0)) {
+		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
 			return nil, ErrRecordTooLarge
 		}
-		recordLen := HeaderSize + keyLen + valLen
-		if int64(recordLen) < 0 || int64(recordLen) > MaxSlabSize {
+		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
 			return nil, ErrRecordTooLarge
 		}
+		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+			return nil, ErrRecordTooLarge
+		}
+		recordLen := int(recordLen64)
 
 		// Ensure the record fits in the active slab, flushing/rotating as needed.
 		if int64(sm.activeSlab.Size)+int64(len(buf))+int64(recordLen) > MaxSlabSize {

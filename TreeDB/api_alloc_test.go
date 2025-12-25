@@ -196,6 +196,124 @@ func TestGetUnsafe_BackendReturnsValue(t *testing.T) {
 	if string(got) != "original" {
 		t.Fatalf("GetUnsafe: got %q, want %q", string(got), "original")
 	}
+	got[0] = 'X'
+
+	got2, err := db.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got2) != "original" {
+		t.Fatalf("GetUnsafe should return a safe copy (backend), got %q", string(got2))
+	}
+}
+
+func TestGetUnsafe_CachedReturnsCopy(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k")
+	val := []byte("original")
+	if err := db.Set(key, val); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetUnsafe(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("GetUnsafe: got %q, want %q", string(got), "original")
+	}
+	got[0] = 'X'
+
+	got2, err := db.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got2) != "original" {
+		t.Fatalf("GetUnsafe should return a safe copy (cached), got %q", string(got2))
+	}
+}
+
+func TestBatchSet_CopiesInput(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatal("NewBatch returned nil")
+	}
+
+	key := []byte("k")
+	val := []byte("original")
+	if err := b.Set(key, val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	key[0] = 'x'
+	val[0] = 'X'
+
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("expected %q, got %q", "original", string(got))
+	}
+}
+
+func TestBatchDelete_CopiesKey(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.SetSync([]byte("a"), []byte("1")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatal("NewBatch returned nil")
+	}
+
+	key := []byte("a")
+	if err := b.Delete(key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	key[0] = 'b'
+
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := db.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected key to be deleted, got %q", string(got))
+	}
 }
 
 func TestGetAppend_NotFound(t *testing.T) {

@@ -74,7 +74,10 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 			currID = childID
 
 		case page.PageTypeLeaf:
-			idx, found := n.SearchLeaf(key)
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
 			if !found {
 				return node.LeafEntry{}, ErrKeyNotFound
 			}

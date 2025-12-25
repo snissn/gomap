@@ -20,14 +20,26 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	// Write enough data that WAL rotation will produce multiple segments (WAL reuse
-	// is disabled once a segment exceeds ~10MiB).
-	val := bytes.Repeat([]byte("v"), 1<<20) // 1MiB
-	for i := 0; i < 20; i++ {
-		k := []byte(fmt.Sprintf("k%03d", i))
-		if err := db.Set(k, val); err != nil {
-			t.Fatalf("Set: %v", err)
+	rotateWAL := func() {
+		t.Helper()
+		db.writeMu.Lock()
+		db.mu.Lock()
+		err := db.rotateWALLocked()
+		db.mu.Unlock()
+		db.writeMu.Unlock()
+		if err != nil {
+			t.Fatalf("rotateWAL: %v", err)
 		}
+	}
+
+	// Create multiple WAL segments by rotating explicitly between writes.
+	val := bytes.Repeat([]byte("v"), 1<<20) // 1MiB
+	if err := db.Set([]byte("k000"), val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	rotateWAL()
+	if err := db.Set([]byte("k001"), val); err != nil {
+		t.Fatalf("Set: %v", err)
 	}
 
 	walDir := filepath.Join(dir, "wal")
@@ -124,12 +136,26 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 
 	db.StartAutoCheckpoint(0, 0, 100*time.Millisecond)
 
-	val := bytes.Repeat([]byte("v"), 1<<20) // 1MiB
-	for i := 0; i < 20; i++ {
-		k := []byte(fmt.Sprintf("k%03d", i))
-		if err := db.Set(k, val); err != nil {
-			t.Fatalf("Set: %v", err)
+	rotateWAL := func() {
+		t.Helper()
+		db.writeMu.Lock()
+		db.mu.Lock()
+		err := db.rotateWALLocked()
+		db.mu.Unlock()
+		db.writeMu.Unlock()
+		if err != nil {
+			t.Fatalf("rotateWAL: %v", err)
 		}
+	}
+
+	// Create multiple WAL segments by rotating explicitly between writes.
+	val := bytes.Repeat([]byte("v"), 1<<20) // 1MiB
+	if err := db.Set([]byte("k000"), val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	rotateWAL()
+	if err := db.Set([]byte("k001"), val); err != nil {
+		t.Fatalf("Set: %v", err)
 	}
 
 	walDir := filepath.Join(dir, "wal")

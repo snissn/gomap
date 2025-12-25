@@ -24,12 +24,19 @@ type Options struct {
 	MinTotalBytes      uint64
 	MaxSlabs           int
 	MicroBatchSize     int
+	// LiveSetMaxEntries controls the in-memory live pointer set size used to
+	// skip per-record tree lookups during compaction. 0 uses a default; <0
+	// disables the live-set optimization.
+	LiveSetMaxEntries int
 
 	// Assist is an optional hook invoked periodically during compaction work.
 	// It must be fast and must not assume any compaction locks are held.
 	// Typical use: coordinate with caching-layer backpressure by triggering a
 	// bounded flush when backlog grows.
 	Assist func()
+
+	// Stats is an optional collector for compaction counters.
+	Stats *Stats
 
 	// RotateBeforeWrite forces a slab rotation once before moving any records.
 	// This can reduce interference with the current active slab, but will create
@@ -40,6 +47,13 @@ type Options struct {
 	CopyBytesPerSec int64
 	// CopyBurstBytes is the limiter burst size. 0 uses a 1-second burst.
 	CopyBurstBytes int64
+}
+
+type Stats struct {
+	LiveSetEntries     uint64
+	LiveSetAborted     bool
+	TreeLookups        uint64
+	TreeLookupsSkipped uint64
 }
 
 var slabStatsKeyPrefix = []byte{0x00, 's', 'l', 'a', 'b'}

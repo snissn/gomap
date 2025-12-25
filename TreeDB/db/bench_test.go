@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -206,6 +208,153 @@ func BenchmarkBatch(b *testing.B) {
 		if err := batch.WriteSync(); err != nil {
 			b.Fatalf("Batch write failed: %v", err)
 		}
+	}
+}
+
+func BenchmarkWriteParallel(b *testing.B) {
+	workers := []int{1, 2, 4, 8}
+	val := make([]byte, 128)
+	keys := make([][]byte, 1024)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
+	for _, n := range workers {
+		b.Run(fmt.Sprintf("G=%d", n), func(b *testing.B) {
+			tmpDir, err := os.MkdirTemp("", "treedb-bench-write-*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			d, err := Open(Options{Dir: tmpDir})
+			if err != nil {
+				b.Fatalf("Failed to open DB: %v", err)
+			}
+			defer d.Close()
+
+			var counter uint64
+			b.ResetTimer()
+
+			var wg sync.WaitGroup
+			var failed atomic.Bool
+			errCh := make(chan error, 1)
+			wg.Add(n)
+			for i := 0; i < n; i++ {
+				go func(id int) {
+					defer wg.Done()
+					for {
+						if failed.Load() {
+							return
+						}
+						idx := int(atomic.AddUint64(&counter, 1)) - 1
+						if idx >= b.N {
+							return
+						}
+						key := keys[idx%len(keys)]
+						if err := d.Set(key, val); err != nil {
+							if failed.CompareAndSwap(false, true) {
+								errCh <- err
+							}
+							return
+						}
+					}
+				}(i)
+			}
+			wg.Wait()
+			if failed.Load() {
+				b.Fatalf("Set failed: %v", <-errCh)
+			}
+		})
+	}
+}
+
+func BenchmarkReadUnderWrite(b *testing.B) {
+	writerCounts := []int{0, 1, 4}
+	val := make([]byte, 128)
+	keys := make([][]byte, 4096)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+
+	for _, writers := range writerCounts {
+		b.Run(fmt.Sprintf("W=%d", writers), func(b *testing.B) {
+			tmpDir, err := os.MkdirTemp("", "treedb-bench-read-write-*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			d, err := Open(Options{Dir: tmpDir})
+			if err != nil {
+				b.Fatalf("Failed to open DB: %v", err)
+			}
+			defer d.Close()
+
+			for i := 0; i < len(keys); i += 512 {
+				batch := d.NewBatch()
+				for j := 0; j < 512 && i+j < len(keys); j++ {
+					if err := batch.Set(keys[i+j], val); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if err := batch.WriteSync(); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			stop := make(chan struct{})
+			var wg sync.WaitGroup
+			errCh := make(chan error, writers)
+			for i := 0; i < writers; i++ {
+				wg.Add(1)
+				go func(id int) {
+					defer wg.Done()
+					r := rand.New(rand.NewSource(time.Now().UnixNano() + int64(id)))
+					for {
+						select {
+						case <-stop:
+							return
+						default:
+						}
+						key := keys[r.Intn(len(keys))]
+						if err := d.Set(key, val); err != nil {
+							select {
+							case errCh <- err:
+							default:
+							}
+							return
+						}
+					}
+				}(i)
+			}
+
+			if writers > 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				key := keys[i%len(keys)]
+				if _, err := d.Get(key); err != nil {
+					b.Fatalf("Get failed: %v", err)
+				}
+			}
+
+			b.StopTimer()
+			close(stop)
+			wg.Wait()
+			for {
+				select {
+				case err := <-errCh:
+					if err != nil {
+						b.Fatalf("writer failed: %v", err)
+					}
+				default:
+					return
+				}
+			}
+		})
 	}
 }
 

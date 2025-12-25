@@ -133,6 +133,7 @@ func (w *bgCompactionWorker) runOnce(ctx context.Context, db *DB) {
 	w.lastRunUnix.Store(time.Now().Unix())
 	if err != nil {
 		w.lastErr.Store(err.Error())
+		db.reportError(err)
 	} else {
 		w.lastErr.Store("")
 	}

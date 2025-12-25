@@ -91,6 +91,18 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### Write concurrency (current limits)
+
+TreeDB currently serializes write commits per DB handle (a single writer at a
+time). This keeps WAL ordering and B+Tree root updates simple and safe, but it
+means multi-core write throughput is gated by one writer lock.
+
+Mitigations:
+- Batch writes (`db.NewBatch`, `batch.Set`, `batch.Write`) to amortize lock hold
+  time and reduce per-write overhead.
+- Use cached mode (memtables + WAL) to absorb bursts and keep read latency
+  stable under write-heavy workloads.
+
 ### Cached-mode auto checkpointing (cached wrapper)
 
 TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the default
@@ -168,6 +180,26 @@ snapshots/iterators drain.
 
 Stats keys:
 - `treedb.bg_vacuum.*`
+
+### Allocator locality and fragmentation knobs
+
+TreeDB exposes a few knobs that directly influence page-ID locality and index
+fragmentation under churn:
+
+- `Options.PreferAppendAlloc` (default: false in durable profile, true in fast)
+  - Bypasses freelist reuse and appends new pages to preserve scan locality.
+  - Trades disk growth for better sequential layout; vacuum reclaims space later.
+- `Options.FreelistRegionPages` + `Options.FreelistRegionRadius`
+  - Biases freelist reuse toward pages near the most recent allocations.
+  - Useful when you want reuse without scattering page IDs.
+  - Default when `PreferAppendAlloc=false`: 8192 pages, radius 1.
+  - Set radius < 0 to force-disable.
+- `Options.LeafFillTargetPPM` / `Options.InternalFillTargetPPM`
+  - Lowering fill targets reduces split churn and can slow re-fragmentation,
+    at the cost of more pages.
+
+Use `db.FragmentationReport()` to observe index span ratio and fill percentiles,
+and let background index vacuum handle high-fragmentation recovery.
 
 ### Offline index vacuum (backend index)
 

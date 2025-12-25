@@ -20,6 +20,12 @@ var (
 	// MaxSlabSize is 4GB (hard limit for rotation).
 	// Variable to allow testing overrides.
 	MaxSlabSize int64 = 4 * 1024 * 1024 * 1024
+	// MaxRecordSize bounds a single slab record (header + key + value).
+	// Set <= 0 to disable the cap.
+	MaxRecordSize int64 = 64 * 1024 * 1024
+	// MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
+	// vm.max_map_count. Set <= 0 to disable the cap.
+	MaxDeadMappings = 64
 )
 
 var (
@@ -27,6 +33,14 @@ var (
 	ErrRecordTooLarge   = errors.New("record too large")
 	ErrSlabFull         = errors.New("slab file is full")
 )
+
+func recordSizeExceedsMax(keyLen uint16, valLen uint32) bool {
+	if MaxRecordSize <= 0 {
+		return false
+	}
+	recordLen := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+	return recordLen > MaxRecordSize
+}
 
 // SlabFile represents a single physical .slab file.
 type SlabFile struct {
@@ -56,7 +70,7 @@ type SlabFile struct {
 
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +166,9 @@ func (s *SlabFile) RepairTail() error {
 		}
 		keyLen := binary.LittleEndian.Uint16(headerArr[4:6])
 		valLen := binary.LittleEndian.Uint32(headerArr[6:10])
+		if recordSizeExceedsMax(keyLen, valLen) {
+			break
+		}
 		recLen := int64(HeaderSize) + int64(keyLen) + int64(valLen)
 		if recLen <= HeaderSize || offset+recLen > size {
 			break
@@ -183,6 +200,10 @@ func (s *SlabFile) RepairTail() error {
 		crc := binary.LittleEndian.Uint32(headerArr[0:4])
 		keyLen := binary.LittleEndian.Uint16(headerArr[4:6])
 		valLen := binary.LittleEndian.Uint32(headerArr[6:10])
+		if recordSizeExceedsMax(keyLen, valLen) {
+			trimTo = start
+			continue
+		}
 		dataLen := int64(keyLen) + int64(valLen)
 		dataStart := start + HeaderSize
 		dataEnd := dataStart + dataLen
@@ -257,6 +278,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 
 	keyLen := binary.LittleEndian.Uint16(headerBuf[4:6])
 	valLen := binary.LittleEndian.Uint32(headerBuf[6:10])
+	if recordSizeExceedsMax(keyLen, valLen) {
+		return nil, ErrRecordTooLarge
+	}
 
 	totalLen64 := int64(keyLen) + int64(valLen)
 	if totalLen64 < 0 || totalLen64 > int64(int(totalLen64)) {
@@ -293,6 +317,9 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 		header := data[realStart : realStart+HeaderSize]
 		keyLen := binary.LittleEndian.Uint16(header[4:6])
 		valLen := binary.LittleEndian.Uint32(header[6:10])
+		if recordSizeExceedsMax(keyLen, valLen) {
+			return nil, ErrRecordTooLarge, true
+		}
 		totalLen64 := int64(keyLen) + int64(valLen)
 		if totalLen64 < 0 || totalLen64 > int64(int(totalLen64)) {
 			return nil, ErrRecordTooLarge, true
@@ -363,6 +390,12 @@ func (s *SlabFile) remapToFileSize() {
 		return
 	}
 
+	if data != nil && MaxDeadMappings > 0 && len(s.deadMappings) >= MaxDeadMappings {
+		// Keep the current mapping to avoid unbounded map growth; reads beyond it
+		// will fall back to pread.
+		return
+	}
+
 	if data != nil {
 		// Don't unmap immediately; existing readers might hold views.
 		s.deadMappings = append(s.deadMappings, data)
@@ -381,11 +414,25 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	keyLen := len(key)
 	valLen := len(value)
 
-	if int64(s.Size)+int64(HeaderSize+keyLen+valLen) > MaxSlabSize {
+	if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+		return 0, ErrRecordTooLarge
+	}
+
+	recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+	if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) {
+		return 0, ErrRecordTooLarge
+	}
+	if recordLen64 > MaxSlabSize {
+		return 0, ErrRecordTooLarge
+	}
+	if int64(s.Size)+recordLen64 > MaxSlabSize {
 		return 0, ErrSlabFull
 	}
 
-	recordLen := HeaderSize + keyLen + valLen
+	recordLen := int(recordLen64)
 	var lenArr [6]byte
 	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
 	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))

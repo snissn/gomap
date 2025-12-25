@@ -69,13 +69,18 @@ type DB struct {
 	repairSlabTailOnOpen bool
 
 	mu               sync.RWMutex
-	writeMu          sync.Mutex
+	writeMu          sync.RWMutex
+	commitMu         sync.Mutex
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
 
 	state atomic.Pointer[DBState]
+
+	notifyError func(error)
+	bgErrMu     sync.Mutex
+	bgErr       error
 }
 
 type Mode uint8
@@ -127,6 +132,9 @@ type Options struct {
 	// MemtableMode selects the cached-mode memtable implementation.
 	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
 	MemtableMode string
+	// MemtableShards controls the number of mutable memtable shards in cached
+	// mode. Values <= 0 use a runtime-dependent default.
+	MemtableShards int
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -188,6 +196,9 @@ type Options struct {
 	// This improves performance for synchronous workloads but provides only
 	// crash consistency (OS buffer cache), not true durability.
 	RelaxedSync bool
+
+	// NotifyError is an optional hook for background maintenance failures.
+	NotifyError func(error)
 
 	// DisableReadChecksum skips CRC verification on slab reads.
 	// This improves read performance (especially for large values) but risks
@@ -326,6 +337,9 @@ func Open(opts Options) (*DB, error) {
 		if opts.FreelistRegionRadius == 0 {
 			opts.FreelistRegionRadius = 1
 		}
+	} else if !opts.PreferAppendAlloc {
+		opts.FreelistRegionPages = 8192
+		opts.FreelistRegionRadius = 1
 	}
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
@@ -390,6 +404,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 		snapPool:     NewSnapshotPool(),
 		ghostManager: &indexGhostManager{},
+		notifyError:  opts.NotifyError,
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
@@ -458,7 +473,30 @@ func (db *DB) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if bgErr := db.backgroundError(); bgErr != nil {
+		errs = append(errs, bgErr)
+	}
 	return errors.Join(errs...)
+}
+
+func (db *DB) reportError(err error) {
+	if err == nil {
+		return
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
+	db.bgErrMu.Lock()
+	if db.bgErr == nil {
+		db.bgErr = err
+	}
+	db.bgErrMu.Unlock()
+}
+
+func (db *DB) backgroundError() error {
+	db.bgErrMu.Lock()
+	defer db.bgErrMu.Unlock()
+	return db.bgErr
 }
 
 // recover reads meta pages and restores state.

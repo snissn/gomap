@@ -2,9 +2,11 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,8 @@ import (
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+var errWALClosed = errors.New("cachingdb: wal writer closed")
+var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
@@ -65,6 +69,68 @@ func memtableCapacity(flushThreshold int64) int {
 	return int(capBytes)
 }
 
+func normalizeShardCount(n int) int {
+	if n < 1 {
+		return 1
+	}
+	// Round down to a power of two.
+	v := 1
+	for v<<1 <= n {
+		v <<= 1
+	}
+	return v
+}
+
+func defaultMemtableShards() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		n = 1
+	}
+	n *= 2
+	if n > 8 {
+		n = 8
+	}
+	return normalizeShardCount(n)
+}
+
+func shardCapacity(totalCap, shards int) int {
+	if shards <= 1 {
+		return totalCap
+	}
+	if totalCap <= 0 {
+		return 1
+	}
+	cap := totalCap / shards
+	if cap <= 0 {
+		cap = 1
+	}
+	return cap
+}
+
+func hashKey(key []byte) uint64 {
+	const (
+		fnvOffset = 14695981039346656037
+		fnvPrime  = 1099511628211
+	)
+	h := uint64(fnvOffset)
+	for _, b := range key {
+		h ^= uint64(b)
+		h *= fnvPrime
+	}
+	return h
+}
+
+func (db *DB) shardIndex(key []byte) int {
+	if len(db.mutableShards) <= 1 {
+		return 0
+	}
+	return int(hashKey(key) & db.mutableShardMask)
+}
+
+func (db *DB) shardForKey(key []byte) *memShard {
+	return &db.mutableShards[db.shardIndex(key)]
+}
+
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
@@ -86,6 +152,11 @@ type Options struct {
 	// Supported: "skiplist", "hash_sorted", "btree", "adaptive".
 	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
 	MemtableMode string
+
+	// MemtableShards controls the number of mutable memtable shards. Values <= 0
+	// use a default derived from GOMAXPROCS. The count is rounded down to a power
+	// of two.
+	MemtableShards int
 
 	// Legacy backpressure knob: queue length limit.
 	// 0 uses the default (4). <0 disables writer backpressure entirely.
@@ -110,12 +181,16 @@ type Options struct {
 	DisableWAL bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
+
+	// NotifyError is an optional hook for background maintenance failures.
+	NotifyError func(error)
 }
 
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
-	writeMu sync.Mutex
+	writeMu sync.RWMutex
+	walMu   sync.Mutex
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
@@ -124,9 +199,16 @@ type DB struct {
 	checkpointing  atomic.Bool
 
 	// Level 0 (Memory)
-	mutable           memtable.Table
-	queue             []memtable.Table
-	mutableRange      keyRange
+	mutableShards    []memShard
+	mutableShardMask uint64
+	mutableBytes     atomic.Int64
+	mutableThreshold atomic.Int64
+	rotatePending    atomic.Bool
+	queue            []memtable.Table
+
+	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
+	// Readers load it atomically to avoid holding db.mu around memtable access.
+	memtables         atomic.Pointer[memtableView]
 	queueRanges       []keyRange
 	queueWALPaths     []string
 	backendRange      keyRange
@@ -135,9 +217,18 @@ type DB struct {
 	backendRangeErr   error
 
 	// Durability
-	wal     *wal.Writer
-	walPath string
-	walSeq  int // Sequence number for WAL files
+	wal           *wal.Writer
+	walPath       string
+	walSeq        int // Sequence number for WAL files
+	walCh         chan walWriteRequest
+	walStopCh     chan struct{}
+	walAckMu      sync.Mutex
+	walErr        error
+	walFastMu     sync.Mutex
+	walFastCond   *sync.Cond
+	walFastQueue  []walFastItem
+	walFastHead   int
+	walFastClosed bool
 	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
 	// segment bytes. It is updated on WAL rotation and segment deletion.
 	walClosedBytes atomic.Int64
@@ -156,6 +247,7 @@ type DB struct {
 	memtableAdaptive        bool
 	memtableWarmupActive    bool
 	memtableWarmupThreshold int64
+	statsMu                 sync.Mutex
 	memtableStats           memtableStats
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
@@ -167,6 +259,9 @@ type DB struct {
 
 	disableWAL  bool
 	relaxedSync bool
+	notifyError func(error)
+	bgErrMu     sync.Mutex
+	bgErr       error
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
@@ -196,6 +291,45 @@ type keyRange struct {
 	valid bool
 	min   []byte
 	max   []byte
+}
+
+type memShard struct {
+	mu    sync.Mutex
+	mem   memtable.Table
+	rng   keyRange
+	bytes int64
+}
+
+// memtableView is an immutable snapshot of the in-memory layers.
+// It is published via atomic.Pointer and treated as read-only by readers.
+type memtableView struct {
+	mutables    []memtable.Table
+	queue       []memtable.Table
+	queueRanges []keyRange
+}
+
+// publishMemtablesLocked publishes a new memtable snapshot.
+// Caller must hold db.mu with a writer lock.
+func (db *DB) publishMemtablesLocked() {
+	view := &memtableView{}
+	if len(db.mutableShards) > 0 {
+		mutables := make([]memtable.Table, len(db.mutableShards))
+		for i := range db.mutableShards {
+			mutables[i] = db.mutableShards[i].mem
+		}
+		view.mutables = mutables
+	}
+	if len(db.queue) > 0 {
+		q := make([]memtable.Table, len(db.queue))
+		copy(q, db.queue)
+		view.queue = q
+	}
+	if len(db.queueRanges) > 0 {
+		qr := make([]keyRange, len(db.queueRanges))
+		copy(qr, db.queueRanges)
+		view.queueRanges = qr
+	}
+	db.memtables.Store(view)
 }
 
 type memtableStats struct {
@@ -280,10 +414,74 @@ func queryCoversRange(start, end []byte, r keyRange) bool {
 	return true
 }
 
-func (db *DB) noteWriteKeyLocked(key []byte) {
+func cloneRange(r keyRange) keyRange {
+	if !r.valid {
+		return r
+	}
+	r.min = append([]byte(nil), r.min...)
+	r.max = append([]byte(nil), r.max...)
+	return r
+}
+
+func (db *DB) snapshotMutableRange() keyRange {
+	var out keyRange
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		r := cloneRange(shard.rng)
+		shard.mu.Unlock()
+		if !r.valid {
+			continue
+		}
+		if !out.valid {
+			out = r
+			continue
+		}
+		if bytes.Compare(r.min, out.min) < 0 {
+			out.min = append(out.min[:0], r.min...)
+		}
+		if bytes.Compare(r.max, out.max) > 0 {
+			out.max = append(out.max[:0], r.max...)
+		}
+	}
+	return out
+}
+
+func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error {
+	db.mutableBytes.Store(0)
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		reused := false
+		if reuse {
+			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
+				r.Reset()
+				reused = true
+			}
+		}
+		if !reused {
+			mt, err := memtable.NewWithCapacityMode(0, nextMode)
+			if err != nil {
+				shard.mu.Unlock()
+				return err
+			}
+			shard.mem = mt
+		}
+		shard.rng = keyRange{}
+		shard.bytes = 0
+		shard.mu.Unlock()
+	}
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
+	return nil
+}
+
+func (db *DB) noteWriteKey(key []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
+	db.statsMu.Lock()
+	defer db.statsMu.Unlock()
 	stats := &db.memtableStats
 	stats.writes++
 	if len(key) == 0 {
@@ -293,14 +491,16 @@ func (db *DB) noteWriteKeyLocked(key []byte) {
 	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
 		stats.seqWrites++
 	}
-	stats.lastKey = key
+	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
 }
 
-func (db *DB) noteIteratorLocked(start, end []byte) {
+func (db *DB) noteIterator(start, end []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
+	db.statsMu.Lock()
+	defer db.statsMu.Unlock()
 	stats := &db.memtableStats
 	stats.iterators++
 	if start != nil || end != nil {
@@ -308,19 +508,29 @@ func (db *DB) noteIteratorLocked(start, end []byte) {
 	}
 }
 
-func (db *DB) mutableFlushThresholdLocked() int64 {
+func (db *DB) updateMutableThresholdLocked() {
+	threshold := db.flushThreshold
 	if db.memtableWarmupActive && db.memtableWarmupThreshold > 0 && db.memtableWarmupThreshold < db.flushThreshold {
-		return db.memtableWarmupThreshold
+		threshold = db.memtableWarmupThreshold
 	}
-	return db.flushThreshold
+	db.mutableThreshold.Store(threshold)
+}
+
+func (db *DB) mutableFlushThreshold() int64 {
+	return db.mutableThreshold.Load()
 }
 
 func (db *DB) resetMemtableStatsLocked() {
+	db.statsMu.Lock()
 	db.memtableStats = memtableStats{}
+	db.statsMu.Unlock()
 }
 
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
-	stats := &db.memtableStats
+	db.statsMu.Lock()
+	statsCopy := db.memtableStats
+	db.statsMu.Unlock()
+	stats := &statsCopy
 	if stats.writes < adaptiveMinWrites {
 		return db.memtableMode
 	}
@@ -364,11 +574,19 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	shardCount := opts.MemtableShards
+	if shardCount <= 0 {
+		shardCount = defaultMemtableShards()
+	}
+	shardCount = normalizeShardCount(shardCount)
+	if shardCount < 1 {
+		shardCount = 1
+	}
 	if opts.MaxQueuedMemtables == 0 {
 		// Keep the default queued backlog roughly stable in bytes when callers
 		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
 		// length of 4 => ~256MB backlog.
-		opts.MaxQueuedMemtables = defaultMaxQueuedMemtables(opts.FlushThreshold)
+		opts.MaxQueuedMemtables = defaultMaxQueuedMemtables(opts.FlushThreshold) * shardCount
 	}
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
@@ -379,7 +597,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
+	if err := os.MkdirAll(walDir, 0700); err != nil {
 		return nil, err
 	}
 	segments, _ := listNonEmptyWALSegments(walDir)
@@ -395,10 +613,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if adaptive && adaptiveWarmupBytes > 0 && int64(adaptiveWarmupBytes) < opts.FlushThreshold {
 		warmupThreshold = int64(adaptiveWarmupBytes)
 	}
-	warmupCap := memtableCapacity(warmupThreshold)
-	mt, err := memtable.NewWithCapacityMode(warmupCap, mode)
-	if err != nil {
-		return nil, err
+	memCap = shardCapacity(memCap, shardCount)
+	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
+	mutableShards := make([]memShard, shardCount)
+	for i := range mutableShards {
+		mt, err := memtable.NewWithCapacityMode(warmupCap, mode)
+		if err != nil {
+			return nil, err
+		}
+		mutableShards[i] = memShard{mem: mt}
 	}
 
 	db := &DB{
@@ -419,7 +642,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildConcurrency:   opts.FlushBuildConcurrency,
 		disableWAL:              opts.DisableWAL,
 		relaxedSync:             opts.RelaxedSync,
-		mutable:                 mt,
+		notifyError:             opts.NotifyError,
+		mutableShards:           mutableShards,
+		mutableShardMask:        uint64(shardCount - 1),
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
@@ -448,13 +673,40 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			}
 			db.mu.Unlock()
 		}
+		db.startWALWriter()
 	}
+
+	// Publish initial memtable snapshot for lock-free reads.
+	db.mu.Lock()
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
 
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
 
 	return db, nil
+}
+
+func (db *DB) reportError(err error) {
+	if err == nil {
+		return
+	}
+	if db.notifyError != nil {
+		db.notifyError(err)
+	}
+	db.bgErrMu.Lock()
+	if db.bgErr == nil {
+		db.bgErr = err
+	}
+	db.bgErrMu.Unlock()
+}
+
+func (db *DB) backgroundError() error {
+	db.bgErrMu.Lock()
+	defer db.bgErrMu.Unlock()
+	return db.bgErr
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
@@ -621,6 +873,323 @@ func walBatchSize(records []wal.Record) int64 {
 		total += walRecordHeaderBytes + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+type walWriteRequest struct {
+	records []wal.Record
+	sync    bool
+	ack     *walAck
+}
+
+type walAck struct {
+	wg  sync.WaitGroup
+	err error
+}
+
+var walAckPool = sync.Pool{
+	New: func() any { return &walAck{} },
+}
+
+type walFastItem struct {
+	record wal.Record
+	ack    *walAck
+}
+
+const (
+	walWriteBuffer   = 4096
+	walWriteBatchMax = 512
+	walFastBatchMax  = 2048
+	walFastQueueMax  = 16384
+)
+
+func (db *DB) startWALWriter() {
+	db.walCh = make(chan walWriteRequest, walWriteBuffer)
+	db.walStopCh = make(chan struct{})
+	db.walFastCond = sync.NewCond(&db.walFastMu)
+	db.wg.Add(1)
+	go db.walWriteLoop()
+	db.wg.Add(1)
+	go db.walFastLoop()
+}
+
+func (db *DB) walWriteLoop() {
+	defer db.wg.Done()
+	defer close(db.walStopCh)
+
+	batch := make([]walWriteRequest, 0, walWriteBatchMax)
+	for {
+		batch = batch[:0]
+
+		var req walWriteRequest
+		select {
+		case <-db.closeCh:
+			db.drainWALWriter(batch)
+			return
+		case req = <-db.walCh:
+		}
+		batch = append(batch, req)
+
+	drain:
+		for len(batch) < walWriteBatchMax {
+			select {
+			case req = <-db.walCh:
+				batch = append(batch, req)
+			default:
+				break drain
+			}
+		}
+
+		db.walAckMu.Lock()
+		walErr := db.walErr
+		db.walAckMu.Unlock()
+		if walErr != nil {
+			db.finishWALRequests(batch, walErr)
+			continue
+		}
+
+		err := db.flushWALRequests(batch)
+		if err != nil {
+			db.walAckMu.Lock()
+			if db.walErr == nil {
+				db.walErr = err
+			}
+			walErr = db.walErr
+			db.walAckMu.Unlock()
+			db.finishWALRequests(batch, walErr)
+			continue
+		}
+
+		db.finishWALRequests(batch, nil)
+	}
+}
+
+func (db *DB) walFastLoop() {
+	defer db.wg.Done()
+
+	batch := make([]walFastItem, 0, walFastBatchMax)
+	records := make([]wal.Record, 0, walFastBatchMax)
+
+	for {
+		db.walFastMu.Lock()
+		for !db.walFastClosed && len(db.walFastQueue)-db.walFastHead == 0 {
+			db.walFastCond.Wait()
+		}
+
+		if db.walFastClosed {
+			batch = append(batch[:0], db.walFastQueue[db.walFastHead:]...)
+			db.walFastQueue = nil
+			db.walFastHead = 0
+			db.walFastMu.Unlock()
+
+			for i := range batch {
+				ack := batch[i].ack
+				ack.err = errWALClosed
+				ack.wg.Done()
+			}
+			return
+		}
+
+		available := len(db.walFastQueue) - db.walFastHead
+		n := available
+		if n > walFastBatchMax {
+			n = walFastBatchMax
+		}
+		batch = append(batch[:0], db.walFastQueue[db.walFastHead:db.walFastHead+n]...)
+		db.walFastHead += n
+
+		if db.walFastHead == len(db.walFastQueue) {
+			db.walFastQueue = db.walFastQueue[:0]
+			db.walFastHead = 0
+		} else if db.walFastHead > 1024 && db.walFastHead*2 >= len(db.walFastQueue) {
+			copy(db.walFastQueue, db.walFastQueue[db.walFastHead:])
+			db.walFastQueue = db.walFastQueue[:len(db.walFastQueue)-db.walFastHead]
+			db.walFastHead = 0
+		}
+		db.walFastCond.Broadcast()
+		db.walFastMu.Unlock()
+
+		records = records[:0]
+		for i := range batch {
+			records = append(records, batch[i].record)
+		}
+		err := db.appendWALDirect(records, false)
+		for i := range batch {
+			ack := batch[i].ack
+			ack.err = err
+			ack.wg.Done()
+		}
+	}
+}
+
+func (db *DB) drainWALWriter(batch []walWriteRequest) {
+	for {
+		select {
+		case req := <-db.walCh:
+			batch = append(batch[:0], req)
+		drain:
+			for len(batch) < walWriteBatchMax {
+				select {
+				case req = <-db.walCh:
+					batch = append(batch, req)
+				default:
+					break drain
+				}
+			}
+			db.walAckMu.Lock()
+			walErr := db.walErr
+			db.walAckMu.Unlock()
+			if walErr != nil {
+				db.finishWALRequests(batch, walErr)
+				continue
+			}
+
+			err := db.flushWALRequests(batch)
+			if err != nil {
+				db.walAckMu.Lock()
+				if db.walErr == nil {
+					db.walErr = err
+				}
+				walErr = db.walErr
+				db.walAckMu.Unlock()
+				db.finishWALRequests(batch, walErr)
+				continue
+			}
+			db.finishWALRequests(batch, nil)
+		default:
+			return
+		}
+	}
+}
+
+func (db *DB) finishWALRequests(requests []walWriteRequest, err error) {
+	for i := range requests {
+		ack := requests[i].ack
+		if ack == nil {
+			continue
+		}
+		ack.err = err
+		ack.wg.Done()
+	}
+}
+
+func (db *DB) flushWALRequests(requests []walWriteRequest) error {
+	if len(requests) == 0 {
+		return nil
+	}
+
+	db.mu.RLock()
+	w := db.wal
+	db.mu.RUnlock()
+	if w == nil {
+		return errWALUnavailable
+	}
+
+	var (
+		totalBytes int64
+		needSync   bool
+	)
+
+	db.walMu.Lock()
+	for _, req := range requests {
+		if len(req.records) == 1 {
+			rec := req.records[0]
+			if err := w.Append(rec.Op, rec.Key, rec.Value); err != nil {
+				db.walMu.Unlock()
+				return err
+			}
+			totalBytes += walRecordSize(rec.Key, rec.Value)
+		} else {
+			if err := w.AppendBatch(req.records); err != nil {
+				db.walMu.Unlock()
+				return err
+			}
+			totalBytes += walBatchSize(req.records)
+		}
+		if req.sync {
+			needSync = true
+		}
+	}
+	if needSync {
+		if err := w.Sync(); err != nil {
+			db.walMu.Unlock()
+			return err
+		}
+	}
+	db.walMu.Unlock()
+
+	if totalBytes > 0 {
+		db.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
+func (db *DB) appendWAL(records []wal.Record, sync bool) error {
+	if db.disableWAL {
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	if len(records) == 1 && !sync {
+		return db.appendWALFast(records[0])
+	}
+	return db.appendWALDirect(records, sync)
+}
+
+func (db *DB) appendWALDirect(records []wal.Record, sync bool) error {
+	ack := walAckPool.Get().(*walAck)
+	ack.err = nil
+	ack.wg.Add(1)
+
+	req := walWriteRequest{records: records, sync: sync, ack: ack}
+	select {
+	case db.walCh <- req:
+		// wait for ack
+	case <-db.closeCh:
+		ack.err = errWALClosed
+		ack.wg.Done()
+		walAckPool.Put(ack)
+		return errWALClosed
+	}
+
+	ack.wg.Wait()
+	err := ack.err
+	walAckPool.Put(ack)
+	return err
+}
+
+func (db *DB) appendWALFast(record wal.Record) error {
+	ack := walAckPool.Get().(*walAck)
+	ack.err = nil
+	ack.wg.Add(1)
+
+	db.walFastMu.Lock()
+	for !db.walFastClosed && len(db.walFastQueue)-db.walFastHead >= walFastQueueMax {
+		db.walFastCond.Wait()
+	}
+	if db.walFastClosed {
+		db.walFastMu.Unlock()
+		ack.err = errWALClosed
+		ack.wg.Done()
+		walAckPool.Put(ack)
+		return errWALClosed
+	}
+	db.walFastQueue = append(db.walFastQueue, walFastItem{record: record, ack: ack})
+	db.walFastCond.Signal()
+	db.walFastMu.Unlock()
+
+	ack.wg.Wait()
+	err := ack.err
+	walAckPool.Put(ack)
+	return err
 }
 
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
@@ -838,7 +1407,7 @@ func (db *DB) Checkpoint() error {
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
-	if db.mutable.Len() > 0 {
+	if db.mutableBytes.Load() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			return err
@@ -878,7 +1447,7 @@ func (db *DB) Checkpoint() error {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
 		db.mu.Lock()
@@ -972,6 +1541,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return
 	}
+	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
 	if !db.flushMu.TryLock() {
@@ -995,19 +1565,27 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 }
 
 func (db *DB) Close() error {
+	var errs []error
 	hadMemtables := false
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutable.Len() > 0 {
+	if db.mutableBytes.Load() > 0 {
 		hadMemtables = true
 		_ = db.rotateMemtableLocked(true)
 	} else if len(db.queue) > 0 {
 		hadMemtables = true
 	}
 	db.mu.Unlock()
-	db.writeMu.Unlock()
+
+	db.walFastMu.Lock()
+	db.walFastClosed = true
+	if db.walFastCond != nil {
+		db.walFastCond.Broadcast()
+	}
+	db.walFastMu.Unlock()
 
 	close(db.closeCh)
+	db.writeMu.Unlock()
 	db.wg.Wait()
 
 	var walBytes int64
@@ -1045,7 +1623,7 @@ func (db *DB) Close() error {
 			err = cerr
 		}
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
@@ -1059,7 +1637,7 @@ func (db *DB) Close() error {
 		}
 		seen[path] = struct{}{}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", path, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
 		db.mu.Lock()
@@ -1067,7 +1645,13 @@ func (db *DB) Close() error {
 		db.mu.Unlock()
 	}
 
-	return db.backend.Close()
+	if err := db.backend.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if bgErr := db.backgroundError(); bgErr != nil {
+		errs = append(errs, bgErr)
+	}
+	return errors.Join(errs...)
 }
 func (db *DB) Set(key, value []byte) error {
 	if key == nil {
@@ -1094,45 +1678,40 @@ func (db *DB) SetSync(key, value []byte) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	db.writeMu.Lock()
+	db.writeMu.RLock()
+	needRotate := false
 
 	if !db.disableWAL {
-		db.mu.RLock()
-		w := db.wal
-		relaxedSync := db.relaxedSync
-		db.mu.RUnlock()
-
-		if w != nil {
-			if err := w.Append(wal.OpSet, key, value); err != nil {
-				db.writeMu.Unlock()
-				return err
-			}
-			db.walLiveBytes.Add(walRecordSize(key, value))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					db.writeMu.Unlock()
-					return err
-				}
-			}
-		}
-	}
-
-	db.mu.Lock()
-	db.mutable.Set(key, value)
-
-	db.mutableRange.add(key)
-	db.noteWriteKeyLocked(key)
-
-	// 3. Check Threshold
-	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-		if err := db.rotateMemtableLocked(true); err != nil {
-			db.mu.Unlock()
-			db.writeMu.Unlock()
+		syncWAL := sync && !db.relaxedSync
+		rec := wal.Record{Op: wal.OpSet, Key: key, Value: value}
+		if err := db.appendWAL([]wal.Record{rec}, syncWAL); err != nil {
+			db.writeMu.RUnlock()
 			return err
 		}
 	}
-	db.mu.Unlock()
-	db.writeMu.Unlock()
+
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Set(key, value)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	// 3. Check Threshold
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -1175,31 +1754,34 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 		defer func() { _ = it.Close() }()
 
-		db.mu.RLock()
-		w := db.wal
-		db.mu.RUnlock()
-
 		for it.Valid() {
 			key := it.Key()
 
-			if w != nil {
-				if err := w.Append(wal.OpDelete, key, nil); err != nil {
-					return err
-				}
-				db.walLiveBytes.Add(walRecordSize(key, nil))
+			rec := wal.Record{Op: wal.OpDelete, Key: key}
+			if err := db.appendWAL([]wal.Record{rec}, false); err != nil {
+				return err
 			}
 
-			db.mu.Lock()
-			db.mutable.Delete(key)
-			db.mutableRange.add(key)
-			db.noteWriteKeyLocked(key)
-			if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-				if err := db.rotateMemtableLocked(true); err != nil {
-					db.mu.Unlock()
-					return err
+			shard := db.shardForKey(key)
+			shard.mu.Lock()
+			shard.mem.Delete(key)
+			shard.rng.add(key)
+			newBytes := shard.mem.Size()
+			delta := newBytes - shard.bytes
+			shard.bytes = newBytes
+			db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
+			db.noteWriteKey(key)
+			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+				db.mu.Lock()
+				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+					if err := db.rotateMemtableLocked(true); err != nil {
+						db.mu.Unlock()
+						return err
+					}
 				}
+				db.mu.Unlock()
 			}
-			db.mu.Unlock()
 
 			it.Next()
 		}
@@ -1226,7 +1808,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	// is empty; otherwise we'd violate "newest wins" semantics.
 	if db.disableWAL {
 		db.mu.Lock()
-		backendOnly := len(db.queue) == 0 && db.mutable.Len() == 0
+		backendOnly := len(db.queue) == 0 && db.mutableBytes.Load() == 0
 		db.mu.Unlock()
 		if backendOnly {
 			it, err := db.backend.Iterator(start, end)
@@ -1286,7 +1868,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 	}
 
-	addRange(db.mutableRange)
+	mutableRange := db.snapshotMutableRange()
+	addRange(mutableRange)
 	for _, r := range db.queueRanges {
 		addRange(r)
 	}
@@ -1319,34 +1902,15 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.resetMemtableStatsLocked()
 			}
 
-			// Reuse the existing mutable memtable when possible to avoid large
-			// allocations (e.g. skiplist arena prealloc) on repeated full-range clears.
-			//
-			// If adaptive mode would switch memtable implementations, fall back to a
-			// fresh memtable instance.
-			reused := false
-			if nextMode == curMode {
-				if r, ok := any(db.mutable).(interface{ Reset() }); ok {
-					r.Reset()
-					reused = true
-				}
-			}
-			if !reused {
-				// Use a small initial capacity. It can grow on demand and avoids
-				// allocating multi-megabyte arenas on every clear.
-				mt, err := memtable.NewWithCapacityMode(0, nextMode)
-				if err != nil {
-					db.mu.Unlock()
-					db.flushMu.Unlock()
-					return err
-				}
-				db.mutable = mt
-			}
 			db.queue = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
-			db.mutableRange = keyRange{}
 			db.queueBacklogBytes.Store(0)
+			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
+				db.mu.Unlock()
+				db.flushMu.Unlock()
+				return err
+			}
 
 			db.mu.Unlock()
 			db.flushMu.Unlock()
@@ -1371,7 +1935,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
-		coversInMemory := queryCoversRange(start, end, db.mutableRange)
+		mutableRange := db.snapshotMutableRange()
+		coversInMemory := queryCoversRange(start, end, mutableRange)
 		for _, r := range db.queueRanges {
 			if !queryCoversRange(start, end, r) {
 				coversInMemory = false
@@ -1393,26 +1958,14 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.resetMemtableStatsLocked()
 			}
 
-			reused := false
-			if nextMode == curMode {
-				if r, ok := any(db.mutable).(interface{ Reset() }); ok {
-					r.Reset()
-					reused = true
-				}
-			}
-			if !reused {
-				mt, err := memtable.NewWithCapacityMode(0, nextMode)
-				if err != nil {
-					db.mu.Unlock()
-					return err
-				}
-				db.mutable = mt
-			}
 			db.queue = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
-			db.mutableRange = keyRange{}
 			db.queueBacklogBytes.Store(0)
+			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
+				db.mu.Unlock()
+				return err
+			}
 			db.mu.Unlock()
 
 			it, err := db.backend.Iterator(start, end)
@@ -1451,25 +2004,19 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		// If we need to enumerate keys from the current mutable memtable, rotate it
 		// first so we never mutate a memtable while iterating it.
-		if overlapsQuery(start, end, db.mutableRange) && db.mutable != nil && db.mutable.Len() > 0 {
-			if queryCoversRange(start, end, db.mutableRange) {
-				if r, ok := any(db.mutable).(interface{ Reset() }); ok {
-					r.Reset()
-				} else {
-					mt, err := memtable.NewWithCapacityMode(0, db.memtableMode)
-					if err != nil {
-						db.mu.Unlock()
-						return err
-					}
-					db.mutable = mt
+		if overlapsQuery(start, end, mutableRange) && db.mutableBytes.Load() > 0 {
+			if queryCoversRange(start, end, mutableRange) {
+				if err := db.resetMutableShardsLocked(db.memtableMode, true); err != nil {
+					db.mu.Unlock()
+					return err
 				}
-				db.mutableRange = keyRange{}
 			} else {
 				if err := db.rotateMemtableLocked(false); err != nil {
 					db.mu.Unlock()
 					return err
 				}
 			}
+			mutableRange = db.snapshotMutableRange()
 		}
 
 		// Drop fully-covered queued memtables without enumerating their keys.
@@ -1498,18 +2045,27 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 		}
+		db.publishMemtablesLocked()
 
 		// Snapshot sources after any rotations/drops.
-		mutable := db.mutable
-		mutableRange := db.mutableRange
+		mutableHasData := db.mutableBytes.Load() > 0
+		mutableRanges := make([]keyRange, len(db.mutableShards))
+		mutables := make([]memtable.Table, len(db.mutableShards))
+		for i := range db.mutableShards {
+			shard := &db.mutableShards[i]
+			shard.mu.Lock()
+			mutables[i] = shard.mem
+			mutableRanges[i] = cloneRange(shard.rng)
+			shard.mu.Unlock()
+		}
 		queue := append([]memtable.Table(nil), db.queue...)
 		queueRanges := append([]keyRange(nil), db.queueRanges...)
 		db.mu.Unlock()
 
 		var (
-			backendIter iterator.UnsafeIterator
-			queueIters  []iterator.UnsafeIterator
-			mutableIter iterator.UnsafeIterator
+			backendIter  iterator.UnsafeIterator
+			queueIters   []iterator.UnsafeIterator
+			mutableIters []iterator.UnsafeIterator
 		)
 
 		if overlapsQuery(start, end, backendRange) {
@@ -1521,11 +2077,19 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			defer func() { _ = backendIter.Close() }()
 		}
 
-		if overlapsQuery(start, end, mutableRange) && mutable != nil {
-			it := mutable.NewIterator(start, end)
-			mutableIter = it
-			mutableIter.Seek(start)
-			defer func() { _ = mutableIter.Close() }()
+		if mutableHasData {
+			for i, mem := range mutables {
+				if mem == nil {
+					continue
+				}
+				if i < len(mutableRanges) && !overlapsQuery(start, end, mutableRanges[i]) {
+					continue
+				}
+				it := mem.NewIterator(start, end)
+				it.Seek(start)
+				mutableIters = append(mutableIters, it)
+				defer func(it iterator.UnsafeIterator) { _ = it.Close() }(it)
+			}
 		}
 
 		for i, mem := range queue {
@@ -1540,9 +2104,16 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		db.mu.Lock()
 		applyDelete := func(key []byte) error {
-			db.mutable.Delete(key)
-			db.mutableRange.add(key)
-			if db.mutable.Size() > db.mutableFlushThresholdLocked() {
+			shard := db.shardForKey(key)
+			shard.mu.Lock()
+			shard.mem.Delete(key)
+			shard.rng.add(key)
+			newBytes := shard.mem.Size()
+			delta := newBytes - shard.bytes
+			shard.bytes = newBytes
+			db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
+			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 				if err := db.rotateMemtableLocked(true); err != nil {
 					return err
 				}
@@ -1550,17 +2121,17 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return nil
 		}
 
-		if mutableIter != nil {
-			for mutableIter.Valid() {
-				if !mutableIter.IsDeleted() {
-					if err := applyDelete(mutableIter.UnsafeKey()); err != nil {
+		for _, it := range mutableIters {
+			for it.Valid() {
+				if !it.IsDeleted() {
+					if err := applyDelete(it.UnsafeKey()); err != nil {
 						db.mu.Unlock()
 						return err
 					}
 				}
-				mutableIter.Next()
+				it.Next()
 			}
-			if err := mutableIter.Error(); err != nil {
+			if err := it.Error(); err != nil {
 				db.mu.Unlock()
 				return err
 			}
@@ -1633,45 +2204,40 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
-	db.writeMu.Lock()
+	db.writeMu.RLock()
+	needRotate := false
 
 	if !db.disableWAL {
-		db.mu.RLock()
-		w := db.wal
-		relaxedSync := db.relaxedSync
-		db.mu.RUnlock()
-
-		if w != nil {
-			if err := w.Append(wal.OpDelete, key, nil); err != nil {
-				db.writeMu.Unlock()
-				return err
-			}
-			db.walLiveBytes.Add(walRecordSize(key, nil))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					db.writeMu.Unlock()
-					return err
-				}
-			}
-		}
-	}
-
-	db.mu.Lock()
-	db.mutable.Delete(key)
-
-	db.mutableRange.add(key)
-	db.noteWriteKeyLocked(key)
-
-	// 3. Threshold
-	if db.mutable.Size() > db.mutableFlushThresholdLocked() {
-		if err := db.rotateMemtableLocked(true); err != nil {
-			db.mu.Unlock()
-			db.writeMu.Unlock()
+		syncWAL := sync && !db.relaxedSync
+		rec := wal.Record{Op: wal.OpDelete, Key: key}
+		if err := db.appendWAL([]wal.Record{rec}, syncWAL); err != nil {
+			db.writeMu.RUnlock()
 			return err
 		}
 	}
-	db.mu.Unlock()
-	db.writeMu.Unlock()
+
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	shard.mem.Delete(key)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	// 3. Threshold
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
 
 	db.noteWrite()
 	db.maybeAssistFlush()
@@ -1680,30 +2246,41 @@ func (db *DB) delete(key []byte, sync bool) error {
 
 func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
 	walPath := db.walPath
-	memBytes := db.mutable.Size()
-	db.mutable.Freeze()
-	db.queue = append(db.queue, db.mutable)
-	db.queueBacklogBytes.Add(memBytes)
-	db.queueRanges = append(db.queueRanges, db.mutableRange)
-	db.queueWALPaths = append(db.queueWALPaths, walPath)
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
 	if db.memtableAdaptive {
 		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 	}
-	if newCapacity < 0 {
-		newCapacity = db.memtableCap
+	db.mutableBytes.Store(0)
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		shard.mem.Freeze()
+		memBytes := shard.mem.Size()
+		db.queue = append(db.queue, shard.mem)
+		db.queueBacklogBytes.Add(memBytes)
+		db.queueRanges = append(db.queueRanges, shard.rng)
+		db.queueWALPaths = append(db.queueWALPaths, walPath)
+
+		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+		if err != nil {
+			shard.mu.Unlock()
+			return err
+		}
+		shard.mem = mt
+		shard.rng = keyRange{}
+		shard.bytes = 0
+		shard.mu.Unlock()
 	}
-	mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
-	if err != nil {
-		return err
-	}
-	db.mutable = mt
-	db.mutableRange = keyRange{}
 	if db.memtableAdaptive {
 		db.resetMemtableStatsLocked()
 	}
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
@@ -1746,40 +2323,106 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 //
 // Caller must hold db.mu.
 func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
-	walPath := db.walPath
-	memBytes := db.mutable.Size()
-	db.mutable.Freeze()
-	db.queue = append(db.queue, db.mutable)
-	db.queueBacklogBytes.Add(memBytes)
-	db.queueRanges = append(db.queueRanges, db.mutableRange)
-	db.queueWALPaths = append(db.queueWALPaths, walPath)
+	return db.rotateMutableShardsLocked(newCapacity, false)
+}
+
+func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
+	return db.rotateMemtableLockedWithCapacity(triggerFlush, -1)
+}
+
+func (db *DB) rotateMemtableIfNeeded(triggerFlush bool) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
+		return nil
+	}
+	return db.rotateMutableShardsLocked(-1, triggerFlush)
+}
+
+func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
+	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
+		return nil
+	}
+	if !db.rotatePending.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer db.rotatePending.Store(false)
+	return db.rotateMemtableIfNeeded(triggerFlush)
+}
+
+// rotateMutableShardsLocked rotates the current mutable shards into the queue
+// while holding db.mu (write) and the affected shard locks.
+//
+// It intentionally does not rotate the WAL segment; checkpoint is responsible
+// for establishing durable boundaries and trimming old segments. This avoids
+// requiring a global writer barrier around WAL rotation.
+func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
 	if db.memtableAdaptive {
 		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 	}
-	if newCapacity < 0 {
-		newCapacity = db.memtableCap
+	walPath := ""
+	if !db.disableWAL {
+		walPath = db.walPath
 	}
-	mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
-	if err != nil {
-		return err
+
+	locked := make([]*memShard, 0, len(db.mutableShards))
+	defer func() {
+		for i := len(locked) - 1; i >= 0; i-- {
+			locked[i].mu.Unlock()
+		}
+	}()
+
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		locked = append(locked, shard)
+
+		// Remove this shard's contribution from the global byte counter before
+		// resetting it, since writers may still be updating other shards.
+		if shard.bytes != 0 {
+			db.mutableBytes.Add(-shard.bytes)
+		}
+
+		// Freeze and enqueue the old mutable shard.
+		shard.mem.Freeze()
+		memBytes := shard.mem.Size()
+		db.queue = append(db.queue, shard.mem)
+		db.queueBacklogBytes.Add(memBytes)
+		db.queueRanges = append(db.queueRanges, shard.rng)
+		db.queueWALPaths = append(db.queueWALPaths, walPath)
+
+		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+		if err != nil {
+			return err
+		}
+		shard.mem = mt
+		shard.rng = keyRange{}
+		shard.bytes = 0
 	}
-	db.mutable = mt
-	db.mutableRange = keyRange{}
+
 	if db.memtableAdaptive {
 		db.resetMemtableStatsLocked()
 	}
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
 
+	if triggerFlush {
+		select {
+		case db.flushCh <- struct{}{}:
+		default:
+		}
+	}
 	db.bpMu.Lock()
 	db.bpCond.Broadcast()
 	db.bpMu.Unlock()
 	return nil
-}
-
-func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
-	return db.rotateMemtableLockedWithCapacity(triggerFlush, -1)
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -1849,14 +2492,25 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
-			// Background flush is intentionally async (no backend sync). The WAL is
-			// retained so the backend can recover up to the last synced boundary.
+			// Background flush is async when WAL is enabled. Without a WAL, we
+			// upgrade to a synced flush unless RelaxedSync is set.
 			db.flushAll(false)
 		}
 	}
 }
 
+func (db *DB) flushSyncRequested(sync bool) bool {
+	if sync {
+		return true
+	}
+	if db.disableWAL && !db.relaxedSync {
+		return true
+	}
+	return false
+}
+
 func (db *DB) flushAll(sync bool) {
+	sync = db.flushSyncRequested(sync)
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 
@@ -1975,7 +2629,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				for _, unit := range units {
 					memOps, err := collectOps(unit.mem, unit.memLen)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 						_ = backendBatch.Close()
 						return false
 					}
@@ -1983,7 +2637,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
 					return false
 				}
@@ -2019,7 +2673,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 				select {
 				case err := <-errCh:
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (iter): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 					_ = backendBatch.Close()
 					return false
 				default:
@@ -2031,7 +2685,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
-					fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
 					return false
 				}
@@ -2044,14 +2698,14 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					key := iter.UnsafeKey()
 					if iter.IsDeleted() {
 						if err := backendBatch.Delete(key); err != nil {
-							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+							db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
 							return false
 						}
 					} else {
 						if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
-							fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
 							return false
@@ -2071,7 +2725,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			err = backendBatch.Write()
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 			_ = backendBatch.Close()
 			return false
 		}
@@ -2102,6 +2756,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		db.queueWALPaths = db.queueWALPaths[len(units):]
 	}
 	db.queueBacklogBytes.Add(-totalBytes)
+	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(units))
 	if sync {
@@ -2131,7 +2786,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	for _, walPath := range deletable {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
 		db.mu.Lock()
@@ -2213,7 +2868,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				iter.Next()
 			}
 			if err := backendBatch.SetOps(ops); err != nil {
-				fmt.Fprintf(os.Stderr, "cachingdb: flush failed (setops): %v\n", err)
+				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
 				return false
@@ -2223,14 +2878,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				key := iter.UnsafeKey()
 				if iter.IsDeleted() {
 					if err := backendBatch.Delete(key); err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (delete): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
 					}
 				} else {
 					if err := backendBatch.Set(key, iter.UnsafeValue()); err != nil {
-						fmt.Fprintf(os.Stderr, "cachingdb: flush failed (set): %v\n", err)
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
@@ -2248,7 +2903,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			err = backendBatch.Write()
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "cachingdb: flush failed: %v\n", err)
+			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 			_ = backendBatch.Close()
 			return false
 		}
@@ -2276,6 +2931,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.queueWALPaths = db.queueWALPaths[1:]
 	}
 	db.queueBacklogBytes.Add(-memBytes)
+	db.publishMemtablesLocked()
 
 	// Check if WAL is still in use
 	inUse := false
@@ -2293,7 +2949,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 	if sync && walPath != "" && !inUse {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "cachingdb: failed to remove WAL segment %q: %v\n", walPath, err)
+			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 		} else {
 			db.mu.Lock()
 			db.untrackWALSegmentLocked(walPath)
@@ -2320,25 +2976,49 @@ func (db *DB) flushOneLocked(sync bool) bool {
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
-	db.mu.RLock()
-	// check mutable
-	val, deleted, found := db.mutable.Get(key)
-	if found {
+	view := db.memtables.Load()
+	var (
+		mutables []memtable.Table
+		queue    []memtable.Table
+	)
+	if view != nil {
+		mutables = view.mutables
+		queue = view.queue
+	} else {
+		// Defensive fallback: should not happen after Open(), but keep safe
+		// behavior for zero-value DBs and tests.
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutables = make([]memtable.Table, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutables[i] = db.mutableShards[i].mem
+			}
+		}
+		queue = append([]memtable.Table(nil), db.queue...)
 		db.mu.RUnlock()
-		if deleted {
-			return nil, true, nil
+	}
+
+	// check mutable
+	if len(mutables) > 0 {
+		idx := db.shardIndex(key)
+		if idx < len(mutables) && mutables[idx] != nil {
+			val, deleted, found := mutables[idx].Get(key)
+			if found {
+				if deleted {
+					return nil, true, nil
+				}
+				if val == nil {
+					return []byte{}, true, nil
+				}
+				return val, true, nil
+			}
 		}
-		if val == nil {
-			return []byte{}, true, nil
-		}
-		return val, true, nil
 	}
 
 	// check queue backwards (newest first)
-	for i := len(db.queue) - 1; i >= 0; i-- {
-		val, deleted, found = db.queue[i].Get(key)
+	for i := len(queue) - 1; i >= 0; i-- {
+		val, deleted, found := queue[i].Get(key)
 		if found {
-			db.mu.RUnlock()
 			if deleted {
 				return nil, true, nil
 			}
@@ -2348,22 +3028,12 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			return val, true, nil
 		}
 	}
-	db.mu.RUnlock()
 	return nil, false, nil
 }
 
-// GetUnsafe implements DB.GetUnsafe using Merging logic logic conceptually,
-// but optimized: check mutable, then queue (newest to oldest), then disk.
-// Returns a view that must not be modified.
+// GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	val, found, err := db.getMemtable(key)
-	if err != nil {
-		return nil, err
-	}
-	if found {
-		return val, nil
-	}
-	return db.backend.GetUnsafe(key)
+	return db.Get(key)
 }
 
 // Get returns a safe copy of the value.
@@ -2421,21 +3091,42 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
-	db.mu.RLock()
-	_, deleted, found := db.mutable.Get(key)
-	if found {
+	view := db.memtables.Load()
+	var (
+		mutables []memtable.Table
+		queue    []memtable.Table
+	)
+	if view != nil {
+		mutables = view.mutables
+		queue = view.queue
+	} else {
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutables = make([]memtable.Table, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutables[i] = db.mutableShards[i].mem
+			}
+		}
+		queue = append([]memtable.Table(nil), db.queue...)
 		db.mu.RUnlock()
-		return !deleted, nil
 	}
 
-	for i := len(db.queue) - 1; i >= 0; i-- {
-		_, deleted, found = db.queue[i].Get(key)
+	if len(mutables) > 0 {
+		idx := db.shardIndex(key)
+		if idx < len(mutables) && mutables[idx] != nil {
+			_, deleted, found := mutables[idx].Get(key)
+			if found {
+				return !deleted, nil
+			}
+		}
+	}
+
+	for i := len(queue) - 1; i >= 0; i-- {
+		_, deleted, found := queue[i].Get(key)
 		if found {
-			db.mu.RUnlock()
 			return !deleted, nil
 		}
 	}
-	db.mu.RUnlock()
 
 	return db.backend.Has(key)
 }
@@ -2447,7 +3138,7 @@ func (db *DB) Stats() map[string]string {
 	}
 	db.mu.RLock()
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", len(db.queue))
-	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutable.Size())
+	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
 	stats["treedb.cache.memtable_mode"] = db.memtableMode.String()
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
@@ -2540,7 +3231,7 @@ func (db *DB) Print() error {
 func (db *DB) Drain() error {
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutable.Len() > 0 {
+	if db.mutableBytes.Load() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
@@ -2561,14 +3252,14 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	db.mu.Lock()
-	db.noteIteratorLocked(start, end)
+	db.noteIterator(start, end)
 
 	// Snapshot Isolation:
 	// To ensure the iterator sees a consistent point-in-time view, we rotate the
 	// mutable memtable into the immutable queue. The iterator then consumes
 	// only the queue and the backend. Any subsequent writes will go to a new
 	// mutable memtable which this iterator ignores.
-	if db.mutable.Len() > 0 {
+	if db.mutableBytes.Load() > 0 {
 		// Rotating is required for snapshot semantics, but allocating a large arena
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
@@ -2579,13 +3270,26 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	queueLen := len(db.queue)
-	queue := append([]memtable.Table(nil), db.queue...)
-	queueRanges := append([]keyRange(nil), db.queueRanges...)
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
 
 	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	var queue []memtable.Table
+	var queueRanges []keyRange
+	if view != nil {
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
+		// for zero-value DBs and tests.
+		db.mu.RLock()
+		queue = append([]memtable.Table(nil), db.queue...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		db.mu.RUnlock()
+	}
+	queueLen := len(queue)
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
@@ -2608,17 +3312,19 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var sources []merging.IteratorSource
 
 	// Priority 0..N: Queue (Newest first)
-	// Note: We skip db.mutable because we just rotated it (so it's empty) or it was already empty.
+	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if overlapsQuery(start, end, queueRanges[i]) {
-			qIter := queue[i].NewIterator(start, end)
-			qIter.Seek(start)
-			sources = append(sources, merging.IteratorSource{
-				Iter:     qIter,
-				Priority: prio,
-			})
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+			prio++
+			continue
 		}
+		qIter := queue[i].NewIterator(start, end)
+		qIter.Seek(start)
+		sources = append(sources, merging.IteratorSource{
+			Iter:     qIter,
+			Priority: prio,
+		})
 		prio++
 	}
 
@@ -2790,8 +3496,8 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Flush everything to backend to simplify reverse iteration
 	db.writeMu.Lock()
 	db.mu.Lock()
-	db.noteIteratorLocked(start, end)
-	if db.mutable.Len() > 0 {
+	db.noteIterator(start, end)
+	if db.mutableBytes.Load() > 0 {
 		_ = db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc) // Flush to backend
 	}
 	db.mu.Unlock()
@@ -2862,29 +3568,27 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
+	keyCopy := append([]byte(nil), key...)
+	valCopy := append([]byte(nil), value...)
 	if b.backend != nil {
-		b.batchRange.add(key)
-		b.size += len(key) + len(value)
-		// Prefer no-copy writes when the backend batch supports it. This avoids
-		// per-entry key/value allocations when streaming large batches to the
-		// backend (e.g. geth's BatchWrite1M workload).
+		b.batchRange.add(keyCopy)
+		b.size += len(keyCopy) + len(valCopy)
+		// Use the backend's view method with owned copies to avoid aliasing.
 		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
-			return sv.SetView(key, value)
+			return sv.SetView(keyCopy, valCopy)
 		}
-		return b.backend.Set(key, value)
+		return b.backend.Set(keyCopy, valCopy)
 	}
 
 	if b.streamEligible {
 		if b.firstKey == nil {
-			// We already store key/value by reference in b.entries, so stream eligibility
-			// tracking can also use references without extra copying.
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	// We don't know about slabs/thresholds here, so we just store inline.
@@ -2892,10 +3596,10 @@ func (b *Batch) Set(key, value []byte) error {
 	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
 	b.entries = append(b.entries, batch.Entry{
 		Type:  batch.OpPut,
-		Key:   key,
-		Value: value,
+		Key:   keyCopy,
+		Value: valCopy,
 	})
-	b.size += len(key) + len(value)
+	b.size += len(keyCopy) + len(valCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -2909,31 +3613,32 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
+	keyCopy := append([]byte(nil), key...)
 	if b.backend != nil {
-		b.batchRange.add(key)
-		b.size += len(key)
+		b.batchRange.add(keyCopy)
+		b.size += len(keyCopy)
 		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
-			return dv.DeleteView(key)
+			return dv.DeleteView(keyCopy)
 		}
-		return b.backend.Delete(key)
+		return b.backend.Delete(keyCopy)
 	}
 
 	if b.streamEligible {
 		if b.firstKey == nil {
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
 		Type: batch.OpDelete,
-		Key:  key,
+		Key:  keyCopy,
 	})
-	b.size += len(key)
+	b.size += len(keyCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -2944,15 +3649,27 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		return ErrBatchClosed
 	}
 	if b.backend != nil {
-		for _, op := range ops {
-			b.size += len(op.Key) + len(op.Value)
-			b.batchRange.add(op.Key)
+		copied := make([]batch.Entry, len(ops))
+		for i, op := range ops {
+			copiedOp := op
+			copiedOp.Key = append([]byte(nil), op.Key...)
+			if op.Value != nil {
+				copiedOp.Value = append([]byte(nil), op.Value...)
+			}
+			copied[i] = copiedOp
+			b.size += len(copiedOp.Key) + len(copiedOp.Value)
+			b.batchRange.add(copiedOp.Key)
 		}
-		return b.backend.SetOps(ops)
+		return b.backend.SetOps(copied)
 	}
 	for _, op := range ops {
-		b.entries = append(b.entries, op)
-		b.size += len(op.Key) + len(op.Value)
+		copied := op
+		copied.Key = append([]byte(nil), op.Key...)
+		if op.Value != nil {
+			copied.Value = append([]byte(nil), op.Value...)
+		}
+		b.entries = append(b.entries, copied)
+		b.size += len(copied.Key) + len(copied.Value)
 	}
 	return nil
 }
@@ -2988,11 +3705,15 @@ func (b *Batch) maybeSwitchToStreaming() {
 	// Only attempt streaming if the batch is strictly increasing and starts beyond
 	// the maximum key present in the in-memory layers.
 	b.db.mu.RLock()
+	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
+	b.db.mu.RUnlock()
+
 	var maxKey []byte
-	if b.db.mutableRange.valid {
-		maxKey = b.db.mutableRange.max
+	mutableRange := b.db.snapshotMutableRange()
+	if mutableRange.valid {
+		maxKey = mutableRange.max
 	}
-	for _, r := range b.db.queueRanges {
+	for _, r := range queueRanges {
 		if !r.valid {
 			continue
 		}
@@ -3000,7 +3721,6 @@ func (b *Batch) maybeSwitchToStreaming() {
 			maxKey = r.max
 		}
 	}
-	b.db.mu.RUnlock()
 
 	b.streamTried = true
 	if maxKey != nil && bytes.Compare(b.firstKey, maxKey) <= 0 {
@@ -3078,7 +3798,8 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeRegular(sync bool) error {
-	b.db.writeMu.Lock()
+	b.db.writeMu.RLock()
+	needRotate := false
 
 	// 1. WAL Append loop
 	if !b.db.disableWAL {
@@ -3095,67 +3816,72 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 		b.walBuf = records
 
-		b.db.mu.RLock()
-		w := b.db.wal
-		relaxedSync := b.db.relaxedSync
-		b.db.mu.RUnlock()
-
-		if w != nil {
-			if err := w.AppendBatch(records); err != nil {
-				b.db.writeMu.Unlock()
-				return err
-			}
-			b.db.walLiveBytes.Add(walBatchSize(records))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					b.db.writeMu.Unlock()
-					return err
-				}
-			}
-		}
-	}
-
-	b.db.mu.Lock()
-	// 2. Memtable Update
-	onKey := func(key []byte) {
-		b.db.noteWriteKeyLocked(key)
-		b.db.mutableRange.add(key)
-	}
-	if b.streamEligible {
-		if applier, ok := b.db.mutable.(memtable.SortedBatchApplier); ok {
-			applier.ApplyStealSortedBatch(b.entries, onKey)
-		} else {
-			for _, op := range b.entries {
-				if op.Type == batch.OpDelete {
-					b.db.mutable.DeleteSteal(op.Key)
-				} else {
-					b.db.mutable.SetSteal(op.Key, op.Value)
-				}
-				onKey(op.Key)
-			}
-		}
-	} else {
-		for _, op := range b.entries {
-			if op.Type == batch.OpDelete {
-				b.db.mutable.DeleteSteal(op.Key)
-			} else {
-				b.db.mutable.SetSteal(op.Key, op.Value)
-			}
-			onKey(op.Key)
-		}
-	}
-
-	// 3. Threshold Check
-	if b.db.mutable.Size() > b.db.mutableFlushThresholdLocked() {
-		if err := b.db.rotateMemtableLocked(true); err != nil {
-			b.db.mu.Unlock()
-			b.db.writeMu.Unlock()
+		syncWAL := sync && !b.db.relaxedSync
+		if err := b.db.appendWAL(records, syncWAL); err != nil {
+			b.db.writeMu.RUnlock()
 			return err
 		}
 	}
 
-	b.db.mu.Unlock()
-	b.db.writeMu.Unlock()
+	// 2. Memtable Update
+	shardCount := len(b.db.mutableShards)
+	shardEntries := make([][]batch.Entry, shardCount)
+	for _, op := range b.entries {
+		b.db.noteWriteKey(op.Key)
+		idx := b.db.shardIndex(op.Key)
+		shardEntries[idx] = append(shardEntries[idx], op)
+	}
+
+	for i := range shardEntries {
+		entries := shardEntries[i]
+		if len(entries) == 0 {
+			continue
+		}
+		shard := &b.db.mutableShards[i]
+		shard.mu.Lock()
+		if b.streamEligible {
+			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+				applier.ApplyStealSortedBatch(entries, func(key []byte) {
+					shard.rng.add(key)
+				})
+			} else {
+				for _, op := range entries {
+					if op.Type == batch.OpDelete {
+						shard.mem.DeleteSteal(op.Key)
+					} else {
+						shard.mem.SetSteal(op.Key, op.Value)
+					}
+					shard.rng.add(op.Key)
+				}
+			}
+		} else {
+			for _, op := range entries {
+				if op.Type == batch.OpDelete {
+					shard.mem.DeleteSteal(op.Key)
+				} else {
+					shard.mem.SetSteal(op.Key, op.Value)
+				}
+				shard.rng.add(op.Key)
+			}
+		}
+		newBytes := shard.mem.Size()
+		delta := newBytes - shard.bytes
+		shard.bytes = newBytes
+		b.db.mutableBytes.Add(delta)
+		shard.mu.Unlock()
+	}
+
+	// 3. Threshold Check
+	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	b.db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := b.db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
 
 	if b.size > 0 {
 		b.db.noteWrite()
@@ -3216,13 +3942,6 @@ func parseWALSeq(name string) (int, bool) {
 func (b *Batch) writeBypass(sync bool) error {
 	// Fast path: if none of these keys exist in mutable/queue, we can write directly
 	// to the backend without flushing (no in-memory shadowing possible).
-	b.db.mu.RLock()
-	mutable := b.db.mutable
-	queue := append([]memtable.Table(nil), b.db.queue...)
-	mutableRange := b.db.mutableRange
-	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
-	b.db.mu.RUnlock()
-
 	// Cheap append-only check: if the batch key range does not overlap with any
 	// in-memory key ranges, it cannot be shadowed.
 	batchRange := keyRange{}
@@ -3231,12 +3950,49 @@ func (b *Batch) writeBypass(sync bool) error {
 		batchRange.add(key)
 	}
 
-	overlaps := rangesOverlap(batchRange, mutableRange)
+	mutableRange := b.db.snapshotMutableRange()
+
+	var (
+		mutables    []memtable.Table
+		queue       []memtable.Table
+		queueRanges []keyRange
+		overlaps    bool
+	)
+
+	b.db.mu.RLock()
+	view := b.db.memtables.Load()
+	overlaps = rangesOverlap(batchRange, mutableRange)
+	if view != nil {
+		mutables = view.mutables
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		// Defensive fallback: should not happen after Open(), but keep safe
+		// behavior for zero-value DBs and tests.
+		if len(b.db.mutableShards) > 0 {
+			mutables = make([]memtable.Table, len(b.db.mutableShards))
+			for i := range b.db.mutableShards {
+				mutables[i] = b.db.mutableShards[i].mem
+			}
+		}
+		if len(b.db.queue) > 0 {
+			queue = append([]memtable.Table(nil), b.db.queue...)
+		}
+		if len(b.db.queueRanges) > 0 {
+			queueRanges = append([]keyRange(nil), b.db.queueRanges...)
+		}
+	}
+	b.db.mu.RUnlock()
+
 	if !overlaps {
-		for _, r := range queueRanges {
-			if rangesOverlap(batchRange, r) {
-				overlaps = true
-				break
+		if len(queueRanges) == 0 && len(queue) > 0 {
+			overlaps = true
+		} else {
+			for _, r := range queueRanges {
+				if rangesOverlap(batchRange, r) {
+					overlaps = true
+					break
+				}
 			}
 		}
 	}
@@ -3245,8 +4001,13 @@ func (b *Batch) writeBypass(sync bool) error {
 		// Slow path: verify no individual key exists in memory (handles sparse overlap).
 		for _, op := range b.entries {
 			key := op.Key
-			if _, _, found := mutable.Get(key); found {
-				return b.writeRegular(sync)
+			if len(mutables) > 0 {
+				idx := b.db.shardIndex(key)
+				if idx < len(mutables) && mutables[idx] != nil {
+					if _, _, found := mutables[idx].Get(key); found {
+						return b.writeRegular(sync)
+					}
+				}
 			}
 			for i := len(queue) - 1; i >= 0; i-- {
 				if _, _, found := queue[i].Get(key); found {

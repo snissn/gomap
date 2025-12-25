@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -125,6 +126,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(err.Error())
+		db.reportError(err)
 		return
 	}
 
@@ -132,7 +134,9 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	if pagesStr == "" {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store("fragmentation report missing treedb.user.pages")
+		msg := "fragmentation report missing treedb.user.pages"
+		w.lastErr.Store(msg)
+		db.reportError(errors.New(msg))
 		return
 	}
 	pages, err := strconv.ParseUint(pagesStr, 10, 64)
@@ -140,6 +144,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(fmt.Sprintf("parse treedb.user.pages: %v", err))
+		db.reportError(fmt.Errorf("parse treedb.user.pages: %w", err))
 		return
 	}
 	w.lastPages.Store(pages)
@@ -155,7 +160,9 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	if spanStr == "" {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store("fragmentation report missing treedb.user.pages.span_ratio_ppm")
+		msg := "fragmentation report missing treedb.user.pages.span_ratio_ppm"
+		w.lastErr.Store(msg)
+		db.reportError(errors.New(msg))
 		return
 	}
 	spanRatio, err := strconv.ParseUint(spanStr, 10, 64)
@@ -163,6 +170,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(fmt.Sprintf("parse treedb.user.pages.span_ratio_ppm: %v", err))
+		db.reportError(fmt.Errorf("parse treedb.user.pages.span_ratio_ppm: %w", err))
 		return
 	}
 	w.lastSpanRatio.Store(spanRatio)
@@ -184,6 +192,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(err.Error())
+		db.reportError(err)
 		return
 	}
 
