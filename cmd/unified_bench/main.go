@@ -1573,6 +1573,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	results := make(map[string]map[string]float64)
 	for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64)
+		for _, inst := range instances {
+			results[testName][inst.Wrapper.Name()] = math.NaN()
+		}
 	}
 
 	// For live progress table
