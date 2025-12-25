@@ -217,10 +217,17 @@ type DB struct {
 	backendRangeErr   error
 
 	// Durability
-	wal     *wal.Writer
-	walPath string
-	walSeq  int // Sequence number for WAL files
-	walCh   chan walWriteRequest
+	wal           *wal.Writer
+	walPath       string
+	walSeq        int // Sequence number for WAL files
+	walCh         chan walWriteRequest
+	walStopCh     chan struct{}
+	walAckMu      sync.Mutex
+	walAckCond    *sync.Cond
+	walSeqNext    uint64
+	walSeqApplied uint64
+	walErr        error
+	walSendMu     sync.Mutex
 	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
 	// segment bytes. It is updated on WAL rotation and segment deletion.
 	walClosedBytes atomic.Int64
@@ -870,7 +877,7 @@ func walBatchSize(records []wal.Record) int64 {
 type walWriteRequest struct {
 	records []wal.Record
 	sync    bool
-	done    chan error
+	seq     uint64
 }
 
 const (
@@ -880,12 +887,15 @@ const (
 
 func (db *DB) startWALWriter() {
 	db.walCh = make(chan walWriteRequest, walWriteBuffer)
+	db.walStopCh = make(chan struct{})
+	db.walAckCond = sync.NewCond(&db.walAckMu)
 	db.wg.Add(1)
 	go db.walWriteLoop()
 }
 
 func (db *DB) walWriteLoop() {
 	defer db.wg.Done()
+	defer close(db.walStopCh)
 
 	batch := make([]walWriteRequest, 0, walWriteBatchMax)
 	for {
@@ -911,8 +921,10 @@ func (db *DB) walWriteLoop() {
 		}
 
 		err := db.flushWALRequests(batch)
-		for i := range batch {
-			batch[i].done <- err
+		db.finishWALRequests(batch, err)
+		if err != nil {
+			db.failWALWriter(err)
+			return
 		}
 	}
 }
@@ -932,9 +944,42 @@ func (db *DB) drainWALWriter(batch []walWriteRequest) {
 				}
 			}
 			err := db.flushWALRequests(batch)
-			for i := range batch {
-				batch[i].done <- err
+			db.finishWALRequests(batch, err)
+			if err != nil {
+				db.failWALWriter(err)
+				return
 			}
+		default:
+			return
+		}
+	}
+}
+
+func (db *DB) finishWALRequests(requests []walWriteRequest, err error) {
+	db.walAckMu.Lock()
+	if len(requests) > 0 {
+		lastSeq := requests[len(requests)-1].seq
+		if lastSeq > db.walSeqApplied {
+			db.walSeqApplied = lastSeq
+		}
+	}
+	if err != nil && db.walErr == nil {
+		db.walErr = err
+	}
+	db.walAckCond.Broadcast()
+	db.walAckMu.Unlock()
+}
+
+func (db *DB) failWALWriter(err error) {
+	db.walAckMu.Lock()
+	if db.walErr == nil {
+		db.walErr = err
+	}
+	db.walAckCond.Broadcast()
+	db.walAckMu.Unlock()
+	for {
+		select {
+		case <-db.walCh:
 		default:
 			return
 		}
@@ -999,17 +1044,55 @@ func (db *DB) appendWAL(records []wal.Record, sync bool) error {
 	if len(records) == 0 {
 		return nil
 	}
-	req := walWriteRequest{
-		records: records,
-		sync:    sync,
-		done:    make(chan error, 1),
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
 	}
+	db.walAckMu.Unlock()
+
+	db.walSendMu.Lock()
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		db.walSendMu.Unlock()
+		return err
+	}
+	seq := db.walSeqNext + 1
+	db.walSeqNext = seq
+	db.walAckMu.Unlock()
+
+	req := walWriteRequest{records: records, sync: sync, seq: seq}
 	select {
 	case db.walCh <- req:
-		return <-req.done
+		// wait for ack
 	case <-db.closeCh:
+		db.walSendMu.Unlock()
 		return errWALClosed
+	case <-db.walStopCh:
+		db.walSendMu.Unlock()
+		db.walAckMu.Lock()
+		err := db.walErr
+		db.walAckMu.Unlock()
+		if err == nil {
+			err = errWALClosed
+		}
+		return err
 	}
+	db.walSendMu.Unlock()
+
+	db.walAckMu.Lock()
+	for db.walSeqApplied < seq && db.walErr == nil {
+		db.walAckCond.Wait()
+	}
+	err := db.walErr
+	db.walAckMu.Unlock()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
