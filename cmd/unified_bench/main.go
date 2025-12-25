@@ -39,6 +39,7 @@ var (
 	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsExcludeArg = flag.String("exclude-dbs", "treedbbackend", "Comma-separated list of DBs to exclude")
 	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
@@ -77,8 +78,9 @@ type BenchConfig struct {
 	RangeQueries int
 	RangeSpan    int
 
-	DBsArg   string
-	TestsArg string
+	DBsArg        string
+	DBsExcludeArg string
+	TestsArg      string
 
 	KeepDir  bool
 	Progress bool
@@ -182,6 +184,7 @@ func main() {
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
 		DBsArg:                           *dbsArg,
+		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
@@ -552,7 +555,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
 	}
 
-	dbNames := resolveDBs(cfg.DBsArg)
+	dbNames := resolveDBs(cfg.DBsArg, cfg.DBsExcludeArg)
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
 
 	// Initialize DBs
