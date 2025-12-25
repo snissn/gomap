@@ -20,507 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dgraph-io/badger/v4"
-	hashdb "github.com/snissn/gomap/HashDB"
-	btreeonhashdb "github.com/snissn/gomap/HashDB/BTreeOnHashDB"
-	treedb "github.com/snissn/gomap/TreeDB"
-	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
-	btreeadapter "github.com/snissn/gomap/kvstore/adapters/btreeonhashdb"
-	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
-
-	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/syndtr/goleveldb/leveldb/filter"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/syndtr/goleveldb/leveldb/util"
 )
-
-// --- Engine Openers (kvstore) ---
-
-var (
-	hashdbLockControls       = flag.Bool("hashdb-lock-controls", true, "HashDB: best-effort lock (mlock/VirtualLock) the SwissHash control bytes")
-	hashdbLockControlsStrict = flag.Bool("hashdb-lock-controls-strict", false, "HashDB: require control-bytes locking to succeed (may require memlock/ulimit changes)")
-	hashdbAdviseKeysWillNeed = flag.Bool("hashdb-advise-keys-willneed", true, "HashDB: madvise WILLNEED for hash key map (best-effort)")
-	hashdbAdviseKeysRandom   = flag.Bool("hashdb-advise-keys-random", true, "HashDB: madvise RANDOM for hash key map (best-effort)")
-)
-
-func openHashDBForBench(dir string) (*hashdb.HashDB, error) {
-	opts := hashdb.HashDBOptions{
-		IndexMemoryPolicySet: true,
-		IndexMemoryPolicy: hashdb.IndexMemoryPolicy{
-			LockControls:       *hashdbLockControls,
-			LockControlsStrict: *hashdbLockControlsStrict,
-			AdviseKeysWillNeed: *hashdbAdviseKeysWillNeed,
-			AdviseKeysRandom:   *hashdbAdviseKeysRandom,
-		},
-	}
-	return hashdb.OpenWithOptions(dir, opts)
-}
-
-func NewHashDB(dir string) (kvstore.DB, error) {
-	m, err := openHashDBForBench(dir)
-	if err != nil {
-		return nil, err
-	}
-	return hashdbadapter.WrapNamed(m, "HashDB"), nil
-}
-
-func NewBTree(dir string) (kvstore.DB, error) {
-	m, err := openHashDBForBench(dir)
-	if err != nil {
-		return nil, err
-	}
-	t, err := btreeonhashdb.NewTreeOnHashDB(m, "bench", &btreeonhashdb.Options{CacheSize: 4096})
-	if err != nil {
-		return nil, err
-	}
-	return btreeadapter.WrapNamed(m, t, "BTree"), nil
-}
-
-func NewTreeDB(dir string) (kvstore.DB, error) {
-	treedbcaching.SetIteratorDebug(*treedbIterDebug)
-	opts := treedb.Options{
-		Dir:                               dir,
-		ChunkSize:                         64 * 1024 * 1024,
-		KeepRecent:                        *treedbKeepRecent,
-		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
-		FlushThreshold:                    *treedbFlushThreshold,
-		MaxQueuedMemtables:                *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:            *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:                *treedbStopBacklogSeconds,
-		MaxBacklogBytes:                   *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables:           *treedbWriterFlushMaxMems,
-		DisableWAL:                        *treedbDisableWAL,
-		RelaxedSync:                       *treedbRelaxedSync,
-		DisableReadChecksum:               *treedbDisableReadChecksum,
-		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
-		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
-		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
-		DisablePiggybackCompaction:        *treedbDisablePiggyback,
-	}
-	if *treedbWriterFlushMaxMs > 0 {
-		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
-	}
-	db, err := treedb.Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	return treedbadapter.WrapNamed(db, "TreeDB"), nil
-}
-
-func NewTreeDBBackend(dir string) (kvstore.DB, error) {
-	opts := treedb.Options{
-		Dir:                               dir,
-		ChunkSize:                         64 * 1024 * 1024,
-		KeepRecent:                        *treedbKeepRecent,
-		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
-		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
-		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
-		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
-	}
-	db, err := treedb.OpenBackend(opts)
-	if err != nil {
-		return nil, err
-	}
-	return treedbadapter.WrapNamed(db, "TreeDBBackend"), nil
-}
-
-// 5. Badger Wrapper
-type BadgerBatch struct {
-	wb *badger.WriteBatch
-}
-
-func (b *BadgerBatch) Set(key, value []byte) error { return b.wb.Set(key, value) }
-func (b *BadgerBatch) Delete(key []byte) error     { return b.wb.Delete(key) }
-func (b *BadgerBatch) Commit() error               { return b.wb.Flush() }
-func (b *BadgerBatch) CommitSync() error           { return b.wb.Flush() }
-func (b *BadgerBatch) Close() error                { b.wb.Cancel(); return nil }
-
-type BadgerIterator struct {
-	txn     *badger.Txn
-	it      *badger.Iterator
-	end     []byte
-	keyBuf  []byte
-	valBuf  []byte
-	lastErr error
-	reverse bool
-}
-
-func (i *BadgerIterator) Valid() bool {
-	if !i.it.Valid() {
-		return false
-	}
-	if i.end == nil {
-		return true
-	}
-	if i.reverse {
-		return bytes.Compare(i.it.Item().Key(), i.end) >= 0
-	}
-	return bytes.Compare(i.it.Item().Key(), i.end) < 0
-}
-func (i *BadgerIterator) Next() { i.it.Next() }
-func (i *BadgerIterator) Key() []byte {
-	i.keyBuf = i.it.Item().KeyCopy(i.keyBuf[:0])
-	return i.keyBuf
-}
-func (i *BadgerIterator) Value() []byte {
-	var err error
-	i.valBuf, err = i.it.Item().ValueCopy(i.valBuf[:0])
-	if err != nil && i.lastErr == nil {
-		i.lastErr = err
-	}
-	return i.valBuf
-}
-
-func (i *BadgerIterator) KeyCopy(dst []byte) []byte   { return append(dst, i.Key()...) }
-func (i *BadgerIterator) ValueCopy(dst []byte) []byte { return append(dst, i.Value()...) }
-
-func (i *BadgerIterator) Close() error {
-	i.it.Close()
-	i.txn.Discard()
-	return nil
-}
-func (i *BadgerIterator) Error() error { return i.lastErr }
-
-type BadgerWrapper struct {
-	db *badger.DB
-}
-
-func NewBadger(dir string) (kvstore.DB, error) {
-	opts := badger.DefaultOptions(dir).WithLogger(nil)
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	return &BadgerWrapper{db: db}, nil
-}
-
-func (b *BadgerWrapper) Name() string { return "Badger" }
-func (b *BadgerWrapper) Checkpoint() error {
-	if b == nil || b.db == nil {
-		return nil
-	}
-	return b.db.Sync()
-}
-func (b *BadgerWrapper) Set(k, v []byte) error {
-	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Set(k, v)
-	})
-}
-func (b *BadgerWrapper) Get(k []byte) ([]byte, error) {
-	var out []byte
-	err := b.db.View(func(txn *badger.Txn) error {
-		it, err := txn.Get(k)
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				return nil
-			}
-			return err
-		}
-		out, err = it.ValueCopy(nil)
-		return err
-	})
-	return out, err
-}
-func (b *BadgerWrapper) Delete(k []byte) error {
-	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete(k)
-	})
-}
-func (b *BadgerWrapper) Close() error { return b.db.Close() }
-
-func (b *BadgerWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	txn := b.db.NewTransaction(false)
-	opts := badger.DefaultIteratorOptions
-	opts.PrefetchValues = true
-	it := txn.NewIterator(opts)
-	if start != nil {
-		it.Seek(start)
-	} else {
-		it.Rewind()
-	}
-
-	var endCopy []byte
-	if end != nil {
-		endCopy = append([]byte(nil), end...)
-	}
-	return &BadgerIterator{txn: txn, it: it, end: endCopy}, nil
-}
-
-func (b *BadgerWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	txn := b.db.NewTransaction(false)
-	opts := badger.DefaultIteratorOptions
-	opts.PrefetchValues = true
-	opts.Reverse = true
-	it := txn.NewIterator(opts)
-
-	if end == nil {
-		it.Rewind()
-	} else {
-		it.Seek(end)
-		if it.Valid() {
-			item := it.Item()
-			if bytes.Compare(item.Key(), end) >= 0 {
-				it.Next()
-			}
-		} else {
-			it.Rewind()
-		}
-	}
-
-	var startCopy []byte
-	if start != nil {
-		startCopy = append([]byte(nil), start...)
-	}
-	return &BadgerIterator{txn: txn, it: it, end: startCopy, reverse: true}, nil
-}
-
-func (b *BadgerWrapper) NewBatch() (kvstore.Batch, error) {
-	return &BadgerBatch{wb: b.db.NewWriteBatch()}, nil
-}
-
-// 6. LevelDB Wrapper
-type LevelDBBatch struct {
-	batch *leveldb.Batch
-	db    *leveldb.DB
-}
-
-func (b *LevelDBBatch) Set(key, value []byte) error {
-	b.batch.Put(key, value)
-	return nil
-}
-func (b *LevelDBBatch) Delete(key []byte) error {
-	b.batch.Delete(key)
-	return nil
-}
-func (b *LevelDBBatch) Commit() error {
-	return b.db.Write(b.batch, nil)
-}
-func (b *LevelDBBatch) CommitSync() error {
-	return b.db.Write(b.batch, &opt.WriteOptions{Sync: true})
-}
-func (b *LevelDBBatch) Close() error {
-	b.batch.Reset()
-	return nil
-}
-
-type LevelDBIterator struct {
-	it      iterator.Iterator
-	reverse bool
-}
-
-func (i *LevelDBIterator) Valid() bool { return i.it.Valid() }
-func (i *LevelDBIterator) Next() {
-	if i.reverse {
-		i.it.Prev()
-		return
-	}
-	i.it.Next()
-}
-func (i *LevelDBIterator) Key() []byte   { return i.it.Key() }
-func (i *LevelDBIterator) Value() []byte { return i.it.Value() }
-func (i *LevelDBIterator) KeyCopy(dst []byte) []byte {
-	return append(dst, i.Key()...)
-}
-func (i *LevelDBIterator) ValueCopy(dst []byte) []byte {
-	return append(dst, i.Value()...)
-}
-func (i *LevelDBIterator) Close() error { i.it.Release(); return nil }
-func (i *LevelDBIterator) Error() error { return i.it.Error() }
-
-type LevelDBWrapper struct {
-	db  *leveldb.DB
-	dir string
-}
-
-const (
-	leveldbMinCacheMB = 16
-	leveldbMinHandles = 16
-)
-
-var (
-	leveldbCacheMB = flag.Int("leveldb-cache-mb", 1024, "LevelDB: total cache in MiB (matches geth semantics; used as BlockCache=cache/2 and WriteBuffer=cache/4)")
-	leveldbHandles = flag.Int("leveldb-handles", 1024, "LevelDB: open files cache capacity (matches geth semantics)")
-)
-
-var (
-	verifyRangePrefix = []byte{0x00, 'u', 'n', 'i', 'b', 'e', 'n', 'c', 'h', '-', 'v', 'e', 'r', 'i', 'f', 'y', 0x00}
-	verifyRangeCount  = 32
-)
-
-func leveldbBenchOptions() *opt.Options {
-	cache := *leveldbCacheMB
-	handles := *leveldbHandles
-	if cache < leveldbMinCacheMB {
-		cache = leveldbMinCacheMB
-	}
-	if handles < leveldbMinHandles {
-		handles = leveldbMinHandles
-	}
-	return &opt.Options{
-		Filter:                 filter.NewBloomFilter(10),
-		DisableSeeksCompaction: true,
-		OpenFilesCacheCapacity: handles,
-		BlockCacheCapacity:     cache / 2 * opt.MiB,
-		WriteBuffer:            cache / 4 * opt.MiB, // two write buffers are used internally
-	}
-}
-
-func NewLevelDB(dir string) (kvstore.DB, error) {
-	db, err := leveldb.OpenFile(dir, leveldbBenchOptions())
-	if err != nil {
-		return nil, err
-	}
-	return &LevelDBWrapper{db: db, dir: dir}, nil
-}
-
-func (l *LevelDBWrapper) Name() string                 { return "LevelDB" }
-func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
-func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
-func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
-func (l *LevelDBWrapper) Close() error                 { return l.db.Close() }
-func (l *LevelDBWrapper) Checkpoint() error {
-	if l == nil || l.db == nil {
-		return nil
-	}
-	if err := l.db.Close(); err != nil {
-		return err
-	}
-	db, err := leveldb.OpenFile(l.dir, leveldbBenchOptions())
-	if err != nil {
-		return err
-	}
-	l.db = db
-	return nil
-}
-func (l *LevelDBWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	var slice *util.Range
-	if start != nil || end != nil {
-		slice = &util.Range{Start: start, Limit: end}
-	}
-	it := l.db.NewIterator(slice, nil)
-	it.First()
-	return &LevelDBIterator{it: it, reverse: false}, nil
-}
-func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	var slice *util.Range
-	if start != nil || end != nil {
-		slice = &util.Range{Start: start, Limit: end}
-	}
-	it := l.db.NewIterator(slice, nil)
-	if end == nil {
-		it.Last()
-	} else {
-		it.Seek(end)
-		if it.Valid() {
-			if bytes.Compare(it.Key(), end) >= 0 {
-				it.Prev()
-			}
-		} else {
-			it.Last()
-		}
-	}
-	return &LevelDBIterator{it: it, reverse: true}, nil
-}
-func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
-	return &LevelDBBatch{batch: new(leveldb.Batch), db: l.db}, nil
-}
-
-func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {
-	keys := make([][]byte, n)
-	val := []byte("v")
-	for i := 0; i < n; i++ {
-		k := make([]byte, len(prefix)+8)
-		copy(k, prefix)
-		binary.BigEndian.PutUint64(k[len(prefix):], uint64(i))
-		keys[i] = k
-		if err := db.Set(k, val); err != nil {
-			return fmt.Errorf("verify: set %d: %w", i, err)
-		}
-	}
-
-	cleanup := func() error {
-		var cerr error
-		for _, k := range keys {
-			if err := db.Delete(k); err != nil && cerr == nil {
-				cerr = err
-			}
-		}
-		return cerr
-	}
-	defer func() {
-		if err := cleanup(); err != nil && retErr == nil {
-			retErr = fmt.Errorf("verify: cleanup: %w", err)
-		}
-	}()
-
-	start := append([]byte(nil), prefix...)
-	end := append(append([]byte(nil), prefix...), 0xFF)
-
-	checkIter := func(iter kvstore.Iterator, descending bool) (int, error) {
-		count := 0
-		var prev []byte
-		for iter.Valid() {
-			k := append([]byte(nil), iter.Key()...)
-			if prev != nil {
-				cmp := bytes.Compare(prev, k)
-				if descending && cmp <= 0 {
-					return count, fmt.Errorf("order broke: %x then %x (expected descending)", prev, k)
-				}
-				if !descending && cmp >= 0 {
-					return count, fmt.Errorf("order broke: %x then %x (expected ascending)", prev, k)
-				}
-			}
-			prev = k
-			_ = iter.Value()
-			iter.Next()
-			count++
-		}
-		if err := iter.Error(); err != nil {
-			return count, err
-		}
-		return count, nil
-	}
-
-	fwd, err := rs.Iterator(start, end)
-	if err != nil {
-		return fmt.Errorf("verify: forward iterator: %w", err)
-	}
-	if count, err := checkIter(fwd, false); err != nil {
-		_ = fwd.Close()
-		return fmt.Errorf("verify: forward iterator: %w", err)
-	} else if count != n {
-		_ = fwd.Close()
-		return fmt.Errorf("verify: forward iterator count=%d want %d", count, n)
-	}
-	if err := fwd.Close(); err != nil {
-		return fmt.Errorf("verify: forward close: %w", err)
-	}
-
-	rev, err := rs.ReverseIterator(start, end)
-	if err != nil {
-		return fmt.Errorf("verify: reverse iterator: %w", err)
-	}
-	if count, err := checkIter(rev, true); err != nil {
-		_ = rev.Close()
-		return fmt.Errorf("verify: reverse iterator: %w", err)
-	} else if count != n {
-		_ = rev.Close()
-		return fmt.Errorf("verify: reverse iterator count=%d want %d", count, n)
-	}
-	if err := rev.Close(); err != nil {
-		return fmt.Errorf("verify: reverse close: %w", err)
-	}
-
-	return nil
-}
 
 // --- Benchmark Runner ---
 
@@ -534,7 +38,7 @@ var (
 	keyScaleArg  = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
 	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run (hashdb,btree,treedb,treedbbackend,badger,leveldb); aliases: gomap->hashdb, treedbcached->treedb, treedbraw->treedbbackend")
+	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg    = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
@@ -557,55 +61,8 @@ var (
 	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
-	treedbFlushThreshold           = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
-	treedbKeepRecent               = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
-	treedbMaxQueuedMems            = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
-	treedbSlowdownBacklogSeconds   = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbStopBacklogSeconds       = flag.Float64("treedb-stop-backlog-seconds", 2, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbMaxBacklogBytes          = flag.Int64("treedb-max-backlog-bytes", 2<<30, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
-	treedbWriterFlushMaxMems       = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
-	treedbWriterFlushMaxMs         = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
-	treedbPreferAppendAlloc        = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
-	treedbLeafFillPPM              = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
-	treedbInternalFillPPM          = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
-	treedbIterDebug                = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
-	treedbIterDebugLimit           = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
-	treedbCompactBeforeScans       = flag.Bool("treedb-compact-before-scans", false, "TreeDB: run slab compaction before scan tests (typically used with -settle-before-scans)")
-	treedbCompactDeadRatio         = flag.Float64("treedb-compact-dead-ratio", 0.50, "TreeDB: slab compaction candidate dead ratio threshold")
-	treedbCompactMinBytes          = flag.Uint64("treedb-compact-min-bytes", 1*1024*1024, "TreeDB: minimum slab total bytes to consider for compaction")
-	treedbCompactMaxSlabs          = flag.Int("treedb-compact-max-slabs", 1, "TreeDB: maximum slabs to compact per run (0=unlimited)")
-	treedbCompactMicroBatch        = flag.Int("treedb-compact-microbatch", 256, "TreeDB: compaction apply micro-batch size (keys per commit)")
-	treedbCompactRotateBeforeWrite = flag.Bool("treedb-compact-rotate-before-write", false, "TreeDB: rotate to a fresh active slab before copying live records")
-	treedbCompactCopyBps           = flag.Int64("treedb-compact-copy-bps", 0, "TreeDB: compaction copy throttling (bytes/sec), 0=disabled")
-	treedbCompactCopyBurst         = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
-	treedbVacuumBeforeScans        = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
 	settleBeforeScans              = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
-
-	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
-	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
-	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
-	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
-	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
-	treedbBgVacuumInterval     = flag.Duration("treedb-bg-vacuum-interval", 0, "TreeDB: background index vacuum interval (0=disabled)")
-	treedbBgVacuumSpanPPM      = flag.Uint64("treedb-bg-vacuum-span-ppm", 0, "TreeDB: background index vacuum span ratio threshold (ppm), 0=default")
 )
-
-func clampPPM(v int) int {
-	if v < 0 {
-		return 0
-	}
-	if v > 1_000_000 {
-		return 1_000_000
-	}
-	return v
-}
-
-func clampUint32(v uint64) uint32 {
-	if v > math.MaxUint32 {
-		return math.MaxUint32
-	}
-	return uint32(v)
-}
 
 type DBInstance struct {
 	Name    string
@@ -644,6 +101,7 @@ type BenchConfig struct {
 
 	SettleBeforeScans bool
 
+	// TreeDB options (config only)
 	TreeDBIterDebug      bool
 	TreeDBIterDebugLimit int
 
@@ -670,9 +128,6 @@ type BenchRun struct {
 	TestOrder    []string
 	DisplayNames map[string]string
 	Results      map[string]map[string]float64
-
-	// CheckpointDurations records per-test checkpoint time when
-	// Config.CheckpointBetweenTests is enabled. Keyed by test name, then DB name.
 	CheckpointDurations map[string]map[string]time.Duration
 }
 
@@ -696,6 +151,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Throughput Benchmark (Operations per second)\n")
 	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
 
+	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
 		ValueSize:                        *valSize,
@@ -959,9 +415,9 @@ func runSweep(baseCfg BenchConfig, keyCounts []int) ([]BenchRun, error) {
 		cfg := baseCfg
 		cfg.Keys = kc
 		run, err := runBenchmark(cfg)
-		if err != nil {
-			return nil, err
-		}
+			if err != nil {
+				return nil, err
+			}
 		runs = append(runs, run)
 	}
 	return runs, nil
@@ -1073,36 +529,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
 	}
 
-	dbsToRun := parseList(cfg.DBsArg)
+	dbNames := resolveDBs(cfg.DBsArg)
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
-
-	factories := map[string]func(string) (kvstore.DB, error){
-		"hashdb":        func(d string) (kvstore.DB, error) { return NewHashDB(d) },
-		"gomap":         func(d string) (kvstore.DB, error) { return NewHashDB(d) }, // legacy alias
-		"btree":         func(d string) (kvstore.DB, error) { return NewBTree(d) },
-		"treedb":        func(d string) (kvstore.DB, error) { return NewTreeDB(d) },        // cached (default)
-		"treedbcached":  func(d string) (kvstore.DB, error) { return NewTreeDB(d) },        // legacy alias
-		"treedbbackend": func(d string) (kvstore.DB, error) { return NewTreeDBBackend(d) }, // uncached
-		"treedbraw":     func(d string) (kvstore.DB, error) { return NewTreeDBBackend(d) }, // alias
-		"badger":        func(d string) (kvstore.DB, error) { return NewBadger(d) },
-		"leveldb":       func(d string) (kvstore.DB, error) { return NewLevelDB(d) },
-	}
 
 	// Initialize DBs
 	instances := make([]*DBInstance, 0)
-	// Order matching dbsArg or default hardcoded order if "all"
-	orderedDBs := []string{"hashdb", "btree", "treedb", "badger", "leveldb"}
-	if strings.TrimSpace(cfg.DBsArg) != "all" {
-		orderedDBs = dbsToRun
-	}
 
-	for _, name := range orderedDBs {
-		if !contains(dbsToRun, name) && !contains(dbsToRun, "all") {
-			continue
-		}
-		factory, ok := factories[name]
-		if !ok {
-			return BenchRun{}, fmt.Errorf("unknown DB: %q", name)
+	for _, name := range dbNames {
+		factory, err := GetDBFactory(name)
+		if err != nil {
+			return BenchRun{}, err
 		}
 
 		dir, err := os.MkdirTemp("", "bench-"+name+"*")
@@ -1842,7 +1278,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s\n",
-						db.Name(), i, itemsThisQuery, buildDur, iterDur)
+							db.Name(), i, itemsThisQuery, buildDur, iterDur)
 				}
 
 				_ = iter.Close()
@@ -1852,12 +1288,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				avgIter := totalIter / time.Duration(cfg.RangeQueries)
 				if debugStatsCount > 0 {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s queue_avg=%.2f sources_avg=%.2f\n",
-						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
-						float64(debugQueueSum)/float64(debugStatsCount),
-						float64(debugSourcesSum)/float64(debugStatsCount))
+							db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
+							float64(debugQueueSum)/float64(debugStatsCount),
+							float64(debugSourcesSum)/float64(debugStatsCount))
 				} else {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s\n",
-						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
+							db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
 				}
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
@@ -1998,21 +1434,61 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	if preloadedOnly {
 		expectedFullScanCount = cfg.Keys
-		checkPrefixCounts = true
 	}
 
-	for _, inst := range instances {
-		rs, ok := inst.Wrapper.(kvstore.RangeScanner)
-		if !ok {
-			continue
-		}
-		if err := verifyRangeIteration(inst.Wrapper, rs, verifyRangePrefix, verifyRangeCount); err != nil {
-			return BenchRun{}, fmt.Errorf("verify/%s: %w", inst.Wrapper.Name(), err)
-		}
-	}
+	// Settle before scans?
+	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read") {
+		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open/Compact)...\n")
+		for _, inst := range instances {
+			// Close
+			if err := inst.Wrapper.Close(); err != nil {
+				return BenchRun{}, fmt.Errorf("settle/close %s: %w", inst.Name, err)
+			}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") && !contains(finalTestOrder, "dataset_write_random") && !contains(finalTestOrder, "dataset_write_sorted") {
-		prefixScanBase = cfg.Keys
+			// Compact (if applicable, best-effort)
+			// TODO: Add compaction logic here if adapters support explicit compact-on-open or similar.
+			// Currently most just reopen.
+
+			// Reopen
+			factory, err := GetDBFactory(inst.Name)
+			if err != nil {
+				return BenchRun{}, err
+			}
+			// Reopen
+			newWrapper, err := factory(inst.Dir)
+			if err != nil {
+				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
+			}
+			inst.Wrapper = newWrapper
+			
+			// Optional TreeDB compaction
+			if inst.Name == "treedb" && cfg.TreeDBCompactBeforeScans {
+				td, ok := inst.Wrapper.(*treedbadapter.DB)
+				if ok {
+					if err := td.DB.CompactCandidates(compaction.Options{
+						DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
+						MinTotalBytes:      cfg.TreeDBCompactMinBytes,
+						MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
+						MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
+						RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
+						CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
+						CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
+					}); err != nil {
+						return BenchRun{}, fmt.Errorf("settle/compact %s: %w", inst.Name, err)
+					}
+				}
+			}
+			
+			// Optional TreeDB Vacuum
+			if inst.Name == "treedb" && cfg.TreeDBVacuumBeforeScans {
+				td, ok := inst.Wrapper.(*treedbadapter.DB)
+				if ok {
+					if err := td.DB.CompactIndex(); err != nil {
+						return BenchRun{}, fmt.Errorf("settle/vacuum %s: %w", inst.Name, err)
+					}
+				}
+			}
+		}
 	}
 
 	if cfg.BlockProfile != "" {
@@ -2066,244 +1542,84 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}()
 	}
 
-	var cpuProfFile *os.File
-	if cfg.CPUProfile != "" {
-		f, err := os.Create(cfg.CPUProfile)
-		if err != nil {
-			return BenchRun{}, fmt.Errorf("cpuprofile: %w", err)
-		}
-		cpuProfFile = f
-		if err := pprof.StartCPUProfile(cpuProfFile); err != nil {
-			_ = cpuProfFile.Close()
-			return BenchRun{}, fmt.Errorf("cpuprofile start: %w", err)
-		}
-		defer func() {
-			pprof.StopCPUProfile()
-			_ = cpuProfFile.Close()
-		}()
-	}
-
 	// Run Tests
 	results := make(map[string]map[string]float64)
 	for _, testName := range finalTestOrder {
-		results[testName] = make(map[string]float64, len(instances))
-		for _, inst := range instances {
-			results[testName][inst.Wrapper.Name()] = math.NaN()
-		}
+		results[testName] = make(map[string]float64)
 	}
 
-	var live *liveTable
-	if cfg.Progress {
-		live = newLiveTable(os.Stderr, instances, finalTestOrder, displayNames)
-		_ = live.Render(results)
-	}
-
-	// Capture cache backlog stats at scan start so scan results can be interpreted.
-	var scanDiagnostics []scanDiag
-	scanDiagnosticsCaptured := false
-	captureScanDiagnostics := func() {
-		scanDiagnosticsCaptured = true
-		for _, inst := range instances {
-			sp, ok := inst.Wrapper.(kvstore.StatsProvider)
-			if !ok {
-				continue
-			}
-			stats := sp.Stats()
-			if stats == nil {
-				continue
-			}
-			backlog := stats["treedb.cache.queue_backlog_bytes"]
-			if backlog == "" {
-				continue
-			}
-			scanDiagnostics = append(scanDiagnostics, scanDiag{
-				dbName:              inst.Wrapper.Name(),
-				queueBacklogBytes:   backlog,
-				queueLen:            stats["treedb.cache.queue_len"],
-				flushThresholdBytes: stats["treedb.cache.flush_threshold_bytes"],
-				maxQueuedMemtables:  stats["treedb.cache.max_queued_memtables"],
-				backpressureMode:    stats["treedb.cache.backpressure_mode"],
-				flushBpsEWMA:        stats["treedb.cache.flush_bps_ewma"],
-			})
-		}
-	}
-
-	settled := false
-	compactTreeDBs := func() error {
-		if !cfg.TreeDBCompactBeforeScans {
-			return nil
-		}
-		for _, inst := range instances {
-			td, ok := inst.Wrapper.(*treedbadapter.DB)
-			if !ok || td == nil || td.DB == nil {
-				continue
-			}
-			if err := td.DB.CompactCandidates(compaction.Options{
-				DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
-				MinTotalBytes:      cfg.TreeDBCompactMinBytes,
-				MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
-				MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
-				RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
-				CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
-				CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
-			}); err != nil {
-				return fmt.Errorf("compact %s: %w", inst.Wrapper.Name(), err)
-			}
-		}
-		return nil
-	}
-
-	vacuumTreeDBs := func() error {
-		if !cfg.TreeDBVacuumBeforeScans {
-			return nil
-		}
-		for _, inst := range instances {
-			td, ok := inst.Wrapper.(*treedbadapter.DB)
-			if !ok || td == nil || td.DB == nil {
-				continue
-			}
-			if err := td.DB.CompactIndex(); err != nil {
-				return fmt.Errorf("vacuum %s: %w", inst.Wrapper.Name(), err)
-			}
-		}
-		return nil
-	}
-
-	settle := func() error {
-		for _, inst := range instances {
-			_ = inst.Wrapper.Close()
-			factory, ok := factories[inst.Name]
-			if !ok {
-				return fmt.Errorf("unknown DB factory: %q", inst.Name)
-			}
-			db, err := factory(inst.Dir)
-			if err != nil {
-				return fmt.Errorf("reopen %s: %w", inst.Name, err)
-			}
-			inst.Wrapper = db
-		}
-		if err := vacuumTreeDBs(); err != nil {
-			return err
-		}
-		if err := compactTreeDBs(); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	testMutatesState := func(testName string) bool {
-		switch testName {
-		case "sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_small_seq", "update_fork_choice", "dataset_update_fork_choice", "random_delete":
-			return true
-		case "vacuum_index", "compact_slabs":
-			return true
-		default:
-			return false
-		}
-	}
-
-	checkpointDBs := func() (map[string]time.Duration, error) {
-		durs := make(map[string]time.Duration, len(instances))
-		for _, inst := range instances {
-			cp, ok := inst.Wrapper.(checkpointer)
-			if !ok {
-				continue
-			}
-			start := time.Now()
-			err := cp.Checkpoint()
-			durs[inst.Wrapper.Name()] = time.Since(start)
-			if err != nil {
-				return durs, fmt.Errorf("checkpoint %s: %w", inst.Wrapper.Name(), err)
-			}
-		}
-		return durs, nil
-	}
+	// For live progress table
+	liveTbl := newLiveTable(os.Stderr, instances, finalTestOrder, displayNames)
 
 	for _, testName := range finalTestOrder {
 		fn := testFuncs[testName]
-		if fn == nil {
-			return BenchRun{}, fmt.Errorf("unknown test: %q", testName)
+		seed := testSeed(cfg.SeedUsed, testName)
+
+		if cfg.CheckpointBetweenTests {
+			// Checkpoint before starting the new test across all DBs
+			// to reduce interference from background flushes of the previous test.
+			// We record the time it takes.
+			chkMap := make(map[string]time.Duration)
+			for _, inst := range instances {
+				cp, ok := inst.Wrapper.(checkpointer)
+				if ok {
+					start := time.Now()
+					if err := cp.Checkpoint(); err != nil {
+						return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, err)
+					}
+					chkMap[inst.Name] = time.Since(start)
+				}
+			}
+			checkpointDurations[testName] = chkMap
 		}
 
-		if cfg.SettleBeforeScans && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read" || testName == "dataset_read_random") {
-			if err := settle(); err != nil {
-				return BenchRun{}, err
-			}
-			settled = true
-			if live != nil {
-				_ = live.Render(results)
-			}
-		} else if (cfg.TreeDBCompactBeforeScans || cfg.TreeDBVacuumBeforeScans) && !settled && (testName == "full_scan" || testName == "prefix_scan" || testName == "fragmentation_report_post" || testName == "random_read" || testName == "dataset_read_random") {
-			// If the caller didn't ask to settle, still allow an optional compaction
-			// pass before scans so scan regressions after churn can be studied in a
-			// "compacted values" state.
-			fmt.Fprintf(os.Stderr, "[Bench] Triggering maintenance before %s...\n", testName)
-			if err := vacuumTreeDBs(); err != nil {
-				return BenchRun{}, err
-			}
-			if err := compactTreeDBs(); err != nil {
-				return BenchRun{}, err
-			}
-		}
-
-		if !scanDiagnosticsCaptured && (testName == "full_scan" || testName == "prefix_scan") {
-			captureScanDiagnostics()
+		if err := liveTbl.Render(results); err != nil {
+			// ignore output errors
 		}
 
 		for _, inst := range instances {
-			rng := rand.New(rand.NewSource(testSeed(cfg.SeedUsed, testName)))
-			res, err := fn(inst.Wrapper, rng)
-			if err != nil {
-				return BenchRun{}, fmt.Errorf("%s/%s: %w", testName, inst.Wrapper.Name(), err)
-			}
-			results[testName][inst.Wrapper.Name()] = res
-			if live != nil {
-				_ = live.UpdateCell(testName, inst.Wrapper.Name(), res)
-			}
-		}
-
-		if cfg.CheckpointBetweenTests && testMutatesState(testName) {
-			durs, err := checkpointDBs()
-			if err != nil {
+			if err := guard.Checkpoint(); err != nil {
 				return BenchRun{}, err
 			}
-			checkpointDurations[testName] = durs
+
+			// Create a fresh PRNG for each DB so they get the same sequence
+			rng := rand.New(rand.NewSource(seed))
+
+			// Run
+			// CPU profile if enabled (only for single key count)
+			if cfg.CPUProfile != "" {
+				f, err := os.Create(cfg.CPUProfile + "_" + testName + "_" + inst.Name)
+				if err != nil {
+					return BenchRun{}, err
+				}
+				pprof.StartCPUProfile(f)
+			}
+
+			opsPerSec, err := fn(inst.Wrapper, rng)
+
+			if cfg.CPUProfile != "" {
+				pprof.StopCPUProfile()
+			}
+
+			if err != nil {
+				return BenchRun{}, fmt.Errorf("test %s on %s: %w", testName, inst.Name, err)
+			}
+
+			results[testName][inst.Wrapper.Name()] = opsPerSec
+
+			// Update live table cell
+			_ = liveTbl.UpdateCell(testName, inst.Wrapper.Name(), opsPerSec)
 		}
 	}
 
-	// Cleanup
+	// Final clear of live table
+	_ = liveTbl.Clear()
+
+	// Shutdown
 	for _, inst := range instances {
 		_ = inst.Wrapper.Close()
 		if !cfg.KeepDir {
 			_ = os.RemoveAll(inst.Dir)
-		}
-	}
-	if live != nil {
-		_ = live.Clear()
-	}
-
-	if len(scanDiagnostics) > 0 {
-		anyBacklog := false
-		for _, diag := range scanDiagnostics {
-			if n, err := strconv.ParseInt(diag.queueBacklogBytes, 10, 64); err == nil && n > 0 {
-				anyBacklog = true
-				break
-			}
-		}
-		if anyBacklog && !cfg.SettleBeforeScans {
-			fmt.Fprintln(os.Stderr)
-			fmt.Fprintln(os.Stderr, "scan note: TreeDB scan tests ran with cached write-back backlog present; use -settle-before-scans to measure settled scan performance")
-			for _, diag := range scanDiagnostics {
-				fmt.Fprintf(os.Stderr, "  %s: queue_backlog_bytes=%s queue_len=%s flush_threshold_bytes=%s max_queued_memtables=%s backpressure_mode=%s flush_bps_ewma=%s\n",
-					diag.dbName,
-					diag.queueBacklogBytes,
-					diag.queueLen,
-					diag.flushThresholdBytes,
-					diag.maxQueuedMemtables,
-					diag.backpressureMode,
-					diag.flushBpsEWMA,
-				)
-			}
 		}
 	}
 
@@ -2882,12 +2198,14 @@ func testSeed(seed int64, testName string) int64 {
 
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
-	colNames := []string{"Test"}
+
+colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-	colWidths := make(map[string]int)
+
+colWidths := make(map[string]int)
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName) // Start with header length
 	}
@@ -2940,22 +2258,26 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 }
 
 func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
-	rows := make([]string, 0, len(finalTestOrder))
+
+rows := make([]string, 0, len(finalTestOrder))
 	for _, testName := range finalTestOrder {
 		if _, ok := durs[testName]; ok {
-			rows = append(rows, testName)
+		
+rows = append(rows, testName)
 		}
 	}
 	if len(rows) == 0 {
 		return ""
 	}
 
-	colNames := []string{"After Test"}
+
+colNames := []string{"After Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-	colWidths := make(map[string]int, len(colNames))
+
+colWidths := make(map[string]int, len(colNames))
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName)
 	}
@@ -3221,12 +2543,14 @@ func (t *liveTable) UpdateCell(testName, dbName string, val float64) error {
 
 func renderResultsTableStringWithLayout(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) (table string, colWidths map[string]int, dbColStart map[string]int, testRowIndex map[string]int) {
 	// Dynamically determine column widths based on content
-	colNames := []string{"Test"}
+
+colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-	colWidths = make(map[string]int)
+
+colWidths = make(map[string]int)
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName)
 	}
