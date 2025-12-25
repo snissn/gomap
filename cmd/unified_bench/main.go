@@ -1436,6 +1436,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		expectedFullScanCount = cfg.Keys
 	}
 
+	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") && !contains(finalTestOrder, "dataset_write_random") && !contains(finalTestOrder, "dataset_write_sorted") {
+		prefixScanBase = cfg.Keys
+	}
+
 	// Settle before scans?
 	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read") {
 		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open/Compact)...\n")
