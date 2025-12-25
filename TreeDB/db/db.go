@@ -132,6 +132,9 @@ type Options struct {
 	// MemtableMode selects the cached-mode memtable implementation.
 	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
 	MemtableMode string
+	// MemtableShards controls the number of mutable memtable shards in cached
+	// mode. Values <= 0 use a runtime-dependent default.
+	MemtableShards int
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).

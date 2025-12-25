@@ -118,6 +118,7 @@ func Open(opts Options) (*DB, error) {
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:          opts.FlushThreshold,
 		MemtableMode:            opts.MemtableMode,
+		MemtableShards:          opts.MemtableShards,
 		MaxQueuedMemtables:      opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:      opts.StopBacklogSeconds,

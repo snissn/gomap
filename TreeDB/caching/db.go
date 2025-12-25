@@ -25,6 +25,8 @@ import (
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+var errWALClosed = errors.New("cachingdb: wal writer closed")
+var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
@@ -201,6 +203,7 @@ type DB struct {
 	mutableShardMask uint64
 	mutableBytes     atomic.Int64
 	mutableThreshold atomic.Int64
+	rotatePending    atomic.Bool
 	queue            []memtable.Table
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
@@ -217,6 +220,7 @@ type DB struct {
 	wal     *wal.Writer
 	walPath string
 	walSeq  int // Sequence number for WAL files
+	walCh   chan walWriteRequest
 	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
 	// segment bytes. It is updated on WAL rotation and segment deletion.
 	walClosedBytes atomic.Int64
@@ -661,6 +665,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			}
 			db.mu.Unlock()
 		}
+		db.startWALWriter()
 	}
 
 	// Publish initial memtable snapshot for lock-free reads.
@@ -860,6 +865,151 @@ func walBatchSize(records []wal.Record) int64 {
 		total += walRecordHeaderBytes + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+type walWriteRequest struct {
+	records []wal.Record
+	sync    bool
+	done    chan error
+}
+
+const (
+	walWriteBuffer   = 1024
+	walWriteBatchMax = 128
+)
+
+func (db *DB) startWALWriter() {
+	db.walCh = make(chan walWriteRequest, walWriteBuffer)
+	db.wg.Add(1)
+	go db.walWriteLoop()
+}
+
+func (db *DB) walWriteLoop() {
+	defer db.wg.Done()
+
+	batch := make([]walWriteRequest, 0, walWriteBatchMax)
+	for {
+		batch = batch[:0]
+
+		var req walWriteRequest
+		select {
+		case <-db.closeCh:
+			db.drainWALWriter(batch)
+			return
+		case req = <-db.walCh:
+		}
+		batch = append(batch, req)
+
+	drain:
+		for len(batch) < walWriteBatchMax {
+			select {
+			case req = <-db.walCh:
+				batch = append(batch, req)
+			default:
+				break drain
+			}
+		}
+
+		err := db.flushWALRequests(batch)
+		for i := range batch {
+			batch[i].done <- err
+		}
+	}
+}
+
+func (db *DB) drainWALWriter(batch []walWriteRequest) {
+	for {
+		select {
+		case req := <-db.walCh:
+			batch = append(batch[:0], req)
+		drain:
+			for len(batch) < walWriteBatchMax {
+				select {
+				case req = <-db.walCh:
+					batch = append(batch, req)
+				default:
+					break drain
+				}
+			}
+			err := db.flushWALRequests(batch)
+			for i := range batch {
+				batch[i].done <- err
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (db *DB) flushWALRequests(requests []walWriteRequest) error {
+	if len(requests) == 0 {
+		return nil
+	}
+
+	db.mu.RLock()
+	w := db.wal
+	db.mu.RUnlock()
+	if w == nil {
+		return errWALUnavailable
+	}
+
+	var (
+		totalBytes int64
+		needSync   bool
+	)
+
+	db.walMu.Lock()
+	for _, req := range requests {
+		if len(req.records) == 1 {
+			rec := req.records[0]
+			if err := w.Append(rec.Op, rec.Key, rec.Value); err != nil {
+				db.walMu.Unlock()
+				return err
+			}
+			totalBytes += walRecordSize(rec.Key, rec.Value)
+		} else {
+			if err := w.AppendBatch(req.records); err != nil {
+				db.walMu.Unlock()
+				return err
+			}
+			totalBytes += walBatchSize(req.records)
+		}
+		if req.sync {
+			needSync = true
+		}
+	}
+	if needSync {
+		if err := w.Sync(); err != nil {
+			db.walMu.Unlock()
+			return err
+		}
+	}
+	db.walMu.Unlock()
+
+	if totalBytes > 0 {
+		db.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
+func (db *DB) appendWAL(records []wal.Record, sync bool) error {
+	if db.disableWAL {
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	req := walWriteRequest{
+		records: records,
+		sync:    sync,
+		done:    make(chan error, 1),
+	}
+	select {
+	case db.walCh <- req:
+		return <-req.done
+	case <-db.closeCh:
+		return errWALClosed
+	}
 }
 
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
@@ -1345,27 +1495,11 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	needRotate := false
 
 	if !db.disableWAL {
-		db.mu.RLock()
-		w := db.wal
-		relaxedSync := db.relaxedSync
-		db.mu.RUnlock()
-
-		if w != nil {
-			db.walMu.Lock()
-			if err := w.Append(wal.OpSet, key, value); err != nil {
-				db.walMu.Unlock()
-				db.writeMu.RUnlock()
-				return err
-			}
-			db.walLiveBytes.Add(walRecordSize(key, value))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					db.walMu.Unlock()
-					db.writeMu.RUnlock()
-					return err
-				}
-			}
-			db.walMu.Unlock()
+		syncWAL := sync && !db.relaxedSync
+		rec := wal.Record{Op: wal.OpSet, Key: key, Value: value}
+		if err := db.appendWAL([]wal.Record{rec}, syncWAL); err != nil {
+			db.writeMu.RUnlock()
+			return err
 		}
 	}
 
@@ -1387,7 +1521,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	db.writeMu.RUnlock()
 
 	if needRotate {
-		if err := db.rotateMemtableIfNeeded(true); err != nil {
+		if err := db.maybeRotateMemtable(true); err != nil {
 			return err
 		}
 	}
@@ -1433,18 +1567,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 		defer func() { _ = it.Close() }()
 
-		db.mu.RLock()
-		w := db.wal
-		db.mu.RUnlock()
-
 		for it.Valid() {
 			key := it.Key()
 
-			if w != nil {
-				if err := w.Append(wal.OpDelete, key, nil); err != nil {
-					return err
-				}
-				db.walLiveBytes.Add(walRecordSize(key, nil))
+			rec := wal.Record{Op: wal.OpDelete, Key: key}
+			if err := db.appendWAL([]wal.Record{rec}, false); err != nil {
+				return err
 			}
 
 			shard := db.shardForKey(key)
@@ -1893,27 +2021,11 @@ func (db *DB) delete(key []byte, sync bool) error {
 	needRotate := false
 
 	if !db.disableWAL {
-		db.mu.RLock()
-		w := db.wal
-		relaxedSync := db.relaxedSync
-		db.mu.RUnlock()
-
-		if w != nil {
-			db.walMu.Lock()
-			if err := w.Append(wal.OpDelete, key, nil); err != nil {
-				db.walMu.Unlock()
-				db.writeMu.RUnlock()
-				return err
-			}
-			db.walLiveBytes.Add(walRecordSize(key, nil))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					db.walMu.Unlock()
-					db.writeMu.RUnlock()
-					return err
-				}
-			}
-			db.walMu.Unlock()
+		syncWAL := sync && !db.relaxedSync
+		rec := wal.Record{Op: wal.OpDelete, Key: key}
+		if err := db.appendWAL([]wal.Record{rec}, syncWAL); err != nil {
+			db.writeMu.RUnlock()
+			return err
 		}
 	}
 
@@ -1935,7 +2047,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	db.writeMu.RUnlock()
 
 	if needRotate {
-		if err := db.rotateMemtableIfNeeded(true); err != nil {
+		if err := db.maybeRotateMemtable(true); err != nil {
 			return err
 		}
 	}
@@ -2082,6 +2194,17 @@ func (db *DB) rotateMemtableIfNeeded(triggerFlush bool) error {
 		return nil
 	}
 	return db.rotateMemtableLocked(triggerFlush)
+}
+
+func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
+	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
+		return nil
+	}
+	if !db.rotatePending.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer db.rotatePending.Store(false)
+	return db.rotateMemtableIfNeeded(triggerFlush)
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -3475,27 +3598,10 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 		b.walBuf = records
 
-		b.db.mu.RLock()
-		w := b.db.wal
-		relaxedSync := b.db.relaxedSync
-		b.db.mu.RUnlock()
-
-		if w != nil {
-			b.db.walMu.Lock()
-			if err := w.AppendBatch(records); err != nil {
-				b.db.walMu.Unlock()
-				b.db.writeMu.RUnlock()
-				return err
-			}
-			b.db.walLiveBytes.Add(walBatchSize(records))
-			if sync && !relaxedSync {
-				if err := w.Sync(); err != nil {
-					b.db.walMu.Unlock()
-					b.db.writeMu.RUnlock()
-					return err
-				}
-			}
-			b.db.walMu.Unlock()
+		syncWAL := sync && !b.db.relaxedSync
+		if err := b.db.appendWAL(records, syncWAL); err != nil {
+			b.db.writeMu.RUnlock()
+			return err
 		}
 	}
 
@@ -3554,7 +3660,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
-		if err := b.db.rotateMemtableIfNeeded(true); err != nil {
+		if err := b.db.maybeRotateMemtable(true); err != nil {
 			return err
 		}
 	}

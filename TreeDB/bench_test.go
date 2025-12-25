@@ -5,11 +5,24 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func benchMemtableShards() int {
+	val := os.Getenv("TREEDB_BENCH_SHARDS")
+	if val == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
+}
 
 func BenchmarkReadUnderWriteCached(b *testing.B) {
 	writerCounts := []int{0, 1, 4}
@@ -18,6 +31,7 @@ func BenchmarkReadUnderWriteCached(b *testing.B) {
 	for i := range keys {
 		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
 	}
+	shards := benchMemtableShards()
 
 	for _, writers := range writerCounts {
 		b.Run(fmt.Sprintf("W=%d", writers), func(b *testing.B) {
@@ -27,7 +41,11 @@ func BenchmarkReadUnderWriteCached(b *testing.B) {
 			}
 			defer os.RemoveAll(tmpDir)
 
-			d, err := Open(Options{Dir: tmpDir})
+			opts := Options{Dir: tmpDir}
+			if shards > 0 {
+				opts.MemtableShards = shards
+			}
+			d, err := Open(opts)
 			if err != nil {
 				b.Fatalf("Failed to open DB: %v", err)
 			}
@@ -107,6 +125,7 @@ func BenchmarkWriteParallelCached(b *testing.B) {
 	for i := range keys {
 		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
 	}
+	shards := benchMemtableShards()
 
 	for _, n := range workers {
 		b.Run(fmt.Sprintf("G=%d", n), func(b *testing.B) {
@@ -116,7 +135,11 @@ func BenchmarkWriteParallelCached(b *testing.B) {
 			}
 			defer os.RemoveAll(tmpDir)
 
-			d, err := Open(Options{Dir: tmpDir})
+			opts := Options{Dir: tmpDir}
+			if shards > 0 {
+				opts.MemtableShards = shards
+			}
+			d, err := Open(opts)
 			if err != nil {
 				b.Fatalf("Failed to open DB: %v", err)
 			}
@@ -165,7 +188,11 @@ func BenchmarkMixedLatencyCached(b *testing.B) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	d, err := Open(Options{Dir: tmpDir})
+	opts := Options{Dir: tmpDir}
+	if shards := benchMemtableShards(); shards > 0 {
+		opts.MemtableShards = shards
+	}
+	d, err := Open(opts)
 	if err != nil {
 		b.Fatalf("Failed to open DB: %v", err)
 	}
