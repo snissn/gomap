@@ -261,23 +261,24 @@ Owner and dates are optional; add them if you use a team workflow.
 ## Performance & Scalability
 
 ### AUD-015: Global write lock serialization
-- Status: MITIGATED
+- Status: FIXED
 - Severity: P2 (performance)
 - Evidence:
   - `TreeDB/db/batch.go`: optimistic write path uses `writeMu.RLock` + `commitMu` with CAS on `UserRootPageID`.
   - `TreeDB/db/alloc_tracker.go`: tracks allocated pages and frees on conflicts.
   - `TreeDB/zipper/zipper.go`: `CloneWithAllocator` preserves zipper config with tracked allocations.
   - `TreeDB/db/concurrent_write_test.go`: concurrent writer correctness test.
-  - `TreeDB/caching/db.go`: write paths use `writeMu` as an `RWMutex` with WAL-level locking.
+  - `TreeDB/caching/db.go`: cached writes lock only `memShard.mu` for memtable mutation (plus a `writeMu.RLock` checkpoint barrier).
   - `TreeDB/caching/db_test.go`: `TestCachingDB_SetDoesNotBlockOnWriteMuRLock`.
   - `docs/TREEDB_TUNING.md`: write concurrency limits and mitigations documented.
+  - `TreeDB/bench_test.go`: `BenchmarkWriteParallelCached` and `BenchmarkWriteParallelCachedRotationStress`.
 - Risk:
   - Multi-writer workloads do not scale with cores.
 - Resolution:
   - Backend writes use optimistic apply + CAS commit with bounded retries and a serialized fallback.
   - Allocation tracking frees pages on conflicts to avoid index growth from abandoned attempts.
   - Concurrent writer test validates no lost updates.
-  - Cached writes still contend on `db.mu` during memtable updates; see the cached write concurrency milestone below.
+  - Cached writes no longer serialize on `db.mu` for memtable updates; remaining contention is tracked in the cached write concurrency milestone below (WAL and rotation/flush paths).
 - Investigation:
   1) Benchmark multi-writer ingestion; capture CPU contention profile.
 - Fix options:
@@ -388,6 +389,12 @@ Phase 0 status:
 - Iterator and `writeBypass` now use the published snapshot to avoid per-call queue copies (`TreeDB/caching/db.go`).
 - Added tests for snapshot updates, immutability, and allocation behavior (`TreeDB/caching/rcu_snapshot_test.go`).
 
+Phase 1 status:
+- Sharded mutables remove `db.mu` from the cached write hot path (`TreeDB/caching/db.go`).
+- WAL append batching reduces contention under high writer counts (`TreeDB/caching/db.go`).
+- Memtable rotations lock all shards until publish (avoids the global `writeMu` barrier while preserving snapshot correctness) (`TreeDB/caching/db.go`).
+- Added `BenchmarkWriteParallelCachedRotationStress` to amplify rotation overhead in benchmarks (`TreeDB/bench_test.go`).
+
 Phase 1: Memtable sharding (true write concurrency).
 1) Data structures + config:
    - Add `memShard` struct: `mu`, `mt memtable.Interface`, `rng keyRange`, `bytes atomic.Int64`.
@@ -403,10 +410,8 @@ Phase 1: Memtable sharding (true write concurrency).
    - Use the RCU snapshot for queued memtables and iterate outside `db.mu`.
    - Keep semantics: newest-first over queue, then backend.
 4) Rotation + flush:
-   - `rotateMemtableLocked` acquires `writeMu.Lock()` to block writers.
-   - Lock all shards in index order, freeze each shard memtable, and move them into the queue as a group.
-   - Aggregate shard ranges into one queue range entry (min/max).
-   - Reset shards with new memtables and zero ranges/bytes; reset `mutableBytes`.
+   - Lock all shards and hold them until `publishMemtablesLocked()` so readers never miss writes to newly-swapped memtables.
+   - Avoid rotating WAL segments in the hot path; checkpoints establish durable boundaries and trim segments.
 5) Iterator + snapshots:
    - Snapshot should capture the current queue slice plus shard pointers (or force a rotation when creating iterators, as today).
    - Ensure iterator merges shard immutables + queue + backend in key order.
@@ -416,7 +421,8 @@ Phase 1: Memtable sharding (true write concurrency).
    - Add a focused unit test to verify rotate + flush correctness with sharded mutables.
 
 Guardrails (to avoid adopting unsafe older changes):
-- Do not move `mutable.Set/Delete` outside `db.mu` unless rotations are fully serialized against writers (iterator-triggered rotations currently do not take `writeMu`).
+- Any operation that swaps shard memtables must hold shard locks until the new memtable view is published (to avoid reads missing concurrent writes).
+- Keep `mutableBytes` updates under the same shard lock used for mutation, so iterator-triggered rotations never miss non-empty mutables due to transient accounting errors.
 - Prefer the RCU snapshot for reads/queue access; it reduces contention without weakening rotation safety.
 
 Acceptance criteria:

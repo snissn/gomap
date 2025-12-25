@@ -899,6 +899,7 @@ const (
 	walWriteBuffer   = 4096
 	walWriteBatchMax = 512
 	walFastBatchMax  = 2048
+	walFastQueueMax  = 16384
 )
 
 func (db *DB) startWALWriter() {
@@ -1004,6 +1005,7 @@ func (db *DB) walFastLoop() {
 			db.walFastQueue = db.walFastQueue[:len(db.walFastQueue)-db.walFastHead]
 			db.walFastHead = 0
 		}
+		db.walFastCond.Broadcast()
 		db.walFastMu.Unlock()
 
 		records = records[:0]
@@ -1170,6 +1172,9 @@ func (db *DB) appendWALFast(record wal.Record) error {
 	ack.wg.Add(1)
 
 	db.walFastMu.Lock()
+	for !db.walFastClosed && len(db.walFastQueue)-db.walFastHead >= walFastQueueMax {
+		db.walFastCond.Wait()
+	}
 	if db.walFastClosed {
 		db.walFastMu.Unlock()
 		ack.err = errWALClosed
@@ -1692,8 +1697,8 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	newBytes := shard.mem.Size()
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
-	shard.mu.Unlock()
 	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
 	// 3. Check Threshold
@@ -1764,8 +1769,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			newBytes := shard.mem.Size()
 			delta := newBytes - shard.bytes
 			shard.bytes = newBytes
-			shard.mu.Unlock()
 			db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
 			db.noteWriteKey(key)
 			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 				db.mu.Lock()
@@ -2106,8 +2111,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			newBytes := shard.mem.Size()
 			delta := newBytes - shard.bytes
 			shard.bytes = newBytes
-			shard.mu.Unlock()
 			db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
 			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 				if err := db.rotateMemtableLocked(true); err != nil {
 					return err
@@ -2218,8 +2223,8 @@ func (db *DB) delete(key []byte, sync bool) error {
 	newBytes := shard.mem.Size()
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
-	shard.mu.Unlock()
 	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
 	// 3. Threshold
@@ -2318,47 +2323,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 //
 // Caller must hold db.mu.
 func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
-	walPath := db.walPath
-	if newCapacity < 0 {
-		newCapacity = db.memtableCap
-	}
-	if db.memtableAdaptive {
-		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
-	}
-	if db.memtableWarmupActive {
-		db.memtableWarmupActive = false
-	}
-	db.mutableBytes.Store(0)
-	for i := range db.mutableShards {
-		shard := &db.mutableShards[i]
-		shard.mu.Lock()
-		shard.mem.Freeze()
-		memBytes := shard.mem.Size()
-		db.queue = append(db.queue, shard.mem)
-		db.queueBacklogBytes.Add(memBytes)
-		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPath)
-
-		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
-		if err != nil {
-			shard.mu.Unlock()
-			return err
-		}
-		shard.mem = mt
-		shard.rng = keyRange{}
-		shard.bytes = 0
-		shard.mu.Unlock()
-	}
-	if db.memtableAdaptive {
-		db.resetMemtableStatsLocked()
-	}
-	db.updateMutableThresholdLocked()
-	db.publishMemtablesLocked()
-
-	db.bpMu.Lock()
-	db.bpCond.Broadcast()
-	db.bpMu.Unlock()
-	return nil
+	return db.rotateMutableShardsLocked(newCapacity, false)
 }
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
@@ -2366,16 +2331,13 @@ func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
 }
 
 func (db *DB) rotateMemtableIfNeeded(triggerFlush bool) error {
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
-
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	if db.mutableBytes.Load() <= db.mutableFlushThreshold() {
 		return nil
 	}
-	return db.rotateMemtableLocked(triggerFlush)
+	return db.rotateMutableShardsLocked(-1, triggerFlush)
 }
 
 func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
@@ -2387,6 +2349,80 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 	}
 	defer db.rotatePending.Store(false)
 	return db.rotateMemtableIfNeeded(triggerFlush)
+}
+
+// rotateMutableShardsLocked rotates the current mutable shards into the queue
+// while holding db.mu (write) and the affected shard locks.
+//
+// It intentionally does not rotate the WAL segment; checkpoint is responsible
+// for establishing durable boundaries and trimming old segments. This avoids
+// requiring a global writer barrier around WAL rotation.
+func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	if newCapacity < 0 {
+		newCapacity = db.memtableCap
+	}
+	if db.memtableAdaptive {
+		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
+	}
+	if db.memtableWarmupActive {
+		db.memtableWarmupActive = false
+	}
+	walPath := ""
+	if !db.disableWAL {
+		walPath = db.walPath
+	}
+
+	locked := make([]*memShard, 0, len(db.mutableShards))
+	defer func() {
+		for i := len(locked) - 1; i >= 0; i-- {
+			locked[i].mu.Unlock()
+		}
+	}()
+
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		locked = append(locked, shard)
+
+		// Remove this shard's contribution from the global byte counter before
+		// resetting it, since writers may still be updating other shards.
+		if shard.bytes != 0 {
+			db.mutableBytes.Add(-shard.bytes)
+		}
+
+		// Freeze and enqueue the old mutable shard.
+		shard.mem.Freeze()
+		memBytes := shard.mem.Size()
+		db.queue = append(db.queue, shard.mem)
+		db.queueBacklogBytes.Add(memBytes)
+		db.queueRanges = append(db.queueRanges, shard.rng)
+		db.queueWALPaths = append(db.queueWALPaths, walPath)
+
+		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+		if err != nil {
+			return err
+		}
+		shard.mem = mt
+		shard.rng = keyRange{}
+		shard.bytes = 0
+	}
+
+	if db.memtableAdaptive {
+		db.resetMemtableStatsLocked()
+	}
+	db.updateMutableThresholdLocked()
+	db.publishMemtablesLocked()
+
+	if triggerFlush {
+		select {
+		case db.flushCh <- struct{}{}:
+		default:
+		}
+	}
+	db.bpMu.Lock()
+	db.bpCond.Broadcast()
+	db.bpMu.Unlock()
+	return nil
 }
 
 func (db *DB) rotateWALLocked() error {
@@ -3831,8 +3867,8 @@ func (b *Batch) writeRegular(sync bool) error {
 		newBytes := shard.mem.Size()
 		delta := newBytes - shard.bytes
 		shard.bytes = newBytes
-		shard.mu.Unlock()
 		b.db.mutableBytes.Add(delta)
+		shard.mu.Unlock()
 	}
 
 	// 3. Threshold Check

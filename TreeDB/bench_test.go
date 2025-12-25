@@ -181,6 +181,78 @@ func BenchmarkWriteParallelCached(b *testing.B) {
 	}
 }
 
+func BenchmarkWriteParallelCachedRotationStress(b *testing.B) {
+	workers := []int{1, 2, 4, 8}
+	val := make([]byte, 128)
+	keys := make([][]byte, 1024)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+	shards := benchMemtableShards()
+
+	const flushThreshold int64 = 1 << 20 // 1MiB
+
+	for _, n := range workers {
+		b.Run(fmt.Sprintf("G=%d", n), func(b *testing.B) {
+			tmpDir, err := os.MkdirTemp("", "treedb-bench-write-cached-rotate-*")
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			opts := Options{
+				Dir:                              tmpDir,
+				FlushThreshold:                   flushThreshold,
+				BackgroundCheckpointInterval:     -1,
+				BackgroundCheckpointIdleDuration: -1,
+				MaxWALBytes:                      -1,
+				BackgroundIndexVacuumInterval:    -1,
+			}
+			if shards > 0 {
+				opts.MemtableShards = shards
+			}
+			d, err := Open(opts)
+			if err != nil {
+				b.Fatalf("Failed to open DB: %v", err)
+			}
+			defer d.Close()
+
+			var counter uint64
+			b.ResetTimer()
+
+			var wg sync.WaitGroup
+			var failed atomic.Bool
+			errCh := make(chan error, 1)
+			wg.Add(n)
+			for i := 0; i < n; i++ {
+				go func(id int) {
+					defer wg.Done()
+					for {
+						if failed.Load() {
+							return
+						}
+						idx := int(atomic.AddUint64(&counter, 1)) - 1
+						if idx >= b.N {
+							return
+						}
+						key := keys[idx%len(keys)]
+						if err := d.Set(key, val); err != nil {
+							if failed.CompareAndSwap(false, true) {
+								errCh <- err
+							}
+							return
+						}
+					}
+				}(i)
+			}
+			wg.Wait()
+			if failed.Load() {
+				b.Fatalf("Set failed: %v", <-errCh)
+			}
+		})
+	}
+}
+
 func BenchmarkMixedLatencyCached(b *testing.B) {
 	tmpDir, err := os.MkdirTemp("", "treedb-bench-mixed-cached-*")
 	if err != nil {
