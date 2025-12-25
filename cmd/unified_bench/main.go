@@ -142,14 +142,37 @@ type scanDiag struct {
 }
 
 func main() {
+	flag.Usage = customUsage
 	flag.Parse()
+
+	isSet := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		isSet[f.Name] = true
+	})
+	if err := applyProfile(*profileArg, isSet); err != nil {
+		log.Fatalf("profile: %v", err)
+	}
 
 	seedUsed := *seed
 	if seedUsed == 0 {
 		seedUsed = time.Now().UnixNano()
 	}
-	fmt.Fprintf(os.Stderr, "Throughput Benchmark (Operations per second)\n")
-	fmt.Fprintf(os.Stderr, "seed=%d\n", seedUsed)
+
+	fmt.Fprintf(os.Stderr, "Unified Benchmark Runner\n")
+	fmt.Fprintf(os.Stderr, "========================\n")
+	if *profileArg != "" {
+		fmt.Fprintf(os.Stderr, "Profile:     %s (%s)\n", *profileArg, profiles[strings.ToLower(*profileArg)].Description)
+	} else {
+		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
+	}
+	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d\n", *numKeys, *valSize, *batchSize)
+	if *rangeQueries > 0 {
+		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
+	}
+	fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
+	fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
+	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
+	fmt.Fprintf(os.Stderr, "\n")
 
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	baseCfg := BenchConfig{
