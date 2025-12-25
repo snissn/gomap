@@ -61,7 +61,7 @@ var (
 	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
-	settleBeforeScans              = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+	settleBeforeScans = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 )
 
 type DBInstance struct {
@@ -123,11 +123,11 @@ type BenchConfig struct {
 }
 
 type BenchRun struct {
-	Config       BenchConfig
-	Instances    []*DBInstance
-	TestOrder    []string
-	DisplayNames map[string]string
-	Results      map[string]map[string]float64
+	Config              BenchConfig
+	Instances           []*DBInstance
+	TestOrder           []string
+	DisplayNames        map[string]string
+	Results             map[string]map[string]float64
 	CheckpointDurations map[string]map[string]time.Duration
 }
 
@@ -415,9 +415,9 @@ func runSweep(baseCfg BenchConfig, keyCounts []int) ([]BenchRun, error) {
 		cfg := baseCfg
 		cfg.Keys = kc
 		run, err := runBenchmark(cfg)
-			if err != nil {
-				return nil, err
-			}
+		if err != nil {
+			return nil, err
+		}
 		runs = append(runs, run)
 	}
 	return runs, nil
@@ -1278,7 +1278,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else if cfg.TreeDBIterDebug && i < cfg.TreeDBIterDebugLimit {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s query=%d items=%d build=%s iter=%s\n",
-							db.Name(), i, itemsThisQuery, buildDur, iterDur)
+						db.Name(), i, itemsThisQuery, buildDur, iterDur)
 				}
 
 				_ = iter.Close()
@@ -1288,12 +1288,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				avgIter := totalIter / time.Duration(cfg.RangeQueries)
 				if debugStatsCount > 0 {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s queue_avg=%.2f sources_avg=%.2f\n",
-							db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
-							float64(debugQueueSum)/float64(debugStatsCount),
-							float64(debugSourcesSum)/float64(debugStatsCount))
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter,
+						float64(debugQueueSum)/float64(debugStatsCount),
+						float64(debugSourcesSum)/float64(debugStatsCount))
 				} else {
 					fmt.Fprintf(os.Stderr, "prefix_scan/%s summary queries=%d span=%d items=%d build_avg=%s iter_avg=%s\n",
-							db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
+						db.Name(), cfg.RangeQueries, cfg.RangeSpan, totalItems, avgBuild, avgIter)
 				}
 			}
 			return float64(totalItems) / time.Since(start).Seconds(), nil
@@ -1460,7 +1460,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
 			}
 			inst.Wrapper = newWrapper
-			
+
 			// Optional TreeDB compaction
 			if inst.Name == "treedb" && cfg.TreeDBCompactBeforeScans {
 				td, ok := inst.Wrapper.(*treedbadapter.DB)
@@ -1478,7 +1478,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 			}
-			
+
 			// Optional TreeDB Vacuum
 			if inst.Name == "treedb" && cfg.TreeDBVacuumBeforeScans {
 				td, ok := inst.Wrapper.(*treedbadapter.DB)
@@ -2199,13 +2199,12 @@ func testSeed(seed int64, testName string) int64 {
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {
 	// Dynamically determine column widths based on content
 
-colNames := []string{"Test"}
+	colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-
-colWidths := make(map[string]int)
+	colWidths := make(map[string]int)
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName) // Start with header length
 	}
@@ -2259,25 +2258,23 @@ colWidths := make(map[string]int)
 
 func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
 
-rows := make([]string, 0, len(finalTestOrder))
+	rows := make([]string, 0, len(finalTestOrder))
 	for _, testName := range finalTestOrder {
 		if _, ok := durs[testName]; ok {
-		
-rows = append(rows, testName)
+
+			rows = append(rows, testName)
 		}
 	}
 	if len(rows) == 0 {
 		return ""
 	}
 
-
-colNames := []string{"After Test"}
+	colNames := []string{"After Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-
-colWidths := make(map[string]int, len(colNames))
+	colWidths := make(map[string]int, len(colNames))
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName)
 	}
@@ -2544,13 +2541,12 @@ func (t *liveTable) UpdateCell(testName, dbName string, val float64) error {
 func renderResultsTableStringWithLayout(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) (table string, colWidths map[string]int, dbColStart map[string]int, testRowIndex map[string]int) {
 	// Dynamically determine column widths based on content
 
-colNames := []string{"Test"}
+	colNames := []string{"Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
 
-
-colWidths = make(map[string]int)
+	colWidths = make(map[string]int)
 	for _, colName := range colNames {
 		colWidths[colName] = len(colName)
 	}

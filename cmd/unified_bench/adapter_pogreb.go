@@ -36,11 +36,11 @@ func NewPogreb(dir string) (kvstore.DB, error) {
 		// In pogreb source options.go: BackgroundSyncInterval time.Duration.
 		// So let's just assume we can pass a value.
 	}
-	
+
 	// Re-checking pogreb options:
 	// type Options struct { BackgroundSyncInterval time.Duration }
 	// If 0, Put calls fsync.
-	
+
 	realOpts := &pogreb.Options{}
 	if *pogrebNoSync {
 		realOpts.BackgroundSyncInterval = 1 * time.Second
@@ -88,4 +88,3 @@ func (p *PogrebWrapper) ForEach(fn func(k, v []byte) error) error {
 	}
 	return nil
 }
-

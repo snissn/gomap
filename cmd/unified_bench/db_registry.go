@@ -55,7 +55,7 @@ func resolveDBs(arg string) []string {
 	if contains(requested, "all") {
 		return GetAllDBNames()
 	}
-	
+
 	// Preserve order of registration for the requested ones, or use requested order?
 	// Usually requested order is preferred by user.
 	// But let's filter to ensure they exist.

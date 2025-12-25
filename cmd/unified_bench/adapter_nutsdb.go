@@ -13,7 +13,7 @@ func init() {
 }
 
 type NutsDBWrapper struct {
-	db *nutsdb.DB
+	db     *nutsdb.DB
 	bucket string
 }
 
@@ -21,12 +21,12 @@ func NewNutsDB(dir string) (kvstore.DB, error) {
 	opt := nutsdb.DefaultOptions
 	opt.Dir = dir
 	opt.SyncEnable = false
-	
+
 	db, err := nutsdb.Open(opt)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	bucket := "bench"
 	// Ensure bucket exists
 	err = db.Update(func(tx *nutsdb.Tx) error {
@@ -37,7 +37,7 @@ func NewNutsDB(dir string) (kvstore.DB, error) {
 		db.Close()
 		return nil, err
 	}
-	
+
 	return &NutsDBWrapper{db: db, bucket: bucket}, nil
 }
 
@@ -95,7 +95,7 @@ func (b *NutsDBBatch) CommitSync() error {
 }
 func (b *NutsDBBatch) Close() error {
 	// nutsdb Tx.Rollback is not public? usually Commit handles cleanup.
-	// But let's check. 
+	// But let's check.
 	// In NutsDB, if Commit is not called, changes are not applied.
 	// There is no Rollback method on nutsdb.Tx.
 	return nil
@@ -133,9 +133,9 @@ type NutsIterator struct {
 	idx    int
 }
 
-func (it *NutsIterator) Valid() bool { return it.idx < len(it.keys) }
-func (it *NutsIterator) Next()       { it.idx++ }
-func (it *NutsIterator) Key() []byte { return it.keys[it.idx] }
+func (it *NutsIterator) Valid() bool   { return it.idx < len(it.keys) }
+func (it *NutsIterator) Next()         { it.idx++ }
+func (it *NutsIterator) Key() []byte   { return it.keys[it.idx] }
 func (it *NutsIterator) Value() []byte { return it.values[it.idx] }
 func (it *NutsIterator) KeyCopy(dst []byte) []byte {
 	return append(dst, it.Key()...)
@@ -167,14 +167,14 @@ func (n *NutsDBWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 		}
 		return nil
 	})
-	
+
 	if err != nil {
 		if err == nutsdb.ErrBucketNotFound {
 			return &NutsIterator{}, nil
 		}
 		return nil, err
 	}
-	
+
 	return &NutsIterator{keys: keys, values: values}, nil
 }
 
@@ -183,7 +183,7 @@ func (n *NutsDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, er
 	if err != nil {
 		return nil, err
 	}
-	
+
 	nit := it.(*NutsIterator)
 	// Reverse in place
 	for i, j := 0, len(nit.keys)-1; i < j; i, j = i+1, j-1 {

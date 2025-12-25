@@ -18,7 +18,7 @@ func init() {
 }
 
 type BboltWrapper struct {
-	db *bbolt.DB
+	db     *bbolt.DB
 	bucket []byte
 }
 
@@ -31,7 +31,7 @@ func NewBbolt(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	bucketName := []byte("bench")
 	err = db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists(bucketName)
@@ -84,8 +84,8 @@ type BboltIterator struct {
 	reverse bool
 }
 
-func (it *BboltIterator) Valid() bool { return it.valid }
-func (it *BboltIterator) Key() []byte { return it.key }
+func (it *BboltIterator) Valid() bool   { return it.valid }
+func (it *BboltIterator) Key() []byte   { return it.key }
 func (it *BboltIterator) Value() []byte { return it.val }
 func (it *BboltIterator) KeyCopy(dst []byte) []byte {
 	return append(dst, it.key...)
@@ -111,7 +111,7 @@ func (it *BboltIterator) Next() {
 	it.key = k
 	it.val = v
 	it.valid = k != nil
-	
+
 	if it.valid && it.end != nil {
 		cmp := bytes.Compare(k, it.end)
 		if !it.reverse && cmp >= 0 {
@@ -128,14 +128,14 @@ func (b *BboltWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 		return nil, err
 	}
 	c := tx.Bucket(b.bucket).Cursor()
-	
+
 	var k, v []byte
 	if start != nil {
 		k, v = c.Seek(start)
 	} else {
 		k, v = c.First()
 	}
-	
+
 	it := &BboltIterator{
 		tx:    tx,
 		c:     c,
@@ -144,11 +144,11 @@ func (b *BboltWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 		val:   v,
 		valid: k != nil,
 	}
-	
+
 	if it.valid && end != nil && bytes.Compare(k, end) >= 0 {
 		it.valid = false
 	}
-	
+
 	return it, nil
 }
 
@@ -158,10 +158,10 @@ func (b *BboltWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, err
 		return nil, err
 	}
 	c := tx.Bucket(b.bucket).Cursor()
-	
+
 	// For reverse, we want to start from `end` (exclusive) and go down.
 	// Bbolt Seek gives >= target.
-	
+
 	var k, v []byte
 	target := end
 	if target == nil {
@@ -182,24 +182,24 @@ func (b *BboltWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, err
 			// Yes.
 			// Example: keys [10, 20]. Seek(15) -> 20. Prev() -> 10. Correct.
 			// Example: keys [10, 20]. Seek(20) -> 20. Prev() -> 10. Correct (end is exclusive).
-			
+
 			// But careful: we must check if we are already at the beginning?
 			// If Seek returned first item and it's >= target, then Prev makes it nil (before start).
 			// If Seek returned target, Prev makes it < target.
-			
+
 			// Logic: Seek target. Move Prev.
 			// Exception: if Seek returned nil, it means everything is < target. So start at Last.
 			// wait, Seek returns nil if NO key is >= target.
-			
+
 			// So:
 			// If Seek(target) != nil: Move Prev.
 			// Else: Move Last.
-			
+
 			// Let's verify.
 			k, v = c.Prev()
 		}
 	}
-	
+
 	it := &BboltIterator{
 		tx:      tx,
 		c:       c,
@@ -209,11 +209,11 @@ func (b *BboltWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, err
 		valid:   k != nil,
 		reverse: true,
 	}
-	
+
 	if it.valid && start != nil && bytes.Compare(k, start) < 0 {
 		it.valid = false
 	}
-	
+
 	return it, nil
 }
 
@@ -239,7 +239,7 @@ func (b *BboltBatch) CommitSync() error {
 func (b *BboltBatch) Close() error {
 	// Rollback is safe to call even if committed (returns error, which we ignore)
 	// But usually we just return nil.
-	_ = b.tx.Rollback() 
+	_ = b.tx.Rollback()
 	return nil
 }
 

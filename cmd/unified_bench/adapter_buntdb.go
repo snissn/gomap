@@ -126,9 +126,9 @@ type BuntIterator struct {
 	valid bool
 }
 
-func (it *BuntIterator) Valid() bool { return it.valid && it.idx < len(it.keys) }
-func (it *BuntIterator) Next()       { it.idx++ }
-func (it *BuntIterator) Key() []byte { return []byte(it.keys[it.idx]) }
+func (it *BuntIterator) Valid() bool   { return it.valid && it.idx < len(it.keys) }
+func (it *BuntIterator) Next()         { it.idx++ }
+func (it *BuntIterator) Key() []byte   { return []byte(it.keys[it.idx]) }
 func (it *BuntIterator) Value() []byte { return []byte(it.vals[it.idx]) }
 func (it *BuntIterator) KeyCopy(dst []byte) []byte {
 	return append(dst, it.keys[it.idx]...)
@@ -143,14 +143,14 @@ func (it *BuntIterator) Close() error {
 
 func (b *BuntWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	var keys, vals []string
-	
+
 	err := b.db.View(func(tx *buntdb.Tx) error {
 		var iterErr error
 		pivot := ""
 		if start != nil {
 			pivot = string(start)
 		}
-		
+
 		err := tx.AscendGreaterOrEqual("", pivot, func(k, v string) bool {
 			if end != nil && k >= string(end) {
 				return false
@@ -164,17 +164,17 @@ func (b *BuntWrapper) Iterator(start, end []byte) (kvstore.Iterator, error) {
 		}
 		return iterErr
 	})
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &BuntIterator{keys: keys, vals: vals, valid: true}, nil
 }
 
 func (b *BuntWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
 	var keys, vals []string
-	
+
 	err := b.db.View(func(tx *buntdb.Tx) error {
 		err := tx.Descend("", func(k, v string) bool {
 			if end != nil && k >= string(end) {
@@ -189,10 +189,10 @@ func (b *BuntWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, erro
 		})
 		return err
 	})
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &BuntIterator{keys: keys, vals: vals, valid: true}, nil
 }

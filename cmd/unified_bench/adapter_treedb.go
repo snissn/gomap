@@ -7,8 +7,8 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
-	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 	"github.com/snissn/gomap/kvstore"
+	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
 
 var (
@@ -34,7 +34,7 @@ var (
 	treedbCompactCopyBps           = flag.Int64("treedb-compact-copy-bps", 0, "TreeDB: compaction copy throttling (bytes/sec), 0=disabled")
 	treedbCompactCopyBurst         = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
 	treedbVacuumBeforeScans        = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
-	
+
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
