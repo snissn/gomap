@@ -226,8 +226,8 @@ type DB struct {
 	walAckCond    *sync.Cond
 	walSeqNext    uint64
 	walSeqApplied uint64
+	walSeqDone    map[uint64]struct{}
 	walErr        error
-	walSendMu     sync.Mutex
 	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
 	// segment bytes. It is updated on WAL rotation and segment deletion.
 	walClosedBytes atomic.Int64
@@ -889,6 +889,9 @@ func (db *DB) startWALWriter() {
 	db.walCh = make(chan walWriteRequest, walWriteBuffer)
 	db.walStopCh = make(chan struct{})
 	db.walAckCond = sync.NewCond(&db.walAckMu)
+	db.walSeqNext = 0
+	db.walSeqApplied = 0
+	db.walSeqDone = make(map[uint64]struct{})
 	db.wg.Add(1)
 	go db.walWriteLoop()
 }
@@ -958,9 +961,19 @@ func (db *DB) drainWALWriter(batch []walWriteRequest) {
 func (db *DB) finishWALRequests(requests []walWriteRequest, err error) {
 	db.walAckMu.Lock()
 	if len(requests) > 0 {
-		lastSeq := requests[len(requests)-1].seq
-		if lastSeq > db.walSeqApplied {
-			db.walSeqApplied = lastSeq
+		if db.walSeqDone == nil {
+			db.walSeqDone = make(map[uint64]struct{}, len(requests))
+		}
+		for _, req := range requests {
+			db.walSeqDone[req.seq] = struct{}{}
+		}
+		for {
+			next := db.walSeqApplied + 1
+			if _, ok := db.walSeqDone[next]; !ok {
+				break
+			}
+			delete(db.walSeqDone, next)
+			db.walSeqApplied = next
 		}
 	}
 	if err != nil && db.walErr == nil {
@@ -1050,16 +1063,6 @@ func (db *DB) appendWAL(records []wal.Record, sync bool) error {
 		db.walAckMu.Unlock()
 		return err
 	}
-	db.walAckMu.Unlock()
-
-	db.walSendMu.Lock()
-	db.walAckMu.Lock()
-	if db.walErr != nil {
-		err := db.walErr
-		db.walAckMu.Unlock()
-		db.walSendMu.Unlock()
-		return err
-	}
 	seq := db.walSeqNext + 1
 	db.walSeqNext = seq
 	db.walAckMu.Unlock()
@@ -1069,10 +1072,8 @@ func (db *DB) appendWAL(records []wal.Record, sync bool) error {
 	case db.walCh <- req:
 		// wait for ack
 	case <-db.closeCh:
-		db.walSendMu.Unlock()
 		return errWALClosed
 	case <-db.walStopCh:
-		db.walSendMu.Unlock()
 		db.walAckMu.Lock()
 		err := db.walErr
 		db.walAckMu.Unlock()
@@ -1081,7 +1082,6 @@ func (db *DB) appendWAL(records []wal.Record, sync bool) error {
 		}
 		return err
 	}
-	db.walSendMu.Unlock()
 
 	db.walAckMu.Lock()
 	for db.walSeqApplied < seq && db.walErr == nil {
