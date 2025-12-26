@@ -63,6 +63,8 @@ type SlabFile struct {
 	remapRequested atomic.Bool
 
 	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
+	remapCount   atomic.Uint64
+	deadMappingsCount atomic.Uint64
 
 	// writeScratch is a reusable buffer for appending records. SlabManager
 	// serializes writers, so this is safe without additional locking.
@@ -114,6 +116,7 @@ func (s *SlabFile) Close() error {
 		_ = munmap(b)
 	}
 	s.deadMappings = nil
+	s.deadMappingsCount.Store(0)
 	s.mmapData.Store([]byte(nil))
 	s.remapMu.Unlock()
 	if s.File == nil {
@@ -456,6 +459,7 @@ func (s *SlabFile) remapToFileSize() {
 	if data != nil {
 		// Don't unmap immediately; existing readers might hold views.
 		s.deadMappings = append(s.deadMappings, data)
+		s.deadMappingsCount.Add(1)
 	}
 
 	b, err := mmapReadOnly(s.File, int(currentSize))
@@ -463,6 +467,7 @@ func (s *SlabFile) remapToFileSize() {
 		return
 	}
 	s.mmapData.Store(b)
+	s.remapCount.Add(1)
 }
 
 // Write appends a record to the slab and returns the offset.

@@ -64,7 +64,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
 - [DONE] Unsafe string/byte conversions require immutable inputs. Plan: add build tag (`treedb_safe`) that forces copies for debug/safety.
 - [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
-- [OPEN] Checksum hotpath micro-optimizations. Plan: profile CRC usage and remove avoidable allocs if meaningful.
+- [DONE] Checksum hotpath micro-optimizations. Plan: remove pooled hash allocations in ChecksumParts.
 
 ### Concurrency & Performance (P2/P3)
 
@@ -79,7 +79,8 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Compaction live-set memory pressure. Plan: fall back to a bloom filter when the live set grows too large.
 - [DONE] CRC pool overhead. Plan: use crc32.Update directly in ChecksumParts.
 - [OPEN] Flush buffer pooling, adaptive memtable hysteresis. Plan: profile-driven perf sprints.
-- [OPEN] mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors.
+- [DONE] mmap remap metrics. Plan: expose remap and dead-mapping counters via Stats.
+- [OPEN] Large-value pointer memtable mode. Plan: benchmark-driven refactors.
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
 - [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
 - [OPEN] Freelist heuristics, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: zero-alloc freelist append implemented.

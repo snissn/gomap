@@ -483,6 +483,17 @@ func (sm *SlabManager) ZombieCount() int {
 	return count
 }
 
+// RemapStats returns cumulative mmap remap counts across slabs.
+func (sm *SlabManager) RemapStats() (remaps uint64, deadMappings uint64) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, s := range sm.slabs {
+		remaps += s.remapCount.Load()
+		deadMappings += s.deadMappingsCount.Load()
+	}
+	return remaps, deadMappings
+}
+
 // CurrentSlabSet returns a snapshot of the current slabs.
 func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	sm.mu.RLock()

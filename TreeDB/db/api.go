@@ -202,6 +202,14 @@ func (db *DB) Stats() map[string]string {
 
 	stats["treedb.slabs.active_id"] = fmt.Sprintf("%d", db.slabManager.ActiveSlabID())
 	stats["treedb.slabs.zombies"] = fmt.Sprintf("%d", db.slabManager.ZombieCount())
+	slabRemaps, slabDeadMappings := db.slabManager.RemapStats()
+	stats["treedb.slabs.mmap_remaps"] = fmt.Sprintf("%d", slabRemaps)
+	stats["treedb.slabs.mmap_dead_mappings"] = fmt.Sprintf("%d", slabDeadMappings)
+	if db.valueLogManager != nil {
+		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
+		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
+		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
+	}
 
 	pruneStatsInto(stats, &db.pruner)
 
