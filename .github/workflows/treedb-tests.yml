@@ -3,6 +3,10 @@ name: "TreeDB: vet+test"
 on:
   push:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -53,4 +57,3 @@ jobs:
       - name: Test Race
         working-directory: TreeDB
         run: go test -race ./...
-

@@ -3,6 +3,10 @@ name: "unified_bench: vet+test"
 on:
   push:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -33,4 +37,3 @@ jobs:
       - name: Test
         working-directory: cmd/unified_bench
         run: go test ./...
-

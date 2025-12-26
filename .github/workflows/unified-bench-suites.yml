@@ -3,6 +3,10 @@ name: "unified_bench: suites (gates)"
 on:
   push:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

@@ -3,6 +3,10 @@ name: "HashDB: vet+test (Windows)"
 on:
   push:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -30,4 +34,3 @@ jobs:
       - name: Test
         working-directory: HashDB
         run: go test ./...
-
