@@ -127,6 +127,7 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
 		DisableWAL:              opts.DisableWAL,
+		DisableValueLog:         opts.DisableValueLog,
 		RelaxedSync:             opts.RelaxedSync,
 		NotifyError:             opts.NotifyError,
 	})

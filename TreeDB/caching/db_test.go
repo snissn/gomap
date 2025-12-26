@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,7 +10,9 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -748,5 +751,54 @@ func TestCachingDB_SetDoesNotBlockOnWriteMuRLock(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("Set blocked behind writeMu RLock")
+	}
+}
+
+func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{FlushThreshold: 1})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	key := []byte("k1")
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.Set(key, val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	cache.flushAll(true)
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry, err := snap.GetEntry(key)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = snap.Close()
+		t.Fatalf("expected pointer flag for large value")
+	}
+	if !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		_ = snap.Close()
+		t.Fatalf("expected value log file id, got %#x", entry.ValuePtr.FileID)
+	}
+	_ = snap.Close()
+
+	got, err := backend.Get(key)
+	if err != nil {
+		t.Fatalf("backend Get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("backend Get mismatch")
 	}
 }

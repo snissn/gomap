@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/vlog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -33,13 +34,15 @@ type DBState struct {
 	RootPageID       uint64
 	SystemRootPageID uint64
 	SlabSet          *slab.SlabSet
+	ValueLogSet      *vlog.Set
 }
 
 type DB struct {
-	slabManager *slab.SlabManager
-	lock        *lockfile.Lock
-	adaptive    *adaptive.Controller
-	pruner      pruneWorker
+	slabManager     *slab.SlabManager
+	valueLogManager *vlog.Manager
+	lock            *lockfile.Lock
+	adaptive        *adaptive.Controller
+	pruner          pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	// It may be swapped during online vacuum; old generations remain alive until
@@ -191,6 +194,8 @@ type Options struct {
 	// This improves performance but sacrifices durability: a crash will revert
 	// the database to the last Checkpoint (backend flush).
 	DisableWAL bool
+	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
+	DisableValueLog bool
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only
@@ -264,6 +269,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if state.SlabSet != nil {
 		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
 	}
+	if state.ValueLogSet != nil {
+		db.valueLogManager.Acquire(state.ValueLogSet)
+	}
 
 	// Register Reader
 	if idx != nil {
@@ -279,7 +287,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.idx = idx
 	snap.state = state
 	if idx != nil {
-		snap.tree.Reset(idx.pager, state.SlabSet, state.RootPageID)
+		snap.tree.Reset(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID)
 	}
 	snap.registryID = id
 	return snap
@@ -290,6 +298,9 @@ func (s *Snapshot) Close() error {
 	var err error
 	if s.state != nil && s.state.SlabSet != nil {
 		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
+	}
+	if s.state != nil && s.state.ValueLogSet != nil {
+		err = errors.Join(err, s.db.valueLogManager.Release(s.state.ValueLogSet))
 	}
 	if s.idx != nil {
 		s.idx.registry.Unregister(s.registryID)
@@ -372,6 +383,15 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
+	vlogDir := filepath.Join(opts.Dir, "wal")
+	vm, err := vlog.NewManager(vlogDir)
+	if err != nil {
+		p.Close()
+		_ = sm.Close()
+		return nil, err
+	}
+	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
 	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
@@ -382,6 +402,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		slabManager:           sm,
+		valueLogManager:       vm,
 		lock:                  lock,
 		adaptive:              adaptive.New(),
 		keepRecent:            opts.KeepRecent,
@@ -423,6 +444,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
 		SlabSet:          sm.CurrentSlabSet(),
+		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
 
@@ -454,7 +476,9 @@ func (db *DB) Close() error {
 
 	db.mu.Lock()
 	sm := db.slabManager
+	vm := db.valueLogManager
 	db.slabManager = nil
+	db.valueLogManager = nil
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
@@ -465,6 +489,11 @@ func (db *DB) Close() error {
 	}
 	if sm != nil {
 		if err := sm.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if vm != nil {
+		if err := vm.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -790,11 +819,13 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
+		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
 
 	if oldState != nil {
 		db.slabManager.ReleaseSlabs(oldState.SlabSet)
+		_ = db.valueLogManager.Release(oldState.ValueLogSet)
 	}
 
 	if db.adaptive != nil {
@@ -887,6 +918,18 @@ func (db *DB) Zipper() *zipper.Zipper {
 	}
 	return idx.zipper
 }
+func (db *DB) InlineThreshold() int {
+	if db == nil {
+		return page.DefaultInlineThreshold
+	}
+	if db.adaptive != nil {
+		return db.adaptive.GetThreshold()
+	}
+	if db.policy.InlineThreshold > 0 {
+		return db.policy.InlineThreshold
+	}
+	return page.DefaultInlineThreshold
+}
 func (db *DB) State() *DBState {
 	return db.state.Load()
 }
@@ -908,10 +951,12 @@ func (db *DB) RefreshSlabSet() error {
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
+		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
 
-	return db.slabManager.ReleaseSlabs(oldState.SlabSet)
+	err := db.slabManager.ReleaseSlabs(oldState.SlabSet)
+	return errors.Join(err, db.valueLogManager.Release(oldState.ValueLogSet))
 }
 
 type CompactionOp struct {
@@ -960,7 +1005,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		db.mu.RUnlock()
 
 		// Build a micro-batch of still-live pointer updates.
-		tr := tree.New(idx.pager, db.slabManager, rootID)
+		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
 		var slabWritesByFile map[uint32]int64
 
@@ -1033,7 +1078,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, state.SlabSet, state.RootPageID)
+	tr := tree.New(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

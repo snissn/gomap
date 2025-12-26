@@ -11,11 +11,19 @@ This doc is a *plan for review* and is intentionally explicit so future agents c
 
 ---
 
+## Status (implemented)
+
+- Value-log segments live in `wal/vlog-*.log` and store v2 records (CRC + KeyLen + ValueLen + Op + key/value).
+- Cached mode uses the value log by default; use `Options.DisableValueLog` (or `DisableWAL`) to revert to classic WAL.
+- Backend reads dispatch by `ValuePtr.FileID` high bit via `ValueReader` (`page.IsValueLogFileID`).
+- Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
+- Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.
+
 ## Problem statement
 
 Today in cached mode:
 
-- `Set` writes a full key/value record to `wal/wal-*.log`.
+- `Set` writes a full key/value record to `wal/wal-*.log` (or `wal/vlog-*.log` when value-log mode is enabled).
 - Later, flush writes the same key/value again into the backend:
   - small values are written inline into `index.db`,
   - large values are written into `data-*.slab` and referenced by `ValuePtr`.
@@ -151,7 +159,7 @@ Checkpoint still needs to:
 
 But **deletion policy changes**:
 
-- Today: delete all old `wal-*.log` after checkpoint.
+- Today (classic WAL): delete all old `wal-*.log` after checkpoint.
 - Target: delete only those segments that are *known to have no live referenced values*.
 
 Segments containing referenced values are retained and reclaimed later via compaction/GC.
@@ -306,4 +314,3 @@ Cons: invasive across all memtable modes; higher risk.
 2) Do we want to support both v1 slabs and v2 value-log records indefinitely, or migrate slabs to v2 over time?
 3) What is the minimum viable liveness tracking for safe segment deletion without scanning the whole index?
 4) Do we eventually want an “always-pointer” mode for small values (and if so, how do we quantify read regression)?
-

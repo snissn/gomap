@@ -137,8 +137,10 @@ func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 	walDir := filepath.Join(dir, "wal")
 	if entries, err := os.ReadDir(walDir); err == nil {
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), "wal-") && strings.HasSuffix(entry.Name(), ".log") {
-				t.Fatalf("expected WAL to be clean after recovery; found %q", entry.Name())
+			name := entry.Name()
+			if strings.HasSuffix(name, ".log") &&
+				(strings.HasPrefix(name, "wal-") || strings.HasPrefix(name, "vlog-")) {
+				t.Fatalf("expected WAL to be clean after recovery; found %q", name)
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -104,7 +105,7 @@ func (c *Compactor) Candidates(opts Options) ([]Candidate, error) {
 		return nil, fmt.Errorf("compaction: missing db state")
 	}
 
-	sysTree := tree.New(snap.Pager(), state.SlabSet, state.SystemRootPageID)
+	sysTree := tree.New(snap.Pager(), db.ValueReaderForState(state), state.SystemRootPageID)
 	it := sysTree.Iterator(slabStatsKeyPrefix, slabStatsPrefixEnd())
 	defer it.Close()
 

@@ -211,6 +211,13 @@ func (w *Writer) Size() int64 {
 	return w.size + int64(len(w.pending)) + 8
 }
 
+func (w *Writer) Flush() error {
+	if err := w.flushPending(); err != nil {
+		return err
+	}
+	return w.bw.Flush()
+}
+
 func (w *Writer) Sync() error {
 	if err := w.flushPending(); err != nil {
 		return err

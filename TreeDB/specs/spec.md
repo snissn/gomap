@@ -122,6 +122,11 @@ type ValuePtr struct {
 } // 16 bytes, naturally aligned
 ```
 
+**FileID scheme:** the high bit distinguishes value logs from slabs.
+
+- `FileID & 0x8000_0000 == 0`: slab (`data-*.slab`)
+- `FileID & 0x8000_0000 != 0`: value log segment (`wal/vlog-*.log`)
+
 ### 3.3 Page Layout
 
 The `index.db` file is an array of 4KB pages.

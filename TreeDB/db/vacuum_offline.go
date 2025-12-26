@@ -69,6 +69,10 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		d.slabManager.AcquireSlabs(state.SlabSet)
 		defer d.slabManager.ReleaseSlabs(state.SlabSet)
 	}
+	if state.ValueLogSet != nil {
+		d.valueLogManager.Acquire(state.ValueLogSet)
+		defer d.valueLogManager.Release(state.ValueLogSet)
+	}
 
 	indexPath := filepath.Join(opts.Dir, indexFileName)
 	newPath := filepath.Join(opts.Dir, indexNewFileName)
@@ -93,7 +97,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	alloc := &pagerAllocator{p: newPager}
 
-	sysIter := tree.New(d.Pager(), state.SlabSet, state.SystemRootPageID).Iterator(nil, nil)
+	sysIter := tree.New(d.Pager(), valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 	sysRoot, err := bulk.Build(sysIter, alloc, newPager)
 	_ = sysIter.Close()
 	if err != nil {
@@ -102,7 +106,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 
-	userIter := tree.New(d.Pager(), state.SlabSet, state.RootPageID).Iterator(nil, nil)
+	userIter := tree.New(d.Pager(), valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID).Iterator(nil, nil)
 	userRoot, err := bulk.Build(userIter, alloc, newPager)
 	_ = userIter.Close()
 	if err != nil {

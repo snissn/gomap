@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Batch implements the cosmos-db Batch interface.
@@ -50,6 +51,11 @@ func (b *Batch) Delete(key []byte) error {
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
 	return b.batch.DeleteView(key)
+}
+
+// SetPointer records a pointer without copying the value bytes.
+func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	return b.batch.SetPointer(key, ptr)
 }
 
 func (b *Batch) SetOps(ops []batch.Entry) error {

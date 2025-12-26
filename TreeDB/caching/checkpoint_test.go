@@ -14,7 +14,7 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -322,13 +322,17 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	preexisting := filepath.Join(walDir, "wal-000010.log")
-	if err := os.WriteFile(preexisting, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {
-		t.Fatalf("WriteFile(preexisting WAL): %v", err)
+	preexisting := []string{
+		filepath.Join(walDir, "wal-000010.log"),
+	}
+	for _, path := range preexisting {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {
+			t.Fatalf("WriteFile(preexisting WAL): %v", err)
+		}
 	}
 
 	backend := NewMockBackend()
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -22,7 +22,7 @@ func TestSlabStatsPersistAcrossReopen(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 
-	sysTree := tree.New(d.Pager(), d.slabManager, d.meta.SystemRootPageID)
+	sysTree := tree.New(d.Pager(), valueReader{slabs: d.slabManager, vlogs: d.valueLogManager}, d.meta.SystemRootPageID)
 	raw, err := sysTree.Get(slabStatsKey(0))
 	if err != nil {
 		t.Fatalf("system get: %v", err)
@@ -50,7 +50,7 @@ func TestSlabStatsPersistAcrossReopen(t *testing.T) {
 	}
 	defer d2.Close()
 
-	sysTree2 := tree.New(d2.Pager(), d2.slabManager, d2.meta.SystemRootPageID)
+	sysTree2 := tree.New(d2.Pager(), valueReader{slabs: d2.slabManager, vlogs: d2.valueLogManager}, d2.meta.SystemRootPageID)
 	raw2, err := sysTree2.Get(slabStatsKey(0))
 	if err != nil {
 		t.Fatalf("system get 2: %v", err)
@@ -88,7 +88,7 @@ func TestSlabStatsDeadBytesOnOverwrite(t *testing.T) {
 		t.Fatalf("set 2: %v", err)
 	}
 
-	sysTree := tree.New(d.Pager(), d.slabManager, d.meta.SystemRootPageID)
+	sysTree := tree.New(d.Pager(), valueReader{slabs: d.slabManager, vlogs: d.valueLogManager}, d.meta.SystemRootPageID)
 	raw, err := sysTree.Get(slabStatsKey(0))
 	if err != nil {
 		t.Fatalf("system get: %v", err)

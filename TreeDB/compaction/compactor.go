@@ -258,7 +258,7 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 		return nil, errors.New("compaction: missing db state")
 	}
 
-	tr := tree.New(snap.Pager(), state.SlabSet, state.RootPageID)
+	tr := tree.New(snap.Pager(), db.ValueReaderForState(state), state.RootPageID)
 	it := tr.Iterator(nil, nil)
 	defer it.Close()
 
