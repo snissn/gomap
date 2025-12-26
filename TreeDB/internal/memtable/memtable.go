@@ -55,6 +55,8 @@ type Table interface {
 	Get(key []byte) ([]byte, bool, bool)
 	Size() int64
 	Len() int
+	// NewIterator may hold a read lock until Close; callers should avoid
+	// iterating over mutable memtables on hot write paths.
 	NewIterator(start, end []byte) iterator.UnsafeIterator
 	Freeze()
 }
