@@ -433,7 +433,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 	if stats == nil {
 		t.Fatalf("Stats() returned nil")
 	}
-	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+	n, err = strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
 	if err != nil {
 		t.Fatalf("parse auto checkpoint count: %v", err)
 	}
