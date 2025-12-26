@@ -17,6 +17,7 @@ const (
 )
 
 var ErrCorrupt = errors.New("wal: corrupt record")
+var ErrRecordTooLarge = errors.New("wal: record too large")
 
 type Writer struct {
 	f          *os.File
@@ -28,7 +29,10 @@ type Writer struct {
 	syncFn     func(*os.File) error
 }
 
-const defaultWALBufferSize = 4 << 20
+const (
+	defaultWALBufferSize = 4 << 20
+	maxSegmentSize       = 64 * 1024 * 1024
+)
 
 type Record struct {
 	Op    byte
@@ -164,6 +168,9 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 	// Encode record into scratch
 	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
 	size := 1 + 2 + 4 + len(key) + len(value)
+	if size > maxSegmentSize {
+		return ErrRecordTooLarge
+	}
 	if size > w.segmentMax {
 		if err := w.flushPending(); err != nil {
 			return err
@@ -219,6 +226,9 @@ func (w *Writer) AppendBatch(records []Record) error {
 	total := 0
 	for _, r := range records {
 		total += 1 + 2 + 4 + len(r.Key) + len(r.Value)
+	}
+	if total > maxSegmentSize {
+		return ErrRecordTooLarge
 	}
 
 	if cap(w.scratch) < total {
@@ -330,8 +340,8 @@ func (r *Reader) readSegment() error {
 	length := binary.LittleEndian.Uint32(header[0:4])
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
 
-	// Sanity check length (e.g. max 64MB) to avoid OOM on corrupt file
-	if length > 64*1024*1024 {
+	// Sanity check length to avoid OOM on corrupt file.
+	if length > maxSegmentSize {
 		return ErrCorrupt
 	}
 
