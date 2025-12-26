@@ -2127,8 +2127,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	db.waitForStop()
 
 	// WAL-enabled mode: do a snapshot scan and apply per-key deletes directly.
-	// We intentionally avoid buffering deletes into a Batch: iterator keys are
-	// ephemeral views and must not be stored by reference.
+	// We batch WAL appends with copied keys to reduce per-record overhead.
 	if !db.disableWAL {
 		db.writeMu.Lock()
 		defer db.writeMu.Unlock()
@@ -2139,14 +2138,15 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 		defer func() { _ = it.Close() }()
 
-		for it.Valid() {
-			key := it.Key()
+		const deleteRangeBatchKeys = 1024
+		const deleteRangeBatchBytes = 1 << 20
 
-			rec := logRecord{Op: logOpDelete, Key: key}
-			if _, err := db.appendWAL([]logRecord{rec}, walDurabilityNone); err != nil {
-				return err
-			}
+		var (
+			batchKeys []byte
+			batch     []logRecord
+		)
 
+		applyDelete := func(key []byte) error {
 			shard := db.shardForKey(key)
 			shard.mu.Lock()
 			if db.shardExceedsLimit(shard, int64(len(key))) {
@@ -2174,8 +2174,42 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				}
 				db.mu.Unlock()
 			}
+			return nil
+		}
 
+		flushBatch := func() error {
+			if len(batch) == 0 {
+				return nil
+			}
+			if _, err := db.appendWAL(batch, walDurabilityNone); err != nil {
+				return err
+			}
+			for i := range batch {
+				if err := applyDelete(batch[i].Key); err != nil {
+					return err
+				}
+			}
+			batch = batch[:0]
+			batchKeys = batchKeys[:0]
+			return nil
+		}
+
+		for it.Valid() {
+			key := it.Key()
+			start := len(batchKeys)
+			batchKeys = append(batchKeys, key...)
+			keyCopy := batchKeys[start:len(batchKeys)]
+			batch = append(batch, logRecord{Op: logOpDelete, Key: keyCopy})
+
+			if len(batch) >= deleteRangeBatchKeys || len(batchKeys) >= deleteRangeBatchBytes {
+				if err := flushBatch(); err != nil {
+					return err
+				}
+			}
 			it.Next()
+		}
+		if err := flushBatch(); err != nil {
+			return err
 		}
 		if err := it.Error(); err != nil {
 			return err
