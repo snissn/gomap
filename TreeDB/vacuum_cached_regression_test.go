@@ -20,6 +20,7 @@ func TestVacuumIndexOnline_CachedMode_DoesNotLoseCheckpointedKeys(t *testing.T) 
 		DisableWAL:          true,
 		RelaxedSync:         true,
 		DisableReadChecksum: true,
+		AllowUnsafe:         true,
 
 		FlushThreshold: 1 << 20, // small-ish to force flush rotations during the test
 		KeepRecent:     1,

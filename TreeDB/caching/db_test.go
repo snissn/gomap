@@ -298,7 +298,7 @@ func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{DisableWAL: true})
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -390,6 +390,7 @@ func TestCachingDB_DeleteRange_DisableWAL_CoversInMemoryDeletesBackend(t *testin
 
 	db, err := Open(dir, backend, Options{
 		DisableWAL:     true,
+		AllowUnsafe:    true,
 		FlushThreshold: 1 << 20,
 	})
 	if err != nil {
@@ -434,6 +435,7 @@ func TestCachingDB_DeleteRange_DisableWAL_PartialRangeUsesTombstones(t *testing.
 	backend := NewMockBackend()
 	db, err := Open(dir, backend, Options{
 		DisableWAL:     true,
+		AllowUnsafe:    true,
 		FlushThreshold: 1 << 20,
 	})
 	if err != nil {

@@ -129,6 +129,7 @@ func Open(opts Options) (*DB, error) {
 		DisableWAL:              opts.DisableWAL,
 		DisableValueLog:         opts.DisableValueLog,
 		RelaxedSync:             opts.RelaxedSync,
+		AllowUnsafe:             opts.AllowUnsafe,
 		NotifyError:             opts.NotifyError,
 	})
 	if err != nil {

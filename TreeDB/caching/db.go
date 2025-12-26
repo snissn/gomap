@@ -27,6 +27,7 @@ import (
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
+var ErrUnsafeOptions = fmt.Errorf("unsafe options require AllowUnsafe")
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
@@ -245,6 +246,9 @@ type Options struct {
 	DisableValueLog bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
+	// AllowUnsafe acknowledges unsafe durability options.
+	// When false, Open will reject DisableWAL or RelaxedSync.
+	AllowUnsafe bool
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
@@ -630,6 +634,9 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync) {
+		return nil, ErrUnsafeOptions
+	}
 	if opts.FlushThreshold <= 0 {
 		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
 	}

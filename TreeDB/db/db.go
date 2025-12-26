@@ -189,6 +189,10 @@ type Options struct {
 	// latency for very large slabs but risks starting up with committed pointers
 	// that decode to checksum errors after a crash.
 	DisableSlabTailRepairOnOpen bool
+	// AllowUnsafe acknowledges unsafe durability/integrity options.
+	// When false, Open will reject options that disable WAL, fsync, checksums,
+	// or slab tail repair.
+	AllowUnsafe bool
 
 	// DisableWAL disables the Write-Ahead Log in cached mode.
 	// This improves performance but sacrifices durability: a crash will revert
@@ -353,6 +357,10 @@ func Open(opts Options) (*DB, error) {
 		opts.FreelistRegionRadius = 1
 	}
 
+	if err := validateUnsafeOptions(opts); err != nil {
+		return nil, err
+	}
+
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
@@ -363,6 +371,16 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func validateUnsafeOptions(opts Options) error {
+	if opts.AllowUnsafe {
+		return nil
+	}
+	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen {
+		return ErrUnsafeOptions
+	}
+	return nil
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
