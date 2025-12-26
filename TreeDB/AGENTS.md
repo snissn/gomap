@@ -40,8 +40,10 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Slab O_APPEND offset risk. Plan: open slabs without O_APPEND; use WriteAt with explicit offsets.
 - [DONE] Recovery should validate root/sysroot page readability. Plan: verify checksum + type before accepting meta candidate.
 - [DONE] Skiplist 4GiB panic. Plan: enforce a hard per-shard memtable cap and return ErrMemtableFull before the arena limit.
+- [NOT_APPLICABLE] Iterator "invalid" panics in public paths. Plan: keep the Cosmos SDK contract (Next panics if invalid) and ensure docs/tests reflect this behavior.
 - [DONE] Empty key checks inconsistent (nil vs len==0). Plan: treat len==0 as empty across public APIs.
 - [DONE] WAL record-size cap mismatch (writer vs reader). Plan: enforce max segment size in writer.
+- [OPEN] Fuzzing coverage for WAL/vlog/page decode and iterator merging. Plan: add targeted fuzz tests for log/page decode and merging bounds.
 - [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
 - [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
 - [OPEN] Value-log retention / disk growth. Plan: live-pointer tracking + GC/compaction; guardrails and hard caps. Status: retained-bytes stats + warning threshold added.
