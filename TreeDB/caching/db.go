@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -253,16 +254,7 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 }
 
 func hashKey(key []byte) uint64 {
-	const (
-		fnvOffset = 14695981039346656037
-		fnvPrime  = 1099511628211
-	)
-	h := uint64(fnvOffset)
-	for _, b := range key {
-		h ^= uint64(b)
-		h *= fnvPrime
-	}
-	return h
+	return xxhash.Sum64(key)
 }
 
 func (db *DB) shardIndex(key []byte) int {
