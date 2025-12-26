@@ -19,6 +19,8 @@ const (
 var ErrCorrupt = errors.New("wal: corrupt record")
 var ErrRecordTooLarge = errors.New("wal: record too large")
 
+var syncDirFn = syncDir
+
 type Writer struct {
 	f          *os.File
 	bw         *bufio.Writer
@@ -45,7 +47,7 @@ func NewWriter(path string) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syncDir(path); err != nil {
+	if err := syncDirFn(path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -76,7 +78,7 @@ func (w *Writer) RotateTo(path string) error {
 			_ = f.Close()
 			return err
 		}
-		if err := syncDir(path); err != nil {
+		if err := syncDirFn(path); err != nil {
 			_ = f.Close()
 			return err
 		}
@@ -108,7 +110,7 @@ func (w *Writer) RotateTo(path string) error {
 		_ = f.Close()
 		return err
 	}
-	if err := syncDir(path); err != nil {
+	if err := syncDirFn(path); err != nil {
 		_ = f.Close()
 		return err
 	}

@@ -35,6 +35,8 @@ var (
 	ErrValueTooLarge  = errors.New("vlog: value too large")
 )
 
+var syncDirFn = syncDir
+
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 type Record struct {
@@ -65,7 +67,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syncDir(path); err != nil {
+	if err := syncDirFn(path); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -115,7 +117,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		if err != nil {
 			return err
 		}
-		if err := syncDir(path); err != nil {
+		if err := syncDirFn(path); err != nil {
 			_ = f.Close()
 			return err
 		}
@@ -150,7 +152,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		_ = f.Close()
 		return err
 	}
-	if err := syncDir(path); err != nil {
+	if err := syncDirFn(path); err != nil {
 		_ = f.Close()
 		return err
 	}

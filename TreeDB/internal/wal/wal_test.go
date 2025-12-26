@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -151,6 +152,76 @@ func TestWALRotateToOpenFailureKeepsWriter(t *testing.T) {
 	}
 	if err := w.RotateTo(path2); err == nil {
 		t.Fatalf("expected RotateTo to fail for missing dir")
+	}
+	if err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("Append after failed RotateTo: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := NewReader(path1)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+
+	op, k, v, err := r.ReadNext()
+	if err != nil {
+		t.Fatalf("ReadNext1: %v", err)
+	}
+	if op != OpSet || !bytes.Equal(k, []byte("k1")) || !bytes.Equal(v, []byte("v1")) {
+		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, k, v)
+	}
+	op, k, v, err = r.ReadNext()
+	if err != nil {
+		t.Fatalf("ReadNext2: %v", err)
+	}
+	if op != OpSet || !bytes.Equal(k, []byte("k2")) || !bytes.Equal(v, []byte("v2")) {
+		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, k, v)
+	}
+	if _, _, _, err = r.ReadNext(); err != io.EOF {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+}
+
+func TestWALNewWriterSyncDirFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal-000001.log")
+
+	orig := syncDirFn
+	t.Cleanup(func() { syncDirFn = orig })
+	syncDirFn = func(string) error { return errors.New("syncdir fail") }
+
+	if _, err := NewWriter(path); err == nil {
+		t.Fatalf("expected NewWriter to fail when syncDir fails")
+	}
+}
+
+func TestWALRotateToSyncDirFailureKeepsWriter(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "wal-000001.log")
+	path2 := filepath.Join(dir, "wal-000002.log")
+
+	orig := syncDirFn
+	t.Cleanup(func() { syncDirFn = orig })
+	syncDirFn = func(path string) error {
+		if path == path2 {
+			return errors.New("syncdir fail")
+		}
+		return nil
+	}
+
+	w, err := NewWriter(path1)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	if err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.RotateTo(path2); err == nil {
+		t.Fatalf("expected RotateTo to fail when syncDir fails")
 	}
 	if err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after failed RotateTo: %v", err)
