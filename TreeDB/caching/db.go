@@ -1877,7 +1877,7 @@ func (db *DB) Close() error {
 	return errors.Join(errs...)
 }
 func (db *DB) Set(key, value []byte) error {
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -1889,7 +1889,7 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 func (db *DB) SetSync(key, value []byte) error {
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -2021,7 +2021,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) Delete(key []byte) error {
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
@@ -2509,7 +2509,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 }
 
 func (db *DB) DeleteSync(key []byte) error {
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
@@ -3998,7 +3998,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 	if value == nil {
@@ -4046,7 +4046,7 @@ func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 

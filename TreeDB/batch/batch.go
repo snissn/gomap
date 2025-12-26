@@ -117,7 +117,7 @@ func (b *Batch) SetView(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 
@@ -153,7 +153,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 
@@ -201,7 +201,7 @@ func (b *Batch) DeleteView(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 
@@ -217,7 +217,7 @@ func (b *Batch) DeleteView(key []byte) error {
 // SetPointer adds a pointer directly to the batch (used by Compaction).
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	if len(key) == 0 {
-		return errors.New("key cannot be empty")
+		return ErrKeyEmpty
 	}
 
 	// Copy key
@@ -240,7 +240,7 @@ func (b *Batch) Delete(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if key == nil {
+	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
 
