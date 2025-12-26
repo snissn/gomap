@@ -70,7 +70,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Faster shard hash. Plan: switch to xxhash for shard selection.
 - [OPEN] Flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
 - [OPEN] Compaction live-set memory pressure, batch pooling, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
-- [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17.
+- [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: zero-alloc freelist append implemented.
 
 ---
 
