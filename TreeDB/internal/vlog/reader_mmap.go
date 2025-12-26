@@ -1,7 +1,6 @@
 package vlog
 
 import (
-	"encoding/binary"
 	"errors"
 	"hash/crc32"
 
@@ -45,8 +44,9 @@ func (f *File) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool
 	}
 
 	header := data[realStart : realStart+HeaderSize]
-	keyLen := binary.LittleEndian.Uint16(header[4:6])
-	valLen := binary.LittleEndian.Uint32(header[6:10])
+	_ = header[10]
+	keyLen := uint16(header[4]) | uint16(header[5])<<8
+	valLen := uint32(header[6]) | uint32(header[7])<<8 | uint32(header[8])<<16 | uint32(header[9])<<24
 	op := header[10]
 	if op != OpSet && op != OpDelete {
 		return nil, ErrCorrupt, true
@@ -67,7 +67,7 @@ func (f *File) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool
 
 	record := data[realStart+HeaderSize : dataEnd]
 	if verifyCRC {
-		crc := binary.LittleEndian.Uint32(header[0:4])
+		crc := uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16 | uint32(header[3])<<24
 		sum := crc32.Update(0, crc32cTable, header[4:])
 		sum = crc32.Update(sum, crc32cTable, record)
 		if sum != crc {

@@ -2710,13 +2710,13 @@ func (db *DB) rotateWALLocked() error {
 			if err != nil {
 				return err
 			}
-			db.wal = vlogWriterAdapter{w: w}
+			db.wal = &vlogWriterAdapter{w: w}
 		} else {
 			w, err := wal.NewWriter(path)
 			if err != nil {
 				return err
 			}
-			db.wal = walWriterAdapter{w: w}
+			db.wal = &walWriterAdapter{w: w}
 		}
 		db.walLiveBytes.Store(0)
 	}
