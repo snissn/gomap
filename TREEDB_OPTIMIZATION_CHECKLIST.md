@@ -39,6 +39,8 @@ So:
 - Root cause: cached-mode auto-checkpoint size trigger could repeatedly run `Checkpoint()` when `effectiveWALBytes` stayed above `MaxWALBytes` (value-log segments retained for pointers cannot be trimmed), thrashing writer latency.
 - Fix: disarm size-triggered auto-checkpoint after the first run; re-arm only once `effectiveWALBytes < MaxWALBytes/2` (commit `5dd76a5`).
 - New result: `results-compare-full/treedb-v1-5dd76a5-wal-on.jsonl`: **1.32 min** total (down from 1.98 min).
+- Follow-up: write-path overhead was still dominated by WAL writer goroutine coordination for non-sync writes; switch non-sync WAL appends to write inline (commit `73d1c11`).
+- New result: `results-compare-full/treedb-v1-73d1c11-wal-on.jsonl`: **0.79 min** total (WAL-off: `results-compare-full/treedb-v1-73d1c11-wal-off.jsonl`: **0.75 min**).
 
 ### Microbenches (op-geth)
 
