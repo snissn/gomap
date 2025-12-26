@@ -2235,9 +2235,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// Serialize writers and flushers while we enumerate keys to delete and
 		// apply tombstones. This keeps snapshot semantics simple and avoids
 		// rotating the memtable (which can allocate large arenas).
-		db.writeMu.Lock()
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
+		db.writeMu.Lock()
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
