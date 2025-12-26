@@ -64,6 +64,9 @@ func TestCRC32C(t *testing.T) {
 func TestUnsafeCastHeader(t *testing.T) {
 	// Note: This test assumes LittleEndian machine.
 	// If running on BigEndian, this test might fail or require adjustment if UnsafeCastHeader is used.
+	if !nativeLittleEndian {
+		t.Skip("UnsafeCastHeader requires little-endian host")
+	}
 
 	buf := make([]byte, PageSize)
 	// Manually write LittleEndian values
