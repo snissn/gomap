@@ -56,6 +56,21 @@ func bytesToStringNoCopy(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
+func (db *DB) syncDirBestEffort(dir string) {
+	if dir == "" {
+		return
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		db.reportError(fmt.Errorf("cachingdb: failed to open dir %q for sync: %w", dir, err))
+		return
+	}
+	if err := f.Sync(); err != nil {
+		db.reportError(fmt.Errorf("cachingdb: failed to sync dir %q: %w", dir, err))
+	}
+	_ = f.Close()
+}
+
 func memtableCapacity(flushThreshold int64) int {
 	if flushThreshold <= 0 {
 		return 0
@@ -1671,6 +1686,7 @@ func (db *DB) Checkpoint() error {
 	currentWAL := db.walPath
 	db.mu.RUnlock()
 
+	removed := false
 	for _, seg := range segments {
 		path := seg.path
 		if path == currentWAL {
@@ -1683,10 +1699,14 @@ func (db *DB) Checkpoint() error {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
+		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
+	}
+	if removed {
+		db.syncDirBestEffort(db.dir)
 	}
 
 	return nil
@@ -1862,6 +1882,7 @@ func (db *DB) Close() error {
 	}
 
 	seen := make(map[string]struct{}, len(walPaths))
+	removed := false
 	for _, path := range walPaths {
 		if path == "" {
 			continue
@@ -1878,10 +1899,14 @@ func (db *DB) Close() error {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
+		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
+	}
+	if removed {
+		db.syncDirBestEffort(db.dir)
 	}
 
 	if err := db.backend.Close(); err != nil {
@@ -3216,15 +3241,20 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	}
 	db.mu.Unlock()
 
+	removed := false
 	for _, walPath := range deletable {
 		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
+		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(walPath)
 		db.mu.Unlock()
 		db.forgetValueLogRetain(walPath)
+	}
+	if removed {
+		db.syncDirBestEffort(db.dir)
 	}
 
 	if flushed && flushDur > 0 && totalBytes > 0 {
@@ -3431,6 +3461,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				db.untrackWALSegmentLocked(walPath)
 				db.mu.Unlock()
 				db.forgetValueLogRetain(walPath)
+				db.syncDirBestEffort(db.dir)
 			}
 		}
 	}
