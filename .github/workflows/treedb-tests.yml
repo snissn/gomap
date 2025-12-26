@@ -32,7 +32,7 @@ jobs:
 
       - name: Test
         working-directory: TreeDB
-        run: go test ./...
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -p 1 ./...
 
   race:
     name: race-check (linux)
@@ -52,4 +52,4 @@ jobs:
 
       - name: Test Race
         working-directory: TreeDB
-        run: go test -race ./...
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./...
