@@ -44,7 +44,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Verified cache paranoid mode. Plan: add option to force verify; implemented `VerifyOnRead` for always-verify.
 - [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
 - [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
-- [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests.
+- [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests. Status: rotate-to-open-failure tests added for WAL/vlog.
 
 ### P2/P3 Portability, Security, Ops
 
