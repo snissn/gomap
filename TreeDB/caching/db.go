@@ -2953,7 +2953,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			collectOps := func(mem memtable.Table, estLen int, ptrs map[string]page.ValuePtr) ([]batch.Entry, error) {
 				ops := make([]batch.Entry, 0, estLen)
 				iter := mem.NewIterator(nil, nil)
-				iter.Seek(nil)
 				for iter.Valid() {
 					if iter.IsDeleted() {
 						ops = append(ops, batch.Entry{
@@ -3063,7 +3062,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			})
 			for _, unit := range units {
 				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-				iter.Seek(nil)                         // Start
 				for iter.Valid() {
 					key := iter.UnsafeKey()
 					if iter.IsDeleted() {
@@ -3238,7 +3236,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		// Flush 'mem' to backend
 		backendBatch := db.backend.NewBatch()
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-		iter.Seek(nil)                    // Start
 
 		// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
 		if mem.Len() > 2000 {
@@ -3761,7 +3758,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			continue
 		}
 		qIter := queue[i].NewIterator(start, end)
-		qIter.Seek(start)
 		sources = append(sources, merging.IteratorSource{
 			Iter:     qIter,
 			Priority: prio,

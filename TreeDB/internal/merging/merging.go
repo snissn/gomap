@@ -91,7 +91,7 @@ func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
 			heap.Push(h, &heapItem{
 				iter:     src.Iter,
 				priority: src.Priority,
-				key:      append([]byte(nil), src.Iter.UnsafeKey()...), // Copy once per source
+				key:      src.Iter.UnsafeKey(), // View valid until src.Iter.Next()
 			})
 		}
 	}
@@ -109,7 +109,7 @@ func (mi *MergingIterator) Next() {
 	if mi.cur != nil {
 		mi.cur.iter.Next()
 		if mi.cur.iter.Valid() {
-			mi.cur.key = append(mi.cur.key[:0], mi.cur.iter.UnsafeKey()...) // Reuse buffer
+			mi.cur.key = mi.cur.iter.UnsafeKey()
 			heap.Push(mi.h, mi.cur)
 		} else {
 			_ = mi.cur.iter.Close()
@@ -141,7 +141,7 @@ func (mi *MergingIterator) advance() {
 				shadowed := heap.Pop(mi.h).(*heapItem)
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = append(shadowed.key[:0], shadowed.iter.UnsafeKey()...)
+					shadowed.key = shadowed.iter.UnsafeKey()
 					heap.Push(mi.h, shadowed)
 				} else {
 					_ = shadowed.iter.Close()
@@ -155,7 +155,7 @@ func (mi *MergingIterator) advance() {
 		if top.iter.IsDeleted() {
 			top.iter.Next()
 			if top.iter.Valid() {
-				top.key = append(top.key[:0], top.iter.UnsafeKey()...) // Reuse buffer
+				top.key = top.iter.UnsafeKey()
 				heap.Push(mi.h, top)
 			} else {
 				_ = top.iter.Close()
