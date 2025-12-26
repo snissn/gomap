@@ -51,7 +51,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [NOT_APPLICABLE] B-tree structural atomicity / no WAL for index pages. TreeDB uses COW + redundant meta pages; crash tests cover recovery.
 - [FIXED] Mmap UAF hazard for GetUnsafe. Snapshots pin slabs; GetUnsafe returns view scoped to snapshot; docs emphasize lifetimes.
 - [NOT_APPLICABLE] Page reuse race on freelist. MVCC + graveyard delays reuse until safe.
-- [OPEN] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback.
+- [OPEN] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback. Status: pager build tags + explicit unsupported error; slab/vlog still unsupported.
 - [DONE] Endianness for UnsafeCastHeader. Plan: guard with runtime check + skip test on big-endian.
 - [DONE] Directory permission hardening. Plan: validate existing perms and warn on open.
 - [DONE] Threat model clarity (CRC vs adversarial tampering). Plan: documented that CRC is non-cryptographic; noted encryption/HMAC guidance.
