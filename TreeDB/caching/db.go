@@ -1256,6 +1256,11 @@ func (db *DB) appendWAL(records []logRecord, sync bool) ([]page.ValuePtr, error)
 	if len(records) == 0 {
 		return nil, nil
 	}
+	select {
+	case <-db.closeCh:
+		return nil, errWALClosed
+	default:
+	}
 	db.walAckMu.Lock()
 	if db.walErr != nil {
 		err := db.walErr
@@ -1264,14 +1269,57 @@ func (db *DB) appendWAL(records []logRecord, sync bool) ([]page.ValuePtr, error)
 	}
 	db.walAckMu.Unlock()
 
-	if len(records) == 1 && !sync {
-		ptr, err := db.appendWALFast(records[0])
-		if err != nil {
-			return nil, err
-		}
-		return []page.ValuePtr{ptr}, nil
+	if !sync {
+		return db.appendWALInline(records)
 	}
 	return db.appendWALDirect(records, sync)
+}
+
+func (db *DB) appendWALInline(records []logRecord) ([]page.ValuePtr, error) {
+	db.mu.RLock()
+	w := db.wal
+	db.mu.RUnlock()
+	if w == nil {
+		return nil, errWALUnavailable
+	}
+
+	var (
+		totalBytes int64
+		ptrs       []page.ValuePtr
+		err        error
+	)
+
+	db.walMu.Lock()
+	if len(records) == 1 {
+		rec := records[0]
+		var ptr page.ValuePtr
+		ptr, err = w.Append(rec.Op, rec.Key, rec.Value)
+		if err == nil && db.valueLogEnabled() {
+			ptrs = []page.ValuePtr{ptr}
+		}
+		totalBytes = db.logRecordSize(rec.Key, rec.Value)
+	} else {
+		ptrs, err = w.AppendBatch(records)
+		totalBytes = db.logBatchSize(records)
+		if !db.valueLogEnabled() {
+			ptrs = nil
+		}
+	}
+	db.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return nil, err
+	}
+
+	if totalBytes > 0 {
+		db.walLiveBytes.Add(totalBytes)
+	}
+	return ptrs, nil
 }
 
 func (db *DB) appendWALDirect(records []logRecord, sync bool) ([]page.ValuePtr, error) {
