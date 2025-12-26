@@ -213,6 +213,45 @@ func (db *DB) valueLogRetained(path string) bool {
 	return retained
 }
 
+func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
+	db.valueLogMu.Lock()
+	if len(db.valueLogRetain) == 0 {
+		db.valueLogMu.Unlock()
+		return 0, 0
+	}
+	paths := make([]string, 0, len(db.valueLogRetain))
+	for path := range db.valueLogRetain {
+		paths = append(paths, path)
+	}
+	db.valueLogMu.Unlock()
+
+	var closedSizes map[string]int64
+	var currentPath string
+	var currentBytes int64
+	db.mu.RLock()
+	if len(db.walClosedSizes) > 0 {
+		closedSizes = make(map[string]int64, len(db.walClosedSizes))
+		for path, size := range db.walClosedSizes {
+			closedSizes[path] = size
+		}
+	}
+	currentPath = db.walPath
+	currentBytes = db.walLiveBytes.Load()
+	db.mu.RUnlock()
+
+	for _, path := range paths {
+		segments++
+		if path == currentPath {
+			bytes += currentBytes
+			continue
+		}
+		if size, ok := closedSizes[path]; ok {
+			bytes += size
+		}
+	}
+	return segments, bytes
+}
+
 func hashKey(key []byte) uint64 {
 	const (
 		fnvOffset = 14695981039346656037
@@ -3723,6 +3762,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load()+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load())
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
+	vlogSegments, vlogBytes := db.valueLogRetainedStats()
+	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
+	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	if db.adaptiveBackpressureEnabled() {
 		stats["treedb.cache.backpressure_mode"] = "adaptive"
 	} else {
