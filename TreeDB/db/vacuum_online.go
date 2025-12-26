@@ -343,6 +343,7 @@ func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.
 			return nil
 		}
 		b := batch.New(db.slabManager, vacuumInlineThresholdMax)
+		defer func() { _ = b.Close() }()
 		if err := b.SetOps(ops); err != nil {
 			return err
 		}

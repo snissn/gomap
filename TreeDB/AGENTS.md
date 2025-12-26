@@ -75,8 +75,9 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Range-delete WAL batching. Plan: batch copied keys for WAL appends in DeleteRange.
 - [DONE] Faster shard hash. Plan: switch to xxhash for shard selection.
 - [DONE] Auto-checkpoint hysteresis under retained segments. Plan: base size trigger/rearm on reclaimable WAL bytes.
+- [DONE] Batch pooling for backend batches. Plan: pool batch.Batch instances and return on Close.
 - [OPEN] Flush buffer pooling, adaptive memtable hysteresis. Plan: profile-driven perf sprints.
-- [OPEN] Compaction live-set memory pressure, batch pooling, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
+- [OPEN] Compaction live-set memory pressure, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
 - [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: zero-alloc freelist append implemented.
 
 ---

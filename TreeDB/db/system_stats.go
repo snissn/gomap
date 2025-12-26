@@ -85,6 +85,7 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 
 	sysTree := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRootID)
 	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
+	defer func() { _ = sysBatch.Close() }()
 
 	for _, id := range ids {
 		key := slabStatsKey(id)

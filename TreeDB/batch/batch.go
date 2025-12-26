@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
@@ -56,17 +57,31 @@ type Batch struct {
 	closed          bool
 }
 
+var batchPool = sync.Pool{
+	New: func() any {
+		return &Batch{
+			entries: make([]Entry, 0, 16),
+			sorted:  true,
+		}
+	},
+}
+
 // New creates a new Batch.
 func New(sm *slab.SlabManager, threshold int) *Batch {
+	return Acquire(sm, threshold)
+}
+
+// Acquire returns a reusable Batch from the pool.
+func Acquire(sm *slab.SlabManager, threshold int) *Batch {
 	if threshold <= 0 {
 		threshold = page.DefaultInlineThreshold
 	}
-	return &Batch{
-		entries:         make([]Entry, 0, 16),
-		slabManager:     sm,
-		inlineThreshold: threshold,
-		sorted:          true,
-	}
+	b := batchPool.Get().(*Batch)
+	b.slabManager = sm
+	b.inlineThreshold = threshold
+	b.closed = false
+	b.resetLocked()
+	return b
 }
 
 func (b *Batch) ensureOpen() error {
@@ -78,13 +93,13 @@ func (b *Batch) ensureOpen() error {
 
 // Reset clears the batch for reuse without releasing its internal buffers.
 func (b *Batch) Reset() {
-	if b == nil {
+	if b == nil || b.closed {
 		return
 	}
-	if b.closed {
-		// Keep behavior simple: Reset is only valid on an open batch.
-		return
-	}
+	b.resetLocked()
+}
+
+func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
@@ -97,6 +112,24 @@ func (b *Batch) Reset() {
 	}
 	b.sorted = true
 	b.lastKey = nil
+}
+
+// Close returns the batch to the pool.
+func (b *Batch) Close() error {
+	Release(b)
+	return nil
+}
+
+// Release resets and returns the batch to the pool.
+func Release(b *Batch) {
+	if b == nil {
+		return
+	}
+	b.resetLocked()
+	b.slabManager = nil
+	b.inlineThreshold = 0
+	b.closed = true
+	batchPool.Put(b)
 }
 
 func (b *Batch) noteKeyOrder(key []byte) {
@@ -216,6 +249,9 @@ func (b *Batch) DeleteView(key []byte) error {
 
 // SetPointer adds a pointer directly to the batch (used by Compaction).
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}

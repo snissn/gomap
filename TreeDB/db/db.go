@@ -1066,6 +1066,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
+		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
 
 		for _, op := range chunk {
@@ -1080,6 +1081,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				continue
 			}
 			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+				closeBatch()
 				db.writeMu.Unlock()
 				return err
 			}
@@ -1090,12 +1092,14 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		if len(b.Ops()) == 0 {
+			closeBatch()
 			db.writeMu.Unlock()
 			continue
 		}
 
 		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 		if err != nil {
+			closeBatch()
 			db.writeMu.Unlock()
 			return err
 		}
@@ -1111,11 +1115,13 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		// Commit without forcing Sync; compaction can be lazily durable.
 		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+			closeBatch()
 			db.writeMu.Unlock()
 			return err
 		}
 
 		db.writeMu.Unlock()
+		closeBatch()
 	}
 
 	return nil
