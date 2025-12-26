@@ -146,7 +146,11 @@ Owner and dates are optional; add them if you use a team workflow.
 - Severity: P1
 - Evidence:
   - `TreeDB/caching/db.go`: background flush upgrades to synced writes when WAL is disabled (unless RelaxedSync).
+  - `TreeDB/caching/db.go`: `syncBarrierAfterWrite` enforces a backend boundary for `SetSync`/`DeleteSync`/`Batch.WriteSync` when `DisableWAL=1`:
+    - strict sync (`RelaxedSync=0`): forces `Checkpoint()` (durable boundary)
+    - relaxed sync (`RelaxedSync=1`): forces flush-to-backend without fsync
   - `TreeDB/caching/db_test.go`: `TestCachingDB_FlushSyncsWhenWALDisabled`.
+  - `TreeDB/recovery_spec_test.go`: `TestCrashRecovery_DurabilityTiers` (includes WAL-disabled strict sync and WAL-enabled relaxed/strict tiers, plus a value-log pointer replay case).
 - Risk:
   - Operations appear successful but are not durable in WAL-disabled mode.
 - Investigation:
@@ -157,7 +161,8 @@ Owner and dates are optional; add them if you use a team workflow.
   - Label ProfileFast as unsafe in API docs and README.
 - Acceptance criteria:
   - Background flush syncs when WAL is disabled (unit test).
-  - RelaxedSync retains opt-out behavior for durability.
+  - `*Sync` APIs do not silently degrade when WAL is disabled (checkpoint/flush barrier enforced).
+  - RelaxedSync retains opt-out behavior for power-loss durability (flush-to-kernel semantics).
 
 ### AUD-009: Corruption-induced panics in leaf search
 - Status: FIXED
@@ -348,7 +353,7 @@ Owner and dates are optional; add them if you use a team workflow.
 | AUD-005 | FIXED |  |  | Iterators hold read lock; concurrency test added. |
 | AUD-006 | FIXED |  |  | RotateTo now syncs; test added. |
 | AUD-007 | FIXED |  |  | recoverIndexSwap syncs parent dir; tests added. |
-| AUD-008 | FIXED |  |  | WAL-disabled flushes sync unless RelaxedSync. |
+| AUD-008 | FIXED |  |  | WAL-disabled flushes sync unless RelaxedSync; `*Sync` barrier + crash-tier tests added. |
 | AUD-009 | FIXED |  |  | SearchLeaf bounds checks + corruption test. |
 | AUD-010 | FIXED |  |  | Default perms tightened; test added. |
 | AUD-011 | FIXED |  |  | NotifyError hook + Close reports background errors. |

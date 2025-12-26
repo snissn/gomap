@@ -1249,7 +1249,15 @@ func (db *DB) flushWALRequests(requests []walWriteRequest) error {
 	return nil
 }
 
-func (db *DB) appendWAL(records []logRecord, sync bool) ([]page.ValuePtr, error) {
+type walDurability uint8
+
+const (
+	walDurabilityNone walDurability = iota
+	walDurabilityFlush
+	walDurabilitySync
+)
+
+func (db *DB) appendWAL(records []logRecord, durability walDurability) ([]page.ValuePtr, error) {
 	if db.disableWAL {
 		return nil, nil
 	}
@@ -1269,13 +1277,17 @@ func (db *DB) appendWAL(records []logRecord, sync bool) ([]page.ValuePtr, error)
 	}
 	db.walAckMu.Unlock()
 
-	if !sync {
-		return db.appendWALInline(records)
+	switch durability {
+	case walDurabilitySync:
+		return db.appendWALDirect(records, true)
+	case walDurabilityFlush:
+		return db.appendWALInline(records, true)
+	default:
+		return db.appendWALInline(records, false)
 	}
-	return db.appendWALDirect(records, sync)
 }
 
-func (db *DB) appendWALInline(records []logRecord) ([]page.ValuePtr, error) {
+func (db *DB) appendWALInline(records []logRecord, flush bool) ([]page.ValuePtr, error) {
 	db.mu.RLock()
 	w := db.wal
 	db.mu.RUnlock()
@@ -1304,6 +1316,9 @@ func (db *DB) appendWALInline(records []logRecord) ([]page.ValuePtr, error) {
 		if !db.valueLogEnabled() {
 			ptrs = nil
 		}
+	}
+	if err == nil && flush {
+		err = w.Flush()
 	}
 	db.walMu.Unlock()
 
@@ -1885,16 +1900,62 @@ func (db *DB) SetSync(key, value []byte) error {
 	return db.set(key, value, true)
 }
 
+func (db *DB) flushAllMemtablesForSync(sync bool) error {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	db.mu.Lock()
+	if db.mutableBytes.Load() > 0 {
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			return err
+		}
+	}
+	db.mu.Unlock()
+
+	for db.flushCombinedLocked(sync) {
+	}
+	return db.backgroundError()
+}
+
+func (db *DB) syncBarrierAfterWrite(sync bool) error {
+	if !sync {
+		return nil
+	}
+	if !db.disableWAL {
+		// WAL durability is handled by appendWAL:
+		// - strict: fsync
+		// - relaxed: flush-to-kernel (no fsync)
+		return nil
+	}
+	if db.relaxedSync {
+		// WAL disabled: enforce a backend flush boundary without fsync.
+		return db.flushAllMemtablesForSync(false)
+	}
+	// WAL disabled: enforce a durable backend boundary.
+	return db.Checkpoint()
+}
+
 func (db *DB) set(key, value []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
+	needSyncBarrier := false
 	var ptr page.ValuePtr
 	var retainPath string
 
 	if !db.disableWAL {
-		syncWAL := sync && !db.relaxedSync
+		durability := walDurabilityNone
+		if sync {
+			if db.relaxedSync {
+				durability = walDurabilityFlush
+			} else {
+				durability = walDurabilitySync
+			}
+		}
 		rec := logRecord{Op: logOpSet, Key: key, Value: value}
-		ptrs, err := db.appendWAL([]logRecord{rec}, syncWAL)
+		ptrs, err := db.appendWAL([]logRecord{rec}, durability)
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -1934,6 +1995,9 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
 	}
+	if sync && db.disableWAL {
+		needSyncBarrier = true
+	}
 	db.writeMu.RUnlock()
 
 	if retainPath != "" {
@@ -1942,6 +2006,11 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	if needRotate {
 		if err := db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
+	if needSyncBarrier {
+		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
 		}
 	}
@@ -1991,7 +2060,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			key := it.Key()
 
 			rec := logRecord{Op: logOpDelete, Key: key}
-			if _, err := db.appendWAL([]logRecord{rec}, false); err != nil {
+			if _, err := db.appendWAL([]logRecord{rec}, walDurabilityNone); err != nil {
 				return err
 			}
 
@@ -2451,11 +2520,19 @@ func (db *DB) DeleteSync(key []byte) error {
 func (db *DB) delete(key []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
+	needSyncBarrier := false
 
 	if !db.disableWAL {
-		syncWAL := sync && !db.relaxedSync
+		durability := walDurabilityNone
+		if sync {
+			if db.relaxedSync {
+				durability = walDurabilityFlush
+			} else {
+				durability = walDurabilitySync
+			}
+		}
 		rec := logRecord{Op: logOpDelete, Key: key}
-		if _, err := db.appendWAL([]logRecord{rec}, syncWAL); err != nil {
+		if _, err := db.appendWAL([]logRecord{rec}, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
@@ -2479,10 +2556,18 @@ func (db *DB) delete(key []byte, sync bool) error {
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
 	}
+	if sync && db.disableWAL {
+		needSyncBarrier = true
+	}
 	db.writeMu.RUnlock()
 
 	if needRotate {
 		if err := db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
+	if needSyncBarrier {
+		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
 		}
 	}
@@ -4117,7 +4202,7 @@ func (b *Batch) write(sync bool) error {
 
 	if b.backend != nil {
 		var err error
-		if sync {
+		if sync && !b.db.relaxedSync {
 			b.db.flushMu.Lock()
 			err = b.backend.WriteSync()
 			b.db.flushMu.Unlock()
@@ -4156,6 +4241,7 @@ func (b *Batch) write(sync bool) error {
 func (b *Batch) writeRegular(sync bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
+	needSyncBarrier := false
 
 	// 1. WAL Append loop
 	if !b.db.disableWAL {
@@ -4172,8 +4258,15 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 		b.walBuf = records
 
-		syncWAL := sync && !b.db.relaxedSync
-		ptrs, err := b.db.appendWAL(records, syncWAL)
+		durability := walDurabilityNone
+		if sync {
+			if b.db.relaxedSync {
+				durability = walDurabilityFlush
+			} else {
+				durability = walDurabilitySync
+			}
+		}
+		ptrs, err := b.db.appendWAL(records, durability)
 		if err != nil {
 			b.db.writeMu.RUnlock()
 			return err
@@ -4272,10 +4365,18 @@ func (b *Batch) writeRegular(sync bool) error {
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		needRotate = true
 	}
+	if sync && b.db.disableWAL {
+		needSyncBarrier = true
+	}
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
 		if err := b.db.maybeRotateMemtable(true); err != nil {
+			return err
+		}
+	}
+	if needSyncBarrier {
+		if err := b.db.syncBarrierAfterWrite(true); err != nil {
 			return err
 		}
 	}

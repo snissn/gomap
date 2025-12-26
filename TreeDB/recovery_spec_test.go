@@ -1,6 +1,7 @@
 package treedb_test
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,6 +50,26 @@ func runCrashRecoveryDeleteRangeWriter(t *testing.T, dir string) {
 	}
 }
 
+func runCrashRecoveryDurabilityWriter(t *testing.T, dir string, extraEnv ...string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCrashRecoveryDurabilityWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
 func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
 		t.Skip("helper")
@@ -69,6 +90,45 @@ func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	_ = db.DeleteSync([]byte("delete"))
 
 	// Simulate a crash by exiting without calling Close() (no defers run, but OS releases locks).
+	os.Exit(0)
+}
+
+func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
+	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
+	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
+	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
+
+	opts := treedb.Options{
+		Dir:             dir,
+		ChunkSize:       64 * 1024,
+		DisableWAL:      disableWAL,
+		RelaxedSync:     relaxedSync,
+		DisableValueLog: disableValueLog,
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	val := []byte("small")
+	if largeValue {
+		val = bytes.Repeat([]byte("x"), 4096)
+	}
+
+	if err := db.SetSync([]byte("k"), val); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
 	os.Exit(0)
 }
 
@@ -200,6 +260,107 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 	}
 	if string(val) != "9" {
 		t.Fatalf("get z: got %q, want %q", string(val), "9")
+	}
+}
+
+func TestCrashRecovery_DurabilityTiers(t *testing.T) {
+	type tier struct {
+		name            string
+		env             []string
+		expectWALRetain bool
+		expectLarge     bool
+	}
+
+	tiers := []tier{
+		{
+			name: "wal_disabled_strict_sync_forces_checkpoint",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=1",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+			},
+		},
+		{
+			name: "wal_enabled_relaxed_sync_flushes_wal",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+			},
+		},
+		{
+			name: "wal_enabled_strict_sync_fsyncs_wal",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+			},
+		},
+		{
+			name: "value_log_pointer_replays_and_retains_segment",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectWALRetain: true,
+			expectLarge:     true,
+		},
+	}
+
+	for _, tc := range tiers {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
+
+			backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+			if err != nil {
+				t.Fatalf("open backend: %v", err)
+			}
+
+			val, err := backend.Get([]byte("k"))
+			if err != nil {
+				t.Fatalf("get k: %v", err)
+			}
+			if tc.expectLarge {
+				if len(val) != 4096 {
+					t.Fatalf("get k: got len %d, want %d", len(val), 4096)
+				}
+			} else if string(val) != "small" {
+				t.Fatalf("get k: got %q, want %q", string(val), "small")
+			}
+
+			if err := backend.Close(); err != nil {
+				t.Fatalf("close backend: %v", err)
+			}
+
+			entries, err := os.ReadDir(filepath.Join(dir, "wal"))
+			if err != nil {
+				if os.IsNotExist(err) {
+					return
+				}
+				t.Fatalf("readdir wal: %v", err)
+			}
+
+			foundLog := false
+			foundVlog := false
+			for _, entry := range entries {
+				name := entry.Name()
+				if strings.HasSuffix(name, ".log") &&
+					(strings.HasPrefix(name, "wal-") || strings.HasPrefix(name, "vlog-")) {
+					foundLog = true
+					if strings.HasPrefix(name, "vlog-") {
+						foundVlog = true
+					}
+				}
+			}
+
+			if tc.expectWALRetain {
+				if !foundVlog {
+					t.Fatalf("expected a retained value-log segment after recovery, found none")
+				}
+			} else if foundLog {
+				t.Fatalf("expected WAL to be clean after recovery; found log segments")
+			}
+		})
 	}
 }
 
