@@ -651,6 +651,10 @@ func (db *DB) recover() error {
 			}
 		}
 
+		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
+			continue
+		}
+
 		chosen = c
 		break
 	}
@@ -689,6 +693,29 @@ func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
 		return false
 	}
 	return true
+}
+
+func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
+	if pageID == 0 || p == nil {
+		return false
+	}
+	data, err := p.Get(pageID)
+	if err != nil {
+		return false
+	}
+	n := node.NewNode(data)
+	if !p.IsVerified(pageID) {
+		if !n.VerifyChecksum() {
+			return false
+		}
+		p.MarkVerified(pageID)
+	}
+	switch n.Type() {
+	case page.PageTypeLeaf, page.PageTypeInternal:
+		return true
+	default:
+		return false
+	}
 }
 
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
