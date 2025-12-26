@@ -112,6 +112,7 @@ Details: `docs/TREEDB_PROFILES.md`.
 - Page checksums are verified once and cached until the page is rewritten; `DisableReadChecksum` disables slab/value-log CRC checks entirely.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.
 - TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
+- Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.
 - On-disk format is considered alpha and may change without backward-compatibility guarantees.
 
 ## Tuning (Cached Mode)
