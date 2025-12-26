@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestWriterReaderRoundTrip(t *testing.T) {
@@ -97,6 +99,62 @@ func TestReadAt(t *testing.T) {
 	}
 	if string(got) != "value1" {
 		t.Fatalf("ReadAt value: got %q want %q", got, "value1")
+	}
+}
+
+func TestAppendBatchPointers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog-000001.log")
+	fileID := uint32(0x80000001)
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptrs, err := w.AppendBatch([]Record{
+		{Op: OpSet, Key: []byte("k1"), Value: []byte("value1")},
+		{Op: OpDelete, Key: []byte("k2")},
+		{Op: OpSet, Key: []byte("k3"), Value: []byte("value3")},
+	})
+	if err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if len(ptrs) != 3 {
+		t.Fatalf("ptrs: got %d want %d", len(ptrs), 3)
+	}
+	if ptrs[0].FileID != fileID || ptrs[0].Offset == 0 {
+		t.Fatalf("ptrs[0] unexpected: %#v", ptrs[0])
+	}
+	if ptrs[1] != (page.ValuePtr{}) {
+		t.Fatalf("ptrs[1] expected zero, got %#v", ptrs[1])
+	}
+	if ptrs[2].FileID != fileID || ptrs[2].Offset == 0 {
+		t.Fatalf("ptrs[2] unexpected: %#v", ptrs[2])
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer f.Close()
+
+	got, err := ReadAt(f, ptrs[0], true)
+	if err != nil {
+		t.Fatalf("ReadAt k1: %v", err)
+	}
+	if string(got) != "value1" {
+		t.Fatalf("ReadAt k1: got %q want %q", got, "value1")
+	}
+	got, err = ReadAt(f, ptrs[2], true)
+	if err != nil {
+		t.Fatalf("ReadAt k3: %v", err)
+	}
+	if string(got) != "value3" {
+		t.Fatalf("ReadAt k3: got %q want %q", got, "value3")
 	}
 }
 

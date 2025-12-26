@@ -20,6 +20,16 @@ type File struct {
 	File     *os.File
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
+
+	closed atomic.Bool
+
+	// mmapData holds the current read-only mapping. Readers load it without locks.
+	mmapData atomic.Value // stores []byte (may be nil slice)
+
+	remapMu        sync.Mutex
+	remapRequested atomic.Bool
+
+	deadMappings [][]byte
 }
 
 func openFile(path string, id uint32) (*File, error) {
@@ -27,13 +37,29 @@ func openFile(path string, id uint32) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &File{ID: id, Path: path, File: f}, nil
+	vf := &File{ID: id, Path: path, File: f}
+	vf.mmapData.Store([]byte(nil))
+	return vf, nil
 }
 
 func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
 	}
+	f.closed.Store(true)
+
+	f.remapMu.Lock()
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil {
+		_ = munmap(data)
+	}
+	for _, b := range f.deadMappings {
+		_ = munmap(b)
+	}
+	f.deadMappings = nil
+	f.mmapData.Store([]byte(nil))
+	f.remapMu.Unlock()
+
 	return f.File.Close()
 }
 
@@ -49,7 +75,7 @@ func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("vlog file %d not found in snapshot", ptr.FileID)
 	}
-	return ReadAt(f.File, ptr, !s.disableReadChecksum)
+	return f.Read(ptr, !s.disableReadChecksum)
 }
 
 func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -57,7 +83,7 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("vlog file %d not found in snapshot", ptr.FileID)
 	}
-	return ReadAt(f.File, ptr, !s.disableReadChecksum)
+	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
 }
 
 type Manager struct {
@@ -152,7 +178,7 @@ func (m *Manager) Read(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ReadAt(f.File, ptr, !m.disableReadChecksum)
+	return f.Read(ptr, !m.disableReadChecksum)
 }
 
 func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -160,7 +186,7 @@ func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ReadAt(f.File, ptr, !m.disableReadChecksum)
+	return f.ReadUnsafe(ptr, !m.disableReadChecksum)
 }
 
 func (m *Manager) fileFor(id uint32) (*File, error) {

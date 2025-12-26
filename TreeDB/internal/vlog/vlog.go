@@ -23,6 +23,10 @@ const (
 
 const defaultBufferSize = 4 << 20
 
+// MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
+// vm.max_map_count. Set <= 0 to disable the cap.
+var MaxDeadMappings = 64
+
 var (
 	ErrCorrupt        = errors.New("vlog: corrupt record")
 	ErrRecordTooLarge = errors.New("vlog: record too large")
@@ -187,14 +191,62 @@ func (w *Writer) AppendBatch(records []Record) ([]page.ValuePtr, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
+
 	ptrs := make([]page.ValuePtr, len(records))
+	total := 0
+	start := w.size
 	for i, r := range records {
-		ptr, err := w.Append(r.Op, r.Key, r.Value)
-		if err != nil {
-			return nil, err
+		if len(r.Key) > int(^uint16(0)) {
+			return nil, ErrKeyTooLarge
 		}
-		ptrs[i] = ptr
+		if len(r.Value) > int(^uint32(0)) {
+			return nil, ErrValueTooLarge
+		}
+		keyLen := uint16(len(r.Key))
+		valLen := uint32(len(r.Value))
+		if recordSizeExceedsMax(keyLen, valLen) {
+			return nil, ErrRecordTooLarge
+		}
+		recordLen := HeaderSize + len(r.Key) + len(r.Value)
+		if r.Op == OpSet {
+			ptrs[i] = page.ValuePtr{
+				Offset: uint64(start + 4),
+				Length: uint32(2 + 4 + 1 + len(r.Key) + len(r.Value)),
+				FileID: w.fileID,
+			}
+		}
+		start += int64(recordLen)
+		total += recordLen
 	}
+
+	if cap(w.scratch) < total {
+		w.scratch = make([]byte, total)
+	}
+	buf := w.scratch[:total]
+
+	off := 0
+	for i, r := range records {
+		keyLen := uint16(len(r.Key))
+		valLen := uint32(len(r.Value))
+		recordLen := HeaderSize + len(r.Key) + len(r.Value)
+
+		binary.LittleEndian.PutUint16(buf[off+4:off+6], keyLen)
+		binary.LittleEndian.PutUint32(buf[off+6:off+10], valLen)
+		buf[off+10] = r.Op
+		copy(buf[off+11:], r.Key)
+		copy(buf[off+11+len(r.Key):], r.Value)
+		sum := crc32.Update(0, crc32cTable, buf[off+4:off+recordLen])
+		binary.LittleEndian.PutUint32(buf[off:off+4], sum)
+		off += recordLen
+		if r.Op != OpSet {
+			ptrs[i] = page.ValuePtr{}
+		}
+	}
+
+	if _, err := w.bw.Write(buf); err != nil {
+		return nil, err
+	}
+	w.size += int64(total)
 	return ptrs, nil
 }
 
@@ -302,6 +354,45 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		return nil, ErrCorrupt
 	}
 	start := int64(ptr.Offset - 4)
+	if ptr.Length != 0 {
+		totalLen := int(ptr.Length) + 4
+		if totalLen < HeaderSize {
+			return nil, ErrCorrupt
+		}
+		buf := make([]byte, totalLen)
+		if _, err := f.ReadAt(buf, start); err != nil {
+			return nil, err
+		}
+		header := buf[:HeaderSize]
+		payload := buf[HeaderSize:]
+
+		crc := binary.LittleEndian.Uint32(header[0:4])
+		keyLen := binary.LittleEndian.Uint16(header[4:6])
+		valLen := binary.LittleEndian.Uint32(header[6:10])
+		op := header[10]
+		if op != OpSet && op != OpDelete {
+			return nil, ErrCorrupt
+		}
+		if recordSizeExceedsMax(keyLen, valLen) {
+			return nil, ErrRecordTooLarge
+		}
+		payloadLen := int(keyLen) + int(valLen)
+		if payloadLen != len(payload) {
+			return nil, ErrCorrupt
+		}
+		expectedLen := uint32(2 + 4 + 1 + payloadLen)
+		if ptr.Length != expectedLen {
+			return nil, fmt.Errorf("vlog: pointer length mismatch (ptr=%d record=%d)", ptr.Length, expectedLen)
+		}
+		if verifyCRC {
+			sum := crc32.Update(0, crc32cTable, buf[4:])
+			if sum != crc {
+				return nil, ErrCorrupt
+			}
+		}
+		return payload[keyLen:], nil
+	}
+
 	var header [HeaderSize]byte
 	if _, err := f.ReadAt(header[:], start); err != nil {
 		return nil, err
@@ -330,11 +421,6 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		if sum != crc {
 			return nil, ErrCorrupt
 		}
-	}
-
-	expectedLen := uint32(2 + 4 + 1 + payloadLen)
-	if ptr.Length != 0 && ptr.Length != expectedLen {
-		return nil, fmt.Errorf("vlog: pointer length mismatch (ptr=%d record=%d)", ptr.Length, expectedLen)
 	}
 
 	return payload[keyLen:], nil
