@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"sort"
+	"sync"
 )
 
 const (
@@ -23,19 +24,24 @@ type hashSortedIndexWork struct {
 	keys []string
 }
 
-type hashSortedIndexer struct {
-	ch chan hashSortedIndexWork
+// HashSortedIndexer processes sealed key chunks in the background.
+type HashSortedIndexer struct {
+	ch       chan hashSortedIndexWork
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
-func newHashSortedIndexer() *hashSortedIndexer {
-	x := &hashSortedIndexer{
+func NewHashSortedIndexer() *HashSortedIndexer {
+	x := &HashSortedIndexer{
 		ch: make(chan hashSortedIndexWork, hashSortedIndexerQueueSize),
 	}
+	x.wg.Add(1)
 	go x.loop()
 	return x
 }
 
-func (x *hashSortedIndexer) loop() {
+func (x *HashSortedIndexer) loop() {
+	defer x.wg.Done()
 	for work := range x.ch {
 		if work.mt == nil || len(work.keys) == 0 {
 			continue
@@ -45,8 +51,19 @@ func (x *hashSortedIndexer) loop() {
 	}
 }
 
-func (x *hashSortedIndexer) enqueue(mt *HashSorted, seq uint64, keys []string) {
+func (x *HashSortedIndexer) enqueue(mt *HashSorted, seq uint64, keys []string) {
 	x.ch <- hashSortedIndexWork{mt: mt, seq: seq, keys: keys}
 }
 
-var globalHashSortedIndexer = newHashSortedIndexer()
+// Close stops the indexer after draining queued work.
+func (x *HashSortedIndexer) Close() {
+	if x == nil {
+		return
+	}
+	x.stopOnce.Do(func() {
+		close(x.ch)
+		x.wg.Wait()
+	})
+}
+
+var globalHashSortedIndexer = NewHashSortedIndexer()

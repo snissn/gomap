@@ -327,6 +327,7 @@ type DB struct {
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables         atomic.Pointer[memtableView]
+	hashSortedIndexer *memtable.HashSortedIndexer
 	queueRanges       []keyRange
 	queueWALPaths     []string
 	queueLargePtrs    []map[string]page.ValuePtr
@@ -589,7 +590,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 			}
 		}
 		if !reused {
-			mt, err := memtable.NewWithCapacityMode(0, nextMode)
+			mt, err := memtable.NewWithCapacityModeAndIndexer(0, nextMode, db.hashSortedIndexer)
 			if err != nil {
 				shard.mu.Unlock()
 				return err
@@ -766,9 +767,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	memCap = shardCapacity(memCap, shardCount)
 	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
+	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
 	for i := range mutableShards {
-		mt, err := memtable.NewWithCapacityMode(warmupCap, mode)
+		mt, err := memtable.NewWithCapacityModeAndIndexer(warmupCap, mode, indexer)
 		if err != nil {
 			return nil, err
 		}
@@ -799,6 +801,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRetain:          retained,
 		mutableShards:           mutableShards,
 		mutableShardMask:        uint64(shardCount - 1),
+		hashSortedIndexer:       indexer,
 		closeCh:                 make(chan struct{}),
 		flushCh:                 make(chan struct{}, 1),
 		autoCheckpointOnceCh:    make(chan struct{}, 1),
@@ -1868,6 +1871,10 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
+	if db.hashSortedIndexer != nil {
+		db.hashSortedIndexer.Close()
+		db.hashSortedIndexer = nil
+	}
 
 	var walBytes int64
 	var walPaths []string
@@ -2692,7 +2699,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueWALPaths = append(db.queueWALPaths, walPath)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
-		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
 		if err != nil {
 			shard.mu.Unlock()
 			return err
@@ -2826,7 +2833,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueWALPaths = append(db.queueWALPaths, walPath)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
-		mt, err := memtable.NewWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
 		if err != nil {
 			return err
 		}

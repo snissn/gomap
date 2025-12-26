@@ -98,11 +98,15 @@ func NewWithCapacity(capacity int) *Memtable {
 }
 
 func NewWithCapacityMode(capacity int, mode Mode) (Table, error) {
+	return NewWithCapacityModeAndIndexer(capacity, mode, nil)
+}
+
+func NewWithCapacityModeAndIndexer(capacity int, mode Mode, indexer *HashSortedIndexer) (Table, error) {
 	switch mode {
 	case ModeSkiplist:
 		return NewWithCapacity(capacity), nil
 	case ModeHashSorted:
-		return NewHashSorted(), nil
+		return NewHashSortedWithIndexer(indexer), nil
 	case ModeBTree:
 		return NewBTree(), nil
 	default:
