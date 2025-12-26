@@ -41,9 +41,9 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
 - [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
 - [OPEN] Value-log retention / disk growth. Plan: add live-pointer tracking + GC/compaction; expose retained bytes; add guardrails and hard caps.
-- [OPEN] Verified cache paranoid/sampling mode. Plan: add option to force verify or periodic scrub; consider build-tag debug mode.
-- [OPEN] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
-- [OPEN] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
+- [DONE] Verified cache paranoid mode. Plan: add option to force verify; implemented `VerifyOnRead` for always-verify.
+- [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
+- [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
 - [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests.
 
 ### P2/P3 Portability, Security, Ops
@@ -52,11 +52,11 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [FIXED] Mmap UAF hazard for GetUnsafe. Snapshots pin slabs; GetUnsafe returns view scoped to snapshot; docs emphasize lifetimes.
 - [NOT_APPLICABLE] Page reuse race on freelist. MVCC + graveyard delays reuse until safe.
 - [OPEN] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback.
-- [OPEN] Endianness for UnsafeCastHeader. Plan: keep unused or guard with runtime check/build tag.
+- [DONE] Endianness for UnsafeCastHeader. Plan: guard with runtime check + skip test on big-endian.
 - [OPEN] Directory permission hardening. Plan: validate existing perms and warn on open.
-- [OPEN] Threat model clarity (CRC vs adversarial tampering). Plan: document that CRC is non-cryptographic; consider HMAC/encryption hooks.
+- [DONE] Threat model clarity (CRC vs adversarial tampering). Plan: documented that CRC is non-cryptographic; noted encryption/HMAC guidance.
 - [OPEN] CLI safety/exfil guardrails. Plan: require explicit flags for value dumps.
-- [OPEN] Error propagation on Close() defer paths. Plan: plumb close errors to callers instead of dropping.
+- [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
 - [OPEN] Unsafe string/byte conversions require immutable inputs. Plan: add debug build that copies or asserts ownership; audit view lifetimes.
 - [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
 
