@@ -25,7 +25,7 @@ Commands:
   verify          Full scan verification (counts items)
   get             Get a single key
   keys            List keys in a range/prefix
-  scan            Scan keys and values in a range/prefix
+  scan            Scan keys and values in a range/prefix (requires -allow-values)
   dump            Alias for scan
   vacuum          Rebuild index (rewrite+swap)
   compact         Compact slab files (by candidate selection or slab id)
@@ -167,6 +167,7 @@ func runGet(dir string, args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
 	hexInput := fs.Bool("hex", false, "Interpret key as hex")
+	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
 	outMode := fs.String("out", "string", "Output format: string|hex|base64")
 	_ = fs.Parse(args)
 
@@ -184,6 +185,9 @@ func runGet(dir string, args []string) {
 	val, err := db.Get(key)
 	if err != nil {
 		fatalf("Get error: %v", err)
+	}
+	if !*allowValues {
+		fatalf("refusing to print values without -allow-values")
 	}
 	if val == nil {
 		return
@@ -244,11 +248,15 @@ func runScan(dir string, args []string) {
 	limit := fs.Int("limit", 0, "Limit number of entries (0=unlimited)")
 	reverse := fs.Bool("reverse", false, "Iterate in reverse order")
 	hexInput := fs.Bool("hex", false, "Interpret input keys as hex")
+	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
 	keyOut := fs.String("key-out", "string", "Key output format: string|hex|base64")
 	valOut := fs.String("val-out", "string", "Value output format: string|hex|base64")
 	_ = fs.Parse(args)
 
 	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
+	if !*allowValues {
+		fatalf("scan requires -allow-values to print values; use keys to dump keys only")
+	}
 
 	db := openTreeDB(dir, *backend)
 	defer closeTreeDB(db)
