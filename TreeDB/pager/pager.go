@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -64,6 +63,10 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := mmapAvailable(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 
 	info, err := f.Stat()
 	if err != nil {
@@ -95,8 +98,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		p.chunks = make([][]byte, numChunks)
 
 		for i := int64(0); i < numChunks; i++ {
-			// unix.Mmap(fd int, offset int64, length int, prot int, flags int)
-			data, err := unix.Mmap(int(f.Fd()), i*chunkSize, int(chunkSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize))
 			if err != nil {
 				p.Close()
 				return nil, err
@@ -263,7 +265,7 @@ func (p *Pager) Close() error {
 	defer p.mu.Unlock()
 
 	for _, chunk := range p.chunks {
-		if err := unix.Munmap(chunk); err != nil {
+		if err := munmapFile(chunk); err != nil {
 			return err
 		}
 	}
@@ -450,7 +452,7 @@ func (p *Pager) Sync() error {
 	var syncErr error
 	for _, idx := range toSync {
 		if idx < len(p.chunks) {
-			if err := unix.Msync(p.chunks[idx], unix.MS_SYNC); err != nil {
+			if err := msyncFile(p.chunks[idx]); err != nil {
 				syncErr = err
 				break // Stop on first error
 			}
