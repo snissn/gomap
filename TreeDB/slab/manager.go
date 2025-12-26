@@ -428,6 +428,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 		}
 		sm.slabs[id] = s
 	}
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
 	sm.activeSlab = s
 	return nil
 }
@@ -435,6 +438,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if err := sm.activeSlab.ensureOpen(); err != nil {
+		return err
+	}
 	return sm.activeSlab.Truncate(int64(offset))
 }
 
@@ -445,6 +451,9 @@ func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 	defer sm.mu.Unlock()
 	if sm.activeSlab == nil {
 		return 0, fmt.Errorf("no active slab")
+	}
+	if err := sm.activeSlab.ensureOpen(); err != nil {
+		return 0, err
 	}
 	if err := sm.activeSlab.RepairTail(); err != nil {
 		return 0, err

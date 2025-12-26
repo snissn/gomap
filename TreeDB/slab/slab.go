@@ -231,7 +231,11 @@ func (s *SlabFile) RepairTail() error {
 	trimTo := lastGoodEnd
 	// Verify CRC for the last complete record; if it fails, drop it (and retry
 	// a few times using our ring buffer).
-	for tries := 0; tries < keepStarts; tries++ {
+	maxTries := keepStarts
+	if startsN < maxTries {
+		maxTries = startsN
+	}
+	for tries := 0; tries < maxTries; tries++ {
 		if startsN == 0 {
 			trimTo = 0
 			break

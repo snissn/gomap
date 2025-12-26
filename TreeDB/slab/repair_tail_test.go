@@ -24,7 +24,7 @@ func TestRepairTail_TruncatesPartialGarbage(t *testing.T) {
 	sizeBefore := s.Size
 
 	// Append some garbage bytes (simulating a torn/partial tail write).
-	if _, err := s.File.Write([]byte{0xAA, 0xBB, 0xCC}); err != nil {
+	if _, err := s.File.WriteAt([]byte{0xAA, 0xBB, 0xCC}, sizeBefore); err != nil {
 		t.Fatalf("append garbage: %v", err)
 	}
 

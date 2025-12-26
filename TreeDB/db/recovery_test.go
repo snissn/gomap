@@ -24,6 +24,9 @@ func TestRecovery(t *testing.T) {
 
 	// Alloc Meta Pages
 	p.Alloc(2)
+	// Allocate root pages for user/system trees.
+	userRoot, _ := p.Alloc(1)
+	sysRoot, _ := p.Alloc(1)
 
 	// Create Slab 0
 	sm, err := slab.NewSlabManager(dir)
@@ -51,12 +54,29 @@ func TestRecovery(t *testing.T) {
 	sm.Append([]byte("garbage"), []byte("data"))
 	// Now slab size is > 18.
 
+	// Build empty roots with valid checksums.
+	rootData, _ := p.Get(userRoot)
+	root := node.NewNode(rootData)
+	root.SetPageID(userRoot)
+	root.SetType(page.PageTypeLeaf)
+	root.SetCount(0)
+	root.UpdateChecksum()
+
+	sysData, _ := p.Get(sysRoot)
+	sysRootNode := node.NewNode(sysData)
+	sysRootNode.SetPageID(sysRoot)
+	sysRootNode.SetType(page.PageTypeLeaf)
+	sysRootNode.SetCount(0)
+	sysRootNode.UpdateChecksum()
+
 	// Write Meta 0 (Seq 1) -> Valid
 	m0 := page.MetaPageBody{
-		CommitSeq:      1,
-		ActiveSlabID:   0,
-		ActiveSlabTail: 18, // Points before garbage
-		TotalPages:     2,
+		CommitSeq:        1,
+		UserRootPageID:   userRoot,
+		SystemRootPageID: sysRoot,
+		ActiveSlabID:     0,
+		ActiveSlabTail:   18, // Points before garbage
+		TotalPages:       4,
 	}
 
 	data0, _ := p.Get(0)
@@ -116,6 +136,12 @@ func TestCommit(t *testing.T) {
 
 	// Fake a New Root
 	newRootID, _ := db.Pager().Alloc(1)
+	newRootData, _ := db.Pager().GetForWrite(newRootID)
+	newRoot := node.NewNode(newRootData)
+	newRoot.SetPageID(newRootID)
+	newRoot.SetType(page.PageTypeLeaf)
+	newRoot.SetCount(0)
+	newRoot.UpdateChecksum()
 
 	// Commit
 	if err := db.Commit(newRootID); err != nil {
