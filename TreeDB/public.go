@@ -56,14 +56,15 @@ type Batch interface {
 // DB is the public TreeDB handle. It can represent either cached mode (default)
 // or backend-only mode depending on Options.
 type DB struct {
-	mode        Mode
-	cached      *caching.DB
-	backend     *db.DB
-	bgComp      bgCompactionWorker
-	bgVac       bgIndexVacuumWorker
-	notifyError func(error)
-	bgErrMu     sync.Mutex
-	bgErr       error
+	mode           Mode
+	cached         *caching.DB
+	backend        *db.DB
+	bgComp         bgCompactionWorker
+	bgVac          bgIndexVacuumWorker
+	notifyError    func(error)
+	bgErrMu        sync.Mutex
+	bgErr          error
+	durabilityMode string
 }
 
 func (db *DB) ensureOpen() error {
@@ -94,7 +95,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError}, nil
+		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts)}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -137,7 +138,7 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError}
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts)}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -212,6 +213,39 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	return out, nil
+}
+
+func computeDurabilityMode(opts Options) string {
+	mode := "durable"
+	if opts.Mode == ModeBackend {
+		if opts.RelaxedSync {
+			mode = "backend_relaxed_sync"
+		} else {
+			mode = "backend_sync"
+		}
+	} else {
+		if opts.DisableWAL {
+			if opts.RelaxedSync {
+				mode = "wal_disabled_relaxed_sync"
+			} else {
+				mode = "wal_disabled_sync"
+			}
+		} else if opts.RelaxedSync {
+			mode = "wal_relaxed_sync"
+		} else {
+			mode = "wal_sync"
+		}
+	}
+	if opts.DisableReadChecksum {
+		mode += "+no_read_checksum"
+	}
+	if opts.VerifyOnRead {
+		mode += "+verify_on_read"
+	}
+	if opts.DisableSlabTailRepairOnOpen {
+		mode += "+no_slab_tail_repair"
+	}
+	return mode
 }
 
 // OpenCached is an explicit cached-mode opener (alias of Open with ModeCached).
@@ -469,6 +503,7 @@ func (db *DB) Stats() map[string]string {
 		if stats == nil {
 			stats = make(map[string]string)
 		}
+		stats["treedb.durability_mode"] = db.durabilityMode
 		bgCompactionStatsInto(stats, &db.bgComp)
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		return stats
@@ -477,9 +512,18 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	stats["treedb.durability_mode"] = db.durabilityMode
 	bgCompactionStatsInto(stats, &db.bgComp)
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	return stats
+}
+
+// DurabilityMode reports the effective durability/integrity policy string.
+func (db *DB) DurabilityMode() string {
+	if db == nil {
+		return ""
+	}
+	return db.durabilityMode
 }
 
 // Print dumps best-effort debug output for the underlying backend.

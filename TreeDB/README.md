@@ -115,6 +115,15 @@ Details: `docs/TREEDB_PROFILES.md`.
 - Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.
 - On-disk format is considered alpha and may change without backward-compatibility guarantees.
 
+### Durability Matrix (Cached Mode)
+
+| Options | WAL | Sync boundary | Power-loss durability | Notes |
+| --- | --- | --- | --- | --- |
+| Defaults | on | fsync | yes | safest default |
+| `RelaxedSync` | on | flush-only | no | crash-consistent only |
+| `DisableWAL` | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
+| `DisableWAL` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
+
 ## Tuning (Cached Mode)
 
 `treedb.Open` defaults to cached mode (memtable + WAL + background flush). The most important knobs:
