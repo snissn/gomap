@@ -24,8 +24,7 @@ jobs:
             go.sum
 
       - name: HashDB (race)
-        run: go test -race ./HashDB/...
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./HashDB/...
 
       - name: TreeDB (race, focused)
-        run: go test -race ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging
-
+        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging

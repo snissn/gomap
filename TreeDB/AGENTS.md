@@ -715,6 +715,24 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 - [ ] No scan collapse: `-settle-before-scans` results must remain sane; `longmix` full/prefix scan ops/s must not crater.
 - [ ] No runaway memory: `bigkeys_guard` must complete without `guard:` aborts (and without excessive RSS growth if running on Linux with `-max-rss-mb`).
 
+### 17.2.4 (Optional / Tentative) Bulk/Streaming Writer for Append-Only Batches
+
+**Goal:** allow cached TreeDB to match backend throughput for large, strictly ordered batch ingest (e.g. `batch_write`) without violating snapshot or durability invariants.
+**Rationale:** limited user benefit because `treedbbackend` already exists for bulk loading; the bulk/streaming path mainly avoids switching engines to reach similar ingest throughput.
+
+- [ ] Add an explicit Bulk/Streaming API (opt-in; not automatic fallback):
+  - `BeginBulk(opts)` returns a `BulkWriter` with `Set/Delete/Flush/Close`.
+  - Requires strictly increasing keys and append-only range beyond max in-memory key.
+- [ ] Safety rules:
+  - Acquire an exclusive bulk lock so no concurrent `Get/Iterator/Set/Delete/Batch` can observe partial backend writes.
+  - Refuse to start unless append-only + sorted guarantees hold (or return an explicit error).
+- [ ] Durability semantics:
+  - Default: require WAL disabled.
+  - If WAL enabled, require explicit opt-in (e.g. `AllowWALBypass`) and document weaker recovery semantics.
+- [ ] Bench target:
+  - `./bin/unified-bench -dbs treedb,treedbbackend -test batch_write -keys <large>` should show cached TreeDB close to backend throughput for append-only keys.
+- [ ] Optional: add a unified-bench knob to exercise BulkWriter when available.
+
 ### 17.3 Operational Defaults & Guardrails (LevelDB-like) (Moved from Phase 16.10)
 
 **Goal:** Reduce “operator footguns” in cached mode by enabling safe defaults, adding visibility, and adding guardrails so long-running workloads don’t silently accumulate unbounded debt (WAL, flush backlog, disk usage, fragmentation).

@@ -207,7 +207,7 @@ func (db *DB) Stats() map[string]string {
 
 	// Best-effort slab fragmentation stats (derived from persisted System tree).
 	var total, dead uint64
-	sysTree := tree.New(idx.pager, state.SlabSet, state.SystemRootPageID)
+	sysTree := tree.New(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID)
 	it := sysTree.Iterator(slabStatsKeyPrefix, slabStatsPrefixEnd())
 	for it.Valid() {
 		_, vPtr, flags := it.UnsafeEntry()

@@ -288,7 +288,6 @@ type btreeIterator struct {
 	cur    btreeEntry
 	hasCur bool
 	mu     *sync.RWMutex
-	once   sync.Once
 }
 
 func (it *btreeIterator) Seek(key []byte) {
@@ -371,11 +370,10 @@ func (it *btreeIterator) Error() error {
 }
 
 func (it *btreeIterator) Close() error {
-	it.once.Do(func() {
-		if it.mu != nil {
-			it.mu.RUnlock()
-		}
-	})
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
 	return nil
 }
 

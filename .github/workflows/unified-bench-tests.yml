@@ -33,4 +33,3 @@ jobs:
       - name: Test
         working-directory: cmd/unified_bench
         run: go test ./...
-

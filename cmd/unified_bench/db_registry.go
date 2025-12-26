@@ -50,17 +50,23 @@ func GetRegisteredDBsList() string {
 
 // resolveDBs returns the list of DBs to run based on the comma-separated arg.
 // If "all" is present, it includes all registered DBs.
-func resolveDBs(arg string) []string {
+// It excludes any DBs listed in excludeArg.
+func resolveDBs(arg, excludeArg string) []string {
 	requested := parseList(arg)
+	excluded := parseList(excludeArg)
+
+	var candidates []string
 	if contains(requested, "all") {
-		return GetAllDBNames()
+		candidates = GetAllDBNames()
+	} else {
+		candidates = requested
 	}
 
-	// Preserve order of registration for the requested ones, or use requested order?
-	// Usually requested order is preferred by user.
-	// But let's filter to ensure they exist.
-	out := make([]string, 0, len(requested))
-	for _, name := range requested {
+	out := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		if contains(excluded, name) {
+			continue
+		}
 		if _, ok := dbFactories[name]; ok {
 			out = append(out, name)
 		}

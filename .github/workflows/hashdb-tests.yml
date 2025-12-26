@@ -30,4 +30,3 @@ jobs:
       - name: Test
         working-directory: HashDB
         run: go test ./...
-

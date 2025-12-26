@@ -83,7 +83,7 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	sysTree := tree.New(idx.pager, db.slabManager, sysRootID)
+	sysTree := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRootID)
 	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
 
 	for _, id := range ids {

@@ -219,7 +219,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
-		sysIter := tree.New(oldGen.pager, state.SlabSet, state.SystemRootPageID).Iterator(nil, nil)
+		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 		newSysRoot, err := bulk.Build(sysIter, newAlloc, newPager)
 		_ = sysIter.Close()
 		if err != nil {
@@ -309,6 +309,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			RootPageID:       nextMeta.UserRootPageID,
 			SystemRootPageID: nextMeta.SystemRootPageID,
 			SlabSet:          db.slabManager.CurrentSlabSet(),
+			ValueLogSet:      db.valueLogManager.CurrentSet(),
 		})
 		db.mu.Unlock()
 
@@ -316,6 +317,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 
 		if oldState != nil {
 			_ = db.slabManager.ReleaseSlabs(oldState.SlabSet)
+			_ = db.valueLogManager.Release(oldState.ValueLogSet)
 		}
 
 		// Drop the DB-held reference to the previous generation outside the
@@ -333,7 +335,7 @@ func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.
 
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	tr := tree.New(snap.idx.pager, snap.state.SlabSet, snap.state.RootPageID)
+	tr := tree.New(snap.idx.pager, valueReader{slabs: snap.state.SlabSet, vlogs: snap.state.ValueLogSet}, snap.state.RootPageID)
 
 	ops := make([]batch.Entry, 0, vacuumDeltaBatchSize)
 	applyOps := func() error {

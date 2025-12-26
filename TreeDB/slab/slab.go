@@ -276,8 +276,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 		return nil, err
 	}
 
-	keyLen := binary.LittleEndian.Uint16(headerBuf[4:6])
-	valLen := binary.LittleEndian.Uint32(headerBuf[6:10])
+	_ = headerBuf[9]
+	keyLen := uint16(headerBuf[4]) | uint16(headerBuf[5])<<8
+	valLen := uint32(headerBuf[6]) | uint32(headerBuf[7])<<8 | uint32(headerBuf[8])<<16 | uint32(headerBuf[9])<<24
 	if recordSizeExceedsMax(keyLen, valLen) {
 		return nil, ErrRecordTooLarge
 	}
@@ -294,7 +295,7 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 	}
 
 	if verifyCRC {
-		crc := binary.LittleEndian.Uint32(headerBuf[0:4])
+		crc := uint32(headerBuf[0]) | uint32(headerBuf[1])<<8 | uint32(headerBuf[2])<<16 | uint32(headerBuf[3])<<24
 		sum := crc32.Update(0, crc32cTable, headerBuf[4:10])
 		sum = crc32.Update(sum, crc32cTable, dataBuf)
 		if sum != crc {
@@ -315,8 +316,9 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 
 	if canReadHeader {
 		header := data[realStart : realStart+HeaderSize]
-		keyLen := binary.LittleEndian.Uint16(header[4:6])
-		valLen := binary.LittleEndian.Uint32(header[6:10])
+		_ = header[9]
+		keyLen := uint16(header[4]) | uint16(header[5])<<8
+		valLen := uint32(header[6]) | uint32(header[7])<<8 | uint32(header[8])<<16 | uint32(header[9])<<24
 		if recordSizeExceedsMax(keyLen, valLen) {
 			return nil, ErrRecordTooLarge, true
 		}
@@ -336,7 +338,7 @@ func (s *SlabFile) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, 
 				sum = crc32.Update(sum, crc32cTable, record)
 
 				// Verify against stored CRC
-				crc := binary.LittleEndian.Uint32(header[0:4])
+				crc := uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16 | uint32(header[3])<<24
 				if sum != crc {
 					return nil, ErrChecksumMismatch, true
 				}

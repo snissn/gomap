@@ -14,7 +14,7 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -322,13 +322,17 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	preexisting := filepath.Join(walDir, "wal-000010.log")
-	if err := os.WriteFile(preexisting, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {
-		t.Fatalf("WriteFile(preexisting WAL): %v", err)
+	preexisting := []string{
+		filepath.Join(walDir, "wal-000010.log"),
+	}
+	for _, path := range preexisting {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {
+			t.Fatalf("WriteFile(preexisting WAL): %v", err)
+		}
 	}
 
 	backend := NewMockBackend()
-	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -375,5 +379,74 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	}
 	if walFiles != 1 {
 		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+	}
+}
+
+func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
+
+	// Seed a retained value-log segment by writing a large value. In value-log
+	// mode this segment cannot be deleted by checkpoint, so effectiveWALBytes can
+	// remain above maxWALBytes indefinitely.
+	val := bytes.Repeat([]byte("v"), 2<<20) // 2MiB
+	if err := db.Set([]byte("seed"), val); err != nil {
+		t.Fatalf("Set(seed): %v", err)
+	}
+
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	var initialCount uint64
+	for {
+		stats := db.Stats()
+		if stats == nil {
+			t.Fatalf("Stats() returned nil")
+		}
+		n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+		if err != nil {
+			t.Fatalf("parse auto checkpoint count: %v", err)
+		}
+		if n > 0 {
+			if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "size" {
+				t.Fatalf("expected last reason size, got %q", reason)
+			}
+			initialCount = n
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for size auto checkpoint to run")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Continue writing while effectiveWALBytes remains above maxWALBytes. The
+	// size-triggered checkpoint should remain disarmed and not repeatedly run.
+	val = bytes.Repeat([]byte("x"), 512<<10) // 512KiB
+	for i := 0; i < 8; i++ {
+		k := []byte(fmt.Sprintf("k%03d", i))
+		if err := db.Set(k, val); err != nil {
+			t.Fatalf("Set(%s): %v", k, err)
+		}
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	stats := db.Stats()
+	if stats == nil {
+		t.Fatalf("Stats() returned nil")
+	}
+	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse auto checkpoint count: %v", err)
+	}
+	if n != initialCount {
+		t.Fatalf("expected size-triggered checkpoint to run once (count=%d), got %d", initialCount, n)
 	}
 }

@@ -211,7 +211,6 @@ type Iterator struct {
 	iter *skiplist.Iterator
 	end  []byte
 	mu   *sync.RWMutex
-	once sync.Once
 }
 
 func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
@@ -294,12 +293,16 @@ func (it *Iterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *Iterator) Close() error {
-	it.once.Do(func() {
-		if it.mu != nil {
-			it.mu.RUnlock()
-		}
-	})
-	return it.iter.Close()
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
+	if it.iter == nil {
+		return nil
+	}
+	err := it.iter.Close()
+	it.iter = nil
+	return err
 }
 
 func (it *Iterator) Error() error {

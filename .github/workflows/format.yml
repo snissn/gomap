@@ -31,4 +31,3 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-

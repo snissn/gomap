@@ -27,6 +27,21 @@ So:
 
 ## Baselines to run (repeatable)
 
+### Regression note (iavl-bench WAL-on full run)
+
+- Full changeset (`./treedb-v1/treedb-v1-bench bench ...`) shows WAL-on regression:
+  - `results/treedb-v1.jsonl` (commit `606c9c7`): **0.81 min** total
+  - `results-compare-full/treedb-v1-head-wal-on.jsonl` (current HEAD): **1.98 min** total
+- Treat this as a priority regression to explain before further optimization work.
+
+#### Update (wal-value-log)
+
+- Root cause: cached-mode auto-checkpoint size trigger could repeatedly run `Checkpoint()` when `effectiveWALBytes` stayed above `MaxWALBytes` (value-log segments retained for pointers cannot be trimmed), thrashing writer latency.
+- Fix: disarm size-triggered auto-checkpoint after the first run; re-arm only once `effectiveWALBytes < MaxWALBytes/2` (commit `5dd76a5`).
+- New result: `results-compare-full/treedb-v1-5dd76a5-wal-on.jsonl`: **1.32 min** total (down from 1.98 min).
+- Follow-up: write-path overhead was still dominated by WAL writer goroutine coordination for non-sync writes; switch non-sync WAL appends to write inline (commit `73d1c11`).
+- New result: `results-compare-full/treedb-v1-73d1c11-wal-on.jsonl`: **0.79 min** total (WAL-off: `results-compare-full/treedb-v1-73d1c11-wal-off.jsonl`: **0.75 min**).
+
 ### Microbenches (op-geth)
 
 From `/Users/michaelseiler/dev/snissn/op-geth`:

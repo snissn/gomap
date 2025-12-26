@@ -29,24 +29,25 @@ import (
 // --- Benchmark Runner ---
 
 var (
-	numKeys      = flag.Int("keys", 100000, "Number of keys")
-	valSize      = flag.Int("valsize", 128, "Value size in bytes")
-	batchSize    = flag.Int("batchsize", 1000, "Size of batches")
-	rangeQueries = flag.Int("range-queries", 200, "number of range queries")
-	rangeSpan    = flag.Int("range-span", 100, "number of keys per range")
-	keyCountsArg = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
-	keyScaleArg  = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
-	keysMin      = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
-	keysMax      = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg       = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
-	testArg      = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
-	formatArg    = flag.String("format", "table", "Output format: table or markdown")
-	suiteArg     = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
-	outDirArg    = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
-	keepDir      = flag.Bool("keep", false, "Keep data directories after run")
-	progress     = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
-	seed         = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
-	cpuProfile   = flag.String("cpuprofile", "", "write cpu profile to file")
+	numKeys       = flag.Int("keys", 100000, "Number of keys")
+	valSize       = flag.Int("valsize", 128, "Value size in bytes")
+	batchSize     = flag.Int("batchsize", 1000, "Size of batches")
+	rangeQueries  = flag.Int("range-queries", 200, "number of range queries")
+	rangeSpan     = flag.Int("range-span", 100, "number of keys per range")
+	keyCountsArg  = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
+	keyScaleArg   = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
+	keysMin       = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
+	keysMax       = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
+	dbsArg        = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsExcludeArg = flag.String("exclude-dbs", "treedbbackend", "Comma-separated list of DBs to exclude")
+	testArg       = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	formatArg     = flag.String("format", "table", "Output format: table or markdown")
+	suiteArg      = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
+	outDirArg     = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
+	keepDir       = flag.Bool("keep", false, "Keep data directories after run")
+	progress      = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed          = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
+	cpuProfile    = flag.String("cpuprofile", "", "write cpu profile to file")
 
 	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -77,8 +78,9 @@ type BenchConfig struct {
 	RangeQueries int
 	RangeSpan    int
 
-	DBsArg   string
-	TestsArg string
+	DBsArg        string
+	DBsExcludeArg string
+	TestsArg      string
 
 	KeepDir  bool
 	Progress bool
@@ -182,6 +184,7 @@ func main() {
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
 		DBsArg:                           *dbsArg,
+		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
@@ -552,7 +555,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
 	}
 
-	dbNames := resolveDBs(cfg.DBsArg)
+	dbNames := resolveDBs(cfg.DBsArg, cfg.DBsExcludeArg)
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
 
 	// Initialize DBs
@@ -1573,6 +1576,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	results := make(map[string]map[string]float64)
 	for _, testName := range finalTestOrder {
 		results[testName] = make(map[string]float64)
+		for _, inst := range instances {
+			results[testName][inst.Wrapper.Name()] = math.NaN()
+		}
 	}
 
 	// For live progress table
