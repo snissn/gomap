@@ -453,11 +453,14 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	n := node.NewNodeView(data)
 
 	// Skip checksum verification for pages we've already verified.
-	if !it.tree.pager.IsVerified(pageID) {
+	verifyAlways := it.tree.pager.VerifyOnRead()
+	if verifyAlways || !it.tree.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
-		it.tree.pager.MarkVerified(pageID)
+		if !verifyAlways {
+			it.tree.pager.MarkVerified(pageID)
+		}
 	}
 
 	return n, nil

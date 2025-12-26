@@ -39,6 +39,7 @@ type Pager struct {
 	allocMu      sync.Mutex
 	path         string
 	verified     atomic.Pointer[verifiedBitset]
+	verifyOnRead atomic.Bool
 
 	growMu       sync.Mutex
 	growStopOnce sync.Once
@@ -164,6 +165,16 @@ func (p *Pager) IsVerified(pageID uint64) bool {
 	bit := uint64(1) << (pageID % 64)
 	word := atomic.LoadUint64(&vb.chunks[chunkIdx][wordIdx])
 	return (word & bit) != 0
+}
+
+// VerifyOnRead reports whether checksum verification should happen on every read.
+func (p *Pager) VerifyOnRead() bool {
+	return p.verifyOnRead.Load()
+}
+
+// SetVerifyOnRead enables or disables checksum verification on every read.
+func (p *Pager) SetVerifyOnRead(always bool) {
+	p.verifyOnRead.Store(always)
 }
 
 // MarkVerified marks a page as verified.

@@ -57,11 +57,14 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 
 		n := node.NewNode(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
 		// We use Verified Cache to skip it if already checked.
-		if !t.pager.IsVerified(currID) {
+		verifyAlways := t.pager.VerifyOnRead()
+		if verifyAlways || !t.pager.IsVerified(currID) {
 			if !n.VerifyChecksum() {
 				return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
 			}
-			t.pager.MarkVerified(currID)
+			if !verifyAlways {
+				t.pager.MarkVerified(currID)
+			}
 		}
 
 		switch n.Type() {

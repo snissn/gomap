@@ -36,11 +36,14 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 			return err
 		}
 		n := node.NewNode(data)
-		if !t.pager.IsVerified(pageID) {
+		verifyAlways := t.pager.VerifyOnRead()
+		if verifyAlways || !t.pager.IsVerified(pageID) {
 			if !n.VerifyChecksum() {
 				return fmt.Errorf("checksum mismatch on page %d", pageID)
 			}
-			t.pager.MarkVerified(pageID)
+			if !verifyAlways {
+				t.pager.MarkVerified(pageID)
+			}
 		}
 
 		if err := fn(pageID, *n); err != nil {

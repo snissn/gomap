@@ -109,7 +109,7 @@ Details: `docs/TREEDB_PROFILES.md`.
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; unsafe toggles require `AllowUnsafe`.
 - With `RelaxedSync` enabled, `SetSync`/`WriteSync` are crash-consistent only (no fsync) and may not survive power loss.
-- Page checksums are verified once and cached until the page is rewritten; `DisableReadChecksum` disables slab/value-log CRC checks entirely.
+- Page checksums are verified once and cached until the page is rewritten; use `VerifyOnRead` for paranoid always-verify behavior. `DisableReadChecksum` disables slab/value-log CRC checks entirely.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.
 - TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
 - Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.

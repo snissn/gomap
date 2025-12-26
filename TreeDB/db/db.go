@@ -213,6 +213,9 @@ type Options struct {
 	// This improves read performance (especially for large values) but risks
 	// returning silent data corruption if the disk/memory is compromised.
 	DisableReadChecksum bool
+	// VerifyOnRead forces checksum verification on every index page read,
+	// bypassing the verified-page cache.
+	VerifyOnRead bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -393,6 +396,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManager(opts.Dir)
 	if err != nil {
@@ -722,11 +726,14 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 		return false
 	}
 	n := node.NewNode(data)
-	if !p.IsVerified(pageID) {
+	verifyAlways := p.VerifyOnRead()
+	if verifyAlways || !p.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return false
 		}
-		p.MarkVerified(pageID)
+		if !verifyAlways {
+			p.MarkVerified(pageID)
+		}
 	}
 	switch n.Type() {
 	case page.PageTypeLeaf, page.PageTypeInternal:
@@ -748,11 +755,14 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	}
 	n := node.NewNode(data)
 
-	if !idx.pager.IsVerified(pageID) {
+	verifyAlways := idx.pager.VerifyOnRead()
+	if verifyAlways || !idx.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return page.MetaPageBody{}, false
 		}
-		idx.pager.MarkVerified(pageID)
+		if !verifyAlways {
+			idx.pager.MarkVerified(pageID)
+		}
 	}
 
 	if n.Type() != page.PageTypeMeta {
