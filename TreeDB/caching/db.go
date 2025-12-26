@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/vlog"
 	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -254,6 +255,41 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 	return segments, bytes
 }
 
+func (db *DB) valueLogRetainedPaths() []string {
+	db.valueLogMu.Lock()
+	if len(db.valueLogRetain) == 0 {
+		db.valueLogMu.Unlock()
+		return nil
+	}
+	paths := make([]string, 0, len(db.valueLogRetain))
+	for path := range db.valueLogRetain {
+		paths = append(paths, path)
+	}
+	db.valueLogMu.Unlock()
+	return paths
+}
+
+func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
+	it, err := db.backend.Iterator(nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer it.Close()
+
+	live := make(map[uint32]struct{})
+	for it.Valid() {
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+			live[ptr.FileID] = struct{}{}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	return live, nil
+}
+
 func (db *DB) checkValueLogRetention() {
 	limit := db.maxValueLogRetainedBytes
 	if limit <= 0 || !db.valueLogEnabled() {
@@ -286,6 +322,82 @@ func (db *DB) allowValueLogPointers() bool {
 	}
 	db.valueLogHardCapWarned.Store(false)
 	return true
+}
+
+type valueLogZombieMarker interface {
+	MarkValueLogZombie(id uint32) error
+}
+
+type valueLogSetRefresher interface {
+	RefreshSlabSet() error
+}
+
+func (db *DB) pruneRetainedValueLogs() {
+	if !db.valueLogEnabled() {
+		return
+	}
+	paths := db.valueLogRetainedPaths()
+	if len(paths) == 0 {
+		return
+	}
+
+	live, err := db.collectValueLogLiveIDs()
+	if err != nil {
+		db.reportError(fmt.Errorf("cachingdb: failed to scan value-log pointers: %w", err))
+		return
+	}
+
+	inUse := make(map[string]struct{})
+	db.mu.RLock()
+	if db.walPath != "" {
+		inUse[db.walPath] = struct{}{}
+	}
+	for _, path := range db.queueWALPaths {
+		inUse[path] = struct{}{}
+	}
+	db.mu.RUnlock()
+
+	removed := false
+	marked := false
+	for _, path := range paths {
+		if _, ok := inUse[path]; ok {
+			continue
+		}
+		seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if !ok || !valueLog {
+			continue
+		}
+		id := page.ValueLogFileID(uint32(seq))
+		if _, ok := live[id]; ok {
+			continue
+		}
+
+		if marker, ok := db.backend.(valueLogZombieMarker); ok {
+			if err := marker.MarkValueLogZombie(id); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+				continue
+			}
+			marked = true
+		} else {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				db.reportError(fmt.Errorf("cachingdb: failed to remove value-log %q: %w", path, err))
+				continue
+			}
+			removed = true
+		}
+		db.forgetValueLogRetain(path)
+	}
+
+	if marked {
+		if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+			if err := refresher.RefreshSlabSet(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
+			}
+		}
+	}
+	if removed {
+		db.syncDirBestEffort(db.dir)
+	}
 }
 
 func hashKey(key []byte) uint64 {
@@ -1903,6 +2015,7 @@ func (db *DB) Checkpoint() error {
 		db.syncDirBestEffort(db.dir)
 	}
 	db.checkValueLogRetention()
+	db.pruneRetainedValueLogs()
 
 	return nil
 }

@@ -46,7 +46,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Fuzzing coverage for WAL/vlog/page decode and iterator merging. Plan: add targeted fuzz tests for log/page decode and merging bounds; fuzz tests added for WAL/vlog/page/node decode and iterator merging.
 - [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
 - [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
-- [OPEN] Value-log retention / disk growth. Plan: live-pointer tracking + GC/compaction; guardrails and hard caps. Status: retained-bytes stats + warning threshold added.
+- [DONE] Value-log retention / disk growth. Plan: live-pointer tracking + GC/compaction; guardrails and hard caps. Implemented checkpoint-time value-log pruning based on live pointer scans plus caps/warnings.
 - [DONE] Verified cache paranoid mode. Plan: add option to force verify; implemented `VerifyOnRead` for always-verify.
 - [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
 - [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.

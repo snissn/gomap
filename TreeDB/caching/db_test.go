@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -855,4 +856,51 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 		t.Fatalf("expected non-value-log pointer for k2")
 	}
 	_ = snap.Close()
+}
+
+func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{FlushThreshold: 1})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	key := []byte("k1")
+	large := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.SetSync(key, large); err != nil {
+		t.Fatalf("SetSync(large): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(large): %v", err)
+	}
+	stats := cache.Stats()
+	segments, err := strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
+	if err != nil {
+		t.Fatalf("parse retained segments: %v", err)
+	}
+	if segments == 0 {
+		t.Fatalf("expected retained value-log segments after large value")
+	}
+
+	if err := cache.SetSync(key, []byte("s")); err != nil {
+		t.Fatalf("SetSync(small): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(small): %v", err)
+	}
+	stats = cache.Stats()
+	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
+	if err != nil {
+		t.Fatalf("parse retained segments: %v", err)
+	}
+	if segments != 0 {
+		t.Fatalf("expected retained segments to be pruned, got %d", segments)
+	}
 }

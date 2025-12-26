@@ -1021,6 +1021,15 @@ func (db *DB) RefreshSlabSet() error {
 	return errors.Join(err, db.valueLogManager.Release(oldState.ValueLogSet))
 }
 
+// MarkValueLogZombie marks a value-log segment as zombie so it can be removed
+// once all snapshots release it.
+func (db *DB) MarkValueLogZombie(id uint32) error {
+	if db == nil || db.valueLogManager == nil {
+		return fmt.Errorf("value log manager unavailable")
+	}
+	return db.valueLogManager.MarkZombie(id)
+}
+
 type CompactionOp struct {
 	Key    []byte
 	OldPtr page.ValuePtr
