@@ -40,6 +40,7 @@ const (
 	adaptiveMinWrites          = 1024
 	adaptiveSequentialWritePct = 0.85
 	adaptiveWarmupBytes        = 16 * 1024 * 1024
+	adaptiveModeSwitchStreak   = 2
 	maxMemtableBytesPerShard   = int64(3 << 30)
 )
 
@@ -447,6 +448,8 @@ type DB struct {
 	memtableAdaptive        bool
 	memtableWarmupActive    bool
 	memtableWarmupThreshold int64
+	memtableAdaptiveCandidate memtable.Mode
+	memtableAdaptiveStreak    uint8
 	statsMu                 sync.Mutex
 	memtableStats           memtableStats
 	maxQueuedMemtables      int
@@ -761,6 +764,29 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	return memtable.ModeHashSorted
 }
 
+func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
+	desired := db.chooseAdaptiveMemtableModeLocked()
+	if desired == db.memtableMode {
+		db.memtableAdaptiveCandidate = desired
+		db.memtableAdaptiveStreak = 0
+		return desired
+	}
+	if db.memtableAdaptiveCandidate != desired {
+		db.memtableAdaptiveCandidate = desired
+		db.memtableAdaptiveStreak = 1
+		return db.memtableMode
+	}
+	if db.memtableAdaptiveStreak < 255 {
+		db.memtableAdaptiveStreak++
+	}
+	if db.memtableAdaptiveStreak >= adaptiveModeSwitchStreak {
+		db.memtableMode = desired
+		db.memtableAdaptiveStreak = 0
+		db.memtableAdaptiveCandidate = desired
+	}
+	return db.memtableMode
+}
+
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync) {
 		return nil, ErrUnsafeOptions
@@ -863,6 +889,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableAdaptive:         adaptive,
 		memtableWarmupActive:     adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:  warmupThreshold,
+		memtableAdaptiveCandidate: mode,
 		maxQueuedMemtables:       opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:       opts.StopBacklogSeconds,
@@ -2462,8 +2489,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			curMode := db.memtableMode
 			nextMode := curMode
 			if db.memtableAdaptive {
-				nextMode = db.chooseAdaptiveMemtableModeLocked()
-				db.memtableMode = nextMode
+				nextMode = db.maybeSwitchAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
 				db.resetMemtableStatsLocked()
 			}
@@ -2519,8 +2545,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			curMode := db.memtableMode
 			nextMode := curMode
 			if db.memtableAdaptive {
-				nextMode = db.chooseAdaptiveMemtableModeLocked()
-				db.memtableMode = nextMode
+				nextMode = db.maybeSwitchAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
 				db.resetMemtableStatsLocked()
 			}
@@ -2856,7 +2881,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		newCapacity = db.memtableCap
 	}
 	if db.memtableAdaptive {
-		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
+		db.maybeSwitchAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
@@ -2970,7 +2995,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		newCapacity = db.memtableCap
 	}
 	if db.memtableAdaptive {
-		db.memtableMode = db.chooseAdaptiveMemtableModeLocked()
+		db.maybeSwitchAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
