@@ -363,6 +363,7 @@ func Open(opts Options) (*DB, error) {
 	if err := validateUnsafeOptions(opts); err != nil {
 		return nil, err
 	}
+	warnInsecureDir(opts.Dir, opts.NotifyError)
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
