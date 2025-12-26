@@ -68,7 +68,9 @@ func (db *DB) syncDirBestEffort(dir string) {
 	if err := f.Sync(); err != nil {
 		db.reportError(fmt.Errorf("cachingdb: failed to sync dir %q: %w", dir, err))
 	}
-	_ = f.Close()
+	if err := f.Close(); err != nil {
+		db.reportError(fmt.Errorf("cachingdb: failed to close dir %q after sync: %w", dir, err))
+	}
 }
 
 func memtableCapacity(flushThreshold int64) int {

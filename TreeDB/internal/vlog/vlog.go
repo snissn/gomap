@@ -167,14 +167,21 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	return nil
 }
 
-func syncDir(path string) error {
+func syncDir(path string) (err error) {
 	dir := filepath.Dir(path)
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return f.Sync()
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *Writer) Append(op byte, key, value []byte) (page.ValuePtr, error) {
