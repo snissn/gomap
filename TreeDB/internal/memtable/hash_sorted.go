@@ -61,6 +61,7 @@ type HashSorted struct {
 	items       map[string]hashEntry
 	sizeBytes   int64
 	sortedKeys  []string
+	sortedDel   []bool
 	sortedValid bool
 	frozen      bool
 	hasDeletes  bool
@@ -135,6 +136,7 @@ func (m *HashSorted) Reset() {
 	clear(m.items)
 	m.sizeBytes = 0
 	m.sortedKeys = m.sortedKeys[:0]
+	m.sortedDel = m.sortedDel[:0]
 	m.sortedValid = true
 	m.frozen = false
 	m.hasDeletes = false
@@ -360,7 +362,8 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 		m.mu.RLock()
 		keys := m.sortedKeys
-		it := &hashIterator{
+		it := hashIteratorPool.Get().(*hashIterator)
+		*it = hashIterator{
 			mt:     m,
 			keys:   keys,
 			end:    endKey,
@@ -393,12 +396,11 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 	idx := 0
 	if startKey != "" {
-		idx = sort.Search(len(keys), func(i int) bool {
-			return keys[i] >= startKey
-		})
+		idx = sort.SearchStrings(keys, startKey)
 	}
 
-	return &hashIterator{
+	it := hashIteratorPool.Get().(*hashIterator)
+	*it = hashIterator{
 		mt:     m,
 		keys:   keys,
 		idx:    idx,
@@ -406,6 +408,8 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		hasEnd: hasEnd,
 		mu:     &m.mu,
 	}
+	it.refresh()
+	return it
 }
 
 func (m *HashSorted) ensureSortedLocked() {
@@ -465,6 +469,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 	if total == 0 {
 		m.mu.Lock()
 		m.sortedKeys = m.sortedKeys[:0]
+		m.sortedDel = m.sortedDel[:0]
 		m.sortedValid = true
 		m.mu.Unlock()
 		m.index.dropRuns()
@@ -472,6 +477,25 @@ func (m *HashSorted) ensureIndexFrozen() {
 	}
 
 	dst = mergeSortedStringRunsInto(dst, runs, total)
+
+	var del []bool
+	if m.hasDeletes {
+		if cap(m.sortedDel) >= len(dst) {
+			del = m.sortedDel[:len(dst)]
+			clear(del)
+		} else {
+			del = make([]bool, len(dst))
+		}
+		m.mu.RLock()
+		for i, k := range dst {
+			ent, ok := m.items[k]
+			if !ok {
+				continue
+			}
+			del[i] = ent.deleted
+		}
+		m.mu.RUnlock()
+	}
 
 	m.mu.Lock()
 	if len(m.items) != total {
@@ -486,14 +510,40 @@ func (m *HashSorted) ensureIndexFrozen() {
 		m.mu.RUnlock()
 		sort.Strings(keys)
 
+		if m.hasDeletes {
+			if cap(del) < len(keys) {
+				del = make([]bool, len(keys))
+			} else {
+				del = del[:len(keys)]
+				clear(del)
+			}
+			m.mu.RLock()
+			for i, k := range keys {
+				ent, ok := m.items[k]
+				if !ok {
+					continue
+				}
+				del[i] = ent.deleted
+			}
+			m.mu.RUnlock()
+		} else {
+			del = del[:0]
+		}
+
 		m.mu.Lock()
 		m.sortedKeys = keys
+		m.sortedDel = del
 		m.sortedValid = true
 		m.mu.Unlock()
 		m.index.dropRuns()
 		return
 	}
 	m.sortedKeys = dst
+	if m.hasDeletes {
+		m.sortedDel = del
+	} else {
+		m.sortedDel = m.sortedDel[:0]
+	}
 	m.sortedValid = true
 	m.mu.Unlock()
 	m.index.dropRuns()
@@ -779,7 +829,12 @@ type hashIterator struct {
 	loaded bool
 	valid  bool
 	mu     *sync.RWMutex
-	once   sync.Once
+}
+
+var hashIteratorPool = sync.Pool{
+	New: func() any {
+		return new(hashIterator)
+	},
 }
 
 func (it *hashIterator) Seek(key []byte) {
@@ -789,9 +844,7 @@ func (it *hashIterator) Seek(key []byte) {
 		return
 	}
 	seekKey := bytesToStringNoCopy(key)
-	it.idx = sort.Search(len(it.keys), func(i int) bool {
-		return it.keys[i] >= seekKey
-	})
+	it.idx = sort.SearchStrings(it.keys, seekKey)
 	it.refresh()
 }
 
@@ -867,6 +920,11 @@ func (it *hashIterator) IsDeleted() bool {
 	if !it.mt.hasDeletes {
 		return false
 	}
+	if it.mt.frozen {
+		if it.idx >= 0 && it.idx < len(it.mt.sortedDel) {
+			return it.mt.sortedDel[it.idx]
+		}
+	}
 	it.ensureLoaded()
 	return it.cur.deleted
 }
@@ -876,11 +934,11 @@ func (it *hashIterator) Error() error {
 }
 
 func (it *hashIterator) Close() error {
-	it.once.Do(func() {
-		if it.mu != nil {
-			it.mu.RUnlock()
-		}
-	})
+	if it.mu != nil {
+		it.mu.RUnlock()
+	}
+	*it = hashIterator{}
+	hashIteratorPool.Put(it)
 	return nil
 }
 
