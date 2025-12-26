@@ -345,6 +345,10 @@ type DB struct {
 	autoCheckpointOnceCh  chan struct{}
 	autoCheckpointWriteCh chan struct{}
 	autoCheckpointOn      atomic.Bool
+	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
+	// It is disarmed after the first size-triggered checkpoint and re-armed only
+	// after effectiveWALBytes falls below maxWALBytes/2.
+	autoCheckpointSizeArmed atomic.Bool
 
 	autoCheckpointCount          atomic.Uint64
 	autoCheckpointLastReason     atomic.Uint32
@@ -816,6 +820,9 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 		return
 	}
 	db.autoCheckpointMaxWALBytes.Store(maxWALBytes)
+	if maxWALBytes > 0 {
+		db.autoCheckpointSizeArmed.Store(true)
+	}
 	if interval <= 0 && idleInterval <= 0 && maxWALBytes <= 0 {
 		return
 	}
@@ -851,6 +858,10 @@ func (db *DB) noteWrite() {
 	}
 	threshold := autoCheckpointWriteEveryBytes
 	if max := db.autoCheckpointMaxWALBytes.Load(); max > 0 {
+		// Rearm size-triggered checkpoints once WAL bytes drop substantially.
+		if current < max/2 {
+			db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
+		}
 		scaled := max / 4
 		if scaled < 4*1024 {
 			scaled = 4 * 1024
@@ -1387,6 +1398,12 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 		if maxWALBytes <= 0 || effectiveBytes < maxWALBytes {
 			return
 		}
+		// Avoid repeatedly checkpointing when WAL bytes cannot be reduced (e.g.
+		// value-log segments retained for pointers keep effectiveWALBytes above
+		// maxWALBytes). Rearm once bytes drop below maxWALBytes/2.
+		if !db.autoCheckpointSizeArmed.CompareAndSwap(true, false) {
+			return
+		}
 	default:
 		// Unknown mode: be conservative and do nothing.
 		return
@@ -1401,10 +1418,16 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	if trimmed < 0 {
 		trimmed = 0
 	}
+	if maxWALBytes > 0 && after < maxWALBytes/2 {
+		db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
+	}
 
 	// Best-effort: failures here should be surfaced via normal write paths or
 	// explicit maintenance calls. Avoid printing from background maintenance.
 	if err != nil {
+		if mode == autoCheckpointModeSize && maxWALBytes > 0 {
+			db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
+		}
 		return
 	}
 
