@@ -197,3 +197,51 @@ func TestCorruptCRC(t *testing.T) {
 	}
 	_ = r.Close()
 }
+
+func TestRotateToOpenFailureKeepsWriter(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "vlog-000001.log")
+	path2 := filepath.Join(dir, "missing", "vlog-000002.log")
+	fileID := uint32(0x80000001)
+
+	w, err := NewWriter(path1, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.RotateTo(path2, fileID+1); err == nil {
+		t.Fatalf("expected RotateTo to fail for missing dir")
+	}
+	if _, err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("Append after failed RotateTo: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := NewReader(path1, fileID)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+
+	op, key, val, _, err := r.ReadNext()
+	if err != nil {
+		t.Fatalf("ReadNext1: %v", err)
+	}
+	if op != OpSet || string(key) != "k1" || string(val) != "v1" {
+		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, key, val)
+	}
+	op, key, val, _, err = r.ReadNext()
+	if err != nil {
+		t.Fatalf("ReadNext2: %v", err)
+	}
+	if op != OpSet || string(key) != "k2" || string(val) != "v2" {
+		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, key, val)
+	}
+	if _, _, _, _, err = r.ReadNext(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+}
