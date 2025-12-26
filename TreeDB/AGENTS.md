@@ -718,7 +718,7 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 ### 17.2.4 (Optional / Tentative) Bulk/Streaming Writer for Append-Only Batches
 
 **Goal:** allow cached TreeDB to match backend throughput for large, strictly ordered batch ingest (e.g. `batch_write`) without violating snapshot or durability invariants.
-**Rationale:** this is only compelling because `treedbbackend` already exists for bulk loading; the bulk/streaming path is about letting cached TreeDB reach similar ingest throughput without users switching engines.
+**Rationale:** limited user benefit because `treedbbackend` already exists for bulk loading; the bulk/streaming path mainly avoids switching engines to reach similar ingest throughput.
 
 - [ ] Add an explicit Bulk/Streaming API (opt-in; not automatic fallback):
   - `BeginBulk(opts)` returns a `BulkWriter` with `Set/Delete/Flush/Close`.
