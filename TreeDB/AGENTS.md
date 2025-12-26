@@ -57,7 +57,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Threat model clarity (CRC vs adversarial tampering). Plan: documented that CRC is non-cryptographic; noted encryption/HMAC guidance.
 - [DONE] CLI safety/exfil guardrails. Plan: require explicit flags for value dumps.
 - [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
-- [OPEN] Unsafe string/byte conversions require immutable inputs. Plan: add debug build that copies or asserts ownership; audit view lifetimes.
+- [DONE] Unsafe string/byte conversions require immutable inputs. Plan: add build tag (`treedb_safe`) that forces copies for debug/safety.
 - [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
 
 ### Concurrency & Performance (P2/P3)
