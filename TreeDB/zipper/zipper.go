@@ -743,9 +743,34 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	}
 
 	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc(left.PageID())
-		if err != nil {
-			return 0, 0, nil, false, err
+		var (
+			lid uint64
+			rid uint64
+		)
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return 0, 0, nil, false, err
+			}
+			if len(ids) < 2 {
+				return 0, 0, nil, false, errors.New("rebalanceLeaves: insufficient pages allocated")
+			}
+			lid, rid = ids[0], ids[1]
+		} else {
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return 0, 0, nil, false, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return 0, 0, nil, false, err
+			}
 		}
 		ldata, err := z.pager.GetForWrite(lid)
 		if err != nil {
@@ -754,11 +779,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
 		lb.SetPageID(lid)
 
-		rid, err := z.allocator.Alloc(lid)
-		if err != nil {
-			retired = append(retired, lid)
-			return 0, 0, nil, false, err
-		}
 		rdata, err := z.pager.GetForWrite(rid)
 		if err != nil {
 			retired = append(retired, lid, rid)
@@ -1058,18 +1078,37 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 	}
 
 	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc(left.PageID())
-		if err != nil {
-			return 0, 0, nil, false, err
+		var (
+			lid uint64
+			rid uint64
+		)
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return 0, 0, nil, false, err
+			}
+			if len(ids) < 2 {
+				return 0, 0, nil, false, errors.New("rebalanceInternals: insufficient pages allocated")
+			}
+			lid, rid = ids[0], ids[1]
+		} else {
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return 0, 0, nil, false, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return 0, 0, nil, false, err
+			}
 		}
 		ldata, err := z.pager.GetForWrite(lid)
 		if err != nil {
-			return 0, 0, nil, false, err
-		}
-
-		rid, err := z.allocator.Alloc(lid)
-		if err != nil {
-			retired = append(retired, lid)
 			return 0, 0, nil, false, err
 		}
 		rdata, err := z.pager.GetForWrite(rid)
