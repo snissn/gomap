@@ -117,21 +117,22 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
-		FlushThreshold:          opts.FlushThreshold,
-		MemtableMode:            opts.MemtableMode,
-		MemtableShards:          opts.MemtableShards,
-		MaxQueuedMemtables:      opts.MaxQueuedMemtables,
-		SlowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
-		StopBacklogSeconds:      opts.StopBacklogSeconds,
-		MaxBacklogBytes:         opts.MaxBacklogBytes,
-		WriterFlushMaxMemtables: opts.WriterFlushMaxMemtables,
-		WriterFlushMaxDuration:  opts.WriterFlushMaxDuration,
-		FlushBuildConcurrency:   opts.FlushBuildConcurrency,
-		DisableWAL:              opts.DisableWAL,
-		DisableValueLog:         opts.DisableValueLog,
-		RelaxedSync:             opts.RelaxedSync,
-		AllowUnsafe:             opts.AllowUnsafe,
-		NotifyError:             opts.NotifyError,
+		FlushThreshold:           opts.FlushThreshold,
+		MemtableMode:             opts.MemtableMode,
+		MemtableShards:           opts.MemtableShards,
+		MaxQueuedMemtables:       opts.MaxQueuedMemtables,
+		SlowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
+		StopBacklogSeconds:       opts.StopBacklogSeconds,
+		MaxBacklogBytes:          opts.MaxBacklogBytes,
+		WriterFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
+		WriterFlushMaxDuration:   opts.WriterFlushMaxDuration,
+		FlushBuildConcurrency:    opts.FlushBuildConcurrency,
+		DisableWAL:               opts.DisableWAL,
+		DisableValueLog:          opts.DisableValueLog,
+		RelaxedSync:              opts.RelaxedSync,
+		AllowUnsafe:              opts.AllowUnsafe,
+		MaxValueLogRetainedBytes: opts.MaxValueLogRetainedBytes,
+		NotifyError:              opts.NotifyError,
 	})
 	if err != nil {
 		_ = backend.Close()

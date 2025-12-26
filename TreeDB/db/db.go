@@ -200,6 +200,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
+	// this threshold (0 disables warnings). Cached mode only.
+	MaxValueLogRetainedBytes int64
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only

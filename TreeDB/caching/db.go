@@ -253,6 +253,21 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 	return segments, bytes
 }
 
+func (db *DB) checkValueLogRetention() {
+	limit := db.maxValueLogRetainedBytes
+	if limit <= 0 || !db.valueLogEnabled() {
+		return
+	}
+	_, bytes := db.valueLogRetainedStats()
+	if bytes <= limit {
+		db.valueLogWarned.Store(false)
+		return
+	}
+	if db.valueLogWarned.CompareAndSwap(false, true) {
+		db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed limit %d", bytes, limit))
+	}
+}
+
 func hashKey(key []byte) uint64 {
 	return xxhash.Sum64(key)
 }
@@ -330,6 +345,9 @@ type Options struct {
 	// AllowUnsafe acknowledges unsafe durability options.
 	// When false, Open will reject DisableWAL or RelaxedSync.
 	AllowUnsafe bool
+	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
+	// this threshold (0 disables warnings).
+	MaxValueLogRetainedBytes int64
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
@@ -387,10 +405,12 @@ type DB struct {
 	walLiveBytes   atomic.Int64
 	walClosedSizes map[string]int64
 
-	disableValueLog bool
-	inlineThreshold int
-	valueLogMu      sync.Mutex
-	valueLogRetain  map[string]struct{}
+	disableValueLog          bool
+	inlineThreshold          int
+	valueLogMu               sync.Mutex
+	valueLogRetain           map[string]struct{}
+	valueLogWarned           atomic.Bool
+	maxValueLogRetainedBytes int64
 
 	// Level 1 (Disk)
 	backend BackendDB
@@ -809,35 +829,36 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	db := &DB{
-		dir:                     walDir,
-		backend:                 backend,
-		flushThreshold:          opts.FlushThreshold,
-		memtableCap:             memCap,
-		memtableMode:            mode,
-		memtableAdaptive:        adaptive,
-		memtableWarmupActive:    adaptive && warmupThreshold < opts.FlushThreshold,
-		memtableWarmupThreshold: warmupThreshold,
-		maxQueuedMemtables:      opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:  opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:      opts.StopBacklogSeconds,
-		maxBacklogBytes:         opts.MaxBacklogBytes,
-		writerFlushMaxMemtables: opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:  opts.WriterFlushMaxDuration,
-		flushBuildConcurrency:   opts.FlushBuildConcurrency,
-		disableWAL:              opts.DisableWAL,
-		disableValueLog:         disableValueLog,
-		relaxedSync:             opts.RelaxedSync,
-		notifyError:             opts.NotifyError,
-		inlineThreshold:         inlineThreshold,
-		valueLogRetain:          retained,
-		mutableShards:           mutableShards,
-		mutableShardMask:        uint64(shardCount - 1),
-		hashSortedIndexer:       indexer,
-		closeCh:                 make(chan struct{}),
-		flushCh:                 make(chan struct{}, 1),
-		autoCheckpointOnceCh:    make(chan struct{}, 1),
-		autoCheckpointWriteCh:   make(chan struct{}, 1),
-		walSeq:                  maxWALSeq,
+		dir:                      walDir,
+		backend:                  backend,
+		flushThreshold:           opts.FlushThreshold,
+		memtableCap:              memCap,
+		memtableMode:             mode,
+		memtableAdaptive:         adaptive,
+		memtableWarmupActive:     adaptive && warmupThreshold < opts.FlushThreshold,
+		memtableWarmupThreshold:  warmupThreshold,
+		maxQueuedMemtables:       opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:       opts.StopBacklogSeconds,
+		maxBacklogBytes:          opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:   opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:    opts.FlushBuildConcurrency,
+		disableWAL:               opts.DisableWAL,
+		disableValueLog:          disableValueLog,
+		relaxedSync:              opts.RelaxedSync,
+		notifyError:              opts.NotifyError,
+		inlineThreshold:          inlineThreshold,
+		valueLogRetain:           retained,
+		maxValueLogRetainedBytes: opts.MaxValueLogRetainedBytes,
+		mutableShards:            mutableShards,
+		mutableShardMask:         uint64(shardCount - 1),
+		hashSortedIndexer:        indexer,
+		closeCh:                  make(chan struct{}),
+		flushCh:                  make(chan struct{}, 1),
+		autoCheckpointOnceCh:     make(chan struct{}, 1),
+		autoCheckpointWriteCh:    make(chan struct{}, 1),
+		walSeq:                   maxWALSeq,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -1769,6 +1790,7 @@ func (db *DB) Checkpoint() error {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+	db.checkValueLogRetention()
 
 	return nil
 }
@@ -3355,6 +3377,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+	db.checkValueLogRetention()
 
 	if flushed && flushDur > 0 && totalBytes > 0 {
 		sample := float64(totalBytes) / flushDur.Seconds()
@@ -3564,6 +3587,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 		}
 	}
+	db.checkValueLogRetention()
 
 	if flushed && flushDur > 0 && memBytes > 0 {
 		sample := float64(memBytes) / flushDur.Seconds()
