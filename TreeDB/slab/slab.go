@@ -70,7 +70,7 @@ type SlabFile struct {
 
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -462,18 +462,10 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	copy(buf[10:10+keyLen], key)
 	copy(buf[10+keyLen:], value)
 
-	// Write to file
-	// Since we opened with O_APPEND, Write writes to end.
-	// But we need the offset.
-	// We trust s.Size matches current end?
-	// To be safe, we can use stat or seek?
-	// Or we use atomic offset tracking?
-	// Ideally SlabManager handles serialization, so s.Size is accurate.
-
 	offset := s.Size
 	written := 0
 	for written < len(buf) {
-		n, err := s.File.Write(buf[written:])
+		n, err := s.File.WriteAt(buf[written:], offset+int64(written))
 		if n > 0 {
 			written += n
 		}
@@ -506,7 +498,7 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	offset := s.Size
 	written := 0
 	for written < len(buf) {
-		n, err := s.File.Write(buf[written:])
+		n, err := s.File.WriteAt(buf[written:], offset+int64(written))
 		if n > 0 {
 			written += n
 		}
