@@ -34,6 +34,12 @@ So:
   - `results-compare-full/treedb-v1-head-wal-on.jsonl` (current HEAD): **1.98 min** total
 - Treat this as a priority regression to explain before further optimization work.
 
+#### Update (wal-value-log)
+
+- Root cause: cached-mode auto-checkpoint size trigger could repeatedly run `Checkpoint()` when `effectiveWALBytes` stayed above `MaxWALBytes` (value-log segments retained for pointers cannot be trimmed), thrashing writer latency.
+- Fix: disarm size-triggered auto-checkpoint after the first run; re-arm only once `effectiveWALBytes < MaxWALBytes/2` (commit `5dd76a5`).
+- New result: `results-compare-full/treedb-v1-5dd76a5-wal-on.jsonl`: **1.32 min** total (down from 1.98 min).
+
 ### Microbenches (op-geth)
 
 From `/Users/michaelseiler/dev/snissn/op-geth`:
