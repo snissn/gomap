@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
@@ -40,6 +41,10 @@ func NewWriter(path string) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := syncDir(path); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return &Writer{
 		f:          f,
 		bw:         bufio.NewWriterSize(f, defaultWALBufferSize),
@@ -64,6 +69,10 @@ func (w *Writer) RotateTo(path string) error {
 		}
 		info, err := f.Stat()
 		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		if err := syncDir(path); err != nil {
 			_ = f.Close()
 			return err
 		}
@@ -95,6 +104,10 @@ func (w *Writer) RotateTo(path string) error {
 		_ = f.Close()
 		return err
 	}
+	if err := syncDir(path); err != nil {
+		_ = f.Close()
+		return err
+	}
 
 	old := w.f
 	w.f = f
@@ -105,6 +118,16 @@ func (w *Writer) RotateTo(path string) error {
 		return err
 	}
 	return nil
+}
+
+func syncDir(path string) error {
+	dir := filepath.Dir(path)
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // writeSegment writes a chunk of data as a checksummed segment.

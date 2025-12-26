@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
@@ -64,6 +65,10 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := syncDir(path); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
@@ -110,6 +115,10 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		if err != nil {
 			return err
 		}
+		if err := syncDir(path); err != nil {
+			_ = f.Close()
+			return err
+		}
 		info, err := f.Stat()
 		if err != nil {
 			_ = f.Close()
@@ -141,6 +150,10 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		_ = f.Close()
 		return err
 	}
+	if err := syncDir(path); err != nil {
+		_ = f.Close()
+		return err
+	}
 
 	old := w.f
 	w.f = f
@@ -152,6 +165,16 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		return err
 	}
 	return nil
+}
+
+func syncDir(path string) error {
+	dir := filepath.Dir(path)
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 func (w *Writer) Append(op byte, key, value []byte) (page.ValuePtr, error) {
