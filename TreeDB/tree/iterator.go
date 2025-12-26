@@ -18,6 +18,7 @@ type CursorItem struct {
 type Iterator struct {
 	tree    *Tree
 	stack   []CursorItem
+	stackBuf [16]CursorItem
 	start   []byte
 	end     []byte
 	valid   bool
@@ -40,6 +41,7 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		end:     end,
 		reverse: false,
 	}
+	it.resetStack()
 	it.Seek(start)
 	return it
 }
@@ -54,6 +56,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		end:     end,
 		reverse: true,
 	}
+	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -76,7 +79,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 func (it *Iterator) seekRightMost() {
-	it.stack = nil
+	it.resetStack()
 	it.valid = false
 	it.err = nil
 	currID := it.tree.rootPageID
@@ -114,7 +117,7 @@ func (it *Iterator) seekRightMost() {
 }
 
 func (it *Iterator) seek(key []byte) {
-	it.stack = nil
+	it.resetStack()
 	it.valid = false
 	it.err = nil
 	it.currKey = nil
@@ -170,6 +173,10 @@ func (it *Iterator) seek(key []byte) {
 			return
 		}
 	}
+}
+
+func (it *Iterator) resetStack() {
+	it.stack = it.stackBuf[:0]
 }
 
 func (it *Iterator) loadCurrent() {
