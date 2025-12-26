@@ -81,7 +81,8 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [OPEN] Flush buffer pooling, adaptive memtable hysteresis. Plan: profile-driven perf sprints.
 - [OPEN] mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors.
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
-- [OPEN] Freelist heuristics, linear scan for small nodes, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: zero-alloc freelist append implemented.
+- [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
+- [OPEN] Freelist heuristics, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: zero-alloc freelist append implemented.
 
 ---
 

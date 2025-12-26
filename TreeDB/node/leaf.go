@@ -103,6 +103,29 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	data := n.data
 	count := n.Count()
+	if count <= smallSearchThreshold {
+		for idx := 0; idx < int(count); idx++ {
+			dirOff := NodeHeaderSize + idx*2
+			if dirOff+2 > len(data) {
+				return 0, false, ErrCorruptedNode
+			}
+			offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+7 > len(data) {
+				return 0, false, ErrCorruptedNode
+			}
+			keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+			keyPtr := ptr + 7
+			if keyPtr+int(keyLen) > len(data) {
+				return 0, false, ErrCorruptedNode
+			}
+			cmp := bytes.Compare(data[keyPtr:keyPtr+int(keyLen)], key)
+			if cmp >= 0 {
+				return uint16(idx), cmp == 0, nil
+			}
+		}
+		return count, false, nil
+	}
 	i, j := 0, int(count)
 
 	for i < j {

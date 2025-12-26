@@ -23,6 +23,8 @@ const (
 
 	// DirectoryEntrySize is the size of an offset (uint16).
 	DirectoryEntrySize = 2
+
+	smallSearchThreshold = 16
 )
 
 // Node is a wrapper around a raw page byte slice.
