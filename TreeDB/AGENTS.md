@@ -63,7 +63,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 ### Concurrency & Performance (P2/P3)
 
 - [OPEN] Global hash_sorted indexer singleton. Plan: scope per DB or make worker pool configurable.
-- [OPEN] Memtable iterator write blocking (mutable memtable). Plan: keep rotation-on-iterator policy; document direct memtable usage constraints.
+- [DONE] Memtable iterator write blocking (mutable memtable). Plan: keep rotation-on-iterator policy; documented direct memtable usage constraints.
 - [OPEN] Slab manager opens all slabs at startup (FD exhaustion). Plan: lazy open + LRU.
 - [DONE] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
 - [OPEN] Range-delete WAL batching, faster shard hash, flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
