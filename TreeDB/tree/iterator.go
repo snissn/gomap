@@ -211,8 +211,7 @@ func (it *Iterator) loadCurrent() {
 			}
 		}
 
-		// Skip tombstones (TreeDB does not currently persist them to disk, but
-		// iterator supports the flag for completeness).
+		// Skip tombstones; they are persisted in the index but hidden from iteration.
 		if flags&node.FlagTombstone != 0 {
 			if it.reverse {
 				it.stack[len(it.stack)-1].Index--
