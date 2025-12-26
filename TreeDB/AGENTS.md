@@ -40,7 +40,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] WAL record-size cap mismatch (writer vs reader). Plan: enforce max segment size in writer.
 - [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
 - [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
-- [OPEN] Value-log retention / disk growth. Plan: add live-pointer tracking + GC/compaction; expose retained bytes; add guardrails and hard caps.
+- [OPEN] Value-log retention / disk growth. Plan: live-pointer tracking + GC/compaction; guardrails and hard caps. Status: retained-bytes stats exposed.
 - [DONE] Verified cache paranoid mode. Plan: add option to force verify; implemented `VerifyOnRead` for always-verify.
 - [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
 - [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
