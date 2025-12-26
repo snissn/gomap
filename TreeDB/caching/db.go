@@ -268,6 +268,25 @@ func (db *DB) checkValueLogRetention() {
 	}
 }
 
+func (db *DB) allowValueLogPointers() bool {
+	if !db.valueLogEnabled() {
+		return false
+	}
+	limit := db.maxValueLogRetainedBytesHard
+	if limit <= 0 {
+		return true
+	}
+	_, bytes := db.valueLogRetainedStats()
+	if bytes >= limit {
+		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
+			db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed hard cap %d; disabling new value-log pointers", bytes, limit))
+		}
+		return false
+	}
+	db.valueLogHardCapWarned.Store(false)
+	return true
+}
+
 func hashKey(key []byte) uint64 {
 	return xxhash.Sum64(key)
 }
@@ -348,6 +367,9 @@ type Options struct {
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings).
 	MaxValueLogRetainedBytes int64
+	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
+	// values once retained bytes exceed this threshold (0 disables the cap).
+	MaxValueLogRetainedBytesHard int64
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
@@ -410,7 +432,9 @@ type DB struct {
 	valueLogMu               sync.Mutex
 	valueLogRetain           map[string]struct{}
 	valueLogWarned           atomic.Bool
+	valueLogHardCapWarned    atomic.Bool
 	maxValueLogRetainedBytes int64
+	maxValueLogRetainedBytesHard int64
 
 	// Level 1 (Disk)
 	backend BackendDB
@@ -853,6 +877,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		inlineThreshold:          inlineThreshold,
 		valueLogRetain:           retained,
 		maxValueLogRetainedBytes: opts.MaxValueLogRetainedBytes,
+		maxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
 		mutableShards:            mutableShards,
 		mutableShardMask:         uint64(shardCount - 1),
 		hashSortedIndexer:        indexer,
@@ -2102,6 +2127,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	needSyncBarrier := false
 	var ptr page.ValuePtr
 	var retainPath string
+	usePointer := false
 
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
@@ -2127,9 +2153,10 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			db.writeMu.RUnlock()
 			return err
 		}
-		if db.valueLogEnabled() && len(ptrs) > 0 {
-			ptr = ptrs[0]
-			if len(value) > db.inlineThreshold {
+		if db.valueLogEnabled() && len(ptrs) > 0 && len(value) > db.inlineThreshold {
+			if db.allowValueLogPointers() {
+				ptr = ptrs[0]
+				usePointer = true
 				db.mu.RLock()
 				retainPath = db.walPath
 				db.mu.RUnlock()
@@ -2140,7 +2167,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	shard.mu.Lock()
 	shard.mem.Set(key, value)
 	if db.valueLogEnabled() {
-		if len(value) > db.inlineThreshold {
+		if usePointer {
 			if shard.largePtrs == nil {
 				shard.largePtrs = make(map[string]page.ValuePtr)
 			}
@@ -4523,7 +4550,17 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		if b.db.valueLogEnabled() && len(ptrs) == len(b.entries) {
+		allowPointers := false
+		if b.db.valueLogEnabled() {
+			for i := range b.entries {
+				op := &b.entries[i]
+				if op.Type == batch.OpPut && len(op.Value) > b.db.inlineThreshold {
+					allowPointers = b.db.allowValueLogPointers()
+					break
+				}
+			}
+		}
+		if allowPointers && len(ptrs) == len(b.entries) {
 			retain := false
 			for i := range b.entries {
 				op := &b.entries[i]

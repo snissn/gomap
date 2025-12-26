@@ -49,7 +49,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
 - [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
 - [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests. Status: rotate-to-open-failure tests added for WAL/vlog.
-- [OPEN] Value-log retention cap enforcement. Plan: add hard cap/backpressure or forced inline writes when retained bytes exceed limit; GC/compaction remains longer-term.
+- [DONE] Value-log retention cap enforcement. Plan: add hard cap that disables new value-log pointers once retained bytes exceed limit.
 
 ### P2/P3 Portability, Security, Ops
 

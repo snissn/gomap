@@ -804,3 +804,55 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		t.Fatalf("backend Get mismatch")
 	}
 }
+
+func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:               1,
+		MaxValueLogRetainedBytesHard: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.Set([]byte("k1"), val); err != nil {
+		t.Fatalf("Set(k1): %v", err)
+	}
+	if err := cache.Set([]byte("k2"), val); err != nil {
+		t.Fatalf("Set(k2): %v", err)
+	}
+	cache.flushAll(true)
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry1, err := snap.GetEntry([]byte("k1"))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry(k1): %v", err)
+	}
+	if entry1.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry1.ValuePtr.FileID) {
+		_ = snap.Close()
+		t.Fatalf("expected value-log pointer for k1")
+	}
+
+	entry2, err := snap.GetEntry([]byte("k2"))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry(k2): %v", err)
+	}
+	if entry2.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry2.ValuePtr.FileID) {
+		_ = snap.Close()
+		t.Fatalf("expected non-value-log pointer for k2")
+	}
+	_ = snap.Close()
+}

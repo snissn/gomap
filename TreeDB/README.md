@@ -115,6 +115,7 @@ Details: `docs/TREEDB_PROFILES.md`.
 - TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
 - Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.
 - Optional guardrail: `MaxValueLogRetainedBytes` emits a warning when retained value-log bytes exceed the threshold.
+- Optional hard cap: `MaxValueLogRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
 - On-disk format is considered alpha and may change without backward-compatibility guarantees.
 
 ### Durability Matrix (Cached Mode)

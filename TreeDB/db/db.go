@@ -203,6 +203,9 @@ type Options struct {
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64
+	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
+	// values once retained bytes exceed this threshold (0 disables the cap).
+	MaxValueLogRetainedBytesHard int64
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only

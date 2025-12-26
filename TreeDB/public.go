@@ -132,6 +132,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:              opts.RelaxedSync,
 		AllowUnsafe:              opts.AllowUnsafe,
 		MaxValueLogRetainedBytes: opts.MaxValueLogRetainedBytes,
+		MaxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
 		NotifyError:              opts.NotifyError,
 	})
 	if err != nil {

@@ -18,6 +18,7 @@ This doc is a *plan for review* and is intentionally explicit so future agents c
 - Backend reads dispatch by `ValuePtr.FileID` high bit via `ValueReader` (`page.IsValueLogFileID`).
 - Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
 - Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.
+- Optional guardrail: `MaxValueLogRetainedBytesHard` disables new value-log pointers once retained bytes exceed the threshold.
 
 ## Problem statement
 
