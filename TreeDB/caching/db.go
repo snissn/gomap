@@ -28,6 +28,7 @@ var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 var ErrUnsafeOptions = fmt.Errorf("unsafe options require AllowUnsafe")
+var ErrMemtableFull = fmt.Errorf("memtable full")
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
@@ -39,6 +40,7 @@ const (
 	adaptiveMinWrites          = 1024
 	adaptiveSequentialWritePct = 0.85
 	adaptiveWarmupBytes        = 16 * 1024 * 1024
+	maxMemtableBytesPerShard   = int64(3 << 30)
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -192,6 +194,13 @@ func (db *DB) shardIndex(key []byte) int {
 
 func (db *DB) shardForKey(key []byte) *memShard {
 	return &db.mutableShards[db.shardIndex(key)]
+}
+
+func (db *DB) shardExceedsLimit(shard *memShard, addBytes int64) bool {
+	if maxMemtableBytesPerShard <= 0 {
+		return false
+	}
+	return shard.bytes+addBytes > maxMemtableBytesPerShard
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
@@ -1952,6 +1961,15 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	var ptr page.ValuePtr
 	var retainPath string
 
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	if db.shardExceedsLimit(shard, int64(len(key)+len(value))) {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		return ErrMemtableFull
+	}
+	shard.mu.Unlock()
+
 	if !db.disableWAL {
 		durability := walDurabilityNone
 		if sync {
@@ -1977,7 +1995,6 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		}
 	}
 
-	shard := db.shardForKey(key)
 	shard.mu.Lock()
 	shard.mem.Set(key, value)
 	if db.valueLogEnabled() {
@@ -2073,6 +2090,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 			shard := db.shardForKey(key)
 			shard.mu.Lock()
+			if db.shardExceedsLimit(shard, int64(len(key))) {
+				shard.mu.Unlock()
+				return ErrMemtableFull
+			}
 			shard.mem.Delete(key)
 			if shard.largePtrs != nil {
 				delete(shard.largePtrs, string(key))
@@ -2427,6 +2448,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		applyDelete := func(key []byte) error {
 			shard := db.shardForKey(key)
 			shard.mu.Lock()
+			if db.shardExceedsLimit(shard, int64(len(key))) {
+				shard.mu.Unlock()
+				return ErrMemtableFull
+			}
 			shard.mem.Delete(key)
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
@@ -2529,6 +2554,15 @@ func (db *DB) delete(key []byte, sync bool) error {
 	needRotate := false
 	needSyncBarrier := false
 
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	if db.shardExceedsLimit(shard, int64(len(key))) {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		return ErrMemtableFull
+	}
+	shard.mu.Unlock()
+
 	if !db.disableWAL {
 		durability := walDurabilityNone
 		if sync {
@@ -2545,7 +2579,6 @@ func (db *DB) delete(key []byte, sync bool) error {
 		}
 	}
 
-	shard := db.shardForKey(key)
 	shard.mu.Lock()
 	shard.mem.Delete(key)
 	if shard.largePtrs != nil {
@@ -4246,7 +4279,34 @@ func (b *Batch) writeRegular(sync bool) error {
 	needRotate := false
 	needSyncBarrier := false
 
-	// 1. WAL Append loop
+	// 1. Memtable capacity pre-check
+	shardCount := len(b.db.mutableShards)
+	shardEntries := make([][]batch.Entry, shardCount)
+	shardAdds := make([]int64, shardCount)
+	for _, op := range b.entries {
+		idx := b.db.shardIndex(op.Key)
+		shardEntries[idx] = append(shardEntries[idx], op)
+		add := int64(len(op.Key))
+		if op.Type == batch.OpPut {
+			add += int64(len(op.Value))
+		}
+		shardAdds[idx] += add
+	}
+	for i, add := range shardAdds {
+		if add == 0 {
+			continue
+		}
+		shard := &b.db.mutableShards[i]
+		shard.mu.Lock()
+		over := b.db.shardExceedsLimit(shard, add)
+		shard.mu.Unlock()
+		if over {
+			b.db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+	}
+
+	// 2. WAL Append loop
 	if !b.db.disableWAL {
 		records := b.walBuf[:0]
 		if cap(records) < len(b.entries) {
@@ -4297,14 +4357,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 	}
 
-	// 2. Memtable Update
-	shardCount := len(b.db.mutableShards)
-	shardEntries := make([][]batch.Entry, shardCount)
-	for _, op := range b.entries {
-		b.db.noteWriteKey(op.Key)
-		idx := b.db.shardIndex(op.Key)
-		shardEntries[idx] = append(shardEntries[idx], op)
-	}
+	// 3. Memtable Update
 
 	for i := range shardEntries {
 		entries := shardEntries[i]
@@ -4317,6 +4370,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
 				applier.ApplyStealSortedBatch(entries, func(key []byte) {
 					shard.rng.add(key)
+					b.db.noteWriteKey(key)
 				})
 			} else {
 				for _, op := range entries {
@@ -4326,6 +4380,7 @@ func (b *Batch) writeRegular(sync bool) error {
 						shard.mem.SetSteal(op.Key, op.Value)
 					}
 					shard.rng.add(op.Key)
+					b.db.noteWriteKey(op.Key)
 				}
 			}
 		} else {
@@ -4336,6 +4391,7 @@ func (b *Batch) writeRegular(sync bool) error {
 					shard.mem.SetSteal(op.Key, op.Value)
 				}
 				shard.rng.add(op.Key)
+				b.db.noteWriteKey(op.Key)
 			}
 		}
 		if b.db.valueLogEnabled() {

@@ -3,6 +3,7 @@ package treedb
 import (
 	"errors"
 
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -12,6 +13,8 @@ var (
 	ErrLocked = db.ErrLocked
 	// ErrUnsafeOptions indicates unsafe durability/integrity options were set without acknowledgement.
 	ErrUnsafeOptions = db.ErrUnsafeOptions
+	// ErrMemtableFull indicates the cached memtable has reached its hard cap.
+	ErrMemtableFull = caching.ErrMemtableFull
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = errors.New("treedb: db is closed")
