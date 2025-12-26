@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"encoding/binary"
 	"errors"
 	"sync"
 
@@ -208,23 +209,9 @@ func (a *Allocator) Free(id uint64) error {
 
 	count := n.Count()
 	if count < page.MaxFreeIDs {
-		// Append
-		// We need to decode, append, encode.
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
-		body.FreeIDs = append(body.FreeIDs, id) // This might alloc new slice if capacity low?
-		// Note: Decode creates slice of size `count`. Append will alloc.
-		// We need to write it back to `data`.
-
-		// Optimization: Decode just reads. We can write directly at offset?
-		// Offset = Header + Next(8) + Count*8.
-		// Write ID
-		// Use simple binary put?
-		// Need binary import?
-		// Or use body.Encode logic.
-		// Let's use body logic to be safe.
-		body.Encode(data[page.PageHeaderSize:]) // Writes Next + Array
-		// But Wait, `body.FreeIDs` has new item. `Encode` writes all.
-		// Correct.
+		// Append without reallocating: offset = header + next(8) + count*8.
+		slotOff := page.PageHeaderSize + 8 + int(count)*8
+		binary.LittleEndian.PutUint64(data[slotOff:slotOff+8], id)
 		n.SetCount(count + 1)
 		n.UpdateChecksum()
 		return nil
