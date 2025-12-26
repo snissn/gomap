@@ -53,6 +53,7 @@ type Options struct {
 type Stats struct {
 	LiveSetEntries     uint64
 	LiveSetAborted     bool
+	LiveSetBloom       bool
 	TreeLookups        uint64
 	TreeLookupsSkipped uint64
 }

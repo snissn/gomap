@@ -171,8 +171,19 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		//   active slab, no new live pointers into this slab can be created after
 		//   the snapshot. ApplyCompaction will verify again against latest state
 		//   to ensure safety.
-		if liveSet != nil {
-			if _, ok := liveSet[oldPtr]; !ok {
+		isLiveViaLookup := func() bool {
+			if opts.Stats != nil {
+				opts.Stats.TreeLookups++
+			}
+			entry, err := snap.GetEntry(key)
+			if err != nil {
+				return false
+			}
+			return entry.Flags&node.FlagPointer != 0 && entry.ValuePtr == oldPtr
+		}
+
+		if liveSet != nil && liveSet.exact != nil {
+			if _, ok := liveSet.exact[oldPtr]; !ok {
 				if opts.Stats != nil {
 					opts.Stats.TreeLookupsSkipped++
 				}
@@ -182,18 +193,20 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if opts.Stats != nil {
 				opts.Stats.TreeLookupsSkipped++
 			}
-		} else {
-			if opts.Stats != nil {
-				opts.Stats.TreeLookups++
-			}
-			entry, err := snap.GetEntry(key)
-			if err != nil {
-				// Not found or error -> Assume dead
+		} else if liveSet != nil && liveSet.bloom != nil {
+			if !liveSet.bloom.mayContain(oldPtr) {
+				if opts.Stats != nil {
+					opts.Stats.TreeLookupsSkipped++
+				}
 				offset += totalLen
 				continue
 			}
-			// Must be a pointer and match exactly.
-			if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != oldPtr {
+			if !isLiveViaLookup() {
+				offset += totalLen
+				continue
+			}
+		} else {
+			if !isLiveViaLookup() {
 				offset += totalLen
 				continue
 			}
@@ -249,7 +262,12 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 	return c.db.RefreshSlabSet()
 }
 
-func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint32, maxEntries int, stats *Stats) (map[page.ValuePtr]struct{}, error) {
+type liveSet struct {
+	exact map[page.ValuePtr]struct{}
+	bloom *bloomFilter
+}
+
+func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint32, maxEntries int, stats *Stats) (*liveSet, error) {
 	if maxEntries < 0 {
 		return nil, nil
 	}
@@ -262,7 +280,17 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 	it := tr.Iterator(nil, nil)
 	defer it.Close()
 
-	liveSet := make(map[page.ValuePtr]struct{})
+	if maxEntries == 0 {
+		maxEntries = defaultLiveSetMaxEntries
+	}
+	initialCap := 1024
+	if maxEntries > 0 && maxEntries < initialCap {
+		initialCap = maxEntries
+	}
+	ls := &liveSet{
+		exact: make(map[page.ValuePtr]struct{}, initialCap),
+	}
+	var liveCount uint64
 
 	for it.Valid() {
 		select {
@@ -273,12 +301,21 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && ptr.FileID == id {
-			liveSet[ptr] = struct{}{}
-			if maxEntries > 0 && len(liveSet) > maxEntries {
-				if stats != nil {
-					stats.LiveSetAborted = true
+			liveCount++
+			if ls.bloom != nil {
+				ls.bloom.add(ptr)
+				continue
+			}
+			ls.exact[ptr] = struct{}{}
+			if maxEntries > 0 && len(ls.exact) > maxEntries {
+				ls.bloom = newBloomFilter(maxEntries)
+				for p := range ls.exact {
+					ls.bloom.add(p)
 				}
-				return nil, nil
+				ls.exact = nil
+				if stats != nil {
+					stats.LiveSetBloom = true
+				}
 			}
 		}
 		it.Next()
@@ -289,7 +326,7 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 	}
 
 	if stats != nil {
-		stats.LiveSetEntries = uint64(len(liveSet))
+		stats.LiveSetEntries = liveCount
 	}
-	return liveSet, nil
+	return ls, nil
 }
