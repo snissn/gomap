@@ -53,7 +53,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [NOT_APPLICABLE] Page reuse race on freelist. MVCC + graveyard delays reuse until safe.
 - [OPEN] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback.
 - [DONE] Endianness for UnsafeCastHeader. Plan: guard with runtime check + skip test on big-endian.
-- [OPEN] Directory permission hardening. Plan: validate existing perms and warn on open.
+- [DONE] Directory permission hardening. Plan: validate existing perms and warn on open.
 - [DONE] Threat model clarity (CRC vs adversarial tampering). Plan: documented that CRC is non-cryptographic; noted encryption/HMAC guidance.
 - [OPEN] CLI safety/exfil guardrails. Plan: require explicit flags for value dumps.
 - [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
