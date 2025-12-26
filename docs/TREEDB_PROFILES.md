@@ -37,6 +37,7 @@ override specific fields:
 opts := treedb.Options{Dir: "./db"}
 treedb.ApplyProfile(&opts, treedb.ProfileBench)
 opts.FlushThreshold = 64 << 20
+opts.AllowUnsafe = true // required for ProfileFast/ProfileBench
 ```
 
 ## What is a Profile?
@@ -88,6 +89,8 @@ Use when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
+Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
+
 ### `ProfileBench`
 
 Goal: benchmark-friendly determinism (“Fast + fewer background surprises”).
@@ -109,6 +112,8 @@ Use when you want:
 
 Not recommended for production.
 
+Note: `ProfileBench` requires `Options.AllowUnsafe = true` to open.
+
 ## Important Notes
 
 ### Profiles do not prevent overrides
@@ -123,4 +128,3 @@ Profiles set boolean policy knobs to match the profile.
 
 If you want the opposite behavior, apply the profile and then set the boolean
 explicitly.
-

@@ -336,6 +336,8 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 // SetSync writes a key/value pair and forces a durability boundary.
+// With Options.RelaxedSync enabled, Sync operations are crash-consistent
+// only (no fsync) and may not survive power loss.
 func (db *DB) SetSync(key, value []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
