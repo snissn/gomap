@@ -453,7 +453,7 @@ type DB struct {
 	autoCheckpointOn      atomic.Bool
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is disarmed after the first size-triggered checkpoint and re-armed only
-	// after effectiveWALBytes falls below maxWALBytes/2.
+	// after reclaimable WAL bytes fall below maxWALBytes/2.
 	autoCheckpointSizeArmed atomic.Bool
 
 	autoCheckpointCount          atomic.Uint64
@@ -462,6 +462,8 @@ type DB struct {
 	autoCheckpointLastDurNanos   atomic.Int64
 	autoCheckpointLastWALBefore  atomic.Int64
 	autoCheckpointLastWALAfter   atomic.Int64
+	autoCheckpointLastWALReclaimableBefore atomic.Int64
+	autoCheckpointLastWALReclaimableAfter  atomic.Int64
 	autoCheckpointLastWALTrimmed atomic.Int64
 	autoCheckpointLastWALBytes   atomic.Int64
 	autoCheckpointMaxWALBytes    atomic.Int64
@@ -974,6 +976,11 @@ func (db *DB) noteWrite() {
 		// Rearm size-triggered checkpoints once WAL bytes drop substantially.
 		if current < max/2 {
 			db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
+		} else if !db.autoCheckpointSizeArmed.Load() && db.valueLogEnabled() {
+			reclaimable := db.reclaimableWALBytes()
+			if reclaimable < max/2 {
+				db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
+			}
 		}
 		scaled := max / 4
 		if scaled < 4*1024 {
@@ -1052,6 +1059,24 @@ func (db *DB) effectiveWALBytes() int64 {
 		return 0
 	}
 	return db.walClosedBytes.Load() + db.walLiveBytes.Load()
+}
+
+func (db *DB) reclaimableWALBytes() int64 {
+	if db == nil {
+		return 0
+	}
+	total := db.effectiveWALBytes()
+	if total <= 0 {
+		return 0
+	}
+	if !db.valueLogEnabled() {
+		return total
+	}
+	_, retained := db.valueLogRetainedStats()
+	if retained >= total {
+		return 0
+	}
+	return total - retained
 }
 
 func (db *DB) minIdleCheckpointWALBytes() int64 {
@@ -1554,6 +1579,7 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	if effectiveBytes <= 0 {
 		return
 	}
+	reclaimableBytes := db.reclaimableWALBytes()
 
 	// Avoid thrashing the checkpoint path when workloads are mostly idle but
 	// produce tiny write bursts.
@@ -1571,12 +1597,12 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	case autoCheckpointModeInterval, autoCheckpointModeIdle, autoCheckpointModeForce:
 		// proceed
 	case autoCheckpointModeSize:
-		if maxWALBytes <= 0 || effectiveBytes < maxWALBytes {
+		if maxWALBytes <= 0 || reclaimableBytes < maxWALBytes {
 			return
 		}
 		// Avoid repeatedly checkpointing when WAL bytes cannot be reduced (e.g.
-		// value-log segments retained for pointers keep effectiveWALBytes above
-		// maxWALBytes). Rearm once bytes drop below maxWALBytes/2.
+		// value-log segments retained for pointers). Rearm once reclaimable bytes
+		// drop below maxWALBytes/2.
 		if !db.autoCheckpointSizeArmed.CompareAndSwap(true, false) {
 			return
 		}
@@ -1586,15 +1612,17 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	}
 
 	before := effectiveBytes
+	beforeReclaimable := reclaimableBytes
 	start := time.Now()
 	err := db.Checkpoint()
 	dur := time.Since(start)
 	after := db.effectiveWALBytes()
+	afterReclaimable := db.reclaimableWALBytes()
 	trimmed := before - after
 	if trimmed < 0 {
 		trimmed = 0
 	}
-	if maxWALBytes > 0 && after < maxWALBytes/2 {
+	if maxWALBytes > 0 && afterReclaimable < maxWALBytes/2 {
 		db.autoCheckpointSizeArmed.CompareAndSwap(false, true)
 	}
 
@@ -1613,6 +1641,8 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	db.autoCheckpointLastDurNanos.Store(dur.Nanoseconds())
 	db.autoCheckpointLastWALBefore.Store(before)
 	db.autoCheckpointLastWALAfter.Store(after)
+	db.autoCheckpointLastWALReclaimableBefore.Store(beforeReclaimable)
+	db.autoCheckpointLastWALReclaimableAfter.Store(afterReclaimable)
 	db.autoCheckpointLastWALTrimmed.Store(trimmed)
 }
 
@@ -3797,6 +3827,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.auto_checkpoint.last_duration_ms"] = fmt.Sprintf("%.3f", float64(db.autoCheckpointLastDurNanos.Load())/float64(time.Millisecond))
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_before"] = fmt.Sprintf("%d", db.autoCheckpointLastWALBefore.Load())
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALAfter.Load())
+	stats["treedb.cache.auto_checkpoint.last_wal_reclaimable_before"] = fmt.Sprintf("%d", db.autoCheckpointLastWALReclaimableBefore.Load())
+	stats["treedb.cache.auto_checkpoint.last_wal_reclaimable_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALReclaimableAfter.Load())
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_trimmed"] = fmt.Sprintf("%d", db.autoCheckpointLastWALTrimmed.Load())
 	stats["treedb.cache.auto_checkpoint.last_unix_nano"] = fmt.Sprintf("%d", db.autoCheckpointLastUnixNano.Load())
 	return stats
