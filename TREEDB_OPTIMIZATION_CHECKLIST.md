@@ -27,6 +27,13 @@ So:
 
 ## Baselines to run (repeatable)
 
+### Regression note (iavl-bench WAL-on full run)
+
+- Full changeset (`./treedb-v1/treedb-v1-bench bench ...`) shows WAL-on regression:
+  - `results/treedb-v1.jsonl` (commit `606c9c7`): **0.81 min** total
+  - `results-compare-full/treedb-v1-head-wal-on.jsonl` (current HEAD): **1.98 min** total
+- Treat this as a priority regression to explain before further optimization work.
+
 ### Microbenches (op-geth)
 
 From `/Users/michaelseiler/dev/snissn/op-geth`:
