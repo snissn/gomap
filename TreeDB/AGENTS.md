@@ -24,6 +24,54 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 ---
 
+## Audit Consolidation (2025-12-26 Reviews)
+
+Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
+
+### P0/P1 Safety & Correctness
+
+- [DONE] Unsafe durability/integrity toggles too easy to enable (DisableWAL, RelaxedSync, DisableReadChecksum, DisableSlabTailRepairOnOpen). Plan: require explicit AllowUnsafe and document profiles; implemented in Open plus docs.
+- [DONE] WAL/vlog rotation atomicity (close-old-before-open-new risk). Plan: open new segment first, then swap/close old.
+- [DONE] Missing directory fsync for WAL/vlog creation. Plan: sync parent dir on create/rotate (best-effort).
+- [DONE] Slab O_APPEND offset risk. Plan: open slabs without O_APPEND; use WriteAt with explicit offsets.
+- [DONE] Recovery should validate root/sysroot page readability. Plan: verify checksum + type before accepting meta candidate.
+- [DONE] Skiplist 4GiB panic. Plan: enforce a hard per-shard memtable cap and return ErrMemtableFull before the arena limit.
+- [DONE] Empty key checks inconsistent (nil vs len==0). Plan: treat len==0 as empty across public APIs.
+- [DONE] WAL record-size cap mismatch (writer vs reader). Plan: enforce max segment size in writer.
+- [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
+- [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
+- [OPEN] Value-log retention / disk growth. Plan: add live-pointer tracking + GC/compaction; expose retained bytes; add guardrails and hard caps.
+- [OPEN] Verified cache paranoid/sampling mode. Plan: add option to force verify or periodic scrub; consider build-tag debug mode.
+- [OPEN] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
+- [OPEN] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
+- [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests.
+
+### P2/P3 Portability, Security, Ops
+
+- [NOT_APPLICABLE] B-tree structural atomicity / no WAL for index pages. TreeDB uses COW + redundant meta pages; crash tests cover recovery.
+- [FIXED] Mmap UAF hazard for GetUnsafe. Snapshots pin slabs; GetUnsafe returns view scoped to snapshot; docs emphasize lifetimes.
+- [NOT_APPLICABLE] Page reuse race on freelist. MVCC + graveyard delays reuse until safe.
+- [OPEN] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback.
+- [OPEN] Endianness for UnsafeCastHeader. Plan: keep unused or guard with runtime check/build tag.
+- [OPEN] Directory permission hardening. Plan: validate existing perms and warn on open.
+- [OPEN] Threat model clarity (CRC vs adversarial tampering). Plan: document that CRC is non-cryptographic; consider HMAC/encryption hooks.
+- [OPEN] CLI safety/exfil guardrails. Plan: require explicit flags for value dumps.
+- [OPEN] Error propagation on Close() defer paths. Plan: plumb close errors to callers instead of dropping.
+- [OPEN] Unsafe string/byte conversions require immutable inputs. Plan: add debug build that copies or asserts ownership; audit view lifetimes.
+- [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
+
+### Concurrency & Performance (P2/P3)
+
+- [OPEN] Global hash_sorted indexer singleton. Plan: scope per DB or make worker pool configurable.
+- [OPEN] Memtable iterator write blocking (mutable memtable). Plan: keep rotation-on-iterator policy; document direct memtable usage constraints.
+- [OPEN] Slab manager opens all slabs at startup (FD exhaustion). Plan: lazy open + LRU.
+- [OPEN] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
+- [OPEN] Range-delete WAL batching, faster shard hash, flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
+- [OPEN] Compaction live-set memory pressure, batch pooling, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
+- [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17.
+
+---
+
 ## Repository Bootstrap
 
 1. Initialize module and deps:
