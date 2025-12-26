@@ -65,7 +65,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [OPEN] Global hash_sorted indexer singleton. Plan: scope per DB or make worker pool configurable.
 - [OPEN] Memtable iterator write blocking (mutable memtable). Plan: keep rotation-on-iterator policy; document direct memtable usage constraints.
 - [OPEN] Slab manager opens all slabs at startup (FD exhaustion). Plan: lazy open + LRU.
-- [OPEN] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
+- [DONE] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
 - [OPEN] Range-delete WAL batching, faster shard hash, flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
 - [OPEN] Compaction live-set memory pressure, batch pooling, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
 - [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17.
