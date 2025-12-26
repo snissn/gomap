@@ -67,7 +67,8 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Slab manager opens all slabs at startup (FD exhaustion). Plan: lazy open + LRU. Status: lazy open implemented (no LRU yet).
 - [DONE] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
 - [DONE] Range-delete WAL batching. Plan: batch copied keys for WAL appends in DeleteRange.
-- [OPEN] Faster shard hash, flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
+- [DONE] Faster shard hash. Plan: switch to xxhash for shard selection.
+- [OPEN] Flush buffer pooling, adaptive memtable hysteresis, checkpoint hysteresis under retained segments. Plan: profile-driven perf sprints.
 - [OPEN] Compaction live-set memory pressure, batch pooling, CRC pool overhead, mmap remap metrics, large-value pointer memtable mode. Plan: benchmark-driven refactors (consider bloom filter for live-set).
 - [OPEN] Freelist heuristics, linear scan for small nodes, iterator stack inline, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17.
 
