@@ -40,22 +40,32 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 		return nil, err
 	}
 
-	var maxID uint32
-	found := false
+	type slabInfo struct {
+		id   uint32
+		path string
+		size int64
+	}
+
+	var (
+		maxID uint32
+		found bool
+		infos []slabInfo
+	)
 
 	for _, path := range matches {
 		var id uint32
 		_, err := fmt.Sscanf(filepath.Base(path), "data-%04d.slab", &id)
-		if err == nil {
-			s, err := OpenSlab(path, id)
-			if err != nil {
-				return nil, err
-			}
-			sm.slabs[id] = s
-			if id >= maxID {
-				maxID = id
-				found = true
-			}
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, slabInfo{id: id, path: path, size: info.Size()})
+		if id >= maxID {
+			maxID = id
+			found = true
 		}
 	}
 
@@ -67,7 +77,18 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 		sm.slabs[0] = s
 		sm.activeSlab = s
 	} else {
-		sm.activeSlab = sm.slabs[maxID]
+		for _, info := range infos {
+			if info.id == maxID {
+				s, err := OpenSlab(info.path, info.id)
+				if err != nil {
+					return nil, err
+				}
+				sm.slabs[info.id] = s
+				sm.activeSlab = s
+				continue
+			}
+			sm.slabs[info.id] = OpenSlabLazy(info.path, info.id, info.size)
+		}
 	}
 
 	return sm, nil

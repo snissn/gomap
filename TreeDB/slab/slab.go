@@ -52,6 +52,7 @@ type SlabFile struct {
 	Size     int64 // Track size for rotation
 
 	closed atomic.Bool
+	openMu sync.Mutex
 
 	// mmapData holds the current read-only mapping. Readers load it without taking
 	// locks; remaps publish a new mapping and keep the old mapping alive until
@@ -68,6 +69,18 @@ type SlabFile struct {
 	writeScratch []byte
 }
 
+func newSlabFile(path string, id uint32, f *os.File, size int64) *SlabFile {
+	sf := &SlabFile{
+		ID:   id,
+		Path: path,
+		File: f,
+		Size: size,
+	}
+	// Initialize atomic.Value with the concrete type so Load is safe.
+	sf.mmapData.Store([]byte(nil))
+	return sf
+}
+
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
@@ -81,15 +94,12 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	sf := &SlabFile{
-		ID:   id,
-		Path: path,
-		File: f,
-		Size: info.Size(),
-	}
-	// Initialize atomic.Value with the concrete type so Load is safe.
-	sf.mmapData.Store([]byte(nil))
-	return sf, nil
+	return newSlabFile(path, id, f, info.Size()), nil
+}
+
+// OpenSlabLazy registers a slab without opening its file descriptor.
+func OpenSlabLazy(path string, id uint32, size int64) *SlabFile {
+	return newSlabFile(path, id, nil, size)
 }
 
 func (s *SlabFile) Close() error {
@@ -106,11 +116,44 @@ func (s *SlabFile) Close() error {
 	s.deadMappings = nil
 	s.mmapData.Store([]byte(nil))
 	s.remapMu.Unlock()
+	if s.File == nil {
+		return nil
+	}
 	return s.File.Close()
 }
 
 func (s *SlabFile) Sync() error {
 	return s.File.Sync()
+}
+
+func (s *SlabFile) ensureOpen() error {
+	if s == nil {
+		return os.ErrClosed
+	}
+	if s.closed.Load() {
+		return os.ErrClosed
+	}
+	if s.File != nil {
+		return nil
+	}
+
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	if s.File != nil {
+		return nil
+	}
+	f, err := os.OpenFile(s.Path, os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	s.File = f
+	s.Size = info.Size()
+	return nil
 }
 
 // Truncate resizes the slab file. Used for crash recovery.
@@ -262,6 +305,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
 			return val, err
 		}
+		if err := s.ensureOpen(); err != nil {
+			return nil, err
+		}
 		s.remapToFileSize()
 		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
 			return val, err
@@ -270,6 +316,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 	}
 
 	// Fallback path: pread into buffers.
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
 	var headerArr [HeaderSize]byte
 	headerBuf := headerArr[:]
 	if _, err := s.File.ReadAt(headerBuf, realStart); err != nil {
@@ -356,6 +405,9 @@ func (s *SlabFile) maybeScheduleRemap() {
 	if s == nil || s.closed.Load() {
 		return
 	}
+	if s.File == nil {
+		return
+	}
 	if !s.remapRequested.CompareAndSwap(false, true) {
 		return
 	}
@@ -367,6 +419,9 @@ func (s *SlabFile) maybeScheduleRemap() {
 
 func (s *SlabFile) remapToFileSize() {
 	if s == nil || s.closed.Load() {
+		return
+	}
+	if s.File == nil {
 		return
 	}
 
