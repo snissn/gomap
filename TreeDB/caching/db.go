@@ -1167,6 +1167,36 @@ var walAckPool = sync.Pool{
 	New: func() any { return &walAck{} },
 }
 
+const maxEntryPoolCap = 1 << 14
+
+var entrySlicePool sync.Pool
+
+func getEntrySlice(capacity int) []batch.Entry {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxEntryPoolCap {
+		return make([]batch.Entry, 0, capacity)
+	}
+	if v := entrySlicePool.Get(); v != nil {
+		s := v.([]batch.Entry)
+		if cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]batch.Entry, 0, capacity)
+}
+
+func putEntrySlice(entries []batch.Entry) {
+	if cap(entries) > maxEntryPoolCap {
+		return
+	}
+	for i := range entries {
+		entries[i] = batch.Entry{}
+	}
+	entrySlicePool.Put(entries[:0])
+}
+
 type walFastItem struct {
 	record logRecord
 	ack    *walAck
@@ -3194,7 +3224,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
 			collectOps := func(mem memtable.Table, estLen int, ptrs map[string]page.ValuePtr) ([]batch.Entry, error) {
-				ops := make([]batch.Entry, 0, estLen)
+				ops := getEntrySlice(estLen)
 				iter := mem.NewIterator(nil, nil)
 				for iter.Valid() {
 					if iter.IsDeleted() {
@@ -3229,27 +3259,35 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				if err == nil {
 					err = iter.Error()
 				}
+				if err != nil {
+					putEntrySlice(ops)
+					return nil, err
+				}
 				return ops, err
 			}
 
 			buildConcurrency := db.flushBuildConcurrency
 			if buildConcurrency <= 1 || len(units) <= 1 {
-				ops := make([]batch.Entry, 0, totalLen)
+				ops := getEntrySlice(totalLen)
 				for _, unit := range units {
 					memOps, err := collectOps(unit.mem, unit.memLen, unit.ptrs)
 					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 						_ = backendBatch.Close()
+						putEntrySlice(ops)
 						return false
 					}
 					ops = append(ops, memOps...)
+					putEntrySlice(memOps)
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
+					putEntrySlice(ops)
 					return false
 				}
+				putEntrySlice(ops)
 			} else {
 				sem := make(chan struct{}, buildConcurrency)
 				unitOps := make([][]batch.Entry, len(units))
@@ -3284,20 +3322,26 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				case err := <-errCh:
 					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 					_ = backendBatch.Close()
+					for _, ops := range unitOps {
+						putEntrySlice(ops)
+					}
 					return false
 				default:
 				}
 
-				ops := make([]batch.Entry, 0, totalLen)
+				ops := getEntrySlice(totalLen)
 				for i := range unitOps {
 					ops = append(ops, unitOps[i]...)
+					putEntrySlice(unitOps[i])
 				}
 
 				if err := backendBatch.SetOps(ops); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
+					putEntrySlice(ops)
 					return false
 				}
+				putEntrySlice(ops)
 			}
 		} else {
 			pointerBatch, _ := backendBatch.(interface {

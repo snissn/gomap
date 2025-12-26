@@ -78,7 +78,8 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Batch pooling for backend batches. Plan: pool batch.Batch instances and return on Close.
 - [DONE] Compaction live-set memory pressure. Plan: fall back to a bloom filter when the live set grows too large.
 - [DONE] CRC pool overhead. Plan: use crc32.Update directly in ChecksumParts.
-- [OPEN] Flush buffer pooling, adaptive memtable hysteresis. Plan: profile-driven perf sprints.
+- [DONE] Flush buffer pooling. Plan: pool batch.Entry slices in flush builder.
+- [OPEN] Adaptive memtable hysteresis. Plan: require consecutive rotations before switching modes.
 - [DONE] mmap remap metrics. Plan: expose remap and dead-mapping counters via Stats.
 - [OPEN] Large-value pointer memtable mode. Plan: benchmark-driven refactors.
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
