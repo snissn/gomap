@@ -26,11 +26,15 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 ## Audit Consolidation (2025-12-26 Reviews)
 
+Note: This section consolidates all issues raised across the audits and perf review.
+Each item includes a remediation plan and current status.
+
 Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 
 ### P0/P1 Safety & Correctness
 
 - [DONE] Unsafe durability/integrity toggles too easy to enable (DisableWAL, RelaxedSync, DisableReadChecksum, DisableSlabTailRepairOnOpen). Plan: require explicit AllowUnsafe and document profiles; implemented in Open plus docs.
+- [DONE] RelaxedSync/SetSync semantics ambiguity. Plan: document that RelaxedSync downgrades sync durability and warn; docs updated.
 - [DONE] WAL/vlog rotation atomicity (close-old-before-open-new risk). Plan: open new segment first, then swap/close old.
 - [DONE] Missing directory fsync for WAL/vlog creation. Plan: sync parent dir on create/rotate (best-effort).
 - [DONE] Slab O_APPEND offset risk. Plan: open slabs without O_APPEND; use WriteAt with explicit offsets.
@@ -45,6 +49,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
 - [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
 - [OPEN] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests. Status: rotate-to-open-failure tests added for WAL/vlog.
+- [OPEN] Value-log retention cap enforcement. Plan: add hard cap/backpressure or forced inline writes when retained bytes exceed limit; GC/compaction remains longer-term.
 
 ### P2/P3 Portability, Security, Ops
 
@@ -59,6 +64,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
 - [DONE] Unsafe string/byte conversions require immutable inputs. Plan: add build tag (`treedb_safe`) that forces copies for debug/safety.
 - [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
+- [OPEN] Checksum hotpath micro-optimizations. Plan: profile CRC usage and remove avoidable allocs if meaningful.
 
 ### Concurrency & Performance (P2/P3)
 
