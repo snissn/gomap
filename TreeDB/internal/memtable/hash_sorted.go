@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -173,13 +172,6 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	for _, c := range chunks {
 		globalHashSortedIndexer.enqueue(c.mt, c.seq, c.keys)
 	}
-}
-
-func bytesToStringNoCopy(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (m *HashSorted) indexApplySortedChunk(seq uint64, keys []string) {

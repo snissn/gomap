@@ -12,7 +12,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -47,13 +46,6 @@ const (
 // CachingDB.Iterator. It is intended for benchmarking/diagnostics.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
-}
-
-func bytesToStringNoCopy(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (db *DB) syncDirBestEffort(dir string) {

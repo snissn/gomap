@@ -3,7 +3,6 @@ package memtable
 import (
 	"strings"
 	"sync"
-	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -395,13 +394,6 @@ func (it *btreeIterator) refresh() {
 	}
 	it.cur = it.iter.Value()
 	it.hasCur = true
-}
-
-func stringToBytesNoCopy(s string) []byte {
-	if len(s) == 0 {
-		return nil
-	}
-	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
 func (m *BTree) setMaybeLoadLocked(key string, entry btreeEntry) (btreeEntry, bool) {
