@@ -33,6 +33,40 @@ func NewMockBackend() *MockBackend {
 	return &MockBackend{data: make(map[string][]byte)}
 }
 
+func (m *MockBackend) SetWriteErr(err error) {
+	m.mu.Lock()
+	m.writeErr = err
+	m.mu.Unlock()
+}
+
+func (m *MockBackend) getWriteErr() error {
+	m.mu.RLock()
+	err := m.writeErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getSetErr() error {
+	m.mu.RLock()
+	err := m.setErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getSetOpsErr() error {
+	m.mu.RLock()
+	err := m.setOpsErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getDeleteErr() error {
+	m.mu.RLock()
+	err := m.deleteErr
+	m.mu.RUnlock()
+	return err
+}
+
 func setMutable(db *DB, key, value []byte) {
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
@@ -191,15 +225,15 @@ type MockBatch struct {
 }
 
 func (b *MockBatch) Set(key, value []byte) error {
-	if b.mb.setErr != nil {
-		return b.mb.setErr
+	if err := b.mb.getSetErr(); err != nil {
+		return err
 	}
 	b.mb.Set(key, value)
 	return nil
 }
 func (b *MockBatch) Delete(key []byte) error {
-	if b.mb.deleteErr != nil {
-		return b.mb.deleteErr
+	if err := b.mb.getDeleteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	delete(b.mb.data, string(key))
@@ -207,8 +241,8 @@ func (b *MockBatch) Delete(key []byte) error {
 	return nil
 }
 func (b *MockBatch) SetOps(ops []batch.Entry) error {
-	if b.mb.setOpsErr != nil {
-		return b.mb.setOpsErr
+	if err := b.mb.getSetOpsErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
@@ -227,8 +261,8 @@ func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *MockBatch) Write() error {
-	if b.mb.writeErr != nil {
-		return b.mb.writeErr
+	if err := b.mb.getWriteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
@@ -237,8 +271,8 @@ func (b *MockBatch) Write() error {
 }
 
 func (b *MockBatch) WriteSync() error {
-	if b.mb.writeErr != nil {
-		return b.mb.writeErr
+	if err := b.mb.getWriteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
@@ -656,7 +690,7 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
-	backend.writeErr = errors.New("write failed")
+	backend.SetWriteErr(errors.New("write failed"))
 
 	errCh := make(chan error, 1)
 	db, err := Open(dir, backend, Options{
@@ -686,7 +720,7 @@ func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
 		t.Fatalf("expected NotifyError to be called")
 	}
 
-	backend.writeErr = nil
+	backend.SetWriteErr(nil)
 	if err := db.Close(); err == nil {
 		t.Fatalf("expected Close to return background error")
 	}
