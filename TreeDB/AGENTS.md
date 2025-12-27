@@ -87,7 +87,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
 - [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
 - [DONE] AllocMany + parallel zipper merges. Plan: add AllocMany and parallelize child rewrites with per-child metrics; implemented with concurrency gating.
-- [OPEN] Freelist heuristics (better reuse). Plan: consider bucketed allocation if profiling shows fragmentation pressure beyond the current region-aware allocator.
+- [DEFERRED] Freelist heuristics (better reuse). Plan: current region-aware allocator + AllocMany cover locality; defer bucketed allocator until profiling shows fragmentation pressure that warrants a format change.
 
 ---
 
