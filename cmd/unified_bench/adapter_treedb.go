@@ -21,6 +21,8 @@ var (
 	treedbWriterFlushMaxMems       = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs         = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
 	treedbPreferAppendAlloc        = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
+	treedbFreelistRegionPages      = flag.Uint64("treedb-freelist-region-pages", 0, "TreeDB: freelist reuse region size in pages (0=default)")
+	treedbFreelistRegionRadius     = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
 	treedbLeafFillPPM              = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbInternalFillPPM          = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbIterDebug                = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
@@ -76,6 +78,8 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		ChunkSize:                         64 * 1024 * 1024,
 		KeepRecent:                        *treedbKeepRecent,
 		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		FreelistRegionPages:               *treedbFreelistRegionPages,
+		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
 		FlushThreshold:                    *treedbFlushThreshold,
@@ -109,6 +113,8 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		ChunkSize:                         64 * 1024 * 1024,
 		KeepRecent:                        *treedbKeepRecent,
 		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		FreelistRegionPages:               *treedbFreelistRegionPages,
+		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
 		AllowUnsafe:                       *treedbAllowUnsafe,
