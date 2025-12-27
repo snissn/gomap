@@ -37,6 +37,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] RelaxedSync/SetSync semantics ambiguity. Plan: document that RelaxedSync downgrades sync durability and warn; docs updated.
 - [DONE] WAL/vlog rotation atomicity (close-old-before-open-new risk). Plan: open new segment first, then swap/close old.
 - [DONE] Missing directory fsync for WAL/vlog creation. Plan: sync parent dir on create/rotate (best-effort).
+- [DONE] Missing directory fsync for slab creation. Plan: sync parent dir when creating new slab files (rotation/open).
 - [DONE] Slab O_APPEND offset risk. Plan: open slabs without O_APPEND; use WriteAt with explicit offsets.
 - [DONE] Recovery should validate root/sysroot page readability. Plan: verify checksum + type before accepting meta candidate.
 - [DONE] Skiplist 4GiB panic. Plan: enforce a hard per-shard memtable cap and return ErrMemtableFull before the arena limit.

@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
@@ -16,6 +17,8 @@ const (
 )
 
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+
+var syncDirFn = syncDir
 
 var (
 	// MaxSlabSize is 4GB (hard limit for rotation).
@@ -89,9 +92,22 @@ func newSlabFile(path string, id uint32, f *os.File, size int64) *SlabFile {
 
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
+	created := false
+	if _, err := os.Stat(path); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		created = true
+	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
+	}
+	if created {
+		if err := syncDirFn(filepath.Dir(path)); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 
 	info, err := f.Stat()
@@ -607,4 +623,16 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	s.Size += int64(written)
 	s.writeOffset = s.Size
 	return offset, nil
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
 }
