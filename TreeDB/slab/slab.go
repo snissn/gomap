@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,8 @@ type SlabFile struct {
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
+	// writeOffset tracks the file offset for sequential appends.
+	writeOffset int64
 
 	closed atomic.Bool
 	openMu sync.Mutex
@@ -73,10 +76,11 @@ type SlabFile struct {
 
 func newSlabFile(path string, id uint32, f *os.File, size int64) *SlabFile {
 	sf := &SlabFile{
-		ID:   id,
-		Path: path,
-		File: f,
-		Size: size,
+		ID:          id,
+		Path:        path,
+		File:        f,
+		Size:        size,
+		writeOffset: size,
 	}
 	// Initialize atomic.Value with the concrete type so Load is safe.
 	sf.mmapData.Store([]byte(nil))
@@ -156,6 +160,12 @@ func (s *SlabFile) ensureOpen() error {
 	}
 	s.File = f
 	s.Size = info.Size()
+	s.writeOffset = s.Size
+	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
+		_ = s.File.Close()
+		s.File = nil
+		return err
+	}
 	return nil
 }
 
@@ -165,6 +175,10 @@ func (s *SlabFile) Truncate(size int64) error {
 		return err
 	}
 	s.Size = size
+	s.writeOffset = size
+	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
+		return err
+	}
 
 	// If we had an mmap, it may now be larger than the file. Clear it to avoid
 	// SIGBUS on reads and to allow remapping to the new size.
@@ -281,6 +295,7 @@ func (s *SlabFile) RepairTail() error {
 		}
 	}
 	s.Size = trimTo
+	s.writeOffset = trimTo
 	return nil
 }
 
@@ -527,9 +542,15 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	copy(buf[10+keyLen:], value)
 
 	offset := s.Size
+	if s.writeOffset != s.Size {
+		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+			return 0, err
+		}
+		s.writeOffset = s.Size
+	}
 	written := 0
 	for written < len(buf) {
-		n, err := s.File.WriteAt(buf[written:], offset+int64(written))
+		n, err := s.File.Write(buf[written:])
 		if n > 0 {
 			written += n
 		}
@@ -545,6 +566,7 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	}
 
 	s.Size += int64(written)
+	s.writeOffset = s.Size
 	return offset, nil
 }
 
@@ -560,9 +582,15 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 
 	offset := s.Size
+	if s.writeOffset != s.Size {
+		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+			return 0, err
+		}
+		s.writeOffset = s.Size
+	}
 	written := 0
 	for written < len(buf) {
-		n, err := s.File.WriteAt(buf[written:], offset+int64(written))
+		n, err := s.File.Write(buf[written:])
 		if n > 0 {
 			written += n
 		}
@@ -577,5 +605,6 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 
 	s.Size += int64(written)
+	s.writeOffset = s.Size
 	return offset, nil
 }
