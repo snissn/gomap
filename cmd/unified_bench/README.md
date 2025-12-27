@@ -18,6 +18,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `write_seq` — Sequential Write
 - `write_rand` — Random Write
 - `batch_write` — Batch Write
+- `batch_random` — Batch Random
+- `batch_delete` — Batch Delete
 - `delete_rand` — Random Delete
 - `read_rand` — Random Read
 - `full_scan` — Full Scan (iterate the full keyspace)
