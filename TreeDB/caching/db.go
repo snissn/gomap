@@ -30,6 +30,7 @@ var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 var ErrUnsafeOptions = fmt.Errorf("unsafe options require AllowUnsafe")
 var ErrMemtableFull = fmt.Errorf("memtable full")
+var ErrMemtableValueLogPointers = errors.New("memtable value-log pointers require WAL/value-log enabled")
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
@@ -160,6 +161,26 @@ func (db *DB) valueLogEnabled() bool {
 	return !db.disableWAL && !db.disableValueLog
 }
 
+func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
+	if db.valueLogReader == nil {
+		return nil, errors.New("cachingdb: value-log reader unavailable")
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
+	}
+	if db.memtableValueLogPointers && db.valueLogEnabled() {
+		db.mu.RLock()
+		curSeq := db.walSeq
+		db.mu.RUnlock()
+		if page.ValueLogFileID(uint32(curSeq)) == ptr.FileID {
+			if err := db.flushValueLog(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return db.valueLogReader.Read(ptr)
+}
+
 func (db *DB) flushValueLog() error {
 	if !db.valueLogEnabled() {
 		return nil
@@ -204,6 +225,20 @@ func (db *DB) forgetValueLogRetain(path string) {
 		delete(db.valueLogRetain, path)
 	}
 	db.valueLogMu.Unlock()
+}
+
+func (db *DB) dropValueLogSegment(path string) {
+	if db.valueLogReader == nil || path == "" {
+		return
+	}
+	seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+	if !ok || !valueLog {
+		return
+	}
+	id := page.ValueLogFileID(uint32(seq))
+	if err := db.valueLogReader.RemoveSegment(id); err != nil && !os.IsNotExist(err) {
+		db.reportError(fmt.Errorf("cachingdb: failed to remove value-log segment %d: %w", id, err))
+	}
 }
 
 func (db *DB) valueLogRetained(path string) bool {
@@ -383,6 +418,7 @@ func (db *DB) pruneRetainedValueLogs() {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove value-log %q: %w", path, err))
 				continue
 			}
+			db.dropValueLogSegment(path)
 			removed = true
 		}
 		db.forgetValueLogRetain(path)
@@ -420,6 +456,13 @@ func (db *DB) shardExceedsLimit(shard *memShard, addBytes int64) bool {
 		return false
 	}
 	return shard.bytes+addBytes > maxMemtableBytesPerShard
+}
+
+func (db *DB) newLargePtrMap() *largePtrMap {
+	if !db.memtableValueLogPointers {
+		return nil
+	}
+	return &largePtrMap{}
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
@@ -474,6 +517,11 @@ type Options struct {
 	DisableValueLog bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
+	// MemtableValueLogPointers avoids storing large values in the memtable and
+	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
+	MemtableValueLogPointers bool
+	// DisableReadChecksum skips CRC verification on value-log reads.
+	DisableReadChecksum bool
 	// AllowUnsafe acknowledges unsafe durability options.
 	// When false, Open will reject DisableWAL or RelaxedSync.
 	AllowUnsafe bool
@@ -514,7 +562,7 @@ type DB struct {
 	hashSortedIndexer *memtable.HashSortedIndexer
 	queueRanges       []keyRange
 	queueWALPaths     []string
-	queueLargePtrs    []map[string]page.ValuePtr
+	queueLargePtrs    []*largePtrMap
 	backendRange      keyRange
 	backendRangeKnown bool
 	backendRangeInit  sync.Once
@@ -540,37 +588,39 @@ type DB struct {
 	walLiveBytes   atomic.Int64
 	walClosedSizes map[string]int64
 
-	disableValueLog          bool
-	inlineThreshold          int
-	valueLogMu               sync.Mutex
-	valueLogRetain           map[string]struct{}
-	valueLogWarned           atomic.Bool
-	valueLogHardCapWarned    atomic.Bool
-	maxValueLogRetainedBytes int64
+	disableValueLog              bool
+	inlineThreshold              int
+	memtableValueLogPointers     bool
+	valueLogReader               *vlog.Manager
+	valueLogMu                   sync.Mutex
+	valueLogRetain               map[string]struct{}
+	valueLogWarned               atomic.Bool
+	valueLogHardCapWarned        atomic.Bool
+	maxValueLogRetainedBytes     int64
 	maxValueLogRetainedBytesHard int64
 
 	// Level 1 (Disk)
 	backend BackendDB
 
 	// Config
-	dir                     string
-	flushThreshold          int64
-	memtableCap             int
-	memtableMode            memtable.Mode
-	memtableAdaptive        bool
-	memtableWarmupActive    bool
-	memtableWarmupThreshold int64
+	dir                       string
+	flushThreshold            int64
+	memtableCap               int
+	memtableMode              memtable.Mode
+	memtableAdaptive          bool
+	memtableWarmupActive      bool
+	memtableWarmupThreshold   int64
 	memtableAdaptiveCandidate memtable.Mode
 	memtableAdaptiveStreak    uint8
-	statsMu                 sync.Mutex
-	memtableStats           memtableStats
-	maxQueuedMemtables      int
-	slowdownBacklogSeconds  float64
-	stopBacklogSeconds      float64
-	maxBacklogBytes         int64
-	writerFlushMaxMemtables int
-	writerFlushMaxDuration  time.Duration
-	flushBuildConcurrency   int
+	statsMu                   sync.Mutex
+	memtableStats             memtableStats
+	maxQueuedMemtables        int
+	slowdownBacklogSeconds    float64
+	stopBacklogSeconds        float64
+	maxBacklogBytes           int64
+	writerFlushMaxMemtables   int
+	writerFlushMaxDuration    time.Duration
+	flushBuildConcurrency     int
 
 	disableWAL  bool
 	relaxedSync bool
@@ -595,17 +645,17 @@ type DB struct {
 	// after reclaimable WAL bytes fall below maxWALBytes/2.
 	autoCheckpointSizeArmed atomic.Bool
 
-	autoCheckpointCount          atomic.Uint64
-	autoCheckpointLastReason     atomic.Uint32
-	autoCheckpointLastUnixNano   atomic.Int64
-	autoCheckpointLastDurNanos   atomic.Int64
-	autoCheckpointLastWALBefore  atomic.Int64
-	autoCheckpointLastWALAfter   atomic.Int64
+	autoCheckpointCount                    atomic.Uint64
+	autoCheckpointLastReason               atomic.Uint32
+	autoCheckpointLastUnixNano             atomic.Int64
+	autoCheckpointLastDurNanos             atomic.Int64
+	autoCheckpointLastWALBefore            atomic.Int64
+	autoCheckpointLastWALAfter             atomic.Int64
 	autoCheckpointLastWALReclaimableBefore atomic.Int64
 	autoCheckpointLastWALReclaimableAfter  atomic.Int64
-	autoCheckpointLastWALTrimmed atomic.Int64
-	autoCheckpointLastWALBytes   atomic.Int64
-	autoCheckpointMaxWALBytes    atomic.Int64
+	autoCheckpointLastWALTrimmed           atomic.Int64
+	autoCheckpointLastWALBytes             atomic.Int64
+	autoCheckpointMaxWALBytes              atomic.Int64
 }
 
 type keyRange struct {
@@ -614,20 +664,67 @@ type keyRange struct {
 	max   []byte
 }
 
+type largePtrMap struct {
+	mu sync.RWMutex
+	m  map[string]page.ValuePtr
+}
+
+func (l *largePtrMap) GetString(key string) (page.ValuePtr, bool) {
+	if l == nil {
+		return page.ValuePtr{}, false
+	}
+	l.mu.RLock()
+	ptr, ok := l.m[key]
+	l.mu.RUnlock()
+	return ptr, ok
+}
+
+func (l *largePtrMap) Get(key []byte) (page.ValuePtr, bool) {
+	if len(key) == 0 {
+		return page.ValuePtr{}, false
+	}
+	return l.GetString(string(key))
+}
+
+func (l *largePtrMap) SetString(key string, ptr page.ValuePtr) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = make(map[string]page.ValuePtr)
+	}
+	l.m[key] = ptr
+	l.mu.Unlock()
+}
+
+func (l *largePtrMap) DeleteString(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	if l.m != nil {
+		delete(l.m, key)
+	}
+	l.mu.Unlock()
+}
+
 type memShard struct {
 	mu        sync.Mutex
 	mem       memtable.Table
 	rng       keyRange
 	bytes     int64
-	largePtrs map[string]page.ValuePtr
+	largePtrs *largePtrMap
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
 // It is published via atomic.Pointer and treated as read-only by readers.
 type memtableView struct {
 	mutables    []memtable.Table
+	mutablePtrs []*largePtrMap
 	queue       []memtable.Table
 	queueRanges []keyRange
+	queuePtrs   []*largePtrMap
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -636,10 +733,13 @@ func (db *DB) publishMemtablesLocked() {
 	view := &memtableView{}
 	if len(db.mutableShards) > 0 {
 		mutables := make([]memtable.Table, len(db.mutableShards))
+		mutablePtrs := make([]*largePtrMap, len(db.mutableShards))
 		for i := range db.mutableShards {
 			mutables[i] = db.mutableShards[i].mem
+			mutablePtrs[i] = db.mutableShards[i].largePtrs
 		}
 		view.mutables = mutables
+		view.mutablePtrs = mutablePtrs
 	}
 	if len(db.queue) > 0 {
 		q := make([]memtable.Table, len(db.queue))
@@ -650,6 +750,11 @@ func (db *DB) publishMemtablesLocked() {
 		qr := make([]keyRange, len(db.queueRanges))
 		copy(qr, db.queueRanges)
 		view.queueRanges = qr
+	}
+	if len(db.queueLargePtrs) > 0 {
+		qp := make([]*largePtrMap, len(db.queueLargePtrs))
+		copy(qp, db.queueLargePtrs)
+		view.queuePtrs = qp
 	}
 	db.memtables.Store(view)
 }
@@ -791,7 +896,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		}
 		shard.rng = keyRange{}
 		shard.bytes = 0
-		shard.largePtrs = nil
+		shard.largePtrs = db.newLargePtrMap()
 		shard.mu.Unlock()
 	}
 	db.updateMutableThresholdLocked()
@@ -900,7 +1005,7 @@ func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
-	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
@@ -965,6 +1070,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
+	if opts.MemtableValueLogPointers && disableValueLog {
+		return nil, ErrMemtableValueLogPointers
+	}
 	var retained map[string]struct{}
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -991,40 +1099,57 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
+	if opts.MemtableValueLogPointers {
+		for i := range mutableShards {
+			mutableShards[i].largePtrs = &largePtrMap{}
+		}
+	}
+
+	var valueLogReader *vlog.Manager
+	if opts.MemtableValueLogPointers {
+		reader, err := vlog.NewManager(walDir)
+		if err != nil {
+			return nil, err
+		}
+		reader.SetDisableReadChecksum(opts.DisableReadChecksum)
+		valueLogReader = reader
+	}
 
 	db := &DB{
-		dir:                      walDir,
-		backend:                  backend,
-		flushThreshold:           opts.FlushThreshold,
-		memtableCap:              memCap,
-		memtableMode:             mode,
-		memtableAdaptive:         adaptive,
-		memtableWarmupActive:     adaptive && warmupThreshold < opts.FlushThreshold,
-		memtableWarmupThreshold:  warmupThreshold,
-		memtableAdaptiveCandidate: mode,
-		maxQueuedMemtables:       opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:   opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:       opts.StopBacklogSeconds,
-		maxBacklogBytes:          opts.MaxBacklogBytes,
-		writerFlushMaxMemtables:  opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:   opts.WriterFlushMaxDuration,
-		flushBuildConcurrency:    opts.FlushBuildConcurrency,
-		disableWAL:               opts.DisableWAL,
-		disableValueLog:          disableValueLog,
-		relaxedSync:              opts.RelaxedSync,
-		notifyError:              opts.NotifyError,
-		inlineThreshold:          inlineThreshold,
-		valueLogRetain:           retained,
-		maxValueLogRetainedBytes: opts.MaxValueLogRetainedBytes,
+		dir:                          walDir,
+		backend:                      backend,
+		flushThreshold:               opts.FlushThreshold,
+		memtableCap:                  memCap,
+		memtableMode:                 mode,
+		memtableAdaptive:             adaptive,
+		memtableWarmupActive:         adaptive && warmupThreshold < opts.FlushThreshold,
+		memtableWarmupThreshold:      warmupThreshold,
+		memtableAdaptiveCandidate:    mode,
+		maxQueuedMemtables:           opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:           opts.StopBacklogSeconds,
+		maxBacklogBytes:              opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:      opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:       opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:        opts.FlushBuildConcurrency,
+		disableWAL:                   opts.DisableWAL,
+		disableValueLog:              disableValueLog,
+		relaxedSync:                  opts.RelaxedSync,
+		notifyError:                  opts.NotifyError,
+		inlineThreshold:              inlineThreshold,
+		memtableValueLogPointers:     opts.MemtableValueLogPointers,
+		valueLogReader:               valueLogReader,
+		valueLogRetain:               retained,
+		maxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
-		mutableShards:            mutableShards,
-		mutableShardMask:         uint64(shardCount - 1),
-		hashSortedIndexer:        indexer,
-		closeCh:                  make(chan struct{}),
-		flushCh:                  make(chan struct{}, 1),
-		autoCheckpointOnceCh:     make(chan struct{}, 1),
-		autoCheckpointWriteCh:    make(chan struct{}, 1),
-		walSeq:                   maxWALSeq,
+		mutableShards:                mutableShards,
+		mutableShardMask:             uint64(shardCount - 1),
+		hashSortedIndexer:            indexer,
+		closeCh:                      make(chan struct{}),
+		flushCh:                      make(chan struct{}, 1),
+		autoCheckpointOnceCh:         make(chan struct{}, 1),
+		autoCheckpointWriteCh:        make(chan struct{}, 1),
+		walSeq:                       maxWALSeq,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -1032,6 +1157,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Open initial WAL
 	if !db.disableWAL {
 		if err := db.rotateWALLocked(); err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.Close()
+				db.valueLogReader = nil
+			}
 			return nil, err
 		}
 		if len(segments) > 0 {
@@ -2005,6 +2134,7 @@ func (db *DB) Checkpoint() error {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
+		db.dropValueLogSegment(path)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
@@ -2153,6 +2283,12 @@ func (db *DB) Close() error {
 		db.hashSortedIndexer.Close()
 		db.hashSortedIndexer = nil
 	}
+	if db.valueLogReader != nil {
+		if err := db.valueLogReader.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.valueLogReader = nil
+	}
 
 	var walBytes int64
 	var walPaths []string
@@ -2211,6 +2347,7 @@ func (db *DB) Close() error {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
+		db.dropValueLogSegment(path)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
@@ -2335,15 +2472,19 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	}
 
 	shard.mu.Lock()
-	shard.mem.Set(key, value)
+	storeValue := value
+	if db.memtableValueLogPointers && usePointer {
+		storeValue = nil
+	}
+	shard.mem.Set(key, storeValue)
 	if db.valueLogEnabled() {
 		if usePointer {
 			if shard.largePtrs == nil {
-				shard.largePtrs = make(map[string]page.ValuePtr)
+				shard.largePtrs = &largePtrMap{}
 			}
-			shard.largePtrs[string(key)] = ptr
+			shard.largePtrs.SetString(string(key), ptr)
 		} else if shard.largePtrs != nil {
-			delete(shard.largePtrs, string(key))
+			shard.largePtrs.DeleteString(string(key))
 		}
 	}
 	shard.rng.add(key)
@@ -2435,7 +2576,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 			shard.mem.Delete(key)
 			if shard.largePtrs != nil {
-				delete(shard.largePtrs, string(key))
+				shard.largePtrs.DeleteString(string(key))
 			}
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
@@ -2824,6 +2965,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				return ErrMemtableFull
 			}
 			shard.mem.Delete(key)
+			if shard.largePtrs != nil {
+				shard.largePtrs.DeleteString(string(key))
+			}
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
 			delta := newBytes - shard.bytes
@@ -2953,7 +3097,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 	shard.mu.Lock()
 	shard.mem.Delete(key)
 	if shard.largePtrs != nil {
-		delete(shard.largePtrs, string(key))
+		shard.largePtrs.DeleteString(string(key))
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -3019,7 +3163,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
-		shard.largePtrs = nil
+		shard.largePtrs = db.newLargePtrMap()
 		shard.mu.Unlock()
 	}
 	if db.memtableAdaptive {
@@ -3152,7 +3296,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
-		shard.largePtrs = nil
+		shard.largePtrs = db.newLargePtrMap()
 	}
 
 	if db.memtableAdaptive {
@@ -3305,7 +3449,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	mems := make([]memtable.Table, max)
 	ranges := make([]keyRange, max)
 	walPaths := make([]string, max)
-	largePtrs := make([]map[string]page.ValuePtr, max)
+	largePtrs := make([]*largePtrMap, max)
 	copy(mems, db.queue[:max])
 	copy(ranges, db.queueRanges[:max])
 	copy(walPaths, db.queueWALPaths[:max])
@@ -3323,7 +3467,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		memLen   int
 		memRange keyRange
 		walPath  string
-		ptrs     map[string]page.ValuePtr
+		ptrs     *largePtrMap
 	}
 
 	units := make([]flushUnit, 0, max)
@@ -3361,7 +3505,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			// Preserve "newest wins" semantics by concatenating per-memtable ops
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
-			collectOps := func(mem memtable.Table, estLen int, ptrs map[string]page.ValuePtr) ([]batch.Entry, error) {
+			collectOps := func(mem memtable.Table, estLen int, ptrs *largePtrMap) ([]batch.Entry, error) {
 				ops := getEntrySlice(estLen)
 				iter := mem.NewIterator(nil, nil)
 				for iter.Valid() {
@@ -3373,8 +3517,8 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						val := iter.UnsafeValue()
-						if ptrs != nil && len(val) > db.inlineThreshold {
-							if ptr, ok := ptrs[bytesToStringNoCopy(key)]; ok {
+						if ptrs != nil {
+							if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
 								ops = append(ops, batch.Entry{
 									Type:     batch.OpPut,
 									Key:      key,
@@ -3498,8 +3642,8 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						val := iter.UnsafeValue()
-						if pointerBatch != nil && unit.ptrs != nil && len(val) > db.inlineThreshold {
-							if ptr, ok := unit.ptrs[bytesToStringNoCopy(key)]; ok {
+						if pointerBatch != nil && unit.ptrs != nil {
+							if ptr, ok := unit.ptrs.GetString(bytesToStringNoCopy(key)); ok {
 								if err := pointerBatch.SetPointer(key, ptr); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
 									_ = iter.Close()
@@ -3607,6 +3751,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
+		db.dropValueLogSegment(walPath)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(walPath)
@@ -3653,7 +3798,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueWALPaths) > 0 {
 		walPath = db.queueWALPaths[0]
 	}
-	var ptrs map[string]page.ValuePtr
+	var ptrs *largePtrMap
 	if len(db.queueLargePtrs) > 0 {
 		ptrs = db.queueLargePtrs[0]
 	}
@@ -3688,8 +3833,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				} else {
 					key := iter.UnsafeKey()
 					val := iter.UnsafeValue()
-					if ptrs != nil && len(val) > db.inlineThreshold {
-						if ptr, ok := ptrs[bytesToStringNoCopy(key)]; ok {
+					if ptrs != nil {
+						if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
 							ops = append(ops, batch.Entry{
 								Type:     batch.OpPut,
 								Key:      key,
@@ -3729,8 +3874,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					}
 				} else {
 					val := iter.UnsafeValue()
-					if pointerBatch != nil && ptrs != nil && len(val) > db.inlineThreshold {
-						if ptr, ok := ptrs[bytesToStringNoCopy(key)]; ok {
+					if pointerBatch != nil && ptrs != nil {
+						if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
 							if err := pointerBatch.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
 								_ = iter.Close()
@@ -3818,6 +3963,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			} else {
+				db.dropValueLogSegment(walPath)
 				db.mu.Lock()
 				db.untrackWALSegmentLocked(walPath)
 				db.mu.Unlock()
@@ -3849,23 +3995,30 @@ func (db *DB) flushOneLocked(sync bool) bool {
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
-		mutables []memtable.Table
-		queue    []memtable.Table
+		mutables    []memtable.Table
+		mutablePtrs []*largePtrMap
+		queue       []memtable.Table
+		queuePtrs   []*largePtrMap
 	)
 	if view != nil {
 		mutables = view.mutables
+		mutablePtrs = view.mutablePtrs
 		queue = view.queue
+		queuePtrs = view.queuePtrs
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
 			mutables = make([]memtable.Table, len(db.mutableShards))
+			mutablePtrs = make([]*largePtrMap, len(db.mutableShards))
 			for i := range db.mutableShards {
 				mutables[i] = db.mutableShards[i].mem
+				mutablePtrs[i] = db.mutableShards[i].largePtrs
 			}
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
+		queuePtrs = append([]*largePtrMap(nil), db.queueLargePtrs...)
 		db.mu.RUnlock()
 	}
 
@@ -3877,6 +4030,17 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			if found {
 				if deleted {
 					return nil, true, nil
+				}
+				if db.memtableValueLogPointers && db.valueLogReader != nil && len(val) == 0 {
+					if idx < len(mutablePtrs) && mutablePtrs[idx] != nil {
+						if ptr, ok := mutablePtrs[idx].Get(key); ok {
+							readVal, err := db.readValueLog(ptr)
+							if err != nil {
+								return nil, true, err
+							}
+							return readVal, true, nil
+						}
+					}
 				}
 				if val == nil {
 					return []byte{}, true, nil
@@ -3892,6 +4056,17 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		if found {
 			if deleted {
 				return nil, true, nil
+			}
+			if db.memtableValueLogPointers && db.valueLogReader != nil && len(val) == 0 {
+				if i < len(queuePtrs) && queuePtrs[i] != nil {
+					if ptr, ok := queuePtrs[i].Get(key); ok {
+						readVal, err := db.readValueLog(ptr)
+						if err != nil {
+							return nil, true, err
+						}
+						return readVal, true, nil
+					}
+				}
 			}
 			if val == nil {
 				return []byte{}, true, nil
@@ -4154,15 +4329,18 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	view := db.memtables.Load()
 	var queue []memtable.Table
 	var queueRanges []keyRange
+	var queuePtrs []*largePtrMap
 	if view != nil {
 		queue = view.queue
 		queueRanges = view.queueRanges
+		queuePtrs = view.queuePtrs
 	} else {
 		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
 		// for zero-value DBs and tests.
 		db.mu.RLock()
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		queuePtrs = append([]*largePtrMap(nil), db.queueLargePtrs...)
 		db.mu.RUnlock()
 	}
 	queueLen := len(queue)
@@ -4196,6 +4374,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			continue
 		}
 		qIter := queue[i].NewIterator(start, end)
+		if db.memtableValueLogPointers && db.valueLogReader != nil && i < len(queuePtrs) && queuePtrs[i] != nil {
+			qIter = newValueLogIterator(qIter, queuePtrs[i], db.readValueLog)
+		}
 		sources = append(sources, merging.IteratorSource{
 			Iter:     qIter,
 			Priority: prio,
@@ -4676,6 +4857,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
+	hasPtr := false
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -4755,6 +4937,7 @@ func (b *Batch) writeRegular(sync bool) error {
 				op.ValuePtr = ptrs[i]
 				op.IsPtr = true
 				retain = true
+				hasPtr = true
 			}
 			if retain {
 				b.db.mu.RLock()
@@ -4774,7 +4957,11 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 		shard := &b.db.mutableShards[i]
 		shard.mu.Lock()
-		if b.streamEligible {
+		useStream := b.streamEligible
+		if useStream && b.db.memtableValueLogPointers && hasPtr {
+			useStream = false
+		}
+		if useStream {
 			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
 				applier.ApplyStealSortedBatch(entries, func(key []byte) {
 					shard.rng.add(key)
@@ -4785,7 +4972,11 @@ func (b *Batch) writeRegular(sync bool) error {
 					if op.Type == batch.OpDelete {
 						shard.mem.DeleteSteal(op.Key)
 					} else {
-						shard.mem.SetSteal(op.Key, op.Value)
+						if b.db.memtableValueLogPointers && op.IsPtr {
+							shard.mem.SetSteal(op.Key, nil)
+						} else {
+							shard.mem.SetSteal(op.Key, op.Value)
+						}
 					}
 					shard.rng.add(op.Key)
 					b.db.noteWriteKey(op.Key)
@@ -4796,7 +4987,11 @@ func (b *Batch) writeRegular(sync bool) error {
 				if op.Type == batch.OpDelete {
 					shard.mem.DeleteSteal(op.Key)
 				} else {
-					shard.mem.SetSteal(op.Key, op.Value)
+					if b.db.memtableValueLogPointers && op.IsPtr {
+						shard.mem.SetSteal(op.Key, nil)
+					} else {
+						shard.mem.SetSteal(op.Key, op.Value)
+					}
 				}
 				shard.rng.add(op.Key)
 				b.db.noteWriteKey(op.Key)
@@ -4807,17 +5002,17 @@ func (b *Batch) writeRegular(sync bool) error {
 				key := string(op.Key)
 				if op.Type == batch.OpDelete {
 					if shard.largePtrs != nil {
-						delete(shard.largePtrs, key)
+						shard.largePtrs.DeleteString(key)
 					}
 					continue
 				}
 				if op.IsPtr {
 					if shard.largePtrs == nil {
-						shard.largePtrs = make(map[string]page.ValuePtr)
+						shard.largePtrs = &largePtrMap{}
 					}
-					shard.largePtrs[key] = op.ValuePtr
+					shard.largePtrs.SetString(key, op.ValuePtr)
 				} else if shard.largePtrs != nil {
-					delete(shard.largePtrs, key)
+					shard.largePtrs.DeleteString(key)
 				}
 			}
 		}

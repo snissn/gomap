@@ -806,6 +806,61 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 	}
 }
 
+func TestCachingDB_MemtableValueLogPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:           1 << 30,
+		MemtableValueLogPointers: true,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	key := []byte("k1")
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.Set(key, val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	got, err := cache.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("Get mismatch")
+	}
+
+	it, err := cache.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatalf("Iterator invalid")
+	}
+	if !bytes.Equal(it.Value(), val) {
+		t.Fatalf("Iterator value mismatch")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("Iterator error: %v", err)
+	}
+}
+
+func TestCachingDB_MemtableValueLogPointersRequiresWAL(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	_, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		AllowUnsafe:              true,
+		MemtableValueLogPointers: true,
+	})
+	if !errors.Is(err, ErrMemtableValueLogPointers) {
+		t.Fatalf("expected ErrMemtableValueLogPointers, got %v", err)
+	}
+}
+
 func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})

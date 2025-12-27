@@ -200,6 +200,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// MemtableValueLogPointers avoids storing large values in the memtable and
+	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
+	MemtableValueLogPointers bool
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64

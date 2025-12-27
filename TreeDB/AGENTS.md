@@ -83,7 +83,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Flush buffer pooling. Plan: pool batch.Entry slices in flush builder.
 - [DONE] Adaptive memtable hysteresis. Plan: require consecutive rotations before switching modes.
 - [DONE] mmap remap metrics. Plan: expose remap and dead-mapping counters via Stats.
-- [OPEN] Large-value pointer memtable mode. Plan: benchmark-driven refactors.
+- [DONE] Large-value pointer memtable mode. Plan: optional memtable value-log pointer storage, value-log reader lookup for Gets/iterators, and tests to validate large-value round-trips.
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
 - [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
 - [DONE] AllocMany + parallel zipper merges. Plan: add AllocMany and parallelize child rewrites with per-child metrics; implemented with concurrency gating.
