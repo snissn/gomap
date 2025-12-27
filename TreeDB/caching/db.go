@@ -4213,14 +4213,21 @@ func (db *DB) Stats() map[string]string {
 		stats = make(map[string]string)
 	}
 	db.mu.RLock()
-	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", len(db.queue))
-	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
-	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", db.flushThreshold)
-	stats["treedb.cache.memtable_mode"] = db.memtableMode.String()
-	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", db.maxQueuedMemtables)
+	queueLen := len(db.queue)
+	flushThreshold := db.flushThreshold
+	memtableMode := db.memtableMode
+	maxQueued := db.maxQueuedMemtables
 	walCurrentBytes := db.walLiveBytes.Load()
-	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load()+walCurrentBytes)
-	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", db.walClosedBytes.Load())
+	walClosedBytes := db.walClosedBytes.Load()
+	db.mu.RUnlock()
+
+	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
+	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
+	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
+	stats["treedb.cache.memtable_mode"] = memtableMode.String()
+	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
+	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
 	vlogSegments, vlogBytes := db.valueLogRetainedStats()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
@@ -4230,7 +4237,6 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.backpressure_mode"] = "queue_len"
 	}
-	db.mu.RUnlock()
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
