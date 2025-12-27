@@ -16,19 +16,19 @@ type CursorItem struct {
 }
 
 type Iterator struct {
-	tree    *Tree
-	stack   []CursorItem
+	tree     *Tree
+	stack    []CursorItem
 	stackBuf [16]CursorItem
-	start   []byte
-	end     []byte
-	valid   bool
-	err     error
-	currKey []byte
-	currVal []byte
-	currPtr page.ValuePtr
-	flags   byte
-	valOK   bool
-	reverse bool
+	start    []byte
+	end      []byte
+	valid    bool
+	err      error
+	currKey  []byte
+	currVal  []byte
+	currPtr  page.ValuePtr
+	flags    byte
+	valOK    bool
+	reverse  bool
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {

@@ -62,8 +62,8 @@ type SlabFile struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
-	remapCount   atomic.Uint64
+	deadMappings      [][]byte // Old mappings retained for safety (prevent use-after-free)
+	remapCount        atomic.Uint64
 	deadMappingsCount atomic.Uint64
 
 	// writeScratch is a reusable buffer for appending records. SlabManager

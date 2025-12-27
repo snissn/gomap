@@ -29,8 +29,8 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings [][]byte
-	remapCount   atomic.Uint64
+	deadMappings      [][]byte
+	remapCount        atomic.Uint64
 	deadMappingsCount atomic.Uint64
 }
 
