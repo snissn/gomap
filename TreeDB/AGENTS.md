@@ -86,7 +86,8 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [OPEN] Large-value pointer memtable mode. Plan: benchmark-driven refactors.
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
 - [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
-- [OPEN] Freelist heuristics, AllocMany, parallel zipper merges. Plan: only after profiling gates in Phase 17. Status: AllocMany added + zipper uses it for paired splits; parallel merges still pending.
+- [DONE] AllocMany + parallel zipper merges. Plan: add AllocMany and parallelize child rewrites with per-child metrics; implemented with concurrency gating.
+- [OPEN] Freelist heuristics (better reuse). Plan: consider bucketed allocation if profiling shows fragmentation pressure beyond the current region-aware allocator.
 
 ---
 
