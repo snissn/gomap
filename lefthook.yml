@@ -1,5 +1,5 @@
 pre-commit:
   commands:
-    git-fmt:
-      run: git fmt
+    go-fmt:
+      run: go fmt ./...
       stage_fixed: true
