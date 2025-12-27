@@ -113,8 +113,33 @@ linked by `NextPageID`.
   be pursued if higher-churn or larger-key workloads show unacceptable span
   ratios with region bias.
 
+
+## Locality Profiling Notes (2025-12-26, local, 300k)
+
+**Workload**
+- `./bin/unified-bench`
+- `-exclude-dbs '' -dbs treedbbackend`
+- `-profile fast -treedb-allow-unsafe`
+- `-test sequential_write,fragmentation_report_pre,batch_delete,batch_random,fragmentation_report_post`
+- `-keys 300000 -valsize 64 -batchsize 1000 -range-queries 0 -range-span 0`
+- Seed: 1 (default)
+- Note: `batch_delete`/`batch_random` used to keep runtime reasonable at 300k; `batch_random` uses a 10x keyspace spread.
+
+**Region bias enabled (default)**
+- Pre: `treedb.user.pages.span_ratio_ppm=4300688`, `treedb.pages.total=51922`
+- Post: `treedb.user.pages.span_ratio_ppm=369769263`, `treedb.pages.total=4343765`, `treedb.user.pages.span=4342940`
+
+**Region bias disabled (`treedb-freelist-region-radius=-1`)**
+- Pre: `treedb.user.pages.span_ratio_ppm=4052657`, `treedb.pages.total=48931`
+- Post: `treedb.user.pages.span_ratio_ppm=367952149`, `treedb.pages.total=4340975`, `treedb.user.pages.span=4321598`
+
+**Interpretation**
+- At 300k, span ratios after churn are massive in both modes; bias on/off differs by <0.5%.
+- The allocator choice is not the dominant driver here; churn plus wide keyspace spread dominates file growth.
+- Bucketed freelist is unlikely to materially reduce span ratios unless allocation/compaction strategy changes.
+
 ## Next Steps
 
-- Add unified-bench flags for `FreelistRegionPages`/`FreelistRegionRadius` to
-  compare region bias vs disabled in a controlled run.
-- Re-run the workload at higher key counts (e.g., 300k+) to validate scaling.
+- Done: add unified-bench flags for `FreelistRegionPages`/`FreelistRegionRadius`.
+- Done: re-run locality profile at 300k with region bias enabled and disabled (see above).
+- Open: revisit bucketed freelist if allocator/compaction changes still leave span ratios high.

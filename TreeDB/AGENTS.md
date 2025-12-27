@@ -87,7 +87,7 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 - [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
 - [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
 - [DONE] AllocMany + parallel zipper merges. Plan: add AllocMany and parallelize child rewrites with per-child metrics; implemented with concurrency gating.
-- [DEFERRED] Freelist heuristics (better reuse). Plan: see `docs/TREEDB_FREELIST_BUCKETS.md` for bucketed format design + locality notes; current profiling shows region bias outperforming PreferAppendAlloc at 30k keys, so defer format change pending larger-scale runs.
+- [DEFERRED] Freelist heuristics (better reuse). Plan: see `docs/TREEDB_FREELIST_BUCKETS.md` for bucketed format design + locality notes; 300k runs with batch_delete/batch_random show region bias on/off within ~0.5%, so the on-disk bucket format stays deferred.
 
 ---
 
