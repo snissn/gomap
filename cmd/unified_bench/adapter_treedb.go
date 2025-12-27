@@ -38,6 +38,7 @@ var (
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbAllowUnsafe          = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
 	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
 	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
 	treedbBgVacuumInterval     = flag.Duration("treedb-bg-vacuum-interval", 0, "TreeDB: background index vacuum interval (0=disabled)")
@@ -86,6 +87,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		DisableWAL:                        *treedbDisableWAL,
 		RelaxedSync:                       *treedbRelaxedSync,
 		DisableReadChecksum:               *treedbDisableReadChecksum,
+		AllowUnsafe:                       *treedbAllowUnsafe,
 		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
@@ -109,6 +111,7 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		AllowUnsafe:                       *treedbAllowUnsafe,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
