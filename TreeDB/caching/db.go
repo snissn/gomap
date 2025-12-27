@@ -459,7 +459,7 @@ func (db *DB) shardExceedsLimit(shard *memShard, addBytes int64) bool {
 }
 
 func (db *DB) newLargePtrMap() *largePtrMap {
-	if !db.memtableValueLogPointers {
+	if !db.valueLogEnabled() {
 		return nil
 	}
 	return &largePtrMap{}
@@ -1099,7 +1099,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	if opts.MemtableValueLogPointers {
+	if !disableValueLog {
 		for i := range mutableShards {
 			mutableShards[i].largePtrs = &largePtrMap{}
 		}
@@ -2477,13 +2477,10 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		storeValue = nil
 	}
 	shard.mem.Set(key, storeValue)
-	if db.valueLogEnabled() {
+	if db.valueLogEnabled() && shard.largePtrs != nil {
 		if usePointer {
-			if shard.largePtrs == nil {
-				shard.largePtrs = &largePtrMap{}
-			}
 			shard.largePtrs.SetString(string(key), ptr)
-		} else if shard.largePtrs != nil {
+		} else {
 			shard.largePtrs.DeleteString(string(key))
 		}
 	}
@@ -4997,21 +4994,16 @@ func (b *Batch) writeRegular(sync bool) error {
 				b.db.noteWriteKey(op.Key)
 			}
 		}
-		if b.db.valueLogEnabled() {
+		if b.db.valueLogEnabled() && shard.largePtrs != nil {
 			for _, op := range entries {
 				key := string(op.Key)
 				if op.Type == batch.OpDelete {
-					if shard.largePtrs != nil {
-						shard.largePtrs.DeleteString(key)
-					}
+					shard.largePtrs.DeleteString(key)
 					continue
 				}
 				if op.IsPtr {
-					if shard.largePtrs == nil {
-						shard.largePtrs = &largePtrMap{}
-					}
 					shard.largePtrs.SetString(key, op.ValuePtr)
-				} else if shard.largePtrs != nil {
+				} else {
 					shard.largePtrs.DeleteString(key)
 				}
 			}
