@@ -683,7 +683,7 @@ func (l *largePtrMap) Get(key []byte) (page.ValuePtr, bool) {
 	if len(key) == 0 {
 		return page.ValuePtr{}, false
 	}
-	return l.GetString(string(key))
+	return l.GetString(bytesToStringNoCopy(key))
 }
 
 func (l *largePtrMap) SetString(key string, ptr page.ValuePtr) {
@@ -2476,13 +2476,23 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	if db.memtableValueLogPointers && usePointer {
 		storeValue = nil
 	}
-	shard.mem.Set(key, storeValue)
-	if db.valueLogEnabled() && shard.largePtrs != nil {
-		if usePointer {
-			shard.largePtrs.SetString(string(key), ptr)
-		} else {
-			shard.largePtrs.DeleteString(string(key))
+	if shard.largePtrs != nil {
+		err := shard.mem.PutWithCallback(key, storeValue, func(k, _ []byte) error {
+			keyStr := bytesToStringNoCopy(k)
+			if usePointer {
+				shard.largePtrs.SetString(keyStr, ptr)
+			} else {
+				shard.largePtrs.DeleteString(keyStr)
+			}
+			return nil
+		})
+		if err != nil {
+			shard.mu.Unlock()
+			db.writeMu.RUnlock()
+			return err
 		}
+	} else {
+		shard.mem.Set(key, storeValue)
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -2571,9 +2581,16 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				shard.mu.Unlock()
 				return ErrMemtableFull
 			}
-			shard.mem.Delete(key)
 			if shard.largePtrs != nil {
-				shard.largePtrs.DeleteString(string(key))
+				if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
+					shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+					return nil
+				}); err != nil {
+					shard.mu.Unlock()
+					return err
+				}
+			} else {
+				shard.mem.Delete(key)
 			}
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
@@ -2961,9 +2978,16 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				shard.mu.Unlock()
 				return ErrMemtableFull
 			}
-			shard.mem.Delete(key)
 			if shard.largePtrs != nil {
-				shard.largePtrs.DeleteString(string(key))
+				if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
+					shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+					return nil
+				}); err != nil {
+					shard.mu.Unlock()
+					return err
+				}
+			} else {
+				shard.mem.Delete(key)
 			}
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
@@ -3092,9 +3116,18 @@ func (db *DB) delete(key []byte, sync bool) error {
 	}
 
 	shard.mu.Lock()
-	shard.mem.Delete(key)
 	if shard.largePtrs != nil {
-		shard.largePtrs.DeleteString(string(key))
+		err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
+			shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+			return nil
+		})
+		if err != nil {
+			shard.mu.Unlock()
+			db.writeMu.RUnlock()
+			return err
+		}
+	} else {
+		shard.mem.Delete(key)
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -4996,7 +5029,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 		if b.db.valueLogEnabled() && shard.largePtrs != nil {
 			for _, op := range entries {
-				key := string(op.Key)
+				key := bytesToStringNoCopy(op.Key)
 				if op.Type == batch.OpDelete {
 					shard.largePtrs.DeleteString(key)
 					continue
