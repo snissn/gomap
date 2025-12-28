@@ -1044,7 +1044,7 @@ func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
-	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.MemtableValueLogPointers) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
@@ -2627,47 +2627,60 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		const deleteRangeBatchKeys = 1024
 		const deleteRangeBatchBytes = 1 << 20
 
+		useBatch := !db.valueLogEnabled()
+
 		var (
 			batchKeys []byte
 			batch     []logRecord
 		)
 
 		applyDelete := func(key []byte) error {
-			shard := db.shardForKey(key)
-			shard.mu.Lock()
-			if db.shardExceedsLimit(shard, int64(len(key))) {
-				shard.mu.Unlock()
+			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
 				return ErrMemtableFull
 			}
-			if shard.largePtrs != nil {
-				if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
-					shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
-					return nil
-				}); err != nil {
+			for {
+				shard := db.shardForKey(key)
+				shard.mu.Lock()
+				if db.shardExceedsLimit(shard, int64(len(key))) {
 					shard.mu.Unlock()
-					return err
-				}
-			} else {
-				shard.mem.Delete(key)
-			}
-			shard.rng.add(key)
-			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			db.mutableBytes.Add(delta)
-			shard.mu.Unlock()
-			db.noteWriteKey(key)
-			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
-				db.mu.Lock()
-				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
-					if err := db.rotateMemtableLocked(true); err != nil {
-						db.mu.Unlock()
+					db.mu.Lock()
+					err := db.rotateMemtableLocked(true)
+					db.mu.Unlock()
+					if err != nil {
 						return err
 					}
+					continue
 				}
-				db.mu.Unlock()
+				if shard.largePtrs != nil {
+					if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
+						shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+						return nil
+					}); err != nil {
+						shard.mu.Unlock()
+						return err
+					}
+				} else {
+					shard.mem.Delete(key)
+				}
+				shard.rng.add(key)
+				newBytes := shard.mem.Size()
+				delta := newBytes - shard.bytes
+				shard.bytes = newBytes
+				db.mutableBytes.Add(delta)
+				shard.mu.Unlock()
+				db.noteWriteKey(key)
+				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+					db.mu.Lock()
+					if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+						if err := db.rotateMemtableLocked(true); err != nil {
+							db.mu.Unlock()
+							return err
+						}
+					}
+					db.mu.Unlock()
+				}
+				return nil
 			}
-			return nil
 		}
 
 		flushBatch := func() error {
@@ -2689,20 +2702,34 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		for it.Valid() {
 			key := it.Key()
-			start := len(batchKeys)
-			batchKeys = append(batchKeys, key...)
-			keyCopy := batchKeys[start:len(batchKeys)]
-			batch = append(batch, logRecord{Op: logOpDelete, Key: keyCopy})
+			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
+				return ErrMemtableFull
+			}
+			if useBatch {
+				start := len(batchKeys)
+				batchKeys = append(batchKeys, key...)
+				keyCopy := batchKeys[start:len(batchKeys)]
+				batch = append(batch, logRecord{Op: logOpDelete, Key: keyCopy})
 
-			if len(batch) >= deleteRangeBatchKeys || len(batchKeys) >= deleteRangeBatchBytes {
-				if err := flushBatch(); err != nil {
+				if len(batch) >= deleteRangeBatchKeys || len(batchKeys) >= deleteRangeBatchBytes {
+					if err := flushBatch(); err != nil {
+						return err
+					}
+				}
+			} else {
+				if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, walDurabilityNone); err != nil {
+					return err
+				}
+				if err := applyDelete(key); err != nil {
 					return err
 				}
 			}
 			it.Next()
 		}
-		if err := flushBatch(); err != nil {
-			return err
+		if useBatch {
+			if err := flushBatch(); err != nil {
+				return err
+			}
 		}
 		if err := it.Error(); err != nil {
 			return err

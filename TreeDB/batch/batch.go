@@ -60,6 +60,8 @@ type Batch struct {
 	largeVals       [][]byte
 }
 
+const maxBatchPoolCap = 1 << 16
+
 var batchPool = sync.Pool{
 	New: func() any {
 		return &Batch{
@@ -126,6 +128,49 @@ func (b *Batch) resetLocked() {
 	b.lastKey = nil
 }
 
+func (b *Batch) resetForPool() {
+	if b.entries != nil {
+		clear(b.entries)
+		if cap(b.entries) > maxBatchPoolCap {
+			b.entries = nil
+		} else {
+			b.entries = b.entries[:0]
+		}
+	}
+	if b.largeIdxs != nil {
+		if cap(b.largeIdxs) > maxBatchPoolCap {
+			b.largeIdxs = nil
+		} else {
+			b.largeIdxs = b.largeIdxs[:0]
+		}
+	}
+	if b.largeKeys != nil {
+		clear(b.largeKeys)
+		if cap(b.largeKeys) > maxBatchPoolCap {
+			b.largeKeys = nil
+		} else {
+			b.largeKeys = b.largeKeys[:0]
+		}
+	}
+	if b.largeVals != nil {
+		clear(b.largeVals)
+		if cap(b.largeVals) > maxBatchPoolCap {
+			b.largeVals = nil
+		} else {
+			b.largeVals = b.largeVals[:0]
+		}
+	}
+	b.byteSize = 0
+	b.slabWritten = 0
+	if b.slabWrittenByID != nil {
+		for id := range b.slabWrittenByID {
+			delete(b.slabWrittenByID, id)
+		}
+	}
+	b.sorted = true
+	b.lastKey = nil
+}
+
 // Close returns the batch to the pool.
 func (b *Batch) Close() error {
 	Release(b)
@@ -137,9 +182,10 @@ func Release(b *Batch) {
 	if b == nil {
 		return
 	}
-	b.resetLocked()
+	b.resetForPool()
 	b.slabManager = nil
 	b.inlineThreshold = 0
+	b.slabWrittenByID = nil
 	b.closed = true
 	batchPool.Put(b)
 }

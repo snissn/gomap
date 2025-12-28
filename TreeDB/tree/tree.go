@@ -47,6 +47,10 @@ func (t *Tree) SetRoot(root uint64) {
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	currID := t.rootPageID
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
 
 	for depth := 0; depth < 50; depth++ {
 		// Use Get (mmap) instead of ReadPage (Copy)
@@ -57,7 +61,6 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 
 		n := node.NewNode(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
 		// We use Verified Cache to skip it if already checked.
-		verifyAlways := t.pager.VerifyOnRead()
 		if verifyAlways || !t.pager.IsVerified(currID) {
 			if !n.VerifyChecksum() {
 				return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
