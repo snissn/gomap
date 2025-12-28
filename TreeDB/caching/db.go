@@ -1476,7 +1476,7 @@ var walAckPool = sync.Pool{
 	New: func() any { return &walAck{} },
 }
 
-const maxEntryPoolCap = 1 << 14
+const maxEntryPoolCap = 1 << 16
 
 var entrySlicePool sync.Pool
 
@@ -4715,14 +4715,15 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db        *DB
-	entries   []batch.Entry
-	backend   batch.Interface
-	size      int
-	walBuf    []logRecord
-	shardIdxs []int
-	shardAdds []int64
-	shardCnts []int
+	db           *DB
+	entries      []batch.Entry
+	backend      batch.Interface
+	size         int
+	walBuf       []logRecord
+	shardIdxs    []int
+	shardAdds    []int64
+	shardCnts    []int
+	shardEntries [][]batch.Entry
 
 	closed         bool
 	streamEligible bool
@@ -4763,6 +4764,9 @@ func (b *Batch) Reset() {
 	}
 	if b.shardCnts != nil {
 		b.shardCnts = b.shardCnts[:0]
+	}
+	if b.shardEntries != nil {
+		b.shardEntries = b.shardEntries[:0]
 	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
@@ -5241,10 +5245,25 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 	}
 
-	shardEntries := make([][]batch.Entry, shardCount)
+	shardEntries := b.shardEntries
+	if cap(shardEntries) < shardCount {
+		shardEntries = make([][]batch.Entry, shardCount)
+	} else {
+		shardEntries = shardEntries[:shardCount]
+		for i := range shardEntries {
+			shardEntries[i] = shardEntries[i][:0]
+		}
+	}
+	b.shardEntries = shardEntries
 	for i, count := range shardCounts {
 		if count > 0 {
-			shardEntries[i] = make([]batch.Entry, 0, count)
+			entries := shardEntries[i]
+			if cap(entries) < count {
+				entries = make([]batch.Entry, 0, count)
+			} else {
+				entries = entries[:0]
+			}
+			shardEntries[i] = entries
 		}
 	}
 	for i, op := range b.entries {
