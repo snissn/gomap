@@ -208,7 +208,7 @@ func (b *Batch) SetView(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 
@@ -244,7 +244,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 
@@ -292,7 +292,7 @@ func (b *Batch) DeleteView(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 
@@ -334,7 +334,7 @@ func (b *Batch) Delete(key []byte) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if len(key) == 0 {
+	if key == nil {
 		return ErrKeyEmpty
 	}
 

@@ -116,7 +116,7 @@ func (m *BTree) Set(key, value []byte) {
 }
 
 func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
-	if len(key) == 0 {
+	if key == nil {
 		return nil
 	}
 	keyCopy := m.arena.Copy(key)
@@ -149,7 +149,7 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 }
 
 func (m *BTree) SetSteal(key, value []byte) {
-	if len(key) == 0 {
+	if key == nil {
 		return
 	}
 	keyStr := bytesToStringNoCopy(key)
@@ -178,7 +178,7 @@ func (m *BTree) Delete(key []byte) {
 }
 
 func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
-	if len(key) == 0 {
+	if key == nil {
 		return nil
 	}
 	keyCopy := m.arena.Copy(key)
@@ -204,7 +204,7 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 }
 
 func (m *BTree) DeleteSteal(key []byte) {
-	if len(key) == 0 {
+	if key == nil {
 		return
 	}
 	keyStr := bytesToStringNoCopy(key)
