@@ -129,6 +129,7 @@ func Open(opts Options) (*DB, error) {
 		FlushBuildConcurrency:        opts.FlushBuildConcurrency,
 		DisableWAL:                   opts.DisableWAL,
 		DisableValueLog:              opts.DisableValueLog,
+		WALMaxSegmentBytes:           opts.WALMaxSegmentBytes,
 		RelaxedSync:                  opts.RelaxedSync,
 		DisableReadChecksum:          opts.DisableReadChecksum,
 		MemtableValueLogPointers:     opts.MemtableValueLogPointers,

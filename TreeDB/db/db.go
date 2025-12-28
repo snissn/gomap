@@ -200,6 +200,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
+	// 0 uses the default limit.
+	WALMaxSegmentBytes int64
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool

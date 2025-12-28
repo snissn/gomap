@@ -538,6 +538,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces the cached WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
+	// 0 uses the default limit.
+	WALMaxSegmentBytes int64
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
 	// MemtableValueLogPointers avoids storing large values in the memtable and
@@ -1109,6 +1112,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
+	if opts.WALMaxSegmentBytes > 0 {
+		wal.MaxSegmentSize = opts.WALMaxSegmentBytes
+	}
 	if opts.MemtableValueLogPointers && disableValueLog {
 		return nil, ErrMemtableValueLogPointers
 	}
