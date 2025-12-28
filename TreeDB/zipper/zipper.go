@@ -527,35 +527,36 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
-		sem := make(chan struct{}, maxParallel)
-		var wg sync.WaitGroup
-		var firstErr error
-		var errOnce sync.Once
-
+		jobs := make(chan int, len(children))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].childID
 				continue
 			}
-			wg.Add(1)
-			go func(i int) {
-				sem <- struct{}{}
-				defer func() {
-					<-sem
-					wg.Done()
-				}()
-
+			jobs <- i
+		}
+		close(jobs)
+		var wg sync.WaitGroup
+		var firstErr error
+		var errOnce sync.Once
+		worker := func() {
+			defer wg.Done()
+			for i := range jobs {
 				var childMetrics adaptive.Metrics
 				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, &childMetrics)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
-					return
+					continue
 				}
 				children[i].newChild = ncID
 				children[i].splits = cs
 				children[i].retired = childRet
 				children[i].childStat = childMetrics
-			}(i)
+			}
+		}
+		for i := 0; i < maxParallel; i++ {
+			wg.Add(1)
+			go worker()
 		}
 		wg.Wait()
 		if firstErr != nil {
