@@ -37,6 +37,8 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 var iteratorDebugEnabled atomic.Bool
 
 const (
+	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
+
 	minMemtablePrealloc        = 64 * 1024
 	maxMemtablePrealloc        = 256 << 20
 	adaptiveMinWrites          = 1024
@@ -50,6 +52,27 @@ const (
 // CachingDB.Iterator. It is intended for benchmarking/diagnostics.
 func SetIteratorDebug(enabled bool) {
 	iteratorDebugEnabled.Store(enabled)
+}
+
+func envBool(name string) bool {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return false
+	}
+	v = strings.TrimSpace(strings.ToLower(v))
+	if v == "" {
+		return true
+	}
+	switch v {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	case "0", "false", "f", "no", "n", "off":
+		return false
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n != 0
+	}
+	return false
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
@@ -622,11 +645,17 @@ type DB struct {
 	writerFlushMaxDuration    time.Duration
 	flushBuildConcurrency     int
 
-	disableWAL  bool
-	relaxedSync bool
-	notifyError func(error)
-	bgErrMu     sync.Mutex
-	bgErr       error
+	disableWAL         bool
+	relaxedSync        bool
+	notifyError        func(error)
+	debugFlushPointers bool
+	debugPtrEligible   atomic.Int64
+	debugPtrUsed       atomic.Int64
+	debugPtrNoPtr      atomic.Int64
+	debugPtrDenied     atomic.Int64
+	debugPtrDisabled   atomic.Int64
+	bgErrMu            sync.Mutex
+	bgErr              error
 
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
@@ -684,6 +713,16 @@ func (l *largePtrMap) Get(key []byte) (page.ValuePtr, bool) {
 		return page.ValuePtr{}, false
 	}
 	return l.GetString(bytesToStringNoCopy(key))
+}
+
+func (l *largePtrMap) Len() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.RLock()
+	n := len(l.m)
+	l.mu.RUnlock()
+	return n
 }
 
 func (l *largePtrMap) SetString(key string, ptr page.ValuePtr) {
@@ -1114,6 +1153,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 		valueLogReader = reader
 	}
+	debugFlushPointers := envBool(envDebugFlushPointers)
 
 	db := &DB{
 		dir:                          walDir,
@@ -1140,6 +1180,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableValueLogPointers:     opts.MemtableValueLogPointers,
 		valueLogReader:               valueLogReader,
 		valueLogRetain:               retained,
+		debugFlushPointers:           debugFlushPointers,
 		maxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
 		mutableShards:                mutableShards,
@@ -2435,6 +2476,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	var ptr page.ValuePtr
 	var retainPath string
 	usePointer := false
+	debugPtr := db.debugFlushPointers
 
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
@@ -2460,13 +2502,29 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			db.writeMu.RUnlock()
 			return err
 		}
-		if db.valueLogEnabled() && len(ptrs) > 0 && len(value) > db.inlineThreshold {
+		eligible := len(value) > db.inlineThreshold
+		if debugPtr && eligible {
+			db.debugPtrEligible.Add(1)
+		}
+		valueLogEnabled := db.valueLogEnabled()
+		if valueLogEnabled && len(ptrs) > 0 && eligible {
 			if db.allowValueLogPointers() {
 				ptr = ptrs[0]
 				usePointer = true
+				if debugPtr {
+					db.debugPtrUsed.Add(1)
+				}
 				db.mu.RLock()
 				retainPath = db.walPath
 				db.mu.RUnlock()
+			} else if debugPtr {
+				db.debugPtrDenied.Add(1)
+			}
+		} else if debugPtr && eligible {
+			if !valueLogEnabled {
+				db.debugPtrDisabled.Add(1)
+			} else if len(ptrs) == 0 {
+				db.debugPtrNoPtr.Add(1)
 			}
 		}
 	}
@@ -3523,6 +3581,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		totalLen += memLen
 	}
 
+	debugPtr := db.debugFlushPointers
+	var ptrChecks atomic.Int64
+	var ptrHits atomic.Int64
+	var ptrMisses atomic.Int64
+	var ptrNoMap atomic.Int64
+	var ptrMapKeys atomic.Int64
+
 	// Optimization: Skip flush if the selected memtables have no entries.
 	flushStart := time.Time{}
 	flushed := false
@@ -3536,6 +3601,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
 			collectOps := func(mem memtable.Table, estLen int, ptrs *largePtrMap) ([]batch.Entry, error) {
+				if debugPtr {
+					if ptrs == nil {
+						ptrNoMap.Add(1)
+					} else {
+						ptrMapKeys.Add(int64(ptrs.Len()))
+					}
+				}
 				ops := getEntrySlice(estLen)
 				iter := mem.NewIterator(nil, nil)
 				for iter.Valid() {
@@ -3548,7 +3620,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						key := iter.UnsafeKey()
 						val := iter.UnsafeValue()
 						if ptrs != nil {
-							if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
+							if debugPtr {
+								ptrChecks.Add(1)
+							}
+							if ptr, ok := ptrs.Get(key); ok {
+								if debugPtr {
+									ptrHits.Add(1)
+								}
 								ops = append(ops, batch.Entry{
 									Type:     batch.OpPut,
 									Key:      key,
@@ -3557,6 +3635,9 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								})
 								iter.Next()
 								continue
+							}
+							if debugPtr {
+								ptrMisses.Add(1)
 							}
 						}
 						ops = append(ops, batch.Entry{
@@ -3660,6 +3741,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				SetPointer(key []byte, ptr page.ValuePtr) error
 			})
 			for _, unit := range units {
+				if debugPtr {
+					if unit.ptrs == nil {
+						ptrNoMap.Add(1)
+					} else {
+						ptrMapKeys.Add(int64(unit.ptrs.Len()))
+					}
+				}
 				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 				for iter.Valid() {
 					key := iter.UnsafeKey()
@@ -3673,7 +3761,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						val := iter.UnsafeValue()
 						if pointerBatch != nil && unit.ptrs != nil {
-							if ptr, ok := unit.ptrs.GetString(bytesToStringNoCopy(key)); ok {
+							if debugPtr {
+								ptrChecks.Add(1)
+							}
+							if ptr, ok := unit.ptrs.Get(key); ok {
+								if debugPtr {
+									ptrHits.Add(1)
+								}
 								if err := pointerBatch.SetPointer(key, ptr); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
 									_ = iter.Close()
@@ -3682,6 +3776,9 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								}
 								iter.Next()
 								continue
+							}
+							if debugPtr {
+								ptrMisses.Add(1)
 							}
 						}
 						if err := backendBatch.Set(key, val); err != nil {
@@ -3720,6 +3817,21 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	flushDur := time.Duration(0)
 	if flushed {
 		flushDur = time.Since(flushStart)
+	}
+	if debugPtr && flushed {
+		fmt.Fprintf(os.Stderr, "treedb: flush ptrs entries=%d checks=%d hits=%d misses=%d no_map=%d map_keys=%d eligible=%d used=%d noptr=%d denied=%d disabled=%d\n",
+			totalLen,
+			ptrChecks.Load(),
+			ptrHits.Load(),
+			ptrMisses.Load(),
+			ptrNoMap.Load(),
+			ptrMapKeys.Load(),
+			db.debugPtrEligible.Load(),
+			db.debugPtrUsed.Load(),
+			db.debugPtrNoPtr.Load(),
+			db.debugPtrDenied.Load(),
+			db.debugPtrDisabled.Load(),
+		)
 	}
 
 	// Remove from queue and delete old WAL segments.
@@ -4897,11 +5009,11 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
-	shardEntries := make([][]batch.Entry, shardCount)
 	shardAdds := make([]int64, shardCount)
+	shardCounts := make([]int, shardCount)
 	for _, op := range b.entries {
 		idx := b.db.shardIndex(op.Key)
-		shardEntries[idx] = append(shardEntries[idx], op)
+		shardCounts[idx]++
 		add := int64(len(op.Key))
 		if op.Type == batch.OpPut {
 			add += int64(len(op.Value))
@@ -4950,14 +5062,35 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
+		debugPtr := b.db.debugFlushPointers
+		valueLogEnabled := b.db.valueLogEnabled()
+		eligibleCount := 0
 		allowPointers := false
-		if b.db.valueLogEnabled() {
+		if valueLogEnabled || debugPtr {
 			for i := range b.entries {
 				op := &b.entries[i]
-				if op.Type == batch.OpPut && len(op.Value) > b.db.inlineThreshold {
-					allowPointers = b.db.allowValueLogPointers()
-					break
+				if op.Type != batch.OpPut || len(op.Value) <= b.db.inlineThreshold {
+					continue
 				}
+				if debugPtr {
+					eligibleCount++
+				}
+				if valueLogEnabled && !allowPointers {
+					allowPointers = b.db.allowValueLogPointers()
+					if !debugPtr && allowPointers {
+						break
+					}
+				}
+			}
+		}
+		if debugPtr && eligibleCount > 0 {
+			b.db.debugPtrEligible.Add(int64(eligibleCount))
+			if !valueLogEnabled {
+				b.db.debugPtrDisabled.Add(int64(eligibleCount))
+			} else if !allowPointers {
+				b.db.debugPtrDenied.Add(int64(eligibleCount))
+			} else if len(ptrs) != len(b.entries) {
+				b.db.debugPtrNoPtr.Add(int64(eligibleCount))
 			}
 		}
 		if allowPointers && len(ptrs) == len(b.entries) {
@@ -4972,6 +5105,9 @@ func (b *Batch) writeRegular(sync bool) error {
 				}
 				op.ValuePtr = ptrs[i]
 				op.IsPtr = true
+				if debugPtr {
+					b.db.debugPtrUsed.Add(1)
+				}
 				retain = true
 				hasPtr = true
 			}
@@ -4982,6 +5118,17 @@ func (b *Batch) writeRegular(sync bool) error {
 				b.db.markValueLogRetain(retainPath)
 			}
 		}
+	}
+
+	shardEntries := make([][]batch.Entry, shardCount)
+	for i, count := range shardCounts {
+		if count > 0 {
+			shardEntries[i] = make([]batch.Entry, 0, count)
+		}
+	}
+	for _, op := range b.entries {
+		idx := b.db.shardIndex(op.Key)
+		shardEntries[idx] = append(shardEntries[idx], op)
 	}
 
 	// 3. Memtable Update

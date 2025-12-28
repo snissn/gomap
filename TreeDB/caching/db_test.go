@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -811,6 +813,15 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 	cache.flushAll(true)
+
+	slabPath := filepath.Join(dir, "data-0000.slab")
+	info, err := os.Stat(slabPath)
+	if err != nil {
+		t.Fatalf("stat slab: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("expected empty slab, got %d bytes", info.Size())
+	}
 
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
