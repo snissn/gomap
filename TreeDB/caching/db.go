@@ -4721,6 +4721,8 @@ type Batch struct {
 	size      int
 	walBuf    []logRecord
 	shardIdxs []int
+	shardAdds []int64
+	shardCnts []int
 
 	closed         bool
 	streamEligible bool
@@ -4755,6 +4757,12 @@ func (b *Batch) Reset() {
 	}
 	if b.shardIdxs != nil {
 		b.shardIdxs = b.shardIdxs[:0]
+	}
+	if b.shardAdds != nil {
+		b.shardAdds = b.shardAdds[:0]
+	}
+	if b.shardCnts != nil {
+		b.shardCnts = b.shardCnts[:0]
 	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
@@ -4813,6 +4821,50 @@ func (b *Batch) Set(key, value []byte) error {
 	return nil
 }
 
+// SetView records a Put without copying key/value bytes. Callers must treat
+// key/value as immutable until the batch is written or closed.
+func (b *Batch) SetView(key, value []byte) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
+
+	if b.backend != nil {
+		b.batchRange.add(key)
+		b.size += len(key) + len(value)
+		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
+			return sv.SetView(key, value)
+		}
+		return b.backend.Set(key, value)
+	}
+
+	if b.streamEligible {
+		if b.firstKey == nil {
+			b.firstKey = key
+			b.lastKey = key
+		} else {
+			if bytes.Compare(key, b.lastKey) <= 0 {
+				b.streamEligible = false
+			}
+			b.lastKey = key
+		}
+	}
+	b.entries = append(b.entries, batch.Entry{
+		Type:  batch.OpPut,
+		Key:   key,
+		Value: value,
+	})
+	b.size += len(key) + len(value)
+
+	b.maybeSwitchToStreaming()
+	return nil
+}
+
 func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -4847,6 +4899,46 @@ func (b *Batch) Delete(key []byte) error {
 		Key:  keyCopy,
 	})
 	b.size += len(keyCopy)
+
+	b.maybeSwitchToStreaming()
+	return nil
+}
+
+// DeleteView records a Delete without copying key bytes. Callers must treat
+// key as immutable until the batch is written or closed.
+func (b *Batch) DeleteView(key []byte) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+
+	if b.backend != nil {
+		b.batchRange.add(key)
+		b.size += len(key)
+		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
+			return dv.DeleteView(key)
+		}
+		return b.backend.Delete(key)
+	}
+
+	if b.streamEligible {
+		if b.firstKey == nil {
+			b.firstKey = key
+			b.lastKey = key
+		} else {
+			if bytes.Compare(key, b.lastKey) <= 0 {
+				b.streamEligible = false
+			}
+			b.lastKey = key
+		}
+	}
+	b.entries = append(b.entries, batch.Entry{
+		Type: batch.OpDelete,
+		Key:  key,
+	})
+	b.size += len(key)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -5013,8 +5105,24 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
-	shardAdds := make([]int64, shardCount)
-	shardCounts := make([]int, shardCount)
+	shardAdds := b.shardAdds
+	if cap(shardAdds) < shardCount {
+		shardAdds = make([]int64, shardCount)
+	} else {
+		shardAdds = shardAdds[:shardCount]
+		clear(shardAdds)
+	}
+	b.shardAdds = shardAdds
+
+	shardCounts := b.shardCnts
+	if cap(shardCounts) < shardCount {
+		shardCounts = make([]int, shardCount)
+	} else {
+		shardCounts = shardCounts[:shardCount]
+		clear(shardCounts)
+	}
+	b.shardCnts = shardCounts
+
 	shardIdxs := b.shardIdxs
 	if cap(shardIdxs) < len(b.entries) {
 		shardIdxs = make([]int, len(b.entries))
