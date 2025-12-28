@@ -55,6 +55,9 @@ type Batch struct {
 	sorted          bool
 	lastKey         []byte
 	closed          bool
+	largeIdxs       []int
+	largeKeys       [][]byte
+	largeVals       [][]byte
 }
 
 var batchPool = sync.Pool{
@@ -102,6 +105,15 @@ func (b *Batch) Reset() {
 func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
+	}
+	if b.largeIdxs != nil {
+		b.largeIdxs = b.largeIdxs[:0]
+	}
+	if b.largeKeys != nil {
+		b.largeKeys = b.largeKeys[:0]
+	}
+	if b.largeVals != nil {
+		b.largeVals = b.largeVals[:0]
 	}
 	b.byteSize = 0
 	b.slabWritten = 0
@@ -317,7 +329,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 	}
 
 	// Convert large inline values to slab pointers in bulk to amortize syscalls.
-	var largeIdx []int
+	largeIdx := b.largeIdxs[:0]
 	for i := range ops {
 		op := &ops[i]
 		if op.Type != OpPut || op.IsPtr {
@@ -327,10 +339,21 @@ func (b *Batch) SetOps(ops []Entry) error {
 			largeIdx = append(largeIdx, i)
 		}
 	}
+	b.largeIdxs = largeIdx
 
 	if len(largeIdx) > 0 {
-		keys := make([][]byte, len(largeIdx))
-		values := make([][]byte, len(largeIdx))
+		keys := b.largeKeys
+		if cap(keys) < len(largeIdx) {
+			keys = make([][]byte, len(largeIdx))
+		} else {
+			keys = keys[:len(largeIdx)]
+		}
+		values := b.largeVals
+		if cap(values) < len(largeIdx) {
+			values = make([][]byte, len(largeIdx))
+		} else {
+			values = values[:len(largeIdx)]
+		}
 		for i, idx := range largeIdx {
 			keys[i] = ops[idx].Key
 			values[i] = ops[idx].Value
@@ -338,6 +361,11 @@ func (b *Batch) SetOps(ops []Entry) error {
 
 		ptrs, err := b.slabManager.AppendMany(keys, values)
 		if err != nil {
+			clear(keys)
+			clear(values)
+			b.largeKeys = keys[:0]
+			b.largeVals = values[:0]
+			b.largeIdxs = largeIdx[:0]
 			return err
 		}
 
@@ -354,6 +382,12 @@ func (b *Batch) SetOps(ops []Entry) error {
 			}
 			b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
 		}
+
+		clear(keys)
+		clear(values)
+		b.largeKeys = keys[:0]
+		b.largeVals = values[:0]
+		b.largeIdxs = largeIdx[:0]
 	}
 
 	// Just append them. Deduplication happens at Ops() time.
