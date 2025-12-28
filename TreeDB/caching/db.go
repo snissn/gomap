@@ -4715,11 +4715,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db      *DB
-	entries []batch.Entry
-	backend batch.Interface
-	size    int
-	walBuf  []logRecord
+	db        *DB
+	entries   []batch.Entry
+	backend   batch.Interface
+	size      int
+	walBuf    []logRecord
+	shardIdxs []int
 
 	closed         bool
 	streamEligible bool
@@ -4751,6 +4752,9 @@ func (b *Batch) Reset() {
 	}
 	if b.entries != nil {
 		b.entries = b.entries[:0]
+	}
+	if b.shardIdxs != nil {
+		b.shardIdxs = b.shardIdxs[:0]
 	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
@@ -5011,8 +5015,17 @@ func (b *Batch) writeRegular(sync bool) error {
 	shardCount := len(b.db.mutableShards)
 	shardAdds := make([]int64, shardCount)
 	shardCounts := make([]int, shardCount)
-	for _, op := range b.entries {
+	shardIdxs := b.shardIdxs
+	if cap(shardIdxs) < len(b.entries) {
+		shardIdxs = make([]int, len(b.entries))
+	} else {
+		shardIdxs = shardIdxs[:len(b.entries)]
+	}
+	b.shardIdxs = shardIdxs
+	for i := range b.entries {
+		op := &b.entries[i]
 		idx := b.db.shardIndex(op.Key)
+		shardIdxs[i] = idx
 		shardCounts[idx]++
 		add := int64(len(op.Key))
 		if op.Type == batch.OpPut {
@@ -5126,8 +5139,8 @@ func (b *Batch) writeRegular(sync bool) error {
 			shardEntries[i] = make([]batch.Entry, 0, count)
 		}
 	}
-	for _, op := range b.entries {
-		idx := b.db.shardIndex(op.Key)
+	for i, op := range b.entries {
+		idx := shardIdxs[i]
 		shardEntries[idx] = append(shardEntries[idx], op)
 	}
 
