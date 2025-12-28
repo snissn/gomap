@@ -2613,7 +2613,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	db.waitForStop()
 
 	// WAL-enabled mode: do a snapshot scan and apply per-key deletes directly.
-	// We batch WAL appends with copied keys to reduce per-record overhead.
+	// Append WAL records one-by-one to preserve batch atomicity and to avoid
+	// post-WAL apply divergence on partial batch failure.
 	if !db.disableWAL {
 		db.writeMu.Lock()
 		defer db.writeMu.Unlock()
@@ -2623,16 +2624,6 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return err
 		}
 		defer func() { _ = it.Close() }()
-
-		const deleteRangeBatchKeys = 1024
-		const deleteRangeBatchBytes = 1 << 20
-
-		useBatch := !db.valueLogEnabled()
-
-		var (
-			batchKeys []byte
-			batch     []logRecord
-		)
 
 		applyDelete := func(key []byte) error {
 			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
@@ -2683,53 +2674,62 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 		}
 
-		flushBatch := func() error {
-			if len(batch) == 0 {
+		poisonApply := func(err error) error {
+			if err == nil {
 				return nil
 			}
-			if _, err := db.appendWAL(batch, walDurabilityNone); err != nil {
-				return err
+			db.reportError(fmt.Errorf("cachingdb: WAL apply failed: %w", err))
+			db.walAckMu.Lock()
+			if db.walErr == nil {
+				db.walErr = err
 			}
-			for i := range batch {
-				if err := applyDelete(batch[i].Key); err != nil {
+			db.walAckMu.Unlock()
+			return err
+		}
+
+		preRotate := func(key []byte) error {
+			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
+				return ErrMemtableFull
+			}
+			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+				db.mu.Lock()
+				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+					err := db.rotateMemtableLocked(true)
+					db.mu.Unlock()
+					if err != nil {
+						return err
+					}
+				} else {
+					db.mu.Unlock()
+				}
+			}
+			shard := db.shardForKey(key)
+			shard.mu.Lock()
+			exceeds := db.shardExceedsLimit(shard, int64(len(key)))
+			shard.mu.Unlock()
+			if exceeds {
+				db.mu.Lock()
+				err := db.rotateMemtableLocked(true)
+				db.mu.Unlock()
+				if err != nil {
 					return err
 				}
 			}
-			batch = batch[:0]
-			batchKeys = batchKeys[:0]
 			return nil
 		}
 
 		for it.Valid() {
 			key := it.Key()
-			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
-				return ErrMemtableFull
-			}
-			if useBatch {
-				start := len(batchKeys)
-				batchKeys = append(batchKeys, key...)
-				keyCopy := batchKeys[start:len(batchKeys)]
-				batch = append(batch, logRecord{Op: logOpDelete, Key: keyCopy})
-
-				if len(batch) >= deleteRangeBatchKeys || len(batchKeys) >= deleteRangeBatchBytes {
-					if err := flushBatch(); err != nil {
-						return err
-					}
-				}
-			} else {
-				if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, walDurabilityNone); err != nil {
-					return err
-				}
-				if err := applyDelete(key); err != nil {
-					return err
-				}
-			}
-			it.Next()
-		}
-		if useBatch {
-			if err := flushBatch(); err != nil {
+			if err := preRotate(key); err != nil {
 				return err
 			}
+			if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, walDurabilityNone); err != nil {
+				return err
+			}
+			if err := applyDelete(key); err != nil {
+				return poisonApply(err)
+			}
+			it.Next()
 		}
 		if err := it.Error(); err != nil {
 			return err
