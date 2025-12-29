@@ -32,6 +32,14 @@ type Entry struct {
 	IsPtr    bool          // True if ValuePtr is valid
 }
 
+type entrySorter []Entry
+
+func (e entrySorter) Len() int { return len(e) }
+func (e entrySorter) Less(i, j int) bool {
+	return bytes.Compare(e[i].Key, e[j].Key) < 0
+}
+func (e entrySorter) Swap(i, j int) { e[i], e[j] = e[j], e[i] }
+
 // Interface defines the contract for a batch operation.
 type Interface interface {
 	Set(key, value []byte) error
@@ -453,9 +461,7 @@ func (b *Batch) SortedEntries() []Entry {
 		return nil
 	}
 	if !b.sorted {
-		sort.SliceStable(b.entries, func(i, j int) bool {
-			return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
-		})
+		sort.Stable(entrySorter(b.entries))
 		b.sorted = true
 	}
 
