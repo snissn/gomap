@@ -45,6 +45,10 @@ const (
 	adaptiveSequentialWritePct = 0.85
 	adaptiveWarmupBytes        = 16 * 1024 * 1024
 	adaptiveModeSwitchStreak   = 2
+	adaptiveMinIterators       = 8
+	adaptiveMinRangeIterators  = 2
+	adaptiveIterRatio          = 0.002
+	adaptiveRangeIterRatio     = 0.001
 	maxMemtableBytesPerShard   = int64(3 << 30)
 )
 
@@ -1012,10 +1016,13 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	seqRatio := float64(stats.seqWrites) / float64(denom)
 	sequential := seqRatio >= adaptiveSequentialWritePct
 
-	if stats.rangeIters > 0 {
+	iterRatio := float64(stats.iterators) / float64(denom)
+	rangeRatio := float64(stats.rangeIters) / float64(denom)
+
+	if stats.rangeIters >= adaptiveMinRangeIterators && rangeRatio >= adaptiveRangeIterRatio {
 		return memtable.ModeSkiplist
 	}
-	if stats.iterators > 0 {
+	if stats.iterators >= adaptiveMinIterators && iterRatio >= adaptiveIterRatio {
 		return memtable.ModeSkiplist
 	}
 	if sequential {
