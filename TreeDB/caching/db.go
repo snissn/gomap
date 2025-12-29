@@ -1790,6 +1790,16 @@ func (db *DB) appendWAL(records []logRecord, durability walDurability) ([]page.V
 	case walDurabilityFlush:
 		return db.appendWALInline(records, true)
 	default:
+		if len(records) == 1 && db.walFastCond != nil {
+			ptr, err := db.appendWALFast(records[0])
+			if err != nil {
+				return nil, err
+			}
+			if db.valueLogEnabled() {
+				return []page.ValuePtr{ptr}, nil
+			}
+			return nil, nil
+		}
 		return db.appendWALInline(records, false)
 	}
 }
