@@ -95,7 +95,37 @@ Profiles are intended to make intent explicit:
 - `ProfileFast`: relax durability/integrity knobs for throughput.
 - `ProfileBench`: deterministic benchmarking profile (not production).
 
+Unsafe profiles require an explicit acknowledgement:
+
+```go
+opts := treedb.OptionsFor(treedb.ProfileFast, "./my-db-data")
+opts.AllowUnsafe = true
+db, err := treedb.Open(opts)
+```
+
 Details: `docs/TREEDB_PROFILES.md`.
+
+## Durability & Safety Notes
+
+- Safe defaults keep WAL, fsync, and read checksums enabled; unsafe toggles require `AllowUnsafe`.
+- With `RelaxedSync` enabled, `SetSync`/`WriteSync` are crash-consistent only (no fsync) and may not survive power loss.
+- Page checksums are verified once and cached until the page is rewritten; use `VerifyOnRead` for paranoid always-verify behavior. `DisableReadChecksum` disables slab/value-log CRC checks entirely.
+- CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
+- `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.
+- TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
+- Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.
+- Optional guardrail: `MaxValueLogRetainedBytes` emits a warning when retained value-log bytes exceed the threshold.
+- Optional hard cap: `MaxValueLogRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
+- On-disk format is considered alpha and may change without backward-compatibility guarantees.
+
+### Durability Matrix (Cached Mode)
+
+| Options | WAL | Sync boundary | Power-loss durability | Notes |
+| --- | --- | --- | --- | --- |
+| Defaults | on | fsync | yes | safest default |
+| `RelaxedSync` | on | flush-only | no | crash-consistent only |
+| `DisableWAL` | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
+| `DisableWAL` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
 
 ## Tuning (Cached Mode)
 

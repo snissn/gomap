@@ -8,6 +8,8 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
@@ -33,6 +35,8 @@ var (
 	ErrKeyTooLarge    = errors.New("vlog: key too large")
 	ErrValueTooLarge  = errors.New("vlog: value too large")
 )
+
+var syncDirFn = syncDir
 
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
@@ -62,6 +66,10 @@ type Writer struct {
 func NewWriter(path string, fileID uint32) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
+		return nil, err
+	}
+	if err := syncDirFn(path); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	info, err := f.Stat()
@@ -105,18 +113,33 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		return errors.New("vlog: nil writer")
 	}
 
-	if w.f != nil {
-		if err := w.bw.Flush(); err != nil {
-			_ = w.f.Close()
+	if w.f == nil {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
 			return err
 		}
-		if w.syncFn != nil {
-			if err := w.syncFn(w.f); err != nil {
-				_ = w.f.Close()
-				return err
-			}
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
 		}
-		if err := w.f.Close(); err != nil {
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		w.f = f
+		w.bw.Reset(f)
+		w.size = info.Size()
+		w.fileID = fileID
+		w.scratch = w.scratch[:0]
+		return nil
+	}
+
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if w.syncFn != nil {
+		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
 	}
@@ -130,12 +153,40 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		_ = f.Close()
 		return err
 	}
+	if err := syncDirFn(path); err != nil {
+		_ = f.Close()
+		return err
+	}
 
+	old := w.f
 	w.f = f
 	w.bw.Reset(f)
 	w.size = info.Size()
 	w.fileID = fileID
 	w.scratch = w.scratch[:0]
+	if err := old.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncDir(path string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	if err := f.Sync(); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -40,22 +40,32 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 		return nil, err
 	}
 
-	var maxID uint32
-	found := false
+	type slabInfo struct {
+		id   uint32
+		path string
+		size int64
+	}
+
+	var (
+		maxID uint32
+		found bool
+		infos []slabInfo
+	)
 
 	for _, path := range matches {
 		var id uint32
 		_, err := fmt.Sscanf(filepath.Base(path), "data-%04d.slab", &id)
-		if err == nil {
-			s, err := OpenSlab(path, id)
-			if err != nil {
-				return nil, err
-			}
-			sm.slabs[id] = s
-			if id >= maxID {
-				maxID = id
-				found = true
-			}
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, slabInfo{id: id, path: path, size: info.Size()})
+		if id >= maxID {
+			maxID = id
+			found = true
 		}
 	}
 
@@ -67,7 +77,18 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 		sm.slabs[0] = s
 		sm.activeSlab = s
 	} else {
-		sm.activeSlab = sm.slabs[maxID]
+		for _, info := range infos {
+			if info.id == maxID {
+				s, err := OpenSlab(info.path, info.id)
+				if err != nil {
+					return nil, err
+				}
+				sm.slabs[info.id] = s
+				sm.activeSlab = s
+				continue
+			}
+			sm.slabs[info.id] = OpenSlabLazy(info.path, info.id, info.size)
+		}
 	}
 
 	return sm, nil
@@ -175,6 +196,49 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	const maxBatchBytes = 8 << 20   // 8 MiB
 	const maxKeepScratch = 16 << 20 // 16 MiB
 
+	type appendManyPrep struct {
+		keyLen    int
+		valLen    int
+		recordLen int
+		crc       uint32
+	}
+
+	prep := make([]appendManyPrep, len(keys))
+	var lenArr [6]byte
+
+	for i := 0; i < len(keys); i++ {
+		key := keys[i]
+		value := values[i]
+
+		keyLen := len(key)
+		valLen := len(value)
+
+		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+			return nil, ErrRecordTooLarge
+		}
+		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+			return nil, ErrRecordTooLarge
+		}
+		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+			return nil, ErrRecordTooLarge
+		}
+		recordLen := int(recordLen64)
+
+		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+		binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+		sum := crc32.Update(0, crc32cTable, lenArr[:])
+		sum = crc32.Update(sum, crc32cTable, key)
+		sum = crc32.Update(sum, crc32cTable, value)
+
+		prep[i] = appendManyPrep{
+			keyLen:    keyLen,
+			valLen:    valLen,
+			recordLen: recordLen,
+			crc:       sum,
+		}
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -236,26 +300,13 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		buf = nb
 	}
 
-	var lenArr [6]byte
-
 	for i := 0; i < len(keys); i++ {
 		key := keys[i]
 		value := values[i]
-
-		keyLen := len(key)
-		valLen := len(value)
-
-		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
-		}
-		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
-		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen := int(recordLen64)
+		recPrep := prep[i]
+		keyLen := recPrep.keyLen
+		valLen := recPrep.valLen
+		recordLen := recPrep.recordLen
 
 		// Ensure the record fits in the active slab, flushing/rotating as needed.
 		if int64(sm.activeSlab.Size)+int64(len(buf))+int64(recordLen) > MaxSlabSize {
@@ -282,15 +333,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		buf = buf[:end]
 		rec := buf[start:end]
 
-		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
-		binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
-
-		sum := crc32.Update(0, crc32cTable, lenArr[:])
-		sum = crc32.Update(sum, crc32cTable, key)
-		sum = crc32.Update(sum, crc32cTable, value)
-
-		binary.LittleEndian.PutUint32(rec[0:4], sum)
-		copy(rec[4:10], lenArr[:])
+		binary.LittleEndian.PutUint32(rec[0:4], recPrep.crc)
+		binary.LittleEndian.PutUint16(rec[4:6], uint16(keyLen))
+		binary.LittleEndian.PutUint32(rec[6:10], uint32(valLen))
 		copy(rec[10:10+keyLen], key)
 		copy(rec[10+keyLen:], value)
 
@@ -383,6 +428,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 		}
 		sm.slabs[id] = s
 	}
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
 	sm.activeSlab = s
 	return nil
 }
@@ -390,6 +438,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if err := sm.activeSlab.ensureOpen(); err != nil {
+		return err
+	}
 	return sm.activeSlab.Truncate(int64(offset))
 }
 
@@ -400,6 +451,9 @@ func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 	defer sm.mu.Unlock()
 	if sm.activeSlab == nil {
 		return 0, fmt.Errorf("no active slab")
+	}
+	if err := sm.activeSlab.ensureOpen(); err != nil {
+		return 0, err
 	}
 	if err := sm.activeSlab.RepairTail(); err != nil {
 		return 0, err
@@ -436,6 +490,17 @@ func (sm *SlabManager) ZombieCount() int {
 		}
 	}
 	return count
+}
+
+// RemapStats returns cumulative mmap remap counts across slabs.
+func (sm *SlabManager) RemapStats() (remaps uint64, deadMappings uint64) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, s := range sm.slabs {
+		remaps += s.remapCount.Load()
+		deadMappings += s.deadMappingsCount.Load()
+	}
+	return remaps, deadMappings
 }
 
 // CurrentSlabSet returns a snapshot of the current slabs.

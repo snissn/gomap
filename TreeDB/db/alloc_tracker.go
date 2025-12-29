@@ -1,11 +1,16 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/freelist"
+import (
+	"sync"
+
+	"github.com/snissn/gomap/TreeDB/freelist"
+)
 
 // allocTracker wraps the freelist allocator and remembers allocated pages so
 // they can be returned if a write attempt is abandoned.
 type allocTracker struct {
 	alloc *freelist.Allocator
+	mu    sync.Mutex
 	pages []uint64
 }
 
@@ -18,7 +23,9 @@ func (t *allocTracker) Alloc(hint uint64) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	t.mu.Lock()
 	t.pages = append(t.pages, id)
+	t.mu.Unlock()
 	return id, nil
 }
 
@@ -26,12 +33,15 @@ func (t *allocTracker) FreeAll() error {
 	if t == nil {
 		return nil
 	}
+	t.mu.Lock()
+	pages := append([]uint64(nil), t.pages...)
+	t.pages = nil
+	t.mu.Unlock()
 	var firstErr error
-	for _, id := range t.pages {
+	for _, id := range pages {
 		if err := t.alloc.Free(id); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	t.pages = nil
 	return firstErr
 }

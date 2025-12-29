@@ -25,6 +25,7 @@ func init() {
 		setBoolIfUnset("treedb-disable-wal", true, isSet, treedbDisableWAL)
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
+		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)

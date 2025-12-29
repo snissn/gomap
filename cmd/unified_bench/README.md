@@ -18,6 +18,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `write_seq` — Sequential Write
 - `write_rand` — Random Write
 - `batch_write` — Batch Write
+- `batch_random` — Batch Random
+- `batch_delete` — Batch Delete
 - `delete_rand` — Random Delete
 - `read_rand` — Random Read
 - `full_scan` — Full Scan (iterate the full keyspace)
@@ -46,6 +48,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
+- `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state

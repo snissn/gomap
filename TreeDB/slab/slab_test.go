@@ -114,6 +114,17 @@ func TestSlabRotation(t *testing.T) {
 	}
 }
 
+func TestOpenSlabSyncDirFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data-0000.slab")
+	orig := syncDirFn
+	t.Cleanup(func() { syncDirFn = orig })
+	syncDirFn = func(string) error { return errors.New("syncdir fail") }
+	if _, err := OpenSlab(path, 0); err == nil {
+		t.Fatalf("expected syncDir failure")
+	}
+}
+
 func TestDataCorruption(t *testing.T) {
 	dir := t.TempDir()
 	sm, err := NewSlabManager(dir)

@@ -192,6 +192,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 }
 
 func (b *Batch) Close() error {
+	if b.batch != nil {
+		err := b.batch.Close()
+		b.batch = nil
+		return err
+	}
 	b.batch = nil
 	return nil
 }

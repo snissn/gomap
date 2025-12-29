@@ -395,36 +395,27 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
 
 	// Seed a retained value-log segment by writing a large value. In value-log
-	// mode this segment cannot be deleted by checkpoint, so effectiveWALBytes can
-	// remain above maxWALBytes indefinitely.
+	// mode this segment cannot be deleted by checkpoint, so reclaimable WAL bytes
+	// remain below maxWALBytes indefinitely.
 	val := bytes.Repeat([]byte("v"), 2<<20) // 2MiB
 	if err := db.Set([]byte("seed"), val); err != nil {
 		t.Fatalf("Set(seed): %v", err)
 	}
 
-	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
 	var initialCount uint64
-	for {
-		stats := db.Stats()
-		if stats == nil {
-			t.Fatalf("Stats() returned nil")
-		}
-		n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
-		if err != nil {
-			t.Fatalf("parse auto checkpoint count: %v", err)
-		}
-		if n > 0 {
-			if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "size" {
-				t.Fatalf("expected last reason size, got %q", reason)
-			}
-			initialCount = n
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for size auto checkpoint to run")
-		}
-		time.Sleep(10 * time.Millisecond)
+	time.Sleep(withRaceTimeout(200 * time.Millisecond))
+	stats := db.Stats()
+	if stats == nil {
+		t.Fatalf("Stats() returned nil")
 	}
+	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse auto checkpoint count: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected size auto checkpoint to remain idle with retained value-log (count=%d)", n)
+	}
+	initialCount = n
 
 	// Continue writing while effectiveWALBytes remains above maxWALBytes. The
 	// size-triggered checkpoint should remain disarmed and not repeatedly run.
@@ -438,11 +429,11 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 
 	time.Sleep(200 * time.Millisecond)
 
-	stats := db.Stats()
+	stats = db.Stats()
 	if stats == nil {
 		t.Fatalf("Stats() returned nil")
 	}
-	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+	n, err = strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
 	if err != nil {
 		t.Fatalf("parse auto checkpoint count: %v", err)
 	}

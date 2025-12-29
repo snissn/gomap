@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -11,6 +12,9 @@ import (
 // Regression test for cached-mode vacuum: ensure that running online vacuum
 // while using cached mode does not lose already-checkpointed keys.
 func TestVacuumIndexOnline_CachedMode_DoesNotLoseCheckpointedKeys(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 
 	opts := Options{
@@ -20,6 +24,7 @@ func TestVacuumIndexOnline_CachedMode_DoesNotLoseCheckpointedKeys(t *testing.T) 
 		DisableWAL:          true,
 		RelaxedSync:         true,
 		DisableReadChecksum: true,
+		AllowUnsafe:         true,
 
 		FlushThreshold: 1 << 20, // small-ish to force flush rotations during the test
 		KeepRecent:     1,

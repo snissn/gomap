@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
@@ -16,18 +18,41 @@ const (
 )
 
 var ErrCorrupt = errors.New("wal: corrupt record")
+var ErrRecordTooLarge = errors.New("wal: record too large")
+
+var syncDirFn = syncDir
 
 type Writer struct {
-	f          *os.File
-	bw         *bufio.Writer
-	scratch    []byte
-	pending    []byte
-	size       int64
-	segmentMax int
-	syncFn     func(*os.File) error
+	f              *os.File
+	bw             *bufio.Writer
+	scratch        []byte
+	pending        []byte
+	size           int64
+	segmentMax     int
+	maxSegmentSize int64
+	syncFn         func(*os.File) error
 }
 
-const defaultWALBufferSize = 4 << 20
+const (
+	defaultWALBufferSize  = 4 << 20
+	defaultMaxSegmentSize = 64 * 1024 * 1024
+)
+
+type Options struct {
+	// MaxSegmentSize bounds the total WAL segment payload size (bytes).
+	// 0 uses the default limit; values < 0 disable the cap.
+	MaxSegmentSize int64
+}
+
+func normalizeMaxSegmentSize(size int64) int64 {
+	if size == 0 {
+		return defaultMaxSegmentSize
+	}
+	if size < 0 {
+		return 0
+	}
+	return size
+}
 
 type Record struct {
 	Op    byte
@@ -36,17 +61,26 @@ type Record struct {
 }
 
 func NewWriter(path string) (*Writer, error) {
+	return NewWriterWithOptions(path, Options{})
+}
+
+func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
 	}
+	if err := syncDirFn(path); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return &Writer{
-		f:          f,
-		bw:         bufio.NewWriterSize(f, defaultWALBufferSize),
-		scratch:    make([]byte, 0, defaultWALBufferSize),
-		pending:    make([]byte, 0, defaultWALBufferSize),
-		segmentMax: defaultWALBufferSize,
-		syncFn:     func(file *os.File) error { return file.Sync() },
+		f:              f,
+		bw:             bufio.NewWriterSize(f, defaultWALBufferSize),
+		scratch:        make([]byte, 0, defaultWALBufferSize),
+		pending:        make([]byte, 0, defaultWALBufferSize),
+		segmentMax:     defaultWALBufferSize,
+		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		syncFn:         func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
@@ -57,22 +91,35 @@ func (w *Writer) RotateTo(path string) error {
 		return errors.New("wal: nil writer")
 	}
 
-	if w.f != nil {
-		if err := w.flushPending(); err != nil {
-			_ = w.f.Close()
+	if w.f == nil {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
 			return err
 		}
-		if err := w.bw.Flush(); err != nil {
-			_ = w.f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
 			return err
 		}
-		if w.syncFn != nil {
-			if err := w.syncFn(w.f); err != nil {
-				_ = w.f.Close()
-				return err
-			}
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
 		}
-		if err := w.f.Close(); err != nil {
+		w.f = f
+		w.bw.Reset(f)
+		w.size = info.Size()
+		w.pending = w.pending[:0]
+		return nil
+	}
+
+	if err := w.flushPending(); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if w.syncFn != nil {
+		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
 	}
@@ -86,12 +133,39 @@ func (w *Writer) RotateTo(path string) error {
 		_ = f.Close()
 		return err
 	}
+	if err := syncDirFn(path); err != nil {
+		_ = f.Close()
+		return err
+	}
 
+	old := w.f
 	w.f = f
 	w.bw.Reset(f)
 	w.size = info.Size()
 	w.pending = w.pending[:0]
-	// Keep scratch for reuse; next Append/AppendBatch will resize as needed.
+	if err := old.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncDir(path string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	if err := f.Sync(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -129,6 +203,9 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 	// Encode record into scratch
 	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
 	size := 1 + 2 + 4 + len(key) + len(value)
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
 	if size > w.segmentMax {
 		if err := w.flushPending(); err != nil {
 			return err
@@ -184,6 +261,9 @@ func (w *Writer) AppendBatch(records []Record) error {
 	total := 0
 	for _, r := range records {
 		total += 1 + 2 + 4 + len(r.Key) + len(r.Value)
+	}
+	if w.maxSegmentSize > 0 && int64(total) > w.maxSegmentSize {
+		return ErrRecordTooLarge
 	}
 
 	if cap(w.scratch) < total {
@@ -241,17 +321,25 @@ func (w *Writer) Close() error {
 }
 
 type Reader struct {
-	f   *os.File
-	buf []byte
-	pos int
+	f              *os.File
+	buf            []byte
+	pos            int
+	maxSegmentSize int64
 }
 
 func NewReader(path string) (*Reader, error) {
+	return NewReaderWithOptions(path, Options{})
+}
+
+func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{f: f}, nil
+	return &Reader{
+		f:              f,
+		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+	}, nil
 }
 
 // ReadNext yields the next record. It transparently handles segments.
@@ -295,8 +383,8 @@ func (r *Reader) readSegment() error {
 	length := binary.LittleEndian.Uint32(header[0:4])
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
 
-	// Sanity check length (e.g. max 64MB) to avoid OOM on corrupt file
-	if length > 64*1024*1024 {
+	// Sanity check length to avoid OOM on corrupt file.
+	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
 		return ErrCorrupt
 	}
 

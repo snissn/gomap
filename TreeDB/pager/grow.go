@@ -1,10 +1,6 @@
 package pager
 
-import (
-	"fmt"
-
-	"golang.org/x/sys/unix"
-)
+import "fmt"
 
 const minAsyncPregrowChunkSize = 1 << 20 // 1MiB
 
@@ -130,10 +126,10 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	newChunks := make([][]byte, 0, chunksNeeded)
 	for i := int64(0); i < chunksNeeded; i++ {
 		offset := currentCapacity + (i * p.chunkSize)
-		data, err := unix.Mmap(int(p.file.Fd()), offset, int(p.chunkSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize))
 		if err != nil {
 			for _, c := range newChunks {
-				_ = unix.Munmap(c)
+				_ = munmapFile(c)
 			}
 			return err
 		}

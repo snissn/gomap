@@ -59,16 +59,44 @@ func (d *DB) NewBatch() (kvstore.Batch, error) {
 	if b == nil {
 		return nil, kvstore.ErrUnsupported
 	}
-	return &batch{b: b}, nil
+	wrapped := &batch{b: b}
+	if sv, ok := b.(interface{ SetView(key, value []byte) error }); ok {
+		wrapped.setView = sv.SetView
+	}
+	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
+		wrapped.deleteView = dv.DeleteView
+	}
+	return wrapped, nil
 }
 
 type batch struct {
-	b treedb.Batch
+	b          treedb.Batch
+	setView    func(key, value []byte) error
+	deleteView func(key []byte) error
 }
 
 func (b *batch) Set(key, value []byte) error { return b.b.Set(key, value) }
 
 func (b *batch) Delete(key []byte) error { return b.b.Delete(key) }
+
+// SetView records a Put without copying key/value bytes if supported by the
+// underlying TreeDB batch. Callers must treat key/value as immutable until
+// Commit/CommitSync/Close.
+func (b *batch) SetView(key, value []byte) error {
+	if b.setView != nil {
+		return b.setView(key, value)
+	}
+	return b.b.Set(key, value)
+}
+
+// DeleteView records a Delete without copying key bytes if supported by the
+// underlying TreeDB batch.
+func (b *batch) DeleteView(key []byte) error {
+	if b.deleteView != nil {
+		return b.deleteView(key)
+	}
+	return b.b.Delete(key)
+}
 
 func (b *batch) Commit() error { return b.b.Write() }
 

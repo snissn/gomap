@@ -189,6 +189,10 @@ type Options struct {
 	// latency for very large slabs but risks starting up with committed pointers
 	// that decode to checksum errors after a crash.
 	DisableSlabTailRepairOnOpen bool
+	// AllowUnsafe acknowledges unsafe durability/integrity options.
+	// When false, Open will reject options that disable WAL, fsync, checksums,
+	// or slab tail repair.
+	AllowUnsafe bool
 
 	// DisableWAL disables the Write-Ahead Log in cached mode.
 	// This improves performance but sacrifices durability: a crash will revert
@@ -196,6 +200,18 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
+	// 0 uses the default limit.
+	WALMaxSegmentBytes int64
+	// MemtableValueLogPointers avoids storing large values in the memtable and
+	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
+	MemtableValueLogPointers bool
+	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
+	// this threshold (0 disables warnings). Cached mode only.
+	MaxValueLogRetainedBytes int64
+	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
+	// values once retained bytes exceed this threshold (0 disables the cap).
+	MaxValueLogRetainedBytesHard int64
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only
@@ -209,6 +225,9 @@ type Options struct {
 	// This improves read performance (especially for large values) but risks
 	// returning silent data corruption if the disk/memory is compromised.
 	DisableReadChecksum bool
+	// VerifyOnRead forces checksum verification on every index page read,
+	// bypassing the verified-page cache.
+	VerifyOnRead bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -353,6 +372,11 @@ func Open(opts Options) (*DB, error) {
 		opts.FreelistRegionRadius = 1
 	}
 
+	if err := validateUnsafeOptions(opts); err != nil {
+		return nil, err
+	}
+	warnInsecureDir(opts.Dir, opts.NotifyError)
+
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
@@ -365,6 +389,16 @@ func Open(opts Options) (*DB, error) {
 	return db, nil
 }
 
+func validateUnsafeOptions(opts Options) error {
+	if opts.AllowUnsafe {
+		return nil
+	}
+	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
+		return ErrUnsafeOptions
+	}
+	return nil
+}
+
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
@@ -375,6 +409,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManager(opts.Dir)
 	if err != nil {
@@ -453,7 +488,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := replayWALIntoBackend(db, segments); err != nil {
+	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -651,6 +686,10 @@ func (db *DB) recover() error {
 			}
 		}
 
+		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
+			continue
+		}
+
 		chosen = c
 		break
 	}
@@ -691,6 +730,32 @@ func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
 	return true
 }
 
+func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
+	if pageID == 0 || p == nil {
+		return false
+	}
+	data, err := p.Get(pageID)
+	if err != nil {
+		return false
+	}
+	n := node.NewNode(data)
+	verifyAlways := p.VerifyOnRead()
+	if verifyAlways || !p.IsVerified(pageID) {
+		if !n.VerifyChecksum() {
+			return false
+		}
+		if !verifyAlways {
+			p.MarkVerified(pageID)
+		}
+	}
+	switch n.Type() {
+	case page.PageTypeLeaf, page.PageTypeInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
@@ -703,11 +768,14 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	}
 	n := node.NewNode(data)
 
-	if !idx.pager.IsVerified(pageID) {
+	verifyAlways := idx.pager.VerifyOnRead()
+	if verifyAlways || !idx.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return page.MetaPageBody{}, false
 		}
-		idx.pager.MarkVerified(pageID)
+		if !verifyAlways {
+			idx.pager.MarkVerified(pageID)
+		}
 	}
 
 	if n.Type() != page.PageTypeMeta {
@@ -959,6 +1027,15 @@ func (db *DB) RefreshSlabSet() error {
 	return errors.Join(err, db.valueLogManager.Release(oldState.ValueLogSet))
 }
 
+// MarkValueLogZombie marks a value-log segment as zombie so it can be removed
+// once all snapshots release it.
+func (db *DB) MarkValueLogZombie(id uint32) error {
+	if db == nil || db.valueLogManager == nil {
+		return fmt.Errorf("value log manager unavailable")
+	}
+	return db.valueLogManager.MarkZombie(id)
+}
+
 type CompactionOp struct {
 	Key    []byte
 	OldPtr page.ValuePtr
@@ -1007,6 +1084,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
+		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
 
 		for _, op := range chunk {
@@ -1021,6 +1099,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				continue
 			}
 			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
+				closeBatch()
 				db.writeMu.Unlock()
 				return err
 			}
@@ -1031,12 +1110,14 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		if len(b.Ops()) == 0 {
+			closeBatch()
 			db.writeMu.Unlock()
 			continue
 		}
 
 		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
 		if err != nil {
+			closeBatch()
 			db.writeMu.Unlock()
 			return err
 		}
@@ -1052,11 +1133,13 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		// Commit without forcing Sync; compaction can be lazily durable.
 		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+			closeBatch()
 			db.writeMu.Unlock()
 			return err
 		}
 
 		db.writeMu.Unlock()
+		closeBatch()
 	}
 
 	return nil

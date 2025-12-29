@@ -29,7 +29,9 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings [][]byte
+	deadMappings      [][]byte
+	remapCount        atomic.Uint64
+	deadMappingsCount atomic.Uint64
 }
 
 func openFile(path string, id uint32) (*File, error) {
@@ -57,6 +59,7 @@ func (f *File) Close() error {
 		_ = munmap(b)
 	}
 	f.deadMappings = nil
+	f.deadMappingsCount.Store(0)
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
@@ -255,6 +258,17 @@ func (m *Manager) MarkZombie(id uint32) error {
 	}
 	f.IsZombie.Store(true)
 	return nil
+}
+
+// RemapStats returns cumulative mmap remap counts across value-log files.
+func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		remaps += f.remapCount.Load()
+		deadMappings += f.deadMappingsCount.Load()
+	}
+	return remaps, deadMappings
 }
 
 func (m *Manager) RemoveSegment(id uint32) error {

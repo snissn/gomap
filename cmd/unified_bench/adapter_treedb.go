@@ -21,6 +21,8 @@ var (
 	treedbWriterFlushMaxMems       = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs         = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
 	treedbPreferAppendAlloc        = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
+	treedbFreelistRegionPages      = flag.Uint64("treedb-freelist-region-pages", 0, "TreeDB: freelist reuse region size in pages (0=default)")
+	treedbFreelistRegionRadius     = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
 	treedbLeafFillPPM              = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbInternalFillPPM          = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbIterDebug                = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
@@ -38,6 +40,7 @@ var (
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbAllowUnsafe          = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
 	treedbBgCompactionInterval = flag.Duration("treedb-bg-compaction-interval", 0, "TreeDB: background compaction interval (0=disabled)")
 	treedbDisablePiggyback     = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
 	treedbBgVacuumInterval     = flag.Duration("treedb-bg-vacuum-interval", 0, "TreeDB: background index vacuum interval (0=disabled)")
@@ -75,6 +78,8 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		ChunkSize:                         64 * 1024 * 1024,
 		KeepRecent:                        *treedbKeepRecent,
 		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		FreelistRegionPages:               *treedbFreelistRegionPages,
+		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
 		FlushThreshold:                    *treedbFlushThreshold,
@@ -86,6 +91,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		DisableWAL:                        *treedbDisableWAL,
 		RelaxedSync:                       *treedbRelaxedSync,
 		DisableReadChecksum:               *treedbDisableReadChecksum,
+		AllowUnsafe:                       *treedbAllowUnsafe,
 		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
@@ -107,8 +113,11 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		ChunkSize:                         64 * 1024 * 1024,
 		KeepRecent:                        *treedbKeepRecent,
 		PreferAppendAlloc:                 *treedbPreferAppendAlloc,
+		FreelistRegionPages:               *treedbFreelistRegionPages,
+		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		AllowUnsafe:                       *treedbAllowUnsafe,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}

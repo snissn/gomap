@@ -16,18 +16,20 @@ type CursorItem struct {
 }
 
 type Iterator struct {
-	tree    *Tree
-	stack   []CursorItem
-	start   []byte
-	end     []byte
-	valid   bool
-	err     error
-	currKey []byte
-	currVal []byte
-	currPtr page.ValuePtr
-	flags   byte
-	valOK   bool
-	reverse bool
+	tree         *Tree
+	stack        []CursorItem
+	stackBuf     [16]CursorItem
+	start        []byte
+	end          []byte
+	valid        bool
+	err          error
+	currKey      []byte
+	currVal      []byte
+	currPtr      page.ValuePtr
+	flags        byte
+	valOK        bool
+	reverse      bool
+	verifyAlways bool
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
@@ -35,11 +37,13 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
 	}
 	it := &Iterator{
-		tree:    t,
-		start:   start,
-		end:     end,
-		reverse: false,
+		tree:         t,
+		start:        start,
+		end:          end,
+		reverse:      false,
+		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
+	it.resetStack()
 	it.Seek(start)
 	return it
 }
@@ -49,11 +53,13 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		return &Iterator{tree: t, valid: false, err: nil}
 	}
 	it := &Iterator{
-		tree:    t,
-		start:   start,
-		end:     end,
-		reverse: true,
+		tree:         t,
+		start:        start,
+		end:          end,
+		reverse:      true,
+		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
+	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -76,7 +82,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 func (it *Iterator) seekRightMost() {
-	it.stack = nil
+	it.resetStack()
 	it.valid = false
 	it.err = nil
 	currID := it.tree.rootPageID
@@ -114,7 +120,7 @@ func (it *Iterator) seekRightMost() {
 }
 
 func (it *Iterator) seek(key []byte) {
-	it.stack = nil
+	it.resetStack()
 	it.valid = false
 	it.err = nil
 	it.currKey = nil
@@ -172,6 +178,10 @@ func (it *Iterator) seek(key []byte) {
 	}
 }
 
+func (it *Iterator) resetStack() {
+	it.stack = it.stackBuf[:0]
+}
+
 func (it *Iterator) loadCurrent() {
 	for {
 		if len(it.stack) == 0 {
@@ -211,8 +221,7 @@ func (it *Iterator) loadCurrent() {
 			}
 		}
 
-		// Skip tombstones (TreeDB does not currently persist them to disk, but
-		// iterator supports the flag for completeness).
+		// Skip tombstones; they are persisted in the index but hidden from iteration.
 		if flags&node.FlagTombstone != 0 {
 			if it.reverse {
 				it.stack[len(it.stack)-1].Index--
@@ -454,11 +463,14 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	n := node.NewNodeView(data)
 
 	// Skip checksum verification for pages we've already verified.
-	if !it.tree.pager.IsVerified(pageID) {
+	verifyAlways := it.verifyAlways
+	if verifyAlways || !it.tree.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
-		it.tree.pager.MarkVerified(pageID)
+		if !verifyAlways {
+			it.tree.pager.MarkVerified(pageID)
+		}
 	}
 
 	return n, nil

@@ -1,6 +1,7 @@
 package freelist
 
 import (
+	"encoding/binary"
 	"errors"
 	"sync"
 
@@ -61,13 +62,90 @@ func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
 	a.regionRadius = radius
 }
 
-// Alloc allocates a single page.
-// hint is a page ID that the caller would like the new page to be close to.
-// If hint is 0, the allocator uses its own heuristics (e.g. lastAlloc).
-func (a *Allocator) Alloc(hint uint64) (uint64, error) {
+// AllocMany allocates up to count pages in one pass. It returns any allocated
+// IDs even if an error occurs so callers can retire them.
+func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
+	if count <= 0 {
+		return nil, nil
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	if a.regionPages > 0 && a.regionRadius > 0 {
+		ids := make([]uint64, 0, count)
+		var err error
+		for len(ids) < count {
+			id, allocErr := a.allocLocked(hint)
+			if allocErr != nil {
+				err = allocErr
+				break
+			}
+			ids = append(ids, id)
+			hint = id
+		}
+		return ids, err
+	}
+
+	ids := make([]uint64, 0, count)
+	for len(ids) < count {
+		if a.preferAppend || a.head == 0 {
+			id, err := a.pager.Alloc(count - len(ids))
+			if err != nil {
+				return ids, err
+			}
+			for i := 0; i < count-len(ids); i++ {
+				ids = append(ids, id+uint64(i))
+			}
+			a.lastAlloc = ids[len(ids)-1]
+			return ids, nil
+		}
+
+		data, err := a.pager.GetForWrite(a.head)
+		if err != nil {
+			return ids, err
+		}
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return ids, errors.New("freelist head corrupted (AllocMany)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return ids, errors.New("invalid freelist page type")
+		}
+
+		countFree := int(n.Count())
+		if countFree == 0 {
+			body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
+			next := body.NextPageID
+
+			recycled := a.head
+			a.head = next
+			a.pager.MarkUnverified(recycled)
+			a.lastAlloc = recycled
+			ids = append(ids, recycled)
+			continue
+		}
+
+		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], uint16(countFree))
+		for countFree > 0 && len(ids) < count {
+			countFree--
+			id := body.FreeIDs[countFree]
+			slotOff := page.PageHeaderSize + 8 + countFree*8
+			clear(data[slotOff : slotOff+8])
+			a.pager.MarkUnverified(id)
+			a.lastAlloc = id
+			ids = append(ids, id)
+		}
+
+		body.FreeIDs = body.FreeIDs[:countFree]
+		body.Encode(data[page.PageHeaderSize:])
+		n.SetCount(uint16(countFree))
+		n.UpdateChecksum()
+	}
+	return ids, nil
+}
+
+func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 	if a.preferAppend {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
@@ -84,14 +162,11 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 		return id, err
 	}
 
-	// Read Head
 	data, err := a.pager.GetForWrite(a.head)
 	if err != nil {
 		return 0, err
 	}
-
-	// Decode
-	n := node.NewNode(data) // Helper for header
+	n := node.NewNode(data)
 	if !n.VerifyChecksum() {
 		return 0, errors.New("freelist head corrupted (Alloc)")
 	}
@@ -101,7 +176,6 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 
 	count := n.Count()
 	if count > 0 {
-		// Pop from body
 		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
 		id := body.FreeIDs[count-1]
 
@@ -140,15 +214,12 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 				n.SetCount(count - 1)
 				n.UpdateChecksum()
 
-				// This page may have been verified under a previous incarnation. Ensure
-				// it is treated as unverified when reused.
 				a.pager.MarkUnverified(id)
 				a.lastAlloc = id
 				return id, nil
 			}
 		}
 
-		// Update page body and header.
 		lastIdx := int(count) - 1
 		body.FreeIDs = body.FreeIDs[:lastIdx]
 		body.Encode(data[page.PageHeaderSize:])
@@ -157,26 +228,30 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 		n.SetCount(count - 1)
 		n.UpdateChecksum()
 
-		// This page may have been verified under a previous incarnation. Ensure
-		// it is treated as unverified when reused.
 		a.pager.MarkUnverified(id)
 		a.lastAlloc = id
 		return id, nil
 	}
 
-	// Count == 0. This page is empty.
-	// We consume this page itself.
-	// Next head = Body.NextPageID.
-	body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0) // Count 0
+	body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
 	next := body.NextPageID
 
 	recycled := a.head
 	a.head = next
 
-	// This page is being repurposed; ensure it is treated as unverified.
 	a.pager.MarkUnverified(recycled)
 	a.lastAlloc = recycled
 	return recycled, nil
+}
+
+// Alloc allocates a single page.
+// hint is a page ID that the caller would like the new page to be close to.
+// If hint is 0, the allocator uses its own heuristics (e.g. lastAlloc).
+func (a *Allocator) Alloc(hint uint64) (uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.allocLocked(hint)
 }
 
 // Free adds a page to the freelist.
@@ -208,23 +283,9 @@ func (a *Allocator) Free(id uint64) error {
 
 	count := n.Count()
 	if count < page.MaxFreeIDs {
-		// Append
-		// We need to decode, append, encode.
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
-		body.FreeIDs = append(body.FreeIDs, id) // This might alloc new slice if capacity low?
-		// Note: Decode creates slice of size `count`. Append will alloc.
-		// We need to write it back to `data`.
-
-		// Optimization: Decode just reads. We can write directly at offset?
-		// Offset = Header + Next(8) + Count*8.
-		// Write ID
-		// Use simple binary put?
-		// Need binary import?
-		// Or use body.Encode logic.
-		// Let's use body logic to be safe.
-		body.Encode(data[page.PageHeaderSize:]) // Writes Next + Array
-		// But Wait, `body.FreeIDs` has new item. `Encode` writes all.
-		// Correct.
+		// Append without reallocating: offset = header + next(8) + count*8.
+		slotOff := page.PageHeaderSize + 8 + int(count)*8
+		binary.LittleEndian.PutUint64(data[slotOff:slotOff+8], id)
 		n.SetCount(count + 1)
 		n.UpdateChecksum()
 		return nil

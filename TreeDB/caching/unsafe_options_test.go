@@ -15,6 +15,7 @@ func TestDisableWAL_NoFilesCreated(t *testing.T) {
 
 	opts := Options{
 		DisableWAL:     true,
+		AllowUnsafe:    true,
 		FlushThreshold: 1024 * 1024,
 	}
 
@@ -77,6 +78,7 @@ func TestRelaxedSync_Performance(t *testing.T) {
 		opts := Options{
 			RelaxedSync:    relaxed,
 			DisableWAL:     false,
+			AllowUnsafe:    relaxed,
 			FlushThreshold: 1024 * 1024,
 		}
 
@@ -118,6 +120,7 @@ func TestUnsafeOptions_ConcurrentStress(t *testing.T) {
 	opts := Options{
 		DisableWAL:     true,
 		RelaxedSync:    true,
+		AllowUnsafe:    true,
 		FlushThreshold: 64 * 1024, // Small threshold to trigger frequent flushes/rotations
 	}
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -14,13 +15,23 @@ const (
 	indexReadyFileName = "index.db.new.ready"
 )
 
-var syncDirFn = func(dir string) error {
+var syncDirFn = func(dir string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return f.Sync()
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // recoverIndexSwap is a best-effort recovery helper for crash-safe offline

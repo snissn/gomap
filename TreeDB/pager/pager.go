@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -39,6 +38,7 @@ type Pager struct {
 	allocMu      sync.Mutex
 	path         string
 	verified     atomic.Pointer[verifiedBitset]
+	verifyOnRead atomic.Bool
 
 	growMu       sync.Mutex
 	growStopOnce sync.Once
@@ -58,9 +58,16 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	if chunkSize%int64(os.Getpagesize()) != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
 	}
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran)
+	}
 
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
+		return nil, err
+	}
+	if err := mmapAvailable(); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
@@ -94,8 +101,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		p.chunks = make([][]byte, numChunks)
 
 		for i := int64(0); i < numChunks; i++ {
-			// unix.Mmap(fd int, offset int64, length int, prot int, flags int)
-			data, err := unix.Mmap(int(f.Fd()), i*chunkSize, int(chunkSize), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
+			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize))
 			if err != nil {
 				p.Close()
 				return nil, err
@@ -164,6 +170,16 @@ func (p *Pager) IsVerified(pageID uint64) bool {
 	bit := uint64(1) << (pageID % 64)
 	word := atomic.LoadUint64(&vb.chunks[chunkIdx][wordIdx])
 	return (word & bit) != 0
+}
+
+// VerifyOnRead reports whether checksum verification should happen on every read.
+func (p *Pager) VerifyOnRead() bool {
+	return p.verifyOnRead.Load()
+}
+
+// SetVerifyOnRead enables or disables checksum verification on every read.
+func (p *Pager) SetVerifyOnRead(always bool) {
+	p.verifyOnRead.Store(always)
 }
 
 // MarkVerified marks a page as verified.
@@ -252,7 +268,7 @@ func (p *Pager) Close() error {
 	defer p.mu.Unlock()
 
 	for _, chunk := range p.chunks {
-		if err := unix.Munmap(chunk); err != nil {
+		if err := munmapFile(chunk); err != nil {
 			return err
 		}
 	}
@@ -439,7 +455,7 @@ func (p *Pager) Sync() error {
 	var syncErr error
 	for _, idx := range toSync {
 		if idx < len(p.chunks) {
-			if err := unix.Msync(p.chunks[idx], unix.MS_SYNC); err != nil {
+			if err := msyncFile(p.chunks[idx]); err != nil {
 				syncErr = err
 				break // Stop on first error
 			}

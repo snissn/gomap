@@ -119,6 +119,7 @@ func (f *File) remapToFileSize() {
 	}
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
+		f.deadMappingsCount.Add(1)
 	}
 
 	b, err := mmapReadOnly(f.File, int(currentSize))
@@ -126,4 +127,5 @@ func (f *File) remapToFileSize() {
 		return
 	}
 	f.mmapData.Store(b)
+	f.remapCount.Add(1)
 }

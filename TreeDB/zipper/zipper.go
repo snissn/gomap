@@ -3,6 +3,8 @@ package zipper
 import (
 	"bytes"
 	"errors"
+	"runtime"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -465,7 +467,17 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
-	entries := make([]internalEntry, 0, int(count)+4)
+	type childWork struct {
+		key       []byte
+		childID   uint64
+		ops       []batch.Entry
+		newChild  uint64
+		splits    []Split
+		retired   []uint64
+		childStat adaptive.Metrics
+	}
+
+	children := make([]childWork, 0, int(count))
 
 	for i := uint16(0); i < count; i++ {
 		// Optimization: Use View to avoid alloc
@@ -496,30 +508,96 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 		childOps := ops[startOpIdx:opIdx]
 
-		var newChildID uint64
-		var childSplits []Split
+		children = append(children, childWork{
+			key:     key,
+			childID: childID,
+			ops:     childOps,
+		})
+	}
 
-		if len(childOps) > 0 {
-			// Recurse
-			ncID, cs, childRet, err := z.writeRecursive(childID, childOps, maintenance, metrics)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			newChildID = ncID
-			childSplits = cs
-			retired = append(retired, childRet...)
-		} else {
-			// Reuse
-			newChildID = childID
+	const (
+		minParallelChildren = 4
+		minParallelOps      = 1024
+	)
+
+	useParallel := len(children) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
+
+	if useParallel {
+		maxParallel := runtime.GOMAXPROCS(0)
+		if maxParallel < 1 {
+			maxParallel = 1
 		}
+		jobs := make(chan int, len(children))
+		for i := range children {
+			if len(children[i].ops) == 0 {
+				children[i].newChild = children[i].childID
+				continue
+			}
+			jobs <- i
+		}
+		close(jobs)
+		var wg sync.WaitGroup
+		var firstErr error
+		var errOnce sync.Once
+		worker := func() {
+			defer wg.Done()
+			for i := range jobs {
+				var childMetrics adaptive.Metrics
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, &childMetrics)
+				if err != nil {
+					errOnce.Do(func() { firstErr = err })
+					continue
+				}
+				children[i].newChild = ncID
+				children[i].splits = cs
+				children[i].retired = childRet
+				children[i].childStat = childMetrics
+			}
+		}
+		for i := 0; i < maxParallel; i++ {
+			wg.Add(1)
+			go worker()
+		}
+		wg.Wait()
+		if firstErr != nil {
+			return 0, nil, nil, firstErr
+		}
+		for i := range children {
+			if len(children[i].ops) == 0 {
+				continue
+			}
+			mergeMetrics(metrics, &children[i].childStat)
+			if len(children[i].retired) > 0 {
+				retired = append(retired, children[i].retired...)
+			}
+		}
+	} else {
+		for i := range children {
+			if len(children[i].ops) > 0 {
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, metrics)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				children[i].newChild = ncID
+				children[i].splits = cs
+				children[i].retired = childRet
+				retired = append(retired, childRet...)
+			} else {
+				children[i].newChild = children[i].childID
+			}
+		}
+	}
 
-		if newChildID >= z.pager.PageCount() {
+	entries := make([]internalEntry, 0, len(children)+4)
+	for i := range children {
+		child := children[i]
+		if child.newChild >= z.pager.PageCount() {
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
-		entries = append(entries, internalEntry{key: append([]byte(nil), key...), child: newChildID})
+		entries = append(entries, internalEntry{key: append([]byte(nil), child.key...), child: child.newChild})
 
 		// Add sibling splits
-		for _, s := range childSplits {
+		for _, s := range child.splits {
 			if s.NodeID >= z.pager.PageCount() {
 				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
 			}
@@ -577,6 +655,34 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	// builder finalized by caller.
 	return builder.PageID(), splits, retired, nil
+}
+
+func mergeMetrics(dst, src *adaptive.Metrics) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.LeafFill += src.LeafFill
+	dst.Splits += src.Splits
+	dst.IndexWriteBytes += src.IndexWriteBytes
+	dst.SlabWriteBytes += src.SlabWriteBytes
+	dst.SlabDeadBytes += src.SlabDeadBytes
+
+	if src.SlabWriteBytesByFile != nil {
+		if dst.SlabWriteBytesByFile == nil {
+			dst.SlabWriteBytesByFile = make(map[uint32]int64, len(src.SlabWriteBytesByFile))
+		}
+		for id, n := range src.SlabWriteBytesByFile {
+			dst.SlabWriteBytesByFile[id] += n
+		}
+	}
+	if src.SlabDeadBytesByFile != nil {
+		if dst.SlabDeadBytesByFile == nil {
+			dst.SlabDeadBytesByFile = make(map[uint32]int64, len(src.SlabDeadBytesByFile))
+		}
+		for id, n := range src.SlabDeadBytesByFile {
+			dst.SlabDeadBytesByFile[id] += n
+		}
+	}
 }
 
 func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
@@ -743,9 +849,34 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	}
 
 	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc(left.PageID())
-		if err != nil {
-			return 0, 0, nil, false, err
+		var (
+			lid uint64
+			rid uint64
+		)
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return 0, 0, nil, false, err
+			}
+			if len(ids) < 2 {
+				return 0, 0, nil, false, errors.New("rebalanceLeaves: insufficient pages allocated")
+			}
+			lid, rid = ids[0], ids[1]
+		} else {
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return 0, 0, nil, false, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return 0, 0, nil, false, err
+			}
 		}
 		ldata, err := z.pager.GetForWrite(lid)
 		if err != nil {
@@ -754,11 +885,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
 		lb.SetPageID(lid)
 
-		rid, err := z.allocator.Alloc(lid)
-		if err != nil {
-			retired = append(retired, lid)
-			return 0, 0, nil, false, err
-		}
 		rdata, err := z.pager.GetForWrite(rid)
 		if err != nil {
 			retired = append(retired, lid, rid)
@@ -1058,18 +1184,37 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 	}
 
 	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
-		lid, err := z.allocator.Alloc(left.PageID())
-		if err != nil {
-			return 0, 0, nil, false, err
+		var (
+			lid uint64
+			rid uint64
+		)
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return 0, 0, nil, false, err
+			}
+			if len(ids) < 2 {
+				return 0, 0, nil, false, errors.New("rebalanceInternals: insufficient pages allocated")
+			}
+			lid, rid = ids[0], ids[1]
+		} else {
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return 0, 0, nil, false, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return 0, 0, nil, false, err
+			}
 		}
 		ldata, err := z.pager.GetForWrite(lid)
 		if err != nil {
-			return 0, 0, nil, false, err
-		}
-
-		rid, err := z.allocator.Alloc(lid)
-		if err != nil {
-			retired = append(retired, lid)
 			return 0, 0, nil, false, err
 		}
 		rdata, err := z.pager.GetForWrite(rid)

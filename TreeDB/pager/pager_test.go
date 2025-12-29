@@ -12,9 +12,7 @@ func TestPagerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index.db")
 
-	osPageSize := int64(os.Getpagesize())
-	chunkSize := osPageSize
-	// Ensure chunkSize is at least PageSize (it usually is)
+	chunkSize := mmapOffsetGranularity()
 	if chunkSize < int64(page.PageSize) {
 		chunkSize = int64(page.PageSize)
 	}
@@ -138,6 +136,9 @@ func TestPagerTruncate(t *testing.T) {
 	path := filepath.Join(dir, "index_trunc.db")
 
 	chunkSize := int64(page.PageSize * 4) // 4 pages per chunk
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		chunkSize = gran
+	}
 
 	p, err := Open(path, chunkSize)
 
@@ -189,16 +190,12 @@ func TestPagerTruncate(t *testing.T) {
 
 	info, _ := os.Stat(path)
 
-	// 5 pages. chunkSize is 4 pages. Needs 2 chunks.
-
-	// 2 * chunkSize
-
-	expectedSize := chunkSize * 2
+	pagesPerChunk := chunkSize / int64(page.PageSize)
+	chunks := (int64(5) + pagesPerChunk - 1) / pagesPerChunk
+	expectedSize := chunkSize * chunks
 
 	if info.Size() != expectedSize {
-
 		t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
-
 	}
 
 }

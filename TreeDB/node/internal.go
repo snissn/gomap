@@ -98,6 +98,25 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 	if count == 0 {
 		return 0, false
 	}
+	if count <= smallSearchThreshold {
+		last := -1
+		for i := 0; i < int(count); i++ {
+			offset := binary.LittleEndian.Uint16(data[NodeHeaderSize+i*2:])
+			ptr := int(offset)
+			keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+			keyPtr := ptr + 10 // Skip KeyLen(2) + ChildID(8)
+			cmp := bytes.Compare(data[keyPtr:keyPtr+int(keyLen)], key)
+			if cmp <= 0 {
+				last = i
+				continue
+			}
+			break
+		}
+		if last >= 0 {
+			return uint16(last), true
+		}
+		return 0, false
+	}
 
 	i, j := 0, int(count)
 

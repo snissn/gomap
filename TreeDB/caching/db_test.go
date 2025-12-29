@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +33,40 @@ type MockBackend struct {
 
 func NewMockBackend() *MockBackend {
 	return &MockBackend{data: make(map[string][]byte)}
+}
+
+func (m *MockBackend) SetWriteErr(err error) {
+	m.mu.Lock()
+	m.writeErr = err
+	m.mu.Unlock()
+}
+
+func (m *MockBackend) getWriteErr() error {
+	m.mu.RLock()
+	err := m.writeErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getSetErr() error {
+	m.mu.RLock()
+	err := m.setErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getSetOpsErr() error {
+	m.mu.RLock()
+	err := m.setOpsErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) getDeleteErr() error {
+	m.mu.RLock()
+	err := m.deleteErr
+	m.mu.RUnlock()
+	return err
 }
 
 func setMutable(db *DB, key, value []byte) {
@@ -190,15 +227,15 @@ type MockBatch struct {
 }
 
 func (b *MockBatch) Set(key, value []byte) error {
-	if b.mb.setErr != nil {
-		return b.mb.setErr
+	if err := b.mb.getSetErr(); err != nil {
+		return err
 	}
 	b.mb.Set(key, value)
 	return nil
 }
 func (b *MockBatch) Delete(key []byte) error {
-	if b.mb.deleteErr != nil {
-		return b.mb.deleteErr
+	if err := b.mb.getDeleteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	delete(b.mb.data, string(key))
@@ -206,8 +243,8 @@ func (b *MockBatch) Delete(key []byte) error {
 	return nil
 }
 func (b *MockBatch) SetOps(ops []batch.Entry) error {
-	if b.mb.setOpsErr != nil {
-		return b.mb.setOpsErr
+	if err := b.mb.getSetOpsErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
@@ -226,8 +263,8 @@ func (b *MockBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *MockBatch) Write() error {
-	if b.mb.writeErr != nil {
-		return b.mb.writeErr
+	if err := b.mb.getWriteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
@@ -236,8 +273,8 @@ func (b *MockBatch) Write() error {
 }
 
 func (b *MockBatch) WriteSync() error {
-	if b.mb.writeErr != nil {
-		return b.mb.writeErr
+	if err := b.mb.getWriteErr(); err != nil {
+		return err
 	}
 	b.mb.mu.Lock()
 	b.mb.writeCalls++
@@ -298,7 +335,7 @@ func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{DisableWAL: true})
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -390,6 +427,7 @@ func TestCachingDB_DeleteRange_DisableWAL_CoversInMemoryDeletesBackend(t *testin
 
 	db, err := Open(dir, backend, Options{
 		DisableWAL:     true,
+		AllowUnsafe:    true,
 		FlushThreshold: 1 << 20,
 	})
 	if err != nil {
@@ -434,6 +472,7 @@ func TestCachingDB_DeleteRange_DisableWAL_PartialRangeUsesTombstones(t *testing.
 	backend := NewMockBackend()
 	db, err := Open(dir, backend, Options{
 		DisableWAL:     true,
+		AllowUnsafe:    true,
 		FlushThreshold: 1 << 20,
 	})
 	if err != nil {
@@ -653,7 +692,7 @@ func TestCachingDB_IteratorIncludesBackendAfterStreamingBatch(t *testing.T) {
 func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
-	backend.writeErr = errors.New("write failed")
+	backend.SetWriteErr(errors.New("write failed"))
 
 	errCh := make(chan error, 1)
 	db, err := Open(dir, backend, Options{
@@ -683,7 +722,7 @@ func TestCachingDB_NotifyErrorOnFlushFailure(t *testing.T) {
 		t.Fatalf("expected NotifyError to be called")
 	}
 
-	backend.writeErr = nil
+	backend.SetWriteErr(nil)
 	if err := db.Close(); err == nil {
 		t.Fatalf("expected Close to return background error")
 	}
@@ -775,6 +814,15 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 	}
 	cache.flushAll(true)
 
+	slabPath := filepath.Join(dir, "data-0000.slab")
+	info, err := os.Stat(slabPath)
+	if err != nil {
+		t.Fatalf("stat slab: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("expected empty slab, got %d bytes", info.Size())
+	}
+
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		t.Fatalf("snapshot nil")
@@ -800,5 +848,160 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 	}
 	if !bytes.Equal(got, val) {
 		t.Fatalf("backend Get mismatch")
+	}
+}
+
+func TestCachingDB_MemtableValueLogPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 30,
+		MemtableValueLogPointers: true,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	key := []byte("k1")
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.Set(key, val); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	got, err := cache.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("Get mismatch")
+	}
+
+	it, err := cache.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatalf("Iterator invalid")
+	}
+	if !bytes.Equal(it.Value(), val) {
+		t.Fatalf("Iterator value mismatch")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("Iterator error: %v", err)
+	}
+}
+
+func TestCachingDB_MemtableValueLogPointersRequiresWAL(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	_, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		AllowUnsafe:              true,
+		MemtableValueLogPointers: true,
+	})
+	if !errors.Is(err, ErrMemtableValueLogPointers) {
+		t.Fatalf("expected ErrMemtableValueLogPointers, got %v", err)
+	}
+}
+
+func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:               1,
+		MaxValueLogRetainedBytesHard: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.Set([]byte("k1"), val); err != nil {
+		t.Fatalf("Set(k1): %v", err)
+	}
+	if err := cache.Set([]byte("k2"), val); err != nil {
+		t.Fatalf("Set(k2): %v", err)
+	}
+	cache.flushAll(true)
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry1, err := snap.GetEntry([]byte("k1"))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry(k1): %v", err)
+	}
+	if entry1.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry1.ValuePtr.FileID) {
+		_ = snap.Close()
+		t.Fatalf("expected value-log pointer for k1")
+	}
+
+	entry2, err := snap.GetEntry([]byte("k2"))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry(k2): %v", err)
+	}
+	if entry2.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry2.ValuePtr.FileID) {
+		_ = snap.Close()
+		t.Fatalf("expected non-value-log pointer for k2")
+	}
+	_ = snap.Close()
+}
+
+func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{FlushThreshold: 1})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	key := []byte("k1")
+	large := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
+	if err := cache.SetSync(key, large); err != nil {
+		t.Fatalf("SetSync(large): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(large): %v", err)
+	}
+	stats := cache.Stats()
+	segments, err := strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
+	if err != nil {
+		t.Fatalf("parse retained segments: %v", err)
+	}
+	if segments == 0 {
+		t.Fatalf("expected retained value-log segments after large value")
+	}
+
+	if err := cache.SetSync(key, []byte("s")); err != nil {
+		t.Fatalf("SetSync(small): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(small): %v", err)
+	}
+	stats = cache.Stats()
+	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
+	if err != nil {
+		t.Fatalf("parse retained segments: %v", err)
+	}
+	if segments != 0 {
+		t.Fatalf("expected retained segments to be pruned, got %d", segments)
 	}
 }

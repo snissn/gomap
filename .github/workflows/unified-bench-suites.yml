@@ -18,7 +18,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25.5"
+          go-version-file: go.mod
           cache: true
           cache-dependency-path: |
             go.sum
@@ -34,3 +34,28 @@ jobs:
 
       - name: Suite: bigkeys_guard
         run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096
+
+  profiles:
+    name: profiles (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        profile: [balanced, fast, durable]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Build unified-bench
+        run: make unified-bench
+
+      - name: Smoke: ${{ matrix.profile }}
+        run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests

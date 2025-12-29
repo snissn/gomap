@@ -114,6 +114,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		DisableWAL:      disableWAL,
 		RelaxedSync:     relaxedSync,
 		DisableValueLog: disableValueLog,
+		AllowUnsafe:     disableWAL || relaxedSync,
 	}
 
 	db, err := treedb.Open(opts)

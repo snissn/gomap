@@ -4,7 +4,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -74,6 +73,7 @@ type HashSorted struct {
 	pendingBytes int
 	nextSeq      uint64
 	index        hashSortedIndex
+	indexer      *HashSortedIndexer
 
 	finalizeOnce sync.Once
 	finalizeDone chan struct{}
@@ -92,9 +92,17 @@ type hashSortedIndex struct {
 }
 
 func NewHashSorted() *HashSorted {
+	return NewHashSortedWithIndexer(nil)
+}
+
+func NewHashSortedWithIndexer(indexer *HashSortedIndexer) *HashSorted {
+	if indexer == nil {
+		indexer = globalHashSortedIndexer
+	}
 	m := &HashSorted{
 		items:       make(map[string]hashEntry),
 		sortedValid: true,
+		indexer:     indexer,
 	}
 	m.index.cond = sync.NewCond(&m.index.mu)
 	return m
@@ -171,15 +179,8 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Unlock()
 
 	for _, c := range chunks {
-		globalHashSortedIndexer.enqueue(c.mt, c.seq, c.keys)
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys)
 	}
-}
-
-func bytesToStringNoCopy(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func (m *HashSorted) indexApplySortedChunk(seq uint64, keys []string) {
@@ -195,7 +196,7 @@ func (m *HashSorted) SetSteal(key, value []byte) {
 	chunk, seq := m.setStealLocked(key, value)
 	m.mu.Unlock()
 	if seq != 0 {
-		globalHashSortedIndexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk)
 	}
 }
 
@@ -242,7 +243,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	m.mu.Unlock()
 
 	if seq != 0 {
-		globalHashSortedIndexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk)
 	}
 	return nil
 }
@@ -256,7 +257,7 @@ func (m *HashSorted) DeleteSteal(key []byte) {
 	chunk, seq := m.deleteStealLocked(key)
 	m.mu.Unlock()
 	if seq != 0 {
-		globalHashSortedIndexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk)
 	}
 }
 
@@ -302,7 +303,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
 	if seq != 0 {
-		globalHashSortedIndexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk)
 	}
 	return nil
 }

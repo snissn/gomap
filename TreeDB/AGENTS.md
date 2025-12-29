@@ -24,6 +24,74 @@ TreeDB uses **dual roots** for namespace isolation: the **User** B+Tree stores u
 
 ---
 
+## Audit Consolidation (2025-12-26 Reviews)
+
+Note: This section consolidates all issues raised across the audits and perf review.
+Each item includes a remediation plan and current status.
+
+Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
+
+### P0/P1 Safety & Correctness
+
+- [DONE] Unsafe durability/integrity toggles too easy to enable (DisableWAL, RelaxedSync, DisableReadChecksum, DisableSlabTailRepairOnOpen). Plan: require explicit AllowUnsafe and document profiles; implemented in Open plus docs.
+- [DONE] RelaxedSync/SetSync semantics ambiguity. Plan: document that RelaxedSync downgrades sync durability and warn; docs updated.
+- [DONE] WAL/vlog rotation atomicity (close-old-before-open-new risk). Plan: open new segment first, then swap/close old.
+- [DONE] Missing directory fsync for WAL/vlog creation. Plan: sync parent dir on create/rotate (best-effort).
+- [DONE] Missing directory fsync for slab creation. Plan: sync parent dir when creating new slab files (rotation/open).
+- [DONE] Slab O_APPEND offset risk. Plan: open slabs without O_APPEND; use WriteAt with explicit offsets.
+- [DONE] Recovery should validate root/sysroot page readability. Plan: verify checksum + type before accepting meta candidate.
+- [DONE] Skiplist 4GiB panic. Plan: enforce a hard per-shard memtable cap and return ErrMemtableFull before the arena limit.
+- [NOT_APPLICABLE] Iterator "invalid" panics in public paths. Plan: keep the Cosmos SDK contract (Next panics if invalid) and ensure docs/tests reflect this behavior.
+- [DONE] Empty key checks inconsistent (nil vs len==0). Plan: treat len==0 as empty across public APIs.
+- [DONE] WAL record-size cap mismatch (writer vs reader). Plan: enforce max segment size in writer.
+- [DONE] Fuzzing coverage for WAL/vlog/page decode and iterator merging. Plan: add targeted fuzz tests for log/page decode and merging bounds; fuzz tests added for WAL/vlog/page/node decode and iterator merging.
+- [DONE] Tombstone persistence ambiguity. Plan: correct iterator comments; tombstones are persisted but skipped in iteration.
+- [DONE] Docs for durability semantics, RelaxedSync caveats, unsafe views, checksum tradeoffs, confidentiality, and format stability.
+- [DONE] Value-log retention / disk growth. Plan: live-pointer tracking + GC/compaction; guardrails and hard caps. Implemented checkpoint-time value-log pruning based on live pointer scans plus caps/warnings.
+- [DONE] Verified cache paranoid mode. Plan: add option to force verify; implemented `VerifyOnRead` for always-verify.
+- [DONE] Durability matrix + runtime mode reporting. Plan: add docs table and DB.DurabilityMode()/Stats key for effective policy.
+- [DONE] Directory fsync on WAL/vlog deletion/rename. Plan: best-effort sync after deletions when durability is required.
+- [DONE] Fault-injection tests (fsync/rename/create/short-write). Plan: add targeted crash/recovery tests; rotate/open/syncDir failure coverage added for WAL/vlog and index-swap paths.
+- [DONE] Value-log retention cap enforcement. Plan: add hard cap that disables new value-log pointers once retained bytes exceed limit.
+
+### P2/P3 Portability, Security, Ops
+
+- [NOT_APPLICABLE] B-tree structural atomicity / no WAL for index pages. TreeDB uses COW + redundant meta pages; crash tests cover recovery.
+- [FIXED] Mmap UAF hazard for GetUnsafe. Snapshots pin slabs; GetUnsafe returns view scoped to snapshot; docs emphasize lifetimes.
+- [NOT_APPLICABLE] Page reuse race on freelist. MVCC + graveyard delays reuse until safe.
+- [DONE] Windows support (pager uses unix mmap; slab/vlog mmap unsupported). Plan: add OS-specific mapping or safe ReadAt fallback. Status: pager mmap implemented for Windows; slab/vlog use ReadAt fallback when mmap is unavailable.
+- [DONE] Endianness for UnsafeCastHeader. Plan: guard with runtime check + skip test on big-endian.
+- [DONE] Directory permission hardening. Plan: validate existing perms and warn on open.
+- [DONE] Threat model clarity (CRC vs adversarial tampering). Plan: documented that CRC is non-cryptographic; noted encryption/HMAC guidance.
+- [DONE] CLI safety/exfil guardrails. Plan: require explicit flags for value dumps.
+- [DONE] Error propagation on Close() defer paths. Plan: return close errors from syncDir paths; best-effort dir syncs report close errors.
+- [DONE] Unsafe string/byte conversions require immutable inputs. Plan: add build tag (`treedb_safe`) that forces copies for debug/safety.
+- [NOT_APPLICABLE] DB.GetUnsafe zero-copy expectation. DB.GetUnsafe returns a safe copy by design; Snapshot.GetUnsafe exposes views with documented lifetimes.
+- [DONE] Checksum hotpath micro-optimizations. Plan: remove pooled hash allocations in ChecksumParts.
+
+### Concurrency & Performance (P2/P3)
+
+- [DONE] Global hash_sorted indexer singleton. Plan: scope per DB or make worker pool configurable.
+- [DONE] Memtable iterator write blocking (mutable memtable). Plan: keep rotation-on-iterator policy; documented direct memtable usage constraints.
+- [DONE] Slab manager opens all slabs at startup (FD exhaustion). Plan: lazy open + LRU. Status: lazy open implemented (no LRU yet).
+- [DONE] Global slab lock + CRC inside lock. Plan: precompute CRC outside lock; evaluate per-file locks.
+- [DONE] Range-delete WAL batching. Plan: batch copied keys for WAL appends in DeleteRange.
+- [DONE] Faster shard hash. Plan: switch to xxhash for shard selection.
+- [DONE] Auto-checkpoint hysteresis under retained segments. Plan: base size trigger/rearm on reclaimable WAL bytes.
+- [DONE] Batch pooling for backend batches. Plan: pool batch.Batch instances and return on Close.
+- [DONE] Compaction live-set memory pressure. Plan: fall back to a bloom filter when the live set grows too large.
+- [DONE] CRC pool overhead. Plan: use crc32.Update directly in ChecksumParts.
+- [DONE] Flush buffer pooling. Plan: pool batch.Entry slices in flush builder.
+- [DONE] Adaptive memtable hysteresis. Plan: require consecutive rotations before switching modes.
+- [DONE] mmap remap metrics. Plan: expose remap and dead-mapping counters via Stats.
+- [DONE] Large-value pointer memtable mode. Plan: optional memtable value-log pointer storage, value-log reader lookup for Gets/iterators, and tests to validate large-value round-trips.
+- [DONE] Iterator stack inline allocation. Plan: add small fixed buffer for typical tree depth.
+- [DONE] Linear scan for small nodes. Plan: use linear search for small fanout to reduce branch overhead.
+- [DONE] AllocMany + parallel zipper merges. Plan: add AllocMany and parallelize child rewrites with per-child metrics; implemented with concurrency gating.
+- [DEFERRED] Freelist heuristics (better reuse). Plan: see `docs/TREEDB_FREELIST_BUCKETS.md` for bucketed format design + locality notes; 300k runs with batch_delete/batch_random show region bias on/off within ~0.5%, so the on-disk bucket format stays deferred.
+
+---
+
 ## Repository Bootstrap
 
 1. Initialize module and deps:

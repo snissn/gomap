@@ -23,6 +23,11 @@ const (
 	ValuePtrSize = 16
 )
 
+var nativeLittleEndian = func() bool {
+	var v uint16 = 1
+	return *(*byte)(unsafe.Pointer(&v)) == 1
+}()
+
 // PageType represents the type of page (Meta, Freelist, Internal, Leaf).
 type PageType uint16
 
@@ -147,5 +152,8 @@ func DecodeValuePtr(buf []byte) ValuePtr {
 // AND the machine is likely LittleEndian (standard for Cosmos/x86/ARM).
 // Let's implement a UnsafeCastHeader for when we have the mmap slice.
 func UnsafeCastHeader(data []byte) *PageHeader {
+	if !nativeLittleEndian {
+		panic("UnsafeCastHeader requires little-endian host")
+	}
 	return (*PageHeader)(unsafe.Pointer(&data[0]))
 }

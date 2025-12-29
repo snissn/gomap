@@ -4,7 +4,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -15,6 +18,8 @@ const (
 )
 
 var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+
+var syncDirFn = syncDir
 
 var (
 	// MaxSlabSize is 4GB (hard limit for rotation).
@@ -50,8 +55,11 @@ type SlabFile struct {
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
+	// writeOffset tracks the file offset for sequential appends.
+	writeOffset int64
 
 	closed atomic.Bool
+	openMu sync.Mutex
 
 	// mmapData holds the current read-only mapping. Readers load it without taking
 	// locks; remaps publish a new mapping and keep the old mapping alive until
@@ -61,18 +69,46 @@ type SlabFile struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings [][]byte // Old mappings retained for safety (prevent use-after-free)
+	deadMappings      [][]byte // Old mappings retained for safety (prevent use-after-free)
+	remapCount        atomic.Uint64
+	deadMappingsCount atomic.Uint64
 
 	// writeScratch is a reusable buffer for appending records. SlabManager
 	// serializes writers, so this is safe without additional locking.
 	writeScratch []byte
 }
 
+func newSlabFile(path string, id uint32, f *os.File, size int64) *SlabFile {
+	sf := &SlabFile{
+		ID:          id,
+		Path:        path,
+		File:        f,
+		Size:        size,
+		writeOffset: size,
+	}
+	// Initialize atomic.Value with the concrete type so Load is safe.
+	sf.mmapData.Store([]byte(nil))
+	return sf
+}
+
 // OpenSlab opens or creates a slab file.
 func OpenSlab(path string, id uint32) (*SlabFile, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
+	created := false
+	if _, err := os.Stat(path); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		created = true
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return nil, err
+	}
+	if created {
+		if err := syncDirFn(filepath.Dir(path)); err != nil {
+			_ = f.Close()
+			return nil, err
+		}
 	}
 
 	info, err := f.Stat()
@@ -81,15 +117,12 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	sf := &SlabFile{
-		ID:   id,
-		Path: path,
-		File: f,
-		Size: info.Size(),
-	}
-	// Initialize atomic.Value with the concrete type so Load is safe.
-	sf.mmapData.Store([]byte(nil))
-	return sf, nil
+	return newSlabFile(path, id, f, info.Size()), nil
+}
+
+// OpenSlabLazy registers a slab without opening its file descriptor.
+func OpenSlabLazy(path string, id uint32, size int64) *SlabFile {
+	return newSlabFile(path, id, nil, size)
 }
 
 func (s *SlabFile) Close() error {
@@ -104,13 +137,53 @@ func (s *SlabFile) Close() error {
 		_ = munmap(b)
 	}
 	s.deadMappings = nil
+	s.deadMappingsCount.Store(0)
 	s.mmapData.Store([]byte(nil))
 	s.remapMu.Unlock()
+	if s.File == nil {
+		return nil
+	}
 	return s.File.Close()
 }
 
 func (s *SlabFile) Sync() error {
 	return s.File.Sync()
+}
+
+func (s *SlabFile) ensureOpen() error {
+	if s == nil {
+		return os.ErrClosed
+	}
+	if s.closed.Load() {
+		return os.ErrClosed
+	}
+	if s.File != nil {
+		return nil
+	}
+
+	s.openMu.Lock()
+	defer s.openMu.Unlock()
+	if s.File != nil {
+		return nil
+	}
+	f, err := os.OpenFile(s.Path, os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return err
+	}
+	s.File = f
+	s.Size = info.Size()
+	s.writeOffset = s.Size
+	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
+		_ = s.File.Close()
+		s.File = nil
+		return err
+	}
+	return nil
 }
 
 // Truncate resizes the slab file. Used for crash recovery.
@@ -119,6 +192,10 @@ func (s *SlabFile) Truncate(size int64) error {
 		return err
 	}
 	s.Size = size
+	s.writeOffset = size
+	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
+		return err
+	}
 
 	// If we had an mmap, it may now be larger than the file. Clear it to avoid
 	// SIGBUS on reads and to allow remapping to the new size.
@@ -185,7 +262,11 @@ func (s *SlabFile) RepairTail() error {
 	trimTo := lastGoodEnd
 	// Verify CRC for the last complete record; if it fails, drop it (and retry
 	// a few times using our ring buffer).
-	for tries := 0; tries < keepStarts; tries++ {
+	maxTries := keepStarts
+	if startsN < maxTries {
+		maxTries = startsN
+	}
+	for tries := 0; tries < maxTries; tries++ {
 		if startsN == 0 {
 			trimTo = 0
 			break
@@ -231,6 +312,7 @@ func (s *SlabFile) RepairTail() error {
 		}
 	}
 	s.Size = trimTo
+	s.writeOffset = trimTo
 	return nil
 }
 
@@ -262,6 +344,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
 			return val, err
 		}
+		if err := s.ensureOpen(); err != nil {
+			return nil, err
+		}
 		s.remapToFileSize()
 		if val, err, ok := s.readViaMmap(realStart, verifyCRC); ok {
 			return val, err
@@ -270,6 +355,9 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 	}
 
 	// Fallback path: pread into buffers.
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
 	var headerArr [HeaderSize]byte
 	headerBuf := headerArr[:]
 	if _, err := s.File.ReadAt(headerBuf, realStart); err != nil {
@@ -356,6 +444,9 @@ func (s *SlabFile) maybeScheduleRemap() {
 	if s == nil || s.closed.Load() {
 		return
 	}
+	if s.File == nil {
+		return
+	}
 	if !s.remapRequested.CompareAndSwap(false, true) {
 		return
 	}
@@ -367,6 +458,9 @@ func (s *SlabFile) maybeScheduleRemap() {
 
 func (s *SlabFile) remapToFileSize() {
 	if s == nil || s.closed.Load() {
+		return
+	}
+	if s.File == nil {
 		return
 	}
 
@@ -401,6 +495,7 @@ func (s *SlabFile) remapToFileSize() {
 	if data != nil {
 		// Don't unmap immediately; existing readers might hold views.
 		s.deadMappings = append(s.deadMappings, data)
+		s.deadMappingsCount.Add(1)
 	}
 
 	b, err := mmapReadOnly(s.File, int(currentSize))
@@ -408,6 +503,7 @@ func (s *SlabFile) remapToFileSize() {
 		return
 	}
 	s.mmapData.Store(b)
+	s.remapCount.Add(1)
 }
 
 // Write appends a record to the slab and returns the offset.
@@ -462,15 +558,13 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	copy(buf[10:10+keyLen], key)
 	copy(buf[10+keyLen:], value)
 
-	// Write to file
-	// Since we opened with O_APPEND, Write writes to end.
-	// But we need the offset.
-	// We trust s.Size matches current end?
-	// To be safe, we can use stat or seek?
-	// Or we use atomic offset tracking?
-	// Ideally SlabManager handles serialization, so s.Size is accurate.
-
 	offset := s.Size
+	if s.writeOffset != s.Size {
+		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+			return 0, err
+		}
+		s.writeOffset = s.Size
+	}
 	written := 0
 	for written < len(buf) {
 		n, err := s.File.Write(buf[written:])
@@ -489,6 +583,7 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	}
 
 	s.Size += int64(written)
+	s.writeOffset = s.Size
 	return offset, nil
 }
 
@@ -504,6 +599,12 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 
 	offset := s.Size
+	if s.writeOffset != s.Size {
+		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+			return 0, err
+		}
+		s.writeOffset = s.Size
+	}
 	written := 0
 	for written < len(buf) {
 		n, err := s.File.Write(buf[written:])
@@ -521,5 +622,21 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 
 	s.Size += int64(written)
+	s.writeOffset = s.Size
 	return offset, nil
+}
+
+func syncDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
 }
