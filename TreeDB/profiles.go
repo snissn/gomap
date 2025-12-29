@@ -155,6 +155,11 @@ func applyFastProfile(opts *Options) {
 	if !opts.PreferAppendAlloc {
 		opts.PreferAppendAlloc = true
 	}
+
+	// Favor hash-based memtable writes in fast/bench profiles when unset.
+	if opts.MemtableMode == "" {
+		opts.MemtableMode = "hash_sorted"
+	}
 }
 
 func applyBenchProfile(opts *Options) {
