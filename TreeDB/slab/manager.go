@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -204,38 +205,107 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 
 	prep := make([]appendManyPrep, len(keys))
-	var lenArr [6]byte
 
-	for i := 0; i < len(keys); i++ {
-		key := keys[i]
-		value := values[i]
-
-		keyLen := len(key)
-		valLen := len(value)
-
-		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
+	const parallelThreshold = 2048
+	if len(keys) >= parallelThreshold && runtime.GOMAXPROCS(0) > 1 {
+		workers := runtime.GOMAXPROCS(0)
+		if workers > len(keys) {
+			workers = len(keys)
 		}
-		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
-		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen := int(recordLen64)
+		chunk := (len(keys) + workers - 1) / workers
+		var wg sync.WaitGroup
+		var errOnce sync.Once
+		var firstErr error
 
-		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
-		binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
-		sum := crc32.Update(0, crc32cTable, lenArr[:])
-		sum = crc32.Update(sum, crc32cTable, key)
-		sum = crc32.Update(sum, crc32cTable, value)
+		for w := 0; w < workers; w++ {
+			start := w * chunk
+			if start >= len(keys) {
+				break
+			}
+			end := start + chunk
+			if end > len(keys) {
+				end = len(keys)
+			}
+			wg.Add(1)
+			go func(start, end int) {
+				defer wg.Done()
+				var lenArr [6]byte
+				for i := start; i < end; i++ {
+					key := keys[i]
+					value := values[i]
 
-		prep[i] = appendManyPrep{
-			keyLen:    keyLen,
-			valLen:    valLen,
-			recordLen: recordLen,
-			crc:       sum,
+					keyLen := len(key)
+					valLen := len(value)
+
+					if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+						errOnce.Do(func() { firstErr = ErrRecordTooLarge })
+						return
+					}
+					if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+						errOnce.Do(func() { firstErr = ErrRecordTooLarge })
+						return
+					}
+					recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+					if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+						errOnce.Do(func() { firstErr = ErrRecordTooLarge })
+						return
+					}
+					recordLen := int(recordLen64)
+
+					binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+					binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+					sum := crc32.Update(0, crc32cTable, lenArr[:])
+					sum = crc32.Update(sum, crc32cTable, key)
+					sum = crc32.Update(sum, crc32cTable, value)
+
+					prep[i] = appendManyPrep{
+						keyLen:    keyLen,
+						valLen:    valLen,
+						recordLen: recordLen,
+						crc:       sum,
+					}
+				}
+			}(start, end)
+		}
+
+		wg.Wait()
+		if firstErr != nil {
+			return nil, firstErr
+		}
+	} else {
+		var lenArr [6]byte
+
+		for i := 0; i < len(keys); i++ {
+			key := keys[i]
+			value := values[i]
+
+			keyLen := len(key)
+			valLen := len(value)
+
+			if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+				return nil, ErrRecordTooLarge
+			}
+			if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+				return nil, ErrRecordTooLarge
+			}
+			recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+			if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+				return nil, ErrRecordTooLarge
+			}
+			recordLen := int(recordLen64)
+
+			binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+			binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+			sum := crc32.Update(0, crc32cTable, lenArr[:])
+			sum = crc32.Update(sum, crc32cTable, key)
+			sum = crc32.Update(sum, crc32cTable, value)
+
+			prep[i] = appendManyPrep{
+				keyLen:    keyLen,
+				valLen:    valLen,
+				recordLen: recordLen,
+				crc:       sum,
+			}
 		}
 	}
 

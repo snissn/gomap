@@ -4751,6 +4751,7 @@ type Batch struct {
 	entries      []batch.Entry
 	backend      batch.Interface
 	size         int
+	copyBuf      []byte
 	walBuf       []logRecord
 	shardIdxs    []int
 	shardAdds    []int64
@@ -4764,6 +4765,8 @@ type Batch struct {
 	lastKey        []byte
 	batchRange     keyRange
 }
+
+const maxBatchCopyBuf = 8 << 20
 
 func (db *DB) NewBatch() *Batch {
 	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
@@ -4788,6 +4791,13 @@ func (b *Batch) Reset() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
+	if b.copyBuf != nil {
+		if cap(b.copyBuf) > maxBatchCopyBuf {
+			b.copyBuf = nil
+		} else {
+			b.copyBuf = b.copyBuf[:0]
+		}
+	}
 	if b.shardIdxs != nil {
 		b.shardIdxs = b.shardIdxs[:0]
 	}
@@ -4809,6 +4819,18 @@ func (b *Batch) Reset() {
 	b.batchRange = keyRange{}
 }
 
+func (b *Batch) copyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return []byte{}
+	}
+	if maxBatchCopyBuf <= 0 || len(src) > maxBatchCopyBuf || len(b.copyBuf)+len(src) > maxBatchCopyBuf {
+		return append([]byte(nil), src...)
+	}
+	off := len(b.copyBuf)
+	b.copyBuf = append(b.copyBuf, src...)
+	return b.copyBuf[off : off+len(src)]
+}
+
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -4820,8 +4842,8 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	keyCopy := append([]byte(nil), key...)
-	valCopy := append([]byte(nil), value...)
+	keyCopy := b.copyBytes(key)
+	valCopy := b.copyBytes(value)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -4909,7 +4931,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := b.copyBytes(key)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -4988,9 +5010,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		copied := make([]batch.Entry, len(ops))
 		for i, op := range ops {
 			copiedOp := op
-			copiedOp.Key = append([]byte(nil), op.Key...)
+			copiedOp.Key = b.copyBytes(op.Key)
 			if op.Value != nil {
-				copiedOp.Value = append([]byte(nil), op.Value...)
+				copiedOp.Value = b.copyBytes(op.Value)
 			}
 			copied[i] = copiedOp
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
@@ -5000,9 +5022,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
-		copied.Key = append([]byte(nil), op.Key...)
+		copied.Key = b.copyBytes(op.Key)
 		if op.Value != nil {
-			copied.Value = append([]byte(nil), op.Value...)
+			copied.Value = b.copyBytes(op.Value)
 		}
 		b.entries = append(b.entries, copied)
 		b.size += len(copied.Key) + len(copied.Value)
