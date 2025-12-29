@@ -190,16 +190,12 @@ func TestPagerTruncate(t *testing.T) {
 
 	info, _ := os.Stat(path)
 
-	// 5 pages. chunkSize is 4 pages. Needs 2 chunks.
-
-	// 2 * chunkSize
-
-	expectedSize := chunkSize * 2
+	pagesPerChunk := chunkSize / int64(page.PageSize)
+	chunks := (int64(5) + pagesPerChunk - 1) / pagesPerChunk
+	expectedSize := chunkSize * chunks
 
 	if info.Size() != expectedSize {
-
 		t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
-
 	}
 
 }

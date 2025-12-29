@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 	chunkSize := int64(64 * 1024)
 
@@ -71,6 +75,9 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 }
 
 func TestVacuumIndexOnline_AllowsSnapshotAcrossSwap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 	chunkSize := int64(64 * 1024)
 
@@ -138,6 +145,9 @@ func TestVacuumIndexOnline_AllowsSnapshotAcrossSwap(t *testing.T) {
 }
 
 func TestVacuumIndexOnline_RepeatWhileSnapshotPinned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 	chunkSize := int64(64 * 1024)
 
@@ -225,6 +235,9 @@ func TestVacuumIndexOnline_RepeatWhileSnapshotPinned(t *testing.T) {
 }
 
 func TestVacuumIndexOnline_ReturnsErrVacuumInProgress(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 	chunkSize := int64(64 * 1024)
 
