@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -151,9 +152,11 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		_ = d.Close()
 		return err
 	}
-	if dir, err := os.Open(opts.Dir); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	if runtime.GOOS != "windows" {
+		if dir, err := os.Open(opts.Dir); err == nil {
+			_ = dir.Sync()
+			_ = dir.Close()
+		}
 	}
 	if fail == vacuumFailAfterReady {
 		_ = newPager.Close()
@@ -187,9 +190,11 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	_ = os.Remove(readyPath)
 	_ = os.Remove(bakPath)
-	if dir, err := os.Open(opts.Dir); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	if runtime.GOOS != "windows" {
+		if dir, err := os.Open(opts.Dir); err == nil {
+			_ = dir.Sync()
+			_ = dir.Close()
+		}
 	}
 
 	return nil

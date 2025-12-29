@@ -76,7 +76,7 @@ func envBool(name string) bool {
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
-	if dir == "" {
+	if dir == "" || runtime.GOOS == "windows" {
 		return
 	}
 	f, err := os.Open(dir)

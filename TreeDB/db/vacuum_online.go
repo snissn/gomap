@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -18,6 +19,7 @@ import (
 )
 
 var ErrVacuumInProgress = errors.New("online vacuum already in progress")
+var ErrVacuumUnsupported = errors.New("online vacuum unsupported on this platform")
 
 const (
 	vacuumDeltaBatchSize     = 4096
@@ -84,6 +86,9 @@ func (r *vacuumRecorder) Drain() map[string]struct{} {
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if runtime.GOOS == "windows" {
+		return ErrVacuumUnsupported
 	}
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
@@ -268,9 +273,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			cleanupNewPager()
 			return err
 		}
-		if dir, err := os.Open(db.dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if runtime.GOOS != "windows" {
+			if dir, err := os.Open(db.dir); err == nil {
+				_ = dir.Sync()
+				_ = dir.Close()
+			}
 		}
 
 		// Swap index.db -> index.db.bak, index.db.new -> index.db.
@@ -289,9 +296,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 
 		_ = os.Remove(readyPath)
 		_ = os.Remove(bakPath)
-		if dir, err := os.Open(db.dir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
+		if runtime.GOOS != "windows" {
+			if dir, err := os.Open(db.dir); err == nil {
+				_ = dir.Sync()
+				_ = dir.Close()
+			}
 		}
 
 		// Publish the new index generation (old readers keep oldGen pinned).
