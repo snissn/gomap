@@ -72,6 +72,7 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	failErr := errors.New("apply delete failed")
 
 	db.mu.Lock()
+	origWal := db.wal
 	db.wal = stub
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -85,6 +86,10 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	if err := db.DeleteRange([]byte("a"), []byte("z")); !errors.Is(err, failErr) {
 		t.Fatalf("expected delete range error %v, got %v", failErr, err)
 	}
+
+	db.mu.Lock()
+	db.wal = origWal
+	db.mu.Unlock()
 	if stub.appendCalls == 0 {
 		t.Fatalf("expected Append to be called")
 	}
