@@ -4,7 +4,6 @@
 package pager
 
 import (
-	"reflect"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -54,8 +53,10 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	hdr := &reflect.SliceHeader{Data: addr, Len: length, Cap: length}
-	return *(*[]byte)(unsafe.Pointer(hdr)), nil
+	if addr == 0 {
+		return nil, windows.ERROR_INVALID_ADDRESS
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(addr)), length), nil
 }
 
 func mmapAvailable() error {
