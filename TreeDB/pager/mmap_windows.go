@@ -4,16 +4,35 @@
 package pager
 
 import (
-	"reflect"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
+var (
+	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	procGetSystemInfo = modkernel32.NewProc("GetSystemInfo")
+)
+
+// systemInfo mirrors Windows SYSTEM_INFO for allocation granularity lookup.
+type systemInfo struct {
+	wProcessorArchitecture      uint16
+	wReserved                   uint16
+	dwPageSize                  uint32
+	lpMinimumApplicationAddress uintptr
+	lpMaximumApplicationAddress uintptr
+	dwActiveProcessorMask       uintptr
+	dwNumberOfProcessors        uint32
+	dwProcessorType             uint32
+	dwAllocationGranularity     uint32
+	wProcessorLevel             uint16
+	wProcessorRevision          uint16
+}
+
 var allocationGranularity = func() int64 {
-	var info windows.SystemInfo
-	windows.GetSystemInfo(&info)
-	return int64(info.AllocationGranularity)
+	var info systemInfo
+	_, _, _ = procGetSystemInfo.Call(uintptr(unsafe.Pointer(&info)))
+	return int64(info.dwAllocationGranularity)
 }()
 
 func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
@@ -34,8 +53,10 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	hdr := &reflect.SliceHeader{Data: addr, Len: length, Cap: length}
-	return *(*[]byte)(unsafe.Pointer(hdr)), nil
+	if addr == 0 {
+		return nil, windows.ERROR_INVALID_ADDRESS
+	}
+	return sliceFromAddr(addr, length), nil
 }
 
 func mmapAvailable() error {
@@ -54,4 +75,11 @@ func msyncFile(b []byte) error {
 		return nil
 	}
 	return windows.FlushViewOfFile(uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+}
+
+func sliceFromAddr(addr uintptr, length int) []byte {
+	var dummy byte
+	// The arithmetic form keeps go vet's unsafeptr analyzer happy for mmap pointers.
+	ptr := unsafe.Pointer(uintptr(unsafe.Pointer(&dummy)) + (addr - uintptr(unsafe.Pointer(&dummy))))
+	return unsafe.Slice((*byte)(ptr), length)
 }

@@ -200,6 +200,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
+	// 0 uses the default limit.
+	WALMaxSegmentBytes int64
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
@@ -390,7 +393,7 @@ func validateUnsafeOptions(opts Options) error {
 	if opts.AllowUnsafe {
 		return nil
 	}
-	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen {
+	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
 		return ErrUnsafeOptions
 	}
 	return nil
@@ -485,7 +488,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := replayWALIntoBackend(db, segments); err != nil {
+	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes); err != nil {
 		db.Close()
 		return nil, err
 	}

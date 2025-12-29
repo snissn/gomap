@@ -96,7 +96,7 @@ func isTruncatedLogError(err error) bool {
 		errors.Is(err, vlog.ErrCorrupt)
 }
 
-func replayWALIntoBackend(db *DB, segments []logSegment) error {
+func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64) error {
 	const maxOpsPerBatch = 10_000
 
 	markedZombie := false
@@ -111,7 +111,7 @@ func replayWALIntoBackend(db *DB, segments []logSegment) error {
 			}
 			continue
 		}
-		if err := replayWALSegment(db, segment, maxOpsPerBatch); err != nil {
+		if err := replayWALSegment(db, segment, maxOpsPerBatch, maxSegmentBytes); err != nil {
 			return err
 		}
 	}
@@ -124,8 +124,8 @@ func replayWALIntoBackend(db *DB, segments []logSegment) error {
 	return nil
 }
 
-func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int) error {
-	reader, err := wal.NewReader(segment.path)
+func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegmentBytes int64) error {
+	reader, err := wal.NewReaderWithOptions(segment.path, wal.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
 		return err
 	}

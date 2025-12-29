@@ -20,6 +20,10 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 	stack = append(stack, t.rootPageID)
 
 	visited := make(map[uint64]struct{}, 1024)
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
 
 	for len(stack) > 0 {
 		// pop
@@ -36,7 +40,6 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 			return err
 		}
 		n := node.NewNode(data)
-		verifyAlways := t.pager.VerifyOnRead()
 		if verifyAlways || !t.pager.IsVerified(pageID) {
 			if !n.VerifyChecksum() {
 				return fmt.Errorf("checksum mismatch on page %d", pageID)

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -626,6 +627,9 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 }
 
 func syncDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	dir, err := os.Open(path)
 	if err != nil {
 		return err

@@ -254,3 +254,19 @@ func TestWALRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
+
+func TestWALMaxSegmentSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wal-000001.log")
+
+	w, err := NewWriterWithOptions(path, Options{MaxSegmentSize: 64})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	err = w.Append(OpSet, bytes.Repeat([]byte("k"), 60), nil)
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
+	}
+}

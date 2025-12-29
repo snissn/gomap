@@ -63,7 +63,8 @@ func (it *valueLogIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	}
 	it.loadValue()
 	if it.cachedHasPtr {
-		return it.cachedValue, it.cachedPtr, node.FlagPointer
+		// Value-log pointers are materialized here; report inline semantics.
+		return it.cachedValue, page.ValuePtr{}, node.FlagInline
 	}
 	return it.cachedValue, page.ValuePtr{}, node.FlagInline
 }

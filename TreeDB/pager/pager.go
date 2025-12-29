@@ -58,6 +58,9 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	if chunkSize%int64(os.Getpagesize()) != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
 	}
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran)
+	}
 
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {

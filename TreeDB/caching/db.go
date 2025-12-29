@@ -76,7 +76,7 @@ func envBool(name string) bool {
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
-	if dir == "" {
+	if dir == "" || runtime.GOOS == "windows" {
 		return
 	}
 	f, err := os.Open(dir)
@@ -538,6 +538,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces the cached WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
+	// 0 uses the default limit.
+	WALMaxSegmentBytes int64
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
 	// MemtableValueLogPointers avoids storing large values in the memtable and
@@ -644,6 +647,7 @@ type DB struct {
 	writerFlushMaxMemtables   int
 	writerFlushMaxDuration    time.Duration
 	flushBuildConcurrency     int
+	walMaxSegmentBytes        int64
 
 	disableWAL         bool
 	relaxedSync        bool
@@ -1044,7 +1048,7 @@ func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
-	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.MemtableValueLogPointers) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
@@ -1172,6 +1176,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables:      opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:       opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:        opts.FlushBuildConcurrency,
+		walMaxSegmentBytes:           opts.WALMaxSegmentBytes,
 		disableWAL:                   opts.DisableWAL,
 		disableValueLog:              disableValueLog,
 		relaxedSync:                  opts.RelaxedSync,
@@ -2613,7 +2618,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	db.waitForStop()
 
 	// WAL-enabled mode: do a snapshot scan and apply per-key deletes directly.
-	// We batch WAL appends with copied keys to reduce per-record overhead.
+	// Append WAL records one-by-one to preserve batch atomicity and to avoid
+	// post-WAL apply divergence on partial batch failure.
 	if !db.disableWAL {
 		db.writeMu.Lock()
 		defer db.writeMu.Unlock()
@@ -2624,85 +2630,111 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		}
 		defer func() { _ = it.Close() }()
 
-		const deleteRangeBatchKeys = 1024
-		const deleteRangeBatchBytes = 1 << 20
-
-		var (
-			batchKeys []byte
-			batch     []logRecord
-		)
-
 		applyDelete := func(key []byte) error {
-			shard := db.shardForKey(key)
-			shard.mu.Lock()
-			if db.shardExceedsLimit(shard, int64(len(key))) {
-				shard.mu.Unlock()
+			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
 				return ErrMemtableFull
 			}
-			if shard.largePtrs != nil {
-				if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
-					shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
-					return nil
-				}); err != nil {
+			for {
+				shard := db.shardForKey(key)
+				shard.mu.Lock()
+				if db.shardExceedsLimit(shard, int64(len(key))) {
 					shard.mu.Unlock()
-					return err
+					db.mu.Lock()
+					err := db.rotateMemtableLocked(true)
+					db.mu.Unlock()
+					if err != nil {
+						return err
+					}
+					continue
 				}
-			} else {
-				shard.mem.Delete(key)
+				if shard.largePtrs != nil {
+					if err := shard.mem.DeleteWithCallback(key, func(k, _ []byte) error {
+						shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+						return nil
+					}); err != nil {
+						shard.mu.Unlock()
+						return err
+					}
+				} else {
+					shard.mem.Delete(key)
+				}
+				shard.rng.add(key)
+				newBytes := shard.mem.Size()
+				delta := newBytes - shard.bytes
+				shard.bytes = newBytes
+				db.mutableBytes.Add(delta)
+				shard.mu.Unlock()
+				db.noteWriteKey(key)
+				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+					db.mu.Lock()
+					if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+						if err := db.rotateMemtableLocked(true); err != nil {
+							db.mu.Unlock()
+							return err
+						}
+					}
+					db.mu.Unlock()
+				}
+				return nil
 			}
-			shard.rng.add(key)
-			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			db.mutableBytes.Add(delta)
-			shard.mu.Unlock()
-			db.noteWriteKey(key)
+		}
+
+		poisonApply := func(err error) error {
+			if err == nil {
+				return nil
+			}
+			db.reportError(fmt.Errorf("cachingdb: WAL apply failed: %w", err))
+			db.walAckMu.Lock()
+			if db.walErr == nil {
+				db.walErr = err
+			}
+			db.walAckMu.Unlock()
+			return err
+		}
+
+		preRotate := func(key []byte) error {
+			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
+				return ErrMemtableFull
+			}
 			if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 				db.mu.Lock()
 				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
-					if err := db.rotateMemtableLocked(true); err != nil {
-						db.mu.Unlock()
+					err := db.rotateMemtableLocked(true)
+					db.mu.Unlock()
+					if err != nil {
 						return err
 					}
+				} else {
+					db.mu.Unlock()
 				}
+			}
+			shard := db.shardForKey(key)
+			shard.mu.Lock()
+			exceeds := db.shardExceedsLimit(shard, int64(len(key)))
+			shard.mu.Unlock()
+			if exceeds {
+				db.mu.Lock()
+				err := db.rotateMemtableLocked(true)
 				db.mu.Unlock()
-			}
-			return nil
-		}
-
-		flushBatch := func() error {
-			if len(batch) == 0 {
-				return nil
-			}
-			if _, err := db.appendWAL(batch, walDurabilityNone); err != nil {
-				return err
-			}
-			for i := range batch {
-				if err := applyDelete(batch[i].Key); err != nil {
+				if err != nil {
 					return err
 				}
 			}
-			batch = batch[:0]
-			batchKeys = batchKeys[:0]
 			return nil
 		}
 
 		for it.Valid() {
 			key := it.Key()
-			start := len(batchKeys)
-			batchKeys = append(batchKeys, key...)
-			keyCopy := batchKeys[start:len(batchKeys)]
-			batch = append(batch, logRecord{Op: logOpDelete, Key: keyCopy})
-
-			if len(batch) >= deleteRangeBatchKeys || len(batchKeys) >= deleteRangeBatchBytes {
-				if err := flushBatch(); err != nil {
-					return err
-				}
+			if err := preRotate(key); err != nil {
+				return err
+			}
+			if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, walDurabilityNone); err != nil {
+				return err
+			}
+			if err := applyDelete(key); err != nil {
+				return poisonApply(err)
 			}
 			it.Next()
-		}
-		if err := flushBatch(); err != nil {
-			return err
 		}
 		if err := it.Error(); err != nil {
 			return err
@@ -3440,7 +3472,7 @@ func (db *DB) rotateWALLocked() error {
 			}
 			db.wal = &vlogWriterAdapter{w: w}
 		} else {
-			w, err := wal.NewWriter(path)
+			w, err := wal.NewWriterWithOptions(path, wal.Options{MaxSegmentSize: db.walMaxSegmentBytes})
 			if err != nil {
 				return err
 			}

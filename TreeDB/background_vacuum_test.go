@@ -2,12 +2,16 @@ package treedb
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 )
 
 func TestBackgroundIndexVacuumRunsAndStops(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
 	dir := t.TempDir()
 
 	d, err := Open(Options{

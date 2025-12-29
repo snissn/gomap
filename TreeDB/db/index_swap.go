@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -15,6 +16,9 @@ const (
 )
 
 var syncDirFn = func(dir string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err

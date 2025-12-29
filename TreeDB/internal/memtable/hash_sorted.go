@@ -201,7 +201,7 @@ func (m *HashSorted) SetSteal(key, value []byte) {
 }
 
 func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
-	if len(key) == 0 {
+	if key == nil {
 		return nil
 	}
 
@@ -262,7 +262,7 @@ func (m *HashSorted) DeleteSteal(key []byte) {
 }
 
 func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
-	if len(key) == 0 {
+	if key == nil {
 		return nil
 	}
 	var chunk []string
@@ -597,7 +597,7 @@ func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 }
 
 func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
-	if len(key) == 0 {
+	if key == nil {
 		return nil, 0
 	}
 	keyLookup := bytesToStringNoCopy(key)
@@ -617,7 +617,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 }
 
 func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
-	if len(key) == 0 {
+	if key == nil {
 		return nil, 0
 	}
 	m.hasDeletes = true

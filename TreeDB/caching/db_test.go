@@ -855,6 +855,7 @@ func TestCachingDB_MemtableValueLogPointers(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
 		FlushThreshold:           1 << 30,
 		MemtableValueLogPointers: true,
 	})

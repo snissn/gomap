@@ -16,19 +16,20 @@ type CursorItem struct {
 }
 
 type Iterator struct {
-	tree     *Tree
-	stack    []CursorItem
-	stackBuf [16]CursorItem
-	start    []byte
-	end      []byte
-	valid    bool
-	err      error
-	currKey  []byte
-	currVal  []byte
-	currPtr  page.ValuePtr
-	flags    byte
-	valOK    bool
-	reverse  bool
+	tree         *Tree
+	stack        []CursorItem
+	stackBuf     [16]CursorItem
+	start        []byte
+	end          []byte
+	valid        bool
+	err          error
+	currKey      []byte
+	currVal      []byte
+	currPtr      page.ValuePtr
+	flags        byte
+	valOK        bool
+	reverse      bool
+	verifyAlways bool
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
@@ -36,10 +37,11 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
 	}
 	it := &Iterator{
-		tree:    t,
-		start:   start,
-		end:     end,
-		reverse: false,
+		tree:         t,
+		start:        start,
+		end:          end,
+		reverse:      false,
+		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
 	it.resetStack()
 	it.Seek(start)
@@ -51,10 +53,11 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		return &Iterator{tree: t, valid: false, err: nil}
 	}
 	it := &Iterator{
-		tree:    t,
-		start:   start,
-		end:     end,
-		reverse: true,
+		tree:         t,
+		start:        start,
+		end:          end,
+		reverse:      true,
+		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
 	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
@@ -460,7 +463,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	n := node.NewNodeView(data)
 
 	// Skip checksum verification for pages we've already verified.
-	verifyAlways := it.tree.pager.VerifyOnRead()
+	verifyAlways := it.verifyAlways
 	if verifyAlways || !it.tree.pager.IsVerified(pageID) {
 		if !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)

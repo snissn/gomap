@@ -183,7 +183,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
-		if err == treedbdb.ErrVacuumInProgress {
+		if err == treedbdb.ErrVacuumInProgress || err == treedbdb.ErrVacuumUnsupported {
 			w.runs.Add(1)
 			w.lastRunUnix.Store(now.Unix())
 			w.lastErr.Store("")
