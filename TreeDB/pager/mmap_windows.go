@@ -5,16 +5,35 @@ package pager
 
 import (
 	"reflect"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
+var (
+	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	procGetSystemInfo = modkernel32.NewProc("GetSystemInfo")
+)
+
+// systemInfo mirrors Windows SYSTEM_INFO for allocation granularity lookup.
+type systemInfo struct {
+	wProcessorArchitecture      uint16
+	wReserved                   uint16
+	dwPageSize                  uint32
+	lpMinimumApplicationAddress uintptr
+	lpMaximumApplicationAddress uintptr
+	dwActiveProcessorMask       uintptr
+	dwNumberOfProcessors        uint32
+	dwProcessorType             uint32
+	dwAllocationGranularity     uint32
+	wProcessorLevel             uint16
+	wProcessorRevision          uint16
+}
+
 var allocationGranularity = func() int64 {
-	var info syscall.SystemInfo
-	syscall.GetSystemInfo(&info)
-	return int64(info.AllocationGranularity)
+	var info systemInfo
+	_, _, _ = procGetSystemInfo.Call(uintptr(unsafe.Pointer(&info)))
+	return int64(info.dwAllocationGranularity)
 }()
 
 func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
