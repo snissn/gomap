@@ -22,26 +22,35 @@ var ErrRecordTooLarge = errors.New("wal: record too large")
 var syncDirFn = syncDir
 
 type Writer struct {
-	f          *os.File
-	bw         *bufio.Writer
-	scratch    []byte
-	pending    []byte
-	size       int64
-	segmentMax int
-	syncFn     func(*os.File) error
+	f              *os.File
+	bw             *bufio.Writer
+	scratch        []byte
+	pending        []byte
+	size           int64
+	segmentMax     int
+	maxSegmentSize int64
+	syncFn         func(*os.File) error
 }
 
-const defaultWALBufferSize = 4 << 20
+const (
+	defaultWALBufferSize  = 4 << 20
+	defaultMaxSegmentSize = 64 * 1024 * 1024
+)
 
-// MaxSegmentSize bounds the total WAL segment payload size (bytes).
-// Set <= 0 to disable the cap.
-var MaxSegmentSize int64 = 64 * 1024 * 1024
+type Options struct {
+	// MaxSegmentSize bounds the total WAL segment payload size (bytes).
+	// 0 uses the default limit; values < 0 disable the cap.
+	MaxSegmentSize int64
+}
 
-func maxSegmentLimit() int64 {
-	if MaxSegmentSize <= 0 {
+func normalizeMaxSegmentSize(size int64) int64 {
+	if size == 0 {
+		return defaultMaxSegmentSize
+	}
+	if size < 0 {
 		return 0
 	}
-	return MaxSegmentSize
+	return size
 }
 
 type Record struct {
@@ -51,6 +60,10 @@ type Record struct {
 }
 
 func NewWriter(path string) (*Writer, error) {
+	return NewWriterWithOptions(path, Options{})
+}
+
+func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, err
@@ -60,12 +73,13 @@ func NewWriter(path string) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:          f,
-		bw:         bufio.NewWriterSize(f, defaultWALBufferSize),
-		scratch:    make([]byte, 0, defaultWALBufferSize),
-		pending:    make([]byte, 0, defaultWALBufferSize),
-		segmentMax: defaultWALBufferSize,
-		syncFn:     func(file *os.File) error { return file.Sync() },
+		f:              f,
+		bw:             bufio.NewWriterSize(f, defaultWALBufferSize),
+		scratch:        make([]byte, 0, defaultWALBufferSize),
+		pending:        make([]byte, 0, defaultWALBufferSize),
+		segmentMax:     defaultWALBufferSize,
+		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		syncFn:         func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
@@ -185,7 +199,7 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 	// Encode record into scratch
 	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
 	size := 1 + 2 + 4 + len(key) + len(value)
-	if limit := maxSegmentLimit(); limit > 0 && int64(size) > limit {
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
 	if size > w.segmentMax {
@@ -244,7 +258,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 	for _, r := range records {
 		total += 1 + 2 + 4 + len(r.Key) + len(r.Value)
 	}
-	if limit := maxSegmentLimit(); limit > 0 && int64(total) > limit {
+	if w.maxSegmentSize > 0 && int64(total) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
 
@@ -303,17 +317,25 @@ func (w *Writer) Close() error {
 }
 
 type Reader struct {
-	f   *os.File
-	buf []byte
-	pos int
+	f              *os.File
+	buf            []byte
+	pos            int
+	maxSegmentSize int64
 }
 
 func NewReader(path string) (*Reader, error) {
+	return NewReaderWithOptions(path, Options{})
+}
+
+func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{f: f}, nil
+	return &Reader{
+		f:              f,
+		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+	}, nil
 }
 
 // ReadNext yields the next record. It transparently handles segments.
@@ -358,7 +380,7 @@ func (r *Reader) readSegment() error {
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
 
 	// Sanity check length to avoid OOM on corrupt file.
-	if limit := maxSegmentLimit(); limit > 0 && int64(length) > limit {
+	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
 		return ErrCorrupt
 	}
 

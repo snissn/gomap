@@ -647,6 +647,7 @@ type DB struct {
 	writerFlushMaxMemtables   int
 	writerFlushMaxDuration    time.Duration
 	flushBuildConcurrency     int
+	walMaxSegmentBytes        int64
 
 	disableWAL         bool
 	relaxedSync        bool
@@ -1112,9 +1113,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
-	if opts.WALMaxSegmentBytes > 0 {
-		wal.MaxSegmentSize = opts.WALMaxSegmentBytes
-	}
 	if opts.MemtableValueLogPointers && disableValueLog {
 		return nil, ErrMemtableValueLogPointers
 	}
@@ -1178,6 +1176,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables:      opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:       opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:        opts.FlushBuildConcurrency,
+		walMaxSegmentBytes:           opts.WALMaxSegmentBytes,
 		disableWAL:                   opts.DisableWAL,
 		disableValueLog:              disableValueLog,
 		relaxedSync:                  opts.RelaxedSync,
@@ -3473,7 +3472,7 @@ func (db *DB) rotateWALLocked() error {
 			}
 			db.wal = &vlogWriterAdapter{w: w}
 		} else {
-			w, err := wal.NewWriter(path)
+			w, err := wal.NewWriterWithOptions(path, wal.Options{MaxSegmentSize: db.walMaxSegmentBytes})
 			if err != nil {
 				return err
 			}

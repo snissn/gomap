@@ -488,7 +488,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := replayWALIntoBackend(db, segments); err != nil {
+	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes); err != nil {
 		db.Close()
 		return nil, err
 	}

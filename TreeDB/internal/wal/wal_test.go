@@ -259,11 +259,7 @@ func TestWALMaxSegmentSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal-000001.log")
 
-	orig := MaxSegmentSize
-	t.Cleanup(func() { MaxSegmentSize = orig })
-	MaxSegmentSize = 64
-
-	w, err := NewWriter(path)
+	w, err := NewWriterWithOptions(path, Options{MaxSegmentSize: 64})
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
