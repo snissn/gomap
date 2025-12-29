@@ -511,7 +511,8 @@ type Options struct {
 
 	// MemtableMode selects the in-memory write buffer implementation.
 	// Supported: "skiplist", "hash_sorted", "btree", "adaptive".
-	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
+	// Use "adaptive" (defaults to hash_sorted) or "adaptive:<mode>" to switch
+	// per-rotation based on workload.
 	MemtableMode string
 
 	// MemtableShards controls the number of mutable memtable shards. Values <= 0
@@ -642,6 +643,7 @@ type DB struct {
 	memtableWarmupThreshold   int64
 	memtableAdaptiveCandidate memtable.Mode
 	memtableAdaptiveStreak    uint8
+	memtableAdaptiveSwitches  atomic.Uint64
 	statsMu                   sync.Mutex
 	memtableStats             memtableStats
 	maxQueuedMemtables        int
@@ -1050,6 +1052,7 @@ func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
 		db.memtableMode = desired
 		db.memtableAdaptiveStreak = 0
 		db.memtableAdaptiveCandidate = desired
+		db.memtableAdaptiveSwitches.Add(1)
 	}
 	return db.memtableMode
 }
@@ -1069,10 +1072,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	adaptive := false
 	if modeStr == "adaptive" || modeStr == "auto" {
 		adaptive = true
-		modeStr = ""
+		modeStr = "hash_sorted"
 	} else if strings.HasPrefix(modeStr, "adaptive:") {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
+		if modeStr == "" {
+			modeStr = "hash_sorted"
+		}
 	}
 	mode, err := memtable.ModeFromString(modeStr)
 	if err != nil {
@@ -4377,6 +4383,9 @@ func (db *DB) Stats() map[string]string {
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
 	memtableMode := db.memtableMode
+	memtableAdaptive := db.memtableAdaptive
+	memtableAdaptiveCandidate := db.memtableAdaptiveCandidate
+	memtableAdaptiveStreak := db.memtableAdaptiveStreak
 	maxQueued := db.maxQueuedMemtables
 	walCurrentBytes := db.walLiveBytes.Load()
 	walClosedBytes := db.walClosedBytes.Load()
@@ -4386,6 +4395,30 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
+	stats["treedb.cache.memtable_adaptive"] = fmt.Sprintf("%t", memtableAdaptive)
+	stats["treedb.cache.memtable_adaptive_candidate"] = memtableAdaptiveCandidate.String()
+	stats["treedb.cache.memtable_adaptive_streak"] = fmt.Sprintf("%d", memtableAdaptiveStreak)
+	stats["treedb.cache.memtable_adaptive_switches"] = fmt.Sprintf("%d", db.memtableAdaptiveSwitches.Load())
+	memStats := memtableStats{}
+	db.statsMu.Lock()
+	memStats = db.memtableStats
+	db.statsMu.Unlock()
+	stats["treedb.cache.memtable_adaptive_writes"] = fmt.Sprintf("%d", memStats.writes)
+	stats["treedb.cache.memtable_adaptive_seq_writes"] = fmt.Sprintf("%d", memStats.seqWrites)
+	stats["treedb.cache.memtable_adaptive_iterators"] = fmt.Sprintf("%d", memStats.iterators)
+	stats["treedb.cache.memtable_adaptive_range_iters"] = fmt.Sprintf("%d", memStats.rangeIters)
+	if memStats.writes > 0 {
+		denom := memStats.writes
+		if denom > 1 {
+			denom--
+		}
+		seqRatio := float64(memStats.seqWrites) / float64(denom)
+		iterRatio := float64(memStats.iterators) / float64(memStats.writes)
+		rangeRatio := float64(memStats.rangeIters) / float64(memStats.writes)
+		stats["treedb.cache.memtable_adaptive_seq_ratio"] = fmt.Sprintf("%.3f", seqRatio)
+		stats["treedb.cache.memtable_adaptive_iter_ratio"] = fmt.Sprintf("%.3f", iterRatio)
+		stats["treedb.cache.memtable_adaptive_range_ratio"] = fmt.Sprintf("%.3f", rangeRatio)
+	}
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)

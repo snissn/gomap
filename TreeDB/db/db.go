@@ -134,6 +134,7 @@ type Options struct {
 	FlushThreshold int64
 	// MemtableMode selects the cached-mode memtable implementation.
 	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
+	// Use "adaptive" (defaults to hash_sorted) or "adaptive:<mode>".
 	MemtableMode string
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
