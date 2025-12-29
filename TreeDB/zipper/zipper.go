@@ -528,14 +528,19 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			maxParallel = 1
 		}
 		jobs := make(chan int, len(children))
+		jobCount := 0
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].childID
 				continue
 			}
+			jobCount++
 			jobs <- i
 		}
 		close(jobs)
+		if jobCount < maxParallel {
+			maxParallel = jobCount
+		}
 		var wg sync.WaitGroup
 		var firstErr error
 		var errOnce sync.Once
