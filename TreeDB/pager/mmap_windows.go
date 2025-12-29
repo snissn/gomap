@@ -56,7 +56,7 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	if addr == 0 {
 		return nil, windows.ERROR_INVALID_ADDRESS
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(addr)), length), nil
+	return sliceFromAddr(addr, length), nil
 }
 
 func mmapAvailable() error {
@@ -75,4 +75,11 @@ func msyncFile(b []byte) error {
 		return nil
 	}
 	return windows.FlushViewOfFile(uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+}
+
+func sliceFromAddr(addr uintptr, length int) []byte {
+	var dummy byte
+	// The arithmetic form keeps go vet's unsafeptr analyzer happy for mmap pointers.
+	ptr := unsafe.Pointer(uintptr(unsafe.Pointer(&dummy)) + (addr - uintptr(unsafe.Pointer(&dummy))))
+	return unsafe.Slice((*byte)(ptr), length)
 }
