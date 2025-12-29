@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
@@ -149,6 +150,9 @@ func (w *Writer) RotateTo(path string) error {
 }
 
 func syncDir(path string) (err error) {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	dir := filepath.Dir(path)
 	f, err := os.Open(dir)
 	if err != nil {
