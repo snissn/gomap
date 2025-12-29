@@ -5,14 +5,15 @@ package pager
 
 import (
 	"reflect"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var allocationGranularity = func() int64 {
-	var info windows.SystemInfo
-	windows.GetSystemInfo(&info)
+	var info syscall.SystemInfo
+	syscall.GetSystemInfo(&info)
 	return int64(info.AllocationGranularity)
 }()
 
