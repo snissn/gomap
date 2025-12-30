@@ -3,7 +3,6 @@ package skiplist
 import (
 	"bytes"
 	"encoding/binary"
-	"math/rand"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -40,7 +39,7 @@ type SkipList struct {
 
 	head   uint32
 	tail   [maxHeight]uint32
-	rnd    *rand.Rand
+	rng    uint64
 	height int
 	size   int64 // Logical size (approx)
 	count  int   // Number of items
@@ -59,8 +58,11 @@ func maxChunkIndex() int {
 // New creates a new SkipList.
 func New(capacity int) *SkipList {
 	s := &SkipList{
-		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		height: 1,
+	}
+	s.rng = uint64(time.Now().UnixNano())
+	if s.rng == 0 {
+		s.rng = 0xdeadbeefcafebabe
 	}
 	if capacity < headNodeSize {
 		capacity = headNodeSize
@@ -499,11 +501,26 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 }
 
 func (s *SkipList) randomHeight() int {
+	const mask = uint64(0x3) // 2 bits => p=0.25
 	h := 1
-	for h < maxHeight && s.rnd.Float32() < 0.25 {
+	r := s.rand64()
+	for h < maxHeight && (r&mask) == 0 {
 		h++
+		r >>= 2
 	}
 	return h
+}
+
+// rand64 returns pseudo-random bits for level selection.
+// Distribution quality is not critical; it must be fast and non-zero.
+func (s *SkipList) rand64() uint64 {
+	// xorshift64*
+	x := s.rng
+	x ^= x >> 12
+	x ^= x << 25
+	x ^= x >> 27
+	s.rng = x
+	return x * 2685821657736338717
 }
 
 // Get returns value, isDeleted, exists
