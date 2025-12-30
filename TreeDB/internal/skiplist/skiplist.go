@@ -60,9 +60,11 @@ func New(capacity int) *SkipList {
 		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		height: 1,
 	}
-	// Pre-allocate first chunk if capacity suggested
+	if capacity > chunkSize {
+		capacity = chunkSize
+	}
 	if capacity > 0 {
-		s.ensureSpace(0, chunkSize)
+		s.ensureSpace(0, capacity)
 	}
 	// Allocate dummy head (height=maxHeight, key=empty, val=empty)
 	s.head = s.allocNode(0, 0, maxHeight)
@@ -178,7 +180,11 @@ func (s *SkipList) alloc(n int) uint32 {
 		s.curChunkOff = 0
 	}
 
-	s.ensureSpace(s.curChunkIdx, chunkSize)
+	ensureSize := s.curChunkOff + n
+	if s.curChunkIdx > 0 && ensureSize < chunkSize {
+		ensureSize = chunkSize
+	}
+	s.ensureSpace(s.curChunkIdx, ensureSize)
 
 	if s.curChunkIdx > maxChunkIndex() {
 		panic("skiplist arena size exceeded 4GB")
@@ -191,21 +197,44 @@ func (s *SkipList) alloc(n int) uint32 {
 
 // ensureSpace guarantees that s.chunks[idx] exists and has sufficient capacity.
 func (s *SkipList) ensureSpace(idx, size int) {
+	if size <= 0 {
+		size = 1
+	}
+
 	// Reuse existing chunk if possible (fast path for Reset/Reuse)
+	var old []byte
 	if idx < len(s.chunks) {
-		if cap(s.chunks[idx]) >= size {
-			s.chunks[idx] = s.chunks[idx][:size]
+		old = s.chunks[idx]
+		if cap(old) >= size {
+			s.chunks[idx] = old[:size]
 			return
 		}
 	}
 
 	allocSize := size
-	if allocSize < chunkSize {
+	if idx > 0 && allocSize < chunkSize {
 		allocSize = chunkSize
 	}
 
-	// Allocate new backing array
+	if len(old) > 0 {
+		growCap := cap(old) * 2
+		if growCap < allocSize {
+			growCap = allocSize
+		}
+		if growCap < size {
+			growCap = size
+		}
+		if idx == 0 && growCap > chunkSize {
+			growCap = chunkSize
+		}
+		allocSize = growCap
+	}
+
+	// Allocate new backing array and preserve any existing content for this chunk.
 	buf := make([]byte, allocSize)
+	if len(old) > 0 {
+		copy(buf, old)
+	}
 	s.allocated = append(s.allocated, buf)
 
 	chunksNeeded := (allocSize + chunkSize - 1) / chunkSize
@@ -219,6 +248,11 @@ func (s *SkipList) ensureSpace(idx, size int) {
 		s.chunks = append(s.chunks, make([][]byte, grow)...)
 	}
 
+	if chunksNeeded == 1 {
+		s.chunks[idx] = buf[:size:allocSize]
+		return
+	}
+
 	// Map virtual chunks to the physical buffer.
 	// For huge allocations, multiple virtual chunks point to slices of the same large buffer.
 	for i := 0; i < chunksNeeded; i++ {
@@ -227,8 +261,6 @@ func (s *SkipList) ensureSpace(idx, size int) {
 		if end > allocSize {
 			end = allocSize
 		}
-		// slice[i:j:k] sets capacity to k-i. This ensures that for huge allocations,
-		// the slice has enough capacity to allow bytesAt to read past the 64KB boundary.
 		s.chunks[idx+i] = buf[start:end:allocSize]
 	}
 }

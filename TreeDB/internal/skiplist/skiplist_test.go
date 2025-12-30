@@ -58,6 +58,16 @@ func TestSkipList_BasicCRUD(t *testing.T) {
 	}
 }
 
+func TestSkipList_NewRespectsCapacityHint(t *testing.T) {
+	s := New(64 * 1024)
+	if len(s.allocated) == 0 {
+		t.Fatal("expected an initial allocation")
+	}
+	if got := cap(s.allocated[0]); got != 64*1024 {
+		t.Fatalf("expected initial allocation cap %d, got %d", 64*1024, got)
+	}
+}
+
 func TestSkipList_ChunkCrossing(t *testing.T) {
 	// Chunk size is 65536. We write enough small items to force the allocator
 	// to span multiple chunks.
