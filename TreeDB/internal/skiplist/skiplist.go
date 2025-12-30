@@ -334,13 +334,22 @@ func (s *SkipList) setFlags(node uint32, f uint8) {
 }
 
 func (s *SkipList) getNext(node uint32, level int) uint32 {
-	offset := node + uint32(nodeHeaderBase) + uint32(4*level)
-	return binary.LittleEndian.Uint32(s.bytesAt(offset, 4))
+	p := node + uint32(nodeHeaderBase) + uint32(4*level)
+	idx := int(p >> chunkShift)
+	off := int(p & chunkMask)
+	b := s.chunks[idx]
+	return uint32(b[off]) | uint32(b[off+1])<<8 | uint32(b[off+2])<<16 | uint32(b[off+3])<<24
 }
 
 func (s *SkipList) setNext(node uint32, level int, next uint32) {
-	offset := node + uint32(nodeHeaderBase) + uint32(4*level)
-	binary.LittleEndian.PutUint32(s.bytesAt(offset, 4), next)
+	p := node + uint32(nodeHeaderBase) + uint32(4*level)
+	idx := int(p >> chunkShift)
+	off := int(p & chunkMask)
+	b := s.chunks[idx]
+	b[off] = byte(next)
+	b[off+1] = byte(next >> 8)
+	b[off+2] = byte(next >> 16)
+	b[off+3] = byte(next >> 24)
 }
 
 // --- Standard SkipList Logic ---
