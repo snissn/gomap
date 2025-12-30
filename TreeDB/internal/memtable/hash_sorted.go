@@ -1,6 +1,8 @@
 package memtable
 
 import (
+	"bytes"
+	"hash/maphash"
 	"sort"
 	"strings"
 	"sync"
@@ -91,7 +93,10 @@ func (a *hashArena) copyBytes(src []byte) []byte {
 
 type HashSorted struct {
 	mu          sync.RWMutex
-	items       map[string]hashEntry
+	items       map[uint64]hashEntry
+	collisions  map[string]hashEntry
+	collideHash map[uint64]struct{}
+	seed        maphash.Seed
 	sizeBytes   int64
 	sortedKeys  []string
 	sortedDel   []bool
@@ -143,7 +148,8 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 
 	mapHint := hashSortedEstimateMapHint(capacity)
 	m := &HashSorted{
-		items:       make(map[string]hashEntry, mapHint),
+		items:       make(map[uint64]hashEntry, mapHint),
+		seed:        maphash.MakeSeed(),
 		sortedValid: true,
 		indexer:     indexer,
 	}
@@ -155,6 +161,18 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 	}
 	m.index.cond = sync.NewCond(&m.index.mu)
 	return m
+}
+
+func (m *HashSorted) keyHashBytes(key []byte) uint64 {
+	return maphash.Bytes(m.seed, key)
+}
+
+func (m *HashSorted) keyHashString(key string) uint64 {
+	return maphash.String(m.seed, key)
+}
+
+func (m *HashSorted) keyCountLocked() int {
+	return len(m.items) + len(m.collisions)
 }
 
 func hashSortedEstimateMapHint(capacity int) int {
@@ -241,6 +259,12 @@ func (m *HashSorted) Reset() {
 	m.mu.Lock()
 
 	clear(m.items)
+	if m.collisions != nil {
+		clear(m.collisions)
+	}
+	if m.collideHash != nil {
+		clear(m.collideHash)
+	}
 	m.sizeBytes = 0
 	m.sortedKeys = m.sortedKeys[:0]
 	m.sortedDel = m.sortedDel[:0]
@@ -308,23 +332,100 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	var seq uint64
 
 	m.mu.Lock()
-	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
+	keyHash := m.keyHashBytes(key)
+
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			keyLookup := bytesToStringNoCopy(key)
+			if ent, ok := m.collisions[keyLookup]; ok {
+				keyBytes := m.arena.sliceRef(ent.keyRef)
+				valRef, valCopy := m.arena.copyBytesRef(value)
+				if cb != nil {
+					if err := cb(keyBytes, valCopy); err != nil {
+						m.mu.Unlock()
+						return err
+					}
+				}
+				oldLen := int(ent.valRef.len)
+				ent.valRef = valRef
+				ent.deleted = false
+				m.sizeBytes += int64(len(valCopy) - oldLen)
+				storedKey := bytesToStringNoCopy(keyBytes)
+				m.collisions[storedKey] = ent
+				m.mu.Unlock()
+				return nil
+			}
+
+			keyRef, keyCopy := m.arena.copyBytesRef(key)
+			valRef, valCopy := m.arena.copyBytesRef(value)
+			if cb != nil {
+				if err := cb(keyCopy, valCopy); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
+			keyStored := bytesToStringNoCopy(keyCopy)
+			if m.collisions == nil {
+				m.collisions = make(map[string]hashEntry)
+			}
+			m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+			m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+			chunk, seq = m.noteNewKeyLocked(keyStored)
+			m.mu.Unlock()
+			if seq != 0 {
+				m.indexer.enqueue(m, seq, chunk)
+			}
+			return nil
+		}
+	}
+
+	if ent, ok := m.items[keyHash]; ok {
 		keyBytes := m.arena.sliceRef(ent.keyRef)
+		if bytes.Equal(keyBytes, key) {
+			valRef, valCopy := m.arena.copyBytesRef(value)
+			if cb != nil {
+				if err := cb(keyBytes, valCopy); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
+			oldLen := int(ent.valRef.len)
+			ent.valRef = valRef
+			ent.deleted = false
+			m.sizeBytes += int64(len(valCopy) - oldLen)
+			m.items[keyHash] = ent
+			m.mu.Unlock()
+			return nil
+		}
+
+		// Hash collision: move the existing key and the new key into the collision map.
+		delete(m.items, keyHash)
+		if m.collideHash == nil {
+			m.collideHash = make(map[uint64]struct{}, 8)
+		}
+		m.collideHash[keyHash] = struct{}{}
+		if m.collisions == nil {
+			m.collisions = make(map[string]hashEntry)
+		}
 		storedKey := bytesToStringNoCopy(keyBytes)
+		m.collisions[storedKey] = ent
+
+		keyRef, keyCopy := m.arena.copyBytesRef(key)
 		valRef, valCopy := m.arena.copyBytesRef(value)
 		if cb != nil {
-			if err := cb(keyBytes, valCopy); err != nil {
+			if err := cb(keyCopy, valCopy); err != nil {
 				m.mu.Unlock()
 				return err
 			}
 		}
-		oldLen := int(ent.valRef.len)
-		ent.valRef = valRef
-		ent.deleted = false
-		m.sizeBytes += int64(len(valCopy) - oldLen)
-		m.items[storedKey] = ent
+		keyStored := bytesToStringNoCopy(keyCopy)
+		m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+		m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+		chunk, seq = m.noteNewKeyLocked(keyStored)
 		m.mu.Unlock()
+		if seq != 0 {
+			m.indexer.enqueue(m, seq, chunk)
+		}
 		return nil
 	}
 
@@ -337,7 +438,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+	m.items[keyHash] = hashEntry{keyRef: keyRef, valRef: valRef}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -371,23 +472,98 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	m.mu.Lock()
 	m.hasDeletes = true
 
-	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
+	keyHash := m.keyHashBytes(key)
+
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			keyLookup := bytesToStringNoCopy(key)
+			if ent, ok := m.collisions[keyLookup]; ok {
+				keyBytes := m.arena.sliceRef(ent.keyRef)
+				if cb != nil {
+					if err := cb(keyBytes, nil); err != nil {
+						m.mu.Unlock()
+						return err
+					}
+				}
+				if !ent.deleted {
+					m.sizeBytes -= int64(ent.valRef.len)
+					ent.valRef = arenaRef{}
+					ent.deleted = true
+				}
+				storedKey := bytesToStringNoCopy(keyBytes)
+				m.collisions[storedKey] = ent
+				m.mu.Unlock()
+				return nil
+			}
+
+			keyRef, keyCopy := m.arena.copyBytesRef(key)
+			if cb != nil {
+				if err := cb(keyCopy, nil); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
+			keyStored := bytesToStringNoCopy(keyCopy)
+			if m.collisions == nil {
+				m.collisions = make(map[string]hashEntry)
+			}
+			m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+			m.sizeBytes += int64(len(keyCopy))
+			chunk, seq = m.noteNewKeyLocked(keyStored)
+			m.mu.Unlock()
+			if seq != 0 {
+				m.indexer.enqueue(m, seq, chunk)
+			}
+			return nil
+		}
+	}
+
+	if ent, ok := m.items[keyHash]; ok {
 		keyBytes := m.arena.sliceRef(ent.keyRef)
+		if bytes.Equal(keyBytes, key) {
+			if cb != nil {
+				if err := cb(keyBytes, nil); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
+			if !ent.deleted {
+				m.sizeBytes -= int64(ent.valRef.len)
+				ent.valRef = arenaRef{}
+				ent.deleted = true
+			}
+			m.items[keyHash] = ent
+			m.mu.Unlock()
+			return nil
+		}
+
+		// Hash collision: move the existing key and the new key into the collision map.
+		delete(m.items, keyHash)
+		if m.collideHash == nil {
+			m.collideHash = make(map[uint64]struct{}, 8)
+		}
+		m.collideHash[keyHash] = struct{}{}
+		if m.collisions == nil {
+			m.collisions = make(map[string]hashEntry)
+		}
 		storedKey := bytesToStringNoCopy(keyBytes)
+		m.collisions[storedKey] = ent
+
+		keyRef, keyCopy := m.arena.copyBytesRef(key)
 		if cb != nil {
-			if err := cb(keyBytes, nil); err != nil {
+			if err := cb(keyCopy, nil); err != nil {
 				m.mu.Unlock()
 				return err
 			}
 		}
-		if !ent.deleted {
-			m.sizeBytes -= int64(ent.valRef.len)
-			ent.valRef = arenaRef{}
-			ent.deleted = true
-		}
-		m.items[storedKey] = ent
+		keyStored := bytesToStringNoCopy(keyCopy)
+		m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+		m.sizeBytes += int64(len(keyCopy))
+		chunk, seq = m.noteNewKeyLocked(keyStored)
 		m.mu.Unlock()
+		if seq != 0 {
+			m.indexer.enqueue(m, seq, chunk)
+		}
 		return nil
 	}
 
@@ -399,7 +575,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+	m.items[keyHash] = hashEntry{keyRef: keyRef, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -412,8 +588,28 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	ent, ok := m.items[bytesToStringNoCopy(key)]
+	keyHash := m.keyHashBytes(key)
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			ent, ok := m.collisions[bytesToStringNoCopy(key)]
+			if !ok {
+				return nil, false, false
+			}
+			return m.arena.sliceRef(ent.valRef), ent.deleted, true
+		}
+	}
+
+	ent, ok := m.items[keyHash]
 	if !ok {
+		return nil, false, false
+	}
+	if !bytes.Equal(m.arena.sliceRef(ent.keyRef), key) {
+		if m.collisions != nil {
+			ent, ok = m.collisions[bytesToStringNoCopy(key)]
+			if ok {
+				return m.arena.sliceRef(ent.valRef), ent.deleted, true
+			}
+		}
 		return nil, false, false
 	}
 	return m.arena.sliceRef(ent.valRef), ent.deleted, true
@@ -428,7 +624,7 @@ func (m *HashSorted) Size() int64 {
 func (m *HashSorted) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.items)
+	return m.keyCountLocked()
 }
 
 func (m *HashSorted) Freeze() {
@@ -518,12 +714,14 @@ func (m *HashSorted) ensureSortedLocked() {
 	if m.sortedValid {
 		return
 	}
-	if len(m.sortedKeys) != len(m.items) {
-		keys := make([]string, len(m.items))
-		i := 0
-		for k := range m.items {
-			keys[i] = k
-			i++
+	if len(m.sortedKeys) != m.keyCountLocked() {
+		keys := make([]string, 0, m.keyCountLocked())
+		for _, ent := range m.items {
+			keyBytes := m.arena.sliceRef(ent.keyRef)
+			keys = append(keys, bytesToStringNoCopy(keyBytes))
+		}
+		for k := range m.collisions {
+			keys = append(keys, k)
 		}
 		m.sortedKeys = keys
 	}
@@ -590,7 +788,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 		}
 		m.mu.RLock()
 		for i, k := range dst {
-			ent, ok := m.items[k]
+			ent, ok := m.entryByStringLocked(k)
 			if !ok {
 				continue
 			}
@@ -600,13 +798,17 @@ func (m *HashSorted) ensureIndexFrozen() {
 	}
 
 	m.mu.Lock()
-	if len(m.items) != total {
+	if m.keyCountLocked() != total {
 		m.mu.Unlock()
 
 		// Safety fallback: if indexing missed keys, rebuild directly from the map.
-		keys := make([]string, 0, len(m.items))
+		keys := make([]string, 0, m.keyCountLocked())
 		m.mu.RLock()
-		for k := range m.items {
+		for _, ent := range m.items {
+			keyBytes := m.arena.sliceRef(ent.keyRef)
+			keys = append(keys, bytesToStringNoCopy(keyBytes))
+		}
+		for k := range m.collisions {
 			keys = append(keys, k)
 		}
 		m.mu.RUnlock()
@@ -621,7 +823,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 			}
 			m.mu.RLock()
 			for i, k := range keys {
-				ent, ok := m.items[k]
+				ent, ok := m.entryByStringLocked(k)
 				if !ok {
 					continue
 				}
@@ -666,16 +868,19 @@ func (m *HashSorted) startFinalize() {
 
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
-	if len(m.items) > cap(m.sortedKeys) {
+	if len(m.sortedKeys)+1 > cap(m.sortedKeys) {
 		newCap := cap(m.sortedKeys)
 		if newCap < hashSortedSortedKeysInitCap {
 			newCap = hashSortedSortedKeysInitCap
 		}
-		for newCap < len(m.items) {
+		for newCap < len(m.sortedKeys)+1 {
 			newCap *= 2
 		}
-		m.sortedKeys = make([]string, 0, newCap)
+		expanded := make([]string, len(m.sortedKeys), newCap)
+		copy(expanded, m.sortedKeys)
+		m.sortedKeys = expanded
 	}
+	m.sortedKeys = append(m.sortedKeys, key)
 	if m.pendingKeys == nil {
 		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitCap)
 	}
@@ -701,22 +906,68 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 	if key == nil {
 		return nil, 0
 	}
-	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
-		keyBytes := m.arena.sliceRef(ent.keyRef)
-		storedKey := bytesToStringNoCopy(keyBytes)
-		oldLen := int(ent.valRef.len)
-		valRef, valCopy := m.arena.copyBytesRef(value)
-		ent.valRef = valRef
-		ent.deleted = false
-		m.sizeBytes += int64(len(valCopy) - oldLen)
-		m.items[storedKey] = ent
-		return nil, 0
+	keyHash := m.keyHashBytes(key)
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			keyLookup := bytesToStringNoCopy(key)
+			if ent, ok := m.collisions[keyLookup]; ok {
+				keyBytes := m.arena.sliceRef(ent.keyRef)
+				oldLen := int(ent.valRef.len)
+				valRef, valCopy := m.arena.copyBytesRef(value)
+				ent.valRef = valRef
+				ent.deleted = false
+				m.sizeBytes += int64(len(valCopy) - oldLen)
+				storedKey := bytesToStringNoCopy(keyBytes)
+				m.collisions[storedKey] = ent
+				return nil, 0
+			}
+			keyRef, keyCopy := m.arena.copyBytesRef(key)
+			valRef, valCopy := m.arena.copyBytesRef(value)
+			keyStored := bytesToStringNoCopy(keyCopy)
+			if m.collisions == nil {
+				m.collisions = make(map[string]hashEntry)
+			}
+			m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+			m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+			return m.noteNewKeyLocked(keyStored)
+		}
 	}
+
+	if ent, ok := m.items[keyHash]; ok {
+		keyBytes := m.arena.sliceRef(ent.keyRef)
+		if bytes.Equal(keyBytes, key) {
+			oldLen := int(ent.valRef.len)
+			valRef, valCopy := m.arena.copyBytesRef(value)
+			ent.valRef = valRef
+			ent.deleted = false
+			m.sizeBytes += int64(len(valCopy) - oldLen)
+			m.items[keyHash] = ent
+			return nil, 0
+		}
+
+		delete(m.items, keyHash)
+		if m.collideHash == nil {
+			m.collideHash = make(map[uint64]struct{}, 8)
+		}
+		m.collideHash[keyHash] = struct{}{}
+		if m.collisions == nil {
+			m.collisions = make(map[string]hashEntry)
+		}
+		storedKey := bytesToStringNoCopy(keyBytes)
+		m.collisions[storedKey] = ent
+
+		keyRef, keyCopy := m.arena.copyBytesRef(key)
+		valRef, valCopy := m.arena.copyBytesRef(value)
+		keyStored := bytesToStringNoCopy(keyCopy)
+		m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+		m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+		return m.noteNewKeyLocked(keyStored)
+	}
+
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
 	valRef, valCopy := m.arena.copyBytesRef(value)
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
+	m.items[keyHash] = hashEntry{keyRef: keyRef, valRef: valRef}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
 	return m.noteNewKeyLocked(keyStored)
 }
@@ -726,21 +977,66 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 		return nil, 0
 	}
 	m.hasDeletes = true
-	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
-		keyBytes := m.arena.sliceRef(ent.keyRef)
-		storedKey := bytesToStringNoCopy(keyBytes)
-		if !ent.deleted {
-			m.sizeBytes -= int64(ent.valRef.len)
-			ent.valRef = arenaRef{}
-			ent.deleted = true
+	keyHash := m.keyHashBytes(key)
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			keyLookup := bytesToStringNoCopy(key)
+			if ent, ok := m.collisions[keyLookup]; ok {
+				keyBytes := m.arena.sliceRef(ent.keyRef)
+				if !ent.deleted {
+					m.sizeBytes -= int64(ent.valRef.len)
+					ent.valRef = arenaRef{}
+					ent.deleted = true
+				}
+				storedKey := bytesToStringNoCopy(keyBytes)
+				m.collisions[storedKey] = ent
+				return nil, 0
+			}
+
+			keyRef, keyCopy := m.arena.copyBytesRef(key)
+			keyStored := bytesToStringNoCopy(keyCopy)
+			if m.collisions == nil {
+				m.collisions = make(map[string]hashEntry)
+			}
+			m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+			m.sizeBytes += int64(len(keyCopy))
+			return m.noteNewKeyLocked(keyStored)
 		}
-		m.items[storedKey] = ent
-		return nil, 0
 	}
+
+	if ent, ok := m.items[keyHash]; ok {
+		keyBytes := m.arena.sliceRef(ent.keyRef)
+		if bytes.Equal(keyBytes, key) {
+			if !ent.deleted {
+				m.sizeBytes -= int64(ent.valRef.len)
+				ent.valRef = arenaRef{}
+				ent.deleted = true
+			}
+			m.items[keyHash] = ent
+			return nil, 0
+		}
+
+		delete(m.items, keyHash)
+		if m.collideHash == nil {
+			m.collideHash = make(map[uint64]struct{}, 8)
+		}
+		m.collideHash[keyHash] = struct{}{}
+		if m.collisions == nil {
+			m.collisions = make(map[string]hashEntry)
+		}
+		storedKey := bytesToStringNoCopy(keyBytes)
+		m.collisions[storedKey] = ent
+
+		keyRef, keyCopy := m.arena.copyBytesRef(key)
+		keyStored := bytesToStringNoCopy(keyCopy)
+		m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+		m.sizeBytes += int64(len(keyCopy))
+		return m.noteNewKeyLocked(keyStored)
+	}
+
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
+	m.items[keyHash] = hashEntry{keyRef: keyRef, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
 	return m.noteNewKeyLocked(keyStored)
 }
@@ -1078,11 +1374,37 @@ func (it *hashIterator) ensureLoaded() {
 	if !it.valid || it.curKey == "" {
 		return
 	}
-	ent, ok := it.mt.items[it.curKey]
+	ent, ok := it.mt.entryByStringLocked(it.curKey)
 	if !ok {
 		it.valid = false
 		return
 	}
 	it.cur = ent
 	it.loaded = true
+}
+
+func (m *HashSorted) entryByStringLocked(key string) (hashEntry, bool) {
+	keyHash := m.keyHashString(key)
+	if m.collideHash != nil {
+		if _, ok := m.collideHash[keyHash]; ok {
+			ent, ok := m.collisions[key]
+			return ent, ok
+		}
+	}
+	ent, ok := m.items[keyHash]
+	if !ok {
+		if m.collisions != nil {
+			ent, ok = m.collisions[key]
+			return ent, ok
+		}
+		return hashEntry{}, false
+	}
+	if !bytes.Equal(m.arena.sliceRef(ent.keyRef), stringToBytesNoCopy(key)) {
+		if m.collisions != nil {
+			ent, ok = m.collisions[key]
+			return ent, ok
+		}
+		return hashEntry{}, false
+	}
+	return ent, true
 }
