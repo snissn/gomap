@@ -644,16 +644,24 @@ type DB struct {
 	memtableWarmupThreshold   int64
 	memtableAdaptiveCandidate memtable.Mode
 	memtableAdaptiveStreak    uint8
-	statsMu                   sync.Mutex
-	memtableStats             memtableStats
-	maxQueuedMemtables        int
-	slowdownBacklogSeconds    float64
-	stopBacklogSeconds        float64
-	maxBacklogBytes           int64
-	writerFlushMaxMemtables   int
-	writerFlushMaxDuration    time.Duration
-	flushBuildConcurrency     int
-	walMaxSegmentBytes        int64
+
+	memtableWrites     atomic.Uint64
+	memtableSeqWrites  atomic.Uint64
+	memtableIterators  atomic.Uint64
+	memtableRangeIters atomic.Uint64
+
+	memtableTrackSequential bool
+	memtableLastKeyMu       sync.Mutex
+	memtableLastKey         []byte
+	memtableHasLastKey      bool
+	maxQueuedMemtables      int
+	slowdownBacklogSeconds  float64
+	stopBacklogSeconds      float64
+	maxBacklogBytes         int64
+	writerFlushMaxMemtables int
+	writerFlushMaxDuration  time.Duration
+	flushBuildConcurrency   int
+	walMaxSegmentBytes      int64
 
 	disableWAL         bool
 	relaxedSync        bool
@@ -808,15 +816,6 @@ func (db *DB) publishMemtablesLocked() {
 	db.memtables.Store(view)
 }
 
-type memtableStats struct {
-	writes     uint64
-	seqWrites  uint64
-	iterators  uint64
-	rangeIters uint64
-	lastKey    []byte
-	hasLastKey bool
-}
-
 func (r *keyRange) add(key []byte) {
 	if key == nil {
 		return
@@ -957,31 +956,37 @@ func (db *DB) noteWriteKey(key []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
-	db.statsMu.Lock()
-	defer db.statsMu.Unlock()
-	stats := &db.memtableStats
-	stats.writes++
-	if len(key) == 0 {
-		stats.hasLastKey = false
+	db.memtableWrites.Add(1)
+	if !db.memtableTrackSequential {
 		return
 	}
-	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
-		stats.seqWrites++
+	if len(key) == 0 {
+		db.memtableLastKeyMu.Lock()
+		db.memtableHasLastKey = false
+		db.memtableLastKeyMu.Unlock()
+		return
 	}
-	stats.lastKey = append(stats.lastKey[:0], key...)
-	stats.hasLastKey = true
+	db.memtableLastKeyMu.Lock()
+	if db.memtableHasLastKey && bytes.Compare(db.memtableLastKey, key) < 0 {
+		db.memtableSeqWrites.Add(1)
+	}
+	if cap(db.memtableLastKey) < len(key) {
+		db.memtableLastKey = make([]byte, len(key))
+	} else {
+		db.memtableLastKey = db.memtableLastKey[:len(key)]
+	}
+	copy(db.memtableLastKey, key)
+	db.memtableHasLastKey = true
+	db.memtableLastKeyMu.Unlock()
 }
 
 func (db *DB) noteIterator(start, end []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
-	db.statsMu.Lock()
-	defer db.statsMu.Unlock()
-	stats := &db.memtableStats
-	stats.iterators++
+	db.memtableIterators.Add(1)
 	if start != nil || end != nil {
-		stats.rangeIters++
+		db.memtableRangeIters.Add(1)
 	}
 }
 
@@ -998,33 +1003,41 @@ func (db *DB) mutableFlushThreshold() int64 {
 }
 
 func (db *DB) resetMemtableStatsLocked() {
-	db.statsMu.Lock()
-	db.memtableStats = memtableStats{}
-	db.statsMu.Unlock()
+	db.memtableWrites.Store(0)
+	db.memtableSeqWrites.Store(0)
+	db.memtableIterators.Store(0)
+	db.memtableRangeIters.Store(0)
+	if db.memtableTrackSequential {
+		db.memtableLastKeyMu.Lock()
+		db.memtableHasLastKey = false
+		db.memtableLastKey = db.memtableLastKey[:0]
+		db.memtableLastKeyMu.Unlock()
+	}
 }
 
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
-	db.statsMu.Lock()
-	statsCopy := db.memtableStats
-	db.statsMu.Unlock()
-	stats := &statsCopy
-	if stats.writes < adaptiveMinWrites {
+	writes := db.memtableWrites.Load()
+	if writes < adaptiveMinWrites {
 		return db.memtableMode
 	}
-	denom := stats.writes
+	denom := writes
 	if denom > 1 {
 		denom--
 	}
-	seqRatio := float64(stats.seqWrites) / float64(denom)
-	sequential := seqRatio >= adaptiveSequentialWritePct
 
-	iterRatio := float64(stats.iterators) / float64(denom)
-	rangeRatio := float64(stats.rangeIters) / float64(denom)
+	sequential := false
+	if db.memtableTrackSequential {
+		seqRatio := float64(db.memtableSeqWrites.Load()) / float64(denom)
+		sequential = seqRatio >= adaptiveSequentialWritePct
+	}
 
-	if stats.rangeIters >= adaptiveMinRangeIterators && rangeRatio >= adaptiveRangeIterRatio {
+	iterRatio := float64(db.memtableIterators.Load()) / float64(denom)
+	rangeRatio := float64(db.memtableRangeIters.Load()) / float64(denom)
+
+	if db.memtableRangeIters.Load() >= adaptiveMinRangeIterators && rangeRatio >= adaptiveRangeIterRatio {
 		return memtable.ModeSkiplist
 	}
-	if stats.iterators >= adaptiveMinIterators && iterRatio >= adaptiveIterRatio {
+	if db.memtableIterators.Load() >= adaptiveMinIterators && iterRatio >= adaptiveIterRatio {
 		return memtable.ModeSkiplist
 	}
 	if sequential {
@@ -1178,6 +1191,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableWarmupActive:         adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:      warmupThreshold,
 		memtableAdaptiveCandidate:    mode,
+		memtableTrackSequential:      shardCount == 1,
 		maxQueuedMemtables:           opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:           opts.StopBacklogSeconds,
