@@ -5360,6 +5360,9 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 3. Memtable Update
 
+	trackSequential := b.db.memtableAdaptive && b.db.memtableTrackSequential
+	countWrites := b.db.memtableAdaptive && !b.db.memtableTrackSequential
+
 	for i := range shardEntries {
 		entries := shardEntries[i]
 		if len(entries) == 0 {
@@ -5375,7 +5378,9 @@ func (b *Batch) writeRegular(sync bool) error {
 			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
 				applier.ApplyStealSortedBatch(entries, func(key []byte) {
 					shard.rng.add(key)
-					b.db.noteWriteKey(key)
+					if trackSequential {
+						b.db.noteWriteKey(key)
+					}
 				})
 			} else {
 				for _, op := range entries {
@@ -5389,7 +5394,9 @@ func (b *Batch) writeRegular(sync bool) error {
 						}
 					}
 					shard.rng.add(op.Key)
-					b.db.noteWriteKey(op.Key)
+					if trackSequential {
+						b.db.noteWriteKey(op.Key)
+					}
 				}
 			}
 		} else {
@@ -5404,7 +5411,9 @@ func (b *Batch) writeRegular(sync bool) error {
 					}
 				}
 				shard.rng.add(op.Key)
-				b.db.noteWriteKey(op.Key)
+				if trackSequential {
+					b.db.noteWriteKey(op.Key)
+				}
 			}
 		}
 		if b.db.valueLogEnabled() && shard.largePtrs != nil {
@@ -5426,6 +5435,9 @@ func (b *Batch) writeRegular(sync bool) error {
 		shard.bytes = newBytes
 		b.db.mutableBytes.Add(delta)
 		shard.mu.Unlock()
+		if countWrites {
+			b.db.memtableWrites.Add(uint64(len(entries)))
+		}
 	}
 
 	// 3. Threshold Check
