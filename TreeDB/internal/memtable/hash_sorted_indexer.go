@@ -21,6 +21,7 @@ const (
 type hashSortedIndexWork struct {
 	mt   *HashSorted
 	seq  uint64
+	refs []arenaRef
 	keys []string
 }
 
@@ -43,16 +44,42 @@ func NewHashSortedIndexer() *HashSortedIndexer {
 func (x *HashSortedIndexer) loop() {
 	defer x.wg.Done()
 	for work := range x.ch {
-		if work.mt == nil || len(work.keys) == 0 {
+		if work.mt == nil || len(work.refs) == 0 {
 			continue
 		}
-		sort.Strings(work.keys)
-		work.mt.indexApplySortedChunk(work.seq, work.keys)
+		if len(work.keys) != len(work.refs) {
+			work.mt.mu.RLock()
+			keys := make([]string, len(work.refs))
+			for i, ref := range work.refs {
+				keys[i] = bytesToStringNoCopy(work.mt.arena.sliceRef(ref))
+			}
+			work.mt.mu.RUnlock()
+			work.keys = keys
+		}
+
+		sort.Sort(hashSortedRunSorter{keys: work.keys, refs: work.refs})
+		work.mt.indexApplySortedChunk(work.seq, work.refs)
 	}
 }
 
-func (x *HashSortedIndexer) enqueue(mt *HashSorted, seq uint64, keys []string) {
-	x.ch <- hashSortedIndexWork{mt: mt, seq: seq, keys: keys}
+type hashSortedRunSorter struct {
+	keys []string
+	refs []arenaRef
+}
+
+func (s hashSortedRunSorter) Len() int { return len(s.refs) }
+
+func (s hashSortedRunSorter) Less(i, j int) bool {
+	return s.keys[i] < s.keys[j]
+}
+
+func (s hashSortedRunSorter) Swap(i, j int) {
+	s.keys[i], s.keys[j] = s.keys[j], s.keys[i]
+	s.refs[i], s.refs[j] = s.refs[j], s.refs[i]
+}
+
+func (x *HashSortedIndexer) enqueue(mt *HashSorted, seq uint64, refs []arenaRef, keys []string) {
+	x.ch <- hashSortedIndexWork{mt: mt, seq: seq, refs: refs, keys: keys}
 }
 
 // Close stops the indexer after draining queued work.

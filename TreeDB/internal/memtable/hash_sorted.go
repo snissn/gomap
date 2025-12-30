@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"hash/maphash"
 	"sort"
-	"strings"
 	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -98,7 +97,7 @@ type HashSorted struct {
 	collideHash map[uint64]struct{}
 	seed        maphash.Seed
 	sizeBytes   int64
-	sortedKeys  []string
+	sortedKeys  []arenaRef
 	sortedDel   []bool
 	sortedValid bool
 	frozen      bool
@@ -106,13 +105,15 @@ type HashSorted struct {
 	arena       hashArena
 
 	// Incremental ordering:
-	// We record first-seen keys into pendingKeys and seal them into chunk slices.
-	// A global background worker sorts those chunks and stores them as sorted runs.
-	pendingKeys  []string
-	pendingBytes int
-	nextSeq      uint64
-	index        hashSortedIndex
-	indexer      *HashSortedIndexer
+	// We record first-seen keys into pendingRefs and seal them into chunks.
+	// A background worker sorts each chunk using the parallel pendingSortKeys slice
+	// so it does not need to touch the arena while writes are ongoing.
+	pendingRefs     []arenaRef
+	pendingSortKeys []string
+	pendingBytes    int
+	nextSeq         uint64
+	index           hashSortedIndex
+	indexer         *HashSortedIndexer
 
 	finalizeOnce sync.Once
 	finalizeDone chan struct{}
@@ -127,7 +128,7 @@ type hashSortedIndex struct {
 
 	// runs stores sorted key chunks indexed by sequence number (seq-1).
 	// When doneTo >= N, runs[0:N] are populated.
-	runs [][]string
+	runs [][]arenaRef
 }
 
 func NewHashSorted() *HashSorted {
@@ -154,7 +155,7 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 		indexer:     indexer,
 	}
 	if capHint := hashSortedEstimateSortedKeysCap(capacity, mapHint); capHint > 0 {
-		m.sortedKeys = make([]string, 0, capHint)
+		m.sortedKeys = make([]arenaRef, 0, capHint)
 	}
 	if arenaCap := hashSortedEstimateArenaFirstChunk(capacity); arenaCap > 0 {
 		m.arena.nextCap = arenaCap
@@ -271,7 +272,8 @@ func (m *HashSorted) Reset() {
 	m.sortedValid = true
 	m.frozen = false
 	m.hasDeletes = false
-	m.pendingKeys = nil
+	m.pendingRefs = nil
+	m.pendingSortKeys = nil
 	m.pendingBytes = 0
 	m.nextSeq = 0
 	m.index.reset()
@@ -287,12 +289,12 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Lock()
 	for _, op := range entries {
 		if op.Type == batchpkg.OpDelete {
-			if chunk, seq := m.deleteStealLocked(op.Key); seq != 0 {
-				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			if refs, keys, seq := m.deleteStealLocked(op.Key); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		} else {
-			if chunk, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
-				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			if refs, keys, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		}
 		if onKey != nil {
@@ -302,12 +304,12 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Unlock()
 
 	for _, c := range chunks {
-		c.mt.indexer.enqueue(c.mt, c.seq, c.keys)
+		c.mt.indexer.enqueue(c.mt, c.seq, c.refs, c.keys)
 	}
 }
 
-func (m *HashSorted) indexApplySortedChunk(seq uint64, keys []string) {
-	m.index.apply(seq, keys)
+func (m *HashSorted) indexApplySortedChunk(seq uint64, refs []arenaRef) {
+	m.index.apply(seq, refs)
 }
 
 func (m *HashSorted) Set(key, value []byte) {
@@ -316,10 +318,10 @@ func (m *HashSorted) Set(key, value []byte) {
 
 func (m *HashSorted) SetSteal(key, value []byte) {
 	m.mu.Lock()
-	chunk, seq := m.setStealLocked(key, value)
+	refs, keys, seq := m.setStealLocked(key, value)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, refs, keys)
 	}
 }
 
@@ -328,7 +330,8 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		return nil
 	}
 
-	var chunk []string
+	var refs []arenaRef
+	var keys []string
 	var seq uint64
 
 	m.mu.Lock()
@@ -370,10 +373,10 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 			m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-			chunk, seq = m.noteNewKeyLocked(keyStored)
+			refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 			m.mu.Unlock()
 			if seq != 0 {
-				m.indexer.enqueue(m, seq, chunk)
+				m.indexer.enqueue(m, seq, refs, keys)
 			}
 			return nil
 		}
@@ -421,10 +424,10 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 		m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-		chunk, seq = m.noteNewKeyLocked(keyStored)
+		refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 		m.mu.Unlock()
 		if seq != 0 {
-			m.indexer.enqueue(m, seq, chunk)
+			m.indexer.enqueue(m, seq, refs, keys)
 		}
 		return nil
 	}
@@ -440,11 +443,11 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, valRef: valRef}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-	chunk, seq = m.noteNewKeyLocked(keyStored)
+	refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 	m.mu.Unlock()
 
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, refs, keys)
 	}
 	return nil
 }
@@ -455,10 +458,10 @@ func (m *HashSorted) Delete(key []byte) {
 
 func (m *HashSorted) DeleteSteal(key []byte) {
 	m.mu.Lock()
-	chunk, seq := m.deleteStealLocked(key)
+	refs, keys, seq := m.deleteStealLocked(key)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, refs, keys)
 	}
 }
 
@@ -466,7 +469,8 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	if key == nil {
 		return nil
 	}
-	var chunk []string
+	var refs []arenaRef
+	var keys []string
 	var seq uint64
 
 	m.mu.Lock()
@@ -509,10 +513,10 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 			m.sizeBytes += int64(len(keyCopy))
-			chunk, seq = m.noteNewKeyLocked(keyStored)
+			refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 			m.mu.Unlock()
 			if seq != 0 {
-				m.indexer.enqueue(m, seq, chunk)
+				m.indexer.enqueue(m, seq, refs, keys)
 			}
 			return nil
 		}
@@ -559,10 +563,10 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 		m.sizeBytes += int64(len(keyCopy))
-		chunk, seq = m.noteNewKeyLocked(keyStored)
+		refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 		m.mu.Unlock()
 		if seq != 0 {
-			m.indexer.enqueue(m, seq, chunk)
+			m.indexer.enqueue(m, seq, refs, keys)
 		}
 		return nil
 	}
@@ -577,10 +581,10 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
-	chunk, seq = m.noteNewKeyLocked(keyStored)
+	refs, keys, seq = m.noteNewKeyLocked(keyRef, keyStored)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, refs, keys)
 	}
 	return nil
 }
@@ -651,21 +655,14 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		}
 		m.ensureIndexFrozen()
 
-		endKey := ""
-		hasEnd := false
-		if end != nil {
-			endKey = bytesToStringNoCopy(end)
-			hasEnd = true
-		}
-
 		m.mu.RLock()
 		keys := m.sortedKeys
 		it := hashIteratorPool.Get().(*hashIterator)
 		*it = hashIterator{
 			mt:     m,
 			keys:   keys,
-			end:    endKey,
-			hasEnd: hasEnd,
+			end:    end,
+			hasEnd: end != nil,
 			mu:     &m.mu,
 		}
 		it.Seek(start)
@@ -678,35 +675,17 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		m.mu.Unlock()
 	}
 
-	startKey := ""
-	if start != nil {
-		startKey = bytesToStringNoCopy(start)
-	}
-	endKey := ""
-	hasEnd := false
-	if end != nil {
-		endKey = bytesToStringNoCopy(end)
-		hasEnd = true
-	}
-
 	m.mu.RLock()
 	keys := m.sortedKeys
-
-	idx := 0
-	if startKey != "" {
-		idx = sort.SearchStrings(keys, startKey)
-	}
-
 	it := hashIteratorPool.Get().(*hashIterator)
 	*it = hashIterator{
 		mt:     m,
 		keys:   keys,
-		idx:    idx,
-		end:    endKey,
-		hasEnd: hasEnd,
+		end:    end,
+		hasEnd: end != nil,
 		mu:     &m.mu,
 	}
-	it.refresh()
+	it.Seek(start)
 	return it
 }
 
@@ -714,38 +693,47 @@ func (m *HashSorted) ensureSortedLocked() {
 	if m.sortedValid {
 		return
 	}
-	if len(m.sortedKeys) != m.keyCountLocked() {
-		keys := make([]string, 0, m.keyCountLocked())
-		for _, ent := range m.items {
-			keyBytes := m.arena.sliceRef(ent.keyRef)
-			keys = append(keys, bytesToStringNoCopy(keyBytes))
-		}
-		for k := range m.collisions {
-			keys = append(keys, k)
-		}
-		m.sortedKeys = keys
+	count := m.keyCountLocked()
+	if cap(m.sortedKeys) < count {
+		m.sortedKeys = make([]arenaRef, 0, count)
+	} else {
+		m.sortedKeys = m.sortedKeys[:0]
 	}
-	sort.Strings(m.sortedKeys)
+	for _, ent := range m.items {
+		m.sortedKeys = append(m.sortedKeys, ent.keyRef)
+	}
+	if m.collisions != nil {
+		for _, ent := range m.collisions {
+			m.sortedKeys = append(m.sortedKeys, ent.keyRef)
+		}
+	}
+	sort.Slice(m.sortedKeys, func(i, j int) bool {
+		return bytes.Compare(m.arena.sliceRef(m.sortedKeys[i]), m.arena.sliceRef(m.sortedKeys[j])) < 0
+	})
 	m.sortedValid = true
 }
 
 func (m *HashSorted) ensureIndexFrozen() {
 	m.mu.RLock()
-	if m.sortedValid {
+	sortedValid := m.sortedValid
+	hasPending := len(m.pendingRefs) > 0
+	if sortedValid && !hasPending {
 		m.mu.RUnlock()
 		return
 	}
 	m.mu.RUnlock()
 
 	m.mu.Lock()
-	if m.sortedValid {
+	if m.sortedValid && len(m.pendingRefs) == 0 {
 		m.mu.Unlock()
 		return
 	}
 	target := m.nextSeq
-	pending := m.pendingKeys
+	pendingRefs := m.pendingRefs
+	pendingKeys := m.pendingSortKeys
 	dst := m.sortedKeys
-	m.pendingKeys = nil
+	m.pendingRefs = nil
+	m.pendingSortKeys = nil
 	m.pendingBytes = 0
 	m.mu.Unlock()
 
@@ -753,10 +741,20 @@ func (m *HashSorted) ensureIndexFrozen() {
 
 	// Seal any remaining keys locally as a final chunk after prior chunks have
 	// completed to preserve the seq->run mapping.
-	if len(pending) > 0 {
-		sort.Strings(pending)
+	if len(pendingRefs) > 0 {
+		if len(pendingKeys) == len(pendingRefs) {
+			sort.Sort(hashSortedRunSorter{keys: pendingKeys, refs: pendingRefs})
+		} else {
+			m.mu.RLock()
+			keys := make([]string, len(pendingRefs))
+			for i, ref := range pendingRefs {
+				keys[i] = bytesToStringNoCopy(m.arena.sliceRef(ref))
+			}
+			m.mu.RUnlock()
+			sort.Sort(hashSortedRunSorter{keys: keys, refs: pendingRefs})
+		}
 		finalSeq := target + 1
-		m.index.apply(finalSeq, pending)
+		m.index.apply(finalSeq, pendingRefs)
 		target = finalSeq
 		m.mu.Lock()
 		if m.nextSeq < target {
@@ -765,8 +763,10 @@ func (m *HashSorted) ensureIndexFrozen() {
 		m.mu.Unlock()
 	}
 
+	m.mu.RLock()
 	runs, total := m.index.snapshotRuns(target)
 	if total == 0 {
+		m.mu.RUnlock()
 		m.mu.Lock()
 		m.sortedKeys = m.sortedKeys[:0]
 		m.sortedDel = m.sortedDel[:0]
@@ -776,7 +776,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 		return
 	}
 
-	dst = mergeSortedStringRunsInto(dst, runs, total)
+	dst = mergeSortedRefRunsInto(m, dst, runs, total)
 
 	var del []bool
 	if m.hasDeletes {
@@ -786,33 +786,32 @@ func (m *HashSorted) ensureIndexFrozen() {
 		} else {
 			del = make([]bool, len(dst))
 		}
-		m.mu.RLock()
-		for i, k := range dst {
-			ent, ok := m.entryByStringLocked(k)
+		for i, ref := range dst {
+			ent, ok := m.entryByRefLocked(ref)
 			if !ok {
 				continue
 			}
 			del[i] = ent.deleted
 		}
-		m.mu.RUnlock()
 	}
+	m.mu.RUnlock()
 
 	m.mu.Lock()
 	if m.keyCountLocked() != total {
 		m.mu.Unlock()
 
 		// Safety fallback: if indexing missed keys, rebuild directly from the map.
-		keys := make([]string, 0, m.keyCountLocked())
+		keys := make([]arenaRef, 0, m.keyCountLocked())
 		m.mu.RLock()
 		for _, ent := range m.items {
-			keyBytes := m.arena.sliceRef(ent.keyRef)
-			keys = append(keys, bytesToStringNoCopy(keyBytes))
+			keys = append(keys, ent.keyRef)
 		}
-		for k := range m.collisions {
-			keys = append(keys, k)
+		for _, ent := range m.collisions {
+			keys = append(keys, ent.keyRef)
 		}
-		m.mu.RUnlock()
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			return bytes.Compare(m.arena.sliceRef(keys[i]), m.arena.sliceRef(keys[j])) < 0
+		})
 
 		if m.hasDeletes {
 			if cap(del) < len(keys) {
@@ -821,22 +820,24 @@ func (m *HashSorted) ensureIndexFrozen() {
 				del = del[:len(keys)]
 				clear(del)
 			}
-			m.mu.RLock()
 			for i, k := range keys {
-				ent, ok := m.entryByStringLocked(k)
-				if !ok {
-					continue
+				ent, ok := m.entryByRefLocked(k)
+				if ok {
+					del[i] = ent.deleted
 				}
-				del[i] = ent.deleted
 			}
-			m.mu.RUnlock()
 		} else {
 			del = del[:0]
 		}
+		m.mu.RUnlock()
 
 		m.mu.Lock()
 		m.sortedKeys = keys
-		m.sortedDel = del
+		if m.hasDeletes {
+			m.sortedDel = del
+		} else {
+			m.sortedDel = m.sortedDel[:0]
+		}
 		m.sortedValid = true
 		m.mu.Unlock()
 		m.index.dropRuns()
@@ -866,45 +867,40 @@ func (m *HashSorted) startFinalize() {
 	})
 }
 
-func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
+func (m *HashSorted) noteNewKeyLocked(ref arenaRef, sortKey string) (chunkRefs []arenaRef, chunkKeys []string, seq uint64) {
 	m.sortedValid = false
-	if len(m.sortedKeys)+1 > cap(m.sortedKeys) {
-		newCap := cap(m.sortedKeys)
-		if newCap < hashSortedSortedKeysInitCap {
-			newCap = hashSortedSortedKeysInitCap
-		}
-		for newCap < len(m.sortedKeys)+1 {
-			newCap *= 2
-		}
-		expanded := make([]string, len(m.sortedKeys), newCap)
-		copy(expanded, m.sortedKeys)
-		m.sortedKeys = expanded
+	if m.pendingRefs == nil {
+		m.pendingRefs = make([]arenaRef, 0, hashSortedPendingKeysInitCap)
+		m.pendingSortKeys = make([]string, 0, hashSortedPendingKeysInitCap)
 	}
-	m.sortedKeys = append(m.sortedKeys, key)
-	if m.pendingKeys == nil {
-		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitCap)
+	m.pendingRefs = append(m.pendingRefs, ref)
+	m.pendingSortKeys = append(m.pendingSortKeys, sortKey)
+	if len(m.pendingRefs) == hashSortedPendingKeysUpgradeThreshold && cap(m.pendingRefs) < hashSortedSealKeysThreshold {
+		refsExpanded := make([]arenaRef, len(m.pendingRefs), hashSortedSealKeysThreshold)
+		copy(refsExpanded, m.pendingRefs)
+		m.pendingRefs = refsExpanded
+
+		keysExpanded := make([]string, len(m.pendingSortKeys), hashSortedSealKeysThreshold)
+		copy(keysExpanded, m.pendingSortKeys)
+		m.pendingSortKeys = keysExpanded
 	}
-	m.pendingKeys = append(m.pendingKeys, key)
-	if len(m.pendingKeys) == hashSortedPendingKeysUpgradeThreshold && cap(m.pendingKeys) < hashSortedSealKeysThreshold {
-		expanded := make([]string, len(m.pendingKeys), hashSortedSealKeysThreshold)
-		copy(expanded, m.pendingKeys)
-		m.pendingKeys = expanded
-	}
-	m.pendingBytes += len(key)
-	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
-		return nil, 0
+	m.pendingBytes += len(sortKey)
+	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingRefs) < hashSortedSealKeysThreshold {
+		return nil, nil, 0
 	}
 
-	chunk = m.pendingKeys
-	m.pendingKeys = nil
+	chunkRefs = m.pendingRefs
+	chunkKeys = m.pendingSortKeys
+	m.pendingRefs = nil
+	m.pendingSortKeys = nil
 	m.pendingBytes = 0
 	m.nextSeq++
-	return chunk, m.nextSeq
+	return chunkRefs, chunkKeys, m.nextSeq
 }
 
-func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
+func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, uint64) {
 	if key == nil {
-		return nil, 0
+		return nil, nil, 0
 	}
 	keyHash := m.keyHashBytes(key)
 	if m.collideHash != nil {
@@ -919,7 +915,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 				m.sizeBytes += int64(len(valCopy) - oldLen)
 				storedKey := bytesToStringNoCopy(keyBytes)
 				m.collisions[storedKey] = ent
-				return nil, 0
+				return nil, nil, 0
 			}
 			keyRef, keyCopy := m.arena.copyBytesRef(key)
 			valRef, valCopy := m.arena.copyBytesRef(value)
@@ -929,7 +925,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 			m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-			return m.noteNewKeyLocked(keyStored)
+			return m.noteNewKeyLocked(keyRef, keyStored)
 		}
 	}
 
@@ -942,7 +938,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 			ent.deleted = false
 			m.sizeBytes += int64(len(valCopy) - oldLen)
 			m.items[keyHash] = ent
-			return nil, 0
+			return nil, nil, 0
 		}
 
 		delete(m.items, keyHash)
@@ -961,7 +957,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 		m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-		return m.noteNewKeyLocked(keyStored)
+		return m.noteNewKeyLocked(keyRef, keyStored)
 	}
 
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
@@ -969,12 +965,12 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, valRef: valRef}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-	return m.noteNewKeyLocked(keyStored)
+	return m.noteNewKeyLocked(keyRef, keyStored)
 }
 
-func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
+func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64) {
 	if key == nil {
-		return nil, 0
+		return nil, nil, 0
 	}
 	m.hasDeletes = true
 	keyHash := m.keyHashBytes(key)
@@ -990,7 +986,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 				}
 				storedKey := bytesToStringNoCopy(keyBytes)
 				m.collisions[storedKey] = ent
-				return nil, 0
+				return nil, nil, 0
 			}
 
 			keyRef, keyCopy := m.arena.copyBytesRef(key)
@@ -1000,7 +996,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 			m.sizeBytes += int64(len(keyCopy))
-			return m.noteNewKeyLocked(keyStored)
+			return m.noteNewKeyLocked(keyRef, keyStored)
 		}
 	}
 
@@ -1013,7 +1009,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 				ent.deleted = true
 			}
 			m.items[keyHash] = ent
-			return nil, 0
+			return nil, nil, 0
 		}
 
 		delete(m.items, keyHash)
@@ -1031,14 +1027,14 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 		m.sizeBytes += int64(len(keyCopy))
-		return m.noteNewKeyLocked(keyStored)
+		return m.noteNewKeyLocked(keyRef, keyStored)
 	}
 
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
-	return m.noteNewKeyLocked(keyStored)
+	return m.noteNewKeyLocked(keyRef, keyStored)
 }
 
 func (idx *hashSortedIndex) reset() {
@@ -1064,17 +1060,17 @@ func (idx *hashSortedIndex) wait(target uint64) {
 	idx.mu.Unlock()
 }
 
-func (idx *hashSortedIndex) apply(seq uint64, keys []string) {
-	if len(keys) == 0 || seq == 0 {
+func (idx *hashSortedIndex) apply(seq uint64, refs []arenaRef) {
+	if len(refs) == 0 || seq == 0 {
 		return
 	}
 	idx.mu.Lock()
 	if int(seq) > len(idx.runs) {
-		newRuns := make([][]string, seq)
+		newRuns := make([][]arenaRef, seq)
 		copy(newRuns, idx.runs)
 		idx.runs = newRuns
 	}
-	idx.runs[seq-1] = keys
+	idx.runs[seq-1] = refs
 	idx.markDoneLocked(seq)
 	if idx.waiters > 0 {
 		idx.cond.Broadcast()
@@ -1104,7 +1100,7 @@ func (idx *hashSortedIndex) markDoneLocked(seq uint64) {
 	idx.done[seq] = struct{}{}
 }
 
-func (idx *hashSortedIndex) snapshotRuns(target uint64) (runs [][]string, total int) {
+func (idx *hashSortedIndex) snapshotRuns(target uint64) (runs [][]arenaRef, total int) {
 	if target == 0 {
 		return nil, 0
 	}
@@ -1113,7 +1109,7 @@ func (idx *hashSortedIndex) snapshotRuns(target uint64) (runs [][]string, total 
 	if int(target) > len(idx.runs) {
 		target = uint64(len(idx.runs))
 	}
-	runs = make([][]string, 0, target)
+	runs = make([][]arenaRef, 0, target)
 	for i := uint64(0); i < target; i++ {
 		run := idx.runs[i]
 		if len(run) == 0 {
@@ -1133,17 +1129,17 @@ func (idx *hashSortedIndex) dropRuns() {
 }
 
 type hashRunMergeItem struct {
-	key string
+	ref arenaRef
 	run int
 	pos int
 }
 
-func heapPushMerge(h []hashRunMergeItem, item hashRunMergeItem) []hashRunMergeItem {
+func heapPushMerge(mt *HashSorted, h []hashRunMergeItem, item hashRunMergeItem) []hashRunMergeItem {
 	h = append(h, item)
 	i := len(h) - 1
 	for i > 0 {
 		p := (i - 1) / 2
-		if h[p].key <= h[i].key {
+		if bytes.Compare(mt.arena.sliceRef(h[p].ref), mt.arena.sliceRef(h[i].ref)) <= 0 {
 			break
 		}
 		h[p], h[i] = h[i], h[p]
@@ -1152,7 +1148,7 @@ func heapPushMerge(h []hashRunMergeItem, item hashRunMergeItem) []hashRunMergeIt
 	return h
 }
 
-func heapPopMerge(h []hashRunMergeItem) (hashRunMergeItem, []hashRunMergeItem) {
+func heapPopMerge(mt *HashSorted, h []hashRunMergeItem) (hashRunMergeItem, []hashRunMergeItem) {
 	n := len(h)
 	out := h[0]
 	last := h[n-1]
@@ -1169,10 +1165,10 @@ func heapPopMerge(h []hashRunMergeItem) (hashRunMergeItem, []hashRunMergeItem) {
 			break
 		}
 		small := l
-		if r < len(h) && h[r].key < h[l].key {
+		if r < len(h) && bytes.Compare(mt.arena.sliceRef(h[r].ref), mt.arena.sliceRef(h[l].ref)) < 0 {
 			small = r
 		}
-		if h[i].key <= h[small].key {
+		if bytes.Compare(mt.arena.sliceRef(h[i].ref), mt.arena.sliceRef(h[small].ref)) <= 0 {
 			break
 		}
 		h[i], h[small] = h[small], h[i]
@@ -1181,13 +1177,13 @@ func heapPopMerge(h []hashRunMergeItem) (hashRunMergeItem, []hashRunMergeItem) {
 	return out, h
 }
 
-func mergeSortedStringRunsInto(dst []string, runs [][]string, total int) []string {
+func mergeSortedRefRunsInto(mt *HashSorted, dst []arenaRef, runs [][]arenaRef, total int) []arenaRef {
 	if total <= 0 {
 		return dst[:0]
 	}
 
 	if cap(dst) < total {
-		dst = make([]string, total)
+		dst = make([]arenaRef, total)
 	} else {
 		dst = dst[:total]
 	}
@@ -1202,20 +1198,20 @@ func mergeSortedStringRunsInto(dst []string, runs [][]string, total int) []strin
 		if len(run) == 0 {
 			continue
 		}
-		h = heapPushMerge(h, hashRunMergeItem{key: run[0], run: runIdx, pos: 0})
+		h = heapPushMerge(mt, h, hashRunMergeItem{ref: run[0], run: runIdx, pos: 0})
 	}
 
 	out := 0
 	for len(h) > 0 {
 		var item hashRunMergeItem
-		item, h = heapPopMerge(h)
-		dst[out] = item.key
+		item, h = heapPopMerge(mt, h)
+		dst[out] = item.ref
 		out++
 
 		run := runs[item.run]
 		nextPos := item.pos + 1
 		if nextPos < len(run) {
-			h = heapPushMerge(h, hashRunMergeItem{key: run[nextPos], run: item.run, pos: nextPos})
+			h = heapPushMerge(mt, h, hashRunMergeItem{ref: run[nextPos], run: item.run, pos: nextPos})
 		}
 	}
 
@@ -1224,11 +1220,11 @@ func mergeSortedStringRunsInto(dst []string, runs [][]string, total int) []strin
 
 type hashIterator struct {
 	mt     *HashSorted
-	keys   []string
+	keys   []arenaRef
 	idx    int
-	end    string
+	end    []byte
 	hasEnd bool
-	curKey string
+	curRef arenaRef
 	cur    hashEntry
 	loaded bool
 	valid  bool
@@ -1247,8 +1243,14 @@ func (it *hashIterator) Seek(key []byte) {
 		it.loaded = false
 		return
 	}
-	seekKey := bytesToStringNoCopy(key)
-	it.idx = sort.SearchStrings(it.keys, seekKey)
+	if key == nil {
+		it.idx = 0
+		it.refresh()
+		return
+	}
+	it.idx = sort.Search(len(it.keys), func(i int) bool {
+		return bytes.Compare(it.mt.arena.sliceRef(it.keys[i]), key) >= 0
+	})
 	it.refresh()
 }
 
@@ -1268,10 +1270,7 @@ func (it *hashIterator) UnsafeKey() []byte {
 	if !it.valid {
 		return nil
 	}
-	if it.loaded {
-		return it.mt.arena.sliceRef(it.cur.keyRef)
-	}
-	return stringToBytesNoCopy(it.curKey)
+	return it.mt.arena.sliceRef(it.curRef)
 }
 
 func (it *hashIterator) UnsafeValue() []byte {
@@ -1350,20 +1349,21 @@ func (it *hashIterator) Domain() (start, end []byte) {
 	if !it.hasEnd {
 		return nil, nil
 	}
-	return nil, []byte(it.end)
+	return nil, it.end
 }
 
 func (it *hashIterator) refresh() {
 	it.valid = false
 	it.loaded = false
-	it.curKey = ""
+	it.curRef = arenaRef{}
 	if it.idx < 0 || it.idx >= len(it.keys) {
 		return
 	}
-	if it.hasEnd && strings.Compare(it.keys[it.idx], it.end) >= 0 {
+	it.curRef = it.keys[it.idx]
+	if it.hasEnd && bytes.Compare(it.mt.arena.sliceRef(it.curRef), it.end) >= 0 {
+		it.curRef = arenaRef{}
 		return
 	}
-	it.curKey = it.keys[it.idx]
 	it.valid = true
 }
 
@@ -1371,10 +1371,10 @@ func (it *hashIterator) ensureLoaded() {
 	if it.loaded {
 		return
 	}
-	if !it.valid || it.curKey == "" {
+	if !it.valid {
 		return
 	}
-	ent, ok := it.mt.entryByStringLocked(it.curKey)
+	ent, ok := it.mt.entryByRefLocked(it.curRef)
 	if !ok {
 		it.valid = false
 		return
@@ -1383,28 +1383,25 @@ func (it *hashIterator) ensureLoaded() {
 	it.loaded = true
 }
 
-func (m *HashSorted) entryByStringLocked(key string) (hashEntry, bool) {
-	keyHash := m.keyHashString(key)
+func (m *HashSorted) entryByRefLocked(ref arenaRef) (hashEntry, bool) {
+	keyBytes := m.arena.sliceRef(ref)
+	keyHash := m.keyHashBytes(keyBytes)
 	if m.collideHash != nil {
 		if _, ok := m.collideHash[keyHash]; ok {
-			ent, ok := m.collisions[key]
+			if m.collisions == nil {
+				return hashEntry{}, false
+			}
+			ent, ok := m.collisions[bytesToStringNoCopy(keyBytes)]
 			return ent, ok
 		}
 	}
 	ent, ok := m.items[keyHash]
-	if !ok {
-		if m.collisions != nil {
-			ent, ok = m.collisions[key]
-			return ent, ok
-		}
+	if ok {
+		return ent, true
+	}
+	if m.collisions == nil {
 		return hashEntry{}, false
 	}
-	if !bytes.Equal(m.arena.sliceRef(ent.keyRef), stringToBytesNoCopy(key)) {
-		if m.collisions != nil {
-			ent, ok = m.collisions[key]
-			return ent, ok
-		}
-		return hashEntry{}, false
-	}
-	return ent, true
+	ent, ok = m.collisions[bytesToStringNoCopy(keyBytes)]
+	return ent, ok
 }
