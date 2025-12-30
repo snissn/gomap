@@ -4799,7 +4799,7 @@ type Batch struct {
 	batchRange     keyRange
 }
 
-const maxBatchCopyBuf = 8 << 20
+const maxBatchCopyBuf = 64 << 20
 
 func (db *DB) NewBatch() *Batch {
 	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
