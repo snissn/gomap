@@ -512,6 +512,8 @@ type Options struct {
 	// MemtableMode selects the in-memory write buffer implementation.
 	// Supported: "skiplist", "hash_sorted", "btree", "adaptive".
 	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
+	// "adaptive" defaults to seeding "hash_sorted" and may switch to "skiplist"
+	// if iterator or sequential-write patterns dominate.
 	MemtableMode string
 
 	// MemtableShards controls the number of mutable memtable shards. Values <= 0
@@ -1069,7 +1071,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	adaptive := false
 	if modeStr == "adaptive" || modeStr == "auto" {
 		adaptive = true
-		modeStr = ""
+		modeStr = "hash_sorted"
 	} else if strings.HasPrefix(modeStr, "adaptive:") {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
