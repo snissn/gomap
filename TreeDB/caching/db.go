@@ -4679,7 +4679,7 @@ func (it *concatUnsafeIterator) advance() {
 
 func (it *concatUnsafeIterator) Next() {
 	if !it.valid {
-		panic("iterator invalid")
+		return
 	}
 	it.cur.Next()
 	it.advance()
@@ -5700,7 +5700,7 @@ func (it *singleSourceIterator) advance() {
 
 func (it *singleSourceIterator) Next() {
 	if !it.valid {
-		panic("iterator invalid")
+		return
 	}
 	it.iter.Next()
 	it.advance()
@@ -5722,7 +5722,7 @@ type emptyIterator struct {
 	start, end []byte
 }
 
-func (it *emptyIterator) Next()                     { panic("iterator invalid") }
+func (it *emptyIterator) Next()                     {}
 func (it *emptyIterator) Valid() bool               { return false }
 func (it *emptyIterator) Key() []byte               { panic("iterator invalid") }
 func (it *emptyIterator) Value() []byte             { panic("iterator invalid") }

@@ -151,7 +151,7 @@ func NewMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
 
 func (mi *MergingIterator) Next() {
 	if !mi.valid {
-		panic("merging iterator invalid")
+		return
 	}
 
 	if mi.hasCur {

@@ -361,7 +361,7 @@ func (it *Iterator) stepBackward() {
 
 func (it *Iterator) Next() {
 	if !it.valid {
-		panic("iterator invalid")
+		return
 	}
 	if len(it.stack) > 0 {
 		if it.reverse {
