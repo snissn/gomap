@@ -310,17 +310,49 @@ func (s *SkipList) bytesAt(ptr uint32, len int) []byte {
 	return s.chunks[idx][off : off+uint32(len)]
 }
 
+func (s *SkipList) u16At(ptr uint32) uint16 {
+	idx := int(ptr >> chunkShift)
+	off := int(ptr & chunkMask)
+	b := s.chunks[idx]
+	return uint16(b[off]) | uint16(b[off+1])<<8
+}
+
+func (s *SkipList) putU16(ptr uint32, v uint16) {
+	idx := int(ptr >> chunkShift)
+	off := int(ptr & chunkMask)
+	b := s.chunks[idx]
+	b[off] = byte(v)
+	b[off+1] = byte(v >> 8)
+}
+
+func (s *SkipList) u32At(ptr uint32) uint32 {
+	idx := int(ptr >> chunkShift)
+	off := int(ptr & chunkMask)
+	b := s.chunks[idx]
+	return uint32(b[off]) | uint32(b[off+1])<<8 | uint32(b[off+2])<<16 | uint32(b[off+3])<<24
+}
+
+func (s *SkipList) putU32(ptr uint32, v uint32) {
+	idx := int(ptr >> chunkShift)
+	off := int(ptr & chunkMask)
+	b := s.chunks[idx]
+	b[off] = byte(v)
+	b[off+1] = byte(v >> 8)
+	b[off+2] = byte(v >> 16)
+	b[off+3] = byte(v >> 24)
+}
+
 func (s *SkipList) getKey(node uint32) []byte {
 	h := int(s.valAt(node, nodeHeightOff))
-	kLen := int(binary.LittleEndian.Uint16(s.bytesAt(node+nodeKeyLenOff, 2)))
+	kLen := int(s.u16At(node + uint32(nodeKeyLenOff)))
 	offset := node + uint32(nodeHeaderBase) + uint32(4*h)
 	return s.bytesAt(offset, kLen)
 }
 
 func (s *SkipList) getValue(node uint32) []byte {
 	h := int(s.valAt(node, nodeHeightOff))
-	kLen := int(binary.LittleEndian.Uint16(s.bytesAt(node+nodeKeyLenOff, 2)))
-	vLen := int(binary.LittleEndian.Uint32(s.bytesAt(node+nodeValLenOff, 4)))
+	kLen := int(s.u16At(node + uint32(nodeKeyLenOff)))
+	vLen := int(s.u32At(node + uint32(nodeValLenOff)))
 	offset := node + uint32(nodeHeaderBase) + uint32(4*h) + uint32(kLen)
 	return s.bytesAt(offset, vLen)
 }
