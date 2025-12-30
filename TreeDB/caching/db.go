@@ -4912,8 +4912,9 @@ func (b *Batch) Set(key, value []byte) error {
 	return nil
 }
 
-// SetView records a Put without copying key/value bytes. Callers must treat
-// key/value as immutable until the batch is written or closed.
+// SetView records a Put without copying key/value bytes when writing directly
+// to the backend. For the in-memory path it copies into batch-owned memory, since
+// memtables may retain the slices.
 func (b *Batch) SetView(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -4934,23 +4935,28 @@ func (b *Batch) SetView(key, value []byte) error {
 		return b.backend.Set(key, value)
 	}
 
+	// Memtables may store key/value slices without copying (Steal semantics).
+	// Preserve the SetView contract by copying into batch-owned memory.
+	keyCopy := b.copyBytes(key)
+	valCopy := b.copyBytes(value)
+
 	if b.streamEligible {
 		if b.firstKey == nil {
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
 		Type:  batch.OpPut,
-		Key:   key,
-		Value: value,
+		Key:   keyCopy,
+		Value: valCopy,
 	})
-	b.size += len(key) + len(value)
+	b.size += len(keyCopy) + len(valCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -4995,8 +5001,9 @@ func (b *Batch) Delete(key []byte) error {
 	return nil
 }
 
-// DeleteView records a Delete without copying key bytes. Callers must treat
-// key as immutable until the batch is written or closed.
+// DeleteView records a Delete without copying key bytes when writing directly
+// to the backend. For the in-memory path it copies into batch-owned memory, since
+// memtables may retain the slices.
 func (b *Batch) DeleteView(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -5014,22 +5021,26 @@ func (b *Batch) DeleteView(key []byte) error {
 		return b.backend.Delete(key)
 	}
 
+	// Memtables may store key slices without copying (Steal semantics).
+	// Preserve the DeleteView contract by copying into batch-owned memory.
+	keyCopy := b.copyBytes(key)
+
 	if b.streamEligible {
 		if b.firstKey == nil {
-			b.firstKey = key
-			b.lastKey = key
+			b.firstKey = keyCopy
+			b.lastKey = keyCopy
 		} else {
-			if bytes.Compare(key, b.lastKey) <= 0 {
+			if bytes.Compare(keyCopy, b.lastKey) <= 0 {
 				b.streamEligible = false
 			}
-			b.lastKey = key
+			b.lastKey = keyCopy
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
 		Type: batch.OpDelete,
-		Key:  key,
+		Key:  keyCopy,
 	})
-	b.size += len(key)
+	b.size += len(keyCopy)
 
 	b.maybeSwitchToStreaming()
 	return nil
@@ -5193,6 +5204,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	needRotate := false
 	needSyncBarrier := false
 	hasPtr := false
+	stoleBatchBytes := false
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -5237,6 +5249,9 @@ func (b *Batch) writeRegular(sync bool) error {
 			continue
 		}
 		shard := &b.db.mutableShards[i]
+		if _, ok := shard.mem.(*memtable.Memtable); !ok {
+			stoleBatchBytes = true
+		}
 		shard.mu.Lock()
 		over := b.db.shardExceedsLimit(shard, add)
 		shard.mu.Unlock()
@@ -5464,6 +5479,12 @@ func (b *Batch) writeRegular(sync bool) error {
 		b.db.noteWrite()
 	}
 	b.db.maybeAssistFlush()
+
+	if stoleBatchBytes {
+		// Some memtables store key/value slices without copying. If we reuse the
+		// batch copy buffer after Write, those references can be corrupted.
+		b.copyBuf = nil
+	}
 
 	b.Reset()
 	return nil
