@@ -35,7 +35,7 @@ func NewTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byte) *Two
 
 func (m *TwoWayMerger) Next() {
 	if !m.valid {
-		panic("merging iterator invalid")
+		return
 	}
 	if m.cur != nil {
 		m.cur.Next()

@@ -90,6 +90,7 @@ func TestTwoWayMerger(t *testing.T) {
 		results = append(results, struct{ k, v string }{string(merger.Key()), string(merger.Value())})
 		merger.Next()
 	}
+	merger.Next() // Calling Next on an exhausted iterator should be a no-op.
 
 	if !reflect.DeepEqual(results, expected) {
 		t.Errorf("Merge results mismatch.\nGot: %v\nWant:%v", results, expected)
@@ -117,6 +118,7 @@ func TestTwoWayMerger(t *testing.T) {
 		results2 = append(results2, struct{ k, v string }{string(merger2.Key()), string(merger2.Value())})
 		merger2.Next()
 	}
+	merger2.Next() // Calling Next on an exhausted iterator should be a no-op.
 
 	if !reflect.DeepEqual(results2, expected2) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
