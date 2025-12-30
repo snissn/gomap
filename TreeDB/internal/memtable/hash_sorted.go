@@ -125,12 +125,12 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 
 func hashSortedEstimateMapHint(capacity int) int {
 	const (
-		avgEntryBytes = 256
+		avgEntryBytes = 2048
 		minHint       = 1024
-		maxHint       = 1 << 18 // 262,144
+		maxHint       = 1 << 15 // 32,768
 	)
 	if capacity <= 0 {
-		return minHint
+		return 0
 	}
 	hint := capacity / avgEntryBytes
 	if hint < minHint {
@@ -148,10 +148,7 @@ func hashSortedEstimateSortedKeysCap(capacity, mapHint int) int {
 	if capacity <= 0 {
 		return 0
 	}
-	if mapHint < hashSortedSortedKeysInitCap {
-		return hashSortedSortedKeysInitCap
-	}
-	return mapHint
+	return hashSortedSortedKeysInitCap
 }
 
 func hashSortedEstimateArenaFirstChunk(capacity int) int {
