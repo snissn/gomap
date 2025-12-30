@@ -476,7 +476,7 @@ func (db *DB) NewBatch() Batch {
 	return db.backend.NewBatch()
 }
 
-// NewBatchWithSize creates a new batch with a hint for the expected entry size.
+// NewBatchWithSize creates a new batch with a size hint (in bytes) for internal buffering.
 func (db *DB) NewBatchWithSize(size int) Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil

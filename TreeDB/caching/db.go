@@ -4800,13 +4800,37 @@ type Batch struct {
 }
 
 const maxBatchCopyBuf = 8 << 20
+const maxBatchEntryCapHint = 1 << 17 // cap prealloc to avoid huge batches on size-hint misuse
 
 func (db *DB) NewBatch() *Batch {
 	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
+	// The size hint is in bytes (for internal buffering), not number-of-entries.
+	// Bound it to avoid accidentally allocating enormous entry slices.
+	hint := size
+	if hint < 0 {
+		hint = 0
+	}
+	if hint > maxBatchCopyBuf {
+		hint = maxBatchCopyBuf
+	}
+	entriesCap := 16
+	if hint > 0 {
+		// Roughly estimate entries from byte size. This is only a hint.
+		entriesCap = hint / 64
+		if entriesCap < 16 {
+			entriesCap = 16
+		} else if entriesCap > maxBatchEntryCapHint {
+			entriesCap = maxBatchEntryCapHint
+		}
+	}
+	b := &Batch{db: db, entries: make([]batch.Entry, 0, entriesCap), streamEligible: true}
+	if hint > 0 {
+		b.copyBuf = make([]byte, 0, hint)
+	}
+	return b
 }
 
 // Reset clears the batch for reuse without closing it.
