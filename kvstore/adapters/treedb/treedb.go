@@ -1,9 +1,31 @@
 package treedbadapter
 
 import (
-	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
+	"os"
+	"strconv"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
+
+// allowBatchViews enables the view-based batch fast-path for TreeDB's kvstore adapter.
+//
+// When enabled, Batch.Set/Delete will avoid copying key/value bytes by delegating to
+// the underlying TreeDB batch's SetView/DeleteView methods (if supported). Callers
+// MUST treat key/value as immutable until Commit/CommitSync/Close.
+//
+// This is intentionally opt-in because many callers expect Set/Delete to be safe
+// against later buffer reuse/mutation.
+var allowBatchViews = func() bool {
+	v, ok := os.LookupEnv("GOMAP_TREEDB_BATCH_VIEW")
+	if !ok {
+		return false
+	}
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b
+	}
+	return v != "" && v != "0"
+}()
 
 // DB adapts TreeDB's public API to kvstore interfaces.
 type DB struct {
@@ -75,9 +97,19 @@ type batch struct {
 	deleteView func(key []byte) error
 }
 
-func (b *batch) Set(key, value []byte) error { return b.b.Set(key, value) }
+func (b *batch) Set(key, value []byte) error {
+	if allowBatchViews && b.setView != nil {
+		return b.setView(key, value)
+	}
+	return b.b.Set(key, value)
+}
 
-func (b *batch) Delete(key []byte) error { return b.b.Delete(key) }
+func (b *batch) Delete(key []byte) error {
+	if allowBatchViews && b.deleteView != nil {
+		return b.deleteView(key)
+	}
+	return b.b.Delete(key)
+}
 
 // SetView records a Put without copying key/value bytes if supported by the
 // underlying TreeDB batch. Callers must treat key/value as immutable until
