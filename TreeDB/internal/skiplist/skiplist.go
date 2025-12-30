@@ -20,6 +20,8 @@ const (
 
 	flagDeleted = 1
 
+	headNodeSize = nodeHeaderBase + (4 * maxHeight)
+
 	// Arena Constants
 	// We use 4MiB chunks. With uint32 pointers, this provides a total addressable
 	// arena of 4GiB.
@@ -60,12 +62,13 @@ func New(capacity int) *SkipList {
 		rnd:    rand.New(rand.NewSource(time.Now().UnixNano())),
 		height: 1,
 	}
+	if capacity < headNodeSize {
+		capacity = headNodeSize
+	}
 	if capacity > chunkSize {
 		capacity = chunkSize
 	}
-	if capacity > 0 {
-		s.ensureSpace(0, capacity)
-	}
+	s.ensureSpace(0, capacity)
 	// Allocate dummy head (height=maxHeight, key=empty, val=empty)
 	s.head = s.allocNode(0, 0, maxHeight)
 	for i := range s.tail {
@@ -175,6 +178,16 @@ func (s *SkipList) alloc(n int) uint32 {
 
 	// 2. Handle Standard Allocations
 	// If it doesn't fit in the current chunk, move to the next one.
+	if s.curChunkIdx == 0 && len(s.chunks) > 0 {
+		// Chunk 0 may be sized based on the provided capacity hint (e.g. small
+		// "iterator rotation" memtables). Once it's full, start allocating from
+		// chunk 1 rather than growing chunk 0 and copying existing content.
+		c0cap := cap(s.chunks[0])
+		if c0cap > 0 && c0cap < chunkSize && s.curChunkOff+n > c0cap {
+			s.curChunkIdx++
+			s.curChunkOff = 0
+		}
+	}
 	if s.curChunkOff+n > chunkSize {
 		s.curChunkIdx++
 		s.curChunkOff = 0
