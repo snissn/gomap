@@ -343,26 +343,38 @@ func (s *SkipList) putU32(ptr uint32, v uint32) {
 }
 
 func (s *SkipList) getKey(node uint32) []byte {
-	h := int(s.valAt(node, nodeHeightOff))
-	kLen := int(s.u16At(node + uint32(nodeKeyLenOff)))
-	offset := node + uint32(nodeHeaderBase) + uint32(4*h)
-	return s.bytesAt(offset, kLen)
+	idx := int(node >> chunkShift)
+	base := int(node & chunkMask)
+	b := s.chunks[idx]
+
+	h := int(b[base+nodeHeightOff])
+	kLen := int(uint16(b[base+nodeKeyLenOff]) | uint16(b[base+nodeKeyLenOff+1])<<8)
+	start := base + nodeHeaderBase + (4 * h)
+	return b[start : start+kLen]
 }
 
 func (s *SkipList) getValue(node uint32) []byte {
-	h := int(s.valAt(node, nodeHeightOff))
-	kLen := int(s.u16At(node + uint32(nodeKeyLenOff)))
-	vLen := int(s.u32At(node + uint32(nodeValLenOff)))
-	offset := node + uint32(nodeHeaderBase) + uint32(4*h) + uint32(kLen)
-	return s.bytesAt(offset, vLen)
+	idx := int(node >> chunkShift)
+	base := int(node & chunkMask)
+	b := s.chunks[idx]
+
+	h := int(b[base+nodeHeightOff])
+	kLen := int(uint16(b[base+nodeKeyLenOff]) | uint16(b[base+nodeKeyLenOff+1])<<8)
+	vLen := int(uint32(b[base+nodeValLenOff]) | uint32(b[base+nodeValLenOff+1])<<8 | uint32(b[base+nodeValLenOff+2])<<16 | uint32(b[base+nodeValLenOff+3])<<24)
+	start := base + nodeHeaderBase + (4 * h) + kLen
+	return b[start : start+vLen]
 }
 
 func (s *SkipList) getFlags(node uint32) uint8 {
-	return s.valAt(node, nodeFlagsOff)
+	idx := int(node >> chunkShift)
+	base := int(node & chunkMask)
+	return s.chunks[idx][base+nodeFlagsOff]
 }
 
 func (s *SkipList) setFlags(node uint32, f uint8) {
-	s.setValAt(node, nodeFlagsOff, f)
+	idx := int(node >> chunkShift)
+	base := int(node & chunkMask)
+	s.chunks[idx][base+nodeFlagsOff] = f
 }
 
 func (s *SkipList) getNext(node uint32, level int) uint32 {
