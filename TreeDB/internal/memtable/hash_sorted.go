@@ -96,16 +96,82 @@ func NewHashSorted() *HashSorted {
 }
 
 func NewHashSortedWithIndexer(indexer *HashSortedIndexer) *HashSorted {
+	return NewHashSortedWithCapacityAndIndexer(0, indexer)
+}
+
+func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexer) *HashSorted {
 	if indexer == nil {
 		indexer = globalHashSortedIndexer
 	}
+	if capacity < 0 {
+		capacity = 0
+	}
+
+	mapHint := hashSortedEstimateMapHint(capacity)
 	m := &HashSorted{
-		items:       make(map[string]hashEntry),
+		items:       make(map[string]hashEntry, mapHint),
 		sortedValid: true,
 		indexer:     indexer,
 	}
+	if capHint := hashSortedEstimateSortedKeysCap(capacity, mapHint); capHint > 0 {
+		m.sortedKeys = make([]string, 0, capHint)
+	}
+	if arenaCap := hashSortedEstimateArenaFirstChunk(capacity); arenaCap > 0 {
+		m.arena.nextCap = arenaCap
+	}
 	m.index.cond = sync.NewCond(&m.index.mu)
 	return m
+}
+
+func hashSortedEstimateMapHint(capacity int) int {
+	const (
+		avgEntryBytes = 256
+		minHint       = 1024
+		maxHint       = 1 << 18 // 262,144
+	)
+	if capacity <= 0 {
+		return minHint
+	}
+	hint := capacity / avgEntryBytes
+	if hint < minHint {
+		hint = minHint
+	}
+	if hint > maxHint {
+		hint = maxHint
+	}
+	return hint
+}
+
+func hashSortedEstimateSortedKeysCap(capacity, mapHint int) int {
+	// sortedKeys is populated during Freeze; preallocating here reduces slice
+	// growth costs without eagerly materializing the keyset.
+	if capacity <= 0 {
+		return 0
+	}
+	if mapHint < hashSortedSortedKeysInitCap {
+		return hashSortedSortedKeysInitCap
+	}
+	return mapHint
+}
+
+func hashSortedEstimateArenaFirstChunk(capacity int) int {
+	if capacity <= 0 {
+		return 0
+	}
+	// Allocate a larger first chunk than the default 64KiB to reduce chunk churn
+	// when callers already have an arena size hint (e.g. FlushThreshold-derived).
+	const (
+		minChunk = 64 * 1024
+		maxChunk = 1 << 20 // 1MiB
+	)
+	chunk := capacity / 8
+	if chunk < minChunk {
+		chunk = minChunk
+	}
+	if chunk > maxChunk {
+		chunk = maxChunk
+	}
+	return chunk
 }
 
 func (a *hashArena) resetKeepFirstChunk() {

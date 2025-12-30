@@ -156,3 +156,23 @@ func TestHashSortedFrozenIterator_ReusesSortedKeysBuffer(t *testing.T) {
 		t.Fatalf("iterator close: %v", err)
 	}
 }
+
+func TestHashSortedCapacityHintSeedsArena(t *testing.T) {
+	indexer := NewHashSortedIndexer()
+	defer indexer.Close()
+
+	tbl, err := NewWithCapacityModeAndIndexer(8<<20, ModeHashSorted, indexer)
+	if err != nil {
+		t.Fatalf("NewWithCapacityModeAndIndexer: %v", err)
+	}
+	hs, ok := tbl.(*HashSorted)
+	if !ok {
+		t.Fatalf("expected HashSorted, got %T", tbl)
+	}
+	if hs.arena.nextCap == 0 {
+		t.Fatalf("expected arena prealloc hint, got nextCap=0")
+	}
+	if cap(hs.sortedKeys) == 0 {
+		t.Fatalf("expected sortedKeys preallocation")
+	}
+}
