@@ -2,7 +2,6 @@ package caching
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -465,17 +464,6 @@ func (db *DB) pruneRetainedValueLogs() {
 }
 
 func hashKey(key []byte) uint64 {
-	// Shard hashing is on the hot write path. For typical TreeDB keys (often
-	// already high-entropy), a cheap mixing of the first/last 8 bytes provides
-	// good distribution without hashing the full key.
-	//
-	// Fall back to xxhash for very short keys.
-	if len(key) >= 16 {
-		return binary.LittleEndian.Uint64(key) ^ binary.LittleEndian.Uint64(key[len(key)-8:])
-	}
-	if len(key) >= 8 {
-		return binary.LittleEndian.Uint64(key) ^ uint64(len(key))<<32
-	}
 	return xxhash.Sum64(key)
 }
 
