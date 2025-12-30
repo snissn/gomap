@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbbatch "github.com/snissn/gomap/TreeDB/batch"
 )
 
 // allowBatchViews enables the view-based batch fast-path for TreeDB's kvstore adapter.
@@ -135,6 +136,17 @@ func (b *batch) Commit() error { return b.b.Write() }
 func (b *batch) CommitSync() error { return b.b.WriteSync() }
 
 func (b *batch) Close() error { return b.b.Close() }
+
+// Replay forwards to the underlying TreeDB batch's Replay method.
+//
+// This is an optional capability used by higher-level adapters (e.g. op-geth)
+// to avoid duplicating per-op replay bookkeeping.
+func (b *batch) Replay(fn func(treedbbatch.Entry) error) error {
+	if b == nil || b.b == nil {
+		return kvstore.ErrUnsupported
+	}
+	return b.b.Replay(fn)
+}
 
 // Reset is an optional fast-path used by higher-level adapters to recycle batch
 // buffers without reallocation. If the underlying TreeDB batch doesn't support
