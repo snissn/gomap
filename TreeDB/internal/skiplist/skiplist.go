@@ -21,10 +21,10 @@ const (
 	flagDeleted = 1
 
 	// Arena Constants
-	// We use 2MiB chunks. With uint32 pointers, this provides a total addressable
+	// We use 4MiB chunks. With uint32 pointers, this provides a total addressable
 	// arena of 4GiB.
-	chunkShift = 21
-	chunkSize  = 1 << chunkShift // 2 MiB
+	chunkShift = 22
+	chunkSize  = 1 << chunkShift // 4 MiB
 	chunkMask  = chunkSize - 1
 )
 
