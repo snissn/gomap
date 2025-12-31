@@ -1544,6 +1544,9 @@ func getEntrySlice(capacity int) []batch.Entry {
 		if cap(s) >= capacity {
 			return s[:0]
 		}
+		// Preserve smaller slices for future callers; otherwise a single
+		// large-capacity request can discard pooled small buffers.
+		entrySlicePool.Put(s[:0])
 	}
 	return make([]batch.Entry, 0, capacity)
 }
