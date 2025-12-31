@@ -4830,8 +4830,27 @@ const maxBatchCopyBuf = 32 << 20
 const maxBatchCopyBufRetain = 8 << 20
 const maxBatchEntryCapHint = 1 << 17 // cap prealloc to avoid huge batches on size-hint misuse
 
+const maxBatchPoolEntriesCap = 1 << 16
+const maxBatchPoolWALCap = 1 << 16
+
+var batchPool = sync.Pool{
+	New: func() any {
+		return &Batch{
+			entries:        make([]batch.Entry, 0, 128),
+			streamEligible: true,
+		}
+	},
+}
+
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
+	b := batchPool.Get().(*Batch)
+	b.db = db
+	b.closed = false
+	if b.entries == nil {
+		b.entries = make([]batch.Entry, 0, 128)
+	}
+	b.Reset()
+	return b
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
@@ -4854,13 +4873,23 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 			entriesCap = maxBatchEntryCapHint
 		}
 	}
-	b := &Batch{db: db, entries: make([]batch.Entry, 0, entriesCap), streamEligible: true}
+	b := batchPool.Get().(*Batch)
+	b.db = db
+	b.closed = false
+	if b.entries == nil || cap(b.entries) < entriesCap {
+		b.entries = make([]batch.Entry, 0, entriesCap)
+	}
+	b.Reset()
 	if hint > 0 {
 		copyCap := hint
 		if copyCap > maxBatchCopyBufRetain {
 			copyCap = maxBatchCopyBufRetain
 		}
-		b.copyBuf = make([]byte, 0, copyCap)
+		if b.copyBuf == nil || cap(b.copyBuf) < copyCap {
+			b.copyBuf = make([]byte, 0, copyCap)
+		} else {
+			b.copyBuf = b.copyBuf[:0]
+		}
 	}
 	return b
 }
@@ -5804,15 +5833,96 @@ func (b *Batch) Close() error {
 	if b.closed {
 		return nil
 	}
-	b.closed = true
-	b.entries = nil
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil
 	}
-	b.walBuf = nil
+	if b.entries != nil {
+		if cap(b.entries) > maxBatchPoolEntriesCap {
+			b.entries = nil
+			b.entriesClear = 0
+		} else {
+			clearTo := cap(b.entries)
+			if clearTo > 0 {
+				clear(b.entries[:clearTo])
+			}
+			b.entries = b.entries[:0]
+			b.entriesClear = 0
+		}
+	}
+	if b.walBuf != nil {
+		if cap(b.walBuf) > maxBatchPoolWALCap {
+			b.walBuf = nil
+			b.walClear = 0
+		} else {
+			clearTo := cap(b.walBuf)
+			if clearTo > 0 {
+				clear(b.walBuf[:clearTo])
+			}
+			b.walBuf = b.walBuf[:0]
+			b.walClear = 0
+		}
+	}
+	b.size = 0
+	b.needsClear = false
 	b.firstKey = nil
 	b.lastKey = nil
+	b.batchRange = keyRange{}
+	if b.copyBuf != nil {
+		if cap(b.copyBuf) > maxBatchCopyBufRetain {
+			b.copyBuf = nil
+		} else {
+			b.copyBuf = b.copyBuf[:0]
+		}
+	}
+	if b.shardIdxs != nil {
+		if cap(b.shardIdxs) > maxBatchPoolEntriesCap {
+			b.shardIdxs = nil
+		} else {
+			b.shardIdxs = b.shardIdxs[:0]
+		}
+	}
+	if b.shardAdds != nil {
+		if cap(b.shardAdds) > maxBatchPoolEntriesCap {
+			b.shardAdds = nil
+		} else {
+			b.shardAdds = b.shardAdds[:0]
+		}
+	}
+	if b.shardCnts != nil {
+		if cap(b.shardCnts) > maxBatchPoolEntriesCap {
+			b.shardCnts = nil
+		} else {
+			b.shardCnts = b.shardCnts[:0]
+		}
+	}
+	if b.shardOrder != nil {
+		if cap(b.shardOrder) > maxBatchPoolEntriesCap {
+			b.shardOrder = nil
+		} else {
+			b.shardOrder = b.shardOrder[:0]
+		}
+	}
+	if b.shardOffsets != nil {
+		if cap(b.shardOffsets) > maxBatchPoolEntriesCap {
+			b.shardOffsets = nil
+		} else {
+			b.shardOffsets = b.shardOffsets[:0]
+		}
+	}
+	if b.shardPos != nil {
+		if cap(b.shardPos) > maxBatchPoolEntriesCap {
+			b.shardPos = nil
+		} else {
+			b.shardPos = b.shardPos[:0]
+		}
+	}
+	b.streamEligible = true
+	b.streamTried = false
+
+	b.db = nil
+	b.closed = true
+	batchPool.Put(b)
 	return nil
 }
 
