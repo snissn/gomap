@@ -5552,41 +5552,64 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 
 		if shard.largePtrs != nil {
-			for _, entryIdx := range shardOrder[start:end] {
-				op := &b.entries[entryIdx]
-				if op.Type == batch.OpDelete {
-					err := shard.mem.DeleteWithCallback(op.Key, func(k, _ []byte) error {
-						shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
-						return nil
-					})
-					if err != nil {
-						shard.mu.Unlock()
-						b.db.writeMu.RUnlock()
-						return err
-					}
-				} else {
-					storeValue := op.Value
-					if b.db.memtableValueLogPointers && op.IsPtr {
-						storeValue = nil
-					}
-					err := shard.mem.PutWithCallback(op.Key, storeValue, func(k, _ []byte) error {
-						keyStr := bytesToStringNoCopy(k)
-						if op.IsPtr {
-							shard.largePtrs.SetString(keyStr, op.ValuePtr)
-						} else {
-							shard.largePtrs.DeleteString(keyStr)
+			if hs, ok := shard.mem.(*memtable.HashSorted); ok && !isSkiplist {
+				if b.db.memtableValueLogPointers && hasPtr {
+					for _, entryIdx := range shardOrder[start:end] {
+						op := &b.entries[entryIdx]
+						if op.Type == batch.OpPut && op.IsPtr {
+							op.Value = nil
 						}
-						return nil
-					})
-					if err != nil {
-						shard.mu.Unlock()
-						b.db.writeMu.RUnlock()
-						return err
 					}
 				}
-				shard.rng.add(op.Key)
-				if trackSequential {
-					b.db.noteWriteKey(op.Key)
+				hs.ApplyStealBatchIndicesWithStableKeyCallback(b.entries, shardOrder[start:end], func(k []byte, op batch.Entry) {
+					keyStr := bytesToStringNoCopy(k)
+					if op.Type == batch.OpPut && op.IsPtr {
+						shard.largePtrs.SetString(keyStr, op.ValuePtr)
+					} else {
+						shard.largePtrs.DeleteString(keyStr)
+					}
+					shard.rng.add(k)
+					if trackSequential {
+						b.db.noteWriteKey(k)
+					}
+				})
+			} else {
+				for _, entryIdx := range shardOrder[start:end] {
+					op := &b.entries[entryIdx]
+					if op.Type == batch.OpDelete {
+						err := shard.mem.DeleteWithCallback(op.Key, func(k, _ []byte) error {
+							shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
+							return nil
+						})
+						if err != nil {
+							shard.mu.Unlock()
+							b.db.writeMu.RUnlock()
+							return err
+						}
+					} else {
+						storeValue := op.Value
+						if b.db.memtableValueLogPointers && op.IsPtr {
+							storeValue = nil
+						}
+						err := shard.mem.PutWithCallback(op.Key, storeValue, func(k, _ []byte) error {
+							keyStr := bytesToStringNoCopy(k)
+							if op.IsPtr {
+								shard.largePtrs.SetString(keyStr, op.ValuePtr)
+							} else {
+								shard.largePtrs.DeleteString(keyStr)
+							}
+							return nil
+						})
+						if err != nil {
+							shard.mu.Unlock()
+							b.db.writeMu.RUnlock()
+							return err
+						}
+					}
+					shard.rng.add(op.Key)
+					if trackSequential {
+						b.db.noteWriteKey(op.Key)
+					}
 				}
 			}
 		} else if useStream && isSkiplist {

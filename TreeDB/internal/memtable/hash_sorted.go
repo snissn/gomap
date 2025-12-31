@@ -289,11 +289,11 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Lock()
 	for _, op := range entries {
 		if op.Type == batchpkg.OpDelete {
-			if refs, keys, seq := m.deleteStealLocked(op.Key); seq != 0 {
+			if refs, keys, seq, _ := m.deleteStealLocked(op.Key); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		} else {
-			if refs, keys, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+			if refs, keys, seq, _ := m.setStealLocked(op.Key, op.Value); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		}
@@ -324,16 +324,61 @@ func (m *HashSorted) ApplyStealBatchIndices(entries []batchpkg.Entry, order []in
 		}
 		op := entries[idx]
 		if op.Type == batchpkg.OpDelete {
-			if refs, keys, seq := m.deleteStealLocked(op.Key); seq != 0 {
+			if refs, keys, seq, _ := m.deleteStealLocked(op.Key); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		} else {
-			if refs, keys, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+			if refs, keys, seq, _ := m.setStealLocked(op.Key, op.Value); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
 			}
 		}
 		if onKey != nil {
 			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.refs, c.keys)
+	}
+}
+
+// ApplyStealBatchIndicesWithStableKeyCallback applies entries referenced by order
+// (indices into entries) under a single lock acquisition and invokes cb for each
+// applied operation with the memtable-owned key bytes.
+//
+// The callback receives a stable key slice backed by the memtable arena, suitable
+// for unsafe string conversions (e.g. bytesToStringNoCopy) as long as the memtable
+// remains alive.
+func (m *HashSorted) ApplyStealBatchIndicesWithStableKeyCallback(entries []batchpkg.Entry, order []int, cb func(stableKey []byte, op batchpkg.Entry)) {
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	for _, idx := range order {
+		if idx < 0 || idx >= len(entries) {
+			continue
+		}
+		op := entries[idx]
+		var stableKey []byte
+		if op.Type == batchpkg.OpDelete {
+			var refs []arenaRef
+			var keys []string
+			var seq uint64
+			refs, keys, seq, stableKey = m.deleteStealLocked(op.Key)
+			if seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
+			}
+		} else {
+			var refs []arenaRef
+			var keys []string
+			var seq uint64
+			refs, keys, seq, stableKey = m.setStealLocked(op.Key, op.Value)
+			if seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
+			}
+		}
+		if cb != nil && stableKey != nil {
+			cb(stableKey, op)
 		}
 	}
 	m.mu.Unlock()
@@ -353,7 +398,7 @@ func (m *HashSorted) Set(key, value []byte) {
 
 func (m *HashSorted) SetSteal(key, value []byte) {
 	m.mu.Lock()
-	refs, keys, seq := m.setStealLocked(key, value)
+	refs, keys, seq, _ := m.setStealLocked(key, value)
 	m.mu.Unlock()
 	if seq != 0 {
 		m.indexer.enqueue(m, seq, refs, keys)
@@ -493,7 +538,7 @@ func (m *HashSorted) Delete(key []byte) {
 
 func (m *HashSorted) DeleteSteal(key []byte) {
 	m.mu.Lock()
-	refs, keys, seq := m.deleteStealLocked(key)
+	refs, keys, seq, _ := m.deleteStealLocked(key)
 	m.mu.Unlock()
 	if seq != 0 {
 		m.indexer.enqueue(m, seq, refs, keys)
@@ -933,9 +978,9 @@ func (m *HashSorted) noteNewKeyLocked(ref arenaRef, sortKey string) (chunkRefs [
 	return chunkRefs, chunkKeys, m.nextSeq
 }
 
-func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, uint64) {
+func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, uint64, []byte) {
 	if key == nil {
-		return nil, nil, 0
+		return nil, nil, 0, nil
 	}
 	keyHash := m.keyHashBytes(key)
 	if m.collideHash != nil {
@@ -950,7 +995,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, ui
 				m.sizeBytes += int64(len(valCopy) - oldLen)
 				storedKey := bytesToStringNoCopy(keyBytes)
 				m.collisions[storedKey] = ent
-				return nil, nil, 0
+				return nil, nil, 0, keyBytes
 			}
 			keyRef, keyCopy := m.arena.copyBytesRef(key)
 			valRef, valCopy := m.arena.copyBytesRef(value)
@@ -960,7 +1005,8 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, ui
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 			m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-			return m.noteNewKeyLocked(keyRef, keyStored)
+			refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+			return refs, keys, seq, keyCopy
 		}
 	}
 
@@ -973,7 +1019,7 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, ui
 			ent.deleted = false
 			m.sizeBytes += int64(len(valCopy) - oldLen)
 			m.items[keyHash] = ent
-			return nil, nil, 0
+			return nil, nil, 0, keyBytes
 		}
 
 		delete(m.items, keyHash)
@@ -992,7 +1038,8 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, ui
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, valRef: valRef}
 		m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-		return m.noteNewKeyLocked(keyRef, keyStored)
+		refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+		return refs, keys, seq, keyCopy
 	}
 
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
@@ -1000,12 +1047,13 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]arenaRef, []string, ui
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, valRef: valRef}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
-	return m.noteNewKeyLocked(keyRef, keyStored)
+	refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+	return refs, keys, seq, keyCopy
 }
 
-func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64) {
+func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64, []byte) {
 	if key == nil {
-		return nil, nil, 0
+		return nil, nil, 0, nil
 	}
 	m.hasDeletes = true
 	keyHash := m.keyHashBytes(key)
@@ -1021,7 +1069,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64
 				}
 				storedKey := bytesToStringNoCopy(keyBytes)
 				m.collisions[storedKey] = ent
-				return nil, nil, 0
+				return nil, nil, 0, keyBytes
 			}
 
 			keyRef, keyCopy := m.arena.copyBytesRef(key)
@@ -1031,7 +1079,8 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64
 			}
 			m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 			m.sizeBytes += int64(len(keyCopy))
-			return m.noteNewKeyLocked(keyRef, keyStored)
+			refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+			return refs, keys, seq, keyCopy
 		}
 	}
 
@@ -1044,7 +1093,7 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64
 				ent.deleted = true
 			}
 			m.items[keyHash] = ent
-			return nil, nil, 0
+			return nil, nil, 0, keyBytes
 		}
 
 		delete(m.items, keyHash)
@@ -1062,14 +1111,16 @@ func (m *HashSorted) deleteStealLocked(key []byte) ([]arenaRef, []string, uint64
 		keyStored := bytesToStringNoCopy(keyCopy)
 		m.collisions[keyStored] = hashEntry{keyRef: keyRef, deleted: true}
 		m.sizeBytes += int64(len(keyCopy))
-		return m.noteNewKeyLocked(keyRef, keyStored)
+		refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+		return refs, keys, seq, keyCopy
 	}
 
 	keyRef, keyCopy := m.arena.copyBytesRef(key)
 	keyStored := bytesToStringNoCopy(keyCopy)
 	m.items[keyHash] = hashEntry{keyRef: keyRef, deleted: true}
 	m.sizeBytes += int64(len(keyCopy))
-	return m.noteNewKeyLocked(keyRef, keyStored)
+	refs, keys, seq := m.noteNewKeyLocked(keyRef, keyStored)
+	return refs, keys, seq, keyCopy
 }
 
 func (idx *hashSortedIndex) reset() {
