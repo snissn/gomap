@@ -675,11 +675,6 @@ type DB struct {
 	memtableLastKey         []byte
 	memtableHasLastKey      bool
 
-	// batchEntriesCapHint is a best-effort heuristic for preallocating batch entry
-	// slices. Some integrations create many short-lived batches without reusing
-	// them; preallocating to a recently observed size reduces slice growth
-	// allocation spikes in view-based batch mode.
-	batchEntriesCapHint     atomic.Int64
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
 	stopBacklogSeconds      float64
@@ -4846,11 +4841,6 @@ const maxBatchEntryCapHint = 1 << 17 // cap prealloc to avoid huge batches on si
 const maxBatchPoolEntriesCap = 1 << 16
 const maxBatchPoolWALCap = 1 << 16
 
-// maxBatchEntriesCapAutoHint caps the adaptive prealloc hint derived from recent
-// batch sizes. It intentionally stays well below flush thresholds to avoid
-// pathological over-allocation from a single outlier batch.
-const maxBatchEntriesCapAutoHint = 1 << 13 // 8192 entries
-
 var batchPool = sync.Pool{
 	New: func() any {
 		return &Batch{
@@ -4860,66 +4850,13 @@ var batchPool = sync.Pool{
 	},
 }
 
-func clampBatchEntryCapAutoHint(entries int) int {
-	if entries < 16 {
-		return 16
-	}
-	if entries > maxBatchEntriesCapAutoHint {
-		return maxBatchEntriesCapAutoHint
-	}
-	return entries
-}
-
-func (db *DB) noteBatchEntriesHint(entryCount int) {
-	if db == nil || entryCount <= 0 {
-		return
-	}
-	entryCount = clampBatchEntryCapAutoHint(entryCount)
-
-	for {
-		old := db.batchEntriesCapHint.Load()
-		oldInt := int(old)
-		if oldInt <= 0 {
-			if db.batchEntriesCapHint.CompareAndSwap(old, int64(entryCount)) {
-				return
-			}
-			continue
-		}
-
-		oldInt = clampBatchEntryCapAutoHint(oldInt)
-
-		// Exponentially-weighted moving average (EWMA) toward the current batch
-		// size. This avoids locking the hint to a single outlier, while still
-		// converging quickly for stable batch sizes.
-		//
-		// new = old + (entryCount-old)/8  (~12.5% step)
-		newHint := oldInt + (entryCount-oldInt)/8
-		if newHint < 16 {
-			newHint = 16
-		}
-		newHint = clampBatchEntryCapAutoHint(newHint)
-		if newHint == oldInt {
-			return
-		}
-		if db.batchEntriesCapHint.CompareAndSwap(old, int64(newHint)) {
-			return
-		}
-	}
-}
-
 func (db *DB) NewBatch() *Batch {
 	b := batchPool.Get().(*Batch)
 	b.db = db
 	b.closed = false
 
-	entriesCap := 16
-	if db != nil {
-		if hint := int(db.batchEntriesCapHint.Load()); hint > entriesCap {
-			entriesCap = clampBatchEntryCapAutoHint(hint)
-		}
-	}
-	if b.entries == nil || cap(b.entries) < entriesCap {
-		b.entries = make([]batch.Entry, 0, entriesCap)
+	if b.entries == nil || cap(b.entries) < 16 {
+		b.entries = make([]batch.Entry, 0, 16)
 	}
 	b.Reset()
 	return b
@@ -4948,11 +4885,6 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	b := batchPool.Get().(*Batch)
 	b.db = db
 	b.closed = false
-	if db != nil {
-		if hint := int(db.batchEntriesCapHint.Load()); hint > entriesCap {
-			entriesCap = clampBatchEntryCapAutoHint(hint)
-		}
-	}
 	if b.entries == nil || cap(b.entries) < entriesCap {
 		b.entries = make([]batch.Entry, 0, entriesCap)
 	}
@@ -5386,9 +5318,6 @@ func (b *Batch) write(sync bool) error {
 		if err == nil && b.size > 0 {
 			b.db.noteWrite()
 		}
-		if err == nil {
-			b.db.noteBatchEntriesHint(len(b.entries))
-		}
 		b.Reset()
 		return err
 	}
@@ -5797,7 +5726,6 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 	b.db.maybeAssistFlush()
 
-	b.db.noteBatchEntriesHint(len(b.entries))
 	b.Reset()
 	return nil
 }
@@ -5985,7 +5913,6 @@ func (b *Batch) tryWriteBypass(sync bool) (bool, error) {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
-	b.db.noteBatchEntriesHint(len(b.entries))
 	b.Reset()
 	return true, nil
 }
