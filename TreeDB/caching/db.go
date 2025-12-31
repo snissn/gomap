@@ -4799,7 +4799,14 @@ type Batch struct {
 	batchRange     keyRange
 }
 
-const maxBatchCopyBuf = 8 << 20
+// maxBatchCopyBuf is the maximum number of bytes we will accumulate in the
+// batch's copy buffer before falling back to per-entry allocations.
+const maxBatchCopyBuf = 32 << 20
+
+// maxBatchCopyBufRetain is the maximum copy buffer capacity we retain across
+// Batch.Reset() calls. Larger buffers are dropped to avoid long-lived memory
+// spikes for bursty workloads.
+const maxBatchCopyBufRetain = 8 << 20
 const maxBatchEntryCapHint = 1 << 17 // cap prealloc to avoid huge batches on size-hint misuse
 
 func (db *DB) NewBatch() *Batch {
@@ -4828,7 +4835,11 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	}
 	b := &Batch{db: db, entries: make([]batch.Entry, 0, entriesCap), streamEligible: true}
 	if hint > 0 {
-		b.copyBuf = make([]byte, 0, hint)
+		copyCap := hint
+		if copyCap > maxBatchCopyBufRetain {
+			copyCap = maxBatchCopyBufRetain
+		}
+		b.copyBuf = make([]byte, 0, copyCap)
 	}
 	return b
 }
@@ -4849,7 +4860,7 @@ func (b *Batch) Reset() {
 		b.entries = b.entries[:0]
 	}
 	if b.copyBuf != nil {
-		if cap(b.copyBuf) > maxBatchCopyBuf {
+		if cap(b.copyBuf) > maxBatchCopyBufRetain {
 			b.copyBuf = nil
 		} else {
 			b.copyBuf = b.copyBuf[:0]
