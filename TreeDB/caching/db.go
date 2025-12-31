@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -484,6 +485,10 @@ func (db *DB) pruneRetainedValueLogs() {
 }
 
 func hashKey(key []byte) uint64 {
+	// Fast-path common fixed-size hash keys (e.g. geth hashdb).
+	if len(key) == 32 {
+		return binary.LittleEndian.Uint64(key)
+	}
 	return xxhash.Sum64(key)
 }
 
@@ -5356,16 +5361,25 @@ func (b *Batch) writeRegular(sync bool) error {
 	needSyncBarrier := false
 	hasPtr := false
 
-	// 1. Memtable capacity pre-check
+	// 1. Shard routing and (rare) memtable capacity pre-check.
+	//
+	// The per-shard memtable hard cap is ~3GiB and exists primarily as a safety
+	// valve to prevent the skiplist arena from panicking on extreme workloads.
+	// For typical workloads where the total mutable size is far below the cap, we
+	// can skip the per-shard byte accounting and lock-based checks.
 	shardCount := len(b.db.mutableShards)
-	shardAdds := b.shardAdds
-	if cap(shardAdds) < shardCount {
-		shardAdds = make([]int64, shardCount)
-	} else {
-		shardAdds = shardAdds[:shardCount]
-		clear(shardAdds)
+	needCapCheck := maxMemtableBytesPerShard > 0 && b.db.mutableBytes.Load()+int64(b.size) >= maxMemtableBytesPerShard
+	var shardAdds []int64
+	if needCapCheck {
+		shardAdds = b.shardAdds
+		if cap(shardAdds) < shardCount {
+			shardAdds = make([]int64, shardCount)
+		} else {
+			shardAdds = shardAdds[:shardCount]
+			clear(shardAdds)
+		}
+		b.shardAdds = shardAdds
 	}
-	b.shardAdds = shardAdds
 
 	shardCounts := b.shardCnts
 	if cap(shardCounts) < shardCount {
@@ -5388,23 +5402,27 @@ func (b *Batch) writeRegular(sync bool) error {
 		idx := b.db.shardIndex(op.Key)
 		shardIdxs[i] = idx
 		shardCounts[idx]++
-		add := int64(len(op.Key))
-		if op.Type == batch.OpPut {
-			add += int64(len(op.Value))
+		if needCapCheck {
+			add := int64(len(op.Key))
+			if op.Type == batch.OpPut {
+				add += int64(len(op.Value))
+			}
+			shardAdds[idx] += add
 		}
-		shardAdds[idx] += add
 	}
-	for i, add := range shardAdds {
-		if add == 0 {
-			continue
-		}
-		shard := &b.db.mutableShards[i]
-		shard.mu.Lock()
-		over := b.db.shardExceedsLimit(shard, add)
-		shard.mu.Unlock()
-		if over {
-			b.db.writeMu.RUnlock()
-			return ErrMemtableFull
+	if needCapCheck {
+		for i, add := range shardAdds {
+			if add == 0 {
+				continue
+			}
+			shard := &b.db.mutableShards[i]
+			shard.mu.Lock()
+			over := b.db.shardExceedsLimit(shard, add)
+			shard.mu.Unlock()
+			if over {
+				b.db.writeMu.RUnlock()
+				return ErrMemtableFull
+			}
 		}
 	}
 
