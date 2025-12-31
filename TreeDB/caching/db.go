@@ -4798,10 +4798,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 type Batch struct {
 	db           *DB
 	entries      []batch.Entry
+	entriesClear int
 	backend      batch.Interface
 	size         int
 	copyBuf      []byte
 	walBuf       []logRecord
+	walClear     int
 	shardIdxs    []int
 	shardAdds    []int64
 	shardCnts    []int
@@ -4875,6 +4877,17 @@ func (b *Batch) Reset() {
 		b.backend = nil
 	}
 	if b.entries != nil {
+		clearTo := len(b.entries)
+		if b.entriesClear > clearTo {
+			clearTo = b.entriesClear
+		}
+		if clearTo > cap(b.entries) {
+			clearTo = cap(b.entries)
+		}
+		if clearTo > 0 {
+			clear(b.entries[:clearTo])
+		}
+		b.entriesClear = len(b.entries)
 		b.entries = b.entries[:0]
 	}
 	if b.copyBuf != nil {
@@ -4903,7 +4916,22 @@ func (b *Batch) Reset() {
 		b.shardPos = b.shardPos[:0]
 	}
 	b.size = 0
-	b.walBuf = b.walBuf[:0]
+	if b.walBuf != nil {
+		clearTo := len(b.walBuf)
+		if b.walClear > clearTo {
+			clearTo = b.walClear
+		}
+		if clearTo > cap(b.walBuf) {
+			clearTo = cap(b.walBuf)
+		}
+		if clearTo > 0 {
+			clear(b.walBuf[:clearTo])
+		}
+		b.walClear = len(b.walBuf)
+		b.walBuf = b.walBuf[:0]
+	} else {
+		b.walClear = 0
+	}
 	b.streamEligible = true
 	b.streamTried = false
 	b.firstKey = nil
