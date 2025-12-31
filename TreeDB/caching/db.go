@@ -4789,7 +4789,9 @@ type Batch struct {
 	shardIdxs    []int
 	shardAdds    []int64
 	shardCnts    []int
-	shardEntries [][]batch.Entry
+	shardOrder   []int
+	shardOffsets []int
+	shardPos     []int
 
 	closed         bool
 	streamEligible bool
@@ -4875,8 +4877,14 @@ func (b *Batch) Reset() {
 	if b.shardCnts != nil {
 		b.shardCnts = b.shardCnts[:0]
 	}
-	if b.shardEntries != nil {
-		b.shardEntries = b.shardEntries[:0]
+	if b.shardOrder != nil {
+		b.shardOrder = b.shardOrder[:0]
+	}
+	if b.shardOffsets != nil {
+		b.shardOffsets = b.shardOffsets[:0]
+	}
+	if b.shardPos != nil {
+		b.shardPos = b.shardPos[:0]
 	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
@@ -5367,30 +5375,46 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 	}
 
-	shardEntries := b.shardEntries
-	if cap(shardEntries) < shardCount {
-		shardEntries = make([][]batch.Entry, shardCount)
+	// Build a stable per-shard ordering without duplicating entries.
+	//
+	// This avoids allocating and retaining per-shard []batch.Entry slices, which
+	// are pointer-heavy (Key/Value) and increase GC scan costs.
+	shardOrder := b.shardOrder
+	if cap(shardOrder) < len(b.entries) {
+		shardOrder = make([]int, len(b.entries))
 	} else {
-		shardEntries = shardEntries[:shardCount]
-		for i := range shardEntries {
-			shardEntries[i] = shardEntries[i][:0]
-		}
+		shardOrder = shardOrder[:len(b.entries)]
 	}
-	b.shardEntries = shardEntries
-	for i, count := range shardCounts {
-		if count > 0 {
-			entries := shardEntries[i]
-			if cap(entries) < count {
-				entries = make([]batch.Entry, 0, count)
-			} else {
-				entries = entries[:0]
-			}
-			shardEntries[i] = entries
-		}
+	b.shardOrder = shardOrder
+
+	shardOffsets := b.shardOffsets
+	if cap(shardOffsets) < shardCount+1 {
+		shardOffsets = make([]int, shardCount+1)
+	} else {
+		shardOffsets = shardOffsets[:shardCount+1]
 	}
-	for i, op := range b.entries {
+	b.shardOffsets = shardOffsets
+
+	shardPos := b.shardPos
+	if cap(shardPos) < shardCount {
+		shardPos = make([]int, shardCount)
+	} else {
+		shardPos = shardPos[:shardCount]
+	}
+	b.shardPos = shardPos
+
+	sum := 0
+	for i, n := range shardCounts {
+		shardOffsets[i] = sum
+		shardPos[i] = sum
+		sum += n
+	}
+	shardOffsets[shardCount] = sum
+	for i := range b.entries {
 		idx := shardIdxs[i]
-		shardEntries[idx] = append(shardEntries[idx], op)
+		pos := shardPos[idx]
+		shardOrder[pos] = i
+		shardPos[idx] = pos + 1
 	}
 
 	// 3. Memtable Update
@@ -5398,9 +5422,10 @@ func (b *Batch) writeRegular(sync bool) error {
 	trackSequential := b.db.memtableAdaptive && b.db.memtableTrackSequential
 	countWrites := b.db.memtableAdaptive && !b.db.memtableTrackSequential
 
-	for i := range shardEntries {
-		entries := shardEntries[i]
-		if len(entries) == 0 {
+	for i := range shardCounts {
+		start := shardOffsets[i]
+		end := shardOffsets[i+1]
+		if start == end {
 			continue
 		}
 		shard := &b.db.mutableShards[i]
@@ -5415,7 +5440,8 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 
 		if shard.largePtrs != nil {
-			for _, op := range entries {
+			for _, entryIdx := range shardOrder[start:end] {
+				op := &b.entries[entryIdx]
 				if op.Type == batch.OpDelete {
 					err := shard.mem.DeleteWithCallback(op.Key, func(k, _ []byte) error {
 						shard.largePtrs.DeleteString(bytesToStringNoCopy(k))
@@ -5452,28 +5478,25 @@ func (b *Batch) writeRegular(sync bool) error {
 				}
 			}
 		} else if useStream && isSkiplist {
-			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-				applier.ApplyStealSortedBatch(entries, func(key []byte) {
-					shard.rng.add(key)
-					if trackSequential {
-						b.db.noteWriteKey(key)
+			for _, entryIdx := range shardOrder[start:end] {
+				op := &b.entries[entryIdx]
+				if op.Type == batch.OpDelete {
+					shard.mem.DeleteSteal(op.Key)
+				} else {
+					storeValue := op.Value
+					if b.db.memtableValueLogPointers && op.IsPtr {
+						storeValue = nil
 					}
-				})
-			} else {
-				for _, op := range entries {
-					if op.Type == batch.OpDelete {
-						shard.mem.DeleteSteal(op.Key)
-					} else {
-						shard.mem.SetSteal(op.Key, op.Value)
-					}
-					shard.rng.add(op.Key)
-					if trackSequential {
-						b.db.noteWriteKey(op.Key)
-					}
+					shard.mem.SetSteal(op.Key, storeValue)
+				}
+				shard.rng.add(op.Key)
+				if trackSequential {
+					b.db.noteWriteKey(op.Key)
 				}
 			}
 		} else {
-			for _, op := range entries {
+			for _, entryIdx := range shardOrder[start:end] {
+				op := &b.entries[entryIdx]
 				if op.Type == batch.OpDelete {
 					if isSkiplist {
 						shard.mem.DeleteSteal(op.Key)
@@ -5503,7 +5526,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		b.db.mutableBytes.Add(delta)
 		shard.mu.Unlock()
 		if countWrites {
-			b.db.memtableWrites.Add(uint64(len(entries)))
+			b.db.memtableWrites.Add(uint64(end - start))
 		}
 	}
 
