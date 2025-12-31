@@ -158,7 +158,7 @@ func normalizeShardCount(n int) int {
 	return v
 }
 
-func defaultMemtableShards() int {
+func defaultMemtableShards(flushThreshold int64) int {
 	n := runtime.GOMAXPROCS(0)
 	if n < 1 {
 		n = 1
@@ -166,6 +166,22 @@ func defaultMemtableShards() int {
 	n *= 2
 	if n > 8 {
 		n = 8
+	}
+	if flushThreshold > 0 {
+		// Avoid tiny per-shard memtables: they amplify flush/rotation overhead
+		// for write-heavy workloads, especially when writes are effectively
+		// single-threaded (common in embedded DB usage).
+		//
+		// Heuristic: target ~16MiB per shard, capped by the concurrency-based
+		// default above.
+		const minShardBytes = 16 * 1024 * 1024
+		maxBySize := int(flushThreshold / minShardBytes)
+		if maxBySize < 1 {
+			maxBySize = 1
+		}
+		if n > maxBySize {
+			n = maxBySize
+		}
 	}
 	return normalizeShardCount(n)
 }
@@ -1095,7 +1111,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	shardCount := opts.MemtableShards
 	if shardCount <= 0 {
-		shardCount = defaultMemtableShards()
+		shardCount = defaultMemtableShards(opts.FlushThreshold)
 	}
 	shardCount = normalizeShardCount(shardCount)
 	if shardCount < 1 {
