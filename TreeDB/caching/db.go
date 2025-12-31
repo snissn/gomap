@@ -4820,6 +4820,7 @@ type Batch struct {
 	shardPos     []int
 
 	closed         bool
+	written        bool
 	streamEligible bool
 	streamTried    bool
 	needsClear     bool
@@ -4923,6 +4924,7 @@ func (b *Batch) Reset() {
 		_ = b.backend.Close()
 		b.backend = nil
 	}
+	b.written = false
 	if b.entries != nil {
 		if b.needsClear {
 			clearTo := len(b.entries)
@@ -4995,22 +4997,6 @@ func (b *Batch) Reset() {
 	b.batchRange = keyRange{}
 }
 
-func (b *Batch) resetAfterWrite() {
-	hadNeedsClear := b.needsClear
-	entries := b.entries
-	b.Reset()
-
-	// Batches created by some integrations (e.g. geth hashdb) are frequently
-	// one-shot and never Closed; releasing the entry slice after a write lets us
-	// reuse large backing arrays across batches and reduces GC churn. This is
-	// safe for view-based batches because Reset() already cleared pointer fields.
-	if hadNeedsClear && entries != nil && cap(entries) > 0 && cap(entries) <= maxBatchPoolEntriesCap {
-		batchEntriesPool.Put(entries[:0])
-		b.entries = nil
-		b.entriesClear = 0
-	}
-}
-
 func (b *Batch) copyBytes(src []byte) []byte {
 	if len(src) == 0 {
 		return []byte{}
@@ -5026,6 +5012,9 @@ func (b *Batch) copyBytes(src []byte) []byte {
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
+	}
+	if b.written {
+		b.Reset()
 	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
@@ -5080,6 +5069,9 @@ func (b *Batch) SetView(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	if b.written {
+		b.Reset()
+	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
@@ -5127,6 +5119,9 @@ func (b *Batch) Delete(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	if b.written {
+		b.Reset()
+	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
@@ -5171,6 +5166,9 @@ func (b *Batch) DeleteView(key []byte) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	if b.written {
+		b.Reset()
+	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
@@ -5213,6 +5211,9 @@ func (b *Batch) DeleteView(key []byte) error {
 func (b *Batch) SetOps(ops []batch.Entry) error {
 	if b.closed {
 		return ErrBatchClosed
+	}
+	if b.written {
+		b.Reset()
 	}
 	if b.backend != nil {
 		copied := make([]batch.Entry, len(ops))
@@ -5331,6 +5332,9 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
+	if b.size == 0 {
+		return nil
+	}
 	b.db.waitForCheckpoint()
 	b.db.waitForStop()
 
@@ -5345,20 +5349,17 @@ func (b *Batch) write(sync bool) error {
 			err = b.backend.Write()
 			b.db.flushMu.Unlock()
 		}
-		if cerr := b.backend.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
 		if err == nil && b.batchRange.valid {
 			b.db.mu.Lock()
 			b.db.backendRange.add(b.batchRange.min)
 			b.db.backendRange.add(b.batchRange.max)
 			b.db.mu.Unlock()
 		}
-		b.backend = nil
-		if err == nil && b.size > 0 {
+		if err == nil {
 			b.db.noteWrite()
+			b.written = true
+			b.size = 0
 		}
-		b.resetAfterWrite()
 		return err
 	}
 
@@ -5766,7 +5767,8 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 	b.db.maybeAssistFlush()
 
-	b.resetAfterWrite()
+	b.written = true
+	b.size = 0
 	return nil
 }
 
@@ -5953,7 +5955,8 @@ func (b *Batch) tryWriteBypass(sync bool) (bool, error) {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
-	b.resetAfterWrite()
+	b.written = true
+	b.size = 0
 	return true, nil
 }
 
