@@ -674,12 +674,6 @@ type DB struct {
 	memtableLastKeyMu       sync.Mutex
 	memtableLastKey         []byte
 	memtableHasLastKey      bool
-
-	// batchEntriesCapHint is a best-effort heuristic for preallocating batch entry
-	// slices. Some integrations create many short-lived batches without reusing
-	// them; preallocating to a recently observed size reduces slice growth
-	// allocation spikes in view-based batch mode.
-	batchEntriesCapHint     atomic.Int64
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
 	stopBacklogSeconds      float64
@@ -4855,44 +4849,12 @@ var batchPool = sync.Pool{
 	},
 }
 
-func clampBatchEntryCapHint(capacity int) int {
-	if capacity < 16 {
-		return 16
-	}
-	if capacity > maxBatchEntryCapHint {
-		return maxBatchEntryCapHint
-	}
-	return capacity
-}
-
-func (db *DB) noteBatchEntriesHint(entryCount int) {
-	if db == nil || entryCount <= 0 {
-		return
-	}
-	entryCount = clampBatchEntryCapHint(entryCount)
-	for {
-		old := db.batchEntriesCapHint.Load()
-		if int64(entryCount) <= old {
-			return
-		}
-		if db.batchEntriesCapHint.CompareAndSwap(old, int64(entryCount)) {
-			return
-		}
-	}
-}
-
 func (db *DB) NewBatch() *Batch {
 	b := batchPool.Get().(*Batch)
 	b.db = db
 	b.closed = false
-	entriesCap := 16
-	if db != nil {
-		if hint := int(db.batchEntriesCapHint.Load()); hint > entriesCap {
-			entriesCap = clampBatchEntryCapHint(hint)
-		}
-	}
-	if b.entries == nil || cap(b.entries) < entriesCap {
-		b.entries = make([]batch.Entry, 0, entriesCap)
+	if b.entries == nil {
+		b.entries = make([]batch.Entry, 0, 16)
 	}
 	b.Reset()
 	return b
@@ -4921,11 +4883,6 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	b := batchPool.Get().(*Batch)
 	b.db = db
 	b.closed = false
-	if db != nil {
-		if hint := int(db.batchEntriesCapHint.Load()); hint > entriesCap {
-			entriesCap = clampBatchEntryCapHint(hint)
-		}
-	}
 	if b.entries == nil || cap(b.entries) < entriesCap {
 		b.entries = make([]batch.Entry, 0, entriesCap)
 	}
@@ -5359,9 +5316,6 @@ func (b *Batch) write(sync bool) error {
 		if err == nil && b.size > 0 {
 			b.db.noteWrite()
 		}
-		if err == nil {
-			b.db.noteBatchEntriesHint(len(b.entries))
-		}
 		b.Reset()
 		return err
 	}
@@ -5757,7 +5711,6 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 	b.db.maybeAssistFlush()
 
-	b.db.noteBatchEntriesHint(len(b.entries))
 	b.Reset()
 	return nil
 }
@@ -5945,7 +5898,6 @@ func (b *Batch) tryWriteBypass(sync bool) (bool, error) {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
-	b.db.noteBatchEntriesHint(len(b.entries))
 	b.Reset()
 	return true, nil
 }
