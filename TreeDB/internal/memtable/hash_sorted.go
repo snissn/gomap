@@ -308,6 +308,41 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	}
 }
 
+// ApplyStealBatchIndices applies entries referenced by order (indices into entries)
+// under a single lock acquisition. This avoids per-entry lock/unlock overhead in
+// hot write paths that already group operations per-shard.
+//
+// The caller may optionally supply onKey, which is invoked with the original
+// entry key in the same order as application.
+func (m *HashSorted) ApplyStealBatchIndices(entries []batchpkg.Entry, order []int, onKey func(key []byte)) {
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	for _, idx := range order {
+		if idx < 0 || idx >= len(entries) {
+			continue
+		}
+		op := entries[idx]
+		if op.Type == batchpkg.OpDelete {
+			if refs, keys, seq := m.deleteStealLocked(op.Key); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
+			}
+		} else {
+			if refs, keys, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, refs: refs, keys: keys})
+			}
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.refs, c.keys)
+	}
+}
+
 func (m *HashSorted) indexApplySortedChunk(seq uint64, refs []arenaRef) {
 	m.index.apply(seq, refs)
 }

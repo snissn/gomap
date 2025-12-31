@@ -5607,28 +5607,37 @@ func (b *Batch) writeRegular(sync bool) error {
 				}
 			}
 		} else {
-			for _, entryIdx := range shardOrder[start:end] {
-				op := &b.entries[entryIdx]
-				if op.Type == batch.OpDelete {
-					if isSkiplist {
-						shard.mem.DeleteSteal(op.Key)
+			if hs, ok := shard.mem.(*memtable.HashSorted); ok && !isSkiplist {
+				hs.ApplyStealBatchIndices(b.entries, shardOrder[start:end], func(k []byte) {
+					shard.rng.add(k)
+					if trackSequential {
+						b.db.noteWriteKey(k)
+					}
+				})
+			} else {
+				for _, entryIdx := range shardOrder[start:end] {
+					op := &b.entries[entryIdx]
+					if op.Type == batch.OpDelete {
+						if isSkiplist {
+							shard.mem.DeleteSteal(op.Key)
+						} else {
+							shard.mem.Delete(op.Key)
+						}
 					} else {
-						shard.mem.Delete(op.Key)
+						storeValue := op.Value
+						if b.db.memtableValueLogPointers && op.IsPtr {
+							storeValue = nil
+						}
+						if isSkiplist {
+							shard.mem.SetSteal(op.Key, storeValue)
+						} else {
+							shard.mem.Set(op.Key, storeValue)
+						}
 					}
-				} else {
-					storeValue := op.Value
-					if b.db.memtableValueLogPointers && op.IsPtr {
-						storeValue = nil
+					shard.rng.add(op.Key)
+					if trackSequential {
+						b.db.noteWriteKey(op.Key)
 					}
-					if isSkiplist {
-						shard.mem.SetSteal(op.Key, storeValue)
-					} else {
-						shard.mem.Set(op.Key, storeValue)
-					}
-				}
-				shard.rng.add(op.Key)
-				if trackSequential {
-					b.db.noteWriteKey(op.Key)
 				}
 			}
 		}
