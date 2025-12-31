@@ -4836,7 +4836,7 @@ const maxBatchPoolWALCap = 1 << 16
 var batchPool = sync.Pool{
 	New: func() any {
 		return &Batch{
-			entries:        make([]batch.Entry, 0, 128),
+			entries:        make([]batch.Entry, 0, 16),
 			streamEligible: true,
 		}
 	},
@@ -4847,7 +4847,7 @@ func (db *DB) NewBatch() *Batch {
 	b.db = db
 	b.closed = false
 	if b.entries == nil {
-		b.entries = make([]batch.Entry, 0, 128)
+		b.entries = make([]batch.Entry, 0, 16)
 	}
 	b.Reset()
 	return b

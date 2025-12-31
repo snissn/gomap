@@ -77,3 +77,9 @@ type Batch interface {
 type Batcher interface {
 	NewBatch() (Batch, error)
 }
+
+// BatcherWithSize is an optional capability for batched writes with a size
+// hint (in bytes) for internal buffering.
+type BatcherWithSize interface {
+	NewBatchWithSize(size int) (Batch, error)
+}
