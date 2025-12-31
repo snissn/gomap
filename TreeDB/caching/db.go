@@ -5196,8 +5196,8 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 }
 
 const (
-	viewBatchBypassMinEntries = 1
-	viewBatchBypassMinBytes   = 0
+	viewBatchBypassMinEntries = 1024
+	viewBatchBypassMinBytes   = 256 << 10 // 256KiB
 )
 
 func (b *Batch) maybeSwitchToStreaming() {
