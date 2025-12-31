@@ -2,7 +2,6 @@ package caching
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -485,10 +484,6 @@ func (db *DB) pruneRetainedValueLogs() {
 }
 
 func hashKey(key []byte) uint64 {
-	// Fast-path common fixed-size hash keys (e.g. geth hashdb).
-	if len(key) == 32 {
-		return binary.LittleEndian.Uint64(key)
-	}
 	return xxhash.Sum64(key)
 }
 
