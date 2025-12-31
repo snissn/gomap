@@ -4843,10 +4843,13 @@ const maxBatchPoolWALCap = 1 << 16
 
 var batchPool = sync.Pool{
 	New: func() any {
-		return &Batch{
-			entries:        make([]batch.Entry, 0, 16),
-			streamEligible: true,
-		}
+		return &Batch{streamEligible: true}
+	},
+}
+
+var batchEntriesPool = sync.Pool{
+	New: func() any {
+		return make([]batch.Entry, 0, 16)
 	},
 }
 
@@ -4855,7 +4858,9 @@ func (db *DB) NewBatch() *Batch {
 	b.db = db
 	b.closed = false
 
-	if b.entries == nil || cap(b.entries) < 16 {
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	} else if cap(b.entries) < 16 {
 		b.entries = make([]batch.Entry, 0, 16)
 	}
 	b.Reset()
@@ -4885,7 +4890,10 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	b := batchPool.Get().(*Batch)
 	b.db = db
 	b.closed = false
-	if b.entries == nil || cap(b.entries) < entriesCap {
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	}
+	if cap(b.entries) < entriesCap {
 		b.entries = make([]batch.Entry, 0, entriesCap)
 	}
 	b.Reset()
@@ -4987,6 +4995,22 @@ func (b *Batch) Reset() {
 	b.batchRange = keyRange{}
 }
 
+func (b *Batch) resetAfterWrite() {
+	hadNeedsClear := b.needsClear
+	entries := b.entries
+	b.Reset()
+
+	// Batches created by some integrations (e.g. geth hashdb) are frequently
+	// one-shot and never Closed; releasing the entry slice after a write lets us
+	// reuse large backing arrays across batches and reduces GC churn. This is
+	// safe for view-based batches because Reset() already cleared pointer fields.
+	if hadNeedsClear && entries != nil && cap(entries) > 0 && cap(entries) <= maxBatchPoolEntriesCap {
+		batchEntriesPool.Put(entries[:0])
+		b.entries = nil
+		b.entriesClear = 0
+	}
+}
+
 func (b *Batch) copyBytes(src []byte) []byte {
 	if len(src) == 0 {
 		return []byte{}
@@ -5022,6 +5046,9 @@ func (b *Batch) Set(key, value []byte) error {
 		return b.backend.Set(keyCopy, valCopy)
 	}
 
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	}
 	if b.streamEligible {
 		if b.firstKey == nil {
 			b.firstKey = keyCopy
@@ -5071,6 +5098,9 @@ func (b *Batch) SetView(key, value []byte) error {
 		return b.backend.Set(key, value)
 	}
 
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	}
 	if b.streamEligible {
 		if b.firstKey == nil {
 			b.firstKey = key
@@ -5111,6 +5141,9 @@ func (b *Batch) Delete(key []byte) error {
 		return b.backend.Delete(keyCopy)
 	}
 
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	}
 	if b.streamEligible {
 		if b.firstKey == nil {
 			b.firstKey = keyCopy
@@ -5153,6 +5186,9 @@ func (b *Batch) DeleteView(key []byte) error {
 		return b.backend.Delete(key)
 	}
 
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
+	}
 	if b.streamEligible {
 		if b.firstKey == nil {
 			b.firstKey = key
@@ -5191,6 +5227,10 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			b.batchRange.add(copiedOp.Key)
 		}
 		return b.backend.SetOps(copied)
+	}
+
+	if b.entries == nil {
+		b.entries = batchEntriesPool.Get().([]batch.Entry)
 	}
 	for _, op := range ops {
 		copied := op
@@ -5318,7 +5358,7 @@ func (b *Batch) write(sync bool) error {
 		if err == nil && b.size > 0 {
 			b.db.noteWrite()
 		}
-		b.Reset()
+		b.resetAfterWrite()
 		return err
 	}
 
@@ -5726,7 +5766,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 	b.db.maybeAssistFlush()
 
-	b.Reset()
+	b.resetAfterWrite()
 	return nil
 }
 
@@ -5913,7 +5953,7 @@ func (b *Batch) tryWriteBypass(sync bool) (bool, error) {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
-	b.Reset()
+	b.resetAfterWrite()
 	return true, nil
 }
 
