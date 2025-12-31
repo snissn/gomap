@@ -1058,6 +1058,17 @@ func (m *HashSorted) setStealLocked(key, value []byte, noCopyValue bool) ([]aren
 			keyLookup := bytesToStringNoCopy(key)
 			if ent, ok := m.collisions[keyLookup]; ok {
 				keyBytes := m.arena.sliceRef(ent.keyRef)
+				// Content-addressed keyspaces (like geth hashdb) may redundantly write
+				// the same key/value pair. Avoid re-copying identical values.
+				if !ent.deleted && len(key) == 32 {
+					oldVal := ent.valExt
+					if oldVal == nil {
+						oldVal = m.arena.sliceRef(ent.valRef)
+					}
+					if len(oldVal) == len(valueExt) && bytes.Equal(oldVal, valueExt) {
+						return nil, nil, 0, keyBytes
+					}
+				}
 				oldLen := int(ent.valRef.len)
 				if ent.valExt != nil {
 					oldLen = len(ent.valExt)
@@ -1106,6 +1117,17 @@ func (m *HashSorted) setStealLocked(key, value []byte, noCopyValue bool) ([]aren
 	if ent, ok := m.items[keyHash]; ok {
 		keyBytes := m.arena.sliceRef(ent.keyRef)
 		if bytes.Equal(keyBytes, key) {
+			// Content-addressed keyspaces (like geth hashdb) may redundantly write
+			// the same key/value pair. Avoid re-copying identical values.
+			if !ent.deleted && len(key) == 32 {
+				oldVal := ent.valExt
+				if oldVal == nil {
+					oldVal = m.arena.sliceRef(ent.valRef)
+				}
+				if len(oldVal) == len(valueExt) && bytes.Equal(oldVal, valueExt) {
+					return nil, nil, 0, keyBytes
+				}
+			}
 			oldLen := int(ent.valRef.len)
 			if ent.valExt != nil {
 				oldLen = len(ent.valExt)
