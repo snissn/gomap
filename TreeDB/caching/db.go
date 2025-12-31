@@ -4814,6 +4814,7 @@ type Batch struct {
 	closed         bool
 	streamEligible bool
 	streamTried    bool
+	needsClear     bool
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
@@ -4877,17 +4878,21 @@ func (b *Batch) Reset() {
 		b.backend = nil
 	}
 	if b.entries != nil {
-		clearTo := len(b.entries)
-		if b.entriesClear > clearTo {
-			clearTo = b.entriesClear
+		if b.needsClear {
+			clearTo := len(b.entries)
+			if b.entriesClear > clearTo {
+				clearTo = b.entriesClear
+			}
+			if clearTo > cap(b.entries) {
+				clearTo = cap(b.entries)
+			}
+			if clearTo > 0 {
+				clear(b.entries[:clearTo])
+			}
+			b.entriesClear = len(b.entries)
+		} else {
+			b.entriesClear = 0
 		}
-		if clearTo > cap(b.entries) {
-			clearTo = cap(b.entries)
-		}
-		if clearTo > 0 {
-			clear(b.entries[:clearTo])
-		}
-		b.entriesClear = len(b.entries)
 		b.entries = b.entries[:0]
 	}
 	if b.copyBuf != nil {
@@ -4917,23 +4922,28 @@ func (b *Batch) Reset() {
 	}
 	b.size = 0
 	if b.walBuf != nil {
-		clearTo := len(b.walBuf)
-		if b.walClear > clearTo {
-			clearTo = b.walClear
+		if b.needsClear {
+			clearTo := len(b.walBuf)
+			if b.walClear > clearTo {
+				clearTo = b.walClear
+			}
+			if clearTo > cap(b.walBuf) {
+				clearTo = cap(b.walBuf)
+			}
+			if clearTo > 0 {
+				clear(b.walBuf[:clearTo])
+			}
+			b.walClear = len(b.walBuf)
+		} else {
+			b.walClear = 0
 		}
-		if clearTo > cap(b.walBuf) {
-			clearTo = cap(b.walBuf)
-		}
-		if clearTo > 0 {
-			clear(b.walBuf[:clearTo])
-		}
-		b.walClear = len(b.walBuf)
 		b.walBuf = b.walBuf[:0]
 	} else {
 		b.walClear = 0
 	}
 	b.streamEligible = true
 	b.streamTried = false
+	b.needsClear = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
@@ -5011,6 +5021,8 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+
+	b.needsClear = true
 
 	if b.backend != nil {
 		b.batchRange.add(key)
@@ -5091,6 +5103,8 @@ func (b *Batch) DeleteView(key []byte) error {
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
+
+	b.needsClear = true
 
 	if b.backend != nil {
 		b.batchRange.add(key)

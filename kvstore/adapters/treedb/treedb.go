@@ -25,21 +25,6 @@ var allowBatchViews = func() bool {
 		}
 		return v != "" && v != "0"
 	}
-
-	// Op-geth integration: if a TreeDB profile is explicitly selected, assume the
-	// caller is performance-sensitive and provides stable key/value buffers for
-	// the duration of the batch commit.
-	//
-	// This avoids redundant copies: TreeDB's memtables copy keys/values into
-	// their own arenas, so copying again in the adapter provides little safety
-	// but adds allocation and CPU overhead.
-	v, ok = os.LookupEnv("OP_GETH_TREEDB_PROFILE")
-	if ok {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
-		return v != "" && v != "0"
-	}
 	return false
 }()
 
