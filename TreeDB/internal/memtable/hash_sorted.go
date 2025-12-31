@@ -179,9 +179,9 @@ func (m *HashSorted) keyCountLocked() int {
 
 func hashSortedEstimateMapHint(capacity int) int {
 	const (
-		avgEntryBytes = 2048
+		avgEntryBytes = 512
 		minHint       = 1024
-		maxHint       = 1 << 15 // 32,768
+		maxHint       = 1 << 20 // 1,048,576
 	)
 	if capacity <= 0 {
 		return 0
@@ -213,7 +213,7 @@ func hashSortedEstimateArenaFirstChunk(capacity int) int {
 	// when callers already have an arena size hint (e.g. FlushThreshold-derived).
 	const (
 		minChunk = 64 * 1024
-		maxChunk = 1 << 20 // 1MiB
+		maxChunk = 8 << 20 // 8MiB
 	)
 	chunk := capacity / 8
 	if chunk < minChunk {
