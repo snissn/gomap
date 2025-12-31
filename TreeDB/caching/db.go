@@ -4888,22 +4888,15 @@ func (db *DB) noteBatchEntriesHint(entryCount int) {
 
 		oldInt = clampBatchEntryCapAutoHint(oldInt)
 
-		// Update policy:
-		// - Grow immediately up to the most recently observed size.
-		// - Decay slowly when batches get smaller to avoid locking in an outlier.
-		newHint := oldInt
-		if entryCount > oldInt {
-			newHint = entryCount
-		} else if entryCount < oldInt {
-			decayed := oldInt - oldInt/8 // 12.5% decay per update
-			if decayed < entryCount {
-				decayed = entryCount
-			}
-			newHint = decayed
-		} else {
-			return
+		// Exponentially-weighted moving average (EWMA) toward the current batch
+		// size. This avoids locking the hint to a single outlier, while still
+		// converging quickly for stable batch sizes.
+		//
+		// new = old + (entryCount-old)/8  (~12.5% step)
+		newHint := oldInt + (entryCount-oldInt)/8
+		if newHint < 16 {
+			newHint = 16
 		}
-
 		newHint = clampBatchEntryCapAutoHint(newHint)
 		if newHint == oldInt {
 			return
