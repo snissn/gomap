@@ -38,6 +38,10 @@ var iteratorDebugEnabled atomic.Bool
 
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
+	// envUnsafeNoCopyMemtableValues enables storing memtable values by reference
+	// (no copy into the memtable arena). This is unsafe unless the caller
+	// guarantees values remain immutable for the lifetime of the memtable.
+	envUnsafeNoCopyMemtableValues = "GOMAP_TREEDB_UNSAFE_MEMTABLE_NOCOPY_VALUES"
 
 	minMemtablePrealloc        = 64 * 1024
 	maxMemtablePrealloc        = 256 << 20
@@ -681,6 +685,7 @@ type DB struct {
 
 	disableWAL         bool
 	relaxedSync        bool
+	unsafeNoCopyValues bool
 	notifyError        func(error)
 	debugFlushPointers bool
 	debugPtrEligible   atomic.Int64
@@ -1196,6 +1201,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogReader = reader
 	}
 	debugFlushPointers := envBool(envDebugFlushPointers)
+	unsafeNoCopyValues := opts.DisableWAL && envBool(envUnsafeNoCopyMemtableValues) && envBool("GOMAP_TREEDB_BATCH_VIEW")
 
 	db := &DB{
 		dir:                          walDir,
@@ -1225,6 +1231,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogReader:               valueLogReader,
 		valueLogRetain:               retained,
 		debugFlushPointers:           debugFlushPointers,
+		unsafeNoCopyValues:           unsafeNoCopyValues,
 		maxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
 		mutableShards:                mutableShards,
@@ -5631,12 +5638,17 @@ func (b *Batch) writeRegular(sync bool) error {
 			}
 		} else {
 			if hs, ok := shard.mem.(*memtable.HashSorted); ok && !isSkiplist {
-				hs.ApplyStealBatchIndices(b.entries, shardOrder[start:end], func(k []byte) {
+				onKey := func(k []byte) {
 					shard.rng.add(k)
 					if trackSequential {
 						b.db.noteWriteKey(k)
 					}
-				})
+				}
+				if b.db.unsafeNoCopyValues && b.needsClear {
+					hs.ApplyStealBatchIndicesNoCopyValues(b.entries, shardOrder[start:end], onKey)
+				} else {
+					hs.ApplyStealBatchIndices(b.entries, shardOrder[start:end], onKey)
+				}
 			} else {
 				for _, entryIdx := range shardOrder[start:end] {
 					op := &b.entries[entryIdx]
