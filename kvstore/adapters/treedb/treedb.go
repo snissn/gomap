@@ -1,8 +1,10 @@
 package treedbadapter
 
 import (
+	"errors"
 	"github.com/snissn/gomap/kvstore"
 	"os"
+	"runtime"
 	"strconv"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -26,6 +28,23 @@ var allowBatchViews = func() bool {
 		return v != "" && v != "0"
 	}
 	return false
+}()
+
+// autoCloseBatches enables a GC finalizer that calls Batch.Close if callers drop
+// a kvstore batch without closing it (e.g. when adapting to an API that has no
+// Close on batches, like go-ethereum's ethdb.Batch).
+//
+// This reduces allocation churn in batch-heavy workloads by allowing TreeDB's
+// internal batch pooling to work even when upper layers cannot explicitly Close.
+var autoCloseBatches = func() bool {
+	v, ok := os.LookupEnv("GOMAP_TREEDB_BATCH_AUTOCLOSE")
+	if ok {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+		return v != "" && v != "0"
+	}
+	return true
 }()
 
 // DB adapts TreeDB's public API to kvstore interfaces.
@@ -89,6 +108,9 @@ func (d *DB) NewBatch() (kvstore.Batch, error) {
 	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
 		wrapped.deleteView = dv.DeleteView
 	}
+	if autoCloseBatches {
+		runtime.SetFinalizer(wrapped, (*batch).finalize)
+	}
 	return wrapped, nil
 }
 
@@ -106,6 +128,9 @@ func (d *DB) NewBatchWithSize(size int) (kvstore.Batch, error) {
 	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
 		wrapped.deleteView = dv.DeleteView
 	}
+	if autoCloseBatches {
+		runtime.SetFinalizer(wrapped, (*batch).finalize)
+	}
 	return wrapped, nil
 }
 
@@ -115,7 +140,16 @@ type batch struct {
 	deleteView func(key []byte) error
 }
 
+var errBatchClosed = errors.New("treedb adapter: batch closed")
+
+func (b *batch) finalize() {
+	_ = b.Close()
+}
+
 func (b *batch) Set(key, value []byte) error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
 	if allowBatchViews && b.setView != nil {
 		return b.setView(key, value)
 	}
@@ -123,6 +157,9 @@ func (b *batch) Set(key, value []byte) error {
 }
 
 func (b *batch) Delete(key []byte) error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
 	if allowBatchViews && b.deleteView != nil {
 		return b.deleteView(key)
 	}
@@ -133,6 +170,9 @@ func (b *batch) Delete(key []byte) error {
 // underlying TreeDB batch. Callers must treat key/value as immutable until
 // Commit/CommitSync/Close.
 func (b *batch) SetView(key, value []byte) error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
 	if b.setView != nil {
 		return b.setView(key, value)
 	}
@@ -142,17 +182,42 @@ func (b *batch) SetView(key, value []byte) error {
 // DeleteView records a Delete without copying key bytes if supported by the
 // underlying TreeDB batch.
 func (b *batch) DeleteView(key []byte) error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
 	if b.deleteView != nil {
 		return b.deleteView(key)
 	}
 	return b.b.Delete(key)
 }
 
-func (b *batch) Commit() error { return b.b.Write() }
+func (b *batch) Commit() error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
+	return b.b.Write()
+}
 
-func (b *batch) CommitSync() error { return b.b.WriteSync() }
+func (b *batch) CommitSync() error {
+	if b == nil || b.b == nil {
+		return errBatchClosed
+	}
+	return b.b.WriteSync()
+}
 
-func (b *batch) Close() error { return b.b.Close() }
+func (b *batch) Close() error {
+	if b == nil || b.b == nil {
+		return nil
+	}
+	if autoCloseBatches {
+		runtime.SetFinalizer(b, nil)
+	}
+	err := b.b.Close()
+	b.b = nil
+	b.setView = nil
+	b.deleteView = nil
+	return err
+}
 
 // Replay forwards to the underlying TreeDB batch's Replay method.
 //
