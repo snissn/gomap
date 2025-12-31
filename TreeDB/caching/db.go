@@ -5026,6 +5026,16 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
+	// Content-addressed keyspaces (like geth hashdb) can redundantly set the same
+	// key/value pair repeatedly. If the previous op in this batch is identical,
+	// skip recording it to avoid extra copying and WAL/memtable churn.
+	if b.backend == nil && len(key) == 32 && len(b.entries) > 0 {
+		last := b.entries[len(b.entries)-1]
+		if last.Type == batch.OpPut && bytes.Equal(last.Key, key) && bytes.Equal(last.Value, value) {
+			return nil
+		}
+	}
+
 	keyCopy := b.copyBytes(key)
 	valCopy := b.copyBytes(value)
 	if b.backend != nil {
@@ -5080,6 +5090,13 @@ func (b *Batch) SetView(key, value []byte) error {
 	}
 	if value == nil {
 		return ErrValueNil
+	}
+
+	if b.backend == nil && len(key) == 32 && len(b.entries) > 0 {
+		last := b.entries[len(b.entries)-1]
+		if last.Type == batch.OpPut && bytes.Equal(last.Key, key) && bytes.Equal(last.Value, value) {
+			return nil
+		}
 	}
 
 	b.needsClear = true
