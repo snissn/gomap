@@ -5195,6 +5195,11 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
+const (
+	viewBatchBypassMinEntries = 1024
+	viewBatchBypassMinBytes   = 256 << 10 // 256KiB
+)
+
 func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
 		return
@@ -5306,6 +5311,26 @@ func (b *Batch) write(sync bool) error {
 		}
 		b.Reset()
 		return err
+	}
+
+	// View-based batches (SetView/DeleteView) avoid copying bytes into the batch,
+	// but the cached/memtable path will still copy values into the memtable arena.
+	// When WAL is disabled, we can often reduce total copying (and keep the batch
+	// contract intact) by writing directly to the backend.
+	//
+	// We guard this behind an explicit view-based batch usage signal and an
+	// exclusive writer lock to avoid ordering issues with concurrent memtable
+	// writers.
+	if b.needsClear && b.db.disableWAL && (len(b.entries) >= viewBatchBypassMinEntries || b.size >= viewBatchBypassMinBytes) {
+		b.db.writeMu.Lock()
+		bypassed, err := b.tryWriteBypass(sync)
+		b.db.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		if bypassed {
+			return nil
+		}
 	}
 
 	// Optimization: Bypass for Large Batches
@@ -5714,7 +5739,7 @@ func parseLogSeq(name string) (int, bool, bool) {
 	return 0, false, false
 }
 
-func (b *Batch) writeBypass(sync bool) error {
+func (b *Batch) tryWriteBypass(sync bool) (bool, error) {
 	// Fast path: if none of these keys exist in mutable/queue, we can write directly
 	// to the backend without flushing (no in-memory shadowing possible).
 	// Cheap append-only check: if the batch key range does not overlap with any
@@ -5780,13 +5805,13 @@ func (b *Batch) writeBypass(sync bool) error {
 				idx := b.db.shardIndex(key)
 				if idx < len(mutables) && mutables[idx] != nil {
 					if _, _, found := mutables[idx].Get(key); found {
-						return b.writeRegular(sync)
+						return false, nil
 					}
 				}
 			}
 			for i := len(queue) - 1; i >= 0; i-- {
 				if _, _, found := queue[i].Get(key); found {
-					return b.writeRegular(sync)
+					return false, nil
 				}
 			}
 		}
@@ -5797,7 +5822,8 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	// Use SetOps for bulk transfer (checking slabs internally in backend)
 	if err := backendBatch.SetOps(b.entries); err != nil {
-		return err
+		_ = backendBatch.Close()
+		return true, err
 	}
 
 	var err error
@@ -5811,8 +5837,11 @@ func (b *Batch) writeBypass(sync bool) error {
 		b.db.flushMu.Unlock()
 	}
 
+	if cerr := backendBatch.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
 	if err != nil {
-		return err
+		return true, err
 	}
 
 	b.db.mu.Lock()
@@ -5826,7 +5855,18 @@ func (b *Batch) writeBypass(sync bool) error {
 		b.db.noteWrite()
 	}
 	b.Reset()
-	return nil
+	return true, nil
+}
+
+func (b *Batch) writeBypass(sync bool) error {
+	bypassed, err := b.tryWriteBypass(sync)
+	if err != nil {
+		return err
+	}
+	if bypassed {
+		return nil
+	}
+	return b.writeRegular(sync)
 }
 
 func (b *Batch) Close() error {
