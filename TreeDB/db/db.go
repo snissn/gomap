@@ -1075,11 +1075,64 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			return errors.New("missing index")
 		}
 
-		// Snapshot roots under DB lock.
-		db.mu.RLock()
+		// Fast path: if no readers are pinned to the current index generation,
+		// update leaf pointer values in-place to avoid COW page churn.
+		db.mu.Lock()
 		rootID := db.meta.UserRootPageID
 		sysRoot := db.meta.SystemRootPageID
-		db.mu.RUnlock()
+		noPinnedReaders := idx.registry.MinPinnedSeq() == ^uint64(0)
+		if noPinnedReaders {
+			tr := tree.New(idx.pager, nil, rootID)
+			var (
+				metrics       adaptive.Metrics
+				modifiedPages map[uint64]struct{}
+			)
+			for _, op := range chunk {
+				updated, leafID, err := tr.UpdateValuePtrInPlace(op.Key, op.OldPtr, op.NewPtr)
+				if err != nil {
+					db.mu.Unlock()
+					db.writeMu.Unlock()
+					return err
+				}
+				if !updated {
+					continue
+				}
+				if modifiedPages == nil {
+					modifiedPages = make(map[uint64]struct{}, 8)
+				}
+				modifiedPages[leafID] = struct{}{}
+
+				if metrics.SlabWriteBytesByFile == nil {
+					metrics.SlabWriteBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabWriteBytesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
+
+				if metrics.SlabDeadBytesByFile == nil {
+					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(op.OldPtr.Length)
+				metrics.SlabDeadBytes += int(op.OldPtr.Length)
+			}
+			if len(modifiedPages) > 0 {
+				metrics.IndexWriteBytes += len(modifiedPages) * page.PageSize
+			}
+			db.mu.Unlock()
+
+			if len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
+				db.writeMu.Unlock()
+				continue
+			}
+
+			// Commit without forcing Sync; compaction can be lazily durable.
+			if err := db.finalizeCommit(rootID, sysRoot, nil, false, metrics); err != nil {
+				db.writeMu.Unlock()
+				return err
+			}
+
+			db.writeMu.Unlock()
+			continue
+		}
+		db.mu.Unlock()
 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
