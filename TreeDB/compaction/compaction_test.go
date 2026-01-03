@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -332,6 +333,9 @@ func TestCompaction_WriterLatencyBudget(t *testing.T) {
 }
 
 func TestCompaction_IndexSwap_PreservesData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index-swap compaction not supported on windows")
+	}
 	dir := t.TempDir()
 	opts := db.Options{Dir: dir}
 	d, err := db.Open(opts)
@@ -384,6 +388,9 @@ func TestCompaction_IndexSwap_PreservesData(t *testing.T) {
 }
 
 func TestCompaction_IndexSwap_SnapshotKeepsOldSlabPinnedUntilClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index-swap compaction not supported on windows")
+	}
 	dir := t.TempDir()
 	opts := db.Options{Dir: dir}
 	d, err := db.Open(opts)
@@ -455,6 +462,9 @@ func TestCompaction_IndexSwap_SnapshotKeepsOldSlabPinnedUntilClosed(t *testing.T
 }
 
 func TestCompaction_IndexSwap_AllowsConcurrentWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index-swap compaction not supported on windows")
+	}
 	dir := t.TempDir()
 	opts := db.Options{Dir: dir}
 	d, err := db.Open(opts)
@@ -530,6 +540,9 @@ func TestCompaction_IndexSwap_AllowsConcurrentWrites(t *testing.T) {
 }
 
 func TestCompaction_IndexSwap_CompactsMultipleCandidatesWithSingleIndexSwapCommit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("index-swap compaction not supported on windows")
+	}
 	dir := t.TempDir()
 	d, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
