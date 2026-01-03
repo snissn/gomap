@@ -25,6 +25,10 @@ type Options struct {
 	MinTotalBytes      uint64
 	MaxSlabs           int
 	MicroBatchSize     int
+	// IndexSwap rebuilds the index into a new file and swaps it in once after
+	// compacting one or more slabs. This avoids high write amplification from
+	// applying many pointer updates via COW B-Tree commits.
+	IndexSwap bool
 	// LiveSetMaxEntries controls the in-memory live pointer set size used to
 	// skip per-record tree lookups during compaction. 0 uses a default; <0
 	// disables the live-set optimization.
@@ -196,6 +200,18 @@ func (c *Compactor) CompactCandidatesWithContext(ctx context.Context, opts Optio
 		if _, err := c.db.SlabManager().Rotate(); err != nil {
 			return err
 		}
+	}
+
+	if opts.IndexSwap {
+		ids := make([]uint32, 0, len(cands))
+		for _, cand := range cands {
+			ids = append(ids, cand.FileID)
+		}
+		return c.db.CompactSlabsIndexSwap(ctx, ids, db.IndexSwapCompactionOptions{
+			CopyBytesPerSec: opts.CopyBytesPerSec,
+			CopyBurstBytes:  opts.CopyBurstBytes,
+			Assist:          opts.Assist,
+		})
 	}
 
 	for _, cand := range cands {

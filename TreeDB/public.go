@@ -185,6 +185,7 @@ func Open(opts Options) (*DB, error) {
 			CopyBytesPerSec:    opts.BackgroundCompactionCopyBytesPerSec,
 			CopyBurstBytes:     opts.BackgroundCompactionCopyBurstBytes,
 			RotateBeforeWrite:  opts.BackgroundCompactionRotateBeforeWrite,
+			IndexSwap:          opts.BackgroundCompactionIndexSwap,
 		}
 		// Reasonable effective defaults for background mode.
 		if co.MaxSlabs == 0 {

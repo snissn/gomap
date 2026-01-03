@@ -46,6 +46,14 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		return errors.New("compaction: cannot compact active slab")
 	}
 
+	if opts.IndexSwap {
+		return c.db.CompactSlabsIndexSwap(ctx, []uint32{id}, db.IndexSwapCompactionOptions{
+			CopyBytesPerSec: opts.CopyBytesPerSec,
+			CopyBurstBytes:  opts.CopyBurstBytes,
+			Assist:          opts.Assist,
+		})
+	}
+
 	snap := c.db.AcquireSnapshot()
 	defer snap.Close()
 

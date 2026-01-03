@@ -122,6 +122,10 @@ type Options struct {
 	BackgroundCompactionCopyBytesPerSec   int64
 	BackgroundCompactionCopyBurstBytes    int64
 	BackgroundCompactionRotateBeforeWrite bool
+	// BackgroundCompactionIndexSwap compacts slabs by rebuilding the index into a
+	// new file and swapping it in once per pass (two-index-file approach). This
+	// can drastically reduce index churn during large slab pointer rewrites.
+	BackgroundCompactionIndexSwap bool
 	// BackgroundIndexVacuumInterval enables background index vacuum when > 0.
 	// The worker uses FragmentationReport span ratio to decide if a rebuild is
 	// warranted; see BackgroundIndexVacuumSpanRatioPPM.
@@ -1109,7 +1113,8 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			slabWritesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
 		}
 
-		if len(b.Ops()) == 0 {
+		opsMap := b.Ops()
+		if len(opsMap) == 0 {
 			closeBatch()
 			db.writeMu.Unlock()
 			continue
@@ -1136,6 +1141,9 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			closeBatch()
 			db.writeMu.Unlock()
 			return err
+		}
+		if db.vacuum.Active() {
+			db.vacuum.RecordOps(opsMap)
 		}
 
 		db.writeMu.Unlock()
