@@ -87,6 +87,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
