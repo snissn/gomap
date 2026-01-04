@@ -186,3 +186,139 @@ func TestApplyCompactionMicroBatches_SkipsStalePointer(t *testing.T) {
 		t.Fatalf("expected latest value to survive compaction")
 	}
 }
+
+func TestApplyCompactionMicroBatches_InPlaceAvoidsCOWWhenNoReaders(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("k")
+	val := bytes.Repeat([]byte("A"), 300)
+	if err := d.Set(key, val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	// Rotate so compaction can move pointers into a different slab.
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected active slab != 0 after rotation")
+	}
+
+	snap := d.AcquireSnapshot()
+	entry, err := snap.GetEntry(key)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer entry for key %q", key)
+	}
+
+	newPtr, err := d.SlabManager().Append(key, val)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if newPtr.FileID == entry.ValuePtr.FileID {
+		t.Fatalf("expected new ptr in a different slab (got %d)", newPtr.FileID)
+	}
+
+	oldRoot := d.meta.UserRootPageID
+
+	op := CompactionOp{
+		Key:    append([]byte(nil), key...),
+		OldPtr: entry.ValuePtr,
+		NewPtr: newPtr,
+	}
+	if err := d.ApplyCompactionMicroBatches([]CompactionOp{op}, 1); err != nil {
+		t.Fatalf("ApplyCompactionMicroBatches: %v", err)
+	}
+
+	// With no snapshots pinned, compaction should be able to update the leaf
+	// entry in-place without rewriting the tree path.
+	if got := d.meta.UserRootPageID; got != oldRoot {
+		t.Fatalf("expected root unchanged after in-place apply; got=%d want=%d", got, oldRoot)
+	}
+
+	snap2 := d.AcquireSnapshot()
+	entry2, err := snap2.GetEntry(key)
+	_ = snap2.Close()
+	if err != nil {
+		t.Fatalf("GetEntry after apply: %v", err)
+	}
+	if entry2.ValuePtr != newPtr {
+		t.Fatalf("expected pointer to be updated in place")
+	}
+}
+
+func TestApplyCompactionMicroBatches_FallsBackToCOWWhenSnapshotPinned(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("k")
+	val := bytes.Repeat([]byte("A"), 300)
+	if err := d.Set(key, val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if got := d.SlabManager().ActiveSlabID(); got == 0 {
+		t.Fatalf("expected active slab != 0 after rotation")
+	}
+
+	// Keep the snapshot open during apply so the in-place fast path is not
+	// allowed. The update must go through COW so the snapshot stays valid.
+	snap := d.AcquireSnapshot()
+	entry, err := snap.GetEntry(key)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = snap.Close()
+		t.Fatalf("expected pointer entry for key %q", key)
+	}
+
+	newPtr, err := d.SlabManager().Append(key, val)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("append: %v", err)
+	}
+
+	oldRoot := d.meta.UserRootPageID
+
+	op := CompactionOp{
+		Key:    append([]byte(nil), key...),
+		OldPtr: entry.ValuePtr,
+		NewPtr: newPtr,
+	}
+	if err := d.ApplyCompactionMicroBatches([]CompactionOp{op}, 1); err != nil {
+		_ = snap.Close()
+		t.Fatalf("ApplyCompactionMicroBatches: %v", err)
+	}
+
+	if got := d.meta.UserRootPageID; got == oldRoot {
+		_ = snap.Close()
+		t.Fatalf("expected COW root change when snapshot pinned")
+	}
+
+	// The old snapshot should still see the original pointer.
+	entry2, err := snap.GetEntry(key)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("snapshot GetEntry after apply: %v", err)
+	}
+	if entry2.ValuePtr != entry.ValuePtr {
+		t.Fatalf("expected snapshot view to remain stable across compaction apply")
+	}
+}

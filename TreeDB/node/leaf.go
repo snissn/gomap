@@ -71,6 +71,53 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 	return key, val, page.ValuePtr{}, flags, nil
 }
 
+// UpdateLeafValuePtr updates the ValuePtr bytes for the entry at index if the
+// entry is a pointer and currently matches oldPtr. It updates the page checksum
+// on success.
+//
+// This is intended for maintenance operations (e.g. slab compaction) that need
+// to swap pointers without rewriting the B+Tree structure.
+func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (bool, error) {
+	if n.Type() != page.PageTypeLeaf {
+		return false, ErrInvalidType
+	}
+
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return false, err
+	}
+	if int(offset) >= len(n.data) {
+		return false, ErrCorruptedNode
+	}
+
+	ptr := int(offset)
+	if ptr < NodeHeaderSize || ptr+7 > len(n.data) {
+		return false, ErrCorruptedNode
+	}
+
+	keyLen := int(binary.LittleEndian.Uint16(n.data[ptr : ptr+2]))
+	flags := n.data[ptr+6]
+
+	// Tombstones and inline values have no ValuePtr bytes to rewrite.
+	if flags&FlagTombstone != 0 || flags&FlagPointer == 0 {
+		return false, nil
+	}
+
+	ptr += 7 + keyLen
+	if ptr+page.ValuePtrSize > len(n.data) {
+		return false, ErrCorruptedNode
+	}
+
+	cur := page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
+	if cur != oldPtr {
+		return false, nil
+	}
+
+	newPtr.Encode(n.data[ptr : ptr+page.ValuePtrSize])
+	n.UpdateChecksum()
+	return true, nil
+}
+
 // GetLeafEntry reads the entry at the given index.
 func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 	keyView, valView, valPtr, flags, err := n.GetLeafEntryView(index)
