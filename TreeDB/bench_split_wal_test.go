@@ -51,6 +51,7 @@ func benchmarkSplitValueLogWrite(b *testing.B, mix benchWriteMix, split bool) {
 		BackgroundCheckpointInterval:     -1,
 		BackgroundCheckpointIdleDuration: -1,
 		MaxWALBytes:                      -1,
+		AllowUnsafe:                      true,
 	}
 	db, err := Open(opts)
 	if err != nil {
