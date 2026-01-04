@@ -213,6 +213,11 @@ type Options struct {
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
+	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
+	// Values <= 0 use the default inline threshold (256 bytes).
+	ValueLogPointerThreshold int
+	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
+	ForceValuePointers bool
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64
@@ -232,6 +237,8 @@ type Options struct {
 	// This improves read performance (especially for large values) but risks
 	// returning silent data corruption if the disk/memory is compromised.
 	DisableReadChecksum bool
+	// SlabCompression configures compression for slab-stored values.
+	SlabCompression slab.CompressionOptions
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -418,7 +425,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	sm, err := slab.NewSlabManager(opts.Dir)
+	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
+		Compression: opts.SlabCompression,
+	})
 	if err != nil {
 		p.Close()
 		return nil, err
@@ -442,11 +451,18 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	gen := newIndexGen(1, p, alloc, z)
 
+	adaptiveCtrl := adaptive.New()
+	inlineThreshold := page.DefaultInlineThreshold
+	if opts.ForceValuePointers {
+		inlineThreshold = 0
+		adaptiveCtrl = nil
+	}
+
 	db := &DB{
 		slabManager:           sm,
 		valueLogManager:       vm,
 		lock:                  lock,
-		adaptive:              adaptive.New(),
+		adaptive:              adaptiveCtrl,
 		keepRecent:            opts.KeepRecent,
 		leafFillTargetPPM:     opts.LeafFillTargetPPM,
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
@@ -458,7 +474,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:   opts.FreelistRegionPages,
 		freelistRegionRadius:  opts.FreelistRegionRadius,
 		policy: WritePolicy{
-			InlineThreshold: page.DefaultInlineThreshold,
+			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 
@@ -1001,7 +1017,7 @@ func (db *DB) InlineThreshold() int {
 	if db.adaptive != nil {
 		return db.adaptive.GetThreshold()
 	}
-	if db.policy.InlineThreshold > 0 {
+	if db.policy.InlineThreshold >= 0 {
 		return db.policy.InlineThreshold
 	}
 	return page.DefaultInlineThreshold
@@ -1113,13 +1129,13 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				if metrics.SlabWriteBytesByFile == nil {
 					metrics.SlabWriteBytesByFile = make(map[uint32]int64, 4)
 				}
-				metrics.SlabWriteBytesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
+				metrics.SlabWriteBytesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
 
 				if metrics.SlabDeadBytesByFile == nil {
 					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
 				}
-				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(op.OldPtr.Length)
-				metrics.SlabDeadBytes += int(op.OldPtr.Length)
+				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(page.ValuePtrRecordLength(op.OldPtr))
+				metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(op.OldPtr))
 			}
 			if len(modifiedPages) > 0 {
 				metrics.IndexWriteBytes += len(modifiedPages) * page.PageSize
@@ -1167,7 +1183,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			if slabWritesByFile == nil {
 				slabWritesByFile = make(map[uint32]int64, 4)
 			}
-			slabWritesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
+			slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
 		}
 
 		opsMap := b.Ops()

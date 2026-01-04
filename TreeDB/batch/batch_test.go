@@ -121,7 +121,7 @@ func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 		t.Fatalf("k3 value mismatch")
 	}
 
-	wantSlabBytes := int(got["k1"].ValuePtr.Length + got["k3"].ValuePtr.Length)
+	wantSlabBytes := int(page.ValuePtrRecordLength(got["k1"].ValuePtr) + page.ValuePtrRecordLength(got["k3"].ValuePtr))
 	if b.SlabWriteBytes() != wantSlabBytes {
 		t.Fatalf("unexpected slab write bytes: got %d want %d", b.SlabWriteBytes(), wantSlabBytes)
 	}

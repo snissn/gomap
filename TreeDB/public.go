@@ -134,6 +134,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                  opts.RelaxedSync,
 		DisableReadChecksum:          opts.DisableReadChecksum,
 		MemtableValueLogPointers:     opts.MemtableValueLogPointers,
+		ValueLogPointerThreshold:     opts.ValueLogPointerThreshold,
 		AllowUnsafe:                  opts.AllowUnsafe,
 		MaxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
 		MaxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,

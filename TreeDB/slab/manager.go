@@ -17,6 +17,7 @@ type SlabSet struct {
 	Files               map[uint32]*SlabFile
 	RefCount            atomic.Int64
 	disableReadChecksum bool
+	compression         *compressionConfig
 }
 type SlabManager struct {
 	dir        string
@@ -25,14 +26,24 @@ type SlabManager struct {
 	mu         sync.RWMutex
 
 	disableReadChecksum bool
+	compression         compressionConfig
 
 	appendManyScratch []byte
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
+	return NewSlabManagerWithOptions(dir, Options{})
+}
+
+func NewSlabManagerWithOptions(dir string, opts Options) (*SlabManager, error) {
+	compression, err := normalizeCompressionOptions(opts.Compression)
+	if err != nil {
+		return nil, err
+	}
 	sm := &SlabManager{
-		dir:   dir,
-		slabs: make(map[uint32]*SlabFile),
+		dir:         dir,
+		slabs:       make(map[uint32]*SlabFile),
+		compression: compression,
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -100,6 +111,16 @@ func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.disableReadChecksum = disable
 }
 
+func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) ([]byte, error) {
+	if !page.ValuePtrIsCompressed(ptr) {
+		return val, nil
+	}
+	if compression == nil {
+		return nil, errCompressedCorrupt
+	}
+	return compression.decompressValue(val)
+}
+
 func (sm *SlabManager) Close() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -125,58 +146,82 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
+	compression := &sm.compression
 	sm.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
 	}
 
-	return s.Read(int64(ptr.Offset), verifyCRC)
+	val, err := s.Read(int64(ptr.Offset), verifyCRC)
+	if err != nil {
+		return nil, err
+	}
+	return decodeValue(ptr, val, compression)
 }
 
 func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
+	compression := &sm.compression
 	sm.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
 	}
 
-	return s.ReadUnsafe(int64(ptr.Offset), verifyCRC)
+	val, err := s.ReadUnsafe(int64(ptr.Offset), verifyCRC)
+	if err != nil {
+		return nil, err
+	}
+	return decodeValue(ptr, val, compression)
 }
 
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
+	encoded := value
+	compressed := false
+	var err error
+	if sm.compression.kind != CompressionNone {
+		encoded, compressed, err = sm.compression.compressValue(value)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	offset, err := sm.activeSlab.Write(key, value)
+	offset, err := sm.activeSlab.Write(key, encoded)
 	if err == ErrSlabFull {
 		if err := sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
 		}
-		offset, err = sm.activeSlab.Write(key, value)
+		offset, err = sm.activeSlab.Write(key, encoded)
 	}
 
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
 
-	length := 2 + 4 + len(key) + len(value)
+	length := uint32(2 + 4 + len(key) + len(encoded))
+	if compressed {
+		length = page.ValuePtrMarkCompressed(length)
+	}
 
 	return page.ValuePtr{
 		Offset: uint64(offset + 4),
-		Length: uint32(length),
+		Length: length,
 		FileID: sm.activeSlab.ID,
 	}, nil
 }
 
 type appendManyMeta struct {
-	idx    int
-	start  int
-	keyLen int
-	valLen int
+	idx        int
+	start      int
+	keyLen     int
+	valLen     int
+	compressed bool
 }
 
 // AppendMany appends multiple records while amortizing system calls. It returns
@@ -203,12 +248,26 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		crc       uint32
 	}
 
+	encodedValues := values
+	compressedFlags := make([]bool, len(values))
+	if sm.compression.kind != CompressionNone {
+		encodedValues = make([][]byte, len(values))
+		for i := range values {
+			encoded, compressed, err := sm.compression.compressValue(values[i])
+			if err != nil {
+				return nil, err
+			}
+			encodedValues[i] = encoded
+			compressedFlags[i] = compressed
+		}
+	}
+
 	prep := make([]appendManyPrep, len(keys))
 	var lenArr [6]byte
 
 	for i := 0; i < len(keys); i++ {
 		key := keys[i]
-		value := values[i]
+		value := encodedValues[i]
 
 		keyLen := len(key)
 		valLen := len(value)
@@ -271,9 +330,13 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 			}
 
 			for _, meta := range metas {
+				length := uint32(2 + 4 + meta.keyLen + meta.valLen)
+				if meta.compressed {
+					length = page.ValuePtrMarkCompressed(length)
+				}
 				ptrs[meta.idx] = page.ValuePtr{
 					Offset: uint64(base + int64(meta.start) + 4),
-					Length: uint32(2 + 4 + meta.keyLen + meta.valLen),
+					Length: length,
 					FileID: id,
 				}
 			}
@@ -302,7 +365,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 
 	for i := 0; i < len(keys); i++ {
 		key := keys[i]
-		value := values[i]
+		value := encodedValues[i]
 		recPrep := prep[i]
 		keyLen := recPrep.keyLen
 		valLen := recPrep.valLen
@@ -340,10 +403,11 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		copy(rec[10+keyLen:], value)
 
 		metas = append(metas, appendManyMeta{
-			idx:    i,
-			start:  start,
-			keyLen: keyLen,
-			valLen: valLen,
+			idx:        i,
+			start:      start,
+			keyLen:     keyLen,
+			valLen:     valLen,
+			compressed: compressedFlags[i],
 		})
 	}
 
@@ -519,6 +583,7 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	s := &SlabSet{
 		Files:               files,
 		disableReadChecksum: sm.disableReadChecksum,
+		compression:         &sm.compression,
 	}
 	s.RefCount.Store(1) // Manager owns one reference
 	return s
@@ -528,7 +593,11 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
 	}
-	return f.Read(int64(ptr.Offset), !s.disableReadChecksum)
+	val, err := f.Read(int64(ptr.Offset), !s.disableReadChecksum)
+	if err != nil {
+		return nil, err
+	}
+	return decodeValue(ptr, val, s.compression)
 }
 
 func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -536,7 +605,11 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
 	}
-	return f.ReadUnsafe(int64(ptr.Offset), !s.disableReadChecksum)
+	val, err := f.ReadUnsafe(int64(ptr.Offset), !s.disableReadChecksum)
+	if err != nil {
+		return nil, err
+	}
+	return decodeValue(ptr, val, s.compression)
 }
 
 // AcquireSlabs increments the RefCount for the Set (O(1)).

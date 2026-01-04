@@ -78,7 +78,7 @@ func New(sm *slab.SlabManager, threshold int) *Batch {
 
 // Acquire returns a reusable Batch from the pool.
 func Acquire(sm *slab.SlabManager, threshold int) *Batch {
-	if threshold <= 0 {
+	if threshold < 0 {
 		threshold = page.DefaultInlineThreshold
 	}
 	b := batchPool.Get().(*Batch)

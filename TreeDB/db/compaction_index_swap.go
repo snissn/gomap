@@ -498,7 +498,7 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	key := it.under.UnsafeKey()
 	value := it.under.UnsafeValue()
 
-	recordBytes := int(ptr.Length) + 4 // include CRC
+	recordBytes := int(page.ValuePtrRecordLength(ptr)) + 4 // include CRC
 	if err := it.lim.Wait(it.ctx, recordBytes); err != nil {
 		it.err = err
 		return nil, page.ValuePtr{}, 0
@@ -520,15 +520,15 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.metrics.SlabWriteBytesByFile == nil {
 		it.metrics.SlabWriteBytesByFile = make(map[uint32]int64, 4)
 	}
-	it.metrics.SlabWriteBytesByFile[newPtr.FileID] += int64(newPtr.Length)
+	it.metrics.SlabWriteBytesByFile[newPtr.FileID] += int64(page.ValuePtrRecordLength(newPtr))
 
 	if it.metrics.SlabDeadBytesByFile == nil {
 		it.metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
 	}
-	it.metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
+	it.metrics.SlabDeadBytesByFile[ptr.FileID] += int64(page.ValuePtrRecordLength(ptr))
 
-	it.metrics.SlabWriteBytes += int(newPtr.Length)
-	it.metrics.SlabDeadBytes += int(ptr.Length)
+	it.metrics.SlabWriteBytes += int(page.ValuePtrRecordLength(newPtr))
+	it.metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(ptr))
 
 	return nil, newPtr, flags
 }
@@ -632,7 +632,7 @@ func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipp
 
 		if metrics.SlabWriteBytesByFile != nil {
 			if cur := metrics.SlabWriteBytesByFile[newPtr.FileID]; cur > 0 {
-				cur -= int64(newPtr.Length)
+				cur -= int64(page.ValuePtrRecordLength(newPtr))
 				if cur <= 0 {
 					delete(metrics.SlabWriteBytesByFile, newPtr.FileID)
 				} else {
@@ -642,7 +642,7 @@ func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipp
 		}
 		if metrics.SlabDeadBytesByFile != nil {
 			if cur := metrics.SlabDeadBytesByFile[ptr.FileID]; cur > 0 {
-				cur -= int64(ptr.Length)
+				cur -= int64(page.ValuePtrRecordLength(ptr))
 				if cur <= 0 {
 					delete(metrics.SlabDeadBytesByFile, ptr.FileID)
 				} else {
@@ -651,13 +651,13 @@ func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipp
 			}
 		}
 		if metrics.SlabWriteBytes > 0 {
-			metrics.SlabWriteBytes -= int(newPtr.Length)
+			metrics.SlabWriteBytes -= int(page.ValuePtrRecordLength(newPtr))
 			if metrics.SlabWriteBytes < 0 {
 				metrics.SlabWriteBytes = 0
 			}
 		}
 		if metrics.SlabDeadBytes > 0 {
-			metrics.SlabDeadBytes -= int(ptr.Length)
+			metrics.SlabDeadBytes -= int(page.ValuePtrRecordLength(ptr))
 			if metrics.SlabDeadBytes < 0 {
 				metrics.SlabDeadBytes = 0
 			}

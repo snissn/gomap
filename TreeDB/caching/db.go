@@ -600,6 +600,9 @@ type Options struct {
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
+	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
+	// Values <= 0 use the default inline threshold (256 bytes).
+	ValueLogPointerThreshold int
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
 	// AllowUnsafe acknowledges unsafe durability options.
@@ -679,6 +682,7 @@ type DB struct {
 	disableValueLog              bool
 	splitValueLog                bool
 	inlineThreshold              int
+	valueLogThreshold            int
 	memtableValueLogPointers     bool
 	valueLogReader               *vlog.Manager
 	valueLogMu                   sync.Mutex
@@ -1176,9 +1180,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	inlineThreshold := page.DefaultInlineThreshold
 	if provider, ok := backend.(interface{ InlineThreshold() int }); ok {
-		if v := provider.InlineThreshold(); v > 0 {
+		if v := provider.InlineThreshold(); v >= 0 {
 			inlineThreshold = v
 		}
+	}
+	valueLogThreshold := opts.ValueLogPointerThreshold
+	if valueLogThreshold <= 0 {
+		valueLogThreshold = page.DefaultInlineThreshold
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
 	if opts.SplitValueLog && disableValueLog {
@@ -1259,6 +1267,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		relaxedSync:                  opts.RelaxedSync,
 		notifyError:                  opts.NotifyError,
 		inlineThreshold:              inlineThreshold,
+		valueLogThreshold:            valueLogThreshold,
 		memtableValueLogPointers:     opts.MemtableValueLogPointers,
 		valueLogReader:               valueLogReader,
 		valueLogRetain:               retained,
@@ -2690,7 +2699,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				durability = walDurabilitySync
 			}
 		}
-		eligible := len(value) > db.inlineThreshold
+		eligible := len(value) > db.valueLogThreshold
 		valueLogEnabled := db.valueLogEnabled()
 		allowPointers := valueLogEnabled && db.allowValueLogPointers()
 		if debugPtr && eligible {
@@ -5535,7 +5544,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		if valueLogEnabled || debugPtr {
 			for i := range b.entries {
 				op := &b.entries[i]
-				if op.Type != batch.OpPut || len(op.Value) <= b.db.inlineThreshold {
+				if op.Type != batch.OpPut || len(op.Value) <= b.db.valueLogThreshold {
 					continue
 				}
 				eligibleIdxs = append(eligibleIdxs, i)
@@ -5641,7 +5650,7 @@ func (b *Batch) writeRegular(sync bool) error {
 					if op.Type != batch.OpPut {
 						continue
 					}
-					if len(op.Value) <= b.db.inlineThreshold {
+					if len(op.Value) <= b.db.valueLogThreshold {
 						continue
 					}
 					op.ValuePtr = ptrs[i]
