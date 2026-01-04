@@ -25,6 +25,11 @@ const (
 	DirectoryEntrySize = 2
 
 	smallSearchThreshold = 16
+
+	leafPrefixCompressedFlag uint16 = 0x8000
+	pageTypeMask                   = ^leafPrefixCompressedFlag
+
+	leafPrefixRestartInterval = 16
 )
 
 // Node is a wrapper around a raw page byte slice.
@@ -33,13 +38,15 @@ type Node struct {
 	data  []byte        // The raw page data (4096 bytes)
 	count uint16        // Cached count
 	ptype page.PageType // Cached type
+	keyScratch []byte
 }
 
 // NewNode creates a Node wrapper around the given page data.
 func NewNode(data []byte) *Node {
 	n := &Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		n.ptype = page.PageType(binary.LittleEndian.Uint16(data[12:14]))
+		flags := binary.LittleEndian.Uint16(data[12:14])
+		n.ptype = page.PageType(flags & pageTypeMask)
 		n.count = binary.LittleEndian.Uint16(data[14:16])
 	}
 	return n
@@ -50,7 +57,8 @@ func NewNode(data []byte) *Node {
 func NewNodeView(data []byte) Node {
 	n := Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		n.ptype = page.PageType(binary.LittleEndian.Uint16(data[12:14]))
+		flags := binary.LittleEndian.Uint16(data[12:14])
+		n.ptype = page.PageType(flags & pageTypeMask)
 		n.count = binary.LittleEndian.Uint16(data[14:16])
 	}
 	return n
@@ -79,7 +87,35 @@ func (n *Node) Type() page.PageType {
 // SetType sets the page type in the header.
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
-	binary.LittleEndian.PutUint16(n.data[12:14], uint16(t))
+	flags := binary.LittleEndian.Uint16(n.data[12:14])
+	flags = (flags & leafPrefixCompressedFlag) | uint16(t)
+	binary.LittleEndian.PutUint16(n.data[12:14], flags)
+}
+
+func (n *Node) rawFlags() uint16 {
+	return binary.LittleEndian.Uint16(n.data[12:14])
+}
+
+func (n *Node) setRawFlags(flags uint16) {
+	binary.LittleEndian.PutUint16(n.data[12:14], flags)
+	n.ptype = page.PageType(flags & pageTypeMask)
+}
+
+func (n *Node) leafPrefixCompressed() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafPrefixCompressedFlag != 0
+}
+
+func (n *Node) setLeafPrefixCompressed(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafPrefixCompressedFlag
+	} else {
+		flags &^= leafPrefixCompressedFlag
+	}
+	n.setRawFlags(flags)
 }
 
 // Count returns the number of items in the node.

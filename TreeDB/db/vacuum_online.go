@@ -131,6 +131,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ := zipper.New(newPager, newAlloc)
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
+	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -138,7 +139,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
 	baseIter := baseSnap.tree.Iterator(nil, nil)
-	newRoot, err := bulk.Build(baseIter, newAlloc, newPager)
+	newRoot, err := bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+	})
 	_ = baseIter.Close()
 	_ = baseSnap.Close()
 	if err != nil {
@@ -225,7 +228,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		}
 
 		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
-		newSysRoot, err := bulk.Build(sysIter, newAlloc, newPager)
+		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+		})
 		_ = sysIter.Close()
 		if err != nil {
 			db.writeMu.Unlock()

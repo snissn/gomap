@@ -23,9 +23,13 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 
 	// 1. Setup newNode type
 	newNode.SetType(n.Type())
+	if n.Type() == page.PageTypeLeaf {
+		newNode.setLeafPrefixCompressed(n.leafPrefixCompressed())
+	}
 
 	// 2. Iterate from splitIndex to count-1 and move items
 	var pivotKey []byte
+	var leafBuilder *Builder
 
 	for i := uint16(0); i < moveCount; i++ {
 		srcIdx := splitIndex + i
@@ -46,25 +50,18 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 			return nil, ErrCorruptedNode
 		}
 
-		var key []byte
-
 		if n.Type() == page.PageTypeLeaf {
-			// Leaf
-			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-
-			// Extract Key for Pivot (only need first one)
-			if i == 0 {
-				key = make([]byte, keyLen)
-				copy(key, n.data[ptr+7:ptr+7+int(keyLen)])
-				pivotKey = key
+			if leafBuilder == nil {
+				opts := BuilderOptions{LeafPrefixCompression: n.leafPrefixCompressed()}
+				leafBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
+				leafBuilder.SetPageID(newNode.PageID())
 			}
-
 		} else {
 			// Internal
 			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
 
 			if i == 0 {
-				key = make([]byte, keyLen)
+				key := make([]byte, keyLen)
 				copy(key, n.data[ptr+10:ptr+10+int(keyLen)])
 				pivotKey = key
 			}
@@ -87,8 +84,11 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			if i == 0 {
+				pivotKey = append([]byte(nil), key...)
+			}
 			// AddLeafEntry copies data, so Views are safe here.
-			err = newNode.AddLeafEntry(key, val, flags, ptr)
+			err = leafBuilder.AddLeafEntry(key, val, flags, ptr)
 			if err != nil {
 				return nil, err
 			}
@@ -132,7 +132,13 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 
 	n.SetCount(splitIndex)
 	n.UpdateChecksum()
-	newNode.UpdateChecksum() // Add* already updates, but safe to do.
+	if leafBuilder != nil {
+		leafBuilder.Finish()
+		newNode.setRawFlags(binary.LittleEndian.Uint16(newNode.data[12:14]))
+		newNode.count = binary.LittleEndian.Uint16(newNode.data[14:16])
+	} else {
+		newNode.UpdateChecksum() // Add* already updates, but safe to do.
+	}
 
 	return pivotKey, nil
 }

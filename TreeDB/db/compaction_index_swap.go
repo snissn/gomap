@@ -115,6 +115,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	newZ := zipper.New(newPager, newAlloc)
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
+	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -124,7 +125,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 	lim := newIndexSwapLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
 	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist)
-	newRoot, buildErr := bulk.Build(remapIter, newAlloc, newPager)
+	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+	})
 	iterErr := remapIter.Error()
 	_ = remapIter.Close()
 	if buildErr != nil || iterErr != nil {
@@ -216,7 +219,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		}
 
 		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
-		newSysRoot, err := bulk.Build(sysIter, newAlloc, newPager)
+		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+		})
 		_ = sysIter.Close()
 		if err != nil {
 			db.writeMu.Unlock()

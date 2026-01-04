@@ -68,6 +68,61 @@ func TestLeafNode(t *testing.T) {
 	}
 }
 
+func TestLeafNodePrefixCompression(t *testing.T) {
+	data := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(data, page.PageTypeLeaf, BuilderOptions{LeafPrefixCompression: true})
+	b.SetPageID(1)
+
+	keys := [][]byte{
+		[]byte("key1"),
+		[]byte("key2"),
+		[]byte("key3"),
+		[]byte("key9"),
+	}
+	for _, k := range keys {
+		if err := b.AddLeafEntry(k, []byte("val"+string(k)), FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry failed: %v", err)
+		}
+	}
+	n := b.Finish()
+
+	if !n.leafPrefixCompressed() {
+		t.Fatalf("expected leaf prefix compression flag")
+	}
+	if n.Count() != uint16(len(keys)) {
+		t.Fatalf("expected %d items, got %d", len(keys), n.Count())
+	}
+
+	for i, k := range keys {
+		entry, err := n.GetLeafEntry(uint16(i))
+		if err != nil {
+			t.Fatalf("GetLeafEntry(%d) failed: %v", i, err)
+		}
+		if !bytes.Equal(entry.Key, k) {
+			t.Fatalf("entry %d key mismatch: %q != %q", i, entry.Key, k)
+		}
+	}
+
+	idx, found, err := n.SearchLeaf([]byte("key2"))
+	if err != nil {
+		t.Fatalf("SearchLeaf key2 failed: %v", err)
+	}
+	if !found || idx != 1 {
+		t.Fatalf("SearchLeaf key2 expected idx=1 found=true, got idx=%d found=%v", idx, found)
+	}
+
+	if err := n.AddLeafEntry([]byte("key2"), []byte("updated"), FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry update failed: %v", err)
+	}
+	updated, err := n.GetLeafEntry(1)
+	if err != nil {
+		t.Fatalf("GetLeafEntry after update failed: %v", err)
+	}
+	if !bytes.Equal(updated.Value, []byte("updated")) {
+		t.Fatalf("expected updated value, got %q", updated.Value)
+	}
+}
+
 func TestLeafSearch_CorruptedOffsetsReturnError(t *testing.T) {
 	data := make([]byte, page.PageSize)
 	n := NewNode(data)

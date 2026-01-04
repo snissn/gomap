@@ -66,6 +66,7 @@ type DB struct {
 	policy                WritePolicy
 	leafFillTargetPPM     uint32
 	internalFillTargetPPM uint32
+	leafPrefixCompression bool
 	piggybackCompaction   bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
@@ -162,6 +163,8 @@ type Options struct {
 	// (current behavior). Zero uses the default (1_000_000).
 	LeafFillTargetPPM     uint32
 	InternalFillTargetPPM uint32
+	// LeafPrefixCompression enables prefix-compressed leaf nodes for new pages.
+	LeafPrefixCompression bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -466,6 +469,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		keepRecent:            opts.KeepRecent,
 		leafFillTargetPPM:     opts.LeafFillTargetPPM,
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
+		leafPrefixCompression: opts.LeafPrefixCompression,
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		dir:                   opts.Dir,
@@ -490,6 +494,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -610,11 +615,9 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		n := node.NewNode(data)
-		n.SetPageID(rootID)
-		n.SetType(page.PageTypeLeaf)
-		n.SetCount(0)
-		n.UpdateChecksum()
+		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		b.SetPageID(rootID)
+		b.Finish()
 
 		db.meta.UserRootPageID = rootID
 
@@ -627,11 +630,9 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		nSys := node.NewNode(dataSys)
-		nSys.SetPageID(sysRootID)
-		nSys.SetType(page.PageTypeLeaf)
-		nSys.SetCount(0)
-		nSys.UpdateChecksum()
+		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		bSys.SetPageID(sysRootID)
+		bSys.Finish()
 
 		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
@@ -1258,7 +1259,9 @@ func (db *DB) CompactIndex() error {
 
 	// Build new tree sequentially
 	alloc := &pagerAllocator{p: idx.pager}
-	newRoot, err := bulk.Build(iter, alloc, idx.pager)
+	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+	})
 	if err != nil {
 		return err
 	}

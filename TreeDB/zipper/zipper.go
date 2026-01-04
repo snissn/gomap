@@ -21,9 +21,10 @@ type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
 
-	leafReserveBytes     int
-	internalReserveBytes int
-	piggybackCompaction  bool
+	leafReserveBytes      int
+	internalReserveBytes  int
+	piggybackCompaction   bool
+	leafPrefixCompression bool
 }
 
 type Split struct {
@@ -47,11 +48,12 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 // the provided allocator.
 func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 	return &Zipper{
-		pager:                z.pager,
-		allocator:            a,
-		leafReserveBytes:     z.leafReserveBytes,
-		internalReserveBytes: z.internalReserveBytes,
-		piggybackCompaction:  z.piggybackCompaction,
+		pager:                 z.pager,
+		allocator:             a,
+		leafReserveBytes:      z.leafReserveBytes,
+		internalReserveBytes:  z.internalReserveBytes,
+		piggybackCompaction:   z.piggybackCompaction,
+		leafPrefixCompression: z.leafPrefixCompression,
 	}
 }
 
@@ -64,6 +66,24 @@ func (z *Zipper) SetFillTargets(leafPPM, internalPPM uint32) {
 
 func (z *Zipper) SetPiggybackCompaction(enabled bool) {
 	z.piggybackCompaction = enabled
+}
+
+func (z *Zipper) SetLeafPrefixCompression(enabled bool) {
+	z.leafPrefixCompression = enabled
+}
+
+func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
+	if z != nil && z.leafPrefixCompression {
+		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
+	}
+	return node.NewBuilder(data, page.PageTypeLeaf)
+}
+
+func (z *Zipper) newBuilderForType(data []byte, typ page.PageType) *node.Builder {
+	if typ == page.PageTypeLeaf {
+		return z.newLeafBuilder(data)
+	}
+	return node.NewBuilder(data, typ)
 }
 
 func reserveBytesFromPPM(ppm uint32) int {
@@ -234,7 +254,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	oldNode := node.NewNode(oldData)
 
 	// Create Builder for new page
-	builder := node.NewBuilder(newData, oldNode.Type())
+	builder := z.newBuilderForType(newData, oldNode.Type())
 	builder.SetPageID(newPageID)
 
 	// Track retired page
@@ -281,7 +301,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		// Handle Page 0 / Empty / New Tree case
 		if oldNode.Type() == 0 {
 			// Reuse builder, set type
-			builder = node.NewBuilder(newData, page.PageTypeLeaf)
+			builder = z.newLeafBuilder(newData)
 			builder.SetPageID(newPageID)
 
 			nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
@@ -389,12 +409,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		entrySize := 7 + len(key)
-		if flags&node.FlagPointer != 0 {
-			entrySize += page.ValuePtrSize
-		} else {
-			entrySize += len(val)
-		}
+		entrySize := target.LeafEntrySize(key, val, flags)
 		var err error
 		if z.leafSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
@@ -424,7 +439,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			splitBuilder := node.NewBuilder(sdata, page.PageTypeLeaf)
+			splitBuilder := z.newLeafBuilder(sdata)
 			splitBuilder.SetPageID(sid)
 
 			// Record split
@@ -771,7 +786,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		if err != nil {
 			return 0, false, err
 		}
-		b := node.NewBuilder(data, page.PageTypeLeaf)
+		b := z.newLeafBuilder(data)
 		b.SetPageID(pid)
 
 		addAll := func(n *node.Node) error {
@@ -828,7 +843,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		if err != nil {
 			return 0, err
 		}
-		b := node.NewBuilder(data, page.PageTypeLeaf)
+		b := z.newLeafBuilder(data)
 		b.SetPageID(pid)
 
 		for i := uint16(0); i < n.Count(); i++ {
@@ -882,7 +897,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
-		lb := node.NewBuilder(ldata, page.PageTypeLeaf)
+		lb := z.newLeafBuilder(ldata)
 		lb.SetPageID(lid)
 
 		rdata, err := z.pager.GetForWrite(rid)
@@ -955,7 +970,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 			return 0, 0, nil, false, nil
 		}
 
-		rb := node.NewBuilder(rdata, page.PageTypeLeaf)
+		rb := z.newLeafBuilder(rdata)
 		rb.SetPageID(rid)
 
 		for i := 0; i < bestSplitAt; i++ {

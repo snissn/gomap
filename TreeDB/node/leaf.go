@@ -21,53 +21,175 @@ type LeafEntry struct {
 	Flags    byte
 }
 
-// GetLeafEntryView returns a view of the entry at the given index.
-// Key and Value slices point directly to the node's data.
-// CAUTION: The returned slices are valid only as long as the node data is valid.
-func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr page.ValuePtr, flags byte, err error) {
+type leafEntryLayout struct {
+	headerSize int
+	prefixLen  int
+	suffixLen  int
+	keyLen     int
+	valLen     int
+	flags      byte
+}
+
+func (n *Node) ensureKeyScratch(size int) []byte {
+	if size < 0 {
+		return nil
+	}
+	if cap(n.keyScratch) < size {
+		n.keyScratch = make([]byte, size)
+	}
+	return n.keyScratch[:size]
+}
+
+func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
+	if offset < NodeHeaderSize || offset >= len(n.data) {
+		return leafEntryLayout{}, ErrCorruptedNode
+	}
+
+	if n.leafPrefixCompressed() {
+		if offset+9 > len(n.data) {
+			return leafEntryLayout{}, ErrCorruptedNode
+		}
+		prefixLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
+		suffixLen := int(binary.LittleEndian.Uint16(n.data[offset+2 : offset+4]))
+		valLen := int(binary.LittleEndian.Uint32(n.data[offset+4 : offset+8]))
+		flags := n.data[offset+8]
+		keyStart := offset + 9
+		if keyStart+suffixLen > len(n.data) {
+			return leafEntryLayout{}, ErrCorruptedNode
+		}
+		return leafEntryLayout{
+			headerSize: 9,
+			prefixLen:  prefixLen,
+			suffixLen:  suffixLen,
+			keyLen:     prefixLen + suffixLen,
+			valLen:     valLen,
+			flags:      flags,
+		}, nil
+	}
+
+	if offset+7 > len(n.data) {
+		return leafEntryLayout{}, ErrCorruptedNode
+	}
+	keyLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
+	valLen := int(binary.LittleEndian.Uint32(n.data[offset+2 : offset+6]))
+	flags := n.data[offset+6]
+	keyStart := offset + 7
+	if keyStart+keyLen > len(n.data) {
+		return leafEntryLayout{}, ErrCorruptedNode
+	}
+	return leafEntryLayout{
+		headerSize: 7,
+		suffixLen:  keyLen,
+		keyLen:     keyLen,
+		valLen:     valLen,
+		flags:      flags,
+	}, nil
+}
+
+func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout, entryStart int, err error) {
 	offset, err := n.getOffset(index)
+	if err != nil {
+		return nil, leafEntryLayout{}, 0, err
+	}
+	if int(offset) >= len(n.data) {
+		return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+	}
+	entryStart = int(offset)
+
+	if !n.leafPrefixCompressed() {
+		layout, err = n.leafEntryLayoutAt(entryStart)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		keyStart := entryStart + layout.headerSize
+		if keyStart+layout.keyLen > len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		key = n.data[keyStart : keyStart+layout.keyLen]
+		return key, layout, entryStart, nil
+	}
+
+	count := n.Count()
+	if index >= count {
+		return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+	}
+	restart := index - (index % leafPrefixRestartInterval)
+	var prevKey []byte
+	for i := restart; i <= index; i++ {
+		off, err := n.getOffset(i)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		if int(off) >= len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		ptr := int(off)
+		layout, err = n.leafEntryLayoutAt(ptr)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		keyStart := ptr + layout.headerSize
+		keyEnd := keyStart + layout.suffixLen
+		if keyEnd > len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+
+		if i == restart {
+			if layout.prefixLen != 0 {
+				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+			}
+			key = n.ensureKeyScratch(layout.suffixLen)
+			copy(key, n.data[keyStart:keyEnd])
+		} else {
+			if layout.prefixLen > len(prevKey) {
+				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+			}
+			keyLen := layout.prefixLen + layout.suffixLen
+			key = n.ensureKeyScratch(keyLen)
+			copy(key, prevKey[:layout.prefixLen])
+			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
+		}
+
+		prevKey = key
+		if i == index {
+			entryStart = ptr
+			return key, layout, entryStart, nil
+		}
+	}
+
+	return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+}
+
+// GetLeafEntryView returns a view of the entry at the given index.
+// Key and Value slices point directly to the node's data when the node is not
+// prefix-compressed. For prefix-compressed nodes, Key is reconstructed into a
+// scratch buffer owned by the node and is only valid until the next call.
+func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr page.ValuePtr, flags byte, err error) {
+	layout, entryStart := leafEntryLayout{}, 0
+	key, layout, entryStart, err = n.leafEntryKeyAt(index)
 	if err != nil {
 		return nil, nil, page.ValuePtr{}, 0, err
 	}
-
-	if int(offset) >= len(n.data) {
-		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
-	}
-
-	ptr := int(offset)
-	if ptr+7 > len(n.data) {
-		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
-	}
-
-	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-	valLen := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
-	flags = n.data[ptr+6]
-
-	ptr += 7
-	if ptr+int(keyLen) > len(n.data) {
-		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
-	}
-
-	key = n.data[ptr : ptr+int(keyLen)]
-	ptr += int(keyLen)
+	flags = layout.flags
 
 	if flags&FlagTombstone != 0 {
 		return key, nil, page.ValuePtr{}, flags, nil
 	}
 
+	valueStart := entryStart + layout.headerSize + layout.suffixLen
 	if flags&FlagPointer != 0 {
-		if ptr+page.ValuePtrSize > len(n.data) {
+		if valueStart+page.ValuePtrSize > len(n.data) {
 			return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 		}
-		valPtr = page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
+		valPtr = page.DecodeValuePtr(n.data[valueStart : valueStart+page.ValuePtrSize])
 		return key, nil, valPtr, flags, nil
 	}
 
 	// Inline
-	if ptr+int(valLen) > len(n.data) {
+	if valueStart+layout.valLen > len(n.data) {
 		return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 	}
-	val = n.data[ptr : ptr+int(valLen)]
+	val = n.data[valueStart : valueStart+layout.valLen]
 	return key, val, page.ValuePtr{}, flags, nil
 }
 
@@ -91,19 +213,22 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 
 	ptr := int(offset)
-	if ptr < NodeHeaderSize || ptr+7 > len(n.data) {
+	if ptr < NodeHeaderSize {
 		return false, ErrCorruptedNode
 	}
 
-	keyLen := int(binary.LittleEndian.Uint16(n.data[ptr : ptr+2]))
-	flags := n.data[ptr+6]
+	layout, err := n.leafEntryLayoutAt(ptr)
+	if err != nil {
+		return false, err
+	}
+	flags := layout.flags
 
 	// Tombstones and inline values have no ValuePtr bytes to rewrite.
 	if flags&FlagTombstone != 0 || flags&FlagPointer == 0 {
 		return false, nil
 	}
 
-	ptr += 7 + keyLen
+	ptr += layout.headerSize + layout.suffixLen
 	if ptr+page.ValuePtrSize > len(n.data) {
 		return false, ErrCorruptedNode
 	}
@@ -148,6 +273,10 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 // If key is found, found=true.
 // If key is greater than all entries, returns Count, false.
 func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
+	if n.leafPrefixCompressed() {
+		return n.searchLeafPrefixCompressed(key)
+	}
+
 	data := n.data
 	count := n.Count()
 	if count <= smallSearchThreshold {
@@ -229,6 +358,52 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	return uint16(i), false, nil
 }
 
+func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
+	count := n.Count()
+	if count == 0 {
+		return 0, false, nil
+	}
+	if count <= smallSearchThreshold {
+		for idx := uint16(0); idx < count; idx++ {
+			k, _, _, err := n.leafEntryKeyAt(idx)
+			if err != nil {
+				return 0, false, err
+			}
+			cmp := bytes.Compare(k, key)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
+		}
+		return count, false, nil
+	}
+
+	i, j := 0, int(count)
+	for i < j {
+		h := int(uint(i+j) >> 1) // avoid overflow
+		k, _, _, err := n.leafEntryKeyAt(uint16(h))
+		if err != nil {
+			return 0, false, err
+		}
+		cmp := bytes.Compare(k, key)
+		if cmp < 0 {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+
+	if i < int(count) {
+		k, _, _, err := n.leafEntryKeyAt(uint16(i))
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Equal(k, key) {
+			return uint16(i), true, nil
+		}
+	}
+	return uint16(i), false, nil
+}
+
 // AddLeafEntry inserts a new entry into the Leaf Node.
 // It maintains the sorted order of keys.
 // If the key already exists, it updates it (by rewriting the entry).
@@ -238,6 +413,9 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr) error {
 	if n.Type() != page.PageTypeLeaf {
 		return ErrInvalidType
+	}
+	if n.leafPrefixCompressed() {
+		return n.addLeafEntryPrefixCompressed(key, value, flags, valPtr)
 	}
 
 	// Calculate size needed
@@ -360,5 +538,61 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	}
 
 	n.UpdateChecksum()
+	return nil
+}
+
+func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	newEntry := LeafEntry{
+		Key:      append([]byte(nil), key...),
+		ValuePtr: valPtr,
+		Flags:    flags,
+	}
+	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+		newEntry.Value = append([]byte(nil), value...)
+	}
+
+	entries := make([]LeafEntry, 0, int(n.Count())+1)
+	inserted := false
+	for i := uint16(0); i < n.Count(); i++ {
+		k, v, ptr, f, err := n.GetLeafEntryView(i)
+		if err != nil {
+			return err
+		}
+		cmp := bytes.Compare(k, key)
+		if cmp == 0 {
+			if !inserted {
+				entries = append(entries, newEntry)
+				inserted = true
+			}
+			continue
+		}
+		if !inserted && cmp > 0 {
+			entries = append(entries, newEntry)
+			inserted = true
+		}
+		entry := LeafEntry{
+			Key:      append([]byte(nil), k...),
+			ValuePtr: ptr,
+			Flags:    f,
+		}
+		if f&FlagPointer == 0 && f&FlagTombstone == 0 {
+			entry.Value = append([]byte(nil), v...)
+		}
+		entries = append(entries, entry)
+	}
+	if !inserted {
+		entries = append(entries, newEntry)
+	}
+
+	b := NewBuilderWithOptions(n.data, page.PageTypeLeaf, BuilderOptions{LeafPrefixCompression: true})
+	b.SetPageID(n.PageID())
+	for _, entry := range entries {
+		if err := b.AddLeafEntry(entry.Key, entry.Value, entry.Flags, entry.ValuePtr); err != nil {
+			return err
+		}
+	}
+	b.Finish()
+	n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+	n.count = binary.LittleEndian.Uint16(n.data[14:16])
 	return nil
 }

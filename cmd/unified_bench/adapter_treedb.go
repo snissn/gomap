@@ -39,6 +39,7 @@ var (
 	treedbCompactCopyBurst          = flag.Int64("treedb-compact-copy-burst", 0, "TreeDB: compaction copy throttling burst (bytes), 0=default")
 	treedbVacuumBeforeScans         = flag.Bool("treedb-vacuum-before-scans", false, "TreeDB: vacuum (rebuild) the user index before scan tests (typically used with -settle-before-scans)")
 	treedbForceValuePointers        = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in slabs (no inline values)")
+	treedbLeafPrefixCompression     = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable prefix-compressed leaf nodes")
 	treedbSlabCompression           = flag.String("treedb-slab-compression", "none", "TreeDB: slab compression (none|zstd)")
 	treedbSlabCompressionMinBytes   = flag.Int("treedb-slab-compression-min-bytes", 0, "TreeDB: minimum value size to attempt compression (0=default)")
 	treedbSlabCompressionMinSavings = flag.Int("treedb-slab-compression-min-savings", 0, "TreeDB: minimum bytes saved to keep compressed (0=default)")
@@ -105,6 +106,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		LeafPrefixCompression:             *treedbLeafPrefixCompression,
 		FlushThreshold:                    *treedbFlushThreshold,
 		MaxQueuedMemtables:                *treedbMaxQueuedMems,
 		SlowdownBacklogSeconds:            *treedbSlowdownBacklogSeconds,
@@ -144,6 +146,7 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		FreelistRegionRadius:              *treedbFreelistRegionRadius,
 		LeafFillTargetPPM:                 uint32(clampPPM(*treedbLeafFillPPM)),
 		InternalFillTargetPPM:             uint32(clampPPM(*treedbInternalFillPPM)),
+		LeafPrefixCompression:             *treedbLeafPrefixCompression,
 		ForceValuePointers:                *treedbForceValuePointers,
 		SlabCompression:                   compOpts,
 		AllowUnsafe:                       *treedbAllowUnsafe,
