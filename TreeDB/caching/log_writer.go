@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	logOpSet    = byte(0)
-	logOpDelete = byte(1)
+	logOpSet        = byte(0)
+	logOpDelete     = byte(1)
+	logOpSetPointer = byte(2)
 )
 
 type logRecord struct {

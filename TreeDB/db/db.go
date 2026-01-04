@@ -204,6 +204,9 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
+	// segments, and WAL entries reference them via pointers.
+	SplitValueLog bool
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
@@ -487,7 +490,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.state.Store(initialState)
 
-	segments, err := listWALSegments(opts.Dir)
+	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog && !opts.SplitValueLog
+	segments, err := listWALSegments(opts.Dir, includeValueLog)
 	if err != nil {
 		db.Close()
 		return nil, err
