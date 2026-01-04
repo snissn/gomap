@@ -925,6 +925,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 				if flags&node.FlagTombstone != 0 {
 					continue
 				}
+				if z.leafPrefixCompression {
+					k = append([]byte(nil), k...)
+				}
 				combined = append(combined, ev{k: k, v: v, ptr: ptr, flags: flags, size: leafEntryBytes(k, v, ptr, flags)})
 			}
 		}

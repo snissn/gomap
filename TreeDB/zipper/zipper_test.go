@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -152,5 +153,78 @@ func TestZipperUpdates(t *testing.T) {
 	val, err = tr.Get([]byte("C"))
 	if !bytes.Equal(val, []byte("valC")) {
 		t.Errorf("C mismatch: %s", val)
+	}
+}
+
+func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetLeafPrefixCompression(true)
+
+	buildLeaf := func(keys []string, valSize int) uint64 {
+		id, err := p.Alloc(1)
+		if err != nil {
+			t.Fatalf("alloc leaf: %v", err)
+		}
+		data, err := p.GetForWrite(id)
+		if err != nil {
+			t.Fatalf("get leaf: %v", err)
+		}
+		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
+		b.SetPageID(id)
+		val := bytes.Repeat([]byte("v"), valSize)
+		for _, k := range keys {
+			if err := b.AddLeafEntry([]byte(k), val, node.FlagInline, page.ValuePtr{}); err != nil {
+				t.Fatalf("add leaf entry %q: %v", k, err)
+			}
+		}
+		b.Finish()
+		return id
+	}
+
+	leftID := buildLeaf([]string{"a0"}, 100)
+	rightID := buildLeaf([]string{"b0", "b1", "b2", "b3"}, 1000)
+
+	entries := []internalEntry{
+		{key: []byte{}, child: leftID},
+		{key: []byte("b0"), child: rightID},
+	}
+
+	out, _, err := z.coalesceLeafChildren(entries, &adaptive.Metrics{})
+	if err != nil {
+		t.Fatalf("coalesceLeafChildren: %v", err)
+	}
+
+	var got []string
+	for _, e := range out {
+		data, err := p.Get(e.child)
+		if err != nil {
+			t.Fatalf("load leaf %d: %v", e.child, err)
+		}
+		n := node.NewNode(data)
+		for i := uint16(0); i < n.Count(); i++ {
+			entry, err := n.GetLeafEntry(i)
+			if err != nil {
+				t.Fatalf("leaf entry %d: %v", i, err)
+			}
+			got = append(got, string(entry.Key))
+		}
+	}
+
+	expected := []string{"a0", "b0", "b1", "b2", "b3"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d keys, got %d (%v)", len(expected), len(got), got)
+	}
+	for i, k := range expected {
+		if got[i] != k {
+			t.Fatalf("key[%d] = %q, want %q (all=%v)", i, got[i], k, got)
+		}
 	}
 }
