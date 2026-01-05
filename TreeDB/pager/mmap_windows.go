@@ -59,6 +59,30 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	return sliceFromAddr(addr, length), nil
 }
 
+func mmapFileReadOnly(fd uintptr, offset int64, length int) ([]byte, error) {
+	if length == 0 {
+		return nil, nil
+	}
+	if allocationGranularity != 0 && offset%allocationGranularity != 0 {
+		return nil, windows.ERROR_MAPPED_ALIGNMENT
+	}
+	size := offset + int64(length)
+	h, err := windows.CreateFileMapping(windows.Handle(fd), nil, windows.PAGE_READONLY, uint32(size>>32), uint32(size), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(h)
+
+	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_READ, uint32(offset>>32), uint32(offset), uintptr(length))
+	if err != nil {
+		return nil, err
+	}
+	if addr == 0 {
+		return nil, windows.ERROR_INVALID_ADDRESS
+	}
+	return sliceFromAddr(addr, length), nil
+}
+
 func mmapAvailable() error {
 	return nil
 }

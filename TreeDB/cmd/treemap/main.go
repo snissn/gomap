@@ -7,8 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/compaction"
@@ -31,6 +34,8 @@ Commands:
   compact         Compact slab files (by candidate selection or slab id)
 
 Run "treemap <command> -h" for command-specific options.
+
+Most read commands open the DB read-only by default; pass -rw to allow writes/recovery.
 `
 
 func main() {
@@ -81,9 +86,10 @@ func main() {
 func runInfo(dir string, args []string) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	printStats(db.Stats())
@@ -100,9 +106,10 @@ func runInfo(dir string, args []string) {
 func runStats(dir string, args []string) {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 	printStats(db.Stats())
 }
@@ -110,9 +117,10 @@ func runStats(dir string, args []string) {
 func runFrag(dir string, args []string) {
 	fs := flag.NewFlagSet("frag", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 	rep, err := db.FragmentationReport()
 	if err != nil {
@@ -127,10 +135,11 @@ func runFrag(dir string, args []string) {
 func runVerify(dir string, args []string) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	report := fs.Bool("report", false, "Print stats and fragmentation report")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	if *report {
@@ -166,6 +175,7 @@ func runVerify(dir string, args []string) {
 func runGet(dir string, args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	hexInput := fs.Bool("hex", false, "Interpret key as hex")
 	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
 	outMode := fs.String("out", "string", "Output format: string|hex|base64")
@@ -179,7 +189,7 @@ func runGet(dir string, args []string) {
 		fatalf("invalid key: %v", err)
 	}
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	val, err := db.Get(key)
@@ -202,6 +212,7 @@ func runGet(dir string, args []string) {
 func runKeys(dir string, args []string) {
 	fs := flag.NewFlagSet("keys", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	start := fs.String("start", "", "Start key (inclusive)")
 	end := fs.String("end", "", "End key (exclusive)")
 	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
@@ -213,7 +224,7 @@ func runKeys(dir string, args []string) {
 
 	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -242,6 +253,7 @@ func runKeys(dir string, args []string) {
 func runScan(dir string, args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	start := fs.String("start", "", "Start key (inclusive)")
 	end := fs.String("end", "", "End key (exclusive)")
 	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
@@ -258,7 +270,7 @@ func runScan(dir string, args []string) {
 		fatalf("scan requires -allow-values to print values; use keys to dump keys only")
 	}
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -293,7 +305,7 @@ func runVacuum(dir string, args []string) {
 	timeout := fs.Duration("timeout", 0, "Timeout for online vacuum (0=none)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, true)
+	db := openTreeDB(dir, true, true)
 	defer closeTreeDB(db)
 
 	ctx := context.Background()
@@ -358,15 +370,52 @@ func runCompact(dir string, args []string) {
 	}
 }
 
-func openTreeDB(dir string, backend bool) *treedb.DB {
+var (
+	signalOnce    sync.Once
+	signalCloseMu sync.Mutex
+	signalClosers []func()
+)
+
+func registerSignalCloser(fn func()) {
+	if fn == nil {
+		return
+	}
+	signalCloseMu.Lock()
+	signalClosers = append(signalClosers, fn)
+	signalCloseMu.Unlock()
+
+	signalOnce.Do(func() {
+		ch := make(chan os.Signal, 2)
+		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-ch
+			signalCloseMu.Lock()
+			closers := append([]func(){}, signalClosers...)
+			signalCloseMu.Unlock()
+			for _, closer := range closers {
+				func() {
+					defer func() { _ = recover() }()
+					closer()
+				}()
+			}
+			os.Exit(130)
+		}()
+	})
+}
+
+func openTreeDB(dir string, backend bool, rw bool) *treedb.DB {
 	opts := treedb.Options{Dir: dir}
 	if backend {
 		opts.Mode = treedb.ModeBackend
+	}
+	if !rw {
+		opts.ReadOnly = true
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
+	registerSignalCloser(func() { _ = db.Close() })
 	return db
 }
 

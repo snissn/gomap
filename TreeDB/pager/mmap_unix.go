@@ -9,6 +9,10 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	return unix.Mmap(int(fd), offset, length, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 }
 
+func mmapFileReadOnly(fd uintptr, offset int64, length int) ([]byte, error) {
+	return unix.Mmap(int(fd), offset, length, unix.PROT_READ, unix.MAP_SHARED)
+}
+
 func mmapAvailable() error {
 	return nil
 }

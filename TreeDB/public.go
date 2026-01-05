@@ -93,6 +93,11 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
+	if opts.ReadOnly {
+		// Read-only opens are backend-only: the caching layer creates and rotates
+		// WAL segments (writes) and runs background maintenance loops.
+		opts.Mode = ModeBackend
+	}
 
 	backend, err := db.Open(opts)
 	if err != nil {
@@ -227,6 +232,9 @@ func Open(opts Options) (*DB, error) {
 }
 
 func computeDurabilityMode(opts Options) string {
+	if opts.ReadOnly {
+		return "read_only"
+	}
 	mode := "durable"
 	if opts.Mode == ModeBackend {
 		if opts.RelaxedSync {

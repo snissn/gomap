@@ -20,6 +20,7 @@ type SlabSet struct {
 }
 type SlabManager struct {
 	dir        string
+	readOnly   bool
 	activeSlab *SlabFile
 	slabs      map[uint32]*SlabFile // The master list of all live + zombie slabs
 	mu         sync.RWMutex
@@ -30,9 +31,18 @@ type SlabManager struct {
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
+	return newSlabManager(dir, false)
+}
+
+func NewSlabManagerReadOnly(dir string) (*SlabManager, error) {
+	return newSlabManager(dir, true)
+}
+
+func newSlabManager(dir string, readOnly bool) (*SlabManager, error) {
 	sm := &SlabManager{
-		dir:   dir,
-		slabs: make(map[uint32]*SlabFile),
+		dir:      dir,
+		readOnly: readOnly,
+		slabs:    make(map[uint32]*SlabFile),
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -70,6 +80,9 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 	}
 
 	if !found {
+		if readOnly {
+			return nil, fmt.Errorf("no slab files found in %q", dir)
+		}
 		s, err := OpenSlab(filepath.Join(dir, "data-0000.slab"), 0)
 		if err != nil {
 			return nil, err
@@ -79,7 +92,13 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 	} else {
 		for _, info := range infos {
 			if info.id == maxID {
-				s, err := OpenSlab(info.path, info.id)
+				var s *SlabFile
+				var err error
+				if readOnly {
+					s, err = OpenSlabReadOnly(info.path, info.id)
+				} else {
+					s, err = OpenSlab(info.path, info.id)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -87,7 +106,11 @@ func NewSlabManager(dir string) (*SlabManager, error) {
 				sm.activeSlab = s
 				continue
 			}
-			sm.slabs[info.id] = OpenSlabLazy(info.path, info.id, info.size)
+			if readOnly {
+				sm.slabs[info.id] = OpenSlabLazyReadOnly(info.path, info.id, info.size)
+			} else {
+				sm.slabs[info.id] = OpenSlabLazy(info.path, info.id, info.size)
+			}
 		}
 	}
 
@@ -150,6 +173,9 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return page.ValuePtr{}, ErrReadOnly
+	}
 
 	offset, err := sm.activeSlab.Write(key, value)
 	if err == ErrSlabFull {
@@ -241,6 +267,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return nil, ErrReadOnly
+	}
 
 	ptrs := make([]page.ValuePtr, len(keys))
 
@@ -364,6 +393,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 func (sm *SlabManager) Rotate() (*SlabFile, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return nil, ErrReadOnly
+	}
 	if err := sm.rotateLocked(); err != nil {
 		return nil, err
 	}
@@ -371,6 +403,9 @@ func (sm *SlabManager) Rotate() (*SlabFile, error) {
 }
 
 func (sm *SlabManager) rotateLocked() error {
+	if sm.readOnly {
+		return ErrReadOnly
+	}
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
@@ -399,6 +434,9 @@ func (sm *SlabManager) rotateLocked() error {
 func (sm *SlabManager) Sync() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return ErrReadOnly
+	}
 	return sm.activeSlab.Sync()
 }
 
@@ -422,7 +460,11 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 	if !ok {
 		path := filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", id))
 		var err error
-		s, err = OpenSlab(path, id)
+		if sm.readOnly {
+			s, err = OpenSlabReadOnly(path, id)
+		} else {
+			s, err = OpenSlab(path, id)
+		}
 		if err != nil {
 			return err
 		}
@@ -438,6 +480,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return ErrReadOnly
+	}
 	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return err
 	}
@@ -449,6 +494,9 @@ func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return 0, ErrReadOnly
+	}
 	if sm.activeSlab == nil {
 		return 0, fmt.Errorf("no active slab")
 	}
@@ -464,6 +512,9 @@ func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 func (sm *SlabManager) PruneSlabs(maxID uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return ErrReadOnly
+	}
 
 	for id, s := range sm.slabs {
 		if id > maxID {
