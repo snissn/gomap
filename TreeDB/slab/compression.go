@@ -38,7 +38,7 @@ type compressionConfig struct {
 	minBytes   int
 	minSavings int
 	zstdEnc    *zstd.Encoder
-	zstdDecs   sync.Pool
+	zstdDecs   *sync.Pool
 }
 
 func normalizeCompressionOptions(opts CompressionOptions) (compressionConfig, error) {
@@ -54,9 +54,11 @@ func normalizeCompressionOptions(opts CompressionOptions) (compressionConfig, er
 		cfg.minSavings = defaultCompressionMinSavings
 	}
 
-	cfg.zstdDecs.New = func() any {
-		dec, _ := zstd.NewReader(nil)
-		return dec
+	cfg.zstdDecs = &sync.Pool{
+		New: func() any {
+			dec, _ := zstd.NewReader(nil)
+			return dec
+		},
 	}
 
 	if opts.Kind == CompressionZSTD {
@@ -96,6 +98,9 @@ func (c *compressionConfig) decompressValue(encoded []byte) ([]byte, error) {
 	rawLen := binary.LittleEndian.Uint32(encoded[:compressedHeaderSize])
 	payload := encoded[compressedHeaderSize:]
 
+	if c.zstdDecs == nil {
+		return nil, errCompressedCorrupt
+	}
 	dec := c.zstdDecs.Get().(*zstd.Decoder)
 	out, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
 	c.zstdDecs.Put(dec)
