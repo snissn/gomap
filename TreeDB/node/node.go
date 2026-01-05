@@ -27,7 +27,7 @@ const (
 	smallSearchThreshold = 16
 
 	leafPrefixCompressedFlag uint16 = 0x8000
-	pageTypeMask                   = ^leafPrefixCompressedFlag
+	pageTypeMask                    = ^leafPrefixCompressedFlag
 
 	leafPrefixRestartInterval = 16
 )
@@ -35,9 +35,9 @@ const (
 // Node is a wrapper around a raw page byte slice.
 // It implements the Slotted Page layout.
 type Node struct {
-	data  []byte        // The raw page data (4096 bytes)
-	count uint16        // Cached count
-	ptype page.PageType // Cached type
+	data       []byte        // The raw page data (4096 bytes)
+	count      uint16        // Cached count
+	ptype      page.PageType // Cached type
 	keyScratch []byte
 }
 
