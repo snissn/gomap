@@ -54,17 +54,25 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		})
 	}
 
-	snap := c.db.AcquireSnapshot()
-	defer snap.Close()
-
+	liveSnap := c.db.AcquireSnapshot()
 	liveSetMax := opts.LiveSetMaxEntries
 	if liveSetMax == 0 {
 		liveSetMax = defaultLiveSetMaxEntries
 	}
-	liveSet, err := c.buildLiveSet(ctx, snap, id, liveSetMax, opts.Stats)
+	liveSet, err := c.buildLiveSet(ctx, liveSnap, id, liveSetMax, opts.Stats)
+	_ = liveSnap.Close()
 	if err != nil {
 		return err
 	}
+
+	var lookupSnap *db.Snapshot
+	closeLookup := func() {
+		if lookupSnap != nil {
+			_ = lookupSnap.Close()
+			lookupSnap = nil
+		}
+	}
+	defer closeLookup()
 
 	assist := opts.Assist
 	lastAssist := time.Now()
@@ -183,7 +191,10 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if opts.Stats != nil {
 				opts.Stats.TreeLookups++
 			}
-			entry, err := snap.GetEntry(key)
+			if lookupSnap == nil {
+				lookupSnap = c.db.AcquireSnapshot()
+			}
+			entry, err := lookupSnap.GetEntry(key)
 			if err != nil {
 				return false
 			}
@@ -244,6 +255,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		// Apply periodically to bound memory and writer pauses.
 		if len(ops) >= microBatch {
 			maybeAssist(true)
+			closeLookup()
 			if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 				return err
 			}
@@ -256,6 +268,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 
 	if len(ops) > 0 {
 		maybeAssist(true)
+		closeLookup()
 		if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 			return err
 		}
