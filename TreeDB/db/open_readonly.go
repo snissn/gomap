@@ -110,3 +110,85 @@ func openReadOnly(opts Options) (*DB, error) {
 	// No WAL replay, no background workers in read-only mode.
 	return db, nil
 }
+
+func openReadOnlyNoLock(opts Options) (*DB, error) {
+	idxPath := filepath.Join(opts.Dir, indexFileName)
+	if _, err := os.Stat(idxPath); err != nil {
+		return nil, err
+	}
+
+	p, err := pager.OpenReadOnly(idxPath, opts.ChunkSize)
+	if err != nil {
+		return nil, err
+	}
+	p.SetVerifyOnRead(opts.VerifyOnRead)
+
+	sm, err := slab.NewSlabManagerReadOnly(opts.Dir)
+	if err != nil {
+		_ = p.Close()
+		return nil, err
+	}
+	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
+
+	vlogDir := filepath.Join(opts.Dir, "wal")
+	vm, err := vlog.NewManager(vlogDir)
+	if err != nil {
+		_ = p.Close()
+		_ = sm.Close()
+		return nil, err
+	}
+	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+
+	alloc := freelist.New(p, 0)
+	alloc.SetPreferAppend(opts.PreferAppendAlloc)
+	alloc.SetFreelistRegion(opts.FreelistRegionPages, opts.FreelistRegionRadius)
+
+	z := zipper.New(p, alloc)
+	gen := newIndexGen(1, p, alloc, z)
+
+	db := &DB{
+		readOnly:              true,
+		slabManager:           sm,
+		valueLogManager:       vm,
+		adaptive:              adaptive.New(),
+		keepRecent:            opts.KeepRecent,
+		leafFillTargetPPM:     opts.LeafFillTargetPPM,
+		internalFillTargetPPM: opts.InternalFillTargetPPM,
+		piggybackCompaction:   !opts.DisablePiggybackCompaction,
+		repairSlabTailOnOpen:  false,
+		dir:                   opts.Dir,
+		chunkSize:             opts.ChunkSize,
+		preferAppendAlloc:     opts.PreferAppendAlloc,
+		freelistRegionPages:   opts.FreelistRegionPages,
+		freelistRegionRadius:  opts.FreelistRegionRadius,
+		policy: WritePolicy{
+			InlineThreshold: page.DefaultInlineThreshold,
+			FlushThreshold:  opts.FlushThreshold,
+		},
+
+		idxAll:      map[uint64]*indexGen{gen.id: gen},
+		idxNext:     gen.id + 1,
+		snapPool:    NewSnapshotPool(),
+		notifyError: opts.NotifyError,
+	}
+	db.idx.Store(gen)
+
+	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
+	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+
+	if err := db.recover(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	initialState := &DBState{
+		CommitSeq:        db.meta.CommitSeq,
+		RootPageID:       db.meta.UserRootPageID,
+		SystemRootPageID: db.meta.SystemRootPageID,
+		SlabSet:          sm.CurrentSlabSet(),
+		ValueLogSet:      vm.CurrentSet(),
+	}
+	db.state.Store(initialState)
+
+	return db, nil
+}

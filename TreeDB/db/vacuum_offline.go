@@ -44,6 +44,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		opts.ChunkSize = 256 * 1024 * 1024
 	}
 	opts.DisableBackgroundPrune = true
+	opts.ReadOnly = true
 
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
@@ -56,7 +57,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	}
 
 	// Open the DB without acquiring a second lock (we already hold it).
-	d, err := openWithLock(opts, nil)
+	d, err := openReadOnlyNoLock(opts)
 	if err != nil {
 		return err
 	}
