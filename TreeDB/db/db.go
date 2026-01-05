@@ -62,6 +62,8 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
+	readOnly bool
+
 	keepRecent            uint64
 	policy                WritePolicy
 	leafFillTargetPPM     uint32
@@ -95,7 +97,11 @@ const (
 )
 
 type Options struct {
-	Dir        string
+	Dir string
+	// ReadOnly opens the database without acquiring an exclusive lock and without
+	// modifying on-disk state (no recovery truncation, no WAL replay, no background
+	// maintenance). Only read operations are supported.
+	ReadOnly   bool
 	ChunkSize  int64  // Default 256MB
 	KeepRecent uint64 // Default 10000
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
@@ -394,6 +400,10 @@ func Open(opts Options) (*DB, error) {
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
 
+	if opts.ReadOnly {
+		return openReadOnly(opts)
+	}
+
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
@@ -407,6 +417,11 @@ func Open(opts Options) (*DB, error) {
 }
 
 func validateUnsafeOptions(opts Options) error {
+	if opts.ReadOnly {
+		// Read-only opens never mutate on-disk state, so "unsafe" write options do
+		// not apply.
+		return nil
+	}
 	if opts.AllowUnsafe {
 		return nil
 	}
@@ -601,6 +616,9 @@ func (db *DB) recover() error {
 	p := idx.pager
 
 	if p.PageCount() < 2 {
+		if db.readOnly {
+			return errors.New("read-only open requires an existing index with meta pages")
+		}
 		if _, err := p.Alloc(2); err != nil {
 			return err
 		}
@@ -695,23 +713,28 @@ func (db *DB) recover() error {
 		if err := db.slabManager.SetActiveSlab(c.meta.ActiveSlabID); err != nil {
 			continue
 		}
-		if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
-			return err
-		}
-
-		if db.repairSlabTailOnOpen {
-			repairedTail, err := db.slabManager.RepairActiveSlabTail()
-			if err != nil {
+		if !db.readOnly {
+			if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
 				return err
 			}
-			if repairedTail < c.meta.ActiveSlabTail {
-				// This commit's meta tail was beyond the last checksum-valid record;
-				// reject it and fall back to an older meta page.
-				continue
+
+			if db.repairSlabTailOnOpen {
+				repairedTail, err := db.slabManager.RepairActiveSlabTail()
+				if err != nil {
+					return err
+				}
+				if repairedTail < c.meta.ActiveSlabTail {
+					// This commit's meta tail was beyond the last checksum-valid record;
+					// reject it and fall back to an older meta page.
+					continue
+				}
 			}
 		}
 
 		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
+			continue
+		}
+		if !db.freelistHeadValid(p, c.meta.FreelistHeadID) {
 			continue
 		}
 
@@ -725,8 +748,10 @@ func (db *DB) recover() error {
 	db.meta = chosen.meta
 	db.metaPageID = chosen.id
 
-	if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
-		return err
+	if !db.readOnly {
+		if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
+			return err
+		}
 	}
 
 	if chosen.meta.TotalPages > 0 {
@@ -781,6 +806,27 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 	}
 }
 
+func (db *DB) freelistHeadValid(p *pager.Pager, head uint64) bool {
+	if head == 0 || p == nil {
+		return true
+	}
+	data, err := p.Get(head)
+	if err != nil {
+		return false
+	}
+	n := node.NewNode(data)
+	verifyAlways := p.VerifyOnRead()
+	if verifyAlways || !p.IsVerified(head) {
+		if !n.VerifyChecksum() {
+			return false
+		}
+		if !verifyAlways {
+			p.MarkVerified(head)
+		}
+	}
+	return n.Type() == page.PageTypeFreelist
+}
+
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
@@ -830,6 +876,9 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	idx := db.idx.Load()
 	if idx == nil {
 		return errors.New("missing index")
@@ -934,6 +983,9 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 // If external user calls Commit, they might not know retired pages.
 // We'll accept nil for retired if manual.
 func (db *DB) Commit(newRootID uint64) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	// Public Commit assumes the caller has built a new tree.
 	// We need to serialize with other writers.
 	db.writeMu.Lock()
@@ -954,6 +1006,9 @@ func (db *DB) Commit(newRootID uint64) error {
 
 // Prune reclaims pages from the graveyard.
 func (db *DB) Prune() {
+	if db.readOnly {
+		return
+	}
 	idx := db.idx.Load()
 	if idx == nil {
 		return

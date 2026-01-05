@@ -37,6 +37,7 @@ var (
 	ErrChecksumMismatch = errors.New("slab record checksum mismatch")
 	ErrRecordTooLarge   = errors.New("record too large")
 	ErrSlabFull         = errors.New("slab file is full")
+	ErrReadOnly         = errors.New("slab is read-only")
 )
 
 func recordSizeExceedsMax(keyLen uint16, valLen uint32) bool {
@@ -52,6 +53,7 @@ type SlabFile struct {
 	ID       uint32
 	Path     string
 	File     *os.File
+	readOnly bool
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
 	Size     int64 // Track size for rotation
@@ -78,11 +80,12 @@ type SlabFile struct {
 	writeScratch []byte
 }
 
-func newSlabFile(path string, id uint32, f *os.File, size int64) *SlabFile {
+func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool) *SlabFile {
 	sf := &SlabFile{
 		ID:          id,
 		Path:        path,
 		File:        f,
+		readOnly:    readOnly,
 		Size:        size,
 		writeOffset: size,
 	}
@@ -117,12 +120,32 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	return newSlabFile(path, id, f, info.Size()), nil
+	return newSlabFile(path, id, f, info.Size(), false), nil
+}
+
+// OpenSlabReadOnly opens an existing slab file in read-only mode.
+func OpenSlabReadOnly(path string, id uint32) (*SlabFile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+
+	return newSlabFile(path, id, f, info.Size(), true), nil
 }
 
 // OpenSlabLazy registers a slab without opening its file descriptor.
 func OpenSlabLazy(path string, id uint32, size int64) *SlabFile {
-	return newSlabFile(path, id, nil, size)
+	return newSlabFile(path, id, nil, size, false)
+}
+
+// OpenSlabLazyReadOnly registers a slab without opening its file descriptor in read-only mode.
+func OpenSlabLazyReadOnly(path string, id uint32, size int64) *SlabFile {
+	return newSlabFile(path, id, nil, size, true)
 }
 
 func (s *SlabFile) Close() error {
@@ -147,6 +170,9 @@ func (s *SlabFile) Close() error {
 }
 
 func (s *SlabFile) Sync() error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	return s.File.Sync()
 }
 
@@ -166,7 +192,13 @@ func (s *SlabFile) ensureOpen() error {
 	if s.File != nil {
 		return nil
 	}
-	f, err := os.OpenFile(s.Path, os.O_RDWR, 0600)
+	var f *os.File
+	var err error
+	if s.readOnly {
+		f, err = os.Open(s.Path)
+	} else {
+		f, err = os.OpenFile(s.Path, os.O_RDWR, 0600)
+	}
 	if err != nil {
 		return err
 	}
@@ -188,6 +220,9 @@ func (s *SlabFile) ensureOpen() error {
 
 // Truncate resizes the slab file. Used for crash recovery.
 func (s *SlabFile) Truncate(size int64) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	if err := s.File.Truncate(size); err != nil {
 		return err
 	}
@@ -214,6 +249,9 @@ func (s *SlabFile) Truncate(size int64) error {
 // record and truncates any partial/corrupt tail bytes. This is primarily a
 // crash-recovery helper.
 func (s *SlabFile) RepairTail() error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	info, err := s.File.Stat()
 	if err != nil {
 		return err
@@ -509,6 +547,9 @@ func (s *SlabFile) remapToFileSize() {
 // Write appends a record to the slab and returns the offset.
 // Thread-safety: This should be called by a single writer (SlabManager mutex).
 func (s *SlabFile) Write(key, value []byte) (int64, error) {
+	if s.readOnly {
+		return 0, ErrReadOnly
+	}
 	keyLen := len(key)
 	valLen := len(value)
 
@@ -591,6 +632,9 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 // starting file offset. Thread-safety: This should be called by a single writer
 // (SlabManager mutex).
 func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
+	if s.readOnly {
+		return 0, ErrReadOnly
+	}
 	if len(buf) == 0 {
 		return s.Size, nil
 	}

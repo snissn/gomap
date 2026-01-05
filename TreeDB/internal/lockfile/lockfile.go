@@ -66,6 +66,44 @@ func Acquire(path string) (*Lock, error) {
 	return &Lock{f: f, path: path}, nil
 }
 
+// AcquireShared attempts to take a shared (read) lock on an existing lock file.
+// It never creates or writes to the lock file.
+func AcquireShared(path string) (*Lock, error) {
+	path = filepath.Clean(path)
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+
+	processMu.Lock()
+	if _, ok := processLocks[path]; ok {
+		processMu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrLocked, path)
+	}
+	processLocks[path] = struct{}{}
+	processMu.Unlock()
+
+	f, err := os.Open(path)
+	if err != nil {
+		processMu.Lock()
+		delete(processLocks, path)
+		processMu.Unlock()
+		return nil, err
+	}
+
+	if err := lockFileShared(f); err != nil {
+		_ = f.Close()
+		processMu.Lock()
+		delete(processLocks, path)
+		processMu.Unlock()
+		if errors.Is(err, ErrLocked) {
+			return nil, fmt.Errorf("%w: %s", ErrLocked, path)
+		}
+		return nil, err
+	}
+
+	return &Lock{f: f, path: path}, nil
+}
+
 func (l *Lock) Close() error {
 	if l == nil || l.f == nil {
 		return nil

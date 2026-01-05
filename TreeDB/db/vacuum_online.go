@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +29,7 @@ const (
 	vacuumCutoverMaxKeys     = 8192
 	vacuumCutoverMaxDefers   = 3
 	vacuumInlineThresholdMax = int(^uint(0) >> 1)
+	vacuumMaxGrowthFactor    = 8
 )
 
 type vacuumRecorder struct {
@@ -87,6 +89,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
@@ -119,6 +124,26 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		_ = os.Remove(readyPath)
 	}
 
+	oldGen := db.idx.Load()
+	oldPages := uint64(0)
+	if oldGen != nil && oldGen.pager != nil {
+		oldPages = oldGen.pager.PageCount()
+	}
+	maxPages := uint64(0)
+	if oldPages > 0 {
+		maxPages = oldPages * uint64(vacuumMaxGrowthFactor)
+	}
+	checkGrowth := func() error {
+		if maxPages == 0 {
+			return nil
+		}
+		newPages := newPager.PageCount()
+		if newPages > maxPages {
+			return fmt.Errorf("vacuum: new index page count %d exceeds %dx old (%d)", newPages, vacuumMaxGrowthFactor, oldPages)
+		}
+		return nil
+	}
+
 	if _, err := newPager.Alloc(2); err != nil {
 		cleanupNewPager()
 		return err
@@ -148,6 +173,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		cleanupNewPager()
 		return err
 	}
+	if err := checkGrowth(); err != nil {
+		cleanupNewPager()
+		return err
+	}
 
 	freeRetired := func(retired []uint64) {
 		for _, id := range retired {
@@ -172,6 +201,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return err
 		}
 		freeRetired(retired)
+		if err := checkGrowth(); err != nil {
+			cleanupNewPager()
+			return err
+		}
 		if len(keys) <= vacuumCatchupKeyTarget {
 			break
 		}
@@ -201,6 +234,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 				return err
 			}
 			freeRetired(retired)
+			if err := checkGrowth(); err != nil {
+				cleanupNewPager()
+				return err
+			}
 			continue
 		}
 
@@ -213,6 +250,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 				return err
 			}
 			freeRetired(retired)
+			if err := checkGrowth(); err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
 		}
 
 		// Snapshot current roots/meta while writers are paused.
@@ -233,6 +275,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		})
 		_ = sysIter.Close()
 		if err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		if err := checkGrowth(); err != nil {
 			db.writeMu.Unlock()
 			cleanupNewPager()
 			return err
