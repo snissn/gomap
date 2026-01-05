@@ -343,7 +343,7 @@ func runCompact(dir string, args []string) {
 	minBytes := fs.Uint64("min-bytes", 1, "Minimum slab size to consider")
 	maxSlabs := fs.Int("max-slabs", 1, "Maximum slabs to compact (0=unlimited)")
 	microBatch := fs.Int("microbatch", 256, "Micro-batch size for pointer updates")
-	indexSwap := fs.Bool("index-swap", false, "Compact via index rebuild+swap (two-index-file approach)")
+	indexSwap := fs.Bool("index-swap", true, "Compact via index rebuild+swap (two-index-file approach)")
 	rotateBeforeWrite := fs.Bool("rotate-before-write", false, "Rotate active slab before copying")
 	copyBps := fs.Int64("copy-bps", 0, "Copy throttling bytes/sec (0=disabled)")
 	copyBurst := fs.Int64("copy-burst", 0, "Copy throttling burst bytes (0=default)")
