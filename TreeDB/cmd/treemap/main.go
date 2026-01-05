@@ -350,7 +350,12 @@ func runCompact(dir string, args []string) {
 	timeout := fs.Duration("timeout", 0, "Timeout for compaction (0=none)")
 	_ = fs.Parse(args)
 
-	d, err := treedbdb.Open(treedbdb.Options{Dir: dir})
+	d, err := treedbdb.Open(treedbdb.Options{
+		Dir: dir,
+		// Favor immediate page reuse during offline compaction to avoid index growth.
+		KeepRecent:             1,
+		DisableBackgroundPrune: true,
+	})
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
