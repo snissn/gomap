@@ -181,6 +181,19 @@ snapshots/iterators drain.
 Stats keys:
 - `treedb.bg_vacuum.*`
 
+### Close-time maintenance (env)
+
+TreeDB can run optional maintenance work at `DB.Close()` to keep on-disk state compact
+without a separate offline tool. These hooks execute inline during shutdown.
+
+- `TREEDB_CLOSE_CHECKPOINT=1`: call `Checkpoint()` before closing
+- `TREEDB_CLOSE_COMPACT_INDEX=1`: call `CompactIndex()` before closing
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` before closing
+- `TREEDB_CLOSE_VACUUM_TIMEOUT`: timeout for the online vacuum (duration string or seconds)
+- `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages
+- `TREEDB_CLOSE_SCOPE_CONTAINS`: substring match on `Options.Dir` that scopes which DBs run
+  close maintenance (default: all). Example: `TREEDB_CLOSE_SCOPE_CONTAINS=application.db`.
+
 ### Allocator locality and fragmentation knobs
 
 TreeDB exposes a few knobs that directly influence page-ID locality and index
