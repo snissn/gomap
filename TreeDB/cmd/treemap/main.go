@@ -30,7 +30,7 @@ Commands:
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
   dump            Alias for scan
-  vacuum          Rebuild index (rewrite+swap)
+  vacuum          Rebuild index (offline by default; use -online for online vacuum)
   compact         Compact slab files (by candidate selection or slab id)
 
 Run "treemap <command> -h" for command-specific options.
@@ -302,20 +302,37 @@ func runScan(dir string, args []string) {
 
 func runVacuum(dir string, args []string) {
 	fs := flag.NewFlagSet("vacuum", flag.ExitOnError)
+	online := fs.Bool("online", false, "Run online vacuum (requires -rw)")
+	rw := fs.Bool("rw", false, "Open read-write for online vacuum (unsafe; may replay WAL or repair files)")
+	chunkMiB := fs.Int64("chunk-size-mib", 64, "Chunk size in MiB for offline vacuum (0=default)")
 	timeout := fs.Duration("timeout", 0, "Timeout for online vacuum (0=none)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, true, true)
-	defer closeTreeDB(db)
+	if *online {
+		if !*rw {
+			fatalf("online vacuum requires -rw")
+		}
+		db := openTreeDB(dir, true, true)
+		defer closeTreeDB(db)
 
-	ctx := context.Background()
-	if *timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, *timeout)
-		defer cancel()
+		ctx := context.Background()
+		if *timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
+		}
+		if err := db.VacuumIndexOnline(ctx); err != nil {
+			fatalf("VacuumIndexOnline error: %v", err)
+		}
+		return
 	}
-	if err := db.VacuumIndexOnline(ctx); err != nil {
-		fatalf("VacuumIndexOnline error: %v", err)
+
+	chunkSize := int64(0)
+	if *chunkMiB > 0 {
+		chunkSize = *chunkMiB * 1024 * 1024
+	}
+	if err := treedbdb.VacuumIndexOffline(treedbdb.Options{Dir: dir, ChunkSize: chunkSize}); err != nil {
+		fatalf("VacuumIndexOffline error: %v", err)
 	}
 }
 
