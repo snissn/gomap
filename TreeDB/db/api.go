@@ -94,6 +94,7 @@ func (db *DB) DeleteSync(key []byte) error {
 type DBIterator struct {
 	snap *Snapshot
 	iter iterator.UnsafeIterator
+	err  error
 }
 
 func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
@@ -108,7 +109,7 @@ func (it *DBIterator) Next() {
 }
 
 func (it *DBIterator) Valid() bool {
-	return it.iter.Valid()
+	return it.iter.Valid() && it.err == nil
 }
 
 func (it *DBIterator) Key() []byte {
@@ -128,6 +129,9 @@ func (it *DBIterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *DBIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
 	return it.iter.Error()
 }
 
@@ -151,7 +155,16 @@ func (it *DBIterator) UnsafeKey() []byte {
 }
 
 func (it *DBIterator) UnsafeValue() []byte {
-	return it.iter.UnsafeValue()
+	if it.err != nil {
+		return nil
+	}
+	val := it.iter.UnsafeValue()
+	if err := it.iter.Error(); err != nil {
+		it.err = err
+		return nil
+	}
+	it.err = nil
+	return val
 }
 
 func (it *DBIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
