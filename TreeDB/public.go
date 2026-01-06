@@ -93,6 +93,9 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
+	// Enable Value Index by default for Phase 17.3 testing.
+	opts.EnableValueIndex = true
+
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
 		// WAL segments (writes) and runs background maintenance loops.
