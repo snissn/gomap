@@ -1378,7 +1378,8 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			continue
 		}
 
-		var newRoot, retired []uint64
+		var newRoot uint64
+		var retired []uint64
 		var metrics adaptive.Metrics
 		var err error
 
