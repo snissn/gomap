@@ -1036,7 +1036,20 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	return s.tree.GetUnsafe(key)
+	entry, err := s.tree.GetEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, tree.ErrKeyNotFound
+	}
+
+	if entry.Flags&node.FlagPointer != 0 {
+		vr := ValueReaderForState(s.state)
+		return vr.ReadUnsafe(entry.ValuePtr)
+	}
+
+	return entry.Value, nil
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
@@ -1219,6 +1232,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
 		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
+		var metrics adaptive.Metrics
 
 		for _, op := range chunk {
 			entry, err := tr.GetEntry(op.Key)
