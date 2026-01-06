@@ -375,6 +375,8 @@ func (b *noAllocBackend) Print() error { return nil }
 
 func (b *noAllocBackend) Stats() map[string]string { return nil }
 
+func (b *noAllocBackend) LastSeq() uint64 { return 0 }
+
 type noAllocBatch struct{}
 
 func (b *noAllocBatch) Set(key, value []byte) error { return nil }
@@ -392,6 +394,8 @@ func (b *noAllocBatch) Close() error { return nil }
 func (b *noAllocBatch) Replay(func(batch.Entry) error) error { return nil }
 
 func (b *noAllocBatch) GetByteSize() (int, error) { return 0, nil }
+
+func (b *noAllocBatch) SetLastSeq(uint64) {}
 
 type emptyUnsafeIterator struct{}
 

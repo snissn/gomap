@@ -551,6 +551,7 @@ type BackendDB interface {
 	Close() error
 	Print() error
 	Stats() map[string]string
+	LastSeq() uint64
 }
 
 type Options struct {
@@ -646,6 +647,7 @@ type DB struct {
 	queueRanges        []keyRange
 	queueWALPaths      []string
 	queueValueLogPaths []string
+	queueMaxSeqs       []uint64
 	queueLargePtrs     []*largePtrMap
 	backendRange       keyRange
 	backendRangeKnown  bool
@@ -756,6 +758,7 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
+	nextSeq            atomic.Uint64
 }
 
 type keyRange struct {
@@ -1345,6 +1348,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.wg.Add(1)
 	go db.flushLoop()
 
+	// Initialize sequence number from backend
+	if db.backend != nil {
+		db.nextSeq.Store(db.backend.LastSeq())
+	}
+
 	return db, nil
 }
 
@@ -1842,7 +1850,7 @@ func (db *DB) flushWALRequests(requests []walWriteRequest) error {
 		req := &requests[i]
 		if len(req.records) == 1 {
 			rec := req.records[0]
-			ptr, err := w.Append(rec.Op, rec.Key, rec.Value)
+			ptr, err := w.Append(rec.Seq, rec.Op, rec.Key, rec.Value)
 			if err != nil {
 				db.walMu.Unlock()
 				return err
@@ -1895,6 +1903,12 @@ func (db *DB) appendWAL(records []logRecord, durability walDurability) ([]page.V
 	if len(records) == 0 {
 		return nil, nil
 	}
+
+	// Assign sequence numbers
+	for i := range records {
+		records[i].Seq = db.nextSeq.Add(1)
+	}
+
 	select {
 	case <-db.closeCh:
 		return nil, errWALClosed
@@ -1946,7 +1960,7 @@ func (db *DB) appendValueLog(records []logRecord, durability walDurability) ([]p
 	if len(records) == 1 {
 		rec := records[0]
 		var ptr page.ValuePtr
-		ptr, err = w.Append(rec.Op, rec.Key, rec.Value)
+		ptr, err = w.Append(rec.Seq, rec.Op, rec.Key, rec.Value)
 		if err == nil {
 			ptrs = []page.ValuePtr{ptr}
 		}
@@ -1991,7 +2005,7 @@ func (db *DB) appendWALInline(records []logRecord, flush bool) ([]page.ValuePtr,
 	if len(records) == 1 {
 		rec := records[0]
 		var ptr page.ValuePtr
-		ptr, err = w.Append(rec.Op, rec.Key, rec.Value)
+		ptr, err = w.Append(rec.Seq, rec.Op, rec.Key, rec.Value)
 		if err == nil && db.walUsesValueLog() {
 			ptrs = []page.ValuePtr{ptr}
 		}
@@ -3525,6 +3539,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.memtableWarmupActive = false
 	}
 	db.mutableBytes.Store(0)
+	currentSeq := db.nextSeq.Load()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
@@ -3535,6 +3550,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPath)
 		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPath)
+		db.queueMaxSeqs = append(db.queueMaxSeqs, currentSeq)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
 		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
@@ -3648,6 +3664,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		valueLogPath = db.currentValueLogPath()
 	}
 
+	currentSeq := db.nextSeq.Load()
 	locked := make([]*memShard, 0, len(db.mutableShards))
 	defer func() {
 		for i := len(locked) - 1; i >= 0; i-- {
@@ -3674,6 +3691,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPath)
 		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPath)
+		db.queueMaxSeqs = append(db.queueMaxSeqs, currentSeq)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
 		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
@@ -3899,10 +3917,12 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	mems := make([]memtable.Table, max)
 	ranges := make([]keyRange, max)
 	walPaths := make([]string, max)
+	maxSeqs := make([]uint64, max)
 	largePtrs := make([]*largePtrMap, max)
 	copy(mems, db.queue[:max])
 	copy(ranges, db.queueRanges[:max])
 	copy(walPaths, db.queueWALPaths[:max])
+	copy(maxSeqs, db.queueMaxSeqs[:max])
 	copy(largePtrs, db.queueLargePtrs[:max])
 	db.mu.Unlock()
 
@@ -3917,6 +3937,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		memLen   int
 		memRange keyRange
 		walPath  string
+		maxSeq   uint64
 		ptrs     *largePtrMap
 	}
 
@@ -3937,6 +3958,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			memLen:   memLen,
 			memRange: ranges[i],
 			walPath:  walPaths[i],
+			maxSeq:   maxSeqs[i],
 			ptrs:     largePtrs[i],
 		})
 		totalBytes += memBytes
@@ -3957,6 +3979,15 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		flushStart = time.Now()
 
 		backendBatch := db.backend.NewBatch()
+		highestSeq := uint64(0)
+		for _, u := range units {
+			if u.maxSeq > highestSeq {
+				highestSeq = u.maxSeq
+			}
+		}
+		if highestSeq > 0 {
+			backendBatch.SetLastSeq(highestSeq)
+		}
 
 		if totalLen > 2000 {
 			// Preserve "newest wins" semantics by concatenating per-memtable ops
@@ -4217,6 +4248,9 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if len(db.queueValueLogPaths) >= len(units) {
 		db.queueValueLogPaths = db.queueValueLogPaths[len(units):]
 	}
+	if len(db.queueMaxSeqs) >= len(units) {
+		db.queueMaxSeqs = db.queueMaxSeqs[len(units):]
+	}
 	if len(db.queueLargePtrs) >= len(units) {
 		db.queueLargePtrs = db.queueLargePtrs[len(units):]
 	}
@@ -4305,6 +4339,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueWALPaths) > 0 {
 		walPath = db.queueWALPaths[0]
 	}
+	maxSeq := uint64(0)
+	if len(db.queueMaxSeqs) > 0 {
+		maxSeq = db.queueMaxSeqs[0]
+	}
 	var ptrs *largePtrMap
 	if len(db.queueLargePtrs) > 0 {
 		ptrs = db.queueLargePtrs[0]
@@ -4318,6 +4356,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		flushStart = time.Now()
 		// Flush 'mem' to backend
 		backendBatch := db.backend.NewBatch()
+		if maxSeq > 0 {
+			backendBatch.SetLastSeq(maxSeq)
+		}
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
@@ -4446,6 +4487,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	}
 	if len(db.queueValueLogPaths) > 0 {
 		db.queueValueLogPaths = db.queueValueLogPaths[1:]
+	}
+	if len(db.queueMaxSeqs) > 0 {
+		db.queueMaxSeqs = db.queueMaxSeqs[1:]
 	}
 	if len(db.queueLargePtrs) > 0 {
 		db.queueLargePtrs = db.queueLargePtrs[1:]

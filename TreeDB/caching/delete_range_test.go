@@ -13,7 +13,7 @@ type countingLogWriter struct {
 	batchCalls  int
 }
 
-func (w *countingLogWriter) Append(op byte, key, value []byte) (page.ValuePtr, error) {
+func (w *countingLogWriter) Append(seq uint64, op byte, key, value []byte) (page.ValuePtr, error) {
 	w.appendCalls++
 	return page.ValuePtr{}, nil
 }

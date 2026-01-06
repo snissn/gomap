@@ -64,7 +64,7 @@ func TestReadOnlyDoesNotReplayOrRemoveWAL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wal.NewWriter: %v", err)
 	}
-	if err := ww.Append(wal.OpSet, []byte("k"), []byte("v")); err != nil {
+	if err := ww.Append(1, wal.OpSet, []byte("k"), []byte("v")); err != nil {
 		_ = ww.Close()
 		t.Fatalf("wal.Append: %v", err)
 	}

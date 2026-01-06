@@ -216,6 +216,7 @@ func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterato
 
 func (m *MockBackend) Print() error             { return nil }
 func (m *MockBackend) Stats() map[string]string { return nil }
+func (m *MockBackend) LastSeq() uint64          { return 0 }
 
 // NewBatch returns a struct that satisfies BatchInterface
 func (m *MockBackend) NewBatch() batch.Interface {
@@ -285,6 +286,7 @@ func (b *MockBatch) WriteSync() error {
 
 func (b *MockBatch) Close() error              { return nil }
 func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
+func (b *MockBatch) SetLastSeq(uint64)         {}
 
 func (m *MockBackend) Close() error { return nil }
 

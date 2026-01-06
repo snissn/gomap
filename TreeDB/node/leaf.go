@@ -11,6 +11,7 @@ const (
 	FlagInline    = 0x00
 	FlagPointer   = 0x01
 	FlagTombstone = 0x02
+	FlagValueID   = 0x04
 )
 
 // LeafEntry represents a parsed entry from a Leaf Node.

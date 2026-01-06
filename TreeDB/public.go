@@ -660,6 +660,14 @@ func (db *DB) Print() error {
 	return db.backend.Print()
 }
 
+// LastSeq returns the highest sequence number persisted in the database.
+func (db *DB) LastSeq() uint64 {
+	if db == nil || db.backend == nil {
+		return 0
+	}
+	return db.backend.LastSeq()
+}
+
 // Checkpoint forces a durable backend boundary and trims cached-mode WAL
 // segments, so long-running cached-mode workloads do not accumulate unbounded
 // `wal/` growth.
@@ -726,6 +734,17 @@ func (db *DB) CompactIndex() error {
 		}
 	}
 	return db.backend.CompactIndex()
+}
+
+// GC performs garbage collection of unreachable value segments.
+func (db *DB) GC() (int64, error) {
+	if err := db.ensureOpen(); err != nil {
+		return 0, err
+	}
+	if db.backend == nil {
+		return 0, ErrClosed
+	}
+	return db.backend.GC()
 }
 
 // VacuumIndexOnline rebuilds the user index into a new file and swaps it in with

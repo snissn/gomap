@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +36,7 @@ type DBState struct {
 	SystemRootPageID uint64
 	SlabSet          *slab.SlabSet
 	ValueLogSet      *vlog.Set
+	LastSeq          uint64
 }
 
 type DB struct {
@@ -70,6 +72,7 @@ type DB struct {
 	internalFillTargetPPM uint32
 	leafPrefixCompression bool
 	piggybackCompaction   bool
+	enableValueIndex      bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -82,11 +85,15 @@ type DB struct {
 	meta             page.MetaPageBody
 	metaPageID       uint64
 
+	nextValueID atomic.Uint64
+
 	state atomic.Pointer[DBState]
 
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
+
+	lastGCStats atomic.Pointer[GCStats]
 }
 
 type Mode uint8
@@ -227,6 +234,10 @@ type Options struct {
 	ValueLogPointerThreshold int
 	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
 	ForceValuePointers bool
+	// EnableValueIndex enables the Value Index for large values (pointer-backed).
+	// Writes generate a ValueID and store the mapping in the System Tree.
+	// Reads resolve the ValueID via the System Tree.
+	EnableValueIndex bool
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64
@@ -487,6 +498,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		leafPrefixCompression: opts.LeafPrefixCompression,
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
+		enableValueIndex:      opts.EnableValueIndex,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -654,6 +666,7 @@ func (db *DB) recover() error {
 
 		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
+		db.meta.NextValueID = 1
 
 		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
 			return err
@@ -662,6 +675,7 @@ func (db *DB) recover() error {
 			return err
 		}
 		db.metaPageID = MetaPage0ID
+		db.nextValueID.Store(db.meta.NextValueID)
 		return nil
 	}
 
@@ -747,6 +761,7 @@ func (db *DB) recover() error {
 
 	db.meta = chosen.meta
 	db.metaPageID = chosen.id
+	db.nextValueID.Store(db.meta.NextValueID)
 
 	if !db.readOnly {
 		if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
@@ -875,7 +890,7 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, sysOps []batch.Entry, metrics adaptive.Metrics, lastSeq uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -888,7 +903,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	//
 	// This mutates index pages, so it must run before any Sync() durability
 	// boundary.
-	if nextSysRoot, sysRetired, err := db.applySystemStatsUpdates(sysRootID, metrics); err != nil {
+	if nextSysRoot, sysRetired, err := db.applySystemUpdates(sysRootID, sysOps, metrics); err != nil {
 		return err
 	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
 		sysRootID = nextSysRoot
@@ -917,6 +932,10 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = idx.pager.PageCount()
+	nextMeta.NextValueID = db.nextValueID.Load()
+	if lastSeq > nextMeta.LastSeq {
+		nextMeta.LastSeq = lastSeq
+	}
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -962,6 +981,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		LastSeq:          nextMeta.LastSeq,
 	}
 	db.state.Store(newState)
 
@@ -1001,7 +1021,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, nil, adaptive.Metrics{}, 0)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1030,13 +1050,75 @@ func (db *DB) Prune() {
 
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.tree.Get(key)
+	entry, err := s.tree.GetEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, tree.ErrKeyNotFound
+	}
+
+	if entry.Flags&node.FlagValueID != 0 {
+		return s.resolveValueID(entry.Value, false)
+	}
+
+	if entry.Flags&node.FlagPointer != 0 {
+		// Use tree's configured reader (which is ValueReaderForState logic internally)
+		// But s.tree.slabReader is private.
+		// Reconstruct reader.
+		vr := ValueReaderForState(s.state)
+		return vr.Read(entry.ValuePtr)
+	}
+
+	// Inline value
+	// Return copy
+	val := make([]byte, len(entry.Value))
+	copy(val, entry.Value)
+	return val, nil
 }
 
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	return s.tree.GetUnsafe(key)
+	entry, err := s.tree.GetEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, tree.ErrKeyNotFound
+	}
+
+	if entry.Flags&node.FlagValueID != 0 {
+		return s.resolveValueID(entry.Value, true)
+	}
+
+	if entry.Flags&node.FlagPointer != 0 {
+		vr := ValueReaderForState(s.state)
+		return vr.ReadUnsafe(entry.ValuePtr)
+	}
+
+	return entry.Value, nil
+}
+
+func (s *Snapshot) resolveValueID(idBytes []byte, unsafe bool) ([]byte, error) {
+	if len(idBytes) != 8 {
+		return nil, errors.New("invalid value id length")
+	}
+	id := ValueID(binary.BigEndian.Uint64(idBytes))
+
+	// System Tree Lookup
+	sysTree := tree.New(s.idx.pager, ValueReaderForState(s.state), s.state.SystemRootPageID)
+	vi := valueIndexHelper{}
+	ptr, err := vi.Get(sysTree, id)
+	if err != nil {
+		return nil, fmt.Errorf("value index lookup failed: %w", err)
+	}
+
+	vr := ValueReaderForState(s.state)
+	if unsafe {
+		return vr.ReadUnsafe(ptr)
+	}
+	return vr.Read(ptr)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
@@ -1082,6 +1164,13 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+// LastSeq returns the highest sequence number persisted in the database.
+func (db *DB) LastSeq() uint64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.meta.LastSeq
+}
+
 // RefreshSlabSet publishes a new DBState with the current SlabSet (excluding
 // zombies) without creating a new commit. This is used by background compaction
 // so that future snapshots stop pinning compacted slabs immediately.
@@ -1100,6 +1189,7 @@ func (db *DB) RefreshSlabSet() error {
 		SystemRootPageID: oldState.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		LastSeq:          oldState.LastSeq,
 	}
 	db.state.Store(newState)
 
@@ -1204,7 +1294,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			}
 
 			// Commit without forcing Sync; compaction can be lazily durable.
-			if err := db.finalizeCommit(rootID, sysRoot, nil, false, metrics); err != nil {
+			if err := db.finalizeCommit(rootID, sysRoot, nil, false, nil, metrics, 0); err != nil {
 				db.writeMu.Unlock()
 				return err
 			}
@@ -1266,7 +1356,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		// Commit without forcing Sync; compaction can be lazily durable.
-		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, nil, metrics, 0); err != nil {
 			closeBatch()
 			db.writeMu.Unlock()
 			return err
@@ -1330,7 +1420,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, nil, adaptive.Metrics{}, 0)
 }
 
 type pagerAllocator struct {

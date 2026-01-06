@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -94,6 +95,7 @@ func (db *DB) DeleteSync(key []byte) error {
 type DBIterator struct {
 	snap *Snapshot
 	iter iterator.UnsafeIterator
+	err  error
 }
 
 func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
@@ -105,7 +107,7 @@ func (it *DBIterator) Next() {
 }
 
 func (it *DBIterator) Valid() bool {
-	return it.iter.Valid()
+	return it.iter.Valid() && it.err == nil
 }
 
 func (it *DBIterator) Key() []byte {
@@ -113,7 +115,14 @@ func (it *DBIterator) Key() []byte {
 }
 
 func (it *DBIterator) Value() []byte {
-	return it.iter.Value()
+	val := it.UnsafeValue()
+	if val == nil {
+		return nil
+	}
+	// Copy
+	dst := make([]byte, len(val))
+	copy(dst, val)
+	return dst
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {
@@ -121,10 +130,14 @@ func (it *DBIterator) KeyCopy(dst []byte) []byte {
 }
 
 func (it *DBIterator) ValueCopy(dst []byte) []byte {
-	return it.iter.ValueCopy(dst)
+	val := it.UnsafeValue()
+	return append(dst, val...)
 }
 
 func (it *DBIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
 	return it.iter.Error()
 }
 
@@ -148,7 +161,20 @@ func (it *DBIterator) UnsafeKey() []byte {
 }
 
 func (it *DBIterator) UnsafeValue() []byte {
-	return it.iter.UnsafeValue()
+	if it.err != nil {
+		return nil
+	}
+	val := it.iter.UnsafeValue()
+	_, _, flags := it.iter.UnsafeEntry()
+	if flags&node.FlagValueID != 0 {
+		resolved, err := it.snap.resolveValueID(val, true)
+		if err != nil {
+			it.err = err
+			return nil
+		}
+		return resolved
+	}
+	return val
 }
 
 func (it *DBIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
@@ -237,6 +263,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.slabs.dead_bytes"] = fmt.Sprintf("%d", dead)
 	if total > 0 {
 		stats["treedb.slabs.dead_ratio_ppm"] = fmt.Sprintf("%d", (dead*1_000_000)/total)
+	}
+
+	if gcStats := db.lastGCStats.Load(); gcStats != nil {
+		stats["treedb.gc.last_run_time"] = gcStats.LastRunTime.Format(time.RFC3339)
+		stats["treedb.gc.last_run_duration"] = gcStats.LastRunDuration.String()
+		stats["treedb.gc.reclaimed_bytes"] = fmt.Sprintf("%d", gcStats.ReclaimedBytes)
+		if gcStats.LastError != nil {
+			stats["treedb.gc.last_error"] = gcStats.LastError.Error()
+		}
 	}
 
 	return stats

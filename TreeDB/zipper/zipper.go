@@ -381,7 +381,14 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				continue // Skip insert
 			}
 			key = op.Key
-			if op.IsPtr {
+			if op.Flags != 0 {
+				flags = op.Flags
+				if op.IsPtr {
+					valPtr = op.ValuePtr
+				} else {
+					val = op.Value
+				}
+			} else if op.IsPtr {
 				flags = node.FlagPointer
 				valPtr = op.ValuePtr
 			} else {
