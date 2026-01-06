@@ -22,7 +22,7 @@ type logSegment struct {
 	fileID   uint32
 }
 
-func listWALSegments(dir string) ([]logSegment, error) {
+func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 	walDir := filepath.Join(dir, "wal")
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
@@ -41,6 +41,9 @@ func listWALSegments(dir string) ([]logSegment, error) {
 		name := entry.Name()
 		seq, valueLog, ok := parseLogSeq(name)
 		if !ok {
+			continue
+		}
+		if valueLog && !includeValueLog {
 			continue
 		}
 
@@ -134,6 +137,9 @@ func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegment
 		opsInBatch int
 		batch      = db.NewBatch()
 	)
+	ptrBatch, _ := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
 
 	for {
 		op, key, val, err := reader.ReadNext()
@@ -159,6 +165,23 @@ func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegment
 				_ = reader.Close()
 				return err
 			}
+		case wal.OpSetPointer:
+			if ptrBatch == nil {
+				_ = batch.Close()
+				_ = reader.Close()
+				return fmt.Errorf("wal: pointer op without pointer support")
+			}
+			if len(val) < page.ValuePtrSize {
+				_ = batch.Close()
+				_ = reader.Close()
+				return fmt.Errorf("wal: invalid pointer length %d", len(val))
+			}
+			ptr := page.DecodeValuePtr(val)
+			if err := ptrBatch.SetPointer(key, ptr); err != nil {
+				_ = batch.Close()
+				_ = reader.Close()
+				return err
+			}
 		default:
 			_ = batch.Close()
 			_ = reader.Close()
@@ -174,6 +197,9 @@ func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegment
 			}
 			_ = batch.Close()
 			batch = db.NewBatch()
+			ptrBatch, _ = batch.(interface {
+				SetPointer(key []byte, ptr page.ValuePtr) error
+			})
 			opsInBatch = 0
 		}
 	}

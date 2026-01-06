@@ -27,7 +27,7 @@ func (n *Node) Compact() error {
 	pageID := n.PageID()
 	copy(newData[:NodeHeaderSize], n.data[:NodeHeaderSize])
 	binary.LittleEndian.PutUint64(newData[0:8], pageID)
-	binary.LittleEndian.PutUint16(newData[12:14], uint16(n.Type()))
+	binary.LittleEndian.PutUint16(newData[12:14], n.rawFlags())
 	binary.LittleEndian.PutUint16(newData[14:16], count)
 
 	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
@@ -58,7 +58,7 @@ func (n *Node) Compact() error {
 	}
 
 	copy(n.data, newData)
-	n.ptype = page.PageType(binary.LittleEndian.Uint16(n.data[12:14]))
+	n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
 	n.count = binary.LittleEndian.Uint16(n.data[14:16])
 	n.UpdateChecksum()
 	return nil
@@ -67,30 +67,22 @@ func (n *Node) Compact() error {
 func entryLength(n *Node, offset int) (int, error) {
 	switch n.Type() {
 	case page.PageTypeLeaf:
-		if offset+7 > len(n.data) {
-			return 0, ErrCorruptedNode
+		layout, err := n.leafEntryLayoutAt(offset)
+		if err != nil {
+			return 0, err
 		}
-		keyLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
-		valLen := int(binary.LittleEndian.Uint32(n.data[offset+2 : offset+6]))
-		flags := n.data[offset+6]
-
-		if keyLen < 0 {
-			return 0, ErrCorruptedNode
-		}
-		base := 7 + keyLen
+		flags := layout.flags
+		base := layout.headerSize + layout.suffixLen
 		if flags&FlagPointer != 0 {
 			if offset+base+page.ValuePtrSize > len(n.data) {
 				return 0, ErrCorruptedNode
 			}
 			return base + page.ValuePtrSize, nil
 		}
-		if valLen < 0 {
+		if offset+base+layout.valLen > len(n.data) {
 			return 0, ErrCorruptedNode
 		}
-		if offset+base+valLen > len(n.data) {
-			return 0, ErrCorruptedNode
-		}
-		return base + valLen, nil
+		return base + layout.valLen, nil
 
 	case page.PageTypeInternal:
 		if offset+2+8 > len(n.data) {

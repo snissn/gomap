@@ -46,17 +46,33 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		return errors.New("compaction: cannot compact active slab")
 	}
 
-	snap := c.db.AcquireSnapshot()
-	defer snap.Close()
+	if opts.IndexSwap {
+		return c.db.CompactSlabsIndexSwap(ctx, []uint32{id}, db.IndexSwapCompactionOptions{
+			CopyBytesPerSec: opts.CopyBytesPerSec,
+			CopyBurstBytes:  opts.CopyBurstBytes,
+			Assist:          opts.Assist,
+		})
+	}
 
+	liveSnap := c.db.AcquireSnapshot()
 	liveSetMax := opts.LiveSetMaxEntries
 	if liveSetMax == 0 {
 		liveSetMax = defaultLiveSetMaxEntries
 	}
-	liveSet, err := c.buildLiveSet(ctx, snap, id, liveSetMax, opts.Stats)
+	liveSet, err := c.buildLiveSet(ctx, liveSnap, id, liveSetMax, opts.Stats)
+	_ = liveSnap.Close()
 	if err != nil {
 		return err
 	}
+
+	var lookupSnap *db.Snapshot
+	closeLookup := func() {
+		if lookupSnap != nil {
+			_ = lookupSnap.Close()
+			lookupSnap = nil
+		}
+	}
+	defer closeLookup()
 
 	assist := opts.Assist
 	lastAssist := time.Now()
@@ -84,7 +100,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Determine source size once. If the file grows concurrently (it shouldn't,
 	// since we don't compact the active slab), we ignore the tail.
@@ -175,7 +191,10 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if opts.Stats != nil {
 				opts.Stats.TreeLookups++
 			}
-			entry, err := snap.GetEntry(key)
+			if lookupSnap == nil {
+				lookupSnap = c.db.AcquireSnapshot()
+			}
+			entry, err := lookupSnap.GetEntry(key)
 			if err != nil {
 				return false
 			}
@@ -236,6 +255,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		// Apply periodically to bound memory and writer pauses.
 		if len(ops) >= microBatch {
 			maybeAssist(true)
+			closeLookup()
 			if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 				return err
 			}
@@ -248,11 +268,21 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 
 	if len(ops) > 0 {
 		maybeAssist(true)
+		closeLookup()
 		if err := c.db.ApplyCompactionMicroBatches(ops, microBatch); err != nil {
 			return err
 		}
 		maybeAssist(true)
 	}
+
+	// On Windows, a file cannot be removed while it is open by any process,
+	// including the compactor itself. MarkZombie+RefreshSlabSet can delete the
+	// compacted slab once snapshots release it, so close our reader before that.
+	//
+	// (On Unix, unlinking an open file is allowed, but we want consistent
+	// behavior across platforms.)
+	_ = f.Close()
+	f = nil
 
 	// Now that pointers have been moved, remove the old slab from future
 	// snapshots. It will be deleted once no snapshots reference it.

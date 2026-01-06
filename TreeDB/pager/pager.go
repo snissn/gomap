@@ -12,7 +12,8 @@ import (
 
 var (
 	ErrPageOutOfBounds = errors.New("page index out of bounds") // Added declaration
-	ErrFileSize        = errors.New("file size is not a multiple of chunk size")
+	ErrFileSize        = errors.New("file size is not a multiple of page size")
+	ErrReadOnly        = errors.New("pager is read-only")
 )
 
 type chunkList struct {
@@ -37,6 +38,7 @@ type Pager struct {
 	mu           sync.RWMutex
 	allocMu      sync.Mutex
 	path         string
+	readOnly     bool
 	verified     atomic.Pointer[verifiedBitset]
 	verifyOnRead atomic.Bool
 
@@ -123,6 +125,78 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	}
 
 	p.startGrower()
+	return p, nil
+}
+
+// OpenReadOnly opens an existing pager at path without modifying the underlying file.
+//
+// The returned pager does not support Alloc/GetForWrite/Write/Sync.
+func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
+	if chunkSize%page.PageSize != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
+	}
+	if chunkSize%int64(os.Getpagesize()) != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
+	}
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		return nil, fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := mmapAvailable(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+
+	size := info.Size()
+	if size%int64(page.PageSize) != 0 {
+		_ = f.Close()
+		return nil, ErrFileSize
+	}
+
+	p := &Pager{
+		file:      f,
+		chunkSize: chunkSize,
+		path:      path,
+		readOnly:  true,
+	}
+
+	if size > 0 {
+		numChunks := int64((size + chunkSize - 1) / chunkSize)
+		p.chunks = make([][]byte, numChunks)
+
+		for i := int64(0); i < numChunks; i++ {
+			offset := i * chunkSize
+			length := int(chunkSize)
+			remaining := size - offset
+			if remaining < int64(length) {
+				length = int(remaining)
+			}
+			data, err := mmapFileReadOnly(f.Fd(), offset, length)
+			if err != nil {
+				p.Close()
+				return nil, err
+			}
+			p.chunks[i] = data
+		}
+
+		p.atomicChunks.Store(&chunkList{data: p.chunks})
+		p.numPages.Store(uint64(size / int64(page.PageSize)))
+		p.ensureVerifiedCapacityLocked(p.numPages.Load())
+	} else {
+		p.ensureVerifiedCapacityLocked(0)
+		p.atomicChunks.Store(&chunkList{data: nil})
+	}
+
 	return p, nil
 }
 
@@ -280,6 +354,9 @@ func (p *Pager) Close() error {
 // Truncate resizes the file to the specified number of pages.
 // Safety: Shrinking is forbidden. Only growing is allowed.
 func (p *Pager) Truncate(targetPages uint64) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
 	currentPages := p.numPages.Load()
 
 	if targetPages < currentPages {
@@ -299,6 +376,9 @@ func (p *Pager) Truncate(targetPages uint64) error {
 // Alloc allocates `count` new pages and returns the ID of the first one.
 // It grows the file if necessary.
 func (p *Pager) Alloc(count int) (uint64, error) {
+	if p.readOnly {
+		return 0, ErrReadOnly
+	}
 	p.allocMu.Lock()
 	defer p.allocMu.Unlock()
 
@@ -327,6 +407,9 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 
 // GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
 func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
+	if p.readOnly {
+		return nil, ErrReadOnly
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -409,6 +492,9 @@ func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
 // Write copies data into the page.
 // The data slice must be exactly PageSize bytes (or less, but we usually write full pages).
 func (p *Pager) Write(pageID uint64, data []byte) error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -437,6 +523,9 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 
 // Sync msyncs the memory maps to disk.
 func (p *Pager) Sync() error {
+	if p.readOnly {
+		return ErrReadOnly
+	}
 	p.mu.Lock()
 	// Copy dirty list and clear
 	toSync := make([]int, 0, len(p.dirtyChunks))

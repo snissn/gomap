@@ -16,8 +16,17 @@ type levelBuilder struct {
 	startKey []byte
 }
 
+type BuildOptions struct {
+	LeafPrefixCompression bool
+}
+
 // Build creates a new B-Tree from a sorted iterator.
 func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint64, error) {
+	return BuildWithOptions(iter, alloc, p, BuildOptions{})
+}
+
+// BuildWithOptions creates a new B-Tree from a sorted iterator with custom options.
+func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
 	if !iter.Valid() {
 		// Empty tree? Return a new empty root.
 		rootID, err := alloc.Alloc(0)
@@ -26,7 +35,7 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 		}
 		// Write empty leaf
 		buf := make([]byte, page.PageSize)
-		b := node.NewBuilder(buf, page.PageTypeLeaf)
+		b := newLeafBuilder(buf, opts)
 		b.SetPageID(rootID)
 		n := b.Finish()
 		if err := p.Write(rootID, n.Data()); err != nil {
@@ -36,6 +45,13 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 	}
 
 	var levels []*levelBuilder
+
+	newBuilder := func(buf []byte, typ page.PageType) *node.Builder {
+		if typ == page.PageTypeLeaf {
+			return newLeafBuilder(buf, opts)
+		}
+		return node.NewBuilder(buf, typ)
+	}
 
 	ensureLevel := func(lvl int) error {
 		for len(levels) <= lvl {
@@ -50,7 +66,7 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 				typ = page.PageTypeLeaf
 			}
 
-			b := node.NewBuilder(buf, typ)
+			b := newBuilder(buf, typ)
 			b.SetPageID(pid)
 			levels = append(levels, &levelBuilder{
 				builder:  b,
@@ -123,7 +139,7 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 		if lvl == 0 {
 			typ = page.PageTypeLeaf
 		}
-		lb.builder = node.NewBuilder(buf, typ)
+		lb.builder = newBuilder(buf, typ)
 		lb.builder.SetPageID(pid)
 		lb.startKey = nil
 
@@ -208,4 +224,11 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 	}
 
 	return currID, nil
+}
+
+func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
+	if opts.LeafPrefixCompression {
+		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
+	}
+	return node.NewBuilder(buf, page.PageTypeLeaf)
 }

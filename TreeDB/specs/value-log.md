@@ -19,6 +19,7 @@ This doc is a *plan for review* and is intentionally explicit so future agents c
 - Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
 - Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.
 - Optional guardrail: `MaxValueLogRetainedBytesHard` disables new value-log pointers once retained bytes exceed the threshold.
+- Optional split mode: `SplitValueLog` keeps WAL records in `wal/wal-*.log` and writes large values to `wal/vlog-*.log`, with WAL entries storing `ValuePtr` payloads for large values.
 
 ## Problem statement
 
@@ -43,6 +44,19 @@ Treat cached-mode WAL segments as a **value-log**:
 - old segments can be deleted when they contain no live referenced values (or after compaction migrates live values out).
 
 Key property: the log is still a WAL (redo source), but it is also a *value store* for out-of-line values.
+
+---
+
+## Split WAL/value-log mode
+
+When `SplitValueLog` is enabled, the WAL and value log are separate files:
+
+- **WAL**: `wal/wal-*.log` stores redo records; large values are represented as `OpSetPointer` with an encoded `ValuePtr`.
+- **Value log**: `wal/vlog-*.log` stores the actual value bytes for large values.
+- **Recovery**: WAL segments are replayed; value-log segments are not replayed (their records are referenced by pointers).
+- **Retention**: the caching layer tracks value-log paths per memtable and only prunes segments once they are no longer referenced.
+
+This mode avoids large value bytes inflating WAL size while preserving pointer semantics for large values.
 
 ---
 

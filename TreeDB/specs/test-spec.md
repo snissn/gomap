@@ -88,7 +88,7 @@ Focus on isolating the complex low-level data structures before system integrati
     * **Assert:** `Length` (4 bytes) follows `Offset`.
 * **Length Precision:**
     * Write a record.
-    * **Assert:** `ValuePtr.Length` equals exactly `2 + 4 + len(Key) + len(Value)`.
+    * **Assert:** `ValuePtr.Length` masked for compression equals `2 + 4 + len(Key) + len(Value)`.
     * Verify that reading `Length` bytes from `Offset` covers the CRC, Headers, Key, and Value exactly.
 * **Corrupt Record CRC:**
     * Flip one bit in `ValueBytes` or the CRC field.

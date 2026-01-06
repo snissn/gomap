@@ -45,7 +45,7 @@ Rules:
   * **Checksum:** Uses **CRC32C (Castagnoli)** for hardware acceleration (SSE4.2/ARMv8).
   * Only values stored out-of-line (i.e., `len(value) > InlineThreshold`) are appended as slab records.
   * The `ValuePtr.Offset` points to the beginning of `KeyLen` (i.e., immediately after CRC32C), so the compactor can parse forward easily and readers can bounds-check safely.
-  * **Definition of Length:** `ValuePtr.Length` is defined as `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`. This ensures that `Offset + Length` precisely covers the data protected by the CRC.
+  * **Definition of Length:** `ValuePtr.Length` encodes `2 (KeyLen) + 4 (ValueLen) + len(Key) + len(Value)`; the high bit is reserved for value compression and must be masked when computing record length.
   * On read, the record CRC32C is verified before returning data.
 
 ### 2.2 The Index File ("The Pager")

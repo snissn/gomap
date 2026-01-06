@@ -7,8 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/compaction"
@@ -27,10 +30,12 @@ Commands:
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
   dump            Alias for scan
-  vacuum          Rebuild index (rewrite+swap)
+  vacuum          Rebuild index (offline by default; use -online for online vacuum)
   compact         Compact slab files (by candidate selection or slab id)
 
 Run "treemap <command> -h" for command-specific options.
+
+Most read commands open the DB read-only by default; pass -rw to allow writes/recovery.
 `
 
 func main() {
@@ -81,9 +86,10 @@ func main() {
 func runInfo(dir string, args []string) {
 	fs := flag.NewFlagSet("info", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	printStats(db.Stats())
@@ -100,9 +106,10 @@ func runInfo(dir string, args []string) {
 func runStats(dir string, args []string) {
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 	printStats(db.Stats())
 }
@@ -110,9 +117,10 @@ func runStats(dir string, args []string) {
 func runFrag(dir string, args []string) {
 	fs := flag.NewFlagSet("frag", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 	rep, err := db.FragmentationReport()
 	if err != nil {
@@ -127,10 +135,11 @@ func runFrag(dir string, args []string) {
 func runVerify(dir string, args []string) {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	report := fs.Bool("report", false, "Print stats and fragmentation report")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	if *report {
@@ -166,6 +175,7 @@ func runVerify(dir string, args []string) {
 func runGet(dir string, args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	hexInput := fs.Bool("hex", false, "Interpret key as hex")
 	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
 	outMode := fs.String("out", "string", "Output format: string|hex|base64")
@@ -179,7 +189,7 @@ func runGet(dir string, args []string) {
 		fatalf("invalid key: %v", err)
 	}
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	val, err := db.Get(key)
@@ -202,6 +212,7 @@ func runGet(dir string, args []string) {
 func runKeys(dir string, args []string) {
 	fs := flag.NewFlagSet("keys", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	start := fs.String("start", "", "Start key (inclusive)")
 	end := fs.String("end", "", "End key (exclusive)")
 	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
@@ -213,7 +224,7 @@ func runKeys(dir string, args []string) {
 
 	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -242,6 +253,7 @@ func runKeys(dir string, args []string) {
 func runScan(dir string, args []string) {
 	fs := flag.NewFlagSet("scan", flag.ExitOnError)
 	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	start := fs.String("start", "", "Start key (inclusive)")
 	end := fs.String("end", "", "End key (exclusive)")
 	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
@@ -258,7 +270,7 @@ func runScan(dir string, args []string) {
 		fatalf("scan requires -allow-values to print values; use keys to dump keys only")
 	}
 
-	db := openTreeDB(dir, *backend)
+	db := openTreeDB(dir, *backend, *rw)
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -290,20 +302,37 @@ func runScan(dir string, args []string) {
 
 func runVacuum(dir string, args []string) {
 	fs := flag.NewFlagSet("vacuum", flag.ExitOnError)
+	online := fs.Bool("online", false, "Run online vacuum (requires -rw)")
+	rw := fs.Bool("rw", false, "Open read-write for online vacuum (unsafe; may replay WAL or repair files)")
+	chunkMiB := fs.Int64("chunk-size-mib", 64, "Chunk size in MiB for offline vacuum (0=default)")
 	timeout := fs.Duration("timeout", 0, "Timeout for online vacuum (0=none)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, true)
-	defer closeTreeDB(db)
+	if *online {
+		if !*rw {
+			fatalf("online vacuum requires -rw")
+		}
+		db := openTreeDB(dir, true, true)
+		defer closeTreeDB(db)
 
-	ctx := context.Background()
-	if *timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, *timeout)
-		defer cancel()
+		ctx := context.Background()
+		if *timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, *timeout)
+			defer cancel()
+		}
+		if err := db.VacuumIndexOnline(ctx); err != nil {
+			fatalf("VacuumIndexOnline error: %v", err)
+		}
+		return
 	}
-	if err := db.VacuumIndexOnline(ctx); err != nil {
-		fatalf("VacuumIndexOnline error: %v", err)
+
+	chunkSize := int64(0)
+	if *chunkMiB > 0 {
+		chunkSize = *chunkMiB * 1024 * 1024
+	}
+	if err := treedbdb.VacuumIndexOffline(treedbdb.Options{Dir: dir, ChunkSize: chunkSize}); err != nil {
+		fatalf("VacuumIndexOffline error: %v", err)
 	}
 }
 
@@ -314,13 +343,19 @@ func runCompact(dir string, args []string) {
 	minBytes := fs.Uint64("min-bytes", 1, "Minimum slab size to consider")
 	maxSlabs := fs.Int("max-slabs", 1, "Maximum slabs to compact (0=unlimited)")
 	microBatch := fs.Int("microbatch", 256, "Micro-batch size for pointer updates")
+	indexSwap := fs.Bool("index-swap", true, "Compact via index rebuild+swap (two-index-file approach)")
 	rotateBeforeWrite := fs.Bool("rotate-before-write", false, "Rotate active slab before copying")
 	copyBps := fs.Int64("copy-bps", 0, "Copy throttling bytes/sec (0=disabled)")
 	copyBurst := fs.Int64("copy-burst", 0, "Copy throttling burst bytes (0=default)")
 	timeout := fs.Duration("timeout", 0, "Timeout for compaction (0=none)")
 	_ = fs.Parse(args)
 
-	d, err := treedbdb.Open(treedbdb.Options{Dir: dir})
+	d, err := treedbdb.Open(treedbdb.Options{
+		Dir: dir,
+		// Favor immediate page reuse during offline compaction to avoid index growth.
+		KeepRecent:             1,
+		DisableBackgroundPrune: true,
+	})
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
@@ -332,6 +367,7 @@ func runCompact(dir string, args []string) {
 		MinTotalBytes:      *minBytes,
 		MaxSlabs:           *maxSlabs,
 		MicroBatchSize:     *microBatch,
+		IndexSwap:          *indexSwap,
 		RotateBeforeWrite:  *rotateBeforeWrite,
 		CopyBytesPerSec:    *copyBps,
 		CopyBurstBytes:     *copyBurst,
@@ -356,15 +392,52 @@ func runCompact(dir string, args []string) {
 	}
 }
 
-func openTreeDB(dir string, backend bool) *treedb.DB {
+var (
+	signalOnce    sync.Once
+	signalCloseMu sync.Mutex
+	signalClosers []func()
+)
+
+func registerSignalCloser(fn func()) {
+	if fn == nil {
+		return
+	}
+	signalCloseMu.Lock()
+	signalClosers = append(signalClosers, fn)
+	signalCloseMu.Unlock()
+
+	signalOnce.Do(func() {
+		ch := make(chan os.Signal, 2)
+		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-ch
+			signalCloseMu.Lock()
+			closers := append([]func(){}, signalClosers...)
+			signalCloseMu.Unlock()
+			for _, closer := range closers {
+				func() {
+					defer func() { _ = recover() }()
+					closer()
+				}()
+			}
+			os.Exit(130)
+		}()
+	})
+}
+
+func openTreeDB(dir string, backend bool, rw bool) *treedb.DB {
 	opts := treedb.Options{Dir: dir}
 	if backend {
 		opts.Mode = treedb.ModeBackend
+	}
+	if !rw {
+		opts.ReadOnly = true
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
+	registerSignalCloser(func() { _ = db.Close() })
 	return db
 }
 

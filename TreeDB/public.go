@@ -3,6 +3,10 @@ package treedb
 import (
 	"context"
 	"errors"
+	"log"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,6 +69,7 @@ type DB struct {
 	bgErrMu        sync.Mutex
 	bgErr          error
 	durabilityMode string
+	dir            string
 }
 
 func (db *DB) ensureOpen() error {
@@ -88,6 +93,11 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
+	if opts.ReadOnly {
+		// Read-only opens are backend-only: the caching layer creates and rotates
+		// WAL segments (writes) and runs background maintenance loops.
+		opts.Mode = ModeBackend
+	}
 
 	backend, err := db.Open(opts)
 	if err != nil {
@@ -95,7 +105,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts)}, nil
+		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -129,10 +139,12 @@ func Open(opts Options) (*DB, error) {
 		FlushBuildConcurrency:        opts.FlushBuildConcurrency,
 		DisableWAL:                   opts.DisableWAL,
 		DisableValueLog:              opts.DisableValueLog,
+		SplitValueLog:                opts.SplitValueLog,
 		WALMaxSegmentBytes:           opts.WALMaxSegmentBytes,
 		RelaxedSync:                  opts.RelaxedSync,
 		DisableReadChecksum:          opts.DisableReadChecksum,
 		MemtableValueLogPointers:     opts.MemtableValueLogPointers,
+		ValueLogPointerThreshold:     opts.ValueLogPointerThreshold,
 		AllowUnsafe:                  opts.AllowUnsafe,
 		MaxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
 		MaxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
@@ -143,7 +155,7 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts)}
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -185,6 +197,7 @@ func Open(opts Options) (*DB, error) {
 			CopyBytesPerSec:    opts.BackgroundCompactionCopyBytesPerSec,
 			CopyBurstBytes:     opts.BackgroundCompactionCopyBurstBytes,
 			RotateBeforeWrite:  opts.BackgroundCompactionRotateBeforeWrite,
+			IndexSwap:          opts.BackgroundCompactionIndexSwap,
 		}
 		// Reasonable effective defaults for background mode.
 		if co.MaxSlabs == 0 {
@@ -221,6 +234,9 @@ func Open(opts Options) (*DB, error) {
 }
 
 func computeDurabilityMode(opts Options) string {
+	if opts.ReadOnly {
+		return "read_only"
+	}
 	mode := "durable"
 	if opts.Mode == ModeBackend {
 		if opts.RelaxedSync {
@@ -253,6 +269,103 @@ func computeDurabilityMode(opts Options) string {
 	return mode
 }
 
+const (
+	envCloseCheckpoint        = "TREEDB_CLOSE_CHECKPOINT"
+	envCloseCompactIndex      = "TREEDB_CLOSE_COMPACT_INDEX"
+	envCloseVacuumIndexOnline = "TREEDB_CLOSE_VACUUM_INDEX_ONLINE"
+	envCloseVacuumTimeout     = "TREEDB_CLOSE_VACUUM_TIMEOUT"
+	envCloseLog               = "TREEDB_CLOSE_LOG"
+	envCloseScopeContains     = "TREEDB_CLOSE_SCOPE_CONTAINS"
+)
+
+func envBool(name string) bool {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return false
+	}
+	if val == "" {
+		return true
+	}
+	parsed, err := strconv.ParseBool(val)
+	return err == nil && parsed
+}
+
+func envDuration(name string, def time.Duration) time.Duration {
+	val, ok := os.LookupEnv(name)
+	if !ok || val == "" {
+		return def
+	}
+	if d, err := time.ParseDuration(val); err == nil {
+		return d
+	}
+	if secs, err := strconv.Atoi(val); err == nil {
+		return time.Duration(secs) * time.Second
+	}
+	return def
+}
+
+func (db *DB) closeMaintenanceEnabled() bool {
+	scope := os.Getenv(envCloseScopeContains)
+	if scope == "" {
+		return true
+	}
+	if db == nil {
+		return false
+	}
+	if db.dir == "" {
+		return true
+	}
+	return strings.Contains(db.dir, scope)
+}
+
+func (db *DB) closeMaintenance() error {
+	logEnabled := envBool(envCloseLog)
+	if !db.closeMaintenanceEnabled() {
+		if logEnabled {
+			log.Printf("treedb: close maintenance skipped dir=%q", db.dir)
+		}
+		return nil
+	}
+	var err error
+	if envBool(envCloseCheckpoint) {
+		if logEnabled {
+			log.Printf("treedb: close checkpoint start")
+		}
+		if e := db.Checkpoint(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if logEnabled {
+			log.Printf("treedb: close checkpoint done")
+		}
+	}
+	if envBool(envCloseCompactIndex) {
+		if logEnabled {
+			log.Printf("treedb: close compact index start")
+		}
+		if e := db.CompactIndex(); e != nil {
+			err = errors.Join(err, e)
+		}
+		if logEnabled {
+			log.Printf("treedb: close compact index done")
+		}
+	}
+	if envBool(envCloseVacuumIndexOnline) {
+		timeout := envDuration(envCloseVacuumTimeout, 30*time.Minute)
+		if logEnabled {
+			log.Printf("treedb: close vacuum index online start timeout=%s", timeout)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		if e := db.VacuumIndexOnline(ctx); e != nil {
+			err = errors.Join(err, e)
+		}
+		cancel()
+		if logEnabled {
+			log.Printf("treedb: close vacuum index online done")
+		}
+	}
+	return err
+}
+
 // OpenCached is an explicit cached-mode opener (alias of Open with ModeCached).
 func OpenCached(opts Options) (*DB, error) {
 	opts.Mode = ModeCached
@@ -278,18 +391,23 @@ func (db *DB) Close() error {
 	db.bgVac.Stop()
 	db.bgComp.Stop()
 	var err error
+	if db.cached != nil || db.backend != nil {
+		if e := db.closeMaintenance(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
 	if db.cached != nil {
-		err = db.cached.Close()
+		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 		db.backend = nil
 		return errors.Join(err, db.backgroundError())
 	}
 	if db.backend != nil {
-		err = db.backend.Close()
+		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
 		return errors.Join(err, db.backgroundError())
 	}
-	return db.backgroundError()
+	return errors.Join(err, db.backgroundError())
 }
 
 func (db *DB) reportError(err error) {

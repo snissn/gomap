@@ -45,8 +45,8 @@ func TestRecovery(t *testing.T) {
 		t.Errorf("Expected offset 4, got %d", ptr.Offset)
 	}
 	// Length excludes CRC(4). So 18-4 = 14.
-	if ptr.Length != 14 {
-		t.Errorf("Expected length 14, got %d", ptr.Length)
+	if page.ValuePtrRecordLength(ptr) != 14 {
+		t.Errorf("Expected length 14, got %d", page.ValuePtrRecordLength(ptr))
 	}
 
 	// Simulate "Torn Write" on Slab: Append garbage but don't update meta

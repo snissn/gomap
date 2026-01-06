@@ -778,6 +778,75 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 2. Add bounded worker pool to compaction copy/decode path (outside writer lock), with a hard cap on goroutines and memory.
 3. Iterator/scan prefetching *only if* IO-bound and it can be disabled with one option (and must have a memory cap).
 
+### 17.3 Value Index + Unified Seq + Refcounted GC (Design Milestone)
+
+**Goal:** eliminate full User-tree rewrites when slab/vlog bytes move (compaction/GC), and make large-value storage reclaimable under long-running churn.
+
+#### 17.3.0 Core Concepts (must be explicit in PRs)
+
+- **Value Index (indirection):** User tree stores `key -> ValueID` (fixed-size), and a separate mapping stores `ValueID -> ValuePtr` (file/offset/len/flags).
+  - **Outcome:** moving large-value bytes during compaction updates the Value Index, not N user keys.
+- **Unified sequence space:** all durability/replayable writes that can affect pointer validity must be ordered in one monotonic `seq`, even if stored in multiple files (`wal-*` and `vlog-*`).
+- **Checkpoint boundary:** define an explicit “all ops ≤ seq X are reflected in index/meta” invariant that GC can rely on.
+- **Refcounted GC:** reclaim `wal/vlog-*` (and/or slab segments) based on reachability from the latest committed roots plus pinned snapshots.
+
+#### 17.3.1 Value Index: Implementation Plan (opt-in first)
+
+- [ ] Add a new option gate in `treedb.Options` (in `TreeDB/db/db.go`) to enable Value Index for pointer-backed values (default off until proven).
+- [ ] Define on-disk encoding for `ValueID` and `ValuePtr` mapping:
+  - **Preferred first cut:** store in the existing System tree (internal namespace) under a dedicated prefix (e.g. `0x00 'v' 'i'`), keyed by big-endian `ValueID`.
+  - Must be MVCC-safe (old ValueIDs remain readable while snapshots are pinned).
+- [ ] Update write paths for pointer-backed values:
+  - allocate a fresh `ValueID` on write,
+  - write mapping `ValueID -> ValuePtr` into the Value Index,
+  - write `key -> ValueID` into the User tree.
+- [ ] Update read paths:
+  - resolve `ValueID -> ValuePtr` via the Value Index (snapshot-consistent),
+  - then read bytes from slab/vlog using the resolved pointer.
+- [ ] Update maintenance tools:
+  - `treemap info/stats` should report whether Value Index is enabled and basic sizing counters (entries, bytes).
+  - `treemap verify` should optionally verify ValueID resolution.
+- [ ] Tests/gates:
+  - unit tests for ValueID mapping encode/decode and snapshot visibility,
+  - crash/recovery test that replays and verifies pointer-backed values still resolve.
+
+#### 17.3.2 Unified Seq Across `wal-*` and `vlog-*` (required for GC correctness)
+
+- [ ] Establish one monotonic sequence generator used by both streams.
+- [ ] Define replay order unambiguously:
+  - read both streams, merge by `(seq, stream)` tie-breaker, apply deterministically.
+- [ ] Ensure “bytes before pointer” ordering:
+  - a `ValuePtr` must never become visible in `index.db` at seq N unless the referenced bytes are durable enough for seq N under the chosen durability mode.
+- [ ] Add an invariant check helper (test-only) that validates the ordering on recovery fixtures.
+
+#### 17.3.3 Refcounted GC for `vlog-*` / slab segments (bounded disk over long churn)
+
+- [ ] Pick the first refcount granularity:
+  - segment-level refcount (simpler) or
+  - block/extent-level (better reclaim, higher complexity).
+- [ ] Define reachability inputs:
+  - latest committed User/System roots,
+  - pinned snapshots (via ReaderRegistry),
+  - any “in-flight” compaction/vacuum generations.
+- [ ] Implement a GC pass that:
+  - computes live `ValueID -> ValuePtr` set (from Value Index),
+  - aggregates to per-segment live refs (and optionally live byte ranges),
+  - marks segments (or extents) reclaimable once no refs remain and all snapshots are newer than the segment’s last-seen seq.
+- [ ] Expose observability:
+  - retained vlog bytes/segments, reclaimable bytes, last GC duration, last error.
+- [ ] Provide an operator command path:
+  - `treemap gc` (offline first), and a bounded background mode later (with strict quotas).
+
+#### 17.3.4 Merge Criteria (for enabling by default)
+
+- [ ] `./bin/unified-bench -suite longmix` shows:
+  - significantly lower `index.db` growth under compaction/GC workloads,
+  - stable `treedb.user.pages.span_ratio_ppm` (no locality regression),
+  - no major throughput regression.
+- [ ] Mainnet sync harness demonstrates:
+  - no mid-run “index balloon” from pointer-move maintenance (compaction/GC),
+  - bounded `wal/` growth over the run with checkpoint + GC enabled.
+
 #### 17.2.3 Gates (required)
 - [ ] Run **17.0.2 Baseline Gates** (before/after).
 - [ ] No scan collapse: `-settle-before-scans` results must remain sane; `longmix` full/prefix scan ops/s must not crater.

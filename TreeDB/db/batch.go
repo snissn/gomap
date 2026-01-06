@@ -71,6 +71,12 @@ func (b *Batch) WriteSync() error {
 }
 
 func (b *Batch) write(sync bool) error {
+	if b == nil || b.db == nil {
+		return fmt.Errorf("missing db")
+	}
+	if b.db.readOnly {
+		return ErrReadOnly
+	}
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
 		committed, err := b.writeOptimistic(sync)
 		if err != nil {

@@ -62,10 +62,13 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
+	readOnly bool
+
 	keepRecent            uint64
 	policy                WritePolicy
 	leafFillTargetPPM     uint32
 	internalFillTargetPPM uint32
+	leafPrefixCompression bool
 	piggybackCompaction   bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
@@ -94,7 +97,11 @@ const (
 )
 
 type Options struct {
-	Dir        string
+	Dir string
+	// ReadOnly opens the database without acquiring an exclusive lock and without
+	// modifying on-disk state (no recovery truncation, no WAL replay, no background
+	// maintenance). Only read operations are supported.
+	ReadOnly   bool
 	ChunkSize  int64  // Default 256MB
 	KeepRecent uint64 // Default 10000
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
@@ -122,6 +129,10 @@ type Options struct {
 	BackgroundCompactionCopyBytesPerSec   int64
 	BackgroundCompactionCopyBurstBytes    int64
 	BackgroundCompactionRotateBeforeWrite bool
+	// BackgroundCompactionIndexSwap compacts slabs by rebuilding the index into a
+	// new file and swapping it in once per pass (two-index-file approach). This
+	// can drastically reduce index churn during large slab pointer rewrites.
+	BackgroundCompactionIndexSwap bool
 	// BackgroundIndexVacuumInterval enables background index vacuum when > 0.
 	// The worker uses FragmentationReport span ratio to decide if a rebuild is
 	// warranted; see BackgroundIndexVacuumSpanRatioPPM.
@@ -158,6 +169,8 @@ type Options struct {
 	// (current behavior). Zero uses the default (1_000_000).
 	LeafFillTargetPPM     uint32
 	InternalFillTargetPPM uint32
+	// LeafPrefixCompression enables prefix-compressed leaf nodes for new pages.
+	LeafPrefixCompression bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -200,12 +213,20 @@ type Options struct {
 	DisableWAL bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
+	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
+	// segments, and WAL entries reference them via pointers.
+	SplitValueLog bool
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
+	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
+	// Values <= 0 use the default inline threshold (256 bytes).
+	ValueLogPointerThreshold int
+	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
+	ForceValuePointers bool
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64
@@ -225,6 +246,8 @@ type Options struct {
 	// This improves read performance (especially for large values) but risks
 	// returning silent data corruption if the disk/memory is compromised.
 	DisableReadChecksum bool
+	// SlabCompression configures compression for slab-stored values.
+	SlabCompression slab.CompressionOptions
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -377,6 +400,10 @@ func Open(opts Options) (*DB, error) {
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
 
+	if opts.ReadOnly {
+		return openReadOnly(opts)
+	}
+
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
@@ -390,6 +417,11 @@ func Open(opts Options) (*DB, error) {
 }
 
 func validateUnsafeOptions(opts Options) error {
+	if opts.ReadOnly {
+		// Read-only opens never mutate on-disk state, so "unsafe" write options do
+		// not apply.
+		return nil
+	}
 	if opts.AllowUnsafe {
 		return nil
 	}
@@ -411,7 +443,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	sm, err := slab.NewSlabManager(opts.Dir)
+	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
+		Compression: opts.SlabCompression,
+	})
 	if err != nil {
 		p.Close()
 		return nil, err
@@ -435,14 +469,22 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	gen := newIndexGen(1, p, alloc, z)
 
+	adaptiveCtrl := adaptive.New()
+	inlineThreshold := page.DefaultInlineThreshold
+	if opts.ForceValuePointers {
+		inlineThreshold = 0
+		adaptiveCtrl = nil
+	}
+
 	db := &DB{
 		slabManager:           sm,
 		valueLogManager:       vm,
 		lock:                  lock,
-		adaptive:              adaptive.New(),
+		adaptive:              adaptiveCtrl,
 		keepRecent:            opts.KeepRecent,
 		leafFillTargetPPM:     opts.LeafFillTargetPPM,
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
+		leafPrefixCompression: opts.LeafPrefixCompression,
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		dir:                   opts.Dir,
@@ -451,7 +493,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:   opts.FreelistRegionPages,
 		freelistRegionRadius:  opts.FreelistRegionRadius,
 		policy: WritePolicy{
-			InlineThreshold: page.DefaultInlineThreshold,
+			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 
@@ -467,6 +509,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -483,7 +526,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.state.Store(initialState)
 
-	segments, err := listWALSegments(opts.Dir)
+	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog && !opts.SplitValueLog
+	segments, err := listWALSegments(opts.Dir, includeValueLog)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -572,6 +616,9 @@ func (db *DB) recover() error {
 	p := idx.pager
 
 	if p.PageCount() < 2 {
+		if db.readOnly {
+			return errors.New("read-only open requires an existing index with meta pages")
+		}
 		if _, err := p.Alloc(2); err != nil {
 			return err
 		}
@@ -586,11 +633,9 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		n := node.NewNode(data)
-		n.SetPageID(rootID)
-		n.SetType(page.PageTypeLeaf)
-		n.SetCount(0)
-		n.UpdateChecksum()
+		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		b.SetPageID(rootID)
+		b.Finish()
 
 		db.meta.UserRootPageID = rootID
 
@@ -603,11 +648,9 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		nSys := node.NewNode(dataSys)
-		nSys.SetPageID(sysRootID)
-		nSys.SetType(page.PageTypeLeaf)
-		nSys.SetCount(0)
-		nSys.UpdateChecksum()
+		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		bSys.SetPageID(sysRootID)
+		bSys.Finish()
 
 		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
@@ -670,23 +713,28 @@ func (db *DB) recover() error {
 		if err := db.slabManager.SetActiveSlab(c.meta.ActiveSlabID); err != nil {
 			continue
 		}
-		if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
-			return err
-		}
-
-		if db.repairSlabTailOnOpen {
-			repairedTail, err := db.slabManager.RepairActiveSlabTail()
-			if err != nil {
+		if !db.readOnly {
+			if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
 				return err
 			}
-			if repairedTail < c.meta.ActiveSlabTail {
-				// This commit's meta tail was beyond the last checksum-valid record;
-				// reject it and fall back to an older meta page.
-				continue
+
+			if db.repairSlabTailOnOpen {
+				repairedTail, err := db.slabManager.RepairActiveSlabTail()
+				if err != nil {
+					return err
+				}
+				if repairedTail < c.meta.ActiveSlabTail {
+					// This commit's meta tail was beyond the last checksum-valid record;
+					// reject it and fall back to an older meta page.
+					continue
+				}
 			}
 		}
 
 		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
+			continue
+		}
+		if !db.freelistHeadValid(p, c.meta.FreelistHeadID) {
 			continue
 		}
 
@@ -700,8 +748,10 @@ func (db *DB) recover() error {
 	db.meta = chosen.meta
 	db.metaPageID = chosen.id
 
-	if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
-		return err
+	if !db.readOnly {
+		if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
+			return err
+		}
 	}
 
 	if chosen.meta.TotalPages > 0 {
@@ -756,6 +806,27 @@ func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 	}
 }
 
+func (db *DB) freelistHeadValid(p *pager.Pager, head uint64) bool {
+	if head == 0 || p == nil {
+		return true
+	}
+	data, err := p.Get(head)
+	if err != nil {
+		return false
+	}
+	n := node.NewNode(data)
+	verifyAlways := p.VerifyOnRead()
+	if verifyAlways || !p.IsVerified(head) {
+		if !n.VerifyChecksum() {
+			return false
+		}
+		if !verifyAlways {
+			p.MarkVerified(head)
+		}
+	}
+	return n.Type() == page.PageTypeFreelist
+}
+
 func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
@@ -805,6 +876,9 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
 func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	idx := db.idx.Load()
 	if idx == nil {
 		return errors.New("missing index")
@@ -909,6 +983,9 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 // If external user calls Commit, they might not know retired pages.
 // We'll accept nil for retired if manual.
 func (db *DB) Commit(newRootID uint64) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	// Public Commit assumes the caller has built a new tree.
 	// We need to serialize with other writers.
 	db.writeMu.Lock()
@@ -929,6 +1006,9 @@ func (db *DB) Commit(newRootID uint64) error {
 
 // Prune reclaims pages from the graveyard.
 func (db *DB) Prune() {
+	if db.readOnly {
+		return
+	}
 	idx := db.idx.Load()
 	if idx == nil {
 		return
@@ -993,7 +1073,7 @@ func (db *DB) InlineThreshold() int {
 	if db.adaptive != nil {
 		return db.adaptive.GetThreshold()
 	}
-	if db.policy.InlineThreshold > 0 {
+	if db.policy.InlineThreshold >= 0 {
 		return db.policy.InlineThreshold
 	}
 	return page.DefaultInlineThreshold
@@ -1075,11 +1155,64 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			return errors.New("missing index")
 		}
 
-		// Snapshot roots under DB lock.
-		db.mu.RLock()
+		// Fast path: if no readers are pinned to the current index generation,
+		// update leaf pointer values in-place to avoid COW page churn.
+		db.mu.Lock()
 		rootID := db.meta.UserRootPageID
 		sysRoot := db.meta.SystemRootPageID
-		db.mu.RUnlock()
+		noPinnedReaders := idx.registry.MinPinnedSeq() == ^uint64(0)
+		if noPinnedReaders {
+			tr := tree.New(idx.pager, nil, rootID)
+			var (
+				metrics       adaptive.Metrics
+				modifiedPages map[uint64]struct{}
+			)
+			for _, op := range chunk {
+				updated, leafID, err := tr.UpdateValuePtrInPlace(op.Key, op.OldPtr, op.NewPtr)
+				if err != nil {
+					db.mu.Unlock()
+					db.writeMu.Unlock()
+					return err
+				}
+				if !updated {
+					continue
+				}
+				if modifiedPages == nil {
+					modifiedPages = make(map[uint64]struct{}, 8)
+				}
+				modifiedPages[leafID] = struct{}{}
+
+				if metrics.SlabWriteBytesByFile == nil {
+					metrics.SlabWriteBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabWriteBytesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
+
+				if metrics.SlabDeadBytesByFile == nil {
+					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(page.ValuePtrRecordLength(op.OldPtr))
+				metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(op.OldPtr))
+			}
+			if len(modifiedPages) > 0 {
+				metrics.IndexWriteBytes += len(modifiedPages) * page.PageSize
+			}
+			db.mu.Unlock()
+
+			if len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
+				db.writeMu.Unlock()
+				continue
+			}
+
+			// Commit without forcing Sync; compaction can be lazily durable.
+			if err := db.finalizeCommit(rootID, sysRoot, nil, false, metrics); err != nil {
+				db.writeMu.Unlock()
+				return err
+			}
+
+			db.writeMu.Unlock()
+			continue
+		}
+		db.mu.Unlock()
 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
@@ -1106,10 +1239,11 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			if slabWritesByFile == nil {
 				slabWritesByFile = make(map[uint32]int64, 4)
 			}
-			slabWritesByFile[op.NewPtr.FileID] += int64(op.NewPtr.Length)
+			slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
 		}
 
-		if len(b.Ops()) == 0 {
+		opsMap := b.Ops()
+		if len(opsMap) == 0 {
 			closeBatch()
 			db.writeMu.Unlock()
 			continue
@@ -1136,6 +1270,9 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			closeBatch()
 			db.writeMu.Unlock()
 			return err
+		}
+		if db.vacuum.Active() {
+			db.vacuum.RecordOps(opsMap)
 		}
 
 		db.writeMu.Unlock()
@@ -1177,7 +1314,9 @@ func (db *DB) CompactIndex() error {
 
 	// Build new tree sequentially
 	alloc := &pagerAllocator{p: idx.pager}
-	newRoot, err := bulk.Build(iter, alloc, idx.pager)
+	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+	})
 	if err != nil {
 		return err
 	}

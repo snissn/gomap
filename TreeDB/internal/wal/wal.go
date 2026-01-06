@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	OpSet    = byte(0)
-	OpDelete = byte(1)
+	OpSet        = byte(0)
+	OpDelete     = byte(1)
+	OpSetPointer = byte(2)
 )
 
 var ErrCorrupt = errors.New("wal: corrupt record")
