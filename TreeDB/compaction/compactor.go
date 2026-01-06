@@ -198,7 +198,17 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if err != nil {
 				return false
 			}
-			return entry.Flags&node.FlagPointer != 0 && entry.ValuePtr == oldPtr
+			if entry.Flags&node.FlagPointer != 0 {
+				return entry.ValuePtr == oldPtr
+			}
+			if entry.Flags&node.FlagValueID != 0 {
+				ptr, err := lookupSnap.ResolveValueIDToPtr(entry.Value)
+				if err != nil {
+					return false
+				}
+				return ptr == oldPtr
+			}
+			return false
 		}
 
 		if liveSet != nil && liveSet.exact != nil {
@@ -330,13 +340,23 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 		}
 
 		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && ptr.FileID == id {
+		var livePtr page.ValuePtr
+		if flags&node.FlagPointer != 0 {
+			livePtr = ptr
+		} else if flags&node.FlagValueID != 0 {
+			p, err := snap.ResolveValueIDToPtr(it.UnsafeValue())
+			if err == nil {
+				livePtr = p
+			}
+		}
+
+		if livePtr.FileID == id {
 			liveCount++
 			if ls.bloom != nil {
-				ls.bloom.add(ptr)
+				ls.bloom.add(livePtr)
 				continue
 			}
-			ls.exact[ptr] = struct{}{}
+			ls.exact[livePtr] = struct{}{}
 			if maxEntries > 0 && len(ls.exact) > maxEntries {
 				ls.bloom = newBloomFilter(maxEntries)
 				for p := range ls.exact {

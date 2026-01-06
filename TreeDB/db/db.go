@@ -1101,17 +1101,9 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) resolveValueID(idBytes []byte, unsafe bool) ([]byte, error) {
-	if len(idBytes) != 8 {
-		return nil, errors.New("invalid value id length")
-	}
-	id := ValueID(binary.BigEndian.Uint64(idBytes))
-
-	// System Tree Lookup
-	sysTree := tree.New(s.idx.pager, ValueReaderForState(s.state), s.state.SystemRootPageID)
-	vi := valueIndexHelper{}
-	ptr, err := vi.Get(sysTree, id)
+	ptr, err := s.ResolveValueIDToPtr(idBytes)
 	if err != nil {
-		return nil, fmt.Errorf("value index lookup failed: %w", err)
+		return nil, err
 	}
 
 	vr := ValueReaderForState(s.state)
@@ -1119,6 +1111,18 @@ func (s *Snapshot) resolveValueID(idBytes []byte, unsafe bool) ([]byte, error) {
 		return vr.ReadUnsafe(ptr)
 	}
 	return vr.Read(ptr)
+}
+
+func (s *Snapshot) ResolveValueIDToPtr(idBytes []byte) (page.ValuePtr, error) {
+	if len(idBytes) != 8 {
+		return page.ValuePtr{}, errors.New("invalid value id length")
+	}
+	id := ValueID(binary.BigEndian.Uint64(idBytes))
+
+	// System Tree Lookup
+	sysTree := tree.New(s.idx.pager, ValueReaderForState(s.state), s.state.SystemRootPageID)
+	vi := valueIndexHelper{}
+	return vi.Get(sysTree, id)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
@@ -1311,6 +1315,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
 		var sysOps []batch.Entry
+		var metrics adaptive.Metrics
 
 		for _, op := range chunk {
 			entry, err := tr.GetEntry(op.Key)
@@ -1350,6 +1355,12 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 					slabWritesByFile = make(map[uint32]int64, 4)
 				}
 				slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
+
+				if metrics.SlabDeadBytesByFile == nil {
+					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(page.ValuePtrRecordLength(op.OldPtr))
+				metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(op.OldPtr))
 				continue
 			}
 
@@ -1380,7 +1391,6 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		var newRoot uint64
 		var retired []uint64
-		var metrics adaptive.Metrics
 		var err error
 
 		if len(opsMap) > 0 {
