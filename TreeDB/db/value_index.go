@@ -39,6 +39,7 @@ type valueIndexHelper struct{}
 func (vi valueIndexHelper) Set(t *tree.Tree, id ValueID, ptr page.ValuePtr) error {
 	return errors.New("valueIndexHelper.Set: direct Value Index writes are not supported; use batch operations instead")
 }
+
 // Get resolves a ValueID to a ValuePtr using the System Tree.
 func (vi valueIndexHelper) Get(t *tree.Tree, id ValueID) (page.ValuePtr, error) {
 	key := encodeValueIndexKey(id)
