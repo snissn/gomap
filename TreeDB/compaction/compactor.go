@@ -100,7 +100,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Determine source size once. If the file grows concurrently (it shouldn't,
 	// since we don't compact the active slab), we ignore the tail.
@@ -274,6 +274,15 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		}
 		maybeAssist(true)
 	}
+
+	// On Windows, a file cannot be removed while it is open by any process,
+	// including the compactor itself. MarkZombie+RefreshSlabSet can delete the
+	// compacted slab once snapshots release it, so close our reader before that.
+	//
+	// (On Unix, unlinking an open file is allowed, but we want consistent
+	// behavior across platforms.)
+	_ = f.Close()
+	f = nil
 
 	// Now that pointers have been moved, remove the old slab from future
 	// snapshots. It will be deleted once no snapshots reference it.
