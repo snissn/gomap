@@ -1306,15 +1306,54 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
+		sysTr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRoot)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
 		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
+		var sysOps []batch.Entry
 
 		for _, op := range chunk {
 			entry, err := tr.GetEntry(op.Key)
 			if err != nil {
 				continue
 			}
+
+			// Value Index Path
+			if entry.Flags&node.FlagValueID != 0 {
+				if len(entry.Value) != 8 {
+					continue
+				}
+				vid := ValueID(binary.BigEndian.Uint64(entry.Value))
+				sysKey := encodeValueIndexKey(vid)
+				sysVal, err := sysTr.Get(sysKey)
+				if err != nil {
+					continue
+				}
+				if len(sysVal) != page.ValuePtrSize {
+					continue
+				}
+				currentPtr := page.DecodeValuePtr(sysVal)
+				if currentPtr != op.OldPtr {
+					continue
+				}
+
+				// Queue update for System Tree
+				var newPtrBuf [page.ValuePtrSize]byte
+				op.NewPtr.Encode(newPtrBuf[:])
+				sysOps = append(sysOps, batch.Entry{
+					Type:  batch.OpPut,
+					Key:   sysKey,
+					Value: append([]byte(nil), newPtrBuf[:]...),
+				})
+
+				if slabWritesByFile == nil {
+					slabWritesByFile = make(map[uint32]int64, 4)
+				}
+				slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
+				continue
+			}
+
+			// Legacy Pointer Path
 			if entry.Flags&node.FlagPointer == 0 {
 				continue
 			}
@@ -1333,18 +1372,29 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		opsMap := b.Ops()
-		if len(opsMap) == 0 {
+		if len(opsMap) == 0 && len(sysOps) == 0 {
 			closeBatch()
 			db.writeMu.Unlock()
 			continue
 		}
 
-		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
-		if err != nil {
-			closeBatch()
-			db.writeMu.Unlock()
-			return err
+		var newRoot, retired []uint64
+		var metrics adaptive.Metrics
+		var err error
+
+		if len(opsMap) > 0 {
+			var r uint64
+			r, retired, metrics, err = idx.zipper.Apply(rootID, b)
+			if err != nil {
+				closeBatch()
+				db.writeMu.Unlock()
+				return err
+			}
+			newRoot = r
+		} else {
+			newRoot = rootID
 		}
+
 		if len(slabWritesByFile) > 0 {
 			if metrics.SlabWriteBytesByFile == nil {
 				metrics.SlabWriteBytesByFile = slabWritesByFile
@@ -1356,7 +1406,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		// Commit without forcing Sync; compaction can be lazily durable.
-		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, nil, metrics, 0); err != nil {
+		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, sysOps, metrics, 0); err != nil {
 			closeBatch()
 			db.writeMu.Unlock()
 			return err

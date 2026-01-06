@@ -294,6 +294,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 		nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 		nextMeta.TotalPages = newPager.PageCount()
+		nextMeta.LastSeq = baseMeta.LastSeq // Explicitly copy LastSeq
 
 		// Ensure slab tail referenced by meta is durable before publishing the
 		// new index. Vacuum is treated as a durability boundary.
@@ -371,6 +372,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			SystemRootPageID: nextMeta.SystemRootPageID,
 			SlabSet:          db.slabManager.CurrentSlabSet(),
 			ValueLogSet:      db.valueLogManager.CurrentSet(),
+			LastSeq:          nextMeta.LastSeq,
 		})
 		db.mu.Unlock()
 
