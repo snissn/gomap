@@ -93,6 +93,22 @@ func (db *DB) syncDirBestEffort(dir string) {
 	}
 }
 
+func (db *DB) removeFileRetry(path string) error {
+	var err error
+	for i := 0; i < 20; i++ {
+		err = os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if runtime.GOOS != "windows" {
+			return err
+		}
+		// Windows: Retry with exponential backoff up to ~1s total
+		time.Sleep(time.Duration(i+1) * 5 * time.Millisecond)
+	}
+	return err
+}
+
 func warnInsecureDir(dir string, notify func(error)) {
 	if dir == "" || notify == nil || runtime.GOOS == "windows" {
 		return
@@ -485,7 +501,7 @@ func (db *DB) pruneRetainedValueLogs() {
 			}
 			marked = true
 		} else {
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			if err := db.removeFileRetry(path); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove value-log %q: %w", path, err))
 				continue
 			}
@@ -2383,7 +2399,7 @@ func (db *DB) Checkpoint() error {
 		if db.valueLogRetained(path) {
 			continue
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := db.removeFileRetry(path); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
@@ -2601,7 +2617,7 @@ func (db *DB) Close() error {
 		if retain {
 			continue
 		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := db.removeFileRetry(path); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
@@ -4288,7 +4304,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	removed := false
 	for _, walPath := range deletable {
-		if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
+		if err := db.removeFileRetry(walPath); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
@@ -4514,7 +4530,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if sync && walPath != "" && !inUse {
 		retain := db.valueLogRetained(walPath)
 		if !retain {
-			if err := os.Remove(walPath); err != nil && !os.IsNotExist(err) {
+			if err := db.removeFileRetry(walPath); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			} else {
 				db.dropValueLogSegment(walPath)
