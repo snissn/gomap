@@ -407,17 +407,19 @@ func (db *DB) Close() error {
 			err = errors.Join(err, e)
 		}
 	}
+
+	// Close cached layer first if present
 	if db.cached != nil {
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
-		db.backend = nil
-		return errors.Join(err, db.backgroundError())
 	}
+
+	// Always close backend if present
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
-		return errors.Join(err, db.backgroundError())
 	}
+
 	return errors.Join(err, db.backgroundError())
 }
 
