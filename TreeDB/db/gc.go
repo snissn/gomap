@@ -33,6 +33,10 @@ func (db *DB) GC() (reclaimed int64, err error) {
 	start := time.Now()
 
 	// 1. Identify all segments currently registered in the latest state.
+	// Note: We hold writeMu, which ensures no concurrent writes can add new
+	// ValueIDs or pointers during this scan. This guarantees that the User
+	// Tree and System Tree are consistent with each other for the duration of
+	// the GC mark phase.
 	state := db.state.Load()
 	if state == nil {
 		return 0, nil
