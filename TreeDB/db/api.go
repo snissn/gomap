@@ -117,7 +117,17 @@ func (it *DBIterator) Key() []byte {
 }
 
 func (it *DBIterator) Value() []byte {
-	return it.iter.Value()
+	val := it.UnsafeValue()
+	if it.err != nil {
+		return nil
+	}
+	if val == nil {
+		return nil
+	}
+	// Copy
+	dst := make([]byte, len(val))
+	copy(dst, val)
+	return dst
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {
@@ -125,7 +135,11 @@ func (it *DBIterator) KeyCopy(dst []byte) []byte {
 }
 
 func (it *DBIterator) ValueCopy(dst []byte) []byte {
-	return it.iter.ValueCopy(dst)
+	val := it.UnsafeValue()
+	if it.err != nil {
+		return dst
+	}
+	return append(dst, val...)
 }
 
 func (it *DBIterator) Error() error {
