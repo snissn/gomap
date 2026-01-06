@@ -758,7 +758,7 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
-	nextSeq            atomic.Uint64
+	nextSeq                                atomic.Uint64
 }
 
 type keyRange struct {

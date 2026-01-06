@@ -378,7 +378,7 @@ func TestRecovery_TruncatedWALRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wal.NewWriter: %v", err)
 	}
-	if err := writer.Append(wal.OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if err := writer.Append(1, wal.OpSet, []byte("k1"), []byte("v1")); err != nil {
 		_ = writer.Close()
 		t.Fatalf("wal.Append: %v", err)
 	}

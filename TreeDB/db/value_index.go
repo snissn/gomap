@@ -43,7 +43,7 @@ func (vi valueIndexHelper) Set(t *tree.Tree, id ValueID, ptr page.ValuePtr) erro
 	ptr.Encode(buf[:])
 
 	// Write to System Tree.
-	// We use FlagInline (implicit in simple Set) because the "value" of this KV pair 
+	// We use FlagInline (implicit in simple Set) because the "value" of this KV pair
 	// is the 16-byte encoded ValuePtr. It is NOT a pointer itself.
 	// We use SetRaw or Set? Tree.Set does a copy.
 	// Tree.Set calls SetRaw eventually.

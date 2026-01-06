@@ -98,7 +98,7 @@ func (b *Batch) write(sync bool) error {
 			if op.IsPtr {
 				// Allocate ValueID
 				vid := b.db.nextValueID.Add(1)
-				
+
 				// Create SysOp: ValueID -> ValuePtr
 				var ptrBuf [page.ValuePtrSize]byte
 				op.ValuePtr.Encode(ptrBuf[:])
