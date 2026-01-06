@@ -11,9 +11,11 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db      *DB
-	batch   *batch.Batch
-	lastSeq uint64
+	db          *DB
+	batch       *batch.Batch
+	lastSeq     uint64
+	transformed bool
+	sysOps      []batch.Entry
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -89,8 +91,7 @@ func (b *Batch) write(sync bool) error {
 		return ErrReadOnly
 	}
 
-	var sysOps []batch.Entry
-	if b.db.enableValueIndex {
+	if b.db.enableValueIndex && !b.transformed {
 		// Inspect and transform large values
 		ops := b.batch.SortedEntries() // In-place modification allowed
 		for i := range ops {
@@ -103,7 +104,7 @@ func (b *Batch) write(sync bool) error {
 				var ptrBuf [page.ValuePtrSize]byte
 				op.ValuePtr.Encode(ptrBuf[:])
 
-				sysOps = append(sysOps, batch.Entry{
+				b.sysOps = append(b.sysOps, batch.Entry{
 					Type:  batch.OpPut,
 					Key:   encodeValueIndexKey(ValueID(vid)),
 					Value: append([]byte(nil), ptrBuf[:]...),
@@ -118,10 +119,11 @@ func (b *Batch) write(sync bool) error {
 				op.Flags = node.FlagValueID
 			}
 		}
+		b.transformed = true
 	}
 
-	if len(sysOps) > 0 {
-		return b.writeSerialized(sync, sysOps)
+	if len(b.sysOps) > 0 {
+		return b.writeSerialized(sync, b.sysOps)
 	}
 
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
@@ -260,6 +262,8 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.batch.Reset()
+	b.transformed = false
+	b.sysOps = nil
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {
