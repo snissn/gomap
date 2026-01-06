@@ -103,6 +103,9 @@ func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
 }
 
 func (it *DBIterator) Next() {
+	if !it.Valid() {
+		return
+	}
 	it.iter.Next()
 }
 
