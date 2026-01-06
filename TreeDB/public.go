@@ -190,6 +190,11 @@ func Open(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
+	// Enable background compaction by default for testing.
+	if opts.BackgroundCompactionInterval == 0 {
+		opts.BackgroundCompactionInterval = 1 * time.Minute
+	}
+
 	// Background compaction is opt-in (interval > 0).
 	if opts.BackgroundCompactionInterval > 0 {
 		co := compaction.Options{
