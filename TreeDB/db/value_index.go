@@ -32,30 +32,13 @@ func encodeValueIndexKey(id ValueID) []byte {
 // valueIndexHelper encapsulates operations on the Value Index stored in the System Tree.
 type valueIndexHelper struct{}
 
-// Set writes a ValueID -> ValuePtr mapping to the provided System Tree.
-// Note: This does NOT write the user-key mapping; that is handled by the caller.
+// Set is intentionally not implemented for direct writes.
+// Value Index entries are written via batch operations (see batch.go) rather than
+// through direct tree mutations. Calling this method will always return an error to
+// make this design explicit and to avoid silent no-op writes.
 func (vi valueIndexHelper) Set(t *tree.Tree, id ValueID, ptr page.ValuePtr) error {
-	// key := encodeValueIndexKey(id) // Unused
-
-	// Encode ptr as the "inline value" of the leaf entry.
-	// We use the pointer's raw bytes as the value.
-	var buf [page.ValuePtrSize]byte
-	ptr.Encode(buf[:])
-
-	// Write to System Tree.
-	// We use FlagInline (implicit in simple Set) because the "value" of this KV pair
-	// is the 16-byte encoded ValuePtr. It is NOT a pointer itself.
-	// We use SetRaw or Set? Tree.Set does a copy.
-	// Tree.Set calls SetRaw eventually.
-	// But Tree is read-only wrapper usually?
-	// The `t` passed here must be a *tree.Tree* that supports writing?
-	// `tree.Tree` (TreeDB/tree/tree.go) is read-only. Writes go via Zipper.
-	// So this helper might be generating batch entries, not calling Tree.Set directly.
-	// But `finalizeCommit` applies updates via `zipper`.
-	// So we probably don't need this helper to call Set. We just need it to generate the Key/Value pair.
-	return nil
+	return errors.New("valueIndexHelper.Set: direct Value Index writes are not supported; use batch operations instead")
 }
-
 // Get resolves a ValueID to a ValuePtr using the System Tree.
 func (vi valueIndexHelper) Get(t *tree.Tree, id ValueID) (page.ValuePtr, error) {
 	key := encodeValueIndexKey(id)
