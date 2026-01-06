@@ -123,6 +123,16 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	if len(b.sysOps) > 0 {
+		// When Value Index is enabled, large values are rewritten into:
+		//   - user operations: Key -> ValueID
+		//   - system operations (sysOps): ValueID -> ValuePtr
+		//
+		// These two sets of operations must be applied atomically to keep the
+		// user tree and the value-index/system tree consistent. The current
+		// optimistic write path only knows how to apply user operations and
+		// does not handle system ops, so we intentionally route any batch that
+		// contains sysOps through the serialized write path to guarantee
+		// correct, atomic updates for Value Index workloads.
 		return b.writeSerialized(sync, b.sysOps)
 	}
 
