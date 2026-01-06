@@ -501,11 +501,11 @@ func (db *DB) pruneRetainedValueLogs() {
 			}
 			marked = true
 		} else {
+			db.dropValueLogSegment(path)
 			if err := db.removeFileRetry(path); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove value-log %q: %w", path, err))
 				continue
 			}
-			db.dropValueLogSegment(path)
 			db.mu.Lock()
 			db.untrackValueLogSegmentLocked(path)
 			db.mu.Unlock()
@@ -2399,11 +2399,11 @@ func (db *DB) Checkpoint() error {
 		if db.valueLogRetained(path) {
 			continue
 		}
+		db.dropValueLogSegment(path)
 		if err := db.removeFileRetry(path); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
-		db.dropValueLogSegment(path)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
@@ -2617,11 +2617,11 @@ func (db *DB) Close() error {
 		if retain {
 			continue
 		}
+		db.dropValueLogSegment(path)
 		if err := db.removeFileRetry(path); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", path, err))
 			continue
 		}
-		db.dropValueLogSegment(path)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
@@ -4304,11 +4304,11 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	removed := false
 	for _, walPath := range deletable {
+		db.dropValueLogSegment(walPath)
 		if err := db.removeFileRetry(walPath); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			continue
 		}
-		db.dropValueLogSegment(walPath)
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(walPath)
@@ -4530,10 +4530,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if sync && walPath != "" && !inUse {
 		retain := db.valueLogRetained(walPath)
 		if !retain {
+			db.dropValueLogSegment(walPath)
 			if err := db.removeFileRetry(walPath); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: failed to remove WAL segment %q: %w", walPath, err))
 			} else {
-				db.dropValueLogSegment(walPath)
 				db.mu.Lock()
 				db.untrackWALSegmentLocked(walPath)
 				db.mu.Unlock()
