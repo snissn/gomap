@@ -32,14 +32,6 @@ func encodeValueIndexKey(id ValueID) []byte {
 // valueIndexHelper encapsulates operations on the Value Index stored in the System Tree.
 type valueIndexHelper struct{}
 
-// Set is intentionally not implemented for direct writes.
-// Value Index entries are written via batch operations (see batch.go) rather than
-// through direct tree mutations. Calling this method will always return an error to
-// make this design explicit and to avoid silent no-op writes.
-func (vi valueIndexHelper) Set(t *tree.Tree, id ValueID, ptr page.ValuePtr) error {
-	return errors.New("valueIndexHelper.Set: direct Value Index writes are not supported; use batch operations instead")
-}
-
 // Get resolves a ValueID to a ValuePtr using the System Tree.
 func (vi valueIndexHelper) Get(t *tree.Tree, id ValueID) (page.ValuePtr, error) {
 	key := encodeValueIndexKey(id)
