@@ -192,7 +192,8 @@ func Open(opts Options) (*DB, error) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
-	// Enable background compaction by default for testing.
+	// Enable background compaction by default. This is optimal for reducing B-Tree
+	// churn and index fragmentation when the Value Index is enabled.
 	if opts.BackgroundCompactionInterval == 0 {
 		opts.BackgroundCompactionInterval = 1 * time.Minute
 	}
