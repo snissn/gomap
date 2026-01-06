@@ -1347,7 +1347,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				op.NewPtr.Encode(newPtrBuf[:])
 				sysOps = append(sysOps, batch.Entry{
 					Type:  batch.OpPut,
-					Key:   sysKey,
+					Key:   append([]byte(nil), sysKey...),
 					Value: append([]byte(nil), newPtrBuf[:]...),
 				})
 
