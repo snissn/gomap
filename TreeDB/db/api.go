@@ -177,7 +177,6 @@ func (it *DBIterator) UnsafeValue() []byte {
 		it.err = err
 		return nil
 	}
-	it.err = nil
 	return val
 }
 
