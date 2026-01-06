@@ -93,8 +93,10 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
-	// Enable Value Index by default for Phase 17.3 testing.
-	opts.EnableValueIndex = true
+	// Enable Value Index if requested via environment (default off).
+	if envBool("TREEDB_ENABLE_VALUE_INDEX") {
+		opts.EnableValueIndex = true
+	}
 
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
