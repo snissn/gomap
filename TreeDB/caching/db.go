@@ -303,9 +303,7 @@ func (db *DB) dropValueLogSegment(path string) {
 		return
 	}
 	id := page.ValueLogFileID(uint32(seq))
-	if err := db.valueLogReader.RemoveSegment(id); err != nil && !os.IsNotExist(err) {
-		db.reportError(fmt.Errorf("cachingdb: failed to remove value-log segment %d: %w", id, err))
-	}
+	_ = db.valueLogReader.RemoveSegment(id)
 }
 
 func (db *DB) valueLogRetained(path string) bool {
