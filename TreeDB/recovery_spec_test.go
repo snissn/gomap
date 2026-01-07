@@ -106,15 +106,17 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
+	memtablePointers := os.Getenv("TREEDB_CRASH_MEMTABLE_POINTERS") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
 
 	opts := treedb.Options{
-		Dir:             dir,
-		ChunkSize:       64 * 1024,
-		DisableWAL:      disableWAL,
-		RelaxedSync:     relaxedSync,
-		DisableValueLog: disableValueLog,
-		AllowUnsafe:     disableWAL || relaxedSync,
+		Dir:                      dir,
+		ChunkSize:                64 * 1024,
+		DisableWAL:               disableWAL,
+		RelaxedSync:              relaxedSync,
+		DisableValueLog:          disableValueLog,
+		MemtableValueLogPointers: memtablePointers,
+		AllowUnsafe:              disableWAL || relaxedSync,
 	}
 
 	db, err := treedb.Open(opts)
@@ -302,7 +304,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
-			expectWALRetain: true,
+			expectWALRetain: false,
 			expectLarge:     true,
 		},
 	}

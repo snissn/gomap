@@ -540,7 +540,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.state.Store(initialState)
 
-	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog && !opts.SplitValueLog
+	includeValueLog := !opts.DisableValueLog && !opts.SplitValueLog
 	segments, err := listWALSegments(opts.Dir, includeValueLog)
 	if err != nil {
 		db.Close()

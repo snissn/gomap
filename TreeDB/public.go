@@ -136,6 +136,7 @@ func Open(opts Options) (*DB, error) {
 		// leads to WAL sequence conflicts and corruption.
 		backendOpts.DisableWAL = true
 		backendOpts.RelaxedSync = true
+		backendOpts.AllowUnsafe = true
 	}
 
 	backend, err := db.Open(backendOpts)
@@ -191,6 +192,9 @@ func Open(opts Options) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
+		if errors.Is(err, caching.ErrUnsafeOptions) {
+			return nil, ErrUnsafeOptions
+		}
 		return nil, err
 	}
 

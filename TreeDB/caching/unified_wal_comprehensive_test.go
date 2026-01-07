@@ -260,7 +260,7 @@ func TestUnifiedWAL_Flush_After_Reopen(t *testing.T) {
 
 	// Phase 2: Reopen, Replay, and Flush
 	{
-		backend, err := db.Open(db.Options{Dir: dir, ForceValuePointers: true, DisableWAL: true, AllowUnsafe: true})
+		backend, err := db.Open(db.Options{Dir: dir, ForceValuePointers: true, DisableWAL: true, AllowUnsafe: true, SplitValueLog: true})
 		if err != nil {
 			t.Fatal(err)
 		}
