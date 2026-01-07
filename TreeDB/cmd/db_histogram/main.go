@@ -71,6 +71,10 @@ func main() {
 		it.Next()
 	}
 
+	if err := it.Error(); err != nil {
+		log.Fatalf("Iterator failed: %v", err)
+	}
+
 	fmt.Printf("Total Keys: %d\n", totalKeys)
 	fmt.Println("Key Size Histogram (Upper Bound Power of 2):")
 	printHist(keySizes)
