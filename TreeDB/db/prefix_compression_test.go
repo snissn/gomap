@@ -18,12 +18,12 @@ func prefixTestOptions(dir string) Options {
 
 func TestIndex_PrefixCompression_Effectiveness(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Write keys with shared prefixes
 	// user/alice/post/0001 ... 1000
 	prefix := "user/alice/post/"
 	count := 50000
-	
+
 	// Control: No Compression
 	var sizeUncompressed int64
 	{
@@ -31,7 +31,7 @@ func TestIndex_PrefixCompression_Effectiveness(t *testing.T) {
 		opts := prefixTestOptions(d)
 		opts.LeafPrefixCompression = false
 		opts.ForceValuePointers = true // Keep values out of index to measure keys
-		
+
 		db, _ := Open(opts)
 		batch := db.NewBatch()
 		val := []byte{1}
@@ -40,18 +40,18 @@ func TestIndex_PrefixCompression_Effectiveness(t *testing.T) {
 		}
 		batch.Write()
 		db.Close()
-		
+
 		info, _ := os.Stat(filepath.Join(d, "index.db"))
 		sizeUncompressed = info.Size()
 	}
-	
+
 	// Test: Compression Enabled
 	var sizeCompressed int64
 	{
 		opts := prefixTestOptions(dir)
 		opts.LeafPrefixCompression = true
 		opts.ForceValuePointers = true
-		
+
 		db, _ := Open(opts)
 		batch := db.NewBatch()
 		val := []byte{1}
@@ -60,17 +60,17 @@ func TestIndex_PrefixCompression_Effectiveness(t *testing.T) {
 		}
 		batch.Write()
 		db.Close()
-		
+
 		info, _ := os.Stat(filepath.Join(dir, "index.db"))
 		sizeCompressed = info.Size()
 	}
-	
+
 	t.Logf("Index Size: Uncompressed=%d, Compressed=%d", sizeUncompressed, sizeCompressed)
-	
+
 	if sizeCompressed >= sizeUncompressed {
 		t.Errorf("Prefix compression failed! Size did not decrease.")
 	}
-	
+
 	// Expect at least 30% reduction (prefix is 16 bytes, suffix 4 bytes)
 	// Entry overhead exists, but prefix saving is significant.
 	ratio := float64(sizeCompressed) / float64(sizeUncompressed)

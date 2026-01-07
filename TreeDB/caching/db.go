@@ -3040,17 +3040,62 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 			b := db.backend.NewBatch()
 			defer func() { _ = b.Close() }()
+
+			var dv interface {
+				DeleteView([]byte) error
+			}
+			if v, ok := b.(interface {
+				DeleteView([]byte) error
+			}); ok {
+				dv = v
+			}
+
+			// Use an arena to avoid allocations when using DeleteView
+			const batchSize = 1000
+			arena := make([]byte, 0, 32*1024)
+			count := 0
+
 			for it.Valid() {
-				if err := b.Delete(it.Key()); err != nil {
-					return err
+				key := it.UnsafeKey()
+				if dv != nil {
+					start := len(arena)
+					arena = append(arena, key...)
+					if err := dv.DeleteView(arena[start:]); err != nil {
+						return err
+					}
+				} else {
+					if err := b.Delete(key); err != nil {
+						return err
+					}
+				}
+
+				count++
+				if count >= batchSize {
+					if err := b.Write(); err != nil {
+						return err
+					}
+					if err := b.Close(); err != nil {
+						return err
+					}
+					b = db.backend.NewBatch()
+					dv = nil
+					if v, ok := b.(interface {
+						DeleteView([]byte) error
+					}); ok {
+						dv = v
+					}
+					arena = arena[:0]
+					count = 0
 				}
 				it.Next()
 			}
 			if err := it.Error(); err != nil {
 				return err
 			}
-			if err := b.Write(); err != nil {
-				return err
+			if count > 0 {
+				if err := b.Write(); err != nil {
+					return err
+				}
 			}
 			// Best-effort: backend range can shrink; force recompute later.
 			db.mu.Lock()
@@ -3200,17 +3245,61 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			b := db.backend.NewBatch()
 			defer func() { _ = b.Close() }()
 
+			var dv interface {
+				DeleteView([]byte) error
+			}
+			if v, ok := b.(interface {
+				DeleteView([]byte) error
+			}); ok {
+				dv = v
+			}
+
+			// Use an arena to avoid allocations when using DeleteView
+			const batchSize = 1000
+			arena := make([]byte, 0, 32*1024)
+			count := 0
+
 			for it.Valid() {
-				if err := b.Delete(it.Key()); err != nil {
-					return err
+				key := it.UnsafeKey()
+				if dv != nil {
+					start := len(arena)
+					arena = append(arena, key...)
+					if err := dv.DeleteView(arena[start:]); err != nil {
+						return err
+					}
+				} else {
+					if err := b.Delete(key); err != nil {
+						return err
+					}
+				}
+
+				count++
+				if count >= batchSize {
+					if err := b.Write(); err != nil {
+						return err
+					}
+					if err := b.Close(); err != nil {
+						return err
+					}
+					b = db.backend.NewBatch()
+					dv = nil
+					if v, ok := b.(interface {
+						DeleteView([]byte) error
+					}); ok {
+						dv = v
+					}
+					arena = arena[:0]
+					count = 0
 				}
 				it.Next()
 			}
 			if err := it.Error(); err != nil {
 				return err
 			}
-			if err := b.Write(); err != nil {
-				return err
+			if count > 0 {
+				if err := b.Write(); err != nil {
+					return err
+				}
 			}
 
 			// Best-effort: backend range can shrink; force recompute later.
@@ -3390,7 +3479,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		if backendIter != nil {
 			for backendIter.Valid() {
-				if err := applyDelete(backendIter.Key()); err != nil {
+				if err := applyDelete(backendIter.UnsafeKey()); err != nil {
 					db.mu.Unlock()
 					return err
 				}
@@ -3748,9 +3837,14 @@ func (db *DB) rotateWALLocked() error {
 	if db.wal != nil {
 		oldPath := db.walPath
 		oldSize := db.wal.Size()
-		if err := db.wal.RotateTo(path, fileID); err != nil {
+
+		db.walMu.Lock()
+		err := db.wal.RotateTo(path, fileID)
+		db.walMu.Unlock()
+		if err != nil {
 			return err
 		}
+
 		db.walLiveBytes.Store(0)
 		if oldPath != "" {
 			if db.walClosedSizes == nil {
@@ -3798,9 +3892,14 @@ func (db *DB) rotateValueLogLocked() error {
 	if db.vlog != nil {
 		oldPath := db.vlogPath
 		oldSize := db.vlog.Size()
-		if err := db.vlog.RotateTo(path, fileID); err != nil {
+
+		db.vlogMu.Lock()
+		err := db.vlog.RotateTo(path, fileID)
+		db.vlogMu.Unlock()
+		if err != nil {
 			return err
 		}
+
 		db.vlogLiveBytes.Store(0)
 		if oldPath != "" {
 			if db.vlogClosedSizes == nil {
@@ -4365,6 +4464,15 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	flushed := false
 	if memLen > 0 {
 		flushStart = time.Now()
+
+		// Ensure value log is flushed to disk (or at least to OS) so that
+		// subsequent reads (via db.valueLogReader) can resolve pointers.
+		// This is critical for Copy-on-Flush where we read back what we just wrote.
+		if err := db.flushValueLog(); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
+			return false
+		}
+
 		// Flush 'mem' to backend
 		backendBatch := db.backend.NewBatch()
 		if maxSeq > 0 {
@@ -5794,19 +5902,10 @@ func (b *Batch) writeRegular(sync bool) error {
 				}
 			}
 		} else {
-			for _, op := range entries {
-				if op.Type == batch.OpDelete {
-					shard.mem.DeleteSteal(op.Key)
-				} else {
-					if b.db.memtableValueLogPointers && op.IsPtr {
-						shard.mem.SetSteal(op.Key, nil)
-					} else {
-						shard.mem.SetSteal(op.Key, op.Value)
-					}
-				}
-				shard.rng.add(op.Key)
-				b.db.noteWriteKey(op.Key)
-			}
+			shard.mem.ApplyStealBatch(entries, func(key []byte) {
+				shard.rng.add(key)
+				b.db.noteWriteKey(key)
+			})
 		}
 		if b.db.valueLogEnabled() && shard.largePtrs != nil {
 			for _, op := range entries {

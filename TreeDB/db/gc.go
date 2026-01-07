@@ -27,17 +27,13 @@ type GCStats struct {
 //
 // It returns the number of bytes reclaimed (best-effort estimate).
 func (db *DB) GC() (reclaimed int64, err error) {
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
-
 	start := time.Now()
 
-	// 1. Identify all segments currently registered in the latest state.
-	// Note: We hold writeMu, which ensures no concurrent writes can add new
-	// ValueIDs or pointers during this scan. This guarantees that the User
-	// Tree and System Tree are consistent with each other for the duration of
-	// the GC mark phase.
-	state := db.state.Load()
+	// 1. Snapshot current state for consistent scanning.
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+
+	state := snap.State()
 	if state == nil {
 		return 0, nil
 	}
@@ -46,8 +42,8 @@ func (db *DB) GC() (reclaimed int64, err error) {
 	liveFileIDs := make(map[uint32]struct{})
 
 	// 2. Scan User Tree for reachable ValueIDs and legacy pointers.
-	userTree := tree.New(db.idx.Load().pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, state.RootPageID)
-	userIter := userTree.Iterator(nil, nil)
+	// We use the snapshot tree which is consistent.
+	userIter := snap.tree.Iterator(nil, nil)
 	defer userIter.Close()
 
 	for userIter.Valid() {
@@ -68,7 +64,7 @@ func (db *DB) GC() (reclaimed int64, err error) {
 
 	// 3. Scan Value Index (System Tree) for live vlog/slab references.
 	// Also identify unreachable ValueIDs for pruning.
-	sysTree := tree.New(db.idx.Load().pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, state.SystemRootPageID)
+	sysTree := tree.New(snap.idx.pager, ValueReaderForState(state), state.SystemRootPageID)
 	sysIter := sysTree.Iterator(ValueIndexPrefix, ValueIndexPrefixEnd())
 	defer sysIter.Close()
 
@@ -99,27 +95,34 @@ func (db *DB) GC() (reclaimed int64, err error) {
 	}
 
 	// 4. Prune Value Index if dead mappings found.
-	sysRoot := state.SystemRootPageID
+	// We must take the writer lock now to apply updates to the LATEST state.
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	latestState := db.state.Load()
+	if latestState == nil {
+		return 0, nil
+	}
+
+	sysRoot := latestState.SystemRootPageID
 	if len(deadValueIDOps) > 0 {
 		newSysRoot, retired, err := db.applySystemUpdates(sysRoot, deadValueIDOps, adaptive.Metrics{})
 		if err != nil {
 			return 0, fmt.Errorf("GC: failed to prune value index: %w", err)
 		}
 		// Commit the pruned system tree.
-		// We use finalizeCommit to update meta and publish new state.
-		if err := db.finalizeCommit(state.RootPageID, newSysRoot, retired, true, nil, adaptive.Metrics{}, 0); err != nil {
+		if err := db.finalizeCommit(latestState.RootPageID, newSysRoot, retired, true, nil, adaptive.Metrics{}, 0); err != nil {
 			return 0, fmt.Errorf("GC: failed to commit pruned index: %w", err)
 		}
 		sysRoot = newSysRoot
-		// Refresh state for segment cleanup.
-		state = db.state.Load()
+		latestState = db.state.Load()
 	}
 
 	// 5. Mark dead segments as zombies.
 	var candidateBytes int64
 
 	// Value Logs
-	for id := range state.ValueLogSet.Files {
+	for id := range latestState.ValueLogSet.Files {
 		if _, live := liveFileIDs[id]; !live {
 			sz, _ := db.valueLogManager.SegmentSize(id)
 			candidateBytes += sz
@@ -129,7 +132,7 @@ func (db *DB) GC() (reclaimed int64, err error) {
 
 	// Slabs
 	activeSlabID := db.slabManager.ActiveSlabID()
-	for id, sf := range state.SlabSet.Files {
+	for id, sf := range latestState.SlabSet.Files {
 		if id == activeSlabID {
 			continue
 		}

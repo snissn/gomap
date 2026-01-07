@@ -10,11 +10,11 @@ import (
 
 func TestSlab_Compression_Effectiveness(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Create highly compressible data (zeros)
 	val := make([]byte, 1024) // 1KB of zeros
-	count := 1000 // 1MB total
-	
+	count := 1000             // 1MB total
+
 	opts := DefaultOptions(dir)
 	opts.ForceValuePointers = true
 	// Enable Compression
@@ -23,12 +23,12 @@ func TestSlab_Compression_Effectiveness(t *testing.T) {
 		MinBytes:        1,
 		MinSavingsBytes: 0,
 	}
-	
+
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	batch := db.NewBatch()
 	for i := 0; i < count; i++ {
 		// Key must be unique
@@ -42,7 +42,7 @@ func TestSlab_Compression_Effectiveness(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close() // Flush
-	
+
 	// Verify Slab Size
 	// Logical size: 1MB.
 	// Zstd on zeros should be tiny. Headers overhead dominates.
@@ -50,7 +50,7 @@ func TestSlab_Compression_Effectiveness(t *testing.T) {
 	// 1000 * 18 = 18KB.
 	// Compressed value: ~10 bytes?
 	// Total should be < 50KB.
-	
+
 	entries, _ := os.ReadDir(dir)
 	var slabSize int64
 	for _, e := range entries {
@@ -59,10 +59,10 @@ func TestSlab_Compression_Effectiveness(t *testing.T) {
 			slabSize += info.Size()
 		}
 	}
-	
+
 	t.Logf("Total Slab Size: %d bytes (Logical: ~1MB)", slabSize)
-	
-	if slabSize > 200 * 1024 { // 200KB limit (generous)
+
+	if slabSize > 200*1024 { // 200KB limit (generous)
 		t.Errorf("Compression failed! Slab size %d is too large for 1MB of zeros", slabSize)
 	}
 }

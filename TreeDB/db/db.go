@@ -73,6 +73,7 @@ type DB struct {
 	leafPrefixCompression bool
 	piggybackCompaction   bool
 	enableValueIndex      bool
+	forceValuePointers    bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -499,6 +500,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		enableValueIndex:      opts.EnableValueIndex,
+		forceValuePointers:    opts.ForceValuePointers,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -1037,7 +1039,11 @@ func (db *DB) Prune() {
 	defer db.releaseIndex(idx)
 
 	min := idx.registry.MinPinnedSeq()
-	current := db.meta.CommitSeq
+	state := db.state.Load()
+	if state == nil {
+		return
+	}
+	current := state.CommitSeq
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 

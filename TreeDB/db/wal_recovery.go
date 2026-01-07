@@ -285,6 +285,11 @@ func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int, lastS
 		opsInBatch++
 		if opsInBatch >= maxOpsPerBatch {
 			batch.SetLastSeq(maxSeenSeq)
+			if err := batch.WriteSync(); err != nil {
+				_ = batch.Close()
+				_ = reader.Close()
+				return false, err
+			}
 			_ = batch.Close()
 			batch = db.NewBatch()
 			opsInBatch = 0

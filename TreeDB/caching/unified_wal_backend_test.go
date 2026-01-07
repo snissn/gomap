@@ -50,13 +50,16 @@ func TestUnifiedWAL_BackendThresholdMismatch(t *testing.T) {
 		foundSlab := false
 		for _, e := range entries {
 			if len(e.Name()) > 5 && e.Name()[:5] == "data-" {
-				foundSlab = true
-				break
+				info, _ := e.Info()
+				if info.Size() > 0 {
+					foundSlab = true
+					break
+				}
 			}
 		}
 
 		if foundSlab {
-			t.Errorf("Expected 0 slab bytes (inline), found slab file")
+			t.Errorf("Expected 0 slab bytes (inline), found non-empty slab file")
 		}
 	})
 

@@ -129,7 +129,16 @@ func Open(opts Options) (*DB, error) {
 		opts.Mode = ModeBackend
 	}
 
-	backend, err := db.Open(opts)
+	backendOpts := opts
+	if opts.Mode != ModeBackend {
+		// When using the caching layer, the backend should not manage its own WAL
+		// as durability is handled by the caching layer. Sharing the same dir
+		// leads to WAL sequence conflicts and corruption.
+		backendOpts.DisableWAL = true
+		backendOpts.RelaxedSync = true
+	}
+
+	backend, err := db.Open(backendOpts)
 	if err != nil {
 		return nil, err
 	}

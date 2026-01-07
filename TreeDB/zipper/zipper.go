@@ -72,6 +72,10 @@ func (z *Zipper) SetLeafPrefixCompression(enabled bool) {
 	z.leafPrefixCompression = enabled
 }
 
+func (z *Zipper) LeafPrefixCompression() bool {
+	return z.leafPrefixCompression
+}
+
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
 	if z != nil && z.leafPrefixCompression {
 		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})

@@ -128,6 +128,12 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 	return sm, nil
 }
 
+func (sm *SlabManager) Compression() CompressionKind {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.compression.kind
+}
+
 func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

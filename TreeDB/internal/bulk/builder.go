@@ -16,8 +16,14 @@ type levelBuilder struct {
 	startKey []byte
 }
 
+type ValueWriter interface {
+	Append(key, val []byte) (page.ValuePtr, error)
+}
+
 type BuildOptions struct {
 	LeafPrefixCompression bool
+	ValueWriter           ValueWriter
+	ForceValuePointers    bool
 }
 
 // Build creates a new B-Tree from a sorted iterator.
@@ -149,6 +155,17 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	for iter.Valid() {
 		key := iter.UnsafeKey()
 		val, ptr, flags := iter.UnsafeEntry()
+
+		if opts.ForceValuePointers && opts.ValueWriter != nil && flags&node.FlagPointer == 0 && flags&node.FlagTombstone == 0 {
+			// Migrate inline value to slab
+			newPtr, err := opts.ValueWriter.Append(key, val)
+			if err != nil {
+				return 0, err
+			}
+			val = nil
+			ptr = newPtr
+			flags |= node.FlagPointer
+		}
 
 		lb := levels[0]
 		if lb.startKey == nil {

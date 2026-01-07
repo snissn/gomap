@@ -28,7 +28,7 @@ func TestLeafPrefixCompression_Stress(t *testing.T) {
 		key := append([]byte(nil), prefix...)
 		key = append(key, []byte(suffix)...)
 		val := []byte(fmt.Sprintf("value-%d", i))
-		
+
 		keys = append(keys, key)
 		expected[string(key)] = val
 	}
@@ -38,7 +38,7 @@ func TestLeafPrefixCompression_Stress(t *testing.T) {
 	// The test uses Builder directly? No, usually we use Node.AddLeafEntry for updates,
 	// or Builder for bulk load.
 	// Let's use Node.AddLeafEntry to mimic runtime inserts.
-	
+
 	// Re-init node as empty
 	n := NewNode(data)
 	n.SetType(page.PageTypeLeaf)
@@ -48,9 +48,9 @@ func TestLeafPrefixCompression_Stress(t *testing.T) {
 	// Node.leafPrefixCompressed() checks a bit in the header.
 	// We need to set that bit.
 	// In node.go: func (n *Node) leafPrefixCompressed() bool { return n.rawFlags()&FlagLeafPrefixCompressed != 0 }
-	// We can't set raw flags easily via public API? 
+	// We can't set raw flags easily via public API?
 	// Builder does it.
-	
+
 	// Let's use Builder to init an empty compressed node.
 	b.Finish()
 	n = NewNode(data)
@@ -73,7 +73,7 @@ func TestLeafPrefixCompression_Stress(t *testing.T) {
 	// 4. Verify all keys
 	for k, v := range expected {
 		keyBytes := []byte(k)
-		
+
 		// Test SearchLeaf
 		idx, found, err := n.SearchLeaf(keyBytes)
 		if err != nil {
@@ -95,7 +95,7 @@ func TestLeafPrefixCompression_Stress(t *testing.T) {
 			t.Errorf("Value mismatch: got %q want %q", entry.Value, v)
 		}
 	}
-	
+
 	t.Logf("Successfully verified %d prefix-compressed keys", len(keys))
 }
 
@@ -110,7 +110,7 @@ func TestLeafPrefixCompression_RestartBoundary(t *testing.T) {
 	// restart interval is likely 16 (internal constant).
 	// Let's insert 32 keys that are IDENTICAL except last byte.
 	// "key-00", "key-01", ...
-	
+
 	var keys []string
 	for i := 0; i < 40; i++ {
 		k := fmt.Sprintf("key-%02d", i)
@@ -130,7 +130,7 @@ func TestLeafPrefixCompression_RestartBoundary(t *testing.T) {
 		if idx != uint16(i) {
 			t.Errorf("Wrong index for %s: got %d want %d", k, idx, i)
 		}
-		
+
 		// Check key reconstruction
 		entry, _ := n.GetLeafEntry(idx)
 		if string(entry.Key) != k {

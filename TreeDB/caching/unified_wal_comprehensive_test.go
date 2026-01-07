@@ -42,7 +42,7 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 				DisableWAL:               false,
 				AllowUnsafe:              true,
 			}
-			
+
 			cached, err := Open(dir, backend, opts)
 			if err != nil {
 				t.Fatal(err)
@@ -65,7 +65,7 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 			// 4. Verify Backend Storage
 			stats := backend.Stats()
 			t.Logf("Backend Stats: %v", stats)
-			
+
 			entries, _ := os.ReadDir(dir)
 			foundSlab := false
 			for _, e := range entries {
@@ -104,8 +104,8 @@ func TestUnifiedWAL_LargeBatch(t *testing.T) {
 		ValueLogPointerThreshold: 100,
 		SplitValueLog:            true,
 		// Small WAL segment to force multiple files
-		WALMaxSegmentBytes:       1024 * 1024, 
-		AllowUnsafe:              true,
+		WALMaxSegmentBytes: 1024 * 1024,
+		AllowUnsafe:        true,
 	}
 	cached, _ := Open(dir, backend, opts)
 	defer cached.Close()
@@ -183,7 +183,7 @@ func TestUnifiedWAL_InterleavedWrites(t *testing.T) {
 // This targets the `replayValueLogSegment` logic in `wal_recovery.go`.
 func TestUnifiedWAL_Reopen_Deadlock(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Phase 1: Write data and Close
 	{
 		backend, _ := db.Open(db.Options{Dir: dir, ForceValuePointers: true})
@@ -195,7 +195,7 @@ func TestUnifiedWAL_Reopen_Deadlock(t *testing.T) {
 			AllowUnsafe:              true,
 		}
 		cached, _ := Open(dir, backend, opts)
-		
+
 		val := bytes.Repeat([]byte{0xDD}, 500)
 		for i := 0; i < 100; i++ {
 			if err := cached.Set([]byte(fmt.Sprintf("key-%d", i)), val); err != nil {
@@ -205,7 +205,7 @@ func TestUnifiedWAL_Reopen_Deadlock(t *testing.T) {
 		cached.Close()
 		backend.Close()
 	}
-	
+
 	// Phase 2: Reopen with timeout
 	done := make(chan struct{})
 	go func() {
@@ -217,12 +217,87 @@ func TestUnifiedWAL_Reopen_Deadlock(t *testing.T) {
 		backend.Close()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		t.Log("Reopen successful")
 	case <-time.After(5 * time.Second):
 		t.Fatal("Reopen timed out (Deadlock detected)")
+	}
+}
+
+func TestUnifiedWAL_Flush_After_Reopen(t *testing.T) {
+	dir := t.TempDir()
+
+	// Phase 1: Write to Vlog and Close (simulating crash/restart)
+	{
+		// Backend must have WAL disabled to avoid conflict with caching layer in same dir
+		backend, err := db.Open(db.Options{Dir: dir, ForceValuePointers: true, DisableWAL: true, AllowUnsafe: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := Options{
+			ValueLogPointerThreshold: 32,
+			SplitValueLog:            true, // Use separate vlog file
+			DisableWAL:               false,
+			AllowUnsafe:              true,
+		}
+		cached, _ := Open(dir, backend, opts)
+
+		val := bytes.Repeat([]byte{0xCC}, 100) // > 32
+		if err := cached.Set([]byte("key1"), val); err != nil {
+			t.Fatal(err)
+		}
+		// Ensure it's in Vlog (check file existence?)
+		// cached.Checkpoint() would flush it. We want it in MEMTABLE + VLOG on restart?
+		// No, if we restart, memtable is gone. It replays from WAL/Vlog.
+		// Replay puts it back in Memtable.
+		// Then we trigger Flush.
+
+		cached.Close() // Graceful close ensures WAL/Vlog consistency
+		backend.Close()
+	}
+
+	// Phase 2: Reopen, Replay, and Flush
+	{
+		backend, err := db.Open(db.Options{Dir: dir, ForceValuePointers: true, DisableWAL: true, AllowUnsafe: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := Options{
+			ValueLogPointerThreshold: 32,
+			SplitValueLog:            true,
+			DisableWAL:               false,
+			AllowUnsafe:              true,
+		}
+		cached, err := Open(dir, backend, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cached.Close()
+
+		// Verify key exists (in memtable from replay)
+		val, err := cached.Get([]byte("key1"))
+		if err != nil {
+			t.Fatalf("Get error: %v", err)
+		}
+		if val == nil {
+			t.Fatal("Key not found after replay")
+		}
+
+		// Force Flush (should read from replayed Vlog ptr)
+		if err := cached.Checkpoint(); err != nil {
+			t.Fatalf("Flush failed after reopen: %v", err)
+		}
+
+		// Verify Backend has it
+		bVal, err := backend.Get([]byte("key1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(bVal, val) {
+			t.Fatal("Data mismatch in backend")
+		}
 	}
 }
 

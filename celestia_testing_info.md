@@ -314,4 +314,3 @@ Why it matters to Celestia benchmarking:
 - reduces/avoids large User-tree rewrites when value bytes move (slab/vlog compaction)
 - makes long-running disk usage predictable (GC can reclaim vlog/slab segments)
 - reduces mid-run index balloon and the need for heavy vacuums
-

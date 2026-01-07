@@ -2,87 +2,130 @@ package db
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/snissn/gomap/TreeDB/slab"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
-func TestSlabCompression_Verify(t *testing.T) {
-	dir := t.TempDir()
-	
-	// Create compressible data (repeated pattern)
-	// 10KB of 'A'
-	data := bytes.Repeat([]byte{'A'}, 1024*10)
-	
+// TestCompressionEnabled verifies that setting the options
+// enables compression on Slabs and Leaf Prefixes.
+func TestCompressionEnabled(t *testing.T) {
+	dir, err := os.MkdirTemp("", "compression-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
 	opts := Options{
-		Dir: dir,
-		DisableWAL: true,
-		AllowUnsafe: true,
+		Dir:                   dir,
+		ChunkSize:             64 * 1024 * 1024,
+		LeafPrefixCompression: true,
 		SlabCompression: slab.CompressionOptions{
 			Kind: slab.CompressionZSTD,
-			MinBytes: 100, // Compress everything > 100 bytes
-			MinSavingsBytes: 10,
 		},
 	}
-
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 
-	key := []byte("compress_me")
-	if err := db.Set(key, data); err != nil {
+	// 2. Write Compressible Data (Slab Compression)
+	// Write a large, repetitive value that should compress well.
+	largeVal := bytes.Repeat([]byte("A"), 1024*10) // 10KB of 'A's
+	key1 := []byte("prefix/key1")
+
+	batch := db.NewBatch()
+	if err := batch.Set(key1, largeVal); err != nil {
 		t.Fatal(err)
 	}
 
-	// Force flush to backend slab (Set in Backend mode writes to slab immediately? 
-	// Yes, commitBatch writes to slab).
-	
-	// Verify we can read it back
-	got, err := db.Get(key)
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
-	}
-	if !bytes.Equal(got, data) {
-		t.Fatalf("Data mismatch")
-	}
-
-	// Check slab file size
-	// It should be significantly smaller than 10KB + overhead.
-	// ZSTD should compress 10KB of 'A' to < 100 bytes.
-	
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	
-	var slabPath string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "data-") && strings.HasSuffix(e.Name(), ".slab") {
-			slabPath = filepath.Join(dir, e.Name())
-			break
+	// 3. Write Prefix-Compressible Keys (Leaf Compression)
+	// Write many keys sharing the same prefix to trigger prefix compression in B-Tree leaves.
+	for i := 0; i < 1000; i++ {
+		k := []byte(fmt.Sprintf("common/prefix/very/long/key-%04d", i))
+		v := []byte("val")
+		if err := batch.Set(k, v); err != nil {
+			t.Fatal(err)
 		}
 	}
-	
-	if slabPath == "" {
-		t.Fatal("No slab file found")
+
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
 	}
 
-	info, err := os.Stat(slabPath)
+	// Force a sync to flush slabs to disk
+	// (Note: SlabManager might buffer, but WriteSync/Close should flush active slab)
+	// We might need to close/reopen or trigger a slab rotation to be sure.
+	// Re-opening DB ensures everything is flushed.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Verify Slab Compression
+	// Check the slab files in data/ directory.
+	// Since we wrote > 10KB and compression is ZSTD, the file size should be small
+	// relative to raw data if we only look at the payload, BUT slab files are pre-allocated
+	// or grown in chunks. However, we can inspect the content or use the 'strings' check
+	// suggested in the prompt.
+
+	// A more robust check is to read the raw slab file and look for ZSTD magic bytes
+	// or absence of the long string of "AAAA..."
+
+	// Find slab file
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
-	size := info.Size()
-	t.Logf("Slab size: %d bytes (Original data: %d)", size, len(data))
-	
-	if size > 1000 {
-		t.Errorf("Slab size %d is too large, compression failed?", size)
-	} else {
-		t.Log("Compression confirmed working.")
+
+	foundSlab := false
+	for _, f := range files {
+		if filepath.Ext(f.Name()) == ".slab" {
+			foundSlab = true
+			content, err := os.ReadFile(filepath.Join(dir, f.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Simple check: The raw data "AAAA..." (10KB) should NOT appear in plain text
+			// if compressed. It might appear if uncompressed.
+			if bytes.Contains(content, bytes.Repeat([]byte("A"), 100)) { // Check for a run of 100 As
+				t.Errorf("Slab file %s appears uncompressed (found plaintext data)", f.Name())
+			} else {
+				t.Logf("Slab file %s appears compressed (plaintext data not found)", f.Name())
+			}
+		}
+	}
+	if !foundSlab {
+		t.Fatal("No slab files found")
+	}
+
+	// 5. Verify Read-Back works
+	// Re-open and read the data to ensure we can decompress it.
+	db2, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+
+	val, err := db2.Get(key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(val, largeVal) {
+		t.Errorf("Read-back value mismatch. Got len %d, want %d", len(val), len(largeVal))
+	}
+
+	val2, err := db2.Get([]byte("common/prefix/very/long/key-0000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(val2) != "val" {
+		t.Errorf("Read-back prefix key mismatch")
 	}
 }
