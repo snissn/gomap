@@ -90,11 +90,12 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	for len(ids) < count {
 		if a.preferAppend || a.head == 0 {
-			id, err := a.pager.Alloc(count - len(ids))
+			remaining := count - len(ids)
+			id, err := a.pager.Alloc(remaining)
 			if err != nil {
 				return ids, err
 			}
-			for i := 0; i < count-len(ids); i++ {
+			for i := 0; i < remaining; i++ {
 				ids = append(ids, id+uint64(i))
 			}
 			a.lastAlloc = ids[len(ids)-1]
