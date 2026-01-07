@@ -35,11 +35,9 @@ func main() {
 	defer it.Close()
 
 	var (
-		keySizes   = make(map[int]int)
-		valSizes   = make(map[int]int)
-		inlineCnt  int
-		pointerCnt int
-		totalKeys  int
+		keySizes  = make(map[int]int)
+		valSizes  = make(map[int]int)
+		totalKeys int
 	)
 
 	// Since we are using public API, we can't easily distinguish inline vs pointer
