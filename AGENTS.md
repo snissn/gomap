@@ -1,158 +1,70 @@
-# Agent Plan: Hyper-Optimized `WriteRandom` (TreeDB Memtable)
+# Agent Plan: Unified WAL/Slab Architecture
 
-This document tracks the implementation plan for eliminating large sort spikes in the `hash_sorted` memtable while preserving fast random writes.
-
-The end state is **near real-time background construction of the ordered key view** so that flush/close/iteration does not pay `sort.Strings(1e6)` in one shot.
+This document tracks the architectural evolution to unify the Write-Ahead Log (WAL) and Value Log/Slab storage.
 
 ## Context / Problem
 
-- `hash_sorted` uses a hash map for O(1) point ops and produces ordered iteration by sorting the key set on demand.
-- In `op-geth` benchmarks, `WriteRandom` spends a meaningful fraction of time in `(*HashSorted).ensureSortedLocked` sorting ~N keys at flush/close/iterator time.
-- This creates:
-  - throughput loss for write-heavy workloads that must flush/close, and
-  - large tail spikes for the first ordered enumeration of a big memtable.
+- Currently, `TreeDB` has two distinct value storage paths:
+  1. **WAL (`vlog`):** Managed by the `caching` layer. Ephemeral, circular buffer (truncated by `MaxValueLogRetainedBytes`), optimized for append speed.
+  2. **Slabs (`data/*.slab`):** Managed by the `backend`. Permanent, refcounted/GC'd, optimized for long-term storage and delta-compaction.
+- We attempted to use `ValueLogPointerThreshold` to write small values (32-64 bytes) to the WAL and store pointers in the Index.
+- **Critical Bug:** The `caching` layer truncates old `vlog` files (treating them as ephemeral WAL), but the Index permanently references them. This causes `vlog file not found` corruption.
+- **Goal:** Allow large/medium values to land in the WAL initially (fast write), but ensure they are safely transitioned to permanent storage (Slabs) or the WAL segment is promoted to permanent status, without data loss or corruption.
 
-## Goal
+## Proposed Design
 
-Build and maintain the memtable’s ordered key view **incrementally, in the background**, while writes proceed, so:
+We aim to implement a lifecycle where values land in the WAL and are "compacted as appropriate into the slab".
 
-- random writes stay hash-fast (no per-write O(log n) ordered-index maintenance),
-- flush/iterator sees mostly-ready ordering (no 1M-key cliff), and
-- the system remains generally good (not tuned to a single benchmark).
+### 1. Safety First (Immediate)
+- **Status:** Done (in operation).
+- **Action:** Disable `ValueLogPointerThreshold` (set to 0) in production/benchmarks until the architecture is fixed. This forces all values to be copied into the Index (or Slabs via `backend` logic) during flush, preventing dependencies on ephemeral logs.
 
-## Non-Goals
+### 2. Copy-on-Flush (The "Compaction" Approach)
+- **Concept:** The `caching` layer writes values to `vlog`. The Memtable stores pointers.
+- **Change:** During `Flush` (Memtable -> Backend):
+  - Detect pointers that reference `vlog` files.
+  - **Dereference and Copy:** Read the value from `vlog` and write it to the Backend (which puts it into `data/*.slab` or inline in `index.db`).
+  - **Rewire:** Update the entry to point to the new location (or be inline).
+- **Benefit:** Decouples WAL lifecycle from Backend lifecycle. WAL can be safely truncated once flushed.
+- **Cost:** Write amplification (write to WAL, read from WAL, write to Slab). But this is standard LSM behavior (Compaction).
 
-- Benchmark-only fast paths (e.g. special-casing empty-backend bulk build).
-- Changing TreeDB’s on-disk tree format.
-- Adding durable WAL semantics in op-geth unsafe mode.
+### 3. Vlog Promotion (Zero-Copy Optimization)
+- **Concept:** If a `vlog` segment is "full" and completely flushed, move the file from `wal/` to `data/` and register it as a read-only Slab.
+- **Challenges:**
+  - `vlog` might contain mixed data (some flushed, some not).
+  - `vlog` contains "Batch" framing/checksums which might differ from Slab format.
+  - Ownership transfer complexity.
 
-## Proposed Design (Incremental Ordered View for `hash_sorted`)
+### 4. Shared Lifecycle (Refcounting)
+- **Concept:** Backend `GC` becomes aware of `wal/` files.
+- **Change:** `caching` layer does not delete `vlog` files based on size. Instead, it marks them "candidate for deletion". Backend `GC` scans Index. If `vlog` is unreferenced, it is deleted.
+- **Challenge:** Cross-layer coupling.
 
-### Core idea
+## Testing Strategy (Test Driven Development)
 
-Track **only first-seen keys** during the lifetime of a memtable, and sort/merge them in small chunks asynchronously.
+We need rigorous testing to validate the fix (likely **Copy-on-Flush** is the robust starting point).
 
-This works because:
+### Test Case: `TestFlushMovesValuesToSlab`
+- **Setup:** `ValueLogPointerThreshold=1`. Write data. Verify it lands in `vlog`.
+- **Action:** Flush Memtable.
+- **Assert:**
+  - `vlog` file can be deleted/truncated without data loss.
+  - Backend `Get` succeeds.
+  - Backend storage shows values are now in `slab` (or inline), NOT pointing to the deleted `vlog`.
 
-- The memtable’s key set is the set of first-seen keys (including tombstones introduced via `Delete` on a missing key).
-- Updates/deletes after first-seen do not change the key set; ordered iteration can use the sorted keys to look up the *current* value/tombstone state in the hash map.
+### Test Case: `TestVlogTruncationSafety`
+- **Setup:** Small `MaxValueLogRetainedBytes`.
+- **Action:** Write continuous stream of data. Ensure `Flush` keeps up.
+- **Assert:** Old `vlog` files are deleted, but data remains readable (because it was moved).
 
-### Data structures (inside `memtable.HashSorted`)
+## Implementation Plan
 
-- `items map[string]hashEntry` (unchanged): canonical store for point ops; values live in the arena.
-- New incremental-index fields:
-  - `pendingKeys []string` and `pendingBytes int`:
-    - append **only on map-miss** (first-seen key).
-  - `indexMu sync.Mutex` + `indexCond sync.Cond`:
-    - protects index state (`runs`, `doneSeq`) and provides a wait primitive for iterators/flush.
-  - `runs [][]string` (seq-indexed):
-    - each sealed chunk becomes one sorted run stored at `runs[seq-1]` once background sorting finishes.
-  - `indexSeq uint64` and `doneSeq uint64`:
-    - monotonic sequence counters so iterators/flush can wait until indexing is “caught up”.
+1.  **Reproduce:** Create a test case that demonstrates the `vlog file not found` corruption when `ValueLogPointerThreshold > 0` and `Flush` occurs but `vlog` is truncated.
+2.  **Implement Copy-on-Flush:** Modify `caching/flush.go` (or `memtable` iterator) to resolve pointers during flush iteration.
+3.  **Verify:** Run the reproduction test and confirm it passes.
+4.  **Optimize:** Consider "Vlog Promotion" only if Copy-on-Flush proves too slow (IO heavy).
 
-### Background workers (global, constant count)
+## Current Status
 
-Use a **global indexer** (package-level) to avoid per-memtable goroutine lifetime problems.
-
-**Goroutine A (chunk sorter):**
-
-- reads sealed key chunks from a buffered work queue (sends are chunk-granularity, not per-write)
-- sorts chunk keys (`sort.Strings`)
-- stores the sorted run into `runs[seq-1]`
-- updates `doneSeq` (with hole-tracking) and signals `indexCond`
-
-Run compaction/merging is intentionally deferred; iteration/flush uses a k-way merge iterator across runs to avoid repeated copying of keys.
-
-Bound goroutine count:
-
-- Constant: 1 global goroutine (optionally 2 if split sorting vs merging later).
-
-### Sealing policy (general, non-overfit)
-
-Seal `pendingKeys` into a chunk when any of the following triggers:
-
-- `pendingBytes >= sealBytesThreshold` (primary trigger; bytes-based is workload-general),
-- `len(pendingKeys) >= sealKeysThreshold` (safety cap for small keys),
-- optional later: time-based seal (latency cap) if needed.
-
-Sealed chunks are swapped under the memtable lock, then enqueued to the global indexer **after unlocking**. If the queue is full, fall back to synchronous sort+merge outside the hot lock.
-
-### Iterator/flush behavior (barriered correctness)
-
-When `NewIterator(start,end)` is called on a `hash_sorted` memtable:
-
-- For a *frozen* memtable:
-  - seal any remaining `pendingKeys` immediately,
-  - wait until `doneSeq >= indexSeq` (all keys indexed),
-  - iterate via a k-way merge iterator across runs (no 1M-key materialized slice).
-- For a *mutable* memtable (rare; but exists in some paths like WAL-disabled `DeleteRange` enumeration):
-  - prefer to avoid waiting on background work while writes could be ongoing.
-  - acceptable options (choose one explicitly in implementation):
-    1) force a “local seal + build minimal iterator view” (cheap if `pending` is small), or
-    2) fall back to existing `ensureSortedLocked()` full sort (correct, slower).
-
-### Reset / lifecycle
-
-- `Reset()` must:
-  - clear runs/pending state,
-  - reset seq counters,
-  - keep arena reuse behavior intact.
-
-## Implementation Checklist
-
-### Phase 1 — Minimal incremental indexing (no compactor)
-
-- [ ] Add new-key detection hook:
-  - append to `pendingKeys` only on map miss (Set/Delete).
-- [ ] Implement sealing (swap + async send) with byte-based threshold.
-- [ ] Add a single background sorter goroutine:
-  - consumes sealed chunks, sorts, stores into `runs[seq-1]`.
-- [ ] Iterator uses k-way merge across runs + optional pending tail; correctness first.
-- [ ] Add instrumentation counters (debug stats):
-  - `pending_keys`, `pending_bytes`, `runs`, `index_lag_keys`, `seal_queue_depth`.
-
-### Phase 2 — Optional run compaction (if needed)
-
-- [ ] Only if k-way merge overhead is too high: add a compactor to merge runs in the background, but avoid repeatedly copying all keys.
-
-### Phase 3 — Barriers and fallback safety
-
-- [ ] Add `indexSeq/doneSeq` barrier semantics.
-- [ ] Define explicit behavior for mutable-iterator edge cases.
-- [ ] Add “fall back to full sort” escape hatch if background falls behind badly.
-
-### Phase 4 — Tests and benchmarks
-
-- [ ] Unit tests in `TreeDB/internal/memtable`:
-  - random inserts, ensure iterator yields sorted keys covering all items.
-  - tombstones + overwrites: key set stable; values/tombstones correct via map lookup.
-  - Reset stops workers and clears state.
-- [ ] `-race` sanity for `TreeDB/internal/memtable` package.
-- [ ] Microbench:
-  - compare `hash_sorted` (full sort) vs incremental approach for `NewIterator(nil,nil)` and flush-like scans.
-
-## Success Criteria
-
-- `WriteRandom` no longer shows a dominant single `sort.Strings(N)` spike at flush/close.
-- Background indexing overhead is bounded and does not regress pure write throughput significantly.
-- No goroutine leaks across memtable rotation/reset.
-- Correctness holds under snapshot isolation and WAL-disabled paths.
-
-## TODO / Punch List (op-geth + Coinbase base-bench)
-
-### Read-heavy validator red flag (`sload-readheavy`)
-
-- Investigate `validator chain/storage/reads.50-percentile` spike (avg ~501k ns vs ~23k ns leveldb; single-block outlier ~2.4ms) and `latency/update_fork_choice` regression (+59%).
-- Confirm whether the spike correlates with pager CRC verification caching / lock contention, or with DB-level cache misses (process cache / prefetch).
-- Add a repeatable local loop:
-  - rebuild `/Users/michaelseiler/dev/snissn/op-geth/build/bin/geth`
-  - run only `sload-readheavy` via `/Users/michaelseiler/dev/snissn/benchmark/run-bench-geth-kv-both.sh`
-  - diff `metrics-validator.json` for `chain/storage/reads.50-percentile`, `engine/forkchoice/*`, `latency/update_fork_choice`.
-
-### Likely high-impact optimizations (pending)
-
-- Done: pager verified-bitset is now lock-free (removes `RWMutex` contention on `IsVerified/MarkVerified`).
-- Done: implement `Has` without `Get` in both backend and cached layers (avoids value copy/slab read on existence checks).
-- Done: reduce snapshot bookkeeping overhead by replacing `ReaderRegistry` map with a reusable slice + cached-min recompute.
-- Next: capture pprof from the validator during `sload-readheavy` (CPU + mutex) to confirm dominant costs (page traversal, checksum, alloc/copy, slab reads, lock contention).
-- Next (potentially high impact, higher risk): add an opt-in *read-only zero-copy* path for trie-node reads (return views into mmapped pages/slabs) and wire it into op-geth’s trie node fetcher (callers must treat returned bytes as immutable).
+- **Blocked:** `ValueLogPointerThreshold` usage is disabled.
+- **Next:** Implement reproduction test for `Copy-on-Flush` validation.
