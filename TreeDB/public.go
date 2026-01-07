@@ -448,13 +448,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Semantics: Returns a safe copy of the value. For zero-copy views tied to a
 // snapshot lifetime, use AcquireSnapshot().GetUnsafe.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	if err := db.ensureOpen(); err != nil {
-		return nil, err
-	}
-	if db.cached != nil {
-		return db.cached.GetUnsafe(key)
-	}
-	return db.backend.GetUnsafe(key)
+	return db.Get(key)
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

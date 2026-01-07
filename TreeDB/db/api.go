@@ -37,7 +37,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	val, err := snap.GetUnsafe(key)
+	val, err := snap.Get(key)
 	if err == tree.ErrKeyNotFound {
 		return dst, err
 	}
@@ -113,7 +113,13 @@ func (it *DBIterator) Valid() bool {
 }
 
 func (it *DBIterator) Key() []byte {
-	return it.iter.Key()
+	k := it.iter.Key()
+	if k == nil {
+		return nil
+	}
+	dst := make([]byte, len(k))
+	copy(dst, k)
+	return dst
 }
 
 func (it *DBIterator) Value() []byte {
@@ -124,14 +130,18 @@ func (it *DBIterator) Value() []byte {
 	if val == nil {
 		return nil
 	}
-	// Copy
+	// Copy to ensure safety after iterator/snapshot close.
 	dst := make([]byte, len(val))
 	copy(dst, val)
 	return dst
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {
-	return it.iter.KeyCopy(dst)
+	k := it.iter.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
 }
 
 func (it *DBIterator) ValueCopy(dst []byte) []byte {
@@ -139,7 +149,10 @@ func (it *DBIterator) ValueCopy(dst []byte) []byte {
 	if it.err != nil {
 		return dst
 	}
-	return append(dst, val...)
+	if val == nil {
+		return nil
+	}
+	return append(dst[:0], val...)
 }
 
 func (it *DBIterator) Error() error {
@@ -177,6 +190,7 @@ func (it *DBIterator) UnsafeValue() []byte {
 		it.err = err
 		return nil
 	}
+	it.err = nil
 	return val
 }
 
