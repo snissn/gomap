@@ -101,6 +101,9 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_FORCE_VALUE_POINTERS") {
 		opts.ForceValuePointers = true
 	}
+	if envBool("TREEDB_LEAF_PREFIX_COMPRESSION") {
+		opts.LeafPrefixCompression = true
+	}
 	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			opts.SlabCompression.MinBytes = n

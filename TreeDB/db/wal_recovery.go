@@ -241,15 +241,11 @@ func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int, lastS
 		opsInBatch int
 		maxSeenSeq uint64
 		batch      = db.NewBatch()
-		threshold  = db.InlineThreshold()
-		keepSeg    bool
 	)
-	ptrBatch, _ := batch.(interface {
-		SetPointer(key []byte, ptr page.ValuePtr) error
-	})
+	// ptrBatch is not needed if we always Copy-on-Replay.
 
 	for {
-		seq, op, key, val, ptr, err := reader.ReadNext()
+		seq, op, key, val, _, err := reader.ReadNext() // ptr unused
 		if err != nil {
 			if isTruncatedLogError(err) {
 				break
@@ -268,14 +264,8 @@ func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int, lastS
 
 		switch op {
 		case vlog.OpSet:
-			if len(val) > threshold && ptrBatch != nil {
-				keepSeg = true
-				if err := ptrBatch.SetPointer(key, ptr); err != nil {
-					_ = batch.Close()
-					_ = reader.Close()
-					return false, err
-				}
-			} else if err := batch.Set(key, val); err != nil {
+			// Always copy to backend storage (Slab/Index) to decouple from WAL/Vlog.
+			if err := batch.Set(key, val); err != nil {
 				_ = batch.Close()
 				_ = reader.Close()
 				return false, err
@@ -295,16 +285,8 @@ func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int, lastS
 		opsInBatch++
 		if opsInBatch >= maxOpsPerBatch {
 			batch.SetLastSeq(maxSeenSeq)
-			if err := batch.WriteSync(); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return false, err
-			}
 			_ = batch.Close()
 			batch = db.NewBatch()
-			ptrBatch, _ = batch.(interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			})
 			opsInBatch = 0
 		}
 	}
@@ -320,9 +302,6 @@ func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int, lastS
 	}
 	_ = batch.Close()
 
-	if keepSeg {
-		return false, nil
-	}
 	if segment.fileID != 0 {
 		if err := db.valueLogManager.MarkZombie(segment.fileID); err != nil {
 			return false, err
