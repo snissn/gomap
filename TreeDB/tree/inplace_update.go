@@ -64,7 +64,14 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 			if err != nil {
 				return false, 0, err
 			}
-			if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 || curPtr != oldPtr {
+
+			ptrMatches := func(p1, p2 page.ValuePtr) bool {
+				return p1.FileID == p2.FileID &&
+					p1.Offset == p2.Offset &&
+					page.ValuePtrRecordLength(p1) == page.ValuePtrRecordLength(p2)
+			}
+
+			if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 || !ptrMatches(curPtr, oldPtr) {
 				return false, 0, nil
 			}
 

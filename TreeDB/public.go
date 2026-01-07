@@ -104,6 +104,9 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_LEAF_PREFIX_COMPRESSION") {
 		opts.LeafPrefixCompression = true
 	}
+	if envBool("TREEDB_SLAB_OMIT_KEYS") {
+		opts.OmitSlabKeys = true
+	}
 	if envBool("TREEDB_DISABLE_VALUE_LOG") {
 		opts.DisableValueLog = true
 	}
@@ -114,6 +117,10 @@ func Open(opts Options) (*DB, error) {
 		opts.MemtableValueLogPointers = true
 	}
 	if v := os.Getenv("TREEDB_VALUE_LOG_POINTER_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.ValueLogPointerThreshold = n
+		}
+	} else if v := os.Getenv("TREEDB_VALUELOG_POINTER_THRESHOLD"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			opts.ValueLogPointerThreshold = n
 		}
@@ -731,6 +738,13 @@ func (db *DB) LastSeq() uint64 {
 		return 0
 	}
 	return db.backend.LastSeq()
+}
+
+func (db *DB) Backend() *db.DB {
+	if db == nil {
+		return nil
+	}
+	return db.backend
 }
 
 // Checkpoint forces a durable backend boundary and trims cached-mode WAL

@@ -187,6 +187,12 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		} else if err != nil {
 			return 0, err
 		}
+		if !iter.Valid() {
+			if err := iter.Error(); err != nil {
+				return 0, err
+			}
+			break
+		}
 		iter.Next()
 	}
 

@@ -235,7 +235,7 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 
 	cur := page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
-	if cur != oldPtr {
+	if cur.FileID != oldPtr.FileID || cur.Offset != oldPtr.Offset || page.ValuePtrRecordLength(cur) != page.ValuePtrRecordLength(oldPtr) {
 		return false, nil
 	}
 

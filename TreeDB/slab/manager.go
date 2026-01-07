@@ -28,6 +28,7 @@ type SlabManager struct {
 
 	disableReadChecksum bool
 	compression         compressionConfig
+	omitSlabKeys        bool
 
 	appendManyScratch []byte
 }
@@ -50,10 +51,11 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		return nil, err
 	}
 	sm := &SlabManager{
-		dir:         dir,
-		readOnly:    readOnly,
-		slabs:       make(map[uint32]*SlabFile),
-		compression: compression,
+		dir:          dir,
+		readOnly:     readOnly,
+		slabs:        make(map[uint32]*SlabFile),
+		compression:  compression,
+		omitSlabKeys: opts.OmitSlabKeys,
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -154,6 +156,26 @@ func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) 
 	return compression.decompressValue(val)
 }
 
+func (sm *SlabManager) DecodeValueForCompactor(ptr page.ValuePtr, val []byte) ([]byte, error) {
+	sm.mu.RLock()
+	compression := &sm.compression
+	sm.mu.RUnlock()
+	return decodeValue(ptr, val, compression)
+}
+
+func (sm *SlabManager) DecodeRecordForCompactor(ptr page.ValuePtr, val []byte) ([]byte, []byte, error) {
+	if !page.ValuePtrIsFullCompressed(ptr) {
+		return nil, nil, fmt.Errorf("not a full compressed record")
+	}
+	sm.mu.RLock()
+	compression := &sm.compression
+	sm.mu.RUnlock()
+	if compression == nil {
+		return nil, nil, errCompressedCorrupt
+	}
+	return compression.decompressRecord(val)
+}
+
 func (sm *SlabManager) Close() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -216,6 +238,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	encodedKey := key
 	compressed := false
 	fullCompressed := false
+	omittedKey := false
 	var err error
 	if sm.compression.kind != CompressionNone {
 		// Try full record compression first
@@ -233,6 +256,11 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 				return page.ValuePtr{}, err
 			}
 		}
+	}
+
+	if !fullCompressed && sm.omitSlabKeys {
+		encodedKey = nil
+		omittedKey = true
 	}
 
 	sm.mu.Lock()
@@ -256,6 +284,11 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	length := uint32(2 + 4 + len(encodedKey) + len(encoded))
 	if fullCompressed {
 		length = page.ValuePtrMarkFullCompressed(length)
+	} else if omittedKey {
+		length = page.ValuePtrMarkOmittedKey(length)
+		if compressed {
+			length = page.ValuePtrMarkCompressed(length)
+		}
 	} else if compressed {
 		length = page.ValuePtrMarkCompressed(length)
 	}
@@ -274,6 +307,7 @@ type appendManyMeta struct {
 	valLen         int
 	compressed     bool
 	fullCompressed bool
+	omittedKey     bool
 }
 
 // AppendMany appends multiple records while amortizing system calls. It returns
@@ -304,6 +338,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	encodedKeys := keys
 	compressedFlags := make([]bool, len(values))
 	fullCompressedFlags := make([]bool, len(values))
+	omittedKeyFlags := make([]bool, len(values))
 	if sm.compression.kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
@@ -325,6 +360,19 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 				encodedValues[i] = encoded
 				encodedKeys[i] = keys[i]
 				compressedFlags[i] = compressed
+			}
+		}
+	}
+
+	if sm.omitSlabKeys {
+		if sm.compression.kind == CompressionNone {
+			encodedKeys = make([][]byte, len(values))
+			copy(encodedKeys, keys)
+		}
+		for i := range values {
+			if !fullCompressedFlags[i] {
+				encodedKeys[i] = nil
+				omittedKeyFlags[i] = true
 			}
 		}
 	}
@@ -403,6 +451,11 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 				length := uint32(2 + 4 + meta.keyLen + meta.valLen)
 				if meta.fullCompressed {
 					length = page.ValuePtrMarkFullCompressed(length)
+				} else if meta.omittedKey {
+					length = page.ValuePtrMarkOmittedKey(length)
+					if meta.compressed {
+						length = page.ValuePtrMarkCompressed(length)
+					}
 				} else if meta.compressed {
 					length = page.ValuePtrMarkCompressed(length)
 				}
@@ -481,6 +534,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 			valLen:         valLen,
 			compressed:     compressedFlags[i],
 			fullCompressed: fullCompressedFlags[i],
+			omittedKey:     omittedKeyFlags[i],
 		})
 	}
 

@@ -74,6 +74,7 @@ type DB struct {
 	piggybackCompaction   bool
 	enableValueIndex      bool
 	forceValuePointers    bool
+	omitSlabKeys          bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -260,6 +261,10 @@ type Options struct {
 	DisableReadChecksum bool
 	// SlabCompression configures compression for slab-stored values.
 	SlabCompression slab.CompressionOptions
+	// OmitSlabKeys avoids storing the key in the slab record. This saves space
+	// for small records but requires IndexSwap compaction (the default compactor
+	// will skip these records as dead).
+	OmitSlabKeys bool
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -456,7 +461,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression: opts.SlabCompression,
+		Compression:  opts.SlabCompression,
+		OmitSlabKeys: opts.OmitSlabKeys,
 	})
 	if err != nil {
 		p.Close()
@@ -501,6 +507,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
 		enableValueIndex:      opts.EnableValueIndex,
 		forceValuePointers:    opts.ForceValuePointers,
+		omitSlabKeys:          opts.OmitSlabKeys,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -1344,7 +1351,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 					continue
 				}
 				currentPtr := page.DecodeValuePtr(sysVal)
-				if currentPtr != op.OldPtr {
+				if currentPtr.FileID != op.OldPtr.FileID || currentPtr.Offset != op.OldPtr.Offset || page.ValuePtrRecordLength(currentPtr) != page.ValuePtrRecordLength(op.OldPtr) {
 					continue
 				}
 
@@ -1374,7 +1381,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			if entry.Flags&node.FlagPointer == 0 {
 				continue
 			}
-			if entry.ValuePtr != op.OldPtr {
+			if entry.ValuePtr.FileID != op.OldPtr.FileID || entry.ValuePtr.Offset != op.OldPtr.Offset || page.ValuePtrRecordLength(entry.ValuePtr) != page.ValuePtrRecordLength(op.OldPtr) {
 				continue
 			}
 			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {

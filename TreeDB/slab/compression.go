@@ -30,7 +30,8 @@ type CompressionOptions struct {
 }
 
 type Options struct {
-	Compression CompressionOptions
+	Compression  CompressionOptions
+	OmitSlabKeys bool
 }
 
 type compressionConfig struct {
