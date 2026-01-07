@@ -97,6 +97,9 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_ENABLE_VALUE_INDEX") {
 		opts.EnableValueIndex = true
 	}
+	if envBool("TREEDB_FORCE_VALUE_POINTERS") {
+		opts.ForceValuePointers = true
+	}
 
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
