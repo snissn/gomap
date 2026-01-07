@@ -4391,18 +4391,23 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					})
 				} else {
 					key := iter.UnsafeKey()
-					val := iter.UnsafeValue()
-					if ptrs != nil {
+					var val []byte
+					if ptrs != nil && db.memtableValueLogPointers {
 						if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
-							ops = append(ops, batch.Entry{
-								Type:     batch.OpPut,
-								Key:      key,
-								ValuePtr: ptr,
-								IsPtr:    true,
-							})
-							iter.Next()
-							continue
+							if db.valueLogReader != nil {
+								v, err := db.valueLogReader.Read(ptr)
+								if err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								val = v
+							}
 						}
+					}
+					if val == nil {
+						val = iter.UnsafeValue()
 					}
 					ops = append(ops, batch.Entry{
 						Type:  batch.OpPut,
@@ -4419,31 +4424,33 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return false
 			}
 		} else {
-			pointerBatch, _ := backendBatch.(interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			})
 			for iter.Valid() {
-				key := iter.UnsafeKey()
 				if iter.IsDeleted() {
-					if err := backendBatch.Delete(key); err != nil {
+					if err := backendBatch.Delete(iter.UnsafeKey()); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
 					}
 				} else {
-					val := iter.UnsafeValue()
-					if pointerBatch != nil && ptrs != nil {
+					key := iter.UnsafeKey()
+					var val []byte
+					if ptrs != nil && db.memtableValueLogPointers {
 						if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
-							if err := pointerBatch.SetPointer(key, ptr); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
+							if db.valueLogReader != nil {
+								v, err := db.valueLogReader.Read(ptr)
+								if err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								val = v
 							}
-							iter.Next()
-							continue
 						}
+					}
+					if val == nil {
+						val = iter.UnsafeValue()
 					}
 					if err := backendBatch.Set(key, val); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
