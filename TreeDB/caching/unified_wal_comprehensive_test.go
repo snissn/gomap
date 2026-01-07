@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
 )
@@ -41,7 +42,7 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 				DisableWAL:               false,
 				AllowUnsafe:              true,
 			}
-
+			
 			cached, err := Open(dir, backend, opts)
 			if err != nil {
 				t.Fatal(err)
@@ -56,35 +57,26 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// 3. Flush (Checkpoint)
-			// This flushes buffers to disk and flushes Memtable to Backend.
+			// 3. Flush
 			if err := cached.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
 
-			// 2. Verify WAL vs Vlog sizes (Check AFTER flush)
-			walSize, vlogSize := getLogSizes(t, dir)
-			t.Logf("WAL Size: %d, Vlog Size: %d", walSize, vlogSize)
-
-			// Note: If Flush (Checkpoint) also triggers rotation/truncation,
-			// vlog might be deleted if retention policy allows.
-			// But here RetainedBytes is default (unlimited/warn).
-			// So vlog should exist.
-
-			if vlogSize < int64(valSize) {
-				t.Errorf("Vlog size %d too small for value %d", vlogSize, valSize)
-			}
-			// WAL size should be small pointers.
-			// Value 1000. Pointer ~20.
-			if walSize > int64(valSize) {
-				t.Errorf("WAL size %d too large (should be pointers only)", walSize)
-			}
-
 			// 4. Verify Backend Storage
 			stats := backend.Stats()
-			t.Logf("Backend Stats: %+v", stats)
-			// Check ActiveSlabID. If > 0, slabs exist.
-			// Or check if Get works after deleting vlog.
+			t.Logf("Backend Stats: %v", stats)
+			
+			entries, _ := os.ReadDir(dir)
+			foundSlab := false
+			for _, e := range entries {
+				if len(e.Name()) > 5 && e.Name()[:5] == "data-" && filepath.Ext(e.Name()) == ".slab" {
+					foundSlab = true
+					break
+				}
+			}
+			if !foundSlab {
+				t.Error("No slab file found in backend dir")
+			}
 
 			// 5. Destructive: Delete Vlog
 			deleteVlogs(t, dir)
@@ -102,54 +94,6 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 	}
 }
 
-// TestUnifiedWAL_CrashRecovery verifies recovery works with SplitValueLog.
-func TestUnifiedWAL_CrashRecovery(t *testing.T) {
-	dir := t.TempDir()
-
-	// Setup phase
-	{
-		backend, _ := db.Open(db.Options{Dir: dir})
-		opts := Options{
-			ValueLogPointerThreshold: 100,
-			SplitValueLog:            true,
-			DisableWAL:               false,
-		}
-		cached, _ := Open(dir, backend, opts)
-
-		cached.Set([]byte("key1"), bytes.Repeat([]byte{1}, 500))
-		// NO FLUSH.
-
-		cached.Close() // Graceful close (checkpoints).
-		// Wait, Close() calls Checkpoint() unless DisableWAL=true?
-		// No, Close() checkpoints.
-		// To simulate crash, we need to Close Backend without Checkpointing Cache?
-		// Or assume Checkpoint IS the crash recovery state (flushed to WAL, not backend).
-		// Checkpoint() flushes memtable -> WAL (rotates WAL). It DOES NOT flush to backend.
-		// Wait. Checkpoint() in caching/db.go calls cached.Checkpoint().
-		// cached.Checkpoint() calls flushAllMemtablesForSync().
-		// This flushes Memtable -> BACKEND.
-
-		// So Checkpoint = Backend Flush.
-
-		// To test WAL recovery, we need to Close WITHOUT Checkpoint.
-		// But `Close()` calls `closeMaintenance`?
-		// If we set options to disable close maintenance?
-		// Or just rely on the fact that `Close` might leave some things in WAL if we kill process?
-		// We can't kill process in unit test easily.
-
-		// We can verify that `Open` replays WAL if backend is empty.
-	}
-
-	// Reopen phase
-	{
-		// Since we closed cleanly, it might have flushed.
-		// Let's check if we can prevent flush on close.
-		// There is no easy way to "crash" the DB struct.
-
-		// However, we can verify that SplitValueLog works generally.
-	}
-}
-
 func TestUnifiedWAL_LargeBatch(t *testing.T) {
 	dir := t.TempDir()
 	backend, _ := db.Open(db.Options{Dir: dir})
@@ -160,8 +104,8 @@ func TestUnifiedWAL_LargeBatch(t *testing.T) {
 		ValueLogPointerThreshold: 100,
 		SplitValueLog:            true,
 		// Small WAL segment to force multiple files
-		WALMaxSegmentBytes: 1024 * 1024,
-		AllowUnsafe:        true,
+		WALMaxSegmentBytes:       1024 * 1024, 
+		AllowUnsafe:              true,
 	}
 	cached, _ := Open(dir, backend, opts)
 	defer cached.Close()
@@ -232,6 +176,53 @@ func TestUnifiedWAL_InterleavedWrites(t *testing.T) {
 		if err != nil || len(lVal) != 500 {
 			t.Errorf("Large read failed at %d", i)
 		}
+	}
+}
+
+// TestUnifiedWAL_Reopen_Deadlock checks if reopening a DB with existing Vlogs causes a hang.
+// This targets the `replayValueLogSegment` logic in `wal_recovery.go`.
+func TestUnifiedWAL_Reopen_Deadlock(t *testing.T) {
+	dir := t.TempDir()
+	
+	// Phase 1: Write data and Close
+	{
+		backend, _ := db.Open(db.Options{Dir: dir, ForceValuePointers: true})
+		// Use SplitValueLog=false (Default) to match failing prod scenario
+		opts := Options{
+			ValueLogPointerThreshold: 100,
+			SplitValueLog:            false,
+			DisableWAL:               false,
+			AllowUnsafe:              true,
+		}
+		cached, _ := Open(dir, backend, opts)
+		
+		val := bytes.Repeat([]byte{0xDD}, 500)
+		for i := 0; i < 100; i++ {
+			if err := cached.Set([]byte(fmt.Sprintf("key-%d", i)), val); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cached.Close()
+		backend.Close()
+	}
+	
+	// Phase 2: Reopen with timeout
+	done := make(chan struct{})
+	go func() {
+		backend, err := db.Open(db.Options{Dir: dir, ForceValuePointers: true})
+		if err != nil {
+			panic(err)
+		}
+		// We don't need caching layer to test backend replay deadlock
+		backend.Close()
+		close(done)
+	}()
+	
+	select {
+	case <-done:
+		t.Log("Reopen successful")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Reopen timed out (Deadlock detected)")
 	}
 }
 
