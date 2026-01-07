@@ -147,6 +147,10 @@ func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) 
 	if compression == nil {
 		return nil, errCompressedCorrupt
 	}
+	if page.ValuePtrIsFullCompressed(ptr) {
+		_, v, err := compression.decompressRecord(val)
+		return v, err
+	}
 	return compression.decompressValue(val)
 }
 
@@ -209,12 +213,25 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	encoded := value
+	encodedKey := key
 	compressed := false
+	fullCompressed := false
 	var err error
 	if sm.compression.kind != CompressionNone {
-		encoded, compressed, err = sm.compression.compressValue(value)
-		if err != nil {
+		// Try full record compression first
+		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
+			encoded = enc
+			encodedKey = nil
+			compressed = true
+			fullCompressed = true
+		} else if err != nil {
 			return page.ValuePtr{}, err
+		} else {
+			// Fall back to value-only compression
+			encoded, compressed, err = sm.compression.compressValue(value)
+			if err != nil {
+				return page.ValuePtr{}, err
+			}
 		}
 	}
 
@@ -224,20 +241,22 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, ErrReadOnly
 	}
 
-	offset, err := sm.activeSlab.Write(key, encoded)
+	offset, err := sm.activeSlab.Write(encodedKey, encoded)
 	if err == ErrSlabFull {
 		if err := sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
 		}
-		offset, err = sm.activeSlab.Write(key, encoded)
+		offset, err = sm.activeSlab.Write(encodedKey, encoded)
 	}
 
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
 
-	length := uint32(2 + 4 + len(key) + len(encoded))
-	if compressed {
+	length := uint32(2 + 4 + len(encodedKey) + len(encoded))
+	if fullCompressed {
+		length = page.ValuePtrMarkFullCompressed(length)
+	} else if compressed {
 		length = page.ValuePtrMarkCompressed(length)
 	}
 
@@ -249,11 +268,12 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 }
 
 type appendManyMeta struct {
-	idx        int
-	start      int
-	keyLen     int
-	valLen     int
-	compressed bool
+	idx            int
+	start          int
+	keyLen         int
+	valLen         int
+	compressed     bool
+	fullCompressed bool
 }
 
 // AppendMany appends multiple records while amortizing system calls. It returns
@@ -281,16 +301,31 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 
 	encodedValues := values
+	encodedKeys := keys
 	compressedFlags := make([]bool, len(values))
+	fullCompressedFlags := make([]bool, len(values))
 	if sm.compression.kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
+		encodedKeys = make([][]byte, len(values))
 		for i := range values {
-			encoded, compressed, err := sm.compression.compressValue(values[i])
-			if err != nil {
+			// Try full record compression first
+			if enc, ok, err := sm.compression.compressRecord(keys[i], values[i]); err == nil && ok {
+				encodedValues[i] = enc
+				encodedKeys[i] = nil
+				compressedFlags[i] = true
+				fullCompressedFlags[i] = true
+			} else if err != nil {
 				return nil, err
+			} else {
+				// Fall back to value-only compression
+				encoded, compressed, err := sm.compression.compressValue(values[i])
+				if err != nil {
+					return nil, err
+				}
+				encodedValues[i] = encoded
+				encodedKeys[i] = keys[i]
+				compressedFlags[i] = compressed
 			}
-			encodedValues[i] = encoded
-			compressedFlags[i] = compressed
 		}
 	}
 
@@ -298,7 +333,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	var lenArr [6]byte
 
 	for i := 0; i < len(keys); i++ {
-		key := keys[i]
+		key := encodedKeys[i]
 		value := encodedValues[i]
 
 		keyLen := len(key)
@@ -366,7 +401,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 
 			for _, meta := range metas {
 				length := uint32(2 + 4 + meta.keyLen + meta.valLen)
-				if meta.compressed {
+				if meta.fullCompressed {
+					length = page.ValuePtrMarkFullCompressed(length)
+				} else if meta.compressed {
 					length = page.ValuePtrMarkCompressed(length)
 				}
 				ptrs[meta.idx] = page.ValuePtr{
@@ -438,11 +475,12 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		copy(rec[10+keyLen:], value)
 
 		metas = append(metas, appendManyMeta{
-			idx:        i,
-			start:      start,
-			keyLen:     keyLen,
-			valLen:     valLen,
-			compressed: compressedFlags[i],
+			idx:            i,
+			start:          start,
+			keyLen:         keyLen,
+			valLen:         valLen,
+			compressed:     compressedFlags[i],
+			fullCompressed: fullCompressedFlags[i],
 		})
 	}
 
