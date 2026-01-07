@@ -109,6 +109,11 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompression.MinBytes = n
 		}
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_SAVINGS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompression.MinSavingsBytes = n
+		}
+	}
 	if v := os.Getenv("TREEDB_SLAB_COMPRESSION"); v != "" {
 		switch strings.ToLower(v) {
 		case "zstd":
