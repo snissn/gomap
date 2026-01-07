@@ -100,6 +100,11 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_FORCE_VALUE_POINTERS") {
 		opts.ForceValuePointers = true
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompression.MinBytes = n
+		}
+	}
 
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
