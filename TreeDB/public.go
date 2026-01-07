@@ -104,6 +104,20 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_LEAF_PREFIX_COMPRESSION") {
 		opts.LeafPrefixCompression = true
 	}
+	if envBool("TREEDB_DISABLE_VALUE_LOG") {
+		opts.DisableValueLog = true
+	}
+	if envBool("TREEDB_SPLIT_VALUE_LOG") {
+		opts.SplitValueLog = true
+	}
+	if envBool("TREEDB_MEMTABLE_VALUE_LOG_POINTERS") {
+		opts.MemtableValueLogPointers = true
+	}
+	if v := os.Getenv("TREEDB_VALUE_LOG_POINTER_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.ValueLogPointerThreshold = n
+		}
+	}
 	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			opts.SlabCompression.MinBytes = n
