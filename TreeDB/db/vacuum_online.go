@@ -150,11 +150,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	}
 
 	newAlloc := freelist.New(newPager, 0)
-	// Force reuse of pages during vacuum to prevent ballooning. Locality is
-	// established by the initial bulk build; subsequent delta usage should
-	// prioritize space efficiency over append-only locality.
-	newAlloc.SetPreferAppend(false)
-	newAlloc.SetFreelistRegion(0, -1) // Disable region bias to ensure global reuse
+	newAlloc.SetPreferAppend(db.preferAppendAlloc)
+	newAlloc.SetFreelistRegion(db.freelistRegionPages, db.freelistRegionRadius)
 
 	newZ := zipper.New(newPager, newAlloc)
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
