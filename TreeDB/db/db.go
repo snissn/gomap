@@ -374,7 +374,7 @@ func Open(opts Options) (*DB, error) {
 		opts.ChunkSize = 256 * 1024 * 1024
 	}
 	if opts.KeepRecent == 0 {
-		opts.KeepRecent = 10000
+		opts.KeepRecent = 20
 	}
 	if opts.LeafFillTargetPPM == 0 {
 		opts.LeafFillTargetPPM = 1_000_000
