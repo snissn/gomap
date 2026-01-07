@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
@@ -103,6 +104,14 @@ func Open(opts Options) (*DB, error) {
 	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			opts.SlabCompression.MinBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION"); v != "" {
+		switch strings.ToLower(v) {
+		case "zstd":
+			opts.SlabCompression.Kind = slab.CompressionZSTD
+		case "none":
+			opts.SlabCompression.Kind = slab.CompressionNone
 		}
 	}
 
