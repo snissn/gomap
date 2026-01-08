@@ -158,7 +158,13 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	baseSeq := b.db.meta.CommitSeq
+	// Register this writer as a "reader" of the base state to prevent the
+	// pruner from reclaiming pages we are about to read during z.Apply.
+	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
+
+	defer idx.registry.Unregister(regID)
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
@@ -220,7 +226,11 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	baseSeq := b.db.meta.CommitSeq
+	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
+
+	defer idx.registry.Unregister(regID)
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {

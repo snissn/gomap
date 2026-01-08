@@ -9,7 +9,7 @@ type ReaderRegistry struct {
 	mu sync.Mutex
 
 	// seqs stores pinned commit seqs by handle index (handle = idx+1).
-	// A value of 0 indicates a free slot.
+	// A value of math.MaxUint64 indicates a free slot.
 	seqs []uint64
 	free []int
 
@@ -37,7 +37,7 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 		r.free = r.free[:n-1]
 	} else {
 		idx = len(r.seqs)
-		r.seqs = append(r.seqs, 0)
+		r.seqs = append(r.seqs, math.MaxUint64)
 	}
 	r.seqs[idx] = seq
 	if seq < r.min {
@@ -59,10 +59,10 @@ func (r *ReaderRegistry) Unregister(id int64) {
 		return
 	}
 	old := r.seqs[idx]
-	if old == 0 {
+	if old == math.MaxUint64 {
 		return
 	}
-	r.seqs[idx] = 0
+	r.seqs[idx] = math.MaxUint64
 	r.free = append(r.free, idx)
 	if old == r.min {
 		r.dirty = true
@@ -81,14 +81,11 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 
 	min := uint64(math.MaxUint64)
 	for _, seq := range r.seqs {
-		if seq != 0 && seq < min {
+		if seq < min {
 			min = seq
 		}
 	}
 	r.min = min
 	r.dirty = false
-	if min == math.MaxUint64 {
-		return math.MaxUint64
-	}
 	return min
 }
