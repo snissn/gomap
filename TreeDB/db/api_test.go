@@ -2,9 +2,14 @@ package db
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestCRUD(t *testing.T) {
@@ -122,5 +127,86 @@ func TestConcurrentReads(t *testing.T) {
 	val, _ := db.Get([]byte("k0"))
 	if !bytes.Equal(val, []byte("v2")) {
 		t.Errorf("Final state should be v2")
+	}
+}
+
+func TestIterator_ValueIDResolutionError(t *testing.T) {
+	// This test verifies that DBIterator.Value() correctly handles errors during
+	// ValueID resolution (e.g. if the ValueID points to a missing entry).
+	dir := t.TempDir()
+	opts := Options{Dir: dir, EnableValueIndex: true, ForceValuePointers: true}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k")
+	val := []byte("v")
+	if err := db.SetSync(key, val); err != nil {
+		t.Fatal(err)
+	}
+
+	// Corrupt the System Tree by deleting the ValueID mapping manually.
+	// We need to find the ValueID first.
+	snap := db.AcquireSnapshot()
+	entry, err := snap.GetEntry(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Close()
+
+	if entry.Flags&node.FlagValueID == 0 {
+		t.Fatal("expected ValueID entry")
+	}
+
+	// Delete the mapping from the System Tree
+	b2 := db.NewBatch().(*Batch)
+	sysKey := encodeValueIndexKey(ValueID(binary.BigEndian.Uint64(entry.Value)))
+	if err := b2.batch.Delete(sysKey); err != nil {
+		t.Fatal(err)
+	}
+	// Important: we must use the low-level writeSerialized to apply sysOps
+	// because direct User Tree deletes of sysKeys are not handled by normal Write.
+	if err := b2.writeSerialized(true, []batch.Entry{{Type: batch.OpDelete, Key: sysKey}}); err != nil {
+		t.Fatal(err)
+	}
+	b2.Close()
+
+	// Reopen DB to ensure clean state
+	db.Close()
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Verify it's really gone from the system tree first
+	snap2 := db.AcquireSnapshot()
+	sysTree := tree.New(snap2.idx.pager, ValueReaderForState(snap2.state), snap2.state.SystemRootPageID)
+	_, err = sysTree.Get(sysKey)
+	if err == nil {
+		t.Fatal("System Tree mapping should be deleted")
+	}
+	snap2.Close()
+
+	// Now iterate. Resolution should fail.
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+
+	if !it.Valid() {
+		t.Fatal("iterator should be valid initially")
+	}
+
+	// Value() triggers the resolution.
+	v := it.Value()
+	if v != nil {
+		t.Errorf("Expected nil value due to resolution error, got %v", v)
+	}
+	if it.Error() == nil {
+		t.Error("Expected non-nil error after failed resolution")
 	}
 }
