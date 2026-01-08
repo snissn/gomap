@@ -188,6 +188,12 @@ func (c *Compactor) CompactCandidates(opts Options) error {
 }
 
 func (c *Compactor) CompactCandidatesWithContext(ctx context.Context, opts Options) error {
+	// Safety: OmitSlabKeys requires IndexSwap because the default compactor
+	// relies on the key stored in the slab to verify liveness in the user tree.
+	if c.db.SlabManager().OmitSlabKeys() && !opts.IndexSwap {
+		return fmt.Errorf("compaction: IndexSwap required when OmitSlabKeys is enabled")
+	}
+
 	cands, err := c.Candidates(opts)
 	if err != nil {
 		return err

@@ -65,7 +65,7 @@ func (b *bloomFilter) mayContain(ptr page.ValuePtr) bool {
 func bloomHashes(ptr page.ValuePtr) (uint64, uint64) {
 	var buf [16]byte
 	binary.LittleEndian.PutUint64(buf[0:8], ptr.Offset)
-	binary.LittleEndian.PutUint32(buf[8:12], ptr.Length)
+	binary.LittleEndian.PutUint32(buf[8:12], page.ValuePtrRecordLength(ptr))
 	binary.LittleEndian.PutUint32(buf[12:16], ptr.FileID)
 	h1 := xxhash.Sum64(buf[:])
 	h2 := bits.RotateLeft64(h1, 17) ^ 0x9e3779b97f4a7c15

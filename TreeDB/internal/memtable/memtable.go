@@ -52,6 +52,7 @@ type Table interface {
 	DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	SetSteal(key, value []byte)
 	DeleteSteal(key []byte)
+	ApplyStealBatch(entries []batchpkg.Entry, onKey func(key []byte))
 	Get(key []byte) ([]byte, bool, bool)
 	Size() int64
 	Len() int
@@ -182,6 +183,22 @@ func (m *Memtable) SetSteal(key, value []byte) {
 // DeleteSteal - SkipList copies data, so Steal is same as Delete.
 func (m *Memtable) DeleteSteal(key []byte) {
 	m.Delete(key)
+}
+
+func (m *Memtable) ApplyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			m.sl.Delete(op.Key)
+		} else {
+			m.sl.Put(op.Key, op.Value)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
 }
 
 func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {

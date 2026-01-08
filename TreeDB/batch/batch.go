@@ -30,6 +30,7 @@ type Entry struct {
 	Value    []byte        // For inline values
 	ValuePtr page.ValuePtr // For large values
 	IsPtr    bool          // True if ValuePtr is valid
+	Flags    byte
 }
 
 // Interface defines the contract for a batch operation.
@@ -42,6 +43,7 @@ type Interface interface {
 	Close() error
 	Replay(func(Entry) error) error
 	GetByteSize() (int, error)
+	SetLastSeq(uint64)
 }
 
 // Batch accumulates writes and deletes before committing them.
@@ -486,10 +488,16 @@ func (b *Batch) Ops() map[string]Entry {
 	return ops
 }
 
-// ByteSize returns the approximate size of the batch.
 func (b *Batch) ByteSize() int {
 	return b.byteSize
 }
+
+func (b *Batch) GetByteSize() (int, error) {
+	return b.byteSize, nil
+}
+
+// SetLastSeq is a dummy implementation to satisfy the Interface.
+func (b *Batch) SetLastSeq(uint64) {}
 
 // SlabWriteBytes returns the number of bytes written to the slab file.
 func (b *Batch) SlabWriteBytes() int {

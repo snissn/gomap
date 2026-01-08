@@ -18,7 +18,7 @@ func seedWALData() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = w.Append(OpSet, []byte("k"), []byte("v"))
+	_ = w.Append(1, OpSet, []byte("k"), []byte("v"))
 	_ = w.Close()
 	return os.ReadFile(path)
 }
@@ -41,7 +41,7 @@ func FuzzWALReader(f *testing.F) {
 		}
 		defer r.Close()
 		for i := 0; i < 8; i++ {
-			_, _, _, err := r.ReadNext()
+			_, _, _, _, err := r.ReadNext()
 			if err != nil {
 				break
 			}

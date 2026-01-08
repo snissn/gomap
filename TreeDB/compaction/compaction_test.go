@@ -635,3 +635,101 @@ func TestCompaction_IndexSwap_CompactsMultipleCandidatesWithSingleIndexSwapCommi
 		}
 	}
 }
+
+func TestCompaction_FullCompression(t *testing.T) {
+	dir := t.TempDir()
+
+	opts := db.Options{
+		Dir: dir,
+		SlabCompression: slab.CompressionOptions{
+			Kind:            slab.CompressionZSTD,
+			MinBytes:        1,
+			MinSavingsBytes: 0,
+		},
+		AllowUnsafe: true,
+	}
+	d, err := db.Open(opts)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer d.Close()
+
+	// Write highly compressible data to force full compression
+	key := []byte("key_with_significant_length_for_compression_testing_abc_def_ghi")
+	val := bytes.Repeat([]byte("redundant_data_redundant_data_redundant_data_"), 20)
+
+	batch := d.NewBatch().(*db.Batch)
+	batch.Set(key, val)
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch.Write: %v", err)
+	}
+
+	// Rotate slab to allow compaction
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+
+	// Run compaction
+	c := New(d)
+	if err := c.CompactSlab(0); err != nil {
+		t.Fatalf("CompactSlab: %v", err)
+	}
+
+	// Verify data still readable
+	snap := d.AcquireSnapshot()
+	got, err := snap.Get(key)
+	snap.Close()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("data mismatch")
+	}
+}
+
+func TestCompaction_OmitKeys(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("CompactSlabsIndexSwap unsupported on windows")
+	}
+	dir := t.TempDir()
+
+	opts := db.Options{
+		Dir:                dir,
+		OmitSlabKeys:       true,
+		ForceValuePointers: true,
+		AllowUnsafe:        true,
+	}
+	d, err := db.Open(opts)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer d.Close()
+
+	key := []byte("k")
+	val := []byte("v")
+
+	batch := d.NewBatch().(*db.Batch)
+	batch.Set(key, val)
+	if err := batch.Write(); err != nil {
+		t.Fatalf("batch.Write: %v", err)
+	}
+
+	// Rotate slab to allow compaction
+	if _, err := d.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+
+	// Run IndexSwap compaction (should MIGRATE the record even if key is missing in slab)
+	if err := d.CompactSlabsIndexSwap(nil, []uint32{0}, db.IndexSwapCompactionOptions{}); err != nil {
+		t.Fatalf("CompactSlabsIndexSwap: %v", err)
+	}
+
+	// Verify data still readable (now from new slab)
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("data mismatch")
+	}
+}

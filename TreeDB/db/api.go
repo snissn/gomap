@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -37,7 +38,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	val, err := snap.GetUnsafe(key)
+	val, err := snap.Get(key)
 	if err == tree.ErrKeyNotFound {
 		return dst, err
 	}
@@ -94,6 +95,7 @@ func (db *DB) DeleteSync(key []byte) error {
 type DBIterator struct {
 	snap *Snapshot
 	iter iterator.UnsafeIterator
+	err  error
 }
 
 func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
@@ -101,30 +103,63 @@ func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
 }
 
 func (it *DBIterator) Next() {
+	if !it.Valid() {
+		return
+	}
 	it.iter.Next()
 }
 
 func (it *DBIterator) Valid() bool {
-	return it.iter.Valid()
+	return it.iter.Valid() && it.err == nil
 }
 
 func (it *DBIterator) Key() []byte {
-	return it.iter.Key()
+	k := it.iter.Key()
+	if k == nil {
+		return nil
+	}
+	dst := make([]byte, len(k))
+	copy(dst, k)
+	return dst
 }
 
 func (it *DBIterator) Value() []byte {
-	return it.iter.Value()
+	val := it.UnsafeValue()
+	if it.err != nil {
+		return nil
+	}
+	if val == nil {
+		return nil
+	}
+	// Copy to ensure safety after iterator/snapshot close.
+	dst := make([]byte, len(val))
+	copy(dst, val)
+	return dst
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {
-	return it.iter.KeyCopy(dst)
+	k := it.iter.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
 }
 
 func (it *DBIterator) ValueCopy(dst []byte) []byte {
-	return it.iter.ValueCopy(dst)
+	val := it.UnsafeValue()
+	if it.err != nil {
+		return dst
+	}
+	if val == nil {
+		return nil
+	}
+	return append(dst[:0], val...)
 }
 
 func (it *DBIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
 	return it.iter.Error()
 }
 
@@ -148,6 +183,22 @@ func (it *DBIterator) UnsafeKey() []byte {
 }
 
 func (it *DBIterator) UnsafeValue() []byte {
+	if it.err != nil {
+		return nil
+	}
+	val, _, flags := it.iter.UnsafeEntry()
+	if flags&node.FlagValueID != 0 {
+		if len(val) != 8 {
+			it.err = fmt.Errorf("invalid value id length in UnsafeValue: %d", len(val))
+			return nil
+		}
+		resolved, err := it.snap.resolveValueID(val, true)
+		if err != nil {
+			it.err = err
+			return nil
+		}
+		return resolved
+	}
 	return it.iter.UnsafeValue()
 }
 
@@ -237,6 +288,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.slabs.dead_bytes"] = fmt.Sprintf("%d", dead)
 	if total > 0 {
 		stats["treedb.slabs.dead_ratio_ppm"] = fmt.Sprintf("%d", (dead*1_000_000)/total)
+	}
+
+	if gcStats := db.lastGCStats.Load(); gcStats != nil {
+		stats["treedb.gc.last_run_time"] = gcStats.LastRunTime.Format(time.RFC3339)
+		stats["treedb.gc.last_run_duration"] = gcStats.LastRunDuration.String()
+		stats["treedb.gc.reclaimed_bytes"] = fmt.Sprintf("%d", gcStats.ReclaimedBytes)
+		if gcStats.LastError != nil {
+			stats["treedb.gc.last_error"] = gcStats.LastError.Error()
+		}
 	}
 
 	return stats

@@ -271,6 +271,20 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 	return remaps, deadMappings
 }
 
+func (m *Manager) SegmentSize(id uint32) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f, ok := m.files[id]
+	if !ok {
+		return 0, fmt.Errorf("vlog file %d not found", id)
+	}
+	info, err := f.File.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func (m *Manager) RemoveSegment(id uint32) error {
 	m.mu.Lock()
 	f, ok := m.files[id]

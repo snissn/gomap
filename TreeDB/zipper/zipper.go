@@ -72,6 +72,10 @@ func (z *Zipper) SetLeafPrefixCompression(enabled bool) {
 	z.leafPrefixCompression = enabled
 }
 
+func (z *Zipper) LeafPrefixCompression() bool {
+	return z.leafPrefixCompression
+}
+
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
 	if z != nil && z.leafPrefixCompression {
 		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
@@ -134,7 +138,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	}
 	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
 
-	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics)
+	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics, 0)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -233,8 +237,12 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
-func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
-	// 1. Allocate New Page (COW)
+func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
+	if depth > 50 {
+		return 0, nil, nil, errors.New("zipper: tree too deep or cycle detected")
+	}
+
+	// Read Page
 	// Hint: Try to stay near the old page to preserve general tree locality structure
 	newPageID, err := z.allocator.Alloc(pageID)
 	if err != nil {
@@ -275,7 +283,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, metrics)
+		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, metrics, depth)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -381,7 +389,14 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				continue // Skip insert
 			}
 			key = op.Key
-			if op.IsPtr {
+			if op.Flags != 0 {
+				flags = op.Flags
+				if op.IsPtr {
+					valPtr = op.ValuePtr
+				} else {
+					val = op.Value
+				}
+			} else if op.IsPtr {
 				flags = node.FlagPointer
 				valPtr = op.ValuePtr
 			} else {
@@ -471,7 +486,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 
 	var splits []Split
@@ -558,7 +573,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			defer wg.Done()
 			for i := range jobs {
 				var childMetrics adaptive.Metrics
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, &childMetrics)
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, &childMetrics, depth+1)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
@@ -589,7 +604,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, metrics)
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, metrics, depth+1)
 				if err != nil {
 					return 0, nil, nil, err
 				}

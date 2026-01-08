@@ -16,8 +16,14 @@ type levelBuilder struct {
 	startKey []byte
 }
 
+type ValueWriter interface {
+	Append(key, val []byte) (page.ValuePtr, error)
+}
+
 type BuildOptions struct {
 	LeafPrefixCompression bool
+	ValueWriter           ValueWriter
+	ForceValuePointers    bool
 }
 
 // Build creates a new B-Tree from a sorted iterator.
@@ -150,6 +156,18 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		key := iter.UnsafeKey()
 		val, ptr, flags := iter.UnsafeEntry()
 
+		// Do not migrate ValueIDs (they are already logical pointers and must remain inline)
+		if opts.ForceValuePointers && opts.ValueWriter != nil && flags&node.FlagPointer == 0 && flags&node.FlagTombstone == 0 && flags&node.FlagValueID == 0 {
+			// Migrate inline value to slab
+			newPtr, err := opts.ValueWriter.Append(key, val)
+			if err != nil {
+				return 0, err
+			}
+			val = nil
+			ptr = newPtr
+			flags |= node.FlagPointer
+		}
+
 		lb := levels[0]
 		if lb.startKey == nil {
 			lb.startKey = append([]byte(nil), key...)
@@ -164,11 +182,16 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if lb.startKey == nil {
 				lb.startKey = append([]byte(nil), key...)
 			}
-			if err := lb.builder.AddLeafEntry(key, val, flags, ptr); err != nil {
+			err = lb.builder.AddLeafEntry(key, val, flags, ptr)
+		}
+		if err != nil {
+			return 0, err
+		}
+		if !iter.Valid() {
+			if err := iter.Error(); err != nil {
 				return 0, err
 			}
-		} else if err != nil {
-			return 0, err
+			break
 		}
 		iter.Next()
 	}

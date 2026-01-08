@@ -1,16 +1,21 @@
 package db
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db    *DB
-	batch *batch.Batch
+	db          *DB
+	batch       *batch.Batch
+	lastSeq     uint64
+	transformed bool
+	sysOps      []batch.Entry
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -62,6 +67,14 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return b.batch.SetOps(ops)
 }
 
+// SetLastSeq updates the highest sequence number included in this batch.
+// This is used by the caching layer to persist the replay checkpoint.
+func (b *Batch) SetLastSeq(seq uint64) {
+	if seq > b.lastSeq {
+		b.lastSeq = seq
+	}
+}
+
 func (b *Batch) Write() error {
 	return b.write(false)
 }
@@ -77,6 +90,52 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
+
+	if b.db.enableValueIndex && !b.transformed {
+		// Inspect and transform large values
+		ops := b.batch.SortedEntries() // In-place modification allowed
+		for i := range ops {
+			op := &ops[i]
+			if op.IsPtr {
+				// Allocate ValueID
+				vid := b.db.nextValueID.Add(1)
+
+				// Create SysOp: ValueID -> ValuePtr
+				var ptrBuf [page.ValuePtrSize]byte
+				op.ValuePtr.Encode(ptrBuf[:])
+
+				b.sysOps = append(b.sysOps, batch.Entry{
+					Type:  batch.OpPut,
+					Key:   encodeValueIndexKey(ValueID(vid)),
+					Value: append([]byte(nil), ptrBuf[:]...),
+				})
+
+				// Update UserOp: Key -> ValueID
+				var idBuf [8]byte
+				binary.BigEndian.PutUint64(idBuf[:], vid)
+				op.Value = append([]byte(nil), idBuf[:]...)
+				op.ValuePtr = page.ValuePtr{}
+				op.IsPtr = false
+				op.Flags = node.FlagValueID
+			}
+		}
+		b.transformed = true
+	}
+
+	if len(b.sysOps) > 0 {
+		// When Value Index is enabled, large values are rewritten into:
+		//   - user operations: Key -> ValueID
+		//   - system operations (sysOps): ValueID -> ValuePtr
+		//
+		// These two sets of operations must be applied atomically to keep the
+		// user tree and the value-index/system tree consistent. The current
+		// optimistic write path only knows how to apply user operations and
+		// does not handle system ops, so we intentionally route any batch that
+		// contains sysOps through the serialized write path to guarantee
+		// correct, atomic updates for Value Index workloads.
+		return b.writeSerialized(sync, b.sysOps)
+	}
+
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
 		committed, err := b.writeOptimistic(sync)
 		if err != nil {
@@ -86,7 +145,7 @@ func (b *Batch) write(sync bool) error {
 			return nil
 		}
 	}
-	return b.writeSerialized(sync)
+	return b.writeSerialized(sync, nil)
 }
 
 func (b *Batch) writeOptimistic(sync bool) (bool, error) {
@@ -99,7 +158,13 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	baseSeq := b.db.meta.CommitSeq
+	// Register this writer as a "reader" of the base state to prevent the
+	// pruner from reclaiming pages we are about to read during z.Apply.
+	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
+
+	defer idx.registry.Unregister(regID)
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
@@ -115,11 +180,10 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
 		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
+			metrics.SlabWriteBytesByFile = make(map[uint32]int64, len(byFile))
+		}
+		for id, n := range byFile {
+			metrics.SlabWriteBytesByFile[id] += n
 		}
 	}
 
@@ -138,7 +202,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics)
+	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, nil, metrics, b.lastSeq)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -151,7 +215,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeSerialized(sync bool) error {
+func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
@@ -162,7 +226,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
+	baseSeq := b.db.meta.CommitSeq
+	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
+
+	defer idx.registry.Unregister(regID)
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
@@ -171,11 +239,10 @@ func (b *Batch) writeSerialized(sync bool) error {
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
 		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
+			metrics.SlabWriteBytesByFile = make(map[uint32]int64, len(byFile))
+		}
+		for id, n := range byFile {
+			metrics.SlabWriteBytesByFile[id] += n
 		}
 	}
 
@@ -188,7 +255,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, sysOps, metrics, b.lastSeq); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {
@@ -213,6 +280,8 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.batch.Reset()
+	b.transformed = false
+	b.sysOps = nil
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

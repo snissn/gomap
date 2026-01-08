@@ -46,6 +46,12 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		return errors.New("compaction: cannot compact active slab")
 	}
 
+	// Safety: OmitSlabKeys requires IndexSwap because the default compactor
+	// relies on the key stored in the slab to verify liveness in the user tree.
+	if c.db.SlabManager().OmitSlabKeys() && !opts.IndexSwap {
+		return errors.New("compaction: IndexSwap required when OmitSlabKeys is enabled")
+	}
+
 	if opts.IndexSwap {
 		return c.db.CompactSlabsIndexSwap(ctx, []uint32{id}, db.IndexSwapCompactionOptions{
 			CopyBytesPerSec: opts.CopyBytesPerSec,
@@ -119,6 +125,7 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 
 	var ops []db.CompactionOp
 	offset := int64(0)
+	sm := c.db.SlabManager()
 
 	const readerSize = 256 << 10
 	section := io.NewSectionReader(f, 0, size)
@@ -168,8 +175,28 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			return err
 		}
 
-		key := dataBuf[:keyLen]
-		value := dataBuf[keyLen:]
+		var key, value []byte
+		var fullCompressed bool
+
+		if keyLen == 0 && valLen > 0 {
+			// Check if this is a full compressed record.
+			tempPtr := page.ValuePtr{
+				Offset: uint64(offset + 4),
+				Length: page.ValuePtrMarkFullCompressed(valLen),
+				FileID: id,
+			}
+			k, v, err := sm.DecodeRecordForCompactor(tempPtr, dataBuf)
+			if err == nil {
+				key = k
+				value = v
+				fullCompressed = true
+			}
+		}
+
+		if !fullCompressed {
+			key = dataBuf[:keyLen]
+			value = dataBuf[keyLen:]
+		}
 
 		// Construct OldPtr
 		// Matches SlabManager.Append semantics:
@@ -198,11 +225,33 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if err != nil {
 				return false
 			}
-			return entry.Flags&node.FlagPointer != 0 && entry.ValuePtr == oldPtr
+
+			ptrMatches := func(p page.ValuePtr) bool {
+				return p.FileID == oldPtr.FileID &&
+					p.Offset == oldPtr.Offset &&
+					page.ValuePtrRecordLength(p) == page.ValuePtrRecordLength(oldPtr)
+			}
+
+			if entry.Flags&node.FlagPointer != 0 {
+				return ptrMatches(entry.ValuePtr)
+			}
+			if entry.Flags&node.FlagValueID != 0 {
+				ptr, err := lookupSnap.ResolveValueIDToPtr(entry.Value)
+				if err != nil {
+					return false
+				}
+				return ptrMatches(ptr)
+			}
+			return false
 		}
 
 		if liveSet != nil && liveSet.exact != nil {
-			if _, ok := liveSet.exact[oldPtr]; !ok {
+			robustOldPtr := page.ValuePtr{
+				FileID: oldPtr.FileID,
+				Offset: oldPtr.Offset,
+				Length: page.ValuePtrRecordLength(oldPtr),
+			}
+			if _, ok := liveSet.exact[robustOldPtr]; !ok {
 				if opts.Stats != nil {
 					opts.Stats.TreeLookupsSkipped++
 				}
@@ -330,13 +379,28 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 		}
 
 		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && ptr.FileID == id {
+		var livePtr page.ValuePtr
+		if flags&node.FlagPointer != 0 {
+			livePtr = ptr
+		} else if flags&node.FlagValueID != 0 {
+			p, err := snap.ResolveValueIDToPtr(it.UnsafeValue())
+			if err == nil {
+				livePtr = p
+			}
+		}
+
+		if livePtr.FileID == id {
 			liveCount++
+			robustPtr := page.ValuePtr{
+				FileID: livePtr.FileID,
+				Offset: livePtr.Offset,
+				Length: page.ValuePtrRecordLength(livePtr),
+			}
 			if ls.bloom != nil {
-				ls.bloom.add(ptr)
+				ls.bloom.add(robustPtr)
 				continue
 			}
-			ls.exact[ptr] = struct{}{}
+			ls.exact[robustPtr] = struct{}{}
 			if maxEntries > 0 && len(ls.exact) > maxEntries {
 				ls.bloom = newBloomFilter(maxEntries)
 				for p := range ls.exact {

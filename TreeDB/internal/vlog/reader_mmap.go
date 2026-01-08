@@ -19,11 +19,11 @@ func (f *File) read(ptr page.ValuePtr, verifyCRC bool, unsafe bool) ([]byte, err
 	if f == nil || f.File == nil {
 		return nil, errors.New("vlog: nil file")
 	}
-	if ptr.Offset < 4 {
+	if ptr.Offset < 12 {
 		return nil, ErrCorrupt
 	}
 
-	realStart := int64(ptr.Offset - 4)
+	realStart := int64(ptr.Offset - 12)
 	if val, err, ok := f.readViaMmap(realStart, verifyCRC); ok {
 		return val, err
 	}
@@ -44,10 +44,10 @@ func (f *File) readViaMmap(realStart int64, verifyCRC bool) ([]byte, error, bool
 	}
 
 	header := data[realStart : realStart+HeaderSize]
-	_ = header[10]
-	keyLen := uint16(header[4]) | uint16(header[5])<<8
-	valLen := uint32(header[6]) | uint32(header[7])<<8 | uint32(header[8])<<16 | uint32(header[9])<<24
-	op := header[10]
+	_ = header[HeaderSize-1]
+	keyLen := uint16(header[12]) | uint16(header[13])<<8
+	valLen := uint32(header[14]) | uint32(header[15])<<8 | uint32(header[16])<<16 | uint32(header[17])<<24
+	op := header[18]
 	if op != OpSet && op != OpDelete {
 		return nil, ErrCorrupt, true
 	}

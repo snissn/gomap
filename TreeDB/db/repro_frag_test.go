@@ -16,9 +16,12 @@ func TestManySmallCommitsFragmentation(t *testing.T) {
 	os.MkdirAll(dir, 0755)
 
 	opts := treedb.Options{
-		Dir:        dir,
-		ChunkSize:  64 * 1024 * 1024,
-		KeepRecent: 1,
+		Dir:         dir,
+		ChunkSize:   64 * 1024 * 1024,
+		KeepRecent:  1,
+		DisableWAL:  true,
+		RelaxedSync: true,
+		AllowUnsafe: true,
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {

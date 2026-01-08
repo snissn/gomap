@@ -21,7 +21,7 @@ func seedVlogData() ([]byte, uint32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	_, _ = w.Append(OpSet, []byte("k"), []byte("v"))
+	_, _ = w.Append(1, OpSet, []byte("k"), []byte("v"))
 	_ = w.Close()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -50,7 +50,7 @@ func FuzzVlogReader(f *testing.F) {
 		}
 		defer r.Close()
 		for i := 0; i < 8; i++ {
-			_, _, _, _, err := r.ReadNext()
+			_, _, _, _, _, err := r.ReadNext()
 			if err != nil {
 				break
 			}

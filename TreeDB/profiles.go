@@ -149,12 +149,6 @@ func applyFastProfile(opts *Options) {
 	if opts.DisableReadChecksum == false {
 		opts.DisableReadChecksum = true
 	}
-
-	// Prefer appending new pages for throughput under churn unless caller opted
-	// out. This can trade disk growth for write speed.
-	if !opts.PreferAppendAlloc {
-		opts.PreferAppendAlloc = true
-	}
 }
 
 func applyBenchProfile(opts *Options) {

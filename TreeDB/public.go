@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
@@ -93,13 +94,91 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
+	// Enable Value Index if requested via environment (default off).
+	if envBool("TREEDB_ENABLE_VALUE_INDEX") {
+		opts.EnableValueIndex = true
+	}
+	if envBool("TREEDB_FORCE_VALUE_POINTERS") {
+		opts.ForceValuePointers = true
+	}
+	if envBool("TREEDB_LEAF_PREFIX_COMPRESSION") {
+		opts.LeafPrefixCompression = true
+	}
+	if envBool("TREEDB_SLAB_OMIT_KEYS") {
+		opts.OmitSlabKeys = true
+	}
+	if envBool("TREEDB_DISABLE_VALUE_LOG") {
+		opts.DisableValueLog = true
+	}
+	if envBool("TREEDB_SPLIT_VALUE_LOG") {
+		opts.SplitValueLog = true
+	}
+	if envBool("TREEDB_MEMTABLE_VALUE_LOG_POINTERS") {
+		opts.MemtableValueLogPointers = true
+	}
+	if v := os.Getenv("TREEDB_VALUE_LOG_POINTER_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.ValueLogPointerThreshold = n
+		}
+	} else if v := os.Getenv("TREEDB_VALUELOG_POINTER_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.ValueLogPointerThreshold = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompression.MinBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_MIN_SAVINGS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompression.MinSavingsBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION"); v != "" {
+		switch strings.ToLower(v) {
+		case "zstd":
+			opts.SlabCompression.Kind = slab.CompressionZSTD
+		case "none":
+			opts.SlabCompression.Kind = slab.CompressionNone
+		}
+	}
+
+	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			opts.PruneInterval = d
+		} else if secs, err := strconv.Atoi(v); err == nil {
+			opts.PruneInterval = time.Duration(secs) * time.Millisecond
+		}
+	}
+	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_MAX_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.PruneMaxPages = n
+		}
+	}
+
+	if opts.DisableValueLog || opts.DisableWAL {
+		opts.MemtableValueLogPointers = false
+		opts.SplitValueLog = false
+	}
+
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
 		// WAL segments (writes) and runs background maintenance loops.
 		opts.Mode = ModeBackend
 	}
 
-	backend, err := db.Open(opts)
+	backendOpts := opts
+	if opts.Mode != ModeBackend {
+		// When using the caching layer, the backend should not manage its own WAL
+		// as durability is handled by the caching layer. Sharing the same dir
+		// leads to WAL sequence conflicts and corruption.
+		backendOpts.DisableWAL = true
+		backendOpts.RelaxedSync = true
+		backendOpts.AllowUnsafe = true
+	}
+
+	backend, err := db.Open(backendOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +231,9 @@ func Open(opts Options) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
+		if errors.Is(err, caching.ErrUnsafeOptions) {
+			return nil, ErrUnsafeOptions
+		}
 		return nil, err
 	}
 
@@ -185,6 +267,12 @@ func Open(opts Options) (*DB, error) {
 	// disabled, skip starting the background loop to avoid unnecessary work.
 	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
+	}
+
+	// Enable background compaction by default. This is optimal for reducing B-Tree
+	// churn and index fragmentation when the Value Index is enabled.
+	if opts.BackgroundCompactionInterval == 0 {
+		opts.BackgroundCompactionInterval = 1 * time.Minute
 	}
 
 	// Background compaction is opt-in (interval > 0).
@@ -356,6 +444,9 @@ func (db *DB) closeMaintenance() error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		if e := db.VacuumIndexOnline(ctx); e != nil {
+			if logEnabled {
+				log.Printf("treedb: close vacuum index online failed: %v", e)
+			}
 			err = errors.Join(err, e)
 		}
 		cancel()
@@ -396,17 +487,19 @@ func (db *DB) Close() error {
 			err = errors.Join(err, e)
 		}
 	}
+
+	// Close cached layer first if present
 	if db.cached != nil {
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
-		db.backend = nil
-		return errors.Join(err, db.backgroundError())
 	}
+
+	// Always close backend if present
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
-		return errors.Join(err, db.backgroundError())
 	}
+
 	return errors.Join(err, db.backgroundError())
 }
 
@@ -448,13 +541,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // Semantics: Returns a safe copy of the value. For zero-copy views tied to a
 // snapshot lifetime, use AcquireSnapshot().GetUnsafe.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	if err := db.ensureOpen(); err != nil {
-		return nil, err
-	}
-	if db.cached != nil {
-		return db.cached.GetUnsafe(key)
-	}
-	return db.backend.GetUnsafe(key)
+	return db.Get(key)
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.
@@ -660,6 +747,21 @@ func (db *DB) Print() error {
 	return db.backend.Print()
 }
 
+// LastSeq returns the highest sequence number persisted in the database.
+func (db *DB) LastSeq() uint64 {
+	if db == nil || db.backend == nil {
+		return 0
+	}
+	return db.backend.LastSeq()
+}
+
+func (db *DB) Backend() *db.DB {
+	if db == nil {
+		return nil
+	}
+	return db.backend
+}
+
 // Checkpoint forces a durable backend boundary and trims cached-mode WAL
 // segments, so long-running cached-mode workloads do not accumulate unbounded
 // `wal/` growth.
@@ -726,6 +828,17 @@ func (db *DB) CompactIndex() error {
 		}
 	}
 	return db.backend.CompactIndex()
+}
+
+// GC performs garbage collection of unreachable value segments.
+func (db *DB) GC() (int64, error) {
+	if err := db.ensureOpen(); err != nil {
+		return 0, err
+	}
+	if db.backend == nil {
+		return 0, ErrClosed
+	}
+	return db.backend.GC()
 }
 
 // VacuumIndexOnline rebuilds the user index into a new file and swaps it in with

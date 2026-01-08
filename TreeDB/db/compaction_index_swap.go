@@ -153,18 +153,18 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 			cleanupNewPager()
 			return err
 		}
-		keys := db.vacuum.Drain()
-		if len(keys) == 0 {
+		ops := db.vacuum.Drain()
+		if len(ops) == 0 {
 			break
 		}
 		var retired []uint64
-		newRoot, retired, err = db.applyIndexSwapDelta(newRoot, keys, newZ, baseSnap, targets, remap, adjusted, &metrics)
+		newRoot, retired, err = db.applyIndexSwapDelta(newRoot, ops, newZ, baseSnap, targets, remap, adjusted, &metrics)
 		if err != nil {
 			cleanupNewPager()
 			return err
 		}
 		freeRetired(retired)
-		if len(keys) <= vacuumCatchupKeyTarget {
+		if len(ops) <= vacuumCatchupKeyTarget {
 			break
 		}
 	}
@@ -180,14 +180,14 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 		db.writeMu.Lock()
 		db.vacuum.Stop()
-		finalKeys := db.vacuum.Drain()
-		if len(finalKeys) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
+		finalOps := db.vacuum.Drain()
+		if len(finalOps) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
 			db.vacuum.Start()
 			db.writeMu.Unlock()
 			defers++
 
 			var retired []uint64
-			newRoot, retired, err = db.applyIndexSwapDelta(newRoot, finalKeys, newZ, baseSnap, targets, remap, adjusted, &metrics)
+			newRoot, retired, err = db.applyIndexSwapDelta(newRoot, finalOps, newZ, baseSnap, targets, remap, adjusted, &metrics)
 			if err != nil {
 				cleanupNewPager()
 				return err
@@ -196,9 +196,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 			continue
 		}
 
-		if len(finalKeys) > 0 {
+		if len(finalOps) > 0 {
 			var retired []uint64
-			newRoot, retired, err = db.applyIndexSwapDelta(newRoot, finalKeys, newZ, baseSnap, targets, remap, adjusted, &metrics)
+			newRoot, retired, err = db.applyIndexSwapDelta(newRoot, finalOps, newZ, baseSnap, targets, remap, adjusted, &metrics)
 			if err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()
@@ -587,17 +587,16 @@ func entriesEquivalent(base node.LeafEntry, baseErr error, curr node.LeafEntry, 
 	return bytes.Equal(base.Value, curr.Value)
 }
 
-func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipper.Zipper, baseSnap *Snapshot, targets map[uint32]struct{}, remap map[page.ValuePtr]page.ValuePtr, adjusted map[page.ValuePtr]struct{}, metrics *adaptive.Metrics) (uint64, []uint64, error) {
-	if len(keys) == 0 {
+func (db *DB) applyIndexSwapDelta(root uint64, opsMap map[string]batch.Entry, z *zipper.Zipper, baseSnap *Snapshot, targets map[uint32]struct{}, remap map[page.ValuePtr]page.ValuePtr, adjusted map[page.ValuePtr]struct{}, metrics *adaptive.Metrics) (uint64, []uint64, error) {
+	if len(opsMap) == 0 {
 		return root, nil, nil
 	}
 	if baseSnap == nil || baseSnap.idx == nil || baseSnap.state == nil {
 		return 0, nil, errors.New("compaction: missing base snapshot")
 	}
 
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	tr := tree.New(snap.idx.pager, valueReader{slabs: snap.state.SlabSet, vlogs: snap.state.ValueLogSet}, snap.state.RootPageID)
+	// We trust the entry from the recorder because it was captured from a
+	// committed batch. We do not need to look it up in the old index.
 
 	ops := make([]batch.Entry, 0, vacuumDeltaBatchSize)
 	var retired []uint64
@@ -670,11 +669,31 @@ func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipp
 		adjusted[ptr] = struct{}{}
 	}
 
-	for key := range keys {
-		currEntry, currErr := tr.GetEntry([]byte(key))
-		if currErr != nil && !errors.Is(currErr, tree.ErrKeyNotFound) {
-			return 0, nil, currErr
+	// Sort keys to ensure sequential updates and minimal write amplification.
+	sortedKeys := make([]string, 0, len(opsMap))
+	for k := range opsMap {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
+
+	for _, key := range sortedKeys {
+		// Construct currEntry from recorded op
+		op := opsMap[key]
+		var currEntry node.LeafEntry
+		currEntry.Key = op.Key
+		if op.Type == batch.OpDelete {
+			currEntry.Flags |= node.FlagTombstone
+		} else {
+			if op.IsPtr {
+				currEntry.Flags |= node.FlagPointer
+				currEntry.ValuePtr = op.ValuePtr
+			} else {
+				currEntry.Value = op.Value
+			}
 		}
+		// Recorded op is always "found" (nil error)
+		var currErr error = nil
+
 		baseEntry, baseErr := baseSnap.tree.GetEntry([]byte(key))
 		if baseErr != nil && !errors.Is(baseErr, tree.ErrKeyNotFound) {
 			return 0, nil, baseErr
@@ -692,26 +711,8 @@ func (db *DB) applyIndexSwapDelta(root uint64, keys map[string]struct{}, z *zipp
 			}
 		}
 
-		if currErr != nil || (currEntry.Flags&node.FlagTombstone) != 0 {
-			ops = append(ops, batch.Entry{
-				Type: batch.OpDelete,
-				Key:  []byte(key),
-			})
-		} else if currEntry.Flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{
-				Type:     batch.OpPut,
-				Key:      append([]byte(nil), currEntry.Key...),
-				ValuePtr: currEntry.ValuePtr,
-				IsPtr:    true,
-			})
-		} else {
-			val := append([]byte(nil), currEntry.Value...)
-			ops = append(ops, batch.Entry{
-				Type:  batch.OpPut,
-				Key:   append([]byte(nil), currEntry.Key...),
-				Value: val,
-			})
-		}
+		// Append op directly (it is already an Entry)
+		ops = append(ops, op)
 
 		if len(ops) >= vacuumDeltaBatchSize {
 			if err := applyOps(); err != nil {

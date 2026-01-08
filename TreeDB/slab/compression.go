@@ -30,14 +30,15 @@ type CompressionOptions struct {
 }
 
 type Options struct {
-	Compression CompressionOptions
+	Compression  CompressionOptions
+	OmitSlabKeys bool
 }
 
 type compressionConfig struct {
 	kind       CompressionKind
 	minBytes   int
 	minSavings int
-	zstdEnc    *zstd.Encoder
+	zstdEncs   *sync.Pool
 	zstdDecs   *sync.Pool
 }
 
@@ -62,31 +63,65 @@ func normalizeCompressionOptions(opts CompressionOptions) (compressionConfig, er
 	}
 
 	if opts.Kind == CompressionZSTD {
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderCRC(false))
-		if err != nil {
-			return compressionConfig{}, err
+		cfg.zstdEncs = &sync.Pool{
+			New: func() any {
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderCRC(false))
+				return enc
+			},
 		}
-		cfg.zstdEnc = enc
 	}
 
 	return cfg, nil
 }
 
 func (c *compressionConfig) compressValue(value []byte) ([]byte, bool, error) {
-	if c == nil || c.kind == CompressionNone || c.zstdEnc == nil {
+	if c == nil || c.kind == CompressionNone || c.zstdEncs == nil {
 		return value, false, nil
 	}
 	if len(value) < c.minBytes {
 		return value, false, nil
 	}
 
-	compressed := c.zstdEnc.EncodeAll(value, nil)
+	enc := c.zstdEncs.Get().(*zstd.Encoder)
+	compressed := enc.EncodeAll(value, nil)
+	c.zstdEncs.Put(enc)
+
 	if len(compressed)+compressedHeaderSize+c.minSavings >= len(value) {
 		return value, false, nil
 	}
 
 	out := make([]byte, compressedHeaderSize+len(compressed))
 	binary.LittleEndian.PutUint32(out[:compressedHeaderSize], uint32(len(value)))
+	copy(out[compressedHeaderSize:], compressed)
+	return out, true, nil
+}
+
+func (c *compressionConfig) compressRecord(key, value []byte) ([]byte, bool, error) {
+	if c == nil || c.kind == CompressionNone || c.zstdEncs == nil {
+		return nil, false, nil
+	}
+	// combined length: 2 (keyLen) + key + value
+	combinedLen := 2 + len(key) + len(value)
+	if combinedLen < c.minBytes {
+		return nil, false, nil
+	}
+
+	// Prepare combined buffer
+	combined := make([]byte, combinedLen)
+	binary.LittleEndian.PutUint16(combined[:2], uint16(len(key)))
+	copy(combined[2:2+len(key)], key)
+	copy(combined[2+len(key):], value)
+
+	enc := c.zstdEncs.Get().(*zstd.Encoder)
+	compressed := enc.EncodeAll(combined, nil)
+	c.zstdEncs.Put(enc)
+
+	if len(compressed)+compressedHeaderSize+c.minSavings >= combinedLen {
+		return nil, false, nil
+	}
+
+	out := make([]byte, compressedHeaderSize+len(compressed))
+	binary.LittleEndian.PutUint32(out[:compressedHeaderSize], uint32(combinedLen))
 	copy(out[compressedHeaderSize:], compressed)
 	return out, true, nil
 }
@@ -111,4 +146,19 @@ func (c *compressionConfig) decompressValue(encoded []byte) ([]byte, error) {
 		return nil, errCompressedCorrupt
 	}
 	return out, nil
+}
+
+func (c *compressionConfig) decompressRecord(encoded []byte) ([]byte, []byte, error) {
+	decompressed, err := c.decompressValue(encoded)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(decompressed) < 2 {
+		return nil, nil, errCompressedCorrupt
+	}
+	keyLen := int(binary.LittleEndian.Uint16(decompressed[:2]))
+	if len(decompressed) < 2+keyLen {
+		return nil, nil, errCompressedCorrupt
+	}
+	return decompressed[2 : 2+keyLen], decompressed[2+keyLen:], nil
 }

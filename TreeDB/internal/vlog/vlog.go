@@ -19,8 +19,8 @@ const (
 	OpSet    = byte(0)
 	OpDelete = byte(1)
 
-	// HeaderSize: CRC(4) + KeyLen(2) + ValueLen(4) + Op(1)
-	HeaderSize = 11
+	// HeaderSize: CRC(4) + Seq(8) + KeyLen(2) + ValueLen(4) + Op(1)
+	HeaderSize = 19
 )
 
 const defaultBufferSize = 4 << 20
@@ -42,6 +42,7 @@ var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 type Record struct {
 	Op    byte
+	Seq   uint64
 	Key   []byte
 	Value []byte
 }
@@ -171,10 +172,13 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 }
 
 func syncDir(path string) (err error) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || path == "" {
 		return nil
 	}
 	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -190,7 +194,7 @@ func syncDir(path string) (err error) {
 	return nil
 }
 
-func (w *Writer) Append(op byte, key, value []byte) (page.ValuePtr, error) {
+func (w *Writer) Append(seq uint64, op byte, key, value []byte) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("vlog: nil writer")
 	}
@@ -214,11 +218,12 @@ func (w *Writer) Append(op byte, key, value []byte) (page.ValuePtr, error) {
 	}
 	buf := w.scratch[:recordLen]
 
-	binary.LittleEndian.PutUint16(buf[4:6], keyLen)
-	binary.LittleEndian.PutUint32(buf[6:10], valLen)
-	buf[10] = op
-	copy(buf[11:], key)
-	copy(buf[11+len(key):], value)
+	binary.LittleEndian.PutUint64(buf[4:12], seq)
+	binary.LittleEndian.PutUint16(buf[12:14], keyLen)
+	binary.LittleEndian.PutUint32(buf[14:18], valLen)
+	buf[18] = op
+	copy(buf[19:], key)
+	copy(buf[19+len(key):], value)
 	sum := crc32.Update(0, crc32cTable, buf[4:])
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
@@ -231,9 +236,12 @@ func (w *Writer) Append(op byte, key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, nil
 	}
 
+	// For read compatibility, Ptr points to KeyLen.
+	// Seq is at 4..12. KeyLen at 12.
+	// So Ptr should point to 12.
 	return page.ValuePtr{
-		Offset: uint64(start + 4),
-		Length: uint32(2 + 4 + 1 + len(key) + len(value)),
+		Offset: uint64(start + 12),
+		Length: uint32(2 + 4 + 1 + len(key) + len(value)), // KeyLen(2)+ValLen(4)+Op(1)+Key+Val
 		FileID: w.fileID,
 	}, nil
 }
@@ -261,7 +269,7 @@ func (w *Writer) AppendBatch(records []Record) ([]page.ValuePtr, error) {
 		recordLen := HeaderSize + len(r.Key) + len(r.Value)
 		if r.Op == OpSet {
 			ptrs[i] = page.ValuePtr{
-				Offset: uint64(start + 4),
+				Offset: uint64(start + 12),
 				Length: uint32(2 + 4 + 1 + len(r.Key) + len(r.Value)),
 				FileID: w.fileID,
 			}
@@ -281,11 +289,12 @@ func (w *Writer) AppendBatch(records []Record) ([]page.ValuePtr, error) {
 		valLen := uint32(len(r.Value))
 		recordLen := HeaderSize + len(r.Key) + len(r.Value)
 
-		binary.LittleEndian.PutUint16(buf[off+4:off+6], keyLen)
-		binary.LittleEndian.PutUint32(buf[off+6:off+10], valLen)
-		buf[off+10] = r.Op
-		copy(buf[off+11:], r.Key)
-		copy(buf[off+11+len(r.Key):], r.Value)
+		binary.LittleEndian.PutUint64(buf[off+4:off+12], r.Seq)
+		binary.LittleEndian.PutUint16(buf[off+12:off+14], keyLen)
+		binary.LittleEndian.PutUint32(buf[off+14:off+18], valLen)
+		buf[off+18] = r.Op
+		copy(buf[off+19:], r.Key)
+		copy(buf[off+19+len(r.Key):], r.Value)
 		sum := crc32.Update(0, crc32cTable, buf[off+4:off+recordLen])
 		binary.LittleEndian.PutUint32(buf[off:off+4], sum)
 		off += recordLen
@@ -347,32 +356,33 @@ func (r *Reader) DisableChecksum() {
 	r.verifies = false
 }
 
-func (r *Reader) ReadNext() (byte, []byte, []byte, page.ValuePtr, error) {
+func (r *Reader) ReadNext() (uint64, byte, []byte, []byte, page.ValuePtr, error) {
 	var header [HeaderSize]byte
 	if _, err := io.ReadFull(r.r, header[:]); err != nil {
-		return 0, nil, nil, page.ValuePtr{}, err
+		return 0, 0, nil, nil, page.ValuePtr{}, err
 	}
 
 	crc := binary.LittleEndian.Uint32(header[0:4])
-	keyLen := binary.LittleEndian.Uint16(header[4:6])
-	valLen := binary.LittleEndian.Uint32(header[6:10])
-	op := header[10]
+	seq := binary.LittleEndian.Uint64(header[4:12])
+	keyLen := binary.LittleEndian.Uint16(header[12:14])
+	valLen := binary.LittleEndian.Uint32(header[14:18])
+	op := header[18]
 
 	if recordSizeExceedsMax(keyLen, valLen) {
-		return 0, nil, nil, page.ValuePtr{}, ErrRecordTooLarge
+		return 0, 0, nil, nil, page.ValuePtr{}, ErrRecordTooLarge
 	}
 
 	payloadLen := int(keyLen) + int(valLen)
 	payload := make([]byte, payloadLen)
 	if _, err := io.ReadFull(r.r, payload); err != nil {
-		return 0, nil, nil, page.ValuePtr{}, err
+		return 0, 0, nil, nil, page.ValuePtr{}, err
 	}
 
 	if r.verifies {
 		sum := crc32.Update(0, crc32cTable, header[4:])
 		sum = crc32.Update(sum, crc32cTable, payload)
 		if sum != crc {
-			return 0, nil, nil, page.ValuePtr{}, ErrCorrupt
+			return 0, 0, nil, nil, page.ValuePtr{}, ErrCorrupt
 		}
 	}
 
@@ -380,14 +390,14 @@ func (r *Reader) ReadNext() (byte, []byte, []byte, page.ValuePtr, error) {
 	r.pos += int64(HeaderSize + payloadLen)
 
 	ptr := page.ValuePtr{
-		Offset: uint64(start + 4),
+		Offset: uint64(start + 12),
 		Length: uint32(2 + 4 + 1 + payloadLen),
 		FileID: r.fileID,
 	}
 
 	key := payload[:keyLen]
 	value := payload[keyLen:]
-	return op, key, value, ptr, nil
+	return seq, op, key, value, ptr, nil
 }
 
 func (r *Reader) Close() error {
@@ -401,12 +411,14 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil {
 		return nil, errors.New("vlog: nil file")
 	}
-	if ptr.Offset < 4 {
+	// Ptr offset points to KeyLen (byte 12)
+	// Header starts at Offset - 12 (0..4 CRC, 4..12 Seq, 12..14 KeyLen...)
+	if ptr.Offset < 12 {
 		return nil, ErrCorrupt
 	}
-	start := int64(ptr.Offset - 4)
+	start := int64(ptr.Offset - 12)
 	if ptr.Length != 0 {
-		totalLen := int(ptr.Length) + 4
+		totalLen := int(ptr.Length) + 12
 		if totalLen < HeaderSize {
 			return nil, ErrCorrupt
 		}
@@ -418,9 +430,10 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		payload := buf[HeaderSize:]
 
 		crc := binary.LittleEndian.Uint32(header[0:4])
-		keyLen := binary.LittleEndian.Uint16(header[4:6])
-		valLen := binary.LittleEndian.Uint32(header[6:10])
-		op := header[10]
+		// Seq at 4..12
+		keyLen := binary.LittleEndian.Uint16(header[12:14])
+		valLen := binary.LittleEndian.Uint32(header[14:18])
+		op := header[18]
 		if op != OpSet && op != OpDelete {
 			return nil, ErrCorrupt
 		}
@@ -444,15 +457,16 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		return payload[keyLen:], nil
 	}
 
+	// This path (ptr.Length==0) is tricky because we need header to know length.
 	var header [HeaderSize]byte
 	if _, err := f.ReadAt(header[:], start); err != nil {
 		return nil, err
 	}
 
 	crc := binary.LittleEndian.Uint32(header[0:4])
-	keyLen := binary.LittleEndian.Uint16(header[4:6])
-	valLen := binary.LittleEndian.Uint32(header[6:10])
-	op := header[10]
+	keyLen := binary.LittleEndian.Uint16(header[12:14])
+	valLen := binary.LittleEndian.Uint32(header[14:18])
+	op := header[18]
 	if op != OpSet && op != OpDelete {
 		return nil, ErrCorrupt
 	}

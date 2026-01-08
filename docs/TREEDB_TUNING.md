@@ -181,6 +181,35 @@ snapshots/iterators drain.
 Stats keys:
 - `treedb.bg_vacuum.*`
 
+### Value Index (backend index; opt-in)
+
+The Value Index adds an indirection layer for large (pointer-backed) values.
+Instead of storing `Key -> ValuePtr` in the User tree, it stores `Key -> ValueID`
+in the User tree and `ValueID -> ValuePtr` in a separate System tree.
+
+Benefits:
+- **Reduced index churn**: Moving value bytes (compaction/GC) only requires updating
+  one Value Index entry instead of potentially many User tree keys.
+- **Efficient GC**: Enables refcounted garbage collection of value segments.
+
+Knobs:
+- `Options.EnableValueIndex` (default: false): Enable the indirection layer.
+- `Options.ForceValuePointers` (default: false): Force all values to be stored
+  out-of-line (useful for testing or specialized workloads).
+
+### Garbage Collection (backend index)
+
+TreeDB supports refcounted garbage collection of unreachable value segments
+(vlogs and slabs). The GC pass scans both the User tree and the Value Index to
+identify segments that are no longer reachable from the latest root and any
+pinned snapshots.
+
+- Call: `db.GC()` (online or offline)
+- CLI: `treemap gc <db-dir>` (offline)
+
+Stats keys:
+- `treedb.gc.*`
+
 ### Close-time maintenance (env)
 
 TreeDB can run optional maintenance work at `DB.Close()` to keep on-disk state compact
