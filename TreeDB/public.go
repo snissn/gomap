@@ -444,6 +444,9 @@ func (db *DB) closeMaintenance() error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		if e := db.VacuumIndexOnline(ctx); e != nil {
+			if logEnabled {
+				log.Printf("treedb: close vacuum index online failed: %v", e)
+			}
 			err = errors.Join(err, e)
 		}
 		cancel()
