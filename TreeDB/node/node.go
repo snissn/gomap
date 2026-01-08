@@ -15,6 +15,7 @@ var (
 	ErrInvalidType   = errors.New("invalid node type")
 	ErrKeyNotFound   = errors.New("key not found")
 	ErrCorruptedNode = errors.New("corrupted node: invalid offsets")
+	ErrInvalidValueIDLength = errors.New("invalid value id length")
 )
 
 const (

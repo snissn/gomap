@@ -101,6 +101,10 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 
 	// 1. Calculate Entry Size
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
+
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
 	headerSize := 7
 	if b.leafPrefixCompression {

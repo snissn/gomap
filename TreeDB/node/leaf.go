@@ -415,6 +415,9 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	if n.Type() != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
 	if n.leafPrefixCompressed() {
 		return n.addLeafEntryPrefixCompressed(key, value, flags, valPtr)
 	}
