@@ -17,7 +17,7 @@ func TestValueID_Integrity(t *testing.T) {
 
 	opts := DefaultOptions(dir)
 	opts.EnableValueIndex = true
-	opts.ForceValuePointers = true // Force values to be treated as pointers initially
+	opts.ForceValuePointers = true    // Force values to be treated as pointers initially
 	opts.LeafPrefixCompression = true // Enable prefix compression
 
 	// Open DB

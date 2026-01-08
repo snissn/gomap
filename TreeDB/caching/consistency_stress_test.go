@@ -124,7 +124,8 @@ func TestConsistencyStress(t *testing.T) {
 						return
 					}
 					if val == nil {
-						t.Fatalf("CRITICAL: Key %s missing!", key)
+						t.Errorf("CRITICAL: Key %s missing!", key)
+						return
 					}
 					if len(val) != 2048 {
 						t.Errorf("Key %s corrupted len %d", key, len(val))
