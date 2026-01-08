@@ -64,7 +64,7 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 	// If it IS compressed (Full Record), it should NOT appear in plain text at all (except maybe once if zstd didn't compress one).
 	count := bytes.Count(content, []byte("ibc/facks/ports/transfer"))
 	t.Logf("Found %d occurrences of key prefix in slab", count)
-	
+
 	if count > 10 { // Allow a few for safety/edge cases, but 100 would definitely be uncompressed
 		t.Errorf("Too many plain text key prefixes found in slab (%d), full record compression might be failing", count)
 	}
@@ -179,7 +179,7 @@ func TestCompression_E2E_LeafPrefix_Transition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open 3: %v", err)
 	}
-	
+
 	for i := 0; i < 100; i++ {
 		k1 := []byte(fmt.Sprintf("%s%04d", prefix1, i))
 		v1, err := db3.Get(k1)

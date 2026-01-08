@@ -10,13 +10,13 @@ import (
 func TestValueID_With_PrefixCompression(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:                    dir,
-		EnableValueIndex:       true,
-		ForceValuePointers:     true,
-		LeafPrefixCompression:  true,
-		OmitSlabKeys:           true,
-		AllowUnsafe:            true,
-		ChunkSize:              1024 * 1024,
+		Dir:                   dir,
+		EnableValueIndex:      true,
+		ForceValuePointers:    true,
+		LeafPrefixCompression: true,
+		OmitSlabKeys:          true,
+		AllowUnsafe:           true,
+		ChunkSize:             1024 * 1024,
 	}
 	db, err := Open(opts)
 	if err != nil {

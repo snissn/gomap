@@ -2,9 +2,9 @@ package slab
 
 import (
 	"bytes"
+	"github.com/snissn/gomap/TreeDB/page"
 	"os"
 	"testing"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestSlab_OmitKeys(t *testing.T) {

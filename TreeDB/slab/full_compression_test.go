@@ -2,8 +2,8 @@ package slab
 
 import (
 	"bytes"
-	"testing"
 	"github.com/snissn/gomap/TreeDB/page"
+	"testing"
 )
 
 func TestFullRecordCompression(t *testing.T) {
@@ -11,8 +11,8 @@ func TestFullRecordCompression(t *testing.T) {
 
 	opts := Options{
 		Compression: CompressionOptions{
-			Kind: CompressionZSTD,
-			MinBytes: 1,
+			Kind:            CompressionZSTD,
+			MinBytes:        1,
 			MinSavingsBytes: 0,
 		},
 	}
@@ -74,8 +74,8 @@ func TestFullRecordCompression_Rotation(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
 		Compression: CompressionOptions{
-			Kind: CompressionZSTD,
-			MinBytes: 1,
+			Kind:            CompressionZSTD,
+			MinBytes:        1,
 			MinSavingsBytes: 0,
 		},
 	}
