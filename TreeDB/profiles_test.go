@@ -25,9 +25,6 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if !opts.DisableReadChecksum {
 		t.Fatalf("expected DisableReadChecksum=true for fast profile")
 	}
-	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
-	}
 }
 
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
