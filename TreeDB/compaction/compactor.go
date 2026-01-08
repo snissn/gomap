@@ -46,6 +46,12 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 		return errors.New("compaction: cannot compact active slab")
 	}
 
+	// Safety: OmitSlabKeys requires IndexSwap because the default compactor
+	// relies on the key stored in the slab to verify liveness in the user tree.
+	if c.db.SlabManager().OmitSlabKeys() && !opts.IndexSwap {
+		return errors.New("compaction: IndexSwap required when OmitSlabKeys is enabled")
+	}
+
 	if opts.IndexSwap {
 		return c.db.CompactSlabsIndexSwap(ctx, []uint32{id}, db.IndexSwapCompactionOptions{
 			CopyBytesPerSec: opts.CopyBytesPerSec,

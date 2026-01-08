@@ -136,6 +136,12 @@ func (sm *SlabManager) Compression() CompressionKind {
 	return sm.compression.kind
 }
 
+func (sm *SlabManager) OmitSlabKeys() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.omitSlabKeys
+}
+
 func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

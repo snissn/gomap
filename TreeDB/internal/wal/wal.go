@@ -94,26 +94,26 @@ func (w *Writer) RotateTo(path string) error {
 	}
 
 	if w.f == nil {
-			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-			if err != nil {
-				return err
-			}
-			info, err := f.Stat()
-			if err != nil {
-				_ = f.Close()
-				return err
-			}
-			if err := syncDirFn(path); err != nil {
-				_ = f.Close()
-				return err
-			}
-		
-			w.f = f
-			w.bw.Reset(f)
-			w.size = info.Size()
-			w.pending = w.pending[:0]
-			return nil
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		if err != nil {
+			return err
 		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
+		}
+
+		w.f = f
+		w.bw.Reset(f)
+		w.size = info.Size()
+		w.pending = w.pending[:0]
+		return nil
+	}
 	if err := w.flushPending(); err != nil {
 		return err
 	}

@@ -76,17 +76,17 @@ func TestApplyCompaction_ValueID_InPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEntry after compaction: %v", err)
 	}
-	
+
 	// ValueID in User Tree should NOT change
 	if !bytes.Equal(entry2.Value, entry.Value) {
 		t.Fatalf("ValueID in user tree changed unexpectedly")
 	}
-	
+
 	gotPtr, err := snap2.ResolveValueIDToPtr(entry2.Value)
 	if err != nil {
 		t.Fatalf("Resolve after compaction: %v", err)
 	}
-	
+
 	if gotPtr != newPtr {
 		t.Fatalf("Pointer not updated in system tree! got %v, want %v (vid=%d)", gotPtr, newPtr, vid)
 	}
