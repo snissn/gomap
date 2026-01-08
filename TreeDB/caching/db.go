@@ -3621,6 +3621,11 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
+	if db.mutableBytes.Load() == 0 && len(db.queue) > 0 {
+		// Already rotated or no writes yet. Skip rotation to avoid queue bloat.
+		return nil
+	}
+
 	walPath := ""
 	valueLogPath := ""
 	if !db.disableWAL {
