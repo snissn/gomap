@@ -93,6 +93,10 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
 	}
+	if opts.DisableValueLog || opts.DisableWAL {
+		opts.MemtableValueLogPointers = false
+		opts.SplitValueLog = false
+	}
 	if opts.ReadOnly {
 		// Read-only opens are backend-only: the caching layer creates and rotates
 		// WAL segments (writes) and runs background maintenance loops.
