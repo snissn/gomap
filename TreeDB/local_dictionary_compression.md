@@ -47,6 +47,34 @@ During compaction, the `Compactor` analyzes the entire 4GB slab to be written:
 1. It selects the "Most Representative" 32KB for the Global Dictionary.
 2. It identifies "Shift Points" where data distribution changes and schedules Local Dictionary overrides for those specific zones.
 
+### 3.4 Value Delta Encoding (Future Optimization)
+- **Concept**: If a value is updated, instead of writing the whole new value to the Slab, we write a `Diff(Old, New)`.
+- **Why**: In blockchain state, often only a balance or a nonce changes.
+- **Benefit**: Massive I/O reduction for "Account Updates."
+
+### 3.5 Multi-Level Slab Tiering
+- **Concept**: Move "Zombie" (Compacted) Slabs to a compressed read-only file format, while keeping "Active" Slabs in a raw, fast-append format.
+- **Why**: Cold data shouldn't occupy the same high-speed SSD space as the active write-head.
+
+### 3.6 Multi-Stream Slabs (Parallel Writing)
+- **Concept**: Maintain $N$ active slabs (Write Streams) instead of one. Assign writers to streams based on `ThreadID` or `KeyHash`.
+- **Benefit**: Eliminates global mutex contention in `SlabManager.Append`. Allows parallel dictionary training across different streams.
+
+### 3.7 Zonal Bloom Filters (Disaster Recovery & Audit)
+- **Concept**: Store a 2KB Bloom Filter in each 2MB Zone Header, hashing **Keys Only**.
+- **Use Case**: 
+  - **Disaster Recovery**: Accelerates rebuilding a lost `index.db` by allowing the scanner to skip irrelevant zones.
+  - **Integrity Audits**: Verifies B-Tree correctness by matching index keys against the slab without full record decompression.
+- **Note on OmitKeys**: In `OmitSlabKeys` mode, the Bloom Filter provides a niche "Identity Proof" that a known key *was* stored in a zone, even if the full key string is absent from the data record.
+
+### 3.8 Huge-Page Awareness (OS Optimization)
+- **Concept**: Align 2MB Zones to physical 2MB page boundaries and use `madvise(MADV_HUGEPAGE)`.
+- **Benefit**: Reduces TLB misses for large-memory workloads, providing a 5-10% CPU win during random-access reads.
+
+### 3.9 Dictionary Integrity (Safety)
+- **Concept**: Store a dedicated CRC32C checksum for the 32KB Dictionary in the Zone Header.
+- **Benefit**: Prevents "Cascading Corruption" where a single bit-flip in a dictionary renders 2MB of data unreadable.
+
 ---
 
 ## 4. Implementation Detail: Go Memory Management
@@ -70,8 +98,6 @@ To ensure high performance and low GC pressure, the Go implementation utilizes a
 ### 4.3 Training Memory
 - **Sample Pooling**: 128KB training samples are gathered into pooled buffers to avoid heap allocations during high-frequency writes.
 - **Concurrent Safety**: Dictionary training happens in a background goroutine. The `SlabManager` uses an `atomic.Pointer` to swap the "Active Encoder" once training completes, ensuring zero-lock contention for the writer.
-
----
 
 ---
 
