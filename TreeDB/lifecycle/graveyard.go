@@ -1,6 +1,8 @@
 package lifecycle
 
-import "sync"
+import (
+	"sync"
+)
 
 // RetiredBatch represents a set of pages retired at a specific commit sequence.
 // It is returned by ExtractBatchesUpTo so callers can reinsert pages on failure.
