@@ -1072,6 +1072,9 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	}
 
 	if entry.Flags&node.FlagValueID != 0 {
+		if len(entry.Value) != 8 {
+			return nil, fmt.Errorf("invalid value id length in Get: %d", len(entry.Value))
+		}
 		return s.resolveValueID(entry.Value, false)
 	}
 
@@ -1128,7 +1131,7 @@ func (s *Snapshot) resolveValueID(idBytes []byte, unsafe bool) ([]byte, error) {
 
 func (s *Snapshot) ResolveValueIDToPtr(idBytes []byte) (page.ValuePtr, error) {
 	if len(idBytes) != 8 {
-		return page.ValuePtr{}, errors.New("invalid value id length")
+		return page.ValuePtr{}, fmt.Errorf("invalid value id length: %d", len(idBytes))
 	}
 	id := ValueID(binary.BigEndian.Uint64(idBytes))
 

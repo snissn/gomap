@@ -548,7 +548,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 		ValuePtr: valPtr,
 		Flags:    flags,
 	}
-	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+	if (flags&FlagPointer == 0 && flags&FlagTombstone == 0) || (flags&FlagValueID != 0) {
 		newEntry.Value = append([]byte(nil), value...)
 	}
 
@@ -576,7 +576,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 			ValuePtr: ptr,
 			Flags:    f,
 		}
-		if f&FlagPointer == 0 && f&FlagTombstone == 0 {
+		if (f&FlagPointer == 0 && f&FlagTombstone == 0) || (f&FlagValueID != 0) {
 			entry.Value = append([]byte(nil), v...)
 		}
 		entries = append(entries, entry)

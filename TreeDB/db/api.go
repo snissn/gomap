@@ -188,6 +188,10 @@ func (it *DBIterator) UnsafeValue() []byte {
 	}
 	val, _, flags := it.iter.UnsafeEntry()
 	if flags&node.FlagValueID != 0 {
+		if len(val) != 8 {
+			it.err = fmt.Errorf("invalid value id length in UnsafeValue: %d", len(val))
+			return nil
+		}
 		resolved, err := it.snap.resolveValueID(val, true)
 		if err != nil {
 			it.err = err
