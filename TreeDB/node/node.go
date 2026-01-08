@@ -9,12 +9,12 @@ import (
 
 // Common errors
 var (
-	ErrKeyTooLarge   = errors.New("key too large")
-	ErrValueTooLarge = errors.New("value too large")
-	ErrNodeFull      = errors.New("node is full")
-	ErrInvalidType   = errors.New("invalid node type")
-	ErrKeyNotFound   = errors.New("key not found")
-	ErrCorruptedNode = errors.New("corrupted node: invalid offsets")
+	ErrKeyTooLarge          = errors.New("key too large")
+	ErrValueTooLarge        = errors.New("value too large")
+	ErrNodeFull             = errors.New("node is full")
+	ErrInvalidType          = errors.New("invalid node type")
+	ErrKeyNotFound          = errors.New("key not found")
+	ErrCorruptedNode        = errors.New("corrupted node: invalid offsets")
 	ErrInvalidValueIDLength = errors.New("invalid value id length")
 )
 
