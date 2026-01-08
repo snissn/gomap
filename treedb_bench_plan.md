@@ -92,6 +92,12 @@ Outputs:
 - `treedb_op_trace.jsonl` with structured events
 - `treedb_phase_summary.json` with aggregate metrics
 
+Initial implementation (in gomap):
+- `TREEDB_TRACE_PATH=/path/to/treedb_op_trace.jsonl` enables tracing.
+- `TREEDB_TRACE_EVERY_N=100` samples every N ops (default 1).
+- `TREEDB_TRACE_SUMMARY_PATH=/path/to/treedb_phase_summary.json` sets summary output.
+- `SetTracePhase("restore"|"catchup")` can be called by the app to tag phases.
+
 Synthetic mapping:
 - If iterator creation is significant in Phase A or B, add iterator ops into
   the generator/runner to match:
