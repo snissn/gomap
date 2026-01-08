@@ -41,17 +41,18 @@ TreeDB's current B-Tree implementation uses standard **Incremental Front-Coding*
 - **Pointer-First Columnar Layout**: Organizes internal nodes into contiguous arrays: `[Child Pointers][Key Offsets][Key Suffixes]`. This ensures the CPU can binary-search keys and then O(1) jump to the corresponding Page ID with perfect cache alignment.
 - **Relative Page IDs**: Uses 4-byte relative offsets for child pointers within the same range partition, effectively doubling fan-out compared to 8-byte global IDs.
 
-### 3.6 Optimistic Lock Coupling
-- **Concept**: Allow readers to traverse the tree without acquiring `RLock`. Readers use version-checks on nodes to detect concurrent writes.
-- **Benefit**: Read throughput scales linearly with CPU cores, eliminating mutex bottleneck for concurrent lookups.
+### 3.6 Optimistic Lock Coupling (OLFIT)
+- **Versioned Node Protocol**: Every 16KB page header includes a `uint64 Version`. Bit 0 is the "Write Lock"; bits 1-63 are a monotonic counter.
+- **Reader Workflow**: 
+  1. Load `v1`. If locked, spin. 
+  2. Search node, extract pointer. 
+  3. Load `v2`. If `v1 != v2`, retry.
+- **Benefit**: Read throughput scales linearly with CPU cores, eliminating mutex contention for concurrent lookups.
 
-### 3.7 Predictive I/O & Adaptive Read-Ahead
-- **Concept**: The `DBIterator` proactively pre-loads upcoming 2MB clusters into the buffer pool.
-- **Adaptive Dampening**: If a pre-fetched cluster is not accessed within a specific time window, the pre-fetcher automatically throttles back to prevent I/O waste and cache pollution.
-
-### 3.8 Epoch-Based Reclamation (Concurrency Safety)
-- **Concept**: To support Optimistic Lock Coupling, retired pages (from splits/merges) are placed in an Epoch Queue.
-- **Benefit**: Ensures that memory is only reused once all concurrent readers who may have seen the old page have safely moved on, preventing use-after-free crashes in a lock-free environment.
+### 3.8 Snapshot-Pinned Epoch Reclamation
+- **Concept**: Retired pages (from splits/merges) are added to a `PendingFree` list with the current `CommitSeq`.
+- **Logic**: Pages are only moved to the active `FreeList` once `Page.RetiredSeq < MinActiveSnapshotSeq`.
+- **Benefit**: Leverages existing Snapshot infrastructure to ensure thread-safe memory reclamation in a lock-free environment without needing complex hazard pointers.
 
 ---
 

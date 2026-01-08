@@ -57,8 +57,8 @@ During compaction, the `Compactor` analyzes the entire 4GB slab to be written:
 - **Why**: Cold data shouldn't occupy the same high-speed SSD space as the active write-head.
 
 ### 3.6 Multi-Stream Slabs (Parallel Writing)
-- **Concept**: Maintain $N$ active slabs (Write Streams) instead of one. Assign writers to streams based on `ThreadID` or `KeyHash`.
-- **Benefit**: Eliminates global mutex contention in `SlabManager.Append`. Allows parallel dictionary training across different streams.
+- **Thread-Local Affinity**: Writers are assigned to one of $N$ streams based on their current `G` context (goroutine). This maximizes CPU cache hits and eliminates global mutex contention.
+- **The Soft Barrier**: Dictionary rotation is handled via a "Soft Barrier." The training goroutine publishes the dictionary to a pending slot; the primary writer thread performs the atomic swap and alignment write at its next available opportunity, ensuring the file handle is never contended.
 
 ### 3.7 Zonal Bloom Filters (Disaster Recovery & Audit)
 - **Concept**: Store a 2KB Bloom Filter in each 2MB Zone Header, hashing **Keys Only**.
@@ -95,7 +95,8 @@ To ensure high performance and low GC pressure, the Go implementation utilizes a
   - **Eviction**: Uses a "Least Recently Used" policy to cap the total number of active local decoders across all open slabs.
   - **Optimization**: Uses `zstd.WithDecoderLowmem(true)` to minimize RAM footprint per cached decoder.
 
-### 4.3 Training Memory
+### 4.3 Training Memory & Concurrent Safety
+- **Atomic Dictionary Swapping**: Uses `atomic.Pointer` to transition from Global to Local dictionaries.
 - **Sample Pooling**: 128KB training samples are gathered into pooled buffers to avoid heap allocations during high-frequency writes.
 - **Concurrent Safety**: Dictionary training happens in a background goroutine. The `SlabManager` uses an `atomic.Pointer` to swap the "Active Encoder" once training completes, ensuring zero-lock contention for the writer.
 
