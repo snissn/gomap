@@ -389,10 +389,10 @@ func Open(opts Options) (*DB, error) {
 		opts.InternalFillTargetPPM = 1_000_000
 	}
 	if opts.PruneInterval == 0 {
-		opts.PruneInterval = 250 * time.Millisecond
+		opts.PruneInterval = 100 * time.Millisecond
 	}
 	if opts.PruneMaxPages == 0 {
-		opts.PruneMaxPages = 4096
+		opts.PruneMaxPages = 40960
 	}
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
