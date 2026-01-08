@@ -19,34 +19,39 @@ TreeDB's current B-Tree implementation uses standard **Incremental Front-Coding*
 
 ---
 
-## 3. Specific Proposal: The "Clustered Columnar Leaf"
+## 4. Specific Proposal: The "Clustered Columnar Leaf"
 
-We propose a breaking change to the Leaf Page layout to implement **Columnar Block Compression**.
+We propose a breaking change to the Leaf Page layout and Pager architecture to implement **Zonal Leaf Clusters** and **Range Partitioning**.
 
-### 3.1 Page Layout (V2 Leaf)
-The 16KB page will be divided into three distinct segments:
-1. **Page Header (Fixed Size)**:
-   - `LCP_Len (uint16)`: Length of the Longest Common Prefix shared by *all* keys in this page.
-   - `LCP_Bytes`: The actual shared prefix bytes (stored once).
-   - `DictID (uint8)`: ID of the Global B-Tree Dictionary used for this page.
-   - `KeyBlock_Len (uint16)`: Size of the compressed key buffer.
-2. **Compressed Key Buffer**:
-   - A single Zstd-compressed blob containing all key suffixes (Key minus LCP).
-3. **Value Heap**:
-   - Uncompressed values and pointers (enables $O(1)$ value retrieval once the key index is found).
+### 4.1 Zonal Leaf Clusters ("Mega Pages")
+Instead of standalone 16KB pages, leaf pages are organized into **2MB Clusters** (128 pages).
+- **Cluster Dictionary**: The first 32KB of a 2MB cluster is a shared Zstd dictionary.
+- **Global LCP**: The cluster also defines a "Cluster Prefix" that all 128 pages share.
+- **Benefit**: This captures the high compression ratios of the Slab "Zonal" design while allowing the Pager to still serve 16KB requests.
 
-### 3.2 Global Dictionary Selection
-Instead of training a dictionary per page (too much overhead), we use **Typed Global Dictionaries**:
-- The Pager/System Tree maintains a registry of dictionaries (e.g., `DICT_JSON`, `DICT_HEX`, `DICT_ADDRESSES`).
-- When a page is flushed, the `Builder` tests it against the registry and selects the `DictID` with the best ratio.
-- The dictionary is loaded into memory once and shared across thousands of pages.
+### 4.2 Range-Partitioned Index Files
+The single `index.db` is replaced by a set of partitioned files:
+- **Manifest**: A master metadata file tracks `KeyRange -> FilePath`.
+- **Parallel Maintenance**: Maintenance tasks like **Vacuuming** and **Compaction** can now operate on a single range file (e.g., `index_A.db`) without locking the rest of the index.
+- **Dynamic Resizing**: Range files can be split or merged based on size, preventing any single file from becoming a bottleneck.
 
-### 3.3 Search Optimization: LCP Skipping
-By storing the **Longest Common Prefix (LCP)** in the header:
-- `SearchLeaf` can immediately skip the first `LCP_Len` bytes of the search key.
-- If the search key is shorter than `LCP_Len` or differs within the LCP, we know the key is not in this page without decompressing a single byte.
+### 4.3 Pager Evolution: The "Partitioned Pager"
+The Pager will be refactored to support multiple underlying files:
+- **Page ID Mapping**: Page IDs will include a "File Index" prefix (e.g., bits 48-63) to allow $O(1)$ routing to the correct partitioned file.
+- **Zonal Alignment**: The Pager will ensure that clustered leaf pages are always written at 2MB boundaries within their respective partition files to preserve dictionary lookup math.
 
 ---
+
+## 5. Maintenance: Partitioned Vacuuming
+With range partitioning, vacuuming becomes a "background maintenance" task rather than an "offline" necessity:
+1. Identify a range file with high fragmentation.
+2. Create a new "Shadow Partition" for that range.
+3. Perform a **Two-Pass Clustered Compaction** into the shadow file.
+4. Atomically swap the partition in the Manifest.
+
+---
+**Status**: Alpha / Architectural Shift.
+**Next Steps**: Prototype the "Partitioned Pager" to handle multiple files.
 
 ## 4. Implementation Path
 

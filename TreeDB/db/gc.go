@@ -122,7 +122,8 @@ func (db *DB) GC() (reclaimed int64, err error) {
 	var candidateBytes int64
 
 	// Value Logs
-	for id := range latestState.ValueLogSet.Files {
+	// We only mark files that were present in the snapshot we scanned.
+	for id := range state.ValueLogSet.Files {
 		if _, live := liveFileIDs[id]; !live {
 			sz, _ := db.valueLogManager.SegmentSize(id)
 			candidateBytes += sz
@@ -131,8 +132,9 @@ func (db *DB) GC() (reclaimed int64, err error) {
 	}
 
 	// Slabs
+	// We only mark files that were present in the snapshot we scanned.
 	activeSlabID := db.slabManager.ActiveSlabID()
-	for id, sf := range latestState.SlabSet.Files {
+	for id, sf := range state.SlabSet.Files {
 		if id == activeSlabID {
 			continue
 		}
