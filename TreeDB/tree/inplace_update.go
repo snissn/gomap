@@ -60,9 +60,14 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 				return false, 0, nil
 			}
 
-			_, _, curPtr, flags, err := n.GetLeafEntryView(idx)
+			_, valView, curPtr, flags, err := n.GetLeafEntryView(idx)
 			if err != nil {
 				return false, 0, err
+			}
+
+			if flags&node.FlagPointer == 0 && flags&node.FlagTombstone == 0 && len(valView) == page.ValuePtrSize {
+				// Inline pointer (used in System Tree for ValueID mappings)
+				curPtr = page.DecodeValuePtr(valView)
 			}
 
 			ptrMatches := func(p1, p2 page.ValuePtr) bool {
@@ -71,7 +76,7 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 					page.ValuePtrRecordLength(p1) == page.ValuePtrRecordLength(p2)
 			}
 
-			if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 || !ptrMatches(curPtr, oldPtr) {
+			if flags&node.FlagTombstone != 0 || (flags&node.FlagPointer == 0 && len(valView) != page.ValuePtrSize) || !ptrMatches(curPtr, oldPtr) {
 				return false, 0, nil
 			}
 

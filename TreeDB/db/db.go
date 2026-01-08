@@ -1273,6 +1273,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		noPinnedReaders := idx.registry.MinPinnedSeq() == ^uint64(0)
 		if noPinnedReaders {
 			tr := tree.New(idx.pager, nil, rootID)
+			sysTr := tree.New(idx.pager, nil, sysRoot)
 			var (
 				metrics       adaptive.Metrics
 				modifiedPages map[uint64]struct{}
@@ -1284,9 +1285,31 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 					db.writeMu.Unlock()
 					return err
 				}
+
+				if !updated {
+					// Key might be using a ValueID. If so, update the pointer in the
+					// system tree in-place.
+					entry, err := tr.GetEntry(op.Key)
+					if err == nil && entry.Flags&node.FlagValueID != 0 && len(entry.Value) == 8 {
+						vid := ValueID(binary.BigEndian.Uint64(entry.Value))
+						sysKey := encodeValueIndexKey(vid)
+						sysUpdated, sysLeafID, err := sysTr.UpdateValuePtrInPlace(sysKey, op.OldPtr, op.NewPtr)
+						if err != nil {
+							db.mu.Unlock()
+							db.writeMu.Unlock()
+							return err
+						}
+						if sysUpdated {
+							updated = true
+							leafID = sysLeafID
+						}
+					}
+				}
+
 				if !updated {
 					continue
 				}
+
 				if modifiedPages == nil {
 					modifiedPages = make(map[uint64]struct{}, 8)
 				}

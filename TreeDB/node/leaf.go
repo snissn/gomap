@@ -224,8 +224,17 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 	flags := layout.flags
 
-	// Tombstones and inline values have no ValuePtr bytes to rewrite.
-	if flags&FlagTombstone != 0 || flags&FlagPointer == 0 {
+	// Tombstones cannot be updated in place.
+	if flags&FlagTombstone != 0 {
+		return false, nil
+	}
+
+	// We support updating both explicit pointers (FlagPointer) and 16-byte
+	// inline values (used for ValueID mappings in the System Tree).
+	isExplicitPtr := flags&FlagPointer != 0
+	isInlinePtr := flags&FlagPointer == 0 && layout.valLen == page.ValuePtrSize
+
+	if !isExplicitPtr && !isInlinePtr {
 		return false, nil
 	}
 

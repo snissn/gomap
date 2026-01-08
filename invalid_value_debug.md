@@ -57,9 +57,19 @@ Added environment variable support for tuning background pruning without changin
 **Fix:** Updated `TreeDB/internal/bulk/builder.go` to explicitly exclude entries with `FlagValueID` from the "Force Pointer" migration path.
 **Verification:** Added `TestVacuum_ForceValuePointers_PreservesValueIDs` to `TreeDB/db/value_id_integrity_test.go`.
 
-## 10. Summary of Fixes
+## 10. Tertiary Bug: In-Place Compaction Skipped `ValueID` Entries
+**Issue:** The fast-path for slab compaction (`UpdateValuePtrInPlace`) was designed to only update entries with `node.FlagPointer` set. It did not know how to handle `ValueID` entries, where the actual pointer is stored in the System Tree.
+**Consequence:** When the compactor moved data for a key using `ValueID`, the in-place update would return `updated=false` and the pointer in the system tree was never updated. This caused the database to point to old, potentially deleted slab segments.
+**Fix:**
+1.  Modified `node.UpdateLeafValuePtr` to support updating 16-byte inline values (which is how `ValueID` mappings are stored in the system tree).
+2.  Modified `tree.UpdateValuePtrInPlace` to correctly decode the pointer from inline values.
+3.  Updated `db.ApplyCompactionMicroBatches` to detect `ValueID` entries and perform the in-place update on the System Tree.
+**Verification:** Added `TestApplyCompaction_ValueID_InPlace` to `TreeDB/db/value_id_compaction_test.go`.
+
+## 11. Summary of Fixes
 1.  **Safety:** Added `ErrInvalidValueIDLength` check in `AddLeafEntry` to prevent writing corrupted (0-byte) ValueIDs.
 2.  **Config:** Removed `PreferAppendAlloc=true` from `fast`/`bench` profiles to prevent `index.db` infinite growth (ballooning).
 3.  **Tuning:** Increased default Pruner settings (`PruneMaxPages=40960`, `PruneInterval=100ms`) to handle high-throughput syncs.
 4.  **Concurrency:** Fixed a data race in `batch.go` that caused corrupted slab stats (26PB).
-5.  **Logic:** Fixed Vacuum logic to respect `ValueID` entries when `ForceValuePointers` is active.
+5.  **Vacuum Logic:** Fixed Vacuum logic to respect `ValueID` entries when `ForceValuePointers` is active.
+6.  **Compaction Logic:** Fixed In-Place compaction to support `ValueID` pointer updates in the System Tree.
