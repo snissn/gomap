@@ -73,3 +73,83 @@ Added environment variable support for tuning background pruning without changin
 4.  **Concurrency:** Fixed a data race in `batch.go` that caused corrupted slab stats (26PB).
 5.  **Vacuum Logic:** Fixed Vacuum logic to respect `ValueID` entries when `ForceValuePointers` is active.
 6.  **Compaction Logic:** Fixed In-Place compaction to support `ValueID` pointer updates in the System Tree.
+
+---
+
+# 12. Investigation: State Sync Stalls When `TREEDB_BENCH_DISABLE_BG=1`
+
+## 12.1 Symptom (Server Run)
+- `TREEDB_BENCH_DISABLE_BG=1` causes the Celestia mainnet harness to stall during state sync.
+- `TREEDB_BENCH_DISABLE_BG=0` completes successfully.
+- Current run directory: `/home/mikers/.celestia-app-mainnet-treedb-20260108092955`.
+- `curl http://127.0.0.1:36657/status` reports `latest_block_height=0` and `catching_up=true`.
+
+## 12.2 Log Evidence (State Sync)
+From `/home/mikers/.celestia-app-mainnet-treedb-20260108092955/sync/node.log`:
+- State sync starts and applies chunks 0-66.
+- The last chunk (67) is fetched, but **never logged as applied**.
+- No TreeDB errors/panics appear in the log; only P2P churn and seed lookup failures.
+
+Key excerpts:
+- `Starting state sync` / `Snapshot accepted, restoring`
+- `Applied snapshot chunk to ABCI app ... chunk=66`
+- `Fetching snapshot chunk ... chunk=67`
+- **No** `Applied snapshot chunk ... chunk=67` / `State sync complete`
+
+## 12.3 Relevant Code Paths
+The behavior change for `TREEDB_BENCH_DISABLE_BG=1` is in `cosmos-db/treedb.go`:
+- `BackgroundIndexVacuumInterval = -1`
+- `BackgroundCompactionInterval = -1`
+- `BackgroundCheckpointInterval = -1`
+- `BackgroundCheckpointIdleDuration = -1`
+- `MaxWALBytes = -1`
+
+This disables all auto-checkpointing and background vacuum/compaction. TreeDB's cached flush loop still runs, but no periodic checkpoint is forced.
+
+## 12.4 Hypotheses
+1. **Snapshot Apply Stalls on Final Chunk**: `ApplySnapshotChunk` for chunk 67 is blocked (possible DB write/backpressure stall).
+2. **No Auto-Checkpoint = Unbounded WAL**: lack of checkpoints may interact with large snapshot batches (e.g., huge WAL or flush backlog thresholds).
+3. **Flush Backpressure Deadlock**: writers are blocked by backlog and cannot progress if a flush worker stalls (no explicit errors logged).
+
+## 12.5 Proposed Next Steps
+- Collect goroutine dump / pprof during stall:
+  - `pprof` is enabled at `localhost:6062` by the harness script.
+- Capture TreeDB stats during stall (if possible) to see backlog/flush queues.
+- Re-run with `TREEDB_BENCH_DISABLE_BG=1` but **leave auto-checkpoint enabled** (only disable vacuum/compaction) to isolate checkpoint-related stalls.
+
+## 12.6 Test-Driven Resolution (Planned)
+Goal: Create a regression test that simulates a large snapshot-style write workload with background checkpoint disabled and ensures the final write completes and data is readable.
+
+Planned test sketch (not yet implemented):
+1. Open TreeDB in cached mode with:
+   - `BackgroundIndexVacuumInterval = -1`
+   - `BackgroundCheckpointInterval = -1`
+   - `BackgroundCheckpointIdleDuration = -1`
+   - `MaxWALBytes = -1`
+2. Apply multiple large batches (simulate snapshot chunks).
+3. Verify reads succeed for all keys without needing a manual checkpoint.
+4. Add a timeout guard to detect hangs.
+
+This test should fail if the current stall is reproducible in a smaller environment.
+
+## 12.7 Goroutine Dump / Pprof Capture (Stalled Run)
+Captured from the stalled node on `192.168.0.132` using the harness pprof port `6062`:
+- Goroutine dump: `/home/mikers/pprof_goroutine_20260108102130.txt`
+- CPU profile (30s): `/home/mikers/pprof_profile_20260108102137.pb.gz`
+
+## 12.8 Goroutine Analysis & Fix Plan
+### Observation (Stall)
+The goroutine dump shows the state sync restore thread blocked in TreeDB backpressure:
+- `goroutine 4137 [sync.Cond.Wait, 46 minutes]` -> `caching.(*DB).waitForStop` -> `caching.(*Batch).write` -> `kvstore/adapters/treedb.(*batch).Commit` -> `iavl.(*Importer).Commit`.
+- `goroutine 701` is waiting in `snapshots.Manager.RestoreChunk` for the restore to finish, which never happens because the write is blocked.
+
+### Hypothesis
+Backpressure is triggered (`queueBacklogBytes >= stopBytes`), but no background flush is scheduled, so `waitForStop` only flushes one memtable (via `flushSome`) and then waits forever for a `bpCond` signal that never arrives. This is consistent with `TREEDB_BENCH_DISABLE_BG=1` and backlog created without a flush trigger (e.g. iterator-driven rotations, or DisableWAL delete-range paths).
+
+### Fix
+Ensure `waitForStop` schedules a background flush before waiting:
+- Add `db.TriggerFlush()` in `TreeDB/caching/db.go` inside `waitForStop` when backlog exceeds stop.
+
+### Regression Test
+Added `TreeDB/caching/backpressure_wait_test.go`:
+- `TestWaitForStopSchedulesFlush` creates queued memtables via `rotateMemtableLocked(false)` (no flush signal), forces backlog above stop, and asserts a `Set()` completes within a timeout.

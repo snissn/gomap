@@ -2433,6 +2433,10 @@ func (db *DB) waitForStop() {
 		}
 		db.bpMu.Unlock()
 
+		// Ensure a background flush pass is scheduled in case backlog was created
+		// without a flush trigger (e.g. iterator-driven rotations).
+		db.TriggerFlush()
+
 		// Ensure progress even if the background flusher isn't currently scheduled
 		// (e.g. backlog driven by iterator rotations). This still "blocks" the write
 		// in the sense that we don't accept new ops until backlog drops, but lets the
