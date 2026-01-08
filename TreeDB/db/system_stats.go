@@ -105,10 +105,16 @@ func (db *DB) applySystemUpdates(sysRootID uint64, extraOps []batch.Entry, metri
 		}
 
 		if delta := metrics.SlabWriteBytesByFile[id]; delta > 0 {
-			total += uint64(delta)
+			// Safety: cap delta at 100GB per commit to detect corruption.
+			// Realistic commits should never write more than a few GB.
+			if delta < 100<<30 {
+				total += uint64(delta)
+			}
 		}
 		if delta := metrics.SlabDeadBytesByFile[id]; delta > 0 {
-			dead += uint64(delta)
+			if delta < 100<<30 {
+				dead += uint64(delta)
+			}
 		}
 		if dead > total {
 			dead = total

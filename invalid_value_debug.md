@@ -36,7 +36,22 @@ To prevent this corruption from being written to disk, strict validation was add
 
 Now, any attempt to write a malformed `ValueID` entry will return an error at write time, preventing corruption and likely identifying the buggy caller immediately.
 
-## 5. Regression Test
+## 5. Secondary Issue: `index.db` Ballooning
+**Observation:** After fixing the crash, it was observed that `index.db` grew to 16GB for a workload with ~1.6GB of active data (~10x bloat).
+**Root Cause:** The `ProfileFast` and `ProfileBench` high-level presets in `TreeDB/profiles.go` explicitly enabled `PreferAppendAlloc = true`. This flag tells the page allocator to ignore the freelist and always append new pages to the end of the file. This is intended for short, high-speed benchmarks but causes infinite file growth in long-running nodes (like Celestia sync) unless background vacuum is very aggressive.
+**Fix:** Removed `PreferAppendAlloc = true` from the default profile definitions in `TreeDB/profiles.go`. This ensures that pages are reused from the freelist by default, maintaining a stable file size.
+
+## 6. Tertiary Issue: Corrupted Slab Stats (26PB)
+**Observation:** `treemap info` reported `treedb.slabs.total_bytes=26691663622943823` (approx 26 Petabytes) despite the slab file being only 4GB.
+**Root Cause:** A data race was found in `TreeDB/db/batch.go`. The `writeOptimistic` and `writeSerialized` methods were taking a direct reference to the `SlabWriteBytesByFile` map from the batch. Since batches are pooled and reused, another goroutine could clear or modify this map while `finalizeCommit` (and `applySystemUpdates`) was still processing it, leading to corrupted summation.
+**Fix:** Modified `TreeDB/db/batch.go` to always copy the map before passing it to `finalizeCommit`. Additionally, added safety caps in `applySystemUpdates` to ignore unreasonably large deltas (>100GB per commit).
+
+## 7. Pruner Configurability
+Added environment variable support for tuning background pruning without changing application code:
+- `TREEDB_BACKGROUND_PRUNE_INTERVAL`: Duration (e.g. `100ms`) or milliseconds.
+- `TREEDB_BACKGROUND_PRUNE_MAX_PAGES`: Integer (e.g. `8192`).
+
+## 8. Regression Test
 A new integrity test was added to verify robustness under the specific configuration used by Celestia.
 
 **File:** `TreeDB/db/value_id_integrity_test.go`
@@ -47,11 +62,3 @@ A new integrity test was added to verify robustness under the specific configura
 - Performs 200 updates.
 - Reads all keys to verify integrity.
 - Closes and reopens the DB to verify persistence.
-
-## 6. Future Work / If Issue Persists
-If this error resurfaces (or if the new validation triggers errors during writes), the investigation should focus on *who* is constructing the invalid entry.
-
-**Next Steps:**
-1.  **Monitor Logs:** If the new validation trips, the application will receive `ErrInvalidValueIDLength`. Stack traces from that error will pinpoint the exact logic (likely in `zipper.go` or `batch.go`) that is misbehaving.
-2.  **Batch Transformation:** Review `TreeDB/db/batch.go`. Specifically, how `b.sysOps` are generated and how `op.Value` is mutated when `op.IsPtr` is false but `FlagValueID` is set.
-3.  **Compaction:** Review `TreeDB/compaction/compactor.go` and `TreeDB/db/compaction.go`. Ensure that `ApplyCompactionMicroBatches` correctly handles `FlagValueID` updates and doesn't accidentally zero out the value.

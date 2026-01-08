@@ -144,6 +144,19 @@ func Open(opts Options) (*DB, error) {
 		}
 	}
 
+	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			opts.PruneInterval = d
+		} else if secs, err := strconv.Atoi(v); err == nil {
+			opts.PruneInterval = time.Duration(secs) * time.Millisecond
+		}
+	}
+	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_MAX_PAGES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.PruneMaxPages = n
+		}
+	}
+
 	if opts.DisableValueLog || opts.DisableWAL {
 		opts.MemtableValueLogPointers = false
 		opts.SplitValueLog = false

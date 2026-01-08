@@ -174,11 +174,10 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
 		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
+			metrics.SlabWriteBytesByFile = make(map[uint32]int64, len(byFile))
+		}
+		for id, n := range byFile {
+			metrics.SlabWriteBytesByFile[id] += n
 		}
 	}
 
@@ -230,11 +229,10 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
 	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
 		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
+			metrics.SlabWriteBytesByFile = make(map[uint32]int64, len(byFile))
+		}
+		for id, n := range byFile {
+			metrics.SlabWriteBytesByFile[id] += n
 		}
 	}
 
