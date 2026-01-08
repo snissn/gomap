@@ -164,11 +164,25 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if lb.startKey == nil {
 				lb.startKey = append([]byte(nil), key...)
 			}
-			if err := lb.builder.AddLeafEntry(key, val, flags, ptr); err != nil {
+			err = lb.builder.AddLeafEntry(key, val, flags, ptr)
+		}
+
+		if err != nil {
+			if err == node.ErrInvalidValueIDLength {
+				// SKIP CORRUPT ENTRY
+				// This allows vacuum to repair the database by dropping invalid keys.
+			} else {
 				return 0, err
 			}
-		} else if err != nil {
-			return 0, err
+		} else {
+			// Success (only if no error)
+		}
+
+		if !iter.Valid() {
+			if err := iter.Error(); err != nil {
+				return 0, err
+			}
+			break
 		}
 		iter.Next()
 	}
