@@ -156,7 +156,8 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		key := iter.UnsafeKey()
 		val, ptr, flags := iter.UnsafeEntry()
 
-		if opts.ForceValuePointers && opts.ValueWriter != nil && flags&node.FlagPointer == 0 && flags&node.FlagTombstone == 0 {
+		// Do not migrate ValueIDs (they are already logical pointers and must remain inline)
+		if opts.ForceValuePointers && opts.ValueWriter != nil && flags&node.FlagPointer == 0 && flags&node.FlagTombstone == 0 && flags&node.FlagValueID == 0 {
 			// Migrate inline value to slab
 			newPtr, err := opts.ValueWriter.Append(key, val)
 			if err != nil {
@@ -183,18 +184,9 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			}
 			err = lb.builder.AddLeafEntry(key, val, flags, ptr)
 		}
-		
 		if err != nil {
-			if err == node.ErrInvalidValueIDLength {
-				// SKIP CORRUPT ENTRY
-				// This allows vacuum to repair the database by dropping invalid keys.
-			} else {
-				return 0, err
-			}
-		} else {
-			// Success (only if no error)
+			return 0, err
 		}
-		
 		if !iter.Valid() {
 			if err := iter.Error(); err != nil {
 				return 0, err
