@@ -74,3 +74,68 @@ func TestValueID_Integrity(t *testing.T) {
 		}
 	}
 }
+
+func TestVacuum_ForceValuePointers_PreservesValueIDs(t *testing.T) {
+	// This test reproduces the bug where TREEDB_FORCE_VALUE_POINTERS would cause
+	// vacuum to treat existing ValueIDs as inline values and attempt to move them,
+	// corrupting the entry (0-byte ValueID) and causing vacuum failure.
+	dir, err := os.MkdirTemp("", "treedb-vacuum-regression")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	opts := DefaultOptions(dir)
+	opts.EnableValueIndex = true
+	// Start with ForceValuePointers to generate some ValueIDs (for large values)
+	// and some inline values (if we set threshold high enough or mixed).
+	// Actually, we want to ensure we HAVE ValueIDs.
+	opts.ForceValuePointers = true
+	opts.ValueLogPointerThreshold = 10 // Make small values use ValueIndex
+
+	// Open DB
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// Write keys that will become ValueIDs
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%04d", i))
+		val := make([]byte, 50) // > 10, so uses ValueIndex
+		val[0] = byte(i)
+		if err := db.SetSync(key, val); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Trigger Offline Vacuum
+	// Vacuum uses internal/bulk.BuildWithOptions.
+	// If the bug exists, vacuum will fail with "invalid value id length"
+	// because it tries to migrate the ValueID (8 bytes) as if it were a user value.
+	db.Close()
+
+	// Reopen for Vacuum (VacuumIndexOffline opens it)
+	if err := VacuumIndexOffline(opts); err != nil {
+		t.Fatalf("Vacuum failed (likely regression of ForceValuePointers corruption): %v", err)
+	}
+
+	// Verify Data
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for i := 0; i < 100; i++ {
+		key := []byte(fmt.Sprintf("key-%04d", i))
+		val, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get failed for %s: %v", key, err)
+		}
+		if val == nil || val[0] != byte(i) {
+			t.Errorf("Data corruption for %s: got %v", key, val)
+		}
+	}
+}

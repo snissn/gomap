@@ -51,14 +51,15 @@ Added environment variable support for tuning background pruning without changin
 - `TREEDB_BACKGROUND_PRUNE_INTERVAL`: Duration (e.g. `100ms`) or milliseconds.
 - `TREEDB_BACKGROUND_PRUNE_MAX_PAGES`: Integer (e.g. `8192`).
 
-## 8. Regression Test
-A new integrity test was added to verify robustness under the specific configuration used by Celestia.
+## 9. Secondary Bug: Vacuum Corruption with `ForceValuePointers`
+**Issue:** When `TREEDB_FORCE_VALUE_POINTERS=1` is enabled, the Vacuum/Compaction process (`bulk.BuildWithOptions`) incorrectly identified existing `ValueID` entries (which are 8-byte inline values pointing to the system tree) as "inline user values" that needed to be migrated to the Slab file.
+**Consequence:** The migration logic cleared the 8-byte ValueID from the leaf entry (`val = nil`) and set `FlagPointer`, but then called `AddLeafEntry` with `FlagValueID` still set. This triggered the new safety check (`invalid value id length`), aborting the vacuum.
+**Fix:** Updated `TreeDB/internal/bulk/builder.go` to explicitly exclude entries with `FlagValueID` from the "Force Pointer" migration path.
+**Verification:** Added `TestVacuum_ForceValuePointers_PreservesValueIDs` to `TreeDB/db/value_id_integrity_test.go`.
 
-**File:** `TreeDB/db/value_id_integrity_test.go`
-**Test Name:** `TestValueID_Integrity`
-**Details:**
-- Configures DB with `EnableValueIndex`, `ForceValuePointers`, and `LeafPrefixCompression`.
-- Performs 2000 inserts (mixed small and large values).
-- Performs 200 updates.
-- Reads all keys to verify integrity.
-- Closes and reopens the DB to verify persistence.
+## 10. Summary of Fixes
+1.  **Safety:** Added `ErrInvalidValueIDLength` check in `AddLeafEntry` to prevent writing corrupted (0-byte) ValueIDs.
+2.  **Config:** Removed `PreferAppendAlloc=true` from `fast`/`bench` profiles to prevent `index.db` infinite growth (ballooning).
+3.  **Tuning:** Increased default Pruner settings (`PruneMaxPages=40960`, `PruneInterval=100ms`) to handle high-throughput syncs.
+4.  **Concurrency:** Fixed a data race in `batch.go` that caused corrupted slab stats (26PB).
+5.  **Logic:** Fixed Vacuum logic to respect `ValueID` entries when `ForceValuePointers` is active.
