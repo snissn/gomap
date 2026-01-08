@@ -13,7 +13,7 @@ func TestLeafPrefixCompression_Efficiency(t *testing.T) {
 	writeDB := func(compress bool) int64 {
 		dir := t.TempDir()
 		opts := DefaultOptions(dir)
-		opts.ChunkSize = 16384 // Granular allocation
+		opts.ChunkSize = 65536 // Granular allocation (must be multiple of 64KB on Windows)
 		opts.LeafPrefixCompression = compress
 		opts.DisableWAL = true // Speed up
 		opts.AllowUnsafe = true

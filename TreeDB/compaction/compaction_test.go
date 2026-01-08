@@ -688,6 +688,9 @@ func TestCompaction_FullCompression(t *testing.T) {
 }
 
 func TestCompaction_OmitKeys(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("CompactSlabsIndexSwap unsupported on windows")
+	}
 	dir := t.TempDir()
 
 	opts := db.Options{

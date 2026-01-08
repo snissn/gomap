@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,9 @@ import (
 //
 // The fix involves RecordOps capturing the full entry so lookup isn't needed.
 func TestVacuumRaceMissingKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	dir, err := os.MkdirTemp("", "vacuum-race")
 	if err != nil {
 		t.Fatal(err)

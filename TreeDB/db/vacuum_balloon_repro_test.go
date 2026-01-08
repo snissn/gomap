@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestVacuum_Ballooning_Repro(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	dir := t.TempDir()
 	opts := DefaultOptions(dir)
 	opts.ForceValuePointers = true   // Force data to slabs

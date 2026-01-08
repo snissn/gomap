@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestVacuum_Migration_InlineToSlab(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	dir := t.TempDir()
 
 	// Phase 1: Write Inline Values (ForceValuePointers=false)

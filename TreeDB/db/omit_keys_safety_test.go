@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -9,6 +10,9 @@ import (
 )
 
 func TestCompaction_OmitKeys_RequiresIndexSwap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
 	// This test verifies that we've added a safety check to prevent data loss
 	// when TREEDB_SLAB_OMIT_KEYS=1 is used with the default compactor.
 	dir := t.TempDir()
