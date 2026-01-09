@@ -96,6 +96,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
 	inlineIters := parseBoolEnv("TREEDB_TRACE_TIMELINE_INLINE_ITERS", false)
 	skipIters := parseBoolEnv("TREEDB_TRACE_SKIP_ITERS", false)
+	sequentialKeys := parseBoolEnv("TREEDB_TRACE_SEQUENTIAL_KEYS", false)
 
 	timeline, err := loadTraceTimeline(tracePath)
 	if err != nil {
@@ -122,7 +123,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		DisableReadChecksum:     true,
 	}
 
-	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters)
+	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys)
 }
 
 func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
@@ -171,6 +172,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
 	inlineIters := parseBoolEnv("TREEDB_TRACE_TIMELINE_INLINE_ITERS", false)
 	skipIters := parseBoolEnv("TREEDB_TRACE_SKIP_ITERS", false)
+	sequentialKeys := parseBoolEnv("TREEDB_TRACE_SEQUENTIAL_KEYS", false)
 
 	totalOps := scaledTotalOps(s, scale)
 	if totalOps > 0 {
@@ -193,12 +195,12 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		b.Run(mode, func(b *testing.B) {
 			opts := baseOpts
 			opts.MemtableMode = mode
-			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters)
+			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys)
 		})
 	}
 }
 
-func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64, noSleep bool, inlineIters bool, skipIters bool) {
+func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64, noSleep bool, inlineIters bool, skipIters bool, sequentialKeys bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dir, err := os.MkdirTemp("", "treedb-trace-timeline-*")
@@ -225,7 +227,7 @@ func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[
 			if !ok {
 				continue
 			}
-			if err := runTraceTimelinePhase(db, rng, phaseSummary, phaseTimeline, phaseDurationMs, scale, &keyspace, keyIndex, noSleep, inlineIters, skipIters); err != nil {
+			if err := runTraceTimelinePhase(db, rng, phaseSummary, phaseTimeline, phaseDurationMs, scale, &keyspace, keyIndex, noSleep, inlineIters, skipIters, sequentialKeys); err != nil {
 				_ = db.Close()
 				_ = os.RemoveAll(dir)
 				b.Fatalf("phase %s: %v", phaseName, err)
@@ -359,9 +361,17 @@ func loadTraceTimeline(path string) (map[string]*timelinePhase, error) {
 	return phases, nil
 }
 
-func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, phase *timelinePhase, phaseDurationMs int, scale float64, keyspace *[][]byte, keyIndex map[string]struct{}, noSleep bool, inlineIters bool, skipIters bool) error {
+func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, phase *timelinePhase, phaseDurationMs int, scale float64, keyspace *[][]byte, keyIndex map[string]struct{}, noSleep bool, inlineIters bool, skipIters bool, sequentialKeys bool) error {
 	if phase == nil {
 		return nil
+	}
+	var seqCounter uint64
+	seqKeyLen := 0
+	if sequentialKeys {
+		seqKeyLen = summary.SetKeyLens.P50
+		if seqKeyLen < 16 {
+			seqKeyLen = 16
+		}
 	}
 	span := phase.maxTS - phase.minTS
 	var timeScale float64
@@ -387,7 +397,7 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 			if bytes <= 0 {
 				bytes = sampleDist(rng, summary.BatchBytes, 0)
 			}
-			if err := runTraceBatch(db, rng, summary, ops, bytes, keyspace, keyIndex); err != nil {
+			if err := runTraceBatch(db, rng, summary, ops, bytes, keyspace, keyIndex, sequentialKeys, seqKeyLen, &seqCounter); err != nil {
 				return err
 			}
 		case "get":

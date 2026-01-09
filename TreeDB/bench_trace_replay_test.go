@@ -266,6 +266,15 @@ func runTracePhase(db *DB, rng *rand.Rand, p tracePhaseSummary, scale float64, k
 	if batchWrites == 0 {
 		return nil
 	}
+	sequentialKeys := parseBoolEnv("TREEDB_TRACE_SEQUENTIAL_KEYS", false)
+	var seqCounter uint64
+	seqKeyLen := 0
+	if sequentialKeys {
+		seqKeyLen = p.SetKeyLens.P50
+		if seqKeyLen < 16 {
+			seqKeyLen = 16
+		}
+	}
 
 	getsTotal := scaledCount(p.Ops["get"], scale)
 	hasTotal := scaledCount(p.Ops["has"], scale)
@@ -285,7 +294,7 @@ func runTracePhase(db *DB, rng *rand.Rand, p tracePhaseSummary, scale float64, k
 	for i := 0; i < batchWrites; i++ {
 		ops := sampleDist(rng, p.BatchOps, 1)
 		targetBytes := sampleDist(rng, p.BatchBytes, 0)
-		if err := runTraceBatch(db, rng, p, ops, targetBytes, keyspace, keyIndex); err != nil {
+		if err := runTraceBatch(db, rng, p, ops, targetBytes, keyspace, keyIndex, sequentialKeys, seqKeyLen, &seqCounter); err != nil {
 			return err
 		}
 
@@ -365,7 +374,7 @@ func runTracePhase(db *DB, rng *rand.Rand, p tracePhaseSummary, scale float64, k
 	return nil
 }
 
-func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetBytes int, keyspace *[][]byte, keyIndex map[string]struct{}) error {
+func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetBytes int, keyspace *[][]byte, keyIndex map[string]struct{}, sequentialKeys bool, seqKeyLen int, seqCounter *uint64) error {
 	batch := db.NewBatch()
 	if batch == nil {
 		return fmt.Errorf("batch unsupported")
@@ -373,6 +382,9 @@ func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetB
 	usedBytes := 0
 	for i := 0; i < ops; i++ {
 		key := randomKey(rng, p.SetKeyLens)
+		if sequentialKeys {
+			key = sequentialKey(seqCounter, seqKeyLen)
+		}
 		value := randomValue(rng, p.SetValueLens)
 		usedBytes += len(key) + len(value)
 
@@ -385,6 +397,11 @@ func runTraceBatch(db *DB, rng *rand.Rand, p tracePhaseSummary, ops int, targetB
 		}
 		if targetBytes > 0 && usedBytes >= targetBytes {
 			break
+		}
+	}
+	if sequentialKeys {
+		if sortedBatch, ok := batch.(interface{ AssumeSorted() }); ok {
+			sortedBatch.AssumeSorted()
 		}
 	}
 	if err := batch.Write(); err != nil {
@@ -405,6 +422,23 @@ func randomKey(rng *rand.Rand, dist traceDistSummary) []byte {
 	for i := range key {
 		key[i] = byte(rng.Intn(256))
 	}
+	return key
+}
+
+func sequentialKey(seq *uint64, keyLen int) []byte {
+	if seq == nil {
+		return nil
+	}
+	if keyLen < 8 {
+		keyLen = 8
+	}
+	key := make([]byte, keyLen)
+	v := *seq
+	for i := 0; i < 8; i++ {
+		key[keyLen-1-i] = byte(v)
+		v >>= 8
+	}
+	*seq++
 	return key
 }
 

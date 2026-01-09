@@ -207,3 +207,11 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Profiled `BenchmarkTraceReplayTimeline` with `TIMELINE_NO_SLEEP=1`, `INLINE_ITERS=1`, `SKIP_ITERS=1`, `DURATION_MS=3000`.
 - Top TreeDB paths include `zipper.(*Zipper).Apply`, `caching.(*DB).flushCombinedLocked`, and `db.(*Batch).write`.
 - Hot non-TreeDB cost: batch sorting (`batch.(*Batch).SortedEntries`, `sort.*`) and runtime scheduling (`runtime.wakep`).
+
+## 12.18 Timeline Replay Profiling (Backend + Sequential Keys)
+- Added `TREEDB_TRACE_SEQUENTIAL_KEYS=1` and `Batch.AssumeSorted()` to reduce sort overhead in benchmark runs.
+- Ran backend mode (`TREEDB_TRACE_MODE=backend`) with `TIMELINE_NO_SLEEP=1`, `INLINE_ITERS=1`, `SKIP_ITERS=1`, `SEQUENTIAL_KEYS=1`, `DURATION_MS=5000`, `-benchtime=20s`.
+- CPU profile now shows TreeDB zipper/merge hot paths:
+  - `zipper.(*Zipper).writeRecursive` (~14% cum)
+  - `zipper.(*Zipper).mergeLeaf` (~13% cum)
+  - `node.(*Builder).AddLeafEntry` and `zipper.(*Zipper).Apply` appear prominently.

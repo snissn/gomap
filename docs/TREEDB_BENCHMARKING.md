@@ -130,6 +130,10 @@ These apply to trace replay benchmarks:
 - `TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES`: bytes
 - `TREEDB_TRACE_SCALE`: scale factor for counts in summary (default 1.0)
 - `TREEDB_TRACE_TIMELINE_DURATION_MS`: per-phase timeline duration (timeline replay)
+- `TREEDB_TRACE_TIMELINE_NO_SLEEP`: remove sleeps during timeline replay (profiling)
+- `TREEDB_TRACE_TIMELINE_INLINE_ITERS`: run iterators inline (reduce scheduler noise)
+- `TREEDB_TRACE_SKIP_ITERS`: skip iterator events (write/flush profiling)
+- `TREEDB_TRACE_SEQUENTIAL_KEYS`: force sequential keys per batch (avoid sort overhead)
 
 ## 7) Reporting Results
 

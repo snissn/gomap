@@ -5682,6 +5682,9 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+// AssumeSorted is a no-op for cached batches; sorting happens at flush time.
+func (b *Batch) AssumeSorted() {}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
