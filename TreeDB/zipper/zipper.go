@@ -438,12 +438,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		entrySize := target.LeafEntrySize(key, val, flags)
+		entrySize, prefixLen, suffixLen := target.LeafEntrySizeWithPrefix(key, val, flags)
 		var err error
 		if z.leafSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
 		} else {
-			err = target.AddLeafEntry(key, val, flags, valPtr)
+			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
@@ -478,7 +478,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			target = splitBuilder
 
 			// Retry insert
-			err = target.AddLeafEntry(key, val, flags, valPtr)
+			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
+			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
 			if err != nil {
 				return 0, nil, err
 			}

@@ -226,3 +226,8 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Added a sequential-access fast path to reuse the previous decoded key when prefix-compressed leaf entries are accessed in order.
 - Trusted benchmark (backend + sequential keys + prefix compression, 5000ms, -benchtime=20s) improved from ~719ms/op to ~704ms/op.
 - CPU profile: `node.(*Node).leafEntryKeyAt` flat time dropped ~16.6s -> ~15.0s; still a top hotspot.
+
+## 12.21 AddLeafEntry Prefix Reuse
+- Added `LeafEntrySizeWithPrefix` + `AddLeafEntryWithPrefix` to reuse precomputed prefix/suffix lengths during leaf merges.
+- Trusted benchmark (`BenchmarkTraceReplayTimeline`, backend + sequential keys + prefix compression, -benchtime=20s) improved to ~664ms/op (from ~704ms/op).
+- CPU profile shows `leafEntryKeyAt` still top TreeDB hotspot; `mergeLeaf`/`AddLeafEntry` overhead reduced.
