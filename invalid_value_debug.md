@@ -263,3 +263,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.28 Local Data/Len Hoist (Reverted)
 - Hoisted `n.data` and `len(n.data)` into locals in `leafEntryLayoutAt`/`leafEntryKeyAt` to reduce repeated bounds checks.
 - Bench results were noisy (628ms/op, 648ms/op, 688ms/op), so the change was reverted.
+
+## 12.29 Flush SetOps Order Attempt (Reverted)
+- Tried calling `backendBatch.SetOps` per memtable (instead of concatenating) and marking batches as sorted/unsorted based on key ranges.
+- Benchmark regressed (~642ms/op baseline -> ~675–699ms/op), so the change was reverted.
