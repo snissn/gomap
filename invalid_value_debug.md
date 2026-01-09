@@ -215,3 +215,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - `zipper.(*Zipper).writeRecursive` (~14% cum)
   - `zipper.(*Zipper).mergeLeaf` (~13% cum)
   - `node.(*Builder).AddLeafEntry` and `zipper.(*Zipper).Apply` appear prominently.
+
+## 12.19 Prefix Compression Hotspot Alignment
+- Added `TREEDB_TRACE_LEAF_PREFIX_COMPRESSION=1` to align benchmark with Celestia leaf prefix compression.
+- Baseline with prefix compression (before mergeLeaf caching): `BenchmarkTraceReplayTimeline-8` ~771ms/op.
+- After caching old entry in `zipper.mergeLeaf` (avoid double `GetLeafEntryView`): `BenchmarkTraceReplayTimeline-8` ~719ms/op.
+- CPU profile now shows `node.(*Node).leafEntryKeyAt` as the top TreeDB hotspot, aligning with Celestia profiles.

@@ -91,6 +91,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
 	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
+	leafPrefixCompression := parseBoolEnv("TREEDB_TRACE_LEAF_PREFIX_COMPRESSION", false)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
 	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
@@ -119,6 +120,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+		LeafPrefixCompression:   leafPrefixCompression,
 		AllowUnsafe:             true,
 		DisableReadChecksum:     true,
 	}
@@ -167,6 +169,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
 	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
+	leafPrefixCompression := parseBoolEnv("TREEDB_TRACE_LEAF_PREFIX_COMPRESSION", false)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
 	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
@@ -186,6 +189,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+		LeafPrefixCompression:   leafPrefixCompression,
 		AllowUnsafe:             true,
 		DisableReadChecksum:     true,
 	}

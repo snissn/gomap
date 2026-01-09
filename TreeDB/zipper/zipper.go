@@ -328,6 +328,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
+	oldLoaded := false
+	var oldKey, oldVal []byte
+	var oldPtr page.ValuePtr
+	var oldFlags byte
 
 	var splits []Split
 
@@ -349,13 +353,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		} else {
 			// Compare
 			// Optimization: GetLeafEntryView (Zero Copy)
-			k, _, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if !oldLoaded {
+				var err error
+				oldKey, oldVal, oldPtr, oldFlags, err = oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				oldLoaded = true
 			}
 			batchKey := ops[opIdx].Key
 
-			cmp := bytes.Compare(k, batchKey)
+			cmp := bytes.Compare(oldKey, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -364,16 +372,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				// Equal: Update (Batch wins)
 				// The old entry is being overwritten or deleted.
 				// If it was a pointer, track it as dead bytes.
-				if f&node.FlagPointer != 0 {
-					metrics.SlabDeadBytes += int(ptr.Length)
+				if oldFlags&node.FlagPointer != 0 {
+					metrics.SlabDeadBytes += int(oldPtr.Length)
 					if metrics.SlabDeadBytesByFile == nil {
 						metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
 					}
-					metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
+					metrics.SlabDeadBytesByFile[oldPtr.FileID] += int64(oldPtr.Length)
 				}
 
 				useBatch = true
 				oldIdx++ // Skip old
+				oldLoaded = false
 			}
 		}
 
@@ -406,20 +415,25 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		} else {
 			// useOld
 			// Optimization: View
-			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if !oldLoaded {
+				var err error
+				oldKey, oldVal, oldPtr, oldFlags, err = oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				oldLoaded = true
 			}
 			oldIdx++
-			key = k
-			if f&node.FlagTombstone != 0 {
+			oldLoaded = false
+			key = oldKey
+			if oldFlags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
 			}
-			flags = f
-			if f&node.FlagPointer != 0 {
-				valPtr = ptr
+			flags = oldFlags
+			if oldFlags&node.FlagPointer != 0 {
+				valPtr = oldPtr
 			} else {
-				val = v
+				val = oldVal
 			}
 		}
 
