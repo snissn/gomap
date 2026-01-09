@@ -267,3 +267,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.29 Flush SetOps Order Attempt (Reverted)
 - Tried calling `backendBatch.SetOps` per memtable (instead of concatenating) and marking batches as sorted/unsorted based on key ranges.
 - Benchmark regressed (~642ms/op baseline -> ~675–699ms/op), so the change was reverted.
+
+## 12.30 AppendMany Scratch Reuse (Reverted)
+- Tried reusing per-call slices in `slab.AppendMany` to reduce allocations (keys/values/flags/prep).
+- Bench results were noisy/regressive (646ms/op, 716ms/op), so the change was reverted.
