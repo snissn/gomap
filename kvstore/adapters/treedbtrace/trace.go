@@ -1,4 +1,4 @@
-package treedbadapter
+package treedbtrace
 
 import (
 	"bufio"
@@ -112,6 +112,7 @@ func initTrace() {
 	traceInst = t
 }
 
+// SetTracePhase updates the current phase tag for trace events.
 func SetTracePhase(phase string) {
 	t := getTrace()
 	if t == nil || !t.enabled {
@@ -221,13 +222,11 @@ func (t *traceLogger) writeSummary() {
 	}
 	t.mu.Unlock()
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	buf, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return
 	}
-	if err := os.WriteFile(t.summaryPath, data, 0644); err != nil {
-		return
-	}
+	_ = os.WriteFile(t.summaryPath, buf, 0644)
 }
 
 func (t *traceLogger) noteIterClose(kind string, nexts int, dur time.Duration) {
@@ -315,8 +314,10 @@ type traceIterator struct {
 func (t *traceIterator) Valid() bool { return t.inner.Valid() }
 
 func (t *traceIterator) Next() {
+	if t.inner.Valid() {
+		t.nexts++
+	}
 	t.inner.Next()
-	t.nexts++
 }
 
 func (t *traceIterator) Key() []byte { return t.inner.Key() }
@@ -330,9 +331,8 @@ func (t *traceIterator) ValueCopy(dst []byte) []byte { return t.inner.ValueCopy(
 func (t *traceIterator) Error() error { return t.inner.Error() }
 
 func (t *traceIterator) Close() error {
-	err := t.inner.Close()
 	if t.tracer != nil {
 		t.tracer.noteIterClose(t.kind, t.nexts, time.Since(t.start))
 	}
-	return err
+	return t.inner.Close()
 }
