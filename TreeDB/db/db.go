@@ -158,6 +158,11 @@ type Options struct {
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
 	MemtableShards int
+	// IteratorMutableMaxBytes allows iterators to read from mutable memtables
+	// without forcing a rotation when the mutable size is small. This preserves
+	// snapshot isolation but can block writers while iterators are open.
+	// A value <= 0 disables the optimization.
+	IteratorMutableMaxBytes int64
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).

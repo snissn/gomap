@@ -209,6 +209,7 @@ func Open(opts Options) (*DB, error) {
 		FlushThreshold:               opts.FlushThreshold,
 		MemtableMode:                 opts.MemtableMode,
 		MemtableShards:               opts.MemtableShards,
+		IteratorMutableMaxBytes:      opts.IteratorMutableMaxBytes,
 		MaxQueuedMemtables:           opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:           opts.StopBacklogSeconds,

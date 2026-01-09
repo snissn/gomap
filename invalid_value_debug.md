@@ -163,3 +163,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Introduced a reader-tracking reclaimer that defers recycling until no active readers, with a background recycle loop.
 - Wrapped iterator returns to release reader count on Close; Get/Has/GetAppend now bracket memtable reads.
 - Benchmark (production config, scale=1.0) improved from ~95ms/op to ~86ms/op on local Apple M3.
+
+## 12.11 Iterator Rotation Reduction (Optional)
+- Added `IteratorMutableMaxBytes` option to allow iterators to read from mutable memtables without forcing rotations when the mutable size is small.
+- Bench with `TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES=4194304` showed ~55ms/op vs ~72ms/op (scale=1.0, local Apple M3).

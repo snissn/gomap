@@ -68,6 +68,7 @@ func BenchmarkTraceReplay(b *testing.B) {
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
+	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 
 	totalOps := scaledTotalOps(s, scale)
@@ -83,14 +84,15 @@ func BenchmarkTraceReplay(b *testing.B) {
 		}
 
 		opts := Options{
-			Dir:                 dir,
-			Mode:                modeVal,
-			DisableWAL:          disableWAL,
-			DisableValueLog:     disableVlog,
-			FlushThreshold:      int64(flushThreshold),
-			MemtableShards:      memtableShards,
-			AllowUnsafe:         true,
-			DisableReadChecksum: true,
+			Dir:                     dir,
+			Mode:                    modeVal,
+			DisableWAL:              disableWAL,
+			DisableValueLog:         disableVlog,
+			FlushThreshold:          int64(flushThreshold),
+			MemtableShards:          memtableShards,
+			IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+			AllowUnsafe:             true,
+			DisableReadChecksum:     true,
 		}
 		db, err := Open(opts)
 		if err != nil {

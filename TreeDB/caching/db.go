@@ -578,6 +578,12 @@ type Options struct {
 	// of two.
 	MemtableShards int
 
+	// IteratorMutableMaxBytes allows iterators to read from mutable memtables
+	// without forcing a rotation when the mutable size is small. This preserves
+	// snapshot isolation but can block writers while iterators are open.
+	// A value <= 0 disables the optimization.
+	IteratorMutableMaxBytes int64
+
 	// Legacy backpressure knob: queue length limit.
 	// 0 uses the default (4). <0 disables writer backpressure entirely.
 	MaxQueuedMemtables int
@@ -721,6 +727,7 @@ type DB struct {
 	statsMu                   sync.Mutex
 	memtableStats             memtableStats
 	reclaimer                 memtableReclaimer
+	iteratorMutableMaxBytes   int64
 	maxQueuedMemtables        int
 	slowdownBacklogSeconds    float64
 	stopBacklogSeconds        float64
@@ -1270,6 +1277,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableWarmupActive:         adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:      warmupThreshold,
 		memtableAdaptiveCandidate:    mode,
+		iteratorMutableMaxBytes:      opts.IteratorMutableMaxBytes,
 		maxQueuedMemtables:           opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:           opts.StopBacklogSeconds,
@@ -5032,13 +5040,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	db.reclaimer.readEnter()
 	db.mu.Lock()
 	db.noteIterator(start, end)
+	allowMutable := false
+	if db.iteratorMutableMaxBytes > 0 && db.mutableBytes.Load() > 0 && db.mutableBytes.Load() <= db.iteratorMutableMaxBytes {
+		allowMutable = true
+	}
 
 	// Snapshot Isolation:
 	// To ensure the iterator sees a consistent point-in-time view, we rotate the
 	// mutable memtable into the immutable queue. The iterator then consumes
 	// only the queue and the backend. Any subsequent writes will go to a new
 	// mutable memtable which this iterator ignores.
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableBytes.Load() > 0 && !allowMutable {
 		// Rotating is required for snapshot semantics, but allocating a large arena
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
@@ -5059,14 +5071,26 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	var queuePtrs []*largePtrMap
+	var mutables []memtable.Table
+	var mutablePtrs []*largePtrMap
 	if view != nil {
 		queue = view.queue
 		queueRanges = view.queueRanges
 		queuePtrs = view.queuePtrs
+		mutables = view.mutables
+		mutablePtrs = view.mutablePtrs
 	} else {
 		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
 		// for zero-value DBs and tests.
 		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutables = make([]memtable.Table, len(db.mutableShards))
+			mutablePtrs = make([]*largePtrMap, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutables[i] = db.mutableShards[i].mem
+				mutablePtrs[i] = db.mutableShards[i].largePtrs
+			}
+		}
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		queuePtrs = append([]*largePtrMap(nil), db.queueLargePtrs...)
@@ -5095,10 +5119,28 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	var sources []merging.IteratorSource
+	prio := 0
+
+	if allowMutable {
+		for i := len(mutables) - 1; i >= 0; i-- {
+			mem := mutables[i]
+			if mem == nil || mem.Len() == 0 {
+				continue
+			}
+			mIter := mem.NewIterator(start, end)
+			if db.memtableValueLogPointers && db.valueLogReader != nil && i < len(mutablePtrs) && mutablePtrs[i] != nil {
+				mIter = newValueLogIterator(mIter, mutablePtrs[i], db.readValueLog)
+			}
+			sources = append(sources, merging.IteratorSource{
+				Iter:     mIter,
+				Priority: prio,
+			})
+			prio++
+		}
+	}
 
 	// Priority 0..N: Queue (Newest first)
 	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
-	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
 		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
 			prio++
