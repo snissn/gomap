@@ -201,3 +201,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - skiplist ~30.21s/op
   - hash_sorted ~30.17s/op
   - btree ~30.30s/op
+
+## 12.17 Timeline Replay Profiling (No Sleep / Inline / Skip Iters)
+- Added timeline replay knobs: `TREEDB_TRACE_TIMELINE_NO_SLEEP`, `TREEDB_TRACE_TIMELINE_INLINE_ITERS`, `TREEDB_TRACE_SKIP_ITERS`.
+- Profiled `BenchmarkTraceReplayTimeline` with `TIMELINE_NO_SLEEP=1`, `INLINE_ITERS=1`, `SKIP_ITERS=1`, `DURATION_MS=3000`.
+- Top TreeDB paths include `zipper.(*Zipper).Apply`, `caching.(*DB).flushCombinedLocked`, and `db.(*Batch).write`.
+- Hot non-TreeDB cost: batch sorting (`batch.(*Batch).SortedEntries`, `sort.*`) and runtime scheduling (`runtime.wakep`).

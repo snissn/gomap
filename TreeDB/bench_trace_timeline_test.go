@@ -93,6 +93,9 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
+	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
+	inlineIters := parseBoolEnv("TREEDB_TRACE_TIMELINE_INLINE_ITERS", false)
+	skipIters := parseBoolEnv("TREEDB_TRACE_SKIP_ITERS", false)
 
 	timeline, err := loadTraceTimeline(tracePath)
 	if err != nil {
@@ -119,7 +122,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		DisableReadChecksum:     true,
 	}
 
-	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed)
+	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters)
 }
 
 func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
@@ -165,6 +168,9 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
+	noSleep := parseBoolEnv("TREEDB_TRACE_TIMELINE_NO_SLEEP", false)
+	inlineIters := parseBoolEnv("TREEDB_TRACE_TIMELINE_INLINE_ITERS", false)
+	skipIters := parseBoolEnv("TREEDB_TRACE_SKIP_ITERS", false)
 
 	totalOps := scaledTotalOps(s, scale)
 	if totalOps > 0 {
@@ -187,12 +193,12 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		b.Run(mode, func(b *testing.B) {
 			opts := baseOpts
 			opts.MemtableMode = mode
-			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed)
+			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters)
 		})
 	}
 }
 
-func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64) {
+func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64, noSleep bool, inlineIters bool, skipIters bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dir, err := os.MkdirTemp("", "treedb-trace-timeline-*")
@@ -219,7 +225,7 @@ func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[
 			if !ok {
 				continue
 			}
-			if err := runTraceTimelinePhase(db, rng, phaseSummary, phaseTimeline, phaseDurationMs, scale, &keyspace, keyIndex); err != nil {
+			if err := runTraceTimelinePhase(db, rng, phaseSummary, phaseTimeline, phaseDurationMs, scale, &keyspace, keyIndex, noSleep, inlineIters, skipIters); err != nil {
 				_ = db.Close()
 				_ = os.RemoveAll(dir)
 				b.Fatalf("phase %s: %v", phaseName, err)
@@ -353,7 +359,7 @@ func loadTraceTimeline(path string) (map[string]*timelinePhase, error) {
 	return phases, nil
 }
 
-func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, phase *timelinePhase, phaseDurationMs int, scale float64, keyspace *[][]byte, keyIndex map[string]struct{}) error {
+func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, phase *timelinePhase, phaseDurationMs int, scale float64, keyspace *[][]byte, keyIndex map[string]struct{}, noSleep bool, inlineIters bool, skipIters bool) error {
 	if phase == nil {
 		return nil
 	}
@@ -367,7 +373,7 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 	var wg sync.WaitGroup
 
 	for _, ev := range phase.events {
-		if timeScale > 0 {
+		if timeScale > 0 && !noSleep {
 			target := start.Add(time.Duration(float64(ev.ts-phase.minTS) * timeScale))
 			sleepUntil(target)
 		}
@@ -401,6 +407,9 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 				return err
 			}
 		case "iter":
+			if skipIters {
+				continue
+			}
 			iter := ev.iter
 			if iter == nil {
 				continue
@@ -417,9 +426,7 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 			if timeScale > 0 {
 				dur = time.Duration(math.Max(0, float64(dur)*timeScale))
 			}
-			wg.Add(1)
-			go func(kind string, nexts int, start, end []byte, duration time.Duration) {
-				defer wg.Done()
+			runIter := func(kind string, nexts int, start, end []byte, duration time.Duration) {
 				if len(*keyspace) == 0 {
 					return
 				}
@@ -428,7 +435,7 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 					if err != nil {
 						return
 					}
-					consumeIterator(it, nexts, duration)
+					consumeIterator(it, nexts, duration, noSleep)
 					_ = it.Close()
 					return
 				}
@@ -436,8 +443,17 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 				if err != nil {
 					return
 				}
-				consumeIterator(it, nexts, duration)
+				consumeIterator(it, nexts, duration, noSleep)
 				_ = it.Close()
+			}
+			if inlineIters {
+				runIter(iter.kind, nexts, startKey, endKey, dur)
+				continue
+			}
+			wg.Add(1)
+			go func(kind string, nexts int, start, end []byte, duration time.Duration) {
+				defer wg.Done()
+				runIter(kind, nexts, start, end, duration)
 			}(iter.kind, nexts, startKey, endKey, dur)
 		}
 	}
@@ -479,11 +495,11 @@ func trimKey(key []byte, n int) []byte {
 	return out
 }
 
-func consumeIterator(it Iterator, nexts int, duration time.Duration) {
+func consumeIterator(it Iterator, nexts int, duration time.Duration, noSleep bool) {
 	if nexts <= 0 {
 		return
 	}
-	if duration <= 0 {
+	if duration <= 0 || noSleep {
 		for i := 0; i < nexts && it.Valid(); i++ {
 			it.Next()
 		}
