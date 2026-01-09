@@ -271,3 +271,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.30 AppendMany Scratch Reuse (Reverted)
 - Tried reusing per-call slices in `slab.AppendMany` to reduce allocations (keys/values/flags/prep).
 - Bench results were noisy/regressive (646ms/op, 716ms/op), so the change was reverted.
+
+## 12.31 Zipper childWork Pool
+- Added a small `sync.Pool` for `mergeInternal` childWork slices to reduce allocations/GC.
+- Trusted benchmark improved slightly (~642ms/op baseline -> ~637–639ms/op).

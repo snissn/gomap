@@ -37,6 +37,46 @@ type internalEntry struct {
 	child uint64
 }
 
+type childWork struct {
+	key       []byte
+	childID   uint64
+	ops       []batch.Entry
+	newChild  uint64
+	splits    []Split
+	retired   []uint64
+	childStat adaptive.Metrics
+}
+
+const maxChildWorkCap = 1 << 14
+
+var childWorkPool sync.Pool
+
+func getChildWorkSlice(capacity int) []childWork {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxChildWorkCap {
+		return make([]childWork, 0, capacity)
+	}
+	if v := childWorkPool.Get(); v != nil {
+		s := v.([]childWork)
+		if cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]childWork, 0, capacity)
+}
+
+func putChildWorkSlice(children []childWork) {
+	if cap(children) > maxChildWorkCap {
+		return
+	}
+	for i := range children {
+		children[i] = childWork{}
+	}
+	childWorkPool.Put(children[:0])
+}
+
 func New(p *pager.Pager, a PageAllocator) *Zipper {
 	return &Zipper{
 		pager:     p,
@@ -512,17 +552,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
-	type childWork struct {
-		key       []byte
-		childID   uint64
-		ops       []batch.Entry
-		newChild  uint64
-		splits    []Split
-		retired   []uint64
-		childStat adaptive.Metrics
-	}
-
-	children := make([]childWork, 0, int(count))
+	children := getChildWorkSlice(int(count))
+	defer putChildWorkSlice(children)
 
 	for i := uint16(0); i < count; i++ {
 		// Optimization: Use View to avoid alloc
