@@ -135,6 +135,12 @@ Local replay (timeline benchmark):
 - `TREEDB_TRACE_TIMELINE_DURATION_MS=1000` (compress per-phase timelines)
 - `go test -bench BenchmarkTraceReplayTimeline -run '^$' ./TreeDB`
 
+Scaling note:
+- Latest server run duration was ~446s. With `TREEDB_TRACE_TIMELINE_DURATION_MS=1000`,
+  the timeline benchmark took ~3.46s/op (Apple M3), so the replay is ~129x faster than
+  wall clock. Increase `TREEDB_TRACE_TIMELINE_DURATION_MS` (e.g., 3000–5000) if you want
+  less compression; set to 446000 for wall-clock fidelity (not suitable for benchmarks).
+
 ### Phase A vs Phase B Read/Iterator Capture (New)
 Concern: synthetic workload drift due to missing iterator activity. We need to know
 if snapshot restore (phase A) and catch-up (phase B) include iterator-heavy paths.
@@ -256,7 +262,7 @@ Config mapping:
 - [x] Add a helper to capture traces from a server run and pull them locally.
 - [x] Run a full trace capture on the server (run_celestia.sh) and save artifacts.
 - [x] Run the new timeline replay benchmark locally from captured trace.
-- [ ] Compare replay results vs. server run; adjust scaling knobs if needed.
+- [x] Compare replay results vs. server run; adjust scaling knobs if needed.
 
 ## Next Steps (Execution)
 1) Confirm settings from `run_celestia.sh` and record in this doc.
