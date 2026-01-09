@@ -171,3 +171,13 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.12 Server Trace Run (Iterator Mutable Max Bytes)
 - Updated server run config to set `TREEDB_ITERATOR_MUTABLE_MAX_BYTES=4194304`.
 - Started new server run via `nohup ./run_celestia.sh > ~/celestia_trace_run.log 2>&1 &` (PID `1239177`).
+- Run completed successfully; log shows sync caught up and stopped cleanly.
+- Trace output: `/home/mikers/treedb_trace_20260109064203.jsonl` and summary `/home/mikers/treedb_trace_20260109064203.summary.json`.
+- Pulled summary to local: `tmp_trace_summary_20260109064203.json` and ran replay bench (scale=1.0, Apple M3):
+  - Default: ~70.7ms/op.
+  - Memtable modes: adaptive ~69.4ms/op, skiplist ~66.4ms/op, hash_sorted ~45.9ms/op, btree ~54.2ms/op.
+
+## 12.13 Timeline Trace Replay
+- Added timeline replay benchmark (`BenchmarkTraceReplayTimeline`) using JSONL trace timing + overlap.
+- Pulled server trace to `tmp_traces/treedb_trace_20260109064203.jsonl` and ran timeline benchmark:
+  - `TREEDB_TRACE_TIMELINE_DURATION_MS=1000` -> ~3.15s/op (Apple M3).

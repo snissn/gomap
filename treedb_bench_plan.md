@@ -254,8 +254,8 @@ Config mapping:
 - [x] Add trace event IDs + timestamps suitable for timeline replay (iterator IDs; batch timing).
 - [x] Build a timeline-based trace replay benchmark that honors iterator overlap.
 - [x] Add a helper to capture traces from a server run and pull them locally.
-- [ ] Run a full trace capture on the server (run_celestia.sh) and save artifacts.
-- [ ] Run the new timeline replay benchmark locally from captured trace.
+- [x] Run a full trace capture on the server (run_celestia.sh) and save artifacts.
+- [x] Run the new timeline replay benchmark locally from captured trace.
 - [ ] Compare replay results vs. server run; adjust scaling knobs if needed.
 
 ## Next Steps (Execution)
