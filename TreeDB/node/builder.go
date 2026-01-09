@@ -69,6 +69,12 @@ func (b *Builder) LeafEntrySize(key, value []byte, flags byte) int {
 	return entrySize
 }
 
+// LeafEntrySizeWithPrefix returns the encoded size and prefix/suffix lengths
+// for a leaf entry if it were appended next.
+func (b *Builder) LeafEntrySizeWithPrefix(key, value []byte, flags byte) (entrySize, prefixLen, suffixLen int) {
+	return b.leafEntrySize(key, value, flags)
+}
+
 func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, prefixLen int, suffixLen int) {
 	prefixLen = 0
 	suffixLen = len(key)
@@ -102,6 +108,19 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	// 1. Calculate Entry Size
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
+	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+}
+
+// AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
+// The caller must ensure prefixLen/suffixLen are computed for this builder state.
+func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
+	if b.pType != page.PageTypeLeaf {
+		return ErrInvalidType
+	}
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
+
 	headerSize := 7
 	if b.leafPrefixCompression {
 		headerSize = 9
