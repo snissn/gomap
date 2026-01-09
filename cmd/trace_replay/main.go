@@ -77,6 +77,11 @@ func main() {
 			os.Exit(2)
 		}
 		dir = tmp
+	} else {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", dir, err)
+			os.Exit(2)
+		}
 	}
 	fmt.Printf("trace_replay: dir=%s\n", dir)
 
