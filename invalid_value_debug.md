@@ -242,3 +242,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - CPU pprof top (60s sample) shows TreeDB hotspots aligned with benchmark:
   - `node.(*Node).leafEntryKeyAt` (~1.09s flat), `GetLeafEntryView`, `AddLeafEntry`, `SearchLeaf`, `leafEntryLayoutAt`.
   - Cum: `caching.(*DB).flushCombinedLocked` (~18.9s cum), `Batch.SetOps`, `zipper.writeRecursive`, `db.(*Batch).write`.
+
+## 12.24 Timeline Replay (Trace 20260109120107)
+- Pulled `/home/mikers/treedb_trace_20260109120107.jsonl` and generated summary via `cmd/trace_bench`.
+- Trusted timeline replay (backend + sequential keys + prefix compression, 5000ms, -benchtime=20s): ~642ms/op.
