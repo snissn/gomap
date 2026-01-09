@@ -1,0 +1,142 @@
+# TreeDB Benchmarking Guide
+
+This guide focuses on how to run TreeDB benchmarks consistently and how to use
+trace-based replays that approximate Celestia workloads.
+
+## Quick Map
+
+- **Micro/macro synthetic:** `cmd/unified_bench`
+- **Trace summary replay:** `BenchmarkTraceReplay`
+- **Trace timeline replay (overlap-aware):** `BenchmarkTraceReplayTimeline`
+- **Memtable mode matrices:** `BenchmarkTraceReplayMemtableModes`, `BenchmarkTraceReplayTimelineMemtableModes`
+
+## Common Principles
+
+- Use the same hardware when comparing results.
+- Keep env and flags identical (WAL, vlog, compression, memtable settings).
+- Prefer multiple runs or `-count` to reduce noise.
+- Record inputs (trace file, summary, scaling, memtable mode) with results.
+
+## 1) Unified Bench (Synthetic)
+
+Baseline synthetic workload across engines.
+
+Example:
+```bash
+./bin/unified-bench -keys 1000000 -tests write_seq,read_rand -dbs treedb
+```
+
+More details: `docs/BENCHMARK_SPEC.md`.
+
+## 2) Trace Summary Replay (Counts Only)
+
+Uses the JSON summary from trace capture and replays batch sizes + op counts.
+This does **not** model timing overlap.
+
+Benchmark:
+```bash
+TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
+go test -bench BenchmarkTraceReplay -run '^$' ./TreeDB
+```
+
+Memtable mode matrix (summary-based):
+```bash
+TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
+go test -bench BenchmarkTraceReplayMemtableModes -run '^$' ./TreeDB
+```
+
+## 3) Trace Timeline Replay (Overlap-Aware)
+
+Uses the JSONL trace to model iterator lifetimes and write overlap. This is the
+closest approximation to the Celestia workload that does not require a server.
+
+Required inputs:
+- JSONL trace: `treedb_trace_*.jsonl`
+- Summary JSON: `treedb_trace_*.summary.json`
+
+Benchmark:
+```bash
+TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
+TREEDB_TRACE_JSONL=/path/to/trace.jsonl \
+TREEDB_TRACE_TIMELINE_DURATION_MS=3000 \
+go test -bench BenchmarkTraceReplayTimeline -run '^$' ./TreeDB
+```
+
+Memtable mode matrix (timeline-based):
+```bash
+TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
+TREEDB_TRACE_JSONL=/path/to/trace.jsonl \
+TREEDB_TRACE_TIMELINE_DURATION_MS=3000 \
+go test -bench BenchmarkTraceReplayTimelineMemtableModes -run '^$' ./TreeDB
+```
+
+### Timeline Duration Scaling
+
+`TREEDB_TRACE_TIMELINE_DURATION_MS` compresses each phase’s timeline. Lower
+values run faster but can exaggerate contention. Higher values are more faithful
+but slower.
+
+Guidance (Apple M3, trace `20260109071235`):
+- `1000ms` ~3.2–3.5s/op (very compressed)
+- `3000ms` ~9s/op (balanced)
+- `5000ms` ~15s/op (more realistic)
+- `10000ms` ~30s/op (high fidelity)
+
+A good default for local work is **3000–5000ms**.
+
+## 4) Capturing a Trace from the Server
+
+### Capture (server run)
+```bash
+scripts/capture_celestia_trace.sh mikers@192.168.0.132 /home/mikers/run_celestia.sh
+```
+
+This prints:
+- trace JSONL path (`/home/mikers/treedb_trace_*.jsonl`)
+- summary JSON path (`/home/mikers/treedb_trace_*.summary.json`)
+
+### Pull to local
+```bash
+scripts/pull_celestia_trace.sh mikers@192.168.0.132 /home/mikers/treedb_trace_YYYYMMDDHHMMSS.jsonl ./tmp_traces
+```
+
+If summary is missing (older trace), generate it on server:
+```bash
+ssh mikers@192.168.0.132 'cd /home/mikers/dev/snissn/gomap-tracing && \
+  go run ./cmd/trace_bench -trace /home/mikers/treedb_trace_YYYY.jsonl \
+  -out /home/mikers/treedb_trace_YYYY.summary.json'
+```
+
+## 5) Memtable Mode Comparisons
+
+Modes:
+- `adaptive` (default)
+- `skiplist`
+- `hash_sorted`
+- `btree`
+
+When using trace benchmarks, always run a mode matrix to compare behavior.
+Note that results can converge as timeline duration increases.
+
+## 6) Common Environment Knobs
+
+These apply to trace replay benchmarks:
+
+- `TREEDB_TRACE_MODE`: `cached` (default) or `backend`
+- `TREEDB_TRACE_DISABLE_WAL`: `1/0`
+- `TREEDB_TRACE_DISABLE_VLOG`: `1/0`
+- `TREEDB_TRACE_FLUSH_THRESHOLD`: bytes
+- `TREEDB_TRACE_MEMTABLE_SHARDS`: int
+- `TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES`: bytes
+- `TREEDB_TRACE_SCALE`: scale factor for counts in summary (default 1.0)
+- `TREEDB_TRACE_TIMELINE_DURATION_MS`: per-phase timeline duration (timeline replay)
+
+## 7) Reporting Results
+
+When you share results, always include:
+- Trace ID or JSONL path
+- Timeline duration (if timeline replay)
+- Hardware / CPU model
+- Memtable mode and key options (WAL/vlog/thresholds)
+
+This makes comparisons reproducible.
