@@ -231,3 +231,8 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Added `LeafEntrySizeWithPrefix` + `AddLeafEntryWithPrefix` to reuse precomputed prefix/suffix lengths during leaf merges.
 - Trusted benchmark (`BenchmarkTraceReplayTimeline`, backend + sequential keys + prefix compression, -benchtime=20s) improved to ~664ms/op (from ~704ms/op).
 - CPU profile shows `leafEntryKeyAt` still top TreeDB hotspot; `mergeLeaf`/`AddLeafEntry` overhead reduced.
+
+## 12.22 leafEntryKeyAt Prefix Copy Elision
+- Attempted to skip redundant prefix copies when the key scratch buffer is reused.
+- Trusted benchmark runs: ~666ms/op and ~663ms/op (within noise vs ~664ms/op baseline); no clear win yet.
+- Tried collapsing prefixLen/suffixLen writes into a single `PutUint32` (to reduce `PutUint16`), but it regressed (~696ms/op) and was reverted.
