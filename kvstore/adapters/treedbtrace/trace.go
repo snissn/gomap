@@ -26,6 +26,7 @@ type traceLogger struct {
 	summaryPath  string
 	everyN       uint64
 	counter      atomic.Uint64
+	iterCounter  atomic.Uint64
 	openDBs      atomic.Int64
 	closed       atomic.Bool
 	phase        atomic.Value
@@ -57,6 +58,7 @@ type traceEvent struct {
 	TS         int64  `json:"ts_unix_nano"`
 	Op         string `json:"op"`
 	Phase      string `json:"phase,omitempty"`
+	IterID     uint64 `json:"iter_id,omitempty"`
 	KeyLen     int    `json:"key_len,omitempty"`
 	ValueLen   int    `json:"value_len,omitempty"`
 	BatchOps   int    `json:"batch_ops,omitempty"`
@@ -229,7 +231,14 @@ func (t *traceLogger) writeSummary() {
 	_ = os.WriteFile(t.summaryPath, buf, 0644)
 }
 
-func (t *traceLogger) noteIterClose(kind string, nexts int, dur time.Duration) {
+func (t *traceLogger) nextIterID() uint64 {
+	if t == nil || !t.enabled {
+		return 0
+	}
+	return t.iterCounter.Add(1)
+}
+
+func (t *traceLogger) noteIterClose(iterID uint64, kind string, nexts int, dur time.Duration) {
 	phase := t.phaseName()
 	t.addCount(phase, func(c *traceCounts) {
 		c.IterClose++
@@ -238,19 +247,21 @@ func (t *traceLogger) noteIterClose(kind string, nexts int, dur time.Duration) {
 	})
 	t.logEvent(traceEvent{
 		Op:         "iter_close",
+		IterID:     iterID,
 		IterKind:   kind,
 		IterNexts:  nexts,
 		IterMillis: dur.Milliseconds(),
 	})
 }
 
-func (t *traceLogger) noteIterCreate(kind string, start, end []byte) {
+func (t *traceLogger) noteIterCreate(iterID uint64, kind string, start, end []byte) {
 	phase := t.phaseName()
 	t.addCount(phase, func(c *traceCounts) {
 		c.IterCreate++
 	})
 	t.logEvent(traceEvent{
 		Op:       "iter_create",
+		IterID:   iterID,
 		IterKind: kind,
 		StartLen: len(start),
 		EndLen:   len(end),
@@ -306,6 +317,7 @@ func (t *traceLogger) String() string {
 type traceIterator struct {
 	inner  kvstore.Iterator
 	tracer *traceLogger
+	iterID uint64
 	kind   string
 	start  time.Time
 	nexts  int
@@ -332,7 +344,7 @@ func (t *traceIterator) Error() error { return t.inner.Error() }
 
 func (t *traceIterator) Close() error {
 	if t.tracer != nil {
-		t.tracer.noteIterClose(t.kind, t.nexts, time.Since(t.start))
+		t.tracer.noteIterClose(t.iterID, t.kind, t.nexts, time.Since(t.start))
 	}
 	return t.inner.Close()
 }
