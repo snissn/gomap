@@ -259,3 +259,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.27 Restart-Key Cache Attempt (Reverted)
 - Added a restart-key cache in `leafEntryKeyAt` to avoid reconstructing restart entries across probes.
 - Bench results were within noise (~644–646ms/op vs ~642ms/op baseline), so the change was reverted.
+
+## 12.28 Local Data/Len Hoist (Reverted)
+- Hoisted `n.data` and `len(n.data)` into locals in `leafEntryLayoutAt`/`leafEntryKeyAt` to reduce repeated bounds checks.
+- Bench results were noisy (628ms/op, 648ms/op, 688ms/op), so the change was reverted.
