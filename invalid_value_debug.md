@@ -221,3 +221,8 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Baseline with prefix compression (before mergeLeaf caching): `BenchmarkTraceReplayTimeline-8` ~771ms/op.
 - After caching old entry in `zipper.mergeLeaf` (avoid double `GetLeafEntryView`): `BenchmarkTraceReplayTimeline-8` ~719ms/op.
 - CPU profile now shows `node.(*Node).leafEntryKeyAt` as the top TreeDB hotspot, aligning with Celestia profiles.
+
+## 12.20 leafEntryKeyAt Sequential Cache
+- Added a sequential-access fast path to reuse the previous decoded key when prefix-compressed leaf entries are accessed in order.
+- Trusted benchmark (backend + sequential keys + prefix compression, 5000ms, -benchtime=20s) improved from ~719ms/op to ~704ms/op.
+- CPU profile: `node.(*Node).leafEntryKeyAt` flat time dropped ~16.6s -> ~15.0s; still a top hotspot.
