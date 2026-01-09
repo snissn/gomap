@@ -66,6 +66,7 @@ type traceEvent struct {
 	IterMillis int64  `json:"iter_ms,omitempty"`
 	StartLen   int    `json:"iter_start_len,omitempty"`
 	EndLen     int    `json:"iter_end_len,omitempty"`
+	Detail     string `json:"detail,omitempty"`
 }
 
 var (
@@ -120,6 +121,11 @@ func SetTracePhase(phase string) {
 		phase = tracePhaseDefault
 	}
 	t.phase.Store(phase)
+	t.logEvent(traceEvent{
+		Op:     "phase",
+		Phase:  phase,
+		Detail: "SetTracePhase",
+	})
 }
 
 func (t *traceLogger) registerDB() {
