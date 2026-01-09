@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
