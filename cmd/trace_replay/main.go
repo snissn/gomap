@@ -34,6 +34,7 @@ type phaseSummary struct {
 	SetValueLens distSummary    `json:"set_value_lens"`
 	IterStartLen distSummary    `json:"iter_start_lens"`
 	IterEndLen   distSummary    `json:"iter_end_lens"`
+	IterKinds    map[string]int `json:"iter_create_kind"`
 }
 
 type summary struct {
@@ -137,18 +138,24 @@ func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keys
 	}
 
 	getsTotal := scaledCount(p.Ops["get"], scale)
+	hasTotal := scaledCount(p.Ops["has"], scale)
 	iterCreates := scaledCount(p.Ops["iter_create"], scale)
+	deletesTotal := scaledCount(p.Ops["delete"], scale)
 
 	getsPerBatch := float64(getsTotal) / float64(batchWrites)
+	hasPerBatch := float64(hasTotal) / float64(batchWrites)
 	itersPerBatch := float64(iterCreates) / float64(batchWrites)
+	deletesPerBatch := float64(deletesTotal) / float64(batchWrites)
 
 	getDebt := 0.0
+	hasDebt := 0.0
 	iterDebt := 0.0
+	deleteDebt := 0.0
 
 	for i := 0; i < batchWrites; i++ {
 		ops := sampleDist(rng, p.BatchOps, 1)
-		avgValueLen := estimateValueLen(p, ops)
-		if err := runBatch(db, rng, p, ops, avgValueLen, keyspace, keyIndex); err != nil {
+		targetBytes := sampleDist(rng, p.BatchBytes, 0)
+		if err := runBatch(db, rng, p, ops, targetBytes, keyspace, keyIndex); err != nil {
 			return err
 		}
 
@@ -164,6 +171,18 @@ func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keys
 			}
 		}
 
+		hasDebt += hasPerBatch
+		for hasDebt >= 1.0 {
+			hasDebt -= 1.0
+			if len(*keyspace) == 0 {
+				break
+			}
+			key := (*keyspace)[rng.Intn(len(*keyspace))]
+			if _, err := db.Has(key); err != nil {
+				return err
+			}
+		}
+
 		iterDebt += itersPerBatch
 		for iterDebt >= 1.0 {
 			iterDebt -= 1.0
@@ -171,7 +190,21 @@ func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keys
 				break
 			}
 			nexts := sampleDist(rng, p.IterNexts, 0)
-			it, err := db.Iterator(nil, nil)
+			start, end := pickRange(rng, p, *keyspace)
+			if useReverseIter(rng, p.IterKinds) {
+				it, err := db.ReverseIterator(start, end)
+				if err != nil {
+					return err
+				}
+				for j := 0; j < nexts && it.Valid(); j++ {
+					it.Next()
+				}
+				if err := it.Close(); err != nil {
+					return err
+				}
+				continue
+			}
+			it, err := db.Iterator(start, end)
 			if err != nil {
 				return err
 			}
@@ -182,20 +215,47 @@ func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keys
 				return err
 			}
 		}
+
+		deleteDebt += deletesPerBatch
+		for deleteDebt >= 1.0 {
+			deleteDebt -= 1.0
+			if len(*keyspace) == 0 {
+				break
+			}
+			idx := rng.Intn(len(*keyspace))
+			key := (*keyspace)[idx]
+			if err := db.Delete(key); err != nil {
+				return err
+			}
+			delete(keyIndex, string(key))
+			(*keyspace)[idx] = (*keyspace)[len(*keyspace)-1]
+			*keyspace = (*keyspace)[:len(*keyspace)-1]
+		}
 	}
 	return nil
 }
 
-func runBatch(db *treedb.DB, rng *rand.Rand, p phaseSummary, ops int, avgVal int, keyspace *[][]byte, keyIndex map[string]struct{}) error {
+func runBatch(db *treedb.DB, rng *rand.Rand, p phaseSummary, ops int, targetBytes int, keyspace *[][]byte, keyIndex map[string]struct{}) error {
 	batch := db.NewBatch()
 	if batch == nil {
 		return fmt.Errorf("batch unavailable")
 	}
 	defer func() { _ = batch.Close() }()
 
+	remaining := targetBytes
+	if remaining <= 0 {
+		remaining = ops * estimateValueLen(p, ops)
+	}
 	for i := 0; i < ops; i++ {
 		key := makeKey(rng, p, len(*keyspace))
-		val := makeValue(rng, p, avgVal)
+		valLen := sampleDist(rng, p.SetValueLens, estimateValueLen(p, ops))
+		if remaining > 0 {
+			maxForOp := remaining / (ops - i)
+			if maxForOp > 0 && valLen > maxForOp {
+				valLen = maxForOp
+			}
+		}
+		val := makeValue(rng, p, valLen)
 		if err := batch.Set(key, val); err != nil {
 			return err
 		}
@@ -203,6 +263,7 @@ func runBatch(db *treedb.DB, rng *rand.Rand, p phaseSummary, ops int, avgVal int
 			keyIndex[string(key)] = struct{}{}
 			*keyspace = append(*keyspace, key)
 		}
+		remaining -= len(key) + len(val)
 	}
 	return batch.Write()
 }
@@ -274,4 +335,47 @@ func uniformInt(rng *rand.Rand, min, max int) int {
 		return min
 	}
 	return rng.Intn(max-min+1) + min
+}
+
+func useReverseIter(rng *rand.Rand, kinds map[string]int) bool {
+	if len(kinds) == 0 {
+		return false
+	}
+	total := 0
+	for _, v := range kinds {
+		total += v
+	}
+	if total == 0 {
+		return false
+	}
+	r := rng.Intn(total)
+	for kind, count := range kinds {
+		if r < count {
+			return strings.ToLower(kind) == "reverse"
+		}
+		r -= count
+	}
+	return false
+}
+
+func pickRange(rng *rand.Rand, p phaseSummary, keyspace [][]byte) ([]byte, []byte) {
+	if len(keyspace) == 0 {
+		return nil, nil
+	}
+	key := keyspace[rng.Intn(len(keyspace))]
+	startLen := sampleDist(rng, p.IterStartLen, len(key))
+	endLen := sampleDist(rng, p.IterEndLen, len(key))
+	if startLen > len(key) {
+		startLen = len(key)
+	}
+	if endLen <= startLen {
+		endLen = startLen + 1
+	}
+	start := append([]byte(nil), key[:startLen]...)
+	end := make([]byte, endLen)
+	copy(end, start)
+	for i := startLen; i < endLen; i++ {
+		end[i] = 0xFF
+	}
+	return start, end
 }
