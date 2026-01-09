@@ -236,3 +236,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Attempted to skip redundant prefix copies when the key scratch buffer is reused.
 - Trusted benchmark runs: ~666ms/op and ~663ms/op (within noise vs ~664ms/op baseline); no clear win yet.
 - Tried collapsing prefixLen/suffixLen writes into a single `PutUint32` (to reduce `PutUint16`), but it regressed (~696ms/op) and was reverted.
+
+## 12.23 Celestia Trace Run (20260109120107)
+- Started `/home/mikers/run_celestia_trace.sh` on server (run PID 1373309); trace dir `/home/mikers/pprof_20260109120107`.
+- CPU pprof top (60s sample) shows TreeDB hotspots aligned with benchmark:
+  - `node.(*Node).leafEntryKeyAt` (~1.09s flat), `GetLeafEntryView`, `AddLeafEntry`, `SearchLeaf`, `leafEntryLayoutAt`.
+  - Cum: `caching.(*DB).flushCombinedLocked` (~18.9s cum), `Batch.SetOps`, `zipper.writeRecursive`, `db.(*Batch).write`.
