@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -119,7 +120,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	for phase, p := range phases {
+	for _, phase := range orderedPhases(phases) {
+		p := phases[phase]
 		fmt.Printf("phase=%s\n", phase)
 		if err := runPhase(db, rng, p, *scale, &keyspace, keyIndex); err != nil {
 			fmt.Fprintf(os.Stderr, "phase %s: %v\n", phase, err)
@@ -233,6 +235,31 @@ func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keys
 		}
 	}
 	return nil
+}
+
+func orderedPhases(phases map[string]phaseSummary) []string {
+	if len(phases) == 0 {
+		return nil
+	}
+	order := make([]string, 0, len(phases))
+	seen := make(map[string]struct{}, len(phases))
+	preferred := []string{"restore", "catchup"}
+	for _, phase := range preferred {
+		if _, ok := phases[phase]; ok {
+			order = append(order, phase)
+			seen[phase] = struct{}{}
+		}
+	}
+	rest := make([]string, 0, len(phases)-len(order))
+	for phase := range phases {
+		if _, ok := seen[phase]; ok {
+			continue
+		}
+		rest = append(rest, phase)
+	}
+	sort.Strings(rest)
+	order = append(order, rest...)
+	return order
 }
 
 func runBatch(db *treedb.DB, rng *rand.Rand, p phaseSummary, ops int, targetBytes int, keyspace *[][]byte, keyIndex map[string]struct{}) error {
