@@ -177,7 +177,7 @@ func (t *traceLogger) logEvent(ev traceEvent) {
 		return
 	}
 	cur := t.counter.Add(1)
-	if t.everyN > 1 && (cur%t.everyN) != 0 {
+	if ev.Op != "phase" && t.everyN > 1 && (cur%t.everyN) != 0 {
 		return
 	}
 	ev.TS = time.Now().UnixNano()
