@@ -39,6 +39,11 @@ type Node struct {
 	count      uint16        // Cached count
 	ptype      page.PageType // Cached type
 	keyScratch []byte
+	leafKey    []byte
+	leafLayout leafEntryLayout
+	leafEntry  int
+	leafIndex  uint16
+	leafValid  bool
 }
 
 // NewNode creates a Node wrapper around the given page data.

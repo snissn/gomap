@@ -106,12 +106,41 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 		}
 		key = n.data[keyStart : keyStart+layout.keyLen]
+		n.leafValid = false
 		return key, layout, entryStart, nil
 	}
 
 	count := n.Count()
 	if index >= count {
 		return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+	}
+	if n.leafValid && n.leafIndex+1 == index {
+		layout, err = n.leafEntryLayoutAt(entryStart)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		if index%leafPrefixRestartInterval == 0 && layout.prefixLen != 0 {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		keyStart := entryStart + layout.headerSize
+		keyEnd := keyStart + layout.suffixLen
+		if keyEnd > len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		if layout.prefixLen > len(n.leafKey) {
+			n.leafValid = false
+		} else {
+			keyLen := layout.prefixLen + layout.suffixLen
+			key = n.ensureKeyScratch(keyLen)
+			copy(key, n.leafKey[:layout.prefixLen])
+			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
+			return key, layout, entryStart, nil
+		}
 	}
 	restart := index - (index % leafPrefixRestartInterval)
 	var prevKey []byte
@@ -153,6 +182,11 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		prevKey = key
 		if i == index {
 			entryStart = ptr
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
 			return key, layout, entryStart, nil
 		}
 	}
