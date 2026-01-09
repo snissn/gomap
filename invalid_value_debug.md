@@ -255,3 +255,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.26 Prefix Compare Attempt (Reverted)
 - Implemented compare-only `searchLeafPrefixCompressed` (no full key reconstruction for probe target).
 - Trusted benchmark regressed (~642ms/op -> ~668ms/op), so the change was reverted.
+
+## 12.27 Restart-Key Cache Attempt (Reverted)
+- Added a restart-key cache in `leafEntryKeyAt` to avoid reconstructing restart entries across probes.
+- Bench results were within noise (~644–646ms/op vs ~642ms/op baseline), so the change was reverted.
