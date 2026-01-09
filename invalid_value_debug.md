@@ -153,3 +153,7 @@ Ensure `waitForStop` schedules a background flush before waiting:
 ### Regression Test
 Added `TreeDB/caching/backpressure_wait_test.go`:
 - `TestWaitForStopSchedulesFlush` creates queued memtables via `rotateMemtableLocked(false)` (no flush signal), forces backlog above stop, and asserts a `Set()` completes within a timeout.
+
+## 12.9 Trace -> Bench Program (Local)
+- Added `TreeDB/bench_trace_replay_test.go` to benchmark TreeDB using a trace summary (env-driven).
+- Uses `TREEDB_TRACE_SUMMARY` plus optional tuning envs to replay phases with iterator activity in the benchmark harness.
