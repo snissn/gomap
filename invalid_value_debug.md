@@ -187,3 +187,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Trace captured: `/home/mikers/treedb_trace_20260109071235.jsonl` (summary generated post-run).
 - Timeline replay benchmark with `TREEDB_TRACE_TIMELINE_DURATION_MS=1000` -> ~3.46s/op (Apple M3).
 - Compression factor vs wall clock ~129x; increase `TREEDB_TRACE_TIMELINE_DURATION_MS` to reduce compression.
+
+## 12.15 Timeline Scaling Sweep (20260109071235)
+- `TREEDB_TRACE_TIMELINE_DURATION_MS=3000` -> ~9.06s/op.
+- `TREEDB_TRACE_TIMELINE_DURATION_MS=5000` -> ~15.1s/op.
+- `TREEDB_TRACE_TIMELINE_DURATION_MS=10000` -> ~30.1s/op.
+- Suggested balance: 3000–5000ms for more realistic overlap without wall-clock runtimes.

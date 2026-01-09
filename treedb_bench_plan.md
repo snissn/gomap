@@ -140,6 +140,12 @@ Scaling note:
   the timeline benchmark took ~3.46s/op (Apple M3), so the replay is ~129x faster than
   wall clock. Increase `TREEDB_TRACE_TIMELINE_DURATION_MS` (e.g., 3000–5000) if you want
   less compression; set to 446000 for wall-clock fidelity (not suitable for benchmarks).
+- Empirical scaling on Apple M3 (trace `20260109071235`):
+  - 3000ms -> ~9.06s/op
+  - 5000ms -> ~15.1s/op
+  - 10000ms -> ~30.1s/op
+  - 3000–5000ms seems like a reasonable balance for more realistic overlap while
+    keeping runs under ~20s/op.
 
 ### Phase A vs Phase B Read/Iterator Capture (New)
 Concern: synthetic workload drift due to missing iterator activity. We need to know
