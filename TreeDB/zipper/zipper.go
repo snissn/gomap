@@ -32,6 +32,37 @@ type Split struct {
 	NodeID uint64
 }
 
+func shortestSeparator(left, right []byte) []byte {
+	if len(right) == 0 {
+		return nil
+	}
+	if len(left) == 0 {
+		return append([]byte(nil), right...)
+	}
+	if bytes.Compare(left, right) >= 0 {
+		return append([]byte(nil), right...)
+	}
+
+	n := len(left)
+	if len(right) < n {
+		n = len(right)
+	}
+	i := 0
+	for i < n && left[i] == right[i] {
+		i++
+	}
+	if i == n {
+		return append([]byte(nil), right...)
+	}
+	if left[i]+1 < right[i] {
+		sep := make([]byte, i+1)
+		copy(sep, left[:i])
+		sep[i] = left[i] + 1
+		return sep
+	}
+	return append([]byte(nil), right...)
+}
+
 type internalEntry struct {
 	key   []byte
 	child uint64
@@ -484,6 +515,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// Record split
 			splitKey := append([]byte(nil), key...) // Deep copy
+			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
+				splitKey = shortestSeparator(leftMax, key)
+			}
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder

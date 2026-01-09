@@ -57,6 +57,12 @@ func (b *Builder) FreeSpace() int {
 	return b.heapStart - b.dirEnd
 }
 
+// LeafPrevKey returns the last key appended to a leaf builder.
+// It is only maintained when leaf prefix compression is enabled.
+func (b *Builder) LeafPrevKey() []byte {
+	return b.leafPrevKey
+}
+
 // Data returns the underlying buffer.
 func (b *Builder) Data() []byte {
 	return b.data
