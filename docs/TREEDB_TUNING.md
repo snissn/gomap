@@ -91,6 +91,26 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### `Options.IteratorMutableMaxBytes` (cached mode; opt-in)
+
+Allows iterators to read from mutable memtables without forcing a rotation when
+the mutable size is small. This can reduce iterator-driven rotation overhead,
+but can also block writers while an iterator holds a read lock on the mutable
+memtable. Default is disabled (`<= 0`).
+
+When to try it:
+- Short-lived iterators or small range scans where rotation overhead dominates.
+- Workloads with modest concurrent write pressure.
+
+Risks:
+- Long-lived iterators can block writers and reduce write throughput.
+
+How to evaluate safely:
+- Use a trace replay (e.g. `BenchmarkTraceReplayMemtableModes`) and a
+  production-like run to measure both throughput and tail latency.
+- Compare runs with and without `IteratorMutableMaxBytes` at a small threshold
+  (1–4MB). Watch for stalls or reduced write throughput under heavy write load.
+
 ### Write concurrency (current limits)
 
 TreeDB currently serializes write commits per DB handle (a single writer at a
