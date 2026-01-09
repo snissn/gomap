@@ -275,3 +275,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.31 Zipper childWork Pool
 - Added a small `sync.Pool` for `mergeInternal` childWork slices to reduce allocations/GC.
 - Trusted benchmark improved slightly (~642ms/op baseline -> ~637–639ms/op).
+
+## 12.32 AppendMany Flag Consolidation (Reverted)
+- Moved per-record compression flags into `appendManyPrep` to drop three bool slices.
+- Benchmark regressed (~680–707ms/op), so the change was reverted.
