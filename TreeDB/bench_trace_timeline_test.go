@@ -84,6 +84,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	if mode == "backend" || mode == "uncached" || mode == "raw" {
 		modeVal = ModeBackend
 	}
+	memtableMode := strings.ToLower(os.Getenv("TREEDB_TRACE_MEMTABLE_MODE"))
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
@@ -108,6 +109,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 
 	opts := Options{
 		Mode:                    modeVal,
+		MemtableMode:            memtableMode,
 		DisableWAL:              disableWAL,
 		DisableValueLog:         disableVlog,
 		FlushThreshold:          int64(flushThreshold),
@@ -117,6 +119,80 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		DisableReadChecksum:     true,
 	}
 
+	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed)
+}
+
+func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
+	summaryPath := os.Getenv("TREEDB_TRACE_SUMMARY")
+	if summaryPath == "" {
+		b.Skip("TREEDB_TRACE_SUMMARY not set")
+	}
+	tracePath := os.Getenv("TREEDB_TRACE_JSONL")
+	if tracePath == "" {
+		b.Skip("TREEDB_TRACE_JSONL not set")
+	}
+
+	data, err := os.ReadFile(summaryPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var s traceSummary
+	if err := json.Unmarshal(data, &s); err != nil {
+		b.Fatal(err)
+	}
+	if len(s.Phases) == 0 {
+		b.Fatal("trace summary has no phases")
+	}
+
+	timeline, err := loadTraceTimeline(tracePath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(timeline) == 0 {
+		b.Fatal("timeline trace has no phases")
+	}
+
+	mode := strings.ToLower(os.Getenv("TREEDB_TRACE_MODE"))
+	modeVal := ModeCached
+	if mode == "backend" || mode == "uncached" || mode == "raw" {
+		modeVal = ModeBackend
+	}
+	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
+	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
+	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
+	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
+	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
+	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
+	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
+	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
+
+	totalOps := scaledTotalOps(s, scale)
+	if totalOps > 0 {
+		b.ReportMetric(float64(totalOps), "ops/iter")
+	}
+
+	baseOpts := Options{
+		Mode:                    modeVal,
+		DisableWAL:              disableWAL,
+		DisableValueLog:         disableVlog,
+		FlushThreshold:          int64(flushThreshold),
+		MemtableShards:          memtableShards,
+		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+		AllowUnsafe:             true,
+		DisableReadChecksum:     true,
+	}
+
+	for _, mode := range []string{"adaptive", "skiplist", "hash_sorted", "btree"} {
+		mode := mode
+		b.Run(mode, func(b *testing.B) {
+			opts := baseOpts
+			opts.MemtableMode = mode
+			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed)
+		})
+	}
+}
+
+func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dir, err := os.MkdirTemp("", "treedb-trace-timeline-*")

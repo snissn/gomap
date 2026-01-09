@@ -193,3 +193,11 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - `TREEDB_TRACE_TIMELINE_DURATION_MS=5000` -> ~15.1s/op.
 - `TREEDB_TRACE_TIMELINE_DURATION_MS=10000` -> ~30.1s/op.
 - Suggested balance: 3000–5000ms for more realistic overlap without wall-clock runtimes.
+
+## 12.16 Timeline Memtable Modes (10000ms)
+- Added `BenchmarkTraceReplayTimelineMemtableModes` (timeline replay by memtable mode).
+- `TREEDB_TRACE_TIMELINE_DURATION_MS=10000` results (Apple M3):
+  - adaptive ~30.23s/op
+  - skiplist ~30.21s/op
+  - hash_sorted ~30.17s/op
+  - btree ~30.30s/op
