@@ -76,6 +76,76 @@ func BenchmarkTraceReplay(b *testing.B) {
 		b.ReportMetric(float64(totalOps), "ops/iter")
 	}
 
+	opts := Options{
+		Mode:                    modeVal,
+		DisableWAL:              disableWAL,
+		DisableValueLog:         disableVlog,
+		FlushThreshold:          int64(flushThreshold),
+		MemtableShards:          memtableShards,
+		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+		AllowUnsafe:             true,
+		DisableReadChecksum:     true,
+	}
+	runTraceReplayBenchmark(b, s, opts, scale, seed)
+}
+
+func BenchmarkTraceReplayMemtableModes(b *testing.B) {
+	summaryPath := os.Getenv("TREEDB_TRACE_SUMMARY")
+	if summaryPath == "" {
+		b.Skip("TREEDB_TRACE_SUMMARY not set")
+	}
+	data, err := os.ReadFile(summaryPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var s traceSummary
+	if err := json.Unmarshal(data, &s); err != nil {
+		b.Fatal(err)
+	}
+	if len(s.Phases) == 0 {
+		b.Fatal("trace summary has no phases")
+	}
+
+	mode := strings.ToLower(os.Getenv("TREEDB_TRACE_MODE"))
+	modeVal := ModeCached
+	if mode == "backend" || mode == "uncached" || mode == "raw" {
+		modeVal = ModeBackend
+	}
+	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
+	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
+	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
+	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
+	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
+	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
+	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
+
+	totalOps := scaledTotalOps(s, scale)
+	if totalOps > 0 {
+		b.ReportMetric(float64(totalOps), "ops/iter")
+	}
+
+	baseOpts := Options{
+		Mode:                    modeVal,
+		DisableWAL:              disableWAL,
+		DisableValueLog:         disableVlog,
+		FlushThreshold:          int64(flushThreshold),
+		MemtableShards:          memtableShards,
+		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
+		AllowUnsafe:             true,
+		DisableReadChecksum:     true,
+	}
+
+	for _, mode := range []string{"adaptive", "skiplist", "hash_sorted", "btree"} {
+		mode := mode
+		b.Run(mode, func(b *testing.B) {
+			opts := baseOpts
+			opts.MemtableMode = mode
+			runTraceReplayBenchmark(b, s, opts, scale, seed)
+		})
+	}
+}
+
+func runTraceReplayBenchmark(b *testing.B, s traceSummary, opts Options, scale float64, seed int64) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dir, err := os.MkdirTemp("", "treedb-trace-replay-*")
@@ -83,17 +153,7 @@ func BenchmarkTraceReplay(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		opts := Options{
-			Dir:                     dir,
-			Mode:                    modeVal,
-			DisableWAL:              disableWAL,
-			DisableValueLog:         disableVlog,
-			FlushThreshold:          int64(flushThreshold),
-			MemtableShards:          memtableShards,
-			IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
-			AllowUnsafe:             true,
-			DisableReadChecksum:     true,
-		}
+		opts.Dir = dir
 		db, err := Open(opts)
 		if err != nil {
 			_ = os.RemoveAll(dir)

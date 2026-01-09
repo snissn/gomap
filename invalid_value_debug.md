@@ -167,3 +167,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.11 Iterator Rotation Reduction (Optional)
 - Added `IteratorMutableMaxBytes` option to allow iterators to read from mutable memtables without forcing rotations when the mutable size is small.
 - Bench with `TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES=4194304` showed ~55ms/op vs ~72ms/op (scale=1.0, local Apple M3).
+
+## 12.12 Server Trace Run (Iterator Mutable Max Bytes)
+- Updated server run config to set `TREEDB_ITERATOR_MUTABLE_MAX_BYTES=4194304`.
+- Started new server run via `nohup ./run_celestia.sh > ~/celestia_trace_run.log 2>&1 &` (PID `1239177`).
