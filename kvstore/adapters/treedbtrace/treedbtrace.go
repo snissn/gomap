@@ -129,8 +129,9 @@ func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
 		return nil, err
 	}
 	if t := getTrace(); t != nil {
-		t.noteIterCreate("forward", start, end)
-		return &traceIterator{inner: it, tracer: t, kind: "forward", start: time.Now()}, nil
+		iterID := t.nextIterID()
+		t.noteIterCreate(iterID, "forward", start, end)
+		return &traceIterator{inner: it, tracer: t, iterID: iterID, kind: "forward", start: time.Now()}, nil
 	}
 	return it, nil
 }
@@ -145,8 +146,9 @@ func (d *DB) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
 		return nil, err
 	}
 	if t := getTrace(); t != nil {
-		t.noteIterCreate("reverse", start, end)
-		return &traceIterator{inner: it, tracer: t, kind: "reverse", start: time.Now()}, nil
+		iterID := t.nextIterID()
+		t.noteIterCreate(iterID, "reverse", start, end)
+		return &traceIterator{inner: it, tracer: t, iterID: iterID, kind: "reverse", start: time.Now()}, nil
 	}
 	return it, nil
 }

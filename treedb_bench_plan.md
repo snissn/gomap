@@ -66,6 +66,75 @@ Planned instrumentation (future, opt-in):
 - Use rolling file logs with sampling to avoid overhead.
 - Enable via env flags, e.g. `TREEDB_TRACE_BATCH=1`.
 
+### Iterator Timing + Overlap (New)
+Goal: capture iterator lifetimes and overlap with writes so replay can model
+contention and concurrency, not just counts.
+
+Capture plan:
+- Emit timestamped events (monotonic time) for:
+  - iterator create (phase, start/end bounds, iterator kind)
+  - iterator close (duration derived from create timestamp)
+  - iterator next counts (count per iterator on close or periodic sampling)
+  - write batch start/end (duration)
+- Include a coarse "concurrency window" by logging the time offsets relative to
+  a per-phase start time, e.g. `t_us` since phase start.
+- Sampling:
+  - full iterator lifecycle always (low volume)
+  - batch writes and gets can be sampled (every N)
+
+Replay plan:
+- Build a per-phase event timeline sorted by `t_us`.
+- Drive a scheduler that replays events with the same relative ordering and
+  overlapping intervals:
+  - start iterator, hold it open for its recorded duration
+  - issue its `Next()` calls over its lifetime (uniform or bursty based on count)
+  - issue writes during iterator lifetimes to reflect contention
+- Provide a "concurrency scaling" knob to speed/slow event timing without
+  changing overlap ratios.
+
+Trace event schema (minimal):
+- Common fields:
+  - `t_us`: microseconds since phase start (monotonic)
+  - `phase`: `"restore"` | `"catchup"` | other
+  - `type`: event type
+- Iterator events:
+  - `type: "iter_create"` with `iter_id`, `kind`, `start_len`, `end_len`
+  - `type: "iter_close"` with `iter_id`, `next_count`, `duration_us` (optional)
+  - optional `type: "iter_next"` with `iter_id`, `count` (sampled)
+- Write events:
+  - `type: "batch_write"` with `ops`, `bytes`, `duration_us` (optional)
+- Read events (optional):
+  - `type: "get"` or `"has"` with `key_len`
+
+Replay scheduler sketch:
+```
+events := loadEvents()
+sort by t_us
+start := time.Now()
+for _, ev := range events {
+  sleepUntil(start + scale(ev.t_us))
+  switch ev.type:
+    iter_create: open iterator, store handle with end time
+    iter_close: close iterator by id (if still open)
+    batch_write: execute batch workload
+}
+```
+Notes:
+- Use a goroutine per iterator to issue `Next()` calls across its lifetime.
+- If `iter_close` arrives before `iter_create` (due to sampling), drop it.
+
+Helper scripts:
+- `scripts/capture_celestia_trace.sh user@host [run_script] [trace_basename]`
+  - Runs `run_celestia.sh` on the server with trace envs set and prints the PID plus trace paths.
+- `scripts/pull_celestia_trace.sh user@host /path/to/trace.jsonl [dest_dir]`
+  - Copies the trace JSONL + summary to local disk for replay.
+
+Local replay (timeline benchmark):
+- `TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json`
+- `TREEDB_TRACE_JSONL=/path/to/trace.jsonl`
+- `TREEDB_TRACE_TIMELINE_DURATION_MS=1000` (compress per-phase timelines)
+- `go test -bench BenchmarkTraceReplayTimeline -run '^$' ./TreeDB`
+
 ### Phase A vs Phase B Read/Iterator Capture (New)
 Concern: synthetic workload drift due to missing iterator activity. We need to know
 if snapshot restore (phase A) and catch-up (phase B) include iterator-heavy paths.
@@ -103,6 +172,7 @@ Synthetic mapping:
   the generator/runner to match:
   - iterator start/end spans
   - iterator frequency relative to writes
+  - iterator duration overlap with writes (from timing trace)
 
 ## 2) Synthetic Workload Model
 Design a parameterized model that mirrors Celestia restore characteristics.
@@ -178,6 +248,15 @@ Recommended location:
 Config mapping:
 - Map env flags from `run_celestia.sh` to runner options.
 - Use a `--preset=celestia` profile for parity.
+
+## Next Steps (Execution)
+## Execution TODO (Track Progress Here)
+- [x] Add trace event IDs + timestamps suitable for timeline replay (iterator IDs; batch timing).
+- [x] Build a timeline-based trace replay benchmark that honors iterator overlap.
+- [x] Add a helper to capture traces from a server run and pull them locally.
+- [ ] Run a full trace capture on the server (run_celestia.sh) and save artifacts.
+- [ ] Run the new timeline replay benchmark locally from captured trace.
+- [ ] Compare replay results vs. server run; adjust scaling knobs if needed.
 
 ## Next Steps (Execution)
 1) Confirm settings from `run_celestia.sh` and record in this doc.
