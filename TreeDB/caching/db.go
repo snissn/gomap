@@ -720,6 +720,7 @@ type DB struct {
 	memtableAdaptiveStreak    uint8
 	statsMu                   sync.Mutex
 	memtableStats             memtableStats
+	reclaimer                 memtableReclaimer
 	maxQueuedMemtables        int
 	slowdownBacklogSeconds    float64
 	stopBacklogSeconds        float64
@@ -1003,6 +1004,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
+		oldMem := shard.mem
 		reused := false
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
@@ -1011,12 +1013,13 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 			}
 		}
 		if !reused {
-			mt, err := memtable.NewWithCapacityModeAndIndexer(0, nextMode, db.hashSortedIndexer)
+			mt, err := acquireMemtable(nextMode, 0, db.hashSortedIndexer)
 			if err != nil {
 				shard.mu.Unlock()
 				return err
 			}
 			shard.mem = mt
+			db.reclaimer.deferRecycle(oldMem)
 		}
 		shard.rng = keyRange{}
 		shard.bytes = 0
@@ -1229,7 +1232,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
 	for i := range mutableShards {
-		mt, err := memtable.NewWithCapacityModeAndIndexer(warmupCap, mode, indexer)
+		mt, err := acquireMemtable(mode, warmupCap, indexer)
 		if err != nil {
 			return nil, err
 		}
@@ -1298,6 +1301,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		walSeq:                       walSeq,
 		vlogSeq:                      maxVlogSeq,
 	}
+	db.reclaimer.start(db.closeCh)
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
@@ -3171,6 +3175,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.resetMemtableStatsLocked()
 			}
 
+			for _, mem := range db.queue {
+				db.reclaimer.deferRecycle(mem)
+			}
 			db.queue = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
@@ -3228,6 +3235,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.resetMemtableStatsLocked()
 			}
 
+			for _, mem := range db.queue {
+				db.reclaimer.deferRecycle(mem)
+			}
 			db.queue = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
@@ -3348,6 +3358,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					r = db.queueRanges[i]
 				}
 				if queryCoversRange(start, end, r) {
+					db.reclaimer.deferRecycle(mem)
 					db.queueBacklogBytes.Add(-mem.Size())
 					continue
 				}
@@ -3662,7 +3673,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueMaxSeqs = append(db.queueMaxSeqs, currentSeq)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
-		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
+		mt, err := acquireMemtable(db.memtableMode, newCapacity, db.hashSortedIndexer)
 		if err != nil {
 			shard.mu.Unlock()
 			return err
@@ -3803,7 +3814,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueMaxSeqs = append(db.queueMaxSeqs, currentSeq)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
-		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
+		mt, err := acquireMemtable(db.memtableMode, newCapacity, db.hashSortedIndexer)
 		if err != nil {
 			return err
 		}
@@ -4405,6 +4416,10 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	}
 	db.mu.Unlock()
 
+	for _, unit := range units {
+		db.reclaimer.deferRecycle(unit.mem)
+	}
+
 	removed := false
 	for _, walPath := range deletable {
 		db.dropValueLogSegment(walPath)
@@ -4646,6 +4661,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	}
 	db.mu.Unlock()
 
+	db.reclaimer.deferRecycle(mem)
+
 	if sync && walPath != "" && !inUse {
 		retain := db.valueLogRetained(walPath)
 		if !retain {
@@ -4773,31 +4790,39 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	db.reclaimer.readEnter()
 	val, found, err := db.getMemtable(key)
 	if err != nil {
+		db.reclaimer.readExit()
 		return nil, err
 	}
 	if found {
 		if val == nil {
+			db.reclaimer.readExit()
 			return nil, nil
 		}
 		cpy := make([]byte, len(val))
 		copy(cpy, val)
+		db.reclaimer.readExit()
 		return cpy, nil
 	}
+	db.reclaimer.readExit()
 	return db.backend.Get(key)
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
+	db.reclaimer.readEnter()
 	// 1. Memtable (Zero Copy)
 	val, found, err := db.getMemtable(key)
 	if err != nil {
+		db.reclaimer.readExit()
 		return dst, err
 	}
 	if found {
 		if val == nil {
+			db.reclaimer.readExit()
 			// Found tombstone or empty?
 			// getMemtable returns val=nil for deleted.
 			// Deleted means "Not Found" effectively for GetAppend?
@@ -4818,14 +4843,18 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 			// I will add the import.
 			return dst, tree.ErrKeyNotFound
 		}
-		return append(dst, val...), nil
+		out := append(dst, val...)
+		db.reclaimer.readExit()
+		return out, nil
 	}
+	db.reclaimer.readExit()
 
 	// 2. Backend
 	return db.backend.GetAppend(key, dst)
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	db.reclaimer.readEnter()
 	view := db.memtables.Load()
 	var (
 		mutables []memtable.Table
@@ -4851,6 +4880,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if idx < len(mutables) && mutables[idx] != nil {
 			_, deleted, found := mutables[idx].Get(key)
 			if found {
+				db.reclaimer.readExit()
 				return !deleted, nil
 			}
 		}
@@ -4859,10 +4889,12 @@ func (db *DB) Has(key []byte) (bool, error) {
 	for i := len(queue) - 1; i >= 0; i-- {
 		_, deleted, found := queue[i].Get(key)
 		if found {
+			db.reclaimer.readExit()
 			return !deleted, nil
 		}
 	}
 
+	db.reclaimer.readExit()
 	return db.backend.Has(key)
 }
 
@@ -4997,6 +5029,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 
+	db.reclaimer.readEnter()
 	db.mu.Lock()
 	db.noteIterator(start, end)
 
@@ -5012,6 +5045,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		// if/when writes resume.
 		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
+			db.reclaimer.readExit()
 			return nil, err
 		}
 	}
@@ -5048,13 +5082,15 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if backendRangeKnown && len(queue) == 0 && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
+				db.reclaimer.readExit()
 				return nil, err
 			}
 
 			if iteratorDebugEnabled.Load() {
-				return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
+				wrapped := &readTrackingIterator{inner: diskIter, reclaimer: &db.reclaimer}
+				return &debugIterator{Iterator: wrapped, queueLen: queueLen, sourcesUsed: 1}, nil
 			}
-			return diskIter, nil
+			return &readTrackingIterator{inner: diskIter, reclaimer: &db.reclaimer}, nil
 		}
 	}
 
@@ -5084,6 +5120,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
+			db.reclaimer.readExit()
 			return nil, err
 		}
 
@@ -5098,7 +5135,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 0}
 		}
-		return out, nil
+		return &readTrackingIterator{inner: out, reclaimer: &db.reclaimer}, nil
 	}
 
 	if len(sources) == 1 {
@@ -5106,14 +5143,14 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 1}
 		}
-		return out, nil
+		return &readTrackingIterator{inner: out, reclaimer: &db.reclaimer}, nil
 	}
 
 	out := merging.NewMergingIterator(sources, start, end)
 	if iteratorDebugEnabled.Load() {
 		out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: len(sources)}
 	}
-	return out, nil
+	return &readTrackingIterator{inner: out, reclaimer: &db.reclaimer}, nil
 }
 
 type debugIterator struct {

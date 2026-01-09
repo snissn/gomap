@@ -491,6 +491,15 @@ func (s *SkipList) Size() int64 {
 	return int64(s.curChunkIdx)*chunkSize + int64(s.curChunkOff)
 }
 
+// AllocatedBytes reports the total retained allocation size for the arena.
+func (s *SkipList) AllocatedBytes() int64 {
+	var total int64
+	for _, buf := range s.allocated {
+		total += int64(cap(buf))
+	}
+	return total
+}
+
 func (s *SkipList) Count() int {
 	return s.count
 }

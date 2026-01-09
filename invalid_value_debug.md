@@ -157,3 +157,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.9 Trace -> Bench Program (Local)
 - Added `TreeDB/bench_trace_replay_test.go` to benchmark TreeDB using a trace summary (env-driven).
 - Uses `TREEDB_TRACE_SUMMARY` plus optional tuning envs to replay phases with iterator activity in the benchmark harness.
+
+## 12.10 Memtable Reuse Optimization
+- Added a guarded memtable reuse pool for skiplist memtables to reduce allocation churn across rotations.
+- Introduced a reader-tracking reclaimer that defers recycling until no active readers, with a background recycle loop.
+- Wrapped iterator returns to release reader count on Close; Get/Has/GetAppend now bracket memtable reads.
+- Benchmark (production config, scale=1.0) improved from ~95ms/op to ~86ms/op on local Apple M3.

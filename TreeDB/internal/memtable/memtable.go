@@ -214,6 +214,13 @@ func (m *Memtable) Size() int64 {
 	return m.sl.Size()
 }
 
+// AllocatedBytes reports the retained arena size for reuse heuristics.
+func (m *Memtable) AllocatedBytes() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sl.AllocatedBytes()
+}
+
 func (m *Memtable) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
