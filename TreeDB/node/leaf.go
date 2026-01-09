@@ -132,7 +132,10 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		} else {
 			keyLen := layout.prefixLen + layout.suffixLen
 			key = n.ensureKeyScratch(keyLen)
-			copy(key, n.leafKey[:layout.prefixLen])
+			sameBacking := len(n.leafKey) > 0 && len(key) > 0 && &n.leafKey[0] == &key[0]
+			if !sameBacking && layout.prefixLen > 0 {
+				copy(key, n.leafKey[:layout.prefixLen])
+			}
 			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
 			n.leafKey = key
 			n.leafLayout = layout
@@ -175,7 +178,10 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			}
 			keyLen := layout.prefixLen + layout.suffixLen
 			key = n.ensureKeyScratch(keyLen)
-			copy(key, prevKey[:layout.prefixLen])
+			sameBacking := len(prevKey) > 0 && len(key) > 0 && &prevKey[0] == &key[0]
+			if !sameBacking && layout.prefixLen > 0 {
+				copy(key, prevKey[:layout.prefixLen])
+			}
 			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
 		}
 
