@@ -246,3 +246,12 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.24 Timeline Replay (Trace 20260109120107)
 - Pulled `/home/mikers/treedb_trace_20260109120107.jsonl` and generated summary via `cmd/trace_bench`.
 - Trusted timeline replay (backend + sequential keys + prefix compression, 5000ms, -benchtime=20s): ~642ms/op.
+
+## 12.25 Prefix-Compressed Search Compare Plan
+- Add a compare-only path in `searchLeafPrefixCompressed` to avoid reconstructing full keys for binary search probes.
+- Use restart-block reconstruction to get `prevKey`, then compare target vs (prefix from prevKey + suffix bytes) without copying the final key.
+- Keep the existing `leafEntryKeyAt` for callers that need the full key; search uses compare-only path.
+
+## 12.26 Prefix Compare Attempt (Reverted)
+- Implemented compare-only `searchLeafPrefixCompressed` (no full key reconstruction for probe target).
+- Trusted benchmark regressed (~642ms/op -> ~668ms/op), so the change was reverted.
