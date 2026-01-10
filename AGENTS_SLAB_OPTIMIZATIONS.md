@@ -93,7 +93,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Decide: accept (merge) or reject (revert) and document.
 
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
@@ -166,3 +166,4 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Next: run pointer-values profiling and execute items starting from #1.
 - Baseline (slab-opt-01-multistream): `BenchmarkTraceReplayTimeline` ns/op: 1,146,542,800 / 1,209,162,630 / 1,153,101,110. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof`.
 - Decision: deferred #1 (multi-stream slabs) — requires expanding meta to track multiple active slab tails/IDs; current on-disk format only records a single `ActiveSlabID/Tail`, so parallel active slabs would risk unrepaired torn tails on crash. Revisit once a meta v2 or multi-active slab recovery strategy is defined.
+- Decision: deferred #2 (zonal dictionaries / slab v2) — requires on-disk format changes (new header/zone layout, dict selection flags, migration strategy) plus read-path dict caching; scope is too large without a dedicated migration/recovery plan. No benchmarks run.
