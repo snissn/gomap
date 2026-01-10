@@ -18,6 +18,14 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 - **Local (replay bench):** `ns/op` and a CPU profile top table.
 - Always include: branch name, commit SHA(s), and whether accepted/reverted.
 
+## Compatibility stance (Alpha)
+
+This is **alpha software**. For this optimization sprint:
+- **Backward compatibility is NOT required.**
+- It is acceptable to bump slab/index formats and invalidate old on-disk data.
+- “Needs a migration plan” is **not** a valid blocker reason.
+- The only acceptable blockers are concrete engineering constraints (time/complexity/safety) with a clear next step to unblock.
+
 ## Branching & RC Workflow (MANDATORY)
 
 Goal: preserve a linear history of attempts while ensuring the active code path only contains accepted optimizations.
@@ -113,7 +121,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
   - [ ] Read path: O(1) dict selection; zero-copy dict slices from mmap.
   - [ ] Write path: zone headers + dict write policy.
-  - [ ] Migration strategy: v1->v2 handling (explicitly breaking is OK, but must be intentional).
+  - [ ] Format bump: implement v2 alongside v1 or replace v1 entirely (breaking is OK). Migration is optional.
   - [ ] Tests: roundtrip, corruption detection, cross-zone reads.
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 

@@ -2,6 +2,11 @@ You are a Codex agent working in the `gomap` repo. Your mission is to optimize T
 
 Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checklist, and work log. Treat it as your TODO list and update it continuously.
 
+## Compatibility stance (Alpha)
+- Backward compatibility is NOT required.
+- It is acceptable to bump slab/index formats and invalidate old on-disk data.
+- “Needs a migration plan” is not a valid blocker reason; treat format bumps as acceptable.
+
 ## Hard rules
 1) **Branch-per-feature, stacked workflow**
    - Use the current RC base branch (default: `treedb-tracing-capture` unless the repo indicates otherwise).
