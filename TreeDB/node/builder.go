@@ -149,8 +149,8 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	ptr := entryStart
 	keyStart := ptr + headerSize
 	if b.leafPrefixCompression {
-		binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(prefixLen))
-		binary.LittleEndian.PutUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
+		putUint16(b.data[ptr:ptr+2], uint16(prefixLen))
+		putUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
 		if flags&FlagPointer != 0 {
 			binary.LittleEndian.PutUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
 		} else {
@@ -159,7 +159,7 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		b.data[ptr+8] = flags
 		copy(b.data[keyStart:], key[prefixLen:])
 	} else {
-		binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(len(key)))
+		putUint16(b.data[ptr:ptr+2], uint16(len(key)))
 		if flags&FlagPointer != 0 {
 			binary.LittleEndian.PutUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
 		} else {
@@ -177,7 +177,7 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	}
 
 	// 5. Write Directory Offset (Grow Up)
-	binary.LittleEndian.PutUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
 
 	// 6. Update State
 	b.heapStart = entryStart
@@ -213,11 +213,11 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	entryStart := b.heapStart - entrySize
 	ptr := entryStart
 
-	binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(len(key)))
+	putUint16(b.data[ptr:ptr+2], uint16(len(key)))
 	binary.LittleEndian.PutUint64(b.data[ptr+2:ptr+10], childPageID)
 	copy(b.data[ptr+10:], key)
 
-	binary.LittleEndian.PutUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
 
 	b.heapStart = entryStart
 	b.dirEnd += DirectoryEntrySize
@@ -255,4 +255,10 @@ func sharedPrefixLen(a, b []byte) int {
 		}
 	}
 	return n
+}
+
+func putUint16(dst []byte, v uint16) {
+	_ = dst[1]
+	dst[0] = byte(v)
+	dst[1] = byte(v >> 8)
 }
