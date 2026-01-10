@@ -173,17 +173,13 @@ func (t *compressionTrainer) collect(value []byte) {
 	cp := make([]byte, len(sample))
 	copy(cp, sample)
 	gen := t.sampleGen.Load()
-	enqueued := false
 	select {
 	case t.sampleCh <- trainerSample{gen: gen, sample: cp}:
-		enqueued = true
 		t.enqueued.Add(1)
 	default:
 		t.dropped.Add(1)
 	}
-	if enqueued {
-		t.updateMaxQueueLen()
-	}
+	t.updateMaxQueueLen()
 }
 
 func (t *compressionTrainer) run() {
