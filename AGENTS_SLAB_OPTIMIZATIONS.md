@@ -90,7 +90,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 
 ## “No Free Deferrals” Policy (MANDATORY)
 
-Deferring almost everything is not useful. For this plan, **“deferred” is not a default outcome**.
+Deferring almost everything is not useful. For this sprint, **do not use “deferred”** except for truly external blockers (e.g. no access to the Linux server at all).
 
 You may only mark an item **deferred** if ALL of the following are true:
 1) You created a feature branch for the item.
@@ -102,12 +102,21 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - a branch that contains the attempt commits AND a revert commit that restores baseline behavior, merged into `slab-opt-rc`, and
 - a brief note for a future agent about what was tried and what to try next.
 
+## Acceptance bar (avoid “noise wins”)
+
+Mark an item **accepted** only if:
+- Local: repeatable improvement across `-count=3` (or better), and
+- Server (preferred): true-workload improvement, or at least a defensible reduction in syscalls/bytes with no wall-time regression.
+
+If the change is Linux-only, acceptance should be based on Linux server results (see `celestia_testing_info.md`).
+
 ## Optimization punch list (ordered; update statuses as you go)
 
 ### 1) Multi-Stream Slabs (Parallel Writing) — High impact / medium risk
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-01-multistream`
 - Checklist:
+  - **Minimum viable attempt (MVA):** implement a *single-process* multi-stream writer that shards `AppendMany` into N independent buffers and writes them sequentially to the same file (no format change) to measure syscall reduction potential; keep it behind an opt-in option/env and benchmark.
   - [ ] Design: choose N streams, stream->file layout, and pointer encoding.
   - [ ] Implement: parallel append streams + “soft barrier” rotation.
   - [ ] Safety: correctness under crash/restart; no torn writes.
@@ -119,6 +128,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
+  - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
   - [ ] Read path: O(1) dict selection; zero-copy dict slices from mmap.
   - [ ] Write path: zone headers + dict write policy.
@@ -130,6 +140,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
+  - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
   - [ ] Implement rolling compression-ratio metrics per zone.
   - [ ] Trigger background training when ratio degrades; publish next-zone dictionary.
   - [ ] Verify no writer stalls; no extra syscalls on the read fast path.
@@ -139,6 +150,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-04-dict-dedup`
 - Checklist:
+  - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
   - [ ] Hash dictionaries (xxhash64) and reuse global or recent locals when similar.
   - [ ] Implement USE_REF / USE_GLOBAL flags.
   - [ ] Bench: measure slab bytes reduction and any latency impact.
@@ -147,6 +159,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-05-two-pass-compaction`
 - Checklist:
+  - **MVA:** add a compaction benchmark + instrumentation first; do not start with full algorithmic overhaul.
   - [ ] Implement representative global dict selection for rewritten slabs.
   - [ ] Detect shift points; schedule local dict overrides.
   - [ ] Benchmark compaction throughput and resulting slab sizes.
@@ -155,6 +168,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-06-slab-tiering`
 - Checklist:
+  - **MVA:** implement “cold slab copy + reopen read-only” tooling first; keep write path unchanged.
   - [ ] Define “active fast-append” vs “cold compressed” slab formats.
   - [ ] Implement transition policy; verify reads across tiers.
   - [ ] Benchmark space savings vs read latency.
@@ -163,6 +177,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-07-value-delta`
 - Checklist:
+  - **MVA:** prototype delta encoding only for a single known value type in a synthetic benchmark (opt-in) to measure feasibility.
   - [ ] Decide delta format + how to reconstruct values for reads.
   - [ ] Integrate safely with compaction/vacuum.
   - [ ] Add adversarial tests (replay, corruption, partial updates).
@@ -171,6 +186,7 @@ If an item is not implementable within reasonable scope, **it must be handled as
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-08-zone-bloom`
 - Checklist:
+  - **MVA:** add bloom-writing + bloom-reading with a standalone verifier tool first; keep it optional and benchmark write overhead.
   - [ ] Add bloom filters to zone headers (keys only).
   - [ ] Provide tooling to rebuild index faster using blooms.
   - [ ] Ensure omit-keys mode is still supported (bloom is “identity proof”).

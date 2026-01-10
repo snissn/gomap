@@ -28,6 +28,10 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
    - Commit frequently with small, atomic commits.
    - Update `AGENTS_SLAB_OPTIMIZATIONS.md` work log on every major action (branch created, bench run, accept/reject decision).
 
+4) **No “lazy deferrals”**
+   - Do not defer items because they are large. Start with the item’s “MVA” (minimum viable attempt) to get real measurements.
+   - If a full implementation is too large, produce an MVA + benchmark and then “reject for now” via a revert (so work is preserved but inactive).
+
 4) **Stop condition**
    - Only stop (create `SLAB_WORK_HALT`) when every punch-list item is either:
      - **accepted**, or
