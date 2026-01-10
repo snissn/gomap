@@ -284,6 +284,8 @@ type Options struct {
 	SlabCompressionAdaptiveTrainMinRecords int
 	// SlabCompressionAdaptiveTrainMaxRecordBytes caps per-record sample size for training.
 	SlabCompressionAdaptiveTrainMaxRecordBytes int
+	// SlabCompressionAdaptiveTrainSampleStride samples every Nth record for training.
+	SlabCompressionAdaptiveTrainSampleStride int
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -495,6 +497,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		CompressionAdaptiveTrainDictBytes:      opts.SlabCompressionAdaptiveTrainDictBytes,
 		CompressionAdaptiveTrainMinRecords:     opts.SlabCompressionAdaptiveTrainMinRecords,
 		CompressionAdaptiveTrainMaxRecordBytes: opts.SlabCompressionAdaptiveTrainMaxRecordBytes,
+		CompressionAdaptiveTrainSampleStride:   opts.SlabCompressionAdaptiveTrainSampleStride,
 	})
 	if err != nil {
 		p.Close()

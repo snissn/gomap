@@ -254,3 +254,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,230,044,706 / 1,210,352,441 / 1,231,597,482 ns/op (regressed).
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_pool.prof` (pprof top captured).
   - Revert commit `c1f7129` (attempt `5700ba0`), baseline confirm: 1,198,962,321 / 1,205,787,116 / 1,212,346,842 ns/op.
+- #3 training sample stride (in progress): created `slab-opt-03-entropy-training-7` to sample every Nth record for compression training (opt-in).
+  - Baseline replay (ptr-values, training enabled): 1,281,808,851 / 1,313,083,521 / 1,346,444,491 ns/op.
+  - Replay after change with `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE=4`: 1,277,830,697 / 1,322,376,487 / 1,309,572,789 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_stride.prof` (pprof top captured).

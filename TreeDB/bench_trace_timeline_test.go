@@ -102,6 +102,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	slabCompressionTrainDictBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DICT_BYTES", 0)
 	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
+	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -146,13 +147,14 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		SlabCompressionAdaptiveTrainDictBytes:      slabCompressionTrainDictBytes,
 		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
 		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
-		OmitSlabKeys:            slabOmitKeys,
-		FlushThreshold:          int64(flushThreshold),
-		MemtableShards:          memtableShards,
-		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
-		LeafPrefixCompression:   leafPrefixCompression,
-		AllowUnsafe:             true,
-		DisableReadChecksum:     true,
+		SlabCompressionAdaptiveTrainSampleStride:   slabCompressionTrainSampleStride,
+		OmitSlabKeys:                               slabOmitKeys,
+		FlushThreshold:                             int64(flushThreshold),
+		MemtableShards:                             memtableShards,
+		IteratorMutableMaxBytes:                    int64(iteratorMutableMaxBytes),
+		LeafPrefixCompression:                      leafPrefixCompression,
+		AllowUnsafe:                                true,
+		DisableReadChecksum:                        true,
 	}
 
 	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys)
@@ -208,6 +210,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	slabCompressionTrainDictBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DICT_BYTES", 0)
 	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
+	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -243,13 +246,14 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		SlabCompressionAdaptiveTrainDictBytes:      slabCompressionTrainDictBytes,
 		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
 		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
-		OmitSlabKeys:            slabOmitKeys,
-		FlushThreshold:          int64(flushThreshold),
-		MemtableShards:          memtableShards,
-		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
-		LeafPrefixCompression:   leafPrefixCompression,
-		AllowUnsafe:             true,
-		DisableReadChecksum:     true,
+		SlabCompressionAdaptiveTrainSampleStride:   slabCompressionTrainSampleStride,
+		OmitSlabKeys:                               slabOmitKeys,
+		FlushThreshold:                             int64(flushThreshold),
+		MemtableShards:                             memtableShards,
+		IteratorMutableMaxBytes:                    int64(iteratorMutableMaxBytes),
+		LeafPrefixCompression:                      leafPrefixCompression,
+		AllowUnsafe:                                true,
+		DisableReadChecksum:                        true,
 	}
 
 	for _, mode := range []string{"adaptive", "skiplist", "hash_sorted", "btree"} {

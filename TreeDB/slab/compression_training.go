@@ -34,10 +34,12 @@ type compressionTrainer struct {
 	samples       [][]byte
 	lastSlabID    uint32
 
-	sampleGen atomic.Uint64
-	sampleCh  chan trainerSample
-	closed    atomic.Bool
-	closeOnce sync.Once
+	sampleGen           atomic.Uint64
+	sampleStride        uint64
+	sampleStrideCounter atomic.Uint64
+	sampleCh            chan trainerSample
+	closed              atomic.Bool
+	closeOnce           sync.Once
 
 	enqueued         atomic.Uint64
 	dropped          atomic.Uint64
@@ -94,14 +96,19 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 	if maxRecord <= 0 {
 		maxRecord = defaultCompressionTrainMaxRecordBytes
 	}
+	sampleStride := opts.CompressionAdaptiveTrainSampleStride
+	if sampleStride <= 1 {
+		sampleStride = 1
+	}
 
 	trainer := &compressionTrainer{
-		targetBytes: uint64(target),
-		minRecords:  uint64(minRecords),
-		maxRecord:   maxRecord,
-		dictBytes:   dictBytes,
-		level:       cfg.level,
-		sampleCh:    make(chan trainerSample, defaultCompressionTrainQueue),
+		targetBytes:  uint64(target),
+		minRecords:   uint64(minRecords),
+		maxRecord:    maxRecord,
+		dictBytes:    dictBytes,
+		level:        cfg.level,
+		sampleStride: uint64(sampleStride),
+		sampleCh:     make(chan trainerSample, defaultCompressionTrainQueue),
 	}
 	trainer.enabled.Store(true)
 	go trainer.run()
@@ -135,12 +142,18 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	t.sampleRecords = 0
 	t.lastSlabID = slabID
 	t.sampleGen.Add(1)
+	t.sampleStrideCounter.Store(0)
 	t.collecting.Store(true)
 }
 
 func (t *compressionTrainer) collect(value []byte) {
 	if t == nil || t.closed.Load() || !t.collecting.Load() || len(value) == 0 {
 		return
+	}
+	if t.sampleStride > 1 {
+		if t.sampleStrideCounter.Add(1)%t.sampleStride != 0 {
+			return
+		}
 	}
 	if len(t.sampleCh) == cap(t.sampleCh) {
 		t.dropped.Add(1)
