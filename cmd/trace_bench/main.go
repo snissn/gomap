@@ -226,7 +226,7 @@ func main() {
 	}
 
 	if *outPath != "" {
-		if err := os.WriteFile(*outPath, data, 0644); err != nil {
+		if err := os.WriteFile(*outPath, data, 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "write summary: %v\n", err)
 			os.Exit(2)
 		}

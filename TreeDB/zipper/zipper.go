@@ -40,6 +40,8 @@ func shortestSeparator(left, right []byte) []byte {
 		return append([]byte(nil), right...)
 	}
 	if bytes.Compare(left, right) >= 0 {
+		// If keys are equal or left is greater, there is no shorter valid separator.
+		// Return a copy of right to preserve ordering without special-casing callers.
 		return append([]byte(nil), right...)
 	}
 

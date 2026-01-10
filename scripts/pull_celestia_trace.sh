@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 user@host /path/to/trace.jsonl [dest_dir]" >&2
-  exit 2
+  exit 1
 fi
 
 host="$1"

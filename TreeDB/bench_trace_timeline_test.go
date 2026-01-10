@@ -472,19 +472,15 @@ func runTraceTimelinePhase(db *DB, rng *rand.Rand, summary tracePhaseSummary, ph
 		}
 	}
 
-	wg.Wait()
+	if !skipIters {
+		wg.Wait()
+	}
 	return nil
 }
 
 func sleepUntil(t time.Time) {
-	for {
-		now := time.Now()
-		if !now.Before(t) {
-			return
-		}
-		if remain := time.Until(t); remain > 0 {
-			time.Sleep(remain)
-		}
+	if remain := time.Until(t); remain > 0 {
+		time.Sleep(remain)
 	}
 }
 

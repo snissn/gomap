@@ -491,6 +491,16 @@ func (b *Batch) AssumeSorted() {
 	if b == nil || b.closed {
 		return
 	}
+	if len(b.entries) > 1 {
+		for i := 1; i < len(b.entries); i++ {
+			if bytes.Compare(b.entries[i-1].Key, b.entries[i].Key) > 0 {
+				b.assumeSorted = false
+				b.sorted = false
+				b.lastKey = nil
+				return
+			}
+		}
+	}
 	b.assumeSorted = true
 	b.sorted = true
 	b.lastKey = nil
