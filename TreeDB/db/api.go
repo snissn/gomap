@@ -263,6 +263,9 @@ func (db *DB) Stats() map[string]string {
 	}
 	if trainerStats, ok := db.slabManager.CompressionTrainerStats(); ok {
 		stats["treedb.slabs.compression.train.collecting"] = fmt.Sprintf("%t", trainerStats.Collecting)
+		stats["treedb.slabs.compression.train.collect_count"] = fmt.Sprintf("%d", trainerStats.CollectCount)
+		stats["treedb.slabs.compression.train.collect_nanos"] = fmt.Sprintf("%d", trainerStats.CollectNanos)
+		stats["treedb.slabs.compression.train.collect_max_nanos"] = fmt.Sprintf("%d", trainerStats.CollectMaxNanos)
 		stats["treedb.slabs.compression.train.dropped"] = fmt.Sprintf("%d", trainerStats.Dropped)
 		stats["treedb.slabs.compression.train.enqueued"] = fmt.Sprintf("%d", trainerStats.Enqueued)
 		stats["treedb.slabs.compression.train.last_dict_bytes"] = fmt.Sprintf("%d", trainerStats.LastTrainDict)

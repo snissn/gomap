@@ -5,6 +5,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -40,6 +41,7 @@ type compressionTrainer struct {
 	sampleCh            chan trainerSample
 	closed              atomic.Bool
 	closeOnce           sync.Once
+	measureCollect      bool
 
 	enqueued         atomic.Uint64
 	dropped          atomic.Uint64
@@ -48,6 +50,9 @@ type compressionTrainer struct {
 	lastTrainRatio   atomic.Uint64
 	lastTrainSamples atomic.Uint64
 	lastTrainDict    atomic.Uint64
+	collectNanos     atomic.Uint64
+	collectCount     atomic.Uint64
+	collectMaxNanos  atomic.Uint64
 }
 
 type trainerSample struct {
@@ -68,6 +73,9 @@ type CompressionTrainerStats struct {
 	LastTrainRatio   float64
 	LastTrainSamples uint64
 	LastTrainDict    uint64
+	CollectCount     uint64
+	CollectNanos     uint64
+	CollectMaxNanos  uint64
 }
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
@@ -109,6 +117,7 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		level:        cfg.level,
 		sampleStride: uint64(sampleStride),
 		sampleCh:     make(chan trainerSample, defaultCompressionTrainQueue),
+		measureCollect: opts.CompressionMetrics,
 	}
 	trainer.enabled.Store(true)
 	go trainer.run()
@@ -154,8 +163,12 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 }
 
 func (t *compressionTrainer) collect(value []byte) {
+	var started time.Time
 	if t == nil || t.closed.Load() || !t.collecting.Load() || len(value) == 0 {
 		return
+	}
+	if t.measureCollect {
+		started = time.Now()
 	}
 	if t.sampleStride > 1 {
 		if t.sampleStrideCounter.Add(1)%t.sampleStride != 0 {
@@ -164,6 +177,7 @@ func (t *compressionTrainer) collect(value []byte) {
 	}
 	if len(t.sampleCh) == cap(t.sampleCh) {
 		t.dropped.Add(1)
+		t.recordCollect(started)
 		return
 	}
 	sample := value
@@ -180,6 +194,7 @@ func (t *compressionTrainer) collect(value []byte) {
 		t.dropped.Add(1)
 	}
 	t.updateMaxQueueLen()
+	t.recordCollect(started)
 }
 
 func (t *compressionTrainer) run() {
@@ -316,6 +331,24 @@ func (t *compressionTrainer) updateMaxQueueLen() {
 	}
 }
 
+func (t *compressionTrainer) recordCollect(started time.Time) {
+	if t == nil || !t.measureCollect || started.IsZero() {
+		return
+	}
+	elapsed := uint64(time.Since(started))
+	t.collectCount.Add(1)
+	t.collectNanos.Add(elapsed)
+	for {
+		prev := t.collectMaxNanos.Load()
+		if elapsed <= prev {
+			return
+		}
+		if t.collectMaxNanos.CompareAndSwap(prev, elapsed) {
+			return
+		}
+	}
+}
+
 func (t *compressionTrainer) stats() CompressionTrainerStats {
 	if t == nil {
 		return CompressionTrainerStats{}
@@ -333,5 +366,8 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		LastTrainRatio:   math.Float64frombits(t.lastTrainRatio.Load()),
 		LastTrainSamples: t.lastTrainSamples.Load(),
 		LastTrainDict:    t.lastTrainDict.Load(),
+		CollectCount:     t.collectCount.Load(),
+		CollectNanos:     t.collectNanos.Load(),
+		CollectMaxNanos:  t.collectMaxNanos.Load(),
 	}
 }

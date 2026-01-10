@@ -273,3 +273,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,202,969,281 / 1,185,147,868 / 1,131,036,527 ns/op (regressed).
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_enqmax.prof` (pprof top captured).
   - Revert commit `5f535c5` (attempt `ffd51d1`), baseline confirm: 1,085,478,040 / 1,100,580,361 / 1,091,074,810 ns/op.
+- #3 collect timing stats (in progress): created `slab-opt-03-entropy-training-11` to track collect latency totals/max when `TREEDB_SLAB_COMPRESSION_METRICS=1` is enabled.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,101,470,002 / 1,090,666,569 / 1,096,782,567 ns/op.
+  - Replay after change: 1,088,395,248 / 1,098,644,323 / 1,081,352,151 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_collecttiming.prof` (pprof top captured).
