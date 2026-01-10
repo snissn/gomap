@@ -364,3 +364,12 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - `zstd` min=1024 save=64: ~1.19s/op
   - `none`: ~1.18s/op (fastest, but uncompressed slabs).
 - Conclusion: raising min bytes (and modest min savings) yields most of the speedup while keeping compression.
+
+## 12.47 Slab Compression Permutation (Pointer Values, Celestia Trace)
+- True workload sweep with pointer values + omit keys:
+  - `zstd_min1_save0`: duration 257s, index 4,227,858,432, slab 447,938,107.
+  - `zstd_min1024_save0`: duration 246s, index 4,227,858,432, slab 449,808,914.
+  - `zstd_min4096_save0`: duration 254s, index 4,227,858,432, slab 451,807,163.
+  - `zstd_min1024_save64`: duration 254s, index 4,294,967,296, slab 453,720,604.
+  - `none`: duration 254s, index 4,294,967,296, slab 455,634,012.
+- Best tradeoff: `zstd_min1024_save0` (fastest with smaller index size than `none`).
