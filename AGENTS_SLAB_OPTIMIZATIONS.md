@@ -288,3 +288,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,101,470,002 / 1,090,666,569 / 1,096,782,567 ns/op.
   - Replay after change: 1,088,395,248 / 1,098,644,323 / 1,081,352,151 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_collecttiming.prof` (pprof top captured).
+- #4 dict dedup follow-up (in progress): created `slab-opt-04-dict-dedup-2` to track dedup mode/ref in trainer stats (USE_GLOBAL/USE_REF scaffolding).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,110,317,827 / 1,117,767,198 / 1,108,285,921 ns/op.
+  - Replay after change: 1,120,670,454 / 1,107,856,794 / 1,108,167,354 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup2_cpu.prof` (pprof top captured).

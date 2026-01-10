@@ -46,23 +46,27 @@ type compressionTrainer struct {
 	measureCollect      bool
 	samplePool          sync.Pool
 
-	enqueued         atomic.Uint64
-	dropped          atomic.Uint64
-	maxQueueLen      atomic.Uint64
-	trainCount       atomic.Uint64
-	lastTrainRatio   atomic.Uint64
-	lastTrainSamples atomic.Uint64
-	lastTrainDict    atomic.Uint64
-	lastTrainDictHash atomic.Uint64
-	dictDedupLookups  atomic.Uint64
-	dictDedupHits     atomic.Uint64
-	collectNanos     atomic.Uint64
-	collectCount     atomic.Uint64
-	collectMaxNanos  atomic.Uint64
+	enqueued           atomic.Uint64
+	dropped            atomic.Uint64
+	maxQueueLen        atomic.Uint64
+	trainCount         atomic.Uint64
+	lastTrainRatio     atomic.Uint64
+	lastTrainSamples   atomic.Uint64
+	lastTrainDict      atomic.Uint64
+	lastTrainDictHash  atomic.Uint64
+	lastTrainDedupMode atomic.Uint64
+	lastTrainDedupRef  atomic.Uint64
+	dictDedupLookups   atomic.Uint64
+	dictDedupHits      atomic.Uint64
+	collectNanos       atomic.Uint64
+	collectCount       atomic.Uint64
+	collectMaxNanos    atomic.Uint64
 
 	dictDedupWindow int
 	dictHashes      []uint64
 	dictHashPos     int
+	globalSlabID    uint32
+	globalDictHash  uint64
 }
 
 type trainerSample struct {
@@ -71,25 +75,35 @@ type trainerSample struct {
 }
 
 type CompressionTrainerStats struct {
-	Enabled          bool
-	Collecting       bool
-	Training         bool
-	QueueLen         int
-	QueueCap         int
-	Enqueued         uint64
-	Dropped          uint64
-	MaxQueueLen      uint64
-	TrainCount       uint64
-	LastTrainRatio   float64
-	LastTrainSamples uint64
-	LastTrainDict    uint64
-	LastTrainDictHash uint64
-	DictDedupLookups  uint64
-	DictDedupHits     uint64
-	CollectCount     uint64
-	CollectNanos     uint64
-	CollectMaxNanos  uint64
+	Enabled            bool
+	Collecting         bool
+	Training           bool
+	QueueLen           int
+	QueueCap           int
+	Enqueued           uint64
+	Dropped            uint64
+	MaxQueueLen        uint64
+	TrainCount         uint64
+	LastTrainRatio     float64
+	LastTrainSamples   uint64
+	LastTrainDict      uint64
+	LastTrainDictHash  uint64
+	LastTrainDedupMode string
+	LastTrainDedupRef  uint64
+	DictDedupLookups   uint64
+	DictDedupHits      uint64
+	CollectCount       uint64
+	CollectNanos       uint64
+	CollectMaxNanos    uint64
 }
+
+type dictDedupMode uint8
+
+const (
+	dictDedupNone dictDedupMode = iota
+	dictDedupGlobal
+	dictDedupRef
+)
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
 	if readOnly || opts.CompressionAdaptiveTrainBytes == 0 {
@@ -123,14 +137,14 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 	}
 
 	trainer := &compressionTrainer{
-		targetBytes:  uint64(target),
-		minRecords:   uint64(minRecords),
-		maxRecord:    maxRecord,
-		dictBytes:    dictBytes,
-		level:        cfg.level,
-		sampleStride: uint64(sampleStride),
-		sampleCh:     make(chan trainerSample, defaultCompressionTrainQueue),
-		measureCollect: opts.CompressionMetrics,
+		targetBytes:     uint64(target),
+		minRecords:      uint64(minRecords),
+		maxRecord:       maxRecord,
+		dictBytes:       dictBytes,
+		level:           cfg.level,
+		sampleStride:    uint64(sampleStride),
+		sampleCh:        make(chan trainerSample, defaultCompressionTrainQueue),
+		measureCollect:  opts.CompressionMetrics,
 		dictDedupWindow: defaultCompressionTrainDedupWindow,
 	}
 	trainer.enabled.Store(true)
@@ -170,6 +184,12 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	if len(t.samples) > 0 {
 		t.releaseSamples(t.samples)
 		t.samples = nil
+	}
+	if slabID != t.globalSlabID {
+		t.globalSlabID = slabID
+		t.globalDictHash = 0
+		t.dictHashes = nil
+		t.dictHashPos = 0
 	}
 	t.sampleBytes = 0
 	t.sampleRecords = 0
@@ -308,15 +328,24 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 
 	dictHash := xxhash.Sum64(dict)
 	t.lastTrainDictHash.Store(dictHash)
-	if t.recordDictHash(dictHash) {
+	mode, ref := t.recordDictHash(dictHash)
+	t.lastTrainDedupMode.Store(uint64(mode))
+	if mode == dictDedupRef && ref >= 0 {
+		t.lastTrainDedupRef.Store(uint64(ref))
+	} else {
+		t.lastTrainDedupRef.Store(0)
+	}
+	if mode != dictDedupNone {
 		t.lastTrainSamples.Store(uint64(len(samples)))
 		t.lastTrainDict.Store(uint64(len(dict)))
 		if t.logOnce() {
-			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x",
+			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
 				slabID,
 				len(dict),
 				len(samples),
 				dictHash,
+				dedupModeString(mode),
+				ref,
 			)
 		}
 		return
@@ -349,9 +378,9 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	}
 }
 
-func (t *compressionTrainer) recordDictHash(hash uint64) bool {
+func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 	if t == nil {
-		return false
+		return dictDedupNone, -1
 	}
 	t.dictDedupLookups.Add(1)
 	t.mu.Lock()
@@ -365,15 +394,23 @@ func (t *compressionTrainer) recordDictHash(hash uint64) bool {
 	if t.dictHashes == nil {
 		t.dictHashes = make([]uint64, window)
 	}
-	for _, h := range t.dictHashes {
+	if t.globalDictHash != 0 && t.globalDictHash == hash {
+		t.dictDedupHits.Add(1)
+		return dictDedupGlobal, -1
+	}
+	for i, h := range t.dictHashes {
 		if h == hash && h != 0 {
 			t.dictDedupHits.Add(1)
-			return true
+			return dictDedupRef, i
 		}
+	}
+	if t.globalDictHash == 0 {
+		t.globalDictHash = hash
+		return dictDedupNone, -1
 	}
 	t.dictHashes[t.dictHashPos] = hash
 	t.dictHashPos = (t.dictHashPos + 1) % len(t.dictHashes)
-	return false
+	return dictDedupNone, -1
 }
 
 func (t *compressionTrainer) logOnce() bool {
@@ -453,24 +490,38 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 	if t == nil {
 		return CompressionTrainerStats{}
 	}
+	dedupMode := dictDedupMode(t.lastTrainDedupMode.Load())
 	return CompressionTrainerStats{
-		Enabled:          t.enabled.Load(),
-		Collecting:       t.collecting.Load(),
-		Training:         t.training.Load(),
-		QueueLen:         len(t.sampleCh),
-		QueueCap:         cap(t.sampleCh),
-		Enqueued:         t.enqueued.Load(),
-		Dropped:          t.dropped.Load(),
-		MaxQueueLen:      t.maxQueueLen.Load(),
-		TrainCount:       t.trainCount.Load(),
-		LastTrainRatio:   math.Float64frombits(t.lastTrainRatio.Load()),
-		LastTrainSamples: t.lastTrainSamples.Load(),
-		LastTrainDict:    t.lastTrainDict.Load(),
-		LastTrainDictHash: t.lastTrainDictHash.Load(),
-		DictDedupLookups:  t.dictDedupLookups.Load(),
-		DictDedupHits:     t.dictDedupHits.Load(),
-		CollectCount:     t.collectCount.Load(),
-		CollectNanos:     t.collectNanos.Load(),
-		CollectMaxNanos:  t.collectMaxNanos.Load(),
+		Enabled:            t.enabled.Load(),
+		Collecting:         t.collecting.Load(),
+		Training:           t.training.Load(),
+		QueueLen:           len(t.sampleCh),
+		QueueCap:           cap(t.sampleCh),
+		Enqueued:           t.enqueued.Load(),
+		Dropped:            t.dropped.Load(),
+		MaxQueueLen:        t.maxQueueLen.Load(),
+		TrainCount:         t.trainCount.Load(),
+		LastTrainRatio:     math.Float64frombits(t.lastTrainRatio.Load()),
+		LastTrainSamples:   t.lastTrainSamples.Load(),
+		LastTrainDict:      t.lastTrainDict.Load(),
+		LastTrainDictHash:  t.lastTrainDictHash.Load(),
+		LastTrainDedupMode: dedupModeString(dedupMode),
+		LastTrainDedupRef:  t.lastTrainDedupRef.Load(),
+		DictDedupLookups:   t.dictDedupLookups.Load(),
+		DictDedupHits:      t.dictDedupHits.Load(),
+		CollectCount:       t.collectCount.Load(),
+		CollectNanos:       t.collectNanos.Load(),
+		CollectMaxNanos:    t.collectMaxNanos.Load(),
+	}
+}
+
+func dedupModeString(mode dictDedupMode) string {
+	switch mode {
+	case dictDedupGlobal:
+		return "global"
+	case dictDedupRef:
+		return "ref"
+	default:
+		return "none"
 	}
 }
