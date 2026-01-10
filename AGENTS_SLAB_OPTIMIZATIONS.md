@@ -145,7 +145,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Add adversarial tests (replay, corruption, partial updates).
 
 ### 8) Zonal Bloom Filters — Mostly recovery/audit
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-08-zone-bloom`
 - Checklist:
   - [ ] Add bloom filters to zone headers (keys only).
@@ -172,3 +172,4 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Decision: deferred #5 (two-pass compaction) — requires slab v2 dictionary selection and zone layout changes to be meaningful; blocked on item #2. No benchmarks run.
 - Decision: deferred #6 (slab tiering) — requires a new cold-slab file format and migration policy; too invasive without a broader format migration plan. No benchmarks run.
 - Decision: deferred #7 (value delta encoding) — requires new on-disk encoding and read/compaction semantics; too risky without a separate data-model RFC. No benchmarks run.
+- Decision: deferred #8 (zonal bloom filters) — requires slab v2 zone headers for storage and a recovery toolchain; blocked on item #2. No benchmarks run.
