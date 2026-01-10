@@ -121,7 +121,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Bench: measure slab bytes reduction and any latency impact.
 
 ### 5) Two-Pass Compaction (Gold Standard) — Lower impact on write hot path
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-05-two-pass-compaction`
 - Checklist:
   - [ ] Implement representative global dict selection for rewritten slabs.
@@ -169,3 +169,4 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Decision: deferred #2 (zonal dictionaries / slab v2) — requires on-disk format changes (new header/zone layout, dict selection flags, migration strategy) plus read-path dict caching; scope is too large without a dedicated migration/recovery plan. No benchmarks run.
 - Decision: deferred #3 (entropy monitoring / pre-emptive training) — depends on slab v2 zonal dictionaries and a background training pipeline that does not exist yet. No benchmarks run.
 - Decision: deferred #4 (dictionary dedup) — requires slab v2 zone dictionaries and hash-based dict reuse policy; blocked on item #2. No benchmarks run.
+- Decision: deferred #5 (two-pass compaction) — requires slab v2 dictionary selection and zone layout changes to be meaningful; blocked on item #2. No benchmarks run.
