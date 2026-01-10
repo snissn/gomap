@@ -20,10 +20,10 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `ee740f3`)
-- Accepted: #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
+- RC branch: `slab-opt-rc` (head `e09da52`)
+- Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
-- Pending: #2–#5, #7–#8
+- Pending: #2, #4–#5, #7–#8
 
 ## Compatibility stance (Alpha)
 
@@ -151,7 +151,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 
 ### 3) Pre-emptive Training & Entropy Monitoring — Medium impact / medium risk
-- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [ ] in_progress  [x] accepted  [ ] rejected
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
   - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
@@ -222,6 +222,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Local replay bench (baseline): 1.164/1.206/1.208 s/op.
 - Local replay bench (after): 1.129/1.106/1.117 s/op.
 - CPU profile (after): `/tmp/treedb_ptrvalues_cpu_entropy_pool.prof` (top: `syscall.syscall`, `syscall.syscall6`, `SlabFile.readViaMmap`).
+- Merged `slab-opt-03-entropy-training-12` into `slab-opt-rc` (accepted; server trace pending).
 - #1 multistream MVA (rejected): `slab: add opt-in multi-stream AppendMany` (`73d27d5`) then reverted (`747bc86`); results recorded in `log: record multistream attempt results` (`4de3fda`).
 - #6 tiering MVA (rejected): `slab: mark inactive slabs read-only` (`41f25a2`) then reverted (`4cf2036`); results recorded in `log: record slab tiering attempt` (`75c4202`).
 - #9 hugepage hint (accepted): `Hint huge pages for slab mmaps` (`26a4a4b`); Linux-only, needs validation on Linux server in `celestia_testing_info.md`.
