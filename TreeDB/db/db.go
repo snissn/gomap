@@ -276,6 +276,14 @@ type Options struct {
 	SlabCompressionAdaptivePauseBytes int
 	// SlabCompressionAdaptiveMinRecords controls the minimum records per window before triggering pause.
 	SlabCompressionAdaptiveMinRecords int
+	// SlabCompressionAdaptiveTrainBytes controls how many raw bytes to sample for training (0 disables).
+	SlabCompressionAdaptiveTrainBytes int
+	// SlabCompressionAdaptiveTrainDictBytes controls the trained dictionary size.
+	SlabCompressionAdaptiveTrainDictBytes int
+	// SlabCompressionAdaptiveTrainMinRecords controls the minimum records before training.
+	SlabCompressionAdaptiveTrainMinRecords int
+	// SlabCompressionAdaptiveTrainMaxRecordBytes caps per-record sample size for training.
+	SlabCompressionAdaptiveTrainMaxRecordBytes int
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -476,13 +484,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression:                   opts.SlabCompression,
-		OmitSlabKeys:                  opts.OmitSlabKeys,
-		CompressionMetrics:            opts.SlabCompressionMetrics,
-		CompressionMetricsWindowBytes: opts.SlabCompressionMetricsWindowBytes,
-		CompressionAdaptiveRatio:      opts.SlabCompressionAdaptiveRatio,
-		CompressionAdaptivePauseBytes: opts.SlabCompressionAdaptivePauseBytes,
-		CompressionAdaptiveMinRecords: opts.SlabCompressionAdaptiveMinRecords,
+		Compression:                            opts.SlabCompression,
+		OmitSlabKeys:                           opts.OmitSlabKeys,
+		CompressionMetrics:                     opts.SlabCompressionMetrics,
+		CompressionMetricsWindowBytes:          opts.SlabCompressionMetricsWindowBytes,
+		CompressionAdaptiveRatio:               opts.SlabCompressionAdaptiveRatio,
+		CompressionAdaptivePauseBytes:          opts.SlabCompressionAdaptivePauseBytes,
+		CompressionAdaptiveMinRecords:          opts.SlabCompressionAdaptiveMinRecords,
+		CompressionAdaptiveTrainBytes:          opts.SlabCompressionAdaptiveTrainBytes,
+		CompressionAdaptiveTrainDictBytes:      opts.SlabCompressionAdaptiveTrainDictBytes,
+		CompressionAdaptiveTrainMinRecords:     opts.SlabCompressionAdaptiveTrainMinRecords,
+		CompressionAdaptiveTrainMaxRecordBytes: opts.SlabCompressionAdaptiveTrainMaxRecordBytes,
 	})
 	if err != nil {
 		p.Close()

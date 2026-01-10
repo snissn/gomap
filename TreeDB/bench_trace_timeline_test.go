@@ -95,6 +95,13 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	slabCompressionMinBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES", 0)
 	slabCompressionMinSavings := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS", 0)
 	slabCompressionLevel := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_LEVEL", 0)
+	slabCompressionAdaptiveRatio := parseFloatEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO", 0)
+	slabCompressionAdaptivePauseBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES", 0)
+	slabCompressionAdaptiveMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS", 0)
+	slabCompressionTrainBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES", 0)
+	slabCompressionTrainDictBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DICT_BYTES", 0)
+	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
+	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -121,17 +128,24 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	}
 
 	opts := Options{
-		Mode:                    modeVal,
-		MemtableMode:            memtableMode,
-		DisableWAL:              disableWAL,
-		DisableValueLog:         disableVlog,
-		ForceValuePointers:      forceValuePointers,
+		Mode:               modeVal,
+		MemtableMode:       memtableMode,
+		DisableWAL:         disableWAL,
+		DisableValueLog:    disableVlog,
+		ForceValuePointers: forceValuePointers,
 		SlabCompression: slab.CompressionOptions{
 			Kind:            slabCompression,
 			MinBytes:        slabCompressionMinBytes,
 			MinSavingsBytes: slabCompressionMinSavings,
 			Level:           slabCompressionLevel,
 		},
+		SlabCompressionAdaptiveRatio:               slabCompressionAdaptiveRatio,
+		SlabCompressionAdaptivePauseBytes:          slabCompressionAdaptivePauseBytes,
+		SlabCompressionAdaptiveMinRecords:          slabCompressionAdaptiveMinRecords,
+		SlabCompressionAdaptiveTrainBytes:          slabCompressionTrainBytes,
+		SlabCompressionAdaptiveTrainDictBytes:      slabCompressionTrainDictBytes,
+		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
+		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
 		OmitSlabKeys:            slabOmitKeys,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
@@ -187,6 +201,13 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	slabCompressionMinBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES", 0)
 	slabCompressionMinSavings := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS", 0)
 	slabCompressionLevel := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_LEVEL", 0)
+	slabCompressionAdaptiveRatio := parseFloatEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO", 0)
+	slabCompressionAdaptivePauseBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES", 0)
+	slabCompressionAdaptiveMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS", 0)
+	slabCompressionTrainBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES", 0)
+	slabCompressionTrainDictBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DICT_BYTES", 0)
+	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
+	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -205,16 +226,23 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	}
 
 	baseOpts := Options{
-		Mode:                    modeVal,
-		DisableWAL:              disableWAL,
-		DisableValueLog:         disableVlog,
-		ForceValuePointers:      forceValuePointers,
+		Mode:               modeVal,
+		DisableWAL:         disableWAL,
+		DisableValueLog:    disableVlog,
+		ForceValuePointers: forceValuePointers,
 		SlabCompression: slab.CompressionOptions{
 			Kind:            slabCompression,
 			MinBytes:        slabCompressionMinBytes,
 			MinSavingsBytes: slabCompressionMinSavings,
 			Level:           slabCompressionLevel,
 		},
+		SlabCompressionAdaptiveRatio:               slabCompressionAdaptiveRatio,
+		SlabCompressionAdaptivePauseBytes:          slabCompressionAdaptivePauseBytes,
+		SlabCompressionAdaptiveMinRecords:          slabCompressionAdaptiveMinRecords,
+		SlabCompressionAdaptiveTrainBytes:          slabCompressionTrainBytes,
+		SlabCompressionAdaptiveTrainDictBytes:      slabCompressionTrainDictBytes,
+		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
+		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
 		OmitSlabKeys:            slabOmitKeys,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,

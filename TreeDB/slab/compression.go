@@ -31,13 +31,17 @@ type CompressionOptions struct {
 }
 
 type Options struct {
-	Compression                   CompressionOptions
-	OmitSlabKeys                  bool
-	CompressionMetrics            bool
-	CompressionMetricsWindowBytes int
-	CompressionAdaptiveRatio      float64
-	CompressionAdaptivePauseBytes int
-	CompressionAdaptiveMinRecords int
+	Compression                            CompressionOptions
+	OmitSlabKeys                           bool
+	CompressionMetrics                     bool
+	CompressionMetricsWindowBytes          int
+	CompressionAdaptiveRatio               float64
+	CompressionAdaptivePauseBytes          int
+	CompressionAdaptiveMinRecords          int
+	CompressionAdaptiveTrainBytes          int
+	CompressionAdaptiveTrainDictBytes      int
+	CompressionAdaptiveTrainMinRecords     int
+	CompressionAdaptiveTrainMaxRecordBytes int
 }
 
 type compressionConfig struct {

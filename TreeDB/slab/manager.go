@@ -30,6 +30,7 @@ type SlabManager struct {
 	compression         compressionConfig
 	omitSlabKeys        bool
 	compressionMetrics  compressionMetrics
+	compressionTrainer  *compressionTrainer
 
 	appendManyScratch         []byte
 	compressionPauseRemaining atomic.Uint64
@@ -59,6 +60,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		compression:        compression,
 		omitSlabKeys:       opts.OmitSlabKeys,
 		compressionMetrics: newCompressionMetrics(opts),
+		compressionTrainer: newCompressionTrainer(opts, compression, readOnly),
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -273,6 +275,9 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	fullCompressed := false
 	omittedKey := false
 	var err error
+	if sm.compressionTrainer != nil {
+		sm.compressionTrainer.collect(value)
+	}
 	if sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
 		// Try full record compression first
 		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
@@ -331,6 +336,9 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		}
 		if pauseBytes := sm.compressionMetrics.add(sm.activeSlab.ID, rawLen, storedLen, 1, compressedCount, fullCount); pauseBytes > 0 {
 			sm.compressionPauseRemaining.Store(pauseBytes)
+			if sm.compressionTrainer != nil {
+				sm.compressionTrainer.signalDegraded(sm.activeSlab.ID)
+			}
 		}
 	}
 
@@ -375,6 +383,11 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 	if len(keys) == 0 {
 		return nil, nil
+	}
+	if sm.compressionTrainer != nil {
+		for i := range values {
+			sm.compressionTrainer.collect(values[i])
+		}
 	}
 
 	// Keep buffers bounded so we don't double memory usage for extremely large
@@ -552,6 +565,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 				}
 				if pauseBytes := sm.compressionMetrics.add(id, rawTotal, storedTotal, len(metas), compressedCount, fullCount); pauseBytes > 0 {
 					sm.compressionPauseRemaining.Store(pauseBytes)
+					if sm.compressionTrainer != nil {
+						sm.compressionTrainer.signalDegraded(id)
+					}
 				}
 			}
 

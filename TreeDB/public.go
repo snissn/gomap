@@ -171,6 +171,26 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompressionAdaptiveMinRecords = n
 		}
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_DICT_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainDictBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_MIN_RECORDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainMinRecords = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainMaxRecordBytes = n
+		}
+	}
 
 	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
