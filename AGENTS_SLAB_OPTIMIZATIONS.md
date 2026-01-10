@@ -157,7 +157,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
   - [x] Implement rolling compression-ratio metrics per zone.
   - [x] Add opt-in adaptive compression pause on degraded ratio (safe trigger).
-  - [ ] Trigger background training when ratio degrades; publish next-zone dictionary.
+  - [x] Trigger background training when ratio degrades; publish next-zone dictionary.
   - [ ] Verify no writer stalls; no extra syscalls on the read fast path.
   - [ ] Bench + server trace comparison.
 
@@ -228,3 +228,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - #3 replay after metrics logging: 1,145,068,735 / 1,157,760,511 / 1,159,801,847 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu_entropy.prof`.
 - #3 adaptive pause trigger (opt-in): baseline before change 1,152,491,465 / 1,180,121,349 / 1,171,889,825 ns/op; final bench with `TREEDB_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `...PAUSE_BYTES=4194304`, `...MIN_RECORDS=1000`: 1,154,793,614 / 1,166,791,415 / 1,162,242,938 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu_entropy_adaptive.prof`. Logging is now gated by `TREEDB_SLAB_COMPRESSION_METRICS`.
 - Merged `slab-opt-03-entropy-training` into `slab-opt-rc` (ff at `6f8d93a`); RC log updated (head recorded as `2813c5d`).
+- #3 training v2 branch created: `slab-opt-03-entropy-training-2` off `slab-opt-rc`.
+- Baseline replay (ptr-values): 1,157,461,398 / 1,192,799,862 / 1,167,970,789 ns/op.
+- #3 background training (opt-in) replay with `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98` + training envs: 1,123,723,610 / 1,120,500,252 / 1,111,680,888 ns/op; training log ratio ~1.289 (dict worse than raw) on samples.
+- CPU profile (training enabled): `/tmp/treedb_ptrvalues_cpu_entropy_train.prof` (pprof top captured; BuildDict/EncodeAll shows up in top).
