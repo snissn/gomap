@@ -127,6 +127,15 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		if keyEnd > len(n.data) {
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 		}
+		if layout.prefixLen == 0 {
+			key = n.data[keyStart:keyEnd]
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
+			return key, layout, entryStart, nil
+		}
 		if layout.prefixLen > len(n.leafKey) {
 			n.leafValid = false
 		} else {
@@ -170,8 +179,7 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			if layout.prefixLen != 0 {
 				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 			}
-			key = n.ensureKeyScratch(layout.suffixLen)
-			copy(key, n.data[keyStart:keyEnd])
+			key = n.data[keyStart:keyEnd]
 		} else {
 			if layout.prefixLen > len(prevKey) {
 				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
