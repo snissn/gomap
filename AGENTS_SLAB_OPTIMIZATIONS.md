@@ -104,7 +104,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 
 ### 3) Pre-emptive Training & Entropy Monitoring — Medium impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
   - [ ] Implement rolling compression-ratio metrics per zone.
@@ -167,3 +167,4 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Baseline (slab-opt-01-multistream): `BenchmarkTraceReplayTimeline` ns/op: 1,146,542,800 / 1,209,162,630 / 1,153,101,110. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof`.
 - Decision: deferred #1 (multi-stream slabs) — requires expanding meta to track multiple active slab tails/IDs; current on-disk format only records a single `ActiveSlabID/Tail`, so parallel active slabs would risk unrepaired torn tails on crash. Revisit once a meta v2 or multi-active slab recovery strategy is defined.
 - Decision: deferred #2 (zonal dictionaries / slab v2) — requires on-disk format changes (new header/zone layout, dict selection flags, migration strategy) plus read-path dict caching; scope is too large without a dedicated migration/recovery plan. No benchmarks run.
+- Decision: deferred #3 (entropy monitoring / pre-emptive training) — depends on slab v2 zonal dictionaries and a background training pipeline that does not exist yet. No benchmarks run.
