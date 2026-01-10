@@ -7,6 +7,10 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
 - It is acceptable to bump slab/index formats and invalidate old on-disk data.
 - “Needs a migration plan” is not a valid blocker reason; treat format bumps as acceptable.
 
+## Linux server (for true workload + OS-specific tuning)
+- You may read `celestia_testing_info.md` for SSH details to a Linux server used for Celestia runs and profiling.
+- Prefer validating OS-specific changes (e.g., huge pages, madvise) on that Linux server via `run_celestia_trace.sh`.
+
 ## Hard rules
 1) **Branch-per-feature, stacked workflow**
    - Use the current RC base branch (default: `treedb-tracing-capture` unless the repo indicates otherwise).

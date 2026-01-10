@@ -86,6 +86,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 ### Server: true workload (Celestia)
 - Prefer using `run_celestia_trace.sh` to capture `/home/mikers/pprof_*/cpu.pprof` etc.
 - Record results from `sync/sync-time.log` and `sync/disk-breakdown.log`.
+- Linux server access details (SSH host, paths, run scripts) are documented in `celestia_testing_info.md` and may be used for profiling (some optimizations are Linux-only).
 
 ## “No Free Deferrals” Policy (MANDATORY)
 
