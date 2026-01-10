@@ -294,3 +294,7 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Fix: disable memtable pooling (always allocate new memtables, no recycle). Tests pass with `-count=50` for `TestCachingDB_WriteAndFlush` and `-count=10` for `TestUnsafeOptions_ConcurrentStress`.
 - Perf check (timeline replay, cached+skiplist): pooling enabled ~762ms/op vs disabled ~754ms/op (noise/slightly worse with pooling). No compelling perf win to justify safety risk.
 - Fully excised pooling + reader tracking code (removed reclaimer, pooling files). Re-ran caching tests (`TestCachingDB_WriteAndFlush -count=20`, `TestUnsafeOptions_ConcurrentStress -count=5`) and they pass.
+
+## 12.36 Flush SetView/DeleteView Fast Path (Reverted)
+- Added `SetView`/`DeleteView` use in `flushCombinedLocked` and `flushOneLocked` to avoid copying keys/values into backend batches.
+- Trusted benchmark regressed (baseline ~423ms/op vs ~485ms/op), so the change was reverted.
