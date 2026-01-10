@@ -43,6 +43,7 @@ type Options struct {
 	CompressionAdaptiveTrainMinRecords     int
 	CompressionAdaptiveTrainMaxRecordBytes int
 	CompressionAdaptiveTrainSampleStride   int
+	CompressionAdaptiveTrainDedupWindow    int
 }
 
 type compressionConfig struct {

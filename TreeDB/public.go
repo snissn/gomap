@@ -196,6 +196,11 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompressionAdaptiveTrainSampleStride = n
 		}
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainDedupWindow = n
+		}
+	}
 
 	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

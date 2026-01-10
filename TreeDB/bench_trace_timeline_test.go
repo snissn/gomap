@@ -103,6 +103,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
+	slabCompressionTrainDedupWindow := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -148,6 +149,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
 		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
 		SlabCompressionAdaptiveTrainSampleStride:   slabCompressionTrainSampleStride,
+		SlabCompressionAdaptiveTrainDedupWindow:    slabCompressionTrainDedupWindow,
 		OmitSlabKeys:                               slabOmitKeys,
 		FlushThreshold:                             int64(flushThreshold),
 		MemtableShards:                             memtableShards,
@@ -211,6 +213,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	slabCompressionTrainMinRecords := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS", 0)
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
+	slabCompressionTrainDedupWindow := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -247,6 +250,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		SlabCompressionAdaptiveTrainMinRecords:     slabCompressionTrainMinRecords,
 		SlabCompressionAdaptiveTrainMaxRecordBytes: slabCompressionTrainMaxRecordBytes,
 		SlabCompressionAdaptiveTrainSampleStride:   slabCompressionTrainSampleStride,
+		SlabCompressionAdaptiveTrainDedupWindow:    slabCompressionTrainDedupWindow,
 		OmitSlabKeys:                               slabOmitKeys,
 		FlushThreshold:                             int64(flushThreshold),
 		MemtableShards:                             memtableShards,

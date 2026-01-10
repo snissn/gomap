@@ -157,6 +157,10 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 	if sampleStride <= 1 {
 		sampleStride = 1
 	}
+	dedupWindow := opts.CompressionAdaptiveTrainDedupWindow
+	if dedupWindow <= 0 {
+		dedupWindow = defaultCompressionTrainDedupWindow
+	}
 
 	trainer := &compressionTrainer{
 		targetBytes:     uint64(target),
@@ -167,7 +171,7 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		sampleStride:    uint64(sampleStride),
 		sampleCh:        make(chan trainerSample, defaultCompressionTrainQueue),
 		measureCollect:  opts.CompressionMetrics,
-		dictDedupWindow: defaultCompressionTrainDedupWindow,
+		dictDedupWindow: dedupWindow,
 	}
 	trainer.enabled.Store(true)
 	go trainer.run()

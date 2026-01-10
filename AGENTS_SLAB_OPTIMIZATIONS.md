@@ -20,7 +20,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `3926b6b`)
+- RC branch: `slab-opt-rc` (head `a98c480`)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #2, #4–#5, #7–#8
@@ -315,3 +315,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,102,690,129 / 1,115,513,167 / 1,112,873,340 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup5_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Commit: `058db37` (cache by sample hash + stats wiring).
+- #4 dict dedup window option (in progress): created `slab-opt-04-dict-dedup-6` to make the dedup window configurable.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,100,734,306 / 1,100,190,706 / 1,099,141,508 ns/op.
+  - Replay after change: 1,095,450,644 / 1,097,432,702 / 1,096,846,127 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup6_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - New envs: `TREEDB_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW`.
