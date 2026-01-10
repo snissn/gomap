@@ -292,3 +292,4 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Symptom: `Get` returns wrong values (e.g. k0 -> v9) and backend missing keys; reproducible locally.
 - Root cause: memtable pooling led to reusing skiplist instances while still visible in queue/reads, corrupting values.
 - Fix: disable memtable pooling (always allocate new memtables, no recycle). Tests pass with `-count=50` for `TestCachingDB_WriteAndFlush` and `-count=10` for `TestUnsafeOptions_ConcurrentStress`.
+- Perf check (timeline replay, cached+skiplist): pooling enabled ~762ms/op vs disabled ~754ms/op (noise/slightly worse with pooling). No compelling perf win to justify safety risk.
