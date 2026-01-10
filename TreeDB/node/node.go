@@ -37,6 +37,13 @@ func getUint16(b []byte) uint16 {
 	return uint16(b[0]) | uint16(b[1])<<8
 }
 
+func putUint32(dst []byte, v uint32) {
+	dst[0] = byte(v)
+	dst[1] = byte(v >> 8)
+	dst[2] = byte(v >> 16)
+	dst[3] = byte(v >> 24)
+}
+
 // Node is a wrapper around a raw page byte slice.
 // It implements the Slotted Page layout.
 type Node struct {

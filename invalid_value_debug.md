@@ -305,3 +305,10 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - Baseline (3x): ~496ms/op, ~517ms/op, ~484ms/op (avg ~499ms/op).
   - With `getUint16` (3x): ~464ms/op, ~462ms/op, ~509ms/op (avg ~478ms/op).
 - Net: ~4% average improvement; small and safe change, kept.
+
+## 12.38 Inline putUint32 (Kept)
+- Replaced `binary.LittleEndian.PutUint32` with a small inline `putUint32` helper in `TreeDB/node/builder.go` and `TreeDB/node/leaf.go`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, 3x each):
+  - Baseline (with `getUint16`, no `putUint32`): ~489ms/op, ~473ms/op, ~578ms/op (avg ~513ms/op).
+  - With `putUint32`: ~441ms/op, ~454ms/op, ~467ms/op (avg ~454ms/op).
+- Net: ~11% average improvement; kept.

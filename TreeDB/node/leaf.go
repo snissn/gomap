@@ -529,12 +529,12 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 
 	if flags&FlagPointer != 0 {
 		// ValueLen ignored
-		binary.LittleEndian.PutUint32(buf[2:6], 0) // or logic length?
+		putUint32(buf[2:6], 0) // or logic length?
 		buf[6] = flags
 		copy(buf[7:], key)
 		valPtr.Encode(buf[7+len(key):])
 	} else {
-		binary.LittleEndian.PutUint32(buf[2:6], uint32(len(value)))
+		putUint32(buf[2:6], uint32(len(value)))
 		buf[6] = flags
 		copy(buf[7:], key)
 		copy(buf[7+len(key):], value)
