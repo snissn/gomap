@@ -350,3 +350,8 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1225ms/op, ~1215ms/op, ~1212ms/op.
 - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
 - Net: regression; reverted.
+
+## 12.45 Slab Compression Level Tuning (No Win)
+- Added a slab compression level option (env + bench knobs) to tune zstd level for slab-heavy runs.
+- Quick test with `TREEDB_TRACE_SLAB_COMPRESSION_LEVEL=3` (slab-heavy config) regressed (~3.3s/op vs ~1.3s/op baseline).
+- Keeping the option for future tuning, but level 3 is not viable.

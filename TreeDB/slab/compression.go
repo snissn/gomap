@@ -27,6 +27,7 @@ type CompressionOptions struct {
 	Kind            CompressionKind
 	MinBytes        int
 	MinSavingsBytes int
+	Level           int
 }
 
 type Options struct {
@@ -38,6 +39,7 @@ type compressionConfig struct {
 	kind       CompressionKind
 	minBytes   int
 	minSavings int
+	level      zstd.EncoderLevel
 	zstdEncs   *sync.Pool
 	zstdDecs   *sync.Pool
 }
@@ -54,6 +56,11 @@ func normalizeCompressionOptions(opts CompressionOptions) (compressionConfig, er
 	if cfg.minSavings <= 0 {
 		cfg.minSavings = defaultCompressionMinSavings
 	}
+	if opts.Level == 0 {
+		cfg.level = zstd.SpeedFastest
+	} else {
+		cfg.level = zstd.EncoderLevel(opts.Level)
+	}
 
 	cfg.zstdDecs = &sync.Pool{
 		New: func() any {
@@ -65,7 +72,7 @@ func normalizeCompressionOptions(opts CompressionOptions) (compressionConfig, er
 	if opts.Kind == CompressionZSTD {
 		cfg.zstdEncs = &sync.Pool{
 			New: func() any {
-				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderCRC(false))
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.level), zstd.WithEncoderCRC(false))
 				return enc
 			},
 		}

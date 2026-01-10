@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 type traceDistSummary struct {
@@ -233,6 +235,21 @@ func parseFloatEnv(key string, def float64) float64 {
 		return def
 	}
 	return n
+}
+
+func parseCompressionKindEnv(key string, def slab.CompressionKind) slab.CompressionKind {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return def
+	}
+	switch strings.ToLower(val) {
+	case "none", "off", "0":
+		return slab.CompressionNone
+	case "zstd", "zstandard":
+		return slab.CompressionZSTD
+	default:
+		return def
+	}
 }
 
 func orderedTracePhases(phases map[string]tracePhaseSummary) []string {

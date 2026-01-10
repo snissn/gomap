@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 type timelineTraceEvent struct {
@@ -88,6 +90,11 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
 	forceValuePointers := parseBoolEnv("TREEDB_TRACE_FORCE_VALUE_POINTERS", false)
+	slabCompression := parseCompressionKindEnv("TREEDB_TRACE_SLAB_COMPRESSION", slab.CompressionNone)
+	slabOmitKeys := parseBoolEnv("TREEDB_TRACE_SLAB_OMIT_KEYS", false)
+	slabCompressionMinBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES", 0)
+	slabCompressionMinSavings := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS", 0)
+	slabCompressionLevel := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_LEVEL", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -119,6 +126,13 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		DisableWAL:              disableWAL,
 		DisableValueLog:         disableVlog,
 		ForceValuePointers:      forceValuePointers,
+		SlabCompression: slab.CompressionOptions{
+			Kind:            slabCompression,
+			MinBytes:        slabCompressionMinBytes,
+			MinSavingsBytes: slabCompressionMinSavings,
+			Level:           slabCompressionLevel,
+		},
+		OmitSlabKeys:            slabOmitKeys,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
@@ -168,6 +182,11 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
 	forceValuePointers := parseBoolEnv("TREEDB_TRACE_FORCE_VALUE_POINTERS", false)
+	slabCompression := parseCompressionKindEnv("TREEDB_TRACE_SLAB_COMPRESSION", slab.CompressionNone)
+	slabOmitKeys := parseBoolEnv("TREEDB_TRACE_SLAB_OMIT_KEYS", false)
+	slabCompressionMinBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES", 0)
+	slabCompressionMinSavings := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS", 0)
+	slabCompressionLevel := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_LEVEL", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -190,6 +209,13 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		DisableWAL:              disableWAL,
 		DisableValueLog:         disableVlog,
 		ForceValuePointers:      forceValuePointers,
+		SlabCompression: slab.CompressionOptions{
+			Kind:            slabCompression,
+			MinBytes:        slabCompressionMinBytes,
+			MinSavingsBytes: slabCompressionMinSavings,
+			Level:           slabCompressionLevel,
+		},
+		OmitSlabKeys:            slabOmitKeys,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
