@@ -20,7 +20,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `6f8d93a`)
+- RC branch: `slab-opt-rc` (head `2813c5d`)
 - Accepted: #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #2–#5, #7–#8
