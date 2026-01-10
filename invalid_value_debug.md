@@ -326,3 +326,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - With change: ~1154ms/op, ~1132ms/op, ~1125ms/op (avg ~1137ms/op).
   - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op (avg ~1128ms/op).
 - Net: slight regression/noise; reverted.
+
+## 12.41 AppendMany PutUint Helpers (Reverted)
+- Replaced `binary.LittleEndian.PutUint16/PutUint32` with inline helpers in `slab.AppendMany`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1172ms/op, ~1203ms/op, ~1298ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
