@@ -103,6 +103,17 @@ If an item is not implementable within reasonable scope, it must be handled as *
 - a branch that contains the attempt commits AND a revert commit that restores baseline behavior, merged into `slab-opt-rc`, and
 - a brief note for a future agent about what was tried and what to try next.
 
+## Iterative convergence (how to avoid churn)
+
+Target is convergence, not a binary accept/reject mindset.
+
+- Iterate in small steps: baseline → 1 small change → measure → keep/adjust → repeat.
+- Prefer landing enabling work if it improves iteration speed or measurement quality (even if perf-neutral):
+  - instrumentation, counters, trace/pprof hooks, benchmarks, small refactors, format scaffolding behind a flag.
+- Treat “rejected for now” as a last resort:
+  - first try to salvage by reducing scope, gating behind opt-in, tuning thresholds, or adjusting the benchmark to better match the real workload.
+- Keep the repository in a good state after each iteration (tests passing, benchmarks reproducible).
+
 ## Acceptance bar (avoid “noise wins”)
 
 Mark an item **accepted** only if:

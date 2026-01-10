@@ -28,14 +28,22 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
    - Commit frequently with small, atomic commits.
    - Update `AGENTS_SLAB_OPTIMIZATIONS.md` work log on every major action (branch created, bench run, accept/reject decision).
 
-4) **No deferrals (MANDATORY)**
+4) **Iterate toward convergence (MANDATORY)**
+   - Optimize via tight loops: baseline → 1 small change → measure → keep/adjust → repeat.
+   - Prefer **idempotent iterations**: each run should be safe to re-run and should make forward progress (code, measurement, or clarity).
+   - Land enabling work when it helps convergence, even if perf-neutral:
+     - instrumentation, counters, trace/pprof hooks, benchmarks, small refactors, and guarded feature flags.
+   - Only “reject for now” after at least one iteration to salvage the approach (tune a threshold, gate behind opt-in, reduce scope).
+   - Keep the tree green: avoid leaving broken builds/tests between iterations.
+
+5) **No deferrals (MANDATORY)**
    - Do not use “deferred” as an outcome. This repo is alpha; format bumps are allowed; a “migration plan” is never a blocker.
    - If an item is too large, start with the item’s **MVA** (minimum viable attempt) to get real measurements, then either:
      - accept it, or
      - **reject for now** via `git revert` (so the attempt is recorded but inactive).
    - If you hit a true external blocker (e.g. you cannot access the Linux server at all), still create a branch, do the smallest safe spike you can locally, record the blocker, then reject-for-now via a revert and move on.
 
-5) **Stop condition**
+6) **Stop condition**
    - Only stop (create `SLAB_WORK_HALT`) when every punch-list item is either:
      - **accepted**, or
      - **rejected for now** with a recorded attempt (commits) and a revert merged into `slab-opt-rc`.
