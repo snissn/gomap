@@ -1,6 +1,8 @@
 package treedbadapter
 
 import (
+	"errors"
+
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
 )
@@ -31,15 +33,27 @@ func (d *DB) Close() error {
 }
 
 func (d *DB) Get(key []byte) ([]byte, error) {
-	return d.DB.Get(key)
+	val, err := d.DB.Get(key)
+	if errors.Is(err, treedb.ErrClosed) {
+		return nil, nil
+	}
+	return val, err
 }
 
 func (d *DB) GetUnsafe(key []byte) ([]byte, error) {
-	return d.DB.GetUnsafe(key)
+	val, err := d.DB.GetUnsafe(key)
+	if errors.Is(err, treedb.ErrClosed) {
+		return nil, nil
+	}
+	return val, err
 }
 
 func (d *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	return d.DB.GetAppend(key, dst)
+	val, err := d.DB.GetAppend(key, dst)
+	if errors.Is(err, treedb.ErrClosed) {
+		return dst, nil
+	}
+	return val, err
 }
 
 func (d *DB) Set(key, value []byte) error {
@@ -51,7 +65,11 @@ func (d *DB) Delete(key []byte) error {
 }
 
 func (d *DB) Has(key []byte) (bool, error) {
-	return d.DB.Has(key)
+	ok, err := d.DB.Has(key)
+	if errors.Is(err, treedb.ErrClosed) {
+		return false, nil
+	}
+	return ok, err
 }
 
 func (d *DB) SetSync(key, value []byte) error {
