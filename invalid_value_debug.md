@@ -312,3 +312,10 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - Baseline (with `getUint16`, no `putUint32`): ~489ms/op, ~473ms/op, ~578ms/op (avg ~513ms/op).
   - With `putUint32`: ~441ms/op, ~454ms/op, ~467ms/op (avg ~454ms/op).
 - Net: ~11% average improvement; kept.
+
+## 12.39 Inline getUint32 (Reverted)
+- Tried `getUint32` for checksum/value length reads in `TreeDB/node/leaf.go` and `TreeDB/node/node.go`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, 3x each):
+  - With `getUint32`: ~446ms/op, ~437ms/op, ~451ms/op (avg ~445ms/op).
+  - Baseline (without `getUint32`): ~430ms/op, ~451ms/op, ~446ms/op (avg ~441ms/op).
+- Net: slight regression/noise; reverted.
