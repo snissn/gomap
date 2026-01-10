@@ -344,3 +344,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1172ms/op, ~1205ms/op, ~1199ms/op.
 - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
 - Net: regression; reverted.
+
+## 12.44 AppendMany Prep/Meta Pools (Reverted)
+- Added sync.Pool reuse for `appendManyPrep` and `appendManyMeta` slices.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1225ms/op, ~1215ms/op, ~1212ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
