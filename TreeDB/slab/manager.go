@@ -148,38 +148,25 @@ func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.disableReadChecksum = disable
 }
 
-func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig, decPool *sync.Pool) ([]byte, error) {
+func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) ([]byte, error) {
 	if !page.ValuePtrIsCompressed(ptr) {
 		return val, nil
 	}
 	if compression == nil {
 		return nil, errCompressedCorrupt
 	}
-	useDict := page.ValuePtrIsDictCompressed(ptr) && decPool != nil
 	if page.ValuePtrIsFullCompressed(ptr) {
-		if useDict {
-			_, v, err := compression.decompressRecordWithPool(val, decPool)
-			return v, err
-		}
 		_, v, err := compression.decompressRecord(val)
 		return v, err
-	}
-	if useDict {
-		return compression.decompressValueWithPool(val, decPool)
 	}
 	return compression.decompressValue(val)
 }
 
 func (sm *SlabManager) DecodeValueForCompactor(ptr page.ValuePtr, val []byte) ([]byte, error) {
 	sm.mu.RLock()
-	s, ok := sm.slabs[ptr.FileID]
 	compression := &sm.compression
-	var decPool *sync.Pool
-	if ok {
-		_, decPool = s.dictPools(compression)
-	}
 	sm.mu.RUnlock()
-	return decodeValue(ptr, val, compression, decPool)
+	return decodeValue(ptr, val, compression)
 }
 
 func (sm *SlabManager) DecodeRecordForCompactor(ptr page.ValuePtr, val []byte) ([]byte, []byte, error) {
@@ -187,18 +174,10 @@ func (sm *SlabManager) DecodeRecordForCompactor(ptr page.ValuePtr, val []byte) (
 		return nil, nil, fmt.Errorf("not a full compressed record")
 	}
 	sm.mu.RLock()
-	s, ok := sm.slabs[ptr.FileID]
 	compression := &sm.compression
-	var decPool *sync.Pool
-	if ok {
-		_, decPool = s.dictPools(compression)
-	}
 	sm.mu.RUnlock()
 	if compression == nil {
 		return nil, nil, errCompressedCorrupt
-	}
-	if decPool != nil {
-		return compression.decompressRecordWithPool(val, decPool)
 	}
 	return compression.decompressRecord(val)
 }
@@ -239,8 +218,7 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, decPool := s.dictPools(compression)
-	return decodeValue(ptr, val, compression, decPool)
+	return decodeValue(ptr, val, compression)
 }
 
 func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -258,79 +236,37 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, decPool := s.dictPools(compression)
-	return decodeValue(ptr, val, compression, decPool)
+	return decodeValue(ptr, val, compression)
 }
 
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
-	sm.mu.RLock()
-	useDict := sm.compression.kind == CompressionZSTD && sm.activeSlab != nil && sm.activeSlab.version == slabVersionV2
-	sm.mu.RUnlock()
-	if !useDict {
-		encoded := value
-		encodedKey := key
-		compressed := false
-		fullCompressed := false
-		omittedKey := false
-		var err error
-		if sm.compression.kind != CompressionNone {
-			// Try full record compression first
-			if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
-				encoded = enc
-				encodedKey = nil
-				compressed = true
-				fullCompressed = true
-			} else if err != nil {
-				return page.ValuePtr{}, err
-			} else {
-				// Fall back to value-only compression
-				encoded, compressed, err = sm.compression.compressValue(value)
-				if err != nil {
-					return page.ValuePtr{}, err
-				}
-			}
-		}
-
-		if !fullCompressed && sm.omitSlabKeys {
+	encoded := value
+	encodedKey := key
+	compressed := false
+	fullCompressed := false
+	omittedKey := false
+	var err error
+	if sm.compression.kind != CompressionNone {
+		// Try full record compression first
+		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
+			encoded = enc
 			encodedKey = nil
-			omittedKey = true
-		}
-
-		sm.mu.Lock()
-		defer sm.mu.Unlock()
-		if sm.readOnly {
-			return page.ValuePtr{}, ErrReadOnly
-		}
-
-		offset, err := sm.activeSlab.Write(encodedKey, encoded)
-		if err == ErrSlabFull {
-			if err := sm.rotateLocked(); err != nil {
+			compressed = true
+			fullCompressed = true
+		} else if err != nil {
+			return page.ValuePtr{}, err
+		} else {
+			// Fall back to value-only compression
+			encoded, compressed, err = sm.compression.compressValue(value)
+			if err != nil {
 				return page.ValuePtr{}, err
 			}
-			offset, err = sm.activeSlab.Write(encodedKey, encoded)
 		}
+	}
 
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-
-		length := uint32(2 + 4 + len(encodedKey) + len(encoded))
-		if fullCompressed {
-			length = page.ValuePtrMarkFullCompressed(length)
-		} else if omittedKey {
-			length = page.ValuePtrMarkOmittedKey(length)
-			if compressed {
-				length = page.ValuePtrMarkCompressed(length)
-			}
-		} else if compressed {
-			length = page.ValuePtrMarkCompressed(length)
-		}
-
-		return page.ValuePtr{
-			Offset: uint64(offset + 4),
-			Length: length,
-			FileID: sm.activeSlab.ID,
-		}, nil
+	if !fullCompressed && sm.omitSlabKeys {
+		encodedKey = nil
+		omittedKey = true
 	}
 
 	sm.mu.Lock()
@@ -339,85 +275,10 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, ErrReadOnly
 	}
 
-	if err := sm.activeSlab.initDictFromSample(&sm.compression, value); err != nil {
-		return page.ValuePtr{}, err
-	}
-	encPool, _ := sm.activeSlab.dictPools(&sm.compression)
-	encoded, dictCompressed, err := sm.compression.compressValueWithPool(value, encPool)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	compressed := dictCompressed
-	if !dictCompressed {
-		encoded, compressed, err = sm.compression.compressValue(value)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-	}
-	encodedKey := key
-	omittedKey := false
-	if sm.omitSlabKeys {
-		encodedKey = nil
-		omittedKey = true
-	}
-	keyLen := len(encodedKey)
-	valLen := len(encoded)
-	if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-		return page.ValuePtr{}, ErrRecordTooLarge
-	}
-	if dictCompressed && recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-		encoded, compressed, err = sm.compression.compressValue(value)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-		dictCompressed = false
-		valLen = len(encoded)
-		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return page.ValuePtr{}, ErrRecordTooLarge
-		}
-		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			return page.ValuePtr{}, ErrRecordTooLarge
-		}
-	}
-
 	offset, err := sm.activeSlab.Write(encodedKey, encoded)
 	if err == ErrSlabFull {
 		if err := sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
-		}
-		if err := sm.activeSlab.initDictFromSample(&sm.compression, value); err != nil {
-			return page.ValuePtr{}, err
-		}
-		encPool, _ := sm.activeSlab.dictPools(&sm.compression)
-		encoded, dictCompressed, err = sm.compression.compressValueWithPool(value, encPool)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-		compressed = dictCompressed
-		if !dictCompressed {
-			encoded, compressed, err = sm.compression.compressValue(value)
-			if err != nil {
-				return page.ValuePtr{}, err
-			}
-		}
-		keyLen = len(encodedKey)
-		valLen = len(encoded)
-		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return page.ValuePtr{}, ErrRecordTooLarge
-		}
-		if dictCompressed && recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			encoded, compressed, err = sm.compression.compressValue(value)
-			if err != nil {
-				return page.ValuePtr{}, err
-			}
-			dictCompressed = false
-			valLen = len(encoded)
-			if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-				return page.ValuePtr{}, ErrRecordTooLarge
-			}
-			if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-				return page.ValuePtr{}, ErrRecordTooLarge
-			}
 		}
 		offset, err = sm.activeSlab.Write(encodedKey, encoded)
 	}
@@ -427,15 +288,13 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	}
 
 	length := uint32(2 + 4 + len(encodedKey) + len(encoded))
-	if omittedKey {
+	if fullCompressed {
+		length = page.ValuePtrMarkFullCompressed(length)
+	} else if omittedKey {
 		length = page.ValuePtrMarkOmittedKey(length)
-		if dictCompressed {
-			length = page.ValuePtrMarkDictCompressed(length)
-		} else if compressed {
+		if compressed {
 			length = page.ValuePtrMarkCompressed(length)
 		}
-	} else if dictCompressed {
-		length = page.ValuePtrMarkDictCompressed(length)
 	} else if compressed {
 		length = page.ValuePtrMarkCompressed(length)
 	}
@@ -453,7 +312,6 @@ type appendManyMeta struct {
 	keyLen         int
 	valLen         int
 	compressed     bool
-	dictCompressed bool
 	fullCompressed bool
 	omittedKey     bool
 }
@@ -468,13 +326,6 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 	if len(keys) == 0 {
 		return nil, nil
-	}
-
-	sm.mu.RLock()
-	useDict := sm.compression.kind == CompressionZSTD && sm.activeSlab != nil && sm.activeSlab.version == slabVersionV2
-	sm.mu.RUnlock()
-	if useDict {
-		return sm.appendManyWithDict(keys, values)
 	}
 
 	// Keep buffers bounded so we don't double memory usage for extremely large
@@ -608,13 +459,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 					length = page.ValuePtrMarkFullCompressed(length)
 				} else if meta.omittedKey {
 					length = page.ValuePtrMarkOmittedKey(length)
-					if meta.dictCompressed {
-						length = page.ValuePtrMarkDictCompressed(length)
-					} else if meta.compressed {
+					if meta.compressed {
 						length = page.ValuePtrMarkCompressed(length)
 					}
-				} else if meta.dictCompressed {
-					length = page.ValuePtrMarkDictCompressed(length)
 				} else if meta.compressed {
 					length = page.ValuePtrMarkCompressed(length)
 				}
@@ -694,228 +541,6 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 			compressed:     compressedFlags[i],
 			fullCompressed: fullCompressedFlags[i],
 			omittedKey:     omittedKeyFlags[i],
-		})
-	}
-
-	if err := flush(); err != nil {
-		return nil, err
-	}
-
-	if cap(buf) > maxKeepScratch {
-		sm.appendManyScratch = nil
-	} else {
-		sm.appendManyScratch = buf[:0]
-	}
-
-	return ptrs, nil
-}
-
-func (sm *SlabManager) appendManyWithDict(keys [][]byte, values [][]byte) ([]page.ValuePtr, error) {
-	// Keep buffers bounded so we don't double memory usage for extremely large
-	// batches or values.
-	const maxBatchBytes = 8 << 20   // 8 MiB
-	const maxKeepScratch = 16 << 20 // 16 MiB
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.readOnly {
-		return nil, ErrReadOnly
-	}
-
-	ptrs := make([]page.ValuePtr, len(keys))
-	buf := sm.appendManyScratch[:0]
-	metas := make([]appendManyMeta, 0, min(len(keys), 1024))
-
-	flush := func() error {
-		if len(buf) == 0 {
-			return nil
-		}
-		s := sm.activeSlab
-		id := s.ID
-		base, err := s.WriteBatch(buf)
-		if err == ErrSlabFull {
-			return err
-		}
-		if err != nil {
-			return err
-		}
-
-		for _, meta := range metas {
-			length := uint32(2 + 4 + meta.keyLen + meta.valLen)
-			if meta.omittedKey {
-				length = page.ValuePtrMarkOmittedKey(length)
-				if meta.dictCompressed {
-					length = page.ValuePtrMarkDictCompressed(length)
-				} else if meta.compressed {
-					length = page.ValuePtrMarkCompressed(length)
-				}
-			} else if meta.dictCompressed {
-				length = page.ValuePtrMarkDictCompressed(length)
-			} else if meta.compressed {
-				length = page.ValuePtrMarkCompressed(length)
-			}
-			ptrs[meta.idx] = page.ValuePtr{
-				Offset: uint64(base + int64(meta.start) + 4),
-				Length: length,
-				FileID: id,
-			}
-		}
-
-		buf = buf[:0]
-		metas = metas[:0]
-		return nil
-	}
-
-	growBuf := func(target int) {
-		if cap(buf) >= target {
-			return
-		}
-		newCap := cap(buf) * 2
-		if newCap < target {
-			newCap = target
-		}
-		if newCap < 1024 {
-			newCap = 1024
-		}
-		nb := make([]byte, len(buf), newCap)
-		copy(nb, buf)
-		buf = nb
-	}
-
-	var lenArr [6]byte
-	for i := 0; i < len(keys); i++ {
-		key := keys[i]
-		value := values[i]
-		encodedKey := key
-		omittedKey := false
-		if sm.omitSlabKeys {
-			encodedKey = nil
-			omittedKey = true
-		}
-
-		if err := sm.activeSlab.initDictFromSample(&sm.compression, value); err != nil {
-			return nil, err
-		}
-		encPool, _ := sm.activeSlab.dictPools(&sm.compression)
-		encodedValue, dictCompressed, err := sm.compression.compressValueWithPool(value, encPool)
-		if err != nil {
-			return nil, err
-		}
-		compressed := dictCompressed
-		if !dictCompressed {
-			encodedValue, compressed, err = sm.compression.compressValue(value)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		keyLen := len(encodedKey)
-		valLen := len(encodedValue)
-		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
-		}
-		if dictCompressed && recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			encodedValue, compressed, err = sm.compression.compressValue(value)
-			if err != nil {
-				return nil, err
-			}
-			dictCompressed = false
-			valLen = len(encodedValue)
-			if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-				return nil, ErrRecordTooLarge
-			}
-			if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-				return nil, ErrRecordTooLarge
-			}
-		}
-		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
-		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen := int(recordLen64)
-
-		if int64(sm.activeSlab.Size)+int64(len(buf))+int64(recordLen) > MaxSlabSize {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-			if int64(sm.activeSlab.Size)+int64(recordLen) > MaxSlabSize {
-				if err := sm.rotateLocked(); err != nil {
-					return nil, err
-				}
-				if err := sm.activeSlab.initDictFromSample(&sm.compression, value); err != nil {
-					return nil, err
-				}
-				encPool, _ = sm.activeSlab.dictPools(&sm.compression)
-				encodedValue, dictCompressed, err = sm.compression.compressValueWithPool(value, encPool)
-				if err != nil {
-					return nil, err
-				}
-				compressed = dictCompressed
-				if !dictCompressed {
-					encodedValue, compressed, err = sm.compression.compressValue(value)
-					if err != nil {
-						return nil, err
-					}
-				}
-				keyLen = len(encodedKey)
-				valLen = len(encodedValue)
-				if dictCompressed && recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-					encodedValue, compressed, err = sm.compression.compressValue(value)
-					if err != nil {
-						return nil, err
-					}
-					dictCompressed = false
-					valLen = len(encodedValue)
-				}
-				if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-					return nil, ErrRecordTooLarge
-				}
-				if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-					return nil, ErrRecordTooLarge
-				}
-				recordLen64 = int64(HeaderSize) + int64(keyLen) + int64(valLen)
-				if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-					return nil, ErrRecordTooLarge
-				}
-				recordLen = int(recordLen64)
-			}
-		}
-
-		if len(buf) >= maxBatchBytes {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-		}
-
-		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
-		binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
-		sum := crc32.Update(0, crc32cTable, lenArr[:])
-		sum = crc32.Update(sum, crc32cTable, encodedKey)
-		sum = crc32.Update(sum, crc32cTable, encodedValue)
-
-		start := len(buf)
-		end := start + recordLen
-		growBuf(end)
-		buf = buf[:end]
-		rec := buf[start:end]
-
-		binary.LittleEndian.PutUint32(rec[0:4], sum)
-		binary.LittleEndian.PutUint16(rec[4:6], uint16(keyLen))
-		binary.LittleEndian.PutUint32(rec[6:10], uint32(valLen))
-		copy(rec[10:10+keyLen], encodedKey)
-		copy(rec[10+keyLen:], encodedValue)
-
-		metas = append(metas, appendManyMeta{
-			idx:            i,
-			start:          start,
-			keyLen:         keyLen,
-			valLen:         valLen,
-			compressed:     compressed,
-			dictCompressed: dictCompressed,
-			omittedKey:     omittedKey,
 		})
 	}
 
@@ -1127,8 +752,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, decPool := f.dictPools(s.compression)
-	return decodeValue(ptr, val, s.compression, decPool)
+	return decodeValue(ptr, val, s.compression)
 }
 
 func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -1140,8 +764,7 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, decPool := f.dictPools(s.compression)
-	return decodeValue(ptr, val, s.compression, decPool)
+	return decodeValue(ptr, val, s.compression)
 }
 
 // AcquireSlabs increments the RefCount for the Set (O(1)).
