@@ -268,3 +268,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values): 1,087,414,567 / 1,090,490,581 / 1,095,665,917 ns/op.
   - Replay after change: 1,095,999,356 / 1,095,080,898 / 1,096,457,869 ns/op (regressed).
   - Revert commit `b6b466a` (attempt `42f0b26`), baseline confirm: 1,089,834,462 / 1,086,919,242 / 1,086,995,429 ns/op.
+- #3 queue max update gating (rejected): created `slab-opt-03-entropy-training-10` to update trainer queue max only on enqueue.
+  - Baseline replay (ptr-values): 1,085,494,738 / 1,089,976,242 / 1,149,411,536 ns/op.
+  - Replay after change: 1,202,969,281 / 1,185,147,868 / 1,131,036,527 ns/op (regressed).
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_enqmax.prof` (pprof top captured).
+  - Revert commit `5f535c5` (attempt `ffd51d1`), baseline confirm: 1,085,478,040 / 1,100,580,361 / 1,091,074,810 ns/op.
