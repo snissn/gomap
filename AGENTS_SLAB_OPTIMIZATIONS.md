@@ -264,3 +264,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,091,461,879 / 1,087,484,921 / 1,104,038,097 ns/op.
   - CPU profiles: `/tmp/treedb_ptrvalues_cpu_entropy_collectgate_base.prof`, `/tmp/treedb_ptrvalues_cpu_entropy_collectgate_after.prof`.
 - Merged `slab-opt-03-entropy-training-8` into `slab-opt-rc` (ff at `77d8974`).
+- #3 batch collect attempt (rejected): created `slab-opt-03-entropy-training-9` to batch trainer sampling in `AppendMany`.
+  - Baseline replay (ptr-values): 1,087,414,567 / 1,090,490,581 / 1,095,665,917 ns/op.
+  - Replay after change: 1,095,999,356 / 1,095,080,898 / 1,096,457,869 ns/op (regressed).
+  - Revert commit `b6b466a` (attempt `42f0b26`), baseline confirm: 1,089,834,462 / 1,086,919,242 / 1,086,995,429 ns/op.
