@@ -82,7 +82,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 ## Optimization punch list (ordered; update statuses as you go)
 
 ### 1) Multi-Stream Slabs (Parallel Writing) — High impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-01-multistream`
 - Checklist:
   - [ ] Design: choose N streams, stream->file layout, and pointer encoding.
@@ -164,3 +164,5 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 ### 2026-01-10
 - Created this tracker + automation prompt/script scaffolding.
 - Next: run pointer-values profiling and execute items starting from #1.
+- Baseline (slab-opt-01-multistream): `BenchmarkTraceReplayTimeline` ns/op: 1,146,542,800 / 1,209,162,630 / 1,153,101,110. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof`.
+- Decision: deferred #1 (multi-stream slabs) — requires expanding meta to track multiple active slab tails/IDs; current on-disk format only records a single `ActiveSlabID/Tail`, so parallel active slabs would risk unrepaired torn tails on crash. Revisit once a meta v2 or multi-active slab recovery strategy is defined.
