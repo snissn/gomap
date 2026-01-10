@@ -271,6 +271,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.slabs.compression.train.last_dict_bytes"] = fmt.Sprintf("%d", trainerStats.LastTrainDict)
 		stats["treedb.slabs.compression.train.last_dict_hash"] = fmt.Sprintf("%x", trainerStats.LastTrainDictHash)
 		stats["treedb.slabs.compression.train.last_dedup_mode"] = trainerStats.LastTrainDedupMode
+		stats["treedb.slabs.compression.train.last_dedup_flag"] = trainerStats.LastTrainDedupFlag
 		stats["treedb.slabs.compression.train.last_dedup_ref"] = fmt.Sprintf("%d", trainerStats.LastTrainDedupRef)
 		stats["treedb.slabs.compression.train.last_ratio"] = fmt.Sprintf("%.6f", trainerStats.LastTrainRatio)
 		stats["treedb.slabs.compression.train.last_samples"] = fmt.Sprintf("%d", trainerStats.LastTrainSamples)

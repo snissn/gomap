@@ -167,7 +167,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Checklist:
   - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
   - [x] Hash dictionaries (xxhash64) and reuse recent dicts when identical (dedup window).
-  - [ ] Implement USE_REF / USE_GLOBAL flags.
+  - [x] Implement USE_REF / USE_GLOBAL flags.
   - [ ] Bench: measure slab bytes reduction and any latency impact.
 
 ### 5) Two-Pass Compaction (Gold Standard) — Lower impact on write hot path
@@ -300,3 +300,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_mva_cpu.prof` (pprof top captured).
   - Benchmark `BenchmarkCompactionIndexSwapPointerValues`: 27,694,000 ns/op; `remap_ops=2000`, `remap_bytes=75735`, `slab_dead_bytes=67735`, `slab_write_bytes=67735`.
 - Merged `slab-opt-05-two-pass-compaction` into `slab-opt-rc` (ff at `0d74ce1`).
+- #4 dict dedup flags (in progress): created `slab-opt-04-dict-dedup-3` off `slab-opt-rc` to expose USE_GLOBAL/USE_REF flags in trainer stats.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,109,235,673 / 1,100,744,040 / 1,097,132,821 ns/op.
+  - Replay after change: 1,092,699,347 / 1,096,116,169 / 1,094,556,994 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup3_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).

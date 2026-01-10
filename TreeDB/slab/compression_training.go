@@ -55,6 +55,7 @@ type compressionTrainer struct {
 	lastTrainDict      atomic.Uint64
 	lastTrainDictHash  atomic.Uint64
 	lastTrainDedupMode atomic.Uint64
+	lastTrainDedupFlag atomic.Uint64
 	lastTrainDedupRef  atomic.Uint64
 	dictDedupLookups   atomic.Uint64
 	dictDedupHits      atomic.Uint64
@@ -89,6 +90,7 @@ type CompressionTrainerStats struct {
 	LastTrainDict      uint64
 	LastTrainDictHash  uint64
 	LastTrainDedupMode string
+	LastTrainDedupFlag string
 	LastTrainDedupRef  uint64
 	DictDedupLookups   uint64
 	DictDedupHits      uint64
@@ -103,6 +105,14 @@ const (
 	dictDedupNone dictDedupMode = iota
 	dictDedupGlobal
 	dictDedupRef
+)
+
+type dictUseFlag uint8
+
+const (
+	dictUseGlobal dictUseFlag = iota
+	dictUseLocal
+	dictUseRef
 )
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
@@ -330,6 +340,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	t.lastTrainDictHash.Store(dictHash)
 	mode, ref := t.recordDictHash(dictHash)
 	t.lastTrainDedupMode.Store(uint64(mode))
+	t.lastTrainDedupFlag.Store(uint64(dedupFlagFromMode(mode)))
 	if mode == dictDedupRef && ref >= 0 {
 		t.lastTrainDedupRef.Store(uint64(ref))
 	} else {
@@ -491,6 +502,7 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		return CompressionTrainerStats{}
 	}
 	dedupMode := dictDedupMode(t.lastTrainDedupMode.Load())
+	dedupFlag := dictUseFlag(t.lastTrainDedupFlag.Load())
 	return CompressionTrainerStats{
 		Enabled:            t.enabled.Load(),
 		Collecting:         t.collecting.Load(),
@@ -506,6 +518,7 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		LastTrainDict:      t.lastTrainDict.Load(),
 		LastTrainDictHash:  t.lastTrainDictHash.Load(),
 		LastTrainDedupMode: dedupModeString(dedupMode),
+		LastTrainDedupFlag: dedupFlagString(dedupFlag),
 		LastTrainDedupRef:  t.lastTrainDedupRef.Load(),
 		DictDedupLookups:   t.dictDedupLookups.Load(),
 		DictDedupHits:      t.dictDedupHits.Load(),
@@ -523,5 +536,27 @@ func dedupModeString(mode dictDedupMode) string {
 		return "ref"
 	default:
 		return "none"
+	}
+}
+
+func dedupFlagFromMode(mode dictDedupMode) dictUseFlag {
+	switch mode {
+	case dictDedupGlobal:
+		return dictUseGlobal
+	case dictDedupRef:
+		return dictUseRef
+	default:
+		return dictUseLocal
+	}
+}
+
+func dedupFlagString(flag dictUseFlag) string {
+	switch flag {
+	case dictUseGlobal:
+		return "use_global"
+	case dictUseRef:
+		return "use_ref"
+	default:
+		return "use_local"
 	}
 }
