@@ -286,3 +286,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 
 ## 12.34 Internal Separator Attempt (Reverted)
 - Tried shortest separator keys for internal splits; benchmark regressed (~692ms/op) and the change was reverted.
+
+## 12.35 Memtable Pool Regression (Fixed)
+- CI failures in caching tests (`TestCachingDB_WriteAndFlush`, `TestUnsafeOptions_ConcurrentStress`) after `caching: recycle memtables with reader tracking`.
+- Symptom: `Get` returns wrong values (e.g. k0 -> v9) and backend missing keys; reproducible locally.
+- Root cause: memtable pooling led to reusing skiplist instances while still visible in queue/reads, corrupting values.
+- Fix: disable memtable pooling (always allocate new memtables, no recycle). Tests pass with `-count=50` for `TestCachingDB_WriteAndFlush` and `-count=10` for `TestUnsafeOptions_ConcurrentStress`.
