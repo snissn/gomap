@@ -182,43 +182,6 @@ func (t *compressionTrainer) collect(value []byte) {
 	t.updateMaxQueueLen()
 }
 
-func (t *compressionTrainer) collectBatch(values [][]byte) {
-	if t == nil || t.closed.Load() || !t.collecting.Load() || len(values) == 0 {
-		return
-	}
-	for _, value := range values {
-		if t.closed.Load() || !t.collecting.Load() {
-			return
-		}
-		if len(value) == 0 {
-			continue
-		}
-		if t.sampleStride > 1 {
-			if t.sampleStrideCounter.Add(1)%t.sampleStride != 0 {
-				continue
-			}
-		}
-		if len(t.sampleCh) == cap(t.sampleCh) {
-			t.dropped.Add(1)
-			return
-		}
-		sample := value
-		if len(sample) > t.maxRecord {
-			sample = sample[:t.maxRecord]
-		}
-		cp := make([]byte, len(sample))
-		copy(cp, sample)
-		gen := t.sampleGen.Load()
-		select {
-		case t.sampleCh <- trainerSample{gen: gen, sample: cp}:
-			t.enqueued.Add(1)
-		default:
-			t.dropped.Add(1)
-		}
-		t.updateMaxQueueLen()
-	}
-}
-
 func (t *compressionTrainer) run() {
 	for sample := range t.sampleCh {
 		t.appendSample(sample)
