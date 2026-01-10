@@ -223,6 +223,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - After (slab-opt-04-dict-dedup): `BenchmarkTraceReplayTimeline` ns/op: 1,183,208,281 / 1,194,904,890 / 1,188,605,237.
 - CPU profile: `/tmp/treedb_ptrvalues_dict_dedup_cpu.prof` (top shows syscall/syscall6 + zstd BuildDict/EncodeAll).
 - Dedup hits not observed in this replay workload; keeping #4 in_progress for further iterations.
+- Merged `slab-opt-04-dict-dedup` into `slab-opt-rc` at `3b6137c`.
 - Branch `slab-opt-03-entropy-training-12` (commit `faf040b`): pooled compression training samples + early stop in AppendMany collect.
 - Local replay bench (baseline): 1.164/1.206/1.208 s/op.
 - Local replay bench (after): 1.129/1.106/1.117 s/op.
