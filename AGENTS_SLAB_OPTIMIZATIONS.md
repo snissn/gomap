@@ -238,3 +238,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,211,810,491 / 1,236,813,726 / 1,225,207,840 ns/op (training disabled; likely noise).
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_queue.prof` (pprof top captured).
   - Merged `slab-opt-03-entropy-training-3` into `slab-opt-rc` (ff at `21c0310`).
+- #3 training stats (in progress): created `slab-opt-03-entropy-training-4` off `slab-opt-rc` to expose compression trainer queue/ratio counters via `Stats()`.
+  - Baseline replay (ptr-values): 1,195,054,523 / 1,227,023,678 / 1,230,509,250 ns/op.
+  - Replay after change: 1,218,892,274 / 1,265,395,086 / 1,263,555,979 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_stats.prof` (pprof top captured).

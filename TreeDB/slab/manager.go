@@ -835,6 +835,17 @@ func (sm *SlabManager) RemapStats() (remaps uint64, deadMappings uint64) {
 	return remaps, deadMappings
 }
 
+func (sm *SlabManager) CompressionTrainerStats() (CompressionTrainerStats, bool) {
+	if sm.compressionTrainer == nil {
+		return CompressionTrainerStats{}, false
+	}
+	stats := sm.compressionTrainer.stats()
+	if !stats.Enabled {
+		return CompressionTrainerStats{}, false
+	}
+	return stats, true
+}
+
 // CurrentSlabSet returns a snapshot of the current slabs.
 func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	sm.mu.RLock()

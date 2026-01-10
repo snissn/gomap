@@ -2,6 +2,7 @@ package slab
 
 import (
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -37,11 +38,32 @@ type compressionTrainer struct {
 	sampleCh  chan trainerSample
 	closed    atomic.Bool
 	closeOnce sync.Once
+
+	enqueued         atomic.Uint64
+	dropped          atomic.Uint64
+	trainCount       atomic.Uint64
+	lastTrainRatio   atomic.Uint64
+	lastTrainSamples atomic.Uint64
+	lastTrainDict    atomic.Uint64
 }
 
 type trainerSample struct {
 	gen    uint64
 	sample []byte
+}
+
+type CompressionTrainerStats struct {
+	Enabled          bool
+	Collecting       bool
+	Training         bool
+	QueueLen         int
+	QueueCap         int
+	Enqueued         uint64
+	Dropped          uint64
+	TrainCount       uint64
+	LastTrainRatio   float64
+	LastTrainSamples uint64
+	LastTrainDict    uint64
 }
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
@@ -119,6 +141,7 @@ func (t *compressionTrainer) collect(value []byte) {
 		return
 	}
 	if len(t.sampleCh) == cap(t.sampleCh) {
+		t.dropped.Add(1)
 		return
 	}
 	sample := value
@@ -130,7 +153,9 @@ func (t *compressionTrainer) collect(value []byte) {
 	gen := t.sampleGen.Load()
 	select {
 	case t.sampleCh <- trainerSample{gen: gen, sample: cp}:
+		t.enqueued.Add(1)
 	default:
+		t.dropped.Add(1)
 	}
 }
 
@@ -201,6 +226,8 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		return
 	}
 
+	t.trainCount.Add(1)
+
 	dictID := slabID + 1
 	if dictID == 0 {
 		dictID = 1
@@ -228,6 +255,9 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		storedTotal += len(enc.EncodeAll(sample, nil))
 	}
 	ratio := float64(storedTotal) / float64(rawTotal)
+	t.lastTrainRatio.Store(math.Float64bits(ratio))
+	t.lastTrainSamples.Store(uint64(len(samples)))
+	t.lastTrainDict.Store(uint64(len(dict)))
 	if t.logOnce() {
 		log.Printf("treedb: slab compression trained dict slab=%d dict_bytes=%d samples=%d raw=%d stored=%d ratio=%.3f",
 			slabID,
@@ -245,4 +275,23 @@ func (t *compressionTrainer) logOnce() bool {
 		return false
 	}
 	return t.logged.CompareAndSwap(false, true)
+}
+
+func (t *compressionTrainer) stats() CompressionTrainerStats {
+	if t == nil {
+		return CompressionTrainerStats{}
+	}
+	return CompressionTrainerStats{
+		Enabled:          t.enabled.Load(),
+		Collecting:       t.collecting.Load(),
+		Training:         t.training.Load(),
+		QueueLen:         len(t.sampleCh),
+		QueueCap:         cap(t.sampleCh),
+		Enqueued:         t.enqueued.Load(),
+		Dropped:          t.dropped.Load(),
+		TrainCount:       t.trainCount.Load(),
+		LastTrainRatio:   math.Float64frombits(t.lastTrainRatio.Load()),
+		LastTrainSamples: t.lastTrainSamples.Load(),
+		LastTrainDict:    t.lastTrainDict.Load(),
+	}
 }

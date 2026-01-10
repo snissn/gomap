@@ -261,6 +261,18 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 	}
+	if trainerStats, ok := db.slabManager.CompressionTrainerStats(); ok {
+		stats["treedb.slabs.compression.train.collecting"] = fmt.Sprintf("%t", trainerStats.Collecting)
+		stats["treedb.slabs.compression.train.dropped"] = fmt.Sprintf("%d", trainerStats.Dropped)
+		stats["treedb.slabs.compression.train.enqueued"] = fmt.Sprintf("%d", trainerStats.Enqueued)
+		stats["treedb.slabs.compression.train.last_dict_bytes"] = fmt.Sprintf("%d", trainerStats.LastTrainDict)
+		stats["treedb.slabs.compression.train.last_ratio"] = fmt.Sprintf("%.6f", trainerStats.LastTrainRatio)
+		stats["treedb.slabs.compression.train.last_samples"] = fmt.Sprintf("%d", trainerStats.LastTrainSamples)
+		stats["treedb.slabs.compression.train.queue_cap"] = fmt.Sprintf("%d", trainerStats.QueueCap)
+		stats["treedb.slabs.compression.train.queue_len"] = fmt.Sprintf("%d", trainerStats.QueueLen)
+		stats["treedb.slabs.compression.train.runs"] = fmt.Sprintf("%d", trainerStats.TrainCount)
+		stats["treedb.slabs.compression.train.training"] = fmt.Sprintf("%t", trainerStats.Training)
+	}
 
 	pruneStatsInto(stats, &db.pruner)
 
