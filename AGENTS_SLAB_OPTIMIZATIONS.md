@@ -155,7 +155,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
   - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
-  - [ ] Implement rolling compression-ratio metrics per zone.
+  - [x] Implement rolling compression-ratio metrics per zone.
+  - [x] Add opt-in adaptive compression pause on degraded ratio (safe trigger).
   - [ ] Trigger background training when ratio degrades; publish next-zone dictionary.
   - [ ] Verify no writer stalls; no extra syscalls on the read fast path.
   - [ ] Bench + server trace comparison.
@@ -225,3 +226,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - #3 entropy metrics MVA (in progress): renamed old defer branch to `slab-opt-03-entropy-training-defer`, created fresh `slab-opt-03-entropy-training` off `slab-opt-rc`.
 - Baseline replay (ptr-values): 1,144,469,998 / 1,160,093,383 / 1,164,282,942 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof` (pprof top captured).
 - #3 replay after metrics logging: 1,145,068,735 / 1,157,760,511 / 1,159,801,847 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu_entropy.prof`.
+- #3 adaptive pause trigger (opt-in): baseline before change 1,152,491,465 / 1,180,121,349 / 1,171,889,825 ns/op; final bench with `TREEDB_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `...PAUSE_BYTES=4194304`, `...MIN_RECORDS=1000`: 1,154,793,614 / 1,166,791,415 / 1,162,242,938 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu_entropy_adaptive.prof`. Logging is now gated by `TREEDB_SLAB_COMPRESSION_METRICS`.

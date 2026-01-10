@@ -31,7 +31,8 @@ type SlabManager struct {
 	omitSlabKeys        bool
 	compressionMetrics  compressionMetrics
 
-	appendManyScratch []byte
+	appendManyScratch         []byte
+	compressionPauseRemaining atomic.Uint64
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
@@ -153,6 +154,24 @@ func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.disableReadChecksum = disable
 }
 
+func (sm *SlabManager) shouldCompress(rawLen int) bool {
+	if rawLen <= 0 {
+		return true
+	}
+	remaining := sm.compressionPauseRemaining.Load()
+	for remaining > 0 {
+		next := uint64(0)
+		if uint64(rawLen) < remaining {
+			next = remaining - uint64(rawLen)
+		}
+		if sm.compressionPauseRemaining.CompareAndSwap(remaining, next) {
+			return false
+		}
+		remaining = sm.compressionPauseRemaining.Load()
+	}
+	return true
+}
+
 func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) ([]byte, error) {
 	if !page.ValuePtrIsCompressed(ptr) {
 		return val, nil
@@ -254,7 +273,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	fullCompressed := false
 	omittedKey := false
 	var err error
-	if sm.compression.kind != CompressionNone {
+	if sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
 		// Try full record compression first
 		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
 			encoded = enc
@@ -301,7 +320,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, err
 	}
 
-	if sm.compressionMetrics.enabled {
+	if sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone {
 		compressedCount := 0
 		fullCount := 0
 		if compressed {
@@ -310,7 +329,9 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		if fullCompressed {
 			fullCount = 1
 		}
-		sm.compressionMetrics.add(sm.activeSlab.ID, rawLen, storedLen, 1, compressedCount, fullCount)
+		if pauseBytes := sm.compressionMetrics.add(sm.activeSlab.ID, rawLen, storedLen, 1, compressedCount, fullCount); pauseBytes > 0 {
+			sm.compressionPauseRemaining.Store(pauseBytes)
+		}
 	}
 
 	length := uint32(2 + 4 + len(encodedKey) + len(encoded))
@@ -379,6 +400,11 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
 		for i := range values {
+			if !sm.shouldCompress(len(values[i])) {
+				encodedValues[i] = values[i]
+				encodedKeys[i] = keys[i]
+				continue
+			}
 			// Try full record compression first
 			if enc, ok, err := sm.compression.compressRecord(keys[i], values[i]); err == nil && ok {
 				encodedValues[i] = enc
@@ -509,7 +535,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 				}
 			}
 
-			if sm.compressionMetrics.enabled && len(metas) > 0 {
+			if sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone && len(metas) > 0 {
 				rawTotal := 0
 				storedTotal := 0
 				compressedCount := 0
@@ -524,7 +550,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 						fullCount++
 					}
 				}
-				sm.compressionMetrics.add(id, rawTotal, storedTotal, len(metas), compressedCount, fullCount)
+				if pauseBytes := sm.compressionMetrics.add(id, rawTotal, storedTotal, len(metas), compressedCount, fullCount); pauseBytes > 0 {
+					sm.compressionPauseRemaining.Store(pauseBytes)
+				}
 			}
 
 			buf = buf[:0]

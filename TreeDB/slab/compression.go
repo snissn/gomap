@@ -35,6 +35,9 @@ type Options struct {
 	OmitSlabKeys                  bool
 	CompressionMetrics            bool
 	CompressionMetricsWindowBytes int
+	CompressionAdaptiveRatio      float64
+	CompressionAdaptivePauseBytes int
+	CompressionAdaptiveMinRecords int
 }
 
 type compressionConfig struct {

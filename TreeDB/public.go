@@ -156,6 +156,21 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompressionMetricsWindowBytes = n
 		}
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_RATIO"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			opts.SlabCompressionAdaptiveRatio = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptivePauseBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveMinRecords = n
+		}
+	}
 
 	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

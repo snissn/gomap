@@ -270,6 +270,12 @@ type Options struct {
 	SlabCompressionMetrics bool
 	// SlabCompressionMetricsWindowBytes controls log window size for compression ratios.
 	SlabCompressionMetricsWindowBytes int
+	// SlabCompressionAdaptiveRatio enables adaptive compression pausing when ratios degrade (>= threshold).
+	SlabCompressionAdaptiveRatio float64
+	// SlabCompressionAdaptivePauseBytes controls how many raw bytes to skip after a degradation trigger.
+	SlabCompressionAdaptivePauseBytes int
+	// SlabCompressionAdaptiveMinRecords controls the minimum records per window before triggering pause.
+	SlabCompressionAdaptiveMinRecords int
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -474,6 +480,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		OmitSlabKeys:                  opts.OmitSlabKeys,
 		CompressionMetrics:            opts.SlabCompressionMetrics,
 		CompressionMetricsWindowBytes: opts.SlabCompressionMetricsWindowBytes,
+		CompressionAdaptiveRatio:      opts.SlabCompressionAdaptiveRatio,
+		CompressionAdaptivePauseBytes: opts.SlabCompressionAdaptivePauseBytes,
+		CompressionAdaptiveMinRecords: opts.SlabCompressionAdaptiveMinRecords,
 	})
 	if err != nil {
 		p.Close()
