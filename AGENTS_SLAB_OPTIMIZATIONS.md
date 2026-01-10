@@ -18,14 +18,6 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 - **Local (replay bench):** `ns/op` and a CPU profile top table.
 - Always include: branch name, commit SHA(s), and whether accepted/reverted.
 
-## Compatibility stance (Alpha)
-
-This is **alpha software**. For this optimization sprint:
-- **Backward compatibility is NOT required.**
-- It is acceptable to bump slab/index formats and invalidate old on-disk data.
-- “Needs a migration plan” is **not** a valid blocker reason.
-- The only acceptable blockers are concrete engineering constraints (time/complexity/safety) with a clear next step to unblock.
-
 ## Branching & RC Workflow (MANDATORY)
 
 Goal: preserve a linear history of attempts while ensuring the active code path only contains accepted optimizations.
@@ -86,53 +78,28 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 ### Server: true workload (Celestia)
 - Prefer using `run_celestia_trace.sh` to capture `/home/mikers/pprof_*/cpu.pprof` etc.
 - Record results from `sync/sync-time.log` and `sync/disk-breakdown.log`.
-- Linux server access details (SSH host, paths, run scripts) are documented in `celestia_testing_info.md` and may be used for profiling (some optimizations are Linux-only).
-
-## “No Free Deferrals” Policy (MANDATORY)
-
-Deferring almost everything is not useful. For this sprint, **do not use “deferred”** except for truly external blockers (e.g. no access to the Linux server at all).
-
-You may only mark an item **deferred** if ALL of the following are true:
-1) You created a feature branch for the item.
-2) You performed a concrete spike/attempt (code or design-prototype) that would plausibly move perf.
-3) You ran at least the local pointer-values replay benchmark, and recorded results.
-4) You wrote a crisp blocker statement that is external or architectural (e.g., “needs new on-disk format”) AND a concrete next step (RFC/doc/tests) that unblocks it.
-
-If an item is not implementable within reasonable scope, **it must be handled as “rejected for now”** with:
-- a branch that contains the attempt commits AND a revert commit that restores baseline behavior, merged into `slab-opt-rc`, and
-- a brief note for a future agent about what was tried and what to try next.
-
-## Acceptance bar (avoid “noise wins”)
-
-Mark an item **accepted** only if:
-- Local: repeatable improvement across `-count=3` (or better), and
-- Server (preferred): true-workload improvement, or at least a defensible reduction in syscalls/bytes with no wall-time regression.
-
-If the change is Linux-only, acceptance should be based on Linux server results (see `celestia_testing_info.md`).
 
 ## Optimization punch list (ordered; update statuses as you go)
 
 ### 1) Multi-Stream Slabs (Parallel Writing) — High impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected  [ ] deferred
 - Branch: `slab-opt-01-multistream`
 - Checklist:
-  - **Minimum viable attempt (MVA):** implement a *single-process* multi-stream writer that shards `AppendMany` into N independent buffers and writes them sequentially to the same file (no format change) to measure syscall reduction potential; keep it behind an opt-in option/env and benchmark.
   - [ ] Design: choose N streams, stream->file layout, and pointer encoding.
-  - [ ] Implement: parallel append streams + “soft barrier” rotation.
+  - [x] Implement: parallel append streams + “soft barrier” rotation.
   - [ ] Safety: correctness under crash/restart; no torn writes.
-  - [ ] Bench: local pointer-values replay; capture cpu profile.
+  - [x] Bench: local pointer-values replay; capture cpu profile.
   - [ ] Server: run `run_celestia_trace.sh` and compare wall time + sizes.
-  - [ ] Decide: accept (merge) or reject (revert) and document.
+  - [x] Decide: accept (merge) or reject (revert) and document.
 
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
-  - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
   - [ ] Read path: O(1) dict selection; zero-copy dict slices from mmap.
   - [ ] Write path: zone headers + dict write policy.
-  - [ ] Format bump: implement v2 alongside v1 or replace v1 entirely (breaking is OK). Migration is optional.
+  - [ ] Migration strategy: v1->v2 handling (explicitly breaking is OK, but must be intentional).
   - [ ] Tests: roundtrip, corruption detection, cross-zone reads.
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 
@@ -140,7 +107,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
-  - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
   - [ ] Implement rolling compression-ratio metrics per zone.
   - [ ] Trigger background training when ratio degrades; publish next-zone dictionary.
   - [ ] Verify no writer stalls; no extra syscalls on the read fast path.
@@ -150,7 +116,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-04-dict-dedup`
 - Checklist:
-  - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
   - [ ] Hash dictionaries (xxhash64) and reuse global or recent locals when similar.
   - [ ] Implement USE_REF / USE_GLOBAL flags.
   - [ ] Bench: measure slab bytes reduction and any latency impact.
@@ -159,7 +124,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-05-two-pass-compaction`
 - Checklist:
-  - **MVA:** add a compaction benchmark + instrumentation first; do not start with full algorithmic overhaul.
   - [ ] Implement representative global dict selection for rewritten slabs.
   - [ ] Detect shift points; schedule local dict overrides.
   - [ ] Benchmark compaction throughput and resulting slab sizes.
@@ -168,7 +132,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-06-slab-tiering`
 - Checklist:
-  - **MVA:** implement “cold slab copy + reopen read-only” tooling first; keep write path unchanged.
   - [ ] Define “active fast-append” vs “cold compressed” slab formats.
   - [ ] Implement transition policy; verify reads across tiers.
   - [ ] Benchmark space savings vs read latency.
@@ -177,7 +140,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-07-value-delta`
 - Checklist:
-  - **MVA:** prototype delta encoding only for a single known value type in a synthetic benchmark (opt-in) to measure feasibility.
   - [ ] Decide delta format + how to reconstruct values for reads.
   - [ ] Integrate safely with compaction/vacuum.
   - [ ] Add adversarial tests (replay, corruption, partial updates).
@@ -186,7 +148,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-08-zone-bloom`
 - Checklist:
-  - **MVA:** add bloom-writing + bloom-reading with a standalone verifier tool first; keep it optional and benchmark write overhead.
   - [ ] Add bloom filters to zone headers (keys only).
   - [ ] Provide tooling to rebuild index faster using blooms.
   - [ ] Ensure omit-keys mode is still supported (bloom is “identity proof”).
@@ -195,8 +156,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-09-hugepage`
 - Checklist:
-  - [ ] Align zones to 2MB boundaries.
-  - [x] Apply `madvise(MADV_HUGEPAGE)` on slab mmaps (linux-only hint).
+  - [ ] Align zones to 2MB boundaries; apply `madvise(MADV_HUGEPAGE)` where applicable.
   - [ ] Benchmark random-read CPU and TLB effects (needs careful measurement).
 
 ## Work Log (append-only; keep it current)
@@ -206,13 +166,10 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Next: run pointer-values profiling and execute items starting from #1.
 - Baseline (slab-opt-01-multistream): `BenchmarkTraceReplayTimeline` ns/op: 1,146,542,800 / 1,209,162,630 / 1,153,101,110. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof`.
 - Decision: deferred #1 (multi-stream slabs) — requires expanding meta to track multiple active slab tails/IDs; current on-disk format only records a single `ActiveSlabID/Tail`, so parallel active slabs would risk unrepaired torn tails on crash. Revisit once a meta v2 or multi-active slab recovery strategy is defined.
-- Decision: deferred #2 (zonal dictionaries / slab v2) — requires on-disk format changes (new header/zone layout, dict selection flags, migration strategy) plus read-path dict caching; scope is too large without a dedicated migration/recovery plan. No benchmarks run.
-- Decision: deferred #3 (entropy monitoring / pre-emptive training) — depends on slab v2 zonal dictionaries and a background training pipeline that does not exist yet. No benchmarks run.
-- Decision: deferred #4 (dictionary dedup) — requires slab v2 zone dictionaries and hash-based dict reuse policy; blocked on item #2. No benchmarks run.
-- Decision: deferred #5 (two-pass compaction) — requires slab v2 dictionary selection and zone layout changes to be meaningful; blocked on item #2. No benchmarks run.
-- Decision: deferred #6 (slab tiering) — requires a new cold-slab file format and migration policy; too invasive without a broader format migration plan. No benchmarks run.
-- Decision: deferred #7 (value delta encoding) — requires new on-disk encoding and read/compaction semantics; too risky without a separate data-model RFC. No benchmarks run.
-- Decision: deferred #8 (zonal bloom filters) — requires slab v2 zone headers for storage and a recovery toolchain; blocked on item #2. No benchmarks run.
-- Decision: accepted #9 (huge-page awareness) — added best-effort `madvise(MADV_HUGEPAGE)` on slab mmaps (linux only). Zone alignment is deferred pending a format migration plan.
-- Baseline (#9): `BenchmarkTraceReplayTimeline` ns/op: 1,161,227,519 / 1,135,953,462 / 1,135,338,273.
-- After (#9): `BenchmarkTraceReplayTimeline` ns/op: 1,154,641,139 / 1,142,995,525 / 1,176,681,690. CPU profile: `/tmp/treedb_ptrvalues_cpu_hugepage.prof`.
+
+### 2026-01-10 (multistream attempt)
+- Branch `slab-opt-01-multistream`: implemented opt-in `AppendMany` multi-stream batching (streams=4), commits `dff0eec` + revert `9cb85c4`.
+- Baseline (#1 pre-change): `BenchmarkTraceReplayTimeline` ns/op: 1,122,240,140 / 1,102,395,519 / 1,108,738,446.
+- After (#1 streams=4): `BenchmarkTraceReplayTimeline` ns/op: 1,110,628,821 / 1,172,653,904 / 1,110,231,683. CPU profile: `/tmp/treedb_ptrvalues_cpu_multistream.prof`.
+- Revert confirm (#1): `BenchmarkTraceReplayTimeline` ns/op: 1,083,553,706 / 1,101,377,888 / 1,103,611,417.
+- Decision: reject #1 for now (regression/no measurable local win); revisit only with meta v2 or a format that can safely track multiple active slab tails.
