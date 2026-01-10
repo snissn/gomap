@@ -31,13 +31,14 @@ type compressionTrainer struct {
 	mu            sync.Mutex
 	sampleBytes   uint64
 	sampleRecords uint64
-	samples       [][]byte
+	samples       []pooledSample
 	lastSlabID    uint32
 
-	sampleGen atomic.Uint64
-	sampleCh  chan trainerSample
-	closed    atomic.Bool
-	closeOnce sync.Once
+	sampleGen  atomic.Uint64
+	sampleCh   chan trainerSample
+	samplePool sync.Pool
+	closed     atomic.Bool
+	closeOnce  sync.Once
 
 	enqueued         atomic.Uint64
 	dropped          atomic.Uint64
@@ -51,6 +52,12 @@ type compressionTrainer struct {
 type trainerSample struct {
 	gen    uint64
 	sample []byte
+	buf    []byte
+}
+
+type pooledSample struct {
+	data []byte
+	buf  []byte
 }
 
 type CompressionTrainerStats struct {
@@ -103,6 +110,9 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		level:       cfg.level,
 		sampleCh:    make(chan trainerSample, defaultCompressionTrainQueue),
 	}
+	trainer.samplePool.New = func() any {
+		return make([]byte, 0, maxRecord)
+	}
 	trainer.enabled.Store(true)
 	go trainer.run()
 	return trainer
@@ -150,14 +160,22 @@ func (t *compressionTrainer) collect(value []byte) {
 	if len(sample) > t.maxRecord {
 		sample = sample[:t.maxRecord]
 	}
-	cp := make([]byte, len(sample))
+	buf := t.samplePool.Get().([]byte)
+	if cap(buf) < len(sample) {
+		buf = make([]byte, 0, t.maxRecord)
+		if cap(buf) < len(sample) {
+			buf = make([]byte, 0, len(sample))
+		}
+	}
+	cp := buf[:len(sample)]
 	copy(cp, sample)
 	gen := t.sampleGen.Load()
 	select {
-	case t.sampleCh <- trainerSample{gen: gen, sample: cp}:
+	case t.sampleCh <- trainerSample{gen: gen, sample: cp, buf: buf[:0]}:
 		t.enqueued.Add(1)
 	default:
 		t.dropped.Add(1)
+		t.recycleBuffer(buf)
 	}
 	t.updateMaxQueueLen()
 }
@@ -170,17 +188,20 @@ func (t *compressionTrainer) run() {
 
 func (t *compressionTrainer) appendSample(sample trainerSample) {
 	if t == nil || !t.collecting.Load() {
+		t.recycleSample(sample)
 		return
 	}
 	if sample.gen != t.sampleGen.Load() {
+		t.recycleSample(sample)
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.collecting.Load() || sample.gen != t.sampleGen.Load() {
+		t.recycleSample(sample)
 		return
 	}
-	t.samples = append(t.samples, sample.sample)
+	t.samples = append(t.samples, pooledSample{data: sample.sample, buf: sample.buf})
 	t.sampleBytes += uint64(len(sample.sample))
 	t.sampleRecords++
 
@@ -197,15 +218,16 @@ func (t *compressionTrainer) appendSample(sample trainerSample) {
 	go t.train(samples, dictBytes, level, slabID)
 }
 
-func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
+func (t *compressionTrainer) train(samples []pooledSample, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
 	defer t.training.Store(false)
+	defer t.recycleSamples(samples)
 	if len(samples) == 0 {
 		return
 	}
 
 	rawTotal := 0
 	for _, sample := range samples {
-		rawTotal += len(sample)
+		rawTotal += len(sample.data)
 	}
 	if rawTotal < 8 {
 		return
@@ -219,10 +241,10 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			break
 		}
 		need := dictBytes - len(history)
-		if len(sample) > need {
-			history = append(history, sample[:need]...)
+		if len(sample.data) > need {
+			history = append(history, sample.data[:need]...)
 		} else {
-			history = append(history, sample...)
+			history = append(history, sample.data...)
 		}
 	}
 	if len(history) < 8 {
@@ -235,9 +257,13 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	if dictID == 0 {
 		dictID = 1
 	}
+	contents := make([][]byte, 0, len(samples))
+	for _, sample := range samples {
+		contents = append(contents, sample.data)
+	}
 	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
 		ID:       dictID,
-		Contents: samples,
+		Contents: contents,
 		History:  history,
 		Level:    level,
 	})
@@ -255,7 +281,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 
 	storedTotal := 0
 	for _, sample := range samples {
-		storedTotal += len(enc.EncodeAll(sample, nil))
+		storedTotal += len(enc.EncodeAll(sample.data, nil))
 	}
 	ratio := float64(storedTotal) / float64(rawTotal)
 	t.lastTrainRatio.Store(math.Float64bits(ratio))
@@ -278,6 +304,32 @@ func (t *compressionTrainer) logOnce() bool {
 		return false
 	}
 	return t.logged.CompareAndSwap(false, true)
+}
+
+func (t *compressionTrainer) recycleSample(sample trainerSample) {
+	if t == nil || sample.buf == nil {
+		return
+	}
+	t.samplePool.Put(sample.buf[:0])
+}
+
+func (t *compressionTrainer) recycleBuffer(buf []byte) {
+	if t == nil || buf == nil {
+		return
+	}
+	t.samplePool.Put(buf[:0])
+}
+
+func (t *compressionTrainer) recycleSamples(samples []pooledSample) {
+	if t == nil {
+		return
+	}
+	for _, sample := range samples {
+		if sample.buf == nil {
+			continue
+		}
+		t.samplePool.Put(sample.buf[:0])
+	}
 }
 
 func (t *compressionTrainer) updateMaxQueueLen() {
