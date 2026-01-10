@@ -198,6 +198,68 @@ Key model elements:
   - Phase B: catch-up (mixed Set/Delete, smaller batches).
 - **Chunk boundaries**: flush or rotate memtable every chunk to mimic state sync.
 
+## Benchmark Execution Checklist
+- [ ] Ensure trace JSONL and summary JSON are present (or regenerate via server trace).
+- [ ] Select a replay mode: summary replay or timeline replay.
+- [ ] Record environment (CPU, OS, Go version, branch/commit).
+- [ ] Run baseline benchmark (record ns/op, allocs/op).
+- [ ] Run target variants (e.g., memtable modes, compression flags).
+- [ ] Capture pprof for any surprising regressions.
+- [ ] Summarize results and decide on configuration defaults.
+
+## Config Flag Matrix (Replay Bench)
+Use the timeline replay benchmark to compare high-level configuration flags that
+track production toggles. Run in cached mode to include the write-back layer.
+
+### Baseline (cached timeline replay)
+```
+TREEDB_TRACE_SUMMARY=... \
+TREEDB_TRACE_JSONL=... \
+TREEDB_TRACE_MODE=cached \
+TREEDB_TRACE_TIMELINE_DURATION_MS=5000 \
+TREEDB_TRACE_TIMELINE_NO_SLEEP=1 \
+TREEDB_TRACE_TIMELINE_INLINE_ITERS=1 \
+TREEDB_TRACE_SKIP_ITERS=1 \
+TREEDB_TRACE_SEQUENTIAL_KEYS=1 \
+go test -bench '^BenchmarkTraceReplayTimeline$' -run '^$' -benchtime=5s ./TreeDB
+```
+
+### Leaf Prefix + Slab Compression + Force Pointers Matrix
+```
+for leaf in 0 1; do
+  for slab in none zstd; do
+    for forceptr in 0 1; do
+      TREEDB_TRACE_SUMMARY=... \
+      TREEDB_TRACE_JSONL=... \
+      TREEDB_TRACE_MODE=cached \
+      TREEDB_TRACE_TIMELINE_DURATION_MS=5000 \
+      TREEDB_TRACE_TIMELINE_NO_SLEEP=1 \
+      TREEDB_TRACE_TIMELINE_INLINE_ITERS=1 \
+      TREEDB_TRACE_SKIP_ITERS=1 \
+      TREEDB_TRACE_SEQUENTIAL_KEYS=1 \
+      TREEDB_TRACE_LEAF_PREFIX_COMPRESSION=$leaf \
+      TREEDB_SLAB_COMPRESSION=$slab \
+      TREEDB_FORCE_VALUE_POINTERS=$forceptr \
+      go test -bench '^BenchmarkTraceReplayTimeline$' -run '^$' -benchtime=5s ./TreeDB
+    done
+  done
+done
+```
+
+### Recent Results (2026-01-09, Apple M3, cached timeline replay, 5s)
+- leaf=0 slab=none forceptr=0: ~660ms/op
+- leaf=0 slab=none forceptr=1: ~694ms/op
+- leaf=0 slab=zstd forceptr=0: ~651ms/op
+- leaf=0 slab=zstd forceptr=1: ~705ms/op
+- leaf=1 slab=none forceptr=0: ~700ms/op
+- leaf=1 slab=none forceptr=1: ~743ms/op
+- leaf=1 slab=zstd forceptr=0: ~810ms/op
+- leaf=1 slab=zstd forceptr=1: ~727ms/op
+
+Observations: leaf prefix compression and force pointers were regressions in
+this replay; zstd slab was slightly beneficial only when leaf prefix and force
+pointers were off.
+
 Baseline parameters (initial guess):
 - Total keys: 10–50M (scaled down for tests).
 - Batch size mean: 5k ops; max: 20k.
