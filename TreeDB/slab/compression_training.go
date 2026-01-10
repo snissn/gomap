@@ -1,6 +1,7 @@
 package slab
 
 import (
+	"encoding/binary"
 	"log"
 	"math"
 	"sync"
@@ -61,15 +62,20 @@ type compressionTrainer struct {
 	dictDedupHits      atomic.Uint64
 	dictDedupGlobal    atomic.Uint64
 	dictDedupRef       atomic.Uint64
+	dictDedupCache     atomic.Uint64
 	collectNanos       atomic.Uint64
 	collectCount       atomic.Uint64
 	collectMaxNanos    atomic.Uint64
 
-	dictDedupWindow int
-	dictHashes      []uint64
-	dictHashPos     int
-	globalSlabID    uint32
-	globalDictHash  uint64
+	dictDedupWindow     int
+	dictHashes          []uint64
+	dictHashPos         int
+	globalSlabID        uint32
+	globalDictHash      uint64
+	dictCacheHashes     []uint64
+	dictCacheDicts      [][]byte
+	dictCacheDictHashes []uint64
+	dictCachePos        int
 }
 
 type trainerSample struct {
@@ -98,6 +104,7 @@ type CompressionTrainerStats struct {
 	DictDedupHits      uint64
 	DictDedupGlobal    uint64
 	DictDedupRef       uint64
+	DictDedupCache     uint64
 	CollectCount       uint64
 	CollectNanos       uint64
 	CollectMaxNanos    uint64
@@ -109,6 +116,7 @@ const (
 	dictDedupNone dictDedupMode = iota
 	dictDedupGlobal
 	dictDedupRef
+	dictDedupCache
 )
 
 type dictUseFlag uint8
@@ -204,6 +212,10 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 		t.globalDictHash = 0
 		t.dictHashes = nil
 		t.dictHashPos = 0
+		t.dictCacheHashes = nil
+		t.dictCacheDicts = nil
+		t.dictCacheDictHashes = nil
+		t.dictCachePos = 0
 	}
 	t.sampleBytes = 0
 	t.sampleRecords = 0
@@ -323,6 +335,28 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		return
 	}
 
+	samplesHash := hashSamples(samples)
+	if cached, dictHash, ok := t.lookupCachedDict(samplesHash); ok {
+		t.trainCount.Add(1)
+		t.lastTrainDictHash.Store(dictHash)
+		t.lastTrainSamples.Store(uint64(len(samples)))
+		t.lastTrainDict.Store(uint64(len(cached)))
+		t.lastTrainDedupMode.Store(uint64(dictDedupCache))
+		t.lastTrainDedupFlag.Store(uint64(dictUseRef))
+		t.lastTrainDedupRef.Store(0)
+		if t.logOnce() {
+			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
+				slabID,
+				len(cached),
+				len(samples),
+				dictHash,
+				dedupModeString(dictDedupCache),
+				0,
+			)
+		}
+		return
+	}
+
 	t.trainCount.Add(1)
 
 	dictID := slabID + 1
@@ -365,6 +399,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		}
 		return
 	}
+	t.storeCachedDict(samplesHash, dictHash, dict)
 
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
 	if err != nil {
@@ -530,6 +565,7 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		DictDedupHits:      t.dictDedupHits.Load(),
 		DictDedupGlobal:    t.dictDedupGlobal.Load(),
 		DictDedupRef:       t.dictDedupRef.Load(),
+		DictDedupCache:     t.dictDedupCache.Load(),
 		CollectCount:       t.collectCount.Load(),
 		CollectNanos:       t.collectNanos.Load(),
 		CollectMaxNanos:    t.collectMaxNanos.Load(),
@@ -542,6 +578,8 @@ func dedupModeString(mode dictDedupMode) string {
 		return "global"
 	case dictDedupRef:
 		return "ref"
+	case dictDedupCache:
+		return "cache"
 	default:
 		return "none"
 	}
@@ -552,6 +590,8 @@ func dedupFlagFromMode(mode dictDedupMode) dictUseFlag {
 	case dictDedupGlobal:
 		return dictUseGlobal
 	case dictDedupRef:
+		return dictUseRef
+	case dictDedupCache:
 		return dictUseRef
 	default:
 		return dictUseLocal
@@ -567,4 +607,66 @@ func dedupFlagString(flag dictUseFlag) string {
 	default:
 		return "use_local"
 	}
+}
+
+func hashSamples(samples [][]byte) uint64 {
+	hasher := xxhash.New()
+	var lenBuf [4]byte
+	for _, sample := range samples {
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(len(sample)))
+		_, _ = hasher.Write(lenBuf[:])
+		_, _ = hasher.Write(sample)
+	}
+	return hasher.Sum64()
+}
+
+func (t *compressionTrainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
+	if t == nil {
+		return nil, 0, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.dictCacheHashes == nil || t.dictCacheDicts == nil {
+		return nil, 0, false
+	}
+	for i, h := range t.dictCacheHashes {
+		if h == samplesHash && h != 0 {
+			dict := t.dictCacheDicts[i]
+			dictHash := t.dictCacheDictHashes[i]
+			if len(dict) == 0 {
+				return nil, 0, false
+			}
+			t.dictDedupHits.Add(1)
+			t.dictDedupCache.Add(1)
+			return dict, dictHash, true
+		}
+	}
+	return nil, 0, false
+}
+
+func (t *compressionTrainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
+	if t == nil {
+		return
+	}
+	window := t.dictDedupWindow
+	if window <= 0 {
+		window = defaultCompressionTrainDedupWindow
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.dictCacheHashes == nil {
+		t.dictCacheHashes = make([]uint64, window)
+		t.dictCacheDicts = make([][]byte, window)
+		t.dictCacheDictHashes = make([]uint64, window)
+		t.dictCachePos = 0
+	}
+	if dictHash == 0 || samplesHash == 0 {
+		return
+	}
+	entry := make([]byte, len(dict))
+	copy(entry, dict)
+	t.dictCacheHashes[t.dictCachePos] = samplesHash
+	t.dictCacheDicts[t.dictCachePos] = entry
+	t.dictCacheDictHashes[t.dictCachePos] = dictHash
+	t.dictCachePos = (t.dictCachePos + 1) % len(t.dictCacheHashes)
 }

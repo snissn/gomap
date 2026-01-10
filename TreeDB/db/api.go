@@ -279,6 +279,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.slabs.compression.train.dedup_hits"] = fmt.Sprintf("%d", trainerStats.DictDedupHits)
 		stats["treedb.slabs.compression.train.dedup_global"] = fmt.Sprintf("%d", trainerStats.DictDedupGlobal)
 		stats["treedb.slabs.compression.train.dedup_ref"] = fmt.Sprintf("%d", trainerStats.DictDedupRef)
+		stats["treedb.slabs.compression.train.dedup_cache"] = fmt.Sprintf("%d", trainerStats.DictDedupCache)
 		stats["treedb.slabs.compression.train.queue_cap"] = fmt.Sprintf("%d", trainerStats.QueueCap)
 		stats["treedb.slabs.compression.train.queue_len"] = fmt.Sprintf("%d", trainerStats.QueueLen)
 		stats["treedb.slabs.compression.train.queue_max"] = fmt.Sprintf("%d", trainerStats.MaxQueueLen)
