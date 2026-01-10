@@ -355,3 +355,12 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Added a slab compression level option (env + bench knobs) to tune zstd level for slab-heavy runs.
 - Quick test with `TREEDB_TRACE_SLAB_COMPRESSION_LEVEL=3` (slab-heavy config) regressed (~3.3s/op vs ~1.3s/op baseline).
 - Keeping the option for future tuning, but level 3 is not viable.
+
+## 12.46 Slab Compression Threshold Sweep (Pointer Values)
+- Timeline replay sweep (pointer values + omit keys, 10s):
+  - `zstd` min=1 save=0: ~1.44s/op
+  - `zstd` min=1024 save=0: ~1.20s/op
+  - `zstd` min=4096 save=0: ~1.20s/op
+  - `zstd` min=1024 save=64: ~1.19s/op
+  - `none`: ~1.18s/op (fastest, but uncompressed slabs).
+- Conclusion: raising min bytes (and modest min savings) yields most of the speedup while keeping compression.
