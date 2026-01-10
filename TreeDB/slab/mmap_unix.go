@@ -9,7 +9,12 @@ import (
 )
 
 func mmapReadOnly(f *os.File, length int) ([]byte, error) {
-	return unix.Mmap(int(f.Fd()), 0, length, unix.PROT_READ, unix.MAP_SHARED)
+	b, err := unix.Mmap(int(f.Fd()), 0, length, unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return nil, err
+	}
+	adviseHugepage(b)
+	return b, nil
 }
 
 func munmap(b []byte) error {

@@ -153,10 +153,11 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Ensure omit-keys mode is still supported (bloom is “identity proof”).
 
 ### 9) Huge-Page Awareness (OS optimization) — Read-side CPU
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [x] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-09-hugepage`
 - Checklist:
-  - [ ] Align zones to 2MB boundaries; apply `madvise(MADV_HUGEPAGE)` where applicable.
+  - [ ] Align zones to 2MB boundaries.
+  - [x] Apply `madvise(MADV_HUGEPAGE)` on slab mmaps (linux-only hint).
   - [ ] Benchmark random-read CPU and TLB effects (needs careful measurement).
 
 ## Work Log (append-only; keep it current)
@@ -173,3 +174,6 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Decision: deferred #6 (slab tiering) — requires a new cold-slab file format and migration policy; too invasive without a broader format migration plan. No benchmarks run.
 - Decision: deferred #7 (value delta encoding) — requires new on-disk encoding and read/compaction semantics; too risky without a separate data-model RFC. No benchmarks run.
 - Decision: deferred #8 (zonal bloom filters) — requires slab v2 zone headers for storage and a recovery toolchain; blocked on item #2. No benchmarks run.
+- Decision: accepted #9 (huge-page awareness) — added best-effort `madvise(MADV_HUGEPAGE)` on slab mmaps (linux only). Zone alignment is deferred pending a format migration plan.
+- Baseline (#9): `BenchmarkTraceReplayTimeline` ns/op: 1,161,227,519 / 1,135,953,462 / 1,135,338,273.
+- After (#9): `BenchmarkTraceReplayTimeline` ns/op: 1,154,641,139 / 1,142,995,525 / 1,176,681,690. CPU profile: `/tmp/treedb_ptrvalues_cpu_hugepage.prof`.
