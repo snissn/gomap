@@ -215,6 +215,9 @@ func (sm *SlabManager) Close() error {
 	if sm.compressionMetrics.enabled && sm.activeSlab != nil {
 		sm.compressionMetrics.finish("close")
 	}
+	if sm.compressionTrainer != nil {
+		sm.compressionTrainer.Close()
+	}
 	for _, s := range sm.slabs {
 		_ = s.Close()
 	}

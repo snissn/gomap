@@ -13,6 +13,7 @@ const (
 	defaultCompressionTrainDictBytes      = 32 << 10
 	defaultCompressionTrainMinRecords     = 64
 	defaultCompressionTrainMaxRecordBytes = 64 << 10
+	defaultCompressionTrainQueue          = 128
 )
 
 type compressionTrainer struct {
@@ -31,6 +32,16 @@ type compressionTrainer struct {
 	sampleRecords uint64
 	samples       [][]byte
 	lastSlabID    uint32
+
+	sampleGen atomic.Uint64
+	sampleCh  chan trainerSample
+	closed    atomic.Bool
+	closeOnce sync.Once
+}
+
+type trainerSample struct {
+	gen    uint64
+	sample []byte
 }
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
@@ -66,9 +77,21 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		maxRecord:   maxRecord,
 		dictBytes:   dictBytes,
 		level:       cfg.level,
+		sampleCh:    make(chan trainerSample, defaultCompressionTrainQueue),
 	}
 	trainer.enabled.Store(true)
+	go trainer.run()
 	return trainer
+}
+
+func (t *compressionTrainer) Close() {
+	if t == nil {
+		return
+	}
+	t.closeOnce.Do(func() {
+		t.closed.Store(true)
+		close(t.sampleCh)
+	})
 }
 
 func (t *compressionTrainer) signalDegraded(slabID uint32) {
@@ -87,11 +110,15 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	t.sampleBytes = 0
 	t.sampleRecords = 0
 	t.lastSlabID = slabID
+	t.sampleGen.Add(1)
 	t.collecting.Store(true)
 }
 
 func (t *compressionTrainer) collect(value []byte) {
-	if t == nil || !t.collecting.Load() || len(value) == 0 {
+	if t == nil || t.closed.Load() || !t.collecting.Load() || len(value) == 0 {
+		return
+	}
+	if len(t.sampleCh) == cap(t.sampleCh) {
 		return
 	}
 	sample := value
@@ -100,14 +127,33 @@ func (t *compressionTrainer) collect(value []byte) {
 	}
 	cp := make([]byte, len(sample))
 	copy(cp, sample)
+	gen := t.sampleGen.Load()
+	select {
+	case t.sampleCh <- trainerSample{gen: gen, sample: cp}:
+	default:
+	}
+}
 
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.collecting.Load() {
+func (t *compressionTrainer) run() {
+	for sample := range t.sampleCh {
+		t.appendSample(sample)
+	}
+}
+
+func (t *compressionTrainer) appendSample(sample trainerSample) {
+	if t == nil || !t.collecting.Load() {
 		return
 	}
-	t.samples = append(t.samples, cp)
-	t.sampleBytes += uint64(len(cp))
+	if sample.gen != t.sampleGen.Load() {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.collecting.Load() || sample.gen != t.sampleGen.Load() {
+		return
+	}
+	t.samples = append(t.samples, sample.sample)
+	t.sampleBytes += uint64(len(sample.sample))
 	t.sampleRecords++
 
 	if t.sampleBytes < t.targetBytes || t.sampleRecords < t.minRecords {
