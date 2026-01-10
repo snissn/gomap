@@ -20,7 +20,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `git rev-parse HEAD`)
+- RC branch: `slab-opt-rc` (head `aa24ee2`)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #2, #4–#5, #7–#8
@@ -304,3 +304,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,109,235,673 / 1,100,744,040 / 1,097,132,821 ns/op.
   - Replay after change: 1,092,699,347 / 1,096,116,169 / 1,094,556,994 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup3_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
+- Merged `slab-opt-04-dict-dedup-3` into `slab-opt-rc` (ff at `aa24ee2`); #4 remains in_progress (stats scaffolding).
