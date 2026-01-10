@@ -38,9 +38,9 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
 
 5) **No deferrals (MANDATORY)**
    - Do not use “deferred” as an outcome. This repo is alpha; format bumps are allowed; a “migration plan” is never a blocker.
-   - If an item is too large, start with the item’s **MVA** (minimum viable attempt) to get real measurements, then either:
-     - accept it, or
-     - **reject for now** via `git revert` (so the attempt is recorded but inactive).
+   - If an item is too large, start with the item’s **MVA** (minimum viable attempt) to get real measurements.
+     - It is valid (and preferred) to land **enabling sub-steps** into `slab-opt-rc` (instrumentation/bench/flags/scaffolding) while keeping the item itself “planned/in_progress”.
+     - Only “reject for now” when the approach is clearly a dead end after at least one salvage iteration; keep the attempt commits and revert the behavior change so the RC stays healthy.
    - If you hit a true external blocker (e.g. you cannot access the Linux server at all), still create a branch, do the smallest safe spike you can locally, record the blocker, then reject-for-now via a revert and move on.
 
 6) **Stop condition**

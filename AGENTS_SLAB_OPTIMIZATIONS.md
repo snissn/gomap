@@ -110,6 +110,8 @@ Target is convergence, not a binary accept/reject mindset.
 - Iterate in small steps: baseline → 1 small change → measure → keep/adjust → repeat.
 - Prefer landing enabling work if it improves iteration speed or measurement quality (even if perf-neutral):
   - instrumentation, counters, trace/pprof hooks, benchmarks, small refactors, format scaffolding behind a flag.
+- It is normal for a high-level item to take multiple iterations:
+  - land enabling sub-steps into `slab-opt-rc`, keep the item status as planned/in_progress, and continue on the next loop.
 - Treat “rejected for now” as a last resort:
   - first try to salvage by reducing scope, gating behind opt-in, tuning thresholds, or adjusting the benchmark to better match the real workload.
 - Keep the repository in a good state after each iteration (tests passing, benchmarks reproducible).
