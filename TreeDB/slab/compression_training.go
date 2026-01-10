@@ -59,6 +59,8 @@ type compressionTrainer struct {
 	lastTrainDedupRef  atomic.Uint64
 	dictDedupLookups   atomic.Uint64
 	dictDedupHits      atomic.Uint64
+	dictDedupGlobal    atomic.Uint64
+	dictDedupRef       atomic.Uint64
 	collectNanos       atomic.Uint64
 	collectCount       atomic.Uint64
 	collectMaxNanos    atomic.Uint64
@@ -94,6 +96,8 @@ type CompressionTrainerStats struct {
 	LastTrainDedupRef  uint64
 	DictDedupLookups   uint64
 	DictDedupHits      uint64
+	DictDedupGlobal    uint64
+	DictDedupRef       uint64
 	CollectCount       uint64
 	CollectNanos       uint64
 	CollectMaxNanos    uint64
@@ -407,11 +411,13 @@ func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 	}
 	if t.globalDictHash != 0 && t.globalDictHash == hash {
 		t.dictDedupHits.Add(1)
+		t.dictDedupGlobal.Add(1)
 		return dictDedupGlobal, -1
 	}
 	for i, h := range t.dictHashes {
 		if h == hash && h != 0 {
 			t.dictDedupHits.Add(1)
+			t.dictDedupRef.Add(1)
 			return dictDedupRef, i
 		}
 	}
@@ -522,6 +528,8 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		LastTrainDedupRef:  t.lastTrainDedupRef.Load(),
 		DictDedupLookups:   t.dictDedupLookups.Load(),
 		DictDedupHits:      t.dictDedupHits.Load(),
+		DictDedupGlobal:    t.dictDedupGlobal.Load(),
+		DictDedupRef:       t.dictDedupRef.Load(),
 		CollectCount:       t.collectCount.Load(),
 		CollectNanos:       t.collectNanos.Load(),
 		CollectMaxNanos:    t.collectMaxNanos.Load(),

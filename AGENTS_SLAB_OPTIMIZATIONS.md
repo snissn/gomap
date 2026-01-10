@@ -305,3 +305,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,092,699,347 / 1,096,116,169 / 1,094,556,994 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup3_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
 - Merged `slab-opt-04-dict-dedup-3` into `slab-opt-rc` (ff at `aa24ee2`); #4 remains in_progress (stats scaffolding).
+- #4 dict dedup counters (in progress): created `slab-opt-04-dict-dedup-4` to add per-mode dedup hit counters (global/ref) in trainer stats.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,111,794,965 / 1,104,481,635 / 1,103,634,240 ns/op.
+  - Replay after change: 1,102,803,673 / 1,118,197,133 / 1,103,201,827 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup4_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
