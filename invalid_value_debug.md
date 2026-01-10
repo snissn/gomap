@@ -298,3 +298,10 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.36 Flush SetView/DeleteView Fast Path (Reverted)
 - Added `SetView`/`DeleteView` use in `flushCombinedLocked` and `flushOneLocked` to avoid copying keys/values into backend batches.
 - Trusted benchmark regressed (baseline ~423ms/op vs ~485ms/op), so the change was reverted.
+
+## 12.37 Inline getUint16 (Kept)
+- Replaced `binary.LittleEndian.Uint16` with a small inline helper `getUint16` in `TreeDB/node/leaf.go` and `TreeDB/node/node.go`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep):
+  - Baseline (3x): ~496ms/op, ~517ms/op, ~484ms/op (avg ~499ms/op).
+  - With `getUint16` (3x): ~464ms/op, ~462ms/op, ~509ms/op (avg ~478ms/op).
+- Net: ~4% average improvement; small and safe change, kept.
