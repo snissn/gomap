@@ -125,6 +125,13 @@ func (t *compressionTrainer) Close() {
 	})
 }
 
+func (t *compressionTrainer) shouldCollect() bool {
+	if t == nil || t.closed.Load() {
+		return false
+	}
+	return t.collecting.Load()
+}
+
 func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	if t == nil || !t.enabled.Load() {
 		return

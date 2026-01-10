@@ -278,7 +278,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 	fullCompressed := false
 	omittedKey := false
 	var err error
-	if sm.compressionTrainer != nil {
+	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		sm.compressionTrainer.collect(value)
 	}
 	if sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
@@ -387,7 +387,7 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	if sm.compressionTrainer != nil {
+	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		for i := range values {
 			sm.compressionTrainer.collect(values[i])
 		}

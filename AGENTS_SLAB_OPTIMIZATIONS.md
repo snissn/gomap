@@ -259,3 +259,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change with `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE=4`: 1,277,830,697 / 1,322,376,487 / 1,309,572,789 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_entropy_stride.prof` (pprof top captured).
 - Merged `slab-opt-03-entropy-training-7` into `slab-opt-rc` (ff at `f7cd343`).
+- #3 collect gating (in progress): created `slab-opt-03-entropy-training-8` to skip sampling calls when training is inactive.
+  - Baseline replay (ptr-values): 1,139,118,817 / 1,091,569,423 / 1,099,063,915 ns/op.
+  - Replay after change: 1,091,461,879 / 1,087,484,921 / 1,104,038,097 ns/op.
+  - CPU profiles: `/tmp/treedb_ptrvalues_cpu_entropy_collectgate_base.prof`, `/tmp/treedb_ptrvalues_cpu_entropy_collectgate_after.prof`.
