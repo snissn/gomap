@@ -28,19 +28,21 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
    - Commit frequently with small, atomic commits.
    - Update `AGENTS_SLAB_OPTIMIZATIONS.md` work log on every major action (branch created, bench run, accept/reject decision).
 
-4) **No “lazy deferrals”**
-   - Do not defer items because they are large. Start with the item’s “MVA” (minimum viable attempt) to get real measurements.
-   - If a full implementation is too large, produce an MVA + benchmark and then “reject for now” via a revert (so work is preserved but inactive).
+4) **No deferrals (MANDATORY)**
+   - Do not use “deferred” as an outcome. This repo is alpha; format bumps are allowed; a “migration plan” is never a blocker.
+   - If an item is too large, start with the item’s **MVA** (minimum viable attempt) to get real measurements, then either:
+     - accept it, or
+     - **reject for now** via `git revert` (so the attempt is recorded but inactive).
+   - If you hit a true external blocker (e.g. you cannot access the Linux server at all), still create a branch, do the smallest safe spike you can locally, record the blocker, then reject-for-now via a revert and move on.
 
-4) **Stop condition**
+5) **Stop condition**
    - Only stop (create `SLAB_WORK_HALT`) when every punch-list item is either:
      - **accepted**, or
-     - **rejected for now** with a recorded attempt (commits) and a revert merged into `slab-opt-rc`, or
-     - **deferred** under the “No Free Deferrals” policy (i.e., with a concrete attempt + benchmark + explicit blocker + next step).
+     - **rejected for now** with a recorded attempt (commits) and a revert merged into `slab-opt-rc`.
    - `SLAB_WORK_HALT` must contain:
      - final RC branch name + head SHA
      - summary of accepted optimizations + benchmark deltas
-     - what remains and why it was deferred/rejected
+     - what remains and why it was rejected
    - Once `SLAB_WORK_HALT` exists, do not continue work.
 
 ## Execution loop (what to do now)
