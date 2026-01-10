@@ -32,6 +32,10 @@ const (
 	leafPrefixRestartInterval = 16
 )
 
+func getUint16(b []byte) uint16 {
+	return uint16(b[0]) | uint16(b[1])<<8
+}
+
 // Node is a wrapper around a raw page byte slice.
 // It implements the Slotted Page layout.
 type Node struct {
@@ -50,9 +54,9 @@ type Node struct {
 func NewNode(data []byte) *Node {
 	n := &Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		flags := binary.LittleEndian.Uint16(data[12:14])
+		flags := getUint16(data[12:14])
 		n.ptype = page.PageType(flags & pageTypeMask)
-		n.count = binary.LittleEndian.Uint16(data[14:16])
+		n.count = getUint16(data[14:16])
 	}
 	return n
 }
@@ -62,9 +66,9 @@ func NewNode(data []byte) *Node {
 func NewNodeView(data []byte) Node {
 	n := Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		flags := binary.LittleEndian.Uint16(data[12:14])
+		flags := getUint16(data[12:14])
 		n.ptype = page.PageType(flags & pageTypeMask)
-		n.count = binary.LittleEndian.Uint16(data[14:16])
+		n.count = getUint16(data[14:16])
 	}
 	return n
 }
@@ -92,13 +96,13 @@ func (n *Node) Type() page.PageType {
 // SetType sets the page type in the header.
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
-	flags := binary.LittleEndian.Uint16(n.data[12:14])
+	flags := getUint16(n.data[12:14])
 	flags = (flags & leafPrefixCompressedFlag) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
 func (n *Node) rawFlags() uint16 {
-	return binary.LittleEndian.Uint16(n.data[12:14])
+	return getUint16(n.data[12:14])
 }
 
 func (n *Node) setRawFlags(flags uint16) {
@@ -158,7 +162,7 @@ func (n *Node) getOffset(index uint16) (uint16, error) {
 	// Directory starts at NodeHeaderSize
 	// Offset is at NodeHeaderSize + index*2
 	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
-	return binary.LittleEndian.Uint16(n.data[dirOffset : dirOffset+2]), nil
+	return getUint16(n.data[dirOffset : dirOffset+2]), nil
 }
 
 // setOffset sets the offset for the item at the given index.
@@ -206,7 +210,7 @@ func (n *Node) FreeSpace() int {
 		// Wait, if we compact on every write, or keep heap contiguous?
 		// Let's assume we scan for now.
 		for i := uint16(0); i < count; i++ {
-			off := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+int(i)*2:])
+			off := getUint16(n.data[NodeHeaderSize+int(i)*2:])
 			if int(off) < heapStart && off != 0 { // 0 checks for safety
 				heapStart = int(off)
 			}

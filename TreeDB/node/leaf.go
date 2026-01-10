@@ -49,8 +49,8 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 		if offset+9 > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
-		prefixLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
-		suffixLen := int(binary.LittleEndian.Uint16(n.data[offset+2 : offset+4]))
+		prefixLen := int(getUint16(n.data[offset : offset+2]))
+		suffixLen := int(getUint16(n.data[offset+2 : offset+4]))
 		valLen := int(binary.LittleEndian.Uint32(n.data[offset+4 : offset+8]))
 		flags := n.data[offset+8]
 		keyStart := offset + 9
@@ -70,7 +70,7 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 	if offset+7 > len(n.data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
-	keyLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
+	keyLen := int(getUint16(n.data[offset : offset+2]))
 	valLen := int(binary.LittleEndian.Uint32(n.data[offset+2 : offset+6]))
 	flags := n.data[offset+6]
 	keyStart := offset + 7
@@ -333,12 +333,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 			if dirOff+2 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+			offset := getUint16(data[dirOff : dirOff+2])
 			ptr := int(offset)
 			if ptr < NodeHeaderSize || ptr+7 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+			keyLen := getUint16(data[ptr : ptr+2])
 			keyPtr := ptr + 7
 			if keyPtr+int(keyLen) > len(data) {
 				return 0, false, ErrCorruptedNode
@@ -361,12 +361,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		if dirOff+2 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+		offset := getUint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
 		if ptr < NodeHeaderSize || ptr+7 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+		keyLen := getUint16(data[ptr : ptr+2])
 		// Skip ValLen(4) + Flags(1)
 		keyPtr := ptr + 7
 		if keyPtr+int(keyLen) > len(data) {
@@ -388,12 +388,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		if dirOff+2 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+		offset := getUint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
 		if ptr < NodeHeaderSize || ptr+7 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+		keyLen := getUint16(data[ptr : ptr+2])
 		keyPtr := ptr + 7
 		if keyPtr+int(keyLen) > len(data) {
 			return 0, false, ErrCorruptedNode
@@ -538,7 +538,7 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	count := n.Count()
 	for k := uint16(0); k < count; k++ {
 		// Don't check the one we are replacing yet
-		off := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+int(k)*2:])
+		off := getUint16(n.data[NodeHeaderSize+int(k)*2:])
 		if int(off) < heapStart && int(off) != 0 {
 			heapStart = int(off)
 		}
@@ -640,7 +640,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 		}
 	}
 	b.Finish()
-	n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
-	n.count = binary.LittleEndian.Uint16(n.data[14:16])
+	n.setRawFlags(getUint16(n.data[12:14]))
+	n.count = getUint16(n.data[14:16])
 	return nil
 }
