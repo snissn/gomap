@@ -20,7 +20,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `2813c5d`)
+- RC branch: `slab-opt-rc` (head `4042586`)
 - Accepted: #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #2–#5, #7–#8
@@ -232,3 +232,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Baseline replay (ptr-values): 1,157,461,398 / 1,192,799,862 / 1,167,970,789 ns/op.
 - #3 background training (opt-in) replay with `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98` + training envs: 1,123,723,610 / 1,120,500,252 / 1,111,680,888 ns/op; training log ratio ~1.289 (dict worse than raw) on samples.
 - CPU profile (training enabled): `/tmp/treedb_ptrvalues_cpu_entropy_train.prof` (pprof top captured; BuildDict/EncodeAll shows up in top).
+- Merged `slab-opt-03-entropy-training-2` into `slab-opt-rc` (ff at `4042586`).
