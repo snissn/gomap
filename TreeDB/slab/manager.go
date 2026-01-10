@@ -119,7 +119,11 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 				sm.activeSlab = s
 				continue
 			}
-			sm.slabs[info.id] = OpenSlabLazyReadOnly(info.path, info.id, info.size)
+			if readOnly {
+				sm.slabs[info.id] = OpenSlabLazyReadOnly(info.path, info.id, info.size)
+			} else {
+				sm.slabs[info.id] = OpenSlabLazy(info.path, info.id, info.size)
+			}
 		}
 	}
 
@@ -573,7 +577,6 @@ func (sm *SlabManager) rotateLocked() error {
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
-	prev := sm.activeSlab
 
 	newID := sm.activeSlab.ID + 1
 	filename := fmt.Sprintf("data-%04d.slab", newID)
@@ -586,9 +589,6 @@ func (sm *SlabManager) rotateLocked() error {
 
 	sm.slabs[newID] = newSlab
 	sm.activeSlab = newSlab
-	if prev != nil {
-		prev.readOnly = true
-	}
 
 	// Ensure the directory entry is durable (best-effort).
 	if dir, err := os.Open(sm.dir); err == nil {
@@ -637,13 +637,6 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 			return err
 		}
 		sm.slabs[id] = s
-	}
-	if !sm.readOnly && s.readOnly {
-		if s.File != nil {
-			_ = s.File.Close()
-			s.File = nil
-		}
-		s.readOnly = false
 	}
 	if err := s.ensureOpen(); err != nil {
 		return err

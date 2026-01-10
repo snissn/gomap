@@ -114,44 +114,6 @@ func TestSlabRotation(t *testing.T) {
 	}
 }
 
-func TestSetActiveSlabUpgradesReadOnly(t *testing.T) {
-	dir := t.TempDir()
-	sm, err := NewSlabManager(dir)
-	if err != nil {
-		t.Fatalf("NewSlabManager failed: %v", err)
-	}
-	if _, err := sm.Append([]byte("k1"), []byte("v1")); err != nil {
-		t.Fatalf("Append failed: %v", err)
-	}
-	if _, err := sm.Rotate(); err != nil {
-		t.Fatalf("Rotate failed: %v", err)
-	}
-	if err := sm.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
-	}
-
-	sm2, err := NewSlabManager(dir)
-	if err != nil {
-		t.Fatalf("NewSlabManager failed: %v", err)
-	}
-	defer sm2.Close()
-
-	cold := sm2.slabs[0]
-	if cold == nil || !cold.readOnly {
-		t.Fatalf("expected cold slab to start read-only")
-	}
-
-	if err := sm2.SetActiveSlab(0); err != nil {
-		t.Fatalf("SetActiveSlab failed: %v", err)
-	}
-	if sm2.activeSlab.readOnly {
-		t.Fatalf("expected active slab to be read-write after upgrade")
-	}
-	if _, err := sm2.Append([]byte("k2"), []byte("v2")); err != nil {
-		t.Fatalf("Append after upgrade failed: %v", err)
-	}
-}
-
 func TestOpenSlabSyncDirFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "data-0000.slab")
