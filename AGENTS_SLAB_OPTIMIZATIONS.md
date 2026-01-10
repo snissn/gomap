@@ -310,3 +310,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,102,803,673 / 1,118,197,133 / 1,103,201,827 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup4_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
 - Merged `slab-opt-04-dict-dedup-4` into `slab-opt-rc` (ff at `6676dd1`); #4 remains in_progress (stats-only).
+- #4 dict dedup cache (in progress): created `slab-opt-04-dict-dedup-5` to reuse trained dicts when sample hashes repeat (skips `BuildDict`).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,102,014,396 / 1,103,562,669 / 1,114,016,688 ns/op.
+  - Replay after change: 1,102,690,129 / 1,115,513,167 / 1,112,873,340 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup5_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - Commit: `058db37` (cache by sample hash + stats wiring).
