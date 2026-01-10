@@ -260,6 +260,17 @@ Observations: leaf prefix compression and force pointers were regressions in
 this replay; zstd slab was slightly beneficial only when leaf prefix and force
 pointers were off.
 
+### Server Flag A/B (2026-01-09, Apple M3, cached timeline replay, 5s)
+Baseline uses: `DISABLE_VLOG=1`, `SLAB_OMIT_KEYS=1`, `ENABLE_VALUE_INDEX=1`,
+`ITERATOR_MUTABLE_MAX_BYTES=4194304`, `FLUSH_THRESHOLD=33554432`.
+
+- baseline: ~632ms/op
+- value log enabled (`DISABLE_VLOG=0`): ~631ms/op (no material change)
+- slab omit keys off (`SLAB_OMIT_KEYS=0`): ~655ms/op (regression)
+- value index off (`ENABLE_VALUE_INDEX=0`): ~636ms/op (slight improvement)
+- iterator mutable max bytes off (`ITERATOR_MUTABLE_MAX_BYTES=0`): ~639ms/op (regression)
+- flush threshold 16MB (`FLUSH_THRESHOLD=16777216`): ~659ms/op (regression)
+
 Baseline parameters (initial guess):
 - Total keys: 10–50M (scaled down for tests).
 - Batch size mean: 5k ops; max: 20k.
