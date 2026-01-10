@@ -283,3 +283,6 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 ## 12.33 Shortest Separator Split
 - Added shortest separator key generation for leaf splits (using the last key in the left builder).
 - Trusted benchmark improved to ~622–627ms/op (from ~637–642ms/op baseline).
+
+## 12.34 Internal Separator Attempt (Reverted)
+- Tried shortest separator keys for internal splits; benchmark regressed (~692ms/op) and the change was reverted.
