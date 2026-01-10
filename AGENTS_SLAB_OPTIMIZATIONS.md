@@ -129,7 +129,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Benchmark compaction throughput and resulting slab sizes.
 
 ### 6) Multi-Level Slab Tiering — Lower impact on write hot path
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected  [ ] deferred
 - Branch: `slab-opt-06-slab-tiering`
 - Checklist:
   - [ ] Define “active fast-append” vs “cold compressed” slab formats.
@@ -166,6 +166,15 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Next: run pointer-values profiling and execute items starting from #1.
 - Baseline (slab-opt-01-multistream): `BenchmarkTraceReplayTimeline` ns/op: 1,146,542,800 / 1,209,162,630 / 1,153,101,110. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof`.
 - Decision: deferred #1 (multi-stream slabs) — requires expanding meta to track multiple active slab tails/IDs; current on-disk format only records a single `ActiveSlabID/Tail`, so parallel active slabs would risk unrepaired torn tails on crash. Revisit once a meta v2 or multi-active slab recovery strategy is defined.
+- Decision: deferred #2 (zonal dictionaries / slab v2) — requires on-disk format changes (new header/zone layout, dict selection flags, migration strategy) plus read-path dict caching; scope is too large without a dedicated migration/recovery plan. No benchmarks run.
+- Decision: deferred #3 (entropy monitoring / pre-emptive training) — depends on slab v2 zonal dictionaries and a background training pipeline that does not exist yet. No benchmarks run.
+- Decision: deferred #4 (dictionary dedup) — requires slab v2 zone dictionaries and hash-based dict reuse policy; blocked on item #2. No benchmarks run.
+- Decision: deferred #5 (two-pass compaction) — requires slab v2 dictionary selection and zone layout changes to be meaningful; blocked on item #2. No benchmarks run.
+- Decision: rejected #6 (slab tiering MVA) — inactive-slab read-only downgrade + upgrade on SetActiveSlab showed no win.
+- Branch `slab-opt-06-slab-tiering`: commit `a28fee5` + revert `249a195`.
+- Baseline (#6 pre-change, slab-opt-rc): `BenchmarkTraceReplayTimeline` ns/op: 1,116,095,536 / 1,122,053,962 / 1,119,419,817.
+- After (#6 MVA): `BenchmarkTraceReplayTimeline` ns/op: 1,121,125,725 / 1,122,910,723 / 1,124,743,667. CPU profile: `/tmp/treedb_ptrvalues_cpu_tiering.prof`.
+- Revert confirm (#6): `BenchmarkTraceReplayTimeline` ns/op: 1,109,613,212 / 1,124,281,919 / 1,117,624,102.
 
 ### 2026-01-10 (multistream attempt)
 - Branch `slab-opt-01-multistream`: implemented opt-in `AppendMany` multi-stream batching (streams=4), commits `dff0eec` + revert `9cb85c4`.
