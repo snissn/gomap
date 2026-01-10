@@ -270,6 +270,10 @@ type Options struct {
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
 	OmitSlabKeys bool
+	// SlabAppendManyStreams controls how many append buffers are used to build
+	// AppendMany batches before they are written sequentially to the slab.
+	// Values <= 1 disable multi-stream appends.
+	SlabAppendManyStreams int
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -466,8 +470,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression:  opts.SlabCompression,
-		OmitSlabKeys: opts.OmitSlabKeys,
+		Compression:       opts.SlabCompression,
+		OmitSlabKeys:      opts.OmitSlabKeys,
+		AppendManyStreams: opts.SlabAppendManyStreams,
 	})
 	if err != nil {
 		p.Close()

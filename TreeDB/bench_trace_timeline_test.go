@@ -95,6 +95,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	slabCompressionMinBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES", 0)
 	slabCompressionMinSavings := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS", 0)
 	slabCompressionLevel := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_LEVEL", 0)
+	slabAppendStreams := parseIntEnv("TREEDB_TRACE_SLAB_APPEND_STREAMS", 0)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -121,11 +122,11 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	}
 
 	opts := Options{
-		Mode:                    modeVal,
-		MemtableMode:            memtableMode,
-		DisableWAL:              disableWAL,
-		DisableValueLog:         disableVlog,
-		ForceValuePointers:      forceValuePointers,
+		Mode:               modeVal,
+		MemtableMode:       memtableMode,
+		DisableWAL:         disableWAL,
+		DisableValueLog:    disableVlog,
+		ForceValuePointers: forceValuePointers,
 		SlabCompression: slab.CompressionOptions{
 			Kind:            slabCompression,
 			MinBytes:        slabCompressionMinBytes,
@@ -133,6 +134,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 			Level:           slabCompressionLevel,
 		},
 		OmitSlabKeys:            slabOmitKeys,
+		SlabAppendManyStreams:   slabAppendStreams,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
@@ -205,10 +207,10 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	}
 
 	baseOpts := Options{
-		Mode:                    modeVal,
-		DisableWAL:              disableWAL,
-		DisableValueLog:         disableVlog,
-		ForceValuePointers:      forceValuePointers,
+		Mode:               modeVal,
+		DisableWAL:         disableWAL,
+		DisableValueLog:    disableVlog,
+		ForceValuePointers: forceValuePointers,
 		SlabCompression: slab.CompressionOptions{
 			Kind:            slabCompression,
 			MinBytes:        slabCompressionMinBytes,

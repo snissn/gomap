@@ -107,6 +107,11 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_SLAB_OMIT_KEYS") {
 		opts.OmitSlabKeys = true
 	}
+	if v := os.Getenv("TREEDB_SLAB_APPEND_STREAMS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabAppendManyStreams = n
+		}
+	}
 	if envBool("TREEDB_DISABLE_VALUE_LOG") {
 		opts.DisableValueLog = true
 	}
