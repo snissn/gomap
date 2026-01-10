@@ -137,7 +137,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Benchmark space savings vs read latency.
 
 ### 7) Value Delta Encoding — Huge potential, high risk (data model)
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
 - Branch: `slab-opt-07-value-delta`
 - Checklist:
   - [ ] Decide delta format + how to reconstruct values for reads.
@@ -171,3 +171,4 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Decision: deferred #4 (dictionary dedup) — requires slab v2 zone dictionaries and hash-based dict reuse policy; blocked on item #2. No benchmarks run.
 - Decision: deferred #5 (two-pass compaction) — requires slab v2 dictionary selection and zone layout changes to be meaningful; blocked on item #2. No benchmarks run.
 - Decision: deferred #6 (slab tiering) — requires a new cold-slab file format and migration policy; too invasive without a broader format migration plan. No benchmarks run.
+- Decision: deferred #7 (value delta encoding) — requires new on-disk encoding and read/compaction semantics; too risky without a separate data-model RFC. No benchmarks run.
