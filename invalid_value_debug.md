@@ -338,3 +338,9 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
 - Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1218ms/op, ~1213ms/op, ~1249ms/op.
 - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
 - Net: regression; reverted.
+
+## 12.43 AppendMany Omit-Keys Copy (Reverted)
+- Avoided copying keys slice when `omitSlabKeys` is set with no compression.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1172ms/op, ~1205ms/op, ~1199ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
