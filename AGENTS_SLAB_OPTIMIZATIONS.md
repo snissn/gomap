@@ -171,10 +171,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [ ] Bench: measure slab bytes reduction and any latency impact.
 
 ### 5) Two-Pass Compaction (Gold Standard) — Lower impact on write hot path
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
 - Branch: `slab-opt-05-two-pass-compaction`
 - Checklist:
   - **MVA:** add a compaction benchmark + instrumentation first; do not start with full algorithmic overhaul.
+  - [x] MVA: add index-swap compaction stats + benchmark (pointer-values).
   - [ ] Implement representative global dict selection for rewritten slabs.
   - [ ] Detect shift points; schedule local dict overrides.
   - [ ] Benchmark compaction throughput and resulting slab sizes.
@@ -293,3 +294,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,120,670,454 / 1,107,856,794 / 1,108,167,354 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup2_cpu.prof` (pprof top captured).
 - Merged `slab-opt-04-dict-dedup-2` into `slab-opt-rc` (ff at `ccc4f32`); #4 remains in_progress (scaffolding only).
+- #5 two-pass compaction MVA (in progress): created `slab-opt-05-two-pass-compaction` off `slab-opt-rc` and added IndexSwap compaction stats + benchmark.
+  - Baseline replay (ptr-values): 1,097,134,252 / 1,101,792,569 / 1,106,051,800 ns/op.
+  - Replay after change: 1,099,917,488 / 1,100,265,794 / 1,104,327,240 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_mva_cpu.prof` (pprof top captured).
+  - Benchmark `BenchmarkCompactionIndexSwapPointerValues`: 27,694,000 ns/op; `remap_ops=2000`, `remap_bytes=75735`, `slab_dead_bytes=67735`, `slab_write_bytes=67735`.
