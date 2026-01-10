@@ -151,7 +151,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 
 ### 3) Pre-emptive Training & Entropy Monitoring — Medium impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
   - **MVA:** implement entropy/ratio metrics and logging only (no behavior change) to locate drift points; then add one safe trigger.
@@ -222,3 +222,6 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - #9 hugepage hint (accepted): `Hint huge pages for slab mmaps` (`26a4a4b`); Linux-only, needs validation on Linux server in `celestia_testing_info.md`.
 - Policy update: do not use “deferred”. Any older “defer …” placeholder commits in history do not count as completed work; remaining items must be revisited with an MVA + benchmark and end as accepted or rejected-for-now (attempt+revert).
 - #2 zonal dict MVA (rejected): `slab: add v2 header + dict compression mva` (`d89e813`) then reverted (`8083f3f`). Baseline ns/op: 1,134,951,571 / 1,156,101,860 / 1,151,579,158. Attempt failed: `BenchmarkTraceReplayTimeline` aborted with `record too large` in `phase restore` (no CPU profile). Revert confirm ns/op: 1,148,604,129 / 1,170,820,099 / 1,167,754,520.
+- #3 entropy metrics MVA (in progress): renamed old defer branch to `slab-opt-03-entropy-training-defer`, created fresh `slab-opt-03-entropy-training` off `slab-opt-rc`.
+- Baseline replay (ptr-values): 1,144,469,998 / 1,160,093,383 / 1,164,282,942 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof` (pprof top captured).
+- #3 replay after metrics logging: 1,145,068,735 / 1,157,760,511 / 1,159,801,847 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu_entropy.prof`.
