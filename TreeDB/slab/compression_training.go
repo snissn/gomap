@@ -42,6 +42,7 @@ type compressionTrainer struct {
 	closed              atomic.Bool
 	closeOnce           sync.Once
 	measureCollect      bool
+	samplePool          sync.Pool
 
 	enqueued         atomic.Uint64
 	dropped          atomic.Uint64
@@ -153,7 +154,10 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	if t.training.Load() || t.collecting.Load() {
 		return
 	}
-	t.samples = nil
+	if len(t.samples) > 0 {
+		t.releaseSamples(t.samples)
+		t.samples = nil
+	}
 	t.sampleBytes = 0
 	t.sampleRecords = 0
 	t.lastSlabID = slabID
@@ -184,7 +188,7 @@ func (t *compressionTrainer) collect(value []byte) {
 	if len(sample) > t.maxRecord {
 		sample = sample[:t.maxRecord]
 	}
-	cp := make([]byte, len(sample))
+	cp := t.getSampleBuf(len(sample))
 	copy(cp, sample)
 	gen := t.sampleGen.Load()
 	select {
@@ -192,6 +196,7 @@ func (t *compressionTrainer) collect(value []byte) {
 		t.enqueued.Add(1)
 	default:
 		t.dropped.Add(1)
+		t.putSampleBuf(cp)
 	}
 	t.updateMaxQueueLen()
 	t.recordCollect(started)
@@ -204,15 +209,21 @@ func (t *compressionTrainer) run() {
 }
 
 func (t *compressionTrainer) appendSample(sample trainerSample) {
-	if t == nil || !t.collecting.Load() {
+	if t == nil {
+		return
+	}
+	if !t.collecting.Load() {
+		t.putSampleBuf(sample.sample)
 		return
 	}
 	if sample.gen != t.sampleGen.Load() {
+		t.putSampleBuf(sample.sample)
 		return
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.collecting.Load() || sample.gen != t.sampleGen.Load() {
+		t.putSampleBuf(sample.sample)
 		return
 	}
 	t.samples = append(t.samples, sample.sample)
@@ -237,6 +248,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	if len(samples) == 0 {
 		return
 	}
+	defer t.releaseSamples(samples)
 
 	rawTotal := 0
 	for _, sample := range samples {
@@ -313,6 +325,38 @@ func (t *compressionTrainer) logOnce() bool {
 		return false
 	}
 	return t.logged.CompareAndSwap(false, true)
+}
+
+func (t *compressionTrainer) getSampleBuf(n int) []byte {
+	if t == nil || n <= 0 {
+		return make([]byte, n)
+	}
+	if v := t.samplePool.Get(); v != nil {
+		buf := v.([]byte)
+		if cap(buf) >= n {
+			return buf[:n]
+		}
+	}
+	return make([]byte, n)
+}
+
+func (t *compressionTrainer) putSampleBuf(buf []byte) {
+	if t == nil || len(buf) == 0 {
+		return
+	}
+	if t.maxRecord > 0 && cap(buf) > t.maxRecord {
+		return
+	}
+	t.samplePool.Put(buf[:0])
+}
+
+func (t *compressionTrainer) releaseSamples(samples [][]byte) {
+	if t == nil {
+		return
+	}
+	for _, sample := range samples {
+		t.putSampleBuf(sample)
+	}
 }
 
 func (t *compressionTrainer) updateMaxQueueLen() {

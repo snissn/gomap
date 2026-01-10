@@ -389,6 +389,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		for i := range values {
+			if !sm.compressionTrainer.shouldCollect() {
+				break
+			}
 			sm.compressionTrainer.collect(values[i])
 		}
 	}
