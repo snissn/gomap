@@ -266,6 +266,10 @@ type Options struct {
 	DisableReadChecksum bool
 	// SlabCompression configures compression for slab-stored values.
 	SlabCompression slab.CompressionOptions
+	// SlabCompressionMetrics logs rolling compression ratios for slabs.
+	SlabCompressionMetrics bool
+	// SlabCompressionMetricsWindowBytes controls log window size for compression ratios.
+	SlabCompressionMetricsWindowBytes int
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -466,8 +470,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression:  opts.SlabCompression,
-		OmitSlabKeys: opts.OmitSlabKeys,
+		Compression:                   opts.SlabCompression,
+		OmitSlabKeys:                  opts.OmitSlabKeys,
+		CompressionMetrics:            opts.SlabCompressionMetrics,
+		CompressionMetricsWindowBytes: opts.SlabCompressionMetricsWindowBytes,
 	})
 	if err != nil {
 		p.Close()

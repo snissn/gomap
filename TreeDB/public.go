@@ -148,6 +148,14 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompression.Kind = slab.CompressionNone
 		}
 	}
+	if envBool("TREEDB_SLAB_COMPRESSION_METRICS") {
+		opts.SlabCompressionMetrics = true
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_METRICS_WINDOW_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionMetricsWindowBytes = n
+		}
+	}
 
 	if v := os.Getenv("TREEDB_BACKGROUND_PRUNE_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

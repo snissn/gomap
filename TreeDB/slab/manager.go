@@ -29,6 +29,7 @@ type SlabManager struct {
 	disableReadChecksum bool
 	compression         compressionConfig
 	omitSlabKeys        bool
+	compressionMetrics  compressionMetrics
 
 	appendManyScratch []byte
 }
@@ -51,11 +52,12 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		return nil, err
 	}
 	sm := &SlabManager{
-		dir:          dir,
-		readOnly:     readOnly,
-		slabs:        make(map[uint32]*SlabFile),
-		compression:  compression,
-		omitSlabKeys: opts.OmitSlabKeys,
+		dir:                dir,
+		readOnly:           readOnly,
+		slabs:              make(map[uint32]*SlabFile),
+		compression:        compression,
+		omitSlabKeys:       opts.OmitSlabKeys,
+		compressionMetrics: newCompressionMetrics(opts),
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -126,6 +128,9 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 			}
 		}
 	}
+	if sm.compressionMetrics.enabled && sm.activeSlab != nil {
+		sm.compressionMetrics.setSlab(sm.activeSlab.ID)
+	}
 
 	return sm, nil
 }
@@ -186,6 +191,9 @@ func (sm *SlabManager) Close() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
+	if sm.compressionMetrics.enabled && sm.activeSlab != nil {
+		sm.compressionMetrics.finish("close")
+	}
 	for _, s := range sm.slabs {
 		_ = s.Close()
 	}
@@ -269,6 +277,12 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		omittedKey = true
 	}
 
+	rawLen := len(value)
+	if fullCompressed {
+		rawLen = 2 + len(key) + len(value)
+	}
+	storedLen := len(encoded)
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	if sm.readOnly {
@@ -285,6 +299,18 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 
 	if err != nil {
 		return page.ValuePtr{}, err
+	}
+
+	if sm.compressionMetrics.enabled {
+		compressedCount := 0
+		fullCount := 0
+		if compressed {
+			compressedCount = 1
+		}
+		if fullCompressed {
+			fullCount = 1
+		}
+		sm.compressionMetrics.add(sm.activeSlab.ID, rawLen, storedLen, 1, compressedCount, fullCount)
 	}
 
 	length := uint32(2 + 4 + len(encodedKey) + len(encoded))
@@ -311,6 +337,8 @@ type appendManyMeta struct {
 	start          int
 	keyLen         int
 	valLen         int
+	rawLen         int
+	storedLen      int
 	compressed     bool
 	fullCompressed bool
 	omittedKey     bool
@@ -345,6 +373,8 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	compressedFlags := make([]bool, len(values))
 	fullCompressedFlags := make([]bool, len(values))
 	omittedKeyFlags := make([]bool, len(values))
+	rawLens := make([]int, len(values))
+	storedLens := make([]int, len(values))
 	if sm.compression.kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
@@ -417,6 +447,13 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 			recordLen: recordLen,
 			crc:       sum,
 		}
+
+		rawLen := len(values[i])
+		if fullCompressedFlags[i] {
+			rawLen = 2 + len(keys[i]) + len(values[i])
+		}
+		rawLens[i] = rawLen
+		storedLens[i] = len(value)
 	}
 
 	sm.mu.Lock()
@@ -470,6 +507,24 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 					Length: length,
 					FileID: id,
 				}
+			}
+
+			if sm.compressionMetrics.enabled && len(metas) > 0 {
+				rawTotal := 0
+				storedTotal := 0
+				compressedCount := 0
+				fullCount := 0
+				for _, meta := range metas {
+					rawTotal += meta.rawLen
+					storedTotal += meta.storedLen
+					if meta.compressed {
+						compressedCount++
+					}
+					if meta.fullCompressed {
+						fullCount++
+					}
+				}
+				sm.compressionMetrics.add(id, rawTotal, storedTotal, len(metas), compressedCount, fullCount)
 			}
 
 			buf = buf[:0]
@@ -538,6 +593,8 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 			start:          start,
 			keyLen:         keyLen,
 			valLen:         valLen,
+			rawLen:         rawLens[i],
+			storedLen:      storedLens[i],
 			compressed:     compressedFlags[i],
 			fullCompressed: fullCompressedFlags[i],
 			omittedKey:     omittedKeyFlags[i],
@@ -587,8 +644,14 @@ func (sm *SlabManager) rotateLocked() error {
 		return err
 	}
 
+	if sm.compressionMetrics.enabled {
+		sm.compressionMetrics.finish("rotate")
+	}
 	sm.slabs[newID] = newSlab
 	sm.activeSlab = newSlab
+	if sm.compressionMetrics.enabled {
+		sm.compressionMetrics.reset(newID)
+	}
 
 	// Ensure the directory entry is durable (best-effort).
 	if dir, err := os.Open(sm.dir); err == nil {
@@ -642,6 +705,9 @@ func (sm *SlabManager) SetActiveSlab(id uint32) error {
 		return err
 	}
 	sm.activeSlab = s
+	if sm.compressionMetrics.enabled {
+		sm.compressionMetrics.reset(s.ID)
+	}
 	return nil
 }
 
