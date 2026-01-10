@@ -87,6 +87,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	memtableMode := strings.ToLower(os.Getenv("TREEDB_TRACE_MEMTABLE_MODE"))
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
+	forceValuePointers := parseBoolEnv("TREEDB_TRACE_FORCE_VALUE_POINTERS", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -117,6 +118,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		MemtableMode:            memtableMode,
 		DisableWAL:              disableWAL,
 		DisableValueLog:         disableVlog,
+		ForceValuePointers:      forceValuePointers,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
@@ -165,6 +167,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	}
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
+	forceValuePointers := parseBoolEnv("TREEDB_TRACE_FORCE_VALUE_POINTERS", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -186,6 +189,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		Mode:                    modeVal,
 		DisableWAL:              disableWAL,
 		DisableValueLog:         disableVlog,
+		ForceValuePointers:      forceValuePointers,
 		FlushThreshold:          int64(flushThreshold),
 		MemtableShards:          memtableShards,
 		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),

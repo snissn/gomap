@@ -319,3 +319,10 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - With `getUint32`: ~446ms/op, ~437ms/op, ~451ms/op (avg ~445ms/op).
   - Baseline (without `getUint32`): ~430ms/op, ~451ms/op, ~446ms/op (avg ~441ms/op).
 - Net: slight regression/noise; reverted.
+
+## 12.40 AppendMany Prep Consolidation (Reverted)
+- Tried merging compression/omit key bookkeeping into `appendManyPrep` to drop extra slices and avoid `encodedKeys` allocation.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x):
+  - With change: ~1154ms/op, ~1132ms/op, ~1125ms/op (avg ~1137ms/op).
+  - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op (avg ~1128ms/op).
+- Net: slight regression/noise; reverted.
