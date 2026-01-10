@@ -218,6 +218,10 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 
 ### 2026-01-10
 - Baseline pointer-values replay + CPU profile captured: `/tmp/treedb_ptrvalues_cpu.prof`.
+- Branch `slab-opt-03-entropy-training-12` (commit `faf040b`): pooled compression training samples + early stop in AppendMany collect.
+- Local replay bench (baseline): 1.164/1.206/1.208 s/op.
+- Local replay bench (after): 1.129/1.106/1.117 s/op.
+- CPU profile (after): `/tmp/treedb_ptrvalues_cpu_entropy_pool.prof` (top: `syscall.syscall`, `syscall.syscall6`, `SlabFile.readViaMmap`).
 - #1 multistream MVA (rejected): `slab: add opt-in multi-stream AppendMany` (`73d27d5`) then reverted (`747bc86`); results recorded in `log: record multistream attempt results` (`4de3fda`).
 - #6 tiering MVA (rejected): `slab: mark inactive slabs read-only` (`41f25a2`) then reverted (`4cf2036`); results recorded in `log: record slab tiering attempt` (`75c4202`).
 - #9 hugepage hint (accepted): `Hint huge pages for slab mmaps` (`26a4a4b`); Linux-only, needs validation on Linux server in `celestia_testing_info.md`.
