@@ -162,11 +162,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [ ] Bench + server trace comparison.
 
 ### 4) Dictionary Deduplication — Medium impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
 - Branch: `slab-opt-04-dict-dedup`
 - Checklist:
   - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
-  - [ ] Hash dictionaries (xxhash64) and reuse global or recent locals when similar.
+  - [x] Hash dictionaries (xxhash64) and reuse recent dicts when identical (dedup window).
   - [ ] Implement USE_REF / USE_GLOBAL flags.
   - [ ] Bench: measure slab bytes reduction and any latency impact.
 
@@ -218,6 +218,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 
 ### 2026-01-10
 - Baseline pointer-values replay + CPU profile captured: `/tmp/treedb_ptrvalues_cpu.prof`.
+- Started #4 MVA on `slab-opt-04-dict-dedup` (dict hash dedup instrumentation in compression trainer).
+- Baseline (slab-opt-rc, training enabled): `BenchmarkTraceReplayTimeline` ns/op: 1,176,716,299 / 1,183,390,849 / 1,191,879,171.
+- After (slab-opt-04-dict-dedup): `BenchmarkTraceReplayTimeline` ns/op: 1,183,208,281 / 1,194,904,890 / 1,188,605,237.
+- CPU profile: `/tmp/treedb_ptrvalues_dict_dedup_cpu.prof` (top shows syscall/syscall6 + zstd BuildDict/EncodeAll).
+- Dedup hits not observed in this replay workload; keeping #4 in_progress for further iterations.
 - Branch `slab-opt-03-entropy-training-12` (commit `faf040b`): pooled compression training samples + early stop in AppendMany collect.
 - Local replay bench (baseline): 1.164/1.206/1.208 s/op.
 - Local replay bench (after): 1.129/1.106/1.117 s/op.

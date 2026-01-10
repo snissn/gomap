@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -16,6 +17,7 @@ const (
 	defaultCompressionTrainMinRecords     = 64
 	defaultCompressionTrainMaxRecordBytes = 64 << 10
 	defaultCompressionTrainQueue          = 128
+	defaultCompressionTrainDedupWindow    = 4
 )
 
 type compressionTrainer struct {
@@ -51,9 +53,16 @@ type compressionTrainer struct {
 	lastTrainRatio   atomic.Uint64
 	lastTrainSamples atomic.Uint64
 	lastTrainDict    atomic.Uint64
+	lastTrainDictHash atomic.Uint64
+	dictDedupLookups  atomic.Uint64
+	dictDedupHits     atomic.Uint64
 	collectNanos     atomic.Uint64
 	collectCount     atomic.Uint64
 	collectMaxNanos  atomic.Uint64
+
+	dictDedupWindow int
+	dictHashes      []uint64
+	dictHashPos     int
 }
 
 type trainerSample struct {
@@ -74,6 +83,9 @@ type CompressionTrainerStats struct {
 	LastTrainRatio   float64
 	LastTrainSamples uint64
 	LastTrainDict    uint64
+	LastTrainDictHash uint64
+	DictDedupLookups  uint64
+	DictDedupHits     uint64
 	CollectCount     uint64
 	CollectNanos     uint64
 	CollectMaxNanos  uint64
@@ -119,6 +131,7 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		sampleStride: uint64(sampleStride),
 		sampleCh:     make(chan trainerSample, defaultCompressionTrainQueue),
 		measureCollect: opts.CompressionMetrics,
+		dictDedupWindow: defaultCompressionTrainDedupWindow,
 	}
 	trainer.enabled.Store(true)
 	go trainer.run()
@@ -293,6 +306,22 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		return
 	}
 
+	dictHash := xxhash.Sum64(dict)
+	t.lastTrainDictHash.Store(dictHash)
+	if t.recordDictHash(dictHash) {
+		t.lastTrainSamples.Store(uint64(len(samples)))
+		t.lastTrainDict.Store(uint64(len(dict)))
+		if t.logOnce() {
+			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x",
+				slabID,
+				len(dict),
+				len(samples),
+				dictHash,
+			)
+		}
+		return
+	}
+
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
 	if err != nil {
 		log.Printf("treedb: slab compression training encode setup failed slab=%d err=%v", slabID, err)
@@ -318,6 +347,33 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			ratio,
 		)
 	}
+}
+
+func (t *compressionTrainer) recordDictHash(hash uint64) bool {
+	if t == nil {
+		return false
+	}
+	t.dictDedupLookups.Add(1)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	window := t.dictDedupWindow
+	if window <= 0 {
+		window = defaultCompressionTrainDedupWindow
+		t.dictDedupWindow = window
+	}
+	if t.dictHashes == nil {
+		t.dictHashes = make([]uint64, window)
+	}
+	for _, h := range t.dictHashes {
+		if h == hash && h != 0 {
+			t.dictDedupHits.Add(1)
+			return true
+		}
+	}
+	t.dictHashes[t.dictHashPos] = hash
+	t.dictHashPos = (t.dictHashPos + 1) % len(t.dictHashes)
+	return false
 }
 
 func (t *compressionTrainer) logOnce() bool {
@@ -410,6 +466,9 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		LastTrainRatio:   math.Float64frombits(t.lastTrainRatio.Load()),
 		LastTrainSamples: t.lastTrainSamples.Load(),
 		LastTrainDict:    t.lastTrainDict.Load(),
+		LastTrainDictHash: t.lastTrainDictHash.Load(),
+		DictDedupLookups:  t.dictDedupLookups.Load(),
+		DictDedupHits:     t.dictDedupHits.Load(),
 		CollectCount:     t.collectCount.Load(),
 		CollectNanos:     t.collectNanos.Load(),
 		CollectMaxNanos:  t.collectMaxNanos.Load(),
