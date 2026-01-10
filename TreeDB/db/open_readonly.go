@@ -38,8 +38,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerReadOnly(opts.Dir, slab.Options{
-		Compression:       opts.SlabCompression,
-		AppendManyStreams: opts.SlabAppendManyStreams,
+		Compression: opts.SlabCompression,
 	})
 	if err != nil {
 		_ = p.Close()

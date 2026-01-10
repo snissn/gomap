@@ -29,10 +29,8 @@ type SlabManager struct {
 	disableReadChecksum bool
 	compression         compressionConfig
 	omitSlabKeys        bool
-	appendManyStreams   int
 
-	appendManyScratch        []byte
-	appendManyScratchStreams [][]byte
+	appendManyScratch []byte
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
@@ -52,17 +50,12 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 	if err != nil {
 		return nil, err
 	}
-	appendManyStreams := opts.AppendManyStreams
-	if appendManyStreams <= 1 {
-		appendManyStreams = 1
-	}
 	sm := &SlabManager{
-		dir:               dir,
-		readOnly:          readOnly,
-		slabs:             make(map[uint32]*SlabFile),
-		compression:       compression,
-		omitSlabKeys:      opts.OmitSlabKeys,
-		appendManyStreams: appendManyStreams,
+		dir:          dir,
+		readOnly:     readOnly,
+		slabs:        make(map[uint32]*SlabFile),
+		compression:  compression,
+		omitSlabKeys: opts.OmitSlabKeys,
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -323,23 +316,6 @@ type appendManyMeta struct {
 	omittedKey     bool
 }
 
-type appendManyPrep struct {
-	keyLen    int
-	valLen    int
-	recordLen int
-	crc       uint32
-}
-
-type appendManyPrepared struct {
-	encodedKeys       [][]byte
-	encodedValues     [][]byte
-	prep              []appendManyPrep
-	compressedFlags   []bool
-	fullCompressed    []bool
-	omittedKeyFlags   []bool
-	appendManyStreams int
-}
-
 // AppendMany appends multiple records while amortizing system calls. It returns
 // a pointer for each key/value pair (same order as inputs).
 //
@@ -352,17 +328,18 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		return nil, nil
 	}
 
-	prepared, err := sm.prepareAppendMany(keys, values)
-	if err != nil {
-		return nil, err
-	}
-	if prepared.appendManyStreams <= 1 {
-		return sm.appendManySingle(keys, prepared)
-	}
-	return sm.appendManyMulti(keys, prepared)
-}
+	// Keep buffers bounded so we don't double memory usage for extremely large
+	// batches or values.
+	const maxBatchBytes = 8 << 20   // 8 MiB
+	const maxKeepScratch = 16 << 20 // 16 MiB
 
-func (sm *SlabManager) prepareAppendMany(keys [][]byte, values [][]byte) (appendManyPrepared, error) {
+	type appendManyPrep struct {
+		keyLen    int
+		valLen    int
+		recordLen int
+		crc       uint32
+	}
+
 	encodedValues := values
 	encodedKeys := keys
 	compressedFlags := make([]bool, len(values))
@@ -379,12 +356,12 @@ func (sm *SlabManager) prepareAppendMany(keys [][]byte, values [][]byte) (append
 				compressedFlags[i] = true
 				fullCompressedFlags[i] = true
 			} else if err != nil {
-				return appendManyPrepared{}, err
+				return nil, err
 			} else {
 				// Fall back to value-only compression
 				encoded, compressed, err := sm.compression.compressValue(values[i])
 				if err != nil {
-					return appendManyPrepared{}, err
+					return nil, err
 				}
 				encodedValues[i] = encoded
 				encodedKeys[i] = keys[i]
@@ -417,14 +394,14 @@ func (sm *SlabManager) prepareAppendMany(keys [][]byte, values [][]byte) (append
 		valLen := len(value)
 
 		if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
-			return appendManyPrepared{}, ErrRecordTooLarge
+			return nil, ErrRecordTooLarge
 		}
 		if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
-			return appendManyPrepared{}, ErrRecordTooLarge
+			return nil, ErrRecordTooLarge
 		}
 		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
 		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-			return appendManyPrepared{}, ErrRecordTooLarge
+			return nil, ErrRecordTooLarge
 		}
 		recordLen := int(recordLen64)
 
@@ -441,23 +418,6 @@ func (sm *SlabManager) prepareAppendMany(keys [][]byte, values [][]byte) (append
 			crc:       sum,
 		}
 	}
-
-	return appendManyPrepared{
-		encodedKeys:       encodedKeys,
-		encodedValues:     encodedValues,
-		prep:              prep,
-		compressedFlags:   compressedFlags,
-		fullCompressed:    fullCompressedFlags,
-		omittedKeyFlags:   omittedKeyFlags,
-		appendManyStreams: sm.appendManyStreams,
-	}, nil
-}
-
-func (sm *SlabManager) appendManySingle(keys [][]byte, prepared appendManyPrepared) ([]page.ValuePtr, error) {
-	// Keep buffers bounded so we don't double memory usage for extremely large
-	// batches or values.
-	const maxBatchBytes = 8 << 20   // 8 MiB
-	const maxKeepScratch = 16 << 20 // 16 MiB
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -535,9 +495,9 @@ func (sm *SlabManager) appendManySingle(keys [][]byte, prepared appendManyPrepar
 	}
 
 	for i := 0; i < len(keys); i++ {
-		key := prepared.encodedKeys[i]
-		value := prepared.encodedValues[i]
-		recPrep := prepared.prep[i]
+		key := keys[i]
+		value := encodedValues[i]
+		recPrep := prep[i]
 		keyLen := recPrep.keyLen
 		valLen := recPrep.valLen
 		recordLen := recPrep.recordLen
@@ -578,9 +538,9 @@ func (sm *SlabManager) appendManySingle(keys [][]byte, prepared appendManyPrepar
 			start:          start,
 			keyLen:         keyLen,
 			valLen:         valLen,
-			compressed:     prepared.compressedFlags[i],
-			fullCompressed: prepared.fullCompressed[i],
-			omittedKey:     prepared.omittedKeyFlags[i],
+			compressed:     compressedFlags[i],
+			fullCompressed: fullCompressedFlags[i],
+			omittedKey:     omittedKeyFlags[i],
 		})
 	}
 
@@ -593,175 +553,6 @@ func (sm *SlabManager) appendManySingle(keys [][]byte, prepared appendManyPrepar
 	} else {
 		sm.appendManyScratch = buf[:0]
 	}
-
-	return ptrs, nil
-}
-
-func (sm *SlabManager) appendManyMulti(keys [][]byte, prepared appendManyPrepared) ([]page.ValuePtr, error) {
-	// Keep buffers bounded so we don't double memory usage for extremely large
-	// batches or values.
-	const maxBatchBytes = 8 << 20   // 8 MiB
-	const maxKeepScratch = 16 << 20 // 16 MiB
-
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.readOnly {
-		return nil, ErrReadOnly
-	}
-
-	streams := prepared.appendManyStreams
-	if streams > len(keys) {
-		streams = len(keys)
-	}
-
-	ptrs := make([]page.ValuePtr, len(keys))
-	buffers := sm.appendManyScratchStreams
-	if len(buffers) < streams {
-		buffers = make([][]byte, streams)
-	}
-	buffers = buffers[:streams]
-	for i := range buffers {
-		buffers[i] = buffers[i][:0]
-	}
-	metas := make([][]appendManyMeta, streams)
-
-	totalPending := 0
-
-	flushStream := func(stream int) error {
-		if len(buffers[stream]) == 0 {
-			return nil
-		}
-		s := sm.activeSlab
-		id := s.ID
-
-		for {
-			base, err := s.WriteBatch(buffers[stream])
-			if err == ErrSlabFull {
-				if err := sm.rotateLocked(); err != nil {
-					return err
-				}
-				s = sm.activeSlab
-				id = s.ID
-				continue
-			}
-			if err != nil {
-				return err
-			}
-
-			for _, meta := range metas[stream] {
-				length := uint32(2 + 4 + meta.keyLen + meta.valLen)
-				if meta.fullCompressed {
-					length = page.ValuePtrMarkFullCompressed(length)
-				} else if meta.omittedKey {
-					length = page.ValuePtrMarkOmittedKey(length)
-					if meta.compressed {
-						length = page.ValuePtrMarkCompressed(length)
-					}
-				} else if meta.compressed {
-					length = page.ValuePtrMarkCompressed(length)
-				}
-				ptrs[meta.idx] = page.ValuePtr{
-					Offset: uint64(base + int64(meta.start) + 4),
-					Length: length,
-					FileID: id,
-				}
-			}
-
-			totalPending -= len(buffers[stream])
-			buffers[stream] = buffers[stream][:0]
-			metas[stream] = metas[stream][:0]
-			return nil
-		}
-	}
-
-	flushAll := func() error {
-		for i := 0; i < streams; i++ {
-			if err := flushStream(i); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	growBuf := func(buf []byte, target int) []byte {
-		if cap(buf) >= target {
-			return buf
-		}
-		newCap := cap(buf) * 2
-		if newCap < target {
-			newCap = target
-		}
-		if newCap < 1024 {
-			newCap = 1024
-		}
-		nb := make([]byte, len(buf), newCap)
-		copy(nb, buf)
-		return nb
-	}
-
-	for i := 0; i < len(keys); i++ {
-		recPrep := prepared.prep[i]
-		recordLen := recPrep.recordLen
-		stream := i % streams
-
-		// Ensure the record fits in the active slab, flushing/rotating as needed.
-		if int64(sm.activeSlab.Size)+int64(totalPending)+int64(recordLen) > MaxSlabSize {
-			if err := flushAll(); err != nil {
-				return nil, err
-			}
-			if int64(sm.activeSlab.Size)+int64(recordLen) > MaxSlabSize {
-				if err := sm.rotateLocked(); err != nil {
-					return nil, err
-				}
-			}
-		}
-
-		// Bound the in-memory buffer size.
-		if totalPending >= maxBatchBytes {
-			if err := flushAll(); err != nil {
-				return nil, err
-			}
-		}
-
-		buf := buffers[stream]
-		start := len(buf)
-		end := start + recordLen
-		buf = growBuf(buf, end)
-		buf = buf[:end]
-		rec := buf[start:end]
-
-		binary.LittleEndian.PutUint32(rec[0:4], recPrep.crc)
-		binary.LittleEndian.PutUint16(rec[4:6], uint16(recPrep.keyLen))
-		binary.LittleEndian.PutUint32(rec[6:10], uint32(recPrep.valLen))
-		copy(rec[10:10+recPrep.keyLen], prepared.encodedKeys[i])
-		copy(rec[10+recPrep.keyLen:], prepared.encodedValues[i])
-
-		metas[stream] = append(metas[stream], appendManyMeta{
-			idx:            i,
-			start:          start,
-			keyLen:         recPrep.keyLen,
-			valLen:         recPrep.valLen,
-			compressed:     prepared.compressedFlags[i],
-			fullCompressed: prepared.fullCompressed[i],
-			omittedKey:     prepared.omittedKeyFlags[i],
-		})
-
-		buffers[stream] = buf
-		totalPending += recordLen
-	}
-
-	if err := flushAll(); err != nil {
-		return nil, err
-	}
-
-	for i := range buffers {
-		if cap(buffers[i]) > maxKeepScratch {
-			buffers[i] = nil
-		} else {
-			buffers[i] = buffers[i][:0]
-		}
-	}
-	sm.appendManyScratchStreams = buffers
 
 	return ptrs, nil
 }

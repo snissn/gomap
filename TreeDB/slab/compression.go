@@ -33,10 +33,6 @@ type CompressionOptions struct {
 type Options struct {
 	Compression  CompressionOptions
 	OmitSlabKeys bool
-	// AppendManyStreams controls how many append buffers are used to build
-	// multi-record batches before writing them sequentially to the slab.
-	// Values <= 1 disable multi-stream appends.
-	AppendManyStreams int
 }
 
 type compressionConfig struct {
