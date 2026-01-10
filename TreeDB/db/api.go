@@ -270,6 +270,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.slabs.compression.train.last_samples"] = fmt.Sprintf("%d", trainerStats.LastTrainSamples)
 		stats["treedb.slabs.compression.train.queue_cap"] = fmt.Sprintf("%d", trainerStats.QueueCap)
 		stats["treedb.slabs.compression.train.queue_len"] = fmt.Sprintf("%d", trainerStats.QueueLen)
+		stats["treedb.slabs.compression.train.queue_max"] = fmt.Sprintf("%d", trainerStats.MaxQueueLen)
 		stats["treedb.slabs.compression.train.runs"] = fmt.Sprintf("%d", trainerStats.TrainCount)
 		stats["treedb.slabs.compression.train.training"] = fmt.Sprintf("%t", trainerStats.Training)
 	}

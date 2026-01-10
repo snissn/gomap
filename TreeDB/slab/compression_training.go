@@ -41,6 +41,7 @@ type compressionTrainer struct {
 
 	enqueued         atomic.Uint64
 	dropped          atomic.Uint64
+	maxQueueLen      atomic.Uint64
 	trainCount       atomic.Uint64
 	lastTrainRatio   atomic.Uint64
 	lastTrainSamples atomic.Uint64
@@ -60,6 +61,7 @@ type CompressionTrainerStats struct {
 	QueueCap         int
 	Enqueued         uint64
 	Dropped          uint64
+	MaxQueueLen      uint64
 	TrainCount       uint64
 	LastTrainRatio   float64
 	LastTrainSamples uint64
@@ -157,6 +159,7 @@ func (t *compressionTrainer) collect(value []byte) {
 	default:
 		t.dropped.Add(1)
 	}
+	t.updateMaxQueueLen()
 }
 
 func (t *compressionTrainer) run() {
@@ -277,6 +280,22 @@ func (t *compressionTrainer) logOnce() bool {
 	return t.logged.CompareAndSwap(false, true)
 }
 
+func (t *compressionTrainer) updateMaxQueueLen() {
+	if t == nil {
+		return
+	}
+	cur := uint64(len(t.sampleCh))
+	for {
+		prev := t.maxQueueLen.Load()
+		if cur <= prev {
+			return
+		}
+		if t.maxQueueLen.CompareAndSwap(prev, cur) {
+			return
+		}
+	}
+}
+
 func (t *compressionTrainer) stats() CompressionTrainerStats {
 	if t == nil {
 		return CompressionTrainerStats{}
@@ -289,6 +308,7 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		QueueCap:         cap(t.sampleCh),
 		Enqueued:         t.enqueued.Load(),
 		Dropped:          t.dropped.Load(),
+		MaxQueueLen:      t.maxQueueLen.Load(),
 		TrainCount:       t.trainCount.Load(),
 		LastTrainRatio:   math.Float64frombits(t.lastTrainRatio.Load()),
 		LastTrainSamples: t.lastTrainSamples.Load(),
