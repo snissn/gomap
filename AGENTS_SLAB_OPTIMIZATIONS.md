@@ -79,10 +79,24 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
 - Prefer using `run_celestia_trace.sh` to capture `/home/mikers/pprof_*/cpu.pprof` etc.
 - Record results from `sync/sync-time.log` and `sync/disk-breakdown.log`.
 
+## “No Free Deferrals” Policy (MANDATORY)
+
+Deferring almost everything is not useful. For this plan, **“deferred” is not a default outcome**.
+
+You may only mark an item **deferred** if ALL of the following are true:
+1) You created a feature branch for the item.
+2) You performed a concrete spike/attempt (code or design-prototype) that would plausibly move perf.
+3) You ran at least the local pointer-values replay benchmark, and recorded results.
+4) You wrote a crisp blocker statement that is external or architectural (e.g., “needs new on-disk format”) AND a concrete next step (RFC/doc/tests) that unblocks it.
+
+If an item is not implementable within reasonable scope, **it must be handled as “rejected for now”** with:
+- a branch that contains the attempt commits AND a revert commit that restores baseline behavior, merged into `slab-opt-rc`, and
+- a brief note for a future agent about what was tried and what to try next.
+
 ## Optimization punch list (ordered; update statuses as you go)
 
 ### 1) Multi-Stream Slabs (Parallel Writing) — High impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-01-multistream`
 - Checklist:
   - [ ] Design: choose N streams, stream->file layout, and pointer encoding.
@@ -93,7 +107,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Decide: accept (merge) or reject (revert) and document.
 
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
@@ -104,7 +118,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Bench: pointer-values replay + server trace; track syscall reduction and bytes written.
 
 ### 3) Pre-emptive Training & Entropy Monitoring — Medium impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-03-entropy-training`
 - Checklist:
   - [ ] Implement rolling compression-ratio metrics per zone.
@@ -113,7 +127,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Bench + server trace comparison.
 
 ### 4) Dictionary Deduplication — Medium impact / medium risk
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-04-dict-dedup`
 - Checklist:
   - [ ] Hash dictionaries (xxhash64) and reuse global or recent locals when similar.
@@ -121,7 +135,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Bench: measure slab bytes reduction and any latency impact.
 
 ### 5) Two-Pass Compaction (Gold Standard) — Lower impact on write hot path
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-05-two-pass-compaction`
 - Checklist:
   - [ ] Implement representative global dict selection for rewritten slabs.
@@ -129,7 +143,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Benchmark compaction throughput and resulting slab sizes.
 
 ### 6) Multi-Level Slab Tiering — Lower impact on write hot path
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-06-slab-tiering`
 - Checklist:
   - [ ] Define “active fast-append” vs “cold compressed” slab formats.
@@ -137,7 +151,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Benchmark space savings vs read latency.
 
 ### 7) Value Delta Encoding — Huge potential, high risk (data model)
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-07-value-delta`
 - Checklist:
   - [ ] Decide delta format + how to reconstruct values for reads.
@@ -145,7 +159,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Add adversarial tests (replay, corruption, partial updates).
 
 ### 8) Zonal Bloom Filters — Mostly recovery/audit
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [x] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-08-zone-bloom`
 - Checklist:
   - [ ] Add bloom filters to zone headers (keys only).
@@ -153,7 +167,7 @@ go tool pprof -top /tmp/treedb_ptrvalues_cpu.prof | head -n 40
   - [ ] Ensure omit-keys mode is still supported (bloom is “identity proof”).
 
 ### 9) Huge-Page Awareness (OS optimization) — Read-side CPU
-- Status: [ ] planned  [ ] in_progress  [x] accepted  [ ] rejected  [ ] deferred
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [ ] rejected  [ ] deferred
 - Branch: `slab-opt-09-hugepage`
 - Checklist:
   - [ ] Align zones to 2MB boundaries.

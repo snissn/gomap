@@ -20,10 +20,14 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
    - Update `AGENTS_SLAB_OPTIMIZATIONS.md` work log on every major action (branch created, bench run, accept/reject decision).
 
 4) **Stop condition**
-   - When the entire punch list in `AGENTS_SLAB_OPTIMIZATIONS.md` is completed or explicitly marked deferred/rejected (with justification), create a file named `SLAB_WORK_HALT` at the repo root containing:
+   - Only stop (create `SLAB_WORK_HALT`) when every punch-list item is either:
+     - **accepted**, or
+     - **rejected for now** with a recorded attempt (commits) and a revert merged into `slab-opt-rc`, or
+     - **deferred** under the “No Free Deferrals” policy (i.e., with a concrete attempt + benchmark + explicit blocker + next step).
+   - `SLAB_WORK_HALT` must contain:
      - final RC branch name + head SHA
      - summary of accepted optimizations + benchmark deltas
-     - what remains and why it was deferred
+     - what remains and why it was deferred/rejected
    - Once `SLAB_WORK_HALT` exists, do not continue work.
 
 ## Execution loop (what to do now)
