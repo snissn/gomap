@@ -20,7 +20,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 ## Progress snapshot (update when RC changes)
 
-- RC branch: `slab-opt-rc` (head `e09da52`)
+- RC branch: `slab-opt-rc` (head `ccc4f32`)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
 - Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #2, #4–#5, #7–#8
@@ -292,3 +292,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,110,317,827 / 1,117,767,198 / 1,108,285,921 ns/op.
   - Replay after change: 1,120,670,454 / 1,107,856,794 / 1,108,167,354 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup2_cpu.prof` (pprof top captured).
+- Merged `slab-opt-04-dict-dedup-2` into `slab-opt-rc` (ff at `ccc4f32`); #4 remains in_progress (scaffolding only).
