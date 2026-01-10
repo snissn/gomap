@@ -34,6 +34,23 @@ type IndexSwapCompactionOptions struct {
 	// Assist is an optional hook invoked periodically during compaction work.
 	// It must be fast and must not assume any DB locks are held.
 	Assist func()
+
+	// Stats captures timing and byte counters for the compaction run.
+	Stats *IndexSwapCompactionStats
+}
+
+// IndexSwapCompactionStats summarizes compaction work for observability.
+type IndexSwapCompactionStats struct {
+	TotalNanos    uint64
+	BuildNanos    uint64
+	CatchupNanos  uint64
+	FinalizeNanos uint64
+
+	RemapCount uint64
+	RemapBytes uint64
+
+	SlabWriteBytes int
+	SlabDeadBytes  int
 }
 
 // CompactSlabsIndexSwap compacts one or more slab files by rebuilding the user
@@ -61,6 +78,15 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 	if db.dir == "" {
 		return errors.New("compaction: missing db dir")
+	}
+
+	stats := opts.Stats
+	var totalStart time.Time
+	if stats != nil {
+		totalStart = time.Now()
+		defer func() {
+			stats.TotalNanos = uint64(time.Since(totalStart))
+		}()
 	}
 
 	activeID := db.slabManager.ActiveSlabID()
@@ -125,9 +151,17 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 	lim := newIndexSwapLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
 	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist)
+	buildStart := time.Now()
 	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 	})
+	if stats != nil {
+		stats.BuildNanos = uint64(time.Since(buildStart))
+		stats.RemapCount = remapIter.remapCount
+		stats.RemapBytes = remapIter.remapBytes
+		stats.SlabWriteBytes = remapIter.metrics.SlabWriteBytes
+		stats.SlabDeadBytes = remapIter.metrics.SlabDeadBytes
+	}
 	iterErr := remapIter.Error()
 	_ = remapIter.Close()
 	if buildErr != nil || iterErr != nil {
@@ -148,6 +182,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	// Online catch-up: replay recorded keys in bounded passes. Filter out keys
 	// whose state did not change since the base snapshot so we never override a
 	// slab-pointer remap with the old pointer value.
+	catchupStart := time.Now()
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
@@ -168,9 +203,13 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 			break
 		}
 	}
+	if stats != nil {
+		stats.CatchupNanos = uint64(time.Since(catchupStart))
+	}
 
 	// Final cutover: stop recording, apply the tail, rebuild the System tree in
 	// the new file, then swap index.db on disk and publish a new index generation.
+	finalizeStart := time.Now()
 	defers := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -338,6 +377,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		}
 
 		db.releaseIndex(oldGen)
+		if stats != nil {
+			stats.FinalizeNanos = uint64(time.Since(finalizeStart))
+		}
 		return nil
 	}
 }
@@ -420,6 +462,9 @@ type indexSwapRemapIterator struct {
 	metrics adaptive.Metrics
 	remap   map[page.ValuePtr]page.ValuePtr
 	err     error
+
+	remapCount uint64
+	remapBytes uint64
 
 	lastAssist       time.Time
 	bytesSinceAssist int64
@@ -516,6 +561,9 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 		it.err = err
 		return nil, page.ValuePtr{}, 0
 	}
+
+	it.remapCount++
+	it.remapBytes += uint64(recordBytes)
 
 	if it.remap == nil {
 		it.remap = make(map[page.ValuePtr]page.ValuePtr, 1024)
