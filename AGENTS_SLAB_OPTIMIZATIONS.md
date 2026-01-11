@@ -326,3 +326,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,134,423,097 / 1,121,122,415 / 1,114,291,917 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup7_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Merged into `slab-opt-rc` (ff at `e985a20`).
+- #4 dict dedup window default (in progress): created `slab-opt-04-dict-dedup-8` to widen the default dedup window (4 -> 16).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,130,168,684 / 1,108,241,085 / 1,131,219,085 ns/op.
+  - Replay after change: 1,109,893,454 / 1,102,575,752 / 1,109,917,792 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup8_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
