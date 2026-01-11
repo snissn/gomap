@@ -18,7 +18,7 @@ const (
 	defaultCompressionTrainMinRecords     = 64
 	defaultCompressionTrainMaxRecordBytes = 64 << 10
 	defaultCompressionTrainQueue          = 128
-	defaultCompressionTrainDedupWindow    = 16
+	defaultCompressionTrainDedupWindow    = 64
 )
 
 type compressionTrainer struct {
