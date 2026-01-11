@@ -146,10 +146,43 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
 - Branch: `slab-opt-02-zonal-dicts`
-- Checklist:
-  - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
-  - **Do not** use a dummy/single-sample dict (e.g., `buildRawDict(sample)`). The dict must be batch‑trained from multiple values (zstd BuildDict or equivalent), and gated by a measured ratio improvement.
-  - Avoid naive implementations that waste time without plausibly improving bytes or syscalls; if the approach is not batch‑trained and ratio‑gated, do not proceed.
+- Checklist (must align with `TreeDB/local_dictionary_compression.md`; no naive shortcuts):
+  - **V2 layout (required):**
+    - 32KB file header with magic/version/metadata.
+    - 32KB global dictionary immediately after header.
+    - 2MB zones, with 64B zone header at each zone boundary.
+    - Record data starts at `SlabV2DataStart` (header + global dict).
+  - **O(1) dict selection (required):**
+    - `zoneID = offset / 2MB`, `headerOffset = zoneID * 2MB` (zone 0 uses global).
+    - Flags: `USE_GLOBAL`, `USE_LOCAL`, `USE_REF`.
+  - **Dictionary integrity (required):**
+    - Store CRC32C for each dictionary in the zone header.
+    - Fail closed on mismatch (no silent corruption).
+  - **Zero‑copy dict slices (required):**
+    - Dictionaries must be mmap-backed slices; avoid heap copies.
+  - **Decoder caching (required):**
+    - Per‑slab global decoder pool.
+    - Global LRU cache for local/reference dict decoders.
+  - **Training (required, non‑naive):**
+    - Batch‑train dicts with `zstd.BuildDict` from multiple samples.
+    - **No single-sample dicts.** If it’s not batch‑trained, do not proceed.
+    - Background training (no write‑path stalls); atomic swap‑in when ready.
+  - **Ratio gating (required):**
+    - Measure dict vs baseline zstd ratio on representative samples.
+    - Only enable dict when it wins by a clear margin (define threshold).
+  - **Dedup (required):**
+    - Exact hash dedup against global and last N locals.
+    - >95% similarity fallback allowed (if measured cheaply).
+  - **Entropy trigger (required):**
+    - Track rolling ratio; trigger new local dict when it degrades by >20%.
+  - **Bench acceptance (required):**
+    - Must show reduced bytes/flush or syscall count in pointer‑values replay.
+    - ns/op must be neutral or better.
+  - **Tests (required):**
+    - Zone header parse, dict CRC validation, dict cache reuse.
+    - Ratio gating (dict rejected when not better).
+    - V2 offset correctness and recovery.
+  - **Explicit rule:** If the change does not meet the above, it is **invalid** and must not be merged.
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
   - [ ] Read path: O(1) dict selection; zero-copy dict slices from mmap.
   - [ ] Write path: zone headers + dict write policy.
