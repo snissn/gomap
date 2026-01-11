@@ -335,3 +335,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,106,503,890 / 1,106,255,242 / 1,122,526,806 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup9_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Revert commit `c846dc9` (attempt `86b00c6`), baseline confirm: 1,114,710,283 / 1,114,419,002 / 1,102,148,146 ns/op.
+  - Merged `slab-opt-04-dict-dedup-9` into `slab-opt-rc` (ff at `10aa660`).
