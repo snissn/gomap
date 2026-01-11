@@ -414,3 +414,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,082,278,905 / 1,093,283,714 / 1,088,599,333 ns/op.
   - Replay after change: 1,090,944,502 / 1,089,246,558 / 1,089,982,218 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_base_disable_cpu.prof` (pprof top captured; syscall/syscall6 + SlabFile.readViaMmap).
+- Merged `slab-opt-05-two-pass-compaction-base-disable` into `slab-opt-rc` (ff at `ffdf109`).
