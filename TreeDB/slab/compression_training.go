@@ -19,7 +19,6 @@ const (
 	defaultCompressionTrainMaxRecordBytes = 64 << 10
 	defaultCompressionTrainQueue          = 128
 	defaultCompressionTrainDedupWindow    = 16
-	zstdDictMagic                        = 0xEC30A437
 )
 
 type compressionTrainer struct {
@@ -391,7 +390,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		return
 	}
 
-	dictHash := hashDictContent(dict)
+	dictHash := xxhash.Sum64(dict)
 	t.lastTrainDictHash.Store(dictHash)
 	mode, ref := t.recordDictHash(dictHash)
 	t.lastTrainDedupMode.Store(uint64(mode))
@@ -650,22 +649,6 @@ func hashSamples(samples [][]byte) uint64 {
 		_, _ = hasher.Write(lenBuf[:])
 		_, _ = hasher.Write(sample)
 	}
-	return hasher.Sum64()
-}
-
-// hashDictContent ignores the zstd dict ID so identical content hashes can dedup.
-func hashDictContent(dict []byte) uint64 {
-	if len(dict) < 8 {
-		return xxhash.Sum64(dict)
-	}
-	if binary.LittleEndian.Uint32(dict[:4]) != zstdDictMagic {
-		return xxhash.Sum64(dict)
-	}
-	hasher := xxhash.New()
-	var zero [4]byte
-	_, _ = hasher.Write(dict[:4])
-	_, _ = hasher.Write(zero[:])
-	_, _ = hasher.Write(dict[8:])
 	return hasher.Sum64()
 }
 
