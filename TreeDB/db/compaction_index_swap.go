@@ -793,7 +793,7 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.bytesSinceAssist += int64(recordBytes)
 	it.maybeAssist(false)
 
-	disableCompression := it.shouldDisableCompression(ptr, value)
+	disableCompression := it.shouldDisableCompression(ptr, key, value)
 	appendOpts := slab.AppendOptions{
 		DisableCompression: disableCompression,
 		SkipTraining:       true,
@@ -829,20 +829,32 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return nil, newPtr, flags
 }
 
-func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, value []byte) bool {
+func compactionShiftRawLen(ptr page.ValuePtr, key, value []byte, maxRecordBytes int) int {
 	rawLen := len(value)
+	if rawLen <= 0 {
+		return 0
+	}
+	if maxRecordBytes > 0 && rawLen > maxRecordBytes {
+		rawLen = maxRecordBytes
+	}
+	if rawLen <= 0 {
+		return 0
+	}
+	if page.ValuePtrIsFullCompressed(ptr) {
+		return rawLen + len(key) + 2
+	}
+	return rawLen
+}
+
+func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, key, value []byte) bool {
+	rawLen := compactionShiftRawLen(ptr, key, value, 0)
 	if rawLen <= 0 {
 		return false
 	}
 
 	if it.disableAll != nil {
 		if override, ok := it.disableAll[ptr.FileID]; ok {
-			if override.maxRecordBytes > 0 && rawLen > override.maxRecordBytes {
-				rawLen = override.maxRecordBytes
-			}
-			if rawLen <= 0 {
-				return false
-			}
+			rawLen = compactionShiftRawLen(ptr, key, value, override.maxRecordBytes)
 			it.shiftOverrideRecords++
 			it.shiftOverrideBytes += uint64(rawLen)
 			return true
@@ -854,9 +866,7 @@ func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, va
 		return false
 	}
 
-	if shift.maxRecordBytes > 0 && rawLen > shift.maxRecordBytes {
-		rawLen = shift.maxRecordBytes
-	}
+	rawLen = compactionShiftRawLen(ptr, key, value, shift.maxRecordBytes)
 	if rawLen <= 0 {
 		return false
 	}
