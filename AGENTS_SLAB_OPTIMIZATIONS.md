@@ -387,3 +387,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,116,327,796 / 1,117,791,435 / 1,189,977,998 ns/op.
   - Replay after change: 1,200,270,692 / 1,194,599,292 / 1,264,326,331 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shifts_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - Merged into `slab-opt-rc` (ff at `87489be`).
