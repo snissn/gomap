@@ -347,3 +347,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after delta prototype (no hot-path integration): 1,090,833,598 / 1,090,922,482 / 1,089,000,815 ns/op.
   - CPU profile: `/tmp/treedb_ptrvalues_value_delta_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Delta benches: `BenchmarkDeltaXorEncodeHit` 37.00 ns/op (88 B/op, 2 allocs/op), `BenchmarkDeltaXorApplyHit` 20.48 ns/op (64 B/op, 1 alloc/op), `BenchmarkDeltaXorEncodeMiss` 223.6 ns/op (64 B/op, 1 alloc/op).
+  - Merged into `slab-opt-rc` (ff at `a77435e`).
