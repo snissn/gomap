@@ -1455,6 +1455,31 @@ func collectCompactionShiftPlanWithEstimator(ctx context.Context, snap *Snapshot
 		totalRecords  uint64
 		strideCounter int
 	)
+	applyWindow := func() {
+		if windowRaw == 0 || windowRecords < cfg.MinRecords {
+			return
+		}
+		ratio := float64(windowStored) / float64(windowRaw)
+		if ratio > baseRatio*(1.0+tuning.ratioTolerance) {
+			plan.shiftCount++
+			if len(plan.points) < tuning.maxPoints {
+				plan.points = append(plan.points, compactionShiftPoint{
+					records:  totalRecords,
+					rawBytes: totalRaw,
+					ratio:    ratio,
+				})
+			}
+			plan.shiftBytes += uint64(windowRaw)
+			plan.shiftRecords += uint64(windowRecords)
+			plan.avgRatio += ratio
+			if ratio > plan.worstRatio {
+				plan.worstRatio = ratio
+			}
+		}
+		windowRaw = 0
+		windowStored = 0
+		windowRecords = 0
+	}
 
 	for iter.Valid() {
 		if err := ctx.Err(); err != nil {
@@ -1492,33 +1517,15 @@ func collectCompactionShiftPlanWithEstimator(ctx context.Context, snap *Snapshot
 		totalRaw += uint64(rawLen)
 		totalRecords++
 
-		if windowRaw >= windowBytes && windowRecords >= cfg.MinRecords {
-			ratio := float64(windowStored) / float64(windowRaw)
-			if ratio > baseRatio*(1.0+tuning.ratioTolerance) {
-				plan.shiftCount++
-				if len(plan.points) < tuning.maxPoints {
-					plan.points = append(plan.points, compactionShiftPoint{
-						records:  totalRecords,
-						rawBytes: totalRaw,
-						ratio:    ratio,
-					})
-				}
-				plan.shiftBytes += uint64(windowRaw)
-				plan.shiftRecords += uint64(windowRecords)
-				plan.avgRatio += ratio
-				if ratio > plan.worstRatio {
-					plan.worstRatio = ratio
-				}
-			}
-			windowRaw = 0
-			windowStored = 0
-			windowRecords = 0
+		if windowRaw >= windowBytes {
+			applyWindow()
 		}
 		iter.Next()
 	}
 	if err := iter.Error(); err != nil {
 		return plan, err
 	}
+	applyWindow()
 	if plan.shiftCount > 0 {
 		plan.avgRatio /= float64(plan.shiftCount)
 	}
