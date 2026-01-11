@@ -419,3 +419,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,090,914,117 / 1,095,445,500 / 1,109,085,975 ns/op.
   - Replay after change: 1,096,048,775 / 1,094,267,494 / 1,098,301,409 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_disableall_per_slab_cpu.prof` (pprof top captured; runtime.madvise + memmove).
+  - Merged into `slab-opt-rc` (ff at `d5527a4`).
