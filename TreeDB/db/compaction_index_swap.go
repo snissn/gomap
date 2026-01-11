@@ -94,11 +94,16 @@ type IndexSwapCompactionStats struct {
 	SampleBaseRecords uint64
 	SampleBaseRatio   float64
 
-	SampleShiftPoints     uint64
-	SampleShiftWorstRatio float64
-	SampleShiftAvgRatio   float64
-	SampleShiftBytes      uint64
-	SampleShiftRecords    uint64
+	SampleShiftPoints            uint64
+	SampleShiftWorstRatio        float64
+	SampleShiftAvgRatio          float64
+	SampleShiftBytes             uint64
+	SampleShiftRecords           uint64
+	SampleShiftDictSampleBytes   uint64
+	SampleShiftDictSampleRecords uint64
+	SampleShiftDictBytes         uint64
+	SampleShiftDictHash          uint64
+	SampleShiftDictRatio         float64
 
 	ShiftOverrideRecords uint64
 	ShiftOverrideBytes   uint64
@@ -347,6 +352,16 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 						stats.SampleShiftAvgRatio = shiftPlan.avgRatio
 						stats.SampleShiftBytes = shiftPlan.shiftBytes
 						stats.SampleShiftRecords = shiftPlan.shiftRecords
+						shiftSample, err := collectCompactionShiftDictSample(ctx, baseSnap, bestID, cfg, shiftPlan, db.slabManager.EstimateCompression)
+						if err != nil {
+							cleanupNewPager()
+							return err
+						}
+						stats.SampleShiftDictSampleBytes = shiftSample.bytes
+						stats.SampleShiftDictSampleRecords = shiftSample.records
+						stats.SampleShiftDictBytes = shiftSample.dictBytes
+						stats.SampleShiftDictHash = shiftSample.dictHash
+						stats.SampleShiftDictRatio = shiftSample.dictRatio
 						if opts.ApplyCompressionShiftPlan && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
 							shiftOverride = &compactionShiftOverride{
 								slabID:         bestID,
@@ -1530,6 +1545,110 @@ func collectCompactionShiftPlanWithEstimator(ctx context.Context, snap *Snapshot
 		plan.avgRatio /= float64(plan.shiftCount)
 	}
 	return plan, nil
+}
+
+func collectCompactionShiftDictSample(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, plan compactionShiftPlan, estimate func([]byte, []byte) (int, int, error)) (compactionDictSample, error) {
+	if snap == nil || snap.idx == nil {
+		return compactionDictSample{}, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return compactionDictSample{}, nil
+	}
+	if plan.windowBytes == 0 || len(plan.points) == 0 {
+		return compactionDictSample{}, nil
+	}
+
+	worst := plan.points[0]
+	for _, point := range plan.points[1:] {
+		if point.ratio > worst.ratio {
+			worst = point
+		}
+	}
+
+	windowEnd := worst.rawBytes
+	windowStart := uint64(0)
+	if windowEnd > plan.windowBytes {
+		windowStart = windowEnd - plan.windowBytes
+	}
+
+	targetBytes := cfg.TrainBytes
+	if plan.windowBytes > 0 && int(plan.windowBytes) < targetBytes {
+		targetBytes = int(plan.windowBytes)
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	samples := make([][]byte, 0, cfg.MinRecords)
+	var (
+		sampleBytes   uint64
+		sampleRecords uint64
+		strideCounter int
+		totalRaw      uint64
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return compactionDictSample{}, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+		rawLen, _, err := estimate(key, value)
+		if err != nil {
+			return compactionDictSample{}, err
+		}
+
+		start := totalRaw
+		end := start + uint64(rawLen)
+		totalRaw = end
+
+		if end <= windowStart {
+			iter.Next()
+			continue
+		}
+		if start >= windowEnd {
+			break
+		}
+		if end > windowStart && start < windowEnd {
+			cp := make([]byte, len(value))
+			copy(cp, value)
+			samples = append(samples, cp)
+			sampleBytes += uint64(len(cp))
+			sampleRecords++
+			if sampleBytes >= uint64(targetBytes) && sampleRecords >= uint64(cfg.MinRecords) {
+				break
+			}
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return compactionDictSample{}, err
+	}
+	return buildCompactionDictSample(slabID, cfg, samples, sampleBytes, sampleRecords), nil
 }
 
 func entriesEquivalent(base node.LeafEntry, baseErr error, curr node.LeafEntry, currErr error) bool {

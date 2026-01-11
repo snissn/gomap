@@ -446,3 +446,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Compaction bench after (local-dict attempt): 79,895,193 / 76,891,127 / 77,005,211 ns/op; `shift_dict_*` metrics remained 0 (no dict selected), `sample_dict_*` still 0.
   - Attempt commit `e0a1ca8` reverted by `982e3dc`; replay after revert: 1,098,416,812 / 1,104,100,915 / 1,099,227,899 ns/op.
   - BuildDict panicked in a unit test attempt; test removed. Local dict override not activated due to missing dict sample; keep #5 in_progress for alternative dict selection.
+- #5 shift-window dict sampling (in progress): created `slab-opt-05-compaction-shift-dict-sample` to sample the worst shift window and build dict stats (no write-path change).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,096,707,623 / 1,137,834,617 / 1,136,942,238 ns/op.
+  - Replay after change: 1,099,213,079 / 1,120,662,094 / 1,130,677,515 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shift_dict_sample_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - New stats: `sample_shift_dict_sample_bytes`, `sample_shift_dict_sample_records`, `sample_shift_dict_bytes`, `sample_shift_dict_ratio`.
