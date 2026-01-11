@@ -365,3 +365,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,095,538,129 / 1,087,767,008 / 1,092,727,842 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup13_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Revert commit `42f4399` (attempt `6b829c2`), baseline confirm: 1,087,125,333 / 1,111,748,232 / 1,090,661,698 ns/op.
+  - Merged into `slab-opt-rc` (ff at `e86bdc9`); #4 remains in_progress.
