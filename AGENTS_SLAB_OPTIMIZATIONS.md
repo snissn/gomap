@@ -396,3 +396,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Compaction bench baseline: 28,770,767 / 27,428,449 / 27,072,744 ns/op.
   - Compaction bench after: 28,759,624 / 28,537,699 / 28,305,220 ns/op.
   - Shift override counters stayed at 0 in benchmark (no degraded windows triggered).
+- #5 shift tuning (in progress): created `slab-opt-05-two-pass-compaction-shift-tuning` off `slab-opt-rc` to add compaction shift plan tuning knobs (window divisor/min bytes/ratio tolerance/max points; negative tolerance allowed for testing) and set compaction bench to use tuned options.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,088,678,396 / 1,091,375,284 / 1,088,549,933 ns/op.
+  - Replay after change: 1,090,352,642 / 1,090,675,617 / 1,101,823,065 ns/op.
+  - CPU profile (after): `/tmp/treedb_ptrvalues_compaction_shift_tuning_cpu.prof` (pprof top captured; runtime.madvise + memmove hot).
+  - Compaction bench: 27,899,038 / 27,932,654 / 28,130,944 ns/op; `sample_shift_*` and `shift_override_*` remain 0 (no shifts triggered).

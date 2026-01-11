@@ -44,6 +44,21 @@ type IndexSwapCompactionOptions struct {
 	// ApplyCompressionShiftPlan uses the sampled shift points to bypass
 	// compression for windows where the dict ratio degrades.
 	ApplyCompressionShiftPlan bool
+	// ShiftWindowDivisor overrides the default shift window divisor. 0 uses the
+	// built-in default.
+	ShiftWindowDivisor int
+	// ShiftMinWindowBytes overrides the default shift window minimum size. 0 uses
+	// the built-in default.
+	ShiftMinWindowBytes int
+	// ShiftRatioTolerance controls how much worse a window's compression ratio
+	// can be relative to the sample baseline before it is marked as a shift.
+	// Negative values can be used for testing to mark more windows as shifts.
+	ShiftRatioTolerance float64
+	// ShiftRatioToleranceSet enables overriding the default ratio tolerance.
+	ShiftRatioToleranceSet bool
+	// ShiftMaxPoints overrides the maximum number of shift points kept for the
+	// plan. 0 uses the built-in default.
+	ShiftMaxPoints int
 
 	// Stats captures timing and byte counters for the compaction run.
 	Stats *IndexSwapCompactionStats
@@ -79,6 +94,13 @@ type IndexSwapCompactionStats struct {
 
 	ShiftOverrideRecords uint64
 	ShiftOverrideBytes   uint64
+}
+
+type compactionShiftTuning struct {
+	windowDivisor  int
+	minWindowBytes int
+	ratioTolerance float64
+	maxPoints      int
 }
 
 // CompactSlabsIndexSwap compacts one or more slab files by rebuilding the user
@@ -177,6 +199,34 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	baseSnap := db.AcquireSnapshot()
 	defer func() { _ = baseSnap.Close() }()
 
+	shiftTuning := compactionShiftTuning{
+		windowDivisor:  compactionShiftWindowDivisor,
+		minWindowBytes: compactionShiftMinWindowBytes,
+		ratioTolerance: compactionShiftRatioTolerance,
+		maxPoints:      compactionShiftMaxPoints,
+	}
+	if opts.ShiftWindowDivisor > 0 {
+		shiftTuning.windowDivisor = opts.ShiftWindowDivisor
+	}
+	if opts.ShiftMinWindowBytes > 0 {
+		shiftTuning.minWindowBytes = opts.ShiftMinWindowBytes
+	}
+	if opts.ShiftRatioToleranceSet {
+		shiftTuning.ratioTolerance = opts.ShiftRatioTolerance
+	}
+	if opts.ShiftMaxPoints > 0 {
+		shiftTuning.maxPoints = opts.ShiftMaxPoints
+	}
+	if shiftTuning.windowDivisor <= 0 {
+		shiftTuning.windowDivisor = 1
+	}
+	if shiftTuning.minWindowBytes <= 0 {
+		shiftTuning.minWindowBytes = compactionShiftMinWindowBytes
+	}
+	if shiftTuning.maxPoints <= 0 {
+		shiftTuning.maxPoints = compactionShiftMaxPoints
+	}
+
 	var shiftOverride *compactionShiftOverride
 	if opts.SampleCompressionDict && stats != nil && db.slabManager.Compression() == slab.CompressionZSTD {
 		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
@@ -228,7 +278,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					stats.SampleDictRatio = best.dictRatio
 
 					if best.dictBytes > 0 && len(best.dict) > 0 && best.dictRatio > 0 {
-						shiftPlan, err := collectCompactionShiftPlan(ctx, baseSnap, bestID, cfg, best.dict, best.dictRatio)
+						shiftPlan, err := collectCompactionShiftPlan(ctx, baseSnap, bestID, cfg, best.dict, best.dictRatio, shiftTuning)
 						if err != nil {
 							cleanupNewPager()
 							return err
@@ -1002,7 +1052,7 @@ func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uin
 	return sample, nil
 }
 
-func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, dict []byte, baseRatio float64) (compactionShiftPlan, error) {
+func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, dict []byte, baseRatio float64, tuning compactionShiftTuning) (compactionShiftPlan, error) {
 	if snap == nil || snap.idx == nil {
 		return compactionShiftPlan{}, errors.New("compaction: missing base snapshot")
 	}
@@ -1013,9 +1063,9 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 		return compactionShiftPlan{}, nil
 	}
 
-	windowBytes := cfg.TrainBytes / compactionShiftWindowDivisor
-	if windowBytes < compactionShiftMinWindowBytes {
-		windowBytes = compactionShiftMinWindowBytes
+	windowBytes := cfg.TrainBytes / tuning.windowDivisor
+	if windowBytes < tuning.minWindowBytes {
+		windowBytes = tuning.minWindowBytes
 	}
 	plan := compactionShiftPlan{windowBytes: uint64(windowBytes)}
 
@@ -1075,9 +1125,9 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 
 		if windowRaw >= windowBytes && windowRecords >= cfg.MinRecords {
 			ratio := float64(windowStored) / float64(windowRaw)
-			if ratio > baseRatio*(1.0+compactionShiftRatioTolerance) {
+			if ratio > baseRatio*(1.0+tuning.ratioTolerance) {
 				plan.shiftCount++
-				if len(plan.points) < compactionShiftMaxPoints {
+				if len(plan.points) < tuning.maxPoints {
 					plan.points = append(plan.points, compactionShiftPoint{
 						records:  totalRecords,
 						rawBytes: totalRaw,

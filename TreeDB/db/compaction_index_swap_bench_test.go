@@ -73,6 +73,11 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 			Stats:                     &stats,
 			SampleCompressionDict:     true,
 			ApplyCompressionShiftPlan: true,
+			ShiftWindowDivisor:        1,
+			ShiftMinWindowBytes:       32 << 10,
+			ShiftRatioToleranceSet:    true,
+			ShiftRatioTolerance:       -0.1,
+			ShiftMaxPoints:            64,
 		}); err != nil {
 			b.StopTimer()
 			_ = d.Close()
