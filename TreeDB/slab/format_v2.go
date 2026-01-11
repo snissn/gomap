@@ -17,6 +17,10 @@ const (
 	slabV2HeaderBytes = 24
 )
 
+// SlabV2DataStart is the first byte offset for records in a v2 slab.
+// Exported for tests that tune MaxSlabSize.
+const SlabV2DataStart = slabV2DataStart
+
 const (
 	slabFlagDictReady = 1 << 0
 	slabFlagDictRaw   = 1 << 1

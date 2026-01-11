@@ -46,7 +46,7 @@ func TestSlabAppendMany_RoundTrip(t *testing.T) {
 func TestSlabAppendMany_Rotates(t *testing.T) {
 	orig := MaxSlabSize
 	defer func() { MaxSlabSize = orig }()
-	MaxSlabSize = 20
+	MaxSlabSize = slabV2DataStart + 16
 
 	dir := t.TempDir()
 	sm, err := NewSlabManager(dir)

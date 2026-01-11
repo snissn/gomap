@@ -19,7 +19,7 @@ func TestCompactCandidates_IdempotentWhenSlabDeleted(t *testing.T) {
 	defer d.Close()
 
 	oldMax := slab.MaxSlabSize
-	slab.MaxSlabSize = 700
+	slab.MaxSlabSize = slab.SlabV2DataStart + 700
 	t.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	// Write a pointer value into slab 0.

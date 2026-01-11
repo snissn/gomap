@@ -40,7 +40,7 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	}
 
 	oldMax := slab.MaxSlabSize
-	slab.MaxSlabSize = 256 << 10
+	slab.MaxSlabSize = slab.SlabV2DataStart + (256 << 10)
 	b.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	value := bytes.Repeat([]byte("v"), 1024)

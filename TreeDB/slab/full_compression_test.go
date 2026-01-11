@@ -31,8 +31,8 @@ func TestFullRecordCompression(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	if !page.ValuePtrIsFullCompressed(ptr) {
-		t.Errorf("Expected full compression for long key and small value")
+	if !page.ValuePtrIsFullCompressed(ptr) && !page.ValuePtrIsDictCompressed(ptr) {
+		t.Errorf("Expected compression (full or dict) for long key and small value")
 	}
 
 	// Verify Read
@@ -53,8 +53,8 @@ func TestFullRecordCompression(t *testing.T) {
 	}
 
 	for i, p := range ptrs {
-		if !page.ValuePtrIsFullCompressed(p) {
-			t.Errorf("Expected full compression for AppendMany[%d]", i)
+		if !page.ValuePtrIsFullCompressed(p) && !page.ValuePtrIsDictCompressed(p) {
+			t.Errorf("Expected compression (full or dict) for AppendMany[%d]", i)
 		}
 		got, err := sm.Read(p)
 		if err != nil {
@@ -69,7 +69,7 @@ func TestFullRecordCompression(t *testing.T) {
 func TestFullRecordCompression_Rotation(t *testing.T) {
 	orig := MaxSlabSize
 	defer func() { MaxSlabSize = orig }()
-	MaxSlabSize = 200 // Small enough to force rotation
+	MaxSlabSize = slabV2DataStart + 200 // Small enough to force rotation
 
 	dir := t.TempDir()
 	opts := Options{
