@@ -235,7 +235,11 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		shiftTuning.maxPoints = compactionShiftMaxPoints
 	}
 
-	var shiftOverride *compactionShiftOverride
+	var (
+		shiftOverride   *compactionShiftOverride
+		disableAll      map[uint32]compactionDisableAllOverride
+		baseRatioBySlab map[uint32]compactionBaseRatioSample
+	)
 	if opts.SampleCompressionDict && stats != nil && db.slabManager.Compression() == slab.CompressionZSTD {
 		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
 			sampleStart := time.Now()
@@ -245,6 +249,10 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 				return err
 			}
 			if len(candidates) > 0 {
+				if opts.DisableCompressionIfBaseRatioGTE > 0 {
+					disableAll = make(map[uint32]compactionDisableAllOverride, len(candidates))
+					baseRatioBySlab = make(map[uint32]compactionBaseRatioSample, len(candidates))
+				}
 				stats.SampleCandidates = uint64(len(candidates))
 				var (
 					best       compactionDictSample
@@ -272,6 +280,24 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 							dictFound = true
 						}
 					}
+					if opts.DisableCompressionIfBaseRatioGTE > 0 {
+						baseRatio, baseRaw, baseStored, baseRecords, err := collectCompactionCompressionRatio(ctx, baseSnap, sampleSlabID, cfg, db.slabManager.EstimateCompression)
+						if err != nil {
+							cleanupNewPager()
+							return err
+						}
+						baseRatioBySlab[sampleSlabID] = compactionBaseRatioSample{
+							ratio:   baseRatio,
+							raw:     baseRaw,
+							stored:  baseStored,
+							records: baseRecords,
+						}
+						if baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
+							disableAll[sampleSlabID] = compactionDisableAllOverride{
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
+					}
 				}
 				if dictFound {
 					best = bestDict
@@ -285,24 +311,32 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					stats.SampleDictHash = best.dictHash
 					stats.SampleDictRatio = best.dictRatio
 
-					baseRatio, baseRaw, baseStored, baseRecords, err := collectCompactionCompressionRatio(ctx, baseSnap, bestID, cfg, db.slabManager.EstimateCompression)
-					if err != nil {
-						cleanupNewPager()
-						return err
+					var (
+						baseRatio   float64
+						baseRaw     uint64
+						baseStored  uint64
+						baseRecords uint64
+						err         error
+					)
+					if sample, ok := baseRatioBySlab[bestID]; ok {
+						baseRatio = sample.ratio
+						baseRaw = sample.raw
+						baseStored = sample.stored
+						baseRecords = sample.records
+					} else {
+						baseRatio, baseRaw, baseStored, baseRecords, err = collectCompactionCompressionRatio(ctx, baseSnap, bestID, cfg, db.slabManager.EstimateCompression)
+						if err != nil {
+							cleanupNewPager()
+							return err
+						}
 					}
 					stats.SampleBaseBytes = baseRaw
 					stats.SampleBaseStored = baseStored
 					stats.SampleBaseRecords = baseRecords
 					stats.SampleBaseRatio = baseRatio
 
-					disableAll := opts.DisableCompressionIfBaseRatioGTE > 0 && baseRatio >= opts.DisableCompressionIfBaseRatioGTE
-					if disableAll {
-						shiftOverride = &compactionShiftOverride{
-							slabID:         bestID,
-							maxRecordBytes: cfg.MaxRecordBytes,
-							disableAll:     true,
-						}
-					} else if baseRatio > 0 {
+					_, disableAllBest := disableAll[bestID]
+					if !disableAllBest && baseRatio > 0 {
 						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)
 						if err != nil {
 							cleanupNewPager()
@@ -328,7 +362,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	}
 
 	lim := newIndexSwapLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
-	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist, shiftOverride)
+	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist, shiftOverride, disableAll)
 	buildStart := time.Now()
 	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
@@ -632,13 +666,14 @@ func (l *indexSwapLimiter) Wait(ctx context.Context, n int) error {
 }
 
 type indexSwapRemapIterator struct {
-	ctx     context.Context
-	under   iterator.UnsafeIterator
-	db      *DB
-	targets map[uint32]struct{}
-	lim     *indexSwapLimiter
-	assist  func()
-	shift   *compactionShiftOverride
+	ctx        context.Context
+	under      iterator.UnsafeIterator
+	db         *DB
+	targets    map[uint32]struct{}
+	lim        *indexSwapLimiter
+	assist     func()
+	shift      *compactionShiftOverride
+	disableAll map[uint32]compactionDisableAllOverride
 
 	metrics adaptive.Metrics
 	remap   map[page.ValuePtr]page.ValuePtr
@@ -655,15 +690,16 @@ type indexSwapRemapIterator struct {
 	bytesSinceAssist int64
 }
 
-func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func(), shift *compactionShiftOverride) *indexSwapRemapIterator {
+func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func(), shift *compactionShiftOverride, disableAll map[uint32]compactionDisableAllOverride) *indexSwapRemapIterator {
 	it := &indexSwapRemapIterator{
-		ctx:     ctx,
-		under:   under,
-		db:      db,
-		targets: targets,
-		lim:     lim,
-		assist:  assist,
-		shift:   shift,
+		ctx:        ctx,
+		under:      under,
+		db:         db,
+		targets:    targets,
+		lim:        lim,
+		assist:     assist,
+		shift:      shift,
+		disableAll: disableAll,
 	}
 	it.lastAssist = time.Now()
 	return it
@@ -779,12 +815,30 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 }
 
 func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, value []byte) bool {
+	rawLen := len(value)
+	if rawLen <= 0 {
+		return false
+	}
+
+	if it.disableAll != nil {
+		if override, ok := it.disableAll[ptr.FileID]; ok {
+			if override.maxRecordBytes > 0 && rawLen > override.maxRecordBytes {
+				rawLen = override.maxRecordBytes
+			}
+			if rawLen <= 0 {
+				return false
+			}
+			it.shiftOverrideRecords++
+			it.shiftOverrideBytes += uint64(rawLen)
+			return true
+		}
+	}
+
 	shift := it.shift
 	if shift == nil || ptr.FileID != shift.slabID {
 		return false
 	}
 
-	rawLen := len(value)
 	if shift.maxRecordBytes > 0 && rawLen > shift.maxRecordBytes {
 		rawLen = shift.maxRecordBytes
 	}
@@ -883,6 +937,17 @@ type compactionShiftOverride struct {
 	plan           compactionShiftPlan
 	maxRecordBytes int
 	disableAll     bool
+}
+
+type compactionDisableAllOverride struct {
+	maxRecordBytes int
+}
+
+type compactionBaseRatioSample struct {
+	ratio   float64
+	raw     uint64
+	stored  uint64
+	records uint64
 }
 
 const (

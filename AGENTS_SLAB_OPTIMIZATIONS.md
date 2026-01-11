@@ -415,3 +415,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,090,944,502 / 1,089,246,558 / 1,089,982,218 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_base_disable_cpu.prof` (pprof top captured; syscall/syscall6 + SlabFile.readViaMmap).
 - Merged `slab-opt-05-two-pass-compaction-base-disable` into `slab-opt-rc` (ff at `ffdf109`).
+- #5 per-slab compression disable sampling (in progress): created `slab-opt-05-two-pass-compaction-disableall-per-slab` to compute base ratios for top candidate slabs and disable compression per-slab when `DisableCompressionIfBaseRatioGTE` is met.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,090,914,117 / 1,095,445,500 / 1,109,085,975 ns/op.
+  - Replay after change: 1,096,048,775 / 1,094,267,494 / 1,098,301,409 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_disableall_per_slab_cpu.prof` (pprof top captured; runtime.madvise + memmove).
