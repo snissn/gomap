@@ -341,3 +341,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change with `TREEDB_TRACE_REPORT_TRAINER_STATS=1`: 1,091,545,025 / 1,098,730,877 / 1,090,572,054 ns/op.
   - Training-enabled replay (`TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES=1048576`) reports `train_dedup_*` metrics at 0 (no dedup hits observed).
   - CPU profile (training enabled): `/tmp/treedb_ptrvalues_dict_dedup10_cpu.prof` (pprof top captured; syscall/syscall6 + zstd BuildDict/EncodeAll).
+  - Merged `slab-opt-04-dict-dedup-10-bench-stats` into `slab-opt-rc` (ff at `9ab721a`).
