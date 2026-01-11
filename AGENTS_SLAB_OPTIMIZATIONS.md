@@ -177,6 +177,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - **MVA:** add a compaction benchmark + instrumentation first; do not start with full algorithmic overhaul.
   - [x] MVA: add index-swap compaction stats + benchmark (pointer-values).
 - [x] Implement representative global dict selection for rewritten slabs.
+  - [x] MVA: inline dict shift override (compaction-only) attempted; reverted (no dict selected).
   - [ ] Detect shift points; schedule local dict overrides.
   - [x] Benchmark compaction throughput and resulting slab sizes.
 
@@ -437,3 +438,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_tail_window_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Compaction bench: 83,707,356 / 86,076,353 / 77,803,868 ns/op; `sample_shift_points=2`, `shift_override_records=2000`, `shift_override_bytes=2,048,000`, `sample_shift_avg_ratio=0.02695`, `sample_shift_worst_ratio=0.02708`.
   - Merged into `slab-opt-rc` (ff at `d823817`).
+- #5 local dict shift override attempt (rejected): created `slab-opt-05-compaction-local-dicts` off `slab-opt-rc` to add inline-dict compression for compaction shift windows (`ApplyCompressionShiftDict`).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,094,603,815 / 1,100,499,845 / 1,108,593,017 ns/op.
+  - Replay after change: 1,096,297,367 / 1,101,111,478 / 1,094,865,425 ns/op.
+  - CPU profile (after): `/tmp/treedb_ptrvalues_cpu_compaction_dict.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - Compaction bench baseline (slab-opt-rc): 82,052,269 / 83,124,126 / 82,834,102 ns/op; `shift_override_records=2000`, `shift_override_bytes=2,048,000`.
+  - Compaction bench after (local-dict attempt): 79,895,193 / 76,891,127 / 77,005,211 ns/op; `shift_dict_*` metrics remained 0 (no dict selected), `sample_dict_*` still 0.
+  - Attempt commit `e0a1ca8` reverted by `982e3dc`; replay after revert: 1,098,416,812 / 1,104,100,915 / 1,099,227,899 ns/op.
+  - BuildDict panicked in a unit test attempt; test removed. Local dict override not activated due to missing dict sample; keep #5 in_progress for alternative dict selection.
