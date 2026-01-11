@@ -359,3 +359,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup12_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Training-enabled replay (`TREEDB_TRACE_REPORT_TRAINER_STATS=1`, `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES=1048576`) reports `train_dedup_*` metrics at 0 (no dedup hits observed).
   - Revert commit `63d6ce0` (attempt `5eff47b`), baseline confirm: 1,092,277,163 / 1,091,825,983 / 1,099,155,038 ns/op.
+  - Merged into `slab-opt-rc` (ff at `2ba390d`); #4 remains in_progress (no dedup hits observed).
