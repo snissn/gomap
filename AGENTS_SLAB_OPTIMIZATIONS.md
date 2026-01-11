@@ -436,3 +436,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,110,057,948 / 1,103,954,315 / 1,115,672,896 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_tail_window_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Compaction bench: 83,707,356 / 86,076,353 / 77,803,868 ns/op; `sample_shift_points=2`, `shift_override_records=2000`, `shift_override_bytes=2,048,000`, `sample_shift_avg_ratio=0.02695`, `sample_shift_worst_ratio=0.02708`.
+  - Merged into `slab-opt-rc` (ff at `d823817`).
