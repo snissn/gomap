@@ -37,6 +37,8 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 				MinBytes:        1024,
 				MinSavingsBytes: 0,
 			},
+			SlabCompressionAdaptiveTrainBytes:     1 << 20,
+			SlabCompressionAdaptiveTrainDictBytes: 32 << 10,
 		}
 		d, err := Open(opts)
 		if err != nil {
@@ -68,7 +70,8 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 		stats := IndexSwapCompactionStats{}
 		b.StartTimer()
 		if err := d.CompactSlabsIndexSwap(context.Background(), []uint32{0}, IndexSwapCompactionOptions{
-			Stats: &stats,
+			Stats:                 &stats,
+			SampleCompressionDict: true,
 		}); err != nil {
 			b.StopTimer()
 			_ = d.Close()
@@ -93,5 +96,14 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	}
 	if lastStats.SlabDeadBytes > 0 {
 		b.ReportMetric(float64(lastStats.SlabDeadBytes), "slab_dead_bytes")
+	}
+	if lastStats.SampleDictBytes > 0 {
+		b.ReportMetric(float64(lastStats.SampleDictBytes), "sample_dict_bytes")
+	}
+	if lastStats.SampleDictRatio > 0 {
+		b.ReportMetric(lastStats.SampleDictRatio, "sample_dict_ratio")
+	}
+	if lastStats.SampleRecords > 0 {
+		b.ReportMetric(float64(lastStats.SampleRecords), "sample_records")
 	}
 }

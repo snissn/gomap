@@ -144,6 +144,16 @@ func (sm *SlabManager) Compression() CompressionKind {
 	return sm.compression.kind
 }
 
+func (sm *SlabManager) CompressionTrainConfig() (CompressionTrainConfig, bool) {
+	sm.mu.RLock()
+	trainer := sm.compressionTrainer
+	sm.mu.RUnlock()
+	if trainer == nil {
+		return CompressionTrainConfig{}, false
+	}
+	return trainer.config(), true
+}
+
 func (sm *SlabManager) OmitSlabKeys() bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

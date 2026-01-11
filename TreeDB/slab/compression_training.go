@@ -120,6 +120,15 @@ type CompressionTrainerStats struct {
 	CollectMaxNanos      uint64
 }
 
+type CompressionTrainConfig struct {
+	TrainBytes     int
+	DictBytes      int
+	MinRecords     int
+	MaxRecordBytes int
+	SampleStride   int
+	Level          zstd.EncoderLevel
+}
+
 type dictDedupMode uint8
 
 const (
@@ -601,6 +610,20 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		CollectCount:         t.collectCount.Load(),
 		CollectNanos:         t.collectNanos.Load(),
 		CollectMaxNanos:      t.collectMaxNanos.Load(),
+	}
+}
+
+func (t *compressionTrainer) config() CompressionTrainConfig {
+	if t == nil {
+		return CompressionTrainConfig{}
+	}
+	return CompressionTrainConfig{
+		TrainBytes:     int(t.targetBytes),
+		DictBytes:      t.dictBytes,
+		MinRecords:     int(t.minRecords),
+		MaxRecordBytes: t.maxRecord,
+		SampleStride:   int(t.sampleStride),
+		Level:          t.level,
 	}
 }
 
