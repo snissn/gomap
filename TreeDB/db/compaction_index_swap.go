@@ -44,6 +44,10 @@ type IndexSwapCompactionOptions struct {
 	// ApplyCompressionShiftPlan uses the sampled shift points to bypass
 	// compression for windows where the dict ratio degrades.
 	ApplyCompressionShiftPlan bool
+	// DisableCompressionIfBaseRatioGTE disables compression during compaction
+	// when the sampled base ratio is greater than or equal to this threshold.
+	// Set to 0 to disable.
+	DisableCompressionIfBaseRatioGTE float64
 	// ShiftWindowDivisor overrides the default shift window divisor. 0 uses the
 	// built-in default.
 	ShiftWindowDivisor int
@@ -291,7 +295,14 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					stats.SampleBaseRecords = baseRecords
 					stats.SampleBaseRatio = baseRatio
 
-					if baseRatio > 0 {
+					disableAll := opts.DisableCompressionIfBaseRatioGTE > 0 && baseRatio >= opts.DisableCompressionIfBaseRatioGTE
+					if disableAll {
+						shiftOverride = &compactionShiftOverride{
+							slabID:         bestID,
+							maxRecordBytes: cfg.MaxRecordBytes,
+							disableAll:     true,
+						}
+					} else if baseRatio > 0 {
 						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)
 						if err != nil {
 							cleanupNewPager()
@@ -769,7 +780,7 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 
 func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, value []byte) bool {
 	shift := it.shift
-	if shift == nil || ptr.FileID != shift.slabID || len(shift.plan.points) == 0 || shift.plan.windowBytes == 0 {
+	if shift == nil || ptr.FileID != shift.slabID {
 		return false
 	}
 
@@ -778,6 +789,14 @@ func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, va
 		rawLen = shift.maxRecordBytes
 	}
 	if rawLen <= 0 {
+		return false
+	}
+	if shift.disableAll {
+		it.shiftOverrideRecords++
+		it.shiftOverrideBytes += uint64(rawLen)
+		return true
+	}
+	if len(shift.plan.points) == 0 || shift.plan.windowBytes == 0 {
 		return false
 	}
 
@@ -863,6 +882,7 @@ type compactionShiftOverride struct {
 	slabID         uint32
 	plan           compactionShiftPlan
 	maxRecordBytes int
+	disableAll     bool
 }
 
 const (
