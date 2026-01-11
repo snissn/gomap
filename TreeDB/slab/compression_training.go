@@ -74,12 +74,14 @@ type compressionTrainer struct {
 	dictDedupWindow     int
 	dictHashes          []uint64
 	dictHashPos         int
+	dictHashIndex       map[uint64]int
 	globalSlabID        uint32
 	globalDictHash      uint64
 	dictCacheHashes     []uint64
 	dictCacheDicts      [][]byte
 	dictCacheDictHashes []uint64
 	dictCachePos        int
+	dictCacheIndex      map[uint64]int
 }
 
 type trainerSample struct {
@@ -224,10 +226,12 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 		t.globalDictHash = 0
 		t.dictHashes = nil
 		t.dictHashPos = 0
+		t.dictHashIndex = nil
 		t.dictCacheHashes = nil
 		t.dictCacheDicts = nil
 		t.dictCacheDictHashes = nil
 		t.dictCachePos = 0
+		t.dictCacheIndex = nil
 	}
 	t.sampleBytes = 0
 	t.sampleRecords = 0
@@ -463,24 +467,28 @@ func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 	}
 	if t.dictHashes == nil {
 		t.dictHashes = make([]uint64, window)
+		t.dictHashIndex = make(map[uint64]int, window)
 	}
 	if t.globalDictHash != 0 && t.globalDictHash == hash {
 		t.dictDedupHits.Add(1)
 		t.dictDedupGlobal.Add(1)
 		return dictDedupGlobal, -1
 	}
-	for i, h := range t.dictHashes {
-		if h == hash && h != 0 {
-			t.dictDedupHits.Add(1)
-			t.dictDedupRef.Add(1)
-			return dictDedupRef, i
-		}
+	if idx, ok := t.dictHashIndex[hash]; ok && hash != 0 {
+		t.dictDedupHits.Add(1)
+		t.dictDedupRef.Add(1)
+		return dictDedupRef, idx
 	}
 	if t.globalDictHash == 0 {
 		t.globalDictHash = hash
 		return dictDedupNone, -1
 	}
+	old := t.dictHashes[t.dictHashPos]
+	if old != 0 {
+		delete(t.dictHashIndex, old)
+	}
 	t.dictHashes[t.dictHashPos] = hash
+	t.dictHashIndex[hash] = t.dictHashPos
 	t.dictHashPos = (t.dictHashPos + 1) % len(t.dictHashes)
 	return dictDedupNone, -1
 }
@@ -653,20 +661,18 @@ func (t *compressionTrainer) lookupCachedDict(samplesHash uint64) ([]byte, uint6
 	if t.dictCacheHashes == nil || t.dictCacheDicts == nil {
 		return nil, 0, false
 	}
-	for i, h := range t.dictCacheHashes {
-		if h == samplesHash && h != 0 {
-			dict := t.dictCacheDicts[i]
-			dictHash := t.dictCacheDictHashes[i]
-			if len(dict) == 0 {
-				return nil, 0, false
-			}
-			t.dictDedupHits.Add(1)
-			t.dictDedupCache.Add(1)
-			bytes := uint64(len(dict))
-			t.dictDedupBytes.Add(bytes)
-			t.dictDedupBytesCache.Add(bytes)
-			return dict, dictHash, true
+	if idx, ok := t.dictCacheIndex[samplesHash]; ok && samplesHash != 0 {
+		dict := t.dictCacheDicts[idx]
+		dictHash := t.dictCacheDictHashes[idx]
+		if len(dict) == 0 {
+			return nil, 0, false
 		}
+		t.dictDedupHits.Add(1)
+		t.dictDedupCache.Add(1)
+		bytes := uint64(len(dict))
+		t.dictDedupBytes.Add(bytes)
+		t.dictDedupBytesCache.Add(bytes)
+		return dict, dictHash, true
 	}
 	return nil, 0, false
 }
@@ -686,14 +692,20 @@ func (t *compressionTrainer) storeCachedDict(samplesHash, dictHash uint64, dict 
 		t.dictCacheDicts = make([][]byte, window)
 		t.dictCacheDictHashes = make([]uint64, window)
 		t.dictCachePos = 0
+		t.dictCacheIndex = make(map[uint64]int, window)
 	}
 	if dictHash == 0 || samplesHash == 0 {
 		return
 	}
 	entry := make([]byte, len(dict))
 	copy(entry, dict)
+	old := t.dictCacheHashes[t.dictCachePos]
+	if old != 0 {
+		delete(t.dictCacheIndex, old)
+	}
 	t.dictCacheHashes[t.dictCachePos] = samplesHash
 	t.dictCacheDicts[t.dictCachePos] = entry
 	t.dictCacheDictHashes[t.dictCachePos] = dictHash
+	t.dictCacheIndex[samplesHash] = t.dictCachePos
 	t.dictCachePos = (t.dictCachePos + 1) % len(t.dictCacheHashes)
 }

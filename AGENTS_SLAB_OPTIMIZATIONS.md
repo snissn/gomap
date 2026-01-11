@@ -348,3 +348,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile: `/tmp/treedb_ptrvalues_value_delta_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Delta benches: `BenchmarkDeltaXorEncodeHit` 37.00 ns/op (88 B/op, 2 allocs/op), `BenchmarkDeltaXorApplyHit` 20.48 ns/op (64 B/op, 1 alloc/op), `BenchmarkDeltaXorEncodeMiss` 223.6 ns/op (64 B/op, 1 alloc/op).
   - Merged into `slab-opt-rc` (ff at `a77435e`).
+- #4 dict dedup hashmap index (in progress): created `slab-opt-04-dict-dedup-11-hashmap` to replace linear scans with hash maps for dict/sample cache lookups.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,089,815,169 / 1,099,398,050 / 1,089,892,742 ns/op.
+  - Replay after change: 1,087,181,529 / 1,093,589,600 / 1,093,221,229 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup11_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
