@@ -1169,6 +1169,16 @@ func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates 
 	return out, nil
 }
 
+func safeBuildZstdDict(opts zstd.BuildDictOptions) (dict []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			dict = nil
+			err = fmt.Errorf("zstd BuildDict panic: %v", r)
+		}
+	}()
+	return zstd.BuildDict(opts)
+}
+
 func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, samples [][]byte, sampleBytes, sampleRecords uint64) compactionDictSample {
 	sample := compactionDictSample{
 		bytes:   sampleBytes,
@@ -1214,7 +1224,7 @@ func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, s
 	if dictID == 0 {
 		dictID = 1
 	}
-	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+	dict, err := safeBuildZstdDict(zstd.BuildDictOptions{
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
@@ -1348,7 +1358,7 @@ func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uin
 	if dictID == 0 {
 		dictID = 1
 	}
-	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+	dict, err := safeBuildZstdDict(zstd.BuildDictOptions{
 		ID:       dictID,
 		Contents: samples,
 		History:  history,

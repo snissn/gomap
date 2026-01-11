@@ -460,3 +460,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Compaction bench baseline attempt: `BenchmarkCompactionIndexSwapPointerValues` panicked (`zstd BuildDict` divide-by-zero) on slab-opt-rc; needs investigation before compaction bench comparisons.
   - Commit: `158d83b`.
   - Merged into `slab-opt-rc` (ff at `ebde683`).
+- #5 compaction BuildDict panic guard (in progress): created `slab-opt-05-compaction-builddict-guard` to recover from zstd BuildDict panic during compaction sampling.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,137,382,802 / 1,109,274,565 / 1,113,121,060 ns/op.
+  - Replay after change: 1,109,113,231 / 1,124,107,619 / 1,111,100,367 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_builddict_guard_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - Compaction bench after change: 95,135,503 / 93,453,240 / 95,470,024 ns/op; no BuildDict panic.
