@@ -308,7 +308,6 @@ type AppendOptions struct {
 	DisableCompression bool
 	SkipTraining       bool
 	SkipMetrics        bool
-	Dict               []byte
 }
 
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
@@ -330,36 +329,19 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		sm.compressionTrainer.collect(value)
 	}
 	if !opts.DisableCompression && sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
-		if len(opts.Dict) > 0 {
-			// Try full record compression with the provided dict, then value-only.
-			if enc, ok, err := sm.compression.compressRecordWithDict(key, value, opts.Dict); err == nil && ok {
-				encoded = enc
-				encodedKey = nil
-				compressed = true
-				fullCompressed = true
-			} else if err != nil {
-				return page.ValuePtr{}, err
-			} else {
-				encoded, compressed, err = sm.compression.compressValueWithDict(value, opts.Dict)
-				if err != nil {
-					return page.ValuePtr{}, err
-				}
-			}
+		// Try full record compression first
+		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
+			encoded = enc
+			encodedKey = nil
+			compressed = true
+			fullCompressed = true
+		} else if err != nil {
+			return page.ValuePtr{}, err
 		} else {
-			// Try full record compression first
-			if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
-				encoded = enc
-				encodedKey = nil
-				compressed = true
-				fullCompressed = true
-			} else if err != nil {
+			// Fall back to value-only compression
+			encoded, compressed, err = sm.compression.compressValue(value)
+			if err != nil {
 				return page.ValuePtr{}, err
-			} else {
-				// Fall back to value-only compression
-				encoded, compressed, err = sm.compression.compressValue(value)
-				if err != nil {
-					return page.ValuePtr{}, err
-				}
 			}
 		}
 	}

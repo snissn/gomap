@@ -12,12 +12,9 @@ const (
 	defaultCompressionMinBytes   = 256
 	defaultCompressionMinSavings = 16
 	compressedHeaderSize         = 4
-	inlineDictHeaderSize         = 8
 )
 
 var errCompressedCorrupt = errors.New("slab: invalid compressed value")
-
-const inlineDictFlag uint32 = 1 << 31
 
 type CompressionKind uint8
 
@@ -117,34 +114,6 @@ func (c *compressionConfig) compressValue(value []byte) ([]byte, bool, error) {
 	return out, true, nil
 }
 
-func (c *compressionConfig) compressValueWithDict(value []byte, dict []byte) ([]byte, bool, error) {
-	if c == nil || c.kind == CompressionNone || len(dict) == 0 {
-		return value, false, nil
-	}
-	if len(value) < c.minBytes {
-		return value, false, nil
-	}
-
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(c.level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
-	if err != nil {
-		return value, false, err
-	}
-	compressed := enc.EncodeAll(value, nil)
-	enc.Close()
-
-	storedLen := inlineDictHeaderSize + len(dict) + len(compressed)
-	if storedLen+c.minSavings >= len(value) {
-		return value, false, nil
-	}
-
-	out := make([]byte, storedLen)
-	binary.LittleEndian.PutUint32(out[:compressedHeaderSize], uint32(len(value))|inlineDictFlag)
-	binary.LittleEndian.PutUint32(out[compressedHeaderSize:inlineDictHeaderSize], uint32(len(dict)))
-	copy(out[inlineDictHeaderSize:], dict)
-	copy(out[inlineDictHeaderSize+len(dict):], compressed)
-	return out, true, nil
-}
-
 func (c *compressionConfig) compressRecord(key, value []byte) ([]byte, bool, error) {
 	if c == nil || c.kind == CompressionNone || c.zstdEncs == nil {
 		return nil, false, nil
@@ -175,84 +144,21 @@ func (c *compressionConfig) compressRecord(key, value []byte) ([]byte, bool, err
 	return out, true, nil
 }
 
-func (c *compressionConfig) compressRecordWithDict(key, value []byte, dict []byte) ([]byte, bool, error) {
-	if c == nil || c.kind == CompressionNone || len(dict) == 0 {
-		return nil, false, nil
-	}
-	combinedLen := 2 + len(key) + len(value)
-	if combinedLen < c.minBytes {
-		return nil, false, nil
-	}
-
-	combined := make([]byte, combinedLen)
-	binary.LittleEndian.PutUint16(combined[:2], uint16(len(key)))
-	copy(combined[2:2+len(key)], key)
-	copy(combined[2+len(key):], value)
-
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(c.level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
-	if err != nil {
-		return nil, false, err
-	}
-	compressed := enc.EncodeAll(combined, nil)
-	enc.Close()
-
-	storedLen := inlineDictHeaderSize + len(dict) + len(compressed)
-	if storedLen+c.minSavings >= combinedLen {
-		return nil, false, nil
-	}
-
-	out := make([]byte, storedLen)
-	binary.LittleEndian.PutUint32(out[:compressedHeaderSize], uint32(combinedLen)|inlineDictFlag)
-	binary.LittleEndian.PutUint32(out[compressedHeaderSize:inlineDictHeaderSize], uint32(len(dict)))
-	copy(out[inlineDictHeaderSize:], dict)
-	copy(out[inlineDictHeaderSize+len(dict):], compressed)
-	return out, true, nil
-}
-
 func (c *compressionConfig) decompressValue(encoded []byte) ([]byte, error) {
 	if len(encoded) < compressedHeaderSize {
 		return nil, errCompressedCorrupt
 	}
 	rawLen := binary.LittleEndian.Uint32(encoded[:compressedHeaderSize])
-	inlineDict := rawLen&inlineDictFlag != 0
-	rawLen &^= inlineDictFlag
 	payload := encoded[compressedHeaderSize:]
 
 	if c.zstdDecs == nil {
 		return nil, errCompressedCorrupt
 	}
-	var out []byte
-	var err error
-	if inlineDict {
-		if len(encoded) < inlineDictHeaderSize {
-			return nil, errCompressedCorrupt
-		}
-		dictLen := binary.LittleEndian.Uint32(encoded[compressedHeaderSize:inlineDictHeaderSize])
-		if dictLen == 0 {
-			return nil, errCompressedCorrupt
-		}
-		if uint64(dictLen) > uint64(len(encoded)-inlineDictHeaderSize) {
-			return nil, errCompressedCorrupt
-		}
-		dictEnd := inlineDictHeaderSize + int(dictLen)
-		dict := encoded[inlineDictHeaderSize:dictEnd]
-		payload = encoded[dictEnd:]
-		dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
-		if err != nil {
-			return nil, err
-		}
-		out, err = dec.DecodeAll(payload, make([]byte, 0, rawLen))
-		dec.Close()
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		dec := c.zstdDecs.Get().(*zstd.Decoder)
-		out, err = dec.DecodeAll(payload, make([]byte, 0, rawLen))
-		c.zstdDecs.Put(dec)
-		if err != nil {
-			return nil, err
-		}
+	dec := c.zstdDecs.Get().(*zstd.Decoder)
+	out, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	c.zstdDecs.Put(dec)
+	if err != nil {
+		return nil, err
 	}
 	if uint32(len(out)) != rawLen {
 		return nil, errCompressedCorrupt

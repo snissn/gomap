@@ -44,9 +44,6 @@ type IndexSwapCompactionOptions struct {
 	// ApplyCompressionShiftPlan uses the sampled shift points to bypass
 	// compression for windows where the dict ratio degrades.
 	ApplyCompressionShiftPlan bool
-	// ApplyCompressionShiftDict uses the sampled dictionary for shift windows
-	// instead of bypassing compression.
-	ApplyCompressionShiftDict bool
 	// DisableCompressionIfBaseRatioGTE disables compression during compaction
 	// when the sampled base ratio is greater than or equal to this threshold.
 	// Set to 0 to disable.
@@ -105,8 +102,6 @@ type IndexSwapCompactionStats struct {
 
 	ShiftOverrideRecords uint64
 	ShiftOverrideBytes   uint64
-	ShiftDictRecords     uint64
-	ShiftDictBytes       uint64
 }
 
 type compactionShiftTuning struct {
@@ -352,15 +347,11 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 						stats.SampleShiftAvgRatio = shiftPlan.avgRatio
 						stats.SampleShiftBytes = shiftPlan.shiftBytes
 						stats.SampleShiftRecords = shiftPlan.shiftRecords
-						applyShiftDict := opts.ApplyCompressionShiftDict && len(best.dict) > 0
-						if (opts.ApplyCompressionShiftPlan || applyShiftDict) && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
+						if opts.ApplyCompressionShiftPlan && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
 							shiftOverride = &compactionShiftOverride{
 								slabID:         bestID,
 								plan:           shiftPlan,
 								maxRecordBytes: cfg.MaxRecordBytes,
-							}
-							if applyShiftDict {
-								shiftOverride.dict = best.dict
 							}
 						}
 					}
@@ -384,8 +375,6 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		stats.SlabDeadBytes = remapIter.metrics.SlabDeadBytes
 		stats.ShiftOverrideRecords = remapIter.shiftOverrideRecords
 		stats.ShiftOverrideBytes = remapIter.shiftOverrideBytes
-		stats.ShiftDictRecords = remapIter.shiftDictRecords
-		stats.ShiftDictBytes = remapIter.shiftDictBytes
 	}
 	iterErr := remapIter.Error()
 	_ = remapIter.Close()
@@ -697,9 +686,6 @@ type indexSwapRemapIterator struct {
 	shiftOverrideBytes   uint64
 	shiftOverrideRecords uint64
 
-	shiftDictRecords uint64
-	shiftDictBytes   uint64
-
 	lastAssist       time.Time
 	bytesSinceAssist int64
 }
@@ -792,12 +778,11 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.bytesSinceAssist += int64(recordBytes)
 	it.maybeAssist(false)
 
-	disableCompression, dict := it.compressionOverride(ptr, value)
+	disableCompression := it.shouldDisableCompression(ptr, value)
 	appendOpts := slab.AppendOptions{
 		DisableCompression: disableCompression,
 		SkipTraining:       true,
 		SkipMetrics:        true,
-		Dict:               dict,
 	}
 	newPtr, err := it.db.slabManager.AppendWithOptions(key, value, appendOpts)
 	if err != nil {
@@ -829,10 +814,10 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return nil, newPtr, flags
 }
 
-func (it *indexSwapRemapIterator) compressionOverride(ptr page.ValuePtr, value []byte) (bool, []byte) {
+func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, value []byte) bool {
 	rawLen := len(value)
 	if rawLen <= 0 {
-		return false, nil
+		return false
 	}
 
 	if it.disableAll != nil {
@@ -841,51 +826,36 @@ func (it *indexSwapRemapIterator) compressionOverride(ptr page.ValuePtr, value [
 				rawLen = override.maxRecordBytes
 			}
 			if rawLen <= 0 {
-				return false, nil
+				return false
 			}
 			it.shiftOverrideRecords++
 			it.shiftOverrideBytes += uint64(rawLen)
-			return true, nil
+			return true
 		}
 	}
 
 	shift := it.shift
 	if shift == nil || ptr.FileID != shift.slabID {
-		return false, nil
+		return false
 	}
 
 	if shift.maxRecordBytes > 0 && rawLen > shift.maxRecordBytes {
 		rawLen = shift.maxRecordBytes
 	}
 	if rawLen <= 0 {
-		return false, nil
+		return false
 	}
 	if shift.disableAll {
 		it.shiftOverrideRecords++
 		it.shiftOverrideBytes += uint64(rawLen)
-		return true, nil
+		return true
 	}
 	if len(shift.plan.points) == 0 || shift.plan.windowBytes == 0 {
-		return false, nil
+		return false
 	}
 
-	if it.shiftWindowHit(shift, uint64(rawLen)) {
-		if len(shift.dict) > 0 {
-			it.shiftDictRecords++
-			it.shiftDictBytes += uint64(rawLen)
-			return false, shift.dict
-		}
-		it.shiftOverrideRecords++
-		it.shiftOverrideBytes += uint64(rawLen)
-		return true, nil
-	}
-
-	return false, nil
-}
-
-func (it *indexSwapRemapIterator) shiftWindowHit(shift *compactionShiftOverride, rawLen uint64) bool {
 	start := it.shiftRawBytes
-	end := start + rawLen
+	end := start + uint64(rawLen)
 
 	for it.shiftPointIdx < len(shift.plan.points) {
 		point := shift.plan.points[it.shiftPointIdx]
@@ -902,6 +872,8 @@ func (it *indexSwapRemapIterator) shiftWindowHit(shift *compactionShiftOverride,
 			if end >= windowEnd {
 				it.shiftPointIdx++
 			}
+			it.shiftOverrideRecords++
+			it.shiftOverrideBytes += uint64(rawLen)
 			return true
 		}
 		if start >= windowEnd {
@@ -965,7 +937,6 @@ type compactionShiftOverride struct {
 	plan           compactionShiftPlan
 	maxRecordBytes int
 	disableAll     bool
-	dict           []byte
 }
 
 type compactionDisableAllOverride struct {

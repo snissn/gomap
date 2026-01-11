@@ -99,7 +99,6 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 			Stats:                     &stats,
 			SampleCompressionDict:     true,
 			ApplyCompressionShiftPlan: true,
-			ApplyCompressionShiftDict: true,
 			ShiftWindowDivisor:        1,
 			ShiftMinWindowBytes:       32 << 10,
 			ShiftRatioToleranceSet:    true,
@@ -139,12 +138,6 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	}
 	if lastStats.SampleBaseRatio > 0 {
 		b.ReportMetric(lastStats.SampleBaseRatio, "sample_base_ratio")
-	}
-	if lastStats.ShiftDictRecords > 0 {
-		b.ReportMetric(float64(lastStats.ShiftDictRecords), "shift_dict_records")
-	}
-	if lastStats.ShiftDictBytes > 0 {
-		b.ReportMetric(float64(lastStats.ShiftDictBytes), "shift_dict_bytes")
 	}
 	if lastStats.SampleBaseBytes > 0 {
 		b.ReportMetric(float64(lastStats.SampleBaseBytes), "sample_base_bytes")
