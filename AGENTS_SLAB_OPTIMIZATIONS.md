@@ -352,3 +352,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Baseline replay (ptr-values, slab-opt-rc): 1,089,815,169 / 1,099,398,050 / 1,089,892,742 ns/op.
   - Replay after change: 1,087,181,529 / 1,093,589,600 / 1,093,221,229 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup11_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - Merged into `slab-opt-rc` (ff at `c659d3a`); #4 remains in_progress (no dedup hits observed).
