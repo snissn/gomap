@@ -453,3 +453,9 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - New stats: `sample_shift_dict_sample_bytes`, `sample_shift_dict_sample_records`, `sample_shift_dict_bytes`, `sample_shift_dict_ratio`.
   - Commit: `c2ba3f3`.
   - Merged into `slab-opt-rc` (ff at `2dd80b8`).
+- #5 shift raw-bytes alignment (in progress): created `slab-opt-05-compaction-shift-rawlen` to align shift window raw byte accounting with full-compressed records (uses key length when `ValuePtrIsFullCompressed`).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,122,333,788 / 1,110,622,979 / 1,109,954,621 ns/op.
+  - Replay after change: 1,113,895,244 / 1,114,430,100 / 1,116,992,467 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shift_rawlen_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - Compaction bench baseline attempt: `BenchmarkCompactionIndexSwapPointerValues` panicked (`zstd BuildDict` divide-by-zero) on slab-opt-rc; needs investigation before compaction bench comparisons.
+  - Commit: `158d83b`.
