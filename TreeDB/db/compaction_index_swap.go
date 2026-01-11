@@ -330,6 +330,19 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 							stats.SampleBaseRatio = bundle.baseRatio
 						}
 					}
+					if opts.DisableCompressionIfBaseRatioGTE > 0 && baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
+						if disableAll == nil {
+							disableAll = make(map[uint32]compactionDisableAllOverride, len(targets))
+						}
+						for slabID := range targets {
+							if _, ok := disableAll[slabID]; ok {
+								continue
+							}
+							disableAll[slabID] = compactionDisableAllOverride{
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
+					}
 					_, disableAllBest := disableAll[bestID]
 					if !disableAllBest && baseRatio > 0 {
 						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)

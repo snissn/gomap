@@ -472,3 +472,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_sample_nodict_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Added compaction stats: `disable_all_slabs`.
   - Merged into `slab-opt-rc` (ff at `4b1fcbb`).
+- #5 global disable-all threshold (in progress): created `slab-opt-05-two-pass-compaction-disableall-global` to disable compression for all target slabs when the sampled base ratio meets `DisableCompressionIfBaseRatioGTE`.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,098,841,021 / 1,095,741,655 / 1,095,928,488 ns/op.
+  - Replay after change: 1,103,103,919 / 1,115,985,958 / 1,095,592,900 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_disableall_global_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
