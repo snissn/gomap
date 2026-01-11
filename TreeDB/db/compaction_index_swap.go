@@ -262,12 +262,17 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					bestDict   compactionDictSample
 					bestDictID uint32
 				)
+				samples, err := collectCompactionSampleSet(ctx, baseSnap, candidates, cfg, db.slabManager.EstimateCompression)
+				if err != nil {
+					cleanupNewPager()
+					return err
+				}
 				for _, sampleSlabID := range candidates {
-					sample, err := collectCompactionDictSample(ctx, baseSnap, sampleSlabID, cfg)
-					if err != nil {
-						cleanupNewPager()
-						return err
+					bundle, ok := samples[sampleSlabID]
+					if !ok {
+						continue
 					}
+					sample := bundle.sample
 					if !bestFound || sample.bytes > best.bytes {
 						best = sample
 						bestID = sampleSlabID
@@ -281,18 +286,13 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 						}
 					}
 					if opts.DisableCompressionIfBaseRatioGTE > 0 {
-						baseRatio, baseRaw, baseStored, baseRecords, err := collectCompactionCompressionRatio(ctx, baseSnap, sampleSlabID, cfg, db.slabManager.EstimateCompression)
-						if err != nil {
-							cleanupNewPager()
-							return err
-						}
 						baseRatioBySlab[sampleSlabID] = compactionBaseRatioSample{
-							ratio:   baseRatio,
-							raw:     baseRaw,
-							stored:  baseStored,
-							records: baseRecords,
+							ratio:   bundle.baseRatio,
+							raw:     bundle.baseRaw,
+							stored:  bundle.baseStored,
+							records: bundle.baseRecords,
 						}
-						if baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
+						if bundle.baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
 							disableAll[sampleSlabID] = compactionDisableAllOverride{
 								maxRecordBytes: cfg.MaxRecordBytes,
 							}
@@ -950,6 +950,14 @@ type compactionBaseRatioSample struct {
 	records uint64
 }
 
+type compactionSampleBundle struct {
+	sample      compactionDictSample
+	baseRatio   float64
+	baseRaw     uint64
+	baseStored  uint64
+	baseRecords uint64
+}
+
 const (
 	compactionShiftWindowDivisor  = 4
 	compactionShiftMinWindowBytes = 128 << 10
@@ -1015,6 +1023,199 @@ func selectCompactionSampleSlabs(ctx context.Context, snap *Snapshot, targets ma
 		ids[i] = candidate.id
 	}
 	return ids, nil
+}
+
+type compactionSampleAccumulator struct {
+	slabID        uint32
+	samples       [][]byte
+	sampleBytes   uint64
+	sampleRecords uint64
+	rawBytes      uint64
+	storedBytes   uint64
+	baseRecords   uint64
+	strideCounter int
+	done          bool
+}
+
+func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates []uint32, cfg slab.CompressionTrainConfig, estimate func([]byte, []byte) (int, int, error)) (map[uint32]compactionSampleBundle, error) {
+	if snap == nil || snap.idx == nil {
+		return nil, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return map[uint32]compactionSampleBundle{}, nil
+	}
+	if len(candidates) == 0 {
+		return map[uint32]compactionSampleBundle{}, nil
+	}
+
+	accs := make(map[uint32]*compactionSampleAccumulator, len(candidates))
+	for _, slabID := range candidates {
+		accs[slabID] = &compactionSampleAccumulator{slabID: slabID}
+	}
+	remaining := len(accs)
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+	targetBytes := uint64(cfg.TrainBytes)
+	minRecords := uint64(cfg.MinRecords)
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			iter.Next()
+			continue
+		}
+		acc := accs[ptr.FileID]
+		if acc == nil || acc.done {
+			iter.Next()
+			continue
+		}
+		acc.strideCounter++
+		if stride > 1 && acc.strideCounter%stride != 0 {
+			iter.Next()
+			continue
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+
+		needSamples := acc.sampleBytes < targetBytes || acc.sampleRecords < minRecords
+		needBase := acc.rawBytes < targetBytes || acc.baseRecords < minRecords
+
+		if needSamples {
+			cp := make([]byte, len(value))
+			copy(cp, value)
+			acc.samples = append(acc.samples, cp)
+			acc.sampleBytes += uint64(len(cp))
+			acc.sampleRecords++
+		}
+		if needBase {
+			rawLen, storedLen, err := estimate(key, value)
+			if err != nil {
+				return nil, err
+			}
+			acc.rawBytes += uint64(rawLen)
+			acc.storedBytes += uint64(storedLen)
+			acc.baseRecords++
+		}
+
+		if !(acc.sampleBytes < targetBytes || acc.sampleRecords < minRecords || acc.rawBytes < targetBytes || acc.baseRecords < minRecords) {
+			acc.done = true
+			remaining--
+			if remaining == 0 {
+				break
+			}
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+
+	out := make(map[uint32]compactionSampleBundle, len(accs))
+	for id, acc := range accs {
+		sample := buildCompactionDictSample(id, cfg, acc.samples, acc.sampleBytes, acc.sampleRecords)
+		ratio := 0.0
+		if acc.rawBytes > 0 {
+			ratio = float64(acc.storedBytes) / float64(acc.rawBytes)
+		}
+		out[id] = compactionSampleBundle{
+			sample:      sample,
+			baseRatio:   ratio,
+			baseRaw:     acc.rawBytes,
+			baseStored:  acc.storedBytes,
+			baseRecords: acc.baseRecords,
+		}
+	}
+	return out, nil
+}
+
+func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, samples [][]byte, sampleBytes, sampleRecords uint64) compactionDictSample {
+	sample := compactionDictSample{
+		bytes:   sampleBytes,
+		records: sampleRecords,
+	}
+	if sampleRecords < uint64(cfg.MinRecords) {
+		return sample
+	}
+
+	rawTotal := 0
+	for _, sample := range samples {
+		rawTotal += len(sample)
+	}
+	if rawTotal < 8 {
+		return sample
+	}
+
+	dictBytes := cfg.DictBytes
+	if dictBytes <= 0 {
+		dictBytes = rawTotal
+	}
+	if dictBytes > rawTotal {
+		dictBytes = rawTotal
+	}
+
+	history := make([]byte, 0, dictBytes)
+	for _, sample := range samples {
+		if len(history) >= dictBytes {
+			break
+		}
+		need := dictBytes - len(history)
+		if len(sample) > need {
+			history = append(history, sample[:need]...)
+		} else {
+			history = append(history, sample...)
+		}
+	}
+	if len(history) < 8 {
+		return sample
+	}
+
+	dictID := slabID + 1
+	if dictID == 0 {
+		dictID = 1
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       dictID,
+		Contents: samples,
+		History:  history,
+		Level:    cfg.Level,
+	})
+	if err != nil {
+		return sample
+	}
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return sample
+	}
+	defer enc.Close()
+
+	storedTotal := 0
+	for _, sample := range samples {
+		storedTotal += len(enc.EncodeAll(sample, nil))
+	}
+	if rawTotal > 0 {
+		sample.dictRatio = float64(storedTotal) / float64(rawTotal)
+	}
+	sample.dictBytes = uint64(len(dict))
+	sample.dictHash = xxhash.Sum64(dict)
+	sample.dict = dict
+	return sample
 }
 
 func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig) (compactionDictSample, error) {

@@ -426,3 +426,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_slabsize_cpu.prof` (pprof top captured; runtime.madvise + memmove).
   - Compaction bench: 58,438,520 ns/op; `slab_bytes_total=1,096,896`, `slab_file_count=5`, `slab_write_bytes=1,088,896`, `slab_dead_bytes=67,735`.
   - Merged into `slab-opt-rc` (ff at `7a73fde`).
+- #5 compaction sample scan (in progress): created `slab-opt-05-compaction-sample-scan` to collect dict/base ratio samples for candidate slabs in a single scan.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,104,510,600 / 1,102,629,729 / 1,103,351,485 ns/op.
+  - Replay after change: 1,103,639,665 / 1,111,644,190 / 1,101,152,054 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_samplescan_cpu.prof` (pprof top captured; runtime.madvise + sort hotspots).
