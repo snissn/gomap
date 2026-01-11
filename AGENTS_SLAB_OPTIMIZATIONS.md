@@ -401,3 +401,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,090,352,642 / 1,090,675,617 / 1,101,823,065 ns/op.
   - CPU profile (after): `/tmp/treedb_ptrvalues_compaction_shift_tuning_cpu.prof` (pprof top captured; runtime.madvise + memmove hot).
   - Compaction bench: 27,899,038 / 27,932,654 / 28,130,944 ns/op; `sample_shift_*` and `shift_override_*` remain 0 (no shifts triggered).
+- Merged `slab-opt-05-two-pass-compaction-shift-tuning` into `slab-opt-rc` (ff at `bfcc57a`).
