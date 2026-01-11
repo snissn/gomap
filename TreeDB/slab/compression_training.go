@@ -417,6 +417,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 				ref,
 			)
 		}
+		t.storeCachedDict(samplesHash, dictHash, dict)
 		return
 	}
 	t.storeCachedDict(samplesHash, dictHash, dict)
