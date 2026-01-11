@@ -176,7 +176,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - Checklist:
   - **MVA:** add a compaction benchmark + instrumentation first; do not start with full algorithmic overhaul.
   - [x] MVA: add index-swap compaction stats + benchmark (pointer-values).
-  - [ ] Implement representative global dict selection for rewritten slabs.
+- [x] Implement representative global dict selection for rewritten slabs.
   - [ ] Detect shift points; schedule local dict overrides.
   - [ ] Benchmark compaction throughput and resulting slab sizes.
 
@@ -378,3 +378,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,092,321,165 / 1,105,215,262 / 1,104,712,540 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_dict_sample_cpu.prof` (pprof top captured; runtime.madvise + memmove hot).
   - Merged into `slab-opt-rc` (ff at `53343f7`).
+- #5 two-pass compaction global dict selection (in progress): created `slab-opt-05-two-pass-compaction-global-dict` to score top compaction candidate slabs and select the best dict ratio for stats (no write-path change).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,109,705,856 / 1,119,180,100 / 1,204,576,281 ns/op.
+  - Replay after change: 1,116,485,244 / 1,116,215,229 / 1,113,700,165 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_globaldict_cpu.prof` (pprof top captured; runtime.madvise + sort hotspots).

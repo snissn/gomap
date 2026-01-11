@@ -103,6 +103,9 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	if lastStats.SampleDictRatio > 0 {
 		b.ReportMetric(lastStats.SampleDictRatio, "sample_dict_ratio")
 	}
+	if lastStats.SampleCandidates > 0 {
+		b.ReportMetric(float64(lastStats.SampleCandidates), "sample_candidates")
+	}
 	if lastStats.SampleRecords > 0 {
 		b.ReportMetric(float64(lastStats.SampleRecords), "sample_records")
 	}

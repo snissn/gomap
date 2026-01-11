@@ -48,11 +48,12 @@ type IndexSwapCompactionOptions struct {
 
 // IndexSwapCompactionStats summarizes compaction work for observability.
 type IndexSwapCompactionStats struct {
-	TotalNanos    uint64
-	BuildNanos    uint64
-	CatchupNanos  uint64
-	FinalizeNanos uint64
-	SampleNanos   uint64
+	TotalNanos       uint64
+	BuildNanos       uint64
+	CatchupNanos     uint64
+	FinalizeNanos    uint64
+	SampleNanos      uint64
+	SampleCandidates uint64
 
 	RemapCount uint64
 	RemapBytes uint64
@@ -167,23 +168,52 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	if opts.SampleCompressionDict && stats != nil && db.slabManager.Compression() == slab.CompressionZSTD {
 		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
 			sampleStart := time.Now()
-			sampleSlabID, ok, err := selectCompactionSampleSlab(ctx, baseSnap, targets)
+			candidates, err := selectCompactionSampleSlabs(ctx, baseSnap, targets, 4)
 			if err != nil {
 				cleanupNewPager()
 				return err
 			}
-			if ok {
-				sample, err := collectCompactionDictSample(ctx, baseSnap, sampleSlabID, cfg)
-				if err != nil {
-					cleanupNewPager()
-					return err
+			if len(candidates) > 0 {
+				stats.SampleCandidates = uint64(len(candidates))
+				var (
+					best       compactionDictSample
+					bestID     uint32
+					bestFound  bool
+					dictFound  bool
+					bestDict   compactionDictSample
+					bestDictID uint32
+				)
+				for _, sampleSlabID := range candidates {
+					sample, err := collectCompactionDictSample(ctx, baseSnap, sampleSlabID, cfg)
+					if err != nil {
+						cleanupNewPager()
+						return err
+					}
+					if !bestFound || sample.bytes > best.bytes {
+						best = sample
+						bestID = sampleSlabID
+						bestFound = true
+					}
+					if sample.dictBytes > 0 && sample.dictRatio > 0 {
+						if !dictFound || sample.dictRatio < bestDict.dictRatio {
+							bestDict = sample
+							bestDictID = sampleSlabID
+							dictFound = true
+						}
+					}
 				}
-				stats.SampleSlabID = sampleSlabID
-				stats.SampleBytes = sample.bytes
-				stats.SampleRecords = sample.records
-				stats.SampleDictBytes = sample.dictBytes
-				stats.SampleDictHash = sample.dictHash
-				stats.SampleDictRatio = sample.dictRatio
+				if dictFound {
+					best = bestDict
+					bestID = bestDictID
+				}
+				if bestFound {
+					stats.SampleSlabID = bestID
+					stats.SampleBytes = best.bytes
+					stats.SampleRecords = best.records
+					stats.SampleDictBytes = best.dictBytes
+					stats.SampleDictHash = best.dictHash
+					stats.SampleDictRatio = best.dictRatio
+				}
 			}
 			stats.SampleNanos = uint64(time.Since(sampleStart))
 		}
@@ -655,8 +685,16 @@ type compactionDictSample struct {
 }
 
 func selectCompactionSampleSlab(ctx context.Context, snap *Snapshot, targets map[uint32]struct{}) (uint32, bool, error) {
+	ids, err := selectCompactionSampleSlabs(ctx, snap, targets, 1)
+	if err != nil || len(ids) == 0 {
+		return 0, false, err
+	}
+	return ids[0], true, nil
+}
+
+func selectCompactionSampleSlabs(ctx context.Context, snap *Snapshot, targets map[uint32]struct{}, max int) ([]uint32, error) {
 	if snap == nil || snap.idx == nil {
-		return 0, false, errors.New("compaction: missing base snapshot")
+		return nil, errors.New("compaction: missing base snapshot")
 	}
 	iter := snap.tree.Iterator(nil, nil)
 	defer func() { _ = iter.Close() }()
@@ -664,7 +702,7 @@ func selectCompactionSampleSlab(ctx context.Context, snap *Snapshot, targets map
 	liveBytes := make(map[uint32]uint64, len(targets))
 	for iter.Valid() {
 		if err := ctx.Err(); err != nil {
-			return 0, false, err
+			return nil, err
 		}
 		_, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer == 0 {
@@ -677,22 +715,33 @@ func selectCompactionSampleSlab(ctx context.Context, snap *Snapshot, targets map
 		iter.Next()
 	}
 	if err := iter.Error(); err != nil {
-		return 0, false, err
+		return nil, err
 	}
 
-	var (
-		bestID  uint32
-		bestLen uint64
-		found   bool
-	)
+	candidates := make([]struct {
+		id    uint32
+		bytes uint64
+	}, 0, len(liveBytes))
 	for id, bytes := range liveBytes {
-		if !found || bytes > bestLen {
-			bestID = id
-			bestLen = bytes
-			found = true
-		}
+		candidates = append(candidates, struct {
+			id    uint32
+			bytes uint64
+		}{id: id, bytes: bytes})
 	}
-	return bestID, found, nil
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].bytes == candidates[j].bytes {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].bytes > candidates[j].bytes
+	})
+	if max > 0 && len(candidates) > max {
+		candidates = candidates[:max]
+	}
+	ids := make([]uint32, len(candidates))
+	for i, candidate := range candidates {
+		ids[i] = candidate.id
+	}
+	return ids, nil
 }
 
 func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig) (compactionDictSample, error) {
