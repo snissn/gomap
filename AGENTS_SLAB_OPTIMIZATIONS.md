@@ -451,3 +451,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,099,213,079 / 1,120,662,094 / 1,130,677,515 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shift_dict_sample_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - New stats: `sample_shift_dict_sample_bytes`, `sample_shift_dict_sample_records`, `sample_shift_dict_bytes`, `sample_shift_dict_ratio`.
+  - Commit: `c2ba3f3`.
