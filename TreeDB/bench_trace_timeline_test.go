@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -104,6 +105,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
 	slabCompressionTrainDedupWindow := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW", 0)
+	reportTrainerStats := parseBoolEnv("TREEDB_TRACE_REPORT_TRAINER_STATS", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -159,7 +161,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		DisableReadChecksum:                        true,
 	}
 
-	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys)
+	runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys, reportTrainerStats)
 }
 
 func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
@@ -214,6 +216,7 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 	slabCompressionTrainMaxRecordBytes := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES", 0)
 	slabCompressionTrainSampleStride := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE", 0)
 	slabCompressionTrainDedupWindow := parseIntEnv("TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW", 0)
+	reportTrainerStats := parseBoolEnv("TREEDB_TRACE_REPORT_TRAINER_STATS", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -265,12 +268,12 @@ func BenchmarkTraceReplayTimelineMemtableModes(b *testing.B) {
 		b.Run(mode, func(b *testing.B) {
 			opts := baseOpts
 			opts.MemtableMode = mode
-			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys)
+			runTraceReplayTimelineBenchmark(b, s, timeline, opts, phaseDurationMs, scale, seed, noSleep, inlineIters, skipIters, sequentialKeys, reportTrainerStats)
 		})
 	}
 }
 
-func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64, noSleep bool, inlineIters bool, skipIters bool, sequentialKeys bool) {
+func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[string]*timelinePhase, opts Options, phaseDurationMs int, scale float64, seed int64, noSleep bool, inlineIters bool, skipIters bool, sequentialKeys bool, reportTrainerStats bool) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		dir, err := os.MkdirTemp("", "treedb-trace-timeline-*")
@@ -304,12 +307,42 @@ func runTraceReplayTimelineBenchmark(b *testing.B, s traceSummary, timeline map[
 			}
 		}
 
+		if reportTrainerStats && i == b.N-1 {
+			reportTrainerMetrics(b, db.Stats())
+		}
+
 		if err := db.Close(); err != nil {
 			_ = os.RemoveAll(dir)
 			b.Fatal(err)
 		}
 		_ = os.RemoveAll(dir)
 	}
+}
+
+func reportTrainerMetrics(b *testing.B, stats map[string]string) {
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_hits", "train_dedup_hits")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_global", "train_dedup_global")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_ref", "train_dedup_ref")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_cache", "train_dedup_cache")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_bytes", "train_dedup_bytes")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_bytes_global", "train_dedup_bytes_global")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_bytes_ref", "train_dedup_bytes_ref")
+	reportMetricUint(b, stats, "treedb.slabs.compression.train.dedup_bytes_cache", "train_dedup_bytes_cache")
+}
+
+func reportMetricUint(b *testing.B, stats map[string]string, key string, unit string) {
+	if stats == nil {
+		return
+	}
+	raw, ok := stats[key]
+	if !ok || raw == "" {
+		return
+	}
+	val, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return
+	}
+	b.ReportMetric(float64(val), unit)
 }
 
 func loadTraceTimeline(path string) (map[string]*timelinePhase, error) {

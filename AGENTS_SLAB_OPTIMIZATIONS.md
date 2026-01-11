@@ -168,7 +168,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
   - [x] Hash dictionaries (xxhash64) and reuse recent dicts when identical (dedup window).
   - [x] Implement USE_REF / USE_GLOBAL flags.
-  - [ ] Bench: measure slab bytes reduction and any latency impact.
+  - [x] Bench: measure slab bytes reduction and any latency impact.
 
 ### 5) Two-Pass Compaction (Gold Standard) — Lower impact on write hot path
 - Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
@@ -336,3 +336,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup9_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Revert commit `c846dc9` (attempt `86b00c6`), baseline confirm: 1,114,710,283 / 1,114,419,002 / 1,102,148,146 ns/op.
   - Merged `slab-opt-04-dict-dedup-9` into `slab-opt-rc` (ff at `10aa660`).
+- #4 dict dedup bench stats (in progress): created `slab-opt-04-dict-dedup-10-bench-stats` to report trainer dedup metrics in trace replay benchmarks.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,105,368,956 / 1,091,071,937 / 1,101,213,363 ns/op.
+  - Replay after change with `TREEDB_TRACE_REPORT_TRAINER_STATS=1`: 1,091,545,025 / 1,098,730,877 / 1,090,572,054 ns/op.
+  - Training-enabled replay (`TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES=1048576`) reports `train_dedup_*` metrics at 0 (no dedup hits observed).
+  - CPU profile (training enabled): `/tmp/treedb_ptrvalues_dict_dedup10_cpu.prof` (pprof top captured; syscall/syscall6 + zstd BuildDict/EncodeAll).
