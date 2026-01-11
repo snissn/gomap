@@ -409,3 +409,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - #5 compaction base ratio sampling re-run (still in progress): baseline replay (ptr-values, slab-opt-rc): 1,096,772,962 / 1,088,551,817 / 1,091,421,427 ns/op.
   - Replay after change: 1,086,663,744 / 1,090,138,163 / 1,098,275,933 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_local_override_cpu.prof` (pprof top captured; syscall/syscall6 + SlabFile.readViaMmap).
+- Merged `slab-opt-05-two-pass-compaction-local-override` into `slab-opt-rc` (ff at `46e50e0`).
