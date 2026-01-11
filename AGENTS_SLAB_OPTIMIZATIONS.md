@@ -402,3 +402,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (after): `/tmp/treedb_ptrvalues_compaction_shift_tuning_cpu.prof` (pprof top captured; runtime.madvise + memmove hot).
   - Compaction bench: 27,899,038 / 27,932,654 / 28,130,944 ns/op; `sample_shift_*` and `shift_override_*` remain 0 (no shifts triggered).
 - Merged `slab-opt-05-two-pass-compaction-shift-tuning` into `slab-opt-rc` (ff at `bfcc57a`).
+- #5 compaction base ratio sampling (in progress): created `slab-opt-05-two-pass-compaction-local-override` to compute non-dict compression ratios via `SlabManager.EstimateCompression` and drive shift plans off the actual compressor; adds `SampleBase*` stats.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,097,202,585 / 1,090,670,183 / 1,087,326,352 ns/op.
+  - Replay after change: 1,085,434,544 / 1,087,383,022 / 1,097,458,683 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_local_override_cpu.prof` (pprof top captured; runtime.madvise + memmove + sort).

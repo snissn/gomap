@@ -79,12 +79,16 @@ type IndexSwapCompactionStats struct {
 	SlabWriteBytes int
 	SlabDeadBytes  int
 
-	SampleSlabID    uint32
-	SampleBytes     uint64
-	SampleRecords   uint64
-	SampleDictBytes uint64
-	SampleDictHash  uint64
-	SampleDictRatio float64
+	SampleSlabID      uint32
+	SampleBytes       uint64
+	SampleRecords     uint64
+	SampleDictBytes   uint64
+	SampleDictHash    uint64
+	SampleDictRatio   float64
+	SampleBaseBytes   uint64
+	SampleBaseStored  uint64
+	SampleBaseRecords uint64
+	SampleBaseRatio   float64
 
 	SampleShiftPoints     uint64
 	SampleShiftWorstRatio float64
@@ -277,8 +281,18 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					stats.SampleDictHash = best.dictHash
 					stats.SampleDictRatio = best.dictRatio
 
-					if best.dictBytes > 0 && len(best.dict) > 0 && best.dictRatio > 0 {
-						shiftPlan, err := collectCompactionShiftPlan(ctx, baseSnap, bestID, cfg, best.dict, best.dictRatio, shiftTuning)
+					baseRatio, baseRaw, baseStored, baseRecords, err := collectCompactionCompressionRatio(ctx, baseSnap, bestID, cfg, db.slabManager.EstimateCompression)
+					if err != nil {
+						cleanupNewPager()
+						return err
+					}
+					stats.SampleBaseBytes = baseRaw
+					stats.SampleBaseStored = baseStored
+					stats.SampleBaseRecords = baseRecords
+					stats.SampleBaseRatio = baseRatio
+
+					if baseRatio > 0 {
+						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)
 						if err != nil {
 							cleanupNewPager()
 							return err
@@ -1052,11 +1066,81 @@ func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uin
 	return sample, nil
 }
 
-func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, dict []byte, baseRatio float64, tuning compactionShiftTuning) (compactionShiftPlan, error) {
+func collectCompactionCompressionRatio(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, estimate func([]byte, []byte) (int, int, error)) (float64, uint64, uint64, uint64, error) {
+	if snap == nil || snap.idx == nil {
+		return 0, 0, 0, 0, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return 0, 0, 0, 0, nil
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	var (
+		rawBytes      uint64
+		storedBytes   uint64
+		records       uint64
+		strideCounter int
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+		rawLen, storedLen, err := estimate(key, value)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		rawBytes += uint64(rawLen)
+		storedBytes += uint64(storedLen)
+		records++
+		if rawBytes >= uint64(cfg.TrainBytes) && records >= uint64(cfg.MinRecords) {
+			break
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if rawBytes == 0 {
+		return 0, rawBytes, storedBytes, records, nil
+	}
+	ratio := float64(storedBytes) / float64(rawBytes)
+	return ratio, rawBytes, storedBytes, records, nil
+}
+
+func collectCompactionShiftPlanWithEstimator(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, baseRatio float64, tuning compactionShiftTuning, estimate func([]byte, []byte) (int, int, error)) (compactionShiftPlan, error) {
 	if snap == nil || snap.idx == nil {
 		return compactionShiftPlan{}, errors.New("compaction: missing base snapshot")
 	}
-	if len(dict) == 0 || baseRatio <= 0 {
+	if baseRatio <= 0 {
 		return compactionShiftPlan{}, nil
 	}
 	if cfg.MinRecords <= 0 {
@@ -1076,12 +1160,6 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 
 	iter := snap.tree.Iterator(nil, nil)
 	defer func() { _ = iter.Close() }()
-
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
-	if err != nil {
-		return compactionShiftPlan{}, err
-	}
-	defer enc.Close()
 
 	var (
 		windowRaw     int
@@ -1108,6 +1186,7 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 				continue
 			}
 		}
+		key := iter.UnsafeKey()
 		value := iter.UnsafeValue()
 		if len(value) == 0 {
 			iter.Next()
@@ -1117,10 +1196,14 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 			value = value[:cfg.MaxRecordBytes]
 		}
 
-		windowRaw += len(value)
-		windowStored += len(enc.EncodeAll(value, nil))
+		rawLen, storedLen, err := estimate(key, value)
+		if err != nil {
+			return compactionShiftPlan{}, err
+		}
+		windowRaw += rawLen
+		windowStored += storedLen
 		windowRecords++
-		totalRaw += uint64(len(value))
+		totalRaw += uint64(rawLen)
 		totalRecords++
 
 		if windowRaw >= windowBytes && windowRecords >= cfg.MinRecords {

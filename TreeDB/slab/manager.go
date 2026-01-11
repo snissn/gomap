@@ -184,6 +184,29 @@ func (sm *SlabManager) shouldCompress(rawLen int) bool {
 	return true
 }
 
+// EstimateCompression reports the raw/stored byte counts for a record if it were
+// appended with the current compression settings. It does not write anything.
+func (sm *SlabManager) EstimateCompression(key, value []byte) (rawLen int, storedLen int, err error) {
+	rawLen = len(value)
+	storedLen = len(value)
+	if sm.compression.kind == CompressionNone || !sm.shouldCompress(len(value)) {
+		return rawLen, storedLen, nil
+	}
+
+	if enc, ok, err := sm.compression.compressRecord(key, value); err != nil {
+		return rawLen, storedLen, err
+	} else if ok {
+		rawLen = 2 + len(key) + len(value)
+		return rawLen, len(enc), nil
+	}
+
+	enc, _, err := sm.compression.compressValue(value)
+	if err != nil {
+		return rawLen, storedLen, err
+	}
+	return rawLen, len(enc), nil
+}
+
 func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) ([]byte, error) {
 	if !page.ValuePtrIsCompressed(ptr) {
 		return val, nil
