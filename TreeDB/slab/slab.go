@@ -59,14 +59,9 @@ type SlabFile struct {
 	Size     int64 // Track size for rotation
 	// writeOffset tracks the file offset for sequential appends.
 	writeOffset int64
-	version     uint8
-	dataStart   int64
-	header      slabHeader
 
-	closed   atomic.Bool
-	openMu   sync.Mutex
-	headerMu sync.Mutex
-	headerOK bool
+	closed atomic.Bool
+	openMu sync.Mutex
 
 	// mmapData holds the current read-only mapping. Readers load it without taking
 	// locks; remaps publish a new mapping and keep the old mapping alive until
@@ -83,14 +78,6 @@ type SlabFile struct {
 	// writeScratch is a reusable buffer for appending records. SlabManager
 	// serializes writers, so this is safe without additional locking.
 	writeScratch []byte
-
-	dictReady  atomic.Bool
-	dictRaw    bool
-	dictID     uint32
-	dict       []byte
-	dictEnc    *sync.Pool
-	dictDec    *sync.Pool
-	dictPoolMu sync.Mutex
 }
 
 func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool) *SlabFile {
@@ -101,8 +88,6 @@ func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool) 
 		readOnly:    readOnly,
 		Size:        size,
 		writeOffset: size,
-		version:     slabVersionV1,
-		dataStart:   0,
 	}
 	// Initialize atomic.Value with the concrete type so Load is safe.
 	sf.mmapData.Store([]byte(nil))
@@ -134,48 +119,8 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		f.Close()
 		return nil, err
 	}
-	size := info.Size()
-	var header slabHeader
-	var hasHeader bool
-	if size == 0 && !created {
-		created = true
-	}
-	if created {
-		header, err = initSlabV2(f, id)
-		if err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		size = slabV2DataStart
-		hasHeader = true
-	} else {
-		header, hasHeader, err = readSlabHeader(f, size)
-		if err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-	}
 
-	sf := newSlabFile(path, id, f, size, false)
-	if hasHeader {
-		if size < slabV2DataStart {
-			_ = f.Close()
-			return nil, errSlabHeaderCorrupt
-		}
-		sf.version = slabVersionV2
-		sf.dataStart = slabV2DataStart
-		sf.header = header
-		sf.dictID = header.DictID
-		sf.dictRaw = header.Flags&slabFlagDictRaw != 0
-		if header.Flags&slabFlagDictReady != 0 {
-			if err := sf.loadDict(); err != nil {
-				_ = f.Close()
-				return nil, err
-			}
-		}
-	}
-	sf.headerOK = true
-	return sf, nil
+	return newSlabFile(path, id, f, info.Size(), false), nil
 }
 
 // OpenSlabReadOnly opens an existing slab file in read-only mode.
@@ -189,32 +134,8 @@ func OpenSlabReadOnly(path string, id uint32) (*SlabFile, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	size := info.Size()
-	header, hasHeader, err := readSlabHeader(f, size)
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	sf := newSlabFile(path, id, f, size, true)
-	if hasHeader {
-		if size < slabV2DataStart {
-			_ = f.Close()
-			return nil, errSlabHeaderCorrupt
-		}
-		sf.version = slabVersionV2
-		sf.dataStart = slabV2DataStart
-		sf.header = header
-		sf.dictID = header.DictID
-		sf.dictRaw = header.Flags&slabFlagDictRaw != 0
-		if header.Flags&slabFlagDictReady != 0 {
-			if err := sf.loadDict(); err != nil {
-				_ = f.Close()
-				return nil, err
-			}
-		}
-	}
-	sf.headerOK = true
-	return sf, nil
+
+	return newSlabFile(path, id, f, info.Size(), true), nil
 }
 
 // OpenSlabLazy registers a slab without opening its file descriptor.
@@ -289,16 +210,6 @@ func (s *SlabFile) ensureOpen() error {
 	s.File = f
 	s.Size = info.Size()
 	s.writeOffset = s.Size
-	if err := s.ensureHeaderLoaded(); err != nil {
-		_ = s.File.Close()
-		s.File = nil
-		return err
-	}
-	if s.dataStart > 0 && s.Size < s.dataStart {
-		_ = s.File.Close()
-		s.File = nil
-		return errSlabHeaderCorrupt
-	}
 	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
 		_ = s.File.Close()
 		s.File = nil
@@ -311,9 +222,6 @@ func (s *SlabFile) ensureOpen() error {
 func (s *SlabFile) Truncate(size int64) error {
 	if s.readOnly {
 		return ErrReadOnly
-	}
-	if s.dataStart > 0 && size < s.dataStart {
-		size = s.dataStart
 	}
 	if err := s.File.Truncate(size); err != nil {
 		return err
@@ -350,15 +258,8 @@ func (s *SlabFile) RepairTail() error {
 	}
 	size := info.Size()
 	if size == 0 {
-		if s.dataStart > 0 {
-			s.Size = s.dataStart
-		} else {
-			s.Size = 0
-		}
+		s.Size = 0
 		return nil
-	}
-	if s.dataStart > 0 && size < s.dataStart {
-		return errSlabHeaderCorrupt
 	}
 
 	// Track the last few record starts so we can drop a corrupted tail record
@@ -368,8 +269,8 @@ func (s *SlabFile) RepairTail() error {
 	var startsN int
 
 	var headerArr [HeaderSize]byte
-	offset := s.dataStart
-	lastGoodEnd := s.dataStart
+	offset := int64(0)
+	lastGoodEnd := int64(0)
 
 	for {
 		if offset+HeaderSize > size {
@@ -405,7 +306,7 @@ func (s *SlabFile) RepairTail() error {
 	}
 	for tries := 0; tries < maxTries; tries++ {
 		if startsN == 0 {
-			trimTo = s.dataStart
+			trimTo = 0
 			break
 		}
 		start := starts[(startsN-1-tries)%keepStarts]
@@ -468,9 +369,6 @@ func (s *SlabFile) read(offset int64, verifyCRC bool, unsafe bool) ([]byte, erro
 	// Offset points to KeyLen. CRC is at Offset - 4.
 	realStart := offset - 4
 	if realStart < 0 {
-		return nil, errors.New("invalid slab offset")
-	}
-	if s.dataStart > 0 && realStart < s.dataStart {
 		return nil, errors.New("invalid slab offset")
 	}
 
@@ -652,10 +550,6 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
-	if s.dataStart > 0 && s.Size < s.dataStart {
-		s.Size = s.dataStart
-		s.writeOffset = s.dataStart
-	}
 	keyLen := len(key)
 	valLen := len(value)
 
@@ -743,10 +637,6 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 	if len(buf) == 0 {
 		return s.Size, nil
-	}
-	if s.dataStart > 0 && s.Size < s.dataStart {
-		s.Size = s.dataStart
-		s.writeOffset = s.dataStart
 	}
 	if int64(s.Size)+int64(len(buf)) > MaxSlabSize {
 		return 0, ErrSlabFull
