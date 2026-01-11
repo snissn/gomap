@@ -178,7 +178,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [x] MVA: add index-swap compaction stats + benchmark (pointer-values).
 - [x] Implement representative global dict selection for rewritten slabs.
   - [ ] Detect shift points; schedule local dict overrides.
-  - [ ] Benchmark compaction throughput and resulting slab sizes.
+  - [x] Benchmark compaction throughput and resulting slab sizes.
 
 ### 6) Multi-Level Slab Tiering — Lower impact on write hot path
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
@@ -420,3 +420,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,096,048,775 / 1,094,267,494 / 1,098,301,409 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_disableall_per_slab_cpu.prof` (pprof top captured; runtime.madvise + memmove).
   - Merged into `slab-opt-rc` (ff at `d5527a4`).
+- #5 compaction slab size metrics (in progress): created `slab-opt-05-compaction-slabsize` to report total slab bytes and slab file count in the compaction benchmark.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,092,365,742 / 1,089,037,312 / 1,092,686,982 ns/op.
+  - Replay after change: 1,102,441,619 / 1,100,455,092 / 1,102,164,867 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_slabsize_cpu.prof` (pprof top captured; runtime.madvise + memmove).
+  - Compaction bench: 58,438,520 ns/op; `slab_bytes_total=1,096,896`, `slab_file_count=5`, `slab_write_bytes=1,088,896`, `slab_dead_bytes=67,735`.

@@ -4,11 +4,35 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/slab"
 )
+
+func sumSlabBytes(dir string) (int64, int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0
+	}
+	var total int64
+	count := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "data-") || !strings.HasSuffix(name, ".slab") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		total += info.Size()
+		count++
+	}
+	return total, count
+}
 
 func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	if runtime.GOOS == "windows" {
@@ -23,6 +47,8 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	updated := bytes.Repeat([]byte("u"), 1024)
 
 	var lastStats IndexSwapCompactionStats
+	var lastSlabBytes int64
+	var lastSlabCount int
 
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -86,6 +112,7 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 		b.StopTimer()
 
 		lastStats = stats
+		lastSlabBytes, lastSlabCount = sumSlabBytes(dir)
 		if err := d.Close(); err != nil {
 			b.Fatalf("Close: %v", err)
 		}
@@ -147,5 +174,11 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	}
 	if lastStats.ShiftOverrideBytes > 0 {
 		b.ReportMetric(float64(lastStats.ShiftOverrideBytes), "shift_override_bytes")
+	}
+	if lastSlabBytes > 0 {
+		b.ReportMetric(float64(lastSlabBytes), "slab_bytes_total")
+	}
+	if lastSlabCount > 0 {
+		b.ReportMetric(float64(lastSlabCount), "slab_file_count")
 	}
 }
