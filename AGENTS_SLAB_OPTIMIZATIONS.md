@@ -425,3 +425,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,102,441,619 / 1,100,455,092 / 1,102,164,867 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_slabsize_cpu.prof` (pprof top captured; runtime.madvise + memmove).
   - Compaction bench: 58,438,520 ns/op; `slab_bytes_total=1,096,896`, `slab_file_count=5`, `slab_write_bytes=1,088,896`, `slab_dead_bytes=67,735`.
+  - Merged into `slab-opt-rc` (ff at `7a73fde`).
