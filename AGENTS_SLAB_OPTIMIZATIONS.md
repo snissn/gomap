@@ -465,4 +465,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,109,113,231 / 1,124,107,619 / 1,111,100,367 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_builddict_guard_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Compaction bench after change: 95,135,503 / 93,453,240 / 95,470,024 ns/op; no BuildDict panic.
-  - Merged into `slab-opt-rc` (ff pending).
+  - Merged into `slab-opt-rc` (ff at `3721a67`).
