@@ -459,3 +459,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shift_rawlen_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Compaction bench baseline attempt: `BenchmarkCompactionIndexSwapPointerValues` panicked (`zstd BuildDict` divide-by-zero) on slab-opt-rc; needs investigation before compaction bench comparisons.
   - Commit: `158d83b`.
+  - Merged into `slab-opt-rc` (ff at `ebde683`).
