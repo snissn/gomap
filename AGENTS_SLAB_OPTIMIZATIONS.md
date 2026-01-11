@@ -148,6 +148,7 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
 - Checklist:
   - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
   - **Do not** use a dummy/single-sample dict (e.g., `buildRawDict(sample)`). The dict must be batch‑trained from multiple values (zstd BuildDict or equivalent), and gated by a measured ratio improvement.
+  - Avoid naive implementations that waste time without plausibly improving bytes or syscalls; if the approach is not batch‑trained and ratio‑gated, do not proceed.
   - [ ] Spec compliance: implement Slab V2 header/zone layout as described.
   - [ ] Read path: O(1) dict selection; zero-copy dict slices from mmap.
   - [ ] Write path: zone headers + dict write policy.
