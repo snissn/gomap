@@ -41,6 +41,9 @@ type IndexSwapCompactionOptions struct {
 	// SampleCompressionDict enables a pre-pass that selects a representative slab
 	// and trains a dictionary on its values for compaction analysis.
 	SampleCompressionDict bool
+	// ApplyCompressionShiftPlan uses the sampled shift points to bypass
+	// compression for windows where the dict ratio degrades.
+	ApplyCompressionShiftPlan bool
 
 	// Stats captures timing and byte counters for the compaction run.
 	Stats *IndexSwapCompactionStats
@@ -73,6 +76,9 @@ type IndexSwapCompactionStats struct {
 	SampleShiftAvgRatio   float64
 	SampleShiftBytes      uint64
 	SampleShiftRecords    uint64
+
+	ShiftOverrideRecords uint64
+	ShiftOverrideBytes   uint64
 }
 
 // CompactSlabsIndexSwap compacts one or more slab files by rebuilding the user
@@ -171,6 +177,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	baseSnap := db.AcquireSnapshot()
 	defer func() { _ = baseSnap.Close() }()
 
+	var shiftOverride *compactionShiftOverride
 	if opts.SampleCompressionDict && stats != nil && db.slabManager.Compression() == slab.CompressionZSTD {
 		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
 			sampleStart := time.Now()
@@ -231,6 +238,13 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 						stats.SampleShiftAvgRatio = shiftPlan.avgRatio
 						stats.SampleShiftBytes = shiftPlan.shiftBytes
 						stats.SampleShiftRecords = shiftPlan.shiftRecords
+						if opts.ApplyCompressionShiftPlan && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
+							shiftOverride = &compactionShiftOverride{
+								slabID:         bestID,
+								plan:           shiftPlan,
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
 					}
 				}
 			}
@@ -239,7 +253,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	}
 
 	lim := newIndexSwapLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
-	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist)
+	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist, shiftOverride)
 	buildStart := time.Now()
 	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
@@ -250,6 +264,8 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		stats.RemapBytes = remapIter.remapBytes
 		stats.SlabWriteBytes = remapIter.metrics.SlabWriteBytes
 		stats.SlabDeadBytes = remapIter.metrics.SlabDeadBytes
+		stats.ShiftOverrideRecords = remapIter.shiftOverrideRecords
+		stats.ShiftOverrideBytes = remapIter.shiftOverrideBytes
 	}
 	iterErr := remapIter.Error()
 	_ = remapIter.Close()
@@ -547,19 +563,24 @@ type indexSwapRemapIterator struct {
 	targets map[uint32]struct{}
 	lim     *indexSwapLimiter
 	assist  func()
+	shift   *compactionShiftOverride
 
 	metrics adaptive.Metrics
 	remap   map[page.ValuePtr]page.ValuePtr
 	err     error
 
-	remapCount uint64
-	remapBytes uint64
+	remapCount           uint64
+	remapBytes           uint64
+	shiftPointIdx        int
+	shiftRawBytes        uint64
+	shiftOverrideBytes   uint64
+	shiftOverrideRecords uint64
 
 	lastAssist       time.Time
 	bytesSinceAssist int64
 }
 
-func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func()) *indexSwapRemapIterator {
+func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func(), shift *compactionShiftOverride) *indexSwapRemapIterator {
 	it := &indexSwapRemapIterator{
 		ctx:     ctx,
 		under:   under,
@@ -567,6 +588,7 @@ func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterato
 		targets: targets,
 		lim:     lim,
 		assist:  assist,
+		shift:   shift,
 	}
 	it.lastAssist = time.Now()
 	return it
@@ -645,7 +667,13 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.bytesSinceAssist += int64(recordBytes)
 	it.maybeAssist(false)
 
-	newPtr, err := it.db.slabManager.Append(key, value)
+	disableCompression := it.shouldDisableCompression(ptr, value)
+	appendOpts := slab.AppendOptions{
+		DisableCompression: disableCompression,
+		SkipTraining:       true,
+		SkipMetrics:        true,
+	}
+	newPtr, err := it.db.slabManager.AppendWithOptions(key, value, appendOpts)
 	if err != nil {
 		it.err = err
 		return nil, page.ValuePtr{}, 0
@@ -673,6 +701,53 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(ptr))
 
 	return nil, newPtr, flags
+}
+
+func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, value []byte) bool {
+	shift := it.shift
+	if shift == nil || ptr.FileID != shift.slabID || len(shift.plan.points) == 0 || shift.plan.windowBytes == 0 {
+		return false
+	}
+
+	rawLen := len(value)
+	if shift.maxRecordBytes > 0 && rawLen > shift.maxRecordBytes {
+		rawLen = shift.maxRecordBytes
+	}
+	if rawLen <= 0 {
+		return false
+	}
+
+	start := it.shiftRawBytes
+	end := start + uint64(rawLen)
+
+	for it.shiftPointIdx < len(shift.plan.points) {
+		point := shift.plan.points[it.shiftPointIdx]
+		windowEnd := point.rawBytes
+		windowStart := uint64(0)
+		if shift.plan.windowBytes > 0 && windowEnd > shift.plan.windowBytes {
+			windowStart = windowEnd - shift.plan.windowBytes
+		}
+		if end <= windowStart {
+			break
+		}
+		if start < windowEnd && end > windowStart {
+			it.shiftRawBytes = end
+			if end >= windowEnd {
+				it.shiftPointIdx++
+			}
+			it.shiftOverrideRecords++
+			it.shiftOverrideBytes += uint64(rawLen)
+			return true
+		}
+		if start >= windowEnd {
+			it.shiftPointIdx++
+			continue
+		}
+		break
+	}
+
+	it.shiftRawBytes = end
+	return false
 }
 
 func (it *indexSwapRemapIterator) Key() []byte   { return it.under.Key() }
@@ -717,6 +792,13 @@ type compactionShiftPlan struct {
 	shiftBytes   uint64
 	shiftRecords uint64
 	shiftCount   uint64
+	windowBytes  uint64
+}
+
+type compactionShiftOverride struct {
+	slabID         uint32
+	plan           compactionShiftPlan
+	maxRecordBytes int
 }
 
 const (
@@ -935,6 +1017,7 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 	if windowBytes < compactionShiftMinWindowBytes {
 		windowBytes = compactionShiftMinWindowBytes
 	}
+	plan := compactionShiftPlan{windowBytes: uint64(windowBytes)}
 
 	stride := cfg.SampleStride
 	if stride <= 1 {
@@ -951,7 +1034,6 @@ func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint
 	defer enc.Close()
 
 	var (
-		plan          compactionShiftPlan
 		windowRaw     int
 		windowStored  int
 		windowRecords int

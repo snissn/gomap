@@ -281,17 +281,31 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return decodeValue(ptr, val, compression)
 }
 
+type AppendOptions struct {
+	DisableCompression bool
+	SkipTraining       bool
+	SkipMetrics        bool
+}
+
 func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
+	return sm.AppendWithOptions(key, value, AppendOptions{})
+}
+
+func (sm *SlabManager) AppendWithOptions(key, value []byte, opts AppendOptions) (page.ValuePtr, error) {
+	return sm.appendWithOptions(key, value, opts)
+}
+
+func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) (page.ValuePtr, error) {
 	encoded := value
 	encodedKey := key
 	compressed := false
 	fullCompressed := false
 	omittedKey := false
 	var err error
-	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
+	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		sm.compressionTrainer.collect(value)
 	}
-	if sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
+	if !opts.DisableCompression && sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
 		// Try full record compression first
 		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
 			encoded = enc
@@ -338,7 +352,7 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, err
 	}
 
-	if sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone {
+	if !opts.SkipMetrics && !opts.DisableCompression && sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone {
 		compressedCount := 0
 		fullCount := 0
 		if compressed {

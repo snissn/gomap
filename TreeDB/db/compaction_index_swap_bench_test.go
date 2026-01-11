@@ -70,8 +70,9 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 		stats := IndexSwapCompactionStats{}
 		b.StartTimer()
 		if err := d.CompactSlabsIndexSwap(context.Background(), []uint32{0}, IndexSwapCompactionOptions{
-			Stats:                 &stats,
-			SampleCompressionDict: true,
+			Stats:                     &stats,
+			SampleCompressionDict:     true,
+			ApplyCompressionShiftPlan: true,
 		}); err != nil {
 			b.StopTimer()
 			_ = d.Close()
@@ -123,5 +124,11 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	}
 	if lastStats.SampleShiftRecords > 0 {
 		b.ReportMetric(float64(lastStats.SampleShiftRecords), "sample_shift_records")
+	}
+	if lastStats.ShiftOverrideRecords > 0 {
+		b.ReportMetric(float64(lastStats.ShiftOverrideRecords), "shift_override_records")
+	}
+	if lastStats.ShiftOverrideBytes > 0 {
+		b.ReportMetric(float64(lastStats.ShiftOverrideBytes), "shift_override_bytes")
 	}
 }

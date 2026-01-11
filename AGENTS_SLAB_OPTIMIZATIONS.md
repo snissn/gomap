@@ -388,3 +388,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,200,270,692 / 1,194,599,292 / 1,264,326,331 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shifts_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Merged into `slab-opt-rc` (ff at `87489be`).
+- #5 shift override MVA (in progress): created `slab-opt-05-two-pass-compaction-shift-override` to use sampled shift points to skip compression in degraded windows (compaction-only). Added `AppendWithOptions` to skip training/metrics during compaction writes.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,087,454,077 / 1,096,498,771 / 1,088,562,085 ns/op.
+  - Replay after change: 1,087,530,396 / 1,094,255,072 / 1,088,504,792 ns/op.
+  - CPU profile (baseline): `/tmp/treedb_ptrvalues_cpu_shift_override_base.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_cpu_shift_override_after.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - Compaction bench baseline: 28,770,767 / 27,428,449 / 27,072,744 ns/op.
+  - Compaction bench after: 28,759,624 / 28,537,699 / 28,305,220 ns/op.
+  - Shift override counters stayed at 0 in benchmark (no degraded windows triggered).
