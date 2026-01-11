@@ -115,6 +115,7 @@ Target is convergence, not a binary accept/reject mindset.
 - Treat “rejected for now” as a last resort:
   - first try to salvage by reducing scope, gating behind opt-in, tuning thresholds, or adjusting the benchmark to better match the real workload.
 - Keep the repository in a good state after each iteration (tests passing, benchmarks reproducible).
+- General directive: do not pursue naive or obviously low-signal work. Every iteration should have a clear, credible path to improving bytes, syscalls, or measurable runtime.
 
 ## Acceptance bar (avoid “noise wins”)
 
