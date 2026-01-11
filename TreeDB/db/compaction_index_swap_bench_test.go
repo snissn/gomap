@@ -109,4 +109,19 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	if lastStats.SampleRecords > 0 {
 		b.ReportMetric(float64(lastStats.SampleRecords), "sample_records")
 	}
+	if lastStats.SampleShiftPoints > 0 {
+		b.ReportMetric(float64(lastStats.SampleShiftPoints), "sample_shift_points")
+	}
+	if lastStats.SampleShiftWorstRatio > 0 {
+		b.ReportMetric(lastStats.SampleShiftWorstRatio, "sample_shift_worst_ratio")
+	}
+	if lastStats.SampleShiftAvgRatio > 0 {
+		b.ReportMetric(lastStats.SampleShiftAvgRatio, "sample_shift_avg_ratio")
+	}
+	if lastStats.SampleShiftBytes > 0 {
+		b.ReportMetric(float64(lastStats.SampleShiftBytes), "sample_shift_bytes")
+	}
+	if lastStats.SampleShiftRecords > 0 {
+		b.ReportMetric(float64(lastStats.SampleShiftRecords), "sample_shift_records")
+	}
 }

@@ -67,6 +67,12 @@ type IndexSwapCompactionStats struct {
 	SampleDictBytes uint64
 	SampleDictHash  uint64
 	SampleDictRatio float64
+
+	SampleShiftPoints     uint64
+	SampleShiftWorstRatio float64
+	SampleShiftAvgRatio   float64
+	SampleShiftBytes      uint64
+	SampleShiftRecords    uint64
 }
 
 // CompactSlabsIndexSwap compacts one or more slab files by rebuilding the user
@@ -213,6 +219,19 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					stats.SampleDictBytes = best.dictBytes
 					stats.SampleDictHash = best.dictHash
 					stats.SampleDictRatio = best.dictRatio
+
+					if best.dictBytes > 0 && len(best.dict) > 0 && best.dictRatio > 0 {
+						shiftPlan, err := collectCompactionShiftPlan(ctx, baseSnap, bestID, cfg, best.dict, best.dictRatio)
+						if err != nil {
+							cleanupNewPager()
+							return err
+						}
+						stats.SampleShiftPoints = shiftPlan.shiftCount
+						stats.SampleShiftWorstRatio = shiftPlan.worstRatio
+						stats.SampleShiftAvgRatio = shiftPlan.avgRatio
+						stats.SampleShiftBytes = shiftPlan.shiftBytes
+						stats.SampleShiftRecords = shiftPlan.shiftRecords
+					}
 				}
 			}
 			stats.SampleNanos = uint64(time.Since(sampleStart))
@@ -682,7 +701,30 @@ type compactionDictSample struct {
 	dictBytes uint64
 	dictHash  uint64
 	dictRatio float64
+	dict      []byte
 }
+
+type compactionShiftPoint struct {
+	records  uint64
+	rawBytes uint64
+	ratio    float64
+}
+
+type compactionShiftPlan struct {
+	points       []compactionShiftPoint
+	worstRatio   float64
+	avgRatio     float64
+	shiftBytes   uint64
+	shiftRecords uint64
+	shiftCount   uint64
+}
+
+const (
+	compactionShiftWindowDivisor  = 4
+	compactionShiftMinWindowBytes = 128 << 10
+	compactionShiftRatioTolerance = 0.15
+	compactionShiftMaxPoints      = 16
+)
 
 func selectCompactionSampleSlab(ctx context.Context, snap *Snapshot, targets map[uint32]struct{}) (uint32, bool, error) {
 	ids, err := selectCompactionSampleSlabs(ctx, snap, targets, 1)
@@ -874,7 +916,112 @@ func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uin
 	}
 	sample.dictBytes = uint64(len(dict))
 	sample.dictHash = xxhash.Sum64(dict)
+	sample.dict = dict
 	return sample, nil
+}
+
+func collectCompactionShiftPlan(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, dict []byte, baseRatio float64) (compactionShiftPlan, error) {
+	if snap == nil || snap.idx == nil {
+		return compactionShiftPlan{}, errors.New("compaction: missing base snapshot")
+	}
+	if len(dict) == 0 || baseRatio <= 0 {
+		return compactionShiftPlan{}, nil
+	}
+	if cfg.MinRecords <= 0 {
+		return compactionShiftPlan{}, nil
+	}
+
+	windowBytes := cfg.TrainBytes / compactionShiftWindowDivisor
+	if windowBytes < compactionShiftMinWindowBytes {
+		windowBytes = compactionShiftMinWindowBytes
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return compactionShiftPlan{}, err
+	}
+	defer enc.Close()
+
+	var (
+		plan          compactionShiftPlan
+		windowRaw     int
+		windowStored  int
+		windowRecords int
+		totalRaw      uint64
+		totalRecords  uint64
+		strideCounter int
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+
+		windowRaw += len(value)
+		windowStored += len(enc.EncodeAll(value, nil))
+		windowRecords++
+		totalRaw += uint64(len(value))
+		totalRecords++
+
+		if windowRaw >= windowBytes && windowRecords >= cfg.MinRecords {
+			ratio := float64(windowStored) / float64(windowRaw)
+			if ratio > baseRatio*(1.0+compactionShiftRatioTolerance) {
+				plan.shiftCount++
+				if len(plan.points) < compactionShiftMaxPoints {
+					plan.points = append(plan.points, compactionShiftPoint{
+						records:  totalRecords,
+						rawBytes: totalRaw,
+						ratio:    ratio,
+					})
+				}
+				plan.shiftBytes += uint64(windowRaw)
+				plan.shiftRecords += uint64(windowRecords)
+				plan.avgRatio += ratio
+				if ratio > plan.worstRatio {
+					plan.worstRatio = ratio
+				}
+			}
+			windowRaw = 0
+			windowStored = 0
+			windowRecords = 0
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return plan, err
+	}
+	if plan.shiftCount > 0 {
+		plan.avgRatio /= float64(plan.shiftCount)
+	}
+	return plan, nil
 }
 
 func entriesEquivalent(base node.LeafEntry, baseErr error, curr node.LeafEntry, currErr error) bool {

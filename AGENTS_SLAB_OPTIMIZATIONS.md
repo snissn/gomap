@@ -383,3 +383,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,116,485,244 / 1,116,215,229 / 1,113,700,165 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_globaldict_cpu.prof` (pprof top captured; runtime.madvise + sort hotspots).
   - Merged into `slab-opt-rc` (ff at `1ab58e9`).
+- #5 shift-point detection (in progress): created `slab-opt-05-two-pass-compaction-shifts` to compute per-window compression shift points during compaction sampling (stats only; no write-path change).
+  - Baseline replay (ptr-values, slab-opt-rc): 1,116,327,796 / 1,117,791,435 / 1,189,977,998 ns/op.
+  - Replay after change: 1,200,270,692 / 1,194,599,292 / 1,264,326,331 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_shifts_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
