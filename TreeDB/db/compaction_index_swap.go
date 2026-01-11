@@ -107,6 +107,7 @@ type IndexSwapCompactionStats struct {
 
 	ShiftOverrideRecords uint64
 	ShiftOverrideBytes   uint64
+	DisableAllSlabs      uint64
 }
 
 type compactionShiftTuning struct {
@@ -245,7 +246,8 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		disableAll      map[uint32]compactionDisableAllOverride
 		baseRatioBySlab map[uint32]compactionBaseRatioSample
 	)
-	if opts.SampleCompressionDict && stats != nil && db.slabManager.Compression() == slab.CompressionZSTD {
+	needsSampling := opts.SampleCompressionDict || opts.ApplyCompressionShiftPlan || opts.DisableCompressionIfBaseRatioGTE > 0
+	if needsSampling && db.slabManager.Compression() == slab.CompressionZSTD {
 		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
 			sampleStart := time.Now()
 			candidates, err := selectCompactionSampleSlabs(ctx, baseSnap, targets, 4)
@@ -254,11 +256,14 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 				return err
 			}
 			if len(candidates) > 0 {
+				buildDict := opts.SampleCompressionDict
 				if opts.DisableCompressionIfBaseRatioGTE > 0 {
 					disableAll = make(map[uint32]compactionDisableAllOverride, len(candidates))
 					baseRatioBySlab = make(map[uint32]compactionBaseRatioSample, len(candidates))
 				}
-				stats.SampleCandidates = uint64(len(candidates))
+				if stats != nil {
+					stats.SampleCandidates = uint64(len(candidates))
+				}
 				var (
 					best       compactionDictSample
 					bestID     uint32
@@ -267,7 +272,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					bestDict   compactionDictSample
 					bestDictID uint32
 				)
-				samples, err := collectCompactionSampleSet(ctx, baseSnap, candidates, cfg, db.slabManager.EstimateCompression)
+				samples, err := collectCompactionSampleSet(ctx, baseSnap, candidates, cfg, buildDict, db.slabManager.EstimateCompression)
 				if err != nil {
 					cleanupNewPager()
 					return err
@@ -283,7 +288,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 						bestID = sampleSlabID
 						bestFound = true
 					}
-					if sample.dictBytes > 0 && sample.dictRatio > 0 {
+					if buildDict && sample.dictBytes > 0 && sample.dictRatio > 0 {
 						if !dictFound || sample.dictRatio < bestDict.dictRatio {
 							bestDict = sample
 							bestDictID = sampleSlabID
@@ -309,37 +314,22 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 					bestID = bestDictID
 				}
 				if bestFound {
-					stats.SampleSlabID = bestID
-					stats.SampleBytes = best.bytes
-					stats.SampleRecords = best.records
-					stats.SampleDictBytes = best.dictBytes
-					stats.SampleDictHash = best.dictHash
-					stats.SampleDictRatio = best.dictRatio
-
-					var (
-						baseRatio   float64
-						baseRaw     uint64
-						baseStored  uint64
-						baseRecords uint64
-						err         error
-					)
-					if sample, ok := baseRatioBySlab[bestID]; ok {
-						baseRatio = sample.ratio
-						baseRaw = sample.raw
-						baseStored = sample.stored
-						baseRecords = sample.records
-					} else {
-						baseRatio, baseRaw, baseStored, baseRecords, err = collectCompactionCompressionRatio(ctx, baseSnap, bestID, cfg, db.slabManager.EstimateCompression)
-						if err != nil {
-							cleanupNewPager()
-							return err
+					var baseRatio float64
+					if bundle, ok := samples[bestID]; ok {
+						baseRatio = bundle.baseRatio
+						if stats != nil {
+							stats.SampleSlabID = bestID
+							stats.SampleBytes = best.bytes
+							stats.SampleRecords = best.records
+							stats.SampleDictBytes = best.dictBytes
+							stats.SampleDictHash = best.dictHash
+							stats.SampleDictRatio = best.dictRatio
+							stats.SampleBaseBytes = bundle.baseRaw
+							stats.SampleBaseStored = bundle.baseStored
+							stats.SampleBaseRecords = bundle.baseRecords
+							stats.SampleBaseRatio = bundle.baseRatio
 						}
 					}
-					stats.SampleBaseBytes = baseRaw
-					stats.SampleBaseStored = baseStored
-					stats.SampleBaseRecords = baseRecords
-					stats.SampleBaseRatio = baseRatio
-
 					_, disableAllBest := disableAll[bestID]
 					if !disableAllBest && baseRatio > 0 {
 						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)
@@ -347,21 +337,13 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 							cleanupNewPager()
 							return err
 						}
-						stats.SampleShiftPoints = shiftPlan.shiftCount
-						stats.SampleShiftWorstRatio = shiftPlan.worstRatio
-						stats.SampleShiftAvgRatio = shiftPlan.avgRatio
-						stats.SampleShiftBytes = shiftPlan.shiftBytes
-						stats.SampleShiftRecords = shiftPlan.shiftRecords
-						shiftSample, err := collectCompactionShiftDictSample(ctx, baseSnap, bestID, cfg, shiftPlan, db.slabManager.EstimateCompression)
-						if err != nil {
-							cleanupNewPager()
-							return err
+						if stats != nil {
+							stats.SampleShiftPoints = shiftPlan.shiftCount
+							stats.SampleShiftWorstRatio = shiftPlan.worstRatio
+							stats.SampleShiftAvgRatio = shiftPlan.avgRatio
+							stats.SampleShiftBytes = shiftPlan.shiftBytes
+							stats.SampleShiftRecords = shiftPlan.shiftRecords
 						}
-						stats.SampleShiftDictSampleBytes = shiftSample.bytes
-						stats.SampleShiftDictSampleRecords = shiftSample.records
-						stats.SampleShiftDictBytes = shiftSample.dictBytes
-						stats.SampleShiftDictHash = shiftSample.dictHash
-						stats.SampleShiftDictRatio = shiftSample.dictRatio
 						if opts.ApplyCompressionShiftPlan && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
 							shiftOverride = &compactionShiftOverride{
 								slabID:         bestID,
@@ -369,10 +351,27 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 								maxRecordBytes: cfg.MaxRecordBytes,
 							}
 						}
+						if buildDict && stats != nil {
+							shiftSample, err := collectCompactionShiftDictSample(ctx, baseSnap, bestID, cfg, shiftPlan, db.slabManager.EstimateCompression)
+							if err != nil {
+								cleanupNewPager()
+								return err
+							}
+							stats.SampleShiftDictSampleBytes = shiftSample.bytes
+							stats.SampleShiftDictSampleRecords = shiftSample.records
+							stats.SampleShiftDictBytes = shiftSample.dictBytes
+							stats.SampleShiftDictHash = shiftSample.dictHash
+							stats.SampleShiftDictRatio = shiftSample.dictRatio
+						}
 					}
 				}
+				if stats != nil && len(disableAll) > 0 {
+					stats.DisableAllSlabs = uint64(len(disableAll))
+				}
 			}
-			stats.SampleNanos = uint64(time.Since(sampleStart))
+			if stats != nil {
+				stats.SampleNanos = uint64(time.Since(sampleStart))
+			}
 		}
 	}
 
@@ -1062,7 +1061,7 @@ type compactionSampleAccumulator struct {
 	done          bool
 }
 
-func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates []uint32, cfg slab.CompressionTrainConfig, estimate func([]byte, []byte) (int, int, error)) (map[uint32]compactionSampleBundle, error) {
+func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates []uint32, cfg slab.CompressionTrainConfig, buildDict bool, estimate func([]byte, []byte) (int, int, error)) (map[uint32]compactionSampleBundle, error) {
 	if snap == nil || snap.idx == nil {
 		return nil, errors.New("compaction: missing base snapshot")
 	}
@@ -1153,7 +1152,7 @@ func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates 
 
 	out := make(map[uint32]compactionSampleBundle, len(accs))
 	for id, acc := range accs {
-		sample := buildCompactionDictSample(id, cfg, acc.samples, acc.sampleBytes, acc.sampleRecords)
+		sample := buildCompactionDictSample(id, cfg, acc.samples, acc.sampleBytes, acc.sampleRecords, buildDict)
 		ratio := 0.0
 		if acc.rawBytes > 0 {
 			ratio = float64(acc.storedBytes) / float64(acc.rawBytes)
@@ -1179,12 +1178,12 @@ func safeBuildZstdDict(opts zstd.BuildDictOptions) (dict []byte, err error) {
 	return zstd.BuildDict(opts)
 }
 
-func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, samples [][]byte, sampleBytes, sampleRecords uint64) compactionDictSample {
+func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, samples [][]byte, sampleBytes, sampleRecords uint64, buildDict bool) compactionDictSample {
 	sample := compactionDictSample{
 		bytes:   sampleBytes,
 		records: sampleRecords,
 	}
-	if sampleRecords < uint64(cfg.MinRecords) {
+	if !buildDict || sampleRecords < uint64(cfg.MinRecords) {
 		return sample
 	}
 
@@ -1668,7 +1667,7 @@ func collectCompactionShiftDictSample(ctx context.Context, snap *Snapshot, slabI
 	if err := iter.Error(); err != nil {
 		return compactionDictSample{}, err
 	}
-	return buildCompactionDictSample(slabID, cfg, samples, sampleBytes, sampleRecords), nil
+	return buildCompactionDictSample(slabID, cfg, samples, sampleBytes, sampleRecords, true), nil
 }
 
 func entriesEquivalent(base node.LeafEntry, baseErr error, curr node.LeafEntry, currErr error) bool {

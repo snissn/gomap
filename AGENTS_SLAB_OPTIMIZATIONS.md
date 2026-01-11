@@ -466,3 +466,8 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_builddict_guard_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Compaction bench after change: 95,135,503 / 93,453,240 / 95,470,024 ns/op; no BuildDict panic.
   - Merged into `slab-opt-rc` (ff at `3721a67`).
+- #5 compaction sampling decouple (in progress): created `slab-opt-05-compaction-sample-nodict` to skip dict builds unless `SampleCompressionDict` is set and allow shift/disable sampling without stats.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,102,073,592 / 1,104,145,597 / 1,103,868,783 ns/op.
+  - Replay after change: 1,103,362,965 / 1,112,591,611 / 1,100,120,460 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_sample_nodict_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
+  - Added compaction stats: `disable_all_slabs`.

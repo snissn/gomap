@@ -187,6 +187,9 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 	if lastStats.ShiftOverrideBytes > 0 {
 		b.ReportMetric(float64(lastStats.ShiftOverrideBytes), "shift_override_bytes")
 	}
+	if lastStats.DisableAllSlabs > 0 {
+		b.ReportMetric(float64(lastStats.DisableAllSlabs), "disable_all_slabs")
+	}
 	if lastSlabBytes > 0 {
 		b.ReportMetric(float64(lastSlabBytes), "slab_bytes_total")
 	}
