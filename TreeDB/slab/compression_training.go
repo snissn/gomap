@@ -224,14 +224,6 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	if slabID != t.globalSlabID {
 		t.globalSlabID = slabID
 		t.globalDictHash = 0
-		t.dictHashes = nil
-		t.dictHashPos = 0
-		t.dictHashIndex = nil
-		t.dictCacheHashes = nil
-		t.dictCacheDicts = nil
-		t.dictCacheDictHashes = nil
-		t.dictCachePos = 0
-		t.dictCacheIndex = nil
 	}
 	t.sampleBytes = 0
 	t.sampleRecords = 0
