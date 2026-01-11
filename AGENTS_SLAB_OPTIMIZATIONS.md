@@ -22,8 +22,8 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 - RC branch: `slab-opt-rc` (head recorded in Work Log)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
-- Rejected: #1 multistream (`73d27d5` + `747bc86`), #6 tiering (`41f25a2` + `4cf2036`)
-- Pending: #2, #4–#5, #7–#8
+- Rejected: #1 multistream (`73d27d5` + `747bc86`), #2 zonal dicts (`d89e813` + `8083f3f`), #4 dict dedup (`77e5325` + `5836b5f`), #6 tiering (`41f25a2` + `4cf2036`)
+- Pending: #5, #7–#8
 
 ## Compatibility stance (Alpha)
 
@@ -162,7 +162,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [ ] Bench + server trace comparison.
 
 ### 4) Dictionary Deduplication — Medium impact / medium risk
-- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
 - Branch: `slab-opt-04-dict-dedup`
 - Checklist:
   - **MVA:** implement exact-hash dedup only (no similarity); measure wins on real slabs.
@@ -366,3 +366,10 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup13_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
   - Revert commit `42f4399` (attempt `6b829c2`), baseline confirm: 1,087,125,333 / 1,111,748,232 / 1,090,661,698 ns/op.
   - Merged into `slab-opt-rc` (ff at `e86bdc9`); #4 remains in_progress.
+- #4 dict dedup dict-ID hash (rejected): created `slab-opt-04-dict-dedup-14-dictid-hash` to hash dictionary content with the zstd dict ID masked out.
+  - Baseline replay (ptr-values, slab-opt-rc): 1,083,164,771 / 1,087,333,436 / 1,086,565,633 ns/op.
+  - Replay after change: 1,088,002,646 / 1,088,722,655 / 1,088,394,851 ns/op.
+  - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup14_cpu.prof` (pprof top captured; runtime.madvise + skiplist hot).
+  - Training replay (`TREEDB_TRACE_REPORT_TRAINER_STATS=1`, `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES=1048576`) reports `train_dedup_*` metrics at 0 (no dedup hits).
+  - Revert commit `5836b5f` (attempt `77e5325`), baseline confirm: 1,089,078,675 / 1,086,773,159 / 1,088,233,548 ns/op.
+  - Marked #4 rejected (no dedup hits across attempts).
