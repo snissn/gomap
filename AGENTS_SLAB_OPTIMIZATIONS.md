@@ -373,7 +373,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Training replay (`TREEDB_TRACE_REPORT_TRAINER_STATS=1`, `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO=0.98`, `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES=1048576`) reports `train_dedup_*` metrics at 0 (no dedup hits).
   - Revert commit `5836b5f` (attempt `77e5325`), baseline confirm: 1,089,078,675 / 1,086,773,159 / 1,088,233,548 ns/op.
   - Marked #4 rejected (no dedup hits across attempts); merged into `slab-opt-rc` (ff at `583e5e5`).
-- #5 two-pass compaction dict sampling (in progress): created `slab-opt-05-two-pass-compaction-dict-sample` off `slab-opt-rc` to select a representative slab and train a zstd dict for compaction analysis (stats only).
+- #5 two-pass compaction dict sampling (in progress): created `slab-opt-05-two-pass-compaction-dict-sample` off `slab-opt-rc` to select a representative slab and train a zstd dict for compaction analysis (stats only). Commit: `df75463`.
   - Baseline replay (ptr-values, slab-opt-rc): 1,087,483,889 / 1,086,038,341 / 1,085,825,986 ns/op.
   - Replay after change: 1,092,321,165 / 1,105,215,262 / 1,104,712,540 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_dict_sample_cpu.prof` (pprof top captured; runtime.madvise + memmove hot).
