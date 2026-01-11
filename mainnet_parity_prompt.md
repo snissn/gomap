@@ -1,5 +1,12 @@
 You are a Codex agent working in the `gomap` repo. Your mission is to optimize TreeDB’s **pointer-values / slab-heavy** mode for Celestia workloads.
 
+## Current directive (IMPORTANT)
+
+Work **ONLY** on item **#2** in `AGENTS_SLAB_OPTIMIZATIONS.md`:
+- **2) Local Dictionary Compression (Zonal Dictionaries / Slab V2)**
+
+Do not start, continue, or iterate on any other numbered item in the punch list until #2 is completed.
+
 Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checklist, and work log. Treat it as your TODO list and update it continuously.
 
 ## Compatibility stance (Alpha)
@@ -44,13 +51,11 @@ Follow `AGENTS_SLAB_OPTIMIZATIONS.md` as the authoritative issue tracker, checkl
    - If you hit a true external blocker (e.g. you cannot access the Linux server at all), still create a branch, do the smallest safe spike you can locally, record the blocker, then reject-for-now via a revert and move on.
 
 6) **Stop condition**
-   - Only stop (create `SLAB_WORK_HALT`) when every punch-list item is either:
-     - **accepted**, or
-     - **rejected for now** with a recorded attempt (commits) and a revert merged into `slab-opt-rc`.
+   - Stop (create `SLAB_WORK_HALT`) immediately after #2 is completed (accepted or rejected-for-now with attempt+revert).
    - `SLAB_WORK_HALT` must contain:
      - final RC branch name + head SHA
      - summary of accepted optimizations + benchmark deltas
-     - what remains and why it was rejected
+     - a short note that work halted after #2 by instruction
    - Once `SLAB_WORK_HALT` exists, do not continue work.
 
 ## Execution loop (what to do now)

@@ -22,7 +22,8 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 - RC branch: `slab-opt-rc` (head recorded in Work Log)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
-- Rejected: #1 multistream (`73d27d5` + `747bc86`), #2 zonal dicts (`d89e813` + `8083f3f`), #4 dict dedup (`77e5325` + `5836b5f`), #6 tiering (`41f25a2` + `4cf2036`)
+- In progress: #2 zonal dicts (re-opened; prior attempt ended in a benchmark abort, not a perf conclusion)
+- Rejected: #1 multistream (`73d27d5` + `747bc86`), #4 dict dedup (`77e5325` + `5836b5f`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #5, #7–#8
 
 ## Compatibility stance (Alpha)
@@ -126,6 +127,10 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 
 ## Optimization punch list (ordered; update statuses as you go)
 
+## Current directive (IMPORTANT)
+
+Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary compression). Do not start, continue, or iterate on any other numbered item.
+
 ### 1) Multi-Stream Slabs (Parallel Writing) — High impact / medium risk
 - Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
 - Branch: `slab-opt-01-multistream`
@@ -139,7 +144,7 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - [x] Decide: accept (merge) or reject (revert) and document.
 
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
-- Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
+- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
   - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
@@ -235,6 +240,11 @@ If the change is Linux-only, acceptance should be based on Linux server results 
 - #6 tiering MVA (rejected): `slab: mark inactive slabs read-only` (`41f25a2`) then reverted (`4cf2036`); results recorded in `log: record slab tiering attempt` (`75c4202`).
 - #9 hugepage hint (accepted): `Hint huge pages for slab mmaps` (`26a4a4b`); Linux-only, needs validation on Linux server in `celestia_testing_info.md`.
 - Policy update: do not use “deferred”. Any older “defer …” placeholder commits in history do not count as completed work; remaining items must be revisited with an MVA + benchmark and end as accepted or rejected-for-now (attempt+revert).
+
+### 2026-01-11
+- The worker loop drifted out of order (spent a long time iterating on #5 compaction tooling before completing #2). This was flagged as undesirable and the worker was stopped.
+- The prior #2 attempt was marked “rejected” due to a benchmark abort (`record too large`), not due to a conclusive perf regression; #2 is re-opened as in-progress and should be the sole focus until completed.
+- The worker was killed while the tree was already clean (no local uncommitted WIP changes remained to “commit then revert” at the time of shutdown).
 - #2 zonal dict MVA (rejected): `slab: add v2 header + dict compression mva` (`d89e813`) then reverted (`8083f3f`). Baseline ns/op: 1,134,951,571 / 1,156,101,860 / 1,151,579,158. Attempt failed: `BenchmarkTraceReplayTimeline` aborted with `record too large` in `phase restore` (no CPU profile). Revert confirm ns/op: 1,148,604,129 / 1,170,820,099 / 1,167,754,520.
 - #3 entropy metrics MVA (in progress): renamed old defer branch to `slab-opt-03-entropy-training-defer`, created fresh `slab-opt-03-entropy-training` off `slab-opt-rc`.
 - Baseline replay (ptr-values): 1,144,469,998 / 1,160,093,383 / 1,164,282,942 ns/op. CPU profile: `/tmp/treedb_ptrvalues_cpu.prof` (pprof top captured).
