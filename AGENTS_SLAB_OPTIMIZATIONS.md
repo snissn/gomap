@@ -22,8 +22,7 @@ Primary observed bottleneck: **syscall-heavy slab I/O** (writes + reads) under C
 
 - RC branch: `slab-opt-rc` (head recorded in Work Log)
 - Accepted: #3 entropy-training pooling (`faf040b`), #9 hugepage hint (`26a4a4b`, Linux-only; needs Linux validation)
-- In progress: #2 zonal dicts (re-opened; prior attempt ended in a benchmark abort, not a perf conclusion)
-- Rejected: #1 multistream (`73d27d5` + `747bc86`), #4 dict dedup (`77e5325` + `5836b5f`), #6 tiering (`41f25a2` + `4cf2036`)
+- Rejected: #1 multistream (`73d27d5` + `747bc86`), #2 zonal dicts (`c23e55e` + `3294da2`), #4 dict dedup (`77e5325` + `5836b5f`), #6 tiering (`41f25a2` + `4cf2036`)
 - Pending: #5, #7–#8
 
 ## Compatibility stance (Alpha)
@@ -144,7 +143,7 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
   - [x] Decide: accept (merge) or reject (revert) and document.
 
 ### 2) Local Dictionary Compression (Zonal Dictionaries / Slab V2) — High impact / medium risk (breaking)
-- Status: [ ] planned  [x] in_progress  [ ] accepted  [ ] rejected
+- Status: [ ] planned  [ ] in_progress  [ ] accepted  [x] rejected
 - Branch: `slab-opt-02-zonal-dicts`
 - Checklist:
   - **MVA:** implement “global dictionary only” (single dict stored in slab header) before full zonal dicts; measure bytes/speed.
@@ -487,3 +486,12 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
   - Replay after change: 1,103,103,919 / 1,115,985,958 / 1,095,592,900 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_disableall_global_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Merged into `slab-opt-rc` (ff at `bf6cc0f`).
+
+### 2026-01-12
+- #2 zonal dict MVA re-run on `slab-opt-02-zonal-dicts` using v2 header + dict compression, with fixes to avoid overwriting v2 headers and updated tests for v2 data start.
+- Tests: `go test ./TreeDB/slab -count=1 -timeout=60s` (PASS).
+- Pointer-values replay (timeline, duration=2000ms, benchtime=10s, count=3):
+  - Baseline (slab-opt-rc): `1090349008 / 1091780842 / 1091867104 ns/op`.
+  - V2 dict MVA (this branch): `1105024575 / 1129432361 / 1112603782 ns/op`.
+  - CPU profile: `/tmp/treedb_ptrvalues_v2dict_cpu.prof` (top shows syscall/syscall + slab mmap reads).
+- Decision: reject for now due to consistent regression; revert commits `5114f2d` + `3294da2` preserve attempt history while restoring baseline.
