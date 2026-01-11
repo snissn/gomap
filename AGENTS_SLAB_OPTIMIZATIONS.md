@@ -471,3 +471,4 @@ If the change is Linux-only, acceptance should be based on Linux server results 
   - Replay after change: 1,103,362,965 / 1,112,591,611 / 1,100,120,460 ns/op.
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_compaction_sample_nodict_cpu.prof` (pprof top captured; syscall/syscall6 + slab mmap reads).
   - Added compaction stats: `disable_all_slabs`.
+  - Merged into `slab-opt-rc` (ff at `4b1fcbb`).
