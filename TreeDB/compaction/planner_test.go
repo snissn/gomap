@@ -13,7 +13,7 @@ func TestCandidatesSelectsDeadNonActiveSlabs(t *testing.T) {
 
 	// Force rotation so we have a non-active slab to consider.
 	oldMax := slab.MaxSlabSize
-	slab.MaxSlabSize = slab.SlabV2DataStart + 1000
+	slab.MaxSlabSize = 1000
 	t.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	d, err := db.Open(db.Options{Dir: dir})

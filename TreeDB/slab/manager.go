@@ -983,8 +983,6 @@ func (sm *SlabManager) appendManyWithDict(keys [][]byte, values [][]byte) ([]pag
 	for i := 0; i < len(keys); i++ {
 		key := keys[i]
 		value := values[i]
-		var err error
-		var encPool *sync.Pool
 		encodedKey := key
 		omittedKey := false
 		if sm.omitSlabKeys {
@@ -1000,8 +998,9 @@ func (sm *SlabManager) appendManyWithDict(keys [][]byte, values [][]byte) ([]pag
 			if err := sm.activeSlab.initDictFromSample(&sm.compression, value); err != nil {
 				return nil, err
 			}
-			encPool, _ = sm.activeSlab.dictPools(&sm.compression)
+			encPool, _ := sm.activeSlab.dictPools(&sm.compression)
 			if encPool != nil {
+				var err error
 				encodedValue, dictCompressed, err = sm.compression.compressValueWithPool(value, encPool)
 				if err != nil {
 					return nil, err
@@ -1009,6 +1008,7 @@ func (sm *SlabManager) appendManyWithDict(keys [][]byte, values [][]byte) ([]pag
 				compressed = dictCompressed
 			}
 			if !dictCompressed {
+				var err error
 				encodedValue, compressed, err = sm.compression.compressValue(value)
 				if err != nil {
 					return nil, err

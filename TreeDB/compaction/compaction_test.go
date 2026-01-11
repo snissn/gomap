@@ -25,7 +25,7 @@ func TestCompaction(t *testing.T) {
 
 	// Force slab rotation so we can compact a non-active slab.
 	oldMax := slab.MaxSlabSize
-	slab.MaxSlabSize = slab.SlabV2DataStart + 1000
+	slab.MaxSlabSize = 1000
 	t.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	// Insert A, B
@@ -346,7 +346,7 @@ func TestCompaction_IndexSwap_PreservesData(t *testing.T) {
 
 	// Force slab rotation so we can compact a non-active slab.
 	oldMax := slab.MaxSlabSize
-	slab.MaxSlabSize = slab.SlabV2DataStart + 1000
+	slab.MaxSlabSize = 1000
 	t.Cleanup(func() { slab.MaxSlabSize = oldMax })
 
 	valA := bytes.Repeat([]byte("A"), 300) // pointer

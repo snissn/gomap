@@ -175,10 +175,6 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		}
 	}
 	sf.headerOK = true
-	if _, err := f.Seek(size, io.SeekStart); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
 	return sf, nil
 }
 

@@ -59,8 +59,8 @@ func TestSlabRotation(t *testing.T) {
 
 	// Set small limit: enough for 1 record but not 2?
 	// Header(10) + Key(1) + Val(1) = 12 bytes.
-	// Account for the v2 data start.
-	MaxSlabSize = slabV2DataStart + 20
+	// Let's set limit to 20 bytes.
+	MaxSlabSize = 20
 
 	dir := t.TempDir()
 	sm, err := NewSlabManager(dir)
@@ -138,10 +138,6 @@ func TestDataCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append failed: %v", err)
 	}
-	realStart := int64(ptr.Offset) - 4
-	if realStart < 0 {
-		t.Fatalf("invalid slab offset: %d", ptr.Offset)
-	}
 
 	sm.Close() // Close to modify file
 
@@ -151,8 +147,9 @@ func TestDataCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenFile failed: %v", err)
 	}
-	// Corrupt the CRC for the record we just wrote.
-	if _, err := f.WriteAt([]byte{0x00}, realStart); err != nil {
+	// Offset + HeaderSize + KeyLen is where Value starts?
+	// Corruption in CRC (byte 0)
+	if _, err := f.WriteAt([]byte{0x00}, 0); err != nil {
 		t.Fatalf("Corrupt failed: %v", err)
 	}
 	f.Close()
@@ -187,12 +184,11 @@ func TestSlabRead_RejectsOversizedHeader(t *testing.T) {
 	binary.LittleEndian.PutUint16(header[4:6], 8)
 	binary.LittleEndian.PutUint32(header[6:10], 80)
 
-	if _, err := s.File.WriteAt(header[:], int64(slabV2DataStart)); err != nil {
+	if _, err := s.File.Write(header[:]); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
 
-	readOffset := int64(slabV2DataStart) + 4
-	if _, err := s.Read(readOffset, false); !errors.Is(err, ErrRecordTooLarge) {
+	if _, err := s.Read(4, false); !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
 	}
 }
