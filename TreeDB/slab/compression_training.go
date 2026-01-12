@@ -71,6 +71,8 @@ type compressionTrainer struct {
 	collectCount         atomic.Uint64
 	collectMaxNanos      atomic.Uint64
 
+	lastProfile atomic.Value // *ActiveCompressionProfile
+
 	dictDedupWindow     int
 	dictHashes          []uint64
 	dictHashPos         int
@@ -118,6 +120,10 @@ type CompressionTrainerStats struct {
 	CollectCount         uint64
 	CollectNanos         uint64
 	CollectMaxNanos      uint64
+	ProfileK             int
+	ProfileTotalRatio    float64
+	ProfilePayloadRatio  float64
+	ProfileTimestamp     time.Time
 }
 
 type CompressionTrainConfig struct {
@@ -459,6 +465,9 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			ratio,
 		)
 	}
+	if profile := chooseKForDict(dict, samples); profile != nil {
+		t.lastProfile.Store(profile)
+	}
 }
 
 func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
@@ -581,6 +590,16 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 	}
 	dedupMode := dictDedupMode(t.lastTrainDedupMode.Load())
 	dedupFlag := dictUseFlag(t.lastTrainDedupFlag.Load())
+	var profileK int
+	var profileTotal float64
+	var profilePayload float64
+	var profileTS time.Time
+	if p, ok := t.lastProfile.Load().(*ActiveCompressionProfile); ok && p != nil {
+		profileK = p.K
+		profileTotal = p.TotalRatio
+		profilePayload = p.PayloadRatio
+		profileTS = p.Timestamp
+	}
 	return CompressionTrainerStats{
 		Enabled:              t.enabled.Load(),
 		Collecting:           t.collecting.Load(),
@@ -610,6 +629,10 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		CollectCount:         t.collectCount.Load(),
 		CollectNanos:         t.collectNanos.Load(),
 		CollectMaxNanos:      t.collectMaxNanos.Load(),
+		ProfileK:             profileK,
+		ProfileTotalRatio:    profileTotal,
+		ProfilePayloadRatio:  profilePayload,
+		ProfileTimestamp:     profileTS,
 	}
 }
 
