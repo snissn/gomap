@@ -144,6 +144,13 @@ func (sm *SlabManager) Compression() CompressionKind {
 	return sm.compression.kind
 }
 
+func (sm *SlabManager) activeProfile() (*ActiveCompressionProfile, bool) {
+	if sm == nil || sm.compressionTrainer == nil {
+		return nil, false
+	}
+	return sm.compressionTrainer.ActiveProfile()
+}
+
 func (sm *SlabManager) CompressionTrainConfig() (CompressionTrainConfig, bool) {
 	sm.mu.RLock()
 	trainer := sm.compressionTrainer
@@ -429,24 +436,68 @@ type appendManyMeta struct {
 	omittedKey     bool
 }
 
-// AppendMany appends multiple records while amortizing system calls. It returns
-// a pointer for each key/value pair (same order as inputs).
-//
+// appendManyGrouped writes grouped frame records with K>1 values per frame.
 // Thread-safety: This is serialized by the SlabManager mutex.
-func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValuePtr, error) {
+func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) ([]page.ValuePtr, error) {
+	if k <= 1 || len(values) == 0 {
+		return sm.appendWithOptionsMany(keys, values)
+	}
+	ptrs := make([]page.ValuePtr, len(values))
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	writeRecord := func(rec []byte) (int64, error) {
+		offset, err := sm.activeSlab.WriteBatch(rec)
+		if err == ErrSlabFull {
+			if err := sm.rotateLocked(); err != nil {
+				return 0, err
+			}
+			return sm.activeSlab.WriteBatch(rec)
+		}
+		return offset, err
+	}
+
+	idx := 0
+	for idx < len(values) {
+		end := idx + k
+		if end > len(values) {
+			end = len(values)
+		}
+		group := values[idx:end]
+		record, actualK, err := buildFrameGroupRecord(group, &sm.compression)
+		if err != nil {
+			return nil, err
+		}
+		offset, err := writeRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		length := uint32(len(record) - 4) // exclude CRC
+		length = page.ValuePtrMarkCompressed(length)
+		if sm.omitSlabKeys {
+			length = page.ValuePtrMarkOmittedKey(length)
+		}
+		for j := 0; j < actualK && idx+j < len(ptrs); j++ {
+			ptrs[idx+j] = page.ValuePtr{
+				Offset: uint64(offset + 4),
+				Length: page.ValuePtrMarkGrouped(length, uint8(j)),
+				FileID: sm.activeSlab.ID,
+			}
+		}
+		idx = end
+	}
+	return ptrs, nil
+}
+
+// appendWithOptionsMany is the legacy AppendMany path (K=1).
+// Thread-safety: This is serialized by the SlabManager mutex.
+func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]page.ValuePtr, error) {
 	if len(keys) != len(values) {
 		return nil, fmt.Errorf("AppendMany: keys/values length mismatch (%d != %d)", len(keys), len(values))
 	}
 	if len(keys) == 0 {
 		return nil, nil
-	}
-	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
-		for i := range values {
-			if !sm.compressionTrainer.shouldCollect() {
-				break
-			}
-			sm.compressionTrainer.collect(values[i])
-		}
 	}
 
 	// Keep buffers bounded so we don't double memory usage for extremely large
@@ -715,6 +766,35 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 
 	return ptrs, nil
+}
+
+// AppendMany dispatches between grouped writes (K>1) and legacy per-row writes.
+// Thread-safety: This is serialized by the SlabManager mutex.
+func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValuePtr, error) {
+	if len(keys) != len(values) {
+		return nil, fmt.Errorf("AppendMany: keys/values length mismatch (%d != %d)", len(keys), len(values))
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	groupK := 1
+	if profile, ok := sm.activeProfile(); ok && profile != nil && profile.K > 1 && sm.compression.kind == CompressionZSTD && sm.omitSlabKeys {
+		groupK = profile.K
+	}
+	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
+		for i := range values {
+			if !sm.compressionTrainer.shouldCollect() {
+				break
+			}
+			sm.compressionTrainer.collect(values[i])
+		}
+	}
+
+	if groupK > 1 {
+		return sm.appendManyGrouped(keys, values, groupK)
+	}
+	return sm.appendWithOptionsMany(keys, values)
 }
 
 // Rotate forces creation of a new active slab.

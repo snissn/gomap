@@ -769,6 +769,16 @@ func (t *compressionTrainer) config() CompressionTrainConfig {
 	}
 }
 
+func (t *compressionTrainer) ActiveProfile() (*ActiveCompressionProfile, bool) {
+	if t == nil {
+		return nil, false
+	}
+	if p, ok := t.lastProfile.Load().(*ActiveCompressionProfile); ok && p != nil {
+		return p, true
+	}
+	return nil, false
+}
+
 func dedupModeString(mode dictDedupMode) string {
 	switch mode {
 	case dictDedupGlobal:
