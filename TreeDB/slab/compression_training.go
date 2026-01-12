@@ -19,6 +19,13 @@ const (
 	defaultCompressionTrainMaxRecordBytes = 64 << 10
 	defaultCompressionTrainQueue          = 128
 	defaultCompressionTrainDedupWindow    = 16
+
+	// Adaptive gating constants for dict+K refresh.
+	minProfileBytes       = 64 << 20 // 64 MiB
+	minProfileRecords     = 250_000  // records
+	minProfileInterval    = 10 * time.Minute
+	profileDriftThreshold = 0.07 // 7%
+	profileImproveThresh  = 0.02 // 2% better to accept
 )
 
 type compressionTrainer struct {
@@ -73,6 +80,21 @@ type compressionTrainer struct {
 
 	lastProfile atomic.Value // *ActiveCompressionProfile
 
+	// workload counters
+	totalBytesSeen   atomic.Uint64
+	totalRecordsSeen atomic.Uint64
+
+	// anti-thrash gating
+	lastAcceptTime    atomic.Value // time.Time
+	lastAcceptBytes   atomic.Uint64
+	lastAcceptRecords atomic.Uint64
+	rollingRatioBase  atomic.Uint64 // math.Float64bits(last_profile_total_ratio)
+	rollingRatioCur   atomic.Uint64 // math.Float64bits(observed_total_ratio)
+	attempts          atomic.Uint64
+	accepts           atomic.Uint64
+	rejects           atomic.Uint64
+	lastRejectReason  atomic.Value // string
+
 	dictDedupWindow     int
 	dictHashes          []uint64
 	dictHashPos         int
@@ -124,6 +146,15 @@ type CompressionTrainerStats struct {
 	ProfileTotalRatio    float64
 	ProfilePayloadRatio  float64
 	ProfileTimestamp     time.Time
+	ProfileAttempts      uint64
+	ProfileAccepts       uint64
+	ProfileRejects       uint64
+	ProfileRejectReason  string
+	RollingRatioBaseline float64
+	RollingRatioCurrent  float64
+	LastAcceptBytes      uint64
+	LastAcceptRecords    uint64
+	LastAcceptTimestamp  time.Time
 }
 
 type CompressionTrainConfig struct {
@@ -253,6 +284,9 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	t.lastSlabID = slabID
 	t.sampleGen.Add(1)
 	t.sampleStrideCounter.Store(0)
+	if base := math.Float64frombits(t.rollingRatioBase.Load()); base > 0 {
+		t.rollingRatioCur.Store(math.Float64bits(base * (1 + profileDriftThreshold + 0.01)))
+	}
 	t.collecting.Store(true)
 }
 
@@ -261,6 +295,8 @@ func (t *compressionTrainer) collect(value []byte) {
 	if t == nil || t.closed.Load() || !t.collecting.Load() || len(value) == 0 {
 		return
 	}
+	t.totalBytesSeen.Add(uint64(len(value)))
+	t.totalRecordsSeen.Add(1)
 	if t.measureCollect {
 		started = time.Now()
 	}
@@ -336,6 +372,10 @@ func (t *compressionTrainer) appendSample(sample trainerSample) {
 func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
 	defer t.training.Store(false)
 	if len(samples) == 0 {
+		return
+	}
+	now := time.Now()
+	if !t.allowRetrain(now) {
 		return
 	}
 	defer t.releaseSamples(samples)
@@ -465,8 +505,9 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			ratio,
 		)
 	}
+	t.rollingRatioCur.Store(math.Float64bits(ratio))
 	if profile := chooseKForDict(dict, samples); profile != nil {
-		t.lastProfile.Store(profile)
+		t.maybeAcceptProfile(profile)
 	}
 }
 
@@ -584,6 +625,70 @@ func (t *compressionTrainer) recordCollect(started time.Time) {
 	}
 }
 
+func (t *compressionTrainer) allowRetrain(now time.Time) bool {
+	if t == nil {
+		return false
+	}
+	lastTime, _ := t.lastAcceptTime.Load().(time.Time)
+	if !lastTime.IsZero() && now.Sub(lastTime) < minProfileInterval {
+		return false
+	}
+	bytesSeen := t.totalBytesSeen.Load()
+	recordsSeen := t.totalRecordsSeen.Load()
+	lastBytes := t.lastAcceptBytes.Load()
+	lastRecords := t.lastAcceptRecords.Load()
+	if lastTime.IsZero() {
+		// No baseline, allow first training.
+		return true
+	}
+	if bytesSeen <= lastBytes && recordsSeen <= lastRecords {
+		return false
+	}
+	if bytesSeen-lastBytes < minProfileBytes && recordsSeen-lastRecords < minProfileRecords {
+		return false
+	}
+	base := math.Float64frombits(t.rollingRatioBase.Load())
+	cur := math.Float64frombits(t.rollingRatioCur.Load())
+	if base > 0 && cur > 0 && cur <= base*(1.0+profileDriftThreshold) {
+		return false
+	}
+	return true
+}
+
+func (t *compressionTrainer) maybeAcceptProfile(profile *ActiveCompressionProfile) {
+	if t == nil || profile == nil {
+		return
+	}
+	t.attempts.Add(1)
+	old, _ := t.lastProfile.Load().(*ActiveCompressionProfile)
+	if old != nil {
+		t.rollingRatioBase.Store(math.Float64bits(old.TotalRatio))
+	}
+	t.rollingRatioCur.Store(math.Float64bits(profile.TotalRatio))
+	if old != nil {
+		if profile.TotalRatio > old.TotalRatio*(1.0-profileImproveThresh) {
+			t.rejects.Add(1)
+			t.lastRejectReason.Store("not_better")
+			return
+		}
+	}
+	t.acceptProfile(profile)
+}
+
+func (t *compressionTrainer) acceptProfile(profile *ActiveCompressionProfile) {
+	if t == nil || profile == nil {
+		return
+	}
+	t.lastProfile.Store(profile)
+	t.accepts.Add(1)
+	t.lastAcceptTime.Store(profile.Timestamp)
+	t.lastAcceptBytes.Store(t.totalBytesSeen.Load())
+	t.lastAcceptRecords.Store(t.totalRecordsSeen.Load())
+	t.rollingRatioBase.Store(math.Float64bits(profile.TotalRatio))
+	t.rollingRatioCur.Store(math.Float64bits(profile.TotalRatio))
+	t.lastRejectReason.Store("")
+}
+
 func (t *compressionTrainer) stats() CompressionTrainerStats {
 	if t == nil {
 		return CompressionTrainerStats{}
@@ -594,11 +699,16 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 	var profileTotal float64
 	var profilePayload float64
 	var profileTS time.Time
+	var profileReject string
 	if p, ok := t.lastProfile.Load().(*ActiveCompressionProfile); ok && p != nil {
 		profileK = p.K
 		profileTotal = p.TotalRatio
 		profilePayload = p.PayloadRatio
 		profileTS = p.Timestamp
+	}
+	lastAcceptTime, _ := t.lastAcceptTime.Load().(time.Time)
+	if r, ok := t.lastRejectReason.Load().(string); ok {
+		profileReject = r
 	}
 	return CompressionTrainerStats{
 		Enabled:              t.enabled.Load(),
@@ -633,6 +743,15 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		ProfileTotalRatio:    profileTotal,
 		ProfilePayloadRatio:  profilePayload,
 		ProfileTimestamp:     profileTS,
+		ProfileAttempts:      t.attempts.Load(),
+		ProfileAccepts:       t.accepts.Load(),
+		ProfileRejects:       t.rejects.Load(),
+		ProfileRejectReason:  profileReject,
+		RollingRatioBaseline: math.Float64frombits(t.rollingRatioBase.Load()),
+		RollingRatioCurrent:  math.Float64frombits(t.rollingRatioCur.Load()),
+		LastAcceptBytes:      t.lastAcceptBytes.Load(),
+		LastAcceptRecords:    t.lastAcceptRecords.Load(),
+		LastAcceptTimestamp:  lastAcceptTime,
 	}
 }
 

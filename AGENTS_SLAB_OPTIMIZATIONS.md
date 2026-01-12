@@ -338,6 +338,10 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
 - #4 dict dedup follow-up (in progress): created `slab-opt-04-dict-dedup-2` to track dedup mode/ref in trainer stats (USE_GLOBAL/USE_REF scaffolding).
   - Baseline replay (ptr-values, slab-opt-rc): 1,110,317,827 / 1,117,767,198 / 1,108,285,921 ns/op.
   - Replay after change: 1,120,670,454 / 1,107,856,794 / 1,108,167,354 ns/op.
+
+### 2026-01-12
+- Recorded dict micro-batch K trade curve (baseline goal: ~0.33x ceiling, best trade K≈3–8) in `TreeDB/notes/slab_dict_k_tradeoff_2026-01-11.md`; committed bench tools `kv_dict_batch_bench`, `kv_dict_opt_phase1`, `kv_slab_layout_poc`.
+- Added compression trainer profile selection: choose K∈{2..8} during dict training and attach to ActiveCompressionProfile; added anti-thrash gating (min bytes 64MiB OR 250k records, min interval 10m, drift≥7% vs baseline, accept only if ≥2% better total_ratio), with attempts/accepts/rejects counters exposed via Stats().
   - CPU profile (post-change): `/tmp/treedb_ptrvalues_dict_dedup2_cpu.prof` (pprof top captured).
 - Merged `slab-opt-04-dict-dedup-2` into `slab-opt-rc` (ff at `ccc4f32`); #4 remains in_progress (scaffolding only).
 - #5 two-pass compaction MVA (in progress): created `slab-opt-05-two-pass-compaction` off `slab-opt-rc` and added IndexSwap compaction stats + benchmark.

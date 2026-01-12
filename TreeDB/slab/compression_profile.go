@@ -1,7 +1,6 @@
 package slab
 
 import (
-	"bytes"
 	"math"
 	"time"
 

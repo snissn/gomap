@@ -118,3 +118,4 @@ To ensure high performance and low GC pressure, the Go implementation utilizes a
   - Best trade for bounded point-read decode is K≈3–8 (default expected range).
   - Metadata kept separate; per-frame offsets only.
 - Goal: when selecting/composing slab dictionaries, choose K in this range (score-based) to keep point reads to one small frame while approaching ~0.33x total ratio. K selection will be done at dict creation time with lagged retrain to avoid thrash.
+- Current gating (anti-thrash): recompute dict+K only when >=64MiB or >=250k records and >=10m since last accept, AND observed ratio drift ≥7% vs baseline. Accept new profile only if total_ratio improves by ≥2%. Attempts/accepts/rejects surfaced via trainer stats.
