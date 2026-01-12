@@ -289,6 +289,16 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.slabs.compression.train.queue_max"] = fmt.Sprintf("%d", trainerStats.MaxQueueLen)
 		stats["treedb.slabs.compression.train.runs"] = fmt.Sprintf("%d", trainerStats.TrainCount)
 		stats["treedb.slabs.compression.train.training"] = fmt.Sprintf("%t", trainerStats.Training)
+		stats["treedb.slabs.compression.profile.k"] = fmt.Sprintf("%d", trainerStats.ProfileK)
+		stats["treedb.slabs.compression.profile.payload_ratio"] = fmt.Sprintf("%.6f", trainerStats.ProfilePayloadRatio)
+		stats["treedb.slabs.compression.profile.total_ratio"] = fmt.Sprintf("%.6f", trainerStats.ProfileTotalRatio)
+		stats["treedb.slabs.compression.profile.attempts"] = fmt.Sprintf("%d", trainerStats.ProfileAttempts)
+		stats["treedb.slabs.compression.profile.accepts"] = fmt.Sprintf("%d", trainerStats.ProfileAccepts)
+		stats["treedb.slabs.compression.profile.rejects"] = fmt.Sprintf("%d", trainerStats.ProfileRejects)
+		stats["treedb.slabs.compression.profile.reject_reason"] = trainerStats.ProfileRejectReason
+		if !trainerStats.ProfileTimestamp.IsZero() {
+			stats["treedb.slabs.compression.profile.timestamp"] = trainerStats.ProfileTimestamp.Format(time.RFC3339)
+		}
 	}
 
 	pruneStatsInto(stats, &db.pruner)

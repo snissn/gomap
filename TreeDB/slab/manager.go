@@ -982,6 +982,15 @@ func (sm *SlabManager) CompressionTrainerStats() (CompressionTrainerStats, bool)
 	return stats, true
 }
 
+// ForceTrainerCollecting forces the compression trainer into collecting mode
+// (best-effort; no-op if trainer is nil or disabled). Intended for diagnostics.
+func (sm *SlabManager) ForceTrainerCollecting() {
+	if sm.compressionTrainer == nil || !sm.compressionTrainer.enabled.Load() {
+		return
+	}
+	sm.compressionTrainer.collecting.Store(true)
+}
+
 // CurrentSlabSet returns a snapshot of the current slabs.
 func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 	sm.mu.RLock()
