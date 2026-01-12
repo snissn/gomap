@@ -1,12 +1,15 @@
 package slab
 
 import (
+	"bufio"
+	"encoding/json"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -17,12 +20,41 @@ func BenchmarkSlabGrouped(b *testing.B) {
 		N           = 200000
 		readSamples = 10000
 		k           = 3
-		valLen      = 169
 	)
+
+	dictBytes, dictHash := loadDict()
+
+	b.Run("structured", func(b *testing.B) {
+		values, err := loadStructuredValues(N)
+		if err != nil {
+			b.Skipf("structured data unavailable: %v", err)
+		}
+		runGroupedBench(b, values, k, dictBytes, dictHash)
+	})
+
+	b.Run("random", func(b *testing.B) {
+		values := make([][]byte, N)
+		src := rand.New(rand.NewSource(1))
+		for i := 0; i < N; i++ {
+			v := make([]byte, 169)
+			for j := range v {
+				v[j] = byte(src.Intn(256))
+			}
+			values[i] = v
+		}
+		runGroupedBench(b, values, k, dictBytes, dictHash)
+	})
+}
+
+func runGroupedBench(b *testing.B, values [][]byte, k int, dict []byte, dictHash uint64) {
+	const readSamples = 10000
+	keys := make([][]byte, len(values))
 	dir := b.TempDir()
 	opts := Options{
 		Compression: CompressionOptions{
-			Kind: CompressionZSTD,
+			Kind:            CompressionZSTD,
+			MinBytes:        1,
+			MinSavingsBytes: 0,
 		},
 		OmitSlabKeys: true,
 	}
@@ -30,49 +62,30 @@ func BenchmarkSlabGrouped(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewSlabManagerWithOptions: %v", err)
 	}
-	// Force active profile K>1 for benchmark.
+	profile := &ActiveCompressionProfile{K: k, DictBytes: len(dict), DictHash: dictHash}
 	trainer := &compressionTrainer{}
-	trainer.lastProfile.Store(&ActiveCompressionProfile{K: k})
+	trainer.lastProfile.Store(profile)
 	sm.compressionTrainer = trainer
-
-	// Prepare values/keys.
-	values := make([][]byte, N)
-	keys := make([][]byte, N)
-	src := rand.New(rand.NewSource(1))
-	for i := 0; i < N; i++ {
-		v := make([]byte, valLen)
-		for j := range v {
-			v[j] = byte(src.Intn(256))
-		}
-		values[i] = v
-		keys[i] = nil // keys omitted
-	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	var ptrs []page.ValuePtr
-	b.Run("write", func(b *testing.B) {
-		for n := 0; n < b.N; n++ {
-			ptrs = ptrs[:0]
-			batch := 1024
-			start := time.Now()
-			for i := 0; i < N; i += batch {
-				end := i + batch
-				if end > N {
-					end = N
-				}
-				p, err := sm.AppendMany(keys[i:end], values[i:end])
-				if err != nil {
-					b.Fatalf("AppendMany: %v", err)
-				}
-				ptrs = append(ptrs, p...)
-			}
-			elapsed := time.Since(start)
-			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(N), "write_ns/op")
-			break
+	// Write pass.
+	batch := 1024
+	start := time.Now()
+	for i := 0; i < len(values); i += batch {
+		end := i + batch
+		if end > len(values) {
+			end = len(values)
 		}
-	})
+		p, err := sm.AppendMany(keys[i:end], values[i:end])
+		if err != nil {
+			b.Fatalf("AppendMany: %v", err)
+		}
+		ptrs = append(ptrs, p...)
+	}
+	writeElapsed := time.Since(start)
 
 	groupedCnt := 0
 	legacyCnt := 0
@@ -85,22 +98,21 @@ func BenchmarkSlabGrouped(b *testing.B) {
 	}
 
 	// Read random samples.
-	b.Run("read", func(b *testing.B) {
-		idxs := rand.Perm(len(ptrs))[:readSamples]
-		start := time.Now()
-		for _, idx := range idxs {
-			p := ptrs[idx]
-			val, err := sm.Read(p)
-			if err != nil {
-				b.Fatalf("Read: %v", err)
-			}
-			if len(val) != valLen {
-				b.Fatalf("unexpected len: got %d", len(val))
-			}
+	idxCount := readSamples
+	if len(ptrs) < idxCount {
+		idxCount = len(ptrs)
+	}
+	idxs := rand.Perm(len(ptrs))[:idxCount]
+	readStart := time.Now()
+	for _, idx := range idxs {
+		p := ptrs[idx]
+		val, err := sm.Read(p)
+		if err != nil {
+			b.Fatalf("Read: %v", err)
 		}
-		elapsed := time.Since(start)
-		b.ReportMetric(float64(elapsed.Nanoseconds())/float64(len(idxs)), "read_ns/op")
-	})
+		_ = val
+	}
+	readElapsed := time.Since(readStart)
 
 	// Slab size stats.
 	info, err := os.Stat(filepath.Join(dir, "data-0000.slab"))
@@ -109,5 +121,54 @@ func BenchmarkSlabGrouped(b *testing.B) {
 	}
 	bytesPerRecord := float64(info.Size()) / float64(len(ptrs))
 
-	b.Logf("grouped_records=%d legacy_records=%d slab_bytes=%d bytes/record=%.2f", groupedCnt, legacyCnt, info.Size(), bytesPerRecord)
+	compKind := "none"
+	if opts.Compression.Kind == CompressionZSTD {
+		compKind = "zstd"
+	}
+	b.Logf("mode=%s K=%d comp=%s dict_bytes=%d dict_hash=%x grouped=%d legacy=%d slab_bytes=%d bytes/rec=%.2f write_ns/op=%.1f read_ns/op=%.1f", b.Name(), k, compKind, len(dict), dictHash, groupedCnt, legacyCnt, info.Size(), bytesPerRecord, float64(writeElapsed.Nanoseconds())/float64(len(values)), float64(readElapsed.Nanoseconds())/float64(idxCount))
+}
+
+// loadStructuredValues reads up to n values from tmp/treedb_kv_full.jsonl (url-escaped fields).
+func loadStructuredValues(n int) ([][]byte, error) {
+	path := filepath.Join("tmp", "treedb_kv_full.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Allow long lines.
+	buf := make([]byte, 0, 1<<20)
+	scanner.Buffer(buf, 1<<20)
+	type kv struct {
+		Val string `json:"val"`
+	}
+	values := make([][]byte, 0, n)
+	for scanner.Scan() {
+		if len(values) >= n {
+			break
+		}
+		var rec kv
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		values = append(values, []byte(rec.Val))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return values, nil
+}
+
+func loadDict() ([]byte, uint64) {
+	path := filepath.Join("tmp", "dict-32k.zdict")
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return nil, 0
+	}
+	return data, xxhash.Sum64(data)
 }
