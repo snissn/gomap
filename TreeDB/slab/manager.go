@@ -208,6 +208,12 @@ func (sm *SlabManager) EstimateCompression(key, value []byte) (rawLen int, store
 }
 
 func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) ([]byte, error) {
+	if page.ValuePtrIsGrouped(ptr) {
+		if compression == nil {
+			return nil, errCompressedCorrupt
+		}
+		return decompressFrameGroup(compression, val, int(page.ValuePtrSubIndex(ptr)))
+	}
 	if !page.ValuePtrIsCompressed(ptr) {
 		return val, nil
 	}
