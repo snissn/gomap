@@ -531,3 +531,8 @@ Until further notice, work **ONLY** on item **#2** (Slab V2 local dictionary com
   - V2 dict MVA (this branch): `1105024575 / 1129432361 / 1112603782 ns/op`.
   - CPU profile: `/tmp/treedb_ptrvalues_v2dict_cpu.prof` (top shows syscall/syscall + slab mmap reads).
 - Decision: reject for now due to consistent regression; revert commits `5114f2d` + `3294da2` preserve attempt history while restoring baseline.
+
+### 2026-01-11
+- Recorded dict micro-batch K trade curve (gold goal) via `go run ./TreeDB/cmd/kv_dict_batch_bench -input tmp/treedb_kv_full.jsonl -dict tmp/dict-32k.zdict`.
+  - Total ratio ~0.33 at K≈64–128; best bounded point-read trade K≈3–8.
+  - Goal: use this curve as reference when selecting K at dict creation to bound worst-case decode and approach 0.33x.

@@ -108,3 +108,13 @@ To ensure high performance and low GC pressure, the Go implementation utilizes a
 
 ---
 **Status**: Alpha / Breaking / Optimized.
+
+---
+
+## 6. 2026-01-11 Micro-batch Dict Benchmark (Gold Goal)
+- Command: `go run ./TreeDB/cmd/kv_dict_batch_bench -input tmp/treedb_kv_full.jsonl -dict tmp/dict-32k.zdict`
+- Findings:
+  - Total ratio approaches ~0.33 at K≈64–128 (near streaming ceiling).
+  - Best trade for bounded point-read decode is K≈3–8 (default expected range).
+  - Metadata kept separate; per-frame offsets only.
+- Goal: when selecting/composing slab dictionaries, choose K in this range (score-based) to keep point reads to one small frame while approaching ~0.33x total ratio. K selection will be done at dict creation time with lagged retrain to avoid thrash.
