@@ -294,8 +294,37 @@ func (sm *SlabManager) DecodeRecordForCompactor(ptr page.ValuePtr, val []byte) (
 		return nil, nil, fmt.Errorf("not a full compressed record")
 	}
 	sm.mu.RLock()
+	s, ok := sm.slabs[ptr.FileID]
 	compression := &sm.compression
 	sm.mu.RUnlock()
+
+	if ok && s.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart {
+		dec, put, err := s.GetDecoder(int64(ptr.Offset))
+		if err != nil {
+			return nil, nil, err
+		}
+		defer put()
+
+		if len(val) < 4 {
+			return nil, nil, errCompressedCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(val[:4])
+		payload := val[4:]
+
+		decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(decompressed) < 2 {
+			return nil, nil, errCompressedCorrupt
+		}
+		keyLen := int(binary.LittleEndian.Uint16(decompressed[:2]))
+		if len(decompressed) < 2+keyLen {
+			return nil, nil, errCompressedCorrupt
+		}
+		return decompressed[2 : 2+keyLen], decompressed[2+keyLen:], nil
+	}
+
 	if compression == nil {
 		return nil, nil, errCompressedCorrupt
 	}
@@ -1360,15 +1389,36 @@ func (sm *SlabManager) ForceAcceptProfileForTesting(p *ActiveCompressionProfile)
 	}
 
 	dict := p.Dict
+	if len(dict) == 0 {
+		sm.activeCompression.zstdEncs = &sync.Pool{
+			New: func() any {
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.activeCompression.level), zstd.WithEncoderCRC(false))
+				return enc
+			},
+		}
+		sm.activeCompression.zstdDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil)
+				return dec
+			},
+		}
+		return
+	}
 	sm.activeCompression.zstdEncs = &sync.Pool{
 		New: func() any {
-			enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(sm.activeCompression.level))
+			enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(sm.activeCompression.level))
+			if err != nil {
+				enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.activeCompression.level), zstd.WithEncoderCRC(false))
+			}
 			return enc
 		},
 	}
 	sm.activeCompression.zstdDecs = &sync.Pool{
 		New: func() any {
-			dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+			dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+			if err != nil {
+				dec, _ = zstd.NewReader(nil)
+			}
 			return dec
 		},
 	}

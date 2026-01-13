@@ -128,12 +128,21 @@ func (s *SlabFile) detectV2Locked() error {
 	if _, err := s.File.ReadAt(dictBuf, FileHeaderSizeV2); err != nil {
 		return err
 	}
-	s.globalDict = dictBuf
-	s.globalDecs = &sync.Pool{
-		New: func() any {
-			dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
-			return dec
-		},
+	hasDict := false
+	for _, b := range dictBuf {
+		if b != 0 {
+			hasDict = true
+			break
+		}
+	}
+	if hasDict {
+		s.globalDict = dictBuf
+		s.globalDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+				return dec
+			},
+		}
 	}
 	return nil
 }
@@ -437,6 +446,15 @@ func (s *SlabFile) RepairTail() error {
 		return nil
 	}
 
+	startOffset := int64(0)
+	if s.version >= Version2 {
+		if size < SlabV2DataStart {
+			s.Size = size
+			return nil
+		}
+		startOffset = SlabV2DataStart
+	}
+
 	// Track the last few record starts so we can drop a corrupted tail record
 	// without needing a second full scan.
 	const keepStarts = 4
@@ -444,8 +462,8 @@ func (s *SlabFile) RepairTail() error {
 	var startsN int
 
 	var headerArr [HeaderSize]byte
-	offset := int64(0)
-	lastGoodEnd := int64(0)
+	offset := startOffset
+	lastGoodEnd := startOffset
 
 	for {
 		if offset+HeaderSize > size {
@@ -481,7 +499,7 @@ func (s *SlabFile) RepairTail() error {
 	}
 	for tries := 0; tries < maxTries; tries++ {
 		if startsN == 0 {
-			trimTo = 0
+			trimTo = startOffset
 			break
 		}
 		start := starts[(startsN-1-tries)%keepStarts]

@@ -116,6 +116,14 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 	}
 	size := info.Size()
 
+	startOffset := int64(0)
+	if size >= slab.SlabV2DataStart {
+		var magic [8]byte
+		if _, err := f.ReadAt(magic[:], 0); err == nil && string(magic[:]) == slab.MagicV2 {
+			startOffset = slab.SlabV2DataStart
+		}
+	}
+
 	microBatch := opts.MicroBatchSize
 	if microBatch <= 0 {
 		microBatch = 256
@@ -124,11 +132,11 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 	lim := newLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
 
 	var ops []db.CompactionOp
-	offset := int64(0)
+	offset := startOffset
 	sm := c.db.SlabManager()
 
 	const readerSize = 256 << 10
-	section := io.NewSectionReader(f, 0, size)
+	section := io.NewSectionReader(f, startOffset, size-startOffset)
 	r := bufio.NewReaderSize(section, readerSize)
 
 	var headerBuf [slab.HeaderSize]byte
