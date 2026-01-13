@@ -85,7 +85,6 @@ type SlabFile struct {
 	version    uint8
 	globalDict []byte
 	globalDecs *sync.Pool
-	localDecs  sync.Map // zoneID -> *sync.Pool
 
 	// recent local dictionaries for USE_REF emission
 	recentDicts     map[uint64]dictRefEntry
@@ -299,11 +298,10 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 		if zh.DictCRC == 0 {
 			return nil, nil, errors.New("slab: local dictionary CRC missing")
 		}
-		// Check cache
-		if pool, ok := s.localDecs.Load(zoneID); ok {
-			p := pool.(*sync.Pool)
-			dec := p.Get().(*zstd.Decoder)
-			return dec, func() { p.Put(dec) }, nil
+		key := dictCacheKey{slab: s, zoneID: uint32(zoneID)}
+		if pool, ok := dictPools.get(key); ok {
+			dec := pool.Get().(*zstd.Decoder)
+			return dec, func() { pool.Put(dec) }, nil
 		}
 
 		// Load from disk. Dict is 32KB starting after 64B header.
@@ -325,10 +323,9 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 				return dec
 			},
 		}
-		actualPool, _ := s.localDecs.LoadOrStore(zoneID, pool)
-		p := actualPool.(*sync.Pool)
-		dec := p.Get().(*zstd.Decoder)
-		return dec, func() { p.Put(dec) }, nil
+		pool = dictPools.getOrAdd(key, pool)
+		dec := pool.Get().(*zstd.Decoder)
+		return dec, func() { pool.Put(dec) }, nil
 	case ZoneDictRef:
 		refZoneID := int64(zh.DictLength)
 		if refZoneID <= 0 {
@@ -361,10 +358,10 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 				if refHeader.DictCRC != 0 && refHeader.DictCRC != zh.DictCRC {
 					return nil, nil, errors.New("slab: ref dictionary CRC mismatch")
 				}
-				if pool, ok := s.localDecs.Load(refZoneID); ok {
-					p := pool.(*sync.Pool)
-					dec := p.Get().(*zstd.Decoder)
-					return dec, func() { p.Put(dec) }, nil
+				refKey := dictCacheKey{slab: s, zoneID: uint32(refZoneID)}
+				if pool, ok := dictPools.get(refKey); ok {
+					dec := pool.Get().(*zstd.Decoder)
+					return dec, func() { pool.Put(dec) }, nil
 				}
 				dictOffset := refHeaderOffset + ZoneHeaderSize
 				dictBuf := make([]byte, GlobalDictSize)
@@ -381,10 +378,9 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 						return dec
 					},
 				}
-				actualPool, _ := s.localDecs.LoadOrStore(refZoneID, pool)
-				p := actualPool.(*sync.Pool)
-				dec := p.Get().(*zstd.Decoder)
-				return dec, func() { p.Put(dec) }, nil
+				pool = dictPools.getOrAdd(refKey, pool)
+				dec := pool.Get().(*zstd.Decoder)
+				return dec, func() { pool.Put(dec) }, nil
 			case ZoneDictRef:
 				refZoneID = int64(refHeader.DictLength)
 				if refZoneID <= 0 {

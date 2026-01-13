@@ -86,7 +86,7 @@ Prevent unbounded decoder pool growth for local/ref dicts.
 - New test: "LRU reuse keeps hot zones fast".
 
 **Status Log**
-- [ ] pending
+- [x] completed: added global LRU for local/ref decoders; tests cover eviction behavior.
 
 ---
 
