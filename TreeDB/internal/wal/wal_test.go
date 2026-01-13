@@ -259,6 +259,66 @@ func TestWALRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 	}
 }
 
+func TestWALCompression(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compressed.wal")
+
+	w, err := NewWriterWithOptions(path, Options{Compress: true})
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// Use repetitive data to ensure compression actually triggers (payload > 128 and compresses)
+	compressibleVal := bytes.Repeat([]byte("very compressible data indeed "), 20)
+	ops := []struct {
+		seq uint64
+		op  byte
+		key []byte
+		val []byte
+	}{
+		{1, OpSet, []byte("key1"), compressibleVal},
+		{2, OpSet, []byte("key2"), compressibleVal},
+	}
+
+	for _, op := range ops {
+		if err := w.Append(op.seq, op.op, op.key, op.val); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	// Verify file size is smaller than raw data if possible, or at least readable
+	info, _ := os.Stat(path)
+	t.Logf("Compressed WAL size: %d", info.Size())
+
+	r, err := NewReaderWithOptions(path, Options{Compress: true})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+
+	for i, want := range ops {
+		seq, op, k, v, err := r.ReadNext()
+		if err != nil {
+			t.Fatalf("ReadNext %d: %v", i, err)
+		}
+		if seq != want.seq {
+			t.Errorf("seq %d: got %d, want %d", i, seq, want.seq)
+		}
+		if op != want.op {
+			t.Errorf("op %d: got %d, want %d", i, op, want.op)
+		}
+		if !bytes.Equal(k, want.key) {
+			t.Errorf("key %d: got %q, want %q", i, k, want.key)
+		}
+		if !bytes.Equal(v, want.val) {
+			t.Errorf("val %d: got %d bytes, want %d bytes", i, len(v), len(want.val))
+		}
+	}
+}
+
 func TestWALMaxSegmentSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "wal-000001.log")

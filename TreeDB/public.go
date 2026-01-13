@@ -117,6 +117,9 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_SPLIT_VALUE_LOG") {
 		opts.SplitValueLog = true
 	}
+	if envBool("TREEDB_WAL_COMPRESSION") {
+		opts.WALCompression = true
+	}
 	if envBool("TREEDB_MEMTABLE_VALUE_LOG_POINTERS") {
 		opts.MemtableValueLogPointers = true
 	}

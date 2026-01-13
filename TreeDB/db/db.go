@@ -225,6 +225,8 @@ type Options struct {
 	// This improves performance but sacrifices durability: a crash will revert
 	// the database to the last Checkpoint (backend flush).
 	DisableWAL bool
+	// WALCompression enables compression for the metadata WAL.
+	WALCompression bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
