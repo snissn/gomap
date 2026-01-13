@@ -11,7 +11,7 @@ TreeDB Version 2 implements **Zonal Dictionary Compression** with **Global-Local
 | Offset | Size | Description |
 | :--- | :--- | :--- |
 | 0 | 32KB | **File Header**: Magic (`TRDB-SLB`), Version (`0x02`), and Metadata. |
-| 32KB | 32KB | **Global Dictionary**: Trained on the start of the slab. Used by all zones by default. |
+| 32KB | 32KB | **Global Dictionary**: Seeded from the active compression profile at slab creation. Used by all zones by default. |
 | 64KB | 2MB - 64KB | **Zone 0 Data**: Records compressed against Global Dict. |
 | 2,097,152 | 64B | **Zone 1 Header**: Flags indicating which dictionary to use. |
 | 2,097,152 + 64B| ... | **Zone 1 Data**: Records. |
@@ -25,6 +25,16 @@ To read a record at `ptr.Offset`:
    - `0x00 (USE_GLOBAL)`: Use the Global Dictionary (already in memory). **[0 extra I/O]**
    - `0x01 (USE_LOCAL)`: Read the 32KB dictionary immediately following the header. **[1 extra I/O]**
    - `0x02 (USE_REF)`: Use the dictionary already loaded for Zone `N` (Index provided in header). **[0 extra I/O if cached]**
+
+### 2.3 Value Size Limit (Current Implementation)
+- **Limit**: A single slab record must fit within a V2 zone. This caps record size at
+  `ZoneSize - ZoneHeaderSize` (~2MB - 64B).
+- **Behavior**: Writes larger than the cap return `ErrRecordTooLarge`.
+- **Remediations (future work)**:
+  1. **Chunked values**: split a large value across multiple slab records with a
+     reassembly layer.
+  2. **Larger zones**: increase the zone size (format change) to raise the cap.
+  3. **Alternate store**: route oversized values to a separate blob/value store.
 
 ---
 
@@ -41,6 +51,11 @@ When the `SlabManager` trains a new dictionary for a zone:
 - **Entropy Check**: The compressor tracks the "Compression Ratio" of the last 100 records. 
 - If the ratio degrades by >20% compared to the start of the zone, it signals that the Global/Current dictionary is becoming "stale."
 - It then triggers **Background Training** for a new Local Dictionary to be used in the *next* zone.
+
+### 3.2a Adaptive Profile Selection (Current RC Policy)
+- The RC uses the adaptive trainer to select a dictionary + K profile based on rolling ratio drift and anti-thrash gating.
+- The "Global Dictionary" is seeded from the active profile rather than strictly from the first slab bytes.
+- K selection is score-based (ratio vs decode cost), with guarded retrains to avoid churn.
 
 ### 3.3 Two-Pass Compaction (The "Gold Standard")
 During compaction, the `Compactor` analyzes the entire 4GB slab to be written:
@@ -108,3 +123,14 @@ To ensure high performance and low GC pressure, the Go implementation utilizes a
 
 ---
 **Status**: Alpha / Breaking / Optimized.
+
+---
+
+## 6. 2026-01-11 Micro-batch Dict Benchmark (Gold Goal)
+- Command: `go run ./TreeDB/cmd/kv_dict_batch_bench -input tmp/treedb_kv_full.jsonl -dict tmp/dict-32k.zdict`
+- Findings:
+  - Total ratio approaches ~0.33 at K≈64–128 (near streaming ceiling).
+  - Best trade for bounded point-read decode is K≈3–8 (default expected range).
+  - Metadata kept separate; per-frame offsets only.
+- Goal: when selecting/composing slab dictionaries, choose K in this range (score-based) to keep point reads to one small frame while approaching ~0.33x total ratio. K selection will be done at dict creation time with lagged retrain to avoid thrash.
+- Current gating (anti-thrash): recompute dict+K only when >=64MiB or >=250k records and >=10m since last accept, AND observed ratio drift ≥7% vs baseline. Accept new profile only if total_ratio improves by ≥2%. Attempts/accepts/rejects surfaced via trainer stats.

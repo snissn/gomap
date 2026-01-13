@@ -64,7 +64,7 @@ On the server, we additionally use a **local replace** so `celestia-appd` uses t
 
 ### Server
 
-- SSH: `ssh mikers@192.168.0.132`
+- SSH: `ssh mikers@192.168.0.185`
 
 ### Server paths (canonical)
 

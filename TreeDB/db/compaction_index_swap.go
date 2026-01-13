@@ -11,6 +11,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
+	"github.com/klauspost/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -19,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/slab"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -34,6 +37,84 @@ type IndexSwapCompactionOptions struct {
 	// Assist is an optional hook invoked periodically during compaction work.
 	// It must be fast and must not assume any DB locks are held.
 	Assist func()
+
+	// SampleCompressionDict enables a pre-pass that selects a representative slab
+	// and trains a dictionary on its values for compaction analysis.
+	SampleCompressionDict bool
+	// ApplyCompressionShiftPlan uses the sampled shift points to bypass
+	// compression for windows where the dict ratio degrades.
+	ApplyCompressionShiftPlan bool
+	// DisableCompressionIfBaseRatioGTE disables compression during compaction
+	// when the sampled base ratio is greater than or equal to this threshold.
+	// Set to 0 to disable.
+	DisableCompressionIfBaseRatioGTE float64
+	// ShiftWindowDivisor overrides the default shift window divisor. 0 uses the
+	// built-in default.
+	ShiftWindowDivisor int
+	// ShiftMinWindowBytes overrides the default shift window minimum size. 0 uses
+	// the built-in default.
+	ShiftMinWindowBytes int
+	// ShiftRatioTolerance controls how much worse a window's compression ratio
+	// can be relative to the sample baseline before it is marked as a shift.
+	// Negative values can be used for testing to mark more windows as shifts.
+	ShiftRatioTolerance float64
+	// ShiftRatioToleranceSet enables overriding the default ratio tolerance.
+	ShiftRatioToleranceSet bool
+	// ShiftMaxPoints overrides the maximum number of shift points kept for the
+	// plan. 0 uses the built-in default.
+	ShiftMaxPoints int
+
+	// Stats captures timing and byte counters for the compaction run.
+	Stats *IndexSwapCompactionStats
+}
+
+// IndexSwapCompactionStats summarizes compaction work for observability.
+type IndexSwapCompactionStats struct {
+	TotalNanos       uint64
+	BuildNanos       uint64
+	CatchupNanos     uint64
+	FinalizeNanos    uint64
+	SampleNanos      uint64
+	SampleCandidates uint64
+
+	RemapCount uint64
+	RemapBytes uint64
+
+	SlabWriteBytes int
+	SlabDeadBytes  int
+
+	SampleSlabID      uint32
+	SampleBytes       uint64
+	SampleRecords     uint64
+	SampleDictBytes   uint64
+	SampleDictHash    uint64
+	SampleDictRatio   float64
+	SampleBaseBytes   uint64
+	SampleBaseStored  uint64
+	SampleBaseRecords uint64
+	SampleBaseRatio   float64
+
+	SampleShiftPoints            uint64
+	SampleShiftWorstRatio        float64
+	SampleShiftAvgRatio          float64
+	SampleShiftBytes             uint64
+	SampleShiftRecords           uint64
+	SampleShiftDictSampleBytes   uint64
+	SampleShiftDictSampleRecords uint64
+	SampleShiftDictBytes         uint64
+	SampleShiftDictHash          uint64
+	SampleShiftDictRatio         float64
+
+	ShiftOverrideRecords uint64
+	ShiftOverrideBytes   uint64
+	DisableAllSlabs      uint64
+}
+
+type compactionShiftTuning struct {
+	windowDivisor  int
+	minWindowBytes int
+	ratioTolerance float64
+	maxPoints      int
 }
 
 // CompactSlabsIndexSwap compacts one or more slab files by rebuilding the user
@@ -61,6 +142,15 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 	if db.dir == "" {
 		return errors.New("compaction: missing db dir")
+	}
+
+	stats := opts.Stats
+	var totalStart time.Time
+	if stats != nil {
+		totalStart = time.Now()
+		defer func() {
+			stats.TotalNanos = uint64(time.Since(totalStart))
+		}()
 	}
 
 	activeID := db.slabManager.ActiveSlabID()
@@ -123,11 +213,196 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	baseSnap := db.AcquireSnapshot()
 	defer func() { _ = baseSnap.Close() }()
 
+	shiftTuning := compactionShiftTuning{
+		windowDivisor:  compactionShiftWindowDivisor,
+		minWindowBytes: compactionShiftMinWindowBytes,
+		ratioTolerance: compactionShiftRatioTolerance,
+		maxPoints:      compactionShiftMaxPoints,
+	}
+	if opts.ShiftWindowDivisor > 0 {
+		shiftTuning.windowDivisor = opts.ShiftWindowDivisor
+	}
+	if opts.ShiftMinWindowBytes > 0 {
+		shiftTuning.minWindowBytes = opts.ShiftMinWindowBytes
+	}
+	if opts.ShiftRatioToleranceSet {
+		shiftTuning.ratioTolerance = opts.ShiftRatioTolerance
+	}
+	if opts.ShiftMaxPoints > 0 {
+		shiftTuning.maxPoints = opts.ShiftMaxPoints
+	}
+	if shiftTuning.windowDivisor <= 0 {
+		shiftTuning.windowDivisor = 1
+	}
+	if shiftTuning.minWindowBytes <= 0 {
+		shiftTuning.minWindowBytes = compactionShiftMinWindowBytes
+	}
+	if shiftTuning.maxPoints <= 0 {
+		shiftTuning.maxPoints = compactionShiftMaxPoints
+	}
+
+	var (
+		shiftOverride   *compactionShiftOverride
+		disableAll      map[uint32]compactionDisableAllOverride
+		baseRatioBySlab map[uint32]compactionBaseRatioSample
+	)
+	needsSampling := opts.SampleCompressionDict || opts.ApplyCompressionShiftPlan || opts.DisableCompressionIfBaseRatioGTE > 0
+	if needsSampling && db.slabManager.Compression() == slab.CompressionZSTD {
+		if cfg, ok := db.slabManager.CompressionTrainConfig(); ok && cfg.TrainBytes > 0 {
+			sampleStart := time.Now()
+			candidates, err := selectCompactionSampleSlabs(ctx, baseSnap, targets, 4)
+			if err != nil {
+				cleanupNewPager()
+				return err
+			}
+			if len(candidates) > 0 {
+				buildDict := opts.SampleCompressionDict
+				if opts.DisableCompressionIfBaseRatioGTE > 0 {
+					disableAll = make(map[uint32]compactionDisableAllOverride, len(candidates))
+					baseRatioBySlab = make(map[uint32]compactionBaseRatioSample, len(candidates))
+				}
+				if stats != nil {
+					stats.SampleCandidates = uint64(len(candidates))
+				}
+				var (
+					best       compactionDictSample
+					bestID     uint32
+					bestFound  bool
+					dictFound  bool
+					bestDict   compactionDictSample
+					bestDictID uint32
+				)
+				samples, err := collectCompactionSampleSet(ctx, baseSnap, candidates, cfg, buildDict, db.slabManager.EstimateCompression)
+				if err != nil {
+					cleanupNewPager()
+					return err
+				}
+				for _, sampleSlabID := range candidates {
+					bundle, ok := samples[sampleSlabID]
+					if !ok {
+						continue
+					}
+					sample := bundle.sample
+					if !bestFound || sample.bytes > best.bytes {
+						best = sample
+						bestID = sampleSlabID
+						bestFound = true
+					}
+					if buildDict && sample.dictBytes > 0 && sample.dictRatio > 0 {
+						if !dictFound || sample.dictRatio < bestDict.dictRatio {
+							bestDict = sample
+							bestDictID = sampleSlabID
+							dictFound = true
+						}
+					}
+					if opts.DisableCompressionIfBaseRatioGTE > 0 {
+						baseRatioBySlab[sampleSlabID] = compactionBaseRatioSample{
+							ratio:   bundle.baseRatio,
+							raw:     bundle.baseRaw,
+							stored:  bundle.baseStored,
+							records: bundle.baseRecords,
+						}
+						if bundle.baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
+							disableAll[sampleSlabID] = compactionDisableAllOverride{
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
+					}
+				}
+				if dictFound {
+					best = bestDict
+					bestID = bestDictID
+				}
+				if bestFound {
+					var baseRatio float64
+					if bundle, ok := samples[bestID]; ok {
+						baseRatio = bundle.baseRatio
+						if stats != nil {
+							stats.SampleSlabID = bestID
+							stats.SampleBytes = best.bytes
+							stats.SampleRecords = best.records
+							stats.SampleDictBytes = best.dictBytes
+							stats.SampleDictHash = best.dictHash
+							stats.SampleDictRatio = best.dictRatio
+							stats.SampleBaseBytes = bundle.baseRaw
+							stats.SampleBaseStored = bundle.baseStored
+							stats.SampleBaseRecords = bundle.baseRecords
+							stats.SampleBaseRatio = bundle.baseRatio
+						}
+					}
+					if opts.DisableCompressionIfBaseRatioGTE > 0 && baseRatio >= opts.DisableCompressionIfBaseRatioGTE {
+						if disableAll == nil {
+							disableAll = make(map[uint32]compactionDisableAllOverride, len(targets))
+						}
+						for slabID := range targets {
+							if _, ok := disableAll[slabID]; ok {
+								continue
+							}
+							disableAll[slabID] = compactionDisableAllOverride{
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
+					}
+					_, disableAllBest := disableAll[bestID]
+					if !disableAllBest && baseRatio > 0 {
+						shiftPlan, err := collectCompactionShiftPlanWithEstimator(ctx, baseSnap, bestID, cfg, baseRatio, shiftTuning, db.slabManager.EstimateCompression)
+						if err != nil {
+							cleanupNewPager()
+							return err
+						}
+						if stats != nil {
+							stats.SampleShiftPoints = shiftPlan.shiftCount
+							stats.SampleShiftWorstRatio = shiftPlan.worstRatio
+							stats.SampleShiftAvgRatio = shiftPlan.avgRatio
+							stats.SampleShiftBytes = shiftPlan.shiftBytes
+							stats.SampleShiftRecords = shiftPlan.shiftRecords
+						}
+						if opts.ApplyCompressionShiftPlan && len(shiftPlan.points) > 0 && shiftPlan.windowBytes > 0 {
+							shiftOverride = &compactionShiftOverride{
+								slabID:         bestID,
+								plan:           shiftPlan,
+								maxRecordBytes: cfg.MaxRecordBytes,
+							}
+						}
+						if buildDict && stats != nil {
+							shiftSample, err := collectCompactionShiftDictSample(ctx, baseSnap, bestID, cfg, shiftPlan, db.slabManager.EstimateCompression)
+							if err != nil {
+								cleanupNewPager()
+								return err
+							}
+							stats.SampleShiftDictSampleBytes = shiftSample.bytes
+							stats.SampleShiftDictSampleRecords = shiftSample.records
+							stats.SampleShiftDictBytes = shiftSample.dictBytes
+							stats.SampleShiftDictHash = shiftSample.dictHash
+							stats.SampleShiftDictRatio = shiftSample.dictRatio
+						}
+					}
+				}
+				if stats != nil && len(disableAll) > 0 {
+					stats.DisableAllSlabs = uint64(len(disableAll))
+				}
+			}
+			if stats != nil {
+				stats.SampleNanos = uint64(time.Since(sampleStart))
+			}
+		}
+	}
+
 	lim := newIndexSwapLimiter(opts.CopyBytesPerSec, opts.CopyBurstBytes)
-	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist)
+	remapIter := newIndexSwapRemapIterator(ctx, baseSnap.tree.Iterator(nil, nil), db, targets, lim, opts.Assist, shiftOverride, disableAll)
+	buildStart := time.Now()
 	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 	})
+	if stats != nil {
+		stats.BuildNanos = uint64(time.Since(buildStart))
+		stats.RemapCount = remapIter.remapCount
+		stats.RemapBytes = remapIter.remapBytes
+		stats.SlabWriteBytes = remapIter.metrics.SlabWriteBytes
+		stats.SlabDeadBytes = remapIter.metrics.SlabDeadBytes
+		stats.ShiftOverrideRecords = remapIter.shiftOverrideRecords
+		stats.ShiftOverrideBytes = remapIter.shiftOverrideBytes
+	}
 	iterErr := remapIter.Error()
 	_ = remapIter.Close()
 	if buildErr != nil || iterErr != nil {
@@ -148,6 +423,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	// Online catch-up: replay recorded keys in bounded passes. Filter out keys
 	// whose state did not change since the base snapshot so we never override a
 	// slab-pointer remap with the old pointer value.
+	catchupStart := time.Now()
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
@@ -168,9 +444,13 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 			break
 		}
 	}
+	if stats != nil {
+		stats.CatchupNanos = uint64(time.Since(catchupStart))
+	}
 
 	// Final cutover: stop recording, apply the tail, rebuild the System tree in
 	// the new file, then swap index.db on disk and publish a new index generation.
+	finalizeStart := time.Now()
 	defers := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -338,6 +618,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		}
 
 		db.releaseIndex(oldGen)
+		if stats != nil {
+			stats.FinalizeNanos = uint64(time.Since(finalizeStart))
+		}
 		return nil
 	}
 }
@@ -410,29 +693,40 @@ func (l *indexSwapLimiter) Wait(ctx context.Context, n int) error {
 }
 
 type indexSwapRemapIterator struct {
-	ctx     context.Context
-	under   iterator.UnsafeIterator
-	db      *DB
-	targets map[uint32]struct{}
-	lim     *indexSwapLimiter
-	assist  func()
+	ctx        context.Context
+	under      iterator.UnsafeIterator
+	db         *DB
+	targets    map[uint32]struct{}
+	lim        *indexSwapLimiter
+	assist     func()
+	shift      *compactionShiftOverride
+	disableAll map[uint32]compactionDisableAllOverride
 
 	metrics adaptive.Metrics
 	remap   map[page.ValuePtr]page.ValuePtr
 	err     error
 
+	remapCount           uint64
+	remapBytes           uint64
+	shiftPointIdx        int
+	shiftRawBytes        uint64
+	shiftOverrideBytes   uint64
+	shiftOverrideRecords uint64
+
 	lastAssist       time.Time
 	bytesSinceAssist int64
 }
 
-func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func()) *indexSwapRemapIterator {
+func newIndexSwapRemapIterator(ctx context.Context, under iterator.UnsafeIterator, db *DB, targets map[uint32]struct{}, lim *indexSwapLimiter, assist func(), shift *compactionShiftOverride, disableAll map[uint32]compactionDisableAllOverride) *indexSwapRemapIterator {
 	it := &indexSwapRemapIterator{
-		ctx:     ctx,
-		under:   under,
-		db:      db,
-		targets: targets,
-		lim:     lim,
-		assist:  assist,
+		ctx:        ctx,
+		under:      under,
+		db:         db,
+		targets:    targets,
+		lim:        lim,
+		assist:     assist,
+		shift:      shift,
+		disableAll: disableAll,
 	}
 	it.lastAssist = time.Now()
 	return it
@@ -511,11 +805,20 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.bytesSinceAssist += int64(recordBytes)
 	it.maybeAssist(false)
 
-	newPtr, err := it.db.slabManager.Append(key, value)
+	disableCompression := it.shouldDisableCompression(ptr, key, value)
+	appendOpts := slab.AppendOptions{
+		DisableCompression: disableCompression,
+		SkipTraining:       true,
+		SkipMetrics:        true,
+	}
+	newPtr, err := it.db.slabManager.AppendWithOptions(key, value, appendOpts)
 	if err != nil {
 		it.err = err
 		return nil, page.ValuePtr{}, 0
 	}
+
+	it.remapCount++
+	it.remapBytes += uint64(recordBytes)
 
 	if it.remap == nil {
 		it.remap = make(map[page.ValuePtr]page.ValuePtr, 1024)
@@ -538,6 +841,89 @@ func (it *indexSwapRemapIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return nil, newPtr, flags
 }
 
+func compactionShiftRawLen(ptr page.ValuePtr, key, value []byte, maxRecordBytes int) int {
+	rawLen := len(value)
+	if rawLen <= 0 {
+		return 0
+	}
+	if maxRecordBytes > 0 && rawLen > maxRecordBytes {
+		rawLen = maxRecordBytes
+	}
+	if rawLen <= 0 {
+		return 0
+	}
+	if page.ValuePtrIsFullCompressed(ptr) {
+		return rawLen + len(key) + 2
+	}
+	return rawLen
+}
+
+func (it *indexSwapRemapIterator) shouldDisableCompression(ptr page.ValuePtr, key, value []byte) bool {
+	rawLen := compactionShiftRawLen(ptr, key, value, 0)
+	if rawLen <= 0 {
+		return false
+	}
+
+	if it.disableAll != nil {
+		if override, ok := it.disableAll[ptr.FileID]; ok {
+			rawLen = compactionShiftRawLen(ptr, key, value, override.maxRecordBytes)
+			it.shiftOverrideRecords++
+			it.shiftOverrideBytes += uint64(rawLen)
+			return true
+		}
+	}
+
+	shift := it.shift
+	if shift == nil || ptr.FileID != shift.slabID {
+		return false
+	}
+
+	rawLen = compactionShiftRawLen(ptr, key, value, shift.maxRecordBytes)
+	if rawLen <= 0 {
+		return false
+	}
+	if shift.disableAll {
+		it.shiftOverrideRecords++
+		it.shiftOverrideBytes += uint64(rawLen)
+		return true
+	}
+	if len(shift.plan.points) == 0 || shift.plan.windowBytes == 0 {
+		return false
+	}
+
+	start := it.shiftRawBytes
+	end := start + uint64(rawLen)
+
+	for it.shiftPointIdx < len(shift.plan.points) {
+		point := shift.plan.points[it.shiftPointIdx]
+		windowEnd := point.rawBytes
+		windowStart := uint64(0)
+		if shift.plan.windowBytes > 0 && windowEnd > shift.plan.windowBytes {
+			windowStart = windowEnd - shift.plan.windowBytes
+		}
+		if end <= windowStart {
+			break
+		}
+		if start < windowEnd && end > windowStart {
+			it.shiftRawBytes = end
+			if end >= windowEnd {
+				it.shiftPointIdx++
+			}
+			it.shiftOverrideRecords++
+			it.shiftOverrideBytes += uint64(rawLen)
+			return true
+		}
+		if start >= windowEnd {
+			it.shiftPointIdx++
+			continue
+		}
+		break
+	}
+
+	it.shiftRawBytes = end
+	return false
+}
+
 func (it *indexSwapRemapIterator) Key() []byte   { return it.under.Key() }
 func (it *indexSwapRemapIterator) Value() []byte { return it.under.Value() }
 func (it *indexSwapRemapIterator) KeyCopy(dst []byte) []byte {
@@ -556,6 +942,745 @@ func (it *indexSwapRemapIterator) Error() error {
 func (it *indexSwapRemapIterator) Close() error { return it.under.Close() }
 func (it *indexSwapRemapIterator) Domain() (start, end []byte) {
 	return it.under.Domain()
+}
+
+type compactionDictSample struct {
+	bytes     uint64
+	records   uint64
+	dictBytes uint64
+	dictHash  uint64
+	dictRatio float64
+	dict      []byte
+}
+
+type compactionShiftPoint struct {
+	records  uint64
+	rawBytes uint64
+	ratio    float64
+}
+
+type compactionShiftPlan struct {
+	points       []compactionShiftPoint
+	worstRatio   float64
+	avgRatio     float64
+	shiftBytes   uint64
+	shiftRecords uint64
+	shiftCount   uint64
+	windowBytes  uint64
+}
+
+type compactionShiftOverride struct {
+	slabID         uint32
+	plan           compactionShiftPlan
+	maxRecordBytes int
+	disableAll     bool
+}
+
+type compactionDisableAllOverride struct {
+	maxRecordBytes int
+}
+
+type compactionBaseRatioSample struct {
+	ratio   float64
+	raw     uint64
+	stored  uint64
+	records uint64
+}
+
+type compactionSampleBundle struct {
+	sample      compactionDictSample
+	baseRatio   float64
+	baseRaw     uint64
+	baseStored  uint64
+	baseRecords uint64
+}
+
+const (
+	compactionShiftWindowDivisor  = 4
+	compactionShiftMinWindowBytes = 128 << 10
+	compactionShiftRatioTolerance = 0.15
+	compactionShiftMaxPoints      = 16
+)
+
+func selectCompactionSampleSlab(ctx context.Context, snap *Snapshot, targets map[uint32]struct{}) (uint32, bool, error) {
+	ids, err := selectCompactionSampleSlabs(ctx, snap, targets, 1)
+	if err != nil || len(ids) == 0 {
+		return 0, false, err
+	}
+	return ids[0], true, nil
+}
+
+func selectCompactionSampleSlabs(ctx context.Context, snap *Snapshot, targets map[uint32]struct{}, max int) ([]uint32, error) {
+	if snap == nil || snap.idx == nil {
+		return nil, errors.New("compaction: missing base snapshot")
+	}
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	liveBytes := make(map[uint32]uint64, len(targets))
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			iter.Next()
+			continue
+		}
+		if _, ok := targets[ptr.FileID]; ok {
+			liveBytes[ptr.FileID] += uint64(page.ValuePtrRecordLength(ptr))
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+
+	candidates := make([]struct {
+		id    uint32
+		bytes uint64
+	}, 0, len(liveBytes))
+	for id, bytes := range liveBytes {
+		candidates = append(candidates, struct {
+			id    uint32
+			bytes uint64
+		}{id: id, bytes: bytes})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].bytes == candidates[j].bytes {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].bytes > candidates[j].bytes
+	})
+	if max > 0 && len(candidates) > max {
+		candidates = candidates[:max]
+	}
+	ids := make([]uint32, len(candidates))
+	for i, candidate := range candidates {
+		ids[i] = candidate.id
+	}
+	return ids, nil
+}
+
+type compactionSampleAccumulator struct {
+	slabID        uint32
+	samples       [][]byte
+	sampleBytes   uint64
+	sampleRecords uint64
+	rawBytes      uint64
+	storedBytes   uint64
+	baseRecords   uint64
+	strideCounter int
+	done          bool
+}
+
+func collectCompactionSampleSet(ctx context.Context, snap *Snapshot, candidates []uint32, cfg slab.CompressionTrainConfig, buildDict bool, estimate func([]byte, []byte) (int, int, error)) (map[uint32]compactionSampleBundle, error) {
+	if snap == nil || snap.idx == nil {
+		return nil, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return map[uint32]compactionSampleBundle{}, nil
+	}
+	if len(candidates) == 0 {
+		return map[uint32]compactionSampleBundle{}, nil
+	}
+
+	accs := make(map[uint32]*compactionSampleAccumulator, len(candidates))
+	for _, slabID := range candidates {
+		accs[slabID] = &compactionSampleAccumulator{slabID: slabID}
+	}
+	remaining := len(accs)
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+	targetBytes := uint64(cfg.TrainBytes)
+	minRecords := uint64(cfg.MinRecords)
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			iter.Next()
+			continue
+		}
+		acc := accs[ptr.FileID]
+		if acc == nil || acc.done {
+			iter.Next()
+			continue
+		}
+		acc.strideCounter++
+		if stride > 1 && acc.strideCounter%stride != 0 {
+			iter.Next()
+			continue
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+
+		needSamples := acc.sampleBytes < targetBytes || acc.sampleRecords < minRecords
+		needBase := acc.rawBytes < targetBytes || acc.baseRecords < minRecords
+
+		if needSamples {
+			cp := make([]byte, len(value))
+			copy(cp, value)
+			acc.samples = append(acc.samples, cp)
+			acc.sampleBytes += uint64(len(cp))
+			acc.sampleRecords++
+		}
+		if needBase {
+			rawLen, storedLen, err := estimate(key, value)
+			if err != nil {
+				return nil, err
+			}
+			acc.rawBytes += uint64(rawLen)
+			acc.storedBytes += uint64(storedLen)
+			acc.baseRecords++
+		}
+
+		if !(acc.sampleBytes < targetBytes || acc.sampleRecords < minRecords || acc.rawBytes < targetBytes || acc.baseRecords < minRecords) {
+			acc.done = true
+			remaining--
+			if remaining == 0 {
+				break
+			}
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+
+	out := make(map[uint32]compactionSampleBundle, len(accs))
+	for id, acc := range accs {
+		sample := buildCompactionDictSample(id, cfg, acc.samples, acc.sampleBytes, acc.sampleRecords, buildDict)
+		ratio := 0.0
+		if acc.rawBytes > 0 {
+			ratio = float64(acc.storedBytes) / float64(acc.rawBytes)
+		}
+		out[id] = compactionSampleBundle{
+			sample:      sample,
+			baseRatio:   ratio,
+			baseRaw:     acc.rawBytes,
+			baseStored:  acc.storedBytes,
+			baseRecords: acc.baseRecords,
+		}
+	}
+	return out, nil
+}
+
+func safeBuildZstdDict(opts zstd.BuildDictOptions) (dict []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			dict = nil
+			err = fmt.Errorf("zstd BuildDict panic: %v", r)
+		}
+	}()
+	return zstd.BuildDict(opts)
+}
+
+func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, samples [][]byte, sampleBytes, sampleRecords uint64, buildDict bool) compactionDictSample {
+	sample := compactionDictSample{
+		bytes:   sampleBytes,
+		records: sampleRecords,
+	}
+	if !buildDict || sampleRecords < uint64(cfg.MinRecords) {
+		return sample
+	}
+
+	rawTotal := 0
+	for _, sample := range samples {
+		rawTotal += len(sample)
+	}
+	if rawTotal < 8 {
+		return sample
+	}
+
+	dictBytes := cfg.DictBytes
+	if dictBytes <= 0 {
+		dictBytes = rawTotal
+	}
+	if dictBytes > rawTotal {
+		dictBytes = rawTotal
+	}
+
+	history := make([]byte, 0, dictBytes)
+	for _, sample := range samples {
+		if len(history) >= dictBytes {
+			break
+		}
+		need := dictBytes - len(history)
+		if len(sample) > need {
+			history = append(history, sample[:need]...)
+		} else {
+			history = append(history, sample...)
+		}
+	}
+	if len(history) < 8 {
+		return sample
+	}
+
+	dictID := slabID + 1
+	if dictID == 0 {
+		dictID = 1
+	}
+	dict, err := safeBuildZstdDict(zstd.BuildDictOptions{
+		ID:       dictID,
+		Contents: samples,
+		History:  history,
+		Level:    cfg.Level,
+	})
+	if err != nil {
+		return sample
+	}
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return sample
+	}
+	defer enc.Close()
+
+	storedTotal := 0
+	for _, sample := range samples {
+		storedTotal += len(enc.EncodeAll(sample, nil))
+	}
+	if rawTotal > 0 {
+		sample.dictRatio = float64(storedTotal) / float64(rawTotal)
+	}
+	sample.dictBytes = uint64(len(dict))
+	sample.dictHash = xxhash.Sum64(dict)
+	sample.dict = dict
+	return sample
+}
+
+func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig) (compactionDictSample, error) {
+	if snap == nil || snap.idx == nil {
+		return compactionDictSample{}, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return compactionDictSample{}, nil
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	samples := make([][]byte, 0, cfg.MinRecords)
+	var (
+		sampleBytes   uint64
+		sampleRecords uint64
+		strideCounter int
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return compactionDictSample{}, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+		cp := make([]byte, len(value))
+		copy(cp, value)
+		samples = append(samples, cp)
+		sampleBytes += uint64(len(cp))
+		sampleRecords++
+		if sampleBytes >= uint64(cfg.TrainBytes) && sampleRecords >= uint64(cfg.MinRecords) {
+			break
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return compactionDictSample{}, err
+	}
+
+	sample := compactionDictSample{
+		bytes:   sampleBytes,
+		records: sampleRecords,
+	}
+	if sampleRecords < uint64(cfg.MinRecords) {
+		return sample, nil
+	}
+
+	rawTotal := 0
+	for _, sample := range samples {
+		rawTotal += len(sample)
+	}
+	if rawTotal < 8 {
+		return sample, nil
+	}
+
+	dictBytes := cfg.DictBytes
+	if dictBytes <= 0 {
+		dictBytes = rawTotal
+	}
+	if dictBytes > rawTotal {
+		dictBytes = rawTotal
+	}
+
+	history := make([]byte, 0, dictBytes)
+	for _, sample := range samples {
+		if len(history) >= dictBytes {
+			break
+		}
+		need := dictBytes - len(history)
+		if len(sample) > need {
+			history = append(history, sample[:need]...)
+		} else {
+			history = append(history, sample...)
+		}
+	}
+	if len(history) < 8 {
+		return sample, nil
+	}
+
+	dictID := slabID + 1
+	if dictID == 0 {
+		dictID = 1
+	}
+	dict, err := safeBuildZstdDict(zstd.BuildDictOptions{
+		ID:       dictID,
+		Contents: samples,
+		History:  history,
+		Level:    cfg.Level,
+	})
+	if err != nil {
+		return sample, nil
+	}
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return sample, nil
+	}
+	defer enc.Close()
+
+	storedTotal := 0
+	for _, sample := range samples {
+		storedTotal += len(enc.EncodeAll(sample, nil))
+	}
+	if rawTotal > 0 {
+		sample.dictRatio = float64(storedTotal) / float64(rawTotal)
+	}
+	sample.dictBytes = uint64(len(dict))
+	sample.dictHash = xxhash.Sum64(dict)
+	sample.dict = dict
+	return sample, nil
+}
+
+func collectCompactionCompressionRatio(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, estimate func([]byte, []byte) (int, int, error)) (float64, uint64, uint64, uint64, error) {
+	if snap == nil || snap.idx == nil {
+		return 0, 0, 0, 0, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return 0, 0, 0, 0, nil
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	var (
+		rawBytes      uint64
+		storedBytes   uint64
+		records       uint64
+		strideCounter int
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, 0, 0, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+		rawLen, storedLen, err := estimate(key, value)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		rawBytes += uint64(rawLen)
+		storedBytes += uint64(storedLen)
+		records++
+		if rawBytes >= uint64(cfg.TrainBytes) && records >= uint64(cfg.MinRecords) {
+			break
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return 0, 0, 0, 0, err
+	}
+	if rawBytes == 0 {
+		return 0, rawBytes, storedBytes, records, nil
+	}
+	ratio := float64(storedBytes) / float64(rawBytes)
+	return ratio, rawBytes, storedBytes, records, nil
+}
+
+func collectCompactionShiftPlanWithEstimator(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, baseRatio float64, tuning compactionShiftTuning, estimate func([]byte, []byte) (int, int, error)) (compactionShiftPlan, error) {
+	if snap == nil || snap.idx == nil {
+		return compactionShiftPlan{}, errors.New("compaction: missing base snapshot")
+	}
+	if baseRatio <= 0 {
+		return compactionShiftPlan{}, nil
+	}
+	if cfg.MinRecords <= 0 {
+		return compactionShiftPlan{}, nil
+	}
+
+	windowBytes := cfg.TrainBytes / tuning.windowDivisor
+	if windowBytes < tuning.minWindowBytes {
+		windowBytes = tuning.minWindowBytes
+	}
+	plan := compactionShiftPlan{windowBytes: uint64(windowBytes)}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	var (
+		windowRaw     int
+		windowStored  int
+		windowRecords int
+		totalRaw      uint64
+		totalRecords  uint64
+		strideCounter int
+	)
+	applyWindow := func() {
+		if windowRaw == 0 || windowRecords < cfg.MinRecords {
+			return
+		}
+		ratio := float64(windowStored) / float64(windowRaw)
+		if ratio > baseRatio*(1.0+tuning.ratioTolerance) {
+			plan.shiftCount++
+			if len(plan.points) < tuning.maxPoints {
+				plan.points = append(plan.points, compactionShiftPoint{
+					records:  totalRecords,
+					rawBytes: totalRaw,
+					ratio:    ratio,
+				})
+			}
+			plan.shiftBytes += uint64(windowRaw)
+			plan.shiftRecords += uint64(windowRecords)
+			plan.avgRatio += ratio
+			if ratio > plan.worstRatio {
+				plan.worstRatio = ratio
+			}
+		}
+		windowRaw = 0
+		windowStored = 0
+		windowRecords = 0
+	}
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+
+		rawLen, storedLen, err := estimate(key, value)
+		if err != nil {
+			return compactionShiftPlan{}, err
+		}
+		windowRaw += rawLen
+		windowStored += storedLen
+		windowRecords++
+		totalRaw += uint64(rawLen)
+		totalRecords++
+
+		if windowRaw >= windowBytes {
+			applyWindow()
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return plan, err
+	}
+	applyWindow()
+	if plan.shiftCount > 0 {
+		plan.avgRatio /= float64(plan.shiftCount)
+	}
+	return plan, nil
+}
+
+func collectCompactionShiftDictSample(ctx context.Context, snap *Snapshot, slabID uint32, cfg slab.CompressionTrainConfig, plan compactionShiftPlan, estimate func([]byte, []byte) (int, int, error)) (compactionDictSample, error) {
+	if snap == nil || snap.idx == nil {
+		return compactionDictSample{}, errors.New("compaction: missing base snapshot")
+	}
+	if cfg.TrainBytes <= 0 || cfg.MinRecords <= 0 {
+		return compactionDictSample{}, nil
+	}
+	if plan.windowBytes == 0 || len(plan.points) == 0 {
+		return compactionDictSample{}, nil
+	}
+
+	worst := plan.points[0]
+	for _, point := range plan.points[1:] {
+		if point.ratio > worst.ratio {
+			worst = point
+		}
+	}
+
+	windowEnd := worst.rawBytes
+	windowStart := uint64(0)
+	if windowEnd > plan.windowBytes {
+		windowStart = windowEnd - plan.windowBytes
+	}
+
+	targetBytes := cfg.TrainBytes
+	if plan.windowBytes > 0 && int(plan.windowBytes) < targetBytes {
+		targetBytes = int(plan.windowBytes)
+	}
+
+	stride := cfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+
+	iter := snap.tree.Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+
+	samples := make([][]byte, 0, cfg.MinRecords)
+	var (
+		sampleBytes   uint64
+		sampleRecords uint64
+		strideCounter int
+		totalRaw      uint64
+	)
+
+	for iter.Valid() {
+		if err := ctx.Err(); err != nil {
+			return compactionDictSample{}, err
+		}
+		_, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || ptr.FileID != slabID {
+			iter.Next()
+			continue
+		}
+		if stride > 1 {
+			strideCounter++
+			if strideCounter%stride != 0 {
+				iter.Next()
+				continue
+			}
+		}
+		key := iter.UnsafeKey()
+		value := iter.UnsafeValue()
+		if len(value) == 0 {
+			iter.Next()
+			continue
+		}
+		if cfg.MaxRecordBytes > 0 && len(value) > cfg.MaxRecordBytes {
+			value = value[:cfg.MaxRecordBytes]
+		}
+		rawLen, _, err := estimate(key, value)
+		if err != nil {
+			return compactionDictSample{}, err
+		}
+
+		start := totalRaw
+		end := start + uint64(rawLen)
+		totalRaw = end
+
+		if end <= windowStart {
+			iter.Next()
+			continue
+		}
+		if start >= windowEnd {
+			break
+		}
+		if end > windowStart && start < windowEnd {
+			cp := make([]byte, len(value))
+			copy(cp, value)
+			samples = append(samples, cp)
+			sampleBytes += uint64(len(cp))
+			sampleRecords++
+			if sampleBytes >= uint64(targetBytes) && sampleRecords >= uint64(cfg.MinRecords) {
+				break
+			}
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return compactionDictSample{}, err
+	}
+	return buildCompactionDictSample(slabID, cfg, samples, sampleBytes, sampleRecords, true), nil
 }
 
 func entriesEquivalent(base node.LeafEntry, baseErr error, curr node.LeafEntry, currErr error) bool {

@@ -50,8 +50,8 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 		if offset+9 > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
-		prefixLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
-		suffixLen := int(binary.LittleEndian.Uint16(n.data[offset+2 : offset+4]))
+		prefixLen := int(getUint16(n.data[offset : offset+2]))
+		suffixLen := int(getUint16(n.data[offset+2 : offset+4]))
 		valLen := int(binary.LittleEndian.Uint32(n.data[offset+4 : offset+8]))
 		flags := n.data[offset+8]
 		keyStart := offset + 9
@@ -71,7 +71,7 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 	if offset+7 > len(n.data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
-	keyLen := int(binary.LittleEndian.Uint16(n.data[offset : offset+2]))
+	keyLen := int(getUint16(n.data[offset : offset+2]))
 	valLen := int(binary.LittleEndian.Uint32(n.data[offset+2 : offset+6]))
 	flags := n.data[offset+6]
 	keyStart := offset + 7
@@ -107,12 +107,53 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 		}
 		key = n.data[keyStart : keyStart+layout.keyLen]
+		n.leafValid = false
 		return key, layout, entryStart, nil
 	}
 
 	count := n.Count()
 	if index >= count {
 		return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+	}
+	if n.leafValid && n.leafIndex+1 == index {
+		layout, err = n.leafEntryLayoutAt(entryStart)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		if index%leafPrefixRestartInterval == 0 && layout.prefixLen != 0 {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		keyStart := entryStart + layout.headerSize
+		keyEnd := keyStart + layout.suffixLen
+		if keyEnd > len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		if layout.prefixLen == 0 {
+			key = n.data[keyStart:keyEnd]
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
+			return key, layout, entryStart, nil
+		}
+		if layout.prefixLen > len(n.leafKey) {
+			n.leafValid = false
+		} else {
+			keyLen := layout.prefixLen + layout.suffixLen
+			key = n.ensureKeyScratch(keyLen)
+			sameBacking := len(n.leafKey) > 0 && len(key) > 0 && &n.leafKey[0] == &key[0]
+			if !sameBacking && layout.prefixLen > 0 {
+				copy(key, n.leafKey[:layout.prefixLen])
+			}
+			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
+			return key, layout, entryStart, nil
+		}
 	}
 	restart := index - (index % leafPrefixRestartInterval)
 	var prevKey []byte
@@ -139,21 +180,28 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			if layout.prefixLen != 0 {
 				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 			}
-			key = n.ensureKeyScratch(layout.suffixLen)
-			copy(key, n.data[keyStart:keyEnd])
+			key = n.data[keyStart:keyEnd]
 		} else {
 			if layout.prefixLen > len(prevKey) {
 				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 			}
 			keyLen := layout.prefixLen + layout.suffixLen
 			key = n.ensureKeyScratch(keyLen)
-			copy(key, prevKey[:layout.prefixLen])
+			sameBacking := len(prevKey) > 0 && len(key) > 0 && &prevKey[0] == &key[0]
+			if !sameBacking && layout.prefixLen > 0 {
+				copy(key, prevKey[:layout.prefixLen])
+			}
 			copy(key[layout.prefixLen:], n.data[keyStart:keyEnd])
 		}
 
 		prevKey = key
 		if i == index {
 			entryStart = ptr
+			n.leafKey = key
+			n.leafLayout = layout
+			n.leafEntry = entryStart
+			n.leafIndex = index
+			n.leafValid = true
 			return key, layout, entryStart, nil
 		}
 	}
@@ -295,12 +343,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 			if dirOff+2 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+			offset := getUint16(data[dirOff : dirOff+2])
 			ptr := int(offset)
 			if ptr < NodeHeaderSize || ptr+7 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+			keyLen := getUint16(data[ptr : ptr+2])
 			keyPtr := ptr + 7
 			if keyPtr+int(keyLen) > len(data) {
 				return 0, false, ErrCorruptedNode
@@ -323,12 +371,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		if dirOff+2 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+		offset := getUint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
 		if ptr < NodeHeaderSize || ptr+7 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+		keyLen := getUint16(data[ptr : ptr+2])
 		// Skip ValLen(4) + Flags(1)
 		keyPtr := ptr + 7
 		if keyPtr+int(keyLen) > len(data) {
@@ -350,12 +398,12 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		if dirOff+2 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		offset := binary.LittleEndian.Uint16(data[dirOff : dirOff+2])
+		offset := getUint16(data[dirOff : dirOff+2])
 		ptr := int(offset)
 		if ptr < NodeHeaderSize || ptr+7 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		keyLen := binary.LittleEndian.Uint16(data[ptr : ptr+2])
+		keyLen := getUint16(data[ptr : ptr+2])
 		keyPtr := ptr + 7
 		if keyPtr+int(keyLen) > len(data) {
 			return 0, false, ErrCorruptedNode
@@ -481,12 +529,12 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 
 	if flags&FlagPointer != 0 {
 		// ValueLen ignored
-		binary.LittleEndian.PutUint32(buf[2:6], 0) // or logic length?
+		putUint32(buf[2:6], 0) // or logic length?
 		buf[6] = flags
 		copy(buf[7:], key)
 		valPtr.Encode(buf[7+len(key):])
 	} else {
-		binary.LittleEndian.PutUint32(buf[2:6], uint32(len(value)))
+		putUint32(buf[2:6], uint32(len(value)))
 		buf[6] = flags
 		copy(buf[7:], key)
 		copy(buf[7+len(key):], value)
@@ -503,7 +551,7 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	count := n.Count()
 	for k := uint16(0); k < count; k++ {
 		// Don't check the one we are replacing yet
-		off := binary.LittleEndian.Uint16(n.data[NodeHeaderSize+int(k)*2:])
+		off := getUint16(n.data[NodeHeaderSize+int(k)*2:])
 		if int(off) < heapStart && int(off) != 0 {
 			heapStart = int(off)
 		}
@@ -605,7 +653,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 		}
 	}
 	b.Finish()
-	n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
-	n.count = binary.LittleEndian.Uint16(n.data[14:16])
+	n.setRawFlags(getUint16(n.data[12:14]))
+	n.count = getUint16(n.data[14:16])
 	return nil
 }

@@ -261,6 +261,45 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 	}
+	if trainerStats, ok := db.slabManager.CompressionTrainerStats(); ok {
+		stats["treedb.slabs.compression.train.collecting"] = fmt.Sprintf("%t", trainerStats.Collecting)
+		stats["treedb.slabs.compression.train.collect_count"] = fmt.Sprintf("%d", trainerStats.CollectCount)
+		stats["treedb.slabs.compression.train.collect_nanos"] = fmt.Sprintf("%d", trainerStats.CollectNanos)
+		stats["treedb.slabs.compression.train.collect_max_nanos"] = fmt.Sprintf("%d", trainerStats.CollectMaxNanos)
+		stats["treedb.slabs.compression.train.dropped"] = fmt.Sprintf("%d", trainerStats.Dropped)
+		stats["treedb.slabs.compression.train.enqueued"] = fmt.Sprintf("%d", trainerStats.Enqueued)
+		stats["treedb.slabs.compression.train.last_dict_bytes"] = fmt.Sprintf("%d", trainerStats.LastTrainDict)
+		stats["treedb.slabs.compression.train.last_dict_hash"] = fmt.Sprintf("%x", trainerStats.LastTrainDictHash)
+		stats["treedb.slabs.compression.train.last_dedup_mode"] = trainerStats.LastTrainDedupMode
+		stats["treedb.slabs.compression.train.last_dedup_flag"] = trainerStats.LastTrainDedupFlag
+		stats["treedb.slabs.compression.train.last_dedup_ref"] = fmt.Sprintf("%d", trainerStats.LastTrainDedupRef)
+		stats["treedb.slabs.compression.train.last_ratio"] = fmt.Sprintf("%.6f", trainerStats.LastTrainRatio)
+		stats["treedb.slabs.compression.train.last_samples"] = fmt.Sprintf("%d", trainerStats.LastTrainSamples)
+		stats["treedb.slabs.compression.train.dedup_lookups"] = fmt.Sprintf("%d", trainerStats.DictDedupLookups)
+		stats["treedb.slabs.compression.train.dedup_hits"] = fmt.Sprintf("%d", trainerStats.DictDedupHits)
+		stats["treedb.slabs.compression.train.dedup_global"] = fmt.Sprintf("%d", trainerStats.DictDedupGlobal)
+		stats["treedb.slabs.compression.train.dedup_ref"] = fmt.Sprintf("%d", trainerStats.DictDedupRef)
+		stats["treedb.slabs.compression.train.dedup_cache"] = fmt.Sprintf("%d", trainerStats.DictDedupCache)
+		stats["treedb.slabs.compression.train.dedup_bytes"] = fmt.Sprintf("%d", trainerStats.DictDedupBytes)
+		stats["treedb.slabs.compression.train.dedup_bytes_global"] = fmt.Sprintf("%d", trainerStats.DictDedupBytesGlobal)
+		stats["treedb.slabs.compression.train.dedup_bytes_ref"] = fmt.Sprintf("%d", trainerStats.DictDedupBytesRef)
+		stats["treedb.slabs.compression.train.dedup_bytes_cache"] = fmt.Sprintf("%d", trainerStats.DictDedupBytesCache)
+		stats["treedb.slabs.compression.train.queue_cap"] = fmt.Sprintf("%d", trainerStats.QueueCap)
+		stats["treedb.slabs.compression.train.queue_len"] = fmt.Sprintf("%d", trainerStats.QueueLen)
+		stats["treedb.slabs.compression.train.queue_max"] = fmt.Sprintf("%d", trainerStats.MaxQueueLen)
+		stats["treedb.slabs.compression.train.runs"] = fmt.Sprintf("%d", trainerStats.TrainCount)
+		stats["treedb.slabs.compression.train.training"] = fmt.Sprintf("%t", trainerStats.Training)
+		stats["treedb.slabs.compression.profile.k"] = fmt.Sprintf("%d", trainerStats.ProfileK)
+		stats["treedb.slabs.compression.profile.payload_ratio"] = fmt.Sprintf("%.6f", trainerStats.ProfilePayloadRatio)
+		stats["treedb.slabs.compression.profile.total_ratio"] = fmt.Sprintf("%.6f", trainerStats.ProfileTotalRatio)
+		stats["treedb.slabs.compression.profile.attempts"] = fmt.Sprintf("%d", trainerStats.ProfileAttempts)
+		stats["treedb.slabs.compression.profile.accepts"] = fmt.Sprintf("%d", trainerStats.ProfileAccepts)
+		stats["treedb.slabs.compression.profile.rejects"] = fmt.Sprintf("%d", trainerStats.ProfileRejects)
+		stats["treedb.slabs.compression.profile.reject_reason"] = trainerStats.ProfileRejectReason
+		if !trainerStats.ProfileTimestamp.IsZero() {
+			stats["treedb.slabs.compression.profile.timestamp"] = trainerStats.ProfileTimestamp.Format(time.RFC3339)
+		}
+	}
 
 	pruneStatsInto(stats, &db.pruner)
 

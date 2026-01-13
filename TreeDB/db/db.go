@@ -158,6 +158,11 @@ type Options struct {
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
 	MemtableShards int
+	// IteratorMutableMaxBytes allows iterators to read from mutable memtables
+	// without forcing a rotation when the mutable size is small. This preserves
+	// snapshot isolation but can block writers while iterators are open.
+	// A value <= 0 disables the optimization.
+	IteratorMutableMaxBytes int64
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -261,6 +266,28 @@ type Options struct {
 	DisableReadChecksum bool
 	// SlabCompression configures compression for slab-stored values.
 	SlabCompression slab.CompressionOptions
+	// SlabCompressionMetrics logs rolling compression ratios for slabs.
+	SlabCompressionMetrics bool
+	// SlabCompressionMetricsWindowBytes controls log window size for compression ratios.
+	SlabCompressionMetricsWindowBytes int
+	// SlabCompressionAdaptiveRatio enables adaptive compression pausing when ratios degrade (>= threshold).
+	SlabCompressionAdaptiveRatio float64
+	// SlabCompressionAdaptivePauseBytes controls how many raw bytes to skip after a degradation trigger.
+	SlabCompressionAdaptivePauseBytes int
+	// SlabCompressionAdaptiveMinRecords controls the minimum records per window before triggering pause.
+	SlabCompressionAdaptiveMinRecords int
+	// SlabCompressionAdaptiveTrainBytes controls how many raw bytes to sample for training (0 disables).
+	SlabCompressionAdaptiveTrainBytes int
+	// SlabCompressionAdaptiveTrainDictBytes controls the trained dictionary size.
+	SlabCompressionAdaptiveTrainDictBytes int
+	// SlabCompressionAdaptiveTrainMinRecords controls the minimum records before training.
+	SlabCompressionAdaptiveTrainMinRecords int
+	// SlabCompressionAdaptiveTrainMaxRecordBytes caps per-record sample size for training.
+	SlabCompressionAdaptiveTrainMaxRecordBytes int
+	// SlabCompressionAdaptiveTrainSampleStride samples every Nth record for training.
+	SlabCompressionAdaptiveTrainSampleStride int
+	// SlabCompressionAdaptiveTrainDedupWindow controls the exact-hash dedup window size.
+	SlabCompressionAdaptiveTrainDedupWindow int
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -461,8 +488,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression:  opts.SlabCompression,
-		OmitSlabKeys: opts.OmitSlabKeys,
+		Compression:                            opts.SlabCompression,
+		OmitSlabKeys:                           opts.OmitSlabKeys,
+		CompressionMetrics:                     opts.SlabCompressionMetrics,
+		CompressionMetricsWindowBytes:          opts.SlabCompressionMetricsWindowBytes,
+		CompressionAdaptiveRatio:               opts.SlabCompressionAdaptiveRatio,
+		CompressionAdaptivePauseBytes:          opts.SlabCompressionAdaptivePauseBytes,
+		CompressionAdaptiveMinRecords:          opts.SlabCompressionAdaptiveMinRecords,
+		CompressionAdaptiveTrainBytes:          opts.SlabCompressionAdaptiveTrainBytes,
+		CompressionAdaptiveTrainDictBytes:      opts.SlabCompressionAdaptiveTrainDictBytes,
+		CompressionAdaptiveTrainMinRecords:     opts.SlabCompressionAdaptiveTrainMinRecords,
+		CompressionAdaptiveTrainMaxRecordBytes: opts.SlabCompressionAdaptiveTrainMaxRecordBytes,
+		CompressionAdaptiveTrainSampleStride:   opts.SlabCompressionAdaptiveTrainSampleStride,
+		CompressionAdaptiveTrainDedupWindow:    opts.SlabCompressionAdaptiveTrainDedupWindow,
 	})
 	if err != nil {
 		p.Close()

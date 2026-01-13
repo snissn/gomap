@@ -12,6 +12,12 @@ Welcome to the `gomap` documentation.
 
 TreeDB is a persistent B+Tree with an optional high-throughput cached layer.
 
+### Configuration Quickstart
+
+- Start with `treedb.Open` defaults or `treedb.OptionsFor(treedb.ProfileDurable, dir)`.
+- Common ops overrides: `TREEDB_LEAF_PREFIX_COMPRESSION=1`, `TREEDB_SLAB_COMPRESSION=zstd`.
+- Full option/env reference: `docs/TREEDB_TUNING.md`.
+
 - **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Slabs, COW Merge).
 - **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: How to choose the right mode for your workload.
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and WAL replay details.

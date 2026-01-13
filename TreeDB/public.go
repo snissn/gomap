@@ -82,6 +82,7 @@ func (db *DB) ensureOpen() error {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 // To open the backend-only engine, set opts.Mode = ModeBackend.
+// Environment variable overrides (TREEDB_*) are applied; see docs/TREEDB_TUNING.md.
 func Open(opts Options) (*DB, error) {
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
@@ -106,6 +107,9 @@ func Open(opts Options) (*DB, error) {
 	}
 	if envBool("TREEDB_SLAB_OMIT_KEYS") {
 		opts.OmitSlabKeys = true
+	}
+	if envBool("TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP") {
+		opts.BackgroundCompactionIndexSwap = true
 	}
 	if envBool("TREEDB_DISABLE_VALUE_LOG") {
 		opts.DisableValueLog = true
@@ -135,12 +139,70 @@ func Open(opts Options) (*DB, error) {
 			opts.SlabCompression.MinSavingsBytes = n
 		}
 	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_LEVEL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompression.Level = n
+		}
+	}
 	if v := os.Getenv("TREEDB_SLAB_COMPRESSION"); v != "" {
 		switch strings.ToLower(v) {
 		case "zstd":
 			opts.SlabCompression.Kind = slab.CompressionZSTD
 		case "none":
 			opts.SlabCompression.Kind = slab.CompressionNone
+		}
+	}
+	if envBool("TREEDB_SLAB_COMPRESSION_METRICS") {
+		opts.SlabCompressionMetrics = true
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_METRICS_WINDOW_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionMetricsWindowBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_RATIO"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			opts.SlabCompressionAdaptiveRatio = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptivePauseBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveMinRecords = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_DICT_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainDictBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_MIN_RECORDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainMinRecords = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainMaxRecordBytes = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainSampleStride = n
+		}
+	}
+	if v := os.Getenv("TREEDB_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.SlabCompressionAdaptiveTrainDedupWindow = n
 		}
 	}
 
@@ -209,6 +271,7 @@ func Open(opts Options) (*DB, error) {
 		FlushThreshold:               opts.FlushThreshold,
 		MemtableMode:                 opts.MemtableMode,
 		MemtableShards:               opts.MemtableShards,
+		IteratorMutableMaxBytes:      opts.IteratorMutableMaxBytes,
 		MaxQueuedMemtables:           opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:           opts.StopBacklogSeconds,

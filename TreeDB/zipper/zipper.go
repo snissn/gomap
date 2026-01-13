@@ -32,9 +32,82 @@ type Split struct {
 	NodeID uint64
 }
 
+func shortestSeparator(left, right []byte) []byte {
+	if len(right) == 0 {
+		return nil
+	}
+	if len(left) == 0 {
+		return append([]byte(nil), right...)
+	}
+	if bytes.Compare(left, right) >= 0 {
+		// If keys are equal or left is greater, there is no shorter valid separator.
+		// Return a copy of right to preserve ordering without special-casing callers.
+		return append([]byte(nil), right...)
+	}
+
+	n := len(left)
+	if len(right) < n {
+		n = len(right)
+	}
+	i := 0
+	for i < n && left[i] == right[i] {
+		i++
+	}
+	if i == n {
+		return append([]byte(nil), right...)
+	}
+	if left[i]+1 < right[i] {
+		sep := make([]byte, i+1)
+		copy(sep, left[:i])
+		sep[i] = left[i] + 1
+		return sep
+	}
+	return append([]byte(nil), right...)
+}
+
 type internalEntry struct {
 	key   []byte
 	child uint64
+}
+
+type childWork struct {
+	key       []byte
+	childID   uint64
+	ops       []batch.Entry
+	newChild  uint64
+	splits    []Split
+	retired   []uint64
+	childStat adaptive.Metrics
+}
+
+const maxChildWorkCap = 1 << 14
+
+var childWorkPool sync.Pool
+
+func getChildWorkSlice(capacity int) []childWork {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxChildWorkCap {
+		return make([]childWork, 0, capacity)
+	}
+	if v := childWorkPool.Get(); v != nil {
+		s := v.([]childWork)
+		if cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]childWork, 0, capacity)
+}
+
+func putChildWorkSlice(children []childWork) {
+	if cap(children) > maxChildWorkCap {
+		return
+	}
+	for i := range children {
+		children[i] = childWork{}
+	}
+	childWorkPool.Put(children[:0])
 }
 
 func New(p *pager.Pager, a PageAllocator) *Zipper {
@@ -328,6 +401,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
+	oldLoaded := false
+	var oldKey, oldVal []byte
+	var oldPtr page.ValuePtr
+	var oldFlags byte
 
 	var splits []Split
 
@@ -349,13 +426,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		} else {
 			// Compare
 			// Optimization: GetLeafEntryView (Zero Copy)
-			k, _, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if !oldLoaded {
+				var err error
+				oldKey, oldVal, oldPtr, oldFlags, err = oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				oldLoaded = true
 			}
 			batchKey := ops[opIdx].Key
 
-			cmp := bytes.Compare(k, batchKey)
+			cmp := bytes.Compare(oldKey, batchKey)
 			if cmp < 0 {
 				// useOld = true
 			} else if cmp > 0 {
@@ -364,16 +445,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				// Equal: Update (Batch wins)
 				// The old entry is being overwritten or deleted.
 				// If it was a pointer, track it as dead bytes.
-				if f&node.FlagPointer != 0 {
-					metrics.SlabDeadBytes += int(ptr.Length)
+				if oldFlags&node.FlagPointer != 0 {
+					metrics.SlabDeadBytes += int(oldPtr.Length)
 					if metrics.SlabDeadBytesByFile == nil {
 						metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
 					}
-					metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
+					metrics.SlabDeadBytesByFile[oldPtr.FileID] += int64(oldPtr.Length)
 				}
 
 				useBatch = true
 				oldIdx++ // Skip old
+				oldLoaded = false
 			}
 		}
 
@@ -406,30 +488,35 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		} else {
 			// useOld
 			// Optimization: View
-			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if !oldLoaded {
+				var err error
+				oldKey, oldVal, oldPtr, oldFlags, err = oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				oldLoaded = true
 			}
 			oldIdx++
-			key = k
-			if f&node.FlagTombstone != 0 {
+			oldLoaded = false
+			key = oldKey
+			if oldFlags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
 			}
-			flags = f
-			if f&node.FlagPointer != 0 {
-				valPtr = ptr
+			flags = oldFlags
+			if oldFlags&node.FlagPointer != 0 {
+				valPtr = oldPtr
 			} else {
-				val = v
+				val = oldVal
 			}
 		}
 
 		// Insert into target builder
-		entrySize := target.LeafEntrySize(key, val, flags)
+		entrySize, prefixLen, suffixLen := target.LeafEntrySizeWithPrefix(key, val, flags)
 		var err error
 		if z.leafSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
 		} else {
-			err = target.AddLeafEntry(key, val, flags, valPtr)
+			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
@@ -459,12 +546,16 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// Record split
 			splitKey := append([]byte(nil), key...) // Deep copy
+			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
+				splitKey = shortestSeparator(leftMax, key)
+			}
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder
 
 			// Retry insert
-			err = target.AddLeafEntry(key, val, flags, valPtr)
+			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
+			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -497,17 +588,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
-	type childWork struct {
-		key       []byte
-		childID   uint64
-		ops       []batch.Entry
-		newChild  uint64
-		splits    []Split
-		retired   []uint64
-		childStat adaptive.Metrics
-	}
-
-	children := make([]childWork, 0, int(count))
+	children := getChildWorkSlice(int(count))
+	defer putChildWorkSlice(children)
 
 	for i := uint16(0); i < count; i++ {
 		// Optimization: Use View to avoid alloc

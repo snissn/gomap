@@ -10,3 +10,19 @@ treedb.prof
 treedb_opt_node.prof
 *.prof
 TreeDB/db/test-*
+tmp_traces/
+SLAB_WORK_HALT
+
+# Temporary data and benchmarks
+tmp/
+artifacts/
+*.out
+*.log
+
+# PoC and Debug commands
+TreeDB/cmd/kpzstd_dict_debug/
+TreeDB/cmd/kv_block_sweep_poc/
+TreeDB/cmd/kv_dict_decode_bench/
+TreeDB/cmd/kv_dict_poc/
+TreeDB/cmd/kv_dict_segment_poc/
+TreeDB/cmd/kv_row_factored_poc/

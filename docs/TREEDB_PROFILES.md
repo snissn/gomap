@@ -37,7 +37,7 @@ override specific fields:
 opts := treedb.Options{Dir: "./db"}
 treedb.ApplyProfile(&opts, treedb.ProfileBench)
 opts.FlushThreshold = 64 << 20
-opts.AllowUnsafe = true // required for ProfileFast/ProfileBench
+opts.AllowUnsafe = true // required for ProfileFast/ProfileBench/ProfileCompressedFast
 ```
 
 ## What is a Profile?
@@ -80,7 +80,6 @@ Behavior:
   - disables cached-mode WAL (`DisableWAL=true`)
   - relaxes sync policy (`RelaxedSync=true`)
   - skips read checksums (`DisableReadChecksum=true`)
-- Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
 - Leaves background maintenance enabled by default.
 
 Use when you want:
@@ -90,6 +89,36 @@ Use when you want:
   you are willing to trade durability/integrity for throughput
 
 Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
+
+### `ProfileCompressed`
+
+Goal: production-safe defaults + compression.
+
+Behavior:
+
+- Includes `ProfileDurable` safety knobs.
+- Enables slab dictionary compression (`SlabCompression=zstd`).
+- Enables leaf prefix compression (`LeafPrefixCompression=true`).
+
+Use when you want:
+
+- the durable defaults plus compression + smaller index footprints.
+
+### `ProfileCompressedFast`
+
+Goal: maximum throughput with compression enabled.
+
+Behavior:
+
+- Includes `ProfileFast` safety trade-offs.
+- Enables slab dictionary compression (`SlabCompression=zstd`).
+- Enables leaf prefix compression (`LeafPrefixCompression=true`).
+
+Use when you want:
+
+- compression enabled but still want the fastest unsafe settings.
+
+Note: `ProfileCompressedFast` requires `Options.AllowUnsafe = true` to open.
 
 ### `ProfileBench`
 

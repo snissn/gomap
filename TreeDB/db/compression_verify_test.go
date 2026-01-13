@@ -3,10 +3,11 @@ package db
 import (
 	"bytes"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/slab"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // TestCompressionEnabled verifies that setting the options
@@ -19,9 +20,10 @@ func TestCompressionEnabled(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	opts := Options{
-		Dir:                   dir,
-		ChunkSize:             64 * 1024 * 1024,
-		LeafPrefixCompression: true,
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		LeafPrefixCompression:             true,
+		SlabCompressionAdaptiveTrainBytes: -1,
 		SlabCompression: slab.CompressionOptions{
 			Kind: slab.CompressionZSTD,
 		},
@@ -30,7 +32,6 @@ func TestCompressionEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
 
 	// 2. Write Compressible Data (Slab Compression)
 	// Write a large, repetitive value that should compress well.
@@ -61,24 +62,15 @@ func TestCompressionEnabled(t *testing.T) {
 
 	// Force a sync to flush slabs to disk
 	// (Note: SlabManager might buffer, but WriteSync/Close should flush active slab)
-	// We might need to close/reopen or trigger a slab rotation to be sure.
 	// Re-opening DB ensures everything is flushed.
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	// 4. Verify Slab Compression
-	// Check the slab files in data/ directory.
-	// Since we wrote > 10KB and compression is ZSTD, the file size should be small
-	// relative to raw data if we only look at the payload, BUT slab files are pre-allocated
-	// or grown in chunks. However, we can inspect the content or use the 'strings' check
-	// suggested in the prompt.
-
-	// A more robust check is to read the raw slab file and look for ZSTD magic bytes
-	// or absence of the long string of "AAAA..."
-
-	// Find slab file
-	files, err := os.ReadDir(dir)
+	// Find slab file in data/ directory
+	slabDir := dir
+	files, err := os.ReadDir(slabDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +79,7 @@ func TestCompressionEnabled(t *testing.T) {
 	for _, f := range files {
 		if filepath.Ext(f.Name()) == ".slab" {
 			foundSlab = true
-			content, err := os.ReadFile(filepath.Join(dir, f.Name()))
+			content, err := os.ReadFile(filepath.Join(slabDir, f.Name()))
 			if err != nil {
 				t.Fatal(err)
 			}

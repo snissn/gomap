@@ -1,81 +1,82 @@
-# TreeDB Optimization Plan: Closing the Read Latency Gap
+# Gemini Plan: Implement Slab V2 (Zonal Dictionary Compression)
 
-**Goal:** Eliminate the read latency regression (specifically `block_lookup` +6700% vs LevelDB) observed in high-churn workloads like `sstore-manytx`. Maintain our 2x write throughput advantage.
+The goal is to restore and correctly implement the Slab V2 format to enable dictionary-based compression. This will address the current issue where trained dictionaries are not applied because the V2 format (needed to store them) was reverted.
 
-**Root Cause:**
-1.  **Index Generation Thrashing:** High-frequency commits cause frequent creation/destruction of `mmap` views (`indexGen`), triggering expensive `munmap` syscalls and TLB shootdowns.
-2.  **Safety Tax:** Backend `Get` currently forces a copy for safety, punishing large value reads (1MB block bodies).
-3.  **Allocation Churn:** Iterators and Snapshots are allocated per-op on some hot paths.
+## Directives (from AGENTS_SLAB_OPTIMIZATIONS.md & local_dictionary_compression.md)
+*   **V2 Layout:** 32KB File Header -> 32KB Global Dict -> Zone 0 Data ... 64B Zone 1 Header -> Zone 1 Data.
+*   **Dictionary Logic:** Global Dictionary is standard. Local dictionaries are optional overrides triggered by entropy drift.
+*   **Read Path:** O(1) selection via `zoneID = offset / 2MB`.
+*   **Write Path:** Serialize dictionary choices.
+*   **Safety:** Checksums for dicts and headers.
 
-## A. Generation Ghosting (Lifecycle Optimization)
+## Phase 1: V2 Format & Reader Infrastructure (Slab Skeleton)
 
-**Objective:** Decouple "Logical Retirement" of an index generation from "Physical Unmap".
+**Focus:** Define the V2 constants and implement the read-side logic to detect and parse V2 slabs, ensuring backward compatibility with V1.
 
-**Mechanism:**
-1.  **Ghost Cache:** Maintain a `sync.Pool` or LRU-like list of "Retired but Mapped" `indexGen` objects.
-2.  **Deferred Unmap:** When `releaseIndex` drops the refcount to zero:
-    *   Do **not** call `pager.Close()` immediately.
-    *   Instead, move the `indexGen` to a "Ghost List" with a timestamp.
-3.  **Scavenger:** A background goroutine (or piggybacked on `Prune`) checks the Ghost List. Only unmap generations older than `GhostTTL` (e.g., 5 seconds) or if total mapped virtual memory exceeds a safety cap (e.g., 64GB).
-4.  **Resurrection (Optional):** If a new Snapshot requests an older generation that is currently Ghosted, revive it? (Unlikely needed for Geth, which usually follows the tip).
+1.  **Define Constants & Structures (in `slab/slab_v2.go`):**
+    *   `Version2`: 0x02
+    *   `ZoneSize`: 2MB (2 * 1024 * 1024)
+    *   `FileHeaderSize`: 32KB (includes Magic + Version + Metadata space)
+    *   `GlobalDictSize`: 32KB
+    *   `SlabV2DataStart`: 64KB (File Header + Global Dict)
+    *   `ZoneHeaderSize`: 64B
+    *   `ZoneHeader` struct: Magic, DictType (Global/Local/Ref), DictCRC, DictLen, Padding.
+2.  **Update `SlabFile` (in `slab/slab.go`):**
+    *   Add `version` field (detected on Open).
+    *   Update `Read` / `readViaMmap` / `ReadUnsafe` to handle V2 address translation:
+        *   If V2:
+            *   Calculate `zoneID = offset / ZoneSize`.
+            *   Identify Zone Header location.
+            *   **Crucial:** Check if `offset` falls *inside* a Zone Header (invalid read) or crosses a Zone Boundary (handled by logic).
+            *   **Address Translation?** No, the spec implies physical layout. The "offset" passed to Read is the physical file offset. The reader simply needs to know that at specific offsets (multiples of 2MB), there are headers, not data.
+3.  **Implement Dictionary Loading (Read-Side):**
+    *   On `OpenSlab` (V2), map/load the Global Dictionary (bytes [32KB..64KB]).
+    *   Initialize `GlobalDecoderPool`.
+4.  **Tests:**
+    *   Unit tests for `zoneID` calculation.
+    *   Mock V2 file creation (manually writing headers) and verifying `OpenSlab` detects it.
 
-**Files to Modify:**
-*   `TreeDB/db/index_gen.go` (Add lifecycle states)
-*   `TreeDB/db/index_gen_db.go` (Implement ghost/scavenge logic)
-*   `TreeDB/db/db.go` (Wire up scavenger)
+## Phase 2: Write Path (Global Dictionary MVP)
 
-## B. True Zero-Copy for Snapshots
+**Focus:** Enable the primary benefit (dictionary compression) using a single Global Dictionary per slab.
 
-**Objective:** Enable `GetUnsafe` to return direct mmap pointers when safety is guaranteed by an explicit Snapshot.
+1.  **Update `SlabManager.Rotate` (in `slab/manager.go`):**
+    *   Fetch `ActiveProfile` from `compressionTrainer`.
+    *   If valid profile exists:
+        *   Write V2 File Header (Magic + Version=2).
+        *   Write Global Dictionary (32KB, padded).
+        *   Initialize `SlabFile` as V2.
+        *   Set `activeSlab.compressionConfig` to use this dictionary.
+    *   If no profile: Fallback to V1 (or write V2 with empty dict? Prefer V1 for compatibility/simplicity if no dict is ready).
+2.  **Update `SlabManager.Append` (in `slab/manager.go` & `slab/slab.go`):**
+    *   **Zone Tracking:** In `Write` loop, check if `writeOffset + recordLen` crosses a 2MB boundary.
+    *   **Zone Header Insertion:** If crossing boundary:
+        *   Pad current Zone to 2MB (if needed).
+        *   Write `ZoneHeader` (Flags: USE_GLOBAL).
+        *   Reset Zone-local counters if any.
+    *   **Compression:** Use the Global Dictionary encoder for records.
+3.  **Tests:**
+    *   E2E test: Train a dict -> Rotate -> Write Data -> Read Data. Verify `IsCompressed` and `IsFullCompressed` are effective.
+    *   Verify file structure (headers at correct offsets).
 
-**Mechanism:**
-1.  **Explicit Context:** Currently, `GetUnsafe` on `DB` delegates to `Get` (Copy) because it can't guarantee the mmap won't disappear.
-2.  **Snapshot Override:** `Snapshot.GetUnsafe` *knows* the generation is pinned. It should call `tree.GetUnsafe` which calls `slab.Read(ptr)` directly.
-3.  **Slab Read Update:** Ensure `SlabManager.Read` allows bypassing the copy if the caller proves they hold a pin.
-    *   Current `SlabFile.Read` uses `pread` fallback or mmap. The mmap path returns a slice. We need to ensure this path is robust.
-    *   Refine `SlabFile.Read` to accept an `unsafe` flag.
+## Phase 3: Adaptive/Local Dictionaries (Full Spec)
 
-**Files to Modify:**
-*   `TreeDB/slab/slab.go` (Audit mmap path safety)
-*   `TreeDB/tree/tree.go` (Pass-through flag)
-*   `TreeDB/db/api.go` (`Snapshot.GetUnsafe` implementation)
+**Focus:** Implement the "Zonal" part—switching dictionaries mid-file.
 
-## C. Bloom Filters for User Tree
+1.  **Writer Integration:**
+    *   On Zone Boundary, query `compressionTrainer` for a "New Local Dict" (based on recent entropy/samples).
+    *   If available:
+        *   Write `ZoneHeader` with `USE_LOCAL` flag.
+        *   Write the new 32KB Local Dict immediately after header.
+        *   Update `activeSlab` encoder to use new dict.
+    *   If not: Write `USE_GLOBAL` (or `USE_REF`).
+2.  **Reader Integration:**
+    *   Update `Read` to check Zone Header flags.
+    *   If `USE_LOCAL`: Read dict from file (after header).
+    *   Manage `LocalDecoderCache` (LRU) to avoid OOM with many local dicts.
+3.  **Tests:**
+    *   Simulate entropy drift (force trainer to produce new dicts).
+    *   Verify mixed-mode slab reading.
 
-**Objective:** Short-circuit `Has` and `Get` for non-existent keys (e.g. searching for block bodies that don't exist).
-
-**Mechanism:**
-1.  **Structure:** Add a Bloom Filter to the `DBState` or `indexGen`.
-    *   *Option 1 (Simple):* Global Bloom for the current `index.db` generation. Rebuilt on open (fast if persisted), updated on write.
-    *   *Option 2 (Persistent):* Block-based Bloom filters stored in `index.db` metadata pages? (Too complex for now).
-    *   *Decision:* **Memtable-Only Bloom** first. The backend B-Tree is fast enough (log N). The regression is likely seeking/allocating iterators for keys that don't exist.
-    *   Wait, the regression is `block_lookup` which reads *existing* blocks. Bloom won't help hit latency.
-    *   *Pivot:* **Bloom is Lower Priority** than A/B/D given the profile. The profile showed overhead in `munmap` and `malloc`, not B-Tree search depth. **Defer C** until A/B/D are done.
-
-## D. Iterator & Snapshot Pooling
-
-**Objective:** Zero-allocation hot paths for `Get` and `Iterator`.
-
-**Mechanism:**
-1.  **Snapshot Pool:**
-    *   `db.AcquireSnapshot()` checks a `sync.Pool`.
-    *   `Snapshot.Close()` resets fields and returns it to the pool.
-2.  **Iterator Pool:**
-    *   `db.Iterator()` checks a pool.
-    *   `Iterator` struct needs a `Reset()` method to clear stacks/slices without deallocating the backing arrays.
-    *   `Iterator.Close()` returns it to the pool.
-3.  **Safety:** Pooled objects must handle "Generation Mismatch" (e.g. if the DB advanced). `Reset` must clear references to old `indexGen` to allow unmapping.
-
-**Files to Modify:**
-*   `TreeDB/db/db.go` (Snapshot pooling)
-*   `TreeDB/tree/iterator.go` (Iterator pooling and Reset)
-*   `TreeDB/db/api.go` (Public API wiring)
-
-## Implementation Order
-
-1.  **Phase 1: Pooling (D)** - Lowest risk, immediate CPU/GC win.
-2.  **Phase 2: Ghosting (A)** - Solves the `munmap` thrashing (the likely cause of the huge latency spike).
-3.  **Phase 3: Zero-Copy (B)** - Optimizes the bandwidth for large values.
-
----
-*Created by Gemini Agent*
+## Execution Order
+I will start with **Phase 1 & 2 combined (MVP)** because V2 format without a Global Dictionary is useless. I will aim for a "Global-Only V2" first, then add Local support.

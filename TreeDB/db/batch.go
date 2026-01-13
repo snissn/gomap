@@ -83,6 +83,15 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+// AssumeSorted marks the underlying batch as already sorted, skipping internal sorting.
+// Callers must only use this when entries are in non-decreasing key order.
+func (b *Batch) AssumeSorted() {
+	if b == nil || b.batch == nil {
+		return
+	}
+	b.batch.AssumeSorted()
+}
+
 func (b *Batch) write(sync bool) error {
 	if b == nil || b.db == nil {
 		return fmt.Errorf("missing db")

@@ -5,11 +5,15 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -38,7 +42,20 @@ var (
 	ErrRecordTooLarge   = errors.New("record too large")
 	ErrSlabFull         = errors.New("slab file is full")
 	ErrReadOnly         = errors.New("slab is read-only")
+	ErrV2HeaderMismatch = errors.New("slab: v2 header magic mismatch")
 )
+
+func debugRecordTooLargeEnabled() bool {
+	val := os.Getenv("TREEDB_SLAB_DEBUG_RECORD_TOO_LARGE")
+	if val == "" {
+		return false
+	}
+	ok, err := strconv.ParseBool(val)
+	if err != nil {
+		return false
+	}
+	return ok
+}
 
 func recordSizeExceedsMax(keyLen uint16, valLen uint32) bool {
 	if MaxRecordSize <= 0 {
@@ -78,9 +95,23 @@ type SlabFile struct {
 	// writeScratch is a reusable buffer for appending records. SlabManager
 	// serializes writers, so this is safe without additional locking.
 	writeScratch []byte
+
+	// V2 Support
+	version    uint8
+	globalDict []byte
+	globalDecs *sync.Pool
+
+	// recent local dictionaries for USE_REF emission
+	recentDicts     map[uint64]dictRefEntry
+	recentDictOrder []uint64
 }
 
-func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool) *SlabFile {
+type dictRefEntry struct {
+	zoneID uint32
+	crc    uint32
+}
+
+func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool, version uint8, globalDict []byte, globalDecs *sync.Pool) *SlabFile {
 	sf := &SlabFile{
 		ID:          id,
 		Path:        path,
@@ -88,10 +119,77 @@ func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool) 
 		readOnly:    readOnly,
 		Size:        size,
 		writeOffset: size,
+		version:     version,
+		globalDict:  globalDict,
+		globalDecs:  globalDecs,
 	}
 	// Initialize atomic.Value with the concrete type so Load is safe.
 	sf.mmapData.Store([]byte(nil))
 	return sf
+}
+
+func (s *SlabFile) detectV2Locked() error {
+	if s.Size < SlabV2DataStart {
+		return nil
+	}
+	var magic [8]byte
+	if _, err := s.File.ReadAt(magic[:], 0); err != nil {
+		return nil // Ignore read error, might not be V2
+	}
+	if string(magic[:]) != MagicV2 {
+		return nil
+	}
+	headerBuf := make([]byte, FileHeaderSizeV2)
+	if _, err := s.File.ReadAt(headerBuf, 0); err != nil {
+		return err
+	}
+	s.version = headerBuf[8]
+	if s.version != Version2 {
+		return ErrV2HeaderMismatch
+	}
+	dictBuf := make([]byte, GlobalDictSize)
+	if _, err := s.File.ReadAt(dictBuf, FileHeaderSizeV2); err != nil {
+		return err
+	}
+	hasDict := false
+	for _, b := range dictBuf {
+		if b != 0 {
+			hasDict = true
+			break
+		}
+	}
+	if hasDict {
+		s.globalDict = dictBuf
+		s.globalDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+				return dec
+			},
+		}
+	}
+	return nil
+}
+
+func (s *SlabFile) checkBoundary(recordLen int64) error {
+	if s.version < Version2 {
+		return nil
+	}
+	if recordLen > maxV2RecordSize {
+		return ErrRecordTooLarge
+	}
+	// Check if we are at or will cross a boundary.
+	// Boundaries are at ZoneSize, 2*ZoneSize, etc.
+	// Slab start (0) and Zone 0 start (64KB) are NOT boundaries for headers.
+	if s.Size >= ZoneSize {
+		if s.Size%ZoneSize == 0 {
+			return ErrRecordTooLarge
+		}
+		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+		if s.Size+recordLen > nextBoundary {
+			return ErrRecordTooLarge
+		}
+	}
+	return nil
 }
 
 // OpenSlab opens or creates a slab file.
@@ -120,7 +218,12 @@ func OpenSlab(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	return newSlabFile(path, id, f, info.Size(), false), nil
+	sf := newSlabFile(path, id, f, info.Size(), false, 0, nil, nil)
+	if err := sf.detectV2Locked(); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return sf, nil
 }
 
 // OpenSlabReadOnly opens an existing slab file in read-only mode.
@@ -135,21 +238,210 @@ func OpenSlabReadOnly(path string, id uint32) (*SlabFile, error) {
 		return nil, err
 	}
 
-	return newSlabFile(path, id, f, info.Size(), true), nil
+	sf := newSlabFile(path, id, f, info.Size(), true, 0, nil, nil)
+	if err := sf.detectV2Locked(); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return sf, nil
 }
 
 // OpenSlabLazy registers a slab without opening its file descriptor.
 func OpenSlabLazy(path string, id uint32, size int64) *SlabFile {
-	return newSlabFile(path, id, nil, size, false)
+	return newSlabFile(path, id, nil, size, false, 0, nil, nil)
 }
 
 // OpenSlabLazyReadOnly registers a slab without opening its file descriptor in read-only mode.
 func OpenSlabLazyReadOnly(path string, id uint32, size int64) *SlabFile {
-	return newSlabFile(path, id, nil, size, true)
+	return newSlabFile(path, id, nil, size, true, 0, nil, nil)
+}
+
+func (s *SlabFile) readRaw(offset int64, buf []byte) error {
+	// Try mmap
+	data, _ := s.mmapData.Load().([]byte)
+	if data != nil && offset >= 0 && offset+int64(len(buf)) <= int64(len(data)) {
+		copy(buf, data[offset:])
+		return nil
+	}
+	// Fallback
+	if err := s.ensureOpen(); err != nil {
+		return err
+	}
+	_, err := s.File.ReadAt(buf, offset)
+	return err
+}
+
+func (s *SlabFile) dictSlice(offset int64, length int) ([]byte, bool) {
+	data, _ := s.mmapData.Load().([]byte)
+	if data == nil || offset < 0 || offset+int64(length) > int64(len(data)) {
+		return nil, false
+	}
+	return data[offset : offset+int64(length)], true
+}
+
+func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
+	if s.version != Version2 {
+		return nil, nil, errors.New("not v2 slab")
+	}
+
+	// Zone 0 uses Global Dict by definition.
+	if offset < ZoneSize {
+		if s.globalDecs == nil {
+			// Fallback to raw ZSTD if no dictionary is present in Zone 0.
+			dec, _ := zstd.NewReader(nil)
+			return dec, func() {}, nil
+		}
+		dec := s.globalDecs.Get().(*zstd.Decoder)
+		return dec, func() { s.globalDecs.Put(dec) }, nil
+	}
+
+	zoneID := offset / ZoneSize
+	headerOffset := zoneID * ZoneSize
+
+	var headerBuf [ZoneHeaderSize]byte
+	if err := s.readRaw(headerOffset, headerBuf[:]); err != nil {
+		return nil, nil, err
+	}
+
+	var zh ZoneHeader
+	if err := zh.Unmarshal(headerBuf[:]); err != nil {
+		return nil, nil, err
+	}
+
+	switch zh.DictType {
+	case ZoneDictGlobal:
+		if s.globalDecs == nil {
+			dec, _ := zstd.NewReader(nil)
+			return dec, func() {}, nil
+		}
+		dec := s.globalDecs.Get().(*zstd.Decoder)
+		return dec, func() { s.globalDecs.Put(dec) }, nil
+	case ZoneDictLocal:
+		if zh.DictCRC == 0 {
+			return nil, nil, errors.New("slab: local dictionary CRC missing")
+		}
+		key := dictCacheKey{slab: s, zoneID: uint32(zoneID)}
+		if pool, ok := dictPools.get(key); ok {
+			dec := pool.Get().(*zstd.Decoder)
+			return dec, func() { pool.Put(dec) }, nil
+		}
+
+		// Load from disk. Dict is 32KB starting after 64B header.
+		dictOffset := headerOffset + ZoneHeaderSize
+		dictBuf, ok := s.dictSlice(dictOffset, GlobalDictSize)
+		if !ok {
+			if err := s.ensureOpen(); err == nil {
+				s.remapToFileSize()
+				dictBuf, ok = s.dictSlice(dictOffset, GlobalDictSize)
+			}
+		}
+		if !ok {
+			buf := make([]byte, GlobalDictSize)
+			if err := s.readRaw(dictOffset, buf); err != nil {
+				return nil, nil, err
+			}
+			dictBuf = buf
+		}
+
+		// Verify CRC
+		if !zh.VerifyDict(dictBuf) {
+			return nil, nil, errors.New("slab: local dictionary CRC mismatch")
+		}
+
+		// Create pool
+		pool := &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+				return dec
+			},
+		}
+		pool = dictPools.getOrAdd(key, pool)
+		dec := pool.Get().(*zstd.Decoder)
+		return dec, func() { pool.Put(dec) }, nil
+	case ZoneDictRef:
+		refZoneID := int64(zh.DictLength)
+		if refZoneID <= 0 {
+			return nil, nil, errors.New("slab: invalid ref zone id")
+		}
+		const maxRefDepth = 4
+		for depth := 0; depth < maxRefDepth; depth++ {
+			refHeaderOffset := refZoneID * ZoneSize
+			var refHeaderBuf [ZoneHeaderSize]byte
+			if err := s.readRaw(refHeaderOffset, refHeaderBuf[:]); err != nil {
+				return nil, nil, err
+			}
+			var refHeader ZoneHeader
+			if err := refHeader.Unmarshal(refHeaderBuf[:]); err != nil {
+				return nil, nil, err
+			}
+
+			switch refHeader.DictType {
+			case ZoneDictGlobal:
+				if s.globalDecs == nil {
+					dec, _ := zstd.NewReader(nil)
+					return dec, func() {}, nil
+				}
+				dec := s.globalDecs.Get().(*zstd.Decoder)
+				return dec, func() { s.globalDecs.Put(dec) }, nil
+			case ZoneDictLocal:
+				if zh.DictCRC == 0 {
+					return nil, nil, errors.New("slab: ref dictionary CRC missing")
+				}
+				if refHeader.DictCRC != 0 && refHeader.DictCRC != zh.DictCRC {
+					return nil, nil, errors.New("slab: ref dictionary CRC mismatch")
+				}
+				refKey := dictCacheKey{slab: s, zoneID: uint32(refZoneID)}
+				if pool, ok := dictPools.get(refKey); ok {
+					dec := pool.Get().(*zstd.Decoder)
+					return dec, func() { pool.Put(dec) }, nil
+				}
+				dictOffset := refHeaderOffset + ZoneHeaderSize
+				dictBuf, ok := s.dictSlice(dictOffset, GlobalDictSize)
+				if !ok {
+					if err := s.ensureOpen(); err == nil {
+						s.remapToFileSize()
+						dictBuf, ok = s.dictSlice(dictOffset, GlobalDictSize)
+					}
+				}
+				if !ok {
+					buf := make([]byte, GlobalDictSize)
+					if err := s.readRaw(dictOffset, buf); err != nil {
+						return nil, nil, err
+					}
+					dictBuf = buf
+				}
+				sum := crc32.Checksum(dictBuf, crc32cTable)
+				if sum != zh.DictCRC {
+					return nil, nil, errors.New("slab: ref dictionary CRC mismatch")
+				}
+				pool := &sync.Pool{
+					New: func() any {
+						dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+						return dec
+					},
+				}
+				pool = dictPools.getOrAdd(refKey, pool)
+				dec := pool.Get().(*zstd.Decoder)
+				return dec, func() { pool.Put(dec) }, nil
+			case ZoneDictRef:
+				refZoneID = int64(refHeader.DictLength)
+				if refZoneID <= 0 {
+					return nil, nil, errors.New("slab: invalid nested ref zone id")
+				}
+				continue
+			default:
+				return nil, nil, errors.New("slab: ref dicts not implemented")
+			}
+		}
+		return nil, nil, errors.New("slab: ref dict depth exceeded")
+	default:
+		return nil, nil, errors.New("ref dicts not implemented")
+	}
 }
 
 func (s *SlabFile) Close() error {
 	s.closed.Store(true)
+	dictPools.purgeSlab(s)
 
 	s.remapMu.Lock()
 	data, _ := s.mmapData.Load().([]byte)
@@ -210,6 +502,14 @@ func (s *SlabFile) ensureOpen() error {
 	s.File = f
 	s.Size = info.Size()
 	s.writeOffset = s.Size
+
+	// Detect V2
+	if err := s.detectV2Locked(); err != nil {
+		_ = s.File.Close()
+		s.File = nil
+		return err
+	}
+
 	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
 		_ = s.File.Close()
 		s.File = nil
@@ -222,6 +522,9 @@ func (s *SlabFile) ensureOpen() error {
 func (s *SlabFile) Truncate(size int64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	if s.version >= Version2 && size < SlabV2DataStart {
+		size = SlabV2DataStart
 	}
 	if err := s.File.Truncate(size); err != nil {
 		return err
@@ -262,6 +565,15 @@ func (s *SlabFile) RepairTail() error {
 		return nil
 	}
 
+	startOffset := int64(0)
+	if s.version >= Version2 {
+		if size < SlabV2DataStart {
+			s.Size = size
+			return nil
+		}
+		startOffset = SlabV2DataStart
+	}
+
 	// Track the last few record starts so we can drop a corrupted tail record
 	// without needing a second full scan.
 	const keepStarts = 4
@@ -269,8 +581,8 @@ func (s *SlabFile) RepairTail() error {
 	var startsN int
 
 	var headerArr [HeaderSize]byte
-	offset := int64(0)
-	lastGoodEnd := int64(0)
+	offset := startOffset
+	lastGoodEnd := startOffset
 
 	for {
 		if offset+HeaderSize > size {
@@ -306,7 +618,7 @@ func (s *SlabFile) RepairTail() error {
 	}
 	for tries := 0; tries < maxTries; tries++ {
 		if startsN == 0 {
-			trimTo = 0
+			trimTo = startOffset
 			break
 		}
 		start := starts[(startsN-1-tries)%keepStarts]
@@ -571,6 +883,22 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 		return 0, ErrSlabFull
 	}
 
+	// For V2, records must not straddle 2MB boundaries.
+	if s.version >= Version2 {
+		if recordLen64 > maxV2RecordSize {
+			return 0, ErrRecordTooLarge
+		}
+		// If we are EXACTLY at a boundary (that requires a header), signal manager.
+		// Zone 0 (64KB) is special and doesn't need a header here.
+		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+			return 0, ErrRecordTooLarge
+		}
+		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+		if s.Size+recordLen64 > nextBoundary {
+			return 0, ErrRecordTooLarge // Signal SlabManager to rotate zone
+		}
+	}
+
 	recordLen := int(recordLen64)
 	var lenArr [6]byte
 	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
@@ -631,7 +959,7 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 // WriteBatch appends a pre-built record stream to the slab and returns the
 // starting file offset. Thread-safety: This should be called by a single writer
 // (SlabManager mutex).
-func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
+func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -640,6 +968,24 @@ func (s *SlabFile) WriteBatch(buf []byte) (int64, error) {
 	}
 	if int64(s.Size)+int64(len(buf)) > MaxSlabSize {
 		return 0, ErrSlabFull
+	}
+
+	// For V2, batches must not straddle 2MB boundaries.
+	if s.version >= Version2 && !ignoreBoundary {
+		// If we are EXACTLY at a boundary (that requires a header), signal manager.
+		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+			if debugRecordTooLargeEnabled() {
+				log.Printf("slab: batch too large at boundary size=%d buf=%d", s.Size, len(buf))
+			}
+			return 0, ErrRecordTooLarge
+		}
+		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+		if s.Size+int64(len(buf)) > nextBoundary {
+			if debugRecordTooLargeEnabled() {
+				log.Printf("slab: batch crosses boundary size=%d buf=%d next=%d", s.Size, len(buf), nextBoundary)
+			}
+			return 0, ErrRecordTooLarge // Signal SlabManager to rotate zone
+		}
 	}
 
 	offset := s.Size

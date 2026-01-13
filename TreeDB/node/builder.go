@@ -57,6 +57,12 @@ func (b *Builder) FreeSpace() int {
 	return b.heapStart - b.dirEnd
 }
 
+// LeafPrevKey returns the last key appended to a leaf builder.
+// It is only maintained when leaf prefix compression is enabled.
+func (b *Builder) LeafPrevKey() []byte {
+	return b.leafPrevKey
+}
+
 // Data returns the underlying buffer.
 func (b *Builder) Data() []byte {
 	return b.data
@@ -67,6 +73,12 @@ func (b *Builder) Data() []byte {
 func (b *Builder) LeafEntrySize(key, value []byte, flags byte) int {
 	entrySize, _, _ := b.leafEntrySize(key, value, flags)
 	return entrySize
+}
+
+// LeafEntrySizeWithPrefix returns the encoded size and prefix/suffix lengths
+// for a leaf entry if it were appended next.
+func (b *Builder) LeafEntrySizeWithPrefix(key, value []byte, flags byte) (entrySize, prefixLen, suffixLen int) {
+	return b.leafEntrySize(key, value, flags)
 }
 
 func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, prefixLen int, suffixLen int) {
@@ -106,6 +118,19 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	}
 
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
+	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+}
+
+// AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
+// The caller must ensure prefixLen/suffixLen are computed for this builder state.
+func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
+	if b.pType != page.PageTypeLeaf {
+		return ErrInvalidType
+	}
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
+
 	headerSize := 7
 	if b.leafPrefixCompression {
 		headerSize = 9
@@ -128,21 +153,21 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	ptr := entryStart
 	keyStart := ptr + headerSize
 	if b.leafPrefixCompression {
-		binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(prefixLen))
-		binary.LittleEndian.PutUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
+		putUint16(b.data[ptr:ptr+2], uint16(prefixLen))
+		putUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
 		if flags&FlagPointer != 0 {
-			binary.LittleEndian.PutUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
+			putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
 		} else {
-			binary.LittleEndian.PutUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
+			putUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
 		}
 		b.data[ptr+8] = flags
 		copy(b.data[keyStart:], key[prefixLen:])
 	} else {
-		binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(len(key)))
+		putUint16(b.data[ptr:ptr+2], uint16(len(key)))
 		if flags&FlagPointer != 0 {
-			binary.LittleEndian.PutUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
+			putUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
 		} else {
-			binary.LittleEndian.PutUint32(b.data[ptr+2:ptr+6], uint32(len(value)))
+			putUint32(b.data[ptr+2:ptr+6], uint32(len(value)))
 		}
 		b.data[ptr+6] = flags
 		copy(b.data[keyStart:], key)
@@ -156,7 +181,7 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	}
 
 	// 5. Write Directory Offset (Grow Up)
-	binary.LittleEndian.PutUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
 
 	// 6. Update State
 	b.heapStart = entryStart
@@ -192,11 +217,11 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	entryStart := b.heapStart - entrySize
 	ptr := entryStart
 
-	binary.LittleEndian.PutUint16(b.data[ptr:ptr+2], uint16(len(key)))
+	putUint16(b.data[ptr:ptr+2], uint16(len(key)))
 	binary.LittleEndian.PutUint64(b.data[ptr+2:ptr+10], childPageID)
 	copy(b.data[ptr+10:], key)
 
-	binary.LittleEndian.PutUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
 
 	b.heapStart = entryStart
 	b.dirEnd += DirectoryEntrySize
@@ -234,4 +259,10 @@ func sharedPrefixLen(a, b []byte) int {
 		}
 	}
 	return n
+}
+
+func putUint16(dst []byte, v uint16) {
+	_ = dst[1]
+	dst[0] = byte(v)
+	dst[1] = byte(v >> 8)
 }

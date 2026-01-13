@@ -150,7 +150,7 @@ The "Missing Validator Set" panic reported by the user (height 9280500) matches 
 **Objective:** Deploy fixes to server, verify environment, and restart sync test.
 
 ## Actions Taken
-1.  **Code Synchronization:** Used `rsync` to mirror the local `gomap` codebase (containing Vacuum Race and Flush Failed fixes) to the server (`192.168.0.132`).
+1.  **Code Synchronization:** Used `rsync` to mirror the local `gomap` codebase (containing Vacuum Race and Flush Failed fixes) to the server (`192.168.0.185`).
 2.  **Server Verification:** Ran critical regression tests on the server:
     -   `TestVacuumRaceMissingKey`: **PASS**
     -   `TestRaceFlushRotate`: **PASS**
@@ -352,7 +352,7 @@ The codebase is healthy and contains the fixes for the issues reported by the us
     -   Confirmed `TreeDB/db/vacuum_online.go` uses `vacuumRecorder` with full entries (Vacuum Race Fix).
     -   Passed all regression tests: `TestRaceFlushRotate`, `TestVacuumRaceMissingKey`, `TestSlab_Compression_Effectiveness`.
 2.  **Server Deployment:**
-    -   Synced local `gomap` to `mikers@192.168.0.132:/home/mikers/dev/snissn/gomap`.
+    -   Synced local `gomap` to `mikers@192.168.0.185:/home/mikers/dev/snissn/gomap`.
     -   Rebuilt `celestia-appd` on server to link against the updated `gomap`.
 3.  **Run Execution:**
     -   Cleaned old runs: `rm -rf ~/.celestia-app-mainnet-treedb-*`.
