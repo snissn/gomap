@@ -12,6 +12,7 @@ import (
 type ActiveCompressionProfile struct {
 	DictHash         uint64
 	DictBytes        int
+	Dict             []byte
 	K                int
 	PayloadRatio     float64
 	TotalRatio       float64
@@ -99,6 +100,7 @@ func chooseKForDict(dict []byte, samples [][]byte) *ActiveCompressionProfile {
 	return &ActiveCompressionProfile{
 		DictHash:         xxhash.Sum64(dict),
 		DictBytes:        len(dict),
+		Dict:             dict,
 		K:                best.K,
 		PayloadRatio:     best.payloadRatio,
 		TotalRatio:       best.totalRatio,

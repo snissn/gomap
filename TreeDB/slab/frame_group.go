@@ -95,6 +95,12 @@ func decompressFrameGroup(cfg *compressionConfig, body []byte, subIndex int) ([]
 	if cfg == nil || cfg.zstdDecs == nil {
 		return nil, errCompressedCorrupt
 	}
+	dec := cfg.zstdDecs.Get().(*zstd.Decoder)
+	defer cfg.zstdDecs.Put(dec)
+	return decompressFrameGroupWithDecoder(dec, body, subIndex)
+}
+
+func decompressFrameGroupWithDecoder(dec *zstd.Decoder, body []byte, subIndex int) ([]byte, error) {
 	if len(body) < frameGroupHeader {
 		return nil, errFrameGroupCorrupt
 	}
@@ -134,9 +140,7 @@ func decompressFrameGroup(cfg *compressionConfig, body []byte, subIndex int) ([]
 		return nil, errFrameGroupCorrupt
 	}
 
-	dec := cfg.zstdDecs.Get().(*zstd.Decoder)
 	out, err := dec.DecodeAll(compressed, make([]byte, 0, payloadLen))
-	cfg.zstdDecs.Put(dec)
 	if err != nil {
 		return nil, err
 	}

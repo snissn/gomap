@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -28,6 +29,8 @@ type SlabManager struct {
 
 	disableReadChecksum bool
 	compression         compressionConfig
+	activeCompression   compressionConfig
+	currentProfile      *ActiveCompressionProfile
 	omitSlabKeys        bool
 	compressionMetrics  compressionMetrics
 	compressionTrainer  *compressionTrainer
@@ -58,6 +61,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		readOnly:           readOnly,
 		slabs:              make(map[uint32]*SlabFile),
 		compression:        compression,
+		activeCompression:  compression, // Start with base compression
 		omitSlabKeys:       opts.OmitSlabKeys,
 		compressionMetrics: newCompressionMetrics(opts),
 		compressionTrainer: newCompressionTrainer(opts, compression, readOnly),
@@ -296,6 +300,41 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if s.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+		dec, put, err := s.GetDecoder(int64(ptr.Offset))
+		if err != nil {
+			return nil, err
+		}
+		defer put()
+
+		if page.ValuePtrIsGrouped(ptr) {
+			return decompressFrameGroupWithDecoder(dec, val, int(page.ValuePtrSubIndex(ptr)))
+		}
+
+		if len(val) < 4 {
+			return nil, errCompressedCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(val[:4])
+		payload := val[4:]
+
+		if page.ValuePtrIsFullCompressed(ptr) {
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			if err != nil {
+				return nil, err
+			}
+			if len(decompressed) < 2 {
+				return nil, errCompressedCorrupt
+			}
+			keyLen := binary.LittleEndian.Uint16(decompressed[:2])
+			if len(decompressed) < 2+int(keyLen) {
+				return nil, errCompressedCorrupt
+			}
+			return decompressed[2+keyLen:], nil
+		}
+		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	}
+
 	return decodeValue(ptr, val, compression)
 }
 
@@ -314,6 +353,41 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if s.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+		dec, put, err := s.GetDecoder(int64(ptr.Offset))
+		if err != nil {
+			return nil, err
+		}
+		defer put()
+
+		if page.ValuePtrIsGrouped(ptr) {
+			return decompressFrameGroupWithDecoder(dec, val, int(page.ValuePtrSubIndex(ptr)))
+		}
+
+		if len(val) < 4 {
+			return nil, errCompressedCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(val[:4])
+		payload := val[4:]
+
+		if page.ValuePtrIsFullCompressed(ptr) {
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			if err != nil {
+				return nil, err
+			}
+			if len(decompressed) < 2 {
+				return nil, errCompressedCorrupt
+			}
+			keyLen := binary.LittleEndian.Uint16(decompressed[:2])
+			if len(decompressed) < 2+int(keyLen) {
+				return nil, errCompressedCorrupt
+			}
+			return decompressed[2+keyLen:], nil
+		}
+		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	}
+
 	return decodeValue(ptr, val, compression)
 }
 
@@ -341,20 +415,20 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		sm.compressionTrainer.collect(value)
 	}
-	if !opts.DisableCompression && sm.compression.kind != CompressionNone && sm.shouldCompress(len(value)) {
+	if !opts.DisableCompression && sm.activeCompression.kind != CompressionNone && sm.shouldCompress(len(value)) {
 		// Try full record compression first
-		if enc, ok, err := sm.compression.compressRecord(key, value); err == nil && ok {
+		if enc, ok, errInner := sm.activeCompression.compressRecord(key, value); errInner == nil && ok {
 			encoded = enc
 			encodedKey = nil
 			compressed = true
 			fullCompressed = true
-		} else if err != nil {
-			return page.ValuePtr{}, err
+		} else if errInner != nil {
+			return page.ValuePtr{}, errInner
 		} else {
 			// Fall back to value-only compression
-			encoded, compressed, err = sm.compression.compressValue(value)
-			if err != nil {
-				return page.ValuePtr{}, err
+			encoded, compressed, errInner = sm.activeCompression.compressValue(value)
+			if errInner != nil {
+				return page.ValuePtr{}, errInner
 			}
 		}
 	}
@@ -378,7 +452,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 
 	offset, err := sm.activeSlab.Write(encodedKey, encoded)
 	if err == ErrSlabFull {
-		if err := sm.rotateLocked(); err != nil {
+		if err = sm.rotateLocked(); err != nil {
 			return page.ValuePtr{}, err
 		}
 		offset, err = sm.activeSlab.Write(encodedKey, encoded)
@@ -388,7 +462,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		return page.ValuePtr{}, err
 	}
 
-	if !opts.SkipMetrics && !opts.DisableCompression && sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone {
+	if !opts.SkipMetrics && !opts.DisableCompression && sm.compressionMetrics.enabled && sm.activeCompression.kind != CompressionNone {
 		compressedCount := 0
 		fullCount := 0
 		if compressed {
@@ -465,7 +539,7 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 			end = len(values)
 		}
 		group := values[idx:end]
-		record, actualK, err := buildFrameGroupRecord(group, &sm.compression)
+		record, actualK, err := buildFrameGroupRecord(group, &sm.activeCompression)
 		if err != nil {
 			return nil, err
 		}
@@ -519,7 +593,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 	omittedKeyFlags := make([]bool, len(values))
 	rawLens := make([]int, len(values))
 	storedLens := make([]int, len(values))
-	if sm.compression.kind != CompressionNone {
+	if sm.activeCompression.kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
 		for i := range values {
@@ -529,7 +603,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				continue
 			}
 			// Try full record compression first
-			if enc, ok, err := sm.compression.compressRecord(keys[i], values[i]); err == nil && ok {
+			if enc, ok, err := sm.activeCompression.compressRecord(keys[i], values[i]); err == nil && ok {
 				encodedValues[i] = enc
 				encodedKeys[i] = nil
 				compressedFlags[i] = true
@@ -538,7 +612,10 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				return nil, err
 			} else {
 				// Fall back to value-only compression
-				encoded, compressed, err := sm.compression.compressValue(values[i])
+				var encoded []byte
+				var compressed bool
+				var err error
+				encoded, compressed, err = sm.activeCompression.compressValue(values[i])
 				if err != nil {
 					return nil, err
 				}
@@ -550,7 +627,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 	}
 
 	if sm.omitSlabKeys {
-		if sm.compression.kind == CompressionNone {
+		if sm.activeCompression.kind == CompressionNone {
 			encodedKeys = make([][]byte, len(values))
 			copy(encodedKeys, keys)
 		}
@@ -658,7 +735,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				}
 			}
 
-			if sm.compressionMetrics.enabled && sm.compression.kind != CompressionNone && len(metas) > 0 {
+			if sm.compressionMetrics.enabled && sm.activeCompression.kind != CompressionNone && len(metas) > 0 {
 				rawTotal := 0
 				storedTotal := 0
 				compressedCount := 0
@@ -779,8 +856,8 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 
 	groupK := 1
-	if profile, ok := sm.activeProfile(); ok && profile != nil && profile.K > 1 && sm.compression.kind == CompressionZSTD && sm.omitSlabKeys {
-		groupK = profile.K
+	if sm.currentProfile != nil && sm.currentProfile.K > 1 && sm.activeCompression.kind == CompressionZSTD && sm.omitSlabKeys {
+		groupK = sm.currentProfile.K
 	}
 	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		for i := range values {
@@ -810,6 +887,17 @@ func (sm *SlabManager) Rotate() (*SlabFile, error) {
 	return sm.activeSlab, nil
 }
 
+func (sm *SlabManager) writeSlabV2Header(f *os.File, profile *ActiveCompressionProfile) error {
+	header := make([]byte, SlabV2DataStart)
+	copy(header[0:8], MagicV2)
+	header[8] = Version2
+	if profile != nil && len(profile.Dict) > 0 {
+		copy(header[FileHeaderSizeV2:], profile.Dict)
+	}
+	_, err := f.WriteAt(header, 0)
+	return err
+}
+
 func (sm *SlabManager) rotateLocked() error {
 	if sm.readOnly {
 		return ErrReadOnly
@@ -825,6 +913,37 @@ func (sm *SlabManager) rotateLocked() error {
 	newSlab, err := OpenSlab(path, newID)
 	if err != nil {
 		return err
+	}
+
+	// Try to upgrade to V2 if a compression profile is ready.
+	if profile, ok := sm.activeProfile(); ok && profile != nil && sm.compression.kind == CompressionZSTD {
+		if err := sm.writeSlabV2Header(newSlab.File, profile); err != nil {
+			_ = newSlab.Close()
+			return err
+		}
+		newSlab.version = Version2
+		newSlab.Size = SlabV2DataStart
+		newSlab.writeOffset = SlabV2DataStart
+		newSlab.globalDict = profile.Dict
+		newSlab.globalDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+				return dec
+			},
+		}
+		// Update writer's active compression to use the dictionary.
+		sm.activeCompression = sm.compression
+		sm.activeCompression.zstdEncs = &sync.Pool{
+			New: func() any {
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.compression.level))
+				return enc
+			},
+		}
+		sm.currentProfile = profile
+	} else {
+		// Fallback to V1: reset active compression to base (no dict).
+		sm.activeCompression = sm.compression
+		sm.currentProfile = nil
 	}
 
 	if sm.compressionMetrics.enabled {
@@ -844,6 +963,7 @@ func (sm *SlabManager) rotateLocked() error {
 
 	return nil
 }
+
 
 func (sm *SlabManager) Sync() error {
 	sm.mu.Lock()
@@ -1021,6 +1141,41 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if f.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+		dec, put, err := f.GetDecoder(int64(ptr.Offset))
+		if err != nil {
+			return nil, err
+		}
+		defer put()
+
+		if page.ValuePtrIsGrouped(ptr) {
+			return decompressFrameGroupWithDecoder(dec, val, int(page.ValuePtrSubIndex(ptr)))
+		}
+
+		if len(val) < 4 {
+			return nil, errCompressedCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(val[:4])
+		payload := val[4:]
+
+		if page.ValuePtrIsFullCompressed(ptr) {
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			if err != nil {
+				return nil, err
+			}
+			if len(decompressed) < 2 {
+				return nil, errCompressedCorrupt
+			}
+			keyLen := binary.LittleEndian.Uint16(decompressed[:2])
+			if len(decompressed) < 2+int(keyLen) {
+				return nil, errCompressedCorrupt
+			}
+			return decompressed[2+keyLen:], nil
+		}
+		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	}
+
 	return decodeValue(ptr, val, s.compression)
 }
 
@@ -1033,6 +1188,41 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if f.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+		dec, put, err := f.GetDecoder(int64(ptr.Offset))
+		if err != nil {
+			return nil, err
+		}
+		defer put()
+
+		if page.ValuePtrIsGrouped(ptr) {
+			return decompressFrameGroupWithDecoder(dec, val, int(page.ValuePtrSubIndex(ptr)))
+		}
+
+		if len(val) < 4 {
+			return nil, errCompressedCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(val[:4])
+		payload := val[4:]
+
+		if page.ValuePtrIsFullCompressed(ptr) {
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			if err != nil {
+				return nil, err
+			}
+			if len(decompressed) < 2 {
+				return nil, errCompressedCorrupt
+			}
+			keyLen := binary.LittleEndian.Uint16(decompressed[:2])
+			if len(decompressed) < 2+int(keyLen) {
+				return nil, errCompressedCorrupt
+			}
+			return decompressed[2+keyLen:], nil
+		}
+		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	}
+
 	return decodeValue(ptr, val, s.compression)
 }
 
