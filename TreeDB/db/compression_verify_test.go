@@ -3,10 +3,11 @@ package db
 import (
 	"bytes"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/slab"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // TestCompressionEnabled verifies that setting the options
@@ -19,9 +20,10 @@ func TestCompressionEnabled(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	opts := Options{
-		Dir:                   dir,
-		ChunkSize:             64 * 1024 * 1024,
-		LeafPrefixCompression: true,
+		Dir:                               dir,
+		ChunkSize:                         64 * 1024 * 1024,
+		LeafPrefixCompression:             true,
+		SlabCompressionAdaptiveTrainBytes: -1,
 		SlabCompression: slab.CompressionOptions{
 			Kind: slab.CompressionZSTD,
 		},
@@ -30,13 +32,6 @@ func TestCompressionEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Mock a compression profile to force immediate dictionary compression.
-	// This avoids waiting for background training.
-	db.SlabManager().ForceAcceptProfileForTesting(&slab.ActiveCompressionProfile{
-		Dict: bytes.Repeat([]byte("A"), 1024),
-		K:    1,
-	})
 
 	// 2. Write Compressible Data (Slab Compression)
 	// Write a large, repetitive value that should compress well.
@@ -74,7 +69,7 @@ func TestCompressionEnabled(t *testing.T) {
 
 	// 4. Verify Slab Compression
 	// Find slab file in data/ directory
-	slabDir := filepath.Join(dir, "data")
+	slabDir := dir
 	files, err := os.ReadDir(slabDir)
 	if err != nil {
 		t.Fatal(err)

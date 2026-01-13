@@ -7,41 +7,26 @@ import (
 	"path/filepath"
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestCompression_E2E_FullRecord(t *testing.T) {
 	dir := t.TempDir()
 
-	// Set env vars to enable full record compression
-	os.Setenv("TREEDB_SLAB_COMPRESSION", "zstd")
-	os.Setenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES", "1")
-	os.Setenv("TREEDB_SLAB_COMPRESSION_MIN_SAVINGS", "0")
-	os.Setenv("TREEDB_FORCE_VALUE_POINTERS", "1")
-	os.Setenv("TREEDB_DISABLE_VALUE_LOG", "1")
-	defer func() {
-		os.Unsetenv("TREEDB_SLAB_COMPRESSION")
-		os.Unsetenv("TREEDB_SLAB_COMPRESSION_MIN_BYTES")
-		os.Unsetenv("TREEDB_SLAB_COMPRESSION_MIN_SAVINGS")
-		os.Unsetenv("TREEDB_FORCE_VALUE_POINTERS")
-		os.Unsetenv("TREEDB_DISABLE_VALUE_LOG")
-	}()
-
-	opts := Options{Dir: dir}
-	db, err := Open(opts)
+	opts := backenddb.Options{
+		Dir:                               dir,
+		SlabCompressionAdaptiveTrainBytes: -1,
+		SlabCompression: slab.CompressionOptions{
+			Kind:            slab.CompressionZSTD,
+			MinBytes:        1,
+			MinSavingsBytes: 0,
+		},
+	}
+	db, err := backenddb.Open(opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
-	// Mock a compression profile to force immediate dictionary compression.
-	// This avoids waiting for background training which might not finish in time
-	// for the plain-text check.
-	dict := make([]byte, 32768)
-	copy(dict, "ibc/facks/ports/transfer/channels/channel-2/sequences/")
-	db.Backend().SlabManager().ForceAcceptProfileForTesting(&slab.ActiveCompressionProfile{
-		Dict: dict,
-		K:    1,
-	})
 
 	// Write redundant data with long keys and small values
 	keyBase := "s/k:ibc/facks/ports/transfer/channels/channel-2/sequences/"
@@ -50,15 +35,19 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 	batch := db.NewBatch()
 	for i := 0; i < 100; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyBase, i))
-		batch.Set(key, valBase)
+		if err := batch.Set(key, valBase); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
 	}
-	if err := batch.Write(); err != nil {
+	if err := batch.WriteSync(); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+	if err := batch.Close(); err != nil {
+		t.Fatalf("Batch.Close: %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
 	// Find slab file
 	matches, _ := filepath.Glob(dir + "/data-*.slab")
@@ -70,7 +59,6 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-
 	// Verify that the keyBase does NOT appear in plain text many times.
 	// Since we wrote 100 entries, if it's NOT compressed, it should appear 100 times.
 	// If it IS compressed (Full Record), it should NOT appear in plain text at all (except maybe once if zstd didn't compress one).
@@ -82,7 +70,7 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 	}
 
 	// Re-open and verify data integrity
-	db2, err := Open(opts)
+	db2, err := backenddb.Open(opts)
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
