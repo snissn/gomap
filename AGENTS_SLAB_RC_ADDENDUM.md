@@ -150,6 +150,28 @@ public-facing configuration.
 **Status Log**
 - [x] in_progress: drafted value-size limitation + remediation notes; identified docs to update (README, TREEDB_TUNING, TREEDB_BENCHMARKING).
 
+### Sprint 6 Plan (DX / Public API)
+
+**Track 1: User-facing docs cleanup**
+- Create a single "TreeDB configuration quickstart" section (README or `docs/README.md`).
+- Consolidate slab compression docs into one canonical page (link from README/TUNING).
+- Add a "known limits" section (V2 value cap, format stability).
+
+**Track 2: Public API audit**
+- Review `treedb.Options` defaults for consistency and clarity.
+- Document env var overrides (which flags affect which options).
+- Identify confusing flags or obsolete fields; propose renames/aliases if needed.
+
+**Track 3: Error messaging / troubleshooting**
+- Add a compact "common errors" section with cause + remediation.
+- Ensure errors like `ErrRecordTooLarge` mention the V2 cap.
+- Document recovery actions for WAL/vlog/slab errors (link to existing docs).
+
+**Track 4: Example configs / recipes**
+- Provide 3–4 copy/paste configs: cached default, backend-only, slab-heavy (force pointers + compression), and large-batch ingest.
+- Include benchmark-friendly env presets (trace replay settings).
+- Link to Celestia run notes if available.
+
 ---
 
 ## Regression: Trace Replay "record too large" (V2 batch boundary)
