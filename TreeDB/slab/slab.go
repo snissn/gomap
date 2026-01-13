@@ -3,14 +3,17 @@ package slab
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/klauspost/compress/zstd"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -41,6 +44,18 @@ var (
 	ErrReadOnly         = errors.New("slab is read-only")
 	ErrV2HeaderMismatch = errors.New("slab: v2 header magic mismatch")
 )
+
+func debugRecordTooLargeEnabled() bool {
+	val := os.Getenv("TREEDB_SLAB_DEBUG_RECORD_TOO_LARGE")
+	if val == "" {
+		return false
+	}
+	ok, err := strconv.ParseBool(val)
+	if err != nil {
+		return false
+	}
+	return ok
+}
 
 func recordSizeExceedsMax(keyLen uint16, valLen uint32) bool {
 	if MaxRecordSize <= 0 {
@@ -961,10 +976,16 @@ func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 	if s.version >= Version2 && !ignoreBoundary {
 		// If we are EXACTLY at a boundary (that requires a header), signal manager.
 		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+			if debugRecordTooLargeEnabled() {
+				log.Printf("slab: batch too large at boundary size=%d buf=%d", s.Size, len(buf))
+			}
 			return 0, ErrRecordTooLarge
 		}
 		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
 		if s.Size+int64(len(buf)) > nextBoundary {
+			if debugRecordTooLargeEnabled() {
+				log.Printf("slab: batch crosses boundary size=%d buf=%d next=%d", s.Size, len(buf), nextBoundary)
+			}
 			return 0, ErrRecordTooLarge // Signal SlabManager to rotate zone
 		}
 	}

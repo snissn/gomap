@@ -149,3 +149,14 @@ public-facing configuration.
 
 **Status Log**
 - [ ] pending
+
+---
+
+## Regression: Trace Replay "record too large" (V2 batch boundary)
+
+**Goal**
+Prevent batch flushes from constructing buffers larger than a V2 zone, which
+causes `record too large` during trace replay with slab compression enabled.
+
+**Status Log**
+- [x] completed: guard AppendMany flushes against V2 zone boundaries; added regression test; trace replay now passes with slab compression enabled.

@@ -698,8 +698,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 
 	// Keep buffers bounded so we don't double memory usage for extremely large
 	// batches or values.
-	const maxBatchBytes = 8 << 20   // 8 MiB
-	const maxKeepScratch = 16 << 20 // 16 MiB
+	const defaultMaxBatchBytes = 8 << 20 // 8 MiB
+	const maxKeepScratch = 16 << 20      // 16 MiB
 
 	type appendManyPrep struct {
 		keyLen    int
@@ -784,7 +784,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		if sm.activeSlab.version >= Version2 {
 			const maxV2Record = ZoneSize - ZoneHeaderSize
 			if recordLen64 > maxV2Record {
-				return nil, ErrRecordTooLarge
+				return nil, fmt.Errorf("record too large (v2 record=%d max=%d key=%d val=%d): %w", recordLen64, maxV2Record, keyLen, valLen, ErrRecordTooLarge)
 			}
 		}
 		recordLen := int(recordLen64)
@@ -817,6 +817,14 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 	}
 
 	ptrs := make([]page.ValuePtr, len(keys))
+
+	maxBatchBytes := defaultMaxBatchBytes
+	if sm.activeSlab.version >= Version2 {
+		const maxV2Record = ZoneSize - ZoneHeaderSize
+		if maxBatchBytes > maxV2Record {
+			maxBatchBytes = maxV2Record
+		}
+	}
 
 	buf := sm.appendManyScratch[:0]
 	metas := make([]appendManyMeta, 0, min(len(keys), 1024))
@@ -937,6 +945,25 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 			if int64(sm.activeSlab.Size)+int64(recordLen) > MaxSlabSize {
 				if err := sm.rotateLocked(); err != nil {
 					return nil, err
+				}
+			}
+		}
+
+		// For V2 slabs, avoid crossing zone boundaries with the batch buffer.
+		if sm.activeSlab.version >= Version2 {
+			nextBoundary := ((sm.activeSlab.Size / ZoneSize) + 1) * ZoneSize
+			remaining := nextBoundary - (sm.activeSlab.Size + int64(len(buf)))
+			if remaining < int64(recordLen) {
+				if err := flush(); err != nil {
+					return nil, err
+				}
+				if sm.activeSlab.version >= Version2 {
+					nextBoundary = ((sm.activeSlab.Size / ZoneSize) + 1) * ZoneSize
+					if sm.activeSlab.Size+int64(recordLen) > nextBoundary {
+						if _, err := sm.maybeRotateZoneLocked(recordLen); err != nil {
+							return nil, err
+						}
+					}
 				}
 			}
 		}
