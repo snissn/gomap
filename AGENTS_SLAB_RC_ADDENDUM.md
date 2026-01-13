@@ -161,6 +161,8 @@ public-facing configuration.
 - Review `treedb.Options` defaults for consistency and clarity.
 - Document env var overrides (which flags affect which options).
 - Identify confusing flags or obsolete fields; propose renames/aliases if needed.
+- Audit compression modes and legacy toggles (e.g., non-dictionary compression);
+  propose deprecations/removals where appropriate.
 
 **Track 3: Error messaging / troubleshooting**
 - Add a compact "common errors" section with cause + remediation.
