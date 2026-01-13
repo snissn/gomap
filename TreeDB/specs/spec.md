@@ -698,6 +698,7 @@ func (b *Batch) Close() error
 func (b *Batch) GetByteSize() (int, error) {
     return b.byteSize, nil
 }
+```
 
 ## 7\. Write-Back Caching Layer & Read Optimizations
 
