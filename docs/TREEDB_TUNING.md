@@ -230,6 +230,36 @@ Notes:
 - There is no separate "non-dictionary compression" mode beyond that fallback.
 - Design/format details: `TreeDB/local_dictionary_compression.md`.
 
+### Value Log (cached mode)
+
+Cached mode can store large values in the value log (vlog) and keep WAL entries
+small by using pointers.
+
+Options:
+- `Options.DisableValueLog`: legacy WAL-only mode (no vlog pointers).
+- `Options.SplitValueLog`: keep WAL records in `wal/` and large values in `vlog/`.
+- `Options.MemtableValueLogPointers`: store vlog pointers in memtables for large values.
+- `Options.ValueLogPointerThreshold`: inline threshold for using vlog pointers (bytes).
+- `Options.MaxValueLogRetainedBytes`: warn if retained vlog bytes exceed this cap.
+- `Options.MaxValueLogRetainedBytesHard`: stop using vlog pointers after this cap.
+
+Guidance:
+- Prefer the default value-log path; `DisableValueLog` is legacy and can increase WAL size.
+- `SplitValueLog` is required when you want to keep WAL entries small while
+  still using vlog pointers.
+
+### Durability / Integrity Options
+
+These options trade safety for performance and are **unsafe** unless you set
+`Options.AllowUnsafe`.
+
+- `Options.DisableWAL`: disable cached-mode WAL (durability only at checkpoints).
+- `Options.RelaxedSync`: skip fsync on `SetSync`/`WriteSync`.
+- `Options.DisableReadChecksum`: skip CRC checks for slab/vlog reads.
+- `Options.DisableSlabTailRepairOnOpen`: skip best-effort tail repair on open.
+- `Options.VerifyOnRead`: re-check every index page read (slower, paranoid).
+- `Options.DisablePiggybackCompaction`: skip opportunistic locality rewrites.
+
 ### Environment Variable Overrides (treedb.Open)
 
 `treedb.Open` reads these env vars and overwrites `Options` fields when set.
