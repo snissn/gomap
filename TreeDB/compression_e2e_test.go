@@ -31,6 +31,16 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
+	// Mock a compression profile to force immediate dictionary compression.
+	// This avoids waiting for background training which might not finish in time
+	// for the plain-text check.
+	dict := make([]byte, 32768)
+	copy(dict, "ibc/facks/ports/transfer/channels/channel-2/sequences/")
+	db.SlabManager().ForceAcceptProfileForTesting(&slab.ActiveCompressionProfile{
+		Dict: dict,
+		K:    1,
+	})
+
 	// Write redundant data with long keys and small values
 	keyBase := "s/k:ibc/facks/ports/transfer/channels/channel-2/sequences/"
 	valBase := bytes.Repeat([]byte("highly_compressible_value_with_lots_of_redundancy_"), 10) // ~500 bytes

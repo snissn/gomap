@@ -1200,7 +1200,6 @@ func (sm *SlabManager) rotateLocked() error {
 	return nil
 }
 
-
 func (sm *SlabManager) Sync() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -1345,6 +1344,34 @@ func (sm *SlabManager) ForceTrainerCollecting() {
 		return
 	}
 	sm.compressionTrainer.collecting.Store(true)
+}
+
+// ForceAcceptProfileForTesting immediately installs a compression profile.
+// Internal use for deterministic end-to-end tests only.
+func (sm *SlabManager) ForceAcceptProfileForTesting(p *ActiveCompressionProfile) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.currentProfile = p
+	// Ensure activeCompression is ZSTD if we have a dictionary.
+	if sm.compression.kind != CompressionZSTD {
+		sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+	} else {
+		sm.activeCompression = sm.compression
+	}
+
+	dict := p.Dict
+	sm.activeCompression.zstdEncs = &sync.Pool{
+		New: func() any {
+			enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(sm.activeCompression.level))
+			return enc
+		},
+	}
+	sm.activeCompression.zstdDecs = &sync.Pool{
+		New: func() any {
+			dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+			return dec
+		},
+	}
 }
 
 // CurrentSlabSet returns a snapshot of the current slabs.
