@@ -34,7 +34,7 @@ implicit assumptions about dictionary length.
   variable) or "DictLength always padded to GlobalDictSize".
 
 **Status Log**
-- [ ] pending
+- [x] completed: added regression tests for zone1 fallback and short local dicts; implemented fallback + dict padding fixes.
 
 ---
 
@@ -149,4 +149,3 @@ public-facing configuration.
 
 **Status Log**
 - [ ] pending
-

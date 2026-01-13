@@ -1084,6 +1084,12 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		DictType: uint8(dictType),
 	}
 	if dictType == ZoneDictLocal {
+		if len(localDict) > GlobalDictSize {
+			localDict = localDict[:GlobalDictSize]
+		}
+		dictBuf := make([]byte, GlobalDictSize)
+		copy(dictBuf, localDict)
+		localDict = dictBuf
 		zh.DictCRC = crc32.Checksum(localDict, crc32cTable)
 		zh.DictLength = uint32(len(localDict))
 	}
@@ -1096,9 +1102,7 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		// Dictionary size must be padded to GlobalDictSize (32KB) for alignment if we want
 		// predictable zone data starts, but the spec says "immediately following".
 		// We'll write exactly GlobalDictSize to keep everything aligned to 2MB zones + 32KB dicts.
-		dictBuf := make([]byte, GlobalDictSize)
-		copy(dictBuf, localDict)
-		if _, err := s.WriteBatch(dictBuf, true); err != nil {
+		if _, err := s.WriteBatch(localDict, true); err != nil {
 			return err
 		}
 

@@ -281,7 +281,8 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 	switch zh.DictType {
 	case ZoneDictGlobal:
 		if s.globalDecs == nil {
-			return nil, nil, errors.New("global dict missing")
+			dec, _ := zstd.NewReader(nil)
+			return dec, func() {}, nil
 		}
 		dec := s.globalDecs.Get().(*zstd.Decoder)
 		return dec, func() { s.globalDecs.Put(dec) }, nil
