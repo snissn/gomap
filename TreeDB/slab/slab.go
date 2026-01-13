@@ -174,8 +174,7 @@ func (s *SlabFile) checkBoundary(recordLen int64) error {
 	if s.version < Version2 {
 		return nil
 	}
-	const maxV2Record = ZoneSize - ZoneHeaderSize
-	if recordLen > maxV2Record {
+	if recordLen > maxV2RecordSize {
 		return ErrRecordTooLarge
 	}
 	// Check if we are at or will cross a boundary.
@@ -886,8 +885,7 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 
 	// For V2, records must not straddle 2MB boundaries.
 	if s.version >= Version2 {
-		const maxV2Record = ZoneSize - ZoneHeaderSize
-		if recordLen64 > maxV2Record {
+		if recordLen64 > maxV2RecordSize {
 			return 0, ErrRecordTooLarge
 		}
 		// If we are EXACTLY at a boundary (that requires a header), signal manager.

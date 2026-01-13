@@ -28,6 +28,9 @@ const (
 	// ZoneHeaderSize is 64 bytes
 	ZoneHeaderSize = 64
 
+	// maxV2RecordSize is the maximum record size that fits within a V2 zone.
+	maxV2RecordSize = ZoneSize - ZoneHeaderSize
+
 	// ZoneHeaderMagic is "ZNHD"
 	ZoneHeaderMagic uint32 = 0x5A4E4844
 )

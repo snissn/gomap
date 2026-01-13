@@ -535,8 +535,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 
 	// Pre-check for V2 absolute size limit.
 	if sm.activeSlab.version >= Version2 {
-		const maxV2Record = ZoneSize - ZoneHeaderSize
-		if int64(HeaderSize+len(encodedKey)+len(encoded)) > maxV2Record {
+		if int64(HeaderSize+len(encodedKey)+len(encoded)) > maxV2RecordSize {
 			return page.ValuePtr{}, ErrRecordTooLarge
 		}
 	}
@@ -659,8 +658,7 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 		}
 
 		if sm.activeSlab.version >= Version2 {
-			const maxV2Record = ZoneSize - ZoneHeaderSize
-			if int64(len(record)) > maxV2Record {
+			if int64(len(record)) > maxV2RecordSize {
 				return nil, ErrRecordTooLarge
 			}
 		}
@@ -782,9 +780,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 			return nil, ErrRecordTooLarge
 		}
 		if sm.activeSlab.version >= Version2 {
-			const maxV2Record = ZoneSize - ZoneHeaderSize
-			if recordLen64 > maxV2Record {
-				return nil, fmt.Errorf("record too large (v2 record=%d max=%d key=%d val=%d): %w", recordLen64, maxV2Record, keyLen, valLen, ErrRecordTooLarge)
+			if recordLen64 > maxV2RecordSize {
+				return nil, fmt.Errorf("record too large (v2 record=%d max=%d key=%d val=%d): %w", recordLen64, maxV2RecordSize, keyLen, valLen, ErrRecordTooLarge)
 			}
 		}
 		recordLen := int(recordLen64)
@@ -820,9 +817,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 
 	maxBatchBytes := defaultMaxBatchBytes
 	if sm.activeSlab.version >= Version2 {
-		const maxV2Record = ZoneSize - ZoneHeaderSize
-		if maxBatchBytes > maxV2Record {
-			maxBatchBytes = maxV2Record
+		if maxBatchBytes > maxV2RecordSize {
+			maxBatchBytes = maxV2RecordSize
 		}
 	}
 
