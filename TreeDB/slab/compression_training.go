@@ -184,14 +184,11 @@ const (
 )
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
-	if readOnly {
+	if readOnly || opts.CompressionAdaptiveTrainBytes < 0 {
 		return nil
 	}
 	// We allow trainer even if ZSTD is off initially, to support manual rotation tests.
 	target := opts.CompressionAdaptiveTrainBytes
-	if target < 0 {
-		return nil
-	}
 	if target == 0 {
 		target = defaultCompressionTrainBytes
 	}
@@ -244,7 +241,7 @@ func (t *compressionTrainer) Close() {
 }
 
 func (t *compressionTrainer) shouldCollect() bool {
-	if t == nil || t.closed.Load() {
+	if t == nil || t.closed.Load() || t.targetBytes == 0 {
 		return false
 	}
 	return t.collecting.Load()
@@ -379,18 +376,23 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	}
 	defer t.releaseSamples(samples)
 
+	var validSamples [][]byte
 	rawTotal := 0
 	for _, sample := range samples {
-		rawTotal += len(sample)
+		if len(sample) > 0 {
+			validSamples = append(validSamples, sample)
+			rawTotal += len(sample)
+		}
 	}
-	if rawTotal < 8 {
+	// Defensive: Need enough data for dictionary training.
+	if rawTotal < 4096 || len(validSamples) < 8 {
 		return
 	}
 	if dictBytes > rawTotal {
 		dictBytes = rawTotal
 	}
 	history := make([]byte, 0, dictBytes)
-	for _, sample := range samples {
+	for _, sample := range validSamples {
 		if len(history) >= dictBytes {
 			break
 		}
@@ -405,11 +407,11 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		return
 	}
 
-	samplesHash := hashSamples(samples)
+	samplesHash := hashSamples(validSamples)
 	if cached, dictHash, ok := t.lookupCachedDict(samplesHash); ok {
 		t.trainCount.Add(1)
 		t.lastTrainDictHash.Store(dictHash)
-		t.lastTrainSamples.Store(uint64(len(samples)))
+		t.lastTrainSamples.Store(uint64(len(validSamples)))
 		t.lastTrainDict.Store(uint64(len(cached)))
 		t.lastTrainDedupMode.Store(uint64(dictDedupCache))
 		t.lastTrainDedupFlag.Store(uint64(dictUseRef))
@@ -418,7 +420,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
 				slabID,
 				len(cached),
-				len(samples),
+				len(validSamples),
 				dictHash,
 				dedupModeString(dictDedupCache),
 				0,
@@ -429,18 +431,37 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 
 	t.trainCount.Add(1)
 
+	if len(validSamples) == 0 {
+		return
+	}
+
 	dictID := slabID + 1
 	if dictID == 0 {
 		dictID = 1
 	}
-	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
-		ID:       dictID,
-		Contents: samples,
-		History:  history,
-		Level:    level,
-	})
-	if err != nil {
-		log.Printf("treedb: slab compression training failed slab=%d err=%v", slabID, err)
+
+	var dict []byte
+	var err error
+
+	// Ultimate safeguard: catch panics from ZSTD library (e.g. integer divide by zero on bad samples)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("treedb: slab compression training PANIC slab=%d err=%v", slabID, r)
+			}
+		}()
+		dict, err = zstd.BuildDict(zstd.BuildDictOptions{
+			ID:       dictID,
+			Contents: validSamples,
+			History:  history,
+			Level:    level,
+		})
+	}()
+
+	if err != nil || len(dict) == 0 {
+		if err != nil {
+			log.Printf("treedb: slab compression training failed slab=%d err=%v", slabID, err)
+		}
 		return
 	}
 
