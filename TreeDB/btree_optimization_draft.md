@@ -160,8 +160,21 @@ Bloom filters should be leaf-only. Internal node lookups are already bounded and
 This is the “north-star” proposal from both docs, but it’s a major format change.
 
 **Zonal leaf clusters (“mega pages”)**
-- Group pages into ~2MB clusters for better compression and shared prefixes.
-- If we ever move to larger pages (e.g., 16KB), update the math; do not bake 16KB assumptions into logic.
+- Treat clusters as a *physical container* for many logical leaf pages, primarily to improve locality and enable shared compression context.
+- Prefer a **cold-tier format** produced by vacuum/compaction (not the hot write path) to avoid rewrite amplification under churn.
+- Use a shared **cluster prefix** (global LCP) and (optionally) a shared **cluster dictionary** for compressing leaf key material.
+- Compress **keys only** (key column / suffix blob). Keep the value/pointer column uncompressed (or lightly encoded) so reads can jump directly to pointers after key search.
+- Cluster layout should explicitly include:
+  - cluster header + version + CRC
+  - optional cluster prefix bytes
+  - optional fixed-size dict bytes + dict CRC
+  - per-leaf offset table: `leafID -> (keyBlockOffset, keyBlockLen, ptrColOffset, ptrColLen)`
+  - compressed key blocks per leaf + uncompressed pointer columns per leaf
+- If we ever change logical page size (e.g., 4KB → 16KB), update the math; do not bake specific page sizes into the design.
+
+**Index vs slab compression**
+- Do **not** attempt to share the same dictionary bytes between index keys and slab values (different distributions; coupling increases complexity).
+- It *is* desirable to share infrastructure: sampling, gating/anti-thrash policy, stats/telemetry, cache plumbing, and “profile selection” patterns, while keeping dict training domains independent.
 
 **Range-partitioned `index.db`**
 - Replace a single monolith with partitions, tracked by a manifest: `KeyRange -> FilePath`.
@@ -206,4 +219,3 @@ It is not a near-term optimization for the current COW tree.
 - `TreeDB/btree_optimization.md` is the original index-focused brainstorm.
 - `TreeDB/optimization_plan.md` Part I adds important correctness constraints.
 - This draft intentionally ignores slab sections in `TreeDB/optimization_plan.md`.
-
