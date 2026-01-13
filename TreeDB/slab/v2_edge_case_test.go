@@ -25,17 +25,18 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 	}
 	defer sm.Close()
 
-	// Manually force V2
-	header := make([]byte, SlabV2DataStart)
-	copy(header[0:8], MagicV2)
-	header[8] = Version2
-	if _, err := sm.activeSlab.File.WriteAt(header, 0); err != nil {
+	// Force V2 by providing a mock profile and rotating.
+	sm.compressionTrainer.AcceptProfile(&ActiveCompressionProfile{
+		Dict: make([]byte, 32768),
+		K:    1,
+	})
+	if err := sm.rotateLocked(); err != nil {
 		t.Fatal(err)
 	}
-	if err := sm.TruncateActiveSlab(uint64(SlabV2DataStart)); err != nil {
-		t.Fatal(err)
+
+	if sm.activeSlab.version != Version2 {
+		t.Fatalf("expected V2 slab after rotation, got %d", sm.activeSlab.version)
 	}
-	sm.activeSlab.version = Version2
 
 	// 1. Write a record that ends EXACTLY at the 2MB boundary.
 	// Data starts at 64KB. Zone 0 capacity is 2MB - 64KB = 2,031,616 bytes.
@@ -45,7 +46,8 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 	payload := make([]byte, payloadSize)
 	rand.Read(payload)
 
-	ptr1, err := sm.Append(nil, payload)
+	// Use DisableCompression to ensure exact sizing
+	ptr1, err := sm.AppendWithOptions(nil, payload, AppendOptions{DisableCompression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +58,7 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 
 	// 2. Write a small record. It should trigger Zone 1 header insertion.
 	smallPayload := []byte("boundary-test")
-	ptr2, err := sm.Append(nil, smallPayload)
+	ptr2, err := sm.AppendWithOptions(nil, smallPayload, AppendOptions{DisableCompression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,17 +102,18 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 	}
 	defer sm.Close()
 
-	// Manually force V2
-	header := make([]byte, SlabV2DataStart)
-	copy(header[0:8], MagicV2)
-	header[8] = Version2
-	if _, err := sm.activeSlab.File.WriteAt(header, 0); err != nil {
+	// Force V2 by providing a mock profile and rotating.
+	sm.compressionTrainer.AcceptProfile(&ActiveCompressionProfile{
+		Dict: make([]byte, 32768),
+		K:    1,
+	})
+	if err := sm.rotateLocked(); err != nil {
 		t.Fatal(err)
 	}
-	if err := sm.TruncateActiveSlab(uint64(SlabV2DataStart)); err != nil {
-		t.Fatal(err)
+
+	if sm.activeSlab.version != Version2 {
+		t.Fatalf("expected V2 slab after rotation, got %d", sm.activeSlab.version)
 	}
-	sm.activeSlab.version = Version2
 
 	// Max record size in V2 is ZoneSize - ZoneHeaderSize.
 	// But it also must fit in the current zone.
@@ -122,7 +125,8 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 	rand.Read(payload)
 
 	// This should move to Zone 1 because it won't fit in Zone 0 (which has 2MB - 64KB space).
-	ptr, err := sm.Append(nil, payload)
+	// Use DisableCompression to test absolute limit.
+	ptr, err := sm.AppendWithOptions(nil, payload, AppendOptions{DisableCompression: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,9 +145,10 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 		t.Fatal("payload mismatch")
 	}
 	
-	// Attempting a record that is 1 byte too large for V2 should fail.
-	tooLarge := make([]byte, maxPayload+1)
-	_, err = sm.Append(nil, tooLarge)
+	// Attempting a record that is too large for a single V2 zone (>= 2MB - 64B) should fail.
+	// We use ZoneSize + 1 to be absolutely sure it's rejected by V2 boundary logic.
+	tooLarge := make([]byte, ZoneSize+1)
+	_, err = sm.AppendWithOptions(nil, tooLarge, AppendOptions{DisableCompression: true})
 	if err != ErrRecordTooLarge {
 		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
 	}

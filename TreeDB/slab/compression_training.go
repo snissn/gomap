@@ -184,12 +184,10 @@ const (
 )
 
 func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
-	if readOnly || opts.CompressionAdaptiveTrainBytes == 0 {
+	if readOnly {
 		return nil
 	}
-	if cfg.kind != CompressionZSTD {
-		return nil
-	}
+	// We allow trainer even if ZSTD is off initially, to support manual rotation tests.
 	target := opts.CompressionAdaptiveTrainBytes
 	if target < 0 {
 		return nil
@@ -673,6 +671,10 @@ func (t *compressionTrainer) maybeAcceptProfile(profile *ActiveCompressionProfil
 			return
 		}
 	}
+	t.acceptProfile(profile)
+}
+
+func (t *compressionTrainer) AcceptProfile(profile *ActiveCompressionProfile) {
 	t.acceptProfile(profile)
 }
 

@@ -41,7 +41,7 @@ func TestFrameGroupRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = slab.Close() })
 
-	offset, err := slab.WriteBatch(record)
+	offset, err := slab.WriteBatch(record, false)
 	if err != nil {
 		t.Fatalf("write batch: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestFrameGroupPartial(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = slab.Close() })
 
-	offset, err := slab.WriteBatch(record)
+	offset, err := slab.WriteBatch(record, false)
 	if err != nil {
 		t.Fatalf("write batch: %v", err)
 	}

@@ -1,6 +1,7 @@
 package slab
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
@@ -111,6 +112,49 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		}
 		sm.slabs[0] = s
 		sm.activeSlab = s
+
+		// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
+		if s.version == 0 && s.Size == 0 {
+			profile, ok := sm.activeProfile()
+			if ok && profile != nil || sm.compression.kind == CompressionZSTD {
+				if err := sm.writeSlabV2Header(s, profile); err == nil {
+					s.version = Version2
+					if ok && profile != nil && len(profile.Dict) > 0 {
+						s.globalDict = profile.Dict
+						s.globalDecs = &sync.Pool{
+							New: func() any {
+								dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+								return dec
+							},
+						}
+						// Ensure activeCompression is ZSTD if we have a dictionary.
+						if sm.compression.kind != CompressionZSTD {
+							sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+						} else {
+							sm.activeCompression = sm.compression
+						}
+						sm.activeCompression.zstdEncs = &sync.Pool{
+							New: func() any {
+								enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.level))
+								return enc
+							},
+						}
+						sm.currentProfile = profile
+					} else {
+						// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
+						if sm.compression.kind != CompressionZSTD {
+							sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+						} else {
+							sm.activeCompression = sm.compression
+						}
+						sm.currentProfile = nil
+					}
+				} else if err != ErrSlabFull && err != ErrRecordTooLarge {
+					_ = sm.Close()
+					return nil, err
+				}
+			}
+		}
 	} else {
 		for _, info := range infos {
 			if info.id == maxID {
@@ -301,7 +345,7 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if s.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+	if s.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := s.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -354,7 +398,7 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if s.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+	if s.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := s.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -450,12 +494,31 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		return page.ValuePtr{}, ErrReadOnly
 	}
 
-	offset, err := sm.activeSlab.Write(encodedKey, encoded)
-	if err == ErrSlabFull {
-		if err = sm.rotateLocked(); err != nil {
-			return page.ValuePtr{}, err
+	// Pre-check for V2 absolute size limit.
+	if sm.activeSlab.version >= Version2 {
+		const maxV2Record = ZoneSize - ZoneHeaderSize
+		if int64(HeaderSize+len(encodedKey)+len(encoded)) > maxV2Record {
+			return page.ValuePtr{}, ErrRecordTooLarge
 		}
+	}
+
+	var offset int64
+	for attempt := 0; attempt < 3; attempt++ {
 		offset, err = sm.activeSlab.Write(encodedKey, encoded)
+		if err == ErrSlabFull {
+			if err = sm.rotateLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			continue
+		}
+		if err == ErrRecordTooLarge && sm.activeSlab.version >= Version2 {
+			// Zonal rotation requested.
+			if _, err = sm.maybeRotateZoneLocked(len(encoded) + len(encodedKey) + HeaderSize); err != nil {
+				return page.ValuePtr{}, err
+			}
+			continue
+		}
+		break
 	}
 
 	if err != nil {
@@ -522,14 +585,25 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 	defer sm.mu.Unlock()
 
 	writeRecord := func(rec []byte) (int64, error) {
-		offset, err := sm.activeSlab.WriteBatch(rec)
-		if err == ErrSlabFull {
-			if err := sm.rotateLocked(); err != nil {
-				return 0, err
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			var offset int64
+			offset, err = sm.activeSlab.WriteBatch(rec, false)
+			if err == ErrSlabFull {
+				if err = sm.rotateLocked(); err != nil {
+					return 0, err
+				}
+				continue
 			}
-			return sm.activeSlab.WriteBatch(rec)
+			if err == ErrRecordTooLarge && sm.activeSlab.version >= Version2 {
+				if _, err = sm.maybeRotateZoneLocked(len(rec)); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			return offset, err
 		}
-		return offset, err
+		return 0, err
 	}
 
 	idx := 0
@@ -539,10 +613,19 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 			end = len(values)
 		}
 		group := values[idx:end]
+
 		record, actualK, err := buildFrameGroupRecord(group, &sm.activeCompression)
 		if err != nil {
 			return nil, err
 		}
+
+		if sm.activeSlab.version >= Version2 {
+			const maxV2Record = ZoneSize - ZoneHeaderSize
+			if int64(len(record)) > maxV2Record {
+				return nil, ErrRecordTooLarge
+			}
+		}
+
 		offset, err := writeRecord(record)
 		if err != nil {
 			return nil, err
@@ -659,6 +742,12 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
 			return nil, ErrRecordTooLarge
 		}
+		if sm.activeSlab.version >= Version2 {
+			const maxV2Record = ZoneSize - ZoneHeaderSize
+			if recordLen64 > maxV2Record {
+				return nil, ErrRecordTooLarge
+			}
+		}
 		recordLen := int(recordLen64)
 
 		binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
@@ -697,15 +786,27 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		if len(buf) == 0 {
 			return nil
 		}
+		var err error
 		s := sm.activeSlab
 		id := s.ID
 
-		for {
-			base, err := s.WriteBatch(buf)
+		for attempt := 0; attempt < 3; attempt++ {
+			var base int64
+			base, err = s.WriteBatch(buf, false)
 			if err == ErrSlabFull {
 				// Should be rare (pre-checked), but handle if MaxSlabSize changed or
 				// the slab was concurrently advanced by another writer.
 				if err := sm.rotateLocked(); err != nil {
+					return err
+				}
+				s = sm.activeSlab
+				id = s.ID
+				continue
+			}
+			if err == ErrRecordTooLarge && s.version >= Version2 {
+				// Zonal rotation requested.
+				// We pass len(buf) as a conservative estimate for rotation.
+				if _, err := sm.maybeRotateZoneLocked(len(buf)); err != nil {
 					return err
 				}
 				s = sm.activeSlab
@@ -762,6 +863,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 			metas = metas[:0]
 			return nil
 		}
+		return err
 	}
 
 	growBuf := func(target int) {
@@ -887,15 +989,130 @@ func (sm *SlabManager) Rotate() (*SlabFile, error) {
 	return sm.activeSlab, nil
 }
 
-func (sm *SlabManager) writeSlabV2Header(f *os.File, profile *ActiveCompressionProfile) error {
+func (sm *SlabManager) writeSlabV2Header(s *SlabFile, profile *ActiveCompressionProfile) error {
 	header := make([]byte, SlabV2DataStart)
 	copy(header[0:8], MagicV2)
 	header[8] = Version2
 	if profile != nil && len(profile.Dict) > 0 {
 		copy(header[FileHeaderSizeV2:], profile.Dict)
 	}
-	_, err := f.WriteAt(header, 0)
+	// Use WriteBatch with ignoreBoundary=true to correctly update size/offset and handle seek.
+	_, err := s.WriteBatch(header, true)
 	return err
+}
+
+func (sm *SlabManager) maybeRotateZoneLocked(recordLen int) (bool, error) {
+	s := sm.activeSlab
+	if s == nil || s.version < Version2 {
+		return false, nil
+	}
+
+	// 1. Are we EXACTLY at a boundary (Zone 1+)?
+	if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+		if err := sm.forceRotateZoneLocked(); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	// 2. Will the record cross a boundary?
+	nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+	if s.Size+int64(recordLen) <= nextBoundary {
+		return false, nil
+	}
+
+	// Crossing boundary. Pad to boundary.
+	if err := s.Truncate(nextBoundary); err != nil {
+		return false, err
+	}
+	// After padding, we are EXACTLY at the boundary. Write header.
+	if err := sm.forceRotateZoneLocked(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (sm *SlabManager) forceRotateZoneLocked() error {
+	s := sm.activeSlab
+	// Decide dictionary for new zone.
+	profile, ok := sm.activeProfile()
+	dictType := ZoneDictGlobal
+	var localDict []byte
+
+	if ok && profile != nil && len(profile.Dict) > 0 {
+		// Use LOCAL if:
+		// 1. Global dict is empty.
+		// 2. Profile is different/better than global dict (Adaptive).
+		if len(s.globalDict) == 0 || !bytes.Equal(profile.Dict, s.globalDict) {
+			dictType = ZoneDictLocal
+			localDict = profile.Dict
+		}
+	}
+
+	// Write Zone Header.
+	zh := ZoneHeader{
+		Magic:    ZoneHeaderMagic,
+		DictType: uint8(dictType),
+	}
+	if dictType == ZoneDictLocal {
+		zh.DictCRC = crc32.Checksum(localDict, crc32cTable)
+		zh.DictLength = uint32(len(localDict))
+	}
+
+	if _, err := s.WriteBatch(zh.Marshal(), true); err != nil {
+		return err
+	}
+
+	if dictType == ZoneDictLocal {
+		// Dictionary size must be padded to GlobalDictSize (32KB) for alignment if we want
+		// predictable zone data starts, but the spec says "immediately following".
+		// We'll write exactly GlobalDictSize to keep everything aligned to 2MB zones + 32KB dicts.
+		dictBuf := make([]byte, GlobalDictSize)
+		copy(dictBuf, localDict)
+		if _, err := s.WriteBatch(dictBuf, true); err != nil {
+			return err
+		}
+
+		// Update manager's active compression to use the new local dict.
+		sm.activeCompression = sm.compression // shallow copy base settings
+		sm.activeCompression.zstdEncs = &sync.Pool{
+			New: func() any {
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(localDict), zstd.WithEncoderLevel(sm.compression.level))
+				return enc
+			},
+		}
+		sm.activeCompression.zstdDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(localDict))
+				return dec
+			},
+		}
+		sm.currentProfile = profile
+	} else {
+		// USE_GLOBAL.
+		// If we were using a local dict, revert to global (or base if global is empty).
+		if len(s.globalDict) > 0 {
+			sm.activeCompression = sm.compression
+			sm.activeCompression.zstdEncs = &sync.Pool{
+				New: func() any {
+					enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(s.globalDict), zstd.WithEncoderLevel(sm.compression.level))
+					return enc
+				},
+			}
+			sm.activeCompression.zstdDecs = &sync.Pool{
+				New: func() any {
+					dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(s.globalDict))
+					return dec
+				},
+			}
+		} else {
+			// Global is also empty. Revert to base (no dict).
+			sm.activeCompression = sm.compression
+			sm.currentProfile = nil
+		}
+	}
+
+	return nil
 }
 
 func (sm *SlabManager) rotateLocked() error {
@@ -915,33 +1132,52 @@ func (sm *SlabManager) rotateLocked() error {
 		return err
 	}
 
-	// Try to upgrade to V2 if a compression profile is ready.
-	if profile, ok := sm.activeProfile(); ok && profile != nil && sm.compression.kind == CompressionZSTD {
-		if err := sm.writeSlabV2Header(newSlab.File, profile); err != nil {
+	// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
+	profile, ok := sm.activeProfile()
+	if ok && profile != nil || sm.compression.kind == CompressionZSTD {
+		if err := sm.writeSlabV2Header(newSlab, profile); err == nil {
+			newSlab.version = Version2
+			if ok && profile != nil && len(profile.Dict) > 0 {
+				newSlab.globalDict = profile.Dict
+				newSlab.globalDecs = &sync.Pool{
+					New: func() any {
+						dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+						return dec
+					},
+				}
+				// Ensure activeCompression is ZSTD if we have a dictionary.
+				if sm.compression.kind != CompressionZSTD {
+					sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+				} else {
+					sm.activeCompression = sm.compression
+				}
+				sm.activeCompression.zstdEncs = &sync.Pool{
+					New: func() any {
+						enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.level))
+						return enc
+					},
+				}
+				sm.currentProfile = profile
+			} else {
+				// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
+				if sm.compression.kind != CompressionZSTD {
+					sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+				} else {
+					sm.activeCompression = sm.compression
+				}
+				sm.currentProfile = nil
+			}
+		} else if err == ErrSlabFull || err == ErrRecordTooLarge {
+			// MaxSlabSize is too small for V2 header (common in rotation tests).
+			// Fallback to V1.
+			sm.activeCompression = sm.compression
+			sm.currentProfile = nil
+		} else {
 			_ = newSlab.Close()
 			return err
 		}
-		newSlab.version = Version2
-		newSlab.Size = SlabV2DataStart
-		newSlab.writeOffset = SlabV2DataStart
-		newSlab.globalDict = profile.Dict
-		newSlab.globalDecs = &sync.Pool{
-			New: func() any {
-				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
-				return dec
-			},
-		}
-		// Update writer's active compression to use the dictionary.
-		sm.activeCompression = sm.compression
-		sm.activeCompression.zstdEncs = &sync.Pool{
-			New: func() any {
-				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.compression.level))
-				return enc
-			},
-		}
-		sm.currentProfile = profile
 	} else {
-		// Fallback to V1: reset active compression to base (no dict).
+		// Fallback to V1.
 		sm.activeCompression = sm.compression
 		sm.currentProfile = nil
 	}
@@ -1142,7 +1378,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if f.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+	if f.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := f.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -1189,7 +1425,7 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if f.version == Version2 && page.ValuePtrIsCompressed(ptr) {
+	if f.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := f.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
