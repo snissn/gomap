@@ -10,6 +10,10 @@ reframes the roadmap around TreeDB’s current architecture (COW + MVCC snapshot
 
 Status: draft / planning doc (not a committed format contract).
 
+Compatibility stance: **no backward compatibility guarantee** (dev / pre-alpha).
+Format changes may require rebuilding the DB directory (or running a vacuum-style
+rewrite) to upgrade.
+
 ---
 
 ## 0. Scope, Assumptions, Non‑Goals
@@ -25,6 +29,8 @@ Status: draft / planning doc (not a committed format contract).
   - compression logic is factored into a shared package (planned: `TreeDB/internal/compression`),
   - slabs and WAL segments already use that shared infrastructure,
   - compression metrics + adaptive gating utilities are available for reuse.
+- Because TreeDB is pre-alpha, we do **not** optimize for “read old, write new”
+  compatibility. The preferred upgrade path is “format bump + rebuild/vacuum”.
 
 **Non-goals (for near-term “optimization” work)**
 - In-place B-tree updates with lock-coupling. This is a different engine design and must be treated as an architectural fork.
@@ -259,18 +265,21 @@ Key consequence for compatibility:
 
 ### 6.3 Compatibility & Migration Strategy (Recommended)
 
-We want “read old pages; write new pages” with a clean upgrade path.
+TreeDB is pre-alpha and does not require backward compatibility. Prefer the
+simplest safe strategy: bump the format and require an index rebuild (vacuum)
+or a full DB directory reset.
 
 **Mechanism**
-- Introduce a **leaf format flag/version** that is:
-  - readable from the canonical page image (so CRC already covers it),
-  - cheap to branch on in hot paths.
-- Readers decode based on `(PageType == Leaf) + (format flag/version bits)`.
-- Writers emit the new format for newly-created leaf pages (COW rewrite).
+- Introduce a **format flag/version** in the canonical page image (CRC-covered),
+  and make readers reject unknown versions with a clear error (or require
+  rebuild). This keeps failure modes explicit.
+
+Optional (only if we decide it is worth the complexity): support mixed-format
+pages during development by branching decode/search on the format bit.
 
 **Upgrade story**
-- Existing DB: mixed pages will exist during normal churn; the tree remains valid.
-- Full conversion: run an index vacuum/rebuild to rewrite all reachable pages into the newest format.
+- Preferred: run an index vacuum/rebuild to rewrite all reachable pages into the newest format.
+- Simplest: delete the DB dir and resync/rebuild from upstream state (acceptable for dev/pre-alpha).
 
 **Hard rule**
 - New per-page hints (fingerprints/bloom) must never introduce false negatives.
@@ -426,8 +435,16 @@ Post-`GEMINI_PLAN.md` optimizations to leverage:
 
 ### 6.10 Phase Ordering (Recommended)
 
-Start with: Phase 0 → Phase 1 → Phase 2. Do not begin Phase 5 until Phase 1–2
-prove that “keys-first” layouts materially improve the point-read hot path.
+Phases must be completed in order:
+
+- Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 → (optional) Phase 5
+
+Gate each phase on:
+- correctness tests (including fuzz/model tests),
+- a measurable win (or at least no regression) on the Phase 0 benchmarks.
+
+Do not begin Phase 5 until Phases 1–3 prove that keys-first layouts and higher
+fanout materially improve point-read performance and/or index size.
 
 ---
 
