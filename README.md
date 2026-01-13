@@ -178,3 +178,7 @@ _Key counts:_ 1, 10, 100, 1,000, 10,000, 100,000, 1,000,000
 
 - Exclusive open: TreeDB and HashDB take an exclusive lock on the DB directory (`ErrLocked`).
 - On-disk formats and public APIs may evolve; see `docs/API_STABILITY.md`.
+- **TreeDB Slab V2 value limit**: a single slab record must fit within a V2 zone
+  (`ZoneSize - ZoneHeaderSize`, ~2MB - 64B). Writes larger than this return
+  `ErrRecordTooLarge`. See `TreeDB/local_dictionary_compression.md` for
+  remediation options (chunking, larger zones, alternate store).

@@ -198,6 +198,13 @@ TreeDB Slab V2 implements **Zonal Dictionary Compression** (Path B). This allows
   - Size of the ZSTD dictionary to generate.
 - `Options.OmitSlabKeys` (default: false):
   - If true, keys are omitted from the slab record, saving space for small-to-medium records.
+
+#### V2 Value Size Cap (Important)
+- V2 slabs require each record to fit within a single 2MB zone.
+- **Max record size**: `ZoneSize - ZoneHeaderSize` (~2MB - 64B).
+- Writes larger than this return `ErrRecordTooLarge`.
+- If you need larger values: consider chunking, larger zones (format change),
+  or an alternate blob/value store.
   - **Requires** `BackgroundCompactionIndexSwap=true` for background maintenance to function.
 
 #### Environment Variables

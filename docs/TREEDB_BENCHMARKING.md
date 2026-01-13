@@ -54,6 +54,12 @@ Required inputs:
 - JSONL trace: `treedb_trace_*.jsonl`
 - Summary JSON: `treedb_trace_*.summary.json`
 
+Note on V2 slabs:
+- With slab compression enabled, a single slab record must fit within one V2
+  zone (`~2MB - 64B`). Oversized values return `ErrRecordTooLarge`.
+- If a trace contains values larger than this, timeline replay will fail unless
+  you disable V2 compression or implement chunking.
+
 Benchmark:
 ```bash
 TREEDB_TRACE_SUMMARY=/path/to/trace.summary.json \
