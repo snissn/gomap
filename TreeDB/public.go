@@ -107,6 +107,9 @@ func Open(opts Options) (*DB, error) {
 	if envBool("TREEDB_SLAB_OMIT_KEYS") {
 		opts.OmitSlabKeys = true
 	}
+	if envBool("TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP") {
+		opts.BackgroundCompactionIndexSwap = true
+	}
 	if envBool("TREEDB_DISABLE_VALUE_LOG") {
 		opts.DisableValueLog = true
 	}
