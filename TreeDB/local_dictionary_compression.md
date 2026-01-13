@@ -11,7 +11,7 @@ TreeDB Version 2 implements **Zonal Dictionary Compression** with **Global-Local
 | Offset | Size | Description |
 | :--- | :--- | :--- |
 | 0 | 32KB | **File Header**: Magic (`TRDB-SLB`), Version (`0x02`), and Metadata. |
-| 32KB | 32KB | **Global Dictionary**: Trained on the start of the slab. Used by all zones by default. |
+| 32KB | 32KB | **Global Dictionary**: Seeded from the active compression profile at slab creation. Used by all zones by default. |
 | 64KB | 2MB - 64KB | **Zone 0 Data**: Records compressed against Global Dict. |
 | 2,097,152 | 64B | **Zone 1 Header**: Flags indicating which dictionary to use. |
 | 2,097,152 + 64B| ... | **Zone 1 Data**: Records. |
@@ -41,6 +41,11 @@ When the `SlabManager` trains a new dictionary for a zone:
 - **Entropy Check**: The compressor tracks the "Compression Ratio" of the last 100 records. 
 - If the ratio degrades by >20% compared to the start of the zone, it signals that the Global/Current dictionary is becoming "stale."
 - It then triggers **Background Training** for a new Local Dictionary to be used in the *next* zone.
+
+### 3.2a Adaptive Profile Selection (Current RC Policy)
+- The RC uses the adaptive trainer to select a dictionary + K profile based on rolling ratio drift and anti-thrash gating.
+- The "Global Dictionary" is seeded from the active profile rather than strictly from the first slab bytes.
+- K selection is score-based (ratio vs decode cost), with guarded retrains to avoid churn.
 
 ### 3.3 Two-Pass Compaction (The "Gold Standard")
 During compaction, the `Compactor` analyzes the entire 4GB slab to be written:

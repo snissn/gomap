@@ -132,7 +132,7 @@ Reconcile the spec with the current adaptive training + K selection approach.
 - None (doc-only).
 
 **Status Log**
-- [ ] pending
+- [x] completed: documented adaptive profile + K selection policy in `TreeDB/local_dictionary_compression.md`.
 
 ---
 
