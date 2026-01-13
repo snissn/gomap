@@ -658,6 +658,8 @@ func TestCompaction_FullCompression(t *testing.T) {
 	key := []byte("key_with_significant_length_for_compression_testing_abc_def_ghi")
 	val := bytes.Repeat([]byte("redundant_data_redundant_data_redundant_data_"), 20)
 
+	slabID := d.SlabManager().ActiveSlabID()
+
 	batch := d.NewBatch().(*db.Batch)
 	batch.Set(key, val)
 	if err := batch.Write(); err != nil {
@@ -671,7 +673,7 @@ func TestCompaction_FullCompression(t *testing.T) {
 
 	// Run compaction
 	c := New(d)
-	if err := c.CompactSlab(0); err != nil {
+	if err := c.CompactSlab(slabID); err != nil {
 		t.Fatalf("CompactSlab: %v", err)
 	}
 
@@ -708,6 +710,8 @@ func TestCompaction_OmitKeys(t *testing.T) {
 	key := []byte("k")
 	val := []byte("v")
 
+	slabID := d.SlabManager().ActiveSlabID()
+
 	batch := d.NewBatch().(*db.Batch)
 	batch.Set(key, val)
 	if err := batch.Write(); err != nil {
@@ -720,7 +724,7 @@ func TestCompaction_OmitKeys(t *testing.T) {
 	}
 
 	// Run IndexSwap compaction (should MIGRATE the record even if key is missing in slab)
-	if err := d.CompactSlabsIndexSwap(nil, []uint32{0}, db.IndexSwapCompactionOptions{}); err != nil {
+	if err := d.CompactSlabsIndexSwap(nil, []uint32{slabID}, db.IndexSwapCompactionOptions{}); err != nil {
 		t.Fatalf("CompactSlabsIndexSwap: %v", err)
 	}
 
