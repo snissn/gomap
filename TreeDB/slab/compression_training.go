@@ -230,6 +230,7 @@ func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *
 		dictDedupWindow: dedupWindow,
 	}
 	trainer.enabled.Store(true)
+	trainer.collecting.Store(true) // Start collecting immediately
 	go trainer.run()
 	return trainer
 }
