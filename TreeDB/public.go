@@ -82,6 +82,7 @@ func (db *DB) ensureOpen() error {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 // To open the backend-only engine, set opts.Mode = ModeBackend.
+// Environment variable overrides (TREEDB_*) are applied; see docs/TREEDB_TUNING.md.
 func Open(opts Options) (*DB, error) {
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
