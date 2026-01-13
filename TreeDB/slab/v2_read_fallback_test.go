@@ -231,3 +231,41 @@ func TestSlabV2_UseRefDictionary(t *testing.T) {
 		t.Fatalf("read zone2 empty value")
 	}
 }
+
+func TestSlabV2_DictSliceMmap(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewSlabManagerWithOptions(dir, Options{
+		Compression: CompressionOptions{
+			Kind:            CompressionZSTD,
+			MinBytes:        1,
+			MinSavingsBytes: 1,
+		},
+		CompressionAdaptiveTrainBytes: -1,
+	})
+	if err != nil {
+		t.Fatalf("new slab manager: %v", err)
+	}
+	defer func() { _ = sm.Close() }()
+
+	dict := buildTestDict(t, 3, makeTestSamples(8, 2048))
+	sm.ForceAcceptProfileForTesting(&ActiveCompressionProfile{
+		Dict:      dict,
+		DictBytes: len(dict),
+		K:         1,
+	})
+
+	fillToZone(t, sm, 1, []byte("k"), bytes.Repeat([]byte("f"), 64*1024))
+	if _, err := sm.Append([]byte("zone1"), bytes.Repeat([]byte("payload"), 8*1024)); err != nil {
+		t.Fatalf("append zone1: %v", err)
+	}
+
+	sm.mu.RLock()
+	s := sm.activeSlab
+	sm.mu.RUnlock()
+
+	s.remapToFileSize()
+	dictOffset := int64(ZoneSize) + ZoneHeaderSize
+	if _, ok := s.dictSlice(dictOffset, GlobalDictSize); !ok {
+		t.Fatalf("expected mmap-backed dict slice")
+	}
+}

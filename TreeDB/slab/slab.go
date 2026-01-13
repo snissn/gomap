@@ -257,6 +257,14 @@ func (s *SlabFile) readRaw(offset int64, buf []byte) error {
 	return err
 }
 
+func (s *SlabFile) dictSlice(offset int64, length int) ([]byte, bool) {
+	data, _ := s.mmapData.Load().([]byte)
+	if data == nil || offset < 0 || offset+int64(length) > int64(len(data)) {
+		return nil, false
+	}
+	return data[offset : offset+int64(length)], true
+}
+
 func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 	if s.version != Version2 {
 		return nil, nil, errors.New("not v2 slab")
@@ -306,9 +314,19 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 
 		// Load from disk. Dict is 32KB starting after 64B header.
 		dictOffset := headerOffset + ZoneHeaderSize
-		dictBuf := make([]byte, GlobalDictSize)
-		if err := s.readRaw(dictOffset, dictBuf); err != nil {
-			return nil, nil, err
+		dictBuf, ok := s.dictSlice(dictOffset, GlobalDictSize)
+		if !ok {
+			if err := s.ensureOpen(); err == nil {
+				s.remapToFileSize()
+				dictBuf, ok = s.dictSlice(dictOffset, GlobalDictSize)
+			}
+		}
+		if !ok {
+			buf := make([]byte, GlobalDictSize)
+			if err := s.readRaw(dictOffset, buf); err != nil {
+				return nil, nil, err
+			}
+			dictBuf = buf
 		}
 
 		// Verify CRC
@@ -364,9 +382,19 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 					return dec, func() { pool.Put(dec) }, nil
 				}
 				dictOffset := refHeaderOffset + ZoneHeaderSize
-				dictBuf := make([]byte, GlobalDictSize)
-				if err := s.readRaw(dictOffset, dictBuf); err != nil {
-					return nil, nil, err
+				dictBuf, ok := s.dictSlice(dictOffset, GlobalDictSize)
+				if !ok {
+					if err := s.ensureOpen(); err == nil {
+						s.remapToFileSize()
+						dictBuf, ok = s.dictSlice(dictOffset, GlobalDictSize)
+					}
+				}
+				if !ok {
+					buf := make([]byte, GlobalDictSize)
+					if err := s.readRaw(dictOffset, buf); err != nil {
+						return nil, nil, err
+					}
+					dictBuf = buf
 				}
 				sum := crc32.Checksum(dictBuf, crc32cTable)
 				if sum != zh.DictCRC {
@@ -399,6 +427,7 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 
 func (s *SlabFile) Close() error {
 	s.closed.Store(true)
+	dictPools.purgeSlab(s)
 
 	s.remapMu.Lock()
 	data, _ := s.mmapData.Load().([]byte)

@@ -85,3 +85,20 @@ func (c *dictPoolCache) keys() []dictCacheKey {
 	}
 	return keys
 }
+
+func (c *dictPoolCache) purgeSlab(slab *SlabFile) {
+	if c == nil || slab == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for elem := c.ll.Front(); elem != nil; {
+		next := elem.Next()
+		entry := elem.Value.(*dictPoolEntry)
+		if entry.key.slab == slab {
+			c.ll.Remove(elem)
+			delete(c.items, entry.key)
+		}
+		elem = next
+	}
+}

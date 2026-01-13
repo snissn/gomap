@@ -109,7 +109,7 @@ Avoid heap copies when loading dictionaries for local/ref zones.
 - Existing read-path tests should still pass.
 
 **Status Log**
-- [ ] pending
+- [x] completed: zero-copy dict slices via mmap when available; added mmap-backed dict test and cache purge on slab close.
 
 ---
 
