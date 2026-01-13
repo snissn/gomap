@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestCompression_E2E_FullRecord(t *testing.T) {
@@ -36,7 +38,7 @@ func TestCompression_E2E_FullRecord(t *testing.T) {
 	// for the plain-text check.
 	dict := make([]byte, 32768)
 	copy(dict, "ibc/facks/ports/transfer/channels/channel-2/sequences/")
-	db.SlabManager().ForceAcceptProfileForTesting(&slab.ActiveCompressionProfile{
+	db.Backend().SlabManager().ForceAcceptProfileForTesting(&slab.ActiveCompressionProfile{
 		Dict: dict,
 		K:    1,
 	})
