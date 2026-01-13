@@ -176,9 +176,37 @@ TreeDB can optionally run slab compaction in the background (off by default):
   - `Options.BackgroundCompactionCopyBytesPerSec`
   - `Options.BackgroundCompactionCopyBurstBytes`
   - `Options.BackgroundCompactionRotateBeforeWrite`
+  - `Options.BackgroundCompactionIndexSwap`: (Recommended for `OmitSlabKeys`)
 
 Stats keys:
 - `treedb.bg_compaction.*`
+
+### Slab Compression (Dictionary Compression - V2)
+
+TreeDB Slab V2 implements **Zonal Dictionary Compression** (Path B). This allows dictionary compression to begin as early as the first 2MB boundary of the very first slab, providing nearly 100% coverage for large workloads.
+
+#### Configuration Knobs
+
+- `Options.SlabCompression`:
+  - `Kind`: Set to `slab.CompressionZSTD` to enable.
+  - `MinBytes`: Minimum value size to attempt compression (default: 1).
+  - `MinSavingsBytes`: Minimum bytes saved to keep a record compressed.
+- `Options.SlabCompressionAdaptiveTrainBytes` (default: 1MB):
+  - Amount of raw data to sample before triggering background dictionary training.
+  - Set to `-1` to disable training manually.
+- `Options.SlabCompressionAdaptiveTrainDictBytes` (default: 32KB):
+  - Size of the ZSTD dictionary to generate.
+- `Options.OmitSlabKeys` (default: false):
+  - If true, keys are omitted from the slab record, saving space for small-to-medium records.
+  - **Requires** `BackgroundCompactionIndexSwap=true` for background maintenance to function.
+
+#### Environment Variables
+
+- `TREEDB_SLAB_COMPRESSION=zstd`: Enable dictionary compression.
+- `TREEDB_SLAB_OMIT_KEYS=1`: Enable key omission in slabs.
+- `TREEDB_SLAB_COMPRESSION_TRAIN_BYTES=N`: Override training sample target.
+- `TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP=1`: Enable the required compaction mode for OmitKeys.
+- `TREEDB_SLAB_COMPRESSION_METRICS=1`: Log real-time compression ratios and training events.
 
 ### Background index vacuum (cached or backend; default on)
 
