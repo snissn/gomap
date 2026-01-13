@@ -605,6 +605,8 @@ type Options struct {
 
 	// DisableWAL disables the Write-Ahead Log.
 	DisableWAL bool
+	// WALCompression enables compression for the metadata WAL.
+	WALCompression bool
 	// DisableValueLog forces the cached WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
@@ -735,6 +737,7 @@ type DB struct {
 	writerFlushMaxDuration    time.Duration
 	flushBuildConcurrency     int
 	walMaxSegmentBytes        int64
+	walCompression            bool
 
 	disableWAL         bool
 	relaxedSync        bool
@@ -1283,6 +1286,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxDuration:       opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:        opts.FlushBuildConcurrency,
 		walMaxSegmentBytes:           opts.WALMaxSegmentBytes,
+		walCompression:               opts.WALCompression,
 		disableWAL:                   opts.DisableWAL,
 		disableValueLog:              disableValueLog,
 		splitValueLog:                opts.SplitValueLog,
@@ -3879,7 +3883,10 @@ func (db *DB) rotateWALLocked() error {
 			}
 			db.wal = &vlogWriterAdapter{w: w}
 		} else {
-			w, err := wal.NewWriterWithOptions(path, wal.Options{MaxSegmentSize: db.walMaxSegmentBytes})
+			w, err := wal.NewWriterWithOptions(path, wal.Options{
+				MaxSegmentSize: db.walMaxSegmentBytes,
+				Compress:       db.walCompression,
+			})
 			if err != nil {
 				return err
 			}

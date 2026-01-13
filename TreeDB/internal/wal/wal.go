@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
@@ -16,6 +17,9 @@ const (
 	OpSet        = byte(0)
 	OpDelete     = byte(1)
 	OpSetPointer = byte(2)
+
+	// FlagCompressed is set in the MSB of the segment length.
+	FlagCompressed uint32 = 0x80000000
 )
 
 var ErrCorrupt = errors.New("wal: corrupt record")
@@ -32,6 +36,10 @@ type Writer struct {
 	segmentMax     int
 	maxSegmentSize int64
 	syncFn         func(*os.File) error
+
+	compress bool
+	zstdEnc  *zstd.Encoder
+	compBuf  []byte
 }
 
 const (
@@ -43,6 +51,9 @@ type Options struct {
 	// MaxSegmentSize bounds the total WAL segment payload size (bytes).
 	// 0 uses the default limit; values < 0 disable the cap.
 	MaxSegmentSize int64
+
+	// Compress enables per-segment ZSTD compression.
+	Compress bool
 }
 
 func normalizeMaxSegmentSize(size int64) int64 {
@@ -75,7 +86,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &Writer{
+	w := &Writer{
 		f:              f,
 		bw:             bufio.NewWriterSize(f, defaultWALBufferSize),
 		scratch:        make([]byte, 0, defaultWALBufferSize),
@@ -83,7 +94,17 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		segmentMax:     defaultWALBufferSize,
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
 		syncFn:         func(file *os.File) error { return file.Sync() },
-	}, nil
+		compress:       opts.Compress,
+	}
+	if opts.Compress {
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest), zstd.WithEncoderCRC(false))
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		w.zstdEnc = enc
+	}
+	return w, nil
 }
 
 // RotateTo flushes and closes the current WAL file, then opens (or creates) the
@@ -178,17 +199,28 @@ func syncDir(path string) (err error) {
 // Format: [Length 4][CRC 4][Payload...]
 func (w *Writer) writeSegment(payload []byte) error {
 	var header [8]byte
-	binary.LittleEndian.PutUint32(header[0:4], uint32(len(payload)))
-	c := crc.Checksum(payload)
+	data := payload
+	length := uint32(len(payload))
+
+	if w.compress && len(payload) > 128 {
+		w.compBuf = w.zstdEnc.EncodeAll(payload, w.compBuf[:0])
+		if len(w.compBuf) < len(payload) {
+			data = w.compBuf
+			length = uint32(len(w.compBuf)) | FlagCompressed
+		}
+	}
+
+	binary.LittleEndian.PutUint32(header[0:4], length)
+	c := crc.Checksum(data)
 	binary.LittleEndian.PutUint32(header[4:8], c)
 
 	if _, err := w.bw.Write(header[:]); err != nil {
 		return err
 	}
-	if _, err := w.bw.Write(payload); err != nil {
+	if _, err := w.bw.Write(data); err != nil {
 		return err
 	}
-	w.size += 8 + int64(len(payload))
+	w.size += 8 + int64(len(data))
 	return nil
 }
 
@@ -333,6 +365,7 @@ type Reader struct {
 	buf            []byte
 	pos            int
 	maxSegmentSize int64
+	zstdDec        *zstd.Decoder
 }
 
 func NewReader(path string) (*Reader, error) {
@@ -344,9 +377,15 @@ func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
+	dec, err := zstd.NewReader(nil)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	return &Reader{
 		f:              f,
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		zstdDec:        dec,
 	}, nil
 }
 
@@ -389,7 +428,9 @@ func (r *Reader) readSegment() error {
 		return err // EOF or UnexpectedEOF propagates here
 	}
 
-	length := binary.LittleEndian.Uint32(header[0:4])
+	rawLength := binary.LittleEndian.Uint32(header[0:4])
+	compressed := rawLength&FlagCompressed != 0
+	length := rawLength & ^FlagCompressed
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
 
 	// Sanity check length to avoid OOM on corrupt file.
@@ -406,11 +447,22 @@ func (r *Reader) readSegment() error {
 		return ErrCorrupt
 	}
 
-	r.buf = data
+	if compressed {
+		decompressed, err := r.zstdDec.DecodeAll(data, nil)
+		if err != nil {
+			return err
+		}
+		r.buf = decompressed
+	} else {
+		r.buf = data
+	}
 	r.pos = 0
 	return nil
 }
 
 func (r *Reader) Close() error {
+	if r.zstdDec != nil {
+		r.zstdDec.Close()
+	}
 	return r.f.Close()
 }
