@@ -431,7 +431,16 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 
 	t.trainCount.Add(1)
 
-	if len(validSamples) == 0 {
+	// Filter validSamples to ensure none are empty, as ZSTD BuildDict may panic on them.
+	nonEmptySamples := make([][]byte, 0, len(validSamples))
+	for _, s := range validSamples {
+		if len(s) > 0 {
+			nonEmptySamples = append(nonEmptySamples, s)
+		}
+	}
+	validSamples = nonEmptySamples
+
+	if len(validSamples) < 8 {
 		return
 	}
 
