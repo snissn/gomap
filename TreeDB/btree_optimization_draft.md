@@ -21,6 +21,10 @@ Status: draft / planning doc (not a committed format contract).
 **Assumptions about current TreeDB**
 - TreeDB is a **copy-on-write** B+Tree: writers build new pages; readers see a stable snapshot.
 - Pages are currently small (today: 4KB pages in `index.db`), and there is existing MVCC/lifecycle machinery for safe reclamation.
+- This plan is intended to be executed **after** the slab/WAL unification work in `GEMINI_PLAN.md`, and therefore assumes:
+  - compression logic is factored into a shared package (planned: `TreeDB/internal/compression`),
+  - slabs and WAL segments already use that shared infrastructure,
+  - compression metrics + adaptive gating utilities are available for reuse.
 
 **Non-goals (for near-term “optimization” work)**
 - In-place B-tree updates with lock-coupling. This is a different engine design and must be treated as an architectural fork.
@@ -174,7 +178,10 @@ This is the “north-star” proposal from both docs, but it’s a major format 
 
 **Index vs slab compression**
 - Do **not** attempt to share the same dictionary bytes between index keys and slab values (different distributions; coupling increases complexity).
-- It *is* desirable to share infrastructure: sampling, gating/anti-thrash policy, stats/telemetry, cache plumbing, and “profile selection” patterns, while keeping dict training domains independent.
+- Do share **infrastructure** (post-`GEMINI_PLAN.md` Phase 1):
+  - use `TreeDB/internal/compression` for dictionary training, ratio gating, metrics windows, and common zstd/snappy primitives,
+  - keep index-key dictionaries and slab-value dictionaries as **independent domains** (separate trainers, separate caches, separate acceptance criteria),
+  - optionally share generic “profile selection” patterns (e.g., K selection) if they are implemented as generic helpers.
 
 **Range-partitioned `index.db`**
 - Replace a single monolith with partitions, tracked by a manifest: `KeyRange -> FilePath`.
@@ -205,6 +212,7 @@ Key packages involved in index/page layout work:
 - `TreeDB/tree`: search + COW rewrite orchestration (zipper merge uses `node`).
 - `TreeDB/pager`: read/write pages to `index.db` (mmap + chunk growth).
 - `TreeDB/db`: vacuum/rebuild, stats, integration surfaces.
+- `TreeDB/internal/compression` (post-`GEMINI_PLAN.md`): shared dictionary training + metrics infrastructure that can be reused for index key compression experiments.
 
 For Phase 1–4, the work is mostly confined to `TreeDB/node` + a small amount of
 flag/version plumbing in `TreeDB/page` and any call sites that interpret node
@@ -281,6 +289,7 @@ We want “read old pages; write new pages” with a clean upgrade path.
   - comparisons per lookup,
   - bytes touched for key material,
   - allocations per op.
+  - optional: compression ratio / decode cost when experimenting with compressed key blobs (reuse `internal/compression` metrics conventions if available).
 
 **Where**
 - Prefer `TreeDB/node/*_bench_test.go` (bench node logic directly).
@@ -410,6 +419,10 @@ format project with its own design doc and rollout plan.
 Concrete “medium bot” tasks that are still feasible:
 - Prototype a **cluster container reader** for a read-only “cold index” file produced by vacuum.
 - Add a minimal manifest format and a recovery-safe swap protocol (similar in spirit to existing index-swap).
+
+Post-`GEMINI_PLAN.md` optimizations to leverage:
+- If `internal/compression` exists, implement cluster dict training as a first-class “index-key domain” trainer (separate from slab trainers).
+- If an async “data segment writer” exists (Phase 3), consider reusing its buffering/flush mechanics for building cold index cluster files during vacuum (offline/online rebuild), while keeping file formats independent.
 
 ### 6.10 Phase Ordering (Recommended)
 
