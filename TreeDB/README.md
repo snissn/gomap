@@ -94,6 +94,8 @@ Profiles are intended to make intent explicit:
 - `ProfileDurable`: safest defaults (recommended).
 - `ProfileFast`: relax durability/integrity knobs for throughput.
 - `ProfileBench`: deterministic benchmarking profile (not production).
+- `ProfileCompressed`: durable defaults + compression enabled.
+- `ProfileCompressedFast`: fast profile + compression enabled.
 
 Unsafe profiles require an explicit acknowledgement:
 

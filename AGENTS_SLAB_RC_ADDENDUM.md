@@ -152,6 +152,7 @@ public-facing configuration.
 - [x] in_progress: audited public envs/options; updated tuning + benchmarking docs with env overrides, legacy/deprecation notes, and bench-only knobs; updated TreeDB README note.
 - [x] in_progress: added value-log and durability/integrity option guidance to tuning docs.
 - [x] in_progress: clarified `treedb.Open` env override behavior in API docs and getting-started guide.
+- [x] in_progress: added compressed profile variants (durable/fast) and updated profile docs.
 
 ### Sprint 6 Plan (DX / Public API)
 

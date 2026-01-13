@@ -1,5 +1,7 @@
 package treedb
 
+import "github.com/snissn/gomap/TreeDB/slab"
+
 // Profiles are intentionally defined in the public package so downstream users
 // can pick a coherent option bundle without duplicating the mapping from
 // “intent” (durable vs fast vs bench) to low-level knobs.
@@ -74,6 +76,14 @@ const (
 	//
 	// IMPORTANT: This is not a recommended production profile.
 	ProfileBench Profile = "bench"
+
+	// ProfileCompressed enables slab dictionary compression and leaf prefix
+	// compression on top of ProfileDurable.
+	ProfileCompressed Profile = "compressed"
+
+	// ProfileCompressedFast enables slab dictionary compression and leaf prefix
+	// compression on top of ProfileFast.
+	ProfileCompressedFast Profile = "compressed_fast"
 )
 
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
@@ -114,6 +124,10 @@ func ApplyProfile(opts *Options, profile Profile) {
 		applyFastProfile(opts)
 	case ProfileBench:
 		applyBenchProfile(opts)
+	case ProfileCompressed:
+		applyCompressedProfile(opts, false)
+	case ProfileCompressedFast:
+		applyCompressedProfile(opts, true)
 	default:
 		// Unknown profile: no-op (callers can still use Options directly).
 	}
@@ -148,6 +162,18 @@ func applyFastProfile(opts *Options) {
 	}
 	if opts.DisableReadChecksum == false {
 		opts.DisableReadChecksum = true
+	}
+}
+
+func applyCompressedProfile(opts *Options, fast bool) {
+	if fast {
+		applyFastProfile(opts)
+	} else {
+		applyDurableProfile(opts)
+	}
+	opts.LeafPrefixCompression = true
+	if opts.SlabCompression.Kind == slab.CompressionNone {
+		opts.SlabCompression.Kind = slab.CompressionZSTD
 	}
 }
 
