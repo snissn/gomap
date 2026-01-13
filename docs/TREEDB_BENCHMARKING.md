@@ -94,7 +94,7 @@ A good default for local work is **3000–5000ms**.
 
 ### Capture (server run)
 ```bash
-scripts/capture_celestia_trace.sh mikers@192.168.0.132 /home/mikers/run_celestia.sh
+scripts/capture_celestia_trace.sh mikers@192.168.0.185 /home/mikers/run_celestia.sh
 ```
 
 This prints:
@@ -103,12 +103,12 @@ This prints:
 
 ### Pull to local
 ```bash
-scripts/pull_celestia_trace.sh mikers@192.168.0.132 /home/mikers/treedb_trace_YYYYMMDDHHMMSS.jsonl ./tmp_traces
+scripts/pull_celestia_trace.sh mikers@192.168.0.185 /home/mikers/treedb_trace_YYYYMMDDHHMMSS.jsonl ./tmp_traces
 ```
 
 If summary is missing (older trace), generate it on server:
 ```bash
-ssh mikers@192.168.0.132 'cd /home/mikers/dev/snissn/gomap-tracing && \
+ssh mikers@192.168.0.185 'cd /home/mikers/dev/snissn/gomap-tracing && \
   go run ./cmd/trace_bench -trace /home/mikers/treedb_trace_YYYY.jsonl \
   -out /home/mikers/treedb_trace_YYYY.summary.json'
 ```

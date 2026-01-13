@@ -133,7 +133,7 @@ Planned test sketch (not yet implemented):
 This test should fail if the current stall is reproducible in a smaller environment.
 
 ## 12.7 Goroutine Dump / Pprof Capture (Stalled Run)
-Captured from the stalled node on `192.168.0.132` using the harness pprof port `6062`:
+Captured from the stalled node on `192.168.0.185` using the harness pprof port `6062`:
 - Goroutine dump: `/home/mikers/pprof_goroutine_20260108102130.txt`
 - CPU profile (30s): `/home/mikers/pprof_profile_20260108102137.pb.gz`
 
