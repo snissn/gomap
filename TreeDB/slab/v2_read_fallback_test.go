@@ -3,6 +3,7 @@ package slab
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/klauspost/compress/dict"
@@ -233,6 +234,9 @@ func TestSlabV2_UseRefDictionary(t *testing.T) {
 }
 
 func TestSlabV2_DictSliceMmap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap-backed dict slices are not supported on Windows")
+	}
 	dir := t.TempDir()
 	sm, err := NewSlabManagerWithOptions(dir, Options{
 		Compression: CompressionOptions{
