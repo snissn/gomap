@@ -956,6 +956,31 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	return offset, nil
 }
 
+func (s *SlabFile) EncodeRecord(key, value []byte, buf []byte) []byte {
+	keyLen := len(key)
+	valLen := len(value)
+	recordLen := HeaderSize + keyLen + valLen
+
+	if cap(buf) < recordLen {
+		buf = make([]byte, recordLen)
+	}
+	buf = buf[:recordLen]
+
+	var lenArr [6]byte
+	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+
+	checksum := crc32.Update(0, crc32cTable, lenArr[:])
+	checksum = crc32.Update(checksum, crc32cTable, key)
+	checksum = crc32.Update(checksum, crc32cTable, value)
+
+	binary.LittleEndian.PutUint32(buf[0:4], checksum)
+	copy(buf[4:10], lenArr[:])
+	copy(buf[10:10+keyLen], key)
+	copy(buf[10+keyLen:], value)
+	return buf
+}
+
 // WriteBatch appends a pre-built record stream to the slab and returns the
 // starting file offset. Thread-safety: This should be called by a single writer
 // (SlabManager mutex).
