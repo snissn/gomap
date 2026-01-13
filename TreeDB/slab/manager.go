@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/klauspost/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -31,7 +32,7 @@ type SlabManager struct {
 	disableReadChecksum bool
 	compression         compressionConfig
 	activeCompression   compressionConfig
-	currentProfile      *ActiveCompressionProfile
+	currentProfile      atomic.Pointer[ActiveCompressionProfile]
 	omitSlabKeys        bool
 	compressionMetrics  compressionMetrics
 	compressionTrainer  *compressionTrainer
@@ -139,7 +140,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 								return enc
 							},
 						}
-						sm.currentProfile = profile
+						sm.currentProfile.Store(profile)
 					} else {
 						// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
 						if sm.compression.kind != CompressionZSTD {
@@ -147,7 +148,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 						} else {
 							sm.activeCompression = sm.compression
 						}
-						sm.currentProfile = nil
+						sm.currentProfile.Store(nil)
 					}
 				} else if err != ErrSlabFull && err != ErrRecordTooLarge {
 					_ = sm.Close()
@@ -194,9 +195,18 @@ func (sm *SlabManager) Compression() CompressionKind {
 
 func (sm *SlabManager) activeProfile() (*ActiveCompressionProfile, bool) {
 	if sm == nil || sm.compressionTrainer == nil {
+		if profile := sm.currentProfile.Load(); profile != nil {
+			return profile, true
+		}
 		return nil, false
 	}
-	return sm.compressionTrainer.ActiveProfile()
+	if profile, ok := sm.compressionTrainer.ActiveProfile(); ok && profile != nil {
+		return profile, true
+	}
+	if profile := sm.currentProfile.Load(); profile != nil {
+		return profile, true
+	}
+	return nil, false
 }
 
 func (sm *SlabManager) CompressionTrainConfig() (CompressionTrainConfig, bool) {
@@ -987,8 +997,8 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	}
 
 	groupK := 1
-	if sm.currentProfile != nil && sm.currentProfile.K > 1 && sm.activeCompression.kind == CompressionZSTD && sm.omitSlabKeys {
-		groupK = sm.currentProfile.K
+	if profile := sm.currentProfile.Load(); profile != nil && profile.K > 1 && sm.activeCompression.kind == CompressionZSTD && sm.omitSlabKeys {
+		groupK = profile.K
 	}
 	if sm.compressionTrainer != nil && sm.compressionTrainer.shouldCollect() {
 		for i := range values {
@@ -1061,20 +1071,63 @@ func (sm *SlabManager) maybeRotateZoneLocked(recordLen int) (bool, error) {
 	return true, nil
 }
 
+const recentDictWindow = 3
+
+func (s *SlabFile) lookupDictRef(hash uint64) (dictRefEntry, bool) {
+	if s.recentDicts == nil {
+		return dictRefEntry{}, false
+	}
+	entry, ok := s.recentDicts[hash]
+	return entry, ok
+}
+
+func (s *SlabFile) recordDictRef(hash uint64, zoneID uint32, crc uint32) {
+	if s.recentDicts == nil {
+		s.recentDicts = make(map[uint64]dictRefEntry, recentDictWindow)
+	}
+	if _, ok := s.recentDicts[hash]; ok {
+		for i, h := range s.recentDictOrder {
+			if h == hash {
+				copy(s.recentDictOrder[i:], s.recentDictOrder[i+1:])
+				s.recentDictOrder = s.recentDictOrder[:len(s.recentDictOrder)-1]
+				break
+			}
+		}
+	}
+	s.recentDicts[hash] = dictRefEntry{zoneID: zoneID, crc: crc}
+	s.recentDictOrder = append(s.recentDictOrder, hash)
+	if len(s.recentDictOrder) > recentDictWindow {
+		evict := s.recentDictOrder[0]
+		s.recentDictOrder = s.recentDictOrder[1:]
+		delete(s.recentDicts, evict)
+	}
+}
+
 func (sm *SlabManager) forceRotateZoneLocked() error {
 	s := sm.activeSlab
 	// Decide dictionary for new zone.
 	profile, ok := sm.activeProfile()
 	dictType := ZoneDictGlobal
 	var localDict []byte
+	var refEntry dictRefEntry
+	var dictHash uint64
 
 	if ok && profile != nil && len(profile.Dict) > 0 {
+		dictHash = profile.DictHash
+		if dictHash == 0 {
+			dictHash = xxhash.Sum64(profile.Dict)
+		}
 		// Use LOCAL if:
 		// 1. Global dict is empty.
 		// 2. Profile is different/better than global dict (Adaptive).
 		if len(s.globalDict) == 0 || !bytes.Equal(profile.Dict, s.globalDict) {
-			dictType = ZoneDictLocal
-			localDict = profile.Dict
+			if entry, ok := s.lookupDictRef(dictHash); ok {
+				dictType = ZoneDictRef
+				refEntry = entry
+			} else {
+				dictType = ZoneDictLocal
+				localDict = profile.Dict
+			}
 		}
 	}
 
@@ -1092,6 +1145,9 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		localDict = dictBuf
 		zh.DictCRC = crc32.Checksum(localDict, crc32cTable)
 		zh.DictLength = uint32(len(localDict))
+	} else if dictType == ZoneDictRef {
+		zh.DictCRC = refEntry.crc
+		zh.DictLength = refEntry.zoneID
 	}
 
 	if _, err := s.WriteBatch(zh.Marshal(), true); err != nil {
@@ -1120,7 +1176,25 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 				return dec
 			},
 		}
-		sm.currentProfile = profile
+		sm.currentProfile.Store(profile)
+		zoneID := uint32(s.Size / ZoneSize)
+		s.recordDictRef(dictHash, zoneID, zh.DictCRC)
+	} else if dictType == ZoneDictRef {
+		// Keep using the current dict for compression but don't rewrite it.
+		sm.activeCompression = sm.compression
+		sm.activeCompression.zstdEncs = &sync.Pool{
+			New: func() any {
+				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.compression.level))
+				return enc
+			},
+		}
+		sm.activeCompression.zstdDecs = &sync.Pool{
+			New: func() any {
+				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+				return dec
+			},
+		}
+		sm.currentProfile.Store(profile)
 	} else {
 		// USE_GLOBAL.
 		// If we were using a local dict, revert to global (or base if global is empty).
@@ -1141,7 +1215,7 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		} else {
 			// Global is also empty. Revert to base (no dict).
 			sm.activeCompression = sm.compression
-			sm.currentProfile = nil
+			sm.currentProfile.Store(nil)
 		}
 	}
 
@@ -1190,7 +1264,7 @@ func (sm *SlabManager) rotateLocked() error {
 						return enc
 					},
 				}
-				sm.currentProfile = profile
+				sm.currentProfile.Store(profile)
 			} else {
 				// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
 				if sm.compression.kind != CompressionZSTD {
@@ -1198,13 +1272,13 @@ func (sm *SlabManager) rotateLocked() error {
 				} else {
 					sm.activeCompression = sm.compression
 				}
-				sm.currentProfile = nil
+				sm.currentProfile.Store(nil)
 			}
 		} else if err == ErrSlabFull || err == ErrRecordTooLarge {
 			// MaxSlabSize is too small for V2 header (common in rotation tests).
 			// Fallback to V1.
 			sm.activeCompression = sm.compression
-			sm.currentProfile = nil
+			sm.currentProfile.Store(nil)
 		} else {
 			_ = newSlab.Close()
 			return err
@@ -1212,7 +1286,7 @@ func (sm *SlabManager) rotateLocked() error {
 	} else {
 		// Fallback to V1.
 		sm.activeCompression = sm.compression
-		sm.currentProfile = nil
+		sm.currentProfile.Store(nil)
 	}
 
 	if sm.compressionMetrics.enabled {
@@ -1384,7 +1458,7 @@ func (sm *SlabManager) ForceTrainerCollecting() {
 func (sm *SlabManager) ForceAcceptProfileForTesting(p *ActiveCompressionProfile) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.currentProfile = p
+	sm.currentProfile.Store(p)
 	// Ensure activeCompression is ZSTD if we have a dictionary.
 	if sm.compression.kind != CompressionZSTD {
 		sm.activeCompression, _ = normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})

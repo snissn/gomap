@@ -86,6 +86,15 @@ type SlabFile struct {
 	globalDict []byte
 	globalDecs *sync.Pool
 	localDecs  sync.Map // zoneID -> *sync.Pool
+
+	// recent local dictionaries for USE_REF emission
+	recentDicts     map[uint64]dictRefEntry
+	recentDictOrder []uint64
+}
+
+type dictRefEntry struct {
+	zoneID uint32
+	crc    uint32
 }
 
 func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool, version uint8, globalDict []byte, globalDecs *sync.Pool) *SlabFile {
@@ -287,6 +296,9 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 		dec := s.globalDecs.Get().(*zstd.Decoder)
 		return dec, func() { s.globalDecs.Put(dec) }, nil
 	case ZoneDictLocal:
+		if zh.DictCRC == 0 {
+			return nil, nil, errors.New("slab: local dictionary CRC missing")
+		}
 		// Check cache
 		if pool, ok := s.localDecs.Load(zoneID); ok {
 			p := pool.(*sync.Pool)
@@ -317,6 +329,73 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 		p := actualPool.(*sync.Pool)
 		dec := p.Get().(*zstd.Decoder)
 		return dec, func() { p.Put(dec) }, nil
+	case ZoneDictRef:
+		refZoneID := int64(zh.DictLength)
+		if refZoneID <= 0 {
+			return nil, nil, errors.New("slab: invalid ref zone id")
+		}
+		const maxRefDepth = 4
+		for depth := 0; depth < maxRefDepth; depth++ {
+			refHeaderOffset := refZoneID * ZoneSize
+			var refHeaderBuf [ZoneHeaderSize]byte
+			if err := s.readRaw(refHeaderOffset, refHeaderBuf[:]); err != nil {
+				return nil, nil, err
+			}
+			var refHeader ZoneHeader
+			if err := refHeader.Unmarshal(refHeaderBuf[:]); err != nil {
+				return nil, nil, err
+			}
+
+			switch refHeader.DictType {
+			case ZoneDictGlobal:
+				if s.globalDecs == nil {
+					dec, _ := zstd.NewReader(nil)
+					return dec, func() {}, nil
+				}
+				dec := s.globalDecs.Get().(*zstd.Decoder)
+				return dec, func() { s.globalDecs.Put(dec) }, nil
+			case ZoneDictLocal:
+				if zh.DictCRC == 0 {
+					return nil, nil, errors.New("slab: ref dictionary CRC missing")
+				}
+				if refHeader.DictCRC != 0 && refHeader.DictCRC != zh.DictCRC {
+					return nil, nil, errors.New("slab: ref dictionary CRC mismatch")
+				}
+				if pool, ok := s.localDecs.Load(refZoneID); ok {
+					p := pool.(*sync.Pool)
+					dec := p.Get().(*zstd.Decoder)
+					return dec, func() { p.Put(dec) }, nil
+				}
+				dictOffset := refHeaderOffset + ZoneHeaderSize
+				dictBuf := make([]byte, GlobalDictSize)
+				if err := s.readRaw(dictOffset, dictBuf); err != nil {
+					return nil, nil, err
+				}
+				sum := crc32.Checksum(dictBuf, crc32cTable)
+				if sum != zh.DictCRC {
+					return nil, nil, errors.New("slab: ref dictionary CRC mismatch")
+				}
+				pool := &sync.Pool{
+					New: func() any {
+						dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+						return dec
+					},
+				}
+				actualPool, _ := s.localDecs.LoadOrStore(refZoneID, pool)
+				p := actualPool.(*sync.Pool)
+				dec := p.Get().(*zstd.Decoder)
+				return dec, func() { p.Put(dec) }, nil
+			case ZoneDictRef:
+				refZoneID = int64(refHeader.DictLength)
+				if refZoneID <= 0 {
+					return nil, nil, errors.New("slab: invalid nested ref zone id")
+				}
+				continue
+			default:
+				return nil, nil, errors.New("slab: ref dicts not implemented")
+			}
+		}
+		return nil, nil, errors.New("slab: ref dict depth exceeded")
 	default:
 		return nil, nil, errors.New("ref dicts not implemented")
 	}

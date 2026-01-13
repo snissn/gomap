@@ -62,7 +62,7 @@ path so repeated dictionaries don't cost 32KB per zone.
 - Update integrity tests for CRC validation on referenced dicts.
 
 **Status Log**
-- [ ] pending
+- [x] completed: wired USE_REF emission + read path; added ref header and dedup tests.
 
 ---
 

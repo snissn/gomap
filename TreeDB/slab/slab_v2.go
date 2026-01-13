@@ -67,7 +67,7 @@ type ZoneHeader struct {
 	Magic      uint32 // Safety check
 	DictType   uint8  // ZoneDictGlobal, ZoneDictLocal, ZoneDictRef
 	DictCRC    uint32 // CRC32C of the dictionary to be used
-	DictLength uint32 // Length of dictionary (if local) or Index (if ref)
+	DictLength uint32 // Length of dictionary (if local) or ZoneID (if ref)
 	Padding    [51]byte
 }
 

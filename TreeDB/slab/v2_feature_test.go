@@ -79,7 +79,7 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 	sm.mu.Lock()
 	sm.slabs[newSlab.ID] = newSlab // Add to slab map
 	sm.activeSlab = newSlab        // Set as active
-	sm.currentProfile = profile    // Set profile
+	sm.currentProfile.Store(profile) // Set profile
 
 	// Enable ZSTD compression WITH the dictionary.
 	sm.activeCompression.kind = CompressionZSTD

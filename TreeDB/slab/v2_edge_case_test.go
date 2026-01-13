@@ -290,7 +290,7 @@ func TestSlabV2_GroupedBoundary(t *testing.T) {
 	}
 
 	// Set groupK > 1
-	sm.currentProfile = &ActiveCompressionProfile{K: 4}
+	sm.currentProfile.Store(&ActiveCompressionProfile{K: 4})
 
 	// Write almost 2MB to push near boundary.
 	bulkPayload := make([]byte, 100*1024)
