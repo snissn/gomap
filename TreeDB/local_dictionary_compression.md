@@ -26,6 +26,16 @@ To read a record at `ptr.Offset`:
    - `0x01 (USE_LOCAL)`: Read the 32KB dictionary immediately following the header. **[1 extra I/O]**
    - `0x02 (USE_REF)`: Use the dictionary already loaded for Zone `N` (Index provided in header). **[0 extra I/O if cached]**
 
+### 2.3 Value Size Limit (Current Implementation)
+- **Limit**: A single slab record must fit within a V2 zone. This caps record size at
+  `ZoneSize - ZoneHeaderSize` (~2MB - 64B).
+- **Behavior**: Writes larger than the cap return `ErrRecordTooLarge`.
+- **Remediations (future work)**:
+  1. **Chunked values**: split a large value across multiple slab records with a
+     reassembly layer.
+  2. **Larger zones**: increase the zone size (format change) to raise the cap.
+  3. **Alternate store**: route oversized values to a separate blob/value store.
+
 ---
 
 ## 3. Optimizations for I/O and CPU

@@ -148,7 +148,7 @@ public-facing configuration.
 - Define a concise "how to use" + troubleshooting guide.
 
 **Status Log**
-- [ ] pending
+- [x] in_progress: drafted value-size limitation + remediation notes; identified docs to update (README, TREEDB_TUNING, TREEDB_BENCHMARKING).
 
 ---
 
