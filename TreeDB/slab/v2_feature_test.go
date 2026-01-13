@@ -34,7 +34,7 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 	if err != nil {
 		t.Skipf("skipping test as real dictionary not found: %v", err)
 	}
-	
+
 	profile := &ActiveCompressionProfile{
 		Dict:     realDict,
 		DictHash: xxhash.Sum64(realDict),
@@ -74,13 +74,13 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 			return dec
 		},
 	})
-	
+
 	// 3. Update SlabManager to use this new V2 slab and its compression config.
 	sm.mu.Lock()
 	sm.slabs[newSlab.ID] = newSlab // Add to slab map
 	sm.activeSlab = newSlab        // Set as active
 	sm.currentProfile = profile    // Set profile
-	
+
 	// Enable ZSTD compression WITH the dictionary.
 	sm.activeCompression.kind = CompressionZSTD
 	sm.activeCompression.level = zstd.EncoderLevel(sm.compression.level)
@@ -173,7 +173,7 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 	// We need to write ~1.9MB.
 	chunkSize := 100 * 1024
 	iterations := (2*1024*1024 - 64*1024) / chunkSize
-	
+
 	// Create incompressible data just in case, though we used CompressionNone
 	data := make([]byte, chunkSize)
 	for i := range data {

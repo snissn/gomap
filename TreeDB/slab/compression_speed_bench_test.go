@@ -11,7 +11,7 @@ func BenchmarkWriteSpeedComparison(b *testing.B) {
 	// Large compressible value (100KB of repeating patterns + some entropy)
 	basePattern := bytes.Repeat([]byte("{\"id\": 123, \"data\": \"some_repeated_string_to_ensure_compression_efficiency\", \"active\": true}"), 1000)
 	valSize := len(basePattern)
-	
+
 	compressibleValue := make([]byte, valSize)
 	copy(compressibleValue, basePattern)
 
@@ -40,7 +40,7 @@ func BenchmarkWriteSpeedComparison(b *testing.B) {
 
 			b.ResetTimer()
 			b.SetBytes(int64(valSize))
-			
+
 			keyBuf := make([]byte, 8)
 			valBuf := make([]byte, valSize)
 			copy(valBuf, compressibleValue)

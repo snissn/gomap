@@ -152,25 +152,25 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	// Pointer to start of entry
 	ptr := entryStart
 	keyStart := ptr + headerSize
-		if b.leafPrefixCompression {
-			putUint16(b.data[ptr:ptr+2], uint16(prefixLen))
-			putUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
-			if flags&FlagPointer != 0 {
-				putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
-			} else {
-				putUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
-			}
-			b.data[ptr+8] = flags
-			copy(b.data[keyStart:], key[prefixLen:])
+	if b.leafPrefixCompression {
+		putUint16(b.data[ptr:ptr+2], uint16(prefixLen))
+		putUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
+		if flags&FlagPointer != 0 {
+			putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
 		} else {
-			putUint16(b.data[ptr:ptr+2], uint16(len(key)))
-			if flags&FlagPointer != 0 {
-				putUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
-			} else {
-				putUint32(b.data[ptr+2:ptr+6], uint32(len(value)))
-			}
-			b.data[ptr+6] = flags
-			copy(b.data[keyStart:], key)
+			putUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
+		}
+		b.data[ptr+8] = flags
+		copy(b.data[keyStart:], key[prefixLen:])
+	} else {
+		putUint16(b.data[ptr:ptr+2], uint16(len(key)))
+		if flags&FlagPointer != 0 {
+			putUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
+		} else {
+			putUint32(b.data[ptr+2:ptr+6], uint32(len(value)))
+		}
+		b.data[ptr+6] = flags
+		copy(b.data[keyStart:], key)
 	}
 
 	valueStart := keyStart + suffixLen

@@ -3,6 +3,7 @@ package slab
 import (
 	"encoding/binary"
 	"errors"
+	"github.com/klauspost/compress/zstd"
 	"hash/crc32"
 	"io"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -311,7 +311,6 @@ func (s *SlabFile) GetDecoder(offset int64) (*zstd.Decoder, func(), error) {
 		return nil, nil, errors.New("ref dicts not implemented")
 	}
 }
-
 
 func (s *SlabFile) Close() error {
 	s.closed.Store(true)

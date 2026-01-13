@@ -41,12 +41,12 @@ const (
 )
 
 type slab struct {
-	records int
-	rawBytes int
+	records      int
+	rawBytes     int
 	payloadBytes int
-	metaBytes int
-	headerBytes int
-	totalBytes int
+	metaBytes    int
+	headerBytes  int
+	totalBytes   int
 }
 
 func main() {
@@ -227,12 +227,12 @@ func packPerRow(values [][]byte, target int, enc *zstd.Encoder, fmt metaFormat, 
 		}
 		meta := metaBytes(fmt, lengths, crc)
 		s := slab{
-			records:    end - start,
-			rawBytes:   raw,
+			records:      end - start,
+			rawBytes:     raw,
 			payloadBytes: payload,
-			metaBytes:  meta,
-			headerBytes: header,
-			totalBytes: payload + meta + header,
+			metaBytes:    meta,
+			headerBytes:  header,
+			totalBytes:   payload + meta + header,
 		}
 		slabs = append(slabs, s)
 		start = end
@@ -266,12 +266,12 @@ func packBlock(values [][]byte, target int, enc *zstd.Encoder, fmt metaFormat, c
 		comp := enc.EncodeAll(combined, nil)
 		meta := metaBytes(fmt, offsetsToLens(offsets), crc)
 		s := slab{
-			records:    end - start,
-			rawBytes:   raw,
+			records:      end - start,
+			rawBytes:     raw,
 			payloadBytes: len(comp),
-			metaBytes:  meta,
-			headerBytes: header,
-			totalBytes: len(comp) + meta + header,
+			metaBytes:    meta,
+			headerBytes:  header,
+			totalBytes:   len(comp) + meta + header,
 		}
 		slabs = append(slabs, s)
 		start = end
@@ -292,7 +292,7 @@ func metaBytes(fmt metaFormat, lens []int, crc bool) int {
 	n := len(lens)
 	switch fmt {
 	case metaOffsets32:
-		meta := (n+1) * 4
+		meta := (n + 1) * 4
 		if crc {
 			meta += n * 4
 		}
@@ -309,7 +309,7 @@ func metaBytes(fmt metaFormat, lens []int, crc bool) int {
 		}
 		return meta
 	case metaOffsets32LenVarint:
-		meta := (n+1)*4
+		meta := (n + 1) * 4
 		for _, l := range lens {
 			meta += varintLen(uint64(l))
 		}

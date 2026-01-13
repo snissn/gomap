@@ -117,9 +117,9 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 
 	// Max record size in V2 is ZoneSize - ZoneHeaderSize.
 	// But it also must fit in the current zone.
-	// If we write a record that is larger than current zone space but <= MaxV2Record, 
+	// If we write a record that is larger than current zone space but <= MaxV2Record,
 	// it should move to the next zone.
-	
+
 	maxPayload := int(ZoneSize - int64(ZoneHeaderSize) - int64(HeaderSize))
 	payload := make([]byte, maxPayload)
 	rand.Read(payload)
@@ -144,7 +144,7 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 	if !bytes.Equal(val, payload) {
 		t.Fatal("payload mismatch")
 	}
-	
+
 	// Attempting a record that is too large for a single V2 zone (>= 2MB - 64B) should fail.
 	// We use ZoneSize + 1 to be absolutely sure it's rejected by V2 boundary logic.
 	tooLarge := make([]byte, ZoneSize+1)
@@ -156,7 +156,7 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 
 func TestSlabV2_MixedVersionReopen(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// 1. Create a V1 slab
 	optsV1 := Options{Compression: CompressionOptions{Kind: CompressionNone}}
 	sm1, err := NewSlabManagerWithOptions(dir, optsV1)
@@ -176,19 +176,19 @@ func TestSlabV2_MixedVersionReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Manual rotate
 	if err := sm2.rotateLocked(); err != nil {
 		t.Fatal(err)
 	}
-	
+
 	// Force it to V2 on disk so reopen sees it
 	dict := []byte("test-dict-pattern-repeated-for-zstd-validation-starts-with-magic-hopefully")
 	header := make([]byte, SlabV2DataStart)
 	copy(header[0:8], MagicV2)
 	header[8] = Version2
 	copy(header[FileHeaderSizeV2:], dict)
-	
+
 	slab1Path := sm2.GetSlabPath(1)
 	f, err := os.OpenFile(slab1Path, os.O_RDWR, 0600)
 	if err != nil {
@@ -208,19 +208,19 @@ func TestSlabV2_MixedVersionReopen(t *testing.T) {
 	// Update in-memory state of sm2.activeSlab (which is slab 1)
 	sm2.activeSlab.version = Version2
 	sm2.activeSlab.globalDict = dict
-	
+
 	val2 := []byte("v2-data-compressed-with-dict")
 	ptr2, err := sm2.Append(nil, val2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("V2 record: ptr2.Offset=%d, slabSize=%d", ptr2.Offset, sm2.activeSlab.Size)
-	
+
 	// Record ID should be 1
 	if ptr2.FileID != 1 {
 		t.Fatalf("expected fileID 1, got %d", ptr2.FileID)
 	}
-	
+
 	sm2.Close()
 
 	// 3. Reopen and verify both can be read
@@ -245,7 +245,7 @@ func TestSlabV2_MixedVersionReopen(t *testing.T) {
 	if !bytes.Equal(r2, val2) {
 		t.Fatalf("v2 mismatch: got %q, want %q", r2, val2)
 	}
-	
+
 	// Verify slab 1 is indeed V2
 	if sm3.slabs[1].version != Version2 {
 		t.Fatal("slab 1 should be V2")
@@ -288,7 +288,7 @@ func TestSlabV2_GroupedBoundary(t *testing.T) {
 			return dec
 		},
 	}
-	
+
 	// Set groupK > 1
 	sm.currentProfile = &ActiveCompressionProfile{K: 4}
 
@@ -310,12 +310,12 @@ func TestSlabV2_GroupedBoundary(t *testing.T) {
 		[]byte("grouped-3"),
 		[]byte("grouped-4"),
 	}
-	
+
 	ptrs, err := sm.AppendMany(keys, vals)
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	if len(ptrs) != 4 {
 		t.Fatalf("expected 4 ptrs, got %d", len(ptrs))
 	}
