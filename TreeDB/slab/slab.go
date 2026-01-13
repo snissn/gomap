@@ -348,6 +348,31 @@ func (s *SlabFile) ensureOpen() error {
 	s.File = f
 	s.Size = info.Size()
 	s.writeOffset = s.Size
+
+	// Detect V2
+	if s.Size >= SlabV2DataStart {
+		var magic [8]byte
+		if _, err := f.ReadAt(magic[:], 0); err == nil {
+			if string(magic[:]) == MagicV2 {
+				headerBuf := make([]byte, FileHeaderSizeV2)
+				if _, err := f.ReadAt(headerBuf, 0); err == nil {
+					s.version = headerBuf[8]
+					// Read Global Dict
+					dictBuf := make([]byte, GlobalDictSize)
+					if _, err := f.ReadAt(dictBuf, FileHeaderSizeV2); err == nil {
+						s.globalDict = dictBuf
+						s.globalDecs = &sync.Pool{
+							New: func() any {
+								dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dictBuf))
+								return dec
+							},
+						}
+					}
+				}
+			}
+		}
+	}
+
 	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
 		_ = s.File.Close()
 		s.File = nil
@@ -692,27 +717,36 @@ func (s *SlabFile) prepareV2Write(recordLen int) error {
 		return ErrRecordTooLarge
 	}
 
-	nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
-	if s.Size+int64(recordLen) <= nextBoundary {
-		return nil
-	}
+	for {
+		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
 
-	// Straddles boundary. Pad and Header.
-	if _, err := s.File.Seek(nextBoundary, io.SeekStart); err != nil {
-		return err
-	}
+		// If we are at a boundary, write header first.
+		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+			if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+				return err
+			}
+			zh := ZoneHeader{
+				Magic:    ZoneHeaderMagic,
+				DictType: ZoneDictGlobal,
+			}
+			if _, err := s.File.Write(zh.Marshal()); err != nil {
+				return err
+			}
+			s.Size += ZoneHeaderSize
+			s.writeOffset = s.Size
+			// Recalculate boundary for the new size
+			continue
+		}
 
-	zh := ZoneHeader{
-		Magic:    ZoneHeaderMagic,
-		DictType: ZoneDictGlobal,
-	}
-	if _, err := s.File.Write(zh.Marshal()); err != nil {
-		return err
-	}
+		if s.Size+int64(recordLen) <= nextBoundary {
+			return nil
+		}
 
-	s.Size = nextBoundary + ZoneHeaderSize
-	s.writeOffset = s.Size
-	return nil
+		// Straddles boundary. Pad current zone by skipping to the next boundary.
+		s.Size = nextBoundary
+		s.writeOffset = s.Size
+		// Loop will catch the "at boundary" case.
+	}
 }
 
 // Write appends a record to the slab and returns the offset.
