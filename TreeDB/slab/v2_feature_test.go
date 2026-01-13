@@ -77,8 +77,8 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 
 	// 3. Update SlabManager to use this new V2 slab and its compression config.
 	sm.mu.Lock()
-	sm.slabs[newSlab.ID] = newSlab // Add to slab map
-	sm.activeSlab = newSlab        // Set as active
+	sm.slabs[newSlab.ID] = newSlab   // Add to slab map
+	sm.activeSlab = newSlab          // Set as active
 	sm.currentProfile.Store(profile) // Set profile
 
 	// Enable ZSTD compression WITH the dictionary.
