@@ -3,6 +3,8 @@ package slab
 import (
 	"bytes"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 )
 
 func TestDictPoolLRUEviction(t *testing.T) {
@@ -27,7 +29,7 @@ func TestDictPoolLRUEviction(t *testing.T) {
 	dictA := buildTestDict(t, 10, makeTestSamples(6, 2048))
 	dictB := buildTestDict(t, 11, makeTestSamples(6, 2048))
 
-	sm.ForceAcceptProfileForTesting(&ActiveCompressionProfile{
+	sm.ForceAcceptProfileForTesting(&compression.ActiveProfile{
 		Dict:      dictA,
 		DictBytes: len(dictA),
 		K:         1,
@@ -39,7 +41,7 @@ func TestDictPoolLRUEviction(t *testing.T) {
 		t.Fatalf("append zone1: %v", err)
 	}
 
-	sm.ForceAcceptProfileForTesting(&ActiveCompressionProfile{
+	sm.ForceAcceptProfileForTesting(&compression.ActiveProfile{
 		Dict:      dictB,
 		DictBytes: len(dictB),
 		K:         1,

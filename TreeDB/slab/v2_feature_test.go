@@ -10,6 +10,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 )
 
 func TestSlabV2_RotationAndDictionary(t *testing.T) {
@@ -35,7 +36,7 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 		t.Skipf("skipping test as real dictionary not found: %v", err)
 	}
 
-	profile := &ActiveCompressionProfile{
+	profile := &compression.ActiveProfile{
 		Dict:     realDict,
 		DictHash: xxhash.Sum64(realDict),
 		K:        1,
@@ -82,18 +83,18 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 	sm.currentProfile.Store(profile) // Set profile
 
 	// Enable ZSTD compression WITH the dictionary.
-	sm.activeCompression.kind = CompressionZSTD
-	sm.activeCompression.level = zstd.EncoderLevel(sm.compression.level)
-	sm.activeCompression.zstdEncs = &sync.Pool{
+	sm.activeCompression.Kind = CompressionZSTD
+	sm.activeCompression.Level = sm.compression.Level
+	sm.activeCompression.ZstdEncs = &sync.Pool{
 		New: func() any {
-			enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(realDict), zstd.WithEncoderLevel(sm.activeCompression.level))
+			enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(realDict), zstd.WithEncoderLevel(sm.activeCompression.Level))
 			if err != nil {
 				panic(err)
 			}
 			return enc
 		},
 	}
-	sm.activeCompression.zstdDecs = &sync.Pool{
+	sm.activeCompression.ZstdDecs = &sync.Pool{
 		New: func() any {
 			dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(realDict))
 			if err != nil {
@@ -103,6 +104,7 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 		},
 	}
 	sm.mu.Unlock()
+
 
 	// 4. Write data WITH compression.
 	// Use some data that should compress well with a dictionary (repetitive).

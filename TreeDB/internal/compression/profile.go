@@ -1,4 +1,4 @@
-package slab
+package compression
 
 import (
 	"math"
@@ -8,8 +8,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// ActiveCompressionProfile captures the chosen dictionary + K selection at training time.
-type ActiveCompressionProfile struct {
+type ActiveProfile struct {
 	DictHash         uint64
 	DictBytes        int
 	Dict             []byte
@@ -32,7 +31,7 @@ type kScore struct {
 	score        float64
 }
 
-func chooseKForDict(dict []byte, samples [][]byte) *ActiveCompressionProfile {
+func ChooseKForDict(dict []byte, samples [][]byte) *ActiveProfile {
 	if len(samples) == 0 || len(dict) == 0 {
 		return nil
 	}
@@ -97,7 +96,7 @@ func chooseKForDict(dict []byte, samples [][]byte) *ActiveCompressionProfile {
 	if best.K == 1 {
 		best = baseline
 	}
-	return &ActiveCompressionProfile{
+	return &ActiveProfile{
 		DictHash:         xxhash.Sum64(dict),
 		DictBytes:        len(dict),
 		Dict:             dict,

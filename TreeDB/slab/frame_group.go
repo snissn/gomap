@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 )
 
 const (
@@ -21,11 +22,11 @@ var (
 // buildFrameGroupRecord builds a grouped slab record (header + offsets + compressed payload).
 // values must be non-empty. Returns the full record bytes (including checksum header) and the
 // number of values packed.
-func buildFrameGroupRecord(values [][]byte, cfg *compressionConfig) ([]byte, int, error) {
+func buildFrameGroupRecord(values [][]byte, cfg *compression.Config) ([]byte, int, error) {
 	if len(values) == 0 {
 		return nil, 0, errFrameGroupCorrupt
 	}
-	if cfg == nil || cfg.zstdEncs == nil {
+	if cfg == nil || cfg.ZstdEncs == nil {
 		return nil, 0, errors.New("slab: compression config missing for frame group")
 	}
 
@@ -51,9 +52,9 @@ func buildFrameGroupRecord(values [][]byte, cfg *compressionConfig) ([]byte, int
 		pos += len(v)
 	}
 
-	enc := cfg.zstdEncs.Get().(*zstd.Encoder)
+	enc := cfg.ZstdEncs.Get().(*zstd.Encoder)
 	compressed := enc.EncodeAll(payload, nil)
-	cfg.zstdEncs.Put(enc)
+	cfg.ZstdEncs.Put(enc)
 
 	offsetBytes := 4 * (k + 1)
 	bodyLen := frameGroupHeader + offsetBytes + len(compressed)
@@ -91,12 +92,12 @@ func buildFrameGroupRecord(values [][]byte, cfg *compressionConfig) ([]byte, int
 }
 
 // decompressFrameGroup extracts a single value (subIndex) from a grouped record body (value bytes).
-func decompressFrameGroup(cfg *compressionConfig, body []byte, subIndex int) ([]byte, error) {
-	if cfg == nil || cfg.zstdDecs == nil {
-		return nil, errCompressedCorrupt
+func decompressFrameGroup(cfg *compression.Config, body []byte, subIndex int) ([]byte, error) {
+	if cfg == nil || cfg.ZstdDecs == nil {
+		return nil, compression.ErrCorrupt
 	}
-	dec := cfg.zstdDecs.Get().(*zstd.Decoder)
-	defer cfg.zstdDecs.Put(dec)
+	dec := cfg.ZstdDecs.Get().(*zstd.Decoder)
+	defer cfg.ZstdDecs.Put(dec)
 	return decompressFrameGroupWithDecoder(dec, body, subIndex)
 }
 

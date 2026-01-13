@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 )
 
 func BenchmarkWriteSpeedComparison(b *testing.B) {
@@ -28,7 +30,7 @@ func BenchmarkWriteSpeedComparison(b *testing.B) {
 			// dictionary write speed, not training overhead or raw ZSTD.
 			if opts.Compression.Kind == CompressionZSTD {
 				// Inject a mock profile to bypass training time
-				sm.compressionTrainer.AcceptProfile(&ActiveCompressionProfile{
+				sm.compressionTrainer.AcceptProfile(&compression.ActiveProfile{
 					Dict: make([]byte, 32768),
 					K:    1,
 				})

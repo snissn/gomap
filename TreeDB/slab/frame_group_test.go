@@ -5,12 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func newZSTDConfig(t *testing.T) compressionConfig {
+func newZSTDConfig(t *testing.T) compression.Config {
 	t.Helper()
-	cfg, err := normalizeCompressionOptions(CompressionOptions{Kind: CompressionZSTD})
+	cfg, err := compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
 	if err != nil {
 		t.Fatalf("normalize compression: %v", err)
 	}

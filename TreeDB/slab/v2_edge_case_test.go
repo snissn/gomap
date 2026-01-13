@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 )
 
 func TestSlabV2_ExactBoundary(t *testing.T) {
@@ -26,7 +27,7 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 	defer sm.Close()
 
 	// Force V2 by providing a mock profile and rotating.
-	sm.compressionTrainer.AcceptProfile(&ActiveCompressionProfile{
+	sm.compressionTrainer.AcceptProfile(&compression.ActiveProfile{
 		Dict: make([]byte, 32768),
 		K:    1,
 	})
@@ -103,7 +104,7 @@ func TestSlabV2_MaxRecord(t *testing.T) {
 	defer sm.Close()
 
 	// Force V2 by providing a mock profile and rotating.
-	sm.compressionTrainer.AcceptProfile(&ActiveCompressionProfile{
+	sm.compressionTrainer.AcceptProfile(&compression.ActiveProfile{
 		Dict: make([]byte, 32768),
 		K:    1,
 	})
@@ -290,7 +291,7 @@ func TestSlabV2_GroupedBoundary(t *testing.T) {
 	}
 
 	// Set groupK > 1
-	sm.currentProfile.Store(&ActiveCompressionProfile{K: 4})
+	sm.currentProfile.Store(&compression.ActiveProfile{K: 4})
 
 	// Write almost 2MB to push near boundary.
 	bulkPayload := make([]byte, 100*1024)

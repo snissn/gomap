@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -62,9 +63,9 @@ func runGroupedBench(b *testing.B, values [][]byte, k int, dict []byte, dictHash
 	if err != nil {
 		b.Fatalf("NewSlabManagerWithOptions: %v", err)
 	}
-	profile := &ActiveCompressionProfile{K: k, DictBytes: len(dict), DictHash: dictHash}
-	trainer := &compressionTrainer{}
-	trainer.lastProfile.Store(profile)
+	profile := &compression.ActiveProfile{K: k, DictBytes: len(dict), DictHash: dictHash}
+	trainer := &compression.Trainer{}
+	trainer.AcceptProfile(profile)
 	sm.compressionTrainer = trainer
 
 	b.ResetTimer()

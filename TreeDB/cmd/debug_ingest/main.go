@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
 )
@@ -99,7 +100,7 @@ func main() {
 	writeElapsed := time.Since(start)
 
 	// Wait briefly for trainer to process samples.
-	var stats slab.CompressionTrainerStats
+	var stats compression.TrainerStats
 	for i := 0; i < 20; i++ {
 		stats, _ = sm.CompressionTrainerStats()
 		if stats.ProfileAccepts > 0 || stats.ProfileRejects > 0 {

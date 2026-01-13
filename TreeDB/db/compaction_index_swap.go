@@ -1240,13 +1240,13 @@ func buildCompactionDictSample(slabID uint32, cfg slab.CompressionTrainConfig, s
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
-		Level:    cfg.Level,
+		Level:    zstd.EncoderLevel(cfg.Level),
 	})
 	if err != nil {
 		return sample
 	}
 
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevel(cfg.Level)), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
 	if err != nil {
 		return sample
 	}
@@ -1374,13 +1374,13 @@ func collectCompactionDictSample(ctx context.Context, snap *Snapshot, slabID uin
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
-		Level:    cfg.Level,
+		Level:    zstd.EncoderLevel(cfg.Level),
 	})
 	if err != nil {
 		return sample, nil
 	}
 
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(cfg.Level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevel(cfg.Level)), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
 	if err != nil {
 		return sample, nil
 	}

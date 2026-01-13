@@ -8,6 +8,7 @@ import (
 
 	"github.com/klauspost/compress/dict"
 	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -147,7 +148,7 @@ func TestSlabV2_LocalDictPadding(t *testing.T) {
 		t.Fatalf("expected short dict, got %d bytes", len(dict))
 	}
 
-	sm.ForceAcceptProfileForTesting(&ActiveCompressionProfile{
+	sm.ForceAcceptProfileForTesting(&compression.ActiveProfile{
 		Dict:      dict,
 		DictBytes: len(dict),
 		K:         1,
@@ -194,7 +195,7 @@ func TestSlabV2_UseRefDictionary(t *testing.T) {
 	samples := makeTestSamples(16, 4096)
 	dict := buildTestDict(t, 2, samples)
 
-	profile := &ActiveCompressionProfile{
+	profile := &compression.ActiveProfile{
 		Dict:      dict,
 		DictBytes: len(dict),
 		K:         1,
@@ -252,7 +253,7 @@ func TestSlabV2_DictSliceMmap(t *testing.T) {
 	defer func() { _ = sm.Close() }()
 
 	dict := buildTestDict(t, 3, makeTestSamples(8, 2048))
-	sm.ForceAcceptProfileForTesting(&ActiveCompressionProfile{
+	sm.ForceAcceptProfileForTesting(&compression.ActiveProfile{
 		Dict:      dict,
 		DictBytes: len(dict),
 		K:         1,

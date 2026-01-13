@@ -1,4 +1,4 @@
-package slab
+package compression
 
 import (
 	"encoding/binary"
@@ -13,22 +13,22 @@ import (
 )
 
 const (
-	defaultCompressionTrainBytes          = 1 << 20
-	defaultCompressionTrainDictBytes      = 32 << 10
-	defaultCompressionTrainMinRecords     = 64
-	defaultCompressionTrainMaxRecordBytes = 64 << 10
-	defaultCompressionTrainQueue          = 128
-	defaultCompressionTrainDedupWindow    = 16
+	DefaultTrainBytes          = 1 << 20
+	DefaultTrainDictBytes      = 32 << 10
+	DefaultTrainMinRecords     = 64
+	DefaultTrainMaxRecordBytes = 64 << 10
+	DefaultTrainQueue          = 128
+	DefaultTrainDedupWindow    = 16
 
 	// Adaptive gating constants for dict+K refresh.
-	minProfileBytes       = 64 << 20 // 64 MiB
-	minProfileRecords     = 250_000  // records
-	minProfileInterval    = 10 * time.Minute
-	profileDriftThreshold = 0.07 // 7%
-	profileImproveThresh  = 0.02 // 2% better to accept
+	MinProfileBytes       = 64 << 20 // 64 MiB
+	MinProfileRecords     = 250_000  // records
+	MinProfileInterval    = 10 * time.Minute
+	ProfileDriftThreshold = 0.07 // 7%
+	ProfileImproveThresh  = 0.02 // 2% better to accept
 )
 
-type compressionTrainer struct {
+type Trainer struct {
 	enabled     atomic.Bool
 	collecting  atomic.Bool
 	training    atomic.Bool
@@ -78,7 +78,7 @@ type compressionTrainer struct {
 	collectCount         atomic.Uint64
 	collectMaxNanos      atomic.Uint64
 
-	lastProfile atomic.Value // *ActiveCompressionProfile
+	lastProfile atomic.Value // *ActiveProfile
 
 	// workload counters
 	totalBytesSeen   atomic.Uint64
@@ -113,7 +113,7 @@ type trainerSample struct {
 	sample []byte
 }
 
-type CompressionTrainerStats struct {
+type TrainerStats struct {
 	Enabled              bool
 	Collecting           bool
 	Training             bool
@@ -157,15 +157,6 @@ type CompressionTrainerStats struct {
 	LastAcceptTimestamp  time.Time
 }
 
-type CompressionTrainConfig struct {
-	TrainBytes     int
-	DictBytes      int
-	MinRecords     int
-	MaxRecordBytes int
-	SampleStride   int
-	Level          zstd.EncoderLevel
-}
-
 type dictDedupMode uint8
 
 const (
@@ -175,62 +166,61 @@ const (
 	dictDedupCache
 )
 
-type dictUseFlag uint8
+type DictUseFlag uint8
 
 const (
-	dictUseGlobal dictUseFlag = iota
-	dictUseLocal
-	dictUseRef
+	DictUseGlobal DictUseFlag = iota
+	DictUseLocal
+	DictUseRef
 )
 
-func newCompressionTrainer(opts Options, cfg compressionConfig, readOnly bool) *compressionTrainer {
-	if readOnly || opts.CompressionAdaptiveTrainBytes < 0 {
+func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool) *Trainer {
+	if readOnly || opts.TrainBytes < 0 {
 		return nil
 	}
-	// We allow trainer even if ZSTD is off initially, to support manual rotation tests.
-	target := opts.CompressionAdaptiveTrainBytes
+	target := opts.TrainBytes
 	if target == 0 {
-		target = defaultCompressionTrainBytes
+		target = DefaultTrainBytes
 	}
-	dictBytes := opts.CompressionAdaptiveTrainDictBytes
+	dictBytes := opts.DictBytes
 	if dictBytes <= 0 {
-		dictBytes = defaultCompressionTrainDictBytes
+		dictBytes = DefaultTrainDictBytes
 	}
-	minRecords := opts.CompressionAdaptiveTrainMinRecords
+	minRecords := opts.MinRecords
 	if minRecords <= 0 {
-		minRecords = defaultCompressionTrainMinRecords
+		minRecords = DefaultTrainMinRecords
 	}
-	maxRecord := opts.CompressionAdaptiveTrainMaxRecordBytes
+	maxRecord := opts.MaxRecordBytes
 	if maxRecord <= 0 {
-		maxRecord = defaultCompressionTrainMaxRecordBytes
+		maxRecord = DefaultTrainMaxRecordBytes
 	}
-	sampleStride := opts.CompressionAdaptiveTrainSampleStride
+	sampleStride := opts.SampleStride
 	if sampleStride <= 1 {
 		sampleStride = 1
 	}
-	dedupWindow := opts.CompressionAdaptiveTrainDedupWindow
+	dedupWindow := opts.DedupWindow
 	if dedupWindow <= 0 {
-		dedupWindow = defaultCompressionTrainDedupWindow
+		dedupWindow = DefaultTrainDedupWindow
 	}
 
-	trainer := &compressionTrainer{
+	trainer := &Trainer{
 		targetBytes:     uint64(target),
 		minRecords:      uint64(minRecords),
 		maxRecord:       maxRecord,
 		dictBytes:       dictBytes,
-		level:           cfg.level,
+		level:           cfg.Level,
 		sampleStride:    uint64(sampleStride),
-		sampleCh:        make(chan trainerSample, defaultCompressionTrainQueue),
-		measureCollect:  opts.CompressionMetrics,
+		sampleCh:        make(chan trainerSample, DefaultTrainQueue),
+		measureCollect:  metricsEnabled,
 		dictDedupWindow: dedupWindow,
 	}
 	trainer.enabled.Store(true)
-	trainer.collecting.Store(true) // Start collecting immediately
+	trainer.collecting.Store(true)
 	go trainer.run()
 	return trainer
 }
 
-func (t *compressionTrainer) Close() {
+func (t *Trainer) Close() {
 	if t == nil {
 		return
 	}
@@ -240,14 +230,21 @@ func (t *compressionTrainer) Close() {
 	})
 }
 
-func (t *compressionTrainer) shouldCollect() bool {
+func (t *Trainer) ShouldCollect() bool {
 	if t == nil || t.closed.Load() || t.targetBytes == 0 {
 		return false
 	}
 	return t.collecting.Load()
 }
 
-func (t *compressionTrainer) signalDegraded(slabID uint32) {
+func (t *Trainer) ForceCollecting() {
+	if t == nil || !t.enabled.Load() {
+		return
+	}
+	t.collecting.Store(true)
+}
+
+func (t *Trainer) SignalDegraded(slabID uint32) {
 	if t == nil || !t.enabled.Load() {
 		return
 	}
@@ -281,12 +278,12 @@ func (t *compressionTrainer) signalDegraded(slabID uint32) {
 	t.sampleGen.Add(1)
 	t.sampleStrideCounter.Store(0)
 	if base := math.Float64frombits(t.rollingRatioBase.Load()); base > 0 {
-		t.rollingRatioCur.Store(math.Float64bits(base * (1 + profileDriftThreshold + 0.01)))
+		t.rollingRatioCur.Store(math.Float64bits(base * (1 + ProfileDriftThreshold + 0.01)))
 	}
 	t.collecting.Store(true)
 }
 
-func (t *compressionTrainer) collect(value []byte) {
+func (t *Trainer) Collect(value []byte) {
 	var started time.Time
 	if t == nil || t.closed.Load() || !t.collecting.Load() || len(value) == 0 {
 		return
@@ -324,13 +321,13 @@ func (t *compressionTrainer) collect(value []byte) {
 	t.recordCollect(started)
 }
 
-func (t *compressionTrainer) run() {
+func (t *Trainer) run() {
 	for sample := range t.sampleCh {
 		t.appendSample(sample)
 	}
 }
 
-func (t *compressionTrainer) appendSample(sample trainerSample) {
+func (t *Trainer) appendSample(sample trainerSample) {
 	if t == nil {
 		return
 	}
@@ -365,7 +362,7 @@ func (t *compressionTrainer) appendSample(sample trainerSample) {
 	go t.train(samples, dictBytes, level, slabID)
 }
 
-func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
+func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
 	defer t.training.Store(false)
 	if len(samples) == 0 {
 		return
@@ -384,7 +381,6 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 			rawTotal += len(sample)
 		}
 	}
-	// Defensive: Need enough data for dictionary training.
 	if rawTotal < 4096 || len(validSamples) < 8 {
 		return
 	}
@@ -414,7 +410,7 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		t.lastTrainSamples.Store(uint64(len(validSamples)))
 		t.lastTrainDict.Store(uint64(len(cached)))
 		t.lastTrainDedupMode.Store(uint64(dictDedupCache))
-		t.lastTrainDedupFlag.Store(uint64(dictUseRef))
+		t.lastTrainDedupFlag.Store(uint64(DictUseRef))
 		t.lastTrainDedupRef.Store(0)
 		if t.logOnce() {
 			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
@@ -431,7 +427,6 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 
 	t.trainCount.Add(1)
 
-	// Filter validSamples to ensure none are empty, as ZSTD BuildDict may panic on them.
 	nonEmptySamples := make([][]byte, 0, len(validSamples))
 	for _, s := range validSamples {
 		if len(s) > 0 {
@@ -452,7 +447,6 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 	var dict []byte
 	var err error
 
-	// Ultimate safeguard: catch panics from ZSTD library (e.g. integer divide by zero on bad samples)
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -535,12 +529,12 @@ func (t *compressionTrainer) train(samples [][]byte, dictBytes int, level zstd.E
 		)
 	}
 	t.rollingRatioCur.Store(math.Float64bits(ratio))
-	if profile := chooseKForDict(dict, samples); profile != nil {
+	if profile := ChooseKForDict(dict, samples); profile != nil {
 		t.maybeAcceptProfile(profile)
 	}
 }
 
-func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
+func (t *Trainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 	if t == nil {
 		return dictDedupNone, -1
 	}
@@ -550,7 +544,7 @@ func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 
 	window := t.dictDedupWindow
 	if window <= 0 {
-		window = defaultCompressionTrainDedupWindow
+		window = DefaultTrainDedupWindow
 		t.dictDedupWindow = window
 	}
 	if t.dictHashes == nil {
@@ -581,14 +575,14 @@ func (t *compressionTrainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 	return dictDedupNone, -1
 }
 
-func (t *compressionTrainer) logOnce() bool {
+func (t *Trainer) logOnce() bool {
 	if t == nil {
 		return false
 	}
 	return t.logged.CompareAndSwap(false, true)
 }
 
-func (t *compressionTrainer) getSampleBuf(n int) []byte {
+func (t *Trainer) getSampleBuf(n int) []byte {
 	if t == nil || n <= 0 {
 		return make([]byte, n)
 	}
@@ -601,7 +595,7 @@ func (t *compressionTrainer) getSampleBuf(n int) []byte {
 	return make([]byte, n)
 }
 
-func (t *compressionTrainer) putSampleBuf(buf []byte) {
+func (t *Trainer) putSampleBuf(buf []byte) {
 	if t == nil || len(buf) == 0 {
 		return
 	}
@@ -611,7 +605,7 @@ func (t *compressionTrainer) putSampleBuf(buf []byte) {
 	t.samplePool.Put(buf[:0])
 }
 
-func (t *compressionTrainer) releaseSamples(samples [][]byte) {
+func (t *Trainer) releaseSamples(samples [][]byte) {
 	if t == nil {
 		return
 	}
@@ -620,7 +614,7 @@ func (t *compressionTrainer) releaseSamples(samples [][]byte) {
 	}
 }
 
-func (t *compressionTrainer) updateMaxQueueLen() {
+func (t *Trainer) updateMaxQueueLen() {
 	if t == nil {
 		return
 	}
@@ -636,7 +630,7 @@ func (t *compressionTrainer) updateMaxQueueLen() {
 	}
 }
 
-func (t *compressionTrainer) recordCollect(started time.Time) {
+func (t *Trainer) recordCollect(started time.Time) {
 	if t == nil || !t.measureCollect || started.IsZero() {
 		return
 	}
@@ -654,12 +648,12 @@ func (t *compressionTrainer) recordCollect(started time.Time) {
 	}
 }
 
-func (t *compressionTrainer) allowRetrain(now time.Time) bool {
+func (t *Trainer) allowRetrain(now time.Time) bool {
 	if t == nil {
 		return false
 	}
 	lastTime, _ := t.lastAcceptTime.Load().(time.Time)
-	if !lastTime.IsZero() && now.Sub(lastTime) < minProfileInterval {
+	if !lastTime.IsZero() && now.Sub(lastTime) < MinProfileInterval {
 		return false
 	}
 	bytesSeen := t.totalBytesSeen.Load()
@@ -667,35 +661,34 @@ func (t *compressionTrainer) allowRetrain(now time.Time) bool {
 	lastBytes := t.lastAcceptBytes.Load()
 	lastRecords := t.lastAcceptRecords.Load()
 	if lastTime.IsZero() {
-		// No baseline, allow first training.
 		return true
 	}
 	if bytesSeen <= lastBytes && recordsSeen <= lastRecords {
 		return false
 	}
-	if bytesSeen-lastBytes < minProfileBytes && recordsSeen-lastRecords < minProfileRecords {
+	if bytesSeen-lastBytes < MinProfileBytes && recordsSeen-lastRecords < MinProfileRecords {
 		return false
 	}
 	base := math.Float64frombits(t.rollingRatioBase.Load())
 	cur := math.Float64frombits(t.rollingRatioCur.Load())
-	if base > 0 && cur > 0 && cur <= base*(1.0+profileDriftThreshold) {
+	if base > 0 && cur > 0 && cur <= base*(1.0+ProfileDriftThreshold) {
 		return false
 	}
 	return true
 }
 
-func (t *compressionTrainer) maybeAcceptProfile(profile *ActiveCompressionProfile) {
+func (t *Trainer) maybeAcceptProfile(profile *ActiveProfile) {
 	if t == nil || profile == nil {
 		return
 	}
 	t.attempts.Add(1)
-	old, _ := t.lastProfile.Load().(*ActiveCompressionProfile)
+	old, _ := t.lastProfile.Load().(*ActiveProfile)
 	if old != nil {
 		t.rollingRatioBase.Store(math.Float64bits(old.TotalRatio))
 	}
 	t.rollingRatioCur.Store(math.Float64bits(profile.TotalRatio))
 	if old != nil {
-		if profile.TotalRatio > old.TotalRatio*(1.0-profileImproveThresh) {
+		if profile.TotalRatio > old.TotalRatio*(1.0-ProfileImproveThresh) {
 			t.rejects.Add(1)
 			t.lastRejectReason.Store("not_better")
 			return
@@ -704,11 +697,11 @@ func (t *compressionTrainer) maybeAcceptProfile(profile *ActiveCompressionProfil
 	t.acceptProfile(profile)
 }
 
-func (t *compressionTrainer) AcceptProfile(profile *ActiveCompressionProfile) {
+func (t *Trainer) AcceptProfile(profile *ActiveProfile) {
 	t.acceptProfile(profile)
 }
 
-func (t *compressionTrainer) acceptProfile(profile *ActiveCompressionProfile) {
+func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	if t == nil || profile == nil {
 		return
 	}
@@ -722,18 +715,18 @@ func (t *compressionTrainer) acceptProfile(profile *ActiveCompressionProfile) {
 	t.lastRejectReason.Store("")
 }
 
-func (t *compressionTrainer) stats() CompressionTrainerStats {
+func (t *Trainer) Stats() TrainerStats {
 	if t == nil {
-		return CompressionTrainerStats{}
+		return TrainerStats{}
 	}
 	dedupMode := dictDedupMode(t.lastTrainDedupMode.Load())
-	dedupFlag := dictUseFlag(t.lastTrainDedupFlag.Load())
+	dedupFlag := DictUseFlag(t.lastTrainDedupFlag.Load())
 	var profileK int
 	var profileTotal float64
 	var profilePayload float64
 	var profileTS time.Time
 	var profileReject string
-	if p, ok := t.lastProfile.Load().(*ActiveCompressionProfile); ok && p != nil {
+	if p, ok := t.lastProfile.Load().(*ActiveProfile); ok && p != nil {
 		profileK = p.K
 		profileTotal = p.TotalRatio
 		profilePayload = p.PayloadRatio
@@ -743,7 +736,7 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 	if r, ok := t.lastRejectReason.Load().(string); ok {
 		profileReject = r
 	}
-	return CompressionTrainerStats{
+	return TrainerStats{
 		Enabled:              t.enabled.Load(),
 		Collecting:           t.collecting.Load(),
 		Training:             t.training.Load(),
@@ -766,9 +759,9 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 		DictDedupRef:         t.dictDedupRef.Load(),
 		DictDedupCache:       t.dictDedupCache.Load(),
 		DictDedupBytes:       t.dictDedupBytes.Load(),
-		DictDedupBytesGlobal: t.dictDedupBytesGlobal.Load(),
-		DictDedupBytesRef:    t.dictDedupBytesRef.Load(),
-		DictDedupBytesCache:  t.dictDedupBytesCache.Load(),
+		DictDedupBytesGlobal: t.dictDedupBytesGlobal.Add(0),
+		DictDedupBytesRef:    t.dictDedupBytesRef.Add(0),
+		DictDedupBytesCache:  t.dictDedupBytesCache.Add(0),
 		CollectCount:         t.collectCount.Load(),
 		CollectNanos:         t.collectNanos.Load(),
 		CollectMaxNanos:      t.collectMaxNanos.Load(),
@@ -788,25 +781,25 @@ func (t *compressionTrainer) stats() CompressionTrainerStats {
 	}
 }
 
-func (t *compressionTrainer) config() CompressionTrainConfig {
+func (t *Trainer) Config() TrainConfig {
 	if t == nil {
-		return CompressionTrainConfig{}
+		return TrainConfig{}
 	}
-	return CompressionTrainConfig{
+	return TrainConfig{
 		TrainBytes:     int(t.targetBytes),
 		DictBytes:      t.dictBytes,
 		MinRecords:     int(t.minRecords),
 		MaxRecordBytes: t.maxRecord,
 		SampleStride:   int(t.sampleStride),
-		Level:          t.level,
+		Level:          int(t.level),
 	}
 }
 
-func (t *compressionTrainer) ActiveProfile() (*ActiveCompressionProfile, bool) {
+func (t *Trainer) ActiveProfile() (*ActiveProfile, bool) {
 	if t == nil {
 		return nil, false
 	}
-	if p, ok := t.lastProfile.Load().(*ActiveCompressionProfile); ok && p != nil {
+	if p, ok := t.lastProfile.Load().(*ActiveProfile); ok && p != nil {
 		return p, true
 	}
 	return nil, false
@@ -825,24 +818,24 @@ func dedupModeString(mode dictDedupMode) string {
 	}
 }
 
-func dedupFlagFromMode(mode dictDedupMode) dictUseFlag {
+func dedupFlagFromMode(mode dictDedupMode) DictUseFlag {
 	switch mode {
 	case dictDedupGlobal:
-		return dictUseGlobal
+		return DictUseGlobal
 	case dictDedupRef:
-		return dictUseRef
+		return DictUseRef
 	case dictDedupCache:
-		return dictUseRef
+		return DictUseRef
 	default:
-		return dictUseLocal
+		return DictUseLocal
 	}
 }
 
-func dedupFlagString(flag dictUseFlag) string {
+func dedupFlagString(flag DictUseFlag) string {
 	switch flag {
-	case dictUseGlobal:
+	case DictUseGlobal:
 		return "use_global"
-	case dictUseRef:
+	case DictUseRef:
 		return "use_ref"
 	default:
 		return "use_local"
@@ -860,7 +853,7 @@ func hashSamples(samples [][]byte) uint64 {
 	return hasher.Sum64()
 }
 
-func (t *compressionTrainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
+func (t *Trainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
 	if t == nil {
 		return nil, 0, false
 	}
@@ -885,13 +878,13 @@ func (t *compressionTrainer) lookupCachedDict(samplesHash uint64) ([]byte, uint6
 	return nil, 0, false
 }
 
-func (t *compressionTrainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
+func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
 	if t == nil {
 		return
 	}
 	window := t.dictDedupWindow
 	if window <= 0 {
-		window = defaultCompressionTrainDedupWindow
+		window = DefaultTrainDedupWindow
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
