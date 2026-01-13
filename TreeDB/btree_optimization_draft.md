@@ -190,15 +190,243 @@ It is not a near-term optimization for the current COW tree.
 
 ---
 
-## 6. Validation Plan
+## 6. Implementation Plan (Codex-ready)
 
-### Correctness
+This section turns the roadmap into an implementable sequence. It is written to
+be actionable for an implementation agent: what to change, where, and how to
+validate it without getting lost in the speculative “north-star” items.
+
+### 6.1 Architecture Map (Where Changes Land)
+
+Key packages involved in index/page layout work:
+
+- `TreeDB/page`: page header, CRC rules, page size constants.
+- `TreeDB/node`: leaf/internal encoding/decoding, search routines, builders.
+- `TreeDB/tree`: search + COW rewrite orchestration (zipper merge uses `node`).
+- `TreeDB/pager`: read/write pages to `index.db` (mmap + chunk growth).
+- `TreeDB/db`: vacuum/rebuild, stats, integration surfaces.
+
+For Phase 1–4, the work is mostly confined to `TreeDB/node` + a small amount of
+flag/version plumbing in `TreeDB/page` and any call sites that interpret node
+flags.
+
+### 6.2 Flowcharts (End-to-End)
+
+#### 6.2.1 Point read (`DB.Get`) flow (today; remains true after Phase 1–4)
+
+```
+DB.Get(key)
+  -> AcquireSnapshot (pins root + slabs + vlogs; reader is lock-free)
+  -> tree.Search(root, key)
+       -> pager.ReadPage(pageID)          (mmap / pread)
+       -> node.NewNodeView(pageBytes)
+       -> node.SearchInternal / SearchLeaf
+            -> leaf decode/compare path (this is where Phase 1–2 land)
+  -> if leaf entry is pointer:
+       -> resolve ValuePtr (slab/vlog)
+  -> return value (copy)
+```
+
+Phase impact:
+- Phase 1 changes leaf decode/search hot loops (less interleaving, less decode work).
+- Phase 2 adds a fingerprint hint to cut full compares.
+- Phase 3 changes internal-node decode/search.
+- Phase 4 adds optional bloom “skip hint” before leaf decode.
+
+#### 6.2.2 Write (`DB.Set`/batch commit) flow (where new formats get emitted)
+
+```
+DB.Set / Batch.Write
+  -> writer lock
+  -> zipper merge builds new path (COW)
+       -> node.Builder emits new pages (leaf/internal encoding lives here)
+       -> pager.Alloc + pager.WritePage for newly created pages
+  -> update meta pages (new root + commit seq)
+  -> release writer lock
+```
+
+Key consequence for compatibility:
+- Once we teach readers to understand multiple leaf formats, writers can begin
+  emitting the new format via COW without rewriting the entire DB in one shot.
+
+### 6.3 Compatibility & Migration Strategy (Recommended)
+
+We want “read old pages; write new pages” with a clean upgrade path.
+
+**Mechanism**
+- Introduce a **leaf format flag/version** that is:
+  - readable from the canonical page image (so CRC already covers it),
+  - cheap to branch on in hot paths.
+- Readers decode based on `(PageType == Leaf) + (format flag/version bits)`.
+- Writers emit the new format for newly-created leaf pages (COW rewrite).
+
+**Upgrade story**
+- Existing DB: mixed pages will exist during normal churn; the tree remains valid.
+- Full conversion: run an index vacuum/rebuild to rewrite all reachable pages into the newest format.
+
+**Hard rule**
+- New per-page hints (fingerprints/bloom) must never introduce false negatives.
+- Unknown/invalid flags must cause a safe fallback (decode as legacy or fail fast with checksum/format error, depending on strictness).
+
+### 6.4 Phase 0: Instrumentation / Baselines (Implementation Checklist)
+
+**Goal**: lock down measurements so we can prove each phase helps.
+
+**Add**
+- Microbenchmarks focused on node search/compare cost, not end-to-end DB noise:
+  - `BenchmarkLeafSearch_*` (existing leaf format vs new leaf format)
+  - `BenchmarkInternalSearch_*`
+  - `BenchmarkRangeScan_*` (iterator stepping through leaf keys)
+- Metrics to report:
+  - comparisons per lookup,
+  - bytes touched for key material,
+  - allocations per op.
+
+**Where**
+- Prefer `TreeDB/node/*_bench_test.go` (bench node logic directly).
+- Optionally add one end-to-end gate bench in `TreeDB/bench_*` that opens a DB
+  and does many Gets.
+
+**Acceptance**
+- A committed baseline (in comments or benchmark logs) so regressions are detectable.
+
+### 6.5 Phase 1: Columnar Leaf Layout (Detailed Plan)
+
+**Goal**: keep search touching “keys first”, and avoid interleaving pointer/value bytes in the cacheline path.
+
+#### 6.5.1 Decide the format indicator
+
+Recommended: add a **new flag bit** in the existing 16-bit page header `Flags`
+that is meaningful only for `PageTypeLeaf`.
+
+Example (exact bits are an implementation detail):
+- `leafPrefixCompressedFlag` already exists in `TreeDB/node/node.go` (0x8000).
+- Add `leafColumnarFlag` (e.g., 0x4000).
+- Update `pageTypeMask` to exclude both flags when extracting `PageType`.
+
+This keeps the format indicator inside the canonical page image and therefore
+inside the existing CRC coverage.
+
+#### 6.5.2 Define a concrete on-page layout (v1)
+
+Within the 4096-byte page body:
+
+```
+| PageHeader (16B) |
+| LeafHeaderV1     |  (counts, offsets, feature bits)
+| Fingerprints?    |  (optional, Phase 2)
+| KeyOffsets[]     |  (uint16 offsets into KeyBlob; count entries)
+| KeyBlob          |  (packed key suffix bytes; may include restart/LCP metadata)
+| PtrOrInlineCol[] |  (fixed-size struct per entry: flags + (ValuePtr or inline offset/len))
+```
+
+Notes:
+- Phase 1 can still use prefix compression semantics, but the *storage* should
+  be “keys are contiguous” even if they are prefix-encoded.
+- Keep pointer/value column fixed-size if possible. If inline values are
+  variable-length, store them in a tail blob with offsets, and keep the main
+  “pointer column” fixed.
+
+#### 6.5.3 Implement encode/decode/search incrementally
+
+**Implementation order**
+1. Add format flag + routing:
+   - Update `node.NewNodeView` / `node.NewNode` to parse flags correctly.
+2. Add decode helpers for the new leaf header and columns.
+3. Add a new `SearchLeafColumnar` implementation (or branch inside `SearchLeaf`).
+4. Update the leaf builder (`TreeDB/node/builder.go`) to emit the new format on COW writes.
+5. Keep legacy decode/search code path intact for old pages.
+
+**Files likely touched**
+- `TreeDB/node/node.go`: flags/masks; helper predicates (isColumnarLeaf).
+- `TreeDB/node/leaf.go`: new decode/search path.
+- `TreeDB/node/builder.go`: new encoder for columnar leaves.
+- `TreeDB/node/leaf_entry_integrity_test.go` (or new tests): roundtrip validation.
+
+#### 6.5.4 Tests
+
+Add tests that are format-specific and fast:
+- Roundtrip encode/decode for the new leaf format (keys, tombstones, inline, pointers).
+- Mixed-format DB: create legacy pages, then force COW rewrite to emit new pages and verify reads still succeed.
+- Corruption tests: invalid offsets / truncated blobs should return `ErrCorruptedNode`.
+
+Acceptance:
+- All existing node/unit tests pass.
+- New tests prove mixed-format correctness.
+
+### 6.6 Phase 2: Fingerprints (Detailed Plan)
+
+**Goal**: reduce full key comparisons.
+
+**Rules**
+- Fingerprints are hints only; they must not cause false negatives.
+
+**Implementation sketch**
+- Add `fingerprint[i] = hash8(key)` stored contiguously.
+- During binary search or scan:
+  - compare fingerprint first,
+  - only if it matches do a full key compare.
+
+**Where**
+- Add to new columnar leaf header layout (or as an optional section with a feature bit).
+- Prefer implementing scalar first; optionally add SIMD later behind `//go:build` tags.
+
+**Tests**
+- Ensure keys with same fingerprint still resolve correctly (full compare decides).
+- Fallback when fingerprints missing/disabled.
+
+### 6.7 Phase 3: Internal Node Fan-out (Detailed Plan)
+
+**Goal**: reduce internal node size and increase fanout (fewer levels).
+
+Implementation steps:
+- Ensure shortest-separator logic is correct and consistently used during splits.
+- Introduce internal-node global LCP (store prefix once).
+- Convert internal entries to pointer-first columnar layout (child pointers contiguous).
+
+Tests:
+- Search correctness across splits.
+- Randomized insert/delete with verification against a reference map (reuse existing fuzz scaffolding).
+
+### 6.8 Phase 4: Bloom Filters (Detailed Plan)
+
+**Goal**: speed up negative lookups.
+
+Recommended approach first: **in-page bloom** for leaves.
+- Stored inside leaf page image → CRC already covers it → simplest recovery story.
+- Recomputed during leaf page build (COW writes).
+
+Only consider pager sidecar bloom after in-page is proven valuable.
+
+Tests:
+- Bloom never produces false negatives: add randomized test that verifies that any present key always passes bloom.
+- Missing/disabled bloom falls back to full search.
+
+### 6.9 Phase 5: Clustered Leaves + Partitioned Index (Implementation Notes)
+
+This is intentionally *not* Phase 1–4 work. If we start it, treat it as a new
+format project with its own design doc and rollout plan.
+
+Concrete “medium bot” tasks that are still feasible:
+- Prototype a **cluster container reader** for a read-only “cold index” file produced by vacuum.
+- Add a minimal manifest format and a recovery-safe swap protocol (similar in spirit to existing index-swap).
+
+### 6.10 Phase Ordering (Recommended)
+
+Start with: Phase 0 → Phase 1 → Phase 2. Do not begin Phase 5 until Phase 1–2
+prove that “keys-first” layouts materially improve the point-read hot path.
+
+---
+
+## 7. Validation Plan
+
+### 7.1 Correctness
 - Existing TreeDB fuzz/model tests must pass.
 - Add targeted page-format roundtrip tests:
   - encode/decode leaf and internal nodes (including prefixes, fingerprints, bloom presence/absence).
 - Crash recovery tests must ensure new metadata does not create unrecoverable states.
 
-### Performance
+### 7.2 Performance
 - Gate changes with:
   - point lookup microbench,
   - scan microbench,
@@ -206,7 +434,7 @@ It is not a near-term optimization for the current COW tree.
 
 ---
 
-## 7. Open Questions / Decisions
+## 8. Open Questions / Decisions
 
 - Should “Phase 1 leaf layout” be introduced as a new leaf format version while keeping internal nodes unchanged?
 - Do we want in-page bloom (simpler) or pager-metadata bloom (potentially smaller pages but higher complexity)?
