@@ -149,6 +149,7 @@ public-facing configuration.
 
 **Status Log**
 - [x] in_progress: drafted value-size limitation + remediation notes; identified docs to update (README, TREEDB_TUNING, TREEDB_BENCHMARKING).
+- [x] in_progress: audited public envs/options; updated tuning + benchmarking docs with env overrides, legacy/deprecation notes, and bench-only knobs; updated TreeDB README note.
 
 ### Sprint 6 Plan (DX / Public API)
 

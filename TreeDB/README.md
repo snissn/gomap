@@ -142,6 +142,10 @@ Details: `docs/TREEDB_PROFILES.md`.
 
 Details: `docs/TREEDB_TUNING.md`.
 
+Notes:
+- Slab compression supports `zstd` (dictionary) or `none` only.
+- Environment overrides and legacy/deprecation notes are tracked in `docs/TREEDB_TUNING.md`.
+
 ### Exclusive Open (Process Lock)
 
 TreeDB acquires an **exclusive** lock on `Options.Dir`. If another process has the database open,

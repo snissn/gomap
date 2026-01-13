@@ -126,20 +126,42 @@ Note that results can converge as timeline duration increases.
 
 ## 6) Common Environment Knobs
 
-These apply to trace replay benchmarks:
+These apply to trace replay benchmarks only (bench-only; not production config):
 
 - `TREEDB_TRACE_MODE`: `cached` (default) or `backend`
 - `TREEDB_TRACE_DISABLE_WAL`: `1/0`
 - `TREEDB_TRACE_DISABLE_VLOG`: `1/0`
+- `TREEDB_TRACE_FORCE_VALUE_POINTERS`: `1/0`
 - `TREEDB_TRACE_FLUSH_THRESHOLD`: bytes
 - `TREEDB_TRACE_MEMTABLE_SHARDS`: int
 - `TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES`: bytes
+- `TREEDB_TRACE_LEAF_PREFIX_COMPRESSION`: `1/0`
+- `TREEDB_TRACE_SLAB_COMPRESSION`: `zstd|none`
+- `TREEDB_TRACE_SLAB_OMIT_KEYS`: `1/0`
+- `TREEDB_TRACE_SLAB_COMPRESSION_MIN_BYTES`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_MIN_SAVINGS`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_LEVEL`: int
+- `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_RATIO`: float
+- `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS`: int
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_BYTES`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DICT_BYTES`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MIN_RECORDS`: int
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES`: bytes
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE`: int
+- `TREEDB_TRACE_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW`: int
 - `TREEDB_TRACE_SCALE`: scale factor for counts in summary (default 1.0)
 - `TREEDB_TRACE_TIMELINE_DURATION_MS`: per-phase timeline duration (timeline replay)
 - `TREEDB_TRACE_TIMELINE_NO_SLEEP`: remove sleeps during timeline replay (profiling)
 - `TREEDB_TRACE_TIMELINE_INLINE_ITERS`: run iterators inline (reduce scheduler noise)
 - `TREEDB_TRACE_SKIP_ITERS`: skip iterator events (write/flush profiling)
 - `TREEDB_TRACE_SEQUENTIAL_KEYS`: force sequential keys per batch (avoid sort overhead)
+
+Other bench-only envs:
+- `TREEDB_BENCH_SHARDS`: overrides memtable shard count for bench runs.
+
+Most `TREEDB_TRACE_*` knobs mirror `treedb.Options` fields; see
+`docs/TREEDB_TUNING.md` for definitions and semantics.
 
 ## 7) Reporting Results
 

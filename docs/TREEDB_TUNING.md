@@ -193,7 +193,7 @@ TreeDB Slab V2 implements **Zonal Dictionary Compression** (Path B). This allows
   - `MinSavingsBytes`: Minimum bytes saved to keep a record compressed.
 - `Options.SlabCompressionAdaptiveTrainBytes` (default: 1MB):
   - Amount of raw data to sample before triggering background dictionary training.
-  - Set to `-1` to disable training manually.
+  - Set to `-1` to disable background training.
 - `Options.SlabCompressionAdaptiveTrainDictBytes` (default: 32KB):
   - Size of the ZSTD dictionary to generate.
 - `Options.OmitSlabKeys` (default: false):
@@ -207,13 +207,90 @@ TreeDB Slab V2 implements **Zonal Dictionary Compression** (Path B). This allows
   or an alternate blob/value store.
   - **Requires** `BackgroundCompactionIndexSwap=true` for background maintenance to function.
 
-#### Environment Variables
+#### Slab Compression Env Vars
 
 - `TREEDB_SLAB_COMPRESSION=zstd`: Enable dictionary compression.
+- `TREEDB_SLAB_COMPRESSION=none`: Disable compression (only `zstd` and `none` are supported).
+- `TREEDB_SLAB_COMPRESSION_MIN_BYTES=N`: Minimum value size to attempt compression.
+- `TREEDB_SLAB_COMPRESSION_MIN_SAVINGS=N`: Minimum bytes saved to keep compressed records.
+- `TREEDB_SLAB_COMPRESSION_LEVEL=N`: ZSTD compression level (leave unset for default).
 - `TREEDB_SLAB_OMIT_KEYS=1`: Enable key omission in slabs.
 - `TREEDB_SLAB_COMPRESSION_TRAIN_BYTES=N`: Override training sample target.
+- `TREEDB_SLAB_COMPRESSION_TRAIN_DICT_BYTES=N`: Override dictionary size (default 32KB).
+- `TREEDB_SLAB_COMPRESSION_TRAIN_MIN_RECORDS=N`: Minimum records before training.
+- `TREEDB_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES=N`: Cap per-record sample size.
+- `TREEDB_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE=N`: Sample every Nth record.
+- `TREEDB_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW=N`: Dedup window for reusing dicts.
 - `TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP=1`: Enable the required compaction mode for OmitKeys.
 - `TREEDB_SLAB_COMPRESSION_METRICS=1`: Log real-time compression ratios and training events.
+- `TREEDB_SLAB_COMPRESSION_METRICS_WINDOW_BYTES=N`: Window size for compression ratio logs.
+
+Notes:
+- `zstd` always uses dictionaries when available; if no dict is present it falls back to raw ZSTD for that zone.
+- There is no separate "non-dictionary compression" mode beyond that fallback.
+- Design/format details: `TreeDB/local_dictionary_compression.md`.
+
+### Environment Variable Overrides (treedb.Open)
+
+`treedb.Open` reads these env vars and overwrites `Options` fields when set.
+Prefer passing explicit `Options` in code; use envs for scripts/ops overrides.
+
+Core features:
+- `TREEDB_ENABLE_VALUE_INDEX=1`: enable ValueIndex for pointer-backed values.
+- `TREEDB_FORCE_VALUE_POINTERS=1`: store all values out-of-line in slabs.
+- `TREEDB_LEAF_PREFIX_COMPRESSION=1`: enable leaf prefix compression.
+- `TREEDB_SLAB_OMIT_KEYS=1`: omit keys in slab records (requires index-swap compaction).
+- `TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP=1`: use index-swap compactor (required for omit-keys).
+
+WAL / value-log:
+- `TREEDB_DISABLE_VALUE_LOG=1`: legacy WAL-only mode (no vlog pointers).
+- `TREEDB_SPLIT_VALUE_LOG=1`: split WAL entries vs large-value vlog segments.
+- `TREEDB_MEMTABLE_VALUE_LOG_POINTERS=1`: memtables store vlog pointers for large values.
+- `TREEDB_VALUE_LOG_POINTER_THRESHOLD=N`: inline threshold (bytes) for vlog pointers.
+
+Slab compression:
+- `TREEDB_SLAB_COMPRESSION=zstd|none`
+- `TREEDB_SLAB_COMPRESSION_MIN_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_MIN_SAVINGS=N`
+- `TREEDB_SLAB_COMPRESSION_LEVEL=N`
+- `TREEDB_SLAB_COMPRESSION_METRICS=1`
+- `TREEDB_SLAB_COMPRESSION_METRICS_WINDOW_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_ADAPTIVE_RATIO=R`
+- `TREEDB_SLAB_COMPRESSION_ADAPTIVE_PAUSE_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_ADAPTIVE_MIN_RECORDS=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_DICT_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_MIN_RECORDS=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_MAX_RECORD_BYTES=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_SAMPLE_STRIDE=N`
+- `TREEDB_SLAB_COMPRESSION_TRAIN_DEDUP_WINDOW=N`
+
+Background prune:
+- `TREEDB_BACKGROUND_PRUNE_INTERVAL=duration|ms`
+- `TREEDB_BACKGROUND_PRUNE_MAX_PAGES=N`
+
+Close-time maintenance:
+- `TREEDB_CLOSE_CHECKPOINT=1`: run `Checkpoint()` before closing.
+- `TREEDB_CLOSE_COMPACT_INDEX=1`: run `CompactIndex()` before closing.
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: run `VacuumIndexOnline()` before closing.
+- `TREEDB_CLOSE_VACUUM_TIMEOUT=duration|seconds`: timeout for the online vacuum.
+- `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages.
+- `TREEDB_CLOSE_SCOPE_CONTAINS=substr`: only run close maintenance if `Options.Dir` contains this.
+
+### Legacy / Deprecated Config (RC Guidance)
+
+- `TREEDB_VALUELOG_POINTER_THRESHOLD`: deprecated alias for `TREEDB_VALUE_LOG_POINTER_THRESHOLD`.
+- `TREEDB_DISABLE_VALUE_LOG` / `Options.DisableValueLog`: legacy WAL-only mode (no vlog pointers).
+  Prefer the default value-log path unless you are running compatibility or perf
+  experiments that require the legacy format.
+- `Options.DisableBackgroundPrune`: legacy on-commit prune path; keep background
+  prune enabled unless you are intentionally comparing legacy behavior.
+
+### Troubleshooting / Debug Knobs
+
+- `ErrRecordTooLarge`: V2 records must fit in a single 2MB zone; see V2 cap above.
+- `TREEDB_SLAB_DEBUG_RECORD_TOO_LARGE=1`: log sizing details when `ErrRecordTooLarge` fires.
+- `TREEDB_DEBUG_FLUSH_PTRS=1`: log value-log pointer resolution during cached flushes.
 
 ### Background index vacuum (cached or backend; default on)
 
@@ -311,6 +388,45 @@ TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
 - Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
 - Crash safety: `treedb.Open`/`treedb.OpenBackend` will automatically recover from a partial swap
   (e.g. if the process crashed mid-vacuum).
+
+## Example Configs / Recipes
+
+### Cached default (balanced, ops override)
+```bash
+TREEDB_LEAF_PREFIX_COMPRESSION=1 \
+TREEDB_SLAB_COMPRESSION=zstd \
+your-app
+```
+
+### Backend-only (manual batching)
+```go
+opts := treedb.Options{
+    Dir:  "/path/to/db",
+    Mode: treedb.ModeBackend,
+}
+db, err := treedb.Open(opts)
+```
+
+### Slab-heavy (force pointers + compression + omit keys)
+```bash
+TREEDB_FORCE_VALUE_POINTERS=1 \
+TREEDB_SLAB_COMPRESSION=zstd \
+TREEDB_SLAB_OMIT_KEYS=1 \
+TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP=1 \
+your-app
+```
+
+### Large-batch ingest (reduce flush churn)
+```go
+opts := treedb.Options{
+    Dir:            "/path/to/db",
+    FlushThreshold: 256 << 20,
+    MaxQueuedMemtables: 8,
+    SlowdownBacklogSeconds: 2,
+    StopBacklogSeconds: 4,
+}
+db, err := treedb.Open(opts)
+```
 
 ## Benchmark-Driven Tuning
 
