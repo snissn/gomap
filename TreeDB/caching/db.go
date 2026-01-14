@@ -2468,8 +2468,8 @@ func (db *DB) waitForStop() {
 		// Ensure progress even if the background flusher isn't currently scheduled
 		// (e.g. backlog driven by iterator rotations). This still "blocks" the write
 		// in the sense that we don't accept new ops until backlog drops, but lets the
-		// caller contribute bounded flush work.
-		db.flushSomeBlocking(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		// caller drive the queued work to completion.
+		db.flushAll(false)
 
 		db.bpMu.Lock()
 		for {
