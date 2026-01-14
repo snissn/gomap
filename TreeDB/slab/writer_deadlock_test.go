@@ -64,10 +64,14 @@ func TestDeadlock_ZoneRotate_LocalDict(t *testing.T) {
 		}
 	}()
 
+	timeout := 10 * time.Second
+	if raceEnabled {
+		timeout = 30 * time.Second
+	}
 	select {
 	case <-done:
 		// Passed
-	case <-time.After(10 * time.Second):
+	case <-time.After(timeout):
 		t.Fatal("Deadlock detected during zone rotation")
 	}
 }
