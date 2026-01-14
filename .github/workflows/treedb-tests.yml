@@ -56,3 +56,32 @@ jobs:
       - name: Test Race
         working-directory: TreeDB
         run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./...
+
+  slab-adaptive-bench:
+    name: slab-adaptive-bench (signal)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run adaptive compression sweep
+        run: |
+          set -euo pipefail
+          go test ./TreeDB/slab -run '^$' -bench BenchmarkCompressionAdaptiveSweep -benchmem -count=3 -benchtime=1s | tee /tmp/slab_adaptive_bench.txt
+
+      - name: Check adaptive compression baselines
+        run: |
+          set -euo pipefail
+          go run .github/scripts/check_slab_adaptive_bench.go \
+            --bench-output /tmp/slab_adaptive_bench.txt \
+            --baseline .github/perf_baselines/slab_adaptive_defaults.json

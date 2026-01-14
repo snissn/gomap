@@ -1,0 +1,19 @@
+{
+  "defaults": {
+    "highly_compressible": {
+      "min_mbps": 300,
+      "ratio_min": 0.0,
+      "ratio_max": 0.1
+    },
+    "medium_compressible": {
+      "min_mbps": 120,
+      "ratio_min": 0.3,
+      "ratio_max": 0.8
+    },
+    "incompressible": {
+      "min_mbps": 120,
+      "ratio_min": 0.95,
+      "ratio_max": 1.1
+    }
+  }
+}
