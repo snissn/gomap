@@ -198,6 +198,10 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := sm.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
 	if sm.activeSlab.Size <= 2*1024*1024+int64(ZoneHeaderSize) {
 		t.Fatalf("expected size to be beyond 2MB + header, got %d", sm.activeSlab.Size)
 	}

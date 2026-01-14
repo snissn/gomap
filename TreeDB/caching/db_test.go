@@ -139,6 +139,21 @@ func (m *MockBackend) Set(key, val []byte) {
 	m.data[string(key)] = val
 }
 
+func (m *MockBackend) Append(key, value []byte) (page.ValuePtr, error) {
+	// Simple mock implementation: store in data, return a fake pointer
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data[string(key)] = value
+	// Return a dummy pointer (ID=1, Offset=len, Length=len)
+	// This mock doesn't support reading back via pointer properly without a real slab manager simulation,
+	// but it satisfies the interface.
+	return page.ValuePtr{FileID: 1, Offset: uint64(len(value)), Length: uint32(len(value))}, nil
+}
+
+func (m *MockBackend) Read(ptr page.ValuePtr) ([]byte, error) {
+	return nil, fmt.Errorf("mock: Read(ptr) not implemented")
+}
+
 func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	m.mu.RLock()
 	keys := make([]string, 0, len(m.data))

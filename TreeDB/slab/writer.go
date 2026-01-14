@@ -336,3 +336,10 @@ func (w *SlabWriter) Size() int64 {
 	defer w.mu.Unlock()
 	return w.offset
 }
+
+func (w *SlabWriter) ResetOffset(offset int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.offset = offset
+	w.durableSize.Store(offset)
+}

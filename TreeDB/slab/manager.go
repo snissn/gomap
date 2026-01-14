@@ -418,9 +418,22 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
 	cfg := &sm.compression
+
+	// If reading from active slab with async writer, ensure data is on disk.
+	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
+		// Drop read lock to acquire write lock in Sync
+		sm.mu.RUnlock()
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return nil, err
+		}
+		sm.mu.RLock()
+		// Re-acquire s/cfg in case they changed
+		s, ok = sm.slabs[ptr.FileID]
+		cfg = &sm.compression
+	}
 	sm.mu.RUnlock()
 
-	if !ok {
+	if !ok || s == nil {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
 	}
 
@@ -471,9 +484,20 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
 	cfg := &sm.compression
+
+	// If reading from active slab with async writer, ensure data is on disk.
+	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
+		sm.mu.RUnlock()
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return nil, err
+		}
+		sm.mu.RLock()
+		s, ok = sm.slabs[ptr.FileID]
+		cfg = &sm.compression
+	}
 	sm.mu.RUnlock()
 
-	if !ok {
+	if !ok || s == nil {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
 	}
 
@@ -592,9 +616,28 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 
 	for attempt := 0; attempt < 3; attempt++ {
 		// Check for V2 boundaries BEFORE passing to async writer
-		if err := sm.activeSlab.checkBoundary(int64(len(rec))); err != nil {
+		currentSize := sm.activeSlab.Size
+		if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+			currentSize = sm.activeSlabWriter.Size()
+			
+			// If adding this record pushes the async buffer across a zone boundary,
+			// force a sync first so that checkBoundary (and the file writer) sees
+			// the exact state and can trigger rotation/padding correctly.
+			// V2 ZoneSize = 2MB.
+			if sm.activeSlab.version >= Version2 {
+				nextBoundary := ((currentSize / ZoneSize) + 1) * ZoneSize
+				if currentSize+int64(len(rec)) > nextBoundary {
+					if err := sm.activeSlabWriter.Sync(); err != nil {
+						return page.ValuePtr{}, err
+					}
+					currentSize = sm.activeSlab.Size
+				}
+			}
+		}
+
+		if err := sm.activeSlab.checkBoundary(currentSize, int64(len(rec))); err != nil {
 			if err == ErrRecordTooLarge {
-				if sm.activeSlab.Size >= ZoneSize && sm.activeSlab.Size%ZoneSize == 0 {
+				if currentSize >= ZoneSize && currentSize%ZoneSize == 0 {
 					if err = sm.forceRotateZoneLocked(); err != nil {
 						return page.ValuePtr{}, err
 					}
@@ -1133,8 +1176,13 @@ func (sm *SlabManager) maybeRotateZoneLocked(recordLen int) (bool, error) {
 		return false, nil
 	}
 
+	currentSize := s.Size
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		currentSize = sm.activeSlabWriter.Size()
+	}
+
 	// 1. Are we EXACTLY at a boundary (Zone 1+)?
-	if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+	if currentSize >= ZoneSize && currentSize%ZoneSize == 0 {
 		if err := sm.forceRotateZoneLocked(); err != nil {
 			return false, err
 		}
@@ -1142,15 +1190,24 @@ func (sm *SlabManager) maybeRotateZoneLocked(recordLen int) (bool, error) {
 	}
 
 	// 2. Will the record cross a boundary?
-	nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
-	if s.Size+int64(recordLen) <= nextBoundary {
+	nextBoundary := ((currentSize / ZoneSize) + 1) * ZoneSize
+	if currentSize+int64(recordLen) <= nextBoundary {
 		return false, nil
 	}
 
 	// Crossing boundary. Pad to boundary.
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return false, err
+		}
+	}
 	if err := s.Truncate(nextBoundary); err != nil {
 		return false, err
 	}
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		sm.activeSlabWriter.ResetOffset(s.Size)
+	}
+
 	// After padding, we are EXACTLY at the boundary. Write header.
 	if err := sm.forceRotateZoneLocked(); err != nil {
 		return false, err
@@ -1474,7 +1531,19 @@ func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return err
 	}
-	return sm.activeSlab.Truncate(int64(offset))
+	// Writer must flush before truncate to avoid data loss
+	if sm.activeSlabWriter != nil {
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return err
+		}
+	}
+	if err := sm.activeSlab.Truncate(int64(offset)); err != nil {
+		return err
+	}
+	if sm.activeSlabWriter != nil {
+		sm.activeSlabWriter.ResetOffset(int64(offset))
+	}
+	return nil
 }
 
 // RepairActiveSlabTail scans and truncates any partial/corrupt tail records on
@@ -1491,8 +1560,17 @@ func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return 0, err
 	}
+	// Writer must flush before repair
+	if sm.activeSlabWriter != nil {
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return 0, err
+		}
+	}
 	if err := sm.activeSlab.RepairTail(); err != nil {
 		return 0, err
+	}
+	if sm.activeSlabWriter != nil {
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
 	}
 	return uint64(sm.activeSlab.Size), nil
 }

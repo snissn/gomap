@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -71,6 +72,22 @@ func (db *DB) SetSync(key, value []byte) error {
 		return err
 	}
 	return b.WriteSync()
+}
+
+// Append writes a value to the active slab and returns a pointer.
+func (db *DB) Append(key, value []byte) (page.ValuePtr, error) {
+	if db.slabManager == nil {
+		return page.ValuePtr{}, errors.New("db: slab manager unavailable")
+	}
+	return db.slabManager.Append(key, value)
+}
+
+// Read reads a value from a slab pointer.
+func (db *DB) Read(ptr page.ValuePtr) ([]byte, error) {
+	if db.slabManager == nil {
+		return nil, errors.New("db: slab manager unavailable")
+	}
+	return db.slabManager.Read(ptr)
 }
 
 // Delete removes a key.

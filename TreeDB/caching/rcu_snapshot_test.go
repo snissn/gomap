@@ -359,6 +359,14 @@ func (b *noAllocBackend) GetAppend(key, dst []byte) ([]byte, error) { return dst
 
 func (b *noAllocBackend) Has(key []byte) (bool, error) { return false, nil }
 
+func (b *noAllocBackend) Append(key, value []byte) (page.ValuePtr, error) {
+	return page.ValuePtr{FileID: 1, Offset: 100, Length: 100}, nil
+}
+
+func (b *noAllocBackend) Read(ptr page.ValuePtr) ([]byte, error) {
+	return nil, nil
+}
+
 func (b *noAllocBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return &b.iter, nil
 }

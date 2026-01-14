@@ -53,6 +53,10 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := sm.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
 	if sm.activeSlab.Size != ZoneSize {
 		t.Fatalf("expected size to be exactly 2MB, got %d", sm.activeSlab.Size)
 	}

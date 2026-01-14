@@ -84,6 +84,9 @@ func TestRepairTail_V2PreservesHeader(t *testing.T) {
 	if _, err := sm.Append(key2, val); err != nil {
 		t.Fatalf("Append 2: %v", err)
 	}
+	if err := sm.Sync(); err != nil {
+		t.Fatal(err)
+	}
 
 	before := sm.activeSlab.Size
 	if before <= SlabV2DataStart+HeaderSize {

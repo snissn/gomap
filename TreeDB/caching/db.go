@@ -556,6 +556,8 @@ type BackendDB interface {
 	GetUnsafe(key []byte) ([]byte, error)
 	GetAppend(key, dst []byte) ([]byte, error)
 	Has(key []byte) (bool, error)
+	Append(key, value []byte) (page.ValuePtr, error)
+	Read(ptr page.ValuePtr) ([]byte, error)
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	NewBatch() batch.Interface
@@ -2756,23 +2758,18 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				}
 			}
 			if eligible && allowPointers {
-				ptrs, err := db.appendValueLog([]logRecord{{Op: logOpSet, Key: key, Value: value}}, durability)
+				// Use backend SlabManager for zero-copy adoption style writes
+				p, err := db.backend.Append(key, value)
 				if err != nil {
 					db.writeMu.RUnlock()
 					return err
 				}
-				if len(ptrs) > 0 {
-					ptr = ptrs[0]
-					usePointer = true
-					if debugPtr {
-						db.debugPtrUsed.Add(1)
-					}
-					db.mu.RLock()
-					retainPath = db.currentValueLogPath()
-					db.mu.RUnlock()
-				} else if debugPtr {
-					db.debugPtrNoPtr.Add(1)
+				ptr = p
+				usePointer = true
+				if debugPtr {
+					db.debugPtrUsed.Add(1)
 				}
+				// We don't need to track retainPath for backend slabs; they are persistent.
 			}
 
 			if usePointer {
