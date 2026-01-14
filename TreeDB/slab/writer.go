@@ -342,10 +342,6 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 		w.mu.Unlock()
 		return err
 	}
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("writer closed")
-	}
 	if w.durableSize.Load() < offset && len(w.activeBuf) > 0 {
 		if err := w.rotateBufferLocked(); err != nil {
 			w.mu.Unlock()
@@ -364,7 +360,14 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 			return err
 		}
 		if closed {
-			return fmt.Errorf("writer closed")
+			select {
+			case <-w.doneCh:
+				if w.durableSize.Load() >= offset {
+					return nil
+				}
+				return fmt.Errorf("writer closed before reaching offset")
+			default:
+			}
 		}
 		w.durableCond.Wait()
 	}
@@ -389,7 +392,14 @@ func (w *SlabWriter) waitForDurable(offset int64) error {
 			return err
 		}
 		if closed {
-			return fmt.Errorf("writer closed")
+			select {
+			case <-w.doneCh:
+				if w.durableSize.Load() >= offset {
+					return nil
+				}
+				return fmt.Errorf("writer closed before reaching offset")
+			default:
+			}
 		}
 		w.durableCond.Wait()
 	}
