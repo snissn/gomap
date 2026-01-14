@@ -349,6 +349,12 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
+	// Sync active slab if async writer is enabled to ensure "Read Your Writes"
+	// consistency for snapshots.
+	if db.slabManager != nil {
+		_ = db.slabManager.Sync()
+	}
+
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 

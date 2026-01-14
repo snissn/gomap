@@ -141,6 +141,9 @@ func TestDecodeRecordForCompactor_V2FullCompressed(t *testing.T) {
 	if !page.ValuePtrIsFullCompressed(ptr) {
 		t.Fatalf("expected full compressed pointer")
 	}
+	if err := sm.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
 
 	raw, err := sm.activeSlab.read(int64(ptr.Offset), true, false)
 	if err != nil {

@@ -180,14 +180,12 @@ func (s *SlabFile) checkBoundary(currentSize, recordLen int64) error {
 	// Check if we are at or will cross a boundary.
 	// Boundaries are at ZoneSize, 2*ZoneSize, etc.
 	// Slab start (0) and Zone 0 start (64KB) are NOT boundaries for headers.
-	if currentSize >= ZoneSize {
-		if currentSize%ZoneSize == 0 {
-			return ErrRecordTooLarge
-		}
-		nextBoundary := ((currentSize / ZoneSize) + 1) * ZoneSize
-		if currentSize+recordLen > nextBoundary {
-			return ErrRecordTooLarge
-		}
+	if currentSize >= ZoneSize && currentSize%ZoneSize == 0 {
+		return ErrRecordTooLarge
+	}
+	nextBoundary := ((currentSize / ZoneSize) + 1) * ZoneSize
+	if currentSize+recordLen > nextBoundary {
+		return ErrRecordTooLarge
 	}
 	return nil
 }

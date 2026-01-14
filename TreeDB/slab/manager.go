@@ -598,6 +598,12 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	if sm.readOnly {
 		return page.ValuePtr{}, ErrReadOnly
 	}
+	if sm.activeSlabWriter == nil || sm.activeSlabWriter.s != sm.activeSlab {
+		if sm.activeSlabWriter != nil {
+			_ = sm.activeSlabWriter.Close()
+		}
+		sm.activeSlabWriter = NewSlabWriter(sm.activeSlab, 0)
+	}
 
 	// Pre-check for V2 absolute size limit.
 	if sm.activeSlab.version >= Version2 {
@@ -615,7 +621,12 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		// Check for V2 boundaries BEFORE passing to async writer
 		currentSize := sm.activeSlab.Size
 		if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
-			currentSize = sm.activeSlabWriter.Size()
+			writerSize := sm.activeSlabWriter.Size()
+			if writerSize < sm.activeSlab.Size {
+				sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
+				writerSize = sm.activeSlab.Size
+			}
+			currentSize = writerSize
 
 			// If adding this record pushes the async buffer across a zone boundary,
 			// force a sync first so that checkBoundary (and the file writer) sees
@@ -630,6 +641,13 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 					currentSize = sm.activeSlab.Size
 				}
 			}
+		}
+
+		if currentSize+int64(len(rec)) > MaxSlabSize {
+			if err = sm.rotateLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			continue
 		}
 
 		if err := sm.activeSlab.checkBoundary(currentSize, int64(len(rec))); err != nil {
@@ -720,6 +738,18 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if sm.activeSlabWriter == nil || sm.activeSlabWriter.s != sm.activeSlab {
+		if sm.activeSlabWriter != nil {
+			_ = sm.activeSlabWriter.Close()
+		}
+		sm.activeSlabWriter = NewSlabWriter(sm.activeSlab, 0)
+	}
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return nil, err
+		}
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
+	}
 
 	writeRecord := func(rec []byte) (int64, error) {
 		var err error
@@ -779,6 +809,9 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 			}
 		}
 		idx = end
+	}
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
 	}
 	return ptrs, nil
 }
@@ -910,6 +943,18 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 	defer sm.mu.Unlock()
 	if sm.readOnly {
 		return nil, ErrReadOnly
+	}
+	if sm.activeSlabWriter == nil || sm.activeSlabWriter.s != sm.activeSlab {
+		if sm.activeSlabWriter != nil {
+			_ = sm.activeSlabWriter.Close()
+		}
+		sm.activeSlabWriter = NewSlabWriter(sm.activeSlab, 0)
+	}
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		if err := sm.activeSlabWriter.Sync(); err != nil {
+			return nil, err
+		}
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
 	}
 
 	ptrs := make([]page.ValuePtr, len(keys))
@@ -1105,6 +1150,9 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		sm.appendManyScratch = buf[:0]
 	}
 
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
+	}
 	return ptrs, nil
 }
 
@@ -1388,6 +1436,12 @@ func (sm *SlabManager) rotateLocked() error {
 	}
 	newWriter := NewSlabWriter(newSlab, 0)
 
+	// Update manager's active slab and writer BEFORE writing header so that
+	// writeSlabV2Header can use the writer correctly.
+	oldSlab := sm.activeSlab
+	sm.activeSlab = newSlab
+	sm.activeSlabWriter = newWriter
+
 	// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
 	profile, ok := sm.activeProfile()
 	if ok && profile != nil || sm.compression.Kind == CompressionZSTD {
@@ -1435,6 +1489,9 @@ func (sm *SlabManager) rotateLocked() error {
 			sm.activeCompression = sm.compression
 			sm.currentProfile.Store(nil)
 		} else {
+			// Restore on failure
+			sm.activeSlab = oldSlab
+			_ = newWriter.Close()
 			_ = newSlab.Close()
 			return err
 		}
@@ -1447,9 +1504,8 @@ func (sm *SlabManager) rotateLocked() error {
 	if sm.compressionMetrics.Enabled {
 		sm.compressionMetrics.Finish("rotate")
 	}
+	// sm.activeSlab and sm.activeSlabWriter already updated above
 	sm.slabs[newID] = newSlab
-	sm.activeSlab = newSlab
-	sm.activeSlabWriter = newWriter
 	if sm.compressionMetrics.Enabled {
 		sm.compressionMetrics.Reset(newID)
 	}
@@ -1484,7 +1540,13 @@ func (sm *SlabManager) ActiveSlabID() uint32 {
 func (sm *SlabManager) ActiveSlabTail() uint64 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return uint64(sm.activeSlab.Size)
+	tail := sm.activeSlab.Size
+	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+		if writerSize := sm.activeSlabWriter.Size(); writerSize > tail {
+			tail = writerSize
+		}
+	}
+	return uint64(tail)
 }
 
 func (sm *SlabManager) SetActiveSlab(id uint32) error {

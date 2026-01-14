@@ -28,6 +28,10 @@ func TestRecover_RollsBackMetaWhenSlabTailMissing(t *testing.T) {
 	if err := d.Set([]byte("B"), valB); err != nil {
 		t.Fatalf("Set(B): %v", err)
 	}
+	// Flush async writer so tail advances in s.Size
+	if err := d.SlabManager().Sync(); err != nil {
+		t.Fatalf("slab sync: %v", err)
+	}
 	tail2 := d.SlabManager().ActiveSlabTail()
 	if tail2 <= tail1 {
 		t.Fatalf("expected tail to advance, got tail1=%d tail2=%d", tail1, tail2)
