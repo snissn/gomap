@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 
@@ -442,28 +441,6 @@ func (b *Batch) SetOps(ops []Entry) error {
 
 		ptrs, err := b.slabManager.AppendMany(keys, values)
 		if err != nil {
-			if errors.Is(err, slab.ErrRecordTooLarge) {
-				maxKey := 0
-				maxVal := 0
-				maxRecord := int64(0)
-				for _, idx := range largeIdx {
-					keyLen := len(ops[idx].Key)
-					valLen := len(ops[idx].Value)
-					if keyLen > maxKey {
-						maxKey = keyLen
-					}
-					if valLen > maxVal {
-						maxVal = valLen
-					}
-					recordLen := int64(slab.HeaderSize) + int64(keyLen) + int64(valLen)
-					if recordLen > maxRecord {
-						maxRecord = recordLen
-					}
-				}
-				maxV2 := int64(slab.ZoneSize - slab.ZoneHeaderSize)
-				log.Printf("treedb: appendmany record too large max_key=%d max_val=%d max_record=%d max_v2=%d count=%d",
-					maxKey, maxVal, maxRecord, maxV2, len(largeIdx))
-			}
 			clear(keys)
 			clear(values)
 			b.largeKeys = keys[:0]
