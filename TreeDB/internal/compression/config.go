@@ -100,6 +100,49 @@ func (c *Config) CompressValue(value []byte) ([]byte, bool, error) {
 	return out, true, nil
 }
 
+func (c *Config) CompressValuePooled(value []byte) ([]byte, bool, func(), error) {
+	if c == nil || c.Kind == KindNone || c.ZstdEncs == nil {
+		return value, false, nil, nil
+	}
+	if len(value) < c.MinBytes {
+		return value, false, nil, nil
+	}
+
+	pbuf := c.BufferPool.Get().(*[]byte)
+	dst := (*pbuf)[:0]
+
+	enc := c.ZstdEncs.Get().(*zstd.Encoder)
+	compressed := enc.EncodeAll(value, dst)
+	c.ZstdEncs.Put(enc)
+
+	if len(compressed)+HeaderSize+c.MinSavings >= len(value) {
+		*pbuf = compressed
+		c.BufferPool.Put(pbuf)
+		return value, false, nil, nil
+	}
+
+	needed := HeaderSize + len(compressed)
+	if cap(*pbuf) < needed {
+		out := make([]byte, needed)
+		binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
+		copy(out[HeaderSize:], compressed)
+		*pbuf = compressed
+		c.BufferPool.Put(pbuf)
+		return out, true, nil, nil
+	}
+
+	out := (*pbuf)[:needed]
+	binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
+	copy(out[HeaderSize:], compressed)
+
+	release := func() {
+		*pbuf = out
+		c.BufferPool.Put(pbuf)
+	}
+
+	return out, true, release, nil
+}
+
 func (c *Config) CompressRecord(key, value []byte) ([]byte, bool, error) {
 	if c == nil || c.Kind == KindNone || c.ZstdEncs == nil {
 		return nil, false, nil

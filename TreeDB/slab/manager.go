@@ -557,6 +557,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	omittedKey := false
 	var err error
 	var errInner error
+	var releaseEncoded func()
 	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
 		sm.compressionTrainer.Collect(value)
 	}
@@ -574,11 +575,14 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		}
 		if !fullCompressed {
 			// Fall back to value-only compression
-			encoded, compressed, errInner = sm.activeCompression.CompressValue(value)
+			encoded, compressed, releaseEncoded, errInner = sm.activeCompression.CompressValuePooled(value)
 			if errInner != nil {
 				return page.ValuePtr{}, errInner
 			}
 		}
+	}
+	if releaseEncoded != nil {
+		defer releaseEncoded()
 	}
 
 	if !fullCompressed && sm.omitSlabKeys {
@@ -841,6 +845,14 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 	omittedKeyFlags := make([]bool, len(values))
 	rawLens := make([]int, len(values))
 	storedLens := make([]int, len(values))
+	releases := make([]func(), len(values))
+	defer func() {
+		for _, release := range releases {
+			if release != nil {
+				release()
+			}
+		}
+	}()
 	if sm.activeCompression.Kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
@@ -865,14 +877,16 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				// Fall back to value-only compression
 				var encoded []byte
 				var compressed bool
+				var release func()
 				var err error
-				encoded, compressed, err = sm.activeCompression.CompressValue(values[i])
+				encoded, compressed, release, err = sm.activeCompression.CompressValuePooled(values[i])
 				if err != nil {
 					return nil, err
 				}
 				encodedValues[i] = encoded
 				encodedKeys[i] = keys[i]
 				compressedFlags[i] = compressed
+				releases[i] = release
 			}
 		}
 	}
