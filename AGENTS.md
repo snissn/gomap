@@ -382,3 +382,36 @@ The reported issues are known bugs from an older version that are now fixed. The
 
 ## Action
 -   Instruct user to deploy current code and start a new run.
+
+# Phase 33: Compression Backoff Plan (Jan 14, 2026)
+
+**Objective:** Skip compression when it is not paying off, while still training dicts periodically with minimal overhead.
+
+## Plan
+1. **Fast pause gate (per-value attempt):**
+   - Check `compressionPauseRemaining` before any compression work.
+   - If paused, skip compression and write raw bytes.
+   - Use a single atomic decrement by raw length for near-zero overhead.
+2. **Rolling ratio window:**
+   - Track recent `rawBytes` / `storedBytes` and `compressedCount` per slab/zone.
+   - If ratio stays above a threshold (e.g. 0.98–1.00) for the window, set a pause (e.g. 16–64MB).
+3. **Sparse training during pause:**
+   - Still call `Trainer.Collect` on a low duty cycle (e.g. 1/N records) while paused.
+   - This keeps dict training alive without impacting throughput.
+4. **Probe compression:**
+   - Occasionally probe a single record during pause (e.g. every 1–4MB raw).
+   - If it compresses well, clear the pause and resume normal compression.
+5. **Minimal knobs + defaults:**
+   - `CompressionAdaptiveBadRatio`, `CompressionAdaptivePauseBytes`, `CompressionAdaptiveWindowBytes`.
+   - Defaults tuned for no noticeable overhead on write-heavy workloads.
+6. **Parameter scan as a benchmark suite:**
+   - Add a synthetic benchmark that sweeps ratio/pause/window parameters across three workloads:
+     - **Highly compressible:** repeating JSON-like blocks with small entropy tails.
+     - **Medium compressible:** mixed repeating blocks and random chunks (e.g., 50/50).
+     - **Incompressible:** random bytes (uniform).
+   - Report throughput + compression ratio for each parameter set.
+   - Choose defaults that avoid regressions on incompressible data while preserving wins on compressible data.
+7. **Tests and bench coverage:**
+   - Test incompressible data triggers pause quickly and skips compression.
+   - Test compressible data resumes after probe/training.
+   - Add a high-entropy slab bench to validate throughput gains.

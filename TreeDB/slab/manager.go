@@ -37,11 +37,15 @@ type SlabManager struct {
 	currentProfile               atomic.Pointer[compression.ActiveProfile]
 	omitSlabKeys                 bool
 	disableFullRecordCompression bool
+	compressionProbeBytes        uint64
+	pausedSampleStride           uint64
 	compressionMetrics           compression.Metrics
 	compressionTrainer           *compression.Trainer
 
 	appendManyScratch         []byte
 	compressionPauseRemaining atomic.Uint64
+	compressionProbeRemaining atomic.Uint64
+	pausedSampleCounter       atomic.Uint64
 }
 
 func NewSlabManager(dir string) (*SlabManager, error) {
@@ -72,6 +76,22 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		compressionMetrics:           compression.NewMetrics(opts.ToMetricsOptions()),
 		compressionTrainer:           compression.NewTrainer(opts.ToTrainConfig(), compCfg, readOnly, opts.CompressionMetrics),
 	}
+	probeBytes := opts.CompressionAdaptiveProbeBytes
+	if probeBytes < 0 {
+		probeBytes = 0
+	}
+	if probeBytes == 0 && sm.compressionMetrics.Enabled {
+		probeBytes = int(sm.compressionMetrics.WindowBytes / 4)
+		if probeBytes < 64<<10 {
+			probeBytes = 64 << 10
+		}
+	}
+	sm.compressionProbeBytes = uint64(probeBytes)
+	pausedStride := opts.CompressionAdaptivePauseSampleStride
+	if pausedStride <= 0 {
+		pausedStride = 256
+	}
+	sm.pausedSampleStride = uint64(pausedStride)
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
 	if err != nil {
@@ -276,9 +296,9 @@ func (sm *SlabManager) SetDisableReadChecksum(disable bool) {
 	sm.disableReadChecksum = disable
 }
 
-func (sm *SlabManager) shouldCompress(rawLen int) bool {
+func (sm *SlabManager) shouldAttemptCompression(rawLen int) (bool, bool, bool) {
 	if rawLen <= 0 {
-		return true
+		return true, false, false
 	}
 	remaining := sm.compressionPauseRemaining.Load()
 	for remaining > 0 {
@@ -287,11 +307,31 @@ func (sm *SlabManager) shouldCompress(rawLen int) bool {
 			next = remaining - uint64(rawLen)
 		}
 		if sm.compressionPauseRemaining.CompareAndSwap(remaining, next) {
-			return false
+			if sm.compressionProbeBytes == 0 {
+				return false, false, true
+			}
+			probeRemaining := sm.compressionProbeRemaining.Load()
+			for {
+				if probeRemaining <= uint64(rawLen) {
+					if sm.compressionProbeRemaining.CompareAndSwap(probeRemaining, sm.compressionProbeBytes) {
+						return true, true, true
+					}
+				} else if sm.compressionProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-uint64(rawLen)) {
+					return false, false, true
+				}
+				probeRemaining = sm.compressionProbeRemaining.Load()
+			}
 		}
 		remaining = sm.compressionPauseRemaining.Load()
 	}
-	return true
+	return true, false, false
+}
+
+func (sm *SlabManager) shouldCollectPaused() bool {
+	if sm.pausedSampleStride <= 1 {
+		return true
+	}
+	return sm.pausedSampleCounter.Add(1)%sm.pausedSampleStride == 0
 }
 
 // EstimateCompression reports the raw/stored byte counts for a record if it were
@@ -299,7 +339,7 @@ func (sm *SlabManager) shouldCompress(rawLen int) bool {
 func (sm *SlabManager) EstimateCompression(key, value []byte) (rawLen int, storedLen int, err error) {
 	rawLen = len(value)
 	storedLen = len(value)
-	if sm.compression.Kind == CompressionNone || !sm.shouldCompress(len(value)) {
+	if sm.compression.Kind == CompressionNone {
 		return rawLen, storedLen, nil
 	}
 
@@ -558,10 +598,18 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	var err error
 	var errInner error
 	var releaseEncoded func()
-	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
-		sm.compressionTrainer.Collect(value)
+	attemptCompression := false
+	probeCompression := false
+	paused := false
+	if !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone {
+		attemptCompression, probeCompression, paused = sm.shouldAttemptCompression(len(value))
 	}
-	if !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone && sm.shouldCompress(len(value)) {
+	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
+		if !paused || sm.shouldCollectPaused() {
+			sm.compressionTrainer.Collect(value)
+		}
+	}
+	if attemptCompression && !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone {
 		// Try full record compression first
 		if !sm.disableFullRecordCompression {
 			if enc, ok, errInner := sm.activeCompression.CompressRecord(key, value); errInner == nil && ok {
@@ -583,6 +631,10 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	}
 	if releaseEncoded != nil {
 		defer releaseEncoded()
+	}
+	if probeCompression && (compressed || fullCompressed) {
+		sm.compressionPauseRemaining.Store(0)
+		sm.compressionProbeRemaining.Store(sm.compressionProbeBytes)
 	}
 
 	if !fullCompressed && sm.omitSlabKeys {
@@ -691,6 +743,9 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		}
 		if pauseBytes := sm.compressionMetrics.Add(sm.activeSlab.ID, rawLen, storedLen, 1, compressedCount, fullCount); pauseBytes > 0 {
 			sm.compressionPauseRemaining.Store(pauseBytes)
+			if sm.compressionProbeBytes > 0 {
+				sm.compressionProbeRemaining.Store(sm.compressionProbeBytes)
+			}
 			if sm.compressionTrainer != nil {
 				sm.compressionTrainer.SignalDegraded(sm.activeSlab.ID)
 			}
@@ -857,7 +912,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
 		for i := range values {
-			if !sm.shouldCompress(len(values[i])) {
+			attemptCompression, probeCompression, _ := sm.shouldAttemptCompression(len(values[i]))
+			if !attemptCompression {
 				encodedValues[i] = values[i]
 				encodedKeys[i] = keys[i]
 				continue
@@ -887,6 +943,10 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				encodedKeys[i] = keys[i]
 				compressedFlags[i] = compressed
 				releases[i] = release
+			}
+			if probeCompression && (compressedFlags[i] || fullCompressedFlags[i]) {
+				sm.compressionPauseRemaining.Store(0)
+				sm.compressionProbeRemaining.Store(sm.compressionProbeBytes)
 			}
 		}
 	}
@@ -1053,6 +1113,9 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				}
 				if pauseBytes := sm.compressionMetrics.Add(id, rawTotal, storedTotal, len(metas), compressedCount, fullCount); pauseBytes > 0 {
 					sm.compressionPauseRemaining.Store(pauseBytes)
+					if sm.compressionProbeBytes > 0 {
+						sm.compressionProbeRemaining.Store(sm.compressionProbeBytes)
+					}
 					if sm.compressionTrainer != nil {
 						sm.compressionTrainer.SignalDegraded(id)
 					}

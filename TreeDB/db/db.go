@@ -291,6 +291,12 @@ type Options struct {
 	SlabCompressionAdaptiveTrainSampleStride int
 	// SlabCompressionAdaptiveTrainDedupWindow controls the exact-hash dedup window size.
 	SlabCompressionAdaptiveTrainDedupWindow int
+	// SlabCompressionAdaptiveProbeBytes controls how many raw bytes to skip
+	// between compression probes while paused (0 uses a default; <0 disables).
+	SlabCompressionAdaptiveProbeBytes int
+	// SlabCompressionAdaptivePauseSampleStride controls sampling stride while
+	// compression is paused (0 uses a default).
+	SlabCompressionAdaptivePauseSampleStride int
 	// SlabCompressionDisableFullRecord skips full-record compression attempts
 	// (key+value) to reduce CPU overhead in write-heavy paths.
 	SlabCompressionDisableFullRecord bool
@@ -512,6 +518,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		CompressionAdaptiveTrainMaxRecordBytes: opts.SlabCompressionAdaptiveTrainMaxRecordBytes,
 		CompressionAdaptiveTrainSampleStride:   opts.SlabCompressionAdaptiveTrainSampleStride,
 		CompressionAdaptiveTrainDedupWindow:    opts.SlabCompressionAdaptiveTrainDedupWindow,
+		CompressionAdaptiveProbeBytes:          opts.SlabCompressionAdaptiveProbeBytes,
+		CompressionAdaptivePauseSampleStride:   opts.SlabCompressionAdaptivePauseSampleStride,
 	})
 	if err != nil {
 		p.Close()

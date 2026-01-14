@@ -38,8 +38,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerReadOnly(opts.Dir, slab.Options{
-		Compression:                  opts.SlabCompression,
-		CompressionDisableFullRecord: opts.SlabCompressionDisableFullRecord,
+		Compression:                          opts.SlabCompression,
+		CompressionDisableFullRecord:         opts.SlabCompressionDisableFullRecord,
+		CompressionAdaptiveProbeBytes:        opts.SlabCompressionAdaptiveProbeBytes,
+		CompressionAdaptivePauseSampleStride: opts.SlabCompressionAdaptivePauseSampleStride,
 	})
 	if err != nil {
 		_ = p.Close()
@@ -129,8 +131,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerReadOnly(opts.Dir, slab.Options{
-		Compression:                  opts.SlabCompression,
-		CompressionDisableFullRecord: opts.SlabCompressionDisableFullRecord,
+		Compression:                          opts.SlabCompression,
+		CompressionDisableFullRecord:         opts.SlabCompressionDisableFullRecord,
+		CompressionAdaptiveProbeBytes:        opts.SlabCompressionAdaptiveProbeBytes,
+		CompressionAdaptivePauseSampleStride: opts.SlabCompressionAdaptivePauseSampleStride,
 	})
 	if err != nil {
 		_ = p.Close()

@@ -28,6 +28,8 @@ type Options struct {
 	CompressionAdaptiveTrainMaxRecordBytes int
 	CompressionAdaptiveTrainSampleStride   int
 	CompressionAdaptiveTrainDedupWindow    int
+	CompressionAdaptiveProbeBytes          int
+	CompressionAdaptivePauseSampleStride   int
 }
 
 func (o Options) ToTrainConfig() compression.TrainConfig {
