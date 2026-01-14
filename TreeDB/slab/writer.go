@@ -16,11 +16,11 @@ type SlabWriter struct {
 	// Channels for buffer exchange
 	pendingCh chan []byte // Buffers full, waiting to be written
 	freeCh    chan []byte // Buffers empty, ready to be reused
-	
+
 	// Error handling
-	err     error
-	closed  bool
-	doneCh  chan struct{} // Closed when flushLoop exits
+	err    error
+	closed bool
+	doneCh chan struct{} // Closed when flushLoop exits
 
 	// tracking durable offset
 	durableSize atomic.Int64
@@ -73,10 +73,10 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 		// Note: We copy data to avoid ownership issues.
 		largeBuf := make([]byte, len(data))
 		copy(largeBuf, data)
-		
+
 		retOffset := w.offset
 		w.offset += int64(len(data))
-		
+
 		w.mu.Unlock()
 		select {
 		case w.pendingCh <- largeBuf:
@@ -93,7 +93,7 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 	w.activeBuf = append(w.activeBuf, data...)
 	w.offset += int64(len(data))
 	w.mu.Unlock()
-	
+
 	return retOffset, nil
 }
 
@@ -137,10 +137,10 @@ func (w *SlabWriter) rotateBufferLocked() error {
 		// Actually if len==0 we shouldn't be here, but let's handle.
 		// Just treat it as "skipped".
 		// But we need a buffer for w.activeBuf.
-		// We have to get one from freeCh. 
+		// We have to get one from freeCh.
 		// If we didn't send to pendingCh, freeCh might be empty if the other buffer is pending.
-		// Actually, if we didn't send fullBuf, we should just keep using it. 
-		// But we set it nil. 
+		// Actually, if we didn't send fullBuf, we should just keep using it.
+		// But we set it nil.
 		// Simpler: Just send it. flushLoop handles empty buffers.
 		select {
 		case w.pendingCh <- fullBuf:
@@ -179,26 +179,26 @@ func (w *SlabWriter) reportClosedLocked() error {
 
 func (w *SlabWriter) flushLoop() {
 	defer close(w.doneCh)
-	
+
 	// Standard buffer capacity to detect "oversized" buffers that shouldn't be recycled
 	// We can capture this from the first free buffer.
 	// Or we pass it in constructor.
-	// Hack: We know bufferSize from constructor, but didn't save it. 
-	// We can check cap() of buffers coming from freeCh? 
-	// Let's just blindly recycle everything to freeCh? 
+	// Hack: We know bufferSize from constructor, but didn't save it.
+	// We can check cap() of buffers coming from freeCh?
+	// Let's just blindly recycle everything to freeCh?
 	// No, if we allocate huge buffers for large records, we don't want to keep them.
-	// 
+	//
 	// Improved loop:
 	// 1. Read pending.
 	// 2. Write to disk.
 	// 3. If cap(buf) == standardSize, send to freeCh. Else drop.
-	
-	// Wait for the initial free buffer creation to infer size? 
-	// Or just save bufferSize in struct. 
+
+	// Wait for the initial free buffer creation to infer size?
+	// Or just save bufferSize in struct.
 	// Let's assume standard capacity is determined by the first buffer we see?
 	// Actually we can just check if cap <= 16MB (arbitrary limit) or something?
-	// Better: Add `bufferSize` field. 
-	
+	// Better: Add `bufferSize` field.
+
 	for buf := range w.pendingCh {
 		if len(buf) > 0 {
 			_, err := w.s.WriteBatch(buf, false)
@@ -210,15 +210,15 @@ func (w *SlabWriter) flushLoop() {
 			}
 			w.durableSize.Store(w.s.Size)
 		}
-		
+
 		// Recycle logic: only recycle if it matches our standard buffer pool.
 		// Since we don't strictly track standard size, let's just recycle if it came from the pool.
 		// We have 2 buffers in rotation. Oversized ones are allocated ad-hoc.
 		// As long as we keep 2 buffers in the loop, we are good.
-		// Oversized ones are extra. 
+		// Oversized ones are extra.
 		// If we send them to freeCh, we might bloat memory.
-		// 
-		// Simple Fix: We initialized with 2 buffers. 
+		//
+		// Simple Fix: We initialized with 2 buffers.
 		// If we receive a buffer, check if we need to return it.
 		// We only need to return enough to keep the loop going.
 		// `freeCh` has cap 1. `pendingCh` has cap 1.
@@ -228,18 +228,18 @@ func (w *SlabWriter) flushLoop() {
 		// Correct logic: `Write` consumes 1 from `freeCh` and sends 1 to `pendingCh`.
 		// `flushLoop` consumes 1 from `pendingCh` and MUST send 1 to `freeCh`.
 		// If the buffer was oversized, we should discard it and allocate a new standard one to send to `freeCh`.
-		
+
 		// To do this right, we need `bufferSize` in struct. I'll assume 4MB for now or rely on cap check.
 		// Let's check cap. If > 32MB, discard and make new?
 		// Let's stick to strict double buffering of the original buffers if possible.
 		// But pointers change.
-		
+
 		// New Strategy: Always send *something* back to freeCh.
-		// If `buf` is huge, send a new empty slice with cap=0? 
-		// `Write` handles growing `activeBuf` if cap is small. 
+		// If `buf` is huge, send a new empty slice with cap=0?
+		// `Write` handles growing `activeBuf` if cap is small.
 		// So if we send back a small/empty buffer, `Write` will allocate.
 		// That's fine.
-		
+
 		select {
 		case w.freeCh <- buf[:0]:
 		default:
@@ -260,7 +260,7 @@ func (w *SlabWriter) Sync() error {
 	w.mu.Unlock()
 
 	// Wait for pendingCh to drain
-	// We can push a "sync marker"? 
+	// We can push a "sync marker"?
 	// Or just wait until durableSize == offset?
 	// But offset changes.
 	//
@@ -276,14 +276,14 @@ func (w *SlabWriter) Sync() error {
 	// If we send THAT empty buffer to `pendingCh`, `flushLoop` receives it after all prior data.
 	// Then `flushLoop` sends it to `freeCh`.
 	// So if we read from `freeCh`, we know everything prior is done.
-	
+
 	// So:
 	// 1. Lock.
 	// 2. Rotate (sends current data to pending).
 	// 3. Unlock.
 	// 4. Wait for free buffer (ensures pending processed).
 	// 5. Put buffer back (since we just grabbed it to sync).
-	
+
 	// BUT `rotateBufferLocked` *does* wait for a free buffer.
 	// So just calling `rotateBufferLocked` ensures the *previous* pending buffer is done.
 	// It pushes current data to pending.
@@ -293,7 +293,7 @@ func (w *SlabWriter) Sync() error {
 	// 1. Push A to pending. Get B.
 	// 2. Push B (empty) to pending. Get A.
 	// Now A is processed.
-	
+
 	w.mu.Lock()
 	if err := w.rotateBufferLocked(); err != nil {
 		w.mu.Unlock()
@@ -305,7 +305,7 @@ func (w *SlabWriter) Sync() error {
 		return err
 	}
 	w.mu.Unlock()
-	
+
 	return w.s.Sync()
 }
 
@@ -327,7 +327,7 @@ func (w *SlabWriter) Close() error {
 
 	close(w.pendingCh)
 	<-w.doneCh
-	
+
 	return w.err
 }
 

@@ -24,12 +24,12 @@ type SlabSet struct {
 	compression         *compression.Config
 }
 type SlabManager struct {
-	dir        string
-	readOnly   bool
-	activeSlab *SlabFile
+	dir              string
+	readOnly         bool
+	activeSlab       *SlabFile
 	activeSlabWriter *SlabWriter
-	slabs      map[uint32]*SlabFile // The master list of all live + zombie slabs
-	mu         sync.RWMutex
+	slabs            map[uint32]*SlabFile // The master list of all live + zombie slabs
+	mu               sync.RWMutex
 
 	disableReadChecksum bool
 	compression         compression.Config
@@ -113,84 +113,81 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		if err != nil {
 			return nil, err
 		}
-				sm.slabs[0] = s
-				sm.activeSlab = s
-				sm.activeSlabWriter = NewSlabWriter(s, 0)
-		
-				// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
-					if s.version == 0 && s.Size == 0 {
+		sm.slabs[0] = s
+		sm.activeSlab = s
+		sm.activeSlabWriter = NewSlabWriter(s, 0)
 
-				profile, ok := sm.activeProfile()
+		// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
+		if s.version == 0 && s.Size == 0 {
 
-				if ok && profile != nil || sm.compression.Kind == CompressionZSTD {
+			profile, ok := sm.activeProfile()
 
-					if err := sm.writeSlabV2Header(s, profile); err == nil {
+			if ok && profile != nil || sm.compression.Kind == CompressionZSTD {
 
-						s.version = Version2
+				if err := sm.writeSlabV2Header(s, profile); err == nil {
 
-						if ok && profile != nil && len(profile.Dict) > 0 {
+					s.version = Version2
 
-							s.globalDict = profile.Dict
+					if ok && profile != nil && len(profile.Dict) > 0 {
 
-							s.globalDecs = &sync.Pool{
+						s.globalDict = profile.Dict
 
-								New: func() any {
+						s.globalDecs = &sync.Pool{
 
-									dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+							New: func() any {
 
-									return dec
+								dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
 
-								},
+								return dec
 
-							}
+							},
+						}
 
-							// Ensure activeCompression is ZSTD if we have a dictionary.
+						// Ensure activeCompression is ZSTD if we have a dictionary.
 
-							if sm.compression.Kind != CompressionZSTD {
+						if sm.compression.Kind != CompressionZSTD {
 
-								sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
-
-							} else {
-
-								sm.activeCompression = sm.compression
-
-							}
-
-							sm.activeCompression.ZstdEncs = &sync.Pool{
-
-								New: func() any {
-
-									enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.Level))
-
-									return enc
-
-								},
-
-							}
-
-							sm.currentProfile.Store(profile)
+							sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
 
 						} else {
 
-							// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
-
-							if sm.compression.Kind != CompressionZSTD {
-
-								sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
-
-							} else {
-
-								sm.activeCompression = sm.compression
-
-							}
-
-							sm.currentProfile.Store(nil)
+							sm.activeCompression = sm.compression
 
 						}
 
-					} else if err != ErrSlabFull && err != ErrRecordTooLarge {
+						sm.activeCompression.ZstdEncs = &sync.Pool{
 
-		
+							New: func() any {
+
+								enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.Level))
+
+								return enc
+
+							},
+						}
+
+						sm.currentProfile.Store(profile)
+
+					} else {
+
+						// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
+
+						if sm.compression.Kind != CompressionZSTD {
+
+							sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
+
+						} else {
+
+							sm.activeCompression = sm.compression
+
+						}
+
+						sm.currentProfile.Store(nil)
+
+					}
+
+				} else if err != ErrSlabFull && err != ErrRecordTooLarge {
+
 					_ = sm.Close()
 					return nil, err
 				}
@@ -619,7 +616,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		currentSize := sm.activeSlab.Size
 		if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
 			currentSize = sm.activeSlabWriter.Size()
-			
+
 			// If adding this record pushes the async buffer across a zone boundary,
 			// force a sync first so that checkBoundary (and the file writer) sees
 			// the exact state and can trigger rotation/padding correctly.

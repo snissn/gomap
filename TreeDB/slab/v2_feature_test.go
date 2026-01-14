@@ -105,7 +105,6 @@ func TestSlabV2_RotationAndDictionary(t *testing.T) {
 	}
 	sm.mu.Unlock()
 
-
 	// 4. Write data WITH compression.
 	// Use some data that should compress well with a dictionary (repetitive).
 	val := bytes.Repeat([]byte("hello-v2-dictionary-compression-is-cool-and-efficient "), 100)
