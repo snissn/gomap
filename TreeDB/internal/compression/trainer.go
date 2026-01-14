@@ -504,7 +504,10 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	for _, sample := range samples {
 		storedTotal += len(enc.EncodeAll(sample, nil))
 	}
-	ratio := float64(storedTotal) / float64(rawTotal)
+	ratio := 1.0
+	if rawTotal > 0 {
+		ratio = float64(storedTotal) / float64(rawTotal)
+	}
 	t.lastTrainRatio.Store(math.Float64bits(ratio))
 	t.lastTrainSamples.Store(uint64(len(samples)))
 	t.lastTrainDict.Store(uint64(len(dict)))
@@ -524,8 +527,14 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	}
 }
 
-func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel) ([]byte, error) {
-	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel) (dict []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			dict = nil
+			err = fmt.Errorf("zstd.BuildDict panic: %v", r)
+		}
+	}()
+	dict, err = zstd.BuildDict(zstd.BuildDictOptions{
 		ID:       dictID,
 		Contents: samples,
 		History:  history,

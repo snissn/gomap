@@ -2157,12 +2157,10 @@ func (sm *SlabManager) ReleaseSlabs(set *SlabSet) error {
 			sm.mu.Lock()
 			if s.RefCount.Load() == 0 {
 				if _, exists := sm.slabs[s.ID]; exists {
-					if e := s.Close(); e != nil {
-						err = e
-					}
-					if e := os.Remove(s.Path); e != nil {
-						err = e
-					}
+					_ = s.Close()
+					// Best effort: try to remove, but don't fail ReleaseSlabs if it fails
+					// (might still be open in some edge case).
+					_ = os.Remove(s.Path)
 					delete(sm.slabs, s.ID)
 				}
 			}
