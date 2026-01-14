@@ -370,9 +370,23 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 	if w.durableSize.Load() >= offset {
 		return nil
 	}
-	if err := w.Flush(); err != nil {
+	w.mu.Lock()
+	if w.err != nil {
+		err := w.err
+		w.mu.Unlock()
 		return err
 	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("writer closed")
+	}
+	if w.durableSize.Load() < offset && len(w.activeBuf) > 0 {
+		if err := w.rotateBufferLocked(); err != nil {
+			w.mu.Unlock()
+			return err
+		}
+	}
+	w.mu.Unlock()
 	w.durableMu.Lock()
 	defer w.durableMu.Unlock()
 	for w.durableSize.Load() < offset {

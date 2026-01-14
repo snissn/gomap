@@ -1297,6 +1297,13 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			end = len(ops)
 		}
 		chunk := ops[start:end]
+		maxEndByFile := make(map[uint32]uint64, 4)
+		for _, op := range chunk {
+			endOff := op.NewPtr.Offset + uint64(page.ValuePtrRecordLength(op.NewPtr))
+			if endOff > maxEndByFile[op.NewPtr.FileID] {
+				maxEndByFile[op.NewPtr.FileID] = endOff
+			}
+		}
 
 		db.writeMu.Lock()
 		idx := db.idx.Load()
@@ -1374,6 +1381,13 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			if len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
 				db.writeMu.Unlock()
 				continue
+			}
+
+			for id, endOff := range maxEndByFile {
+				if err := db.slabManager.WaitForOffset(id, endOff); err != nil {
+					db.writeMu.Unlock()
+					return err
+				}
 			}
 
 			// Commit without forcing Sync; compaction can be lazily durable.
@@ -1492,6 +1506,14 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				for id, n := range slabWritesByFile {
 					metrics.SlabWriteBytesByFile[id] += n
 				}
+			}
+		}
+
+		for id, endOff := range maxEndByFile {
+			if err := db.slabManager.WaitForOffset(id, endOff); err != nil {
+				closeBatch()
+				db.writeMu.Unlock()
+				return err
 			}
 		}
 
