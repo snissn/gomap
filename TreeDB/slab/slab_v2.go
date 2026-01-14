@@ -16,8 +16,8 @@ const (
 	// FileHeaderSizeV2 is 32KB (Magic + Version + Metadata + Padding)
 	FileHeaderSizeV2 = 32 * 1024
 
-	// GlobalDictSize is 32KB
-	GlobalDictSize = 32 * 1024
+	// GlobalDictSize is 40KB (increased from 32KB to accommodate ZSTD headers)
+	GlobalDictSize = 40 * 1024
 
 	// SlabV2DataStart is where Zone 0 data begins (64KB)
 	SlabV2DataStart = FileHeaderSizeV2 + GlobalDictSize

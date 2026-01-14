@@ -130,13 +130,16 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 
 					if ok && profile != nil && len(profile.Dict) > 0 {
 
-						s.globalDict = profile.Dict
+						// PAD IMMEDIATELY for consistency
+						paddedDict := make([]byte, GlobalDictSize)
+						copy(paddedDict, profile.Dict)
+						s.globalDict = paddedDict
 
 						s.globalDecs = &sync.Pool{
 
 							New: func() any {
 
-								dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+								dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(paddedDict))
 
 								return dec
 
@@ -156,17 +159,19 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 						}
 
 						sm.activeCompression.ZstdEncs = &sync.Pool{
-
 							New: func() any {
-
-								enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.Level))
-
+								enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(paddedDict), zstd.WithEncoderLevel(sm.activeCompression.Level))
+								if err != nil {
+									enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.activeCompression.Level), zstd.WithEncoderCRC(false))
+								}
 								return enc
-
 							},
 						}
 
-						sm.currentProfile.Store(profile)
+						paddedProfile := *profile
+						paddedProfile.Dict = paddedDict
+						paddedProfile.DictHash = xxhash.Sum64(paddedDict)
+						sm.currentProfile.Store(&paddedProfile)
 
 					} else {
 
@@ -431,7 +436,7 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if s.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
+	if s.version >= Version2 && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := s.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -489,7 +494,7 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if s.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
+	if s.version >= Version2 && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := s.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -1297,10 +1302,103 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 				dictType = ZoneDictRef
 				refEntry = entry
 			} else {
-				dictType = ZoneDictLocal
-				localDict = profile.Dict
+				if len(profile.Dict) <= GlobalDictSize {
+					dictType = ZoneDictLocal
+					// PAD IMMEDIATELY for consistency
+					localDict = make([]byte, GlobalDictSize)
+					copy(localDict, profile.Dict)
+					// Update dictHash to match padded dict
+					dictHash = xxhash.Sum64(localDict)
+				}
+				// If too large, we fall back to global or none (already dictType=ZoneDictGlobal).
 			}
 		}
+	}
+
+	// Validate and potentially downgrade dictType if encoder creation fails.
+	var finalEncs *sync.Pool
+	var finalDecs *sync.Pool
+
+	for attempt := 0; attempt < 2; attempt++ {
+		switch dictType {
+		case ZoneDictLocal:
+			encPool := &sync.Pool{
+				New: func() any {
+					enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(localDict), zstd.WithEncoderLevel(sm.compression.Level))
+					if err != nil {
+						return nil
+					}
+					return enc
+				},
+			}
+			// Test one encoder immediately
+			testEnc := encPool.Get()
+			if testEnc == nil {
+				// Downgrade
+				dictType = ZoneDictGlobal
+				localDict = nil
+				continue
+			}
+			encPool.Put(testEnc)
+			finalEncs = encPool
+			finalDecs = &sync.Pool{
+				New: func() any {
+					dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(localDict))
+					return dec
+				},
+			}
+		case ZoneDictRef:
+			// profile.Dict here might be unpadded if it's from currentProfile, 
+			// but we should ensure all stored dicts are padded.
+			// Actually, let's just ensure we use what we have.
+			encPool := &sync.Pool{
+				New: func() any {
+					enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.compression.Level))
+					if err != nil {
+						return nil
+					}
+					return enc
+				},
+			}
+			testEnc := encPool.Get()
+			if testEnc == nil {
+				dictType = ZoneDictGlobal
+				continue
+			}
+			encPool.Put(testEnc)
+			finalEncs = encPool
+			finalDecs = &sync.Pool{
+				New: func() any {
+					dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
+					return dec
+				},
+			}
+		case ZoneDictGlobal:
+			if len(s.globalDict) > 0 {
+				finalEncs = &sync.Pool{
+					New: func() any {
+						enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(s.globalDict), zstd.WithEncoderLevel(sm.compression.Level))
+						return enc
+					},
+				}
+				finalDecs = &sync.Pool{
+					New: func() any {
+						dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(s.globalDict))
+						return dec
+					},
+				}
+			} else {
+				// No dictionary
+				finalEncs = &sync.Pool{
+					New: func() any {
+						enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.compression.Level), zstd.WithEncoderCRC(false))
+						return enc
+					},
+				}
+				finalDecs = nil
+			}
+		}
+		break
 	}
 
 	// Write Zone Header.
@@ -1309,12 +1407,6 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		DictType: uint8(dictType),
 	}
 	if dictType == ZoneDictLocal {
-		if len(localDict) > GlobalDictSize {
-			localDict = localDict[:GlobalDictSize]
-		}
-		dictBuf := make([]byte, GlobalDictSize)
-		copy(dictBuf, localDict)
-		localDict = dictBuf
 		zh.DictCRC = crc32.Checksum(localDict, crc32cTable)
 		zh.DictLength = uint32(len(localDict))
 	} else if dictType == ZoneDictRef {
@@ -1327,66 +1419,30 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 	}
 
 	if dictType == ZoneDictLocal {
-		// Dictionary size must be padded to GlobalDictSize (32KB) for alignment if we want
-		// predictable zone data starts, but the spec says "immediately following".
-		// We'll write exactly GlobalDictSize to keep everything aligned to 2MB zones + 32KB dicts.
 		if _, err := sm.activeSlabWriter.WriteBatch(localDict, true); err != nil {
 			return err
 		}
-
-		// Update manager's active compression to use the new local dict.
-		sm.activeCompression = sm.compression // shallow copy base settings
-		sm.activeCompression.ZstdEncs = &sync.Pool{
-			New: func() any {
-				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(localDict), zstd.WithEncoderLevel(sm.compression.Level))
-				return enc
-			},
-		}
-		sm.activeCompression.ZstdDecs = &sync.Pool{
-			New: func() any {
-				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(localDict))
-				return dec
-			},
-		}
-		sm.currentProfile.Store(profile)
+		sm.activeCompression = sm.compression // shallow copy
+		sm.activeCompression.ZstdEncs = finalEncs
+		sm.activeCompression.ZstdDecs = finalDecs
+		
+		// Update profile with PADDED dict so USE_REF works correctly later
+		paddedProfile := *profile
+		paddedProfile.Dict = localDict
+		sm.currentProfile.Store(&paddedProfile)
+		
 		zoneID := uint32(s.Size / ZoneSize)
 		s.recordDictRef(dictHash, zoneID, zh.DictCRC)
 	} else if dictType == ZoneDictRef {
-		// Keep using the current dict for compression but don't rewrite it.
 		sm.activeCompression = sm.compression
-		sm.activeCompression.ZstdEncs = &sync.Pool{
-			New: func() any {
-				enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.compression.Level))
-				return enc
-			},
-		}
-		sm.activeCompression.ZstdDecs = &sync.Pool{
-			New: func() any {
-				dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
-				return dec
-			},
-		}
+		sm.activeCompression.ZstdEncs = finalEncs
+		sm.activeCompression.ZstdDecs = finalDecs
 		sm.currentProfile.Store(profile)
 	} else {
-		// USE_GLOBAL.
-		// If we were using a local dict, revert to global (or base if global is empty).
-		if len(s.globalDict) > 0 {
-			sm.activeCompression = sm.compression
-			sm.activeCompression.ZstdEncs = &sync.Pool{
-				New: func() any {
-					enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(s.globalDict), zstd.WithEncoderLevel(sm.compression.Level))
-					return enc
-				},
-			}
-			sm.activeCompression.ZstdDecs = &sync.Pool{
-				New: func() any {
-					dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(s.globalDict))
-					return dec
-				},
-			}
-		} else {
-			// Global is also empty. Revert to base (no dict).
-			sm.activeCompression = sm.compression
+		sm.activeCompression = sm.compression
+		sm.activeCompression.ZstdEncs = finalEncs
+		sm.activeCompression.ZstdDecs = finalDecs
+		if len(s.globalDict) == 0 {
 			sm.currentProfile.Store(nil)
 		}
 	}
@@ -1430,18 +1486,60 @@ func (sm *SlabManager) rotateLocked() error {
 	if ok && profile != nil || sm.compression.Kind == CompressionZSTD {
 		if err := sm.writeSlabV2Header(newSlab, profile); err == nil {
 			newSlab.version = Version2
-			if ok && profile != nil && len(profile.Dict) > 0 {
-				newSlab.globalDict = profile.Dict
-				newSlab.globalDecs = &sync.Pool{
-					New: func() any {
-						dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(profile.Dict))
-						if err != nil {
-							panic(err)
-						}
-						return dec
-					},
+			if ok && profile != nil && len(profile.Dict) > 0 && len(profile.Dict) <= GlobalDictSize {
+				// PAD IMMEDIATELY for consistency
+				paddedDict := make([]byte, GlobalDictSize)
+				copy(paddedDict, profile.Dict)
+
+				// Try to create a reader/writer to validate the dict
+				enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(paddedDict), zstd.WithEncoderLevel(sm.activeCompression.Level))
+				if err == nil {
+					enc.Close()
+					newSlab.globalDict = paddedDict
+					newSlab.globalDecs = &sync.Pool{
+						New: func() any {
+							dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(paddedDict))
+							if err != nil {
+								panic(err)
+							}
+							return dec
+						},
+					}
+					// Ensure activeCompression is ZSTD if we have a dictionary.
+					if sm.compression.Kind != CompressionZSTD {
+						sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
+					} else {
+						sm.activeCompression = sm.compression
+					}
+					sm.activeCompression.ZstdEncs = &sync.Pool{
+						New: func() any {
+							enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(paddedDict), zstd.WithEncoderLevel(sm.activeCompression.Level))
+							if err != nil {
+								enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.activeCompression.Level), zstd.WithEncoderCRC(false))
+							}
+							return enc
+						},
+					}
+					sm.activeCompression.ZstdDecs = &sync.Pool{
+						New: func() any {
+							dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(paddedDict))
+							return dec
+						},
+					}
+					paddedProfile := *profile
+					paddedProfile.Dict = paddedDict
+					paddedProfile.DictHash = xxhash.Sum64(paddedDict)
+					sm.currentProfile.Store(&paddedProfile)
+				} else {
+					// Dict invalid, fall back to raw V2
+					sm.activeCompression = sm.compression
+					if sm.activeCompression.Kind != CompressionZSTD {
+						sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
+					}
+					sm.currentProfile.Store(nil)
 				}
-				// Ensure activeCompression is ZSTD if we have a dictionary.
+			} else {
+				// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
 				if sm.compression.Kind != CompressionZSTD {
 					sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
 				} else {
@@ -1449,20 +1547,15 @@ func (sm *SlabManager) rotateLocked() error {
 				}
 				sm.activeCompression.ZstdEncs = &sync.Pool{
 					New: func() any {
-						enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(profile.Dict), zstd.WithEncoderLevel(sm.activeCompression.Level))
-						if err != nil {
-							panic(err)
-						}
+						enc, _ := zstd.NewWriter(nil, zstd.WithEncoderLevel(sm.activeCompression.Level), zstd.WithEncoderCRC(false))
 						return enc
 					},
 				}
-				sm.currentProfile.Store(profile)
-			} else {
-				// V2 but no initial dictionary (Zone 0 will be raw ZSTD).
-				if sm.compression.Kind != CompressionZSTD {
-					sm.activeCompression, _ = compression.NormalizeOptions(compression.Options{Kind: compression.KindZSTD})
-				} else {
-					sm.activeCompression = sm.compression
+				sm.activeCompression.ZstdDecs = &sync.Pool{
+					New: func() any {
+						dec, _ := zstd.NewReader(nil)
+						return dec
+					},
 				}
 				sm.currentProfile.Store(nil)
 			}
@@ -1799,7 +1892,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if f.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
+	if f.version >= Version2 && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := f.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -1817,7 +1910,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 		payload := val[4:]
 
 		if page.ValuePtrIsFullCompressed(ptr) {
-			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, uint64(rawLen)))
 			if err != nil {
 				return nil, err
 			}
@@ -1830,7 +1923,7 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 			}
 			return decompressed[2+keyLen:], nil
 		}
-		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+		return dec.DecodeAll(payload, make([]byte, 0, uint64(rawLen)))
 	}
 
 	return decodeValue(ptr, val, s.compression)
@@ -1846,7 +1939,7 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 
-	if f.version >= Version2 && int64(ptr.Offset) >= SlabV2DataStart && page.ValuePtrIsCompressed(ptr) {
+	if f.version >= Version2 && page.ValuePtrIsCompressed(ptr) {
 		dec, put, err := f.GetDecoder(int64(ptr.Offset))
 		if err != nil {
 			return nil, err
@@ -1864,7 +1957,7 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		payload := val[4:]
 
 		if page.ValuePtrIsFullCompressed(ptr) {
-			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+			decompressed, err := dec.DecodeAll(payload, make([]byte, 0, uint64(rawLen)))
 			if err != nil {
 				return nil, err
 			}
@@ -1877,7 +1970,7 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 			}
 			return decompressed[2+keyLen:], nil
 		}
-		return dec.DecodeAll(payload, make([]byte, 0, rawLen))
+		return dec.DecodeAll(payload, make([]byte, 0, uint64(rawLen)))
 	}
 
 	return decodeValue(ptr, val, s.compression)

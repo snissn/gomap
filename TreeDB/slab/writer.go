@@ -112,6 +112,10 @@ func (w *SlabWriter) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) 
 			w.mu.Lock()
 			w.offset = w.s.Size // Re-sync offset
 			w.mu.Unlock()
+
+			// Re-sync durable size since we bypassed flushLoop
+			w.durableSize.Store(w.s.Size)
+			w.signalDurable()
 		}
 		return off, err
 	}

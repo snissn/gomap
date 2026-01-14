@@ -536,6 +536,15 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		}
 		return nil, err
 	}
+	// Strict cap for V2 compatibility (matching GlobalDictSize)
+	if len(dict) > 40960 {
+		dict = dict[:40960]
+	} else if len(dict) < 40960 {
+		// PAD to exactly GlobalDictSize
+		padded := make([]byte, 40960)
+		copy(padded, dict)
+		dict = padded
+	}
 	if err := validateDict(dict, level); err != nil {
 		// Retry with a smaller dict to avoid invalid offset failures.
 		reduced := dict[:len(dict)/2]
