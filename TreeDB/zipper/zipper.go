@@ -3,6 +3,7 @@ package zipper
 import (
 	"bytes"
 	"errors"
+	"log"
 	"runtime"
 	"sync"
 
@@ -329,6 +330,23 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 // Returns: newPageID, splits, retiredPages, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
 	if depth > 50 {
+		var pageType page.PageType
+		var count uint16
+		var headerID uint64
+		if data, err := z.pager.Get(pageID); err == nil {
+			n := node.NewNodeView(data)
+			pageType = n.Type()
+			count = n.Count()
+			headerID = n.PageID()
+		}
+		log.Printf("treedb: zipper depth limit hit page_id=%d header_id=%d depth=%d ops=%d page_type=%v count=%d",
+			pageID,
+			headerID,
+			depth,
+			len(ops),
+			pageType,
+			count,
+		)
 		return 0, nil, nil, errors.New("zipper: tree too deep or cycle detected")
 	}
 
@@ -613,6 +631,9 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
 			return 0, nil, nil, err
+		}
+		if childID == pageID {
+			log.Printf("treedb: zipper self-child detected page_id=%d entry=%d", pageID, i)
 		}
 
 		// Determine End Key for this child
