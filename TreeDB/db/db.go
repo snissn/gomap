@@ -66,15 +66,16 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent            uint64
-	policy                WritePolicy
-	leafFillTargetPPM     uint32
-	internalFillTargetPPM uint32
-	leafPrefixCompression bool
-	piggybackCompaction   bool
-	enableValueIndex      bool
-	forceValuePointers    bool
-	omitSlabKeys          bool
+	keepRecent                uint64
+	policy                    WritePolicy
+	leafFillTargetPPM         uint32
+	internalFillTargetPPM     uint32
+	leafPrefixCompression     bool
+	piggybackCompaction       bool
+	maintenanceDeleteMinRatio float64
+	enableValueIndex          bool
+	forceValuePointers        bool
+	omitSlabKeys              bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -302,6 +303,10 @@ type Options struct {
 	// When false (default), nodes are rewritten if their siblings are physically
 	// distant, keeping the tree clustered. Set to true to maximize write speed.
 	DisablePiggybackCompaction bool
+	// MaintenanceDeleteMinRatio skips maintenance merges on write unless the
+	// delete ratio in the batch meets or exceeds this threshold (0 uses the
+	// existing "any delete triggers maintenance" behavior).
+	MaintenanceDeleteMinRatio float64
 
 	// BackgroundCheckpointInterval enables periodic durable checkpoints in cached
 	// mode. A checkpoint creates a backend sync boundary and trims
@@ -535,24 +540,25 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
-		slabManager:           sm,
-		valueLogManager:       vm,
-		lock:                  lock,
-		adaptive:              adaptiveCtrl,
-		keepRecent:            opts.KeepRecent,
-		leafFillTargetPPM:     opts.LeafFillTargetPPM,
-		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		leafPrefixCompression: opts.LeafPrefixCompression,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
-		enableValueIndex:      opts.EnableValueIndex,
-		forceValuePointers:    opts.ForceValuePointers,
-		omitSlabKeys:          opts.OmitSlabKeys,
-		dir:                   opts.Dir,
-		chunkSize:             opts.ChunkSize,
-		preferAppendAlloc:     opts.PreferAppendAlloc,
-		freelistRegionPages:   opts.FreelistRegionPages,
-		freelistRegionRadius:  opts.FreelistRegionRadius,
+		slabManager:               sm,
+		valueLogManager:           vm,
+		lock:                      lock,
+		adaptive:                  adaptiveCtrl,
+		keepRecent:                opts.KeepRecent,
+		leafFillTargetPPM:         opts.LeafFillTargetPPM,
+		internalFillTargetPPM:     opts.InternalFillTargetPPM,
+		leafPrefixCompression:     opts.LeafPrefixCompression,
+		piggybackCompaction:       !opts.DisablePiggybackCompaction,
+		maintenanceDeleteMinRatio: opts.MaintenanceDeleteMinRatio,
+		repairSlabTailOnOpen:      !opts.DisableSlabTailRepairOnOpen,
+		enableValueIndex:          opts.EnableValueIndex,
+		forceValuePointers:        opts.ForceValuePointers,
+		omitSlabKeys:              opts.OmitSlabKeys,
+		dir:                       opts.Dir,
+		chunkSize:                 opts.ChunkSize,
+		preferAppendAlloc:         opts.PreferAppendAlloc,
+		freelistRegionPages:       opts.FreelistRegionPages,
+		freelistRegionRadius:      opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -571,6 +577,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
+	gen.zipper.SetMaintenanceDeleteMinRatio(opts.MaintenanceDeleteMinRatio)
 
 	if err := db.recover(); err != nil {
 		db.Close()

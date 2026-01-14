@@ -163,6 +163,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
+	newZ.SetMaintenanceDeleteMinRatio(db.maintenanceDeleteMinRatio)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()

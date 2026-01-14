@@ -65,21 +65,22 @@ func openReadOnly(opts Options) (*DB, error) {
 	gen := newIndexGen(1, p, alloc, z)
 
 	db := &DB{
-		readOnly:              true,
-		slabManager:           sm,
-		valueLogManager:       vm,
-		lock:                  lock,
-		adaptive:              adaptive.New(),
-		keepRecent:            opts.KeepRecent,
-		leafFillTargetPPM:     opts.LeafFillTargetPPM,
-		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  false,
-		dir:                   opts.Dir,
-		chunkSize:             opts.ChunkSize,
-		preferAppendAlloc:     opts.PreferAppendAlloc,
-		freelistRegionPages:   opts.FreelistRegionPages,
-		freelistRegionRadius:  opts.FreelistRegionRadius,
+		readOnly:                  true,
+		slabManager:               sm,
+		valueLogManager:           vm,
+		lock:                      lock,
+		adaptive:                  adaptive.New(),
+		keepRecent:                opts.KeepRecent,
+		leafFillTargetPPM:         opts.LeafFillTargetPPM,
+		internalFillTargetPPM:     opts.InternalFillTargetPPM,
+		piggybackCompaction:       !opts.DisablePiggybackCompaction,
+		maintenanceDeleteMinRatio: opts.MaintenanceDeleteMinRatio,
+		repairSlabTailOnOpen:      false,
+		dir:                       opts.Dir,
+		chunkSize:                 opts.ChunkSize,
+		preferAppendAlloc:         opts.PreferAppendAlloc,
+		freelistRegionPages:       opts.FreelistRegionPages,
+		freelistRegionRadius:      opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -94,6 +95,7 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetMaintenanceDeleteMinRatio(opts.MaintenanceDeleteMinRatio)
 
 	if err := db.recover(); err != nil {
 		_ = db.Close()
@@ -151,20 +153,21 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	gen := newIndexGen(1, p, alloc, z)
 
 	db := &DB{
-		readOnly:              true,
-		slabManager:           sm,
-		valueLogManager:       vm,
-		adaptive:              adaptive.New(),
-		keepRecent:            opts.KeepRecent,
-		leafFillTargetPPM:     opts.LeafFillTargetPPM,
-		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  false,
-		dir:                   opts.Dir,
-		chunkSize:             opts.ChunkSize,
-		preferAppendAlloc:     opts.PreferAppendAlloc,
-		freelistRegionPages:   opts.FreelistRegionPages,
-		freelistRegionRadius:  opts.FreelistRegionRadius,
+		readOnly:                  true,
+		slabManager:               sm,
+		valueLogManager:           vm,
+		adaptive:                  adaptive.New(),
+		keepRecent:                opts.KeepRecent,
+		leafFillTargetPPM:         opts.LeafFillTargetPPM,
+		internalFillTargetPPM:     opts.InternalFillTargetPPM,
+		piggybackCompaction:       !opts.DisablePiggybackCompaction,
+		maintenanceDeleteMinRatio: opts.MaintenanceDeleteMinRatio,
+		repairSlabTailOnOpen:      false,
+		dir:                       opts.Dir,
+		chunkSize:                 opts.ChunkSize,
+		preferAppendAlloc:         opts.PreferAppendAlloc,
+		freelistRegionPages:       opts.FreelistRegionPages,
+		freelistRegionRadius:      opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: page.DefaultInlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -179,6 +182,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
+	gen.zipper.SetMaintenanceDeleteMinRatio(opts.MaintenanceDeleteMinRatio)
 
 	if err := db.recover(); err != nil {
 		_ = db.Close()

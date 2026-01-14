@@ -206,6 +206,7 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
+	newZ.SetMaintenanceDeleteMinRatio(db.maintenanceDeleteMinRatio)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()

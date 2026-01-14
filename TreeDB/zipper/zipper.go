@@ -21,10 +21,11 @@ type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
 
-	leafReserveBytes      int
-	internalReserveBytes  int
-	piggybackCompaction   bool
-	leafPrefixCompression bool
+	leafReserveBytes          int
+	internalReserveBytes      int
+	piggybackCompaction       bool
+	leafPrefixCompression     bool
+	maintenanceDeleteMinRatio float64
 }
 
 type Split struct {
@@ -121,12 +122,13 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 // the provided allocator.
 func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 	return &Zipper{
-		pager:                 z.pager,
-		allocator:             a,
-		leafReserveBytes:      z.leafReserveBytes,
-		internalReserveBytes:  z.internalReserveBytes,
-		piggybackCompaction:   z.piggybackCompaction,
-		leafPrefixCompression: z.leafPrefixCompression,
+		pager:                     z.pager,
+		allocator:                 a,
+		leafReserveBytes:          z.leafReserveBytes,
+		internalReserveBytes:      z.internalReserveBytes,
+		piggybackCompaction:       z.piggybackCompaction,
+		leafPrefixCompression:     z.leafPrefixCompression,
+		maintenanceDeleteMinRatio: z.maintenanceDeleteMinRatio,
 	}
 }
 
@@ -143,6 +145,15 @@ func (z *Zipper) SetPiggybackCompaction(enabled bool) {
 
 func (z *Zipper) SetLeafPrefixCompression(enabled bool) {
 	z.leafPrefixCompression = enabled
+}
+
+// SetMaintenanceDeleteMinRatio sets a delete ratio threshold before triggering
+// maintenance merges on write (0 keeps existing behavior).
+func (z *Zipper) SetMaintenanceDeleteMinRatio(ratio float64) {
+	if ratio < 0 {
+		ratio = 0
+	}
+	z.maintenanceDeleteMinRatio = ratio
 }
 
 func (z *Zipper) LeafPrefixCompression() bool {
@@ -202,11 +213,17 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	//   - the batch includes deletes (can create empty/underfull pages), or
 	//   - the caller configured soft-full targets (reserve bytes), which implies
 	//     a preference for more balanced/less churny pages even on updates.
-	hasDeletes := false
+	deleteCount := 0
 	for _, op := range ops {
 		if op.Type == batch.OpDelete {
-			hasDeletes = true
-			break
+			deleteCount++
+		}
+	}
+	hasDeletes := deleteCount > 0
+	if hasDeletes && z.maintenanceDeleteMinRatio > 0 {
+		deleteRatio := float64(deleteCount) / float64(len(ops))
+		if deleteRatio < z.maintenanceDeleteMinRatio {
+			hasDeletes = false
 		}
 	}
 	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
@@ -332,7 +349,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	oldNode := node.NewNode(oldData)
+	oldNode := node.NewNodeView(oldData)
 
 	// Create Builder for new page
 	builder := z.newBuilderForType(newData, oldNode.Type())
@@ -397,7 +414,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	}
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics) (uint64, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics) (uint64, []Split, error) {
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
@@ -577,7 +594,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 
 	var splits []Split
@@ -804,14 +821,14 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 
 	var retired []uint64
 
-	loadLeaf := func(id uint64) (*node.Node, bool, error) {
+	loadLeaf := func(id uint64) (node.Node, bool, error) {
 		data, err := z.pager.Get(id)
 		if err != nil {
-			return nil, false, err
+			return node.Node{}, false, err
 		}
-		n := node.NewNode(data)
+		n := node.NewNodeView(data)
 		if n.Type() != page.PageTypeLeaf {
-			return nil, false, nil
+			return node.Node{}, false, nil
 		}
 		return n, true, nil
 	}
@@ -851,7 +868,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		return entrySize + node.DirectoryEntrySize
 	}
 
-	leafRequiredBytes := func(n *node.Node) (int, error) {
+	leafRequiredBytes := func(n node.Node) (int, error) {
 		sum := 0
 		for i := uint16(0); i < n.Count(); i++ {
 			k, v, ptr, flags, err := n.GetLeafEntryView(i)
@@ -869,12 +886,12 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		return sum, nil
 	}
 
-	fillPPM := func(n *node.Node) uint32 {
+	fillPPM := func(n node.Node) uint32 {
 		used := page.PageSize - n.FreeSpace()
 		return uint32((used * 1_000_000) / page.PageSize)
 	}
 
-	buildMergedLeaf := func(left, right *node.Node) (uint64, bool, error) {
+	buildMergedLeaf := func(left, right node.Node) (uint64, bool, error) {
 		pid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, false, err
@@ -886,7 +903,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		b := z.newLeafBuilder(data)
 		b.SetPageID(pid)
 
-		addAll := func(n *node.Node) error {
+		addAll := func(n node.Node) error {
 			for i := uint16(0); i < n.Count(); i++ {
 				k, v, ptr, flags, err := n.GetLeafEntryView(i)
 				if err != nil {
@@ -960,7 +977,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 		return pid, nil
 	}
 
-	rebalanceLeaves := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+	rebalanceLeaves := func(left, right node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
 		var (
 			lid uint64
 			rid uint64
@@ -1012,7 +1029,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 			size  int
 		}
 		combined := make([]ev, 0, int(left.Count()+right.Count()))
-		for _, src := range []*node.Node{left, right} {
+		for _, src := range []node.Node{left, right} {
 			for i := uint16(0); i < src.Count(); i++ {
 				k, v, ptr, flags, err := src.GetLeafEntryView(i)
 				if err != nil {
@@ -1206,19 +1223,19 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 
 	var retired []uint64
 
-	loadInternal := func(id uint64) (*node.Node, bool, error) {
+	loadInternal := func(id uint64) (node.Node, bool, error) {
 		data, err := z.pager.Get(id)
 		if err != nil {
-			return nil, false, err
+			return node.Node{}, false, err
 		}
-		n := node.NewNode(data)
+		n := node.NewNodeView(data)
 		if n.Type() != page.PageTypeInternal {
-			return nil, false, nil
+			return node.Node{}, false, nil
 		}
 		return n, true, nil
 	}
 
-	fillPPM := func(n *node.Node) uint32 {
+	fillPPM := func(n node.Node) uint32 {
 		used := page.PageSize - n.FreeSpace()
 		return uint32((used * 1_000_000) / page.PageSize)
 	}
@@ -1231,7 +1248,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		// Internal entry: keylen(uint16) + child(uint64) + key bytes + directory entry.
 		return (2 + 8 + len(key)) + node.DirectoryEntrySize
 	}
-	internalRequiredBytes := func(n *node.Node) (int, error) {
+	internalRequiredBytes := func(n node.Node) (int, error) {
 		sum := 0
 		for i := uint16(0); i < n.Count(); i++ {
 			k, _, err := n.GetInternalEntryView(i)
@@ -1246,7 +1263,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		return sum, nil
 	}
 
-	buildMergedInternal := func(left, right *node.Node) (uint64, bool, error) {
+	buildMergedInternal := func(left, right node.Node) (uint64, bool, error) {
 		pid, err := z.allocator.Alloc(left.PageID())
 		if err != nil {
 			return 0, false, err
@@ -1258,7 +1275,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		b := node.NewBuilder(data, page.PageTypeInternal)
 		b.SetPageID(pid)
 
-		addAll := func(n *node.Node) error {
+		addAll := func(n node.Node) error {
 			for i := uint16(0); i < n.Count(); i++ {
 				k, child, err := n.GetInternalEntryView(i)
 				if err != nil {
@@ -1298,7 +1315,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		return pid, true, nil
 	}
 
-	rebalanceInternals := func(left, right *node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
+	rebalanceInternals := func(left, right node.Node) (leftID uint64, rightID uint64, rightStart []byte, ok bool, err error) {
 		var (
 			lid uint64
 			rid uint64
@@ -1339,7 +1356,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 		}
 
 		combined := make([]internalEntry, 0, int(left.Count()+right.Count()))
-		for _, src := range []*node.Node{left, right} {
+		for _, src := range []node.Node{left, right} {
 			for i := uint16(0); i < src.Count(); i++ {
 				k, child, err := src.GetInternalEntryView(i)
 				if err != nil {

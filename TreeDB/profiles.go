@@ -185,6 +185,20 @@ func applyCompressedProfile(opts *Options, fast bool) {
 	if opts.SlabCompression.Kind == slab.CompressionNone {
 		opts.SlabCompression.Kind = slab.CompressionZSTD
 	}
+	if fast {
+		if !opts.DisablePiggybackCompaction {
+			opts.DisablePiggybackCompaction = true
+		}
+		if opts.MaintenanceDeleteMinRatio == 0 {
+			opts.MaintenanceDeleteMinRatio = 1.0
+		}
+		if opts.SlabCompression.MinBytes == 0 {
+			opts.SlabCompression.MinBytes = 16384
+		}
+		if opts.SlabCompression.MinSavingsBytes == 0 {
+			opts.SlabCompression.MinSavingsBytes = 256
+		}
+	}
 }
 
 func applyBenchProfile(opts *Options) {
