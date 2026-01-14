@@ -676,6 +676,8 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	// Pre-check for V2 absolute size limit.
 	if sm.activeSlab.version >= Version2 {
 		if int64(HeaderSize+len(encodedKey)+len(encoded)) > maxV2RecordSize {
+			log.Printf("treedb: record too large (v2 precheck) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
+				len(encodedKey), len(encoded), HeaderSize+len(encodedKey)+len(encoded), maxV2RecordSize, fullCompressed, compressed, omittedKey)
 			return page.ValuePtr{}, ErrRecordTooLarge
 		}
 	}
@@ -851,11 +853,25 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 
 		record, actualK, err := buildFrameGroupRecord(group, &sm.activeCompression)
 		if err != nil {
+			if err == ErrRecordTooLarge {
+				groupBytes := 0
+				for _, val := range group {
+					groupBytes += len(val)
+				}
+				log.Printf("treedb: record too large (v2 group build) group_k=%d group_bytes=%d max=%d",
+					len(group), groupBytes, maxV2RecordSize)
+			}
 			return nil, err
 		}
 
 		if sm.activeSlab.version >= Version2 {
 			if int64(len(record)) > maxV2RecordSize {
+				groupBytes := 0
+				for _, val := range group {
+					groupBytes += len(val)
+				}
+				log.Printf("treedb: record too large (v2 group) group_k=%d group_bytes=%d record=%d max=%d",
+					len(group), groupBytes, len(record), maxV2RecordSize)
 				return nil, ErrRecordTooLarge
 			}
 		}
@@ -995,10 +1011,14 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		}
 		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
 		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+			log.Printf("treedb: record too large (max) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
+				keyLen, valLen, recordLen64, MaxSlabSize, fullCompressedFlags[i], compressedFlags[i], omittedKeyFlags[i])
 			return nil, ErrRecordTooLarge
 		}
 		if sm.activeSlab.version >= Version2 {
 			if recordLen64 > maxV2RecordSize {
+				log.Printf("treedb: record too large (v2) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
+					keyLen, valLen, recordLen64, maxV2RecordSize, fullCompressedFlags[i], compressedFlags[i], omittedKeyFlags[i])
 				return nil, fmt.Errorf("record too large (v2 record=%d max=%d key=%d val=%d): %w", recordLen64, maxV2RecordSize, keyLen, valLen, ErrRecordTooLarge)
 			}
 		}
@@ -1077,6 +1097,9 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				continue
 			}
 			if err == ErrRecordTooLarge && s.version >= Version2 {
+				nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+				log.Printf("treedb: batch buffer crosses zone size=%d buf=%d next_boundary=%d",
+					s.Size, len(buf), nextBoundary)
 				// Zonal rotation requested.
 				// We pass len(buf) as a conservative estimate for rotation.
 				if _, err := sm.maybeRotateZoneLocked(len(buf)); err != nil {

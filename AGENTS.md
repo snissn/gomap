@@ -415,3 +415,26 @@ The reported issues are known bugs from an older version that are now fixed. The
    - Test incompressible data triggers pause quickly and skips compression.
    - Test compressible data resumes after probe/training.
    - Add a high-entropy slab bench to validate throughput gains.
+
+# Phase 34: V2 Boundary Packing Fix (Jan 14, 2026)
+
+**Objective:** Fix V2 zone boundary packing so small records never fail with `ErrRecordTooLarge` due to buffer crossing, even under async writes and batching.
+
+## Plan
+1. **Reproduce + lock in regression:**
+   - Add a test that writes a batch with the active slab size set to `ZoneSize - small` and verifies `AppendMany`/flush succeeds (no `ErrRecordTooLarge`).
+   - Add a test for grouped/full-record paths to ensure boundary splitting works.
+2. **Use a single “effective size” source:**
+   - Compute boundary math using the writer’s buffered size (if present), not just `slab.Size`.
+   - Centralize this as a helper to avoid mismatched calculations.
+3. **Pre-rotate before buffer grows:**
+   - In `appendWithOptionsMany`, call `maybeRotateZoneLocked(recordLen)` before adding a record when the buffer would cross a boundary.
+   - Ensure `WriteBatch` never sees a buffer that straddles a boundary.
+4. **Conservative padding is OK:**
+   - Flush early and pad the tail when needed, even if it leaves a small gap.
+   - Prioritize correctness over optimal packing.
+5. **Clean up debug logging:**
+   - Remove temporary record-too-large/boundary logs once tests pass.
+6. **Verification:**
+   - Run `go test -race ./TreeDB/caching -run TestConsistencyStress -count=1`.
+   - Run full `go test -p 1 ./...` and race suite.

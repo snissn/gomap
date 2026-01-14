@@ -3,6 +3,8 @@ package batch
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"log"
 	"sort"
 	"sync"
 
@@ -408,6 +410,12 @@ func (b *Batch) SetOps(ops []Entry) error {
 		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
+		if slab.MaxRecordSize > 0 {
+			recordLen := int64(slab.HeaderSize) + int64(len(op.Key)) + int64(len(op.Value))
+			if recordLen > slab.MaxRecordSize {
+				return fmt.Errorf("record too large (key=%d val=%d record=%d max=%d)", len(op.Key), len(op.Value), recordLen, slab.MaxRecordSize)
+			}
+		}
 		if len(op.Value) > b.inlineThreshold {
 			largeIdx = append(largeIdx, i)
 		}
@@ -434,6 +442,28 @@ func (b *Batch) SetOps(ops []Entry) error {
 
 		ptrs, err := b.slabManager.AppendMany(keys, values)
 		if err != nil {
+			if errors.Is(err, slab.ErrRecordTooLarge) {
+				maxKey := 0
+				maxVal := 0
+				maxRecord := int64(0)
+				for _, idx := range largeIdx {
+					keyLen := len(ops[idx].Key)
+					valLen := len(ops[idx].Value)
+					if keyLen > maxKey {
+						maxKey = keyLen
+					}
+					if valLen > maxVal {
+						maxVal = valLen
+					}
+					recordLen := int64(slab.HeaderSize) + int64(keyLen) + int64(valLen)
+					if recordLen > maxRecord {
+						maxRecord = recordLen
+					}
+				}
+				maxV2 := int64(slab.ZoneSize - slab.ZoneHeaderSize)
+				log.Printf("treedb: appendmany record too large max_key=%d max_val=%d max_record=%d max_v2=%d count=%d",
+					maxKey, maxVal, maxRecord, maxV2, len(largeIdx))
+			}
 			clear(keys)
 			clear(values)
 			b.largeKeys = keys[:0]

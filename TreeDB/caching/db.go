@@ -231,7 +231,7 @@ func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
 	}
-	if db.memtableValueLogPointers && db.valueLogEnabled() {
+	if db.valueLogEnabled() {
 		db.mu.RLock()
 		curSeq := db.currentValueLogSeq()
 		db.mu.RUnlock()
@@ -4153,6 +4153,14 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			// Preserve "newest wins" semantics by concatenating per-memtable ops
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
+			copyBytes := func(b []byte) []byte {
+				if len(b) == 0 {
+					return nil
+				}
+				out := make([]byte, len(b))
+				copy(out, b)
+				return out
+			}
 			collectOps := func(mem memtable.Table, estLen int, ptrs *largePtrMap) ([]batch.Entry, error) {
 				if debugPtr {
 					if ptrs == nil {
@@ -4167,7 +4175,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					if iter.IsDeleted() {
 						ops = append(ops, batch.Entry{
 							Type: batch.OpDelete,
-							Key:  iter.UnsafeKey(),
+							Key:  copyBytes(iter.UnsafeKey()),
 						})
 					} else {
 						key := iter.UnsafeKey()
@@ -4180,11 +4188,16 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
+								val, err := db.readValueLog(ptr)
+								if err != nil {
+									_ = iter.Close()
+									putEntrySlice(ops)
+									return nil, err
+								}
 								ops = append(ops, batch.Entry{
-									Type:     batch.OpPut,
-									Key:      key,
-									ValuePtr: ptr,
-									IsPtr:    true,
+									Type:  batch.OpPut,
+									Key:   copyBytes(key),
+									Value: val,
 								})
 								iter.Next()
 								continue
@@ -4195,8 +4208,8 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 						ops = append(ops, batch.Entry{
 							Type:  batch.OpPut,
-							Key:   key,
-							Value: val,
+							Key:   copyBytes(key),
+							Value: copyBytes(val),
 						})
 					}
 					iter.Next()
@@ -4321,7 +4334,14 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
-								if err := pointerBatch.SetPointer(key, ptr); err != nil {
+								readVal, err := db.readValueLog(ptr)
+								if err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								if err := backendBatch.Set(key, readVal); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
 									_ = iter.Close()
 									_ = backendBatch.Close()
