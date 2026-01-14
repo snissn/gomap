@@ -452,17 +452,8 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	var dict []byte
 	var err error
 
-	dict, err = zstd.BuildDict(zstd.BuildDictOptions{
-		ID:       dictID,
-		Contents: validSamples,
-		History:  history,
-		Level:    level,
-	})
-
+	dict, err = buildAndValidateDict(dictID, validSamples, history, level)
 	if err != nil || len(dict) == 0 {
-		if err != nil {
-			log.Printf("treedb: slab compression training failed slab=%d err=%v", slabID, err)
-		}
 		return
 	}
 
@@ -530,6 +521,45 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	if profile := ChooseKForDict(dict, samples); profile != nil {
 		t.maybeAcceptProfile(profile)
 	}
+}
+
+func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel) ([]byte, error) {
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       dictID,
+		Contents: samples,
+		History:  history,
+		Level:    level,
+	})
+	if err != nil || len(dict) == 0 {
+		if err != nil {
+			log.Printf("treedb: slab compression training failed slab=%d err=%v", dictID-1, err)
+		}
+		return nil, err
+	}
+	if err := validateDict(dict, level); err != nil {
+		// Retry with a smaller dict to avoid invalid offset failures.
+		reduced := dict[:len(dict)/2]
+		if err2 := validateDict(reduced, level); err2 == nil {
+			return reduced, nil
+		}
+		log.Printf("treedb: slab compression training dict rejected slab=%d err=%v", dictID-1, err)
+		return nil, err
+	}
+	return dict, nil
+}
+
+func validateDict(dict []byte, level zstd.EncoderLevel) error {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	if err != nil {
+		return err
+	}
+	enc.Close()
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+	if err != nil {
+		return err
+	}
+	dec.Close()
+	return nil
 }
 
 func (t *Trainer) recordDictHash(hash uint64) (dictDedupMode, int) {
