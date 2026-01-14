@@ -584,9 +584,15 @@ func (t *Trainer) recordDictHash(hash uint64) (dictDedupMode, int) {
 		window = DefaultTrainDedupWindow
 		t.dictDedupWindow = window
 	}
+	if window <= 0 {
+		return dictDedupNone, -1
+	}
 	if t.dictHashes == nil {
 		t.dictHashes = make([]uint64, window)
 		t.dictHashIndex = make(map[uint64]int, window)
+	}
+	if len(t.dictHashes) == 0 {
+		return dictDedupNone, -1
 	}
 	if t.globalDictHash != 0 && t.globalDictHash == hash {
 		t.dictDedupHits.Add(1)
@@ -923,6 +929,9 @@ func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
 	if window <= 0 {
 		window = DefaultTrainDedupWindow
 	}
+	if window <= 0 {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.dictCacheHashes == nil {
@@ -933,6 +942,9 @@ func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
 		t.dictCacheIndex = make(map[uint64]int, window)
 	}
 	if dictHash == 0 || samplesHash == 0 {
+		return
+	}
+	if len(t.dictCacheHashes) == 0 {
 		return
 	}
 	entry := make([]byte, len(dict))
