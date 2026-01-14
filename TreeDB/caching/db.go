@@ -2471,6 +2471,19 @@ func (db *DB) waitForStop() {
 		// caller drive the queued work to completion.
 		db.flushAll(false)
 
+		db.mu.RLock()
+		queueEmptyAfter := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmptyAfter {
+			if backlog > 0 {
+				db.queueBacklogBytes.Store(0)
+				db.bpMu.Lock()
+				db.bpCond.Broadcast()
+				db.bpMu.Unlock()
+			}
+			return
+		}
+
 		db.bpMu.Lock()
 		for {
 			_, stopBytes, resumeBytes = db.thresholdsLocked()
