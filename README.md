@@ -31,6 +31,17 @@ High-level guidance:
 - **TreeDB (cached, default)**: best for workloads dominated by many small random writes; use `*Sync` for durability.
 - **TreeDB (backend-only)**: best when you batch writes yourself or want the simplest engine path; scans can be faster.
 
+## Zero-Copy Architecture
+
+TreeDB implements a unified write path that eliminates the traditional double-write (WAL -> Flush -> Slab) penalty for large values.
+
+- **Direct Slab Writes**: Large values are written directly to the active slab segment, compressed on-the-fly, and buffered asynchronously.
+- **Metadata WAL**: Only structure (`Seq`, `Key`, `Pointer`) is written to the Write-Ahead Log, keeping it lightweight and fast.
+- **Async Buffering**: An internal `SlabWriter` buffers writes (default 4MB) to hide `syscall` latency from the hot path.
+- **Zero-Copy Adoption**: When a slab segment is full, it is simply sealed and adopted as immutable. There is no rewriting or "flushing" of value payloads.
+
+This architecture is enabled automatically when `TREEDB_MEMTABLE_VALUE_LOG_POINTERS=1` is set.
+
 Contracts (durability/locking/concurrency/iteration):
 
 - `docs/contracts/README.md`

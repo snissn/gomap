@@ -254,6 +254,7 @@ These options trade safety for performance and are **unsafe** unless you set
 `Options.AllowUnsafe`.
 
 - `Options.DisableWAL`: disable cached-mode WAL (durability only at checkpoints).
+- `Options.WALCompression`: enable streaming ZSTD compression for metadata WAL segments.
 - `Options.RelaxedSync`: skip fsync on `SetSync`/`WriteSync`.
 - `Options.DisableReadChecksum`: skip CRC checks for slab/vlog reads.
 - `Options.DisableSlabTailRepairOnOpen`: skip best-effort tail repair on open.
@@ -274,9 +275,10 @@ Core features:
 
 WAL / value-log:
 - `TREEDB_DISABLE_VALUE_LOG=1`: legacy WAL-only mode (no vlog pointers).
-- `TREEDB_SPLIT_VALUE_LOG=1`: split WAL entries vs large-value vlog segments.
-- `TREEDB_MEMTABLE_VALUE_LOG_POINTERS=1`: memtables store vlog pointers for large values.
-- `TREEDB_VALUE_LOG_POINTER_THRESHOLD=N`: inline threshold (bytes) for vlog pointers.
+- `TREEDB_SPLIT_VALUE_LOG=1`: split WAL entries vs large-value vlog segments (legacy path).
+- `TREEDB_MEMTABLE_VALUE_LOG_POINTERS=1`: enable **Zero-Copy Architecture**. Large values are written directly to backend slabs via an async compressed writer, skipping the intermediate vlog file. The WAL stores only metadata pointers.
+- `TREEDB_VALUE_LOG_POINTER_THRESHOLD=N`: inline threshold (bytes) for offloading values.
+- `TREEDB_WAL_COMPRESSION=1`: enable ZSTD compression for the metadata WAL. Recommended when using Zero-Copy to further reduce IOPS.
 
 Slab compression:
 - `TREEDB_SLAB_COMPRESSION=zstd|none`
