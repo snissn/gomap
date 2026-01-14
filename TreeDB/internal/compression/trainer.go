@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -369,7 +370,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		if r := recover(); r != nil {
 			// Suppress panic from zstd or internal logic, treat as failed training.
 			// Log as warning instead of PANIC.
-			log.Printf("treedb: slab compression training skipped slab=%d err=%v", slabID, r)
+			log.Printf("treedb: slab compression training skipped slab=%d err=%v\n%s", slabID, r, debug.Stack())
 		}
 	}()
 	if len(samples) == 0 {

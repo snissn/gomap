@@ -1,7 +1,10 @@
 package vlog
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,7 +81,21 @@ func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("vlog file %d not found in snapshot", ptr.FileID)
 	}
-	return f.Read(ptr, !s.disableReadChecksum)
+	val, err := f.Read(ptr, !s.disableReadChecksum)
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			recordLen := page.ValuePtrRecordLength(ptr)
+			flags := ptr.Length &^ recordLen
+			log.Printf("treedb: vlog read EOF file=%d offset=%d length=%d flags=0x%x",
+				ptr.FileID,
+				ptr.Offset,
+				ptr.Length,
+				flags,
+			)
+		}
+		return nil, err
+	}
+	return val, nil
 }
 
 func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -86,7 +103,21 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("vlog file %d not found in snapshot", ptr.FileID)
 	}
-	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
+	val, err := f.ReadUnsafe(ptr, !s.disableReadChecksum)
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			recordLen := page.ValuePtrRecordLength(ptr)
+			flags := ptr.Length &^ recordLen
+			log.Printf("treedb: vlog read EOF (unsafe) file=%d offset=%d length=%d flags=0x%x",
+				ptr.FileID,
+				ptr.Offset,
+				ptr.Length,
+				flags,
+			)
+		}
+		return nil, err
+	}
+	return val, nil
 }
 
 type Manager struct {

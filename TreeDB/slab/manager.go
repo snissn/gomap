@@ -3,8 +3,11 @@ package slab
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -2000,6 +2003,16 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	}
 	val, err := f.Read(int64(ptr.Offset), !s.disableReadChecksum)
 	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			recordLen := page.ValuePtrRecordLength(ptr)
+			flags := ptr.Length &^ recordLen
+			log.Printf("treedb: slab read EOF file=%d offset=%d length=%d flags=0x%x",
+				ptr.FileID,
+				ptr.Offset,
+				ptr.Length,
+				flags,
+			)
+		}
 		return nil, err
 	}
 
