@@ -149,6 +149,16 @@ func applyDurableProfile(opts *Options) {
 	if !opts.DisableReadChecksum {
 		// Keep as-is.
 	}
+	// Enable Zero-Copy Architecture by default for better throughput/latency balance.
+	// This writes large values directly to backend slabs (compressed if configured)
+	// and keeps the WAL small (metadata only).
+	if !opts.MemtableValueLogPointers {
+		opts.MemtableValueLogPointers = true
+	}
+	// Compressing the metadata WAL is safe and efficient.
+	if !opts.WALCompression {
+		opts.WALCompression = true
+	}
 }
 
 func applyFastProfile(opts *Options) {

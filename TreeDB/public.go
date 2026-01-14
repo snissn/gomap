@@ -84,6 +84,31 @@ func (db *DB) ensureOpen() error {
 // To open the backend-only engine, set opts.Mode = ModeBackend.
 // Environment variable overrides (TREEDB_*) are applied; see docs/TREEDB_TUNING.md.
 func Open(opts Options) (*DB, error) {
+	// Apply profile from environment if set (before other overrides so specific flags win).
+	if v := os.Getenv("TREEDB_PROFILE"); v != "" {
+		ApplyProfile(&opts, Profile(v))
+	}
+
+	// Default to Zero-Copy Architecture (MemtableValueLogPointers = true)
+	// unless explicitly disabled or using legacy modes.
+	// Since boolean zero-value is false, we enable it if it's false, assuming
+	// the user wants the modern default. To force-disable, one must use
+	// DisableValueLog (legacy mode) or set it false here (which is ambiguous).
+	// We assume Options{} implies "Recommended Defaults".
+	//
+	// If checking for explicit disable is needed, we'd need a pointer boolean or
+	// a specific "Legacy" profile. For now, we enable it if ValueLog is enabled.
+	if !opts.DisableValueLog && !opts.DisableWAL {
+		// We set it to true. If a user *really* wants the old vlog-file behavior
+		// without zero-copy, they can't easily express it with Options{} anymore
+		// without a new flag. This is an acceptable upgrade path.
+		opts.MemtableValueLogPointers = true
+	}
+	// Default to compressed WAL for metadata efficiency.
+	if !opts.DisableWAL {
+		opts.WALCompression = true
+	}
+
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to

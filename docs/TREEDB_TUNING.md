@@ -3,13 +3,15 @@
 TreeDB is a dev project, but a few knobs are already useful and stable.
 This doc describes the knobs exposed via `treedb.Options` and the cached write-back layer.
 
-## TL;DR Defaults
+## Defaults
 
 - `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/WAL rotation threshold)
 - `KeepRecent`:
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
   - backend mode (`treedb.OpenBackend`): defaults to `10,000`
+- **Zero-Copy Architecture**: Enabled by default (`MemtableValueLogPointers=true`) for large values.
+- **Metadata WAL Compression**: Enabled by default (`WALCompression=true`).
 - Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
 - Background index vacuum: defaults to 30s interval (auto-on) with span ratio threshold `1_200_000`
 - Cached-mode auto checkpointing:
@@ -17,9 +19,18 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
   - `BackgroundCheckpointIdleDuration`: defaults to 2s
   - `MaxWALBytes`: defaults to 2 GiB
 
-## Options
+## Environment Variable Overrides
 
-### `Options.Dir` (required)
+TreeDB supports a `TREEDB_PROFILE` variable to load a preset bundle of options before applying specific overrides.
+
+- `TREEDB_PROFILE=durable`: (Default) Safety first.
+- `TREEDB_PROFILE=fast`: Max throughput (relaxed durability).
+- `TREEDB_PROFILE=compressed`: Durable + Slab Compression.
+- `TREEDB_PROFILE=compressed_fast`: Fast + Slab Compression.
+
+### Options
+
+#### `Options.Dir` (required)
 
 DB directory containing:
 
