@@ -420,7 +420,7 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
 		// Drop read lock to acquire write lock in Sync
 		sm.mu.RUnlock()
-		if err := sm.activeSlabWriter.Sync(); err != nil {
+		if err := sm.activeSlabWriter.Flush(); err != nil {
 			return nil, err
 		}
 		sm.mu.RLock()
@@ -485,7 +485,7 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	// If reading from active slab with async writer, ensure data is on disk.
 	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
 		sm.mu.RUnlock()
-		if err := sm.activeSlabWriter.Sync(); err != nil {
+		if err := sm.activeSlabWriter.Flush(); err != nil {
 			return nil, err
 		}
 		sm.mu.RLock()
@@ -619,14 +619,9 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 
 	for attempt := 0; attempt < 3; attempt++ {
 		// Check for V2 boundaries BEFORE passing to async writer
-		currentSize := sm.activeSlab.Size
+		var currentSize int64
 		if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
-			writerSize := sm.activeSlabWriter.Size()
-			if writerSize < sm.activeSlab.Size {
-				sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
-				writerSize = sm.activeSlab.Size
-			}
-			currentSize = writerSize
+			currentSize = sm.activeSlabWriter.Size()
 
 			// If adding this record pushes the async buffer across a zone boundary,
 			// force a sync first so that checkBoundary (and the file writer) sees
@@ -635,12 +630,14 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 			if sm.activeSlab.version >= Version2 {
 				nextBoundary := ((currentSize / ZoneSize) + 1) * ZoneSize
 				if currentSize+int64(len(rec)) > nextBoundary {
-					if err := sm.activeSlabWriter.Sync(); err != nil {
+					if err := sm.activeSlabWriter.Flush(); err != nil {
 						return page.ValuePtr{}, err
 					}
-					currentSize = sm.activeSlab.Size
+					currentSize = sm.activeSlabWriter.Size()
 				}
 			}
+		} else {
+			currentSize = sm.activeSlab.Size
 		}
 
 		if currentSize+int64(len(rec)) > MaxSlabSize {
@@ -745,7 +742,7 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 		sm.activeSlabWriter = NewSlabWriter(sm.activeSlab, 0)
 	}
 	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
-		if err := sm.activeSlabWriter.Sync(); err != nil {
+		if err := sm.activeSlabWriter.Flush(); err != nil {
 			return nil, err
 		}
 		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
@@ -951,7 +948,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		sm.activeSlabWriter = NewSlabWriter(sm.activeSlab, 0)
 	}
 	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
-		if err := sm.activeSlabWriter.Sync(); err != nil {
+		if err := sm.activeSlabWriter.Flush(); err != nil {
 			return nil, err
 		}
 		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
@@ -1416,7 +1413,7 @@ func (sm *SlabManager) rotateLocked() error {
 		return ErrReadOnly
 	}
 	if sm.activeSlabWriter != nil {
-		if err := sm.activeSlabWriter.Sync(); err != nil {
+		if err := sm.activeSlabWriter.Flush(); err != nil {
 			return err
 		}
 		_ = sm.activeSlabWriter.Close()
@@ -1531,6 +1528,19 @@ func (sm *SlabManager) Sync() error {
 	return sm.activeSlab.Sync()
 }
 
+// Flush ensures buffered writes are pushed to the slab without fsync.
+func (sm *SlabManager) Flush() error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return ErrReadOnly
+	}
+	if sm.activeSlabWriter != nil {
+		return sm.activeSlabWriter.Flush()
+	}
+	return nil
+}
+
 func (sm *SlabManager) ActiveSlabID() uint32 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -1540,13 +1550,10 @@ func (sm *SlabManager) ActiveSlabID() uint32 {
 func (sm *SlabManager) ActiveSlabTail() uint64 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	tail := sm.activeSlab.Size
 	if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
-		if writerSize := sm.activeSlabWriter.Size(); writerSize > tail {
-			tail = writerSize
-		}
+		return uint64(sm.activeSlabWriter.Size())
 	}
-	return uint64(tail)
+	return uint64(sm.activeSlab.Size)
 }
 
 func (sm *SlabManager) SetActiveSlab(id uint32) error {

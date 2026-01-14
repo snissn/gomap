@@ -25,6 +25,9 @@ var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
 
 var syncDirFn = syncDir
 
+// slabSyncHook allows tests to observe Sync calls.
+var slabSyncHook func(*SlabFile) error
+
 var (
 	// MaxSlabSize is 4GB (hard limit for rotation).
 	// Variable to allow testing overrides.
@@ -462,6 +465,11 @@ func (s *SlabFile) Close() error {
 func (s *SlabFile) Sync() error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	if slabSyncHook != nil {
+		if err := slabSyncHook(s); err != nil {
+			return err
+		}
 	}
 	return s.File.Sync()
 }

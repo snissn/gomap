@@ -249,6 +249,18 @@ func (w *SlabWriter) flushLoop() {
 }
 
 func (w *SlabWriter) Sync() error {
+	if err := w.flushBuffers(); err != nil {
+		return err
+	}
+	return w.s.Sync()
+}
+
+// Flush forces buffered data to be written to the slab without fsync.
+func (w *SlabWriter) Flush() error {
+	return w.flushBuffers()
+}
+
+func (w *SlabWriter) flushBuffers() error {
 	w.mu.Lock()
 	// Force rotation to flush activeBuf
 	if len(w.activeBuf) > 0 {
@@ -306,7 +318,7 @@ func (w *SlabWriter) Sync() error {
 	}
 	w.mu.Unlock()
 
-	return w.s.Sync()
+	return nil
 }
 
 func (w *SlabWriter) Close() error {
