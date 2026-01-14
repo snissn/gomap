@@ -2448,6 +2448,19 @@ func (db *DB) waitForStop() {
 		}
 		db.bpMu.Unlock()
 
+		db.mu.RLock()
+		queueEmpty := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmpty {
+			if backlog > 0 {
+				db.queueBacklogBytes.Store(0)
+				db.bpMu.Lock()
+				db.bpCond.Broadcast()
+				db.bpMu.Unlock()
+			}
+			return
+		}
+
 		// Ensure a background flush pass is scheduled in case backlog was created
 		// without a flush trigger (e.g. iterator-driven rotations).
 		db.TriggerFlush()

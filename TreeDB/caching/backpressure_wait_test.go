@@ -56,3 +56,48 @@ func TestWaitForStopSchedulesFlush(t *testing.T) {
 		t.Fatal("Set blocked under backpressure; expected flush scheduling to make progress")
 	}
 }
+
+func TestWaitForStopIgnoresStaleBacklog(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1024,
+		DisableValueLog:        true,
+		MemtableShards:         1,
+		SlowdownBacklogSeconds: 0,
+		StopBacklogSeconds:     1,
+		MaxBacklogBytes:        0,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.queueBacklogBytes.Store(2048)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.Set([]byte("k"), []byte("v"))
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		db.queueBacklogBytes.Store(0)
+		db.bpMu.Lock()
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Set after unblock: %v", err)
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("Set blocked under stale backlog")
+		}
+	}
+}
