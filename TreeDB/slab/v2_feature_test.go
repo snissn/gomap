@@ -167,6 +167,9 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 	sm.activeSlab.version = Version2
 	sm.activeSlab.Size = SlabV2DataStart
 	sm.activeSlab.writeOffset = SlabV2DataStart
+	if sm.activeSlabWriter != nil {
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
+	}
 	// No dict needed for this test, just boundary checks.
 
 	// Write almost 2MB.
