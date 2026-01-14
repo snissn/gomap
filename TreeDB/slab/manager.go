@@ -603,6 +603,12 @@ func (sm *SlabManager) AppendWithOptions(key, value []byte, opts AppendOptions) 
 }
 
 func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) (page.ValuePtr, error) {
+	sm.mu.RLock()
+	activeCompression := sm.activeCompression
+	omitSlabKeys := sm.omitSlabKeys
+	disableFullRecord := sm.disableFullRecordCompression
+	sm.mu.RUnlock()
+
 	encoded := value
 	encodedKey := key
 	compressed := false
@@ -614,7 +620,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	attemptCompression := false
 	probeCompression := false
 	paused := false
-	if !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone {
+	if !opts.DisableCompression && activeCompression.Kind != CompressionNone {
 		attemptCompression, probeCompression, paused = sm.shouldAttemptCompression(len(value))
 	}
 	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
@@ -622,10 +628,10 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 			sm.compressionTrainer.Collect(value)
 		}
 	}
-	if attemptCompression && !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone {
+	if attemptCompression && !opts.DisableCompression && activeCompression.Kind != CompressionNone {
 		// Try full record compression first
-		if !sm.disableFullRecordCompression {
-			if enc, ok, errInner := sm.activeCompression.CompressRecord(key, value); errInner == nil && ok {
+		if !disableFullRecord {
+			if enc, ok, errInner := activeCompression.CompressRecord(key, value); errInner == nil && ok {
 				encoded = enc
 				encodedKey = nil
 				compressed = true
@@ -636,7 +642,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		}
 		if !fullCompressed {
 			// Fall back to value-only compression
-			encoded, compressed, releaseEncoded, errInner = sm.activeCompression.CompressValuePooled(value)
+			encoded, compressed, releaseEncoded, errInner = activeCompression.CompressValuePooled(value)
 			if errInner != nil {
 				return page.ValuePtr{}, errInner
 			}
@@ -650,7 +656,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		sm.compressionProbeRemaining.Store(sm.compressionProbeBytes)
 	}
 
-	if !fullCompressed && sm.omitSlabKeys {
+	if !fullCompressed && omitSlabKeys {
 		encodedKey = nil
 		omittedKey = true
 	}
@@ -676,8 +682,6 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	// Pre-check for V2 absolute size limit.
 	if sm.activeSlab.version >= Version2 {
 		if int64(HeaderSize+len(encodedKey)+len(encoded)) > maxV2RecordSize {
-			log.Printf("treedb: record too large (v2 precheck) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
-				len(encodedKey), len(encoded), HeaderSize+len(encodedKey)+len(encoded), maxV2RecordSize, fullCompressed, compressed, omittedKey)
 			return page.ValuePtr{}, ErrRecordTooLarge
 		}
 	}
@@ -747,7 +751,7 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 		return page.ValuePtr{}, err
 	}
 
-	if !opts.SkipMetrics && !opts.DisableCompression && sm.compressionMetrics.Enabled && sm.activeCompression.Kind != CompressionNone {
+	if !opts.SkipMetrics && !opts.DisableCompression && sm.compressionMetrics.Enabled && activeCompression.Kind != CompressionNone {
 		compressedCount := 0
 		fullCount := 0
 		if compressed {
@@ -853,25 +857,11 @@ func (sm *SlabManager) appendManyGrouped(keys [][]byte, values [][]byte, k int) 
 
 		record, actualK, err := buildFrameGroupRecord(group, &sm.activeCompression)
 		if err != nil {
-			if err == ErrRecordTooLarge {
-				groupBytes := 0
-				for _, val := range group {
-					groupBytes += len(val)
-				}
-				log.Printf("treedb: record too large (v2 group build) group_k=%d group_bytes=%d max=%d",
-					len(group), groupBytes, maxV2RecordSize)
-			}
 			return nil, err
 		}
 
 		if sm.activeSlab.version >= Version2 {
 			if int64(len(record)) > maxV2RecordSize {
-				groupBytes := 0
-				for _, val := range group {
-					groupBytes += len(val)
-				}
-				log.Printf("treedb: record too large (v2 group) group_k=%d group_bytes=%d record=%d max=%d",
-					len(group), groupBytes, len(record), maxV2RecordSize)
 				return nil, ErrRecordTooLarge
 			}
 		}
@@ -910,6 +900,12 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		return nil, nil
 	}
 
+	sm.mu.RLock()
+	activeCompression := sm.activeCompression
+	omitSlabKeys := sm.omitSlabKeys
+	disableFullRecord := sm.disableFullRecordCompression
+	sm.mu.RUnlock()
+
 	// Keep buffers bounded so we don't double memory usage for extremely large
 	// batches or values.
 	const defaultMaxBatchBytes = 8 << 20 // 8 MiB
@@ -937,7 +933,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 			}
 		}
 	}()
-	if sm.activeCompression.Kind != CompressionNone {
+	if activeCompression.Kind != CompressionNone {
 		encodedValues = make([][]byte, len(values))
 		encodedKeys = make([][]byte, len(values))
 		for i := range values {
@@ -948,8 +944,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				continue
 			}
 			// Try full record compression first
-			if !sm.disableFullRecordCompression {
-				if enc, ok, err := sm.activeCompression.CompressRecord(keys[i], values[i]); err == nil && ok {
+			if !disableFullRecord {
+				if enc, ok, err := activeCompression.CompressRecord(keys[i], values[i]); err == nil && ok {
 					encodedValues[i] = enc
 					encodedKeys[i] = nil
 					compressedFlags[i] = true
@@ -964,7 +960,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				var compressed bool
 				var release func()
 				var err error
-				encoded, compressed, release, err = sm.activeCompression.CompressValuePooled(values[i])
+				encoded, compressed, release, err = activeCompression.CompressValuePooled(values[i])
 				if err != nil {
 					return nil, err
 				}
@@ -980,8 +976,8 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		}
 	}
 
-	if sm.omitSlabKeys {
-		if sm.activeCompression.Kind == CompressionNone {
+	if omitSlabKeys {
+		if activeCompression.Kind == CompressionNone {
 			encodedKeys = make([][]byte, len(values))
 			copy(encodedKeys, keys)
 		}
@@ -1011,14 +1007,10 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		}
 		recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
 		if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
-			log.Printf("treedb: record too large (max) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
-				keyLen, valLen, recordLen64, MaxSlabSize, fullCompressedFlags[i], compressedFlags[i], omittedKeyFlags[i])
 			return nil, ErrRecordTooLarge
 		}
 		if sm.activeSlab.version >= Version2 {
 			if recordLen64 > maxV2RecordSize {
-				log.Printf("treedb: record too large (v2) key=%d val=%d record=%d max=%d full=%v compressed=%v omitted_key=%v",
-					keyLen, valLen, recordLen64, maxV2RecordSize, fullCompressedFlags[i], compressedFlags[i], omittedKeyFlags[i])
 				return nil, fmt.Errorf("record too large (v2 record=%d max=%d key=%d val=%d): %w", recordLen64, maxV2RecordSize, keyLen, valLen, ErrRecordTooLarge)
 			}
 		}
@@ -1084,6 +1076,17 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 		id := s.ID
 
 		for attempt := 0; attempt < 3; attempt++ {
+			if s.version >= Version2 {
+				nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
+				if (s.Size >= ZoneSize && s.Size%ZoneSize == 0) || s.Size+int64(len(buf)) > nextBoundary {
+					if _, err := sm.maybeRotateZoneLocked(len(buf)); err != nil {
+						return err
+					}
+					s = sm.activeSlab
+					id = s.ID
+					continue
+				}
+			}
 			var base int64
 			base, err = s.WriteBatch(buf, false)
 			if err == ErrSlabFull {
@@ -1097,9 +1100,6 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				continue
 			}
 			if err == ErrRecordTooLarge && s.version >= Version2 {
-				nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
-				log.Printf("treedb: batch buffer crosses zone size=%d buf=%d next_boundary=%d",
-					s.Size, len(buf), nextBoundary)
 				// Zonal rotation requested.
 				// We pass len(buf) as a conservative estimate for rotation.
 				if _, err := sm.maybeRotateZoneLocked(len(buf)); err != nil {
@@ -1111,6 +1111,9 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 			}
 			if err != nil {
 				return err
+			}
+			if sm.activeSlabWriter != nil && sm.activeSlab == sm.activeSlabWriter.s {
+				sm.activeSlabWriter.ResetOffset(s.Size)
 			}
 
 			for _, meta := range metas {
@@ -1132,7 +1135,7 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				}
 			}
 
-			if sm.compressionMetrics.Enabled && sm.activeCompression.Kind != CompressionNone && len(metas) > 0 {
+			if sm.compressionMetrics.Enabled && activeCompression.Kind != CompressionNone && len(metas) > 0 {
 				rawTotal := 0
 				storedTotal := 0
 				compressedCount := 0
@@ -1278,8 +1281,13 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 		return nil, nil
 	}
 
+	sm.mu.RLock()
+	activeCompressionKind := sm.activeCompression.Kind
+	omitSlabKeys := sm.omitSlabKeys
+	sm.mu.RUnlock()
+
 	groupK := 1
-	if profile := sm.currentProfile.Load(); profile != nil && profile.K > 1 && sm.activeCompression.Kind == CompressionZSTD && sm.omitSlabKeys {
+	if profile := sm.currentProfile.Load(); profile != nil && profile.K > 1 && activeCompressionKind == CompressionZSTD && omitSlabKeys {
 		groupK = profile.K
 	}
 	if sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
