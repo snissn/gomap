@@ -4197,7 +4197,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								ops = append(ops, batch.Entry{
 									Type:  batch.OpPut,
 									Key:   copyBytes(key),
-									Value: val,
+									Value: copyBytes(val),
 								})
 								iter.Next()
 								continue
