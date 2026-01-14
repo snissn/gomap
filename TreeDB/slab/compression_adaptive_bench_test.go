@@ -81,6 +81,7 @@ func BenchmarkCompressionAdaptiveSweep(b *testing.B) {
 						value := workload.make(rng, valueSize)
 						key := []byte("bench-key")
 
+						b.ReportAllocs()
 						b.ResetTimer()
 						b.SetBytes(int64(valueSize))
 						for i := 0; i < b.N; i++ {
@@ -89,6 +90,10 @@ func BenchmarkCompressionAdaptiveSweep(b *testing.B) {
 							}
 						}
 						b.StopTimer()
+						if sm.compressionMetrics.Enabled && sm.compressionMetrics.TotalRaw > 0 {
+							ratioObserved := float64(sm.compressionMetrics.TotalStored) / float64(sm.compressionMetrics.TotalRaw)
+							b.ReportMetric(ratioObserved, "observed_ratio")
+						}
 					})
 				}
 			}
