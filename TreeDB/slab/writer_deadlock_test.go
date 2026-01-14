@@ -21,6 +21,8 @@ func TestDeadlock_ZoneRotate_LocalDict(t *testing.T) {
 			Kind:  compression.KindZSTD,
 			Level: 1,
 		},
+		CompressionAdaptiveTrainBytes: -1,
+		CompressionAdaptiveRatio:      -1,
 	}
 	sm, err := NewSlabManagerWithOptions(dir, opts)
 	if err != nil {
@@ -82,6 +84,8 @@ func TestCRC_ZoneRotate_LargeDict(t *testing.T) {
 			Kind:  compression.KindZSTD,
 			Level: 1,
 		},
+		CompressionAdaptiveTrainBytes: -1,
+		CompressionAdaptiveRatio:      -1,
 	}
 	sm, err := NewSlabManagerWithOptions(dir, opts)
 	if err != nil {

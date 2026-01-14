@@ -52,6 +52,9 @@ func ChooseKForDict(dict []byte, samples [][]byte) *ActiveProfile {
 	scores := make([]kScore, 0, len(ks))
 	var baseline kScore
 	for _, k := range ks {
+		if k <= 0 {
+			continue
+		}
 		payload, meta, raw := batchTotals(dict, eval, k)
 		if raw == 0 {
 			continue

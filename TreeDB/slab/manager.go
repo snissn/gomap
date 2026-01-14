@@ -1915,6 +1915,19 @@ func (sm *SlabManager) ForceTrainerCollecting() {
 func (sm *SlabManager) ForceAcceptProfileForTesting(p *compression.ActiveProfile) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if p != nil && p.K <= 0 {
+		p = &compression.ActiveProfile{
+			DictHash:         p.DictHash,
+			DictBytes:        p.DictBytes,
+			Dict:             p.Dict,
+			K:                1,
+			PayloadRatio:     p.PayloadRatio,
+			TotalRatio:       p.TotalRatio,
+			DecodeNsEstimate: p.DecodeNsEstimate,
+			Samples:          p.Samples,
+			Timestamp:        p.Timestamp,
+		}
+	}
 	sm.currentProfile.Store(p)
 	// Ensure activeCompression is ZSTD if we have a dictionary.
 	if sm.compression.Kind != CompressionZSTD {
