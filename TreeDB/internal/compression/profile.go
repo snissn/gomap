@@ -123,6 +123,9 @@ func ChooseKForDict(dict []byte, samples [][]byte) *ActiveProfile {
 }
 
 func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, raw int) {
+	if k <= 0 {
+		return 0, 0, 0
+	}
 	n := (len(samples) / k) * k
 	if n == 0 {
 		return 0, 0, 0
