@@ -161,3 +161,46 @@ func TestWaitForStopFlushesWithoutBackground(t *testing.T) {
 		t.Fatal("Set blocked under backpressure without background flush")
 	}
 }
+
+func TestLargeBatchBypassSkipsBackpressureStop(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1024,
+		DisableValueLog:        true,
+		MemtableShards:         1,
+		SlowdownBacklogSeconds: 0,
+		StopBacklogSeconds:     1,
+		MaxBacklogBytes:        0,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.queueBacklogBytes.Store(10 * 1024)
+
+	b := db.NewBatchWithSize(2048)
+	payload := bytes.Repeat([]byte("x"), 2048)
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		if err := b.Set(key, payload); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Write()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked under backpressure for large bypass batch")
+	}
+}

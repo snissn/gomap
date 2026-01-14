@@ -5686,7 +5686,6 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
-	b.db.waitForStop()
 
 	if b.backend != nil {
 		var err error
@@ -5727,6 +5726,7 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeRegular(sync bool) error {
+	b.db.waitForStop()
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
