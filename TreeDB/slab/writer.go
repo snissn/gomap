@@ -267,6 +267,16 @@ func (w *SlabWriter) Flush() error {
 
 func (w *SlabWriter) flushBuffers() error {
 	w.mu.Lock()
+	if w.err != nil {
+		err := w.err
+		w.mu.Unlock()
+		return err
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("writer closed")
+	}
+	target := w.offset
 	// Force rotation to flush activeBuf
 	if len(w.activeBuf) > 0 {
 		if err := w.rotateBufferLocked(); err != nil {
@@ -275,55 +285,7 @@ func (w *SlabWriter) flushBuffers() error {
 		}
 	}
 	w.mu.Unlock()
-
-	// Wait for pendingCh to drain
-	// We can push a "sync marker"?
-	// Or just wait until durableSize == offset?
-	// But offset changes.
-	//
-	// Reliable Sync: Send a "SyncRequest" to flushLoop?
-	// OR: acquire lock, capture expected size, wait.
-	// But flushLoop doesn't signal completion of specific batches.
-	//
-	// Simplest: Send a special empty buffer? `flushLoop` writes len=0.
-	// We need to know when THAT empty buffer is processed.
-	//
-	// `rotateBufferLocked` sends `activeBuf`.
-	// If we just rotated, `activeBuf` is now empty.
-	// If we send THAT empty buffer to `pendingCh`, `flushLoop` receives it after all prior data.
-	// Then `flushLoop` sends it to `freeCh`.
-	// So if we read from `freeCh`, we know everything prior is done.
-
-	// So:
-	// 1. Lock.
-	// 2. Rotate (sends current data to pending).
-	// 3. Unlock.
-	// 4. Wait for free buffer (ensures pending processed).
-	// 5. Put buffer back (since we just grabbed it to sync).
-
-	// BUT `rotateBufferLocked` *does* wait for a free buffer.
-	// So just calling `rotateBufferLocked` ensures the *previous* pending buffer is done.
-	// It pushes current data to pending.
-	// We need to wait for *that* to be done too.
-	//
-	// So: Call `rotateBufferLocked` TWICE?
-	// 1. Push A to pending. Get B.
-	// 2. Push B (empty) to pending. Get A.
-	// Now A is processed.
-
-	w.mu.Lock()
-	if err := w.rotateBufferLocked(); err != nil {
-		w.mu.Unlock()
-		return err
-	}
-	// Send empty marker
-	if err := w.rotateBufferLocked(); err != nil {
-		w.mu.Unlock()
-		return err
-	}
-	w.mu.Unlock()
-
-	return nil
+	return w.waitForDurable(target)
 }
 
 func (w *SlabWriter) Close() error {
@@ -387,6 +349,31 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 		}
 	}
 	w.mu.Unlock()
+	w.durableMu.Lock()
+	defer w.durableMu.Unlock()
+	for w.durableSize.Load() < offset {
+		w.mu.Lock()
+		err := w.err
+		closed := w.closed
+		w.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if closed {
+			return fmt.Errorf("writer closed")
+		}
+		w.durableCond.Wait()
+	}
+	return nil
+}
+
+func (w *SlabWriter) waitForDurable(offset int64) error {
+	if offset <= 0 {
+		return nil
+	}
+	if w.durableSize.Load() >= offset {
+		return nil
+	}
 	w.durableMu.Lock()
 	defer w.durableMu.Unlock()
 	for w.durableSize.Load() < offset {
