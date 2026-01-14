@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -179,6 +180,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	z := idx.zipper.CloneWithAllocator(tracker)
 	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
 	if err != nil {
+		log.Printf("treedb: batch apply failed: %v", err)
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
 		if freeErr != nil {
@@ -212,6 +214,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	}
 
 	if err := b.waitForSlabDurability(sync); err != nil {
+		log.Printf("treedb: batch wait for slab durability failed: %v", err)
 		b.db.commitMu.Unlock()
 		b.db.writeMu.RUnlock()
 		return false, err
@@ -220,6 +223,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, nil, metrics, b.lastSeq)
 	b.db.commitMu.Unlock()
 	if err != nil {
+		log.Printf("treedb: batch finalize commit failed: %v", err)
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
@@ -249,6 +253,7 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
+		log.Printf("treedb: batch apply (serialized) failed: %v", err)
 		return err
 	}
 	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
@@ -271,10 +276,12 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 	b.db.mu.Unlock()
 
 	if err := b.waitForSlabDurability(sync); err != nil {
+		log.Printf("treedb: batch wait for slab durability (serialized) failed: %v", err)
 		return err
 	}
 
 	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, sysOps, metrics, b.lastSeq); err != nil {
+		log.Printf("treedb: batch finalize commit (serialized) failed: %v", err)
 		return err
 	}
 	if b.db.vacuum.Active() {
