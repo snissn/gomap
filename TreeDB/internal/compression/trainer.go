@@ -366,7 +366,9 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	defer t.training.Store(false)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("treedb: slab compression training PANIC slab=%d err=%v", slabID, r)
+			// Suppress panic from zstd or internal logic, treat as failed training.
+			// Log as warning instead of PANIC.
+			log.Printf("treedb: slab compression training skipped slab=%d err=%v", slabID, r)
 		}
 	}()
 	if len(samples) == 0 {
@@ -449,10 +451,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		dictID = 1
 	}
 
-	var dict []byte
-	var err error
-
-	dict, err = buildAndValidateDict(dictID, validSamples, history, level)
+	dict, err := buildAndValidateDict(dictID, validSamples, history, level)
 	if err != nil || len(dict) == 0 {
 		return
 	}
@@ -562,12 +561,26 @@ func validateDict(dict []byte, level zstd.EncoderLevel) error {
 	if err != nil {
 		return err
 	}
-	enc.Close()
+	defer enc.Close()
+
+	// Verify the dictionary actually works for round-trip.
+	// We use a small dummy payload.
+	dummy := []byte("test_payload_validation")
+	compressed := enc.EncodeAll(dummy, nil)
+
 	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
 	if err != nil {
 		return err
 	}
-	dec.Close()
+	defer dec.Close()
+
+	decompressed, err := dec.DecodeAll(compressed, nil)
+	if err != nil {
+		return err
+	}
+	if string(decompressed) != string(dummy) {
+		return fmt.Errorf("dictionary round-trip mismatch")
+	}
 	return nil
 }
 

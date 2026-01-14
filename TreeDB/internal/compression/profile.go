@@ -31,7 +31,13 @@ type kScore struct {
 	score        float64
 }
 
-func ChooseKForDict(dict []byte, samples [][]byte) *ActiveProfile {
+func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
+	defer func() {
+		if r := recover(); r != nil {
+			profile = nil
+		}
+	}()
+
 	if len(samples) == 0 || len(dict) == 0 {
 		return nil
 	}
