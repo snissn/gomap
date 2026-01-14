@@ -170,11 +170,11 @@ func TestUnifiedWAL_InterleavedWrites(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		sVal, err := backend.Get([]byte(fmt.Sprintf("small-%d", i)))
 		if err != nil || len(sVal) != 50 {
-			t.Errorf("Small read failed at %d", i)
+			t.Errorf("Small read failed at %d err=%v len=%d", i, err, len(sVal))
 		}
 		lVal, err := backend.Get([]byte(fmt.Sprintf("large-%d", i)))
 		if err != nil || len(lVal) != 500 {
-			t.Errorf("Large read failed at %d", i)
+			t.Errorf("Large read failed at %d err=%v len=%d", i, err, len(lVal))
 		}
 	}
 }

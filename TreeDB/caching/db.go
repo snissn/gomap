@@ -4180,7 +4180,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						val := iter.UnsafeValue()
-						if ptrs != nil {
+						if ptrs != nil && db.valueLogReader != nil {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
@@ -4326,7 +4326,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						val := iter.UnsafeValue()
-						if pointerBatch != nil && unit.ptrs != nil {
+						if pointerBatch != nil && unit.ptrs != nil && db.valueLogReader != nil {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
