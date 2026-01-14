@@ -31,13 +31,14 @@ type SlabManager struct {
 	slabs            map[uint32]*SlabFile // The master list of all live + zombie slabs
 	mu               sync.RWMutex
 
-	disableReadChecksum bool
-	compression         compression.Config
-	activeCompression   compression.Config
-	currentProfile      atomic.Pointer[compression.ActiveProfile]
-	omitSlabKeys        bool
-	compressionMetrics  compression.Metrics
-	compressionTrainer  *compression.Trainer
+	disableReadChecksum          bool
+	compression                  compression.Config
+	activeCompression            compression.Config
+	currentProfile               atomic.Pointer[compression.ActiveProfile]
+	omitSlabKeys                 bool
+	disableFullRecordCompression bool
+	compressionMetrics           compression.Metrics
+	compressionTrainer           *compression.Trainer
 
 	appendManyScratch         []byte
 	compressionPauseRemaining atomic.Uint64
@@ -61,14 +62,15 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		return nil, err
 	}
 	sm := &SlabManager{
-		dir:                dir,
-		readOnly:           readOnly,
-		slabs:              make(map[uint32]*SlabFile),
-		compression:        compCfg,
-		activeCompression:  compCfg, // Start with base compression
-		omitSlabKeys:       opts.OmitSlabKeys,
-		compressionMetrics: compression.NewMetrics(opts.ToMetricsOptions()),
-		compressionTrainer: compression.NewTrainer(opts.ToTrainConfig(), compCfg, readOnly, opts.CompressionMetrics),
+		dir:                          dir,
+		readOnly:                     readOnly,
+		slabs:                        make(map[uint32]*SlabFile),
+		compression:                  compCfg,
+		activeCompression:            compCfg, // Start with base compression
+		omitSlabKeys:                 opts.OmitSlabKeys,
+		disableFullRecordCompression: opts.CompressionDisableFullRecord,
+		compressionMetrics:           compression.NewMetrics(opts.ToMetricsOptions()),
+		compressionTrainer:           compression.NewTrainer(opts.ToTrainConfig(), compCfg, readOnly, opts.CompressionMetrics),
 	}
 
 	matches, err := filepath.Glob(filepath.Join(dir, "data-*.slab"))
@@ -301,11 +303,13 @@ func (sm *SlabManager) EstimateCompression(key, value []byte) (rawLen int, store
 		return rawLen, storedLen, nil
 	}
 
-	if enc, ok, err := sm.compression.CompressRecord(key, value); err != nil {
-		return rawLen, storedLen, err
-	} else if ok {
-		rawLen = 2 + len(key) + len(value)
-		return rawLen, len(enc), nil
+	if !sm.disableFullRecordCompression {
+		if enc, ok, err := sm.compression.CompressRecord(key, value); err != nil {
+			return rawLen, storedLen, err
+		} else if ok {
+			rawLen = 2 + len(key) + len(value)
+			return rawLen, len(enc), nil
+		}
 	}
 
 	enc, _, err := sm.compression.CompressValue(value)
@@ -552,19 +556,23 @@ func (sm *SlabManager) appendWithOptions(key, value []byte, opts AppendOptions) 
 	fullCompressed := false
 	omittedKey := false
 	var err error
+	var errInner error
 	if !opts.SkipTraining && sm.compressionTrainer != nil && sm.compressionTrainer.ShouldCollect() {
 		sm.compressionTrainer.Collect(value)
 	}
 	if !opts.DisableCompression && sm.activeCompression.Kind != CompressionNone && sm.shouldCompress(len(value)) {
 		// Try full record compression first
-		if enc, ok, errInner := sm.activeCompression.CompressRecord(key, value); errInner == nil && ok {
-			encoded = enc
-			encodedKey = nil
-			compressed = true
-			fullCompressed = true
-		} else if errInner != nil {
-			return page.ValuePtr{}, errInner
-		} else {
+		if !sm.disableFullRecordCompression {
+			if enc, ok, errInner := sm.activeCompression.CompressRecord(key, value); errInner == nil && ok {
+				encoded = enc
+				encodedKey = nil
+				compressed = true
+				fullCompressed = true
+			} else if errInner != nil {
+				return page.ValuePtr{}, errInner
+			}
+		}
+		if !fullCompressed {
 			// Fall back to value-only compression
 			encoded, compressed, errInner = sm.activeCompression.CompressValue(value)
 			if errInner != nil {
@@ -843,14 +851,17 @@ func (sm *SlabManager) appendWithOptionsMany(keys [][]byte, values [][]byte) ([]
 				continue
 			}
 			// Try full record compression first
-			if enc, ok, err := sm.activeCompression.CompressRecord(keys[i], values[i]); err == nil && ok {
-				encodedValues[i] = enc
-				encodedKeys[i] = nil
-				compressedFlags[i] = true
-				fullCompressedFlags[i] = true
-			} else if err != nil {
-				return nil, err
-			} else {
+			if !sm.disableFullRecordCompression {
+				if enc, ok, err := sm.activeCompression.CompressRecord(keys[i], values[i]); err == nil && ok {
+					encodedValues[i] = enc
+					encodedKeys[i] = nil
+					compressedFlags[i] = true
+					fullCompressedFlags[i] = true
+				} else if err != nil {
+					return nil, err
+				}
+			}
+			if !fullCompressedFlags[i] {
 				// Fall back to value-only compression
 				var encoded []byte
 				var compressed bool
@@ -1348,7 +1359,7 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 				},
 			}
 		case ZoneDictRef:
-			// profile.Dict here might be unpadded if it's from currentProfile, 
+			// profile.Dict here might be unpadded if it's from currentProfile,
 			// but we should ensure all stored dicts are padded.
 			// Actually, let's just ensure we use what we have.
 			encPool := &sync.Pool{
@@ -1425,12 +1436,12 @@ func (sm *SlabManager) forceRotateZoneLocked() error {
 		sm.activeCompression = sm.compression // shallow copy
 		sm.activeCompression.ZstdEncs = finalEncs
 		sm.activeCompression.ZstdDecs = finalDecs
-		
+
 		// Update profile with PADDED dict so USE_REF works correctly later
 		paddedProfile := *profile
 		paddedProfile.Dict = localDict
 		sm.currentProfile.Store(&paddedProfile)
-		
+
 		zoneID := uint32(s.Size / ZoneSize)
 		s.recordDictRef(dictHash, zoneID, zh.DictCRC)
 	} else if dictType == ZoneDictRef {

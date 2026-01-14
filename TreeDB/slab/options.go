@@ -15,6 +15,7 @@ type CompressionTrainConfig = compression.TrainConfig
 
 type Options struct {
 	Compression                            CompressionOptions
+	CompressionDisableFullRecord           bool
 	OmitSlabKeys                           bool
 	CompressionMetrics                     bool
 	CompressionMetricsWindowBytes          int

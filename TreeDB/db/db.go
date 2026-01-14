@@ -291,6 +291,9 @@ type Options struct {
 	SlabCompressionAdaptiveTrainSampleStride int
 	// SlabCompressionAdaptiveTrainDedupWindow controls the exact-hash dedup window size.
 	SlabCompressionAdaptiveTrainDedupWindow int
+	// SlabCompressionDisableFullRecord skips full-record compression attempts
+	// (key+value) to reduce CPU overhead in write-heavy paths.
+	SlabCompressionDisableFullRecord bool
 	// OmitSlabKeys avoids storing the key in the slab record. This saves space
 	// for small records but requires IndexSwap compaction (the default compactor
 	// will skip these records as dead).
@@ -496,6 +499,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
 		Compression:                            opts.SlabCompression,
+		CompressionDisableFullRecord:           opts.SlabCompressionDisableFullRecord,
 		OmitSlabKeys:                           opts.OmitSlabKeys,
 		CompressionMetrics:                     opts.SlabCompressionMetrics,
 		CompressionMetricsWindowBytes:          opts.SlabCompressionMetricsWindowBytes,

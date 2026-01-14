@@ -192,6 +192,9 @@ func applyCompressedProfile(opts *Options, fast bool) {
 		if opts.MaintenanceDeleteMinRatio == 0 {
 			opts.MaintenanceDeleteMinRatio = 1.0
 		}
+		if !opts.SlabCompressionDisableFullRecord {
+			opts.SlabCompressionDisableFullRecord = true
+		}
 		if opts.SlabCompression.MinBytes == 0 {
 			opts.SlabCompression.MinBytes = 16384
 		}
