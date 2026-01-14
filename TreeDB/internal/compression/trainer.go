@@ -2,6 +2,7 @@ package compression
 
 import (
 	"encoding/binary"
+	"fmt"
 	"log"
 	"math"
 	"sync"
