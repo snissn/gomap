@@ -2469,7 +2469,7 @@ func (db *DB) waitForStop() {
 		// (e.g. backlog driven by iterator rotations). This still "blocks" the write
 		// in the sense that we don't accept new ops until backlog drops, but lets the
 		// caller contribute bounded flush work.
-		db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+		db.flushSomeBlocking(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 
 		db.bpMu.Lock()
 		for {
@@ -2526,14 +2526,26 @@ func (db *DB) maybeAssistFlush() {
 }
 
 func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) {
+	db.flushSomeWithLock(sync, maxMemtables, maxDuration, false)
+}
+
+func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Duration) {
+	db.flushSomeWithLock(sync, maxMemtables, maxDuration, true)
+}
+
+func (db *DB) flushSomeWithLock(sync bool, maxMemtables int, maxDuration time.Duration, block bool) {
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return
 	}
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
-	if !db.flushMu.TryLock() {
-		return
+	if block {
+		db.flushMu.Lock()
+	} else {
+		if !db.flushMu.TryLock() {
+			return
+		}
 	}
 	defer db.flushMu.Unlock()
 

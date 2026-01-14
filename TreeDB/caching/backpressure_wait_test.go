@@ -101,3 +101,63 @@ func TestWaitForStopIgnoresStaleBacklog(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitForStopFlushesWithoutBackground(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:          1024,
+		DisableValueLog:         true,
+		MemtableShards:          1,
+		SlowdownBacklogSeconds:  0,
+		StopBacklogSeconds:      1,
+		MaxBacklogBytes:         0,
+		WriterFlushMaxMemtables: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload := bytes.Repeat([]byte("x"), 2048)
+	setMutable(db, []byte("k1"), payload)
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	if db.QueueBacklogBytes() == 0 {
+		t.Fatalf("expected backlog after rotation")
+	}
+
+	origFlushCh := db.flushCh
+	db.flushCh = make(chan struct{})
+	defer func() { db.flushCh = origFlushCh }()
+
+	db.flushMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- db.Set([]byte("k2"), []byte("v"))
+	}()
+
+	select {
+	case err := <-done:
+		db.flushMu.Unlock()
+		t.Fatalf("Set completed early: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	db.flushMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Set blocked under backpressure without background flush")
+	}
+}
