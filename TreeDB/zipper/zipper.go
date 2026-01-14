@@ -626,14 +626,15 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 	children := getChildWorkSlice(int(count))
 	defer putChildWorkSlice(children)
 
+	parentID := oldNode.PageID()
 	for i := uint16(0); i < count; i++ {
 		// Optimization: Use View to avoid alloc
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		if childID == pageID {
-			log.Printf("treedb: zipper self-child detected page_id=%d entry=%d", pageID, i)
+		if childID == parentID {
+			log.Printf("treedb: zipper self-child detected page_id=%d entry=%d", parentID, i)
 		}
 
 		// Determine End Key for this child
