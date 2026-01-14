@@ -224,11 +224,12 @@ func (db *DB) currentValueLogSeq() int {
 }
 
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
+	if !page.IsValueLogFileID(ptr.FileID) {
+		// Non-value-log pointer: must be a backend slab pointer (Zero-Copy Architecture).
+		return db.backend.Read(ptr)
+	}
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
-	}
-	if !page.IsValueLogFileID(ptr.FileID) {
-		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
 	}
 	if db.memtableValueLogPointers && db.valueLogEnabled() {
 		db.mu.RLock()

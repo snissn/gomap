@@ -477,7 +477,7 @@ func validateUnsafeOptions(opts Options) error {
 	if opts.AllowUnsafe {
 		return nil
 	}
-	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
+	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen {
 		return ErrUnsafeOptions
 	}
 	return nil
