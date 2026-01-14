@@ -53,6 +53,7 @@ type Batch struct {
 	byteSize        int
 	slabWritten     int
 	slabWrittenByID map[uint32]int64
+	slabMaxEndByID  map[uint32]uint64
 	inlineThreshold int
 	sorted          bool
 	assumeSorted    bool
@@ -127,6 +128,11 @@ func (b *Batch) resetLocked() {
 			delete(b.slabWrittenByID, id)
 		}
 	}
+	if b.slabMaxEndByID != nil {
+		for id := range b.slabMaxEndByID {
+			delete(b.slabMaxEndByID, id)
+		}
+	}
 	b.sorted = true
 	b.assumeSorted = false
 	b.lastKey = nil
@@ -171,6 +177,11 @@ func (b *Batch) resetForPool() {
 			delete(b.slabWrittenByID, id)
 		}
 	}
+	if b.slabMaxEndByID != nil {
+		for id := range b.slabMaxEndByID {
+			delete(b.slabMaxEndByID, id)
+		}
+	}
 	b.sorted = true
 	b.assumeSorted = false
 	b.lastKey = nil
@@ -191,6 +202,7 @@ func Release(b *Batch) {
 	b.slabManager = nil
 	b.inlineThreshold = 0
 	b.slabWrittenByID = nil
+	b.slabMaxEndByID = nil
 	b.closed = true
 	batchPool.Put(b)
 }
@@ -207,6 +219,21 @@ func (b *Batch) noteKeyOrder(key []byte) {
 		return
 	}
 	b.lastKey = key
+}
+
+func (b *Batch) recordSlabWrite(ptr page.ValuePtr) {
+	b.slabWritten += int(ptr.Length)
+	if b.slabWrittenByID == nil {
+		b.slabWrittenByID = make(map[uint32]int64, 4)
+	}
+	b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
+	if b.slabMaxEndByID == nil {
+		b.slabMaxEndByID = make(map[uint32]uint64, 4)
+	}
+	end := ptr.Offset + uint64(page.ValuePtrRecordLength(ptr))
+	if end > b.slabMaxEndByID[ptr.FileID] {
+		b.slabMaxEndByID[ptr.FileID] = end
+	}
 }
 
 // SetView is an internal-performance helper that records a Put without copying
@@ -232,11 +259,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		}
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
-		b.slabWritten += int(ptr.Length)
-		if b.slabWrittenByID == nil {
-			b.slabWrittenByID = make(map[uint32]int64, 4)
-		}
-		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
+		b.recordSlabWrite(ptr)
 	} else {
 		entry.Value = value
 	}
@@ -274,11 +297,7 @@ func (b *Batch) Set(key, value []byte) error {
 		}
 		entry.ValuePtr = ptr
 		entry.IsPtr = true
-		b.slabWritten += int(ptr.Length)
-		if b.slabWrittenByID == nil {
-			b.slabWrittenByID = make(map[uint32]int64, 4)
-		}
-		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
+		b.recordSlabWrite(ptr)
 	} else {
 		// Store inline
 		valCopy := make([]byte, len(value))
@@ -430,11 +449,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			op.IsPtr = true
 			op.Value = nil
 
-			b.slabWritten += int(ptr.Length)
-			if b.slabWrittenByID == nil {
-				b.slabWrittenByID = make(map[uint32]int64, 4)
-			}
-			b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
+			b.recordSlabWrite(ptr)
 		}
 
 		clear(keys)
@@ -537,4 +552,10 @@ func (b *Batch) SlabWriteBytes() int {
 // this batch. The returned map must be treated as read-only by callers.
 func (b *Batch) SlabWriteBytesByFile() map[uint32]int64 {
 	return b.slabWrittenByID
+}
+
+// SlabWriteMaxEndByFile returns a per-slab maximum end offset (exclusive) written.
+// The returned map must be treated as read-only by callers.
+func (b *Batch) SlabWriteMaxEndByFile() map[uint32]uint64 {
+	return b.slabMaxEndByID
 }

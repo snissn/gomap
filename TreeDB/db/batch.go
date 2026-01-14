@@ -211,6 +211,12 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
+	if err := b.waitForSlabDurability(sync); err != nil {
+		b.db.commitMu.Unlock()
+		b.db.writeMu.RUnlock()
+		return false, err
+	}
+
 	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, nil, metrics, b.lastSeq)
 	b.db.commitMu.Unlock()
 	if err != nil {
@@ -264,6 +270,10 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	if err := b.waitForSlabDurability(sync); err != nil {
+		return err
+	}
+
 	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, sysOps, metrics, b.lastSeq); err != nil {
 		return err
 	}
@@ -291,6 +301,22 @@ func (b *Batch) Reset() {
 	b.batch.Reset()
 	b.transformed = false
 	b.sysOps = nil
+}
+
+func (b *Batch) waitForSlabDurability(sync bool) error {
+	if sync || b == nil || b.batch == nil || b.db == nil || b.db.slabManager == nil {
+		return nil
+	}
+	maxByFile := b.batch.SlabWriteMaxEndByFile()
+	if len(maxByFile) == 0 {
+		return nil
+	}
+	for id, end := range maxByFile {
+		if err := b.db.slabManager.WaitForOffset(id, end); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

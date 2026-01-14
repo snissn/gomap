@@ -415,20 +415,12 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
 	cfg := &sm.compression
-
-	// If reading from active slab with async writer, ensure data is on disk.
-	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
-		// Drop read lock to acquire write lock in Sync
-		sm.mu.RUnlock()
-		if err := sm.activeSlabWriter.Flush(); err != nil {
+	sm.mu.RUnlock()
+	if ok {
+		if err := sm.WaitForPtr(ptr); err != nil {
 			return nil, err
 		}
-		sm.mu.RLock()
-		// Re-acquire s/cfg in case they changed
-		s, ok = sm.slabs[ptr.FileID]
-		cfg = &sm.compression
 	}
-	sm.mu.RUnlock()
 
 	if !ok || s == nil {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
@@ -481,18 +473,12 @@ func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
 	cfg := &sm.compression
-
-	// If reading from active slab with async writer, ensure data is on disk.
-	if ok && sm.activeSlabWriter != nil && sm.activeSlab == s {
-		sm.mu.RUnlock()
-		if err := sm.activeSlabWriter.Flush(); err != nil {
+	sm.mu.RUnlock()
+	if ok {
+		if err := sm.WaitForPtr(ptr); err != nil {
 			return nil, err
 		}
-		sm.mu.RLock()
-		s, ok = sm.slabs[ptr.FileID]
-		cfg = &sm.compression
 	}
-	sm.mu.RUnlock()
 
 	if !ok || s == nil {
 		return nil, fmt.Errorf("slab file %d not found", ptr.FileID)
@@ -1537,6 +1523,33 @@ func (sm *SlabManager) Flush() error {
 	}
 	if sm.activeSlabWriter != nil {
 		return sm.activeSlabWriter.Flush()
+	}
+	return nil
+}
+
+// WaitForPtr blocks until the pointer's data is durable if it targets the active slab.
+func (sm *SlabManager) WaitForPtr(ptr page.ValuePtr) error {
+	end := int64(ptr.Offset) + int64(page.ValuePtrRecordLength(ptr))
+	return sm.WaitForOffset(ptr.FileID, uint64(end))
+}
+
+// WaitForOffset blocks until the given offset is durable for the active slab.
+func (sm *SlabManager) WaitForOffset(fileID uint32, offset uint64) error {
+	sm.mu.RLock()
+	s, ok := sm.slabs[fileID]
+	active := sm.activeSlab
+	writer := sm.activeSlabWriter
+	sm.mu.RUnlock()
+	if !ok || s == nil || active == nil || writer == nil || s != active {
+		return nil
+	}
+	if err := writer.WaitForOffset(int64(offset)); err != nil {
+		sm.mu.RLock()
+		activeNow := sm.activeSlab == s && sm.activeSlabWriter == writer
+		sm.mu.RUnlock()
+		if activeNow {
+			return err
+		}
 	}
 	return nil
 }

@@ -24,6 +24,8 @@ type SlabWriter struct {
 
 	// tracking durable offset
 	durableSize atomic.Int64
+	durableMu   sync.Mutex
+	durableCond *sync.Cond
 }
 
 func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
@@ -38,6 +40,7 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 		freeCh:    make(chan []byte, 1),
 		doneCh:    make(chan struct{}),
 	}
+	w.durableCond = sync.NewCond(&w.durableMu)
 	w.durableSize.Store(s.Size)
 
 	// Create the second buffer and put it in free pool
@@ -206,9 +209,11 @@ func (w *SlabWriter) flushLoop() {
 				w.mu.Lock()
 				w.err = err
 				w.mu.Unlock()
+				w.signalDurable()
 				return
 			}
 			w.durableSize.Store(w.s.Size)
+			w.signalDurable()
 		}
 
 		// Recycle logic: only recycle if it matches our standard buffer pool.
@@ -336,6 +341,7 @@ func (w *SlabWriter) Close() error {
 	}
 	w.closed = true
 	w.mu.Unlock()
+	w.signalDurable()
 
 	close(w.pendingCh)
 	<-w.doneCh
@@ -354,4 +360,39 @@ func (w *SlabWriter) ResetOffset(offset int64) {
 	defer w.mu.Unlock()
 	w.offset = offset
 	w.durableSize.Store(offset)
+	w.signalDurable()
+}
+
+func (w *SlabWriter) WaitForOffset(offset int64) error {
+	if offset <= 0 {
+		return nil
+	}
+	if w.durableSize.Load() >= offset {
+		return nil
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	w.durableMu.Lock()
+	defer w.durableMu.Unlock()
+	for w.durableSize.Load() < offset {
+		w.mu.Lock()
+		err := w.err
+		closed := w.closed
+		w.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if closed {
+			return fmt.Errorf("writer closed")
+		}
+		w.durableCond.Wait()
+	}
+	return nil
+}
+
+func (w *SlabWriter) signalDurable() {
+	w.durableMu.Lock()
+	w.durableCond.Broadcast()
+	w.durableMu.Unlock()
 }
