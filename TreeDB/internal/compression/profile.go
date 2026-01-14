@@ -76,8 +76,21 @@ func ChooseKForDict(dict []byte, samples [][]byte) *ActiveProfile {
 	}
 	avgRaw := float64(baseline.raw) / float64(len(eval))
 	best := kScore{score: -math.MaxFloat64, K: 1}
+	if baseline.raw <= 0 {
+		return &ActiveProfile{
+			DictHash:  xxhash.Sum64(dict),
+			DictBytes: len(dict),
+			Dict:      dict,
+			K:         1,
+			Samples:   len(eval),
+			Timestamp: time.Now(),
+		}
+	}
 	for _, kr := range scores {
 		if kr.K == 1 {
+			continue
+		}
+		if kr.raw == 0 {
 			continue
 		}
 		bytesSaved := (float64(baseline.totalBytes)/float64(baseline.raw) - float64(kr.totalBytes)/float64(kr.raw)) * avgRaw

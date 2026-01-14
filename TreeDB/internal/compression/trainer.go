@@ -364,6 +364,11 @@ func (t *Trainer) appendSample(sample trainerSample) {
 
 func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
 	defer t.training.Store(false)
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("treedb: slab compression training PANIC slab=%d err=%v", slabID, r)
+		}
+	}()
 	if len(samples) == 0 {
 		return
 	}
@@ -447,19 +452,12 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	var dict []byte
 	var err error
 
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("treedb: slab compression training PANIC slab=%d err=%v", slabID, r)
-			}
-		}()
-		dict, err = zstd.BuildDict(zstd.BuildDictOptions{
-			ID:       dictID,
-			Contents: validSamples,
-			History:  history,
-			Level:    level,
-		})
-	}()
+	dict, err = zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       dictID,
+		Contents: validSamples,
+		History:  history,
+		Level:    level,
+	})
 
 	if err != nil || len(dict) == 0 {
 		if err != nil {
