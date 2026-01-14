@@ -65,6 +65,16 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 	if err != nil {
 		return nil, err
 	}
+	metricsOpts := opts.ToMetricsOptions()
+	if opts.Compression.Kind != CompressionNone && metricsOpts.AdaptiveRatio == 0 {
+		metricsOpts.AdaptiveRatio = 0.995
+	}
+	if metricsOpts.WindowBytes <= 0 {
+		metricsOpts.WindowBytes = 1 << 20
+	}
+	if metricsOpts.PauseBytes <= 0 {
+		metricsOpts.PauseBytes = 16 << 20
+	}
 	sm := &SlabManager{
 		dir:                          dir,
 		readOnly:                     readOnly,
@@ -73,7 +83,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		activeCompression:            compCfg, // Start with base compression
 		omitSlabKeys:                 opts.OmitSlabKeys,
 		disableFullRecordCompression: opts.CompressionDisableFullRecord,
-		compressionMetrics:           compression.NewMetrics(opts.ToMetricsOptions()),
+		compressionMetrics:           compression.NewMetrics(metricsOpts),
 		compressionTrainer:           compression.NewTrainer(opts.ToTrainConfig(), compCfg, readOnly, opts.CompressionMetrics),
 	}
 	probeBytes := opts.CompressionAdaptiveProbeBytes
@@ -81,7 +91,7 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		probeBytes = 0
 	}
 	if probeBytes == 0 && sm.compressionMetrics.Enabled {
-		probeBytes = int(sm.compressionMetrics.WindowBytes / 4)
+		probeBytes = int(sm.compressionMetrics.PauseBytes / 4)
 		if probeBytes < 64<<10 {
 			probeBytes = 64 << 10
 		}
