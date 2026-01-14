@@ -2485,23 +2485,13 @@ func (db *DB) waitForStop() {
 		}
 
 		db.bpMu.Lock()
-		for {
-			_, stopBytes, resumeBytes = db.thresholdsLocked()
-			if stopBytes <= 0 {
-				db.bpMu.Unlock()
-				return
-			}
-			backlog = db.queueBacklogBytes.Load()
-			if backlog < stopBytes {
-				db.bpMu.Unlock()
-				return
-			}
-			if backlog < resumeBytes {
-				break
-			}
-			db.bpCond.Wait()
-		}
+		_, stopBytes, resumeBytes = db.thresholdsLocked()
+		backlog = db.queueBacklogBytes.Load()
 		db.bpMu.Unlock()
+		if stopBytes <= 0 || backlog < stopBytes || backlog < resumeBytes {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
