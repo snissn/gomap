@@ -66,6 +66,16 @@ type IndexSwapCompactionOptions struct {
 
 	// Stats captures timing and byte counters for the compaction run.
 	Stats *IndexSwapCompactionStats
+
+	// TestHooks provides synchronization points for regression tests.
+	TestHooks *IndexSwapTestHooks
+}
+
+// IndexSwapTestHooks exposes internal state transitions for testing.
+type IndexSwapTestHooks struct {
+	OnCutoverLockAcquired func()
+	OnCutoverBeforeSync   func()
+	OnCutoverAfterPublish func()
 }
 
 // IndexSwapCompactionStats summarizes compaction work for observability.
@@ -460,6 +470,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		}
 
 		db.writeMu.Lock()
+		if opts.TestHooks != nil && opts.TestHooks.OnCutoverLockAcquired != nil {
+			opts.TestHooks.OnCutoverLockAcquired()
+		}
 		db.vacuum.Stop()
 		finalOps := db.vacuum.Drain()
 		if len(finalOps) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
@@ -531,6 +544,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 
 		// Ensure slab tail referenced by meta is durable before publishing the
 		// new index. Index swap compaction is treated as a durability boundary.
+		if opts.TestHooks != nil && opts.TestHooks.OnCutoverBeforeSync != nil {
+			opts.TestHooks.OnCutoverBeforeSync()
+		}
 		if err := db.slabManager.Sync(); err != nil {
 			db.writeMu.Unlock()
 			cleanupNewPager()
@@ -600,6 +616,9 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		db.mu.Lock()
 		oldState = db.state.Load()
 		db.idx.Store(newGen)
+		if opts.TestHooks != nil && opts.TestHooks.OnCutoverAfterPublish != nil {
+			opts.TestHooks.OnCutoverAfterPublish()
+		}
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
 		db.state.Store(&DBState{

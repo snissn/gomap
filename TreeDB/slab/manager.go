@@ -2238,3 +2238,21 @@ func (sm *SlabManager) RemoveSlab(id uint32) error {
 	}
 	return nil
 }
+
+// TestPauseActiveSlabWriter pauses the flush loop of the active slab writer.
+func (sm *SlabManager) TestPauseActiveSlabWriter() {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if sm.activeSlabWriter != nil {
+		sm.activeSlabWriter.TestPauseFlushLoop()
+	}
+}
+
+// TestResumeActiveSlabWriter resumes the flush loop of the active slab writer.
+func (sm *SlabManager) TestResumeActiveSlabWriter() {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if sm.activeSlabWriter != nil {
+		sm.activeSlabWriter.TestResumeFlushLoop()
+	}
+}

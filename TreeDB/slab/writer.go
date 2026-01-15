@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type SlabWriter struct {
@@ -26,6 +27,11 @@ type SlabWriter struct {
 	durableSize atomic.Int64
 	durableMu   sync.Mutex
 	durableCond *sync.Cond
+
+	bufferSize int
+
+	// Test hooks
+	testFlushPaused atomic.Bool
 }
 
 func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
@@ -33,12 +39,13 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 		bufferSize = 4 << 20 // 4MB default
 	}
 	w := &SlabWriter{
-		s:         s,
-		activeBuf: make([]byte, 0, bufferSize),
-		offset:    s.Size(),
-		pendingCh: make(chan []byte, 1),
-		freeCh:    make(chan []byte, 1),
-		doneCh:    make(chan struct{}),
+		s:          s,
+		activeBuf:  make([]byte, 0, bufferSize),
+		offset:     s.Size(),
+		pendingCh:  make(chan []byte, 1),
+		freeCh:     make(chan []byte, 1),
+		doneCh:     make(chan struct{}),
+		bufferSize: bufferSize,
 	}
 	w.durableCond = sync.NewCond(&w.durableMu)
 	w.durableSize.Store(s.Size())
@@ -187,26 +194,12 @@ func (w *SlabWriter) reportClosedLocked() error {
 func (w *SlabWriter) flushLoop() {
 	defer close(w.doneCh)
 
-	// Standard buffer capacity to detect "oversized" buffers that shouldn't be recycled
-	// We can capture this from the first free buffer.
-	// Or we pass it in constructor.
-	// Hack: We know bufferSize from constructor, but didn't save it.
-	// We can check cap() of buffers coming from freeCh?
-	// Let's just blindly recycle everything to freeCh?
-	// No, if we allocate huge buffers for large records, we don't want to keep them.
-	//
-	// Improved loop:
-	// 1. Read pending.
-	// 2. Write to disk.
-	// 3. If cap(buf) == standardSize, send to freeCh. Else drop.
-
-	// Wait for the initial free buffer creation to infer size?
-	// Or just save bufferSize in struct.
-	// Let's assume standard capacity is determined by the first buffer we see?
-	// Actually we can just check if cap <= 16MB (arbitrary limit) or something?
-	// Better: Add `bufferSize` field.
-
 	for buf := range w.pendingCh {
+		// Test hook: pause flush loop
+		for w.testFlushPaused.Load() {
+			time.Sleep(10 * time.Millisecond)
+		}
+
 		if len(buf) > 0 {
 			_, err := w.s.WriteBatch(buf, false)
 			if err != nil {
@@ -220,37 +213,17 @@ func (w *SlabWriter) flushLoop() {
 			w.signalDurable()
 		}
 
-		// Recycle logic: only recycle if it matches our standard buffer pool.
-		// Since we don't strictly track standard size, let's just recycle if it came from the pool.
-		// We have 2 buffers in rotation. Oversized ones are allocated ad-hoc.
-		// As long as we keep 2 buffers in the loop, we are good.
-		// Oversized ones are extra.
-		// If we send them to freeCh, we might bloat memory.
-		//
-		// Simple Fix: We initialized with 2 buffers.
-		// If we receive a buffer, check if we need to return it.
-		// We only need to return enough to keep the loop going.
-		// `freeCh` has cap 1. `pendingCh` has cap 1.
-		// If we try to send to `freeCh` and it blocks, we drop it?
-		// No, `Write` waits on `freeCh`.
-		//
-		// Correct logic: `Write` consumes 1 from `freeCh` and sends 1 to `pendingCh`.
-		// `flushLoop` consumes 1 from `pendingCh` and MUST send 1 to `freeCh`.
-		// If the buffer was oversized, we should discard it and allocate a new standard one to send to `freeCh`.
-
-		// To do this right, we need `bufferSize` in struct. I'll assume 4MB for now or rely on cap check.
-		// Let's check cap. If > 32MB, discard and make new?
-		// Let's stick to strict double buffering of the original buffers if possible.
-		// But pointers change.
-
-		// New Strategy: Always send *something* back to freeCh.
-		// If `buf` is huge, send a new empty slice with cap=0?
-		// `Write` handles growing `activeBuf` if cap is small.
-		// So if we send back a small/empty buffer, `Write` will allocate.
-		// That's fine.
+		// Recycle logic
+		recycleBuf := buf
+		if cap(buf) > w.bufferSize {
+			// Drop oversized buffer, allocate standard one
+			recycleBuf = make([]byte, 0, w.bufferSize)
+		} else {
+			recycleBuf = buf[:0]
+		}
 
 		select {
-		case w.freeCh <- buf[:0]:
+		case w.freeCh <- recycleBuf:
 		default:
 			// Should not happen if logic is correct (1-in 1-out)
 		}
@@ -410,4 +383,23 @@ func (w *SlabWriter) signalDurable() {
 	w.durableMu.Lock()
 	w.durableCond.Broadcast()
 	w.durableMu.Unlock()
+}
+
+// TestFillFreeCh non-blockingly fills freeCh if empty.
+// Used for regression testing of dropped buffers.
+func (w *SlabWriter) TestFillFreeCh() {
+	select {
+	case w.freeCh <- make([]byte, 0, w.bufferSize):
+	default:
+	}
+}
+
+// TestPauseFlushLoop pauses the background flush loop before the next write.
+func (w *SlabWriter) TestPauseFlushLoop() {
+	w.testFlushPaused.Store(true)
+}
+
+// TestResumeFlushLoop resumes the background flush loop.
+func (w *SlabWriter) TestResumeFlushLoop() {
+	w.testFlushPaused.Store(false)
 }
