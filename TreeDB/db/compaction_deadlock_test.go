@@ -100,3 +100,94 @@ func TestCompactionIndexSwap_DeadlockRegression(t *testing.T) {
 		t.Log("Cleanup timed out (expected during deadlock test)")
 	}
 }
+
+func TestCompactionIndexSwap_ConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir, BackgroundCompactionIndexSwap: false}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Create data to compact (Slab 0)
+	// Need enough data to trigger Assist hook (>4MB).
+	// 1000 keys * 5KB = ~5MB
+	keys := make([][]byte, 1000)
+	val := make([]byte, 5*1024) 
+	for i := 0; i < 1000; i++ {
+		keys[i] = []byte(fmt.Sprintf("k%04d", i))
+		if err := db.Set(keys[i], val); err != nil {
+			t.Fatalf("Set failed: %v", err)
+		}
+	}
+	if _, err := db.SlabManager().Rotate(); err != nil {
+		t.Fatalf("Rotate failed: %v", err)
+	}
+
+	// 2. Setup hooks to synchronize
+	compactionRunning := make(chan struct{})
+	allowContinue := make(chan struct{})
+	var once sync.Once
+
+	assistHook := func() {
+		once.Do(func() {
+			close(compactionRunning)
+			<-allowContinue
+		})
+	}
+
+	// 3. Start Compaction in background
+	compactionDone := make(chan error, 1)
+	go func() {
+		err := db.CompactSlabsIndexSwap(context.Background(), []uint32{0}, IndexSwapCompactionOptions{
+			Assist: assistHook,
+		})
+		compactionDone <- err
+	}()
+
+	// 4. Wait for Compaction to be running (in Build phase)
+	select {
+	case <-compactionRunning:
+		t.Log("Compaction is running (Assist hook reached)")
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Compaction failed to reach Assist hook")
+	}
+
+	// 5. Perform Concurrent Write
+	// This should succeed immediately because Compaction does not hold write locks during Build.
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- db.Set([]byte("concurrent"), []byte("value"))
+	}()
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("Concurrent Write failed: %v", err)
+		}
+		t.Log("Concurrent Write succeeded")
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Concurrent Write timed out (Blocked by Compaction?)")
+	}
+
+	// 6. Finish Compaction
+	close(allowContinue)
+	select {
+	case err := <-compactionDone:
+		if err != nil {
+			t.Fatalf("Compaction failed: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("Compaction timed out after unblock")
+	}
+
+	// Verify concurrent write is visible
+	gotVal, err := db.Get([]byte("concurrent"))
+	if err != nil {
+		t.Fatalf("Get concurrent failed: %v", err)
+	}
+	if string(gotVal) != "value" {
+		t.Fatalf("Get concurrent mismatch: got %q", gotVal)
+	}
+}
