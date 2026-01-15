@@ -77,7 +77,6 @@ func TestIndexSwapCutover_IsNotBlockedByWriterDurabilityWait(t *testing.T) {
 	}
 
 	// Cleanup
-	db.SlabManager().TestResumeActiveSlabWriter()
 	<-compactionDone
 	wg.Wait()
 }

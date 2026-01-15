@@ -21,6 +21,7 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 
 	// 1. Pause flush loop so we can control channel state
 	w.TestPauseFlushLoop()
+	defer w.TestResumeFlushLoop()
 
 	// 2. Perform a write that fills activeBuf and forces rotation.
 	// This puts a buffer into pendingCh and takes one from freeCh.
@@ -39,12 +40,15 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 	// activeBuf: Buf2. pendingCh: Buf1. freeCh: Buf3 (Full).
 	w.TestFillFreeCh()
 
-	// 4. Resume flush loop.
-	// flushLoop picks Buf1. Writes it.
-	// Tries to put Buf1 into freeCh.
-	// freeCh is Full (Buf3).
-	// With the BUG (default case), Buf1 is dropped.
-	// With the FIX (blocking send), flushLoop blocks until freeCh has space.
+	// 4. Resume flush loop (now implicitly handled by defer/sleep or we just wait for it to unblock)
+	// Actually, we need to resume it explicitly here to test the specific sequence?
+	// No, if we defer resume, it happens at end of test.
+	// But we need it to resume NOW for step 5 to work.
+	// So we can call it again? Or just rely on defer for cleanup and keep explicit call?
+	// If we defer, it runs at return.
+	// If we call explicit, it sets flag to false.
+	// Calling twice is fine (atomic store).
+	// So I will KEEP explicit call but also have defer for safety.
 	w.TestResumeFlushLoop()
 
 	// 5. Perform another write that requires rotation.
