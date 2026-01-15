@@ -64,6 +64,9 @@ func shortestSeparator(left, right []byte) []byte {
 		sep[i] = left[i] + 1
 		return sep
 	}
+	if left[i]+1 == right[i] && i+1 < len(right) {
+		return append([]byte(nil), right[:i+1]...)
+	}
 	return append([]byte(nil), right...)
 }
 
@@ -463,6 +466,7 @@ func (z *Zipper) mergeLeaf(oldNode node.Node, builder *node.Builder, ops []batch
 	var oldKey, oldVal []byte
 	var oldPtr page.ValuePtr
 	var oldFlags byte
+	var lastKey []byte
 
 	var splits []Split
 
@@ -604,12 +608,13 @@ func (z *Zipper) mergeLeaf(oldNode node.Node, builder *node.Builder, ops []batch
 
 			// Record split
 			splitKey := append([]byte(nil), key...) // Deep copy
-			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
-				splitKey = shortestSeparator(leftMax, key)
+			if len(lastKey) > 0 {
+				splitKey = shortestSeparator(lastKey, key)
 			}
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder
+			lastKey = lastKey[:0]
 
 			// Retry insert
 			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
@@ -617,8 +622,11 @@ func (z *Zipper) mergeLeaf(oldNode node.Node, builder *node.Builder, ops []batch
 			if err != nil {
 				return 0, nil, err
 			}
+			lastKey = append(lastKey[:0], key...)
 		} else if err != nil {
 			return 0, nil, err
+		} else {
+			lastKey = append(lastKey[:0], key...)
 		}
 	}
 
