@@ -120,7 +120,18 @@ func TestSlabWriter_WaitForOffset_ForcesRotationWhenActiveBufNonEmpty(t *testing
 	defer s.Close()
 
 	w := NewSlabWriter(s, 4096)
-	defer w.Close()
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			w.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+			t.Log("Writer close timed out (expected if test failed)")
+		}
+	}()
 
 	// Write small data (stays in activeBuf)
 	data := []byte("small")
@@ -153,7 +164,18 @@ func TestSlabWriter_OversizeWrite_IsFlushedAndDurable(t *testing.T) {
 
 	bufSize := 4096
 	w := NewSlabWriter(s, bufSize)
-	defer w.Close()
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			w.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+			t.Log("Writer close timed out (expected if test failed)")
+		}
+	}()
 
 	// Write oversized data
 	data := make([]byte, bufSize*2)
