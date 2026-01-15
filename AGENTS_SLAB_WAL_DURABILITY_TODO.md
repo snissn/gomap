@@ -44,12 +44,12 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
   - [x] Add regression: `TestSlabWriter_WaitForOffset_Close_NoHang`.
   - [x] Add regression: `TestSlabWriter_Close_UnblocksWaiters` (covers `Sync()` and `WaitForOffset` concurrently).
 
-- [ ] **Serialize ignore-boundary direct writes:** `WriteBatch(ignoreBoundary=true)` must not race with concurrent buffered writes.
-  - [ ] Add `ioMu` (or equivalent) to serialize file I/O between flushLoop and direct writes.
-  - [ ] Block concurrent `Write()` during ignore-boundary “flush + direct write + resync offset”.
-  - [ ] Offset correctness invariant: offsets returned to callers are reserved under `w.mu` before I/O begins; avoid “snap to file size” corrections unless proven equivalent to the reserved range.
-  - [ ] Add regression: `TestSlabWriter_IgnoreBoundary_ConcurrentWrites_NoCorruption`.
-  - [ ] Add regression: `TestSlabWriter_RotateWhileFlushInFlight` (file switch / rotation during an in-flight flush).
+- [x] **Serialize ignore-boundary direct writes:** `WriteBatch(ignoreBoundary=true)` must not race with concurrent buffered writes.
+  - [x] Add `ioMu` (or equivalent) to serialize file I/O between flushLoop and direct writes.
+  - [x] Block concurrent `Write()` during ignore-boundary “flush + direct write + resync offset”.
+  - [x] Offset correctness invariant: offsets returned to callers are reserved under `w.mu` before I/O begins; avoid “snap to file size” corrections unless proven equivalent to the reserved range.
+  - [x] Add regression: `TestSlabWriter_IgnoreBoundary_ConcurrentWrites_NoCorruption`.
+  - [x] Add regression: `TestSlabWriter_RotateWhileFlushInFlight` (file switch / rotation during an in-flight flush).
 
 - [ ] **Queue depth sanity:** consider raising `pendingCh` capacity (or moving to bounded queue) to avoid pathological backpressure stalls.
 
@@ -134,3 +134,4 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 - 2026-01-15: Replaced Close shutdown with stop/done channels; gated rotation to avoid send-on-closed and deadlock; added `TestSlabWriter_CloseWhileWriting_NoPanic` and `TestSlabWriter_Close_UnblocksPendingEnqueue` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_CloseWhileWriting_NoPanic|TestSlabWriter_Close_UnblocksPendingEnqueue' -count=1 -timeout 60s).
 - 2026-01-15: Added terminal error publication via atomic once; added `TestSlabWriter_FlushLoopError_NoDeadlock` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_FlushLoopError_NoDeadlock -count=1 -timeout 60s).
 - 2026-01-15: Switched WaitForOffset/Sync waiters to w.cond with flushLoop exit wakeups; added `TestSlabWriter_WaitForOffset_Close_NoHang` and `TestSlabWriter_Close_UnblocksWaiters` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_WaitForOffset_Close_NoHang|TestSlabWriter_Close_UnblocksWaiters' -count=1 -timeout 60s).
+- 2026-01-15: Serialized slab I/O with ioMu and direct-write gating; added `TestSlabWriter_IgnoreBoundary_ConcurrentWrites_NoCorruption` and `TestSlabWriter_RotateWhileFlushInFlight` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_IgnoreBoundary_ConcurrentWrites_NoCorruption|TestSlabWriter_RotateWhileFlushInFlight' -count=1 -timeout 60s).

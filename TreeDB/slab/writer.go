@@ -15,6 +15,8 @@ type SlabWriter struct {
 	activeBuf []byte
 	offset    int64 // Virtual offset of the next write (includes activeBuf + pending)
 	rotating  bool
+	directIO  bool
+	ioMu      sync.Mutex
 
 	// Channels for buffer exchange
 	pendingCh chan []byte // Buffers full, waiting to be written
@@ -64,7 +66,7 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 
 func (w *SlabWriter) Write(data []byte) (int64, error) {
 	w.mu.Lock()
-	for w.rotating {
+	for w.rotating || w.directIO {
 		w.cond.Wait()
 	}
 	if err := w.terminalErr(); err != nil {
@@ -129,22 +131,61 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 
 func (w *SlabWriter) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 	if ignoreBoundary {
-		// Force flush to ensure sequentiality before raw write
-		if err := w.Sync(); err != nil {
+		if len(buf) == 0 {
+			return w.Size(), nil
+		}
+		w.mu.Lock()
+		for w.rotating || w.directIO {
+			w.cond.Wait()
+		}
+		if err := w.terminalErr(); err != nil {
+			w.mu.Unlock()
 			return 0, err
 		}
-		// Direct write to slab
-		off, err := w.s.WriteBatch(buf, true)
-		if err == nil {
-			w.mu.Lock()
-			w.offset = w.s.Size() // Re-sync offset
+		if w.closed {
 			w.mu.Unlock()
-
-			// Re-sync durable size since we bypassed flushLoop
-			w.durableSize.Store(w.s.Size())
-			w.signalDurable()
+			return 0, fmt.Errorf("writer closed")
 		}
-		return off, err
+		target := w.offset
+		if len(w.activeBuf) > 0 {
+			if err := w.rotateBufferLocked(); err != nil {
+				w.mu.Unlock()
+				return 0, err
+			}
+		}
+		w.directIO = true
+		retOffset := w.offset
+		w.offset += int64(len(buf))
+		w.mu.Unlock()
+
+		if err := w.waitForDurable(target); err != nil {
+			w.mu.Lock()
+			w.offset -= int64(len(buf))
+			w.directIO = false
+			w.cond.Broadcast()
+			w.mu.Unlock()
+			return 0, err
+		}
+
+		w.ioMu.Lock()
+		_, err := w.s.WriteBatch(buf, true)
+		w.ioMu.Unlock()
+		if err != nil {
+			w.mu.Lock()
+			w.offset -= int64(len(buf))
+			w.directIO = false
+			w.cond.Broadcast()
+			w.mu.Unlock()
+			return 0, err
+		}
+
+		w.durableSize.Store(retOffset + int64(len(buf)))
+		w.signalDurable()
+		w.mu.Lock()
+		w.directIO = false
+		w.cond.Broadcast()
+		w.mu.Unlock()
+		return retOffset, nil
 	}
 	return w.Write(buf)
 }
@@ -237,7 +278,9 @@ func (w *SlabWriter) flushLoop() {
 		select {
 		case buf := <-w.pendingCh:
 			if len(buf) > 0 {
+				w.ioMu.Lock()
 				_, err := w.s.WriteBatch(buf, false)
+				w.ioMu.Unlock()
 				if err != nil {
 					w.setTerminalErr(err)
 					return
@@ -266,7 +309,9 @@ func (w *SlabWriter) flushLoop() {
 				select {
 				case buf := <-w.pendingCh:
 					if len(buf) > 0 {
+						w.ioMu.Lock()
 						_, err := w.s.WriteBatch(buf, false)
+						w.ioMu.Unlock()
 						if err != nil {
 							w.setTerminalErr(err)
 							return
@@ -306,6 +351,9 @@ func (w *SlabWriter) Flush() error {
 
 func (w *SlabWriter) flushBuffers() error {
 	w.mu.Lock()
+	for w.directIO {
+		w.cond.Wait()
+	}
 	if err := w.terminalErr(); err != nil {
 		w.mu.Unlock()
 		return err
