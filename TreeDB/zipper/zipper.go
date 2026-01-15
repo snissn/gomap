@@ -2,16 +2,10 @@ package zipper
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"log"
-	"os"
 	"runtime"
-	"strconv"
-	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -91,442 +85,6 @@ type childWork struct {
 const maxChildWorkCap = 1 << 14
 
 var childWorkPool sync.Pool
-var debugZipper = envBool("TREEDB_ZIPPER_DEBUG", false)
-var debugZipperDumpPage = envUint64("TREEDB_ZIPPER_DUMP_PAGE", 0)
-var debugZipperDumpPages = envUint64Set("TREEDB_ZIPPER_DUMP_PAGES")
-var debugZipperDepthStart = envInt("TREEDB_ZIPPER_DEBUG_DEPTH", 45)
-var debugZipperKey = envHex("TREEDB_ZIPPER_DEBUG_KEY")
-var debugZipperDumpDepths = envIntSet("TREEDB_ZIPPER_DUMP_DEPTHS")
-var debugZipperDumpLimit = envInt("TREEDB_ZIPPER_DUMP_LIMIT", 32)
-var debugZipperDumpOnLimit = envBool("TREEDB_ZIPPER_DUMP_ON_LIMIT", false)
-var debugZipperValidate = envBool("TREEDB_ZIPPER_VALIDATE", false)
-var debugZipperTraceApply = envBool("TREEDB_ZIPPER_TRACE_APPLY", false)
-var debugZipperTraceDepth = envBool("TREEDB_ZIPPER_TRACE_DEPTH", false)
-var debugZipperTraceDepthThreshold = envInt("TREEDB_ZIPPER_TRACE_DEPTH_THRESHOLD", 40)
-var debugZipperTraceSingleChild = envBool("TREEDB_ZIPPER_TRACE_SINGLE_CHILD", false)
-var debugZipperTraceSingleChildLimit = envInt("TREEDB_ZIPPER_TRACE_SINGLE_CHILD_LIMIT", 200)
-var debugZipperTraceSingleChildCount int64
-
-func envBool(name string, defaultValue bool) bool {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return defaultValue
-	}
-	v = strings.TrimSpace(strings.ToLower(v))
-	if v == "" {
-		return true
-	}
-	switch v {
-	case "1", "true", "t", "yes", "y", "on":
-		return true
-	case "0", "false", "f", "no", "n", "off":
-		return false
-	}
-	return defaultValue
-}
-
-func envUint64(name string, defaultValue uint64) uint64 {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return defaultValue
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return defaultValue
-	}
-	n, err := strconv.ParseUint(v, 10, 64)
-	if err != nil {
-		return defaultValue
-	}
-	return n
-}
-
-func envInt(name string, defaultValue int) int {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return defaultValue
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return defaultValue
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return defaultValue
-	}
-	return n
-}
-
-func envHex(name string) []byte {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return nil
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return nil
-	}
-	b, err := hex.DecodeString(v)
-	if err != nil {
-		return nil
-	}
-	return b
-}
-
-func envIntSet(name string) map[int]struct{} {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return nil
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return nil
-	}
-	out := make(map[int]struct{})
-	for _, part := range strings.Split(v, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.Atoi(part)
-		if err != nil {
-			continue
-		}
-		out[n] = struct{}{}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func envUint64Set(name string) map[uint64]struct{} {
-	v, ok := os.LookupEnv(name)
-	if !ok {
-		return nil
-	}
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return nil
-	}
-	out := make(map[uint64]struct{})
-	for _, part := range strings.Split(v, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		n, err := strconv.ParseUint(part, 10, 64)
-		if err != nil {
-			continue
-		}
-		out[n] = struct{}{}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func formatKey(key []byte) string {
-	if len(key) == 0 {
-		return "<empty>"
-	}
-	if len(key) <= 16 {
-		return fmt.Sprintf("%x", key)
-	}
-	return fmt.Sprintf("%x...(len=%d)", key[:16], len(key))
-}
-
-func logNodeSummary(prefix string, pageID uint64, n node.Node) {
-	switch n.Type() {
-	case page.PageTypeInternal:
-		count := n.Count()
-		var firstKey, lastKey []byte
-		if count > 0 {
-			firstKey, _, _ = n.GetInternalEntryView(0)
-			lastKey, _, _ = n.GetInternalEntryView(count - 1)
-		}
-		log.Printf("treedb: zipper %s page_id=%d type=internal count=%d first_key=%s last_key=%s",
-			prefix,
-			pageID,
-			count,
-			formatKey(firstKey),
-			formatKey(lastKey),
-		)
-	case page.PageTypeLeaf:
-		count := n.Count()
-		var firstKey, lastKey []byte
-		if count > 0 {
-			firstKey, _, _, _, _ = n.GetLeafEntryView(0)
-			lastKey, _, _, _, _ = n.GetLeafEntryView(count - 1)
-		}
-		log.Printf("treedb: zipper %s page_id=%d type=leaf count=%d first_key=%s last_key=%s",
-			prefix,
-			pageID,
-			count,
-			formatKey(firstKey),
-			formatKey(lastKey),
-		)
-	default:
-		log.Printf("treedb: zipper %s page_id=%d type=%v count=%d",
-			prefix,
-			pageID,
-			n.Type(),
-			n.Count(),
-		)
-	}
-}
-
-func shouldTraceSingleChild() bool {
-	if !debugZipperTraceSingleChild {
-		return false
-	}
-	if debugZipperTraceSingleChildLimit <= 0 {
-		return true
-	}
-	n := atomic.AddInt64(&debugZipperTraceSingleChildCount, 1)
-	return int(n) <= debugZipperTraceSingleChildLimit
-}
-
-func traceSingleChildInternal(tag string, depth int, pageID uint64, n node.Node) {
-	if n.Type() != page.PageTypeInternal || n.Count() != 1 {
-		return
-	}
-	if !shouldTraceSingleChild() {
-		return
-	}
-	key, childID, err := n.GetInternalEntryView(0)
-	if err != nil {
-		log.Printf("treedb: zipper single-child %s depth=%d page_id=%d err=%v", tag, depth, pageID, err)
-		return
-	}
-	log.Printf("treedb: zipper single-child %s depth=%d page_id=%d key=%s child=%d", tag, depth, pageID, formatKey(key), childID)
-}
-
-func dumpNodeEntries(prefix string, pageID uint64, n node.Node, limit int) {
-	if limit <= 0 {
-		limit = 32
-	}
-	switch n.Type() {
-	case page.PageTypeInternal:
-		count := int(n.Count())
-		log.Printf("treedb: zipper %s page_id=%d type=internal count=%d", prefix, pageID, count)
-		head := limit / 2
-		tail := limit - head
-		for i := 0; i < count; i++ {
-			if i == head && count > limit {
-				log.Printf("treedb: zipper %s page_id=%d ... skipped %d entries ...", prefix, pageID, count-limit)
-				i = count - tail
-			}
-			key, childID, err := n.GetInternalEntryView(uint16(i))
-			if err != nil {
-				log.Printf("treedb: zipper %s page_id=%d entry=%d err=%v", prefix, pageID, i, err)
-				continue
-			}
-			log.Printf("treedb: zipper %s page_id=%d entry=%d key=%s child=%d", prefix, pageID, i, formatKey(key), childID)
-		}
-	case page.PageTypeLeaf:
-		count := int(n.Count())
-		log.Printf("treedb: zipper %s page_id=%d type=leaf count=%d", prefix, pageID, count)
-		head := limit / 2
-		tail := limit - head
-		for i := 0; i < count; i++ {
-			if i == head && count > limit {
-				log.Printf("treedb: zipper %s page_id=%d ... skipped %d entries ...", prefix, pageID, count-limit)
-				i = count - tail
-			}
-			key, _, _, _, err := n.GetLeafEntryView(uint16(i))
-			if err != nil {
-				log.Printf("treedb: zipper %s page_id=%d entry=%d err=%v", prefix, pageID, i, err)
-				continue
-			}
-			log.Printf("treedb: zipper %s page_id=%d entry=%d key=%s", prefix, pageID, i, formatKey(key))
-		}
-	default:
-		log.Printf("treedb: zipper %s page_id=%d type=%v count=%d", prefix, pageID, n.Type(), n.Count())
-	}
-}
-
-func debugKeyMatch(ops []batch.Entry) bool {
-	if len(debugZipperKey) == 0 {
-		return true
-	}
-	if len(ops) == 0 {
-		return false
-	}
-	return bytes.Equal(ops[0].Key, debugZipperKey)
-}
-
-func compareKeys(a, b []byte) int {
-	if len(a) == 0 && len(b) == 0 {
-		return 0
-	}
-	if len(a) == 0 {
-		return -1
-	}
-	if len(b) == 0 {
-		return 1
-	}
-	return bytes.Compare(a, b)
-}
-
-type keyRange struct {
-	min []byte
-	max []byte
-}
-
-func copyKey(k []byte) []byte {
-	if len(k) == 0 {
-		return nil
-	}
-	out := make([]byte, len(k))
-	copy(out, k)
-	return out
-}
-
-func (z *Zipper) validateTree(rootID uint64) error {
-	seen := make(map[uint64]struct{})
-	_, _, err := z.validateNode(rootID, 0, seen)
-	return err
-}
-
-type depthStats struct {
-	maxDepth int
-	leaves   int
-	internal int
-	singles  int
-	maxChain int
-}
-
-func (z *Zipper) computeDepthStats(rootID uint64) (depthStats, error) {
-	stats := depthStats{}
-	seen := make(map[uint64]struct{})
-	type frame struct {
-		id          uint64
-		depth       int
-		singleChain int
-	}
-	stack := []frame{{id: rootID, depth: 0, singleChain: 0}}
-	for len(stack) > 0 {
-		last := len(stack) - 1
-		f := stack[last]
-		stack = stack[:last]
-		if _, ok := seen[f.id]; ok {
-			continue
-		}
-		seen[f.id] = struct{}{}
-		data, err := z.pager.Get(f.id)
-		if err != nil {
-			return stats, err
-		}
-		n := node.NewNodeView(data)
-		if f.depth > stats.maxDepth {
-			stats.maxDepth = f.depth
-		}
-		switch n.Type() {
-		case page.PageTypeLeaf:
-			stats.leaves++
-			if f.singleChain > stats.maxChain {
-				stats.maxChain = f.singleChain
-			}
-		case page.PageTypeInternal:
-			stats.internal++
-			count := int(n.Count())
-			nextChain := 0
-			if count == 1 {
-				stats.singles++
-				nextChain = f.singleChain + 1
-				if nextChain > stats.maxChain {
-					stats.maxChain = nextChain
-				}
-			}
-			for i := count - 1; i >= 0; i-- {
-				_, childID, err := n.GetInternalEntryView(uint16(i))
-				if err != nil {
-					return stats, err
-				}
-				chain := 0
-				if count == 1 {
-					chain = nextChain
-				}
-				stack = append(stack, frame{id: childID, depth: f.depth + 1, singleChain: chain})
-			}
-		}
-	}
-	return stats, nil
-}
-
-func (z *Zipper) validateNode(pageID uint64, depth int, seen map[uint64]struct{}) (keyRange, keyRange, error) {
-	if _, ok := seen[pageID]; ok {
-		return keyRange{}, keyRange{}, fmt.Errorf("cycle detected at page %d", pageID)
-	}
-	seen[pageID] = struct{}{}
-	data, err := z.pager.Get(pageID)
-	if err != nil {
-		return keyRange{}, keyRange{}, err
-	}
-	n := node.NewNodeView(data)
-	switch n.Type() {
-	case page.PageTypeLeaf:
-		count := n.Count()
-		if count == 0 {
-			return keyRange{}, keyRange{}, fmt.Errorf("empty leaf at page %d", pageID)
-		}
-		firstKey, _, _, _, err := n.GetLeafEntryView(0)
-		if err != nil {
-			return keyRange{}, keyRange{}, err
-		}
-		lastKey, _, _, _, err := n.GetLeafEntryView(count - 1)
-		if err != nil {
-			return keyRange{}, keyRange{}, err
-		}
-		return keyRange{min: copyKey(firstKey), max: copyKey(lastKey)}, keyRange{}, nil
-	case page.PageTypeInternal:
-		count := n.Count()
-		if count == 0 {
-			return keyRange{}, keyRange{}, fmt.Errorf("empty internal at page %d", pageID)
-		}
-		var prevKey []byte
-		var prevMax []byte
-		var overallMin []byte
-		var overallMax []byte
-		for i := uint16(0); i < count; i++ {
-			key, childID, err := n.GetInternalEntryView(i)
-			if err != nil {
-				return keyRange{}, keyRange{}, err
-			}
-			if i == 0 {
-				prevKey = key
-			} else if compareKeys(prevKey, key) >= 0 {
-				return keyRange{}, keyRange{}, fmt.Errorf("internal keys out of order at page %d idx %d prev=%s key=%s", pageID, i, formatKey(prevKey), formatKey(key))
-			}
-
-			childRange, _, err := z.validateNode(childID, depth+1, seen)
-			if err != nil {
-				return keyRange{}, keyRange{}, err
-			}
-			if len(childRange.min) == 0 || len(childRange.max) == 0 {
-				return keyRange{}, keyRange{}, fmt.Errorf("empty child range at page %d child %d", pageID, childID)
-			}
-			if i == 0 {
-				overallMin = childRange.min
-			} else {
-				if compareKeys(prevMax, key) >= 0 {
-					return keyRange{}, keyRange{}, fmt.Errorf("separator overlap at page %d idx %d key=%s prev_max=%s", pageID, i, formatKey(key), formatKey(prevMax))
-				}
-				if compareKeys(childRange.min, key) < 0 {
-					return keyRange{}, keyRange{}, fmt.Errorf("child min < separator at page %d idx %d key=%s child_min=%s", pageID, i, formatKey(key), formatKey(childRange.min))
-				}
-			}
-			prevMax = childRange.max
-			overallMax = childRange.max
-			prevKey = key
-		}
-		return keyRange{min: overallMin, max: overallMax}, keyRange{}, nil
-	default:
-		return keyRange{}, keyRange{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
-	}
-}
 
 func getChildWorkSlice(capacity int) []childWork {
 	if capacity < 0 {
@@ -671,24 +229,8 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	}
 	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
 
-	if debugZipperTraceApply && debugKeyMatch(ops) {
-		log.Printf("treedb: zipper apply start root=%d ops=%d deletes=%d maintenance=%t", rootID, len(ops), deleteCount, maintenance)
-	}
-	if debugZipperValidate && debugKeyMatch(ops) {
-		if err := z.validateTree(rootID); err != nil {
-			log.Printf("treedb: zipper validate failed: %v", err)
-		}
-	}
-
 	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics, 0)
 	if err != nil {
-		if debugZipperTraceDepth && debugKeyMatch(ops) {
-			if stats, depthErr := z.computeDepthStats(rootID); depthErr == nil && stats.maxDepth >= debugZipperTraceDepthThreshold {
-				log.Printf("treedb: zipper depth trace root=%d max_depth=%d leaves=%d internal=%d singles=%d max_chain=%d",
-					rootID, stats.maxDepth, stats.leaves, stats.internal, stats.singles, stats.maxChain,
-				)
-			}
-		}
 		return 0, nil, metrics, err
 	}
 
@@ -781,75 +323,12 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		}
 	}
 
-	if debugZipperTraceDepth && debugKeyMatch(ops) {
-		if stats, depthErr := z.computeDepthStats(newRoot); depthErr == nil {
-			if stats.maxDepth >= debugZipperTraceDepthThreshold || debugZipperTraceApply {
-				log.Printf("treedb: zipper depth trace root=%d max_depth=%d leaves=%d internal=%d singles=%d max_chain=%d",
-					newRoot, stats.maxDepth, stats.leaves, stats.internal, stats.singles, stats.maxChain,
-				)
-			}
-		} else {
-			log.Printf("treedb: zipper depth trace err=%v", depthErr)
-		}
-	}
 	return newRoot, retired, metrics, nil
 }
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
-	if (debugZipperDumpPage != 0 && pageID == debugZipperDumpPage) || (debugZipperDumpPages != nil && func() bool { _, ok := debugZipperDumpPages[pageID]; return ok }()) {
-		if data, err := z.pager.Get(pageID); err == nil {
-			n := node.NewNodeView(data)
-			switch n.Type() {
-			case page.PageTypeInternal:
-				log.Printf("treedb: zipper dump page_id=%d type=internal count=%d", pageID, n.Count())
-				for i := uint16(0); i < n.Count(); i++ {
-					key, childID, err := n.GetInternalEntryView(i)
-					if err != nil {
-						log.Printf("treedb: zipper dump page_id=%d entry=%d err=%v", pageID, i, err)
-						continue
-					}
-					log.Printf("treedb: zipper dump page_id=%d entry=%d key=%s child=%d", pageID, i, formatKey(key), childID)
-				}
-			case page.PageTypeLeaf:
-				log.Printf("treedb: zipper dump page_id=%d type=leaf count=%d", pageID, n.Count())
-				if n.Count() > 0 {
-					firstKey, _, _, _, err := n.GetLeafEntryView(0)
-					if err != nil {
-						log.Printf("treedb: zipper dump page_id=%d leaf_first err=%v", pageID, err)
-						break
-					}
-					lastKey, _, _, _, err := n.GetLeafEntryView(n.Count() - 1)
-					if err != nil {
-						log.Printf("treedb: zipper dump page_id=%d leaf_last err=%v", pageID, err)
-						break
-					}
-					log.Printf("treedb: zipper dump page_id=%d leaf_keys first=%s last=%s", pageID, formatKey(firstKey), formatKey(lastKey))
-				}
-			default:
-				log.Printf("treedb: zipper dump page_id=%d type=%v count=%d", pageID, n.Type(), n.Count())
-			}
-		} else {
-			log.Printf("treedb: zipper dump page_id=%d err=%v", pageID, err)
-		}
-	}
-	if debugZipper && debugKeyMatch(ops) && debugZipperDumpDepths != nil {
-		if _, ok := debugZipperDumpDepths[depth]; ok {
-			if data, err := z.pager.Get(pageID); err == nil {
-				dumpNodeEntries(fmt.Sprintf("depth=%d", depth), pageID, node.NewNodeView(data), debugZipperDumpLimit)
-			} else {
-				log.Printf("treedb: zipper depth=%d page_id=%d err=%v", depth, pageID, err)
-			}
-		}
-	}
-	if debugZipper && depth >= debugZipperDepthStart && debugKeyMatch(ops) {
-		if data, err := z.pager.Get(pageID); err == nil {
-			logNodeSummary(fmt.Sprintf("depth=%d", depth), pageID, node.NewNodeView(data))
-		} else {
-			log.Printf("treedb: zipper depth=%d page_id=%d err=%v", depth, pageID, err)
-		}
-	}
 	if depth > 50 {
 		var pageType page.PageType
 		var count uint16
@@ -859,31 +338,6 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 			pageType = n.Type()
 			count = n.Count()
 			headerID = n.PageID()
-		}
-		if debugZipper {
-			var firstKey, lastKey []byte
-			if len(ops) > 0 {
-				firstKey = ops[0].Key
-				lastKey = ops[len(ops)-1].Key
-			}
-			log.Printf("treedb: zipper depth debug page_id=%d header_id=%d depth=%d ops=%d first_key=%s last_key=%s",
-				pageID,
-				headerID,
-				depth,
-				len(ops),
-				formatKey(firstKey),
-				formatKey(lastKey),
-			)
-			if len(firstKey) > 0 {
-				log.Printf("treedb: zipper depth debug key_hex=%x", firstKey)
-			}
-			if debugZipperDumpOnLimit && debugKeyMatch(ops) {
-				if data, err := z.pager.Get(pageID); err == nil {
-					dumpNodeEntries("limit", pageID, node.NewNodeView(data), debugZipperDumpLimit)
-				} else {
-					log.Printf("treedb: zipper limit page_id=%d err=%v", pageID, err)
-				}
-			}
 		}
 		log.Printf("treedb: zipper depth limit hit page_id=%d header_id=%d depth=%d ops=%d page_type=%v count=%d",
 			pageID,
@@ -915,41 +369,6 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	}
 	oldNode := node.NewNodeView(oldData)
 
-	if debugZipper && debugKeyMatch(ops) && oldNode.Type() == page.PageTypeInternal {
-		key := ops[0].Key
-		chosenIdx := uint16(0)
-		var chosenChild uint64
-		var endKey []byte
-		count := oldNode.Count()
-		for i := uint16(0); i < count; i++ {
-			_, childID, err := oldNode.GetInternalEntryView(i)
-			if err != nil {
-				break
-			}
-			if i+1 < count {
-				nextKey, _, err := oldNode.GetInternalEntryView(i + 1)
-				if err != nil {
-					break
-				}
-				endKey = nextKey
-			} else {
-				endKey = nil
-			}
-			if endKey == nil || bytes.Compare(key, endKey) < 0 {
-				chosenIdx = i
-				chosenChild = childID
-				break
-			}
-		}
-		log.Printf("treedb: zipper depth=%d pick child=%d id=%d end_key=%s key=%s",
-			depth,
-			chosenIdx,
-			chosenChild,
-			formatKey(endKey),
-			formatKey(key),
-		)
-	}
-
 	// Create Builder for new page
 	builder := z.newBuilderForType(newData, oldNode.Type())
 	builder.SetPageID(newPageID)
@@ -978,7 +397,6 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		}
 
 		n := builder.Finish()
-		traceSingleChildInternal("writeRecursive", depth, builder.PageID(), *n)
 		metrics.IndexWriteBytes += page.PageSize
 
 		retired = append(retired, childRetired...)
@@ -1253,7 +671,7 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 		minParallelOps      = 1024
 	)
 
-	useParallel := !debugZipper && len(children) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
+	useParallel := len(children) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
 
 	if useParallel {
 		maxParallel := runtime.GOMAXPROCS(0)
@@ -1371,7 +789,7 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 			err = target.AddInternalChild(e.key, e.child)
 		}
 		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, e.key, e.child, metrics, depth)
+			target, err = z.createNewSplitInternal(target, builder, &splits, e.key, e.child, metrics)
 			if err != nil {
 				return 0, nil, nil, err
 			}
@@ -1382,8 +800,7 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 
 	// Finalize last split node
 	if target != builder {
-		n := target.Finish()
-		traceSingleChildInternal("split", depth, target.PageID(), *n)
+		_ = target.Finish()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 
@@ -2138,11 +1555,10 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 	return entries, retired, nil
 }
 
-func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, key []byte, val uint64, metrics *adaptive.Metrics, depth int) (*node.Builder, error) {
+func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, key []byte, val uint64, metrics *adaptive.Metrics) (*node.Builder, error) {
 	// 1. Finish current (if not rootBuilder)
 	if currentTarget != rootBuilder {
-		n := currentTarget.Finish()
-		traceSingleChildInternal("split", depth, currentTarget.PageID(), *n)
+		_ = currentTarget.Finish()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 
