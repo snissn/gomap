@@ -49,7 +49,7 @@ func TestZipperSingleChildGrowth(t *testing.T) {
 	}
 
 	const (
-		batches     = 40
+		batches     = 200
 		batchSize   = 8
 		targetDepth = 50
 		logEvery    = 50
