@@ -25,6 +25,8 @@ type SlabSet struct {
 	RefCount            atomic.Int64
 	disableReadChecksum bool
 	compression         *compression.Config
+	activeFileID        uint32
+	activeWriter        *SlabWriter
 }
 type SlabManager struct {
 	dir              string
@@ -2025,6 +2027,10 @@ func (sm *SlabManager) CurrentSlabSet() *SlabSet {
 		disableReadChecksum: sm.disableReadChecksum,
 		compression:         &sm.compression,
 	}
+	if sm.activeSlab != nil {
+		s.activeFileID = sm.activeSlab.ID
+		s.activeWriter = sm.activeSlabWriter
+	}
 	s.RefCount.Store(1) // Manager owns one reference
 	return s
 }
@@ -2032,6 +2038,16 @@ func (s *SlabSet) Read(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
+	}
+	if s.activeWriter != nil && ptr.FileID == s.activeFileID {
+		end := int64(ptr.Offset) + int64(page.ValuePtrRecordLength(ptr))
+		if err := s.activeWriter.WaitForOffset(end); err != nil {
+			// If the writer rotated/closed but the file already has the data,
+			// proceed with the read.
+			if f.Size() < end {
+				return nil, err
+			}
+		}
 	}
 	val, err := f.Read(int64(ptr.Offset), !s.disableReadChecksum)
 	if err != nil {
@@ -2089,6 +2105,14 @@ func (s *SlabSet) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
 		return nil, fmt.Errorf("slab file %d not found in snapshot", ptr.FileID)
+	}
+	if s.activeWriter != nil && ptr.FileID == s.activeFileID {
+		end := int64(ptr.Offset) + int64(page.ValuePtrRecordLength(ptr))
+		if err := s.activeWriter.WaitForOffset(end); err != nil {
+			if f.Size() < end {
+				return nil, err
+			}
+		}
 	}
 	val, err := f.ReadUnsafe(int64(ptr.Offset), !s.disableReadChecksum)
 	if err != nil {
