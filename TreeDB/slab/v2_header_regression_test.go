@@ -88,7 +88,7 @@ func TestRepairTail_V2PreservesHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	before := sm.activeSlab.Size
+	before := sm.activeSlab.Size()
 	if before <= SlabV2DataStart+HeaderSize {
 		t.Fatalf("unexpected slab size %d", before)
 	}

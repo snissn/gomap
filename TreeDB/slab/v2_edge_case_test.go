@@ -57,8 +57,8 @@ func TestSlabV2_ExactBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if sm.activeSlab.Size != ZoneSize {
-		t.Fatalf("expected size to be exactly 2MB, got %d", sm.activeSlab.Size)
+	if sm.activeSlab.Size() != ZoneSize {
+		t.Fatalf("expected size to be exactly 2MB, got %d", sm.activeSlab.Size())
 	}
 
 	// 2. Write a small record. It should trigger Zone 1 header insertion.
@@ -219,7 +219,7 @@ func TestSlabV2_MixedVersionReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("V2 record: ptr2.Offset=%d, slabSize=%d", ptr2.Offset, sm2.activeSlab.Size)
+	t.Logf("V2 record: ptr2.Offset=%d, slabSize=%d", ptr2.Offset, sm2.activeSlab.Size())
 
 	// Record ID should be 1
 	if ptr2.FileID != 1 {
@@ -305,7 +305,7 @@ func TestSlabV2_GroupedBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("Size before grouped AppendMany: %d", sm.activeSlab.Size)
+	t.Logf("Size before grouped AppendMany: %d", sm.activeSlab.Size())
 
 	// Now write a grouped batch that should cross 2MB.
 	keys := [][]byte{nil, nil, nil, nil}

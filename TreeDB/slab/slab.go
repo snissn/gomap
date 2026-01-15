@@ -76,7 +76,7 @@ type SlabFile struct {
 	readOnly bool
 	RefCount atomic.Int64
 	IsZombie atomic.Bool
-	Size     int64 // Track size for rotation
+	size     atomic.Int64 // Track size for rotation
 	// writeOffset tracks the file offset for sequential appends.
 	writeOffset int64
 
@@ -116,25 +116,29 @@ type dictRefEntry struct {
 	crc    uint32
 }
 
+func (sf *SlabFile) Size() int64 {
+	return sf.size.Load()
+}
+
 func newSlabFile(path string, id uint32, f *os.File, size int64, readOnly bool, version uint8, globalDict []byte, globalDecs *sync.Pool) *SlabFile {
 	sf := &SlabFile{
 		ID:          id,
 		Path:        path,
 		File:        f,
 		readOnly:    readOnly,
-		Size:        size,
 		writeOffset: size,
 		version:     version,
 		globalDict:  globalDict,
 		globalDecs:  globalDecs,
 	}
+	sf.size.Store(size)
 	// Initialize atomic.Value with the concrete type so Load is safe.
 	sf.mmapData.Store([]byte(nil))
 	return sf
 }
 
 func (s *SlabFile) detectV2Locked() error {
-	if s.Size < SlabV2DataStart {
+	if s.size.Load() < SlabV2DataStart {
 		return nil
 	}
 	var magic [8]byte
@@ -508,8 +512,8 @@ func (s *SlabFile) ensureOpen() error {
 		return err
 	}
 	s.File = f
-	s.Size = info.Size()
-	s.writeOffset = s.Size
+	s.size.Store(info.Size())
+	s.writeOffset = s.size.Load()
 
 	// Detect V2
 	if err := s.detectV2Locked(); err != nil {
@@ -543,7 +547,7 @@ func (s *SlabFile) truncateLocked(size int64) error {
 	if err := s.File.Truncate(size); err != nil {
 		return err
 	}
-	s.Size = size
+	s.size.Store(size)
 	s.writeOffset = size
 	if _, err := s.File.Seek(s.writeOffset, io.SeekStart); err != nil {
 		return err
@@ -577,14 +581,14 @@ func (s *SlabFile) RepairTail() error {
 	}
 	size := info.Size()
 	if size == 0 {
-		s.Size = 0
+		s.size.Store(0)
 		return nil
 	}
 
 	startOffset := int64(0)
 	if s.version >= Version2 {
 		if size < SlabV2DataStart {
-			s.Size = size
+			s.size.Store(size)
 			return nil
 		}
 		startOffset = SlabV2DataStart
@@ -677,7 +681,7 @@ func (s *SlabFile) RepairTail() error {
 			return err
 		}
 	}
-	s.Size = trimTo
+	s.size.Store(trimTo)
 	s.writeOffset = trimTo
 	return nil
 }
@@ -897,7 +901,7 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	if recordLen64 > MaxSlabSize {
 		return 0, ErrRecordTooLarge
 	}
-	if int64(s.Size)+recordLen64 > MaxSlabSize {
+	if int64(s.size.Load())+recordLen64 > MaxSlabSize {
 		return 0, ErrSlabFull
 	}
 
@@ -908,11 +912,11 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 		}
 		// If we are EXACTLY at a boundary (that requires a header), signal manager.
 		// Zone 0 (64KB) is special and doesn't need a header here.
-		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+		if s.size.Load() >= ZoneSize && s.size.Load()%ZoneSize == 0 {
 			return 0, ErrRecordTooLarge
 		}
-		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
-		if s.Size+recordLen64 > nextBoundary {
+		nextBoundary := ((s.size.Load() / ZoneSize) + 1) * ZoneSize
+		if s.size.Load()+recordLen64 > nextBoundary {
 			return 0, ErrRecordTooLarge // Signal SlabManager to rotate zone
 		}
 	}
@@ -945,12 +949,12 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	copy(buf[10:10+keyLen], key)
 	copy(buf[10+keyLen:], value)
 
-	offset := s.Size
-	if s.writeOffset != s.Size {
-		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+	offset := s.size.Load()
+	if s.writeOffset != s.size.Load() {
+		if _, err := s.File.Seek(s.size.Load(), io.SeekStart); err != nil {
 			return 0, err
 		}
-		s.writeOffset = s.Size
+		s.writeOffset = s.size.Load()
 	}
 	written := 0
 	for written < len(buf) {
@@ -969,8 +973,8 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 		}
 	}
 
-	s.Size += int64(written)
-	s.writeOffset = s.Size
+	s.size.Add(int64(written))
+	s.writeOffset = s.size.Load()
 	return offset, nil
 }
 
@@ -1009,36 +1013,36 @@ func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 		return 0, ErrReadOnly
 	}
 	if len(buf) == 0 {
-		return s.Size, nil
+		return s.size.Load(), nil
 	}
-	if int64(s.Size)+int64(len(buf)) > MaxSlabSize {
+	if int64(s.size.Load())+int64(len(buf)) > MaxSlabSize {
 		return 0, ErrSlabFull
 	}
 
 	// For V2, batches must not straddle 2MB boundaries.
 	if s.version >= Version2 && !ignoreBoundary {
 		// If we are EXACTLY at a boundary (that requires a header), signal manager.
-		if s.Size >= ZoneSize && s.Size%ZoneSize == 0 {
+		if s.size.Load() >= ZoneSize && s.size.Load()%ZoneSize == 0 {
 			if debugRecordTooLargeEnabled() {
-				log.Printf("slab: batch too large at boundary size=%d buf=%d", s.Size, len(buf))
+				log.Printf("slab: batch too large at boundary size=%d buf=%d", s.size.Load(), len(buf))
 			}
 			return 0, ErrRecordTooLarge
 		}
-		nextBoundary := ((s.Size / ZoneSize) + 1) * ZoneSize
-		if s.Size+int64(len(buf)) > nextBoundary {
+		nextBoundary := ((s.size.Load() / ZoneSize) + 1) * ZoneSize
+		if s.size.Load()+int64(len(buf)) > nextBoundary {
 			if debugRecordTooLargeEnabled() {
-				log.Printf("slab: batch crosses boundary size=%d buf=%d next=%d", s.Size, len(buf), nextBoundary)
+				log.Printf("slab: batch crosses boundary size=%d buf=%d next=%d", s.size.Load(), len(buf), nextBoundary)
 			}
 			return 0, ErrRecordTooLarge // Signal SlabManager to rotate zone
 		}
 	}
 
-	offset := s.Size
-	if s.writeOffset != s.Size {
-		if _, err := s.File.Seek(s.Size, io.SeekStart); err != nil {
+	offset := s.size.Load()
+	if s.writeOffset != s.size.Load() {
+		if _, err := s.File.Seek(s.size.Load(), io.SeekStart); err != nil {
 			return 0, err
 		}
-		s.writeOffset = s.Size
+		s.writeOffset = s.size.Load()
 	}
 	written := 0
 	for written < len(buf) {
@@ -1056,8 +1060,8 @@ func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 		}
 	}
 
-	s.Size += int64(written)
-	s.writeOffset = s.Size
+	s.size.Add(int64(written))
+	s.writeOffset = s.size.Load()
 	return offset, nil
 }
 

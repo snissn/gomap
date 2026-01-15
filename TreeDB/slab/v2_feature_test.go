@@ -165,10 +165,10 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 
 	// Manually force V2 on active slab for testing (simulating a rotation that happened)
 	sm.activeSlab.version = Version2
-	sm.activeSlab.Size = SlabV2DataStart
+	sm.activeSlab.size.Store(SlabV2DataStart)
 	sm.activeSlab.writeOffset = SlabV2DataStart
 	if sm.activeSlabWriter != nil {
-		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size)
+		sm.activeSlabWriter.ResetOffset(sm.activeSlab.Size())
 	}
 	// No dict needed for this test, just boundary checks.
 
@@ -192,7 +192,7 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 	}
 
 	// Current size should be near 2MB.
-	t.Logf("Size before crossing: %d", sm.activeSlab.Size)
+	t.Logf("Size before crossing: %d", sm.activeSlab.Size())
 
 	// Write one more record that crosses the 2MB boundary.
 	_, err = sm.Append(nil, data)
@@ -204,8 +204,8 @@ func TestSlabV2_ZoneHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if sm.activeSlab.Size <= 2*1024*1024+int64(ZoneHeaderSize) {
-		t.Fatalf("expected size to be beyond 2MB + header, got %d", sm.activeSlab.Size)
+	if sm.activeSlab.Size() <= 2*1024*1024+int64(ZoneHeaderSize) {
+		t.Fatalf("expected size to be beyond 2MB + header, got %d", sm.activeSlab.Size())
 	}
 
 	// Verify Zone Header exists at 2MB.

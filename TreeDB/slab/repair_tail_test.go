@@ -21,7 +21,7 @@ func TestRepairTail_TruncatesPartialGarbage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	sizeBefore := s.Size
+	sizeBefore := s.Size()
 
 	// Append some garbage bytes (simulating a torn/partial tail write).
 	if _, err := s.File.WriteAt([]byte{0xAA, 0xBB, 0xCC}, sizeBefore); err != nil {
@@ -31,8 +31,8 @@ func TestRepairTail_TruncatesPartialGarbage(t *testing.T) {
 	if err := s.RepairTail(); err != nil {
 		t.Fatalf("RepairTail: %v", err)
 	}
-	if s.Size != sizeBefore {
-		t.Fatalf("expected size %d after repair, got %d", sizeBefore, s.Size)
+	if s.Size() != sizeBefore {
+		t.Fatalf("expected size %d after repair, got %d", sizeBefore, s.Size())
 	}
 
 	got, err := s.Read(off+4, true)

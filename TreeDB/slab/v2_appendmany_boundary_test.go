@@ -53,7 +53,7 @@ func TestSlabV2_AppendManyBoundary(t *testing.T) {
 	}
 	for i, ptr := range ptrs {
 		if ptr.Offset < uint64(SlabV2DataStart) {
-			t.Fatalf("ptr %d offset=%d size=%d", i, ptr.Offset, sm.activeSlab.Size)
+			t.Fatalf("ptr %d offset=%d size=%d", i, ptr.Offset, sm.activeSlab.Size())
 		}
 	}
 	if err := sm.Flush(); err != nil {

@@ -139,7 +139,7 @@ func (db *DB) GC() (reclaimed int64, err error) {
 			continue
 		}
 		if _, live := liveFileIDs[id]; !live {
-			candidateBytes += sf.Size
+			candidateBytes += sf.Size()
 			_ = db.slabManager.MarkZombie(id)
 		}
 	}

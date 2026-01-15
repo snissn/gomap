@@ -35,13 +35,13 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 	w := &SlabWriter{
 		s:         s,
 		activeBuf: make([]byte, 0, bufferSize),
-		offset:    s.Size,
+		offset:    s.Size(),
 		pendingCh: make(chan []byte, 1),
 		freeCh:    make(chan []byte, 1),
 		doneCh:    make(chan struct{}),
 	}
 	w.durableCond = sync.NewCond(&w.durableMu)
-	w.durableSize.Store(s.Size)
+	w.durableSize.Store(s.Size())
 
 	// Create the second buffer and put it in free pool
 	w.freeCh <- make([]byte, 0, bufferSize)
@@ -110,11 +110,11 @@ func (w *SlabWriter) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) 
 		off, err := w.s.WriteBatch(buf, true)
 		if err == nil {
 			w.mu.Lock()
-			w.offset = w.s.Size // Re-sync offset
+			w.offset = w.s.Size() // Re-sync offset
 			w.mu.Unlock()
 
 			// Re-sync durable size since we bypassed flushLoop
-			w.durableSize.Store(w.s.Size)
+			w.durableSize.Store(w.s.Size())
 			w.signalDurable()
 		}
 		return off, err
@@ -216,7 +216,7 @@ func (w *SlabWriter) flushLoop() {
 				w.signalDurable()
 				return
 			}
-			w.durableSize.Store(w.s.Size)
+			w.durableSize.Store(w.s.Size())
 			w.signalDurable()
 		}
 
