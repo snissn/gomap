@@ -56,7 +56,7 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 	// freeCh becomes empty.
 	// flushLoop unblocks, puts Buf1 into freeCh.
 	// Everyone happy.
-	
+
 	// Wait, if Buf1 was dropped, we lost a buffer.
 	// We have Buf2 (active) and Buf3 (free -> active).
 	// We lost Buf1.
@@ -64,13 +64,13 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 	// Initial total = 2.
 	// So we are back to 2.
 	// Is this a bug?
-	
+
 	// If we execute enough writes, and we keep dropping buffers, maybe we run out?
 	// But we only drop if we injected one.
-	
+
 	// Let's assume the test is valid and see if it passes.
 	// If it passes, I assume current code is "correct" regarding deadlock, but maybe dropping is bad for performance?
-	
+
 	// Ensure we can continue writing.
 	done := make(chan error)
 	go func() {
@@ -115,7 +115,7 @@ func TestSlabWriter_WaitForOffset_ForcesRotationWhenActiveBufNonEmpty(t *testing
 	}
 
 	target := off + int64(len(data))
-	
+
 	// WaitForOffset should trigger rotation and wait
 	err = w.WaitForOffset(target)
 	if err != nil {
@@ -146,9 +146,9 @@ func TestSlabWriter_OversizeWrite_IsFlushedAndDurable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
-	
+
 	target := off + int64(len(data))
-	
+
 	// Should be flushable via WaitForOffset
 	err = w.WaitForOffset(target)
 	if err != nil {
@@ -173,17 +173,17 @@ func TestSlabManager_WaitForOffset_DoesNotBlockIfNotActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append 0 failed: %v", err)
 	}
-	
+
 	// Rotate to Slab 1
 	if _, err := sm.Rotate(); err != nil {
 		t.Fatalf("Rotate failed: %v", err)
 	}
-	
+
 	// Slab 0 is now inactive (sealed/read-only or at least not activeWriter).
 	// WaitForOffset on Slab 0 should return immediately (nil).
-	
+
 	end0 := uint64(ptr0.Offset) + uint64(10) // arbitrary offset
-	
+
 	start := time.Now()
 	err = sm.WaitForOffset(ptr0.FileID, end0)
 	if err != nil {

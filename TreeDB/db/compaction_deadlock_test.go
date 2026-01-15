@@ -11,7 +11,7 @@ import (
 func TestIndexSwapCutover_IsNotBlockedByWriterDurabilityWait(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir: dir,
+		Dir:                           dir,
 		BackgroundCompactionIndexSwap: true,
 	}
 	db, err := Open(opts)
