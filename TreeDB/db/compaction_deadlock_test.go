@@ -3,12 +3,16 @@ package db
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestCompactionIndexSwap_DeadlockRegression(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("IndexSwap compaction/online vacuum unsupported on Windows CI")
+	}
 	dir := t.TempDir()
 	opts := Options{Dir: dir, BackgroundCompactionIndexSwap: false} // Disable to prevent race
 	db, err := Open(opts)
@@ -102,6 +106,9 @@ func TestCompactionIndexSwap_DeadlockRegression(t *testing.T) {
 }
 
 func TestCompactionIndexSwap_ConcurrentWrites(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("IndexSwap compaction/online vacuum unsupported on Windows CI")
+	}
 	dir := t.TempDir()
 	opts := Options{Dir: dir, BackgroundCompactionIndexSwap: false}
 	db, err := Open(opts)

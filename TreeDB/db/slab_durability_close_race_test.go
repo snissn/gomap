@@ -16,7 +16,6 @@ func TestWaitForSlabDurability_CloseNilsSlabManager_Regression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer db.Close()
 
 	originalSM := db.slabManager
 
@@ -33,10 +32,9 @@ func TestWaitForSlabDurability_CloseNilsSlabManager_Regression(t *testing.T) {
 	t.Cleanup(func() {
 		testHookWaitForSlabDurabilityAfterFlush = nil
 		db.mu.Lock()
-		if db.slabManager == nil {
-			db.slabManager = originalSM
-		}
+		db.slabManager = originalSM
 		db.mu.Unlock()
+		_ = db.Close()
 	})
 
 	// Force a slab-backed write (large value).
