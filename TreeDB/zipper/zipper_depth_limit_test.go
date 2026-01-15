@@ -46,14 +46,13 @@ func TestZipperDepthLimit(t *testing.T) {
 		return id
 	}
 
-	rightLeafID := makeLeaf([]byte{0xFF}, []byte("right"))
 	targetKey := []byte("a")
 	targetVal := []byte("value")
 	leafID := makeLeaf(targetKey, targetVal)
 
-	// Build a chain of internal nodes where every lookup for targetKey walks child 0.
+	// Build a chain of single-child internal nodes; these should collapse on write.
 	currentID := leafID
-	for i := 0; i < 51; i++ {
+	for i := 0; i < 60; i++ {
 		id, err := p.Alloc(1)
 		if err != nil {
 			t.Fatalf("alloc internal: %v", err)
@@ -65,9 +64,6 @@ func TestZipperDepthLimit(t *testing.T) {
 		b := node.NewBuilder(data, page.PageTypeInternal)
 		b.SetPageID(id)
 		if err := b.AddInternalChild([]byte{}, currentID); err != nil {
-			t.Fatalf("add child: %v", err)
-		}
-		if err := b.AddInternalChild([]byte{0xFF}, rightLeafID); err != nil {
 			t.Fatalf("add child: %v", err)
 		}
 		b.Finish()

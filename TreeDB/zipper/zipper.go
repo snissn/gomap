@@ -329,6 +329,28 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics, depth int) (uint64, []Split, []uint64, error) {
+	var retired []uint64
+	for {
+		oldData, err := z.pager.Get(pageID)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		oldNode := node.NewNodeView(oldData)
+		if oldNode.Type() != page.PageTypeInternal || oldNode.Count() != 1 {
+			break
+		}
+		childID, err := oldNode.GetInternalChildID(0)
+		if err != nil {
+			break
+		}
+		if childID == pageID {
+			return 0, nil, nil, errors.New("zipper: detected self-referential child")
+		}
+		if pageID != 0 {
+			retired = append(retired, pageID)
+		}
+		pageID = childID
+	}
 	if depth > 50 {
 		var pageType page.PageType
 		var count uint16
@@ -374,7 +396,6 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	builder.SetPageID(newPageID)
 
 	// Track retired page
-	var retired []uint64
 	if pageID != 0 {
 		retired = append(retired, pageID)
 	}
@@ -401,16 +422,18 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 
 		retired = append(retired, childRetired...)
 
-		// If this internal page collapsed to a single child and produced no splits,
-		// skip writing the redundant level by returning the child directly.
-		// This helps delete-heavy workloads shrink tree height without requiring
-		// an explicit vacuum.
-		if len(splits) == 0 && n.Count() == 1 {
+		// If this internal page collapsed to a single child, skip writing the
+		// redundant level by returning the child directly.
+		if n.Count() == 1 {
 			childID, err := n.GetInternalChildID(0)
 			if err == nil {
 				retired = append(retired, nr)
-				return childID, nil, retired, nil
+				return childID, splits, retired, nil
 			}
+		}
+		splits, retired, err = z.collapseSingleChildSplits(splits, retired)
+		if err != nil {
+			return 0, nil, nil, err
 		}
 		return nr, splits, retired, nil
 	} else {
@@ -806,6 +829,29 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 
 	// builder finalized by caller.
 	return builder.PageID(), splits, retired, nil
+}
+
+func (z *Zipper) collapseSingleChildSplits(splits []Split, retired []uint64) ([]Split, []uint64, error) {
+	if len(splits) == 0 {
+		return splits, retired, nil
+	}
+	for i := range splits {
+		data, err := z.pager.Get(splits[i].NodeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		n := node.NewNodeView(data)
+		if n.Type() != page.PageTypeInternal || n.Count() != 1 {
+			continue
+		}
+		childID, err := n.GetInternalChildID(0)
+		if err != nil {
+			return nil, nil, err
+		}
+		retired = append(retired, splits[i].NodeID)
+		splits[i].NodeID = childID
+	}
+	return splits, retired, nil
 }
 
 func mergeMetrics(dst, src *adaptive.Metrics) {
