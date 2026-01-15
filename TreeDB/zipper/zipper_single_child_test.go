@@ -72,7 +72,7 @@ func TestZipperSingleChildGrowth(t *testing.T) {
 		}
 		rootID = newRoot
 		if logEvery > 0 && (b+1)%logEvery == 0 {
-			stats, err := z.computeDepthStats(rootID)
+			stats, err := computeDepthStatsForTest(p, rootID)
 			if err != nil {
 				t.Fatalf("stats failed: %v", err)
 			}
@@ -80,7 +80,7 @@ func TestZipperSingleChildGrowth(t *testing.T) {
 		}
 	}
 
-	stats, err := z.computeDepthStats(rootID)
+	stats, err := computeDepthStatsForTest(p, rootID)
 	if err != nil {
 		t.Fatalf("stats failed: %v", err)
 	}
@@ -90,4 +90,70 @@ func TestZipperSingleChildGrowth(t *testing.T) {
 	if stats.singles > 0 {
 		t.Fatalf("expected no single-child internal nodes, got %d (max_depth=%d)", stats.singles, stats.maxDepth)
 	}
+}
+
+type testDepthStats struct {
+	maxDepth int
+	leaves   int
+	internal int
+	singles  int
+	maxChain int
+}
+
+func computeDepthStatsForTest(p *pager.Pager, rootID uint64) (testDepthStats, error) {
+	stats := testDepthStats{}
+	seen := make(map[uint64]struct{})
+	type frame struct {
+		id          uint64
+		depth       int
+		singleChain int
+	}
+	stack := []frame{{id: rootID, depth: 0, singleChain: 0}}
+	for len(stack) > 0 {
+		last := len(stack) - 1
+		f := stack[last]
+		stack = stack[:last]
+		if _, ok := seen[f.id]; ok {
+			continue
+		}
+		seen[f.id] = struct{}{}
+		data, err := p.Get(f.id)
+		if err != nil {
+			return stats, err
+		}
+		n := node.NewNodeView(data)
+		if f.depth > stats.maxDepth {
+			stats.maxDepth = f.depth
+		}
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			stats.leaves++
+			if f.singleChain > stats.maxChain {
+				stats.maxChain = f.singleChain
+			}
+		case page.PageTypeInternal:
+			stats.internal++
+			count := int(n.Count())
+			nextChain := 0
+			if count == 1 {
+				stats.singles++
+				nextChain = f.singleChain + 1
+				if nextChain > stats.maxChain {
+					stats.maxChain = nextChain
+				}
+			}
+			for i := count - 1; i >= 0; i-- {
+				_, childID, err := n.GetInternalEntryView(uint16(i))
+				if err != nil {
+					return stats, err
+				}
+				chain := 0
+				if count == 1 {
+					chain = nextChain
+				}
+				stack = append(stack, frame{id: childID, depth: f.depth + 1, singleChain: chain})
+			}
+		}
+	}
+	return stats, nil
 }
