@@ -87,6 +87,7 @@ func TestZipperDepthLimit(t *testing.T) {
 func TestZipperDepthLimitOverride(t *testing.T) {
 	run := func(limit int) error {
 		dir := t.TempDir()
+		zipperDepthLimit = limit
 		p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
 		if err != nil {
 			t.Fatal(err)
@@ -150,14 +151,12 @@ func TestZipperDepthLimitOverride(t *testing.T) {
 		zipperDepthLimit = orig
 	}()
 
-	zipperDepthLimit = 50
-	err := run(zipperDepthLimit)
+	err := run(50)
 	if err == nil || !strings.Contains(err.Error(), "tree too deep") {
 		t.Fatalf("expected depth error at limit 50, got %v", err)
 	}
 
-	zipperDepthLimit = 200
-	err = run(zipperDepthLimit)
+	err = run(200)
 	if err != nil {
 		t.Fatalf("unexpected error at limit 200: %v", err)
 	}
