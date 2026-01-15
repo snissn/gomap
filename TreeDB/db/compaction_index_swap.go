@@ -139,6 +139,7 @@ type compactionShiftTuning struct {
 //   - Any concurrent writes are replayed into the new index, but only if the key
 //     actually changed since the base snapshot (to avoid undoing pointer remaps).
 func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts IndexSwapCompactionOptions) error {
+	fmt.Println("DEBUG: CompactSlabsIndexSwap started")
 	if ctx == nil {
 		ctx = context.Background()
 	}

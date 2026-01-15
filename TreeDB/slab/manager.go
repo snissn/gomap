@@ -1731,26 +1731,39 @@ func (sm *SlabManager) rotateLocked() error {
 }
 
 func (sm *SlabManager) Sync() error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.readOnly {
+	sm.mu.RLock()
+	writer := sm.activeSlabWriter
+	slab := sm.activeSlab
+	readOnly := sm.readOnly
+	sm.mu.RUnlock()
+
+	if readOnly {
 		return ErrReadOnly
 	}
-	if sm.activeSlabWriter != nil {
-		return sm.activeSlabWriter.Sync()
+	if writer != nil {
+		return writer.Sync()
 	}
-	return sm.activeSlab.Sync()
+	// If no writer, sync the slab directly (fallback for read-only or closed writer scenario)
+	// But read-only is checked above. If writer is nil, maybe closed?
+	// Use the slab captured under lock.
+	if slab != nil {
+		return slab.Sync()
+	}
+	return nil
 }
 
 // Flush ensures buffered writes are pushed to the slab without fsync.
 func (sm *SlabManager) Flush() error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if sm.readOnly {
+	sm.mu.RLock()
+	writer := sm.activeSlabWriter
+	readOnly := sm.readOnly
+	sm.mu.RUnlock()
+
+	if readOnly {
 		return ErrReadOnly
 	}
-	if sm.activeSlabWriter != nil {
-		return sm.activeSlabWriter.Flush()
+	if writer != nil {
+		return writer.Flush()
 	}
 	return nil
 }

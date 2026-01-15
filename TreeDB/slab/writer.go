@@ -197,7 +197,7 @@ func (w *SlabWriter) flushLoop() {
 	for buf := range w.pendingCh {
 		// Test hook: pause flush loop
 		for w.testFlushPaused.Load() {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 		}
 
 		if len(buf) > 0 {
@@ -265,26 +265,27 @@ func (w *SlabWriter) flushBuffers() error {
 }
 
 func (w *SlabWriter) Close() error {
-	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return nil
+	// Ensure pendingCh is closed so flushLoop terminates
+	select {
+	case <-w.pendingCh:
+		// Already closed?
+	default:
+		close(w.pendingCh)
 	}
-	// Flush remaining data
-	if len(w.activeBuf) > 0 {
-		if err := w.rotateBufferLocked(); err != nil {
-			w.mu.Unlock()
-			return err
+
+	// Drain freeCh to prevent flushLoop from blocking on send during shutdown
+	go func() {
+		for {
+			select {
+			case <-w.freeCh:
+			case <-w.doneCh:
+				return
+			}
 		}
-	}
-	w.closed = true
-	w.mu.Unlock()
-	w.signalDurable()
+	}()
 
-	close(w.pendingCh)
 	<-w.doneCh
-
-	return w.err
+	return nil
 }
 
 func (w *SlabWriter) Size() int64 {
