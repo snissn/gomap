@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,14 +56,14 @@ func TestRecovery(t *testing.T) {
 	// Now slab size is > 18.
 
 	// Build empty roots with valid checksums.
-	rootData, _ := p.Get(userRoot)
+	rootData, _ := p.GetForWrite(userRoot)
 	root := node.NewNode(rootData)
 	root.SetPageID(userRoot)
 	root.SetType(page.PageTypeLeaf)
 	root.SetCount(0)
 	root.UpdateChecksum()
 
-	sysData, _ := p.Get(sysRoot)
+	sysData, _ := p.GetForWrite(sysRoot)
 	sysRootNode := node.NewNode(sysData)
 	sysRootNode.SetPageID(sysRoot)
 	sysRootNode.SetType(page.PageTypeLeaf)
@@ -79,7 +80,7 @@ func TestRecovery(t *testing.T) {
 		TotalPages:       4,
 	}
 
-	data0, _ := p.Get(0)
+	data0, _ := p.GetForWrite(0)
 	m0.Encode(data0[page.PageHeaderSize:])
 	n0 := node.NewNode(data0)
 	n0.SetPageID(0)
@@ -90,13 +91,38 @@ func TestRecovery(t *testing.T) {
 	m1 := page.MetaPageBody{
 		CommitSeq: 2,
 	}
-	data1, _ := p.Get(1)
+	data1, _ := p.GetForWrite(1)
 	m1.Encode(data1[page.PageHeaderSize:])
 	// Don't set header or checksum -> should be invalid (all zeros or garbage)
 
 	p.Sync()
 	p.Close()
 	sm.Close()
+
+	// Verify Meta 0 manually
+	p2, err := pager.OpenReadOnly(idxPath, chunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d0, err := p2.Get(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chk0 := node.NewNode(d0)
+	if !chk0.VerifyChecksum() {
+		t.Fatalf("Meta 0 invalid after write")
+	}
+	p2.Close()
+
+	// Verify Slab 0 size
+	slabPath := filepath.Join(dir, "data-0000.slab")
+	info, err := os.Stat(slabPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() < 18 {
+		t.Fatalf("Slab 0 size expected >= 18, got %d", info.Size())
+	}
 
 	// 2. Run Recovery
 	db, err := Open(Options{Dir: dir, ChunkSize: chunkSize})

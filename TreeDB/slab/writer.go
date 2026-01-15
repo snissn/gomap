@@ -265,13 +265,24 @@ func (w *SlabWriter) flushBuffers() error {
 }
 
 func (w *SlabWriter) Close() error {
-	// Ensure pendingCh is closed so flushLoop terminates
-	select {
-	case <-w.pendingCh:
-		// Already closed?
-	default:
-		close(w.pendingCh)
+	// 1. Flush any active data to pendingCh
+	if err := w.flushBuffers(); err != nil {
+		// If flush fails, we still want to close, but report error.
+		// However, flushBuffers returns error if writer is closed or errored.
+		// We proceed to ensure loop termination.
 	}
+
+	// 2. Mark closed to prevent new writes
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	w.mu.Unlock()
+
+	// 3. Close pendingCh to signal loop to exit after draining
+	close(w.pendingCh)
 
 	// Drain freeCh to prevent flushLoop from blocking on send during shutdown
 	go func() {
@@ -285,7 +296,7 @@ func (w *SlabWriter) Close() error {
 	}()
 
 	<-w.doneCh
-	return nil
+	return w.err
 }
 
 func (w *SlabWriter) Size() int64 {
