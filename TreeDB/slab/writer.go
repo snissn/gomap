@@ -132,19 +132,20 @@ func (w *SlabWriter) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) 
 }
 
 // rotateBufferLocked swaps the active buffer out to pending and gets a fresh one.
-// Releases lock while waiting on channels to prevent deadlock.
-// Re-acquires lock before returning.
+//
+// Important: This function must not release w.mu while w.activeBuf is in a
+// transient state (e.g. nil). Releasing the lock during rotation allows other
+// goroutines to observe w.activeBuf=nil and attempt their own rotate/flush,
+// which can break internal invariants and lead to Flush/WaitForDurable hangs.
 func (w *SlabWriter) rotateBufferLocked() error {
 	fullBuf := w.activeBuf
 	w.activeBuf = nil
-	w.mu.Unlock()
 
 	// Send full buffer
 	if len(fullBuf) > 0 {
 		select {
 		case w.pendingCh <- fullBuf:
 		case <-w.doneCh:
-			w.mu.Lock()
 			return w.reportClosedLocked()
 		}
 	} else {
@@ -161,7 +162,6 @@ func (w *SlabWriter) rotateBufferLocked() error {
 		select {
 		case w.pendingCh <- fullBuf:
 		case <-w.doneCh:
-			w.mu.Lock()
 			return w.reportClosedLocked()
 		}
 	}
@@ -171,11 +171,9 @@ func (w *SlabWriter) rotateBufferLocked() error {
 	select {
 	case nextBuf = <-w.freeCh:
 	case <-w.doneCh:
-		w.mu.Lock()
 		return w.reportClosedLocked()
 	}
 
-	w.mu.Lock()
 	if w.err != nil {
 		return w.err
 	}
