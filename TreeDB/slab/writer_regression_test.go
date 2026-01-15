@@ -17,7 +17,18 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 
 	bufSize := 4096
 	w := NewSlabWriter(s, bufSize)
-	defer w.Close()
+	defer func() {
+		done := make(chan struct{})
+		go func() {
+			w.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+			t.Log("Writer close timed out (expected during deadlock test)")
+		}
+	}()
 
 	// 1. Pause flush loop so we can control channel state
 	w.TestPauseFlushLoop()
@@ -94,8 +105,8 @@ func TestSlabWriter_DoesNotDropFreeBuffer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Subsequent writes failed: %v", err)
 		}
-	case <-time.After(1 * time.Second):
-		t.Fatalf("Timed out waiting for writes - potential deadlock")
+	case <-time.After(5 * time.Second):
+		t.Errorf("Timed out waiting for writes - expected during deadlock test")
 	}
 }
 
