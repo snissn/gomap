@@ -198,26 +198,30 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 	}
 
+	// Release Read Lock to allow concurrent exclusive operations (like compaction cutover)
+	// while we wait for slab durability.
+	b.db.writeMu.RUnlock()
+
+	if err := b.waitForSlabDurability(sync); err != nil {
+		log.Printf("treedb: batch wait for slab durability failed: %v", err)
+		_ = tracker.FreeAll()
+		return false, err
+	}
+
 	b.db.commitMu.Lock()
+	// Re-acquire writeMu.RLock to stabilize index state for finalizeCommit.
+	b.db.writeMu.RLock()
+
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.RUnlock()
-	if currentRoot != rootID {
-		b.db.commitMu.Unlock()
-		freeErr := tracker.FreeAll()
-		b.db.writeMu.RUnlock()
-		if freeErr != nil {
-			return false, freeErr
-		}
-		return false, nil
-	}
 
-	if err := b.waitForSlabDurability(sync); err != nil {
-		log.Printf("treedb: batch wait for slab durability failed: %v", err)
-		b.db.commitMu.Unlock()
+	if currentRoot != rootID {
 		b.db.writeMu.RUnlock()
-		return false, err
+		b.db.commitMu.Unlock()
+		_ = tracker.FreeAll()
+		return false, nil
 	}
 
 	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, nil, metrics, b.lastSeq)
@@ -314,6 +318,10 @@ func (b *Batch) waitForSlabDurability(sync bool) error {
 	if sync || b == nil || b.batch == nil || b.db == nil || b.db.slabManager == nil {
 		return nil
 	}
+
+	// Best-effort flush to ensure activeBuf is rotated if it contains our data.
+	_ = b.db.slabManager.Flush()
+
 	maxByFile := b.batch.SlabWriteMaxEndByFile()
 	if len(maxByFile) == 0 {
 		return nil

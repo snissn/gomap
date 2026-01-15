@@ -224,8 +224,7 @@ func (w *SlabWriter) flushLoop() {
 
 		select {
 		case w.freeCh <- recycleBuf:
-		default:
-			// Should not happen if logic is correct (1-in 1-out)
+		// Removed default case to prevent dropping buffers
 		}
 	}
 }

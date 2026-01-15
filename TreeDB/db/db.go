@@ -1402,13 +1402,6 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 				continue
 			}
 
-			for id, endOff := range maxEndByFile {
-				if err := db.slabManager.WaitForOffset(id, endOff); err != nil {
-					db.writeMu.Unlock()
-					return err
-				}
-			}
-
 			// Commit without forcing Sync; compaction can be lazily durable.
 			if err := db.finalizeCommit(rootID, sysRoot, nil, false, nil, metrics, 0); err != nil {
 				db.writeMu.Unlock()
@@ -1528,14 +1521,6 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			}
 		}
 
-		for id, endOff := range maxEndByFile {
-			if err := db.slabManager.WaitForOffset(id, endOff); err != nil {
-				closeBatch()
-				db.writeMu.Unlock()
-				return err
-			}
-		}
-
 		// Commit without forcing Sync; compaction can be lazily durable.
 		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, sysOps, metrics, 0); err != nil {
 			closeBatch()
@@ -1548,6 +1533,9 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		db.writeMu.Unlock()
 		closeBatch()
+
+		// Best-effort flush to ensure slab durability progresses (prevents idle loops).
+		_ = db.slabManager.Flush()
 	}
 
 	return nil
