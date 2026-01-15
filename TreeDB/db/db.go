@@ -1533,9 +1533,6 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		db.writeMu.Unlock()
 		closeBatch()
-
-		// Best-effort flush to ensure slab durability progresses (prevents idle loops).
-		_ = db.slabManager.Flush()
 	}
 
 	return nil
