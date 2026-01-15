@@ -114,7 +114,7 @@ func TestCompactionIndexSwap_ConcurrentWrites(t *testing.T) {
 	// Need enough data to trigger Assist hook (>4MB).
 	// 1000 keys * 5KB = ~5MB
 	keys := make([][]byte, 1000)
-	val := make([]byte, 5*1024) 
+	val := make([]byte, 5*1024)
 	for i := 0; i < 1000; i++ {
 		keys[i] = []byte(fmt.Sprintf("k%04d", i))
 		if err := db.Set(keys[i], val); err != nil {
