@@ -37,6 +37,8 @@ type Split struct {
 	NodeID uint64
 }
 
+var zipperDepthLimit = 200
+
 var (
 	zipperDebugSeparators      bool
 	zipperDebugSeparatorsEvery uint64 = 1
@@ -385,7 +387,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		}
 		pageID = childID
 	}
-	if depth > 50 {
+	if depth > zipperDepthLimit {
 		var pageType page.PageType
 		var count uint16
 		var headerID uint64

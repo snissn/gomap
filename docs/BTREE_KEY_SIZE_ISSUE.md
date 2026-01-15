@@ -107,4 +107,5 @@ Value pointers affect how leaf values are stored (inline vs slab). They do not c
 
 - We confirmed the depth-limit failure is caused by large separators and low internal fanout.
 - Shortest-separator improvements are in place and pass the long-key zipper regression tests.
+- Depth limit is temporarily raised to 200 to keep iavl-bench running; revisit during the index optimization sprint.
 - Increasing page size is a valid but format-breaking workaround that requires a dedicated migration plan.

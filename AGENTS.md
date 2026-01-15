@@ -443,6 +443,8 @@ The reported issues are known bugs from an older version that are now fixed. The
 
 See `docs/BTREE_KEY_SIZE_ISSUE.md`.
 
+Depth limit is temporarily raised to 200 to keep iavl-bench running; revisit in the upcoming index optimization sprint.
+
 ## iavl-bench repro
 
 ```
