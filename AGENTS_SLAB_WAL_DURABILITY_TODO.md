@@ -13,7 +13,10 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 ## Non‑Negotiable Contracts (must hold)
 
 - **No panics** under concurrent `Write/Flush/Sync/Close` interleavings.
-- **`*Sync` durability:** when `SetSync` / `WriteSync` returns success, referenced slab payload bytes are durable **before** metadata commit is durable.
+- **Durability definitions (normative):**
+  - **Payload written:** bytes have been appended to the slab file (write completed; visible in page cache).
+  - **Payload durable:** slab file has crossed an fsync boundary (`SlabManager.Sync()` or equivalent platform durability boundary), not merely that `WaitForOffset` advanced.
+- **`*Sync` durability:** slab payload durability boundary (fsync) happens‑before WAL/index/root commit durability boundary (and the caller ack).
 - **WAL deletion safety:** no WAL segment containing the only durable record of a write is deleted before the corresponding payload is durable elsewhere.
 - **V2 safety:** no async flush writes a buffer that straddles a `ZoneSize` boundary (unless explicitly in a safe “boundary/header” path).
 
@@ -22,15 +25,17 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 ## P0 (Blockers) — SlabWriter Concurrency & Shutdown
 
 - [ ] **Fix Data Corruption (Lock Gap):** rewrite `rotateBufferLocked` so `w.mu` is never released while `w.activeBuf` is in an invalid/transient state (e.g. `nil`).
-  - [ ] If rotation requires blocking on channels, implement a writer gate (`rotating`/`writing` + `sync.Cond`) so concurrent `Write()` calls wait until rotation completes.
+  - [ ] Preferred invariant: under `w.mu`, keep `activeBuf` always non‑nil; rotate by swapping `bufToFlush := activeBuf; activeBuf = nextBuf[:0]` *before* any unlock; only then enqueue `bufToFlush` (it may block, that’s fine).
+  - [ ] If rotation must unblock writers while enqueue is blocked, implement a writer gate (`rotating`/`writing` + `sync.Cond`) so concurrent `Write()` calls wait until rotation completes.
   - [ ] Add regression: `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (forces many concurrent rotates and verifies no missing/overwritten bytes).
 
 - [ ] **Close/Write panic-proofing:** remove `close(pendingCh)` producer-side shutdown; use `stopCh`/state so writers never send on a closed channel.
   - [ ] Add regression: `TestSlabWriter_CloseWhileWriting_NoPanic` (`TreeDB/slab/writer_concurrency_test.go`).
+  - [ ] Add regression: `TestSlabWriter_Close_UnblocksPendingEnqueue` (fill `pendingCh`, block flushLoop, `Close()` must not deadlock; writers return `ErrClosed`).
 
 - [ ] **Error propagation without deadlocks:** flush goroutine must not block on writer mutex to publish errors.
   - [ ] Implement lock-free “first error wins” (e.g. `sync.Once` + `atomic.Value`).
-  - [ ] Sticky terminal error state: once set, all subsequent `Write/Flush/WaitForOffset` return immediately without blocking.
+  - [ ] Sticky terminal error state: once set, all subsequent `Write/Flush/WaitForOffset/Sync` return immediately without blocking.
   - [ ] Add regression: `TestSlabWriter_FlushLoopError_NoDeadlock` with a stub `WriteBatch` that returns error while producer is blocked.
 
 - [ ] **WaitForOffset/Close correctness:** eliminate missed-wakeup hangs.
@@ -42,6 +47,7 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 - [ ] **Serialize ignore-boundary direct writes:** `WriteBatch(ignoreBoundary=true)` must not race with concurrent buffered writes.
   - [ ] Add `ioMu` (or equivalent) to serialize file I/O between flushLoop and direct writes.
   - [ ] Block concurrent `Write()` during ignore-boundary “flush + direct write + resync offset”.
+  - [ ] Offset correctness invariant: offsets returned to callers are reserved under `w.mu` before I/O begins; avoid “snap to file size” corrections unless proven equivalent to the reserved range.
   - [ ] Add regression: `TestSlabWriter_IgnoreBoundary_ConcurrentWrites_NoCorruption`.
   - [ ] Add regression: `TestSlabWriter_RotateWhileFlushInFlight` (file switch / rotation during an in-flight flush).
 
@@ -55,7 +61,10 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
   - [ ] Add `WaitForOffset(fileID, offset)` to the caching layer `BackendDB` interface.
   - [ ] Implement `WaitForOffset` in backends (including `TreeDB/tree/tree.go`) by delegating to `SlabManager.WaitForOffset`.
   - [ ] Sync ordering for `*Sync` paths:
-    - [ ] `Batch.WriteSync` and cached `SetSync` must: `SlabManager.Flush()` (best-effort) → `WaitForOffset(maxEndByFile)` → `SlabManager.Sync()` (fsync boundary) → WAL/index/meta durability boundary.
+    - [ ] `WaitForOffset` is a **written** barrier (write completion), not an fsync boundary.
+    - [ ] `SlabManager.Sync()` is the **durability** barrier (fsync boundary).
+    - [ ] `Batch.WriteSync` and cached `SetSync` must: `SlabManager.Flush()` (best-effort) → `WaitForOffset(maxEndByFile)` → `SlabManager.Sync()` → WAL/index/meta durability boundary.
+    - [ ] Multi-file batches: gather `maxEndByFile` and wait deterministically (iterate slab fileIDs in sorted order).
   - [ ] Avoid “AppendSync per write”; use “append N records → wait once (max offsets) → commit”.
 
 - [ ] **Enforce ordering in cached write path:**
@@ -63,12 +72,16 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 
 - [ ] **Prevent premature WAL deletion:**
   - [ ] Ensure any path that deletes WAL segments (checkpoint/flush) establishes the slab durability barrier first; only then rotate/delete WAL segments.
-  - [ ] Add explicit eligibility rule: “a WAL segment is deletable iff all payload it references is durable in slabs”.
+  - [ ] Add explicit eligibility rule with watermarks:
+    - [ ] Maintain per-slab durability watermark `slabDurableEnd[fileID]` updated only after `SlabManager.Sync()`.
+    - [ ] Track per-WAL-segment `walMaxEndByFile[fileID]` for any slab offsets referenced by that segment.
+    - [ ] Segment deletable iff for all referenced slab files: `slabDurableEnd[fileID] >= walMaxEndByFile[fileID]` **and** the corresponding checkpoint/root that makes those pointers reachable is durable.
 
 **Required tests (tight timeouts):**
 - [ ] `TestDurability_SetSync_PointerWrite_DurableBeforeAck` (pause slab flush loop; ensure `SetSync` blocks until unpaused).
 - [ ] `TestWALRotation_Safety_PausedSlabWriter` (WAL segment must not be deleted while payload still only in RAM).
 - [ ] `TestWALDeletion_DoesNotAdvancePastSlabDurability` (checkpoint/cleanup respects slab durability watermark).
+- [ ] `TestDurability_WaitForOffsets_MultiSlab_Deterministic` (touch 2 slabs in one sync batch; pause one; ensure wait order is deterministic and completes when unpaused).
 
 ---
 
@@ -83,8 +96,8 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 
 ## P1 — WAL Compression/Reader Hardening
 
-- [ ] **Validate segment lengths before allocation:** ensure `Reader.readSegment` validates `rawLength`/`length` against `MaxSegmentSize` (and a hard safety cap) before allocating buffers (prevents OOM from `FlagCompressed` MSB).
-- [ ] **Reader hard cap even when MaxSegmentSize disabled:** prevent OOM on corrupt lengths; return `ErrCorrupt` before allocation.
+- [ ] **Validate segment lengths before allocation (single rule):**
+  - [ ] Compute `effectiveMax = min(configMax (if set), hardCap)` and enforce `length <= effectiveMax` before any allocation (prevents OOM from `FlagCompressed` MSB or corrupt headers), returning `ErrCorrupt`.
 - [ ] Add regression: “compressed flag with huge length” yields clean error (no large alloc).
 
 ---
@@ -100,6 +113,7 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 
 - Windows CI lacks some online-vacuum/index-swap features; tests must `t.Skip` where unsupported.
 - Keep regression tests deterministic: avoid long sleeps; prefer hooks/latches; set per-test timeouts.
+- Durability tests should validate **ordering** via hooks/latches rather than attempting to prove physical persistence across OS/filesystems.
 
 ---
 
