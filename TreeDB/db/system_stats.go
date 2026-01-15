@@ -7,7 +7,9 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/vlog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/slab"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -58,7 +60,7 @@ func encodeSlabStatsValue(dead, total uint64) []byte {
 //
 // It returns the new System root and any retired pages from the System tree
 // update. If no updates are necessary, it returns the input root and nil.
-func (db *DB) applySystemUpdates(sysRootID uint64, extraOps []batch.Entry, metrics adaptive.Metrics) (uint64, []uint64, error) {
+func (db *DB) applySystemUpdates(sysRootID uint64, extraOps []batch.Entry, metrics adaptive.Metrics, slabs *slab.SlabManager, vlogs *vlog.Manager) (uint64, []uint64, error) {
 	if len(extraOps) == 0 && len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
 		return sysRootID, nil, nil
 	}
@@ -67,9 +69,12 @@ func (db *DB) applySystemUpdates(sysRootID uint64, extraOps []batch.Entry, metri
 	if idx == nil {
 		return 0, nil, errors.New("missing index")
 	}
+	if slabs == nil || vlogs == nil {
+		return 0, nil, ErrClosed
+	}
 
-	sysTree := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRootID)
-	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
+	sysTree := tree.New(idx.pager, valueReader{slabs: slabs, vlogs: vlogs}, sysRootID)
+	sysBatch := batch.New(slabs, page.DefaultInlineThreshold)
 	defer func() { _ = sysBatch.Close() }()
 
 	if len(extraOps) > 0 {

@@ -13,4 +13,6 @@ var (
 	ErrUnsafeOptions = errors.New("treedb: unsafe options require AllowUnsafe")
 	// ErrReadOnly indicates a write was attempted on a read-only DB handle.
 	ErrReadOnly = errors.New("treedb: read-only")
+	// ErrClosed indicates an operation was attempted on a closed DB handle.
+	ErrClosed = errors.New("treedb: closed")
 )

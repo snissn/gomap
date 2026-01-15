@@ -106,7 +106,7 @@ func (db *DB) GC() (reclaimed int64, err error) {
 
 	sysRoot := latestState.SystemRootPageID
 	if len(deadValueIDOps) > 0 {
-		newSysRoot, retired, err := db.applySystemUpdates(sysRoot, deadValueIDOps, adaptive.Metrics{})
+		newSysRoot, retired, err := db.applySystemUpdates(sysRoot, deadValueIDOps, adaptive.Metrics{}, db.slabManager, db.valueLogManager)
 		if err != nil {
 			return 0, fmt.Errorf("GC: failed to prune value index: %w", err)
 		}

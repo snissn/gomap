@@ -966,12 +966,17 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if idx == nil {
 		return errors.New("missing index")
 	}
+	sm := db.slabManager
+	vm := db.valueLogManager
+	if sm == nil || vm == nil {
+		return ErrClosed
+	}
 
 	// 0. Update System metadata tree (slab stats, etc) before sync/meta.
 	//
 	// This mutates index pages, so it must run before any Sync() durability
 	// boundary.
-	if nextSysRoot, sysRetired, err := db.applySystemUpdates(sysRootID, sysOps, metrics); err != nil {
+	if nextSysRoot, sysRetired, err := db.applySystemUpdates(sysRootID, sysOps, metrics, sm, vm); err != nil {
 		return err
 	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
 		sysRootID = nextSysRoot
@@ -982,7 +987,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 
 	// 1. Sync Data (Slabs + Index Pages) - No DB Lock
 	if sync {
-		if err := db.slabManager.Sync(); err != nil {
+		if err := sm.Sync(); err != nil {
 			return err
 		}
 		if err := idx.pager.Sync(); err != nil {
@@ -997,8 +1002,8 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	nextMeta.UserRootPageID = newRootID
 	nextMeta.SystemRootPageID = sysRootID
 	nextMeta.FreelistHeadID = idx.allocator.Head()
-	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
-	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
+	nextMeta.ActiveSlabID = sm.ActiveSlabID()
+	nextMeta.ActiveSlabTail = sm.ActiveSlabTail()
 	nextMeta.TotalPages = idx.pager.PageCount()
 	nextMeta.NextValueID = db.nextValueID.Load()
 	if lastSeq > nextMeta.LastSeq {
@@ -1047,15 +1052,15 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
-		SlabSet:          db.slabManager.CurrentSlabSet(),
-		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		SlabSet:          sm.CurrentSlabSet(),
+		ValueLogSet:      vm.CurrentSet(),
 		LastSeq:          nextMeta.LastSeq,
 	}
 	db.state.Store(newState)
 
 	if oldState != nil {
-		db.slabManager.ReleaseSlabs(oldState.SlabSet)
-		_ = db.valueLogManager.Release(oldState.ValueLogSet)
+		sm.ReleaseSlabs(oldState.SlabSet)
+		_ = vm.Release(oldState.ValueLogSet)
 	}
 
 	if db.adaptive != nil {

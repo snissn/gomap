@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 
@@ -20,6 +21,10 @@ type Batch struct {
 }
 
 const optimisticWriteMaxAttempts = 3
+
+// testHookWaitForSlabDurabilityAfterFlush is a test-only hook that runs after the
+// best-effort slab flush and before offset waits. It must be nil in production.
+var testHookWaitForSlabDurabilityAfterFlush func(*DB)
 
 func (db *DB) NewBatch() batch.Interface {
 	return db.NewBatchWithSize(0)
@@ -227,7 +232,9 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, nil, metrics, b.lastSeq)
 	b.db.commitMu.Unlock()
 	if err != nil {
-		log.Printf("treedb: batch finalize commit failed: %v", err)
+		if !errors.Is(err, ErrClosed) {
+			log.Printf("treedb: batch finalize commit failed: %v", err)
+		}
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
@@ -285,7 +292,9 @@ func (b *Batch) writeSerialized(sync bool, sysOps []batch.Entry) error {
 	}
 
 	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, sysOps, metrics, b.lastSeq); err != nil {
-		log.Printf("treedb: batch finalize commit (serialized) failed: %v", err)
+		if !errors.Is(err, ErrClosed) {
+			log.Printf("treedb: batch finalize commit (serialized) failed: %v", err)
+		}
 		return err
 	}
 	if b.db.vacuum.Active() {
@@ -315,19 +324,30 @@ func (b *Batch) Reset() {
 }
 
 func (b *Batch) waitForSlabDurability(sync bool) error {
-	if sync || b == nil || b.batch == nil || b.db == nil || b.db.slabManager == nil {
+	if sync || b == nil || b.batch == nil || b.db == nil {
+		return nil
+	}
+
+	// Snapshot the slab manager pointer once. DB.Close may clear db.slabManager
+	// concurrently; using a local pointer avoids nil-deref races while still
+	// allowing Close to proceed.
+	sm := b.db.slabManager
+	if sm == nil {
 		return nil
 	}
 
 	// Best-effort flush to ensure activeBuf is rotated if it contains our data.
-	_ = b.db.slabManager.Flush()
+	_ = sm.Flush()
+	if testHookWaitForSlabDurabilityAfterFlush != nil {
+		testHookWaitForSlabDurabilityAfterFlush(b.db)
+	}
 
 	maxByFile := b.batch.SlabWriteMaxEndByFile()
 	if len(maxByFile) == 0 {
 		return nil
 	}
 	for id, end := range maxByFile {
-		if err := b.db.slabManager.WaitForOffset(id, end); err != nil {
+		if err := sm.WaitForOffset(id, end); err != nil {
 			return err
 		}
 	}
