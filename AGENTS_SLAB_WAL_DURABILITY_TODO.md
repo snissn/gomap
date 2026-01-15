@@ -38,11 +38,11 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
   - [x] Sticky terminal error state: once set, all subsequent `Write/Flush/WaitForOffset/Sync` return immediately without blocking.
   - [x] Add regression: `TestSlabWriter_FlushLoopError_NoDeadlock` with a stub `WriteBatch` that returns error while producer is blocked.
 
-- [ ] **WaitForOffset/Close correctness:** eliminate missed-wakeup hangs.
-  - [ ] Ensure waiters are always woken when flushLoop exits (`defer signalDurable(); close(doneCh)` ordering).
-  - [ ] Ensure `WaitForOffset` returns `ErrClosed` if the writer closes before the target offset is reached.
-  - [ ] Add regression: `TestSlabWriter_WaitForOffset_Close_NoHang`.
-  - [ ] Add regression: `TestSlabWriter_Close_UnblocksWaiters` (covers `Sync()` and `WaitForOffset` concurrently).
+- [x] **WaitForOffset/Close correctness:** eliminate missed-wakeup hangs.
+  - [x] Ensure waiters are always woken when flushLoop exits (`defer signalDurable(); close(doneCh)` ordering).
+  - [x] Ensure `WaitForOffset` returns `ErrClosed` if the writer closes before the target offset is reached.
+  - [x] Add regression: `TestSlabWriter_WaitForOffset_Close_NoHang`.
+  - [x] Add regression: `TestSlabWriter_Close_UnblocksWaiters` (covers `Sync()` and `WaitForOffset` concurrently).
 
 - [ ] **Serialize ignore-boundary direct writes:** `WriteBatch(ignoreBoundary=true)` must not race with concurrent buffered writes.
   - [ ] Add `ioMu` (or equivalent) to serialize file I/O between flushLoop and direct writes.
@@ -133,3 +133,4 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 - 2026-01-15: Reworked `SlabWriter.rotateBufferLocked` to keep `activeBuf` non-nil during rotation; added `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_ConcurrentWrites_Rotation_NoLoss -count=1 -timeout 60s).
 - 2026-01-15: Replaced Close shutdown with stop/done channels; gated rotation to avoid send-on-closed and deadlock; added `TestSlabWriter_CloseWhileWriting_NoPanic` and `TestSlabWriter_Close_UnblocksPendingEnqueue` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_CloseWhileWriting_NoPanic|TestSlabWriter_Close_UnblocksPendingEnqueue' -count=1 -timeout 60s).
 - 2026-01-15: Added terminal error publication via atomic once; added `TestSlabWriter_FlushLoopError_NoDeadlock` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_FlushLoopError_NoDeadlock -count=1 -timeout 60s).
+- 2026-01-15: Switched WaitForOffset/Sync waiters to w.cond with flushLoop exit wakeups; added `TestSlabWriter_WaitForOffset_Close_NoHang` and `TestSlabWriter_Close_UnblocksWaiters` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_WaitForOffset_Close_NoHang|TestSlabWriter_Close_UnblocksWaiters' -count=1 -timeout 60s).

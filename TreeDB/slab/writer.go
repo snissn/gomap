@@ -30,8 +30,6 @@ type SlabWriter struct {
 
 	// tracking durable offset
 	durableSize atomic.Int64
-	durableMu   sync.Mutex
-	durableCond *sync.Cond
 
 	bufferSize int
 
@@ -54,7 +52,6 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 		bufferSize: bufferSize,
 	}
 	w.cond = sync.NewCond(&w.mu)
-	w.durableCond = sync.NewCond(&w.durableMu)
 	w.durableSize.Store(s.Size())
 
 	// Create the second buffer and put it in free pool
@@ -223,7 +220,10 @@ func (w *SlabWriter) reportClosedLocked() error {
 }
 
 func (w *SlabWriter) flushLoop() {
-	defer close(w.doneCh)
+	defer func() {
+		w.signalDurable()
+		close(w.doneCh)
+	}()
 
 	for {
 		for w.testFlushPaused.Load() {
@@ -365,82 +365,53 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 	if offset <= 0 {
 		return nil
 	}
-	if w.durableSize.Load() >= offset {
-		return nil
-	}
 	w.mu.Lock()
-	if err := w.terminalErr(); err != nil {
-		w.mu.Unlock()
-		return err
-	}
-	if w.durableSize.Load() < offset && len(w.activeBuf) > 0 {
-		if err := w.rotateBufferLocked(); err != nil {
+	for {
+		if w.durableSize.Load() >= offset {
+			w.mu.Unlock()
+			return nil
+		}
+		if err := w.terminalErr(); err != nil {
 			w.mu.Unlock()
 			return err
 		}
-	}
-	w.mu.Unlock()
-	w.durableMu.Lock()
-	defer w.durableMu.Unlock()
-	for w.durableSize.Load() < offset {
-		w.mu.Lock()
-		err := w.terminalErr()
-		closed := w.closed
-		w.mu.Unlock()
-		if err != nil {
-			return err
+		if w.closed {
+			w.mu.Unlock()
+			return fmt.Errorf("writer closed before reaching offset")
 		}
-		if closed {
-			select {
-			case <-w.doneCh:
-				if w.durableSize.Load() >= offset {
-					return nil
-				}
-				return fmt.Errorf("writer closed before reaching offset")
-			default:
+		if len(w.activeBuf) > 0 {
+			if err := w.rotateBufferLocked(); err != nil {
+				w.mu.Unlock()
+				return err
 			}
+			continue
 		}
-		w.durableCond.Wait()
+		w.cond.Wait()
 	}
-	return nil
 }
 
 func (w *SlabWriter) waitForDurable(offset int64) error {
 	if offset <= 0 {
 		return nil
 	}
-	if w.durableSize.Load() >= offset {
-		return nil
-	}
-	w.durableMu.Lock()
-	defer w.durableMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for w.durableSize.Load() < offset {
-		w.mu.Lock()
-		err := w.terminalErr()
-		closed := w.closed
-		w.mu.Unlock()
-		if err != nil {
+		if err := w.terminalErr(); err != nil {
 			return err
 		}
-		if closed {
-			select {
-			case <-w.doneCh:
-				if w.durableSize.Load() >= offset {
-					return nil
-				}
-				return fmt.Errorf("writer closed before reaching offset")
-			default:
-			}
+		if w.closed {
+			return fmt.Errorf("writer closed before reaching offset")
 		}
-		w.durableCond.Wait()
+		w.cond.Wait()
 	}
 	return nil
 }
 
 func (w *SlabWriter) signalDurable() {
-	w.durableMu.Lock()
-	w.durableCond.Broadcast()
-	w.durableMu.Unlock()
+	w.mu.Lock()
+	w.cond.Broadcast()
+	w.mu.Unlock()
 }
 
 func (w *SlabWriter) setTerminalErr(err error) {
@@ -450,9 +421,6 @@ func (w *SlabWriter) setTerminalErr(err error) {
 	w.errOnce.Do(func() {
 		w.errVal.Store(err)
 		w.stopOnce.Do(func() { close(w.stopCh) })
-		w.mu.Lock()
-		w.cond.Broadcast()
-		w.mu.Unlock()
 		w.signalDurable()
 	})
 }
