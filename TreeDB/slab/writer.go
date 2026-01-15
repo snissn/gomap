@@ -51,6 +51,7 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 	w.durableSize.Store(s.Size())
 
 	// Create the second buffer and put it in free pool
+	w.freeCh = make(chan []byte, 2)
 	w.freeCh <- make([]byte, 0, bufferSize)
 
 	go w.flushLoop()
@@ -92,6 +93,7 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 		case w.pendingCh <- largeBuf:
 		case <-w.doneCh:
 			w.mu.Lock()
+			w.offset -= int64(len(data))
 			defer w.mu.Unlock()
 			return 0, w.err
 		}
@@ -224,7 +226,9 @@ func (w *SlabWriter) flushLoop() {
 
 		select {
 		case w.freeCh <- recycleBuf:
-		// Removed default case to prevent dropping buffers
+		default:
+			// Buffer pool full, drop this buffer to avoid deadlock.
+			// With freeCh cap=2, this only happens during heavy oversized write pressure.
 		}
 	}
 }
