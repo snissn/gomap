@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -32,6 +35,34 @@ type Zipper struct {
 type Split struct {
 	Key    []byte
 	NodeID uint64
+}
+
+var (
+	zipperDebugSeparators      bool
+	zipperDebugSeparatorsEvery uint64 = 1
+	zipperDebugSeparatorsCount uint64
+)
+
+func init() {
+	if v := os.Getenv("TREEDB_ZIPPER_DEBUG_SEPARATORS"); v != "" && v != "0" {
+		zipperDebugSeparators = true
+	}
+	if v := os.Getenv("TREEDB_ZIPPER_DEBUG_SEPARATORS_EVERY"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil && n > 0 {
+			zipperDebugSeparatorsEvery = n
+		}
+	}
+}
+
+func shouldLogSeparator() bool {
+	if !zipperDebugSeparators {
+		return false
+	}
+	if zipperDebugSeparatorsEvery <= 1 {
+		return true
+	}
+	n := atomic.AddUint64(&zipperDebugSeparatorsCount, 1)
+	return n%zipperDebugSeparatorsEvery == 0
 }
 
 func shortestSeparator(left, right []byte) []byte {
@@ -422,6 +453,12 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 
 		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
+		if shouldLogSeparator() {
+			log.Printf("treedb: zipper internal write page_id=%d count=%d",
+				n.PageID(),
+				n.Count(),
+			)
+		}
 
 		retired = append(retired, childRetired...)
 
@@ -612,6 +649,13 @@ func (z *Zipper) mergeLeaf(oldNode node.Node, builder *node.Builder, ops []batch
 				splitKey = shortestSeparator(lastKey, key)
 			}
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
+			if shouldLogSeparator() {
+				log.Printf("treedb: zipper leaf split sep_len=%d left_len=%d right_len=%d",
+					len(splitKey),
+					len(lastKey),
+					len(key),
+				)
+			}
 
 			target = splitBuilder
 			lastKey = lastKey[:0]
@@ -833,6 +877,12 @@ func (z *Zipper) mergeInternal(oldNode node.Node, builder *node.Builder, ops []b
 	if target != builder {
 		_ = target.Finish()
 		metrics.IndexWriteBytes += page.PageSize
+		if shouldLogSeparator() {
+			log.Printf("treedb: zipper internal split page_id=%d count=%d",
+				target.PageID(),
+				target.Count(),
+			)
+		}
 	}
 
 	// builder finalized by caller.

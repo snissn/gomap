@@ -93,11 +93,13 @@ func TestZipperSingleChildGrowth(t *testing.T) {
 }
 
 type testDepthStats struct {
-	maxDepth int
-	leaves   int
-	internal int
-	singles  int
-	maxChain int
+	maxDepth         int
+	leaves           int
+	internal         int
+	singles          int
+	maxChain         int
+	maxInternalCount int
+	maxSeparatorLen  int
 }
 
 func computeDepthStatsForTest(p *pager.Pager, rootID uint64) (testDepthStats, error) {
@@ -134,6 +136,9 @@ func computeDepthStatsForTest(p *pager.Pager, rootID uint64) (testDepthStats, er
 		case page.PageTypeInternal:
 			stats.internal++
 			count := int(n.Count())
+			if count > stats.maxInternalCount {
+				stats.maxInternalCount = count
+			}
 			nextChain := 0
 			if count == 1 {
 				stats.singles++
@@ -143,9 +148,12 @@ func computeDepthStatsForTest(p *pager.Pager, rootID uint64) (testDepthStats, er
 				}
 			}
 			for i := count - 1; i >= 0; i-- {
-				_, childID, err := n.GetInternalEntryView(uint16(i))
+				key, childID, err := n.GetInternalEntryView(uint16(i))
 				if err != nil {
 					return stats, err
+				}
+				if len(key) > stats.maxSeparatorLen {
+					stats.maxSeparatorLen = len(key)
 				}
 				chain := 0
 				if count == 1 {

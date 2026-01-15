@@ -3,6 +3,8 @@
 TreeDB is a dev project, but a few knobs are already useful and stable.
 This doc describes the knobs exposed via `treedb.Options` and the cached write-back layer.
 
+Index key size and separator behavior: `docs/BTREE_KEY_SIZE_ISSUE.md`.
+
 ## Defaults
 
 - `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)

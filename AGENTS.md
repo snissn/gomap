@@ -438,3 +438,18 @@ The reported issues are known bugs from an older version that are now fixed. The
 6. **Verification:**
    - Run `go test -race ./TreeDB/caching -run TestConsistencyStress -count=1`.
    - Run full `go test -p 1 ./...` and race suite.
+
+# B-Tree Key Size Issue (Jan 2026)
+
+See `docs/BTREE_KEY_SIZE_ISSUE.md`.
+
+## iavl-bench repro
+
+```
+DISABLE_BG=1 \
+TREEDB_BENCH_DISABLE_WAL=0 \
+TREEDB_BENCH_RELAXED_SYNC=0 \
+TREEDB_BENCH_DISABLE_READ_CHECKSUM=0 \
+TREEDB_BENCH_ALLOW_UNSAFE=0 \
+./2_run_fast.sh
+```
