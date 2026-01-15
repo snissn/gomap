@@ -21,7 +21,8 @@ type SlabWriter struct {
 	freeCh    chan []byte // Buffers empty, ready to be reused
 
 	// Error handling
-	err    error
+	errOnce sync.Once
+	errVal  atomic.Value
 	closed bool
 	stopCh chan struct{}
 	stopOnce sync.Once
@@ -69,9 +70,9 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 	for w.rotating {
 		w.cond.Wait()
 	}
-	if w.err != nil {
+	if err := w.terminalErr(); err != nil {
 		w.mu.Unlock()
-		return 0, w.err
+		return 0, err
 	}
 	if w.closed {
 		w.mu.Unlock()
@@ -104,12 +105,18 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 			w.mu.Lock()
 			w.offset -= int64(len(data))
 			w.mu.Unlock()
+			if err := w.terminalErr(); err != nil {
+				return 0, err
+			}
 			return 0, fmt.Errorf("writer closed")
 		case <-w.doneCh:
 			w.mu.Lock()
 			w.offset -= int64(len(data))
 			defer w.mu.Unlock()
-			return 0, w.err
+			if err := w.terminalErr(); err != nil {
+				return 0, err
+			}
+			return 0, fmt.Errorf("writer closed")
 		}
 		return retOffset, nil
 	}
@@ -155,8 +162,8 @@ func (w *SlabWriter) rotateBufferLocked() error {
 	for w.rotating {
 		w.cond.Wait()
 	}
-	if w.err != nil {
-		return w.err
+	if err := w.terminalErr(); err != nil {
+		return err
 	}
 	if w.closed {
 		return fmt.Errorf("writer closed")
@@ -196,8 +203,8 @@ func (w *SlabWriter) rotateBufferLocked() error {
 	if stopped {
 		return w.reportClosedLocked()
 	}
-	if w.err != nil {
-		return w.err
+	if err := w.terminalErr(); err != nil {
+		return err
 	}
 	if w.closed {
 		return fmt.Errorf("writer closed")
@@ -206,8 +213,8 @@ func (w *SlabWriter) rotateBufferLocked() error {
 }
 
 func (w *SlabWriter) reportClosedLocked() error {
-	if w.err != nil {
-		return w.err
+	if err := w.terminalErr(); err != nil {
+		return err
 	}
 	if w.closed {
 		return fmt.Errorf("writer closed")
@@ -232,11 +239,7 @@ func (w *SlabWriter) flushLoop() {
 			if len(buf) > 0 {
 				_, err := w.s.WriteBatch(buf, false)
 				if err != nil {
-					w.mu.Lock()
-					w.err = err
-					w.mu.Unlock()
-					w.stopOnce.Do(func() { close(w.stopCh) })
-					w.signalDurable()
+					w.setTerminalErr(err)
 					return
 				}
 				w.durableSize.Store(w.s.Size())
@@ -265,10 +268,7 @@ func (w *SlabWriter) flushLoop() {
 					if len(buf) > 0 {
 						_, err := w.s.WriteBatch(buf, false)
 						if err != nil {
-							w.mu.Lock()
-							w.err = err
-							w.mu.Unlock()
-							w.signalDurable()
+							w.setTerminalErr(err)
 							return
 						}
 						w.durableSize.Store(w.s.Size())
@@ -306,8 +306,7 @@ func (w *SlabWriter) Flush() error {
 
 func (w *SlabWriter) flushBuffers() error {
 	w.mu.Lock()
-	if w.err != nil {
-		err := w.err
+	if err := w.terminalErr(); err != nil {
 		w.mu.Unlock()
 		return err
 	}
@@ -330,6 +329,10 @@ func (w *SlabWriter) flushBuffers() error {
 func (w *SlabWriter) Close() error {
 	// Mark closed to prevent new writes
 	w.mu.Lock()
+	if err := w.terminalErr(); err != nil {
+		w.mu.Unlock()
+		return err
+	}
 	if w.closed {
 		w.mu.Unlock()
 		return nil
@@ -341,7 +344,7 @@ func (w *SlabWriter) Close() error {
 	w.stopOnce.Do(func() { close(w.stopCh) })
 
 	<-w.doneCh
-	return w.err
+	return w.terminalErr()
 }
 
 func (w *SlabWriter) Size() int64 {
@@ -366,8 +369,7 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 		return nil
 	}
 	w.mu.Lock()
-	if w.err != nil {
-		err := w.err
+	if err := w.terminalErr(); err != nil {
 		w.mu.Unlock()
 		return err
 	}
@@ -382,7 +384,7 @@ func (w *SlabWriter) WaitForOffset(offset int64) error {
 	defer w.durableMu.Unlock()
 	for w.durableSize.Load() < offset {
 		w.mu.Lock()
-		err := w.err
+		err := w.terminalErr()
 		closed := w.closed
 		w.mu.Unlock()
 		if err != nil {
@@ -414,7 +416,7 @@ func (w *SlabWriter) waitForDurable(offset int64) error {
 	defer w.durableMu.Unlock()
 	for w.durableSize.Load() < offset {
 		w.mu.Lock()
-		err := w.err
+		err := w.terminalErr()
 		closed := w.closed
 		w.mu.Unlock()
 		if err != nil {
@@ -439,6 +441,27 @@ func (w *SlabWriter) signalDurable() {
 	w.durableMu.Lock()
 	w.durableCond.Broadcast()
 	w.durableMu.Unlock()
+}
+
+func (w *SlabWriter) setTerminalErr(err error) {
+	if err == nil {
+		return
+	}
+	w.errOnce.Do(func() {
+		w.errVal.Store(err)
+		w.stopOnce.Do(func() { close(w.stopCh) })
+		w.mu.Lock()
+		w.cond.Broadcast()
+		w.mu.Unlock()
+		w.signalDurable()
+	})
+}
+
+func (w *SlabWriter) terminalErr() error {
+	if v := w.errVal.Load(); v != nil {
+		return v.(error)
+	}
+	return nil
 }
 
 // TestFillFreeCh non-blockingly fills freeCh if empty.

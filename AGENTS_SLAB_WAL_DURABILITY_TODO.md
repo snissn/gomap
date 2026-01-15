@@ -33,10 +33,10 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
   - [x] Add regression: `TestSlabWriter_CloseWhileWriting_NoPanic` (`TreeDB/slab/writer_concurrency_test.go`).
   - [x] Add regression: `TestSlabWriter_Close_UnblocksPendingEnqueue` (fill `pendingCh`, block flushLoop, `Close()` must not deadlock; writers return `ErrClosed`).
 
-- [ ] **Error propagation without deadlocks:** flush goroutine must not block on writer mutex to publish errors.
-  - [ ] Implement lock-free “first error wins” (e.g. `sync.Once` + `atomic.Value`).
-  - [ ] Sticky terminal error state: once set, all subsequent `Write/Flush/WaitForOffset/Sync` return immediately without blocking.
-  - [ ] Add regression: `TestSlabWriter_FlushLoopError_NoDeadlock` with a stub `WriteBatch` that returns error while producer is blocked.
+- [x] **Error propagation without deadlocks:** flush goroutine must not block on writer mutex to publish errors.
+  - [x] Implement lock-free “first error wins” (e.g. `sync.Once` + `atomic.Value`).
+  - [x] Sticky terminal error state: once set, all subsequent `Write/Flush/WaitForOffset/Sync` return immediately without blocking.
+  - [x] Add regression: `TestSlabWriter_FlushLoopError_NoDeadlock` with a stub `WriteBatch` that returns error while producer is blocked.
 
 - [ ] **WaitForOffset/Close correctness:** eliminate missed-wakeup hangs.
   - [ ] Ensure waiters are always woken when flushLoop exits (`defer signalDurable(); close(doneCh)` ordering).
@@ -132,3 +132,4 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 - 2026-01-15: Fixed `SlabWriter.rotateBufferLocked` “lock gap” hang under concurrent rotate/flush (macOS CI timeout).
 - 2026-01-15: Reworked `SlabWriter.rotateBufferLocked` to keep `activeBuf` non-nil during rotation; added `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_ConcurrentWrites_Rotation_NoLoss -count=1 -timeout 60s).
 - 2026-01-15: Replaced Close shutdown with stop/done channels; gated rotation to avoid send-on-closed and deadlock; added `TestSlabWriter_CloseWhileWriting_NoPanic` and `TestSlabWriter_Close_UnblocksPendingEnqueue` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_CloseWhileWriting_NoPanic|TestSlabWriter_Close_UnblocksPendingEnqueue' -count=1 -timeout 60s).
+- 2026-01-15: Added terminal error publication via atomic once; added `TestSlabWriter_FlushLoopError_NoDeadlock` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_FlushLoopError_NoDeadlock -count=1 -timeout 60s).
