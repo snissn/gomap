@@ -152,11 +152,11 @@ func newSlabManager(dir string, readOnly bool, opts Options) (*SlabManager, erro
 		sm.activeSlab = s
 		sm.activeSlabWriter = NewSlabWriter(s, 0)
 
-				// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
+		// Use V2 if a compression profile is ready (Adaptive) OR if ZSTD is enabled.
 
-				if s.version == 0 && s.Size() == 0 {
+		if s.version == 0 && s.Size() == 0 {
 
-					profile, ok := sm.activeProfile()
+			profile, ok := sm.activeProfile()
 
 			if ok && profile != nil || sm.compression.Kind == CompressionZSTD {
 
