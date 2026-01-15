@@ -10,9 +10,11 @@ import (
 type SlabWriter struct {
 	mu sync.Mutex
 	s  *SlabFile
+	cond *sync.Cond
 
 	activeBuf []byte
 	offset    int64 // Virtual offset of the next write (includes activeBuf + pending)
+	rotating  bool
 
 	// Channels for buffer exchange
 	pendingCh chan []byte // Buffers full, waiting to be written
@@ -21,6 +23,8 @@ type SlabWriter struct {
 	// Error handling
 	err    error
 	closed bool
+	stopCh chan struct{}
+	stopOnce sync.Once
 	doneCh chan struct{} // Closed when flushLoop exits
 
 	// tracking durable offset
@@ -44,9 +48,11 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 		offset:     s.Size(),
 		pendingCh:  make(chan []byte, 1),
 		freeCh:     make(chan []byte, 1),
+		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 		bufferSize: bufferSize,
 	}
+	w.cond = sync.NewCond(&w.mu)
 	w.durableCond = sync.NewCond(&w.durableMu)
 	w.durableSize.Store(s.Size())
 
@@ -60,6 +66,9 @@ func NewSlabWriter(s *SlabFile, bufferSize int) *SlabWriter {
 
 func (w *SlabWriter) Write(data []byte) (int64, error) {
 	w.mu.Lock()
+	for w.rotating {
+		w.cond.Wait()
+	}
 	if w.err != nil {
 		w.mu.Unlock()
 		return 0, w.err
@@ -91,6 +100,11 @@ func (w *SlabWriter) Write(data []byte) (int64, error) {
 		w.mu.Unlock()
 		select {
 		case w.pendingCh <- largeBuf:
+		case <-w.stopCh:
+			w.mu.Lock()
+			w.offset -= int64(len(data))
+			w.mu.Unlock()
+			return 0, fmt.Errorf("writer closed")
 		case <-w.doneCh:
 			w.mu.Lock()
 			w.offset -= int64(len(data))
@@ -138,49 +152,56 @@ func (w *SlabWriter) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) 
 // goroutines to observe w.activeBuf=nil and attempt their own rotate/flush,
 // which can break internal invariants and lead to Flush/WaitForDurable hangs.
 func (w *SlabWriter) rotateBufferLocked() error {
-	fullBuf := w.activeBuf
-	w.activeBuf = nil
-
-	// Send full buffer
-	if len(fullBuf) > 0 {
-		select {
-		case w.pendingCh <- fullBuf:
-		case <-w.doneCh:
-			return w.reportClosedLocked()
-		}
-	} else {
-		// If empty (shouldn't happen in normal flow, but safety check), reuse it?
-		// No, we already set nil. Just put it back in freeCh if we grabbed it?
-		// Actually if len==0 we shouldn't be here, but let's handle.
-		// Just treat it as "skipped".
-		// But we need a buffer for w.activeBuf.
-		// We have to get one from freeCh.
-		// If we didn't send to pendingCh, freeCh might be empty if the other buffer is pending.
-		// Actually, if we didn't send fullBuf, we should just keep using it.
-		// But we set it nil.
-		// Simpler: Just send it. flushLoop handles empty buffers.
-		select {
-		case w.pendingCh <- fullBuf:
-		case <-w.doneCh:
-			return w.reportClosedLocked()
-		}
+	for w.rotating {
+		w.cond.Wait()
 	}
-
-	// Get free buffer
-	var nextBuf []byte
-	select {
-	case nextBuf = <-w.freeCh:
-	case <-w.doneCh:
-		return w.reportClosedLocked()
-	}
-
 	if w.err != nil {
 		return w.err
 	}
 	if w.closed {
 		return fmt.Errorf("writer closed")
 	}
+
+	// INV-1: activeBuf is never nil while w.mu is unlocked.
+	fullBuf := w.activeBuf
+	var nextBuf []byte
+	select {
+	case nextBuf = <-w.freeCh:
+	default:
+		nextBuf = make([]byte, 0, w.bufferSize)
+	}
 	w.activeBuf = nextBuf[:0]
+
+	if len(fullBuf) == 0 {
+		select {
+		case w.freeCh <- fullBuf[:0]:
+		default:
+		}
+		return nil
+	}
+
+	w.rotating = true
+	w.mu.Unlock()
+	stopped := false
+	select {
+	case w.pendingCh <- fullBuf:
+	case <-w.stopCh:
+		stopped = true
+	case <-w.doneCh:
+		stopped = true
+	}
+	w.mu.Lock()
+	w.rotating = false
+	w.cond.Broadcast()
+	if stopped {
+		return w.reportClosedLocked()
+	}
+	if w.err != nil {
+		return w.err
+	}
+	if w.closed {
+		return fmt.Errorf("writer closed")
+	}
 	return nil
 }
 
@@ -188,45 +209,85 @@ func (w *SlabWriter) reportClosedLocked() error {
 	if w.err != nil {
 		return w.err
 	}
+	if w.closed {
+		return fmt.Errorf("writer closed")
+	}
 	return fmt.Errorf("writer stopped unexpectedly")
 }
 
 func (w *SlabWriter) flushLoop() {
 	defer close(w.doneCh)
 
-	for buf := range w.pendingCh {
-		// Test hook: pause flush loop
+	for {
 		for w.testFlushPaused.Load() {
+			select {
+			case <-w.stopCh:
+				return
+			default:
+			}
 			time.Sleep(100 * time.Millisecond)
 		}
-
-		if len(buf) > 0 {
-			_, err := w.s.WriteBatch(buf, false)
-			if err != nil {
-				w.mu.Lock()
-				w.err = err
-				w.mu.Unlock()
-				w.signalDurable()
-				return
-			}
-			w.durableSize.Store(w.s.Size())
-			w.signalDurable()
-		}
-
-		// Recycle logic
-		recycleBuf := buf
-		if cap(buf) > w.bufferSize {
-			// Drop oversized buffer, allocate standard one
-			recycleBuf = make([]byte, 0, w.bufferSize)
-		} else {
-			recycleBuf = buf[:0]
-		}
-
 		select {
-		case w.freeCh <- recycleBuf:
-		default:
-			// Buffer pool full, drop this buffer to avoid deadlock.
-			// With freeCh cap=2, this only happens during heavy oversized write pressure.
+		case buf := <-w.pendingCh:
+			if len(buf) > 0 {
+				_, err := w.s.WriteBatch(buf, false)
+				if err != nil {
+					w.mu.Lock()
+					w.err = err
+					w.mu.Unlock()
+					w.stopOnce.Do(func() { close(w.stopCh) })
+					w.signalDurable()
+					return
+				}
+				w.durableSize.Store(w.s.Size())
+				w.signalDurable()
+			}
+
+			// Recycle logic
+			recycleBuf := buf
+			if cap(buf) > w.bufferSize {
+				// Drop oversized buffer, allocate standard one
+				recycleBuf = make([]byte, 0, w.bufferSize)
+			} else {
+				recycleBuf = buf[:0]
+			}
+
+			select {
+			case w.freeCh <- recycleBuf:
+			default:
+				// Buffer pool full, drop this buffer to avoid deadlock.
+				// With freeCh cap=2, this only happens during heavy oversized write pressure.
+			}
+		case <-w.stopCh:
+			for {
+				select {
+				case buf := <-w.pendingCh:
+					if len(buf) > 0 {
+						_, err := w.s.WriteBatch(buf, false)
+						if err != nil {
+							w.mu.Lock()
+							w.err = err
+							w.mu.Unlock()
+							w.signalDurable()
+							return
+						}
+						w.durableSize.Store(w.s.Size())
+						w.signalDurable()
+					}
+					recycleBuf := buf
+					if cap(buf) > w.bufferSize {
+						recycleBuf = make([]byte, 0, w.bufferSize)
+					} else {
+						recycleBuf = buf[:0]
+					}
+					select {
+					case w.freeCh <- recycleBuf:
+					default:
+					}
+				default:
+					return
+				}
+			}
 		}
 	}
 }
@@ -267,35 +328,17 @@ func (w *SlabWriter) flushBuffers() error {
 }
 
 func (w *SlabWriter) Close() error {
-	// 1. Flush any active data to pendingCh
-	if err := w.flushBuffers(); err != nil {
-		// If flush fails, we still want to close, but report error.
-		// However, flushBuffers returns error if writer is closed or errored.
-		// We proceed to ensure loop termination.
-	}
-
-	// 2. Mark closed to prevent new writes
+	// Mark closed to prevent new writes
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
+	w.cond.Broadcast()
 	w.mu.Unlock()
 
-	// 3. Close pendingCh to signal loop to exit after draining
-	close(w.pendingCh)
-
-	// Drain freeCh to prevent flushLoop from blocking on send during shutdown
-	go func() {
-		for {
-			select {
-			case <-w.freeCh:
-			case <-w.doneCh:
-				return
-			}
-		}
-	}()
+	w.stopOnce.Do(func() { close(w.stopCh) })
 
 	<-w.doneCh
 	return w.err

@@ -24,14 +24,14 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 
 ## P0 (Blockers) — SlabWriter Concurrency & Shutdown
 
-- [ ] **Fix Data Corruption (Lock Gap):** rewrite `rotateBufferLocked` so `w.mu` is never released while `w.activeBuf` is in an invalid/transient state (e.g. `nil`).
-  - [ ] Preferred invariant: under `w.mu`, keep `activeBuf` always non‑nil; rotate by swapping `bufToFlush := activeBuf; activeBuf = nextBuf[:0]` *before* any unlock; only then enqueue `bufToFlush` (it may block, that’s fine).
+- [x] **Fix Data Corruption (Lock Gap):** rewrite `rotateBufferLocked` so `w.mu` is never released while `w.activeBuf` is in an invalid/transient state (e.g. `nil`).
+  - [x] Preferred invariant: under `w.mu`, keep `activeBuf` always non‑nil; rotate by swapping `bufToFlush := activeBuf; activeBuf = nextBuf[:0]` *before* any unlock; only then enqueue `bufToFlush` (it may block, that’s fine).
   - [ ] If rotation must unblock writers while enqueue is blocked, implement a writer gate (`rotating`/`writing` + `sync.Cond`) so concurrent `Write()` calls wait until rotation completes.
-  - [ ] Add regression: `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (forces many concurrent rotates and verifies no missing/overwritten bytes).
+  - [x] Add regression: `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (forces many concurrent rotates and verifies no missing/overwritten bytes).
 
-- [ ] **Close/Write panic-proofing:** remove `close(pendingCh)` producer-side shutdown; use `stopCh`/state so writers never send on a closed channel.
-  - [ ] Add regression: `TestSlabWriter_CloseWhileWriting_NoPanic` (`TreeDB/slab/writer_concurrency_test.go`).
-  - [ ] Add regression: `TestSlabWriter_Close_UnblocksPendingEnqueue` (fill `pendingCh`, block flushLoop, `Close()` must not deadlock; writers return `ErrClosed`).
+- [x] **Close/Write panic-proofing:** remove `close(pendingCh)` producer-side shutdown; use `stopCh`/state so writers never send on a closed channel.
+  - [x] Add regression: `TestSlabWriter_CloseWhileWriting_NoPanic` (`TreeDB/slab/writer_concurrency_test.go`).
+  - [x] Add regression: `TestSlabWriter_Close_UnblocksPendingEnqueue` (fill `pendingCh`, block flushLoop, `Close()` must not deadlock; writers return `ErrClosed`).
 
 - [ ] **Error propagation without deadlocks:** flush goroutine must not block on writer mutex to publish errors.
   - [ ] Implement lock-free “first error wins” (e.g. `sync.Once` + `atomic.Value`).
@@ -130,3 +130,5 @@ Goal: land a **durability-safe** and **panic-free** implementation with determin
 
 - 2026-01-15: Added regression for DB.Close nil slabManager race; fixed by snapshotting managers and returning `ErrClosed`.
 - 2026-01-15: Fixed `SlabWriter.rotateBufferLocked` “lock gap” hang under concurrent rotate/flush (macOS CI timeout).
+- 2026-01-15: Reworked `SlabWriter.rotateBufferLocked` to keep `activeBuf` non-nil during rotation; added `TestSlabWriter_ConcurrentWrites_Rotation_NoLoss` (go test -p 1 ./TreeDB/slab -run TestSlabWriter_ConcurrentWrites_Rotation_NoLoss -count=1 -timeout 60s).
+- 2026-01-15: Replaced Close shutdown with stop/done channels; gated rotation to avoid send-on-closed and deadlock; added `TestSlabWriter_CloseWhileWriting_NoPanic` and `TestSlabWriter_Close_UnblocksPendingEnqueue` (go test -p 1 ./TreeDB/slab -run 'TestSlabWriter_CloseWhileWriting_NoPanic|TestSlabWriter_Close_UnblocksPendingEnqueue' -count=1 -timeout 60s).
