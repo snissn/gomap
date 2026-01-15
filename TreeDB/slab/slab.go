@@ -91,6 +91,8 @@ type SlabFile struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
+	writeMu sync.Mutex
+
 	deadMappings      [][]byte // Old mappings retained for safety (prevent use-after-free)
 	remapCount        atomic.Uint64
 	deadMappingsCount atomic.Uint64
@@ -526,6 +528,12 @@ func (s *SlabFile) ensureOpen() error {
 
 // Truncate resizes the slab file. Used for crash recovery.
 func (s *SlabFile) Truncate(size int64) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.truncateLocked(size)
+}
+
+func (s *SlabFile) truncateLocked(size int64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -558,6 +566,8 @@ func (s *SlabFile) Truncate(size int64) error {
 // record and truncates any partial/corrupt tail bytes. This is primarily a
 // crash-recovery helper.
 func (s *SlabFile) RepairTail() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -663,7 +673,7 @@ func (s *SlabFile) RepairTail() error {
 	}
 
 	if trimTo < size {
-		if err := s.Truncate(trimTo); err != nil {
+		if err := s.truncateLocked(trimTo); err != nil {
 			return err
 		}
 	}
@@ -865,6 +875,8 @@ func (s *SlabFile) remapToFileSize() {
 // Write appends a record to the slab and returns the offset.
 // Thread-safety: This should be called by a single writer (SlabManager mutex).
 func (s *SlabFile) Write(key, value []byte) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -948,11 +960,11 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 		}
 		if err != nil {
 			// Best-effort: remove any partial tail bytes so the active tail stays aligned.
-			_ = s.Truncate(offset)
+			_ = s.truncateLocked(offset)
 			return 0, err
 		}
 		if n == 0 {
-			_ = s.Truncate(offset)
+			_ = s.truncateLocked(offset)
 			return 0, errors.New("short write")
 		}
 	}
@@ -991,6 +1003,8 @@ func (s *SlabFile) EncodeRecord(key, value []byte, buf []byte) []byte {
 // starting file offset. Thread-safety: This should be called by a single writer
 // (SlabManager mutex).
 func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -1033,11 +1047,11 @@ func (s *SlabFile) WriteBatch(buf []byte, ignoreBoundary bool) (int64, error) {
 			written += n
 		}
 		if err != nil {
-			_ = s.Truncate(offset)
+			_ = s.truncateLocked(offset)
 			return 0, err
 		}
 		if n == 0 {
-			_ = s.Truncate(offset)
+			_ = s.truncateLocked(offset)
 			return 0, errors.New("short write")
 		}
 	}

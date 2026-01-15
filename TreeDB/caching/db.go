@@ -754,6 +754,8 @@ type DB struct {
 	bgErrMu            sync.Mutex
 	bgErr              error
 
+	disableBackgroundFlush atomic.Bool
+
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
 	flushBpsEWMA      float64
@@ -4024,6 +4026,9 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
+			if db.disableBackgroundFlush.Load() {
+				continue
+			}
 			// Background flush is async when WAL is enabled. Without a WAL, we
 			// upgrade to a synced flush unless RelaxedSync is set.
 			db.flushAll(false)
@@ -4180,7 +4185,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						val := iter.UnsafeValue()
-						if ptrs != nil && db.valueLogReader != nil {
+						if ptrs != nil {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
@@ -4188,16 +4193,11 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
-								val, err := db.readValueLog(ptr)
-								if err != nil {
-									_ = iter.Close()
-									putEntrySlice(ops)
-									return nil, err
-								}
 								ops = append(ops, batch.Entry{
-									Type:  batch.OpPut,
-									Key:   copyBytes(key),
-									Value: copyBytes(val),
+									Type:     batch.OpPut,
+									Key:      copyBytes(key),
+									ValuePtr: ptr,
+									IsPtr:    true,
 								})
 								iter.Next()
 								continue
@@ -4326,7 +4326,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						val := iter.UnsafeValue()
-						if pointerBatch != nil && unit.ptrs != nil && db.valueLogReader != nil {
+						if pointerBatch != nil && unit.ptrs != nil {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
@@ -4334,14 +4334,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
-								readVal, err := db.readValueLog(ptr)
-								if err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-								if err := backendBatch.Set(key, readVal); err != nil {
+								if err := pointerBatch.SetPointer(key, ptr); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
 									_ = iter.Close()
 									_ = backendBatch.Close()

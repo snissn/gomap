@@ -133,9 +133,8 @@ func TestWaitForStopFlushesWithoutBackground(t *testing.T) {
 		t.Fatalf("expected backlog after rotation")
 	}
 
-	origFlushCh := db.flushCh
-	db.flushCh = make(chan struct{})
-	defer func() { db.flushCh = origFlushCh }()
+	db.disableBackgroundFlush.Store(true)
+	defer db.disableBackgroundFlush.Store(false)
 
 	db.flushMu.Lock()
 	done := make(chan error, 1)
