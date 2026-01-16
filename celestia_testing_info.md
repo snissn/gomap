@@ -64,7 +64,7 @@ On the server, we additionally use a **local replace** so `celestia-appd` uses t
 
 ### Server
 
-- SSH: `ssh mikers@192.168.0.132`
+- SSH: `ssh mikers@192.168.0.185`
 
 ### Server paths (canonical)
 
@@ -314,4 +314,3 @@ Why it matters to Celestia benchmarking:
 - reduces/avoids large User-tree rewrites when value bytes move (slab/vlog compaction)
 - makes long-running disk usage predictable (GC can reclaim vlog/slab segments)
 - reduces mid-run index balloon and the need for heavy vacuums
-
