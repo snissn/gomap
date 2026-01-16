@@ -123,9 +123,6 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
-	if flags&FlagValueID != 0 && len(value) != 8 {
-		return ErrInvalidValueIDLength
-	}
 
 	headerSize := 7
 	if b.leafPrefixCompression {

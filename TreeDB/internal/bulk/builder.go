@@ -168,14 +168,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		}
 
 		if err != nil {
-			if err == node.ErrInvalidValueIDLength {
-				// SKIP CORRUPT ENTRY
-				// This allows vacuum to repair the database by dropping invalid keys.
-			} else {
-				return 0, err
-			}
-		} else {
-			// Success (only if no error)
+			return 0, err
 		}
 
 		if !iter.Valid() {
