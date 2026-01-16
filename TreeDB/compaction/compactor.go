@@ -201,13 +201,6 @@ func (c *Compactor) CompactSlabWithContext(ctx context.Context, id uint32, opts 
 			if entry.Flags&node.FlagPointer != 0 {
 				return entry.ValuePtr == oldPtr
 			}
-			if entry.Flags&node.FlagValueID != 0 {
-				ptr, err := lookupSnap.ResolveValueIDToPtr(entry.Value)
-				if err != nil {
-					return false
-				}
-				return ptr == oldPtr
-			}
 			return false
 		}
 
@@ -343,11 +336,6 @@ func (c *Compactor) buildLiveSet(ctx context.Context, snap *db.Snapshot, id uint
 		var livePtr page.ValuePtr
 		if flags&node.FlagPointer != 0 {
 			livePtr = ptr
-		} else if flags&node.FlagValueID != 0 {
-			p, err := snap.ResolveValueIDToPtr(it.UnsafeValue())
-			if err == nil {
-				livePtr = p
-			}
 		}
 
 		if livePtr.FileID == id {

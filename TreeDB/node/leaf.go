@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -11,7 +12,10 @@ const (
 	FlagInline    = 0x00
 	FlagPointer   = 0x01
 	FlagTombstone = 0x02
+	FlagValueID   = 0x04
 )
+
+var ErrInvalidValueIDLength = errors.New("invalid value id length")
 
 // LeafEntry represents a parsed entry from a Leaf Node.
 type LeafEntry struct {

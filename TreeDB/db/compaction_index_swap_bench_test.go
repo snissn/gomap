@@ -31,7 +31,6 @@ func BenchmarkCompactionIndexSwapPointerValues(b *testing.B) {
 		opts := Options{
 			Dir:                dir,
 			ForceValuePointers: true,
-			OmitSlabKeys:       true,
 			SlabCompression: slab.CompressionOptions{
 				Kind:            slab.CompressionZSTD,
 				MinBytes:        1024,
