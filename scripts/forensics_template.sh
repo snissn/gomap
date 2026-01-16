@@ -333,14 +333,14 @@ if [ -d "${APP_DB}" ]; then
     echo "du_human:"
     du -sh "${APP_DB}" "${APP_DB}"/* 2>/dev/null || true
     echo "du_bytes:"
-    if du -sb "${APP_DB}" >/dev/null 2>&1; then
-      du -sb "${APP_DB}" "${APP_DB}"/* 2>/dev/null || true
-    else
-      du -sk "${APP_DB}" "${APP_DB}"/* 2>/dev/null | awk "{print $1*1024 \" \" $2}"
-    fi
-    echo "top_files_bytes:"
-    find "${APP_DB}" -type f -printf "%s %p\n" 2>/dev/null | sort -nr | head -n 20
-  } > "${BREAKDOWN_LOG}"
+	    if du -sb "${APP_DB}" >/dev/null 2>&1; then
+	      du -sb "${APP_DB}" "${APP_DB}"/* 2>/dev/null || true
+	    else
+	      du -sk "${APP_DB}" "${APP_DB}"/* 2>/dev/null | awk '{print $1 * 1024 " " $2}'
+	    fi
+	    echo "top_files_bytes:"
+	    find "${APP_DB}" -type f -printf "%s %p\n" 2>/dev/null | sort -nr | head -n 20
+	  } > "${BREAKDOWN_LOG}"
   echo "Disk breakdown log: ${BREAKDOWN_LOG}"
 fi
 

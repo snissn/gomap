@@ -71,7 +71,7 @@ On the server, we additionally use a **local replace** so `celestia-appd` uses t
 - `gomap` checkout: `/home/mikers/dev/snissn/gomap`
 - `celestia-app` checkout: `/home/mikers/dev/snissn/celestia-app`
 - `celestia-appd` binary: `/home/mikers/dev/snissn/celestia-app/build/celestia-appd`
-- Mainnet harness script: `/home/mikers/tmp/mainnet-treedb-fast-sync-forensics.sh`
+- Mainnet harness script: `/home/mikers/tmp/mainnet-treedb-fast-sync-forensics.sh` (template in `gomap`: `scripts/forensics_template.sh`)
 - Convenience runner: `~/run_celestia.sh`
 
 ### Go toolchain
