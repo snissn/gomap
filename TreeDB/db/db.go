@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +36,7 @@ type DBState struct {
 	SystemRootPageID uint64
 	SlabSet          *slab.SlabSet
 	ValueLogSet      *vlog.Set
+	LastSeq          uint64
 }
 
 type DB struct {
@@ -70,6 +72,9 @@ type DB struct {
 	internalFillTargetPPM uint32
 	leafPrefixCompression bool
 	piggybackCompaction   bool
+	enableValueIndex      bool
+	forceValuePointers    bool
+	omitSlabKeys          bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -82,11 +87,15 @@ type DB struct {
 	meta             page.MetaPageBody
 	metaPageID       uint64
 
+	nextValueID atomic.Uint64
+
 	state atomic.Pointer[DBState]
 
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
+
+	lastGCStats atomic.Pointer[GCStats]
 }
 
 type Mode uint8
@@ -149,6 +158,11 @@ type Options struct {
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
 	MemtableShards int
+	// IteratorMutableMaxBytes allows iterators to read from mutable memtables
+	// without forcing a rotation when the mutable size is small. This preserves
+	// snapshot isolation but can block writers while iterators are open.
+	// A value <= 0 disables the optimization.
+	IteratorMutableMaxBytes int64
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -227,6 +241,10 @@ type Options struct {
 	ValueLogPointerThreshold int
 	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
 	ForceValuePointers bool
+	// EnableValueIndex enables the Value Index for large values (pointer-backed).
+	// Writes generate a ValueID and store the mapping in the System Tree.
+	// Reads resolve the ValueID via the System Tree.
+	EnableValueIndex bool
 	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
 	// this threshold (0 disables warnings). Cached mode only.
 	MaxValueLogRetainedBytes int64
@@ -248,6 +266,32 @@ type Options struct {
 	DisableReadChecksum bool
 	// SlabCompression configures compression for slab-stored values.
 	SlabCompression slab.CompressionOptions
+	// SlabCompressionMetrics logs rolling compression ratios for slabs.
+	SlabCompressionMetrics bool
+	// SlabCompressionMetricsWindowBytes controls log window size for compression ratios.
+	SlabCompressionMetricsWindowBytes int
+	// SlabCompressionAdaptiveRatio enables adaptive compression pausing when ratios degrade (>= threshold).
+	SlabCompressionAdaptiveRatio float64
+	// SlabCompressionAdaptivePauseBytes controls how many raw bytes to skip after a degradation trigger.
+	SlabCompressionAdaptivePauseBytes int
+	// SlabCompressionAdaptiveMinRecords controls the minimum records per window before triggering pause.
+	SlabCompressionAdaptiveMinRecords int
+	// SlabCompressionAdaptiveTrainBytes controls how many raw bytes to sample for training (0 disables).
+	SlabCompressionAdaptiveTrainBytes int
+	// SlabCompressionAdaptiveTrainDictBytes controls the trained dictionary size.
+	SlabCompressionAdaptiveTrainDictBytes int
+	// SlabCompressionAdaptiveTrainMinRecords controls the minimum records before training.
+	SlabCompressionAdaptiveTrainMinRecords int
+	// SlabCompressionAdaptiveTrainMaxRecordBytes caps per-record sample size for training.
+	SlabCompressionAdaptiveTrainMaxRecordBytes int
+	// SlabCompressionAdaptiveTrainSampleStride samples every Nth record for training.
+	SlabCompressionAdaptiveTrainSampleStride int
+	// SlabCompressionAdaptiveTrainDedupWindow controls the exact-hash dedup window size.
+	SlabCompressionAdaptiveTrainDedupWindow int
+	// OmitSlabKeys avoids storing the key in the slab record. This saves space
+	// for small records but requires IndexSwap compaction (the default compactor
+	// will skip these records as dead).
+	OmitSlabKeys bool
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -363,7 +407,7 @@ func Open(opts Options) (*DB, error) {
 		opts.ChunkSize = 256 * 1024 * 1024
 	}
 	if opts.KeepRecent == 0 {
-		opts.KeepRecent = 10000
+		opts.KeepRecent = 20
 	}
 	if opts.LeafFillTargetPPM == 0 {
 		opts.LeafFillTargetPPM = 1_000_000
@@ -372,10 +416,10 @@ func Open(opts Options) (*DB, error) {
 		opts.InternalFillTargetPPM = 1_000_000
 	}
 	if opts.PruneInterval == 0 {
-		opts.PruneInterval = 250 * time.Millisecond
+		opts.PruneInterval = 100 * time.Millisecond
 	}
 	if opts.PruneMaxPages == 0 {
-		opts.PruneMaxPages = 4096
+		opts.PruneMaxPages = 40960
 	}
 	if opts.PruneMaxDuration == 0 {
 		opts.PruneMaxDuration = 25 * time.Millisecond
@@ -444,7 +488,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression: opts.SlabCompression,
+		Compression:                            opts.SlabCompression,
+		OmitSlabKeys:                           opts.OmitSlabKeys,
+		CompressionMetrics:                     opts.SlabCompressionMetrics,
+		CompressionMetricsWindowBytes:          opts.SlabCompressionMetricsWindowBytes,
+		CompressionAdaptiveRatio:               opts.SlabCompressionAdaptiveRatio,
+		CompressionAdaptivePauseBytes:          opts.SlabCompressionAdaptivePauseBytes,
+		CompressionAdaptiveMinRecords:          opts.SlabCompressionAdaptiveMinRecords,
+		CompressionAdaptiveTrainBytes:          opts.SlabCompressionAdaptiveTrainBytes,
+		CompressionAdaptiveTrainDictBytes:      opts.SlabCompressionAdaptiveTrainDictBytes,
+		CompressionAdaptiveTrainMinRecords:     opts.SlabCompressionAdaptiveTrainMinRecords,
+		CompressionAdaptiveTrainMaxRecordBytes: opts.SlabCompressionAdaptiveTrainMaxRecordBytes,
+		CompressionAdaptiveTrainSampleStride:   opts.SlabCompressionAdaptiveTrainSampleStride,
+		CompressionAdaptiveTrainDedupWindow:    opts.SlabCompressionAdaptiveTrainDedupWindow,
 	})
 	if err != nil {
 		p.Close()
@@ -487,6 +543,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		leafPrefixCompression: opts.LeafPrefixCompression,
 		piggybackCompaction:   !opts.DisablePiggybackCompaction,
 		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
+		enableValueIndex:      opts.EnableValueIndex,
+		forceValuePointers:    opts.ForceValuePointers,
+		omitSlabKeys:          opts.OmitSlabKeys,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -526,7 +585,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.state.Store(initialState)
 
-	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog && !opts.SplitValueLog
+	includeValueLog := !opts.DisableValueLog && !opts.SplitValueLog
 	segments, err := listWALSegments(opts.Dir, includeValueLog)
 	if err != nil {
 		db.Close()
@@ -654,6 +713,7 @@ func (db *DB) recover() error {
 
 		db.meta.SystemRootPageID = sysRootID
 		db.meta.CommitSeq = 0
+		db.meta.NextValueID = 1
 
 		if err := db.writeMeta(MetaPage0ID, db.meta); err != nil {
 			return err
@@ -662,6 +722,7 @@ func (db *DB) recover() error {
 			return err
 		}
 		db.metaPageID = MetaPage0ID
+		db.nextValueID.Store(db.meta.NextValueID)
 		return nil
 	}
 
@@ -747,6 +808,7 @@ func (db *DB) recover() error {
 
 	db.meta = chosen.meta
 	db.metaPageID = chosen.id
+	db.nextValueID.Store(db.meta.NextValueID)
 
 	if !db.readOnly {
 		if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
@@ -875,7 +937,7 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 // finalizeCommit handles durability and state updates with minimal lock contention.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, sysOps []batch.Entry, metrics adaptive.Metrics, lastSeq uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -888,7 +950,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	//
 	// This mutates index pages, so it must run before any Sync() durability
 	// boundary.
-	if nextSysRoot, sysRetired, err := db.applySystemStatsUpdates(sysRootID, metrics); err != nil {
+	if nextSysRoot, sysRetired, err := db.applySystemUpdates(sysRootID, sysOps, metrics); err != nil {
 		return err
 	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
 		sysRootID = nextSysRoot
@@ -917,6 +979,10 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
 	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = idx.pager.PageCount()
+	nextMeta.NextValueID = db.nextValueID.Load()
+	if lastSeq > nextMeta.LastSeq {
+		nextMeta.LastSeq = lastSeq
+	}
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -962,6 +1028,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		SystemRootPageID: nextMeta.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		LastSeq:          nextMeta.LastSeq,
 	}
 	db.state.Store(newState)
 
@@ -1001,7 +1068,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, nil, adaptive.Metrics{}, 0)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1017,7 +1084,11 @@ func (db *DB) Prune() {
 	defer db.releaseIndex(idx)
 
 	min := idx.registry.MinPinnedSeq()
-	current := db.meta.CommitSeq
+	state := db.state.Load()
+	if state == nil {
+		return
+	}
+	current := state.CommitSeq
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 
@@ -1030,7 +1101,34 @@ func (db *DB) Prune() {
 
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.tree.Get(key)
+	entry, err := s.tree.GetEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, tree.ErrKeyNotFound
+	}
+
+	if entry.Flags&node.FlagValueID != 0 {
+		if len(entry.Value) != 8 {
+			return nil, fmt.Errorf("invalid value id length in Get: %d", len(entry.Value))
+		}
+		return s.resolveValueID(entry.Value, false)
+	}
+
+	if entry.Flags&node.FlagPointer != 0 {
+		// Use tree's configured reader (which is ValueReaderForState logic internally)
+		// But s.tree.slabReader is private.
+		// Reconstruct reader.
+		vr := ValueReaderForState(s.state)
+		return vr.Read(entry.ValuePtr)
+	}
+
+	// Inline value
+	// Return copy
+	val := make([]byte, len(entry.Value))
+	copy(val, entry.Value)
+	return val, nil
 }
 
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
@@ -1044,12 +1142,41 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 		return nil, tree.ErrKeyNotFound
 	}
 
+	if entry.Flags&node.FlagValueID != 0 {
+		return s.resolveValueID(entry.Value, true)
+	}
+
 	if entry.Flags&node.FlagPointer != 0 {
 		vr := ValueReaderForState(s.state)
 		return vr.ReadUnsafe(entry.ValuePtr)
 	}
 
 	return entry.Value, nil
+}
+
+func (s *Snapshot) resolveValueID(idBytes []byte, unsafe bool) ([]byte, error) {
+	ptr, err := s.ResolveValueIDToPtr(idBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	vr := ValueReaderForState(s.state)
+	if unsafe {
+		return vr.ReadUnsafe(ptr)
+	}
+	return vr.Read(ptr)
+}
+
+func (s *Snapshot) ResolveValueIDToPtr(idBytes []byte) (page.ValuePtr, error) {
+	if len(idBytes) != 8 {
+		return page.ValuePtr{}, fmt.Errorf("invalid value id length: %d", len(idBytes))
+	}
+	id := ValueID(binary.BigEndian.Uint64(idBytes))
+
+	// System Tree Lookup
+	sysTree := tree.New(s.idx.pager, ValueReaderForState(s.state), s.state.SystemRootPageID)
+	vi := valueIndexHelper{}
+	return vi.Get(sysTree, id)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
@@ -1095,6 +1222,13 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+// LastSeq returns the highest sequence number persisted in the database.
+func (db *DB) LastSeq() uint64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.meta.LastSeq
+}
+
 // RefreshSlabSet publishes a new DBState with the current SlabSet (excluding
 // zombies) without creating a new commit. This is used by background compaction
 // so that future snapshots stop pinning compacted slabs immediately.
@@ -1113,6 +1247,7 @@ func (db *DB) RefreshSlabSet() error {
 		SystemRootPageID: oldState.SystemRootPageID,
 		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		LastSeq:          oldState.LastSeq,
 	}
 	db.state.Store(newState)
 
@@ -1176,6 +1311,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		noPinnedReaders := idx.registry.MinPinnedSeq() == ^uint64(0)
 		if noPinnedReaders {
 			tr := tree.New(idx.pager, nil, rootID)
+			sysTr := tree.New(idx.pager, nil, sysRoot)
 			var (
 				metrics       adaptive.Metrics
 				modifiedPages map[uint64]struct{}
@@ -1187,9 +1323,31 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 					db.writeMu.Unlock()
 					return err
 				}
+
+				if !updated {
+					// Key might be using a ValueID. If so, update the pointer in the
+					// system tree in-place.
+					entry, err := tr.GetEntry(op.Key)
+					if err == nil && entry.Flags&node.FlagValueID != 0 && len(entry.Value) == 8 {
+						vid := ValueID(binary.BigEndian.Uint64(entry.Value))
+						sysKey := encodeValueIndexKey(vid)
+						sysUpdated, sysLeafID, err := sysTr.UpdateValuePtrInPlace(sysKey, op.OldPtr, op.NewPtr)
+						if err != nil {
+							db.mu.Unlock()
+							db.writeMu.Unlock()
+							return err
+						}
+						if sysUpdated {
+							updated = true
+							leafID = sysLeafID
+						}
+					}
+				}
+
 				if !updated {
 					continue
 				}
+
 				if modifiedPages == nil {
 					modifiedPages = make(map[uint64]struct{}, 8)
 				}
@@ -1217,7 +1375,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			}
 
 			// Commit without forcing Sync; compaction can be lazily durable.
-			if err := db.finalizeCommit(rootID, sysRoot, nil, false, metrics); err != nil {
+			if err := db.finalizeCommit(rootID, sysRoot, nil, false, nil, metrics, 0); err != nil {
 				db.writeMu.Unlock()
 				return err
 			}
@@ -1229,9 +1387,11 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 
 		// Build a micro-batch of still-live pointer updates.
 		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
+		sysTr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRoot)
 		b := batch.New(db.slabManager, db.policy.InlineThreshold)
 		closeBatch := func() { _ = b.Close() }
 		var slabWritesByFile map[uint32]int64
+		var sysOps []batch.Entry
 		var metrics adaptive.Metrics
 
 		for _, op := range chunk {
@@ -1239,10 +1399,53 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 			if err != nil {
 				continue
 			}
+
+			// Value Index Path
+			if entry.Flags&node.FlagValueID != 0 {
+				if len(entry.Value) != 8 {
+					continue
+				}
+				vid := ValueID(binary.BigEndian.Uint64(entry.Value))
+				sysKey := encodeValueIndexKey(vid)
+				sysVal, err := sysTr.Get(sysKey)
+				if err != nil {
+					continue
+				}
+				if len(sysVal) != page.ValuePtrSize {
+					continue
+				}
+				currentPtr := page.DecodeValuePtr(sysVal)
+				if currentPtr.FileID != op.OldPtr.FileID || currentPtr.Offset != op.OldPtr.Offset || page.ValuePtrRecordLength(currentPtr) != page.ValuePtrRecordLength(op.OldPtr) {
+					continue
+				}
+
+				// Queue update for System Tree
+				var newPtrBuf [page.ValuePtrSize]byte
+				op.NewPtr.Encode(newPtrBuf[:])
+				sysOps = append(sysOps, batch.Entry{
+					Type:  batch.OpPut,
+					Key:   append([]byte(nil), sysKey...),
+					Value: append([]byte(nil), newPtrBuf[:]...),
+				})
+
+				if slabWritesByFile == nil {
+					slabWritesByFile = make(map[uint32]int64, 4)
+				}
+				slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
+
+				if metrics.SlabDeadBytesByFile == nil {
+					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
+				}
+				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(page.ValuePtrRecordLength(op.OldPtr))
+				metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(op.OldPtr))
+				continue
+			}
+
+			// Legacy Pointer Path
 			if entry.Flags&node.FlagPointer == 0 {
 				continue
 			}
-			if entry.ValuePtr != op.OldPtr {
+			if entry.ValuePtr.FileID != op.OldPtr.FileID || entry.ValuePtr.Offset != op.OldPtr.Offset || page.ValuePtrRecordLength(entry.ValuePtr) != page.ValuePtrRecordLength(op.OldPtr) {
 				continue
 			}
 			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
@@ -1257,18 +1460,29 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		opsMap := b.Ops()
-		if len(opsMap) == 0 {
+		if len(opsMap) == 0 && len(sysOps) == 0 {
 			closeBatch()
 			db.writeMu.Unlock()
 			continue
 		}
 
-		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
-		if err != nil {
-			closeBatch()
-			db.writeMu.Unlock()
-			return err
+		var newRoot uint64
+		var retired []uint64
+		var err error
+
+		if len(opsMap) > 0 {
+			var r uint64
+			r, retired, metrics, err = idx.zipper.Apply(rootID, b)
+			if err != nil {
+				closeBatch()
+				db.writeMu.Unlock()
+				return err
+			}
+			newRoot = r
+		} else {
+			newRoot = rootID
 		}
+
 		if len(slabWritesByFile) > 0 {
 			if metrics.SlabWriteBytesByFile == nil {
 				metrics.SlabWriteBytesByFile = slabWritesByFile
@@ -1280,7 +1494,7 @@ func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error 
 		}
 
 		// Commit without forcing Sync; compaction can be lazily durable.
-		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
+		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, sysOps, metrics, 0); err != nil {
 			closeBatch()
 			db.writeMu.Unlock()
 			return err
@@ -1344,7 +1558,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, nil, adaptive.Metrics{}, 0)
 }
 
 type pagerAllocator struct {

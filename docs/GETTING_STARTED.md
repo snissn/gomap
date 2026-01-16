@@ -51,6 +51,9 @@ func main() {
 }
 ```
 
+Note: `treedb.Open` honors `TREEDB_*` environment overrides; see
+`docs/TREEDB_TUNING.md` for the full list.
+
 ### TreeDB (backend-only mode)
 
 ```go

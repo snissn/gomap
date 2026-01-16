@@ -133,7 +133,7 @@ Planned test sketch (not yet implemented):
 This test should fail if the current stall is reproducible in a smaller environment.
 
 ## 12.7 Goroutine Dump / Pprof Capture (Stalled Run)
-Captured from the stalled node on `192.168.0.132` using the harness pprof port `6062`:
+Captured from the stalled node on `192.168.0.185` using the harness pprof port `6062`:
 - Goroutine dump: `/home/mikers/pprof_goroutine_20260108102130.txt`
 - CPU profile (30s): `/home/mikers/pprof_profile_20260108102137.pb.gz`
 
@@ -312,3 +312,64 @@ Added `TreeDB/caching/backpressure_wait_test.go`:
   - Baseline (with `getUint16`, no `putUint32`): ~489ms/op, ~473ms/op, ~578ms/op (avg ~513ms/op).
   - With `putUint32`: ~441ms/op, ~454ms/op, ~467ms/op (avg ~454ms/op).
 - Net: ~11% average improvement; kept.
+
+## 12.39 Inline getUint32 (Reverted)
+- Tried `getUint32` for checksum/value length reads in `TreeDB/node/leaf.go` and `TreeDB/node/node.go`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, 3x each):
+  - With `getUint32`: ~446ms/op, ~437ms/op, ~451ms/op (avg ~445ms/op).
+  - Baseline (without `getUint32`): ~430ms/op, ~451ms/op, ~446ms/op (avg ~441ms/op).
+- Net: slight regression/noise; reverted.
+
+## 12.40 AppendMany Prep Consolidation (Reverted)
+- Tried merging compression/omit key bookkeeping into `appendManyPrep` to drop extra slices and avoid `encodedKeys` allocation.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x):
+  - With change: ~1154ms/op, ~1132ms/op, ~1125ms/op (avg ~1137ms/op).
+  - Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op (avg ~1128ms/op).
+- Net: slight regression/noise; reverted.
+
+## 12.41 AppendMany PutUint Helpers (Reverted)
+- Replaced `binary.LittleEndian.PutUint16/PutUint32` with inline helpers in `slab.AppendMany`.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1172ms/op, ~1203ms/op, ~1298ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
+
+## 12.42 AppendMany Batch Buffer Increase (Reverted)
+- Increased `maxBatchBytes`/`maxKeepScratch` to 32/64 MiB to reduce syscall frequency.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1218ms/op, ~1213ms/op, ~1249ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
+
+## 12.43 AppendMany Omit-Keys Copy (Reverted)
+- Avoided copying keys slice when `omitSlabKeys` is set with no compression.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1172ms/op, ~1205ms/op, ~1199ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
+
+## 12.44 AppendMany Prep/Meta Pools (Reverted)
+- Added sync.Pool reuse for `appendManyPrep` and `appendManyMeta` slices.
+- Benchmark (timeline replay, backend mode, 5s timeline, no sleep, ForceValuePointers=1, 3x): ~1225ms/op, ~1215ms/op, ~1212ms/op.
+- Baseline: ~1142ms/op, ~1119ms/op, ~1123ms/op.
+- Net: regression; reverted.
+
+## 12.45 Slab Compression Level Tuning (No Win)
+- Added a slab compression level option (env + bench knobs) to tune zstd level for slab-heavy runs.
+- Quick test with `TREEDB_TRACE_SLAB_COMPRESSION_LEVEL=3` (slab-heavy config) regressed (~3.3s/op vs ~1.3s/op baseline).
+- Keeping the option for future tuning, but level 3 is not viable.
+
+## 12.46 Slab Compression Threshold Sweep (Pointer Values)
+- Timeline replay sweep (pointer values + omit keys, 10s):
+  - `zstd` min=1 save=0: ~1.44s/op
+  - `zstd` min=1024 save=0: ~1.20s/op
+  - `zstd` min=4096 save=0: ~1.20s/op
+  - `zstd` min=1024 save=64: ~1.19s/op
+  - `none`: ~1.18s/op (fastest, but uncompressed slabs).
+- Conclusion: raising min bytes (and modest min savings) yields most of the speedup while keeping compression.
+
+## 12.47 Slab Compression Permutation (Pointer Values, Celestia Trace)
+- True workload sweep with pointer values + omit keys:
+  - `zstd_min1_save0`: duration 257s, index 4,227,858,432, slab 447,938,107.
+  - `zstd_min1024_save0`: duration 246s, index 4,227,858,432, slab 449,808,914.
+  - `zstd_min4096_save0`: duration 254s, index 4,227,858,432, slab 451,807,163.
+  - `zstd_min1024_save64`: duration 254s, index 4,294,967,296, slab 453,720,604.
+  - `none`: duration 254s, index 4,294,967,296, slab 455,634,012.
+- Best tradeoff: `zstd_min1024_save0` (fastest with smaller index size than `none`).

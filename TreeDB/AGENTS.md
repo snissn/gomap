@@ -792,49 +792,49 @@ Priority legend: P0 (critical), P1 (high), P2 (medium), P3 (low/perf).
 
 #### 17.3.1 Value Index: Implementation Plan (opt-in first)
 
-- [ ] Add a new option gate in `treedb.Options` (in `TreeDB/db/db.go`) to enable Value Index for pointer-backed values (default off until proven).
-- [ ] Define on-disk encoding for `ValueID` and `ValuePtr` mapping:
+- [x] Add a new option gate in `treedb.Options` (in `TreeDB/db/db.go`) to enable Value Index for pointer-backed values (default off until proven).
+- [x] Define on-disk encoding for `ValueID` and `ValuePtr` mapping:
   - **Preferred first cut:** store in the existing System tree (internal namespace) under a dedicated prefix (e.g. `0x00 'v' 'i'`), keyed by big-endian `ValueID`.
   - Must be MVCC-safe (old ValueIDs remain readable while snapshots are pinned).
-- [ ] Update write paths for pointer-backed values:
+- [x] Update write paths for pointer-backed values:
   - allocate a fresh `ValueID` on write,
   - write mapping `ValueID -> ValuePtr` into the Value Index,
   - write `key -> ValueID` into the User tree.
-- [ ] Update read paths:
+- [x] Update read paths:
   - resolve `ValueID -> ValuePtr` via the Value Index (snapshot-consistent),
   - then read bytes from slab/vlog using the resolved pointer.
-- [ ] Update maintenance tools:
+- [x] Update maintenance tools:
   - `treemap info/stats` should report whether Value Index is enabled and basic sizing counters (entries, bytes).
   - `treemap verify` should optionally verify ValueID resolution.
-- [ ] Tests/gates:
+- [x] Tests/gates:
   - unit tests for ValueID mapping encode/decode and snapshot visibility,
   - crash/recovery test that replays and verifies pointer-backed values still resolve.
 
 #### 17.3.2 Unified Seq Across `wal-*` and `vlog-*` (required for GC correctness)
 
-- [ ] Establish one monotonic sequence generator used by both streams.
-- [ ] Define replay order unambiguously:
+- [x] Establish one monotonic sequence generator used by both streams.
+- [x] Define replay order unambiguously:
   - read both streams, merge by `(seq, stream)` tie-breaker, apply deterministically.
-- [ ] Ensure “bytes before pointer” ordering:
+- [x] Ensure “bytes before pointer” ordering:
   - a `ValuePtr` must never become visible in `index.db` at seq N unless the referenced bytes are durable enough for seq N under the chosen durability mode.
-- [ ] Add an invariant check helper (test-only) that validates the ordering on recovery fixtures.
+- [x] Add an invariant check helper (test-only) that validates the ordering on recovery fixtures.
 
 #### 17.3.3 Refcounted GC for `vlog-*` / slab segments (bounded disk over long churn)
 
-- [ ] Pick the first refcount granularity:
+- [x] Pick the first refcount granularity:
   - segment-level refcount (simpler) or
   - block/extent-level (better reclaim, higher complexity).
-- [ ] Define reachability inputs:
+- [x] Define reachability inputs:
   - latest committed User/System roots,
   - pinned snapshots (via ReaderRegistry),
   - any “in-flight” compaction/vacuum generations.
-- [ ] Implement a GC pass that:
+- [x] Implement a GC pass that:
   - computes live `ValueID -> ValuePtr` set (from Value Index),
   - aggregates to per-segment live refs (and optionally live byte ranges),
   - marks segments (or extents) reclaimable once no refs remain and all snapshots are newer than the segment’s last-seen seq.
-- [ ] Expose observability:
+- [x] Expose observability:
   - retained vlog bytes/segments, reclaimable bytes, last GC duration, last error.
-- [ ] Provide an operator command path:
+- [x] Provide an operator command path:
   - `treemap gc` (offline first), and a bounded background mode later (with strict quotas).
 
 #### 17.3.4 Merge Criteria (for enabling by default)

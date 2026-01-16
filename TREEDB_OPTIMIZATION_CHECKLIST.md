@@ -87,8 +87,10 @@ Scenarios inside:
 - [x] **Change direction**
   - Make delete-range streaming (avoid building `[][]byte` of copied keys).
   - Avoid mutating a memtable while iterating it (rotate first, then apply deletes to the new mutable).
+  - Use arena allocation for keys when using `DeleteView` to amortize allocations.
 - [x] **Acceptance check**
   - `BenchmarkTreeDB/BatchMixedOps/BatchMixedOps10k`: `~121ms/op, ~74MB/op, ~530k allocs/op` → `~3.5ms/op, ~0.67MB/op, ~34k allocs/op`.
+  - Local Benchmark: `BenchmarkDeleteRange_DisableWAL` (10k keys): 11k allocs/op -> 2.3k allocs/op (5x improvement).
   - `alloc_space` no longer dominated by key-copy loops in delete-range.
 
 ### 2) IterationRandom dominated by hash_sorted run iteration overhead

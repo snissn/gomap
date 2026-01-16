@@ -14,12 +14,13 @@ const (
 
 type logRecord struct {
 	Op    byte
+	Seq   uint64
 	Key   []byte
 	Value []byte
 }
 
 type logWriter interface {
-	Append(op byte, key, value []byte) (page.ValuePtr, error)
+	Append(seq uint64, op byte, key, value []byte) (page.ValuePtr, error)
 	AppendBatch(records []logRecord) ([]page.ValuePtr, error)
 	RotateTo(path string, fileID uint32) error
 	Size() int64
@@ -33,8 +34,8 @@ type walWriterAdapter struct {
 	scratch []wal.Record
 }
 
-func (a *walWriterAdapter) Append(op byte, key, value []byte) (page.ValuePtr, error) {
-	if err := a.w.Append(op, key, value); err != nil {
+func (a *walWriterAdapter) Append(seq uint64, op byte, key, value []byte) (page.ValuePtr, error) {
+	if err := a.w.Append(seq, op, key, value); err != nil {
 		return page.ValuePtr{}, err
 	}
 	return page.ValuePtr{}, nil
@@ -51,7 +52,7 @@ func (a *walWriterAdapter) AppendBatch(records []logRecord) ([]page.ValuePtr, er
 	walRecords := a.scratch[:len(records)]
 	for i := range records {
 		r := &records[i]
-		walRecords[i] = wal.Record{Op: r.Op, Key: r.Key, Value: r.Value}
+		walRecords[i] = wal.Record{Seq: r.Seq, Op: r.Op, Key: r.Key, Value: r.Value}
 	}
 	if err := a.w.AppendBatch(walRecords); err != nil {
 		return nil, err
@@ -85,8 +86,8 @@ type vlogWriterAdapter struct {
 	scratch []vlog.Record
 }
 
-func (a *vlogWriterAdapter) Append(op byte, key, value []byte) (page.ValuePtr, error) {
-	return a.w.Append(op, key, value)
+func (a *vlogWriterAdapter) Append(seq uint64, op byte, key, value []byte) (page.ValuePtr, error) {
+	return a.w.Append(seq, op, key, value)
 }
 
 func (a *vlogWriterAdapter) AppendBatch(records []logRecord) ([]page.ValuePtr, error) {
@@ -100,7 +101,7 @@ func (a *vlogWriterAdapter) AppendBatch(records []logRecord) ([]page.ValuePtr, e
 	vlogRecords := a.scratch[:len(records)]
 	for i := range records {
 		r := &records[i]
-		vlogRecords[i] = vlog.Record{Op: r.Op, Key: r.Key, Value: r.Value}
+		vlogRecords[i] = vlog.Record{Seq: r.Seq, Op: r.Op, Key: r.Key, Value: r.Value}
 	}
 	return a.w.AppendBatch(vlogRecords)
 }

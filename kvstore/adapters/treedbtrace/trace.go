@@ -98,6 +98,7 @@ func initTrace() {
 	}
 	f, err := os.Create(path)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "treedbtrace: failed to create trace file %q: %v\n", path, err)
 		return
 	}
 	t := &traceLogger{
@@ -228,7 +229,7 @@ func (t *traceLogger) writeSummary() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(t.summaryPath, buf, 0644)
+	_ = os.WriteFile(t.summaryPath, buf, 0600)
 }
 
 func (t *traceLogger) nextIterID() uint64 {

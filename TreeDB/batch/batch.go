@@ -30,6 +30,7 @@ type Entry struct {
 	Value    []byte        // For inline values
 	ValuePtr page.ValuePtr // For large values
 	IsPtr    bool          // True if ValuePtr is valid
+	Flags    byte
 }
 
 // Interface defines the contract for a batch operation.
@@ -42,6 +43,7 @@ type Interface interface {
 	Close() error
 	Replay(func(Entry) error) error
 	GetByteSize() (int, error)
+	SetLastSeq(uint64)
 }
 
 // Batch accumulates writes and deletes before committing them.
@@ -53,6 +55,7 @@ type Batch struct {
 	slabWrittenByID map[uint32]int64
 	inlineThreshold int
 	sorted          bool
+	assumeSorted    bool
 	lastKey         []byte
 	closed          bool
 	largeIdxs       []int
@@ -125,6 +128,7 @@ func (b *Batch) resetLocked() {
 		}
 	}
 	b.sorted = true
+	b.assumeSorted = false
 	b.lastKey = nil
 }
 
@@ -168,6 +172,7 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.sorted = true
+	b.assumeSorted = false
 	b.lastKey = nil
 }
 
@@ -192,6 +197,9 @@ func Release(b *Batch) {
 
 func (b *Batch) noteKeyOrder(key []byte) {
 	if !b.sorted {
+		return
+	}
+	if b.assumeSorted {
 		return
 	}
 	if b.lastKey != nil && bytes.Compare(b.lastKey, key) > 0 {
@@ -452,7 +460,9 @@ func (b *Batch) SortedEntries() []Entry {
 	if len(b.entries) == 0 {
 		return nil
 	}
-	if !b.sorted {
+	if b.assumeSorted {
+		b.sorted = true
+	} else if !b.sorted {
 		sort.SliceStable(b.entries, func(i, j int) bool {
 			return bytes.Compare(b.entries[i].Key, b.entries[j].Key) < 0
 		})
@@ -475,6 +485,27 @@ func (b *Batch) SortedEntries() []Entry {
 	return b.entries
 }
 
+// AssumeSorted marks the batch as already sorted, skipping internal sorting.
+// Callers must only use this when entries are in non-decreasing key order.
+func (b *Batch) AssumeSorted() {
+	if b == nil || b.closed {
+		return
+	}
+	if len(b.entries) > 1 {
+		for i := 1; i < len(b.entries); i++ {
+			if bytes.Compare(b.entries[i-1].Key, b.entries[i].Key) > 0 {
+				b.assumeSorted = false
+				b.sorted = false
+				b.lastKey = nil
+				return
+			}
+		}
+	}
+	b.assumeSorted = true
+	b.sorted = true
+	b.lastKey = nil
+}
+
 // Ops returns the map of operations.
 // WARNING: This constructs the map on demand. Duplicate keys in the batch
 // are resolved so the last one wins.
@@ -486,10 +517,16 @@ func (b *Batch) Ops() map[string]Entry {
 	return ops
 }
 
-// ByteSize returns the approximate size of the batch.
 func (b *Batch) ByteSize() int {
 	return b.byteSize
 }
+
+func (b *Batch) GetByteSize() (int, error) {
+	return b.byteSize, nil
+}
+
+// SetLastSeq is a dummy implementation to satisfy the Interface.
+func (b *Batch) SetLastSeq(uint64) {}
 
 // SlabWriteBytes returns the number of bytes written to the slab file.
 func (b *Batch) SlabWriteBytes() int {

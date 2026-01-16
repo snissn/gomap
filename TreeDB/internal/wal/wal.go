@@ -56,6 +56,7 @@ func normalizeMaxSegmentSize(size int64) int64 {
 }
 
 type Record struct {
+	Seq   uint64
 	Op    byte
 	Key   []byte
 	Value []byte
@@ -106,13 +107,13 @@ func (w *Writer) RotateTo(path string) error {
 			_ = f.Close()
 			return err
 		}
+
 		w.f = f
 		w.bw.Reset(f)
 		w.size = info.Size()
 		w.pending = w.pending[:0]
 		return nil
 	}
-
 	if err := w.flushPending(); err != nil {
 		return err
 	}
@@ -151,10 +152,13 @@ func (w *Writer) RotateTo(path string) error {
 }
 
 func syncDir(path string) (err error) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || path == "" {
 		return nil
 	}
 	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -200,10 +204,10 @@ func (w *Writer) flushPending() error {
 }
 
 // Append writes a single record as an atomic segment.
-func (w *Writer) Append(op byte, key, value []byte) error {
+func (w *Writer) Append(seq uint64, op byte, key, value []byte) error {
 	// Encode record into scratch
-	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
-	size := 1 + 2 + 4 + len(key) + len(value)
+	// Record: [Seq 8][Op 1][KeyLen 2][ValLen 4][Key][Value]
+	size := 8 + 1 + 2 + 4 + len(key) + len(value)
 	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
@@ -215,11 +219,12 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 			w.scratch = make([]byte, size)
 		}
 		buf := w.scratch[:size]
-		buf[0] = op
-		binary.LittleEndian.PutUint16(buf[1:3], uint16(len(key)))
-		binary.LittleEndian.PutUint32(buf[3:7], uint32(len(value)))
-		copy(buf[7:], key)
-		copy(buf[7+len(key):], value)
+		binary.LittleEndian.PutUint64(buf[0:8], seq)
+		buf[8] = op
+		binary.LittleEndian.PutUint16(buf[9:11], uint16(len(key)))
+		binary.LittleEndian.PutUint32(buf[11:15], uint32(len(value)))
+		copy(buf[15:], key)
+		copy(buf[15+len(key):], value)
 		return w.writeSegment(buf)
 	}
 
@@ -241,11 +246,12 @@ func (w *Writer) Append(op byte, key, value []byte) error {
 	off := len(w.pending)
 	w.pending = w.pending[:need]
 	buf := w.pending[off:need]
-	buf[0] = op
-	binary.LittleEndian.PutUint16(buf[1:3], uint16(len(key)))
-	binary.LittleEndian.PutUint32(buf[3:7], uint32(len(value)))
-	copy(buf[7:], key)
-	copy(buf[7+len(key):], value)
+	binary.LittleEndian.PutUint64(buf[0:8], seq)
+	buf[8] = op
+	binary.LittleEndian.PutUint16(buf[9:11], uint16(len(key)))
+	binary.LittleEndian.PutUint32(buf[11:15], uint32(len(value)))
+	copy(buf[15:], key)
+	copy(buf[15+len(key):], value)
 	return nil
 }
 
@@ -261,7 +267,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 	// Calculate total size
 	total := 0
 	for _, r := range records {
-		total += 1 + 2 + 4 + len(r.Key) + len(r.Value)
+		total += 8 + 1 + 2 + 4 + len(r.Key) + len(r.Value)
 	}
 	if w.maxSegmentSize > 0 && int64(total) > w.maxSegmentSize {
 		return ErrRecordTooLarge
@@ -274,12 +280,13 @@ func (w *Writer) AppendBatch(records []Record) error {
 
 	off := 0
 	for _, r := range records {
-		buf[off] = r.Op
-		binary.LittleEndian.PutUint16(buf[off+1:off+3], uint16(len(r.Key)))
-		binary.LittleEndian.PutUint32(buf[off+3:off+7], uint32(len(r.Value)))
-		copy(buf[off+7:], r.Key)
-		copy(buf[off+7+len(r.Key):], r.Value)
-		off += 1 + 2 + 4 + len(r.Key) + len(r.Value)
+		binary.LittleEndian.PutUint64(buf[off:off+8], r.Seq)
+		buf[off+8] = r.Op
+		binary.LittleEndian.PutUint16(buf[off+9:off+11], uint16(len(r.Key)))
+		binary.LittleEndian.PutUint32(buf[off+11:off+15], uint32(len(r.Value)))
+		copy(buf[off+15:], r.Key)
+		copy(buf[off+15+len(r.Key):], r.Value)
+		off += 8 + 1 + 2 + 4 + len(r.Key) + len(r.Value)
 	}
 
 	return w.writeSegment(buf)
@@ -344,34 +351,35 @@ func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 }
 
 // ReadNext yields the next record. It transparently handles segments.
-func (r *Reader) ReadNext() (op byte, key, val []byte, err error) {
+func (r *Reader) ReadNext() (seq uint64, op byte, key, val []byte, err error) {
 	// If buffer is empty or exhausted, read next segment
 	if r.buf == nil || r.pos >= len(r.buf) {
 		if err := r.readSegment(); err != nil {
-			return 0, nil, nil, err
+			return 0, 0, nil, nil, err
 		}
 	}
 
 	// Parse record from buffer
-	// Record: [Op 1][KeyLen 2][ValLen 4][Key][Value]
-	if r.pos+7 > len(r.buf) {
-		return 0, nil, nil, ErrCorrupt // Segment truncated in memory? Should not happen if readSegment checks size.
+	// Record: [Seq 8][Op 1][KeyLen 2][ValLen 4][Key][Value]
+	if r.pos+15 > len(r.buf) {
+		return 0, 0, nil, nil, ErrCorrupt // Segment truncated in memory? Should not happen if readSegment checks size.
 	}
 
-	op = r.buf[r.pos]
-	kLen := int(binary.LittleEndian.Uint16(r.buf[r.pos+1 : r.pos+3]))
-	vLen := int(binary.LittleEndian.Uint32(r.buf[r.pos+3 : r.pos+7]))
-	recSize := 1 + 2 + 4 + kLen + vLen
+	seq = binary.LittleEndian.Uint64(r.buf[r.pos : r.pos+8])
+	op = r.buf[r.pos+8]
+	kLen := int(binary.LittleEndian.Uint16(r.buf[r.pos+9 : r.pos+11]))
+	vLen := int(binary.LittleEndian.Uint32(r.buf[r.pos+11 : r.pos+15]))
+	recSize := 8 + 1 + 2 + 4 + kLen + vLen
 
 	if r.pos+recSize > len(r.buf) {
-		return 0, nil, nil, ErrCorrupt
+		return 0, 0, nil, nil, ErrCorrupt
 	}
 
-	key = r.buf[r.pos+7 : r.pos+7+kLen]
-	val = r.buf[r.pos+7+kLen : r.pos+recSize]
+	key = r.buf[r.pos+15 : r.pos+15+kLen]
+	val = r.buf[r.pos+15+kLen : r.pos+recSize]
 	r.pos += recSize
 
-	return op, key, val, nil
+	return seq, op, key, val, nil
 }
 
 func (r *Reader) readSegment() error {

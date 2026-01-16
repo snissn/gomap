@@ -113,6 +113,10 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 
 	// 1. Calculate Entry Size
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
+
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
 	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
 }
@@ -122,6 +126,9 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
+	}
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
 	}
 
 	headerSize := 7

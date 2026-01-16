@@ -183,6 +183,31 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	}
 }
 
+func (m *HashSorted) ApplyStealBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	var chunks []hashSortedIndexWork
+
+	m.mu.Lock()
+	for _, op := range entries {
+		if op.Type == batchpkg.OpDelete {
+			if chunk, seq := m.deleteStealLocked(op.Key); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		} else {
+			if chunk, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, c := range chunks {
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys)
+	}
+}
+
 func (m *HashSorted) indexApplySortedChunk(seq uint64, keys []string) {
 	m.index.apply(seq, keys)
 }

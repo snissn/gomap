@@ -11,6 +11,7 @@ const (
 	FlagInline    = 0x00
 	FlagPointer   = 0x01
 	FlagTombstone = 0x02
+	FlagValueID   = 0x04
 )
 
 // LeafEntry represents a parsed entry from a Leaf Node.
@@ -271,8 +272,17 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 	flags := layout.flags
 
-	// Tombstones and inline values have no ValuePtr bytes to rewrite.
-	if flags&FlagTombstone != 0 || flags&FlagPointer == 0 {
+	// Tombstones cannot be updated in place.
+	if flags&FlagTombstone != 0 {
+		return false, nil
+	}
+
+	// We support updating both explicit pointers (FlagPointer) and 16-byte
+	// inline values (used for ValueID mappings in the System Tree).
+	isExplicitPtr := flags&FlagPointer != 0
+	isInlinePtr := flags&FlagPointer == 0 && layout.valLen == page.ValuePtrSize
+
+	if !isExplicitPtr && !isInlinePtr {
 		return false, nil
 	}
 
@@ -282,7 +292,7 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 
 	cur := page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
-	if cur != oldPtr {
+	if cur.FileID != oldPtr.FileID || cur.Offset != oldPtr.Offset || page.ValuePtrRecordLength(cur) != page.ValuePtrRecordLength(oldPtr) {
 		return false, nil
 	}
 
@@ -462,6 +472,9 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	if n.Type() != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	if flags&FlagValueID != 0 && len(value) != 8 {
+		return ErrInvalidValueIDLength
+	}
 	if n.leafPrefixCompressed() {
 		return n.addLeafEntryPrefixCompressed(key, value, flags, valPtr)
 	}
@@ -595,7 +608,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 		ValuePtr: valPtr,
 		Flags:    flags,
 	}
-	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+	if (flags&FlagPointer == 0 && flags&FlagTombstone == 0) || (flags&FlagValueID != 0) {
 		newEntry.Value = append([]byte(nil), value...)
 	}
 
@@ -623,7 +636,7 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 			ValuePtr: ptr,
 			Flags:    f,
 		}
-		if f&FlagPointer == 0 && f&FlagTombstone == 0 {
+		if (f&FlagPointer == 0 && f&FlagTombstone == 0) || (f&FlagValueID != 0) {
 			entry.Value = append([]byte(nil), v...)
 		}
 		entries = append(entries, entry)

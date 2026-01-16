@@ -32,6 +32,7 @@ Commands:
   dump            Alias for scan
   vacuum          Rebuild index (offline by default; use -online for online vacuum)
   compact         Compact slab files (by candidate selection or slab id)
+  gc              Garbage collect unreachable value segments
 
 Run "treemap <command> -h" for command-specific options.
 
@@ -77,10 +78,29 @@ func main() {
 		runVacuum(dir, args)
 	case "compact":
 		runCompact(dir, args)
+	case "gc":
+		runGC(dir, args)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", cmd, usageText)
 		os.Exit(2)
 	}
+}
+
+func runGC(dir string, args []string) {
+	fs := flag.NewFlagSet("gc", flag.ExitOnError)
+	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	_ = fs.Parse(args)
+
+	// GC requires write access to mark segments as zombies and delete files.
+	// Since this is an offline operation, we open with -rw.
+	db := openTreeDB(dir, *backend, true)
+	defer closeTreeDB(db)
+
+	reclaimed, err := db.GC()
+	if err != nil {
+		fatalf("GC error: %v", err)
+	}
+	fmt.Printf("Garbage collection complete. Reclaimed bytes: %d\n", reclaimed)
 }
 
 func runInfo(dir string, args []string) {

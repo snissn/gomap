@@ -94,6 +94,8 @@ Profiles are intended to make intent explicit:
 - `ProfileDurable`: safest defaults (recommended).
 - `ProfileFast`: relax durability/integrity knobs for throughput.
 - `ProfileBench`: deterministic benchmarking profile (not production).
+- `ProfileCompressed`: durable defaults + compression enabled.
+- `ProfileCompressedFast`: fast profile + compression enabled.
 
 Unsafe profiles require an explicit acknowledgement:
 
@@ -141,6 +143,10 @@ Details: `docs/TREEDB_PROFILES.md`.
 - Offline index vacuum (backend index): `treedb.VacuumIndexOffline(opts)` (requires the DB to be closed)
 
 Details: `docs/TREEDB_TUNING.md`.
+
+Notes:
+- Slab compression supports `zstd` (dictionary) or `none` only.
+- Environment overrides and legacy/deprecation notes are tracked in `docs/TREEDB_TUNING.md`.
 
 ### Exclusive Open (Process Lock)
 

@@ -19,17 +19,18 @@ func TestWALRoundTrip(t *testing.T) {
 	}
 
 	ops := []struct {
+		seq uint64
 		op  byte
 		key []byte
 		val []byte
 	}{
-		{OpSet, []byte("key1"), []byte("val1")},
-		{OpDelete, []byte("key2"), nil},
-		{OpSet, []byte("key3"), []byte("val3")},
+		{1, OpSet, []byte("key1"), []byte("val1")},
+		{2, OpDelete, []byte("key2"), nil},
+		{3, OpSet, []byte("key3"), []byte("val3")},
 	}
 
 	for _, op := range ops {
-		if err := w.Append(op.op, op.key, op.val); err != nil {
+		if err := w.Append(op.seq, op.op, op.key, op.val); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
@@ -44,9 +45,12 @@ func TestWALRoundTrip(t *testing.T) {
 	defer r.Close()
 
 	for i, want := range ops {
-		op, k, v, err := r.ReadNext()
+		seq, op, k, v, err := r.ReadNext()
 		if err != nil {
 			t.Fatalf("ReadNext %d: %v", i, err)
+		}
+		if seq != want.seq {
+			t.Errorf("seq %d: got %d, want %d", i, seq, want.seq)
 		}
 		if op != want.op {
 			t.Errorf("op %d: got %d, want %d", i, op, want.op)
@@ -59,7 +63,7 @@ func TestWALRoundTrip(t *testing.T) {
 		}
 	}
 
-	_, _, _, err = r.ReadNext()
+	_, _, _, _, err = r.ReadNext()
 	if err != io.EOF {
 		t.Errorf("expected EOF, got %v", err)
 	}
@@ -83,7 +87,7 @@ func TestWALWriterRotateTo(t *testing.T) {
 	pendingCap := cap(w.pending)
 	scratchCap := cap(w.scratch)
 
-	if err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if err := w.Append(1, OpSet, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := w.RotateTo(path2); err != nil {
@@ -95,7 +99,7 @@ func TestWALWriterRotateTo(t *testing.T) {
 	if cap(w.pending) != pendingCap || cap(w.scratch) != scratchCap {
 		t.Fatalf("expected buffers to be reused across RotateTo")
 	}
-	if err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+	if err := w.Append(2, OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after RotateTo: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -107,14 +111,14 @@ func TestWALWriterRotateTo(t *testing.T) {
 		t.Fatalf("NewReader1: %v", err)
 	}
 	defer r1.Close()
-	op, k, v, err := r1.ReadNext()
+	_, op, k, v, err := r1.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext1: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k1")) || !bytes.Equal(v, []byte("v1")) {
 		t.Fatalf("unexpected record in wal1: op=%d key=%q val=%q", op, k, v)
 	}
-	_, _, _, err = r1.ReadNext()
+	_, _, _, _, err = r1.ReadNext()
 	if err != io.EOF {
 		t.Fatalf("expected EOF for wal1, got %v", err)
 	}
@@ -124,14 +128,14 @@ func TestWALWriterRotateTo(t *testing.T) {
 		t.Fatalf("NewReader2: %v", err)
 	}
 	defer r2.Close()
-	op, k, v, err = r2.ReadNext()
+	_, op, k, v, err = r2.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext2: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k2")) || !bytes.Equal(v, []byte("v2")) {
 		t.Fatalf("unexpected record in wal2: op=%d key=%q val=%q", op, k, v)
 	}
-	_, _, _, err = r2.ReadNext()
+	_, _, _, _, err = r2.ReadNext()
 	if err != io.EOF {
 		t.Fatalf("expected EOF for wal2, got %v", err)
 	}
@@ -147,13 +151,13 @@ func TestWALRotateToOpenFailureKeepsWriter(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 
-	if err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if err := w.Append(1, OpSet, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := w.RotateTo(path2); err == nil {
 		t.Fatalf("expected RotateTo to fail for missing dir")
 	}
-	if err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+	if err := w.Append(2, OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after failed RotateTo: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -166,21 +170,21 @@ func TestWALRotateToOpenFailureKeepsWriter(t *testing.T) {
 	}
 	defer r.Close()
 
-	op, k, v, err := r.ReadNext()
+	_, op, k, v, err := r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext1: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k1")) || !bytes.Equal(v, []byte("v1")) {
 		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, k, v)
 	}
-	op, k, v, err = r.ReadNext()
+	_, op, k, v, err = r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext2: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k2")) || !bytes.Equal(v, []byte("v2")) {
 		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, k, v)
 	}
-	if _, _, _, err = r.ReadNext(); err != io.EOF {
+	if _, _, _, _, err = r.ReadNext(); err != io.EOF {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
@@ -217,13 +221,13 @@ func TestWALRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 
-	if err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if err := w.Append(1, OpSet, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := w.RotateTo(path2); err == nil {
 		t.Fatalf("expected RotateTo to fail when syncDir fails")
 	}
-	if err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+	if err := w.Append(2, OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after failed RotateTo: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -236,21 +240,21 @@ func TestWALRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 	}
 	defer r.Close()
 
-	op, k, v, err := r.ReadNext()
+	_, op, k, v, err := r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext1: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k1")) || !bytes.Equal(v, []byte("v1")) {
 		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, k, v)
 	}
-	op, k, v, err = r.ReadNext()
+	_, op, k, v, err = r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext2: %v", err)
 	}
 	if op != OpSet || !bytes.Equal(k, []byte("k2")) || !bytes.Equal(v, []byte("v2")) {
 		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, k, v)
 	}
-	if _, _, _, err = r.ReadNext(); err != io.EOF {
+	if _, _, _, _, err = r.ReadNext(); err != io.EOF {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
@@ -265,7 +269,7 @@ func TestWALMaxSegmentSize(t *testing.T) {
 	}
 	defer func() { _ = w.Close() }()
 
-	err = w.Append(OpSet, bytes.Repeat([]byte("k"), 60), nil)
+	err = w.Append(1, OpSet, bytes.Repeat([]byte("k"), 60), nil)
 	if !errors.Is(err, ErrRecordTooLarge) {
 		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
 	}

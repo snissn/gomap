@@ -3,6 +3,8 @@ package treedb
 import (
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestOptionsFor_ProfileSetsDir(t *testing.T) {
@@ -24,9 +26,6 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	}
 	if !opts.DisableReadChecksum {
 		t.Fatalf("expected DisableReadChecksum=true for fast profile")
-	}
-	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
 }
 
@@ -51,6 +50,28 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	}
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
+	}
+}
+
+func TestApplyProfile_CompressedSetsCompression(t *testing.T) {
+	var opts Options
+	ApplyProfile(&opts, ProfileCompressed)
+	if !opts.LeafPrefixCompression {
+		t.Fatalf("expected LeafPrefixCompression=true for compressed profile")
+	}
+	if opts.SlabCompression.Kind != slab.CompressionZSTD {
+		t.Fatalf("expected SlabCompression.Kind=zstd for compressed profile")
+	}
+}
+
+func TestApplyProfile_CompressedFastSetsCompression(t *testing.T) {
+	var opts Options
+	ApplyProfile(&opts, ProfileCompressedFast)
+	if !opts.LeafPrefixCompression {
+		t.Fatalf("expected LeafPrefixCompression=true for compressed_fast profile")
+	}
+	if opts.SlabCompression.Kind != slab.CompressionZSTD {
+		t.Fatalf("expected SlabCompression.Kind=zstd for compressed_fast profile")
 	}
 }
 

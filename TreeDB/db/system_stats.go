@@ -53,19 +53,29 @@ func encodeSlabStatsValue(dead, total uint64) []byte {
 	return v[:]
 }
 
-// applySystemStatsUpdates updates the internal System tree with per-slab
-// [DeadBytes][TotalBytes] counters derived from commit metrics.
+// applySystemUpdates updates the internal System tree with extra operations and
+// per-slab [DeadBytes][TotalBytes] counters derived from commit metrics.
 //
 // It returns the new System root and any retired pages from the System tree
 // update. If no updates are necessary, it returns the input root and nil.
-func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics) (uint64, []uint64, error) {
-	if len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
+func (db *DB) applySystemUpdates(sysRootID uint64, extraOps []batch.Entry, metrics adaptive.Metrics) (uint64, []uint64, error) {
+	if len(extraOps) == 0 && len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
 		return sysRootID, nil, nil
 	}
 
 	idx := db.idx.Load()
 	if idx == nil {
 		return 0, nil, errors.New("missing index")
+	}
+
+	sysTree := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRootID)
+	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
+	defer func() { _ = sysBatch.Close() }()
+
+	if len(extraOps) > 0 {
+		if err := sysBatch.SetOps(extraOps); err != nil {
+			return 0, nil, err
+		}
 	}
 
 	// Determine which slab IDs are touched this commit.
@@ -83,10 +93,6 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
-	sysTree := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, sysRootID)
-	sysBatch := batch.New(db.slabManager, page.DefaultInlineThreshold)
-	defer func() { _ = sysBatch.Close() }()
-
 	for _, id := range ids {
 		key := slabStatsKey(id)
 
@@ -99,10 +105,16 @@ func (db *DB) applySystemStatsUpdates(sysRootID uint64, metrics adaptive.Metrics
 		}
 
 		if delta := metrics.SlabWriteBytesByFile[id]; delta > 0 {
-			total += uint64(delta)
+			// Safety: cap delta at 100GB per commit to detect corruption.
+			// Realistic commits should never write more than a few GB.
+			if delta < 100<<30 {
+				total += uint64(delta)
+			}
 		}
 		if delta := metrics.SlabDeadBytesByFile[id]; delta > 0 {
-			dead += uint64(delta)
+			if delta < 100<<30 {
+				dead += uint64(delta)
+			}
 		}
 		if dead > total {
 			dead = total

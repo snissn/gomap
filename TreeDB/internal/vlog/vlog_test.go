@@ -21,11 +21,11 @@ func TestWriterReaderRoundTrip(t *testing.T) {
 		t.Fatalf("NewWriter: %v", err)
 	}
 
-	ptr, err := w.Append(OpSet, []byte("k1"), []byte("value1"))
+	ptr, err := w.Append(1, OpSet, []byte("k1"), []byte("value1"))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	_, err = w.Append(OpDelete, []byte("k2"), nil)
+	_, err = w.Append(2, OpDelete, []byte("k2"), nil)
 	if err != nil {
 		t.Fatalf("Append delete: %v", err)
 	}
@@ -40,9 +40,12 @@ func TestWriterReaderRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	op, key, val, gotPtr, err := r.ReadNext()
+	seq, op, key, val, gotPtr, err := r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext: %v", err)
+	}
+	if seq != 1 {
+		t.Errorf("seq: got %d want 1", seq)
 	}
 	if op != OpSet {
 		t.Fatalf("op: got %d want %d", op, OpSet)
@@ -54,15 +57,18 @@ func TestWriterReaderRoundTrip(t *testing.T) {
 		t.Fatalf("ptr mismatch: got %#v want %#v", gotPtr, ptr)
 	}
 
-	op, key, val, _, err = r.ReadNext()
+	seq, op, key, val, _, err = r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext delete: %v", err)
+	}
+	if seq != 2 {
+		t.Errorf("seq: got %d want 2", seq)
 	}
 	if op != OpDelete || string(key) != "k2" || len(val) != 0 {
 		t.Fatalf("delete record mismatch: op=%d key=%q val=%q", op, key, val)
 	}
 
-	_, _, _, _, err = r.ReadNext()
+	_, _, _, _, _, err = r.ReadNext()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
@@ -80,7 +86,7 @@ func TestReadAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	ptr, err := w.Append(OpSet, []byte("k1"), []byte("value1"))
+	ptr, err := w.Append(1, OpSet, []byte("k1"), []byte("value1"))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -214,7 +220,7 @@ func TestCorruptCRC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	_, err = w.Append(OpSet, []byte("k1"), []byte("value1"))
+	_, err = w.Append(1, OpSet, []byte("k1"), []byte("value1"))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -238,7 +244,7 @@ func TestCorruptCRC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	_, _, _, _, err = r.ReadNext()
+	_, _, _, _, _, err = r.ReadNext()
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("expected ErrCorrupt, got %v", err)
 	}
@@ -255,13 +261,13 @@ func TestRotateToOpenFailureKeepsWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if _, err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if _, err := w.Append(1, OpSet, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := w.RotateTo(path2, fileID+1); err == nil {
 		t.Fatalf("expected RotateTo to fail for missing dir")
 	}
-	if _, err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+	if _, err := w.Append(2, OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after failed RotateTo: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -274,21 +280,21 @@ func TestRotateToOpenFailureKeepsWriter(t *testing.T) {
 	}
 	defer r.Close()
 
-	op, key, val, _, err := r.ReadNext()
+	_, op, key, val, _, err := r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext1: %v", err)
 	}
 	if op != OpSet || string(key) != "k1" || string(val) != "v1" {
 		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, key, val)
 	}
-	op, key, val, _, err = r.ReadNext()
+	_, op, key, val, _, err = r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext2: %v", err)
 	}
 	if op != OpSet || string(key) != "k2" || string(val) != "v2" {
 		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, key, val)
 	}
-	if _, _, _, _, err = r.ReadNext(); !errors.Is(err, io.EOF) {
+	if _, _, _, _, _, err = r.ReadNext(); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
@@ -326,13 +332,13 @@ func TestVlogRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if _, err := w.Append(OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if _, err := w.Append(1, OpSet, []byte("k1"), []byte("v1")); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := w.RotateTo(path2, fileID+1); err == nil {
 		t.Fatalf("expected RotateTo to fail when syncDir fails")
 	}
-	if _, err := w.Append(OpSet, []byte("k2"), []byte("v2")); err != nil {
+	if _, err := w.Append(2, OpSet, []byte("k2"), []byte("v2")); err != nil {
 		t.Fatalf("Append after failed RotateTo: %v", err)
 	}
 	if err := w.Close(); err != nil {
@@ -345,21 +351,21 @@ func TestVlogRotateToSyncDirFailureKeepsWriter(t *testing.T) {
 	}
 	defer r.Close()
 
-	op, key, val, _, err := r.ReadNext()
+	_, op, key, val, _, err := r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext1: %v", err)
 	}
 	if op != OpSet || string(key) != "k1" || string(val) != "v1" {
 		t.Fatalf("record1 mismatch: op=%d key=%q val=%q", op, key, val)
 	}
-	op, key, val, _, err = r.ReadNext()
+	_, op, key, val, _, err = r.ReadNext()
 	if err != nil {
 		t.Fatalf("ReadNext2: %v", err)
 	}
 	if op != OpSet || string(key) != "k2" || string(val) != "v2" {
 		t.Fatalf("record2 mismatch: op=%d key=%q val=%q", op, key, val)
 	}
-	if _, _, _, _, err = r.ReadNext(); err != io.EOF {
+	if _, _, _, _, _, err = r.ReadNext(); err != io.EOF {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
