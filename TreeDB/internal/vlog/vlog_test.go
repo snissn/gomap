@@ -122,7 +122,7 @@ func TestFileReadUnsafeViaMmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	ptr, err := w.Append(OpSet, []byte("k1"), []byte("value1"))
+	ptr, err := w.Append(1, OpSet, []byte("k1"), []byte("value1"))
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
