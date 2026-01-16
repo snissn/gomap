@@ -1,0 +1,788 @@
+# Commit inventory: 642cfeaa51..main (392 commits)
+
+This file is machine-generated to support pivot planning.
+
+Columns: `hash` | `action` | `tags` | `subject` | `paths (first 12)`
+
+- `ff597262bf` | `DROP(ValueIndex/GC)` | `btree,caching,db,docs,tests,value_index,vlog,wal` | feat: Phase 17.3 Value Index, Unified Seq, Refcounted GC
+  - paths: `TreeDB/AGENTS.md`, `TreeDB/batch/batch.go`, `TreeDB/caching/db.go`, `TreeDB/caching/db_test.go`, `TreeDB/caching/delete_range_test.go`, `TreeDB/caching/log_writer.go`, `TreeDB/caching/rcu_snapshot_test.go`, `TreeDB/cmd/treemap/main.go`, `TreeDB/db/api.go`, `TreeDB/db/batch.go`, `TreeDB/db/db.go`, `TreeDB/db/gc.go` (+19 more)
+- `88e993d1b5` | `DROP(ValueIndex/GC)` | `value_index` | chore: enable ValueIndex by default for testing
+  - paths: `TreeDB/public.go`
+- `d112268527` | `REVIEW` | `` | chore: enable BackgroundCompaction by default for testing
+  - paths: `TreeDB/public.go`
+- `c468c45761` | `DROP(ValueIndex/GC)` | `value_index` | chore: make ValueIndex opt-in via env
+  - paths: `TreeDB/public.go`
+- `eb6ab1ecf7` | `DROP(ValueIndex/GC)` | `db,value_index` | fix: compaction supports ValueIndex updates + vacuum preserves LastSeq
+  - paths: `TreeDB/db/db.go`, `TreeDB/db/vacuum_online.go`
+- `6405dbc2bb` | `CANDIDATE_FIX` | `db` | fix: compilation error in db.go
+  - paths: `TreeDB/db/db.go`
+- `fc7cd14a0e` | `DROP(ValueIndex/GC)` | `caching,db,tests,value_index` | fix: gofmt and recovery test compilation
+  - paths: `TreeDB/caching/db.go`, `TreeDB/db/batch.go`, `TreeDB/db/gc.go`, `TreeDB/db/gc_test.go`, `TreeDB/db/value_index.go`, `TreeDB/recovery_spec_test.go`
+- `13643e2960` | `CANDIDATE_FIX` | `db` | fix: prevent panic in DBIterator.Next when invalid
+  - paths: `TreeDB/db/api.go`
+- `75086eea22` | `CANDIDATE_FIX` | `db,vlog` | fix: resolve VLog mmap corruption and DBIterator panic
+  - paths: `TreeDB/compaction/compactor.go`, `TreeDB/db/db.go`, `TreeDB/internal/vlog/reader_mmap.go`
+- `20faded32c` | `DROP(ValueIndex/GC)` | `db,value_index` | fix: disable direct valueIndexHelper writes
+  - paths: `TreeDB/db/value_index.go`
+- `b41dff7502` | `CANDIDATE_FIX` | `db` | fix: robust iterator error handling
+  - paths: `TreeDB/db/api.go`
+- `38c2b03d09` | `REVIEW` | `` | chore: formalize background compaction default
+  - paths: `TreeDB/public.go`
+- `f49b2ca96d` | `CANDIDATE_FIX` | `` | fix: ensure both cached and backend layers are closed
+  - paths: `TreeDB/public.go`
+- `e42318c9ed` | `DROP(ValueIndex/GC)` | `db,value_index` | style: run gofmt on modified files
+  - paths: `TreeDB/db/value_index.go`
+- `18f715d216` | `CANDIDATE_FIX` | `caching,vlog,wal,windows` | fix(treedb/caching): implement reliable file removal retry on Windows for WAL/vlog cleanup
+  - paths: `TreeDB/caching/db.go`
+- `c59db1e442` | `CANDIDATE_FIX` | `caching,vlog,windows` | fix(treedb/caching): ensure value-log segments are closed before removal for Windows compatibility
+  - paths: `TreeDB/caching/db.go`
+- `8591004dd3` | `CANDIDATE_FIX` | `caching` | fix(treedb/caching): suppress redundant error reporting in dropValueLogSegment
+  - paths: `TreeDB/caching/db.go`
+- `13944027e4` | `CANDIDATE_FIX` | `caching,wal,windows` | fix(treedb/caching): suppress WAL removal errors to prevent fatal failures on Windows file locks
+  - paths: `TreeDB/caching/db.go`
+- `15a25d27dc` | `CANDIDATE_FIX` | `db` | fix(treedb): explicit error check in DBIterator.Value/ValueCopy
+  - paths: `TreeDB/db/api.go`
+- `b9a8f23f96` | `CANDIDATE_FIX` | `db` | fix(treedb): prevent double value-index transformation in batch write
+  - paths: `TreeDB/db/batch.go`
+- `1fdd3e45be` | `DROP(docs)` | `db` | docs(treedb): explain serialized write routing for Value Index
+  - paths: `TreeDB/db/batch.go`
+- `ca0ae58d4c` | `CANDIDATE_FIX` | `db` | fix(treedb): explicit key copy in Value Index compaction ops
+  - paths: `TreeDB/db/db.go`
+- `13a7cf1dbb` | `DROP(ValueIndex/GC)` | `db,value_index` | docs(treedb): explain atomicity of GC scan under writeMu
+  - paths: `TreeDB/db/gc.go`
+- `68c1ec670d` | `CANDIDATE_FIX` | `db` | fix(treedb): refine DBIterator error resetting
+  - paths: `TreeDB/db/api.go`
+- `b54a293279` | `DROP(ValueIndex/GC)` | `db,value_index` | refactor(treedb): remove unused valueIndexHelper.Set
+  - paths: `TreeDB/db/value_index.go`
+- `b9306cd4c5` | `CANDIDATE_FIX` | `db` | fix(treedb): disable freelist region bias during online vacuum to prevent index ballooning
+  - paths: `TreeDB/db/vacuum_online.go`
+- `7c28b12866` | `REVIEW` | `db,tests` | test(treedb): add regression test for vacuum index ballooning
+  - paths: `TreeDB/db/vacuum_balloon_test.go`
+- `c6ab8b38bb` | `CANDIDATE_FIX` | `db` | fix(treedb): lower default KeepRecent to 20 to prevent index bloat
+  - paths: `TreeDB/db/db.go`
+- `cb6b5cf3ee` | `REVIEW` | `db` | revert: disable vacuum ballooning fix to investigate allocator corruption
+  - paths: `TreeDB/db/vacuum_online.go`
+- `8c8002c03b` | `REVIEW` | `db,tests` | chore(treedb): remove regression test for reverted fix
+  - paths: `TreeDB/db/vacuum_balloon_test.go`
+- `0965b85de2` | `CANDIDATE_FIX` | `db` | fix(treedb/freelist): correct loop condition in AllocMany fallback
+  - paths: `TreeDB/db/vacuum_online.go`, `TreeDB/freelist/allocator.go`
+- `494806e8cb` | `REVIEW` | `` | feat(treedb): add db_histogram tool
+  - paths: `TreeDB/cmd/db_histogram/main.go`
+- `4df70dc030` | `CANDIDATE_FIX` | `` | fix(treedb/histogram): remove unused variables
+  - paths: `TreeDB/cmd/db_histogram/main.go`
+- `12ebb35c63` | `CANDIDATE_FIX` | `` | fix(treedb/histogram): check for iterator errors
+  - paths: `TreeDB/cmd/db_histogram/main.go`
+- `9a884a8500` | `REVIEW` | `db` | revert: disable vacuum allocator optimization to restore stability
+  - paths: `TreeDB/db/vacuum_online.go`
+- `12d628f7aa` | `CANDIDATE_FIX` | `caching,docs,wal` | fix(treedb/caching): enforce copy-on-flush to decouple WAL from backend storage
+  - paths: `AGENTS.md`, `TreeDB/caching/db.go`
+- `3153d845d1` | `REVIEW` | `caching,tests,wal` | test(treedb): verify Copy-on-Flush architecture for unified WAL/Slab
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`
+- `5599abb218` | `REVIEW` | `caching,tests` | feat(treedb): add env override for ForceValuePointers and verify backend threshold behavior
+  - paths: `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/public.go`
+- `28f47150b2` | `REVIEW` | `compression,slab,tests` | feat(treedb): expose slab compression threshold via env var and verify behavior
+  - paths: `TreeDB/public.go`, `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `f30af02aa1` | `REVIEW` | `compression` | feat(treedb): parse TREEDB_SLAB_COMPRESSION env var
+  - paths: `TreeDB/public.go`
+- `9315a76fda` | `REVIEW` | `caching,compression,db,docs,slab,tests` | chore(treedb): cleanup diagnostic tests
+  - paths: `AGENTS.md`, `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/db/consistency_test.go`, `TreeDB/db/repro_test.go`, `TreeDB/db/wal_recovery.go`, `TreeDB/public.go`, `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `c88506dfae` | `REVIEW` | `db,tests` | chore: remove accidental test commits
+  - paths: `TreeDB/db/consistency_test.go`, `TreeDB/db/repro_test.go`
+- `c6555e723e` | `REVIEW` | `caching,compression,db,slab,tests` | test(treedb): restore focused diagnostic tests for compression and backend behavior
+  - paths: `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/db/prefix_compression_verify_test.go`, `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `ad43291d1a` | `REVIEW` | `compression` | feat(treedb): parse TREEDB_SLAB_COMPRESSION_MIN_SAVINGS to tune compression aggressiveness
+  - paths: `TreeDB/public.go`
+- `379cdf4ad8` | `REVIEW` | `` | feat(debug): add debug_open tool
+  - paths: `TreeDB/cmd/debug_open/main.go`
+- `10141b8454` | `REVIEW` | `caching,tests` | test(treedb): add reopen deadlock regression test
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`
+- `277f7997b9` | `REVIEW` | `compression,db,tests,wal` | test(treedb): add regression tests for vacuum migration, wal recovery, and compression
+  - paths: `TreeDB/db/prefix_compression_test.go`, `TreeDB/db/slab_compression_test.go`, `TreeDB/db/vacuum_migration_test.go`, `TreeDB/db/wal_recovery_dataloss_test.go`
+- `c5564a8a03` | `REVIEW` | `btree,compression,db,tests` | test(treedb): add regression tests for vacuum race, prefix compression, and slab compression
+  - paths: `TreeDB/db/compression_verify_test.go`, `TreeDB/db/vacuum_flush_race_test.go`, `TreeDB/node/prefix_stress_test.go`
+- `a653261c17` | `DROP(ValueIndex/GC)` | `bench,btree,caching,compression,db,docs,slab,slab_manager,tests,value_index` | wip
+  - paths: `AGENTS.md`, `TREEDB_OPTIMIZATION_CHECKLIST.md`, `TreeDB/caching/bench_test.go`, `TreeDB/caching/consistency_stress_test.go`, `TreeDB/caching/db.go`, `TreeDB/caching/race_flush_rotate_test.go`, `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/caching/unified_wal_comprehensive_test.go`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compression_verify_test.go`, `TreeDB/db/config_propagation_test.go`, `TreeDB/db/db.go` (+25 more)
+- `dd4a1617fa` | `REVIEW` | `` | rm lefthookyml
+  - paths: `lefthook.yml`
+- `f038302551` | `CANDIDATE_FIX` | `caching,db,tests` | fix tests
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/recovery_spec_test.go`
+- `7e619171c3` | `REVIEW` | `btree,compression,slab,slab_manager,tests` | Root Cause Analysis   The investigation revealed two main reasons why the slab data appeared uncompressed:    1. Key-Only Visibility: TreeDB previously only compressed the Value part of slab records. The Key was always stored uncompressed for recovery purposes. In workloads like IBC, where keys are long and values are small (e.g.,       sequence numbers), the uncompressed keys dominate the file size, making it appear uncompressed to tools like strings.    2. Compression Thresholds: The default compression threshold was 256 bytes (MinBytes). Many IBC values are smaller than this and were thus skipped by the compressor.    3. Concurrency Bug: A data race was identified in SlabManager where multiple goroutines (e.g., flusher and background compactor) would share a single non-thread-safe zstd encoder, potentially leading to silently failed or       inefficient compression.
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`
+- `2b7304b557` | `REVIEW` | `compression,slab,tests` | feat: integrate compression tests and add more cached mode options
+  - paths: `TreeDB/compression_e2e_test.go`, `TreeDB/public.go`, `TreeDB/slab/full_compression_test.go`
+- `14a72c8395` | `REVIEW` | `btree,compression,db,slab,slab_manager,tests` | feat: add OmitSlabKeys option and robust pointer comparison
+  - paths: `TreeDB/compaction/bloom.go`, `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/compactor.go`, `TreeDB/db/db.go`, `TreeDB/internal/bulk/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/page/value_ptr_flags.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/omit_key_test.go`, `TreeDB/tree/inplace_update.go`
+- `f39ce1b34e` | `CANDIDATE_FIX` | `db` | fix: resolve use-after-free crash in GetAppend and iterator views
+  - paths: `TreeDB/db/api.go`, `TreeDB/public.go`
+- `6057d9dfc0` | `CANDIDATE_FIX` | `vlog` | fix: robustly normalize memtable value-log pointers when value log is disabled
+  - paths: `TreeDB/public.go`
+- `825e03be20` | `DROP(ValueIndex/GC)` | `btree,compression,db,tests,value_index` | fix: preserve ValueID during leaf prefix compression updates
+  - paths: `TreeDB/db/api.go`, `TreeDB/db/db.go`, `TreeDB/db/value_id_regression_test.go`, `TreeDB/node/leaf.go`
+- `928d403bdc` | `DROP(ValueIndex/GC)` | `btree,compression,db,slab,tests,value_index` | test: add comprehensive regression tests for ValueID integrity during structural changes
+  - paths: `TreeDB/compaction/compaction_test.go`, `TreeDB/compression_e2e_test.go`, `TreeDB/db/value_id_regression_test.go`, `TreeDB/node/leaf_entry_integrity_test.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/omit_key_test.go`
+- `5feaf2959b` | `REVIEW` | `db,tests` | attempt fix
+  - paths: `TreeDB/db/value_id_integrity_test.go`
+- `b8ac305b68` | `CANDIDATE_FIX` | `caching,db,tests` | fix test and go fmt
+  - paths: `TreeDB/caching/consistency_stress_test.go`, `TreeDB/db/value_id_integrity_test.go`
+- `be4a377259` | `REVIEW` | `btree` | attempt to fix invalid id lngth
+  - paths: `TreeDB/node/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`
+- `ffac6a0a87` | `REVIEW` | `compression,docs` | add notes
+  - paths: `TreeDB/btree_compression.md`, `TreeDB/local_dictionary_compression.md`, `invalid_value_debug.md`
+- `9125ed31cd` | `REVIEW` | `db,docs` | ✦ I have resolved the crash, the index.db ballooning issue, and the slab stats corruption.
+  - paths: `TreeDB/db/batch.go`, `TreeDB/db/system_stats.go`, `TreeDB/profiles.go`, `TreeDB/public.go`, `invalid_value_debug.md`
+- `966b28f339` | `CANDIDATE_FIX` | `db` | fix(treedb): increase default prune throughput to prevent index ballooning
+  - paths: `TreeDB/db/db.go`
+- `47bbb13203` | `REVIEW` | `` | debug(treedb): log close maintenance errors
+  - paths: `TreeDB/public.go`
+- `fa3714c542` | `CANDIDATE_FIX` | `` | fix(treedb): skip corrupt value entries during vacuum
+  - paths: `TreeDB/internal/bulk/builder.go`
+- `85acec0b36` | `DROP(ValueIndex/GC)` | `value_index` | fix(treedb): prevent ForceValuePointers from corrupting ValueID entries during vacuum
+  - paths: `TreeDB/internal/bulk/builder.go`
+- `9579524bb4` | `REVIEW` | `db,docs,tests` | test(treedb): add regression test for vacuum corruption and update debug docs
+  - paths: `TreeDB/db/value_id_integrity_test.go`, `invalid_value_debug.md`
+- `3e6180c859` | `REVIEW` | `btree` | go fmt
+  - paths: `TreeDB/node/node.go`
+- `bcc055b486` | `REVIEW` | `tests` | test(treedb): fix profile test after removing PreferAppendAlloc default
+  - paths: `TreeDB/profiles_test.go`
+- `a199c01e35` | `DROP(ValueIndex/GC)` | `btree,db,docs,tests,value_index` | fix(treedb): fix in-place compaction for ValueID entries and add regression tests
+  - paths: `TreeDB/db/db.go`, `TreeDB/db/value_id_compaction_test.go`, `TreeDB/node/leaf.go`, `TreeDB/tree/inplace_update.go`, `invalid_value_debug.md`
+- `14f73e3d6d` | `DROP(ValueIndex/GC)` | `caching,db,tests,value_index,vlog,wal` | fix(treedb): fix in-place compaction for ValueID entries and improve overall system stability
+  - paths: `TreeDB/caching/db.go`, `TreeDB/db/prune_snapshot_test.go`, `TreeDB/internal/vlog/vlog.go`, `TreeDB/internal/wal/wal.go`
+- `8d257fab74` | `CANDIDATE_FIX` | `db,slab,slab_manager,tests,wal` | fix(treedb): comprehensive stability and integrity fixes for Celestia sync
+  - paths: `TreeDB/compaction/compactor.go`, `TreeDB/compaction/planner.go`, `TreeDB/db/omit_keys_safety_test.go`, `TreeDB/db/value_id_compaction_test.go`, `TreeDB/internal/wal/wal.go`, `TreeDB/slab/manager.go`
+- `86b36acadf` | `CANDIDATE_FIX` | `compression,db,tests,windows` | fix(treedb): skip unsupported online vacuum tests on Windows and fix mmap alignment
+  - paths: `TreeDB/compaction/compaction_test.go`, `TreeDB/db/omit_keys_safety_test.go`, `TreeDB/db/prefix_compression_verify_test.go`, `TreeDB/db/vacuum_balloon_repro_test.go`, `TreeDB/db/vacuum_migration_test.go`, `TreeDB/db/vacuum_panic_test.go`
+- `e576f782f7` | `CANDIDATE_FIX` | `db,tests` | fix(treedb): address review comments and add iterator regression test
+  - paths: `TreeDB/db/api.go`, `TreeDB/db/api_test.go`
+- `3c42c28a79` | `DROP(ValueIndex/GC)` | `compression,db,docs,value_index` | fix(treedb): harden Zipper against recursion and fix GC zombie bug
+  - paths: `TreeDB/btree_compression.md`, `TreeDB/db/gc.go`, `TreeDB/zipper/zipper.go`
+- `889b6a8384` | `REVIEW` | `compression,docs` | optimization notes
+  - paths: `TreeDB/btree_optimization.md`, `TreeDB/local_dictionary_compression.md`
+- `3a15247be0` | `REVIEW` | `compression,docs` | optimization notes
+  - paths: `TreeDB/btree_compression.md`
+- `2703144cc0` | `CANDIDATE_FIX` | `db` | fix(treedb): resolve concurrency race and sequence 0 pinning bug
+  - paths: `TreeDB/db/batch.go`, `TreeDB/lifecycle/graveyard.go`, `TreeDB/lifecycle/registry.go`
+- `0dddd7709d` | `REVIEW` | `compression,docs` | update plan
+  - paths: `TreeDB/btree_optimization.md`, `TreeDB/local_dictionary_compression.md`
+- `114413ab08` | `CANDIDATE_FIX` | `caching,docs,tests` | Fix backpressure stall and add stress test plan
+  - paths: `TreeDB/caching/backpressure_wait_test.go`, `TreeDB/caching/db.go`, `docs/TREEDB_STRESS_TEST_PLAN.md`, `invalid_value_debug.md`
+- `dc4ad41878` | `REVIEW` | `bench,docs` | Add TreeDB Celestia bench plan
+  - paths: `treedb_bench_plan.md`
+- `ae19ae1835` | `REVIEW` | `` | Merge pull request #45 from snissn/phase17-rc-vi-gc
+- `acfba4314d` | `DROP(tracing/tooling)` | `bench,docs,tracing` | Add TreeDB trace capture hooks
+  - paths: `kvstore/adapters/treedb/trace.go`, `kvstore/adapters/treedb/treedb.go`, `treedb_bench_plan.md`
+- `389f2b3eb3` | `DROP(tracing/tooling)` | `bench,tracing` | Add trace_bench summary tool
+  - paths: `cmd/trace_bench/main.go`
+- `538844c935` | `DROP(tracing/tooling)` | `bench,tracing` | Add trace_replay bench runner
+  - paths: `cmd/trace_replay/main.go`
+- `7108383e8d` | `DROP(tracing/tooling)` | `tracing` | Fix trace_replay build
+  - paths: `cmd/trace_replay/main.go`
+- `2eb473da85` | `DROP(tracing/tooling)` | `tracing` | Ensure trace_replay creates output dir
+  - paths: `cmd/trace_replay/main.go`
+- `cc866854a3` | `DROP(tracing/tooling)` | `tracing` | Improve trace_replay fidelity
+  - paths: `cmd/trace_replay/main.go`
+- `c41e4cd4d8` | `DROP(tracing/tooling)` | `tracing` | Log trace phase changes
+  - paths: `kvstore/adapters/treedb/trace.go`
+- `965d265d3c` | `DROP(tracing/tooling)` | `tracing` | Always log trace phase events
+  - paths: `kvstore/adapters/treedb/trace.go`
+- `404d8f55ad` | `DROP(tracing/tooling)` | `tracing` | trace_replay: order phases
+  - paths: `cmd/trace_replay/main.go`
+- `8780159dae` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | bench: replay trace summaries
+  - paths: `TreeDB/bench_trace_replay_test.go`, `invalid_value_debug.md`
+- `040fba37fe` | `DROP(tracing/tooling)` | `bench,docs,tracing` | treedbtrace: move tracing into optional wrapper
+  - paths: `kvstore/adapters/treedb/treedb.go`, `kvstore/adapters/treedbtrace/trace.go`, `kvstore/adapters/treedbtrace/treedbtrace.go`, `treedb_bench_plan.md`
+- `734339215b` | `REVIEW` | `caching,docs` | caching: recycle memtables with reader tracking
+  - paths: `TreeDB/caching/db.go`, `TreeDB/caching/memtable_pool.go`, `TreeDB/caching/memtable_reclaim.go`, `TreeDB/caching/read_tracking_iterator.go`, `TreeDB/internal/memtable/memtable.go`, `TreeDB/internal/skiplist/skiplist.go`, `invalid_value_debug.md`
+- `de6d63a991` | `DROP(tracing/tooling)` | `bench,caching,db,docs,tests,tracing` | caching: optional iterator rotation reduction
+  - paths: `TreeDB/bench_trace_replay_test.go`, `TreeDB/caching/db.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `invalid_value_debug.md`
+- `cfdf6f1029` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | Add trace replay memtable mode benchmark
+  - paths: `TreeDB/bench_trace_replay_test.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `2dda855192` | `REVIEW` | `docs` | Document iterator mutable memtable tuning
+  - paths: `docs/TREEDB_TUNING.md`
+- `3e99969f6b` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | Add timeline trace replay benchmark
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `kvstore/adapters/treedbtrace/trace.go`, `kvstore/adapters/treedbtrace/treedbtrace.go`, `scripts/capture_celestia_trace.sh`, `scripts/pull_celestia_trace.sh`, `treedb_bench_plan.md`
+- `e2d7c0aee3` | `DROP(tracing/tooling)` | `bench,docs,tracing` | Record timeline trace replay benchmark
+  - paths: `invalid_value_debug.md`, `treedb_bench_plan.md`, `worklog/2026-01-09.md`
+- `03d3473c4d` | `REVIEW` | `bench,docs` | Compare timeline replay to server run
+  - paths: `invalid_value_debug.md`, `treedb_bench_plan.md`, `worklog/2026-01-09.md`
+- `d76598764a` | `REVIEW` | `bench,docs` | Document timeline replay scaling sweep
+  - paths: `invalid_value_debug.md`, `treedb_bench_plan.md`, `worklog/2026-01-09.md`
+- `9475ec7d89` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | Add timeline replay memtable mode benchmark
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `adfff94907` | `REVIEW` | `bench,docs` | Add TreeDB benchmarking guide
+  - paths: `docs/TREEDB_BENCHMARKING.md`
+- `8675234065` | `DROP(tracing/tooling)` | `bench,docs,tracing` | Add trace benchmark changelog
+  - paths: `CHANGELOG_TRACE_BENCH.md`
+- `26d6b23679` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | Add timeline replay knobs for profiling
+  - paths: `CHANGELOG_TRACE_BENCH.md`, `TreeDB/bench_trace_timeline_test.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `e6f6b32dbd` | `DROP(tracing/tooling)` | `bench,caching,db,docs,tests,tracing` | Improve trace replay profiling knobs
+  - paths: `TreeDB/batch/batch.go`, `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/caching/db.go`, `TreeDB/db/batch.go`, `docs/TREEDB_BENCHMARKING.md`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `369cdc790d` | `DROP(tracing/tooling)` | `bench,compression,docs,tests,tracing` | Align trace benchmark with prefix compression
+  - paths: `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `d0051d31f0` | `REVIEW` | `btree,docs` | Speed up prefix leaf key scans
+  - paths: `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `6eeedb9c25` | `REVIEW` | `btree,docs` | Reuse leaf prefix sizes in merge
+  - paths: `TreeDB/node/builder.go`, `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `2874d3d44d` | `REVIEW` | `btree,docs` | Reduce prefix key copying
+  - paths: `TreeDB/node/leaf.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `94763edd4c` | `DROP(tracing/tooling)` | `bench,docs,tracing` | Log trace run and bench results
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `2d8c0487c5` | `DROP(tracing/tooling)` | `docs,tracing` | Record trace replay update
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `7346def29d` | `REVIEW` | `docs` | Log prefix compare attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `05524b5ce3` | `REVIEW` | `docs` | Log restart cache attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `9bd75fc0fd` | `REVIEW` | `docs` | Log prefix search tweaks
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `f9c6857ad2` | `REVIEW` | `docs` | Log flush SetOps attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `0fa0b9a40f` | `REVIEW` | `docs` | Log slab scratch attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `35dbb1e709` | `REVIEW` | `docs` | Pool zipper child work slices
+  - paths: `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `7abf4c1c62` | `REVIEW` | `docs` | Log AppendMany flag attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `b2ffd6bce5` | `REVIEW` | `btree,docs` | Shorten leaf split separators
+  - paths: `TreeDB/node/builder.go`, `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `876b52b4e3` | `REVIEW` | `docs` | Log internal split attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `e1747a02a8` | `REVIEW` | `caching,docs` | Disable memtable pooling to fix corruption
+  - paths: `TreeDB/caching/memtable_pool.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `1e450da633` | `REVIEW` | `docs` | Log memtable pool perf comparison
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `9204b8482f` | `REVIEW` | `caching,docs` | Remove memtable pooling and reader tracking
+  - paths: `TreeDB/caching/db.go`, `TreeDB/caching/memtable_pool.go`, `TreeDB/caching/memtable_reclaim.go`, `TreeDB/caching/read_tracking_iterator.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `c8b5eef9a7` | `REVIEW` | `bench,docs` | Add flag matrix benchmark notes
+  - paths: `treedb_bench_plan.md`, `worklog/2026-01-09.md`
+- `9130ae7faa` | `REVIEW` | `docs` | Log server run_celestia tuning update
+  - paths: `worklog/2026-01-09.md`
+- `0c37ac1634` | `REVIEW` | `bench,docs` | Log server flag A/B benchmarks
+  - paths: `treedb_bench_plan.md`, `worklog/2026-01-09.md`
+- `ea2dd6cd1b` | `REVIEW` | `docs` | Log server param sweep start
+  - paths: `worklog/2026-01-09.md`
+- `e06c2b6ed8` | `REVIEW` | `docs` | Log param sweep restart
+  - paths: `worklog/2026-01-09.md`
+- `4c6397d92f` | `REVIEW` | `docs` | Log param sweep script fix
+  - paths: `worklog/2026-01-09.md`
+- `9b3488cde8` | `REVIEW` | `docs` | Log param sweep awk fix
+  - paths: `worklog/2026-01-09.md`
+- `3d3bc2ddc1` | `REVIEW` | `docs` | worklog: record server param sweep results
+  - paths: `.gitignore`, `worklog/2026-01-09.md`
+- `b5f968c99a` | `REVIEW` | `docs` | worklog: baseline offline vacuum result
+  - paths: `worklog/2026-01-10.md`
+- `3fc9d46647` | `REVIEW` | `docs` | worklog: log 20260109215403 run stats
+  - paths: `worklog/2026-01-10.md`
+- `ebbde82726` | `REVIEW` | `docs` | worklog: add config for 20260109215403 run
+  - paths: `worklog/2026-01-10.md`
+- `c61643969e` | `REVIEW` | `docs` | worklog: log 20260109220904 run stats
+  - paths: `worklog/2026-01-10.md`
+- `7ad2c6aa51` | `REVIEW` | `docs` | worklog: note 20260109220904 shutdown panic
+  - paths: `worklog/2026-01-10.md`
+- `f75ad53334` | `REVIEW` | `docs,tests` | treedb adapter: ignore ErrClosed on reads
+  - paths: `kvstore/adapters/treedb/treedb.go`, `kvstore/adapters/treedb/treedb_close_test.go`, `worklog/2026-01-10.md`
+- `0864fee430` | `REVIEW` | `docs` | worklog: shutdown panic mitigation + rebuild notes
+  - paths: `worklog/2026-01-10.md`
+- `81ba17564b` | `REVIEW` | `docs` | worklog: confirm shutdown panic resolved
+  - paths: `worklog/2026-01-10.md`
+- `662d97684b` | `REVIEW` | `btree,docs` | node: inline uint16 writes in builder
+  - paths: `TreeDB/node/builder.go`, `worklog/2026-01-10.md`
+- `638e76687a` | `REVIEW` | `btree,docs` | node: avoid key copy for zero-prefix leaf entries
+  - paths: `TreeDB/node/leaf.go`, `worklog/2026-01-10.md`
+- `e7368885da` | `REVIEW` | `docs` | worklog: inline-values run + pprof + attempts
+  - paths: `worklog/2026-01-10.md`
+- `e402d4a359` | `REVIEW` | `docs` | worklog: inline-values run results
+  - paths: `worklog/2026-01-10.md`
+- `620df7ba8d` | `REVIEW` | `docs` | Log flush SetView regression
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `e31dff3de5` | `REVIEW` | `btree,docs` | Inline uint16 reads in node leaf paths
+  - paths: `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `dcba8ce042` | `REVIEW` | `btree,docs` | Inline uint32 writes in leaf builder
+  - paths: `TreeDB/node/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `63e2c1ab93` | `REVIEW` | `docs` | Log getUint32 regression
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `29adfe4804` | `DROP(tracing/tooling)` | `bench,tests,tracing` | Address Copilot review notes
+  - paths: `TreeDB/batch/batch.go`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/zipper/zipper.go`, `cmd/trace_bench/main.go`, `kvstore/adapters/treedbtrace/trace.go`, `scripts/capture_celestia_trace.sh`, `scripts/pull_celestia_trace.sh`
+- `5aebd124d8` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | Add force-pointer option to trace bench
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `00b29a4c77` | `REVIEW` | `docs` | Log pointer-value appendmany attempts
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `ec8670fa39` | `REVIEW` | `docs` | Log pointer-value buffer tuning regression
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `31190f4eea` | `REVIEW` | `docs` | Log pointer-value omit-keys attempt
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `cbc471e657` | `REVIEW` | `docs` | Log pointer-value pooling regression
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `6256bc9d04` | `DROP(tracing/tooling)` | `bench,compression,docs,slab,tests,tracing` | Add slab compression tuning options
+  - paths: `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `f520e2e50b` | `REVIEW` | `compression,docs` | Log pointer-value compression sweep
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `4bf8fa4e19` | `DROP(tracing/tooling)` | `docs,tracing` | Log pointer-value trace sweep results
+  - paths: `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `0b5fe1dc0d` | `REVIEW` | `docs` | Add slab optimization tracker and loop prompt
+  - paths: `.gitignore`, `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`, `run_mainnet_parity_loop.sh`
+- `02a5e91c9a` | `REVIEW` | `docs` | defer multistream slabs pending meta v2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `e401dbfca9` | `REVIEW` | `compression,docs` | Defer slab v2 zonal dictionaries
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `4df0643d10` | `REVIEW` | `docs` | Defer entropy training until slab v2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `23e44f53ee` | `REVIEW` | `compression,docs` | Defer dictionary dedup pending slab v2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `60dd2ae72c` | `REVIEW` | `docs` | Defer two-pass compaction pending slab v2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `224ee55c6b` | `REVIEW` | `docs` | Defer slab tiering without format migration
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `be5de04022` | `REVIEW` | `docs` | Defer value delta encoding pending RFC
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `7bbc4d30cd` | `REVIEW` | `docs` | Defer zonal bloom filters pending slab v2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `26a4a4b9f8` | `REVIEW` | `docs,slab` | Hint huge pages for slab mmaps
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/slab/madvise_linux.go`, `TreeDB/slab/madvise_other.go`, `TreeDB/slab/mmap_unix.go`
+- `30e9d73b77` | `REVIEW` | `docs` | Tighten slab optimization policy: no free deferrals
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `62ba9082c1` | `REVIEW` | `docs` | Clarify alpha: no migration needed
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `f4c519d0bd` | `DROP(docs)` | `docs` | Docs: point agents to Linux server info
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `8d979b8ad4` | `REVIEW` | `docs` | Hardening: require MVAs and discourage deferrals
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `73d27d52a2` | `DROP(tracing/tooling)` | `bench,compression,db,slab,slab_manager,tests,tracing` | slab: add opt-in multi-stream AppendMany
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/db/db.go`, `TreeDB/db/open_readonly.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `747bc86aab` | `DROP(tracing/tooling)` | `bench,compression,db,slab,slab_manager,tests,tracing` | Revert "slab: add opt-in multi-stream AppendMany"
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/db/db.go`, `TreeDB/db/open_readonly.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `4de3fda3ce` | `REVIEW` | `docs` | log: record multistream attempt results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `41f25a2302` | `REVIEW` | `slab,slab_manager,tests` | slab: mark inactive slabs read-only
+  - paths: `TreeDB/slab/manager.go`, `TreeDB/slab/slab_test.go`
+- `4cf2036321` | `REVIEW` | `slab,slab_manager,tests` | Revert "slab: mark inactive slabs read-only"
+  - paths: `TreeDB/slab/manager.go`, `TreeDB/slab/slab_test.go`
+- `75c42029a8` | `REVIEW` | `docs` | log: record slab tiering attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `15bb6ce644` | `DROP(docs)` | `docs` | docs: forbid deferrals; summarize slab-opt progress
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `c1340e41cd` | `DROP(docs)` | `docs` | docs: emphasize iterative convergence (idempotent progress)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `77b7085a28` | `DROP(docs)` | `docs` | docs: allow iterative sub-steps without forced accept/reject
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `d8dce25ddf` | `DEFER(slab format/choreography)` | `btree,compression,slab,slab_format,slab_manager` | slab: add v2 header + dict compression mva
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `d1c020d1e5` | `DEFER(slab format/choreography)` | `btree,compression,slab,slab_format,slab_manager` | Revert "slab: add v2 header + dict compression mva"
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `7431ac5855` | `REVIEW` | `compression,docs` | log: record zonal dict attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c671c16cc4` | `REVIEW` | `compression,db,slab,slab_manager` | slab: add compression ratio metrics logging
+  - paths: `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_metrics.go`, `TreeDB/slab/manager.go`
+- `cd55f7e0f3` | `REVIEW` | `docs` | log: record entropy metrics MVA baseline
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6f8d93a14d` | `REVIEW` | `compression,db,docs,slab,slab_manager` | slab: add adaptive compression pause trigger
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_metrics.go`, `TreeDB/slab/manager.go`
+- `2813c5df6c` | `REVIEW` | `docs` | log: advance slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c2ece4a250` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `48898ded48` | `REVIEW` | `docs` | log: record adaptive pause merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `24197c377e` | `DROP(tracing/tooling)` | `bench,compression,db,slab,slab_manager,tests,tracing` | slab: add adaptive training sampler
+  - paths: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `4042586cb3` | `REVIEW` | `docs` | log: record adaptive training sampler results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `84126c7e59` | `REVIEW` | `docs` | log: update slab-opt-rc head and merge note
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `20e9112a0e` | `REVIEW` | `docs` | log: bump slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `bb57d5c5bc` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `bcce7c01f3` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `21c03103d3` | `REVIEW` | `compression,docs,slab,slab_manager` | slab: queue compression training samples
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `273c41daf1` | `REVIEW` | `docs` | log: record entropy training queue run
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `4ff5917bc0` | `REVIEW` | `compression,db,docs,slab,slab_manager` | slab: expose compression trainer stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `450e759974` | `REVIEW` | `docs` | log: record slab opt rc update
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6e96967c47` | `REVIEW` | `compression,db,docs,slab` | slab: track max trainer queue depth
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `2056c4a4df` | `REVIEW` | `docs` | log: record slab-opt-03-entropy-training-5 merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `720ca756d6` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `b22f3784f8` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `5700ba0595` | `REVIEW` | `compression,slab` | slab: pool compression training samples
+  - paths: `TreeDB/slab/compression_training.go`
+- `c1f7129fe2` | `REVIEW` | `compression,slab` | Revert "slab: pool compression training samples"
+  - paths: `TreeDB/slab/compression_training.go`
+- `09a37841b6` | `REVIEW` | `docs` | log: record training sample pool attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `5a4aa6cb98` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `56592982ad` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `e5656a8ccb` | `REVIEW` | `docs` | log: update rc head sha
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `f7cd34394d` | `DROP(tracing/tooling)` | `bench,compression,db,docs,slab,tests,tracing` | slab: add sample stride for compression training
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`
+- `7c7beb8202` | `REVIEW` | `docs` | log: record sample stride merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `bc01ea518b` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `77d8974717` | `REVIEW` | `compression,docs,slab,slab_manager` | slab: gate training collect when inactive
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `c86c4a3d3c` | `REVIEW` | `docs` | log: record entropy collect gating results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `42f0b26295` | `REVIEW` | `compression,slab,slab_manager` | slab: batch trainer sample collection
+  - paths: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `b6b466ae3d` | `REVIEW` | `compression,slab,slab_manager` | Revert "slab: batch trainer sample collection"
+  - paths: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `8abdfc4d1f` | `REVIEW` | `docs` | log: record entropy batch collect attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `4bc64bf082` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ffd51d18ab` | `REVIEW` | `compression,slab` | slab: gate trainer queue max update on enqueue
+  - paths: `TreeDB/slab/compression_training.go`
+- `5f535c53ae` | `REVIEW` | `compression,slab` | Revert "slab: gate trainer queue max update on enqueue"
+  - paths: `TreeDB/slab/compression_training.go`
+- `72f0b5a7d9` | `REVIEW` | `docs` | log: record trainer queue max gating attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `b7c88ddd09` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `fc0f1abb86` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ee740f3d85` | `REVIEW` | `compression,db,docs,slab` | slab: track compression trainer collect timing
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `78614eb974` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `faf040b428` | `REVIEW` | `compression,slab,slab_manager` | slab: pool compression training samples
+  - paths: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `e09da5277d` | `REVIEW` | `bench,docs` | log: record entropy-training pooling bench
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c08c3275fa` | `REVIEW` | `docs` | log: accept entropy-training pooling
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `3b6137c0cc` | `REVIEW` | `compression,db,docs,slab` | slab: add dict hash dedup stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `ca16a05b83` | `DROP(docs)` | `docs` | docs: update slab optimizations log
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ccc4f32168` | `REVIEW` | `compression,db,docs,slab` | slab: track dict dedup mode in trainer stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `d94bc0989c` | `REVIEW` | `compression,docs` | log: record dict dedup scaffolding results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `056a424025` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6cc399180a` | `REVIEW` | `docs` | log: update slab-opt-rc head (post-merge)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `134a0ea181` | `REVIEW` | `docs` | log: avoid hardcoding slab-opt-rc head hash
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `3d667de836` | `REVIEW` | `bench,db,tests` | db: add index-swap compaction stats and benchmark
+  - paths: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `0d74ce1660` | `REVIEW` | `docs` | log: record two-pass compaction MVA
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `9cde489271` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `5fb6c170a8` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `9bb3c6b76d` | `REVIEW` | `docs` | log: normalize slab-opt-rc head marker
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ebf92430af` | `REVIEW` | `docs` | log: record slab-opt-05 merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `aa24ee2ec6` | `REVIEW` | `compression,db,docs,slab` | slab: expose dict dedup flags in trainer stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `bea2405217` | `REVIEW` | `docs` | log: update slab opt rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6676dd1c89` | `REVIEW` | `compression,db,docs,slab` | slab: add dict dedup mode counters
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `f1541fc95a` | `REVIEW` | `compression,docs` | log: record dict dedup counters merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `9c9fb3e86a` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `2abca96d25` | `REVIEW` | `docs` | log: update slab-opt-rc head (post-merge)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6ccf32f14e` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `a6157f8194` | `REVIEW` | `compression,docs` | log: update slab-opt-rc head (dict dedup counters)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `058db37e48` | `REVIEW` | `compression,db,slab` | slab: cache trained dicts by sample hash
+  - paths: `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `3926b6b9dc` | `REVIEW` | `bench,compression,docs` | log: record dict dedup cache benchmark
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `a98c480741` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ba9d466d86` | `DROP(tracing/tooling)` | `bench,compression,db,docs,slab,tests,tracing` | slab: make trainer dedup window configurable
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`
+- `6ce5ac2528` | `REVIEW` | `compression,docs` | log: update slab-opt-rc head (dict dedup window)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `e985a204ac` | `REVIEW` | `compression,db,docs,slab` | slab: track dict dedup bytes in trainer stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/api.go`, `TreeDB/slab/compression_training.go`
+- `b9fa9a38a5` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `33f047d43c` | `REVIEW` | `compression,docs` | log: record dict dedup bytes stats merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `fd5740f2b5` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `b4bd77e7ce` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `b35f6431f2` | `REVIEW` | `compression,slab` | slab: widen dict dedup window
+  - paths: `TreeDB/slab/compression_training.go`
+- `32820f704d` | `REVIEW` | `compression,docs` | log: widen dict dedup window attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6a57ed51e8` | `REVIEW` | `docs` | log: update slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `12171b4555` | `REVIEW` | `docs` | log: refresh slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6e026074da` | `REVIEW` | `docs` | log: record slab-opt-rc head
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `edac9dab2d` | `REVIEW` | `docs` | log: make rc head tracking stable
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `86b00c6ed5` | `REVIEW` | `compression,slab` | slab: cache dicts even on dedup hits
+  - paths: `TreeDB/slab/compression_training.go`
+- `c846dc9265` | `REVIEW` | `compression,slab` | Revert "slab: cache dicts even on dedup hits"
+  - paths: `TreeDB/slab/compression_training.go`
+- `10aa660bf0` | `REVIEW` | `compression,docs` | log: record dict dedup cache attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `792d352bdd` | `REVIEW` | `compression,docs` | log: note dict dedup attempt merged
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `9ab721a5ba` | `DROP(tracing/tooling)` | `bench,docs,tests,tracing` | bench: report trainer dedup metrics
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/bench_trace_timeline_test.go`
+- `37153f2c19` | `REVIEW` | `bench,compression,docs` | log: record dict dedup bench stats merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `f704861c46` | `REVIEW` | `docs,slab,tests` | slab: add xor delta encoding prototype
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/slab/delta_encoding.go`, `TreeDB/slab/delta_encoding_test.go`
+- `a77435e432` | `REVIEW` | `docs` | log: record value delta MVA
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ea172d5bdd` | `REVIEW` | `docs` | log: note value delta merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c659d3a2c7` | `REVIEW` | `compression,docs,slab` | slab: add hashmap indexes for dict dedup lookups
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/slab/compression_training.go`
+- `547ee61e27` | `REVIEW` | `compression,docs` | log: record dict dedup hashmap results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `5eff47b9dd` | `REVIEW` | `compression,slab` | slab: retain dict dedup caches across slabs
+  - paths: `TreeDB/slab/compression_training.go`
+- `63d6ce07bb` | `REVIEW` | `compression,slab` | Revert "slab: retain dict dedup caches across slabs"
+  - paths: `TreeDB/slab/compression_training.go`
+- `2ba390d462` | `REVIEW` | `compression,docs` | log: record dict dedup cross-slab attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `182b1beda0` | `REVIEW` | `compression,docs` | log: note dict dedup cross-slab merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6b829c2a69` | `REVIEW` | `compression,slab` | slab: widen trainer dedup window default
+  - paths: `TreeDB/slab/compression_training.go`
+- `42f4399239` | `REVIEW` | `compression,slab` | Revert "slab: widen trainer dedup window default"
+  - paths: `TreeDB/slab/compression_training.go`
+- `e86bdc9455` | `REVIEW` | `compression,docs` | log: record dict dedup window 64 attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `dbb7726834` | `REVIEW` | `compression,docs` | log: record dict dedup window 64 merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `77e5325f2a` | `REVIEW` | `compression,slab` | slab: hash dict content without ID for dedup
+  - paths: `TreeDB/slab/compression_training.go`
+- `5836b5f487` | `REVIEW` | `compression,slab` | Revert "slab: hash dict content without ID for dedup"
+  - paths: `TreeDB/slab/compression_training.go`
+- `583e5e5650` | `REVIEW` | `compression,docs` | log: record dict dedup dict-ID hash attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `6cb9380a40` | `REVIEW` | `compression,docs` | log: note dict dedup rejection merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `df75463a70` | `REVIEW` | `bench,compression,db,docs,slab,slab_manager,tests` | compaction: sample dict from representative slab
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `53343f73cb` | `REVIEW` | `compression,docs` | log: record compaction dict sampling attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `94d21194f6` | `REVIEW` | `compression,docs` | log: record compaction dict sampling merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `1ab58e9516` | `REVIEW` | `bench,compression,db,docs,tests` | compaction: rank dict samples across candidate slabs
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `90d6410998` | `REVIEW` | `compression,docs` | log: record compaction global dict merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `87489be2a3` | `REVIEW` | `bench,compression,db,docs,tests` | compaction: sample shift points for dict analysis
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `ea933defd5` | `REVIEW` | `docs` | log: record compaction shift sampling results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `1631dc38a0` | `REVIEW` | `bench,compression,db,docs,slab,slab_manager,tests` | compaction: gate compression by shift plan
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/manager.go`
+- `bfcc57ae23` | `REVIEW` | `bench,db,docs,tests` | compaction: add shift plan tuning knobs
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `c78c72e81f` | `REVIEW` | `docs` | log: record compaction shift tuning merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `0a7fc8960d` | `REVIEW` | `bench,db,docs,slab,slab_manager,tests` | compaction: sample base ratio for shift plan
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/manager.go`
+- `46e50e035d` | `REVIEW` | `bench,docs` | log: rerun compaction base ratio sampling benches
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `9a2aacd4bf` | `REVIEW` | `docs` | log: merge compaction base ratio sampling
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `d9ff863ef1` | `REVIEW` | `compression,db` | compaction: allow disabling compression by base ratio
+  - paths: `TreeDB/db/compaction_index_swap.go`
+- `ffdf109d40` | `REVIEW` | `bench,docs` | log: compaction base ratio disable benches
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `81032af6d9` | `REVIEW` | `docs` | log: merge compaction base ratio disable
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `d5527a4abf` | `REVIEW` | `compression,db,docs` | compaction: disable compression per slab via base ratio
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `43a65fac4d` | `REVIEW` | `docs` | log: record per-slab compaction disable sampling
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `7a73fde150` | `REVIEW` | `bench,db,docs,tests` | bench: report compaction slab sizes
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `4658c0a33d` | `REVIEW` | `docs` | log: record compaction slab size metrics
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `178126aabc` | `REVIEW` | `db,docs` | compaction: unify candidate sampling pass
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `e18bc39517` | `REVIEW` | `docs` | log: record compaction sample scan
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `d823817aff` | `REVIEW` | `db,docs` | compaction: evaluate tail window for shift plan
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `6b136c7cd1` | `REVIEW` | `docs` | log: record compaction tail window attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `e0a1ca8b77` | `REVIEW` | `bench,compression,db,slab,slab_manager,tests` | slab: add inline dict override for compaction shifts
+  - paths: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `982e3dc695` | `REVIEW` | `bench,compression,db,slab,slab_manager,tests` | Revert "slab: add inline dict override for compaction shifts"
+  - paths: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `9a91c8eb33` | `REVIEW` | `compression,docs` | log: record local dict shift attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c2ba3f3698` | `REVIEW` | `bench,compression,db,docs,tests` | compaction: sample shift window dict stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `2dd80b88a5` | `REVIEW` | `compression,docs` | log: record shift dict sampling attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `1501f5b036` | `REVIEW` | `compression,docs` | log: record shift dict sampling merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `158d83bb43` | `REVIEW` | `db` | compaction: align shift raw bytes with full records
+  - paths: `TreeDB/db/compaction_index_swap.go`
+- `ebde68311a` | `REVIEW` | `docs` | log: compaction shift rawlen results
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `a88db3224b` | `REVIEW` | `docs` | log: record shift rawlen merge
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `4fe010faac` | `REVIEW` | `compression,db,docs` | compaction: guard zstd BuildDict panics
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `01688231d0` | `REVIEW` | `compression,docs` | log: record compaction BuildDict guard
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `41acd0cd58` | `REVIEW` | `compression,docs` | log: fix BuildDict guard merge sha
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `ef3c4c36ca` | `REVIEW` | `compression,docs` | log: update BuildDict guard merge sha
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c2b6b7afd9` | `REVIEW` | `compression,docs` | log: finalize BuildDict guard merge sha
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `3721a675b4` | `REVIEW` | `compression,docs` | log: mark BuildDict guard merge pending
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `e062d8c7b8` | `REVIEW` | `compression,docs` | log: record BuildDict guard merge sha
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `4b1fcbb25a` | `REVIEW` | `bench,compression,db,docs,tests` | compaction: gate dict sampling on option
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `e55941e198` | `REVIEW` | `docs` | log: record compaction sample decouple
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `bf6cc0fba0` | `REVIEW` | `compression,db,docs` | compaction: disable compression globally on poor base ratio
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `3b2a7459a3` | `REVIEW` | `docs` | log: record compaction disable-all-global attempt
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `bcf78f6e81` | `DROP(docs)` | `docs` | docs: focus slab loop on item #2 only; halt after #2
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `mainnet_parity_prompt.md`
+- `c23e55ee15` | `DEFER(slab format/choreography)` | `btree,compression,slab,slab_format,slab_manager` | slab: add v2 header + dict compression mva
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `ab8d05720f` | `DEFER(slab format/choreography)` | `bench,compression,db,docs,slab,slab_format,slab_manager,tests` | slab: stabilize v2 dict writes and update tests
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/idempotence_test.go`, `TreeDB/compaction/planner_test.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/append_many_test.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_test.go`
+- `5114f2d5cf` | `DEFER(slab format/choreography)` | `bench,compression,db,docs,slab,slab_format,slab_manager,tests` | Revert "slab: stabilize v2 dict writes and update tests"
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/idempotence_test.go`, `TreeDB/compaction/planner_test.go`, `TreeDB/db/compaction_index_swap_bench_test.go`, `TreeDB/slab/append_many_test.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_test.go`
+- `3294da22b1` | `DEFER(slab format/choreography)` | `btree,compression,slab,slab_format,slab_manager` | Revert "slab: add v2 header + dict compression mva"
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `4d6682ed0f` | `REVIEW` | `compression,docs` | log: record #2 v2 dict replay regression and reject
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `c54dfa0483` | `DROP(docs)` | `compression,docs` | docs: require batch-trained dict for #2 (no single-sample)
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `cad35b589f` | `DROP(docs)` | `compression,docs` | docs: warn against naive #2 dict implementations
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `f47bed7b78` | `DROP(docs)` | `docs` | docs: add general no-naive-work directive
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `d5b3750b3a` | `DROP(docs)` | `compression,docs` | docs: align #2 checklist with local_dictionary_compression
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`
+- `55beae1ee2` | `DROP(tracing/tooling)` | `bench,compression,tests,tracing` | bench: add trace replay compression ratio POC
+  - paths: `TreeDB/bench_trace_ratio_test.go`
+- `6fa5d45b09` | `REVIEW` | `bench,compression,docs` | bench: record dict micro-batch K trade curve and 0.33x goal
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/cmd/kv_dict_batch_bench/main.go`, `TreeDB/cmd/kv_dict_opt_phase1/main.go`, `TreeDB/cmd/kv_slab_layout_poc/main.go`, `TreeDB/local_dictionary_compression.md`, `TreeDB/notes/slab_dict_k_tradeoff_2026-01-11.md`
+- `e5acf2aaae` | `REVIEW` | `compression,slab` | slab: add K selection profile at dict training
+  - paths: `TreeDB/slab/compression_profile.go`, `TreeDB/slab/compression_training.go`
+- `dd59c1c8d0` | `REVIEW` | `compression,docs,slab` | slab: gate dict profile refresh and record K selection
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/local_dictionary_compression.md`, `TreeDB/slab/compression_profile.go`, `TreeDB/slab/compression_training.go`
+- `da796c0389` | `REVIEW` | `btree,slab,slab_manager,tests` | slab: add grouped frame records with subindex pointers
+  - paths: `TreeDB/page/value_ptr_flags.go`, `TreeDB/page/value_ptr_group_test.go`, `TreeDB/slab/frame_group.go`, `TreeDB/slab/frame_group_test.go`, `TreeDB/slab/manager.go`
+- `20ea7dac4f` | `REVIEW` | `bench` | bench: add kv_choosek_bench tool for scoring K
+  - paths: `TreeDB/cmd/kv_choosek_bench/main.go`
+- `a09022bf01` | `REVIEW` | `compression,slab,slab_manager` | slab: dispatch AppendMany through grouped writer
+  - paths: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `15678bf686` | `REVIEW` | `bench,slab,tests` | slab: add grouped write/read benchmark
+  - paths: `TreeDB/slab/manager_grouped_bench_test.go`
+- `1a64881c40` | `REVIEW` | `bench,slab,tests` | slab: extend grouped bench for structured and random data
+  - paths: `TreeDB/slab/manager_grouped_bench_test.go`
+- `1aaffb9454` | `REVIEW` | `db,slab,slab_manager` | tool: add debug_ingest to exercise grouped slabs
+  - paths: `TreeDB/cmd/debug_ingest/main.go`, `TreeDB/db/api.go`, `TreeDB/slab/manager.go`
+- `f6e98573c0` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,slab_manager,tests` | slab: implement Slab V2 with zonal dictionary compression
+  - paths: `GEMINI_PLAN.md`, `TreeDB/slab/compression_profile.go`, `TreeDB/slab/frame_group.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_v2.go`, `TreeDB/slab/v2_feature_test.go`
+- `fdeea8e677` | `REVIEW` | `slab,slab_format,tests` | slab: fix V2 lazy-load detection and refine zone boundary logic
+  - paths: `TreeDB/slab/slab.go`, `TreeDB/slab/v2_edge_case_test.go`
+- `8ffce5d8c1` | `REVIEW` | `compression,slab` | slab: start trainer collecting immediately if enabled
+  - paths: `TreeDB/slab/compression_training.go`
+- `55c8258771` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,slab_manager,tests` | TreeDB: Implement Slab V2 Path B (Local Zonal Dictionaries)
+  - paths: `.gitignore`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/frame_group_test.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_edge_case_test.go`, `worklog/2026-01-12.md`
+- `0f7ca9543c` | `REVIEW` | `bench,compression,slab,tests` | TreeDB: Robustness fixes for trainer and write throughput benchmark
+  - paths: `TreeDB/slab/compression_speed_bench_test.go`, `TreeDB/slab/compression_training.go`
+- `67f640d3cd` | `REVIEW` | `` | TreeDB: Add support for TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP env var
+  - paths: `TreeDB/public.go`
+- `67a14e364d` | `REVIEW` | `compression,slab` | feat(treedb): implement buffer pooling for slab compression
+  - paths: `TreeDB/slab/compression.go`
+- `bb9140dc75` | `DROP(docs)` | `compression,docs,tests` | docs(treedb): update dictionary compression and remote testing docs
+  - paths: `AGENTS_SLAB_VLOG_ASYNC.md`, `celestia_testing_info.md`, `docs/TREEDB_TUNING.md`
+- `42d0e09254` | `REVIEW` | `bench,docs` | bench(treedb): update benchmark plan and add forensics template
+  - paths: `scripts/forensics_template.sh`, `treedb_bench_plan.md`
+- `772074f5a7` | `REVIEW` | `tests` | test: use active slab id in compaction cases
+  - paths: `TreeDB/compaction/compaction_test.go`
+- `fe4f41745e` | `REVIEW` | `compression,db,slab,slab_manager,tests` | test: force slab compression profile in e2e checks
+  - paths: `TreeDB/compression_e2e_test.go`, `TreeDB/db/compression_verify_test.go`, `TreeDB/slab/manager.go`
+- `042237675c` | `REVIEW` | `compression,slab` | slab: guard zstd training against empty samples
+  - paths: `TreeDB/slab/compression_training.go`
+- `12c983c32f` | `DEFER(slab format/choreography)` | `bench,btree,compression,slab,slab_format,tests` | style: gofmt slab and builder sources
+  - paths: `TreeDB/cmd/kv_slab_layout_poc/main.go`, `TreeDB/node/builder.go`, `TreeDB/slab/compression_speed_bench_test.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_edge_case_test.go`, `TreeDB/slab/v2_feature_test.go`
+- `15ceb7e3e7` | `REVIEW` | `compression,tests` | test: access slab manager via backend in e2e
+  - paths: `TreeDB/compression_e2e_test.go`
+- `a2ee4aa1da` | `REVIEW` | `docs` | Document write-back caching and read optimizations
+  - paths: `TreeDB/specs/spec.md`
+- `75ad7ec55e` | `DEFER(slab format/choreography)` | `slab,slab_format,slab_manager` | slab: handle v2 headers in repair and compaction
+  - paths: `TreeDB/compaction/compactor.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `97085f0fe1` | `REVIEW` | `compression,db,tests` | tests: stabilize compression e2e coverage
+  - paths: `TreeDB/compression_e2e_test.go`, `TreeDB/db/compression_verify_test.go`
+- `77bdc01c3e` | `REVIEW` | `slab,tests` | tests: add v2 slab header regression coverage
+  - paths: `TreeDB/compaction/compaction_v2_header_test.go`, `TreeDB/slab/v2_header_regression_test.go`
+- `d4b4319c34` | `REVIEW` | `docs` | Add slab RC addendum work log
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`
+- `4f6890f36a` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,slab_manager,tests` | Fix V2 zone fallback and dict padding
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_read_fallback_test.go`
+- `42d58dbe61` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,slab_manager,tests` | Add V2 dict dedup ref support
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_v2.go`, `TreeDB/slab/v2_edge_case_test.go`, `TreeDB/slab/v2_feature_test.go`, `TreeDB/slab/v2_read_fallback_test.go`
+- `b84ad00e9b` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,tests` | Add LRU cache for slab dict decoders
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/slab/dict_cache.go`, `TreeDB/slab/dict_cache_test.go`, `TreeDB/slab/slab.go`
+- `0525607302` | `DEFER(slab format/choreography)` | `compression,docs,slab,slab_format,tests` | Use mmap-backed dict slices
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/slab/dict_cache.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_read_fallback_test.go`
+- `4d97a005d5` | `REVIEW` | `compression,docs` | Document adaptive dict profile policy
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/local_dictionary_compression.md`
+- `3f85535717` | `DEFER(slab format/choreography)` | `docs,slab,slab_format,slab_manager,tests` | Fix V2 batch flush boundary handling
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_batch_boundary_test.go`
+- `14958ec7e8` | `REVIEW` | `compression,docs` | Document slab value size limit
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/local_dictionary_compression.md`
+- `9c1bc07eae` | `REVIEW` | `docs` | Document slab V2 value size cap
+  - paths: `README.md`, `docs/TREEDB_BENCHMARKING.md`, `docs/TREEDB_TUNING.md`
+- `6fab5320f7` | `REVIEW` | `docs` | Expand sprint 6 DX plan
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`
+- `77e3ac3a8c` | `REVIEW` | `docs` | Add API deprecation review to sprint 6
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`
+- `f8b9a9f5bc` | `REVIEW` | `docs` | Broaden sprint 6 API audit scope
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`
+- `1506139418` | `DROP(docs)` | `docs` | docs: audit public config and update sprint 6
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/README.md`, `docs/README.md`, `docs/TREEDB_BENCHMARKING.md`, `docs/TREEDB_TUNING.md`
+- `d69fce8a54` | `DROP(docs)` | `docs` | docs: expand tuning guidance for value log and safety
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `docs/TREEDB_TUNING.md`
+- `2dd1e87f78` | `DROP(docs)` | `docs` | docs: clarify Open env overrides
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/public.go`, `docs/GETTING_STARTED.md`
+- `3a12d93d08` | `REVIEW` | `compression,docs,tests` | profiles: add compressed variants and fix docs
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/README.md`, `TreeDB/profiles.go`, `TreeDB/profiles_test.go`, `docs/TREEDB_PROFILES.md`
+- `091c795d3c` | `REVIEW` | `slab,tests` | gofmt
+  - paths: `TreeDB/slab/v2_feature_test.go`
+- `9e6165234f` | `REVIEW` | `compression,slab,tests,windows` | test: skip mmap dict slice on windows
+  - paths: `TreeDB/slab/v2_read_fallback_test.go`
+- `3e5456c284` | `DROP(docs)` | `docs` | docs: update server IP and remove parity loop script
+  - paths: `AGENTS.md`, `docs/TREEDB_BENCHMARKING.md`, `invalid_value_debug.md`, `run_mainnet_parity_loop.sh`, `worklog/2026-01-12.md`
+- `b56362365a` | `DEFER(slab format/choreography)` | `slab,slab_format,slab_manager` | slab: centralize v2 record size constant
+  - paths: `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_v2.go`
+- `43215d419c` | `REVIEW` | `` | Merge pull request #49 from snissn/slab-opt-rc

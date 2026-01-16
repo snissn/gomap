@@ -1,0 +1,372 @@
+# Key commit index: `642cfeaa51..main`
+
+Purpose: identify *all* core-engine commits after the anchor and classify them for a clean forward-port onto `642cfeaa51`.
+
+Classification rules (pivot hard constraints):
+- **No ValueIndex / ValueID / GC** (subject mentions count; files count).
+- **No slab changes** (any `TreeDB/slab/*` in a commit forces `SPLIT` or `DROP`).
+- **No trace tooling** (trace harness is excluded; manual split only if the commit also contains a clear engine improvement).
+
+Totals (core-touching commits in range): 144
+
+## KEEP: safe cherry-pick candidates (59)
+
+- `6405dbc2bb` | `KEEP` | `` | fix: compilation error in db.go
+  - paths: `TreeDB/db/db.go`
+- `13643e2960` | `KEEP` | `` | fix: prevent panic in DBIterator.Next when invalid
+  - paths: `TreeDB/db/api.go`
+- `75086eea22` | `KEEP` | `` | fix: resolve VLog mmap corruption and DBIterator panic
+  - paths: `TreeDB/compaction/compactor.go`, `TreeDB/db/db.go`, `TreeDB/internal/vlog/reader_mmap.go`
+- `b41dff7502` | `KEEP` | `` | fix: robust iterator error handling
+  - paths: `TreeDB/db/api.go`
+- `f49b2ca96d` | `KEEP` | `` | fix: ensure both cached and backend layers are closed
+  - paths: `TreeDB/public.go`
+- `18f715d216` | `KEEP` | `` | fix(treedb/caching): implement reliable file removal retry on Windows for WAL/vlog cleanup
+  - paths: `TreeDB/caching/db.go`
+- `c59db1e442` | `KEEP` | `` | fix(treedb/caching): ensure value-log segments are closed before removal for Windows compatibility
+  - paths: `TreeDB/caching/db.go`
+- `8591004dd3` | `KEEP` | `` | fix(treedb/caching): suppress redundant error reporting in dropValueLogSegment
+  - paths: `TreeDB/caching/db.go`
+- `13944027e4` | `KEEP` | `` | fix(treedb/caching): suppress WAL removal errors to prevent fatal failures on Windows file locks
+  - paths: `TreeDB/caching/db.go`
+- `15a25d27dc` | `KEEP` | `` | fix(treedb): explicit error check in DBIterator.Value/ValueCopy
+  - paths: `TreeDB/db/api.go`
+- `68c1ec670d` | `KEEP` | `` | fix(treedb): refine DBIterator error resetting
+  - paths: `TreeDB/db/api.go`
+- `b9306cd4c5` | `KEEP` | `` | fix(treedb): disable freelist region bias during online vacuum to prevent index ballooning
+  - paths: `TreeDB/db/vacuum_online.go`
+- `cb6b5cf3ee` | `KEEP` | `` | revert: disable vacuum ballooning fix to investigate allocator corruption
+  - paths: `TreeDB/db/vacuum_online.go`
+- `0965b85de2` | `KEEP` | `` | fix(treedb/freelist): correct loop condition in AllocMany fallback
+  - paths: `TreeDB/db/vacuum_online.go`, `TreeDB/freelist/allocator.go`
+- `9a884a8500` | `KEEP` | `` | revert: disable vacuum allocator optimization to restore stability
+  - paths: `TreeDB/db/vacuum_online.go`
+- `12d628f7aa` | `KEEP` | `` | fix(treedb/caching): enforce copy-on-flush to decouple WAL from backend storage
+  - paths: `AGENTS.md`, `TreeDB/caching/db.go`
+- `5599abb218` | `KEEP` | `` | feat(treedb): add env override for ForceValuePointers and verify backend threshold behavior
+  - paths: `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/public.go`
+- `f30af02aa1` | `KEEP` | `` | feat(treedb): parse TREEDB_SLAB_COMPRESSION env var
+  - paths: `TreeDB/public.go`
+- `ad43291d1a` | `KEEP` | `` | feat(treedb): parse TREEDB_SLAB_COMPRESSION_MIN_SAVINGS to tune compression aggressiveness
+  - paths: `TreeDB/public.go`
+- `f038302551` | `KEEP` | `` | fix tests
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`, `TreeDB/db/db.go`, `TreeDB/public.go`, `TreeDB/recovery_spec_test.go`
+- `f39ce1b34e` | `KEEP` | `` | fix: resolve use-after-free crash in GetAppend and iterator views
+  - paths: `TreeDB/db/api.go`, `TreeDB/public.go`
+- `6057d9dfc0` | `KEEP` | `` | fix: robustly normalize memtable value-log pointers when value log is disabled
+  - paths: `TreeDB/public.go`
+- `be4a377259` | `KEEP` | `` | attempt to fix invalid id lngth
+  - paths: `TreeDB/node/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`
+- `9125ed31cd` | `KEEP` | `` | ✦ I have resolved the crash, the index.db ballooning issue, and the slab stats corruption.
+  - paths: `TreeDB/db/batch.go`, `TreeDB/db/system_stats.go`, `TreeDB/profiles.go`, `TreeDB/public.go`, `invalid_value_debug.md`
+- `47bbb13203` | `KEEP` | `` | debug(treedb): log close maintenance errors
+  - paths: `TreeDB/public.go`
+- `fa3714c542` | `KEEP` | `` | fix(treedb): skip corrupt value entries during vacuum
+  - paths: `TreeDB/internal/bulk/builder.go`
+- `3e6180c859` | `KEEP` | `` | go fmt
+  - paths: `TreeDB/node/node.go`
+- `e576f782f7` | `KEEP` | `` | fix(treedb): address review comments and add iterator regression test
+  - paths: `TreeDB/db/api.go`, `TreeDB/db/api_test.go`
+- `2703144cc0` | `KEEP` | `` | fix(treedb): resolve concurrency race and sequence 0 pinning bug
+  - paths: `TreeDB/db/batch.go`, `TreeDB/lifecycle/graveyard.go`, `TreeDB/lifecycle/registry.go`
+- `114413ab08` | `KEEP` | `` | Fix backpressure stall and add stress test plan
+  - paths: `TreeDB/caching/backpressure_wait_test.go`, `TreeDB/caching/db.go`, `docs/TREEDB_STRESS_TEST_PLAN.md`, `invalid_value_debug.md`
+- `040fba37fe` | `KEEP` | `` | treedbtrace: move tracing into optional wrapper
+  - paths: `kvstore/adapters/treedb/trace.go`, `kvstore/adapters/treedb/treedb.go`, `kvstore/adapters/treedbtrace/trace.go`, `kvstore/adapters/treedbtrace/treedbtrace.go`, `treedb_bench_plan.md`
+- `734339215b` | `KEEP` | `` | caching: recycle memtables with reader tracking
+  - paths: `TreeDB/caching/db.go`, `TreeDB/caching/memtable_pool.go`, `TreeDB/caching/memtable_reclaim.go`, `TreeDB/caching/read_tracking_iterator.go`, `TreeDB/internal/memtable/memtable.go`, `TreeDB/internal/skiplist/skiplist.go`, `invalid_value_debug.md`
+- `d0051d31f0` | `KEEP` | `` | Speed up prefix leaf key scans
+  - paths: `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `6eeedb9c25` | `KEEP` | `` | Reuse leaf prefix sizes in merge
+  - paths: `TreeDB/node/builder.go`, `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `2874d3d44d` | `KEEP` | `` | Reduce prefix key copying
+  - paths: `TreeDB/node/leaf.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `35dbb1e709` | `KEEP` | `` | Pool zipper child work slices
+  - paths: `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `b2ffd6bce5` | `KEEP` | `` | Shorten leaf split separators
+  - paths: `TreeDB/node/builder.go`, `TreeDB/zipper/zipper.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `e1747a02a8` | `KEEP` | `` | Disable memtable pooling to fix corruption
+  - paths: `TreeDB/caching/memtable_pool.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `9204b8482f` | `KEEP` | `` | Remove memtable pooling and reader tracking
+  - paths: `TreeDB/caching/db.go`, `TreeDB/caching/memtable_pool.go`, `TreeDB/caching/memtable_reclaim.go`, `TreeDB/caching/read_tracking_iterator.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `f75ad53334` | `KEEP` | `` | treedb adapter: ignore ErrClosed on reads
+  - paths: `kvstore/adapters/treedb/treedb.go`, `kvstore/adapters/treedb/treedb_close_test.go`, `worklog/2026-01-10.md`
+- `662d97684b` | `KEEP` | `` | node: inline uint16 writes in builder
+  - paths: `TreeDB/node/builder.go`, `worklog/2026-01-10.md`
+- `638e76687a` | `KEEP` | `` | node: avoid key copy for zero-prefix leaf entries
+  - paths: `TreeDB/node/leaf.go`, `worklog/2026-01-10.md`
+- `e31dff3de5` | `KEEP` | `` | Inline uint16 reads in node leaf paths
+  - paths: `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `dcba8ce042` | `KEEP` | `` | Inline uint32 writes in leaf builder
+  - paths: `TreeDB/node/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `invalid_value_debug.md`, `worklog/2026-01-09.md`
+- `3d667de836` | `KEEP` | `` | db: add index-swap compaction stats and benchmark
+  - paths: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `1ab58e9516` | `KEEP` | `` | compaction: rank dict samples across candidate slabs
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `87489be2a3` | `KEEP` | `` | compaction: sample shift points for dict analysis
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `bfcc57ae23` | `KEEP` | `` | compaction: add shift plan tuning knobs
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `d9ff863ef1` | `KEEP` | `` | compaction: allow disabling compression by base ratio
+  - paths: `TreeDB/db/compaction_index_swap.go`
+- `d5527a4abf` | `KEEP` | `` | compaction: disable compression per slab via base ratio
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `178126aabc` | `KEEP` | `` | compaction: unify candidate sampling pass
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `d823817aff` | `KEEP` | `` | compaction: evaluate tail window for shift plan
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `c2ba3f3698` | `KEEP` | `` | compaction: sample shift window dict stats
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `158d83bb43` | `KEEP` | `` | compaction: align shift raw bytes with full records
+  - paths: `TreeDB/db/compaction_index_swap.go`
+- `4fe010faac` | `KEEP` | `` | compaction: guard zstd BuildDict panics
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `4b1fcbb25a` | `KEEP` | `` | compaction: gate dict sampling on option
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `bf6cc0fba0` | `KEEP` | `` | compaction: disable compression globally on poor base ratio
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap.go`
+- `67f640d3cd` | `KEEP` | `` | TreeDB: Add support for TREEDB_BACKGROUND_COMPACTION_INDEX_SWAP env var
+  - paths: `TreeDB/public.go`
+- `2dd1e87f78` | `KEEP` | `` | docs: clarify Open env overrides
+  - paths: `AGENTS_SLAB_RC_ADDENDUM.md`, `TreeDB/public.go`, `docs/GETTING_STARTED.md`
+
+## KEEP_TESTS: test-only commits (optional) (11)
+
+- `7c28b12866` | `KEEP_TESTS` | `TESTS_ONLY` | test(treedb): add regression test for vacuum index ballooning
+  - paths: `TreeDB/db/vacuum_balloon_test.go`
+- `8c8002c03b` | `KEEP_TESTS` | `TESTS_ONLY` | chore(treedb): remove regression test for reverted fix
+  - paths: `TreeDB/db/vacuum_balloon_test.go`
+- `3153d845d1` | `KEEP_TESTS` | `TESTS_ONLY` | test(treedb): verify Copy-on-Flush architecture for unified WAL/Slab
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`
+- `c88506dfae` | `KEEP_TESTS` | `TESTS_ONLY` | chore: remove accidental test commits
+  - paths: `TreeDB/db/consistency_test.go`, `TreeDB/db/repro_test.go`
+- `10141b8454` | `KEEP_TESTS` | `TESTS_ONLY` | test(treedb): add reopen deadlock regression test
+  - paths: `TreeDB/caching/unified_wal_comprehensive_test.go`
+- `277f7997b9` | `KEEP_TESTS` | `TESTS_ONLY` | test(treedb): add regression tests for vacuum migration, wal recovery, and compression
+  - paths: `TreeDB/db/prefix_compression_test.go`, `TreeDB/db/slab_compression_test.go`, `TreeDB/db/vacuum_migration_test.go`, `TreeDB/db/wal_recovery_dataloss_test.go`
+- `c5564a8a03` | `KEEP_TESTS` | `TESTS_ONLY` | test(treedb): add regression tests for vacuum race, prefix compression, and slab compression
+  - paths: `TreeDB/db/compression_verify_test.go`, `TreeDB/db/vacuum_flush_race_test.go`, `TreeDB/node/prefix_stress_test.go`
+- `86b36acadf` | `KEEP_TESTS` | `TESTS_ONLY` | fix(treedb): skip unsupported online vacuum tests on Windows and fix mmap alignment
+  - paths: `TreeDB/compaction/compaction_test.go`, `TreeDB/db/omit_keys_safety_test.go`, `TreeDB/db/prefix_compression_verify_test.go`, `TreeDB/db/vacuum_balloon_repro_test.go`, `TreeDB/db/vacuum_migration_test.go`, `TreeDB/db/vacuum_panic_test.go`
+- `7a73fde150` | `KEEP_TESTS` | `TESTS_ONLY` | bench: report compaction slab sizes
+  - paths: `AGENTS_SLAB_OPTIMIZATIONS.md`, `TreeDB/db/compaction_index_swap_bench_test.go`
+- `772074f5a7` | `KEEP_TESTS` | `TESTS_ONLY` | test: use active slab id in compaction cases
+  - paths: `TreeDB/compaction/compaction_test.go`
+- `97085f0fe1` | `KEEP_TESTS` | `TESTS_ONLY` | tests: stabilize compression e2e coverage
+  - paths: `TreeDB/compression_e2e_test.go`, `TreeDB/db/compression_verify_test.go`
+
+## TODO_POLICY: defaults/knobs to evaluate separately (4)
+
+- `d112268527` | `TODO_POLICY` | `` | chore: enable BackgroundCompaction by default for testing
+  - paths: `TreeDB/public.go`
+- `38c2b03d09` | `TODO_POLICY` | `` | chore: formalize background compaction default
+  - paths: `TreeDB/public.go`
+- `c6ab8b38bb` | `TODO_POLICY` | `` | fix(treedb): lower default KeepRecent to 20 to prevent index bloat
+  - paths: `TreeDB/db/db.go`
+- `966b28f339` | `TODO_POLICY` | `` | fix(treedb): increase default prune throughput to prevent index ballooning
+  - paths: `TreeDB/db/db.go`
+
+## SPLIT: contains banned scope + salvageable changes (62)
+
+Rule: do **not** cherry-pick these as-is. If you want anything from them, manually port only the safe paths and explicitly exclude the banned ones.
+
+- `ff597262bf` | `SPLIT` | `VALUE_FILES,VALUE_SUBJECT` | feat: Phase 17.3 Value Index, Unified Seq, Refcounted GC
+  - safe to port: `TreeDB/batch/batch.go`, `TreeDB/caching/db.go`, `TreeDB/caching/db_test.go`, `TreeDB/caching/delete_range_test.go`, `TreeDB/caching/log_writer.go`, `TreeDB/caching/rcu_snapshot_test.go`, `TreeDB/cmd/treemap/main.go`, `TreeDB/db/api.go`, `TreeDB/db/batch.go`, `TreeDB/db/db.go` …
+  - must NOT port: `TreeDB/db/gc.go`, `TreeDB/db/value_index.go`, `TreeDB/db/value_index_test.go`
+- `eb6ab1ecf7` | `SPLIT` | `VALUE_SUBJECT` | fix: compaction supports ValueIndex updates + vacuum preserves LastSeq
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/db/vacuum_online.go`
+- `fc7cd14a0e` | `SPLIT` | `VALUE_FILES` | fix: gofmt and recovery test compilation
+  - safe to port: `TreeDB/caching/db.go`, `TreeDB/db/batch.go`, `TreeDB/db/gc_test.go`, `TreeDB/recovery_spec_test.go`
+  - must NOT port: `TreeDB/db/gc.go`, `TreeDB/db/value_index.go`
+- `b9a8f23f96` | `SPLIT` | `VALUE_SUBJECT` | fix(treedb): prevent double value-index transformation in batch write
+  - safe to port: `TreeDB/db/batch.go`
+- `1fdd3e45be` | `SPLIT` | `VALUE_SUBJECT` | docs(treedb): explain serialized write routing for Value Index
+  - safe to port: `TreeDB/db/batch.go`
+- `ca0ae58d4c` | `SPLIT` | `VALUE_SUBJECT` | fix(treedb): explicit key copy in Value Index compaction ops
+  - safe to port: `TreeDB/db/db.go`
+- `28f47150b2` | `SPLIT` | `SLAB` | feat(treedb): expose slab compression threshold via env var and verify behavior
+  - safe to port: `TreeDB/public.go`
+  - must NOT port: `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `9315a76fda` | `SPLIT` | `SLAB` | chore(treedb): cleanup diagnostic tests
+  - safe to port: `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/db/consistency_test.go`, `TreeDB/db/repro_test.go`, `TreeDB/db/wal_recovery.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `c6555e723e` | `SPLIT` | `SLAB,TESTS_ONLY` | test(treedb): restore focused diagnostic tests for compression and backend behavior
+  - safe to port: `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/db/prefix_compression_verify_test.go`
+  - must NOT port: `TreeDB/slab/compression_threshold_test.go`, `TreeDB/slab/compression_verify_test.go`
+- `a653261c17` | `SPLIT` | `SLAB,VALUE_FILES` | wip
+  - safe to port: `TreeDB/caching/bench_test.go`, `TreeDB/caching/consistency_stress_test.go`, `TreeDB/caching/db.go`, `TreeDB/caching/race_flush_rotate_test.go`, `TreeDB/caching/unified_wal_backend_test.go`, `TreeDB/caching/unified_wal_comprehensive_test.go`, `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compression_verify_test.go`, `TreeDB/db/config_propagation_test.go`, `TreeDB/db/db.go` …
+  - must NOT port: `TreeDB/db/gc.go`, `TreeDB/slab/manager.go`
+- `7e619171c3` | `SPLIT` | `SLAB` | Root Cause Analysis   The investigation revealed two main reasons why the slab data appeared uncompressed:    1. Key-Only Visibility: TreeDB previously only compressed the Value part of slab records. The Key was always stored uncompressed for recovery purposes. In workloads like IBC, where keys are long and values are small (e.g.,       sequence numbers), the uncompressed keys dominate the file size, making it appear uncompressed to tools like strings.    2. Compression Thresholds: The default compression threshold was 256 bytes (MinBytes). Many IBC values are smaller than this and were thus skipped by the compressor.    3. Concurrency Bug: A data race was identified in SlabManager where multiple goroutines (e.g., flusher and background compactor) would share a single non-thread-safe zstd encoder, potentially leading to silently failed or       inefficient compression.
+  - safe to port: `TreeDB/page/value_ptr_flags.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`
+- `2b7304b557` | `SPLIT` | `SLAB` | feat: integrate compression tests and add more cached mode options
+  - safe to port: `TreeDB/compression_e2e_test.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/slab/full_compression_test.go`
+- `14a72c8395` | `SPLIT` | `SLAB` | feat: add OmitSlabKeys option and robust pointer comparison
+  - safe to port: `TreeDB/compaction/bloom.go`, `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/compactor.go`, `TreeDB/db/db.go`, `TreeDB/internal/bulk/builder.go`, `TreeDB/node/leaf.go`, `TreeDB/page/value_ptr_flags.go`, `TreeDB/public.go`, `TreeDB/tree/inplace_update.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/omit_key_test.go`
+- `825e03be20` | `SPLIT` | `VALUE_FILES,VALUE_SUBJECT` | fix: preserve ValueID during leaf prefix compression updates
+  - safe to port: `TreeDB/db/api.go`, `TreeDB/db/db.go`, `TreeDB/node/leaf.go`
+  - must NOT port: `TreeDB/db/value_id_regression_test.go`
+- `928d403bdc` | `SPLIT` | `SLAB,VALUE_FILES,VALUE_SUBJECT,TESTS_ONLY` | test: add comprehensive regression tests for ValueID integrity during structural changes
+  - safe to port: `TreeDB/compaction/compaction_test.go`, `TreeDB/compression_e2e_test.go`, `TreeDB/node/leaf_entry_integrity_test.go`
+  - must NOT port: `TreeDB/db/value_id_regression_test.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/omit_key_test.go`
+- `b8ac305b68` | `SPLIT` | `VALUE_FILES,TESTS_ONLY` | fix test and go fmt
+  - safe to port: `TreeDB/caching/consistency_stress_test.go`
+  - must NOT port: `TreeDB/db/value_id_integrity_test.go`
+- `85acec0b36` | `SPLIT` | `VALUE_SUBJECT` | fix(treedb): prevent ForceValuePointers from corrupting ValueID entries during vacuum
+  - safe to port: `TreeDB/internal/bulk/builder.go`
+- `a199c01e35` | `SPLIT` | `VALUE_FILES,VALUE_SUBJECT` | fix(treedb): fix in-place compaction for ValueID entries and add regression tests
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/node/leaf.go`, `TreeDB/tree/inplace_update.go`
+  - must NOT port: `TreeDB/db/value_id_compaction_test.go`
+- `14f73e3d6d` | `SPLIT` | `VALUE_SUBJECT` | fix(treedb): fix in-place compaction for ValueID entries and improve overall system stability
+  - safe to port: `TreeDB/caching/db.go`, `TreeDB/db/prune_snapshot_test.go`, `TreeDB/internal/vlog/vlog.go`, `TreeDB/internal/wal/wal.go`
+- `8d257fab74` | `SPLIT` | `SLAB,VALUE_FILES` | fix(treedb): comprehensive stability and integrity fixes for Celestia sync
+  - safe to port: `TreeDB/compaction/compactor.go`, `TreeDB/compaction/planner.go`, `TreeDB/db/omit_keys_safety_test.go`, `TreeDB/internal/wal/wal.go`
+  - must NOT port: `TreeDB/db/value_id_compaction_test.go`, `TreeDB/slab/manager.go`
+- `3c42c28a79` | `SPLIT` | `VALUE_FILES` | fix(treedb): harden Zipper against recursion and fix GC zombie bug
+  - safe to port: `TreeDB/zipper/zipper.go`
+  - must NOT port: `TreeDB/db/gc.go`
+- `acfba4314d` | `SPLIT` | `TRACE` | Add TreeDB trace capture hooks
+  - safe to port: `kvstore/adapters/treedb/trace.go`, `kvstore/adapters/treedb/treedb.go`
+- `c41e4cd4d8` | `SPLIT` | `TRACE` | Log trace phase changes
+  - safe to port: `kvstore/adapters/treedb/trace.go`
+- `965d265d3c` | `SPLIT` | `TRACE` | Always log trace phase events
+  - safe to port: `kvstore/adapters/treedb/trace.go`
+- `de6d63a991` | `SPLIT` | `TRACE` | caching: optional iterator rotation reduction
+  - safe to port: `TreeDB/caching/db.go`, `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_replay_test.go`
+- `e6f6b32dbd` | `SPLIT` | `TRACE` | Improve trace replay profiling knobs
+  - safe to port: `TreeDB/batch/batch.go`, `TreeDB/caching/db.go`, `TreeDB/db/batch.go`
+  - must NOT port: `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`
+- `369cdc790d` | `SPLIT` | `TRACE` | Align trace benchmark with prefix compression
+  - safe to port: `TreeDB/zipper/zipper.go`
+  - must NOT port: `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`
+- `29adfe4804` | `SPLIT` | `TRACE` | Address Copilot review notes
+  - safe to port: `TreeDB/batch/batch.go`, `TreeDB/zipper/zipper.go`, `cmd/trace_bench/main.go`, `kvstore/adapters/treedbtrace/trace.go`, `scripts/capture_celestia_trace.sh`, `scripts/pull_celestia_trace.sh`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`
+- `6256bc9d04` | `SPLIT` | `SLAB,TRACE` | Add slab compression tuning options
+  - safe to port: `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_replay_test.go`, `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`
+- `73d27d52a2` | `SPLIT` | `SLAB,TRACE` | slab: add opt-in multi-stream AppendMany
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/db/open_readonly.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `747bc86aab` | `SPLIT` | `SLAB,TRACE` | Revert "slab: add opt-in multi-stream AppendMany"
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/db/open_readonly.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `d8dce25ddf` | `SPLIT` | `SLAB` | slab: add v2 header + dict compression mva
+  - safe to port: `TreeDB/page/value_ptr_flags.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `d1c020d1e5` | `SPLIT` | `SLAB` | Revert "slab: add v2 header + dict compression mva"
+  - safe to port: `TreeDB/page/value_ptr_flags.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `c671c16cc4` | `SPLIT` | `SLAB` | slab: add compression ratio metrics logging
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/compression_metrics.go`, `TreeDB/slab/manager.go`
+- `6f8d93a14d` | `SPLIT` | `SLAB` | slab: add adaptive compression pause trigger
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/compression_metrics.go`, `TreeDB/slab/manager.go`
+- `24197c377e` | `SPLIT` | `SLAB,TRACE` | slab: add adaptive training sampler
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `4ff5917bc0` | `SPLIT` | `SLAB` | slab: expose compression trainer stats
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `6e96967c47` | `SPLIT` | `SLAB` | slab: track max trainer queue depth
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `f7cd34394d` | `SPLIT` | `SLAB,TRACE` | slab: add sample stride for compression training
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`
+- `ee740f3d85` | `SPLIT` | `SLAB` | slab: track compression trainer collect timing
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `3b6137c0cc` | `SPLIT` | `SLAB` | slab: add dict hash dedup stats
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `ccc4f32168` | `SPLIT` | `SLAB` | slab: track dict dedup mode in trainer stats
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `aa24ee2ec6` | `SPLIT` | `SLAB` | slab: expose dict dedup flags in trainer stats
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `6676dd1c89` | `SPLIT` | `SLAB` | slab: add dict dedup mode counters
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `058db37e48` | `SPLIT` | `SLAB` | slab: cache trained dicts by sample hash
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `ba9d466d86` | `SPLIT` | `SLAB,TRACE` | slab: make trainer dedup window configurable
+  - safe to port: `TreeDB/db/db.go`, `TreeDB/public.go`
+  - must NOT port: `TreeDB/bench_trace_timeline_test.go`, `TreeDB/slab/compression.go`, `TreeDB/slab/compression_training.go`
+- `e985a204ac` | `SPLIT` | `SLAB` | slab: track dict dedup bytes in trainer stats
+  - safe to port: `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`
+- `df75463a70` | `SPLIT` | `SLAB` | compaction: sample dict from representative slab
+  - safe to port: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/compression_training.go`, `TreeDB/slab/manager.go`
+- `1631dc38a0` | `SPLIT` | `SLAB` | compaction: gate compression by shift plan
+  - safe to port: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/manager.go`
+- `0a7fc8960d` | `SPLIT` | `SLAB` | compaction: sample base ratio for shift plan
+  - safe to port: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/manager.go`
+- `e0a1ca8b77` | `SPLIT` | `SLAB` | slab: add inline dict override for compaction shifts
+  - safe to port: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `982e3dc695` | `SPLIT` | `SLAB` | Revert "slab: add inline dict override for compaction shifts"
+  - safe to port: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/manager.go`
+- `c23e55ee15` | `SPLIT` | `SLAB` | slab: add v2 header + dict compression mva
+  - safe to port: `TreeDB/page/value_ptr_flags.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `ab8d05720f` | `SPLIT` | `SLAB` | slab: stabilize v2 dict writes and update tests
+  - safe to port: `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/idempotence_test.go`, `TreeDB/compaction/planner_test.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/append_many_test.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_test.go`
+- `5114f2d5cf` | `SPLIT` | `SLAB` | Revert "slab: stabilize v2 dict writes and update tests"
+  - safe to port: `TreeDB/compaction/compaction_test.go`, `TreeDB/compaction/idempotence_test.go`, `TreeDB/compaction/planner_test.go`, `TreeDB/db/compaction_index_swap_bench_test.go`
+  - must NOT port: `TreeDB/slab/append_many_test.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/full_compression_test.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/slab_test.go`
+- `3294da22b1` | `SPLIT` | `SLAB` | Revert "slab: add v2 header + dict compression mva"
+  - safe to port: `TreeDB/page/value_ptr_flags.go`
+  - must NOT port: `TreeDB/slab/compression.go`, `TreeDB/slab/dict.go`, `TreeDB/slab/format_v2.go`, `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `da796c0389` | `SPLIT` | `SLAB` | slab: add grouped frame records with subindex pointers
+  - safe to port: `TreeDB/page/value_ptr_flags.go`, `TreeDB/page/value_ptr_group_test.go`
+  - must NOT port: `TreeDB/slab/frame_group.go`, `TreeDB/slab/frame_group_test.go`, `TreeDB/slab/manager.go`
+- `1aaffb9454` | `SPLIT` | `SLAB` | tool: add debug_ingest to exercise grouped slabs
+  - safe to port: `TreeDB/cmd/debug_ingest/main.go`, `TreeDB/db/api.go`
+  - must NOT port: `TreeDB/slab/manager.go`
+- `fe4f41745e` | `SPLIT` | `SLAB` | test: force slab compression profile in e2e checks
+  - safe to port: `TreeDB/compression_e2e_test.go`, `TreeDB/db/compression_verify_test.go`
+  - must NOT port: `TreeDB/slab/manager.go`
+- `12c983c32f` | `SPLIT` | `SLAB` | style: gofmt slab and builder sources
+  - safe to port: `TreeDB/cmd/kv_slab_layout_poc/main.go`, `TreeDB/node/builder.go`
+  - must NOT port: `TreeDB/slab/compression_speed_bench_test.go`, `TreeDB/slab/slab.go`, `TreeDB/slab/v2_edge_case_test.go`, `TreeDB/slab/v2_feature_test.go`
+- `75ad7ec55e` | `SPLIT` | `SLAB` | slab: handle v2 headers in repair and compaction
+  - safe to port: `TreeDB/compaction/compactor.go`
+  - must NOT port: `TreeDB/slab/manager.go`, `TreeDB/slab/slab.go`
+- `77bdc01c3e` | `SPLIT` | `SLAB,TESTS_ONLY` | tests: add v2 slab header regression coverage
+  - safe to port: `TreeDB/compaction/compaction_v2_header_test.go`
+  - must NOT port: `TreeDB/slab/v2_header_regression_test.go`
+
+## DROP: banned scope (valueindex/slab/trace) or misc (8)
+
+- `88e993d1b5` | `DROP` | `VALUE_SUBJECT` | chore: enable ValueIndex by default for testing
+  - paths: `TreeDB/public.go`
+- `c468c45761` | `DROP` | `VALUE_SUBJECT` | chore: make ValueIndex opt-in via env
+  - paths: `TreeDB/public.go`
+- `20faded32c` | `DROP` | `VALUE_FILES,VALUE_SUBJECT` | fix: disable direct valueIndexHelper writes
+  - paths: `TreeDB/db/value_index.go`
+- `e42318c9ed` | `DROP` | `VALUE_FILES` | style: run gofmt on modified files
+  - paths: `TreeDB/db/value_index.go`
+- `13a7cf1dbb` | `DROP` | `VALUE_FILES` | docs(treedb): explain atomicity of GC scan under writeMu
+  - paths: `TreeDB/db/gc.go`
+- `b54a293279` | `DROP` | `VALUE_FILES,VALUE_SUBJECT` | refactor(treedb): remove unused valueIndexHelper.Set
+  - paths: `TreeDB/db/value_index.go`
+- `5feaf2959b` | `DROP` | `VALUE_FILES,TESTS_ONLY` | attempt fix
+  - paths: `TreeDB/db/value_id_integrity_test.go`
+- `9579524bb4` | `DROP` | `VALUE_FILES,TESTS_ONLY` | test(treedb): add regression test for vacuum corruption and update debug docs
+  - paths: `TreeDB/db/value_id_integrity_test.go`, `invalid_value_debug.md`
+
+## DROP_DOCS: docs-only commits (ignore) (0)
+
+
