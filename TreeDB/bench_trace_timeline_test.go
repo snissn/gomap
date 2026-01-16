@@ -89,7 +89,6 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
-	iteratorMutableMaxBytes := parseIntEnv("TREEDB_TRACE_ITERATOR_MUTABLE_MAX_BYTES", 0)
 	seed := parseInt64Env("TREEDB_TRACE_SEED", 1)
 	phaseDurationMs := parseIntEnv("TREEDB_TRACE_TIMELINE_DURATION_MS", 1000)
 
@@ -107,14 +106,13 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	}
 
 	opts := Options{
-		Mode:                    modeVal,
-		DisableWAL:              disableWAL,
-		DisableValueLog:         disableVlog,
-		FlushThreshold:          int64(flushThreshold),
-		MemtableShards:          memtableShards,
-		IteratorMutableMaxBytes: int64(iteratorMutableMaxBytes),
-		AllowUnsafe:             true,
-		DisableReadChecksum:     true,
+		Mode:                modeVal,
+		DisableWAL:          disableWAL,
+		DisableValueLog:     disableVlog,
+		FlushThreshold:      int64(flushThreshold),
+		MemtableShards:      memtableShards,
+		AllowUnsafe:         true,
+		DisableReadChecksum: true,
 	}
 
 	b.ResetTimer()

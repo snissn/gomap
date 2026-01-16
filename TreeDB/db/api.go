@@ -185,11 +185,11 @@ func (it *DBIterator) UnsafeValue() []byte {
 	if it.err != nil {
 		return nil
 	}
+	val := it.iter.UnsafeValue()
 	if err := it.iter.Error(); err != nil {
 		it.err = err
 		return nil
 	}
-	val, _, _ := it.iter.UnsafeEntry()
 	it.err = nil
 	return val
 }
