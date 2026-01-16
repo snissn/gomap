@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -99,6 +100,52 @@ func TestReadAt(t *testing.T) {
 	}
 	if string(got) != "value1" {
 		t.Fatalf("ReadAt value: got %q want %q", got, "value1")
+	}
+}
+
+func TestFileReadUnsafeViaMmap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vlog-000001.log")
+	fileID := uint32(0x80000001)
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptr, err := w.Append(OpSet, []byte("k1"), []byte("value1"))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	f, err := openFile(path, fileID)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer f.Close()
+
+	f.remapToFileSize()
+
+	data, _ := f.mmapData.Load().([]byte)
+	if data == nil {
+		t.Fatalf("expected mmap data to be present")
+	}
+
+	got, err := f.ReadUnsafe(ptr, true)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if string(got) != "value1" {
+		t.Fatalf("ReadUnsafe value: got %q want %q", got, "value1")
 	}
 }
 
