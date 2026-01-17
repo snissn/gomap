@@ -1,3 +1,49 @@
+## Objective
+
+Describe the single objective in 1–3 sentences.
+
+## Context
+
+Why this change is needed now (and what it unlocks).
+
+## Non-goals
+
+Explicitly list what is intentionally NOT being done in this PR.
+
+## Design
+
+- Formats/flags/APIs changed (include diagrams if applicable)
+- Invariants that must hold
+- Fail-closed behavior (caps before alloc; CRC/error handling)
+
+## Scope
+
+- Includes (files/symbols):
+- Excludes (files/symbols):
+
+## Correctness
+
+- Tests run (exact commands):
+- Corruption/edge cases covered:
+- Concurrency/race coverage (if applicable):
+
+## Performance
+
+- Benchmarks run (exact commands):
+- Results table (before/after; median-of-5 per G1 in `docs/OPT_SPRINT_NEXT.md`):
+- Regressions (if any) and why acceptable:
+
+## Rollout / Toggle Plan
+
+- Default setting:
+- How to disable quickly:
+
+## Follow-ups
+
+- Issues/PRs to do next:
+
+---
+
 ## Optimization PR Checklist (TreeDB)
 
 ### Scope
@@ -35,4 +81,3 @@
 - [ ] Safe defaults (feature off or conservative threshold)
 - [ ] Clear knobs to disable/revert behavior quickly
 - [ ] Observability: counters/logs to verify effectiveness
-

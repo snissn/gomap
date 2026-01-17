@@ -313,23 +313,102 @@ We ship:
 
 The sprint is executed as 10 PRs. Each PR is independently mergeable.
 
+### Global Gates & PR Exposition (Mandatory)
+
+Every PR in this sprint MUST satisfy the following process requirements.
+
+#### G0 — Required PR writeup (no “drive-by” PRs)
+
+Every PR description MUST include these sections (in this order):
+1) **Objective**: 1–3 sentences.
+2) **Context**: why this change is needed now.
+3) **Non-goals**: explicitly list what is *not* being done.
+4) **Design**: formats/flags/APIs and the invariants they must preserve.
+5) **Scope**:
+   - **Includes**: explicit list of touched files/symbols.
+   - **Excludes**: explicit list of forbidden files/symbols (e.g. async slab writer, zones, ValueIndex).
+6) **Correctness**:
+   - invariants (bullet list)
+   - tests run (exact commands)
+   - failure modes + how they are fail-closed (caps before alloc, CRCs, truncation behavior)
+7) **Performance**:
+   - benchmarks run (exact commands)
+   - results table (before/after) using the gate protocol below
+   - any observed regressions and why they are acceptable (must be rare)
+8) **Rollout / Toggle Plan**:
+   - default setting
+   - how to disable quickly
+9) **Follow-ups**: list any deferred work with issue links.
+
+PRs MUST use `.github/PULL_REQUEST_TEMPLATE/opt_sprint.md` and fill the narrative sections above (not just the checklist).
+
+#### G1 — Benchmark gate protocol (explicit)
+
+When a PR has a “Performance Gates” section below, it MUST follow this protocol:
+- Run each benchmark **5 times**: `-count=5`.
+- Use the **median** as the reported value.
+- Report the machine details in the PR description:
+  - `go env GOMAXPROCS`, `go env GOOS GOARCH`, CPU model, RAM, and storage type.
+- If results are noisy, increase to `-count=10` and report median-of-10.
+
+**Pass/fail thresholds (default)**
+- A regression is defined as:
+  - throughput decrease > **5%**, or
+  - latency increase > **5%**, or
+  - `allocs/op` increase > **10%**
+  compared to the baseline specified in the PR’s gates.
+- If a PR must accept a regression (rare), it MUST:
+  - justify it explicitly (correctness win), and
+  - open a follow-up issue with an owner + plan to recover performance.
+
+#### G2 — Correctness gate protocol (explicit)
+
+When a PR has a “Correctness Gates” section below, it MUST:
+- add deterministic tests for the failure mode(s)
+- include corruption tests (bad headers, truncation, invalid lengths) for any new parser/format
+- be fail-closed (clean errors; no panics; caps before allocation)
+- run `go test ./... -count=1` locally before merge
+
+If a PR changes concurrency behavior or introduces new goroutines/locks:
+- run `go test -race` for the affected packages and include the commands in the PR description.
+
 ### PR 0 — Measurement + Baselines (must land first)
 
 **Goal**
 - Make performance measurable and regressions obvious.
 
-**Deliverables**
-- Benchmarks covering:
-  - compressible values
-  - incompressible values
-  - mixed workloads
-- Metrics counters for:
-  - compression attempts / skips
-  - rolling ratio window stats
-  - pause/probe state transitions
+**Files (explicit)**
+- Add: `TreeDB/slab/bench_gate_test.go`
+- Modify (if needed): `TreeDB/bench_test.go` (only to add a `-short` fast path; must not change default behavior)
+- Modify (if needed): `docs/BENCHMARK_SPEC.md` (document the gate protocol; no placeholder text)
 
-**Acceptance**
-- PR description includes baseline numbers (command + machine).
+**Deliverables (explicit)**
+1) A standard benchmark suite used as the sprint-wide perf baseline:
+   - `BenchmarkDB_Batch_100B` (wraps/aliases `TreeDB/db:BenchmarkBatch` with fixed params)
+   - `BenchmarkDB_Get_100B` (wraps/aliases `TreeDB/db:BenchmarkGet` with fixed params)
+   - `BenchmarkSlab_ValueCompress_Compressible`
+   - `BenchmarkSlab_ValueCompress_Incompressible`
+   - `BenchmarkSlab_ValueCompress_Mixed`
+2) Each new slab benchmark MUST report:
+   - throughput (`ns/op`)
+   - `allocs/op`
+   - stored bytes vs raw bytes (log line via `b.Logf`)
+3) All metrics/logging added in this PR MUST be:
+   - off by default
+   - enabled only in tests/benchmarks (no production overhead)
+
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/db -run '^$' -bench 'BenchmarkBatch|BenchmarkGet' -count=1` (ensures benches build)
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- On the PR0 diff itself, performance MUST NOT regress (this PR is measurement-only):
+  - `go test ./TreeDB/db -run '^$' -bench 'BenchmarkBatch|BenchmarkGet' -count=5`
+  - median `ns/op` must not regress by >2% vs the base commit on the same machine.
+
+**PR Writeup Notes**
+- Include the baseline numbers table that later PRs will compare against.
 
 ---
 
@@ -391,9 +470,23 @@ Add these to `slab.Options` in `TreeDB/slab/compression.go`:
   2) Append random noise until `compressionPauseRemaining > 0`.
   3) Append highly-compressible payload until a compressed pointer is produced AND `compressionPauseRemaining == 0`.
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/slab -run TestCompressionPauseAndProbeResume -count=1` passes.
-- In a local benchmark that writes incompressible data, `CompressionAdaptiveRatio>0` measurably reduces zstd CPU (report before/after in PR description).
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/slab -run TestCompressionPauseAndProbeResume -count=1`
+- `go test -race ./TreeDB/slab -run TestCompressionPauseAndProbeResume -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/slab -run '^$' -bench 'BenchmarkSlab_ValueCompress_(Compressible|Incompressible|Mixed)' -count=5`
+- The slab benchmarks MUST include sub-benchmarks `adaptive_off` and `adaptive_on` (same dataset, same payload sizes).
+- Gates:
+  - Incompressible: median `ns/op` for `adaptive_on` MUST improve by ≥10% vs `adaptive_off`.
+  - Compressible: median `ns/op` for `adaptive_on` MUST NOT regress by >5% vs `adaptive_off`.
+  - Mixed: median `ns/op` for `adaptive_on` MUST NOT regress by >5% vs `adaptive_off`.
+
+**PR Writeup Notes**
+- Include a before/after table for the three slab benchmarks (adaptive_off vs adaptive_on).
 
 ---
 
@@ -448,9 +541,24 @@ Implement `TreeDB/internal/dictstore` with:
 - `TestDictStore_TruncatedTailIsIgnored` (truncate mid-record; open succeeds; earlier dicts readable).
 - `TestDictStore_CorruptCRC_FailsClosed` (flip one byte in non-tail record; open fails).
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/internal/dictstore -count=1` passes.
-- Length caps are exercised by tests (no OOM/panic on corrupt inputs).
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/internal/dictstore -count=1`
+- `go test -race ./TreeDB/internal/dictstore -count=1`
+
+**Performance Gates (must pass)**
+- Add to `TreeDB/internal/dictstore/store_test.go`:
+  - `BenchmarkDictStore_Get_32KB`
+  - `BenchmarkDictStore_Append_32KB`
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/internal/dictstore -run '^$' -bench 'BenchmarkDictStore_(Get|Append)_32KB' -count=5`
+- Gates (hard numbers; fail if exceeded):
+  - `BenchmarkDictStore_Get_32KB`: `allocs/op <= 3` and `B/op <= 65536`
+  - `BenchmarkDictStore_Append_32KB`: `allocs/op <= 8` and `B/op <= 131072`
+
+**PR Writeup Notes**
+- Include the benchmark table and confirm the caps/fail-closed behavior by referencing the corruption tests.
 
 ---
 
@@ -534,9 +642,23 @@ Implement the following (port/adapt from `feature/slab-optimizations:TreeDB/inte
 **Bench (explicit)**
 - Add `BenchmarkChooseKForDict` to `TreeDB/internal/compression/trainer_test.go` that runs `ChooseKForDict` on fixed samples and reports allocations.
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/internal/compression -count=1` passes.
-- `go test ./TreeDB/internal/compression -run '^$' -bench BenchmarkChooseKForDict -count=1` runs and reports allocs/op.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/internal/compression -count=1`
+- Add and run fuzz for safety:
+  - Add `FuzzChooseKForDict` in `TreeDB/internal/compression/trainer_test.go`
+  - Run: `go test ./TreeDB/internal/compression -run '^$' -fuzz FuzzChooseKForDict -fuzztime=10s -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/internal/compression -run '^$' -bench BenchmarkChooseKForDict -count=5`
+- Gates (hard numbers; fail if exceeded):
+  - median `B/op <= 268435456` (256MiB)
+  - median `allocs/op <= 20000`
+
+**PR Writeup Notes**
+- Include benchmark numbers and explain the fixed caps (`eval<=10000`, `decodeCostEstimate<=500`) that bound runtime.
 
 ---
 
@@ -594,8 +716,35 @@ Implement the following (port/adapt from `feature/slab-optimizations:TreeDB/inte
   - `TestFrameGroupV0_RoundTrip` (manual grouped record body; read via grouped pointers)
   - `TestFrameGroupV0_Corruption` (invalid headers/offsets/truncation fail-closed)
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/slab -count=1` passes.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/slab -count=1`
+- `go test -race ./TreeDB/slab -count=1`
+- Add and run fuzz (fail-closed, no panics):
+  - Add `FuzzCompressionEnvelopeV1` in `TreeDB/slab/dict_envelope_test.go`
+  - Add `FuzzFrameGroupV0_Decode` in `TreeDB/slab/frame_group_v0_test.go`
+  - Run:
+    - `go test ./TreeDB/slab -run '^$' -fuzz FuzzCompressionEnvelopeV1 -fuzztime=10s -count=1`
+    - `go test ./TreeDB/slab -run '^$' -fuzz FuzzFrameGroupV0_Decode -fuzztime=10s -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Slab write/read overhead gates:
+  - Run: `go test ./TreeDB/slab -run '^$' -bench 'BenchmarkSlab_ValueCompress_(Compressible|Mixed)' -count=5`
+  - The compressible benchmark MUST include sub-benchmarks `dict_off` and `dict_on`:
+    - `dict_on` MUST force a fixed `DictID` (do not rely on trainer timing in a benchmark)
+  - Gates:
+    - `dict_on` median `ns/op` MUST NOT regress by >10% vs `dict_off`.
+    - `dict_on` MUST improve stored-bytes-per-record by ≥5% vs `dict_off` on the compressible dataset (printed by the benchmark; include in PR table).
+- DB-level regression gate (dict feature off by default):
+  - Run: `go test ./TreeDB/db -run '^$' -bench BenchmarkDB_Batch_100B -count=5`
+  - median `ns/op` MUST NOT regress by >5% vs PR0 baseline.
+
+**PR Writeup Notes**
+- Include explicit byte diagrams for:
+  - K=1 envelope v0/v1 (A2.1)
+  - `ValuePtr.Length` bit layout (A3.2)
+- Include a “fail-closed table”: each corruption class → expected error path.
 
 ---
 
@@ -667,10 +816,39 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
   - run in three modes: structured, mixed, random
   - report: bytes/record, grouped vs legacy pointer counts, ns/op for writes and point reads
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/slab -count=1` passes.
-- `go test ./TreeDB/compaction -count=1` passes.
-- `go test ./TreeDB/slab -run '^$' -bench BenchmarkSlabGrouped -count=1` runs.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/slab -count=1`
+- `go test ./TreeDB/compaction -count=1`
+- `go test -race ./TreeDB/slab -count=1`
+- `go test -race ./TreeDB/compaction -count=1`
+- Add and run fuzz for grouped parsing/ptr flags:
+  - Add `FuzzFrameGroupV0_Decode` (if not already added in PR4) and extend it to exercise all `subIndex` values.
+  - Run: `go test ./TreeDB/slab -run '^$' -fuzz FuzzFrameGroupV0_Decode -fuzztime=10s -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/slab -run '^$' -bench BenchmarkSlabGrouped -count=5`
+  - `go test ./TreeDB/db -run '^$' -bench BenchmarkDB_Batch_100B -count=5`
+- `BenchmarkSlabGrouped` MUST include:
+  - `structured/K1` and `structured/K3` sub-benchmarks (or `K=1` vs `K=ActiveProfile.K`, but include `K=1` baseline).
+  - `random/K1` and `random/K3` sub-benchmarks.
+- Gates:
+  - Structured:
+    - `bytes/rec` for `K3` MUST improve by ≥5% vs `K1`.
+    - point-read median `ns/op` MUST NOT regress by >15% vs `K1`.
+  - Random (incompressible):
+    - `bytes/rec` MUST NOT get worse by >2% for `K3` vs `K1`.
+    - median write `ns/op` MUST NOT regress by >5% for `K3` vs `K1`.
+  - DB-level:
+    - `BenchmarkDB_Batch_100B` median `ns/op` MUST NOT regress by >5% vs PR0 baseline.
+
+**PR Writeup Notes**
+- Include an explicit “ptr identity” explanation:
+  - why compressed-bit must be ignored for matching
+  - why grouped+subIndex must be included
+- Include the benchmark table (K=1 vs K=3) and the grouped-vs-legacy pointer counts.
 
 ---
 
@@ -679,18 +857,44 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 **Goal**
 - Make the durability ordering explicit and enforced with tests.
 
-**Deliverables**
-- Explicit written/durable watermarks for slab payloads
-- `*Sync` ordering enforcement:
-  - slab durable happens-before WAL durable happens-before index durable
-- Harden WAL parsing (length caps before allocation)
+**Files (explicit)**
+- Modify: `TreeDB/caching/db.go` (enforce ordering for cached mode)
+- Modify: `TreeDB/internal/wal/wal.go` (length caps before allocation; fail-closed)
+- Modify: `TreeDB/slab/manager.go` (expose “written vs durable” checkpoints where needed)
+- Add: `TreeDB/caching/durability_order_test.go`
+- Add: `TreeDB/internal/wal/wal_hardening_test.go`
 
-**Tests**
-- ordering regressions (hooks/latches)
-- WAL corruption hardening regressions (no OOM/panic)
+**Deliverables (explicit)**
+1) A **normative ordering contract** is enforced by code:
+   - `slab data durable` happens-before `WAL durable` happens-before `index durable` happens-before `WriteSync ack`
+2) Explicit “written vs durable” state exists in the write path:
+   - written = appended to file (page cache)
+   - durable = crossed `fsync`
+3) WAL reader is OOM-safe:
+   - length fields are validated and capped before any allocation
+   - CRC/parse failures are clean errors (no panic)
 
-**Acceptance**
-- Clear, test-backed contract that a future buffering refactor can build on.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/internal/wal -count=1`
+- `go test ./TreeDB/caching -count=1`
+- `go test -race ./TreeDB/caching -count=1`
+- Fuzz WAL reader hardening:
+  - `go test ./TreeDB/internal/wal -run '^$' -fuzz FuzzWALReader -fuzztime=10s -count=1`
+- Ordering test requirements:
+  - `TreeDB/caching/durability_order_test.go` MUST use latches/hooks (no sleeps)
+  - test MUST assert the happens-before chain by observing recorded events in order
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/db -run '^$' -bench BenchmarkDB_Batch_100B -count=5`
+  - `go test ./TreeDB/db -run '^$' -bench BenchmarkWriteParallel -count=5`
+- Gates:
+  - Both benchmarks MUST NOT regress by >5% vs PR0 baseline.
+
+**PR Writeup Notes**
+- Include a 4-step “ordering timeline” diagram and show exactly where the code enforces each edge.
 
 ---
 
@@ -733,10 +937,29 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
   - `TestLeafColumnar_IteratorOrder` (iterator yields sorted keys; matches legacy).
   - `TestLeafColumnar_Corruption` (invalid offsets/lengths fail-closed with `ErrCorruptedNode`).
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/node -count=1` passes.
-- `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafColumnar_Find -count=1` runs.
-- PR description includes before/after `BenchmarkLeafColumnar_Find` numbers.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/node -count=1`
+- Add and run fuzz for the new decoder:
+  - Add `FuzzLeafColumnar_Decode` in `TreeDB/node/leaf_columnar_test.go`
+  - Run: `go test ./TreeDB/node -run '^$' -fuzz FuzzLeafColumnar_Decode -fuzztime=10s -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafColumnar_Find -count=5`
+  - `go test ./TreeDB/db -run '^$' -bench BenchmarkDB_Get_100B -count=5`
+- `BenchmarkLeafColumnar_Find` MUST include paired sub-benchmarks `legacy` and `columnar` for both datasets:
+  - `long_keys/legacy`, `long_keys/columnar`
+  - `short_keys/legacy`, `short_keys/columnar`
+- Gates:
+  - Long keys: `columnar` median `ns/op` MUST improve by ≥20% vs `legacy`.
+  - Short keys: `columnar` median `ns/op` MUST NOT regress by >5% vs `legacy`.
+  - `allocs/op` MUST NOT increase by >10% for either dataset.
+  - DB-level (flag off by default): `BenchmarkDB_Get_100B` MUST NOT regress by >5% vs PR0 baseline.
+
+**PR Writeup Notes**
+- Include the Appendix D layout diagram excerpt and a short explanation of the restart-search algorithm + fingerprint filter.
 
 ---
 
@@ -789,10 +1012,26 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
   - run the tool (as a `go run` subprocess)
   - open the output partition files with the partitioned pager and verify all keys are found
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/pager -count=1` passes.
-- `go test ./TreeDB/pager -run TestPartitionedPager_ -count=1` passes.
-- `go test ./TreeDB/... -count=1` passes with the tool added (no build breaks).
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/pager -count=1`
+- `go test ./TreeDB/pager -run TestPartitionedPager_ -count=1`
+- Integration test MUST run the tool and validate output partitions:
+  - `go test ./TreeDB/pager -run TestPartitionedPager_ToolIntegration -count=1`
+
+**Performance Gates (must pass)**
+- Add to `TreeDB/pager/partitioned_test.go`:
+  - `BenchmarkPager_Get`
+  - `BenchmarkPartitionedPager_Get`
+- Benchmark protocol: follow G1.
+- Run:
+  - `go test ./TreeDB/pager -run '^$' -bench 'Benchmark(Pager|PartitionedPager)_Get' -count=5`
+- Gates:
+  - `BenchmarkPartitionedPager_Get` median `ns/op` MUST NOT regress by >10% vs `BenchmarkPager_Get`.
+  - Both benchmarks MUST report `allocs/op == 0`.
+
+**PR Writeup Notes**
+- Include Appendix E excerpt (PageID encoding + manifest schema) and the atomic swap procedure.
 
 ---
 
@@ -824,15 +1063,35 @@ Implement a new internal-node layout version (v1) that:
 - `TreeDB/node/internal_lcp_test.go`:
   - `TestInternalNodeV1_GlobalLCP_RoundTrip` (encode→decode; separators compare equal)
   - `TestInternalNodeV1_ShortestSeparator` (separator correctness invariants)
+  - `TestInternalNodeV1_SavesSpaceOnLongSeparators`:
+    - build a synthetic internal node with separators sharing a long common prefix
+    - encode using legacy layout and v1 layout
+    - assert `len(v1Encoded) <= 0.85 * len(legacyEncoded)` (≥15% shrink)
+  - `FuzzInternalNodeV1_Decode` (fail-closed; no panics; bounds checks)
 - Add a DB-level depth regression test:
   - `TreeDB/db/long_key_depth_test.go:TestLongKeyDepthBounded`:
     - insert N keys with long shared prefixes
     - assert max depth ≤ current configured limit
 
-**Acceptance (explicit)**
-- `go test ./TreeDB/node -count=1` passes.
-- `go test ./TreeDB/db -run TestLongKeyDepthBounded -count=1` passes.
-- PR description includes a depth/fanout comparison on the long-key workload.
+**Correctness Gates (must pass)**
+- `go test ./... -count=1`
+- `go test ./TreeDB/node -count=1`
+- `go test ./TreeDB/db -run TestLongKeyDepthBounded -count=1`
+- Run fuzz:
+  - `go test ./TreeDB/node -run '^$' -fuzz FuzzInternalNodeV1_Decode -fuzztime=10s -count=1`
+
+**Performance Gates (must pass)**
+- Benchmark protocol: follow G1.
+- Structural fanout gate (test-enforced):
+  - `TestInternalNodeV1_SavesSpaceOnLongSeparators` MUST pass (≥15% shrink vs legacy on the synthetic dataset).
+- DB-level regression gate:
+  - `go test ./TreeDB/db -run '^$' -bench 'BenchmarkDB_Get_100B|BenchmarkScan' -count=5`
+  - median `ns/op` MUST NOT regress by >5% vs PR0 baseline.
+
+**PR Writeup Notes**
+- Include:
+  - a short “why depth decreases” explanation (fanout math driven by byte savings)
+  - depth measurement on the long-key workload (before/after) using the exact same command and dataset
 
 ---
 
