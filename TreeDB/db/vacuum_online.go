@@ -7,13 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -35,7 +35,7 @@ const (
 type vacuumRecorder struct {
 	active atomic.Bool
 	mu     sync.Mutex
-	keys   map[string]struct{}
+	ops    map[string]batch.Entry
 }
 
 func (r *vacuumRecorder) Active() bool {
@@ -44,13 +44,24 @@ func (r *vacuumRecorder) Active() bool {
 
 func (r *vacuumRecorder) Start() {
 	r.mu.Lock()
-	r.keys = make(map[string]struct{}, 1024)
+	r.ops = make(map[string]batch.Entry, 1024)
 	r.mu.Unlock()
 	r.active.Store(true)
 }
 
 func (r *vacuumRecorder) Stop() {
 	r.active.Store(false)
+}
+
+func vacuumRecordCopyEntry(entry batch.Entry) batch.Entry {
+	out := entry
+	out.Key = append([]byte(nil), entry.Key...)
+	if entry.Type == batch.OpPut && !entry.IsPtr {
+		out.Value = append([]byte(nil), entry.Value...)
+	} else {
+		out.Value = nil
+	}
+	return out
 }
 
 func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
@@ -62,22 +73,22 @@ func (r *vacuumRecorder) RecordOps(ops map[string]batch.Entry) {
 	if !r.active.Load() {
 		return
 	}
-	if r.keys == nil {
-		r.keys = make(map[string]struct{}, len(ops))
+	if r.ops == nil {
+		r.ops = make(map[string]batch.Entry, len(ops))
 	}
-	for k := range ops {
-		r.keys[k] = struct{}{}
+	for k, entry := range ops {
+		r.ops[k] = vacuumRecordCopyEntry(entry)
 	}
 }
 
-func (r *vacuumRecorder) Drain() map[string]struct{} {
+func (r *vacuumRecorder) Drain() map[string]batch.Entry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.keys) == 0 {
+	if len(r.ops) == 0 {
 		return nil
 	}
-	out := r.keys
-	r.keys = make(map[string]struct{}, 1024)
+	out := r.ops
+	r.ops = make(map[string]batch.Entry, 1024)
 	return out
 }
 
@@ -190,12 +201,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			cleanupNewPager()
 			return err
 		}
-		keys := db.vacuum.Drain()
-		if len(keys) == 0 {
+		opsMap := db.vacuum.Drain()
+		if len(opsMap) == 0 {
 			break
 		}
 		var retired []uint64
-		newRoot, retired, err = db.applyVacuumDelta(newRoot, keys, newZ, nil)
+		newRoot, retired, err = db.applyVacuumDelta(newRoot, opsMap, newZ, nil)
 		if err != nil {
 			cleanupNewPager()
 			return err
@@ -205,7 +216,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			cleanupNewPager()
 			return err
 		}
-		if len(keys) <= vacuumCatchupKeyTarget {
+		if len(opsMap) <= vacuumCatchupKeyTarget {
 			break
 		}
 	}
@@ -221,14 +232,14 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 
 		db.writeMu.Lock()
 		db.vacuum.Stop()
-		finalKeys := db.vacuum.Drain()
-		if len(finalKeys) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
+		finalOps := db.vacuum.Drain()
+		if len(finalOps) > vacuumCutoverMaxKeys && defers < vacuumCutoverMaxDefers {
 			db.vacuum.Start()
 			db.writeMu.Unlock()
 			defers++
 
 			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, newZ, nil)
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, newZ, nil)
 			if err != nil {
 				cleanupNewPager()
 				return err
@@ -241,9 +252,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			continue
 		}
 
-		if len(finalKeys) > 0 {
+		if len(finalOps) > 0 {
 			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalKeys, newZ, nil)
+			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, newZ, nil)
 			if err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()
@@ -389,14 +400,16 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	}
 }
 
-func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
-	if len(keys) == 0 {
+func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zipper.Zipper, retired []uint64) (uint64, []uint64, error) {
+	if len(opsMap) == 0 {
 		return root, retired, nil
 	}
 
-	snap := db.AcquireSnapshot()
-	defer snap.Close()
-	tr := tree.New(snap.idx.pager, valueReader{slabs: snap.state.SlabSet, vlogs: snap.state.ValueLogSet}, snap.state.RootPageID)
+	keys := make([]string, 0, len(opsMap))
+	for k := range opsMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
 
 	ops := make([]batch.Entry, 0, vacuumDeltaBatchSize)
 	applyOps := func() error {
@@ -420,37 +433,12 @@ func (db *DB) applyVacuumDelta(root uint64, keys map[string]struct{}, z *zipper.
 		return nil
 	}
 
-	for key := range keys {
-		entry, err := tr.GetEntry([]byte(key))
-		if err != nil {
-			if err == tree.ErrKeyNotFound {
-				ops = append(ops, batch.Entry{
-					Type: batch.OpDelete,
-					Key:  []byte(key),
-				})
-			} else {
-				return 0, nil, err
-			}
-		} else if entry.Flags&node.FlagTombstone != 0 {
-			ops = append(ops, batch.Entry{
-				Type: batch.OpDelete,
-				Key:  append([]byte(nil), entry.Key...),
-			})
-		} else if entry.Flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{
-				Type:     batch.OpPut,
-				Key:      append([]byte(nil), entry.Key...),
-				ValuePtr: entry.ValuePtr,
-				IsPtr:    true,
-			})
-		} else {
-			val := append([]byte(nil), entry.Value...)
-			ops = append(ops, batch.Entry{
-				Type:  batch.OpPut,
-				Key:   append([]byte(nil), entry.Key...),
-				Value: val,
-			})
+	for _, key := range keys {
+		entry := opsMap[key]
+		if len(entry.Key) == 0 {
+			entry.Key = []byte(key)
 		}
+		ops = append(ops, entry)
 
 		if len(ops) >= vacuumDeltaBatchSize {
 			if err := applyOps(); err != nil {

@@ -3723,6 +3723,8 @@ func (db *DB) rotateWALLocked() error {
 	if db.disableWAL {
 		return nil
 	}
+	db.walMu.Lock()
+	defer db.walMu.Unlock()
 	db.walSeq++
 	name := fmt.Sprintf("%s%06d.log", db.logSegmentPrefix(), db.walSeq)
 	path := filepath.Join(db.dir, name)
@@ -3776,6 +3778,8 @@ func (db *DB) rotateValueLogLocked() error {
 	if !db.splitValueLogEnabled() {
 		return nil
 	}
+	db.vlogMu.Lock()
+	defer db.vlogMu.Unlock()
 	db.vlogSeq++
 	name := fmt.Sprintf("vlog-%06d.log", db.vlogSeq)
 	path := filepath.Join(db.dir, name)

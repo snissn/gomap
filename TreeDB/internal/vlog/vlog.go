@@ -171,10 +171,13 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 }
 
 func syncDir(path string) (err error) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || path == "" {
 		return nil
 	}
 	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
