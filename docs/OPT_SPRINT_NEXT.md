@@ -22,7 +22,7 @@ At the end of this sprint, `main` contains:
 
 3) **Dictionary epochs for values (no physical zones)**
    - Values can reference a `DictID` without introducing hard “2MB zones”.
-   - Values support **arbitrary lengths** (including multi-megabyte values).
+   - **Large-value handling is intentionally deferred**: new dict/K encodings must fall back to the existing K=1 record encoding when a record would exceed `slab.MaxRecordSize` (or any configured cap).
 
 4) **Micro-batched value compression (bounded point reads)**
    - Optional micro-batching (`K`) for near-streaming ratios, while bounding point-read decode cost.
@@ -35,7 +35,7 @@ At the end of this sprint, `main` contains:
 6) **Index optimization work that is real, test-backed, and benchmarked**
    - Long-key depth/fanout regressions are locked by tests.
    - A “columnar leaf layout” prototype exists behind an explicit experimental option, with benches and correctness tests.
-   - Range-partition maintenance lands as **range-targeted vacuum**.
+   - A partitioned-index plan is executed (manifest + routing + per-partition maintenance), based on the deeper design in `TreeDB/btree_optimization.md`.
 
 ---
 
@@ -50,10 +50,14 @@ In particular, do **not** import anything like:
 - `activeSlabWriter` / flush goroutines / shutdown choreography
 - hard zone boundaries (“2MB zones”) and associated packing rules
 
-### C2 — Values must support arbitrary lengths
+### C2 — Defer large-value format changes
 
-No record format in this sprint may impose a value size cap (e.g. “record must fit under ZoneSize”).
-If the compression format requires it, implement **chunking** (multi-record values).
+This sprint does **not** attempt to redesign “very large value” storage (chunking / multi-record reassembly).
+
+Constraints:
+- Keep the existing `slab.MaxRecordSize`/`slab.ErrRecordTooLarge` behavior.
+- Any new dict/K encoding must have a deterministic fallback to the existing K=1 record encoding when it would exceed the cap.
+- Do not introduce new “boundary math” failure modes (no zones).
 
 ### C3 — No new mmap usage on mutable/truncating files
 
@@ -85,8 +89,7 @@ This sprint builds on that baseline by adding:
 - adaptive “don’t waste CPU” gating
 - dictionary storage + training + dictID plumbing
 - optional micro-batching (K)
-- range-targeted maintenance tooling
-- an experimental columnar leaf prototype
+- deeper index.db work (columnar leaf + partitioned index plan)
 
 ---
 
@@ -122,6 +125,74 @@ We allow `K` only in a small, safe range:
 Point read bound:
 - Worst-case decode work is **one frame** (not megabytes of unrelated data).
 
+#### A3.1 — Use the proven “grouped frame” model (from `feature/slab-optimizations`), but complete it
+
+The previous implementation in `feature/slab-optimizations` established a good foundation:
+- a grouped frame record type (one slab record holds K logical values)
+- `ValuePtr` carries a `subIndex` (0..7) so each key can point into the grouped frame
+- decode path extracts a single value from the decompressed frame
+
+This sprint keeps the same conceptual model but makes it *complete and safe* for production:
+- grouped records must remain compatible with slab compaction (which scans slab records)
+- grouped records must have deterministic fallback when they exceed caps
+- grouped records must be self-describing and corruption-hardened (caps before alloc)
+
+#### A3.2 — Pointer encoding (minimal, preserves `slab.MaxRecordSize`)
+
+We will extend `TreeDB/page/value_ptr_flags.go` with exactly what grouped frames need:
+- `compressed` bit (already exists)
+- `grouped` bit
+- `subIndex` (3 bits; 0..7)
+
+Important: we explicitly avoid consuming so many length bits that we can no longer represent ~64MiB records.
+The target is to preserve enough length bits for the existing `slab.MaxRecordSize` default.
+
+#### A3.3 — Grouped slab record format (K>1)
+
+Grouped frames are represented as a normal slab record with `KeyLen=0` and a “group body” in the value bytes.
+
+**Slab outer header (existing):**
+- CRC32C (4)
+- KeyLen (2) = 0
+- ValueLen (4) = body length in bytes
+- ValueBytes (body)
+
+**Group body v0 (new, fixed header then tables):**
+- `version` (u8) = 0
+- `k` (u8) = number of logical rows (2..8)
+- `offsetCount` (u16 LE) = k+1
+- `dictID` (u64 LE) = dictionary ID used for this frame (0 means “no dict”)
+- `offsets` (u32 LE)[k+1] = prefix sums into the decompressed payload (record boundaries)
+- `compressed` (bytes) = zstd frame (optionally with dict) of the decompressed payload
+
+`dictID` references `dict.db`. Readers resolve `dictID -> dict bytes` via a cached lookup and use a decoder pool keyed by `dictID` (avoid per-read decoder construction).
+
+**Decompressed payload (bytes):**
+Concatenation of K logical entries, each encoded as:
+- `keyLen` (u16 LE)
+- `valLen` (u32 LE)
+- `keyBytes` (keyLen)
+- `valBytes` (valLen)
+
+This keeps grouped records compatible with compaction:
+- the compactor can extract `(key,value)` per subIndex
+- liveness checks remain key-based
+- pointer identity includes `subIndex` so the correct live mapping is preserved
+
+#### A3.4 — Grouping policy (when we do K>1)
+
+Grouped frames are written only via `AppendMany`/flush paths (where we already have batches of keys/values).
+
+Policy rules:
+- `K` is chosen from the active profile (default K=1; candidate 2..8).
+- Grouping is applied only when:
+  - the batch has enough entries
+  - the computed grouped record would not exceed `slab.MaxRecordSize`
+  - the “pause/probe” gate allows compression attempts
+- Otherwise fall back deterministically:
+  - use smaller K (down to 2), or
+  - K=1 legacy encoding (existing record format)
+
 ### A4 — Adaptive compression viability detection (“pause + probe”)
 
 Mechanism:
@@ -149,8 +220,8 @@ This sprint ships a synchronous implementation with tests. Future buffering is b
 ### A6 — Index work shipped this sprint
 
 We ship:
-1) **range-targeted vacuum** (maintenance partitioning)
-2) **columnar leaf prototype** behind an explicit experimental flag
+1) **columnar leaf prototype** behind an explicit experimental flag
+2) **partitioned-index execution plan** (manifest + routing + per-partition maintenance), based on `TreeDB/btree_optimization.md`
 
 ---
 
@@ -253,61 +324,62 @@ The sprint is executed as 10 PRs. Each PR is independently mergeable.
 - Enable values to reference a `DictID` directly from the slab record format.
 
 **Deliverables**
-- New slab record header extension:
-  - flags: compressed, hasDictID, grouped, chunked
-  - optional `DictID`
-  - optional group metadata
-- Hardened read path:
-  - validate lengths before allocation
-  - clean errors for invalid headers/dict IDs
+- Introduce the grouped-frame encoding spec (K>1) and pointer flags:
+  - `page.ValuePtrIsGrouped`, `page.ValuePtrSubIndex`, `page.ValuePtrMarkGrouped`
+  - grouped frame body v0 (version/k/offsets/dictID + zstd frame)
+- Decoder caching for grouped frames:
+  - cache decoders by `dictID` (and optionally by `slab fileID`) in a bounded LRU
+  - grouped reads must not create a new zstd decoder per call
+- Hardened parsing:
+  - cap `ValueLen` before allocation
+  - cap `offsetCount` (must be k+1, k<=8)
+  - cap decompressed payload length using `offsets[k]`
+  - clean corruption errors (no panic/OOM)
 
 **Tests**
-- roundtrip for:
-  - raw
-  - compressed without dict
-  - compressed with dictID
-- corruption tests for bad headers and missing dict
+- grouped frame roundtrip:
+  - build grouped record (keys+values), write, read back each subIndex via pointer flags
+- corruption tests:
+  - invalid k/offsetCount
+  - invalid offsets (non-monotonic / out of bounds)
+  - truncated body / truncated zstd frame
 
 **Acceptance**
+- Group decode is bounded and safe (caps before alloc).
 - No async writer introduced.
 
 ---
 
-### PR 5 — Arbitrary large values: chunked slab values (must land)
+### PR 5 — Micro-batched compression (K) for slab values (bounded, production-complete)
 
 **Goal**
-- Remove any possibility of value-size caps by supporting chunked values.
+- Achieve near-streaming compression ratios while bounding point-read decode cost, using the grouped-frame approach above.
 
 **Deliverables**
-- Encode a large value as multiple slab records:
-  - start record includes total length and chunk count (or continuation pointer)
-  - continuation records include chunk index
-- Reader reassembles into the requested byte slice
-- Hard caps on total length to avoid OOM on corrupt metadata
+- Write path integration (flush / `AppendMany`):
+  - implement `AppendManyGrouped(keys, values, K)` (or equivalent)
+  - deterministic fallback when grouped record would exceed `slab.MaxRecordSize`:
+    - reduce K, then fall back to K=1
+- Reader path integration:
+  - `SlabManager.Read` and `ReadUnsafe` decode grouped pointers via `subIndex`
+- Compaction correctness:
+  - slab compactor must detect grouped records (`KeyLen=0` + group-body header)
+  - for each grouped record:
+    - decompress once
+    - iterate subIndex 0..k-1
+    - extract `(key,value)`
+    - construct the exact old pointer (includes grouped bits + subIndex)
+    - liveness check by key + pointer match
+- Integrate K selection from `internal/compression`:
+  - default candidates {1..8}
+  - K is capped to keep point reads bounded
+  - use score-based selection (ratio win vs estimated decode cost), like the tradeoff notes in `TreeDB/notes/slab_dict_k_tradeoff_2026-01-11.md`
 
 **Tests**
-- roundtrip for 4MB+ values
-- corruption tests: missing continuation, wrong indices, truncation
-
-**Acceptance**
-- No “ErrRecordTooLarge” exists as a normal operational outcome.
-
----
-
-### PR 6 — Micro-batched compression (K) for slab values (bounded)
-
-**Goal**
-- Achieve near-streaming compression ratios for values while bounding point-read decode cost.
-
-**Deliverables**
-- A “grouped frame” encoding:
-  - K values compressed into one zstd frame
-  - small offset table for extracting a single value without scanning everything
-- Integrate K selection from `internal/compression`
-
-**Tests**
-- point-read extracts one entry from a grouped frame
-- corruption tests: invalid offset table, invalid K
+- point-read extracts one value from a grouped frame (K>1)
+- compaction preserves grouped values:
+  - write grouped frames, run compaction, ensure values remain readable
+- corruption tests: invalid K/offsets, truncated frame, invalid dictID (if used)
 
 **Bench**
 - per-value vs K=3..8 on:
@@ -321,7 +393,7 @@ The sprint is executed as 10 PRs. Each PR is independently mergeable.
 
 ---
 
-### PR 7 — Combined WAL+slab protocol (synchronous first cut)
+### PR 6 — Combined WAL+slab protocol (synchronous first cut)
 
 **Goal**
 - Make the durability ordering explicit and enforced with tests.
@@ -341,70 +413,84 @@ The sprint is executed as 10 PRs. Each PR is independently mergeable.
 
 ---
 
-### PR 8 — Range partition for maintenance: range-targeted vacuum (must land)
+### PR 7 — Index.db deep work (v1): Columnar leaf + search accelerators (experimental)
 
 **Goal**
-- Make vacuuming cheaper and more controllable by targeting subsets of keyspace.
+- Implement deeper `index.db` improvements based on `TreeDB/btree_optimization.md`, starting with leaf layout and search accelerators.
 
 **Deliverables**
-- Offline vacuum option that rebuilds only `[start, end)` from a snapshot iterator:
-  - preserves keys outside range
-  - compacts keys inside range
-- First cut is permitted to rewrite the full file if needed, but must iterate ranges and prove correctness.
+- Experimental columnar leaf layout (new DBs only):
+  - keys stored in a contiguous block (front-coded with restart points)
+  - values/pointers stored in a contiguous block separate from keys
+- Explicit leaf page format versioning:
+  - a leaf body version byte (or equivalent) selects “legacy” vs “columnar” decode
+  - avoids ambiguous mixed layouts in a single DB
+- Optional “fingerprint strip” (1 byte per key) to accelerate comparisons:
+  - used to filter candidate keys before full compare
+- Optional pager-side negative-lookup accelerator (from `TreeDB/btree_optimization.md`):
+  - per-page (or per-leaf) Bloom filter metadata to skip negative lookups before full decode
+- Bench harness:
+  - point reads
+  - range scans
+  - long-key workloads (iavl-bench style)
 
 **Tests**
-- correctness for:
-  - keys inside range preserved
-  - keys outside range unchanged
+- correctness (get/put/iterators)
+- long-key regression coverage (depth stays bounded; separators remain short)
 
 **Bench**
-- vacuum of a subset is measurably faster than full vacuum on synthetic workloads.
+- measurable speedup in key search and/or scans on synthetic and iavl-bench-like key distributions.
 
 ---
 
-### PR 9 — Columnar leaf prototype (experimental but mergeable)
+### PR 8 — Index.db deep work (v2): Partitioned pager + manifest + per-partition maintenance
 
 **Goal**
-- Implement a real “keys-first, values-second” leaf layout prototype.
+- Replace the confusing “range vacuum” concept with a coherent partitioned-index design:
+  - range partitioning is implemented as **multiple index files** + a **manifest**
+  - maintenance (vacuum/compaction) is performed per-partition
 
 **Deliverables**
-- Behind an explicit experimental flag (new DBs only):
-  - `Options.ExperimentalColumnarLeaf = true`
-- Encoding concept:
-  - key block (front-coded or prefix-compressed)
-  - value pointer/value area separate
-
-**Tests**
-- get/put correctness
-- iterator correctness
-
-**Bench**
-- point lookup
-- range scans
-
-**Acceptance**
-- Shows measurable wins in benchmarks; remains opt-in and off by default.
-
----
-
-### PR 10 — Keyspace partition manifest (design + prototype, mergeable)
-
-**Goal**
-- Deliver the architecture for “range partitioned index files” as a real prototype, not a vague future plan.
-
-**Deliverables**
-- `docs/INDEX_PARTITIONING.md` (new doc) describing:
+- `docs/INDEX_PARTITIONING.md` (new doc) with a concrete design:
   - manifest format
-  - routing (key range → file)
-  - maintenance (vacuum per range)
-  - migration strategy (pre-alpha allowed to be “new DB”)
-- Prototype code (not enabled by default) that can:
-  - create N partitions for a fresh DB
-  - route writes by key prefix/range to a partition
-  - run vacuum on one partition independently
+  - routing rule (key range → partition)
+  - partition ID encoding (e.g. upper bits of PageID route to the partition file)
+  - pageID routing / file selection
+  - atomic manifest swap protocol
+- Prototype implementation (new DBs only):
+  - create N partitions + manifest
+  - route reads/writes to the correct partition
+  - run vacuum/compaction on one partition without touching others
+
+**Tests**
+- correctness for routing (keys end up in correct partitions)
+- correctness for per-partition vacuum (data preserved, size shrinks)
+
+**Bench**
+- partition-local vacuum time vs monolithic vacuum on synthetic workloads
 
 **Acceptance**
 - Prototype is runnable via a `cmd/` tool and has a benchmark harness.
+
+---
+
+### PR 9 — Index.db deep work (v3): Internal-node fanout + locality (separator/LCP/relative IDs)
+
+**Goal**
+- Implement the internal-node improvements from `TreeDB/btree_optimization.md` that directly increase fanout and reduce depth.
+
+**Deliverables**
+- Shortest-separator correctness + explicit bounds (already partially done; lock it in)
+- Internal global LCP (strip shared prefix once per internal node)
+- Internal layout improvements (pointer-first, compact separators)
+- Relative page IDs within a partition (where feasible) to increase fanout
+
+**Tests**
+- long-key depth regression tests
+- randomized insert/delete stability with the new internal encoding
+
+**Acceptance**
+- Demonstrably improves internal fanout and reduces depth on long-key workloads.
 
 ---
 
@@ -419,4 +505,3 @@ The sprint is executed as 10 PRs. Each PR is independently mergeable.
 - There is a single “fastest configuration” runbook:
   - fastest local benchmark config
   - fastest safe Celestia config
-
