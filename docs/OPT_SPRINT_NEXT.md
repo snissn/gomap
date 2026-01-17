@@ -508,11 +508,17 @@ Add these to `slab.Options` in `TreeDB/slab/compression.go`:
    - `compressionProbeBytes uint64`
    - `pausedSampleStride uint64`
    - `pausedSampleCounter atomic.Uint64`
+   - pause/probe visibility counters (all monotonic; safe for stats only):
+     - `compressionPauseCount atomic.Uint64`
+     - `compressionProbeCount atomic.Uint64`
+     - `compressionProbeResumeCount atomic.Uint64`
+     - `compressionSkippedRawBytes atomic.Uint64` (raw bytes written while paused, with compression skipped)
    - rolling window counters (raw/stored/records) stored under `sm.mu`:
      - `windowRaw uint64`, `windowStored uint64`, `windowRecords uint64`
 2. Implement `(*SlabManager).shouldAttemptCompression(rawLen int) (attempt bool, probe bool, paused bool)` with the same semantics as the proven version in `feature/slab-optimizations`:
    - If `compressionPauseRemaining > 0`:
      - decrement it by `rawLen` using CAS loop
+     - increment `compressionSkippedRawBytes` by `rawLen`
      - if `CompressionAdaptiveProbeBytes == 0`: return `(false,false,true)`
      - otherwise decrement `compressionProbeRemaining` and return `(true,true,true)` exactly when it crosses zero (probe moment)
    - If not paused: return `(true,false,false)`
@@ -529,10 +535,12 @@ Add these to `slab.Options` in `TreeDB/slab/compression.go`:
        - `compressionPauseRemaining.Store(uint64(CompressionAdaptivePauseBytes))`
        - `compressionProbeBytes = uint64(CompressionAdaptiveProbeBytes)` (cached)
        - `compressionProbeRemaining.Store(compressionProbeBytes)`
+       - increment `compressionPauseCount`
      - reset the window counters to 0
 5. Probe resume rule (explicit):
    - If we are paused and `probe==true` and compression succeeds for the probed record (`compressed==true`), immediately clear the pause:
      - `compressionPauseRemaining.Store(0)`
+     - increment `compressionProbeResumeCount`
 
 **Tests (explicit)**
 - Add `TestCompressionPauseAndProbeResume` to `TreeDB/slab/compression_adaptive_test.go`, based on the proven logic in `feature/slab-optimizations`:
@@ -557,6 +565,8 @@ Add these to `slab.Options` in `TreeDB/slab/compression.go`:
 
 **PR Writeup Notes**
 - Include a before/after table for the three slab benchmarks (adaptive_off vs adaptive_on).
+- Include the pause/probe visibility counters from this PR (pause count, probe count, probe resumes, skipped raw bytes) and compute a “paused ratio”:
+  - `paused_ratio = skipped_raw_bytes / total_raw_bytes` for the benchmark run (report as a single line).
 
 ---
 
@@ -581,6 +591,11 @@ Implement `TreeDB/internal/dictstore` with:
 - `func (s *Store) Append(dictBytes []byte, meta []byte) (id DictID, hash DictHash, err error)`
 - `func (s *Store) Get(id DictID) (dictBytes []byte, meta []byte, err error)`
 - `func (s *Store) FindByHash(hash DictHash) (id DictID, ok bool)`
+
+**Concurrency model (explicit)**
+- `Store.Append` MUST be protected by a mutex (single-writer enforced in-process).
+- `Store.Get` and `FindByHash` MUST be safe for concurrent callers and MUST NOT take the append mutex (RW lock or separate locks are acceptable).
+- If `Store` is opened read-only, `Append` MUST return an error.
 
 **On-disk format (normative)**
 - Path: `dict.db` lives alongside `index.db` and `data-*.slab` in the TreeDB directory.
@@ -757,6 +772,7 @@ Implement the following (port/adapt from `feature/slab-optimizations:TreeDB/inte
   - dict bytes: LRU keyed by `dictID` (capacity 64)
   - decoder pools: LRU keyed by `dictID` (capacity 64; each entry is `*sync.Pool` of `*zstd.Decoder`)
   - encoder pools: LRU keyed by `dictID` (capacity 64; each entry is `*sync.Pool` of `*zstd.Encoder`)
+  - **Pinned active dict (normative):** the currently active `profile.DictID` MUST be pinned and MUST NOT be evicted from any of the codec caches (dict bytes, decoder pools, encoder pools), even when LRU capacity is exceeded. If capacity pressure exists, evict non-active dicts first.
 2) **Trainer/profile wiring**
 - `SlabManager` MUST optionally create `internal/compression.Trainer` (PR3) when not read-only.
 - On every `Append`/`AppendMany`, the raw (uncompressed) values MUST be offered to the trainer:
@@ -880,6 +896,13 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 - `TreeDB/compaction/compactor_grouped_test.go`:
   - write grouped frames, run slab compaction, verify values still readable
   - include a case where values are compressed (ensure compactor does not drop live records due to compressed flag)
+  - `TestCompactor_Grouped_PartialTombstone`:
+    1) Write `[A,B,C]` in a grouped frame (K=3).
+    2) Delete `B` (tombstone).
+    3) Run compaction and verify:
+       - `A` and `C` remain readable with correct values.
+       - `B` is not present.
+       - The output is well-formed (no panic; grouped decoding still works for any grouped pointers produced).
 
 **Bench (explicit)**
 - Add `BenchmarkSlabGrouped` to `TreeDB/slab/grouped_bench_test.go` (port/adapt from `feature/slab-optimizations:TreeDB/slab/manager_grouped_bench_test.go`):
@@ -994,6 +1017,8 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
   1) Binary search only the restart keys (`i % restartInterval == 0`).
   2) Scan forward within the chosen block (max `restartInterval` entries).
   3) Use `fingerprints[i]` to skip full key reconstruction unless fingerprint matches.
+  - The block scan MUST be a simple linear scan (max `restartInterval` = 16 keys); do NOT binary search inside the block.
+  - During the scan, check `fingerprints[i]` first and only reconstruct/compare the full key on fingerprint match (tight loop; no heap allocs).
 
 **Bench harness (explicit)**
 - Add `BenchmarkLeafColumnar_Find` in `TreeDB/node/leaf_columnar_bench_test.go`:
@@ -1352,7 +1377,10 @@ Write-time requirements (fail closed if violated):
 - For all i: `childPageID[i]-basePageID <= math.MaxUint32`.
 
 If any requirement fails, the writer MUST use `childEncoding==0` instead.
+This includes the `math.MaxUint32` delta overflow case even when all partition IDs match.
 
 ### F5) Fail-Closed Corruption Handling
 
 Any violation of layout rules, bounds checks, `childEncoding` values, or monotonic offset constraints MUST return `node.ErrCorruptedNode` (or a new dedicated error) and MUST NOT panic or allocate based on untrusted lengths.
+**Implementation note (explicit)**
+- When making slab data durable, prefer a “data-only” sync when supported (e.g., `fdatasync` on Unix) to avoid unnecessary metadata work; fall back to `file.Sync()` where needed. The happens-before contract above must remain true regardless of the syscall used.
