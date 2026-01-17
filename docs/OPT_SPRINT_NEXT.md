@@ -307,6 +307,76 @@ We ship:
 1) **columnar leaf prototype** behind an explicit experimental flag
 2) **partitioned-index execution plan** (manifest + routing + per-partition maintenance), based on `TreeDB/btree_optimization.md`
 
+### A7 — Index Optimization Strategy (Locked Decisions)
+
+This section resolves the “advanced index ideas” uncertainty by explicitly choosing what we will and will not do in this sprint, given TreeDB’s current implementation:
+- fixed `page.PageSize = 4096`
+- chunked-mmap pager (`TreeDB/pager`)
+- copy-on-write B+Tree pages rebuilt on writes
+
+#### A7.1 — Performance Model (Hot vs Cold)
+
+TreeDB index performance is bimodal:
+- **Cold pages (I/O-bound):** reduce tree height by increasing fanout (more keys/page).
+- **Hot pages (CPU/cache-bound):** reduce cache misses and wasted compares inside each page.
+
+This sprint targets both, but only with changes that preserve:
+- fixed-size 4KB page addressing (mmap friendly)
+- order-preserving key encoding (binary search must still work)
+- fail-closed parsing (no panics/OOM; caps before alloc)
+
+#### A7.2 — Techniques We Adopt (this sprint)
+
+These map directly to the external agent’s suggestions, but are compatible with TreeDB’s constraints:
+
+**Fanout / cold-page wins**
+- **Suffix truncation / shortest separators** (internal nodes): already in-tree; PR9 locks correctness + makes it denser.
+- **Internal global LCP** (internal nodes): PR9 (strip common prefix once per node).
+- **Pointer-first + compact separator layout** (internal nodes): PR9.
+- **CSB+-style pointer compression (safe subset):**
+  - PR9 stores child pointers as `base + u32 delta` *when possible* (within a partition), otherwise falls back to `u64`.
+
+**CPU / hot-page wins**
+- **Columnar leaf layout** (separate key bytes from values/pointers): PR7.
+- **Fence keys via restart keys**:
+  - PR7 uses restart keys as “fence keys” to narrow searches before reconstructing in-block keys.
+- **Fingerprint strip** (1 byte per key):
+  - PR7 uses a fingerprint strip to avoid reconstructing/comparing most candidate keys.
+
+#### A7.3 — Techniques We Explicitly Do NOT Adopt (this sprint)
+
+These are either incompatible with the mmap+fixed-page model, or too risky without a larger format redesign:
+
+- **Zstd-compressed index keys:** rejected for this sprint.
+  - zstd is not order-preserving; searching would require decompressing entire pages/blocks.
+  - variable compressed sizes would break fixed `pageID * PageSize` addressing unless we add a page table.
+  - Instead, we use order-preserving front-coding + restart points + fingerprints.
+- **Large “virtual pages” (16–64KB nodes):** deferred.
+  - would require multi-page node format and major pager/tree changes.
+- **CSB+ “single pointer per node” layout:** deferred.
+  - requires allocating children contiguously as an invariant across mutations; too invasive for now.
+- **Pointer swizzling (rewrite mmapped offsets into pointers):** deferred.
+  - mutates mmapped pages and complicates durability/dirty tracking.
+- **SIMD/AVX search and assembly-heavy intrinsics:** deferred (Go portability + complexity).
+- **Eytzinger layout inside nodes:** deferred.
+  - plausible for immutable arrays, but TreeDB keys are variable-length and compare cost dominates; we take the simpler wins first.
+
+#### A7.4 — Decision Matrix (External Suggestions → Sprint Plan)
+
+This is the explicit mapping from the external agent’s proposals to TreeDB’s constraints and to concrete PRs in this sprint.
+
+| External suggestion | Fit with TreeDB (today) | Sprint decision | Where it lands |
+| --- | --- | --- | --- |
+| **Suffix truncation** (“shortest separators”) | ✅ Already used by `zipper.shortestSeparator` and matches TreeDB’s “child start key” internal-node semantics | **Adopt + lock by tests** | PR9 (correctness invariants + density tests) |
+| **CSB+ Trees** (contiguous children, single base ptr) | ❌ Requires contiguous child allocation invariant across COW mutations | **Defer** | Explicit non-goal (A7.3) |
+| **CSB+-style pointer compaction** (fewer bytes for child IDs) | ✅ Feasible as an encoding *subset* with `base + u32 delta` when safe | **Adopt safe subset** | PR9 (Internal v1 `childEncoding=base+u32`) |
+| **Eytzinger layout** (BFS order) | ⚠️ Possible but high risk/complexity with variable-length keys; compare cost dominates | **Defer** | Explicit non-goal (A7.3) |
+| **SIMD search / AVX / asm** | ❌ Go portability + complexity; requires assembly/CGO for real wins | **Defer** | Explicit non-goal (A7.3) |
+| **Branchless binary search** | ⚠️ Some wins possible, but key-compare is still branchy; do later after format wins | **Defer** | Explicit non-goal (A7.3) |
+| **Pointer swizzling** (rewrite mmap offsets to pointers) | ❌ Mutates mmapped pages; complicates durability and dirty tracking | **Defer** | Explicit non-goal (A7.3) |
+| **Zstd-compressed index keys** | ❌ Not order-preserving; breaks binary-search semantics and fixed 4KB page math | **Reject** | Explicit non-goal (A7.3) |
+| **Fence keys** (narrow decompression) | ✅ We can use restart keys + fingerprints to reduce work without block decompression | **Adopt analogue** | PR7 (restart search + fingerprint strip; Appendix D) |
+
 ---
 
 ## 4) Sprint Execution Plan (PRs)
@@ -909,6 +979,7 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
   - add `leafColumnarFlag uint16 = 0x4000`
   - update `pageTypeMask` to exclude `leafColumnarFlag`
   - add `func (n *Node) leafColumnar() bool`
+  - update `SetType` to preserve all layout flags (`leafPrefixCompressedFlag`, `leafColumnarFlag`, and any future node-layout flags)
 - Add: `TreeDB/node/leaf_columnar.go` (encode/decode/search for leaf columnar v1; see Appendix D)
 - Add: `TreeDB/node/leaf_columnar_test.go`
 - Add: `TreeDB/node/leaf_columnar_bench_test.go`
@@ -1041,22 +1112,29 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 - Implement the internal-node improvements from `TreeDB/btree_optimization.md` that directly increase fanout and reduce depth.
 
 **Files (explicit)**
-- Modify: `TreeDB/node/internal.go` (new internal encoding; keep legacy decoder for existing DBs)
+- Modify: `TreeDB/node/node.go`:
+  - add `internalV1Flag uint16 = 0x2000`
+  - update `pageTypeMask` to exclude `internalV1Flag`
+  - add `func (n *Node) internalV1() bool`
+- Add: `TreeDB/node/internal_v1.go` (encode/decode/search for internal v1; see Appendix F)
+- Modify: `TreeDB/node/internal.go` (route `SearchInternal`/`GetInternalChildID` to v1 when `internalV1Flag` is set; keep legacy decoder for existing DBs)
 - Modify: `TreeDB/node/split.go` and `TreeDB/zipper/zipper.go` to:
   - compute shortest separators
   - compute internal-node global LCP
 - Add: `TreeDB/node/internal_lcp_test.go`
 
 **Internal-node encoding changes (normative)**
-Implement a new internal-node layout version (v1) that:
-1) Stores a single `globalPrefixLen u16` and `globalPrefixBytes` once per node.
-2) Stores separators as suffixes (without the global prefix).
-3) Uses a pointer-first columnar layout:
-   - `[childPageIDs][sepOffsets][sepBytes]`
-4) Maintains lexicographic correctness: reconstructed separators MUST match the comparison behavior of the legacy layout.
+Internal-node v1 MUST match “Appendix F — Internal Node v1 (normative)”.
+
+Implement internal-node v1 so that:
+1) One `globalPrefix` is stored once per node (LCP of all entry keys).
+2) Entry keys are stored as suffixes (without `globalPrefix`).
+3) Child pointers are stored in a pointer-first layout:
+   - `[childPointers][keyOffsets][keySuffixBlob]`
+4) Search compares keys without allocating and preserves legacy ordering semantics.
 
 **Relative page IDs (explicit; only when partitioned index is enabled later)**
-- When PageIDs share a partition (see `docs/INDEX_PARTITIONING.md`), child page IDs MAY be stored as `u32` relative offsets from a `basePageID u64` stored once per node.
+- When all child PageIDs share a partition (see Appendix E PageID encoding), child page IDs MAY be stored as `u32` deltas from `basePageID = min(childPageIDs)` stored once per node.
 - When partitioning is not enabled, store full `u64` page IDs.
 
 **Tests (explicit)**
@@ -1208,3 +1286,73 @@ Fail-closed requirements:
 - Missing required fields MUST error.
 - `partition_count` MUST equal `len(partitions)` and be in `[1,256]`.
 - `id` MUST be unique and in `[0, partition_count)`.
+
+---
+
+## Appendix F — Internal Node v1 (normative)
+
+This format applies to **internal pages only** when `internalV1Flag` is set in `PageHeader.Flags`.
+
+### F1) Semantics (what the keys mean)
+
+Internal nodes store `count = PageHeader.Count` entries, each representing:
+- `startKey[i]` = the minimum key routed to `childPageID[i]` (a “child start key” / fence key)
+- `childPageID[i]` = the child page to descend into
+
+Keys are in strictly increasing order by `startKey`.
+The first entry for a root-level internal node is typically:
+- `startKey[0] = []byte{}` (empty key = “global minimum”)
+
+Search semantics MUST match legacy `SearchInternal`:
+- Find the largest `i` such that `startKey[i] <= targetKey`.
+- If `targetKey < startKey[0]`, return `i=0`.
+- Descend to `childPageID[i]`.
+
+### F2) Body Layout
+
+All integers are little-endian.
+
+Let `count = PageHeader.Count` and `hdr = NodeHeaderSize` (16 bytes).
+
+At offset `hdr`:
+- `version u8 = 1`
+- `childEncoding u8`:
+  - `0` = `u64` child pointers
+  - `1` = `basePageID + u32 delta` child pointers (see F4)
+- `globalPrefixLen u16`
+- `reserved u32 = 0`
+- `basePageID u64` (meaningful only when `childEncoding==1`; otherwise MUST be 0)
+
+Then, in order:
+- `globalPrefixBytes[globalPrefixLen] bytes`
+- `childPointers[count]`:
+  - if `childEncoding==0`: `childPageIDs[count] u64`
+  - if `childEncoding==1`: `childDeltas[count] u32`
+- `keyOffsets[count+1] u16` (offsets into `keySuffixBlob`, relative to the start of that blob)
+- `keySuffixBlob[keyOffsets[count]] bytes`
+
+### F3) Key Reconstruction Rules
+
+- `keyOffsets[0]` MUST equal 0.
+- `keyOffsets` MUST be monotonic non-decreasing.
+- For each entry `i`:
+  - `suffix = keySuffixBlob[keyOffsets[i] : keyOffsets[i+1]]`
+  - reconstructed `startKey[i] = globalPrefixBytes + suffix`
+
+### F4) Child Pointer Rules (base+delta encoding)
+
+When `childEncoding==1`, the node stores `childPageID[i]` as:
+- `childPageID[i] = basePageID + uint64(childDeltas[i])`
+
+Write-time requirements (fail closed if violated):
+- All `childPageID[i]` MUST share the same partition:
+  - `(childPageID[i] >> 48) == (childPageID[0] >> 48)` for all i.
+- `basePageID` MUST equal `min(childPageID[i])`.
+- For all i: `childPageID[i] >= basePageID`.
+- For all i: `childPageID[i]-basePageID <= math.MaxUint32`.
+
+If any requirement fails, the writer MUST use `childEncoding==0` instead.
+
+### F5) Fail-Closed Corruption Handling
+
+Any violation of layout rules, bounds checks, `childEncoding` values, or monotonic offset constraints MUST return `node.ErrCorruptedNode` (or a new dedicated error) and MUST NOT panic or allocate based on untrusted lengths.
