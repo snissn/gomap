@@ -98,6 +98,7 @@ This sprint builds on that baseline by adding:
 - TreeDB does not currently use `compress/zlib`. The existing per-value compressor is zstd (SpeedFastest) and is treated as the legacy baseline (“envelope v0”).
 - The dict+K work in this sprint is not a parallel compression system: it extends the same envelope with a `DictID` (“envelope v1”) and adds grouped frames (K>1).
 - PR1’s pause/probe gate is explicitly the mechanism that makes “envelope v0” effectively disappear on real workloads where it does not pay off.
+- We do **not** delete the legacy per-value zstd code *before* the dict+K implementation. Deleting it early would remove a useful baseline and increase churn; PR1+PR4 fold it into the single “value encoding” pipeline (v0/v1), and PR1 ensures it is effectively off when it does not pay off.
 
 ---
 
