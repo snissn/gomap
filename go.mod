@@ -1,6 +1,6 @@
 module github.com/snissn/gomap
 
-go 1.24.0
+go 1.23.0
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
@@ -18,7 +18,7 @@ require (
 	github.com/tidwall/buntdb v1.3.2
 	github.com/tidwall/redcon v1.6.2
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/sys v0.39.0
+	golang.org/x/sys v0.35.0
 	gonum.org/v1/plot v0.16.0
 )
 
