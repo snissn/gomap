@@ -84,7 +84,7 @@ If any ValueID remnants exist, they remain disabled and unsupported unless a ded
 ## 2) Current Baseline (Reality Check)
 
 `main` already includes:
-- per-value slab compression (zstd) in `TreeDB/slab/compression.go`
+- per-value slab compression (zstd) in `TreeDB/slab/compression.go` (legacy “envelope v0”)
 - long-key separator improvements documented in `docs/BTREE_KEY_SIZE_ISSUE.md`
 - copy-on-flush safety for cached mode (vlog pointers are resolved before backend persistence)
 
@@ -93,6 +93,11 @@ This sprint builds on that baseline by adding:
 - dictionary storage + training + dictID plumbing
 - optional micro-batching (K)
 - deeper index.db work (columnar leaf + partitioned index plan)
+
+**Note on “zlib” vs “zstd”**
+- TreeDB does not currently use `compress/zlib`. The existing per-value compressor is zstd (SpeedFastest) and is treated as the legacy baseline (“envelope v0”).
+- The dict+K work in this sprint is not a parallel compression system: it extends the same envelope with a `DictID` (“envelope v1”) and adds grouped frames (K>1).
+- PR1’s pause/probe gate is explicitly the mechanism that makes “envelope v0” effectively disappear on real workloads where it does not pay off.
 
 ---
 
