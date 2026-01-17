@@ -3975,6 +3975,16 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if totalLen > 0 {
 		flushStart = time.Now()
 
+		// Ensure value log is flushed to disk (or at least to OS) so that
+		// subsequent reads (via db.valueLogReader) can resolve pointers.
+		// This is critical for Copy-on-Flush where we read back what we just wrote.
+		if db.memtableValueLogPointers && db.valueLogReader != nil {
+			if err := db.flushValueLog(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
+				return false
+			}
+		}
+
 		backendBatch := db.backend.NewBatch()
 
 		if totalLen > 2000 {
@@ -4000,7 +4010,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						val := iter.UnsafeValue()
-						if ptrs != nil {
+						if ptrs != nil && db.memtableValueLogPointers {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
@@ -4008,14 +4018,15 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
-								ops = append(ops, batch.Entry{
-									Type:     batch.OpPut,
-									Key:      key,
-									ValuePtr: ptr,
-									IsPtr:    true,
-								})
-								iter.Next()
-								continue
+								if db.valueLogReader != nil {
+									v, err := db.valueLogReader.Read(ptr)
+									if err != nil {
+										_ = iter.Close()
+										putEntrySlice(ops)
+										return nil, err
+									}
+									val = v
+								}
 							}
 							if debugPtr {
 								ptrMisses.Add(1)
@@ -4118,9 +4129,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				putEntrySlice(ops)
 			}
 		} else {
-			pointerBatch, _ := backendBatch.(interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			})
 			for _, unit := range units {
 				if debugPtr {
 					if unit.ptrs == nil {
@@ -4141,7 +4149,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						val := iter.UnsafeValue()
-						if pointerBatch != nil && unit.ptrs != nil {
+						if unit.ptrs != nil && db.memtableValueLogPointers {
 							if debugPtr {
 								ptrChecks.Add(1)
 							}
@@ -4149,14 +4157,16 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 								if debugPtr {
 									ptrHits.Add(1)
 								}
-								if err := pointerBatch.SetPointer(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (setptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
+								if db.valueLogReader != nil {
+									v, err := db.valueLogReader.Read(ptr)
+									if err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
+									}
+									val = v
 								}
-								iter.Next()
-								continue
 							}
 							if debugPtr {
 								ptrMisses.Add(1)
@@ -4335,6 +4345,17 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	flushed := false
 	if memLen > 0 {
 		flushStart = time.Now()
+
+		// Ensure value log is flushed to disk (or at least to OS) so that
+		// subsequent reads (via db.valueLogReader) can resolve pointers.
+		// This is critical for Copy-on-Flush where we read back what we just wrote.
+		if db.memtableValueLogPointers && db.valueLogReader != nil {
+			if err := db.flushValueLog(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
+				return false
+			}
+		}
+
 		// Flush 'mem' to backend
 		backendBatch := db.backend.NewBatch()
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator

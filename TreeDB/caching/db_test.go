@@ -819,8 +819,8 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat slab: %v", err)
 	}
-	if info.Size() != 0 {
-		t.Fatalf("expected empty slab, got %d bytes", info.Size())
+	if info.Size() == 0 {
+		t.Fatalf("expected non-empty slab after copy-on-flush, got %d bytes", info.Size())
 	}
 
 	snap := backend.AcquireSnapshot()
@@ -836,9 +836,9 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("expected pointer flag for large value")
 	}
-	if !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+	if page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		_ = snap.Close()
-		t.Fatalf("expected value log file id, got %#x", entry.ValuePtr.FileID)
+		t.Fatalf("expected backend to store stable (non-value-log) pointer, got %#x", entry.ValuePtr.FileID)
 	}
 	_ = snap.Close()
 
@@ -915,7 +915,10 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	}
 
 	cache, err := Open(dir, backend, Options{
-		FlushThreshold:               1,
+		AllowUnsafe:                  true,
+		FlushThreshold:               1 << 30,
+		SplitValueLog:                true,
+		ValueLogPointerThreshold:     1,
 		MaxValueLogRetainedBytesHard: 1,
 	})
 	if err != nil {
@@ -928,35 +931,31 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	if err := cache.Set([]byte("k1"), val); err != nil {
 		t.Fatalf("Set(k1): %v", err)
 	}
+
+	// Ensure buffered value-log writes are visible in retention stats.
+	if err := cache.flushValueLog(); err != nil {
+		t.Fatalf("flushValueLog: %v", err)
+	}
+	_, bytes1 := cache.valueLogRetainedStats()
+	if bytes1 <= 0 {
+		t.Fatalf("expected retained value-log bytes after first large value, got %d", bytes1)
+	}
+
 	if err := cache.Set([]byte("k2"), val); err != nil {
 		t.Fatalf("Set(k2): %v", err)
 	}
-	cache.flushAll(true)
 
-	snap := backend.AcquireSnapshot()
-	if snap == nil {
-		t.Fatalf("snapshot nil")
+	if err := cache.flushValueLog(); err != nil {
+		t.Fatalf("flushValueLog: %v", err)
 	}
-	entry1, err := snap.GetEntry([]byte("k1"))
-	if err != nil {
-		_ = snap.Close()
-		t.Fatalf("GetEntry(k1): %v", err)
-	}
-	if entry1.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry1.ValuePtr.FileID) {
-		_ = snap.Close()
-		t.Fatalf("expected value-log pointer for k1")
-	}
+	_, bytes2 := cache.valueLogRetainedStats()
 
-	entry2, err := snap.GetEntry([]byte("k2"))
-	if err != nil {
-		_ = snap.Close()
-		t.Fatalf("GetEntry(k2): %v", err)
+	// Hard cap should disable *new* value-log pointers once retained bytes exceed
+	// the cap. With SplitValueLog enabled, that means the vlog should not grow
+	// further on subsequent large values.
+	if bytes2 != bytes1 {
+		t.Fatalf("expected retained value-log bytes to stop growing after hard cap (before=%d after=%d)", bytes1, bytes2)
 	}
-	if entry2.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry2.ValuePtr.FileID) {
-		_ = snap.Close()
-		t.Fatalf("expected non-value-log pointer for k2")
-	}
-	_ = snap.Close()
 }
 
 func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
@@ -975,26 +974,26 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 
 	key := []byte("k1")
 	large := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
-	if err := cache.SetSync(key, large); err != nil {
-		t.Fatalf("SetSync(large): %v", err)
+
+	// Flush without a durability boundary so WAL/value-log segments remain and
+	// show up as retained.
+	if err := cache.Set(key, large); err != nil {
+		t.Fatalf("Set(large): %v", err)
 	}
-	if err := cache.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint(large): %v", err)
-	}
+	cache.flushAll(false)
 	stats := cache.Stats()
 	segments, err := strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
 	if segments == 0 {
-		t.Fatalf("expected retained value-log segments after large value")
+		t.Fatalf("expected retained value-log segments after non-sync flush")
 	}
 
-	if err := cache.SetSync(key, []byte("s")); err != nil {
-		t.Fatalf("SetSync(small): %v", err)
-	}
+	// A Checkpoint creates a durability boundary and trims old WAL segments, so
+	// retained value-log segments should become reclaimable and be pruned.
 	if err := cache.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint(small): %v", err)
+		t.Fatalf("Checkpoint: %v", err)
 	}
 	stats = cache.Stats()
 	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
@@ -1002,6 +1001,6 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("parse retained segments: %v", err)
 	}
 	if segments != 0 {
-		t.Fatalf("expected retained segments to be pruned, got %d", segments)
+		t.Fatalf("expected retained segments to be pruned after checkpoint, got %d", segments)
 	}
 }
