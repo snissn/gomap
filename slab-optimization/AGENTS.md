@@ -882,3 +882,8 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 11:29:26 HST`
 - PR8: add unified_bench dataset value patterns and optional TreeDB flags for regression benchmarking.
 - Tests: `go test ./cmd/unified_bench -count=1` → PASS
+
+`2026-01-18 11:31:21 HST`
+- Added `.pr/PR8_description.md`.
+- Pushed branch `sprint/slabopt-pr8-regression-rc` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr7-index-flags`): https://github.com/snissn/gomap/pull/67
