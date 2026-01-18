@@ -85,16 +85,6 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	}
 	avgRaw := float64(baseline.raw) / float64(len(eval))
 	best := kScore{score: -math.MaxFloat64, K: 1}
-	if baseline.raw <= 0 {
-		return &ActiveProfile{
-			DictHash:  xxhash.Sum64(dict),
-			DictBytes: len(dict),
-			Dict:      dict,
-			K:         1,
-			Samples:   len(eval),
-			Timestamp: time.Now(),
-		}
-	}
 	for _, kr := range scores {
 		if kr.K == 1 {
 			continue
@@ -142,10 +132,14 @@ func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, r
 	samples = samples[:n]
 	batches := n / k
 	var enc *zstd.Encoder
+	var err error
 	if dict != nil {
-		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
+		enc, err = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
 	} else {
-		enc, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	}
+	if err != nil {
+		return 0, 0, 0
 	}
 	defer enc.Close()
 	for b := 0; b < batches; b++ {
@@ -174,7 +168,10 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 	if n > 500 {
 		n = 500
 	}
-	enc, _ := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
+	if err != nil {
+		return 1.0
+	}
 	defer enc.Close()
 	frames := make([][]byte, n)
 	totalRaw := 0
@@ -182,7 +179,10 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 		totalRaw += len(samples[i])
 		frames[i] = enc.EncodeAll(samples[i], nil)
 	}
-	dec, _ := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+	dec, err := zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+	if err != nil {
+		return 1.0
+	}
 	defer dec.Close()
 	var out []byte
 	start := time.Now()
