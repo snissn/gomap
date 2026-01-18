@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
@@ -63,6 +66,7 @@ type DB struct {
 	mode           Mode
 	cached         *caching.DB
 	backend        *db.DB
+	dictdb         *db.DB
 	bgComp         bgCompactionWorker
 	bgVac          bgIndexVacuumWorker
 	notifyError    func(error)
@@ -103,13 +107,38 @@ func Open(opts Options) (*DB, error) {
 		opts.Mode = ModeBackend
 	}
 
+	rootDir := opts.Dir
+	maindbDir := filepath.Join(rootDir, "maindb")
+	dictdbDir := filepath.Join(rootDir, "dictdb")
+	if !opts.ReadOnly {
+		if err := os.MkdirAll(maindbDir, 0755); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(dictdbDir, 0755); err != nil {
+			return nil, err
+		}
+	}
+
+	dictOpts := opts
+	dictOpts.Dir = dictdbDir
+	dictOpts.Mode = ModeBackend
+	dictOpts.DisableBackgroundPrune = true
+	dictOpts.SlabCompression = slab.CompressionOptions{Kind: slab.CompressionNone}
+	dictBackend, err := db.Open(dictOpts)
+	if err != nil {
+		return nil, err
+	}
+	dictStore := dictdb.New(dictBackend)
+
+	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {
+		_ = dictBackend.Close()
 		return nil, err
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}, nil
+		return &DB{mode: ModeBackend, backend: backend, dictdb: dictBackend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -156,10 +185,12 @@ func Open(opts Options) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
+		_ = dictBackend.Close()
 		return nil, err
 	}
 
-	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}
+	cached.SetDictStore(dictStore)
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, dictdb: dictBackend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -411,6 +442,10 @@ func (db *DB) Close() error {
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
+	}
+	if db.dictdb != nil {
+		err = errors.Join(err, db.dictdb.Close())
+		db.dictdb = nil
 	}
 
 	return errors.Join(err, db.backgroundError())

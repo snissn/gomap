@@ -197,7 +197,7 @@ func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 	}
 
 	// WAL segments should be retired after successful recovery.
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "maindb", "wal")
 	if entries, err := os.ReadDir(walDir); err == nil {
 		for _, entry := range entries {
 			name := entry.Name()
@@ -346,7 +346,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("close backend: %v", err)
 			}
 
-			entries, err := os.ReadDir(filepath.Join(dir, "wal"))
+			entries, err := os.ReadDir(filepath.Join(dir, "maindb", "wal"))
 			if err != nil {
 				if os.IsNotExist(err) {
 					return
@@ -381,7 +381,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 func TestRecovery_TruncatedWALRecord(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "maindb", "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}

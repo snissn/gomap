@@ -708,3 +708,14 @@ Authoritative spec: `slab-optimization/spec.md`
 - Commit: `PR1: journal durability + crash tests`.
 - Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
+
+`2026-01-17 20:03:38 HST`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery_DurabilityTiers -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-17 20:04:32 HST`
+- Created `.pr/PR2_description.md` with unified_bench outputs and test list.
