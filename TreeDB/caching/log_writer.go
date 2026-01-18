@@ -25,8 +25,8 @@ type commitWriter interface {
 }
 
 type valueWriter interface {
-	Append(rid uint64, value []byte) (page.ValuePtr, error)
-	AppendBatch(records []valuelog.Record) ([]page.ValuePtr, error)
+	Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error)
+	AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error)
 	RotateTo(path string, fileID uint32) error
 	Size() int64
 	Flush() error

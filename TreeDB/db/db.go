@@ -233,6 +233,8 @@ type Options struct {
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
 	MaxValueLogRetainedBytesHard int64
+	// DictLookup provides dictionary bytes for value-log decoding.
+	DictLookup valuelog.DictLookup
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only
@@ -460,6 +462,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	vm.SetDictLookup(opts.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)

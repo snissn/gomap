@@ -19,12 +19,19 @@ func TestValueLogAppendRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	ptr1, err := writer.Append(1, []byte("alpha"))
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
 	if err != nil {
 		_ = writer.Close()
 		t.Fatalf("append: %v", err)
 	}
-	ptr2, err := writer.Append(2, []byte("beta"))
+	if len(ptrs) != 2 {
+		_ = writer.Close()
+		t.Fatalf("expected 2 ptrs, got %d", len(ptrs))
+	}
+	ptr3, err := writer.Append(0, nil, 3, []byte("gamma"))
 	if err != nil {
 		_ = writer.Close()
 		t.Fatalf("append: %v", err)
@@ -55,6 +62,15 @@ func TestValueLogAppendRead(t *testing.T) {
 		_ = reader.Close()
 		t.Fatalf("record2 mismatch")
 	}
+	rid3, val3, gotPtr3, err := reader.ReadNext()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next: %v", err)
+	}
+	if rid3 != 3 || string(val3) != "gamma" {
+		_ = reader.Close()
+		t.Fatalf("record3 mismatch")
+	}
 	if _, _, _, err := reader.ReadNext(); !errors.Is(err, io.EOF) {
 		_ = reader.Close()
 		t.Fatalf("expected EOF, got %v", err)
@@ -65,15 +81,20 @@ func TestValueLogAppendRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open file: %v", err)
 	}
-	read1, err := ReadAt(f, ptr1, true)
+	read1, err := ReadAt(f, ptrs[0], true)
 	if err != nil {
 		_ = f.Close()
 		t.Fatalf("read at ptr1: %v", err)
 	}
-	read2, err := ReadAt(f, ptr2, true)
+	read2, err := ReadAt(f, ptrs[1], true)
 	if err != nil {
 		_ = f.Close()
 		t.Fatalf("read at ptr2: %v", err)
+	}
+	read3, err := ReadAt(f, ptr3, true)
+	if err != nil {
+		_ = f.Close()
+		t.Fatalf("read at ptr3: %v", err)
 	}
 	_ = f.Close()
 
@@ -83,12 +104,18 @@ func TestValueLogAppendRead(t *testing.T) {
 	if string(read2) != "beta" {
 		t.Fatalf("ptr2 read mismatch")
 	}
+	if string(read3) != "gamma" {
+		t.Fatalf("ptr3 read mismatch")
+	}
 
-	if gotPtr1 != ptr1 {
+	if gotPtr1 != ptrs[0] {
 		t.Fatalf("ptr1 mismatch")
 	}
-	if gotPtr2 != ptr2 {
+	if gotPtr2 != ptrs[1] {
 		t.Fatalf("ptr2 mismatch")
+	}
+	if gotPtr3 != ptr3 {
+		t.Fatalf("ptr3 mismatch")
 	}
 }
 
@@ -100,7 +127,7 @@ func TestValueLogCorruptCRC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	if _, err := writer.Append(1, []byte("alpha")); err != nil {
+	if _, err := writer.Append(0, nil, 1, []byte("alpha")); err != nil {
 		_ = writer.Close()
 		t.Fatalf("append: %v", err)
 	}

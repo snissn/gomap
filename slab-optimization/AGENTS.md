@@ -751,3 +751,17 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 21:41:31 HST`
 - CI (post-log update): `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 22:40:59 HST`
+- Added `TreeDB/internal/compression` (ported package) and wired dynamic-K selection into value-log writes.
+- Extended valuelog grouped frame parsing/flags, dict lookup plumbing, and stricter grouped pointer validation.
+- Wired dict lookup through cached/backend opens and updated value-log writer/readers/tests for dict frames.
+- Added compressible dataset test `TreeDB/caching/dict_k_compression_test.go`.
+- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-17 22:42:22 HST`
+- Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`

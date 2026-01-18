@@ -381,7 +381,7 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
 	}
-	if _, err := vw.Append(1, []byte("v1")); err != nil {
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
 		_ = vw.Close()
 		t.Fatalf("valuelog.Append: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
 	}
-	if _, err := vw.Append(1, []byte("v1")); err != nil {
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
 		_ = vw.Close()
 		t.Fatalf("valuelog.Append: %v", err)
 	}

@@ -15,21 +15,22 @@ import (
 
 // File represents a value-log segment on disk.
 type File struct {
-	ID       uint32
-	Path     string
-	File     *os.File
-	RefCount atomic.Int64
-	IsZombie atomic.Bool
+	ID         uint32
+	Path       string
+	File       *os.File
+	RefCount   atomic.Int64
+	IsZombie   atomic.Bool
+	dictLookup DictLookup
 
 	closed atomic.Bool
 }
 
-func openFile(path string, id uint32) (*File, error) {
+func openFile(path string, id uint32, lookup DictLookup) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	return &File{ID: id, Path: path, File: f}, nil
+	return &File{ID: id, Path: path, File: f, dictLookup: lookup}, nil
 }
 
 func (f *File) Close() error {
@@ -41,11 +42,11 @@ func (f *File) Close() error {
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
-	return ReadAt(f.File, ptr, verifyCRC)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
-	return ReadAt(f.File, ptr, verifyCRC)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
 }
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.
@@ -78,6 +79,7 @@ type Manager struct {
 	files map[uint32]*File
 
 	disableReadChecksum bool
+	dictLookup          DictLookup
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -97,6 +99,14 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.disableReadChecksum = disable
 }
 
+func (m *Manager) SetDictLookup(lookup DictLookup) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.dictLookup = lookup
+	for _, f := range m.files {
+		f.dictLookup = lookup
+	}
+}
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -127,7 +137,7 @@ func (m *Manager) Refresh() error {
 		if _, ok := m.files[seg.id]; ok {
 			continue
 		}
-		f, err := openFile(seg.path, seg.id)
+		f, err := openFile(seg.path, seg.id, m.dictLookup)
 		if err != nil {
 			return err
 		}

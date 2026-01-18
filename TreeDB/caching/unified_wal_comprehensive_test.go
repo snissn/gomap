@@ -112,7 +112,7 @@ func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 	}
 	key := []byte("k1")
 	val := bytes.Repeat([]byte{0xAB}, 512)
-	if _, err := writer.Append(1, val); err != nil {
+	if _, err := writer.Append(0, nil, 1, val); err != nil {
 		_ = writer.Close()
 		t.Fatalf("valuelog.Append: %v", err)
 	}
