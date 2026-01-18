@@ -846,3 +846,9 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 07:59:45 HST`
 - PR created via `gh` (base `sprint/slabopt-pr6-recovery-hardening`): https://github.com/snissn/gomap/pull/66
 - CI: `gh pr checks 66 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
