@@ -30,7 +30,7 @@ run_case "batch_write/random/baseline" "${base_batch[@]}" -dataset-val-pattern r
 run_case "batch_write/repeat/baseline" "${base_batch[@]}" -dataset-val-pattern repeat -treedb-slab-compression none
 run_case "batch_write/zero/zstd" "${base_batch[@]}" -dataset-val-pattern zero -treedb-slab-compression zstd -treedb-slab-compression-min-bytes 64
 run_case "batch_write/random/lanes2" "${base_batch[@]}" -dataset-val-pattern random -treedb-journal-lanes 2 -treedb-slab-compression none
-run_case "batch_write/random/split_vlog" "${base_batch[@]}" -dataset-val-pattern random -treedb-split-value-log -treedb-memtable-value-log-pointers -treedb-slab-compression none
+run_case "batch_write/random/split_vlog" "${base_batch[@]}" -dataset-val-pattern random -treedb-split-value-log -treedb-memtable-value-log-pointers -treedb-allow-unsafe -treedb-slab-compression none
 run_case "batch_write/random/columnar" "${base_batch[@]}" -dataset-val-pattern random -treedb-index-columnar-leaves -treedb-slab-compression none
 run_case "batch_write/random/base_delta" "${base_batch[@]}" -dataset-val-pattern random -treedb-index-internal-base-delta -treedb-slab-compression none
 run_case "batch_write/random/columnar_base_delta" "${base_batch[@]}" -dataset-val-pattern random -treedb-index-columnar-leaves -treedb-index-internal-base-delta -treedb-slab-compression none
