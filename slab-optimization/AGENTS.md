@@ -708,3 +708,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Commit: `PR1: journal durability + crash tests`.
 - Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
