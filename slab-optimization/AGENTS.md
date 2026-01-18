@@ -806,3 +806,6 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 08:59:33 HST`
 - Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
+
+`2026-01-18 09:15:24 HST`
+- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
