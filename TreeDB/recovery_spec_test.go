@@ -107,6 +107,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
+	splitValueLog := os.Getenv("TREEDB_CRASH_SPLIT_VALUE_LOG") == "1"
 
 	opts := treedb.Options{
 		Dir:             dir,
@@ -114,6 +115,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		DisableWAL:      disableWAL,
 		RelaxedSync:     relaxedSync,
 		DisableValueLog: disableValueLog,
+		SplitValueLog:   splitValueLog,
 		AllowUnsafe:     disableWAL || relaxedSync,
 	}
 
@@ -300,6 +302,17 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_DISABLE_WAL=0",
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectWALRetain: true,
+			expectLarge:     true,
+		},
+		{
+			name: "split_value_log_write_sync_requires_commit_and_payload",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
 			expectWALRetain: true,

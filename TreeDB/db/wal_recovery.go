@@ -177,6 +177,21 @@ func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegment
 				return fmt.Errorf("wal: invalid pointer length %d", len(val))
 			}
 			ptr := page.DecodeValuePtr(val)
+			if !page.IsValueLogFileID(ptr.FileID) {
+				_ = batch.Close()
+				_ = reader.Close()
+				return fmt.Errorf("wal: non value-log pointer %#x", ptr.FileID)
+			}
+			if db.valueLogManager == nil {
+				_ = batch.Close()
+				_ = reader.Close()
+				return fmt.Errorf("wal: pointer payload missing: value-log manager unavailable")
+			}
+			if _, err := db.valueLogManager.Read(ptr); err != nil {
+				_ = batch.Close()
+				_ = reader.Close()
+				return fmt.Errorf("wal: pointer payload missing: %w", err)
+			}
 			if err := ptrBatch.SetPointer(key, ptr); err != nil {
 				_ = batch.Close()
 				_ = reader.Close()
