@@ -856,5 +856,21 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 09:18:36 HST`
 - PR6: merged `sprint/slabopt-pr6-recovery-hardening` into `sprint/slabopt-pr7-index-flags` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
 
+`2026-01-18 09:26:29 HST`
+- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:28:24 HST`
+- PR5: merged `sprint/slabopt-pr5-parallel-lanes` into `sprint/slabopt-pr6-recovery-hardening` after resolving `slab-optimization/AGENTS.md`.
+
 `2026-01-18 09:30:00 HST`
 - PR6: merged `sprint/slabopt-pr6-recovery-hardening` into `sprint/slabopt-pr7-index-flags` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:42:31 HST`
+- PR5: skip empty commit batches, preserve legacy commit-log ordering, and clean up lane WAL/vlog writers on open failures.
+- PR5: document lane/segment limits in options and skip legacy value-log segments that would collide with lane-encoded IDs.
+- Updated unified bench outputs in `.pr/PR5_description.md`.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`

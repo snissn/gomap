@@ -353,6 +353,10 @@ func listSegments(dir string) ([]segmentInfo, error) {
 			if parseErr != nil {
 				continue
 			}
+			if seq > maxSegmentSeq {
+				// Legacy segments use raw seq; skip ones that would collide with lane-encoded IDs.
+				continue
+			}
 			id = page.ValueLogFileID(uint32(seq))
 		}
 

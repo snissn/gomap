@@ -26,15 +26,15 @@ Seed:        1
        Test         TreeDB
 -----------  -------------
 Batch Write              -
-Batch Write / TreeDB = 4,701,693
+Batch Write / TreeDB = 4,815,336
 # unified_bench suite: lanes_probe
 
 - lanes requested: 1
 - keys: 500,000
 - valsize: 128
 - batchsize: 1000
-- ops/sec: 4,701,693
-- wall time: 531ms
+- ops/sec: 4,815,336
+- wall time: 441ms
 - index.db bytes: 134,217,728
 - wal bytes: 0
 ```
@@ -53,15 +53,15 @@ Seed:        1
        Test         TreeDB
 -----------  -------------
 Batch Write              -
-Batch Write / TreeDB = 4,768,914
+Batch Write / TreeDB = 4,566,634
 # unified_bench suite: lanes_probe
 
 - lanes requested: 2
 - keys: 500,000
 - valsize: 128
 - batchsize: 1000
-- ops/sec: 4,768,914
-- wall time: 418ms
+- ops/sec: 4,566,634
+- wall time: 463ms
 - index.db bytes: 134,217,728
 - wal bytes: 0
 ```

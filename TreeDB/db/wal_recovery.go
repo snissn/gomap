@@ -205,8 +205,10 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}
 
 	var (
-		batches     []commitBatch
-		commitPaths []string
+		batches       []commitBatch
+		legacyBatches []commitBatch
+		commitPaths   []string
+		readOrder     int
 	)
 	for _, segment := range segments {
 		if segment.valueLog {
@@ -220,11 +222,18 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		for {
 			records, err := reader.ReadBatch()
 			if err == nil {
-				seq := uint64(0)
-				if len(records) > 0 {
-					seq = records[0].Seq
+				if len(records) == 0 {
+					continue
 				}
-				batches = append(batches, commitBatch{seq: seq, order: len(batches), records: records})
+				seq := records[0].Seq
+				batch := commitBatch{seq: seq, order: readOrder, records: records}
+				readOrder++
+				if seq == 0 {
+					// Legacy commit logs don't carry sequence numbers; preserve read order.
+					legacyBatches = append(legacyBatches, batch)
+				} else {
+					batches = append(batches, batch)
+				}
 				continue
 			}
 			if isTruncatedLogError(err) {
@@ -249,6 +258,11 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 			}
 			return batches[i].seq < batches[j].seq
 		})
+	}
+	for _, batch := range legacyBatches {
+		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+			return err
+		}
 	}
 	for _, batch := range batches {
 		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
