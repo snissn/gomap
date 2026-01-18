@@ -15,6 +15,7 @@ import (
 
 var (
 	treedbFlushThreshold            = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbKeepRecent                = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems             = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
 	treedbSlowdownBacklogSeconds    = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
@@ -125,6 +126,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 		DisablePiggybackCompaction:        *treedbDisablePiggyback,
 	}
+	// TODO(slabopt-pr0): plumb treedbJournalLanes into treedb.Options once JournalLanes exists.
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
 	}
@@ -153,6 +155,7 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
+	// TODO(slabopt-pr0): plumb treedbJournalLanes into treedb.Options once JournalLanes exists.
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err

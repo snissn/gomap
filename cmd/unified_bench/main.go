@@ -270,6 +270,12 @@ func main() {
 				log.Fatalf("sload_readheavy suite: %v", err)
 			}
 			fmt.Print(out)
+		case "lanes_probe", "lanes-probe":
+			out, err := runLaneProbeSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("lanes_probe suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
