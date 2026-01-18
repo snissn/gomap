@@ -892,3 +892,6 @@ Authoritative spec: `slab-optimization/spec.md`
 - PR4 regression fix: skip value-log compression when no dict is active; add regression test.
 - Cherry-picked fix into PR5/PR6/PR7/PR8.
 - Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+
+`2026-01-18 11:48:55 HST`
+- PR8: added `scripts/bench_slabopt_matrix.sh` for slabopt regression sweeps (PR8/main comparison).
