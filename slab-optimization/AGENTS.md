@@ -800,3 +800,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Pushed branch `sprint/slabopt-pr5-parallel-lanes` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr4-dict-dynamick`): https://github.com/snissn/gomap/pull/64
 - CI: `gh pr checks 64 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
