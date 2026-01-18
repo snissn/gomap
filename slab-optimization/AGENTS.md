@@ -732,3 +732,8 @@ Authoritative spec: `slab-optimization/spec.md`
 - Updated read-only open handling for missing maindb/dictdb directories in `TreeDB/public.go`.
 - Clarified dictdb store errors, added collision handling/rehydration, and updated tests in `TreeDB/internal/dictdb/store.go` and `TreeDB/internal/dictdb/store_test.go`.
 - Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+
+`2026-01-18 00:44:53 HST`
+- Commit: `fix: handle dictdb collisions and read-only open`.
+- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
+- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
