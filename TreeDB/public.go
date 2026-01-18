@@ -177,6 +177,7 @@ func Open(opts Options) (*DB, error) {
 		DisableWAL:                   opts.DisableWAL,
 		DisableValueLog:              opts.DisableValueLog,
 		SplitValueLog:                opts.SplitValueLog,
+		JournalLanes:                 opts.JournalLanes,
 		WALMaxSegmentBytes:           opts.WALMaxSegmentBytes,
 		RelaxedSync:                  opts.RelaxedSync,
 		DisableReadChecksum:          opts.DisableReadChecksum,

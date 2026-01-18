@@ -45,6 +45,7 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:  1 << 30,
 		DisableValueLog: true,
+		JournalLanes:    1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -72,8 +73,11 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	failErr := errors.New("apply delete failed")
 
 	db.mu.Lock()
-	origWal := db.wal
-	db.wal = stub
+	l := &db.lanes[0]
+	l.walMu.Lock()
+	origWal := l.wal
+	l.wal = stub
+	l.walMu.Unlock()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
@@ -88,7 +92,9 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	db.wal = origWal
+	l.walMu.Lock()
+	l.wal = origWal
+	l.walMu.Unlock()
 	db.mu.Unlock()
 	if stub.appendCalls == 0 {
 		t.Fatalf("expected Append to be called")

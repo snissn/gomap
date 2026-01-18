@@ -78,6 +78,7 @@ func decodeBatch(payload []byte) ([]Record, error) {
 		keyLen := binary.LittleEndian.Uint16(payload[off+1 : off+3])
 		valLen := binary.LittleEndian.Uint32(payload[off+3 : off+7])
 		rid := binary.LittleEndian.Uint64(payload[off+7 : off+15])
+		seq := binary.LittleEndian.Uint64(payload[off+15 : off+23])
 		if recordSizeExceedsMax(keyLen, valLen) {
 			return nil, ErrRecordTooLarge
 		}
@@ -107,7 +108,7 @@ func decodeBatch(payload []byte) ([]Record, error) {
 			return nil, ErrCorrupt
 		}
 
-		records = append(records, Record{Op: op, Key: key, Value: val, RID: rid})
+		records = append(records, Record{Op: op, Key: key, Value: val, RID: rid, Seq: seq})
 		off += recSize
 	}
 	if off != len(payload) {

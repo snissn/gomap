@@ -779,3 +779,18 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -count=1` → PASS
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 23:13:49 HST`
+- CI: `gh pr checks 63` → pending (windows-latest job still pending; others pass).
+
+`2026-01-17 23:14:06 HST`
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 00:20:33 HST`
+- Updated cached-mode tests for per-lane WAL/value-log writers in `TreeDB/caching/checkpoint_test.go`, `TreeDB/caching/delete_range_test.go`, `TreeDB/caching/dict_k_compression_test.go`, and `TreeDB/caching/unsafe_options_test.go`.
+- Added `.pr/PR5_description.md` with summary, tests, and unified_bench output.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`

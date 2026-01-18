@@ -117,12 +117,19 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 	}
 
 	valueBytes := func() int64 {
-		cached.vlogMu.Lock()
-		defer cached.vlogMu.Unlock()
-		if cached.vlog == nil {
-			return 0
+		var total int64
+		for i := range cached.lanes {
+			l := &cached.lanes[i]
+			l.vlogMu.Lock()
+			for _, sz := range l.vlogClosedSizes {
+				total += sz
+			}
+			if l.vlog != nil {
+				total += l.vlog.Size()
+			}
+			l.vlogMu.Unlock()
 		}
-		return cached.vlog.Size()
+		return total
 	}()
 	if valueBytes == 0 {
 		t.Fatalf("expected value log bytes > 0")

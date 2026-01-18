@@ -121,12 +121,12 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		RelaxedSync:                       *treedbRelaxedSync,
 		DisableReadChecksum:               *treedbDisableReadChecksum,
 		AllowUnsafe:                       *treedbAllowUnsafe,
+		JournalLanes:                      *treedbJournalLanes,
 		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 		DisablePiggybackCompaction:        *treedbDisablePiggyback,
 	}
-	// TODO(slabopt-pr0): plumb treedbJournalLanes into treedb.Options once JournalLanes exists.
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
 	}
@@ -152,10 +152,10 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		ForceValuePointers:                *treedbForceValuePointers,
 		SlabCompression:                   compOpts,
 		AllowUnsafe:                       *treedbAllowUnsafe,
+		JournalLanes:                      *treedbJournalLanes,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
-	// TODO(slabopt-pr0): plumb treedbJournalLanes into treedb.Options once JournalLanes exists.
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
