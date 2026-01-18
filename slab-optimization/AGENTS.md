@@ -771,3 +771,11 @@ Authoritative spec: `slab-optimization/spec.md`
 - Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr3-rid-join`): https://github.com/snissn/gomap/pull/63
 - CI: `gh pr checks 63 --watch` → FAIL (windows-latest: https://github.com/snissn/gomap/actions/runs/21108956317/job/60704603039; others PASS).
+
+`2026-01-17 23:06:28 HST`
+- Commit: `fix: make dict compression test use vlog size`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
