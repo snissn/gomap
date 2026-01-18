@@ -836,3 +836,6 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 07:54:43 HST`
 - Created `.pr/PR7_description.md`.
+
+`2026-01-18 07:55:17 HST`
+- Commit: `PR7: index work flags + columnar leaf scaffold`.
