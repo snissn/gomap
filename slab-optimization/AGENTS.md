@@ -878,3 +878,7 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 09:46:17 HST`
 - PR7: simplify zipper leaf builder option wiring and add columnar layout bounds check.
 - Tests: `go test ./TreeDB/node -count=1` → PASS
+
+`2026-01-18 11:29:26 HST`
+- PR8: add unified_bench dataset value patterns and optional TreeDB flags for regression benchmarking.
+- Tests: `go test ./cmd/unified_bench -count=1` → PASS
