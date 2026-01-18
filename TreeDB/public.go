@@ -3,6 +3,7 @@ package treedb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -110,7 +111,20 @@ func Open(opts Options) (*DB, error) {
 	rootDir := opts.Dir
 	maindbDir := filepath.Join(rootDir, "maindb")
 	dictdbDir := filepath.Join(rootDir, "dictdb")
-	if !opts.ReadOnly {
+	if opts.ReadOnly {
+		if _, err := os.Stat(maindbDir); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: maindb directory missing for read-only open: %s", maindbDir)
+			}
+			return nil, err
+		}
+		if _, err := os.Stat(dictdbDir); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: dictdb directory missing for read-only open: %s", dictdbDir)
+			}
+			return nil, err
+		}
+	} else {
 		if err := os.MkdirAll(maindbDir, 0755); err != nil {
 			return nil, err
 		}
