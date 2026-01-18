@@ -167,7 +167,8 @@ func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
 		t.Fatalf("wal.Close: %v", err)
 	}
 
-	if _, err := db.Open(db.Options{Dir: dir, SplitValueLog: true}); err == nil {
+	if opened, err := db.Open(db.Options{Dir: dir, SplitValueLog: true}); err == nil {
+		_ = opened.Close()
 		t.Fatalf("expected recovery to fail on missing payload, got nil error")
 	} else if !strings.Contains(err.Error(), "pointer payload missing") {
 		t.Fatalf("expected pointer payload error, got %v", err)
