@@ -839,3 +839,10 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 07:55:17 HST`
 - Commit: `PR7: index work flags + columnar leaf scaffold`.
+
+`2026-01-18 07:55:57 HST`
+- Pushed branch `sprint/slabopt-pr7-index-flags` to origin.
+
+`2026-01-18 07:59:45 HST`
+- PR created via `gh` (base `sprint/slabopt-pr6-recovery-hardening`): https://github.com/snissn/gomap/pull/66
+- CI: `gh pr checks 66 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
