@@ -779,3 +779,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -count=1` → PASS
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
