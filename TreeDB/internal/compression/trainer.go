@@ -559,7 +559,11 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		// Retry with a smaller dict to avoid invalid offset failures.
 		reduced := dict[:len(dict)/2]
 		if err2 := validateDict(reduced, level); err2 == nil {
-			return reduced, nil
+			padded := make([]byte, 40960)
+			copy(padded, reduced)
+			if err3 := validateDict(padded, level); err3 == nil {
+				return padded, nil
+			}
 		}
 		log.Printf("treedb: slab compression training dict rejected slab=%d err=%v", dictID-1, err)
 		return nil, err

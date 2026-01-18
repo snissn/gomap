@@ -788,3 +788,9 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 09:14:11 HST`
 - PR3: merged `sprint/slabopt-pr3-rid-join` into `sprint/slabopt-pr4-dict-dynamick` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:22:54 HST`
+- PR4: handle zstd encoder/decoder creation errors in `TreeDB/internal/compression/profile.go`, remove dead baseline check, and pad reduced dictionaries in `TreeDB/internal/compression/trainer.go`.
+
+`2026-01-18 09:23:59 HST`
+- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS
