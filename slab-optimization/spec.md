@@ -286,7 +286,8 @@ Correctness is prioritized over recovery speed.
 
 ### PR Process Requirements
 - Every PR stage MUST be opened via GitHub CLI (`gh pr create`), not via web UI.
-- Every PR description MUST include unified_bench output samples relevant to that stage.
+- Every PR description on GitHub MUST include unified_bench output samples relevant to that stage.
+- Each PR branch MUST be based on the previous PR branch; PRs must be done sequentially.
 
 ### PR0 — Benchmarks and Lane Probe
 - Stable benchmark entry points.

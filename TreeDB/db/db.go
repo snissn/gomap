@@ -14,7 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/vlog"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -34,12 +34,12 @@ type DBState struct {
 	RootPageID       uint64
 	SystemRootPageID uint64
 	SlabSet          *slab.SlabSet
-	ValueLogSet      *vlog.Set
+	ValueLogSet      *valuelog.Set
 }
 
 type DB struct {
 	slabManager     *slab.SlabManager
-	valueLogManager *vlog.Manager
+	valueLogManager *valuelog.Manager
 	lock            *lockfile.Lock
 	adaptive        *adaptive.Controller
 	pruner          pruneWorker
@@ -452,8 +452,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
-	vlogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := vlog.NewManager(vlogDir)
+	valueLogDir := filepath.Join(opts.Dir, "wal")
+	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		p.Close()
 		_ = sm.Close()
@@ -516,17 +516,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
-	// Initialize State
-	initialState := &DBState{
-		CommitSeq:        db.meta.CommitSeq,
-		RootPageID:       db.meta.UserRootPageID,
-		SystemRootPageID: db.meta.SystemRootPageID,
-		SlabSet:          sm.CurrentSlabSet(),
-		ValueLogSet:      vm.CurrentSet(),
-	}
-	db.state.Store(initialState)
-
-	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog && !opts.SplitValueLog
+	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog
 	segments, err := listWALSegments(opts.Dir, includeValueLog)
 	if err != nil {
 		db.Close()
@@ -536,6 +526,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
+
+	// Initialize State after recovery so log cleanup can proceed without pinning.
+	initialState := &DBState{
+		CommitSeq:        db.meta.CommitSeq,
+		RootPageID:       db.meta.UserRootPageID,
+		SystemRootPageID: db.meta.SystemRootPageID,
+		SlabSet:          sm.CurrentSlabSet(),
+		ValueLogSet:      vm.CurrentSet(),
+	}
+	db.state.Store(initialState)
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
