@@ -887,3 +887,8 @@ Authoritative spec: `slab-optimization/spec.md`
 - Added `.pr/PR8_description.md`.
 - Pushed branch `sprint/slabopt-pr8-regression-rc` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr7-index-flags`): https://github.com/snissn/gomap/pull/67
+
+`2026-01-18 11:41:28 HST`
+- PR4 regression fix: skip value-log compression when no dict is active; add regression test.
+- Cherry-picked fix into PR5/PR6/PR7/PR8.
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
