@@ -719,3 +719,6 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 20:04:32 HST`
 - Created `.pr/PR2_description.md` with unified_bench outputs and test list.
+
+`2026-01-17 20:06:27 HST`
+- Commit: `PR2: dictdb separate TreeDB instance` (lefthook `go-fmt`).
