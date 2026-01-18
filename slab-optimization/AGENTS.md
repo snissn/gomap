@@ -727,3 +727,8 @@ Authoritative spec: `slab-optimization/spec.md`
 - Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr1-journal-abstraction`): https://github.com/snissn/gomap/pull/61
 - CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 00:39:12 HST`
+- Updated read-only open handling for missing maindb/dictdb directories in `TreeDB/public.go`.
+- Clarified dictdb store errors, added collision handling/rehydration, and updated tests in `TreeDB/internal/dictdb/store.go` and `TreeDB/internal/dictdb/store_test.go`.
+- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS

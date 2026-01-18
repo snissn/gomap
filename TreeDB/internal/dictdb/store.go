@@ -1,6 +1,7 @@
 package dictdb
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -11,7 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
-var errMissingCurrent = errors.New("dictdb: current dictionary missing")
+var errStoreUnavailable = errors.New("dictdb: store unavailable")
 
 // Store provides access to dictionary storage backed by a TreeDB backend.
 type Store struct {
@@ -45,7 +46,7 @@ func (s *Store) Close() error {
 // GetCurrent returns the current dictionary ID or 0 if unset.
 func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 	if s == nil || s.backend == nil {
-		return 0, errMissingCurrent
+		return 0, errStoreUnavailable
 	}
 	val, err := s.backend.Get(currentKey())
 	if err != nil {
@@ -63,7 +64,7 @@ func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
 // PutDictBytes inserts dict bytes (deduped by hash) and returns its dictID.
 func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, error) {
 	if s == nil || s.backend == nil {
-		return 0, errMissingCurrent
+		return 0, errStoreUnavailable
 	}
 	if dictBytes == nil {
 		dictBytes = []byte{}
@@ -84,6 +85,7 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		return binary.BigEndian.Uint64(val), nil
 	}
 
+	// dictID uses the first 8 bytes of SHA256; verify content on collision.
 	dictID := binary.BigEndian.Uint64(checksum[:8])
 	bytesKey := bytesKey(dictID)
 	existing, err := s.backend.Get(bytesKey)
@@ -91,7 +93,15 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 		return 0, err
 	}
 	if existing != nil {
-		return 0, fmt.Errorf("dictdb: dict bytes for id %d already exist", dictID)
+		if bytes.Equal(existing, dictBytes) {
+			valBuf := make([]byte, 8)
+			binary.BigEndian.PutUint64(valBuf, dictID)
+			if err := s.backend.SetSync(hashKey, valBuf); err != nil {
+				return 0, err
+			}
+			return dictID, nil
+		}
+		return 0, fmt.Errorf("dictdb: dict id collision for %d", dictID)
 	}
 
 	batch := s.backend.NewBatch()
@@ -118,7 +128,7 @@ func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, err
 // SetCurrent marks dictID as the current dictionary.
 func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 	if s == nil || s.backend == nil {
-		return errMissingCurrent
+		return errStoreUnavailable
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,7 +148,7 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 // GetDictBytes returns the dictionary bytes for dictID.
 func (s *Store) GetDictBytes(_ context.Context, dictID uint64) ([]byte, error) {
 	if s == nil || s.backend == nil {
-		return nil, errMissingCurrent
+		return nil, errStoreUnavailable
 	}
 	val, err := s.backend.Get(bytesKey(dictID))
 	if err != nil {
