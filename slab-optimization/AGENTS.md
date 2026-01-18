@@ -675,3 +675,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
 - Tests: `go test ./cmd/unified_bench -count=1` → PASS
+
+`2026-01-17 18:51:59 HST`
+- Created branch `sprint/slabopt-pr0-bench-lanes-probe`.
+- Commit: `PR0: add unified bench lanes probe suite`.
+- Pushed branch to origin.
+- PR created via `gh`: https://github.com/snissn/gomap/pull/59
