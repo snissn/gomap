@@ -92,14 +92,8 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 
 	flags := byte(0)
 	encoded := payload
-	if rawTotal > 0 {
-		var enc *zstd.Encoder
-		var err error
-		if len(dict) > 0 {
-			enc, err = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
-		} else {
-			enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
-		}
+	if rawTotal > 0 && len(dict) > 0 {
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
 		if err != nil {
 			return nil, FrameHeader{}, err
 		}

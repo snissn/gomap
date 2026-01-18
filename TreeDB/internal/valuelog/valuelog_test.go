@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -194,4 +195,31 @@ func TestValueLogTruncatedRecord(t *testing.T) {
 		t.Fatalf("expected unexpected EOF, got %v", err)
 	}
 	_ = reader.Close()
+}
+
+func TestEncodeFrameSkipsCompressionWithoutDict(t *testing.T) {
+	value := bytes.Repeat([]byte("a"), 2048)
+	body, header, err := EncodeFrame(0, nil, []Record{{RID: 1, Value: value}})
+	if err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+	if header.Flags&FrameFlagCompressed != 0 {
+		t.Fatalf("expected no compression flag without dict")
+	}
+	decoded, rids, offsets, payload, err := DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	if decoded.Flags&FrameFlagCompressed != 0 {
+		t.Fatalf("expected no compression flag in decoded header")
+	}
+	if len(rids) != 1 || rids[0] != 1 {
+		t.Fatalf("unexpected rids: %v", rids)
+	}
+	if len(offsets) != 2 || offsets[1] != uint32(len(value)) {
+		t.Fatalf("unexpected offsets: %v", offsets)
+	}
+	if !bytes.Equal(payload, value) {
+		t.Fatalf("payload mismatch")
+	}
 }
