@@ -765,3 +765,9 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 22:42:22 HST`
 - Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 22:50:23 HST`
+- Commit: `PR4: dict + dynamic-K grouped ValueLog encoding`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr3-rid-join`): https://github.com/snissn/gomap/pull/63
+- CI: `gh pr checks 63 --watch` → FAIL (windows-latest: https://github.com/snissn/gomap/actions/runs/21108956317/job/60704603039; others PASS).
