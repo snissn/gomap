@@ -722,3 +722,8 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 20:06:27 HST`
 - Commit: `PR2: dictdb separate TreeDB instance` (lefthook `go-fmt`).
+
+`2026-01-17 20:11:27 HST`
+- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr1-journal-abstraction`): https://github.com/snissn/gomap/pull/61
+- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
