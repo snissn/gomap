@@ -742,3 +742,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -count=1` → PASS
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 21:35:34 HST`
+- Commit: `PR3: RID join for CommitLog/ValueLog + recovery v1`.
+- Pushed branch `sprint/slabopt-pr3-rid-join` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr2-dictdb`): https://github.com/snissn/gomap/pull/62
+- CI: `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
