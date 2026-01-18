@@ -709,6 +709,35 @@ Authoritative spec: `slab-optimization/spec.md`
 - Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
 
+`2026-01-17 20:03:38 HST`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery_DurabilityTiers -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-17 20:04:32 HST`
+- Created `.pr/PR2_description.md` with unified_bench outputs and test list.
+
+`2026-01-17 20:06:27 HST`
+- Commit: `PR2: dictdb separate TreeDB instance` (lefthook `go-fmt`).
+
+`2026-01-17 20:11:27 HST`
+- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr1-journal-abstraction`): https://github.com/snissn/gomap/pull/61
+- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 00:39:12 HST`
+- Updated read-only open handling for missing maindb/dictdb directories in `TreeDB/public.go`.
+- Clarified dictdb store errors, added collision handling/rehydration, and updated tests in `TreeDB/internal/dictdb/store.go` and `TreeDB/internal/dictdb/store_test.go`.
+- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+
+`2026-01-18 00:44:53 HST`
+- Commit: `fix: handle dictdb collisions and read-only open`.
+- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
+- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
 `2026-01-18 08:58:31 HST`
 - PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
 
