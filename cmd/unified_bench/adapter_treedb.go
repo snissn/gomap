@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"math"
+	"reflect"
 	"strings"
 	"time"
 
@@ -45,6 +46,10 @@ var (
 	treedbSlabCompressionMinBytes   = flag.Int("treedb-slab-compression-min-bytes", 0, "TreeDB: minimum value size to attempt compression (0=default)")
 	treedbSlabCompressionMinSavings = flag.Int("treedb-slab-compression-min-savings", 0, "TreeDB: minimum bytes saved to keep compressed (0=default)")
 	treedbValueLogThreshold         = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
+	treedbMemtableValueLogPointers  = flag.Bool("treedb-memtable-value-log-pointers", false, "TreeDB: store large values as value-log pointers in memtables")
+	treedbSplitValueLog             = flag.Bool("treedb-split-value-log", false, "TreeDB: store WAL and value-log in separate segments")
+	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
+	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -78,6 +83,24 @@ func clampUint32(v uint64) uint32 {
 		return math.MaxUint32
 	}
 	return uint32(v)
+}
+
+func setOptionalBoolOption(opts *treedb.Options, name string, value bool) {
+	v := reflect.ValueOf(opts).Elem()
+	field := v.FieldByName(name)
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Bool {
+		return
+	}
+	field.SetBool(value)
+}
+
+func setOptionalIntOption(opts *treedb.Options, name string, value int) {
+	v := reflect.ValueOf(opts).Elem()
+	field := v.FieldByName(name)
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Int {
+		return
+	}
+	field.SetInt(int64(value))
 }
 
 func parseSlabCompression(name string, minBytes int, minSavings int) slab.CompressionOptions {
@@ -130,6 +153,11 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
 	}
+	setOptionalBoolOption(&opts, "MemtableValueLogPointers", *treedbMemtableValueLogPointers)
+	setOptionalBoolOption(&opts, "SplitValueLog", *treedbSplitValueLog)
+	setOptionalIntOption(&opts, "JournalLanes", *treedbJournalLanes)
+	setOptionalBoolOption(&opts, "IndexColumnarLeaves", *treedbIndexColumnarLeaves)
+	setOptionalBoolOption(&opts, "IndexInternalBaseDelta", *treedbIndexInternalBaseDelta)
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
@@ -156,6 +184,11 @@ func NewTreeDBBackend(dir string) (kvstore.DB, error) {
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),
 	}
+	setOptionalBoolOption(&opts, "MemtableValueLogPointers", *treedbMemtableValueLogPointers)
+	setOptionalBoolOption(&opts, "SplitValueLog", *treedbSplitValueLog)
+	setOptionalIntOption(&opts, "JournalLanes", *treedbJournalLanes)
+	setOptionalBoolOption(&opts, "IndexColumnarLeaves", *treedbIndexColumnarLeaves)
+	setOptionalBoolOption(&opts, "IndexInternalBaseDelta", *treedbIndexInternalBaseDelta)
 	db, err := treedb.OpenBackend(opts)
 	if err != nil {
 		return nil, err
