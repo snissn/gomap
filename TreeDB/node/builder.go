@@ -16,12 +16,16 @@ type Builder struct {
 	dirEnd                int // Offset where the next directory entry (offset) will be written
 	heapStart             int // Offset where the next heap entry will be written (grows down)
 	leafPrefixCompression bool
+	leafColumnar          bool
+	internalBaseDelta     bool
 	leafPrevKey           []byte
 	leafIndex             int
 }
 
 type BuilderOptions struct {
 	LeafPrefixCompression bool
+	LeafColumnar          bool
+	InternalBaseDelta     bool
 }
 
 // NewBuilder initializes a builder for the given buffer.
@@ -30,12 +34,18 @@ func NewBuilder(data []byte, pType page.PageType) *Builder {
 }
 
 func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions) *Builder {
+	leafPrefix := opts.LeafPrefixCompression
+	if opts.LeafColumnar {
+		leafPrefix = false
+	}
 	return &Builder{
 		data:                  data,
 		pType:                 pType,
 		dirEnd:                NodeHeaderSize,
 		heapStart:             len(data),
-		leafPrefixCompression: opts.LeafPrefixCompression,
+		leafPrefixCompression: leafPrefix,
+		leafColumnar:          opts.LeafColumnar,
+		internalBaseDelta:     opts.InternalBaseDelta,
 	}
 }
 
@@ -82,6 +92,17 @@ func (b *Builder) LeafEntrySizeWithPrefix(key, value []byte, flags byte) (entryS
 }
 
 func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, prefixLen int, suffixLen int) {
+	if b.leafColumnar {
+		prefixLen = 0
+		suffixLen = len(key)
+		entrySize = leafColumnarHeaderSize + suffixLen
+		if flags&FlagPointer != 0 {
+			entrySize += page.ValuePtrSize
+		} else {
+			entrySize += len(value)
+		}
+		return entrySize, prefixLen, suffixLen
+	}
 	prefixLen = 0
 	suffixLen = len(key)
 	headerSize := 7
@@ -110,11 +131,55 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	if b.leafColumnar {
+		return b.addLeafEntryColumnar(key, value, flags, valPtr)
+	}
 
 	// 1. Calculate Entry Size
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
 	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+}
+
+func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	valLen := 0
+	entrySize := leafColumnarHeaderSize + len(key)
+	if flags&FlagPointer != 0 {
+		entrySize += page.ValuePtrSize
+	} else if flags&FlagTombstone == 0 {
+		valLen = len(value)
+		entrySize += valLen
+	}
+
+	required := entrySize + DirectoryEntrySize
+	freeSpace := b.heapStart - b.dirEnd
+	if freeSpace < required {
+		return ErrNodeFull
+	}
+
+	entryStart := b.heapStart - entrySize
+	keyOff := leafColumnarHeaderSize
+	valOff := keyOff + len(key)
+
+	writeLeafColumnarHeader(b.data[entryStart:entryStart+leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
+
+	keyStart := entryStart + keyOff
+	copy(b.data[keyStart:keyStart+len(key)], key)
+
+	valueStart := entryStart + valOff
+	if flags&FlagPointer != 0 {
+		valPtr.Encode(b.data[valueStart : valueStart+page.ValuePtrSize])
+	} else if flags&FlagTombstone == 0 {
+		copy(b.data[valueStart:valueStart+valLen], value)
+	}
+
+	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+
+	b.heapStart = entryStart
+	b.dirEnd += DirectoryEntrySize
+	b.count++
+	b.leafIndex++
+	return nil
 }
 
 // AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
@@ -230,8 +295,13 @@ func (b *Builder) Finish() *Node {
 	binary.LittleEndian.PutUint64(b.data[0:8], b.pageID)
 	// Checksum at 8-12 (written by UpdateChecksum)
 	flags := uint16(b.pType)
-	if b.leafPrefixCompression && b.pType == page.PageTypeLeaf {
-		flags |= leafPrefixCompressedFlag
+	if b.pType == page.PageTypeLeaf {
+		if b.leafPrefixCompression {
+			flags |= leafPrefixCompressedFlag
+		}
+		if b.leafColumnar {
+			flags |= leafColumnarFlag
+		}
 	}
 	binary.LittleEndian.PutUint16(b.data[12:14], flags)
 	binary.LittleEndian.PutUint16(b.data[14:16], b.count)

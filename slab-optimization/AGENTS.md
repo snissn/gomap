@@ -815,3 +815,24 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 03:41:31 HST`
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-18 07:35:51 HST`
+- Created branch `sprint/slabopt-pr7-index-flags` from `sprint/slabopt-pr6-recovery-hardening`.
+
+`2026-01-18 07:47:44 HST`
+- Added PR7 index flags to `TreeDB/db/db.go` and plumbed into zipper/bulk builders.
+- Added columnar leaf encoding scaffolding (`TreeDB/node/leaf_columnar.go`) and wiring in leaf/builder/split/compact paths.
+- Added columnar leaf smoke test in `TreeDB/node/leaf_columnar_test.go`.
+- Updated index rebuild paths in `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/vacuum_online.go`, and `TreeDB/db/vacuum_offline.go`.
+
+`2026-01-18 07:49:12 HST`
+- gofmt: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/db.go`, `TreeDB/db/vacuum_offline.go`, `TreeDB/db/vacuum_online.go`, `TreeDB/internal/bulk/builder.go`, `TreeDB/node/builder.go`, `TreeDB/node/compact.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `TreeDB/node/split.go`, `TreeDB/node/leaf_columnar.go`, `TreeDB/node/leaf_columnar_test.go`, `TreeDB/zipper/zipper.go`.
+
+`2026-01-18 07:54:15 HST`
+- Tests: `go test ./TreeDB/node -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-18 07:54:43 HST`
+- Created `.pr/PR7_description.md`.

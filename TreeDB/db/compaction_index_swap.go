@@ -142,6 +142,8 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
+	newZ.SetIndexColumnarLeaves(db.indexColumnarLeaves)
+	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -154,6 +156,8 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 	buildStart := time.Now()
 	newRoot, buildErr := bulk.BuildWithOptions(remapIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
 	})
 	if stats != nil {
 		stats.BuildNanos = uint64(time.Since(buildStart))
@@ -260,6 +264,8 @@ func (db *DB) CompactSlabsIndexSwap(ctx context.Context, slabIDs []uint32, opts 
 		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		_ = sysIter.Close()
 		if err != nil {

@@ -102,6 +102,8 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	sysIter := tree.New(d.Pager(), valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		InternalBaseDelta:     opts.IndexInternalBaseDelta,
 	})
 	_ = sysIter.Close()
 	if err != nil {
@@ -113,6 +115,8 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	userIter := tree.New(d.Pager(), valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID).Iterator(nil, nil)
 	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		InternalBaseDelta:     opts.IndexInternalBaseDelta,
 	})
 	_ = userIter.Close()
 	if err != nil {
