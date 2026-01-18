@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -117,37 +116,18 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 		t.Fatalf("flush value log: %v", err)
 	}
 
-	valueBytes, err := sumValueLogBytes(filepath.Join(maindbDir, "wal"))
-	if err != nil {
-		t.Fatalf("sum value log: %v", err)
-	}
+	valueBytes := func() int64 {
+		cached.vlogMu.Lock()
+		defer cached.vlogMu.Unlock()
+		if cached.vlog == nil {
+			return 0
+		}
+		return cached.vlog.Size()
+	}()
 	if valueBytes == 0 {
 		t.Fatalf("expected value log bytes > 0")
 	}
 	if float64(valueBytes) >= float64(rawTotal)*0.8 {
 		t.Fatalf("expected compression reduction: raw=%d stored=%d", rawTotal, valueBytes)
 	}
-}
-
-func sumValueLogBytes(dir string) (int64, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, err
-	}
-	var total int64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "value-") || !strings.HasSuffix(name, ".log") {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return 0, err
-		}
-		total += info.Size()
-	}
-	return total, nil
 }
