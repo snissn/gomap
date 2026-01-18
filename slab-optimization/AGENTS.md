@@ -751,3 +751,9 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 21:41:31 HST`
 - CI (post-log update): `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
