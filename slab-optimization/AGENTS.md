@@ -703,3 +703,8 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-17 19:33:04 HST`
 - Created `.pr/PR1_description.md` with unified_bench outputs.
+
+`2026-01-17 19:34:12 HST`
+- Commit: `PR1: journal durability + crash tests`.
+- Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
