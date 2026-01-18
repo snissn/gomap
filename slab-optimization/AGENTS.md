@@ -794,3 +794,9 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-18 00:26:10 HST`
+- Commit: `PR5: parallel active journal lanes`.
+- Pushed branch `sprint/slabopt-pr5-parallel-lanes` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr4-dict-dynamick`): https://github.com/snissn/gomap/pull/64
+- CI: `gh pr checks 64 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
