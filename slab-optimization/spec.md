@@ -284,6 +284,10 @@ Correctness is prioritized over recovery speed.
 
 ## 6) PR Plan (Executable Milestones)
 
+### PR Process Requirements
+- Every PR stage MUST be opened via GitHub CLI (`gh pr create`), not via web UI.
+- Every PR description MUST include unified_bench output samples relevant to that stage.
+
 ### PR0 — Benchmarks and Lane Probe
 - Stable benchmark entry points.
 - Simple lane-count probe harness.

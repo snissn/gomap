@@ -14,6 +14,8 @@ Operational rules:
 - MUST use `rg -n` to re-confirm symbol line numbers before editing.
 - MUST create a branch per PR: `sprint/slabopt-pr<N>-<slug>`.
 - MUST write a PR description at `.pr/PR<N>_description.md` and create the PR via `gh` (see “GitHub CLI policy”).
+- MUST open a PR via the GitHub CLI for every PR stage (no web UI/manual PR creation).
+- MUST include unified_bench output samples in every PR body (include the relevant suite(s) for that stage).
 - MUST NOT merge PRs.
 - MUST fail-closed: all new parsers MUST cap lengths before allocation; on invalid data MUST return errors (no panic/OOM).
 
@@ -632,6 +634,7 @@ Authoritative spec: `slab-optimization/spec.md`
 ## GitHub CLI policy (future runs)
 - MUST create PRs with:
   - `gh pr create --title "..." --body-file .pr/PR<N>_description.md --head <branch> --base main`
+- MUST include unified_bench output samples in each PR description (store outputs in `.pr/PR<N>_description.md`).
 - MUST confirm CI passes before starting the next PR:
   - `gh pr checks <PR_NUMBER> --watch`
   - (alternative) `gh pr view <PR_NUMBER> --json statusCheckRollup`
@@ -656,3 +659,19 @@ Authoritative spec: `slab-optimization/spec.md`
   - `TreeDB/db/db.go:529` (WAL replay block), `TreeDB/db/db.go:611` (`recover`)
   - Existing slab per-value zstd envelope (baseline note): `TreeDB/slab/compression.go:75` (`compressValue`)
 
+`2026-01-17 18:38:04 HST`
+- Added lanes_probe suite hook in `cmd/unified_bench/main.go`.
+- Added `-treedb-journal-lanes` flag placeholder + TODO plumbing notes in `cmd/unified_bench/adapter_treedb.go`.
+- Added `cmd/unified_bench/suite_lanes_probe.go` (TreeDB-only deterministic lane probe + size reporting).
+- Created `.pr/` and `.pr/PR0_description.md`.
+
+`2026-01-17 18:40:29 HST`
+- Tests: `go test ./cmd/unified_bench -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+
+`2026-01-17 18:50:53 HST`
+- Updated PR process requirements in `slab-optimization/AGENTS.md` and `slab-optimization/spec.md`.
+- Updated `.pr/PR0_description.md` with unified_bench output samples.
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+- Tests: `go test ./cmd/unified_bench -count=1` → PASS
