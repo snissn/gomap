@@ -19,7 +19,8 @@ func parseLeafColumnarLayout(data []byte, offset int) (leafEntryLayout, error) {
 	keyOff := int(getUint16(data[offset+7 : offset+9]))
 	valOff := int(getUint16(data[offset+9 : offset+11]))
 
-	if keyOff < leafColumnarHeaderSize || valOff < leafColumnarHeaderSize {
+	remaining := len(data) - offset
+	if keyOff < leafColumnarHeaderSize || valOff < leafColumnarHeaderSize || keyOff > remaining || valOff > remaining {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
 

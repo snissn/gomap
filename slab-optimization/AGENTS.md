@@ -874,3 +874,7 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
 - Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-18 09:46:17 HST`
+- PR7: simplify zipper leaf builder option wiring and add columnar layout bounds check.
+- Tests: `go test ./TreeDB/node -count=1` → PASS

@@ -156,16 +156,11 @@ func (z *Zipper) SetIndexInternalBaseDelta(enabled bool) {
 }
 
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
-	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves) {
+	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves || z.indexInternalBaseDelta) {
 		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: z.leafPrefixCompression,
 			LeafColumnar:          z.indexColumnarLeaves,
 			InternalBaseDelta:     z.indexInternalBaseDelta,
-		})
-	}
-	if z != nil && z.indexInternalBaseDelta {
-		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
-			InternalBaseDelta: z.indexInternalBaseDelta,
 		})
 	}
 	return node.NewBuilder(data, page.PageTypeLeaf)
