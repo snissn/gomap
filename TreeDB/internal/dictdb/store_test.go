@@ -3,6 +3,7 @@ package dictdb
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -50,7 +51,7 @@ func TestStorePutGetDedup(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsExistingBytes(t *testing.T) {
+func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
 	if err != nil {
@@ -68,7 +69,21 @@ func TestStoreRejectsExistingBytes(t *testing.T) {
 	if err := store.backend.DeleteSync(hashKey(sum)); err != nil {
 		t.Fatalf("delete hash: %v", err)
 	}
-	if _, err := store.PutDictBytes(ctx, []byte("beta")); err == nil {
-		t.Fatalf("expected error on existing bytes for id %d", id)
+	got, err := store.PutDictBytes(ctx, []byte("beta"))
+	if err != nil {
+		t.Fatalf("put existing bytes: %v", err)
+	}
+	if got != id {
+		t.Fatalf("expected id %d, got %d", id, got)
+	}
+	val, err := store.backend.Get(hashKey(sum))
+	if err != nil {
+		t.Fatalf("get hash: %v", err)
+	}
+	if len(val) != 8 {
+		t.Fatalf("expected hash value length 8, got %d", len(val))
+	}
+	if gotID := binary.BigEndian.Uint64(val); gotID != id {
+		t.Fatalf("expected hash id %d, got %d", id, gotID)
 	}
 }
