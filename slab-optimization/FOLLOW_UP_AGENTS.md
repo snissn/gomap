@@ -4,6 +4,73 @@ This document captures the **follow‑up work** after PR0–PR8 to (a) cement wi
 
 Primary audiences: maintainers running the slab‑optimization waterfall and perf owners reviewing PR8 (#67).
 
+## Milestones (Owner View)
+
+Each milestone ends with a **posted PR8 comment** that includes: the exact commands, the summary table, and the `artifacts/bench/...` log/profile paths.
+
+### M0 — Establish a Trusted Baseline (1 session)
+**Goal:** “PR8 vs main” is stable enough that deltas are actionable.
+
+**TODOs**
+- [ ] Run the baseline gate twice back‑to‑back and confirm the deltas are directionally consistent (noise bounded).
+- [ ] Record host facts in the PR8 comment: OS, CPU, disk type, Go version, filesystem.
+- [ ] Confirm the bench excludes DB open/close time for the benchmark loop (so we’re measuring steady‑state ops/sec).
+
+**Exit criteria**
+- A baseline log is pinned in PR8 as the reference.
+
+### M1 — Eliminate Regressions in Core Workloads (iterative)
+**Goal:** On the baseline gate tests, PR8 has **no meaningful regressions** vs `main` for the default configuration.
+
+**TODOs**
+- [ ] If any test is negative vs `main` beyond noise, create a minimized reproducer (single test, smaller keycount).
+- [ ] Capture trace + syscall + sync profiles for both `main` and PR8 for the minimized case.
+- [ ] Implement targeted fixes (allocation, locking, syscalls, redundant work) without changing defaults.
+- [ ] Re-run baseline gate and re-post the updated table.
+
+**Exit criteria**
+- Gate table is “all wins or within noise” for baseline config.
+
+### M2 — Validate New Features Don’t Hide Regressions (matrix)
+**Goal:** Each major feature introduced in PR0–PR7 is benchmarked ON vs OFF and does not introduce unacceptable cliffs.
+
+**TODOs**
+- [ ] Run per‑feature sweeps (lanes, split vlog, dict training, index flags) using consistent methodology.
+- [ ] Identify “bad combos” (feature interactions) and either fix or document as “not recommended”.
+
+**Exit criteria**
+- A PR8 comment enumerates best settings per workload and any caveats.
+
+### M3 — Demonstrate Compression Wins on Compressible Data (matrix + profiles)
+**Goal:** Dict compression shows clear wins on compressible data and degrades gracefully on incompressible data.
+
+**TODOs**
+- [ ] Run `repeat` and `zero` datasets with dict training OFF vs ON.
+- [ ] Profile dict‑enabled runs to ensure training overhead is bounded and adaptive pause behaves.
+
+**Exit criteria**
+- A PR8 comment with side‑by‑side results (random vs repeat) and the chosen recommended knobs.
+
+### M4 — Resource / Footprint Validation (ops focused)
+**Goal:** We understand disk growth and memory usage for recommended configs.
+
+**TODOs**
+- [ ] Add a repeatable measurement procedure for `index.db`, `wal/`, and `vlog/` sizes after each test.
+- [ ] Capture RSS (Linux) for the heaviest write workload and at least one scan workload.
+
+**Exit criteria**
+- A PR8 comment includes disk + memory numbers for “recommended configs”.
+
+### M5 — Release Candidate Sign‑off
+**Goal:** PR8 is ready as the RC comparison baseline and the feature recommendations are documented.
+
+**TODOs**
+- [ ] Re-run baseline gate + one compressible matrix run and ensure results still hold.
+- [ ] Add a short “Recommended Settings” section (with commands) to PR8.
+
+**Exit criteria**
+- One final PR8 comment with “baseline + compression + flags” summary.
+
 ## Guiding Principles
 
 - **Apples‑to‑apples:** do not claim wins by changing defaults in one branch but not the other. When changing a knob, run the same knob on both `main` and PR8 and report both.
@@ -30,6 +97,13 @@ bash scripts/bench_compare_pr8_vs_main_trimmed.sh
 ### Record
 - Log path printed at end (e.g. `artifacts/bench/compare_pr8_vs_main_trimmed_<ts>.log`).
 - Paste the summary table + link to the log in PR8 (#67) as a comment.
+
+### Output Standard (what to paste into PR8)
+- Commit SHAs: `main` SHA and PR8 SHA.
+- One table: test → main trimmed avg, PR8 trimmed avg, delta.
+- The exact command line (including env vars).
+- The full log path under `artifacts/bench/`.
+- If a profile was captured: list the trace/pprof file paths.
 
 ## Profiling Toolkit (Unified Bench)
 
@@ -61,6 +135,32 @@ go tool pprof -top artifacts/bench/pr8_random_write_200k.trace.sync.pb.gz | head
 ```
 
 Run the same commands for `main` (via the built binary/worktree, or by checking out `main`) and compare.
+
+## Profiling TODO List (What We Want to Measure)
+
+This is the prioritized “profile backlog”. Each item should be closed out with: reproduced delta → profile evidence → fix → re-run.
+
+### P0 — Core write path
+- [ ] `random_write` @ `valsize=1024` (default threshold=256) baseline config.
+- [ ] `batch_write` @ `valsize=1024` baseline config.
+- [ ] Sweep `-treedb-journal-lanes` for both tests and profile the best + worst lane counts.
+
+### P0 — Dict compression path
+- [ ] Repeat the two write tests with dict training enabled on `repeat` data.
+- [ ] Repeat on `random` data to confirm adaptive pause avoids CPU burn.
+- [ ] Profile trainer overhead vs commit/value-log overhead (trace `sched` + `syscall` + `sync`).
+
+### P1 — Read and scan
+- [ ] `random_read` baseline and with value-log pointers dominant (`valsize=4096`).
+- [ ] `prefix_scan` baseline and with PR7 index flags.
+
+### P1 — Startup/reopen and recovery overhead
+- [ ] Add a “reopen cost” microbench run (open/close loop) to detect creeping recovery time.
+- [ ] Profile reopen on: empty, medium, and large WAL/vlog directories.
+
+### P2 — Background activity
+- [ ] Ensure background flush/compaction/vacuum workers are not waking too frequently under write load (trace sync blocking).
+- [ ] Confirm no periodic `time.Now()` or `os.Stat` calls in per‑write hot loops.
 
 ## Immediate Follow‑Ups (Known Sensitive Areas)
 
@@ -199,6 +299,34 @@ We should maintain a set of workloads that are intentionally adversarial:
 - **Mixed sizes:** (follow‑up: add a unified_bench mixed‑valsize dataset if missing)
 - **Skewed key distributions:** repeated hot prefixes to stress iterator/zipper locality
 
+## Benchmark Matrices (Concrete Runs)
+
+These are the “standard” runs to answer the most common questions without inventing new ad‑hoc commands each time.
+
+### Matrix A — Baseline (default config)
+- Workloads: `batch_write,random_write,random_read,prefix_scan`
+- Data: `-dataset-val-pattern random`
+- Keys: `1,000,000` (gate) and `200,000` (profiling)
+
+### Matrix B — Compression ROI (repeat vs random)
+- Workloads: `batch_write,random_write`
+- Data patterns: `random` and `repeat`
+- Dict training: OFF and ON
+- Keys: `1,000,000` (numbers) and `200,000` (profiles)
+
+### Matrix C — Lanes sweep
+- Workloads: `batch_write,random_write`
+- Lanes: `1,2,4,8`
+- Note: if unified_bench workload is single-threaded, also add a concurrent-writer benchmark (future enhancement) to properly stress lanes.
+
+### Matrix D — Index flags
+- Workloads: `random_read,prefix_scan,batch_write`
+- Flags:
+  - `-treedb-index-columnar-leaves`
+  - `-treedb-index-internal-base-delta`
+  - `-treedb-leaf-prefix-compression`
+  - `-treedb-prefer-append-alloc`
+
 ## “When you find a regression” Workflow
 
 1) **Reproduce** with the baseline gate and capture the log under `artifacts/bench/`.
@@ -220,4 +348,3 @@ If profiling indicates we’re missing signal, consider follow‑ups:
 - add a “concurrent writers” mode for `random_write` / `batch_write` to better exercise journal lanes
 - add explicit disk usage reporting per DB in unified_bench output for every test
 - add optional RSS reporting (Linux) into unified_bench runner output
-
