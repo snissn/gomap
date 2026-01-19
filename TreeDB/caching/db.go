@@ -2369,16 +2369,16 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	return ptrs, nil
 }
 
-func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, error) {
+func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if l == nil {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	select {
 	case <-db.closeCh:
-		return page.ValuePtr{}, errWALClosed
+		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
 
@@ -2391,7 +2391,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	startSize := w.Size()
 
@@ -2416,14 +2416,19 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if err == nil {
 		totalBytes = w.Size() - startSize
 	}
+	retainPath := ""
+	if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+		l.vlogRetainedPath = l.vlogPath
+		retainPath = l.vlogPath
+	}
 	l.vlogMu.Unlock()
 	if err != nil {
-		return page.ValuePtr{}, err
+		return page.ValuePtr{}, "", err
 	}
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
-	return ptr, nil
+	return ptr, retainPath, nil
 }
 
 func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
@@ -3205,7 +3210,8 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			}
 
 			rid := db.nextRID.Add(1)
-			ptr, err = db.appendValueLogOne(lane, dictID, dictBytes, rid, value, durability)
+			var retain string
+			ptr, retain, err = db.appendValueLogOne(lane, dictID, dictBytes, rid, value, durability)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -3214,7 +3220,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			if debugPtr {
 				db.debugPtrUsed.Add(1)
 			}
-			retainPath = db.currentValueLogPath(lane)
+			retainPath = retain
 
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
 			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
