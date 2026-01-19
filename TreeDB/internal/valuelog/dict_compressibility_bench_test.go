@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type dictBenchWorkload struct {
@@ -74,6 +75,7 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 
 			rid := uint64(1)
 			records := make([]Record, 4)
+			var ptrScratch [4]page.ValuePtr
 			totalRaw := uint64(0)
 			totalStored := uint64(0)
 			for i := 0; i < b.N; i++ {
@@ -81,7 +83,7 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 					records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
 					rid++
 				}
-				_, stats, err := w.AppendFrameWithStats(dictID, dict, records)
+				_, stats, err := w.AppendFrameWithStatsInto(dictID, dict, records, ptrScratch[:])
 				if err != nil {
 					b.Fatalf("AppendFrameWithStats: %v", err)
 				}
@@ -214,12 +216,13 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 					totalRaw := uint64(0)
 					totalStored := uint64(0)
 					records := make([]Record, k)
+					ptrScratch := make([]page.ValuePtr, k)
 					for i := 0; i < b.N; i++ {
 						for j := 0; j < k; j++ {
 							records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
 							rid++
 						}
-						_, stats, err := w.AppendFrameWithStats(mode.dictID, dict, records)
+						_, stats, err := w.AppendFrameWithStatsInto(mode.dictID, dict, records, ptrScratch)
 						if err != nil {
 							b.Fatalf("AppendFrameWithStats: %v", err)
 						}

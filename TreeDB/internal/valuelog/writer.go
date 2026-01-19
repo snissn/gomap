@@ -274,12 +274,30 @@ func (w *Writer) AppendFrame(dictID uint64, dict []byte, records []Record) ([]pa
 }
 
 func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Record) ([]page.ValuePtr, FrameStats, error) {
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := w.AppendFrameWithStatsInto(dictID, dict, records, dst)
+	if err != nil {
+		return nil, FrameStats{}, err
+	}
+	return ptrs, stats, nil
+}
+
+// AppendFrameWithStatsInto appends a grouped frame and fills dst with the
+// returned pointers (dst must be at least len(records) long).
+//
+// This is a performance-oriented helper to avoid allocating a new pointer slice
+// on every frame append.
+func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []Record, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
 	}
 	if len(records) == 0 {
-		return nil, FrameStats{}, nil
+		return dst[:0], FrameStats{}, nil
 	}
+	if len(dst) < len(records) {
+		return nil, FrameStats{}, errors.New("valuelog: dst too small")
+	}
+	dst = dst[:len(records)]
 	if len(records) == 1 && dictID == 0 {
 		rec := records[0]
 		if rec.RID == 0 {
@@ -331,11 +349,12 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		w.size += int64(recordLen)
 
 		recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
-		return []page.ValuePtr{{
+		dst[0] = page.ValuePtr{
 			Offset: uint64(start + 4),
 			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
 			FileID: w.fileID,
-		}}, FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Compressed: false}, nil
+		}
+		return dst[:1], FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Compressed: false}, nil
 	}
 
 	rawPayloadBytes := 0
@@ -444,17 +463,16 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 			}
 			w.size += int64(HeaderSize + bodyLen)
 
-			ptrs := make([]page.ValuePtr, len(records))
 			recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
 			for i := range records {
-				ptrs[i] = page.ValuePtr{
+				dst[i] = page.ValuePtr{
 					Offset: uint64(start + 4),
 					Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
 					FileID: w.fileID,
 				}
 			}
 
-			return ptrs, FrameStats{
+			return dst, FrameStats{
 				Records:            k,
 				RawPayloadBytes:    rawPayloadBytes,
 				StoredPayloadBytes: rawPayloadBytes,
@@ -479,10 +497,10 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		if cap(w.encScratch) < rawPayloadBytes {
 			w.encScratch = make([]byte, 0, rawPayloadBytes)
 		}
-		dst := w.encScratch[:0]
+		encDst := w.encScratch[:0]
 
 		enc := codecs.encPool.Get().(*zstd.Encoder)
-		encoded := enc.EncodeAll(raw, dst)
+		encoded := enc.EncodeAll(raw, encDst)
 		codecs.encPool.Put(enc)
 
 		flags := byte(0)
@@ -560,17 +578,16 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		}
 		w.size += int64(HeaderSize + bodyLen)
 
-		ptrs := make([]page.ValuePtr, len(records))
 		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
 		for i := range records {
-			ptrs[i] = page.ValuePtr{
+			dst[i] = page.ValuePtr{
 				Offset: uint64(start + 4),
 				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
 				FileID: w.fileID,
 			}
 		}
 
-		return ptrs, FrameStats{
+		return dst, FrameStats{
 			Records:            k,
 			RawPayloadBytes:    rawPayloadBytes,
 			StoredPayloadBytes: storedPayloadBytes,
@@ -613,10 +630,9 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 	}
 	w.size += int64(recordLen)
 
-	ptrs := make([]page.ValuePtr, len(records))
 	recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
 	for i := range records {
-		ptrs[i] = page.ValuePtr{
+		dst[i] = page.ValuePtr{
 			Offset: uint64(start + 4),
 			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
 			FileID: w.fileID,
@@ -628,7 +644,7 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 	if storedPayloadBytes < 0 {
 		storedPayloadBytes = 0
 	}
-	return ptrs, FrameStats{
+	return dst, FrameStats{
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,
 		StoredPayloadBytes: storedPayloadBytes,

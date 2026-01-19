@@ -2292,16 +2292,34 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	type frameStatsWriter interface {
 		AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
 	}
+	type frameStatsWriterInto interface {
+		AppendFrameWithStatsInto(dictID uint64, dict []byte, records []valuelog.Record, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
+	}
 	statsWriter, hasStats := w.(frameStatsWriter)
+	statsWriterInto, hasInto := w.(frameStatsWriterInto)
 
 	ptrs = make([]page.ValuePtr, 0, len(records))
 	storedPayloadBytes := 0
 	rawFrameBytes := 0
 	frameRecords := 0
+	var framePtrScratch [valuelog.MaxFrameK]page.ValuePtr
 	for i := 0; i < len(records); i += k {
 		end := i + k
 		if end > len(records) {
 			end = len(records)
+		}
+		if hasInto {
+			scratch := framePtrScratch[:end-i]
+			framePtrs, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], scratch)
+			if frameErr != nil {
+				err = frameErr
+				break
+			}
+			ptrs = append(ptrs, framePtrs...)
+			rawFrameBytes += stats.RawPayloadBytes
+			storedPayloadBytes += stats.StoredPayloadBytes
+			frameRecords += stats.Records
+			continue
 		}
 		if hasStats {
 			framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(dictID, dict, records[i:end])
