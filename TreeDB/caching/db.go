@@ -574,24 +574,6 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 	return segments, bytes
 }
 
-func (db *DB) valueLogRetainedBytesApprox() int64 {
-	if db == nil {
-		return 0
-	}
-	// Avoid per-write allocations in valueLogRetainedStats; refresh periodically.
-	// A stale value is safe (it only delays disabling new pointers after exceeding
-	// the hard cap).
-	const refreshEvery = uint64(1 << 12)
-	seq := db.valueLogRetainedOps.Add(1)
-	if seq&(refreshEvery-1) != 0 {
-		return db.valueLogRetainedBytesCached.Load()
-	}
-	segments, bytes := db.valueLogRetainedStats()
-	db.valueLogRetainedSegsCached.Store(int64(segments))
-	db.valueLogRetainedBytesCached.Store(bytes)
-	return bytes
-}
-
 func (db *DB) valueLogRetainedPaths() []string {
 	db.valueLogMu.Lock()
 	if len(db.valueLogRetain) == 0 {
@@ -650,7 +632,15 @@ func (db *DB) allowValueLogPointers() bool {
 	if limit <= 0 {
 		return true
 	}
-	bytes := db.valueLogRetainedBytesApprox()
+	bytes := db.valueLogRetainedClosedBytes.Load()
+	if db.splitValueLogEnabled() {
+		for i := range db.lanes {
+			l := &db.lanes[i]
+			if l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
+				bytes += l.vlogLiveBytes.Load()
+			}
+		}
+	}
 	if bytes >= limit {
 		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
 			db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed hard cap %d; disabling new value-log pointers", bytes, limit))
@@ -941,9 +931,7 @@ type DB struct {
 	valueLogRetain               map[string]struct{}
 	valueLogWarned               atomic.Bool
 	valueLogHardCapWarned        atomic.Bool
-	valueLogRetainedBytesCached  atomic.Int64
-	valueLogRetainedSegsCached   atomic.Int64
-	valueLogRetainedOps          atomic.Uint64
+	valueLogRetainedClosedBytes  atomic.Int64
 	maxValueLogRetainedBytes     int64
 	maxValueLogRetainedBytesHard int64
 
@@ -4290,6 +4278,9 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 			prev := l.vlogClosedSizes[oldPath]
 			l.vlogClosedSizes[oldPath] = oldSize
 			l.vlogClosedBytes.Add(oldSize - prev)
+			if oldPath == l.vlogRetainedPath {
+				db.valueLogRetainedClosedBytes.Add(oldSize - prev)
+			}
 		}
 	} else {
 		w, err := valuelog.NewWriter(path, fileID)
@@ -4348,6 +4339,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 		return
 	}
 	delete(l.vlogClosedSizes, path)
+	db.valueLogRetainedClosedBytes.Add(-size)
 	for {
 		cur := l.vlogClosedBytes.Load()
 		next := cur - size
