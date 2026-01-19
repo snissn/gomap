@@ -24,6 +24,7 @@ LOG="$OUT_DIR/compare_pr8_vs_main_trimmed_$TS.log"
 RUNS="${RUNS:-5}"
 KEEP="${KEEP:-3}" # keep middle KEEP values after sorting
 SLEEP_S="${SLEEP_S:-5}"
+WARMUP="${WARMUP:-1}" # warm-up runs per test (discarded; helps reduce first-run noise)
 
 KEYS="${KEYS:-1000000}"
 VALSIZE="${VALSIZE:-1024}"
@@ -34,7 +35,7 @@ BIN_MAIN="${BIN_MAIN:-/tmp/ubench-main-plain}"
 BIN_CUR="${BIN_CUR:-/tmp/ubench-cur}"
 
 echo "compare pr8 vs main (trimmed mean)" | tee "$LOG"
-echo "ts=$TS runs=$RUNS keep=$KEEP sleep=${SLEEP_S}s keys=$KEYS valsize=$VALSIZE batchsize=$BATCHSIZE" | tee -a "$LOG"
+echo "ts=$TS runs=$RUNS keep=$KEEP warmup=$WARMUP sleep=${SLEEP_S}s keys=$KEYS valsize=$VALSIZE batchsize=$BATCHSIZE" | tee -a "$LOG"
 echo "root=$ROOT" | tee -a "$LOG"
 echo "main_wt=$MAIN_WT" | tee -a "$LOG"
 echo "bin_main=$BIN_MAIN bin_cur=$BIN_CUR" | tee -a "$LOG"
@@ -80,21 +81,47 @@ run_one() {
 collect_runs() {
   local bin="$1"
   local test="$2"
-  python - "$bin" "$test" "$RUNS" "$KEEP" "$SLEEP_S" "$LOG" <<'PY'
-import re, statistics, subprocess, sys, time
+  python - "$bin" "$test" "$RUNS" "$KEEP" "$SLEEP_S" "$WARMUP" "$LOG" <<'PY'
+import os, re, statistics, subprocess, sys, time
 
-binpath, test, runs_s, keep_s, sleep_s, log_path = sys.argv[1:7]
+binpath, test, runs_s, keep_s, sleep_s, warmup_s, log_path = sys.argv[1:8]
 runs = int(runs_s)
 keep = int(keep_s)
 sleep_sec = float(sleep_s)
+warmup = int(warmup_s)
 
 val_re = re.compile(rf"{re.escape(test.replace('_',' ').title())} / TreeDB = ([0-9,]+)")
 fallback_re = re.compile(r"TreeDB = ([0-9,]+)")
 
 vals = []
+
+def run_once():
+    return subprocess.check_output(
+        [
+            binpath,
+            "-dbs",
+            "treedb",
+            "-test",
+            test,
+            "-keys",
+            str(int(os.environ.get("KEYS", "1000000"))),
+            "-valsize",
+            str(int(os.environ.get("VALSIZE", "1024"))),
+            "-batchsize",
+            str(int(os.environ.get("BATCHSIZE", "1000"))),
+            "-progress=false",
+        ],
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+
+for _ in range(max(0, warmup)):
+    time.sleep(sleep_sec)
+    _ = run_once()
+
 for i in range(runs):
     time.sleep(sleep_sec)
-    out = subprocess.check_output([binpath, "-dbs", "treedb", "-test", test, "-keys", str(int(__import__('os').environ.get('KEYS', '1000000'))), "-valsize", str(int(__import__('os').environ.get('VALSIZE', '1024'))), "-batchsize", str(int(__import__('os').environ.get('BATCHSIZE', '1000')))], text=True, stderr=subprocess.STDOUT)
+    out = run_once()
     m = re.search(rf"{test.replace('_',' ').title()} / TreeDB = ([0-9,]+)", out)
     if not m:
         m = fallback_re.search(out)
