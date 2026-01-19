@@ -95,6 +95,10 @@ Profiles are intended to make intent explicit:
 - `ProfileFast`: relax durability/integrity knobs for throughput.
 - `ProfileBench`: deterministic benchmarking profile (not production).
 
+Note: `DisableWAL=true` also disables cached value-log pointers (and therefore
+value-log dictionary compression). To benchmark value-log features, keep WAL
+enabled and use `RelaxedSync=true` + `AllowUnsafe=true` instead.
+
 Unsafe profiles require an explicit acknowledgement:
 
 ```go

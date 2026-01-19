@@ -49,7 +49,7 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables WAL/sync for all supported DBs. UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (and value-log pointers). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"unsafe": { // Alias for fast

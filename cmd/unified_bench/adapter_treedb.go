@@ -63,6 +63,7 @@ var (
 	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
 	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
+	treedbDisableValueLog      = flag.Bool("treedb-disable-value-log", false, "TreeDB: disable value-log pointers (forces legacy WAL framing; also implied by -treedb-disable-wal)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
 	treedbAllowUnsafe          = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
@@ -182,6 +183,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		ValueLogPointerThreshold:          *treedbValueLogThreshold,
 		SlabCompression:                   compOpts,
 		DisableWAL:                        *treedbDisableWAL,
+		DisableValueLog:                   *treedbDisableValueLog,
 		RelaxedSync:                       *treedbRelaxedSync,
 		DisableReadChecksum:               *treedbDisableReadChecksum,
 		AllowUnsafe:                       *treedbAllowUnsafe,
