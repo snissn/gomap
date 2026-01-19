@@ -394,3 +394,10 @@ Append-only log of actual runs, results, and next actions. Every entry should in
   - cmd: `RUNS=5 KEEP=3 SLEEP_S=5 WARMUP=1 KEYS=1000000 VALSIZE=1024 BATCHSIZE=1000 bash scripts/bench_compare_pr8_vs_main_trimmed.sh`
   - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118220332.log`
   - deltas: `random_write -8.07%` (improved from ~-16%/~-19% prior); other cells still show high variance (investigate after stabilizing disk/IO conditions).
+
+`2026-01-18 22:20 HST`
+- Additional fix: avoid per-write `markValueLogRetain()` calls on the hot path for single-key `Set()` pointer writes.
+  - Track per-lane `vlogRetainedPath` and only emit a retain mark when the active segment path changes (once per segment, not once per write).
+- Bench gate run (WARMUP=1):
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118221956.log`
+  - deltas: `batch_write +9.09%`, `random_write +3.21%` (regression cleared), `random_read +7.23%`, `prefix_scan +25.87%`
