@@ -1581,6 +1581,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	debugFlushPointers := envBool(envDebugFlushPointers)
 
+	valueLogDictTrain := opts.ValueLogDictTrain
+
 	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
 	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
 	valueLogDictMetricsMinRecords := opts.ValueLogDictMetricsMinRecords
@@ -1596,10 +1598,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		splitValueLog = true
 	}
 
+	// Value-log dictionary compression is a core performance feature of the
+	// value-store path. For unsafe/bench workloads (AllowUnsafe=true), enable
+	// background dict training by default when the value log is active unless
+	// the caller explicitly configured it.
+	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
+		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+	}
+
 	// If dict training is enabled but no adaptive ratio is specified, default to
 	// a conservative pause threshold to avoid wasting CPU on incompressible
 	// payload streams.
-	if opts.ValueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
+	if valueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
 		valueLogDictAdaptiveRatio = 0.995
 	}
 	if valueLogDictAdaptiveRatio > 0 {
@@ -1647,7 +1657,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		debugFlushPointers:            debugFlushPointers,
 		maxValueLogRetainedBytes:      opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:  opts.MaxValueLogRetainedBytesHard,
-		valueLogDictTrain:             opts.ValueLogDictTrain,
+		valueLogDictTrain:             valueLogDictTrain,
 		valueLogDictAdaptiveRatio:     valueLogDictAdaptiveRatio,
 		valueLogDictMinPayloadSavings: minPayloadSavings,
 		valueLogDictMetricsWindow:     valueLogDictMetricsWindow,
