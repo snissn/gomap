@@ -57,13 +57,77 @@ Scope constraint:
 
 Objective: if someone runs “fast” or “default” scripts in this repo, they should get cached+value-log–centric behavior.
 
-Checklist:
+#### What “cached+value-log–centric” means (required invariants)
 
-- `iavl-bench`: already updated `2_run_fast.sh` default `TREEDB_BENCH_MODE=cached`.
-- `gomap` benches:
-  - Ensure `unified_bench` profiles / examples default to cached mode for TreeDB.
-  - Prefer **one knob** for “fast ingest” rather than many interacting flags.
-  - Where multiple flags are unavoidable, document the single recommended “fast ingest” bundle in one place and keep other scripts sourcing it.
+To avoid ambiguity, we treat this as a small set of invariants that must hold
+for “fast ingest”:
+
+- **Engine mode**: cached mode (`ModeCached`).
+- **Value store**: out-of-line values are written to the **value log**, and the
+  backend index stores `ValuePtr` references to those value-log records (not to
+  backend slab-direct append results).
+- **Redo/journal policy**: may be enabled or disabled, but must not silently
+  force a different value store.
+
+Important current-code note:
+
+- Cached mode currently computes `disableValueLog := opts.DisableValueLog || opts.DisableWAL`.
+  This means `DisableWAL=true` implicitly disables value-log pointers today.
+
+So, “fast ingest” must be expressible as:
+
+- “redo/journal off” **while** “value log on” (so we do not fall back to a
+  different value storage path).
+
+#### Canonical knob (reduce sources of error)
+
+Implement one canonical way to request this intent, and ensure all first-party
+harnesses use it by default.
+
+Acceptable approaches for PR11 (pick one; standardize on it everywhere):
+
+1) **New profile name** (preferred):
+   - Add `ProfileFastIngest` (or similarly explicit) whose intent is:
+     - cached mode + value log enabled + relaxed durability (journal policy may be “off”).
+
+2) **New explicit option**:
+   - Add `Options.DisableJournal` / `DisableRedoLog` that is independent of
+     `DisableValueLog`.
+   - Keep `DisableValueLog` as “force legacy/no pointers”.
+   - Treat `DisableWAL` as legacy/compat and migrate code to the new names.
+
+The core requirement is not naming: it is that **one knob** expresses “cached +
+value log”, and that toggling “journal off” does not implicitly toggle “value
+log off”.
+
+#### Harness wiring (how we ensure behavior everywhere)
+
+For each harness we control, do two things:
+
+1) **Default to the canonical knob** (so “fast” means the same thing everywhere).
+2) **Print the write-path summary to stderr** (Stage 1.A) so the effective path
+   is always visible.
+
+Concrete checklist:
+
+- `iavl-bench`:
+  - Keep `TREEDB_BENCH_MODE` defaulted to `cached` (already done).
+  - Keep value log enabled by default (already done via `TREEDB_BENCH_DISABLE_VALUE_LOG=0`).
+  - Ensure the TreeDB open path prints the write-path summary to stderr.
+
+- `cmd/unified_bench`:
+  - Add a profile (or a single documented flag bundle) whose default for TreeDB
+    is cached+value-log–centric.
+  - Ensure the existing `-profile fast` does not accidentally select a
+    different value store for TreeDB due to a single flag (this is why “fast ingest”
+    should have its own explicit knob).
+
+Success criteria for Stage 1.B:
+
+- Running “fast” benches in this repo yields stderr output indicating
+  `mode=cached` and `value_store=value_log`.
+- There is no “obvious” first-party “fast” harness invocation that ends up on
+  backend slab-direct writes.
 
 Principle:
 
