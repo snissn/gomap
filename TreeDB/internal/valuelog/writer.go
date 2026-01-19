@@ -362,6 +362,118 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		rawPayloadBytes += len(records[i].Value)
 	}
 
+	// Fast path: grouped frame with no dict/compression.
+	//
+	// We can write the frame prefix + raw values directly to the buffered writer
+	// without first concatenating the payload into a temporary buffer.
+	//
+	// This matters for high-throughput append workloads (e.g. IAVL node storage)
+	// where dict compression is disabled or not yet available.
+	if dictID == 0 {
+		k := len(records)
+		if k <= 0 || k > MaxFrameK {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if rawPayloadBytes > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if slab.MaxRecordSize > 0 && int64(rawPayloadBytes) > slab.MaxRecordSize {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+
+		var offsets [MaxFrameK + 1]uint32
+		offsets[0] = 0
+		payloadOff := 0
+		for i := 0; i < k; i++ {
+			payloadOff += len(records[i].Value)
+			if payloadOff < 0 || payloadOff > int(^uint32(0)) {
+				return nil, FrameStats{}, ErrRecordTooLarge
+			}
+			offsets[i+1] = uint32(payloadOff)
+		}
+
+		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + rawPayloadBytes
+		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if bodyLen > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if recordSizeExceedsMax(uint32(bodyLen)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+
+		start := w.size
+		var header [HeaderSize]byte
+		header[4] = Version
+		header[5] = recordFlagGrouped
+		header[6] = 0
+		header[7] = 0
+		binary.LittleEndian.PutUint64(header[8:16], 0)
+		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+		if cap(w.prefixBuf) < prefixLen {
+			w.prefixBuf = make([]byte, 0, prefixLen)
+		}
+		prefix := w.prefixBuf[:prefixLen]
+		prefixOff := 0
+		prefix[prefixOff] = FrameVersion
+		prefix[prefixOff+1] = 0
+		prefix[prefixOff+2] = byte(k)
+		prefix[prefixOff+3] = 0
+		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
+		prefixOff += FrameHeaderSize
+
+		for i := 0; i < k; i++ {
+			rid := records[i].RID
+			if rid == 0 {
+				return nil, FrameStats{}, errors.New("valuelog: missing rid")
+			}
+			binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+			prefixOff += 8
+		}
+		for i := 0; i < k+1; i++ {
+			binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+			prefixOff += 4
+		}
+
+		sum := crc.ChecksumParts(header[4:], prefix)
+		for i := 0; i < k; i++ {
+			sum = crc.Update(sum, records[i].Value)
+		}
+		binary.LittleEndian.PutUint32(header[0:4], sum)
+
+		if _, err := w.bw.Write(header[:]); err != nil {
+			return nil, FrameStats{}, err
+		}
+		if _, err := w.bw.Write(prefix); err != nil {
+			return nil, FrameStats{}, err
+		}
+		for i := 0; i < k; i++ {
+			if _, err := w.bw.Write(records[i].Value); err != nil {
+				return nil, FrameStats{}, err
+			}
+		}
+		w.size += int64(HeaderSize + bodyLen)
+
+		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+		for i := range records {
+			dst[i] = page.ValuePtr{
+				Offset: uint64(start + 4),
+				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+				FileID: w.fileID,
+			}
+		}
+
+		return dst, FrameStats{
+			Records:            k,
+			RawPayloadBytes:    rawPayloadBytes,
+			StoredPayloadBytes: rawPayloadBytes,
+			Compressed:         false,
+		}, nil
+	}
+
 	if dictID != 0 {
 		if len(dict) == 0 {
 			return nil, FrameStats{}, ErrMissingDict
