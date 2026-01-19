@@ -85,6 +85,20 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	}
 }
 
+func (db *DB) valueLogDictCollectSample(value []byte) {
+	if db == nil {
+		return
+	}
+	tr := db.valueLogDictTrainer
+	if tr == nil || !tr.ShouldCollect() {
+		return
+	}
+	if !likelyCompressibleSample(value) {
+		return
+	}
+	tr.Collect(value)
+}
+
 func (db *DB) ensureValueLogDictTrainer() {
 	if db == nil || !db.valueLogDictTrainingEnabled() {
 		return

@@ -2348,6 +2348,63 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	return ptrs, nil
 }
 
+func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, error) {
+	if !db.splitValueLogEnabled() {
+		return page.ValuePtr{}, errWALUnavailable
+	}
+	if l == nil {
+		return page.ValuePtr{}, errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return page.ValuePtr{}, errWALClosed
+	default:
+	}
+
+	var (
+		totalBytes int64
+		ptr        page.ValuePtr
+		err        error
+	)
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, errWALUnavailable
+	}
+	startSize := w.Size()
+
+	if len(value) > 0 {
+		db.valueLogDictConsumePause(uint64(len(value)))
+	}
+	if db.valueLogDictPaused() {
+		dictID = 0
+		dict = nil
+	}
+	db.valueLogDictCollectSample(value)
+
+	ptr, err = w.Append(dictID, dict, rid, value)
+	if err == nil {
+		switch durability {
+		case journalDurabilityFlush:
+			err = w.Flush()
+		case journalDurabilitySync:
+			err = w.Sync()
+		}
+	}
+	if err == nil {
+		totalBytes = w.Size() - startSize
+	}
+	l.vlogMu.Unlock()
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if totalBytes > 0 {
+		l.vlogLiveBytes.Add(totalBytes)
+	}
+	return ptr, nil
+}
+
 func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 	if l == nil {
 		return errWALUnavailable
@@ -3104,32 +3161,40 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		}
 
 		if eligible && allowPointers {
-			dictID, err := db.currentDictID(context.Background())
-			if err != nil {
-				db.writeMu.RUnlock()
-				return err
-			}
-			rid := db.nextRID.Add(1)
-			dictBytes, err := db.dictBytes(context.Background(), dictID)
-			if err != nil {
-				db.writeMu.RUnlock()
-				return err
-			}
-			ptrs, err := db.appendValueLog(lane, dictID, dictBytes, []valuelog.Record{{RID: rid, Value: value}}, durability)
-			if err != nil {
-				db.writeMu.RUnlock()
-				return err
-			}
-			if len(ptrs) > 0 {
-				ptr = ptrs[0]
-				usePointer = true
-				if debugPtr {
-					db.debugPtrUsed.Add(1)
+			dictID := uint64(0)
+			if db.valueLogDictTrain.TrainBytes > 0 {
+				id, err := db.currentDictID(context.Background())
+				if err != nil {
+					db.writeMu.RUnlock()
+					return err
 				}
-				retainPath = db.currentValueLogPath(lane)
-			} else if debugPtr {
-				db.debugPtrNoPtr.Add(1)
+				dictID = id
+			} else {
+				dictID = db.dictCurrentCached.Load()
 			}
+
+			var dictBytes []byte
+			if dictID != 0 {
+				b, err := db.dictBytes(context.Background(), dictID)
+				if err != nil {
+					db.writeMu.RUnlock()
+					return err
+				}
+				dictBytes = b
+			}
+
+			rid := db.nextRID.Add(1)
+			ptr, err = db.appendValueLogOne(lane, dictID, dictBytes, rid, value, durability)
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
+			usePointer = true
+			if debugPtr {
+				db.debugPtrUsed.Add(1)
+			}
+			retainPath = db.currentValueLogPath(lane)
+
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
 			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
 				db.writeMu.RUnlock()
