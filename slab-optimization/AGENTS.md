@@ -899,3 +899,6 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 15:18:06 HST`
 - PR8: set slabopt bench matrix default to RUNS=3 and ran PR8 vs main sweep.
 - PR8: ran PR1–PR8 baseline batch_write sweep (RUNS=3) for regression staging.
+
+`2026-01-18 15:30:03 HST`
+- PR8: PR1 vs main high-keys batch_write sweep (RUNS=3) with journal lanes flag; confirmed PR1 within ~5% of main and lanes ignored pre-PR5.
