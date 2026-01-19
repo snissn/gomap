@@ -386,3 +386,11 @@ Append-only log of actual runs, results, and next actions. Every entry should in
   - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118214516.log`
   - deltas: `batch_write +39.10%`, `random_write -16.83%`, `random_read -1.71%`, `prefix_scan +14.80%`
 - Next: treat `random_write` regression as real (2 consecutive runs) and profile `main` vs PR9 for `random_write` with `-trace` + `-pprof=syscall|sync|sched`, then implement targeted fixes without changing defaults.
+
+`2026-01-18 22:04 HST`
+- Hypothesis: `random_write` regression is dominated by per-write overhead in `allowValueLogPointers()` calling `valueLogRetainedStats()` (allocates slices + maps and scales with retained-path count).
+- Fix: amortize retained-bytes computation and refresh periodically (`valueLogRetainedBytesApprox()`), so the hard-cap check no longer allocates on every write.
+- Bench gate run (WARMUP=1 added; unified_bench forced to `-progress=false` to reduce output noise):
+  - cmd: `RUNS=5 KEEP=3 SLEEP_S=5 WARMUP=1 KEYS=1000000 VALSIZE=1024 BATCHSIZE=1000 bash scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118220332.log`
+  - deltas: `random_write -8.07%` (improved from ~-16%/~-19% prior); other cells still show high variance (investigate after stabilizing disk/IO conditions).
