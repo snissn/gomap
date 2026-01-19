@@ -4,6 +4,28 @@ This document captures the **follow‑up work** after PR0–PR8 to (a) cement wi
 
 Primary audiences: maintainers running the slab‑optimization waterfall and perf owners reviewing PR8 (#67).
 
+## PR9 Policy (Mandatory)
+
+All follow‑up perf/profiling work MUST happen in a new PR:
+- **PR9**: release‑candidate follow‑ups (profiling, benchmarks, targeted perf fixes, and bench infrastructure improvements).
+
+**This policy MUST be followed.** Do not land additional perf/profiling changes directly on PR8 or earlier PR branches.
+
+### PR9 workflow requirements
+- **Branching:** create `sprint/slabopt-pr9-perf-followups` based on `sprint/slabopt-pr8-regression-rc`.
+- **PR creation:** MUST open PR9 via GitHub CLI (`gh pr create`) and keep it updated.
+- **Commit cadence:** commit often (small, scoped changes) and push often (so CI + reviewers see progress).
+- **Reporting cadence:** every meaningful benchmark/profiling result MUST be logged in two places:
+  1) append/update this file: `slab-optimization/FOLLOW_UP_AGENTS.md` (include timestamp + command + log paths + key deltas)
+  2) add a comment to the PR9 conversation with the same summary (include `artifacts/bench/...` paths)
+- **No rewriting history:** avoid force pushes; keep a linear story for perf investigations.
+
+### What qualifies as “must log”
+- Any baseline gate run (`scripts/bench_compare_pr8_vs_main_trimmed.sh`)
+- Any feature sweep (lanes, split vlog, dict training knobs, index flags)
+- Any profile capture (`-trace`, `-blockprofile`, `-mutexprofile`, `-cpuprofile`)
+- Any regression discovery, hypothesis, fix, and verification run
+
 ## Milestones (Owner View)
 
 Each milestone ends with a **posted PR8 comment** that includes: the exact commands, the summary table, and the `artifacts/bench/...` log/profile paths.
