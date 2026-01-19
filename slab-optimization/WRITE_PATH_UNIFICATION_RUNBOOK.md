@@ -185,6 +185,26 @@ After PR12, the matrix should be achievable with stable flags:
 - (2) `DisableJournal=true`, `DisableValueLog=false`, `SplitValueLog=true`, `MemtableValueLogPointers=true`
 - (3) `DisableJournal=false`, `DisableValueLog=false`, `SplitValueLog=true`, `MemtableValueLogPointers=true`
 
+### Stage 2 bench recipe (unified_bench)
+
+Use this when validating that the matrix is actually selectable (and that “value_store” matches intent).
+
+- Build once: `go build -o /tmp/unified_bench ./cmd/unified_bench`
+- Hygiene: `RUNS=5 KEEP=3 SLEEP_S=5` (sleep between runs; keep the middle 3)
+- Workload: `-suite lanes_probe -dbs treedb -keys 1000000 -valsize 1024 -batchsize 1000`
+
+Cases:
+
+- (1) `DisableWAL=true` (legacy “everything off”; values not persisted via value log)
+  - `/tmp/unified_bench ... -treedb-disable-wal -treedb-allow-unsafe`
+  - Expected stderr: `mode=cached value_store=backend_flush redo_log=off`
+- (2) `DisableJournal=true` but value log enabled
+  - `/tmp/unified_bench ... -treedb-disable-journal -treedb-split-value-log -treedb-memtable-value-log-pointers -treedb-allow-unsafe`
+  - Expected stderr: `mode=cached value_store=value_log redo_log=off`
+- (3) Journal on + value log enabled
+  - `/tmp/unified_bench ... -treedb-split-value-log -treedb-memtable-value-log-pointers -treedb-allow-unsafe`
+  - Expected stderr: `mode=cached value_store=value_log redo_log=on`
+
 Bench harness requirement:
 
 - stderr write-path summary must reflect the new state:
