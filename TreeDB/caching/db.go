@@ -457,23 +457,31 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		return errWALUnavailable
 	}
 	if db.splitValueLogEnabled() {
+		waitStart := time.Now()
 		l.vlogMu.Lock()
+		waited := time.Since(waitStart)
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
 		}
+		start := time.Now()
 		err := w.Flush()
+		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
 		return err
 	}
+	waitStart := time.Now()
 	l.walMu.Lock()
+	waited := time.Since(waitStart)
 	w := l.wal
 	if w == nil {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	start := time.Now()
 	err := w.Flush()
+	db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
 	l.walMu.Unlock()
 	return err
 }
@@ -483,23 +491,31 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		return errWALUnavailable
 	}
 	if db.splitValueLogEnabled() {
+		waitStart := time.Now()
 		l.vlogMu.Lock()
+		waited := time.Since(waitStart)
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
 		}
+		start := time.Now()
 		err := w.Sync()
+		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
 		return err
 	}
+	waitStart := time.Now()
 	l.walMu.Lock()
+	waited := time.Since(waitStart)
 	w := l.wal
 	if w == nil {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	start := time.Now()
 	err := w.Sync()
+	db.debugVlogTiming("wal_sync", int(l.id), "walMu", waited, time.Since(start))
 	l.walMu.Unlock()
 	return err
 }
@@ -4472,7 +4488,11 @@ func (db *DB) flushSyncRequested(sync bool) bool {
 }
 
 func (db *DB) flushAll(sync bool) {
+	origSync := sync
 	sync = db.flushSyncRequested(sync)
+	if !origSync && sync && db.disableJournal && !db.relaxedSync {
+		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
+	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 
