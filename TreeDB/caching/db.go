@@ -2908,10 +2908,6 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	dictID, err := db.currentDictID(context.Background())
-	if err != nil {
-		return err
-	}
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -2954,6 +2950,11 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		}
 
 		if eligible && allowPointers {
+			dictID, err := db.currentDictID(context.Background())
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
 			rid := db.nextRID.Add(1)
 			dictBytes, err := db.dictBytes(context.Background(), dictID)
 			if err != nil {
@@ -5799,10 +5800,6 @@ func (b *Batch) write(sync bool) error {
 	b.db.waitForCheckpoint()
 	b.db.waitForStop()
 
-	if err := b.freezeDictID(context.Background()); err != nil {
-		return err
-	}
-
 	if b.backend != nil {
 		var err error
 		if sync && !b.db.relaxedSync {
@@ -5946,6 +5943,10 @@ func (b *Batch) writeRegular(sync bool) error {
 
 		var rids []uint64
 		if allowPointers && eligibleCount > 0 {
+			if err := b.freezeDictID(context.Background()); err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
 			rids = make([]uint64, len(b.entries))
 			valueRecords := make([]valuelog.Record, eligibleCount)
 			for i, idx := range eligibleIdxs {
