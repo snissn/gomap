@@ -902,3 +902,12 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-18 15:30:03 HST`
 - PR8: PR1 vs main high-keys batch_write sweep (RUNS=3) with journal lanes flag; confirmed PR1 within ~5% of main and lanes ignored pre-PR5.
+
+`2026-01-18 20:45:00 HST`
+- PR8: restored default `ValueLogPointerThreshold` behavior to match the inline threshold (256 bytes).
+- PR8: profiled `random_write` regression vs `main` and removed per-write allocations on the value-log append hot path:
+  - Added `caching.(*DB).appendValueLogOne` and used it for single-key `Set` pointer writes.
+  - Optimized `valuelog.(*Writer).Append` for `dictID==0` (no dict/compression) to avoid `[]ValuePtr{...}` allocations.
+- Tests: `go test ./... -count=1` → PASS
+- Bench gate (RUNS=5 KEEP=3 SLEEP_S=5, keys=1,000,000 valsize=1024 batchsize=1000): `scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118204204.log`
