@@ -2364,6 +2364,18 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
+	} else if len(records) > 1 {
+		// Even when dictionary compression is disabled/paused, grouping records into
+		// frames reduces per-record overhead (CRC/header writes) on append-heavy
+		// workloads.
+		//
+		// When no dict is available, we write raw frames (uncompressed) and still
+		// benefit from fewer syscalls and less framing work.
+		if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+			k = cur
+		} else {
+			k = 8
+		}
 	}
 	k = db.clampValueLogDictK(k)
 
