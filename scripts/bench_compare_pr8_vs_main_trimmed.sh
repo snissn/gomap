@@ -57,6 +57,9 @@ ensure_main_worktree() {
     return 0
   fi
   mkdir -p "$(dirname "$MAIN_WT")"
+  if [[ -e "$MAIN_WT" ]]; then
+    rm -rf "$MAIN_WT"
+  fi
   git worktree add -f "$MAIN_WT" main >>"$LOG" 2>&1
 }
 
