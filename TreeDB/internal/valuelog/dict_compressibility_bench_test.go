@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math/rand"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,87 @@ import (
 type dictBenchWorkload struct {
 	name string
 	make func(rng *rand.Rand, size int) []byte
+}
+
+func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
+	workloads := []dictBenchWorkload{
+		{
+			name: "highly_compressible",
+			make: func(rng *rand.Rand, size int) []byte {
+				pattern := bytes.Repeat([]byte("{\"key\":\"value\",\"active\":true}"), (size/32)+1)
+				buf := make([]byte, size)
+				copy(buf, pattern)
+				if size > 64 {
+					rng.Read(buf[size-64:])
+				}
+				return buf
+			},
+		},
+		{
+			name: "incompressible",
+			make: func(rng *rand.Rand, size int) []byte {
+				buf := make([]byte, size)
+				rng.Read(buf)
+				return buf
+			},
+		},
+	}
+
+	const valueSize = 16 << 10
+	const poolSize = 2048
+	const trainSamples = 256
+
+	for _, workload := range workloads {
+		b.Run(workload.name, func(b *testing.B) {
+			fileID, _ := EncodeFileID(0, 1)
+			w := newWriterWithSink(io.Discard, fileID)
+
+			rng := rand.New(rand.NewSource(1))
+			values := make([][]byte, poolSize)
+			for i := 0; i < poolSize; i++ {
+				values[i] = workload.make(rng, valueSize)
+			}
+
+			samples := make([][]byte, 0, trainSamples)
+			for i := 0; i < trainSamples && i < len(values); i++ {
+				samples = append(samples, values[i])
+			}
+			dictID := uint64(1)
+			dict, err := buildBenchDict(uint32(dictID), samples)
+			if err != nil {
+				dict, err = buildFallbackBenchDict(uint32(dictID))
+				if err != nil {
+					b.Fatalf("build dict: %v", err)
+				}
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(int64(valueSize * 4))
+			b.ResetTimer()
+
+			rid := uint64(1)
+			records := make([]Record, 4)
+			totalRaw := uint64(0)
+			totalStored := uint64(0)
+			for i := 0; i < b.N; i++ {
+				for j := 0; j < 4; j++ {
+					records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
+					rid++
+				}
+				_, stats, err := w.AppendFrameWithStats(dictID, dict, records)
+				if err != nil {
+					b.Fatalf("AppendFrameWithStats: %v", err)
+				}
+				totalRaw += uint64(stats.RawPayloadBytes)
+				totalStored += uint64(stats.StoredPayloadBytes)
+			}
+			b.StopTimer()
+
+			if totalRaw > 0 {
+				b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
+			}
+		})
+	}
 }
 
 func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {

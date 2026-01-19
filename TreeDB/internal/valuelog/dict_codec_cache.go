@@ -60,6 +60,7 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 	enc0, err := zstd.NewWriter(nil,
 		zstd.WithEncoderDict(dictCopy),
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
+		zstd.WithEncoderConcurrency(1),
 		zstd.WithEncoderCRC(false),
 	)
 	if err != nil {
@@ -75,6 +76,7 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 			enc, _ := zstd.NewWriter(nil,
 				zstd.WithEncoderDict(dictCopy),
 				zstd.WithEncoderLevel(zstd.SpeedFastest),
+				zstd.WithEncoderConcurrency(1),
 				zstd.WithEncoderCRC(false),
 			)
 			return enc
