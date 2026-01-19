@@ -187,19 +187,23 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 		}
 	}
 
-	var (
-		dec *zstd.Decoder
-		err error
-	)
+	var dec *zstd.Decoder
+	var release func()
 	if len(dict) > 0 {
-		dec, err = zstd.NewReader(nil, zstd.WithDecoderDicts(dict))
+		codecs := getDictCodecs(header.DictID, dict)
+		if codecs == nil || codecs.decPool == nil {
+			return nil, ErrMissingDict
+		}
+		dec = codecs.decPool.Get().(*zstd.Decoder)
+		release = func() { codecs.decPool.Put(dec) }
 	} else {
-		dec, err = zstd.NewReader(nil)
+		dec, err := zstd.NewReader(nil)
+		if err != nil {
+			return nil, err
+		}
+		release = dec.Close
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer dec.Close()
+	defer release()
 
 	out, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
 	if err != nil {

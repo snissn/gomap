@@ -51,6 +51,66 @@ func TestStorePutGetDedup(t *testing.T) {
 	}
 }
 
+func TestStoreClearCurrent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	id, err := store.PutDictBytes(ctx, []byte("alpha"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.SetCurrent(ctx, id); err != nil {
+		t.Fatalf("set current: %v", err)
+	}
+	if err := store.SetCurrent(ctx, 0); err != nil {
+		t.Fatalf("clear current: %v", err)
+	}
+	cur, err := store.GetCurrent(ctx)
+	if err != nil {
+		t.Fatalf("get current: %v", err)
+	}
+	if cur != 0 {
+		t.Fatalf("expected current=0 got %d", cur)
+	}
+}
+
+func TestStoreKMeta(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	id, err := store.PutDictBytes(ctx, []byte("alpha"))
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	k, err := store.GetK(ctx, id)
+	if err != nil {
+		t.Fatalf("get k: %v", err)
+	}
+	if k != 0 {
+		t.Fatalf("expected missing k=0 got %d", k)
+	}
+	if err := store.SetK(ctx, id, 4); err != nil {
+		t.Fatalf("set k: %v", err)
+	}
+	k, err = store.GetK(ctx, id)
+	if err != nil {
+		t.Fatalf("get k: %v", err)
+	}
+	if k != 4 {
+		t.Fatalf("expected k=4 got %d", k)
+	}
+}
+
 func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})

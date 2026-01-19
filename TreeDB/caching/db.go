@@ -330,15 +330,23 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
+	db.valueLogDictBytesMu.Lock()
+	db.valueLogDictBytesID = 0
+	db.valueLogDictBytes = nil
+	db.valueLogDictBytesMu.Unlock()
 	if db.valueLogReader != nil && store != nil {
 		db.valueLogReader.SetDictLookup(func(dictID uint64) ([]byte, error) {
 			return store.GetDictBytes(context.Background(), dictID)
 		})
 	}
+	db.ensureValueLogDictTrainer()
 }
 
 func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 	if db == nil || db.dictStore == nil {
+		return 0, nil
+	}
+	if db.valueLogDictPaused() {
 		return 0, nil
 	}
 	return db.dictStore.GetCurrent(ctx)
@@ -351,7 +359,23 @@ func (db *DB) dictBytes(ctx context.Context, dictID uint64) ([]byte, error) {
 	if db == nil || db.dictStore == nil {
 		return nil, valuelog.ErrMissingDict
 	}
-	return db.dictStore.GetDictBytes(ctx, dictID)
+	db.valueLogDictBytesMu.Lock()
+	if db.valueLogDictBytesID == dictID && len(db.valueLogDictBytes) > 0 {
+		out := db.valueLogDictBytes
+		db.valueLogDictBytesMu.Unlock()
+		return out, nil
+	}
+	db.valueLogDictBytesMu.Unlock()
+
+	out, err := db.dictStore.GetDictBytes(ctx, dictID)
+	if err != nil {
+		return nil, err
+	}
+	db.valueLogDictBytesMu.Lock()
+	db.valueLogDictBytesID = dictID
+	db.valueLogDictBytes = out
+	db.valueLogDictBytesMu.Unlock()
+	return out, nil
 }
 
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
@@ -788,7 +812,7 @@ type Options struct {
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a conservative default (4KiB).
 	ValueLogPointerThreshold int
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
@@ -801,6 +825,22 @@ type Options struct {
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
 	MaxValueLogRetainedBytesHard int64
+
+	// ValueLogDictTrain configures background dictionary training for value-log frame compression.
+	// TrainBytes <= 0 disables training.
+	ValueLogDictTrain compression.TrainConfig
+	// ValueLogDictAdaptiveRatio enables adaptive pause of dict compression when payload ratios degrade.
+	// 0 disables.
+	ValueLogDictAdaptiveRatio float64
+	// ValueLogDictMetricsWindowBytes controls the metrics window size (0=default).
+	ValueLogDictMetricsWindowBytes int
+	// ValueLogDictMetricsMinRecords is a minimum record count before pausing (0=default).
+	ValueLogDictMetricsMinRecords int
+	// ValueLogDictMetricsPauseBytes controls pause duration in bytes (0=default).
+	ValueLogDictMetricsPauseBytes int
+	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload ratio
+	// does not improve by at least this fraction (0 uses default).
+	ValueLogDictMinPayloadSavingsRatio float64
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
@@ -870,6 +910,28 @@ type DB struct {
 	// Level 1 (Disk)
 	backend   BackendDB
 	dictStore DictStore
+
+	// Value-log dictionary compression (cached mode).
+	valueLogDictTrain             compression.TrainConfig
+	valueLogDictAdaptiveRatio     float64
+	valueLogDictMinPayloadSavings float64
+	valueLogDictMetricsWindow     int
+	valueLogDictMetricsMinRecords int
+	valueLogDictMetricsPauseBytes int
+
+	valueLogDictTrainerMu sync.Mutex
+	valueLogDictTrainer   *compression.Trainer
+	valueLogDictMetrics   compression.Metrics
+
+	valueLogDictPauseRemaining      atomic.Uint64
+	valueLogDictLastAppliedDictHash atomic.Uint64
+	valueLogDictLastAppliedDictID   atomic.Uint64
+	valueLogDictCurrentK            atomic.Uint32
+	valueLogDictKMu                 sync.RWMutex
+	valueLogDictKCache              map[uint64]int
+	valueLogDictBytesMu             sync.Mutex
+	valueLogDictBytesID             uint64
+	valueLogDictBytes               []byte
 
 	// Config
 	dir                       string
@@ -1371,9 +1433,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
+	// Default-off for moderate values: value-log pointers add per-write overhead
+	// (extra log write + pointer indirection) that is often not worth it until
+	// values are several KiB.
+	const defaultValueLogPointerThreshold = 4 << 10
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
-		valueLogThreshold = page.DefaultInlineThreshold
+		valueLogThreshold = defaultValueLogPointerThreshold
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
 	if opts.SplitValueLog && disableValueLog {
@@ -1425,9 +1491,34 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	debugFlushPointers := envBool(envDebugFlushPointers)
 
+	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
+	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
+	valueLogDictMetricsMinRecords := opts.ValueLogDictMetricsMinRecords
+	valueLogDictMetricsPauseBytes := opts.ValueLogDictMetricsPauseBytes
+
+	minPayloadSavings := opts.ValueLogDictMinPayloadSavingsRatio
+	if minPayloadSavings <= 0 {
+		minPayloadSavings = 0.005
+	}
+
 	splitValueLog := opts.SplitValueLog
 	if !disableValueLog {
 		splitValueLog = true
+	}
+
+	// If dict training is enabled but no adaptive ratio is specified, default to
+	// a conservative pause threshold to avoid wasting CPU on incompressible
+	// payload streams.
+	if opts.ValueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
+		valueLogDictAdaptiveRatio = 0.995
+	}
+	if valueLogDictAdaptiveRatio > 0 {
+		if valueLogDictMetricsWindow <= 0 {
+			valueLogDictMetricsWindow = 1 << 20
+		}
+		if valueLogDictMetricsPauseBytes <= 0 {
+			valueLogDictMetricsPauseBytes = 16 << 20
+		}
 	}
 	lanes := make([]lane, laneCount)
 	for i := range lanes {
@@ -1435,46 +1526,51 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
 	}
-
 	db := &DB{
-		dir:                          walDir,
-		backend:                      backend,
-		flushThreshold:               opts.FlushThreshold,
-		memtableCap:                  memCap,
-		memtableMode:                 mode,
-		memtableAdaptive:             adaptive,
-		memtableWarmupActive:         adaptive && warmupThreshold < opts.FlushThreshold,
-		memtableWarmupThreshold:      warmupThreshold,
-		memtableAdaptiveCandidate:    mode,
-		maxQueuedMemtables:           opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:           opts.StopBacklogSeconds,
-		maxBacklogBytes:              opts.MaxBacklogBytes,
-		writerFlushMaxMemtables:      opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:       opts.WriterFlushMaxDuration,
-		flushBuildConcurrency:        opts.FlushBuildConcurrency,
-		walMaxSegmentBytes:           opts.WALMaxSegmentBytes,
-		disableWAL:                   opts.DisableWAL,
-		disableValueLog:              disableValueLog,
-		splitValueLog:                splitValueLog,
-		relaxedSync:                  opts.RelaxedSync,
-		notifyError:                  opts.NotifyError,
-		inlineThreshold:              inlineThreshold,
-		valueLogThreshold:            valueLogThreshold,
-		memtableValueLogPointers:     opts.MemtableValueLogPointers,
-		valueLogReader:               valueLogReader,
-		valueLogRetain:               retained,
-		debugFlushPointers:           debugFlushPointers,
-		maxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
-		maxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
-		mutableShards:                mutableShards,
-		mutableShardMask:             uint64(shardCount - 1),
-		hashSortedIndexer:            indexer,
-		closeCh:                      make(chan struct{}),
-		flushCh:                      make(chan struct{}, 1),
-		autoCheckpointOnceCh:         make(chan struct{}, 1),
-		autoCheckpointWriteCh:        make(chan struct{}, 1),
-		lanes:                        lanes,
+		dir:                           walDir,
+		backend:                       backend,
+		flushThreshold:                opts.FlushThreshold,
+		memtableCap:                   memCap,
+		memtableMode:                  mode,
+		memtableAdaptive:              adaptive,
+		memtableWarmupActive:          adaptive && warmupThreshold < opts.FlushThreshold,
+		memtableWarmupThreshold:       warmupThreshold,
+		memtableAdaptiveCandidate:     mode,
+		maxQueuedMemtables:            opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:        opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:            opts.StopBacklogSeconds,
+		maxBacklogBytes:               opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:       opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:        opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:         opts.FlushBuildConcurrency,
+		walMaxSegmentBytes:            opts.WALMaxSegmentBytes,
+		disableWAL:                    opts.DisableWAL,
+		disableValueLog:               disableValueLog,
+		splitValueLog:                 splitValueLog,
+		relaxedSync:                   opts.RelaxedSync,
+		notifyError:                   opts.NotifyError,
+		inlineThreshold:               inlineThreshold,
+		valueLogThreshold:             valueLogThreshold,
+		memtableValueLogPointers:      opts.MemtableValueLogPointers,
+		valueLogReader:                valueLogReader,
+		valueLogRetain:                retained,
+		debugFlushPointers:            debugFlushPointers,
+		maxValueLogRetainedBytes:      opts.MaxValueLogRetainedBytes,
+		maxValueLogRetainedBytesHard:  opts.MaxValueLogRetainedBytesHard,
+		valueLogDictTrain:             opts.ValueLogDictTrain,
+		valueLogDictAdaptiveRatio:     valueLogDictAdaptiveRatio,
+		valueLogDictMinPayloadSavings: minPayloadSavings,
+		valueLogDictMetricsWindow:     valueLogDictMetricsWindow,
+		valueLogDictMetricsMinRecords: valueLogDictMetricsMinRecords,
+		valueLogDictMetricsPauseBytes: valueLogDictMetricsPauseBytes,
+		mutableShards:                 mutableShards,
+		mutableShardMask:              uint64(shardCount - 1),
+		hashSortedIndexer:             indexer,
+		closeCh:                       make(chan struct{}),
+		flushCh:                       make(chan struct{}, 1),
+		autoCheckpointOnceCh:          make(chan struct{}, 1),
+		autoCheckpointWriteCh:         make(chan struct{}, 1),
+		lanes:                         lanes,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
@@ -2114,27 +2210,6 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 }
 
-func chooseValueLogK(dict []byte, records []valuelog.Record) int {
-	if len(records) <= 1 {
-		return 1
-	}
-	if len(dict) == 0 {
-		return 1
-	}
-	samples := make([][]byte, 0, len(records))
-	for i := range records {
-		samples = append(samples, records[i].Value)
-	}
-	profile := compression.ChooseKForDict(dict, samples)
-	if profile == nil || profile.K <= 0 {
-		return 1
-	}
-	if profile.K > valuelog.MaxFrameK {
-		return valuelog.MaxFrameK
-	}
-	return profile.K
-}
-
 func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
@@ -2163,16 +2238,54 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		return nil, errWALUnavailable
 	}
 	startSize := w.Size()
-	k := chooseValueLogK(dict, records)
-	if k <= 0 {
-		k = 1
+
+	rawPayloadBytes := 0
+	for i := range records {
+		rawPayloadBytes += len(records[i].Value)
 	}
+	if rawPayloadBytes > 0 {
+		db.valueLogDictConsumePause(uint64(rawPayloadBytes))
+	}
+	if db.valueLogDictPaused() {
+		dictID = 0
+		dict = nil
+	}
+
+	db.valueLogDictCollectSamples(records)
+
+	k := 1
+	if dictID != 0 && len(dict) > 0 {
+		k = db.valueLogDictK(dictID)
+	}
+	k = db.clampValueLogDictK(k)
+
+	type frameStatsWriter interface {
+		AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
+	}
+	statsWriter, hasStats := w.(frameStatsWriter)
+
 	ptrs = make([]page.ValuePtr, 0, len(records))
+	storedPayloadBytes := 0
+	rawFrameBytes := 0
+	frameRecords := 0
 	for i := 0; i < len(records); i += k {
 		end := i + k
 		if end > len(records) {
 			end = len(records)
 		}
+		if hasStats {
+			framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(dictID, dict, records[i:end])
+			if frameErr != nil {
+				err = frameErr
+				break
+			}
+			ptrs = append(ptrs, framePtrs...)
+			rawFrameBytes += stats.RawPayloadBytes
+			storedPayloadBytes += stats.StoredPayloadBytes
+			frameRecords += stats.Records
+			continue
+		}
+
 		framePtrs, frameErr := w.AppendFrame(dictID, dict, records[i:end])
 		if frameErr != nil {
 			err = frameErr
@@ -2194,6 +2307,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	l.vlogMu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if dictID != 0 && len(dict) > 0 {
+		if rawFrameBytes == 0 {
+			rawFrameBytes = rawPayloadBytes
+		}
+		if storedPayloadBytes == 0 {
+			// Best-effort fallback when writer stats are unavailable.
+			storedPayloadBytes = int(totalBytes)
+		}
+		if frameRecords == 0 {
+			frameRecords = len(records)
+		}
+		db.valueLogDictObservePayload(uint64(rawFrameBytes), uint64(storedPayloadBytes), frameRecords)
 	}
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
@@ -2752,6 +2878,13 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
+	db.valueLogDictTrainerMu.Lock()
+	trainer := db.valueLogDictTrainer
+	db.valueLogDictTrainer = nil
+	db.valueLogDictTrainerMu.Unlock()
+	if trainer != nil {
+		trainer.Close()
+	}
 	if db.hashSortedIndexer != nil {
 		db.hashSortedIndexer.Close()
 		db.hashSortedIndexer = nil
