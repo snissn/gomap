@@ -93,12 +93,12 @@ Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
 - `ProfileFast`: relax durability/integrity knobs for throughput.
-- `ProfileFastIngest`: fast ingest profile that keeps cached value-log enabled.
+- `ProfileFastIngest`: fast ingest profile that keeps cached value-log enabled (and may disable the journal/redo log).
 - `ProfileBench`: deterministic benchmarking profile (not production).
 
-Note: `DisableWAL=true` also disables cached value-log pointers (and therefore
-value-log dictionary compression). To benchmark value-log features, keep WAL
-enabled and use `RelaxedSync=true` + `AllowUnsafe=true` instead.
+Note: `DisableWAL=true` disables both the journal/redo log and cached value-log
+pointers. To benchmark the value-log path with the journal disabled, use
+`DisableJournal=true` (and keep `DisableValueLog=false`) with `AllowUnsafe=true`.
 
 Unsafe profiles require an explicit acknowledgement:
 
@@ -129,6 +129,8 @@ Details: `docs/TREEDB_PROFILES.md`.
 | --- | --- | --- | --- | --- |
 | Defaults | on | fsync | yes | safest default |
 | `RelaxedSync` | on | flush-only | no | crash-consistent only |
+| `DisableJournal` | off | backend checkpoint | yes (if not relaxed) | no redo log; durable only after checkpoint |
+| `DisableJournal` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
 | `DisableWAL` | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
 | `DisableWAL` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
 

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -818,15 +816,6 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 	}
 	cache.flushAll(true)
 
-	slabPath := filepath.Join(dir, "data-0000.slab")
-	info, err := os.Stat(slabPath)
-	if err != nil {
-		t.Fatalf("stat slab: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Fatalf("expected non-empty slab after copy-on-flush, got %d bytes", info.Size())
-	}
-
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		t.Fatalf("snapshot nil")
@@ -840,9 +829,9 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("expected pointer flag for large value")
 	}
-	if page.IsValueLogFileID(entry.ValuePtr.FileID) {
+	if !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		_ = snap.Close()
-		t.Fatalf("expected backend to store stable (non-value-log) pointer, got %#x", entry.ValuePtr.FileID)
+		t.Fatalf("expected backend to store value-log pointer, got %#x", entry.ValuePtr.FileID)
 	}
 	_ = snap.Close()
 
@@ -998,8 +987,11 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("expected retained value-log segments after non-sync flush")
 	}
 
-	// A Checkpoint creates a durability boundary and trims old WAL segments, so
-	// retained value-log segments should become reclaimable and be pruned.
+	// Delete the key and checkpoint. The value-log segments that only contain
+	// now-unreferenced payloads should become reclaimable and be pruned.
+	if err := cache.Delete(key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}

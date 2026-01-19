@@ -207,7 +207,7 @@ func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 		for _, entry := range entries {
 			name := entry.Name()
 			if strings.HasSuffix(name, ".log") &&
-				(strings.HasPrefix(name, "commit-") || strings.HasPrefix(name, "value-")) {
+				strings.HasPrefix(name, "commit-") {
 				t.Fatalf("expected logs to be clean after recovery; found %q", name)
 			}
 		}
@@ -360,7 +360,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			for _, entry := range entries {
 				name := entry.Name()
 				if strings.HasSuffix(name, ".log") &&
-					(strings.HasPrefix(name, "commit-") || strings.HasPrefix(name, "value-")) {
+					strings.HasPrefix(name, "commit-") {
 					foundLog = true
 				}
 			}
@@ -433,10 +433,8 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat commitlog file: %v", err)
 	}
-	if _, err := os.Stat(valuePath); err == nil {
-		t.Fatalf("expected valuelog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat valuelog file: %v", err)
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}
 }
 
@@ -755,9 +753,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat commitlog file: %v", err)
 	}
-	if _, err := os.Stat(valuePath); err == nil {
-		t.Fatalf("expected valuelog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat valuelog file: %v", err)
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}
 }

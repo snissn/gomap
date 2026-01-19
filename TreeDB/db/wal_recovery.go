@@ -152,18 +152,21 @@ func isTruncatedLogError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64) error {
-	ridMap, err := scanValueLogSegments(segments)
+func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, keepValueLogs bool, dictLookup valuelog.DictLookup) error {
+	ridMap, err := scanValueLogSegments(segments, dictLookup)
 	if err != nil {
 		return err
 	}
-	if err := replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes); err != nil {
+	if err := replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes, keepValueLogs); err != nil {
 		return err
+	}
+	if keepValueLogs {
+		return nil
 	}
 	return removeValueLogSegments(db, segments)
 }
 
-func scanValueLogSegments(segments []logSegment) (map[uint64]page.ValuePtr, error) {
+func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {
 	ridMap := make(map[uint64]page.ValuePtr)
 	for _, segment := range segments {
 		if !segment.valueLog {
@@ -174,6 +177,8 @@ func scanValueLogSegments(segments []logSegment) (map[uint64]page.ValuePtr, erro
 			return nil, err
 		}
 		reader.DisableValueDecode()
+		reader.ValidateDicts()
+		reader.SetDictLookup(dictLookup)
 		for {
 			rid, _, ptr, err := reader.ReadNext()
 			if err == nil {
@@ -197,7 +202,7 @@ func scanValueLogSegments(segments []logSegment) (map[uint64]page.ValuePtr, erro
 	return ridMap, nil
 }
 
-func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
+func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64, keepValueLogs bool) error {
 	type commitBatch struct {
 		seq     uint64
 		order   int
@@ -260,12 +265,12 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		})
 	}
 	for _, batch := range legacyBatches {
-		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
 			return err
 		}
 	}
 	for _, batch := range batches {
-		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
 			return err
 		}
 	}
@@ -277,12 +282,16 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	return nil
 }
 
-func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr) error {
+func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, keepValueLogs bool) error {
 	if len(records) == 0 {
 		return nil
 	}
 	batch := db.NewBatch()
 	defer func() { _ = batch.Close() }()
+
+	ptrBatch, hasPtrBatch := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
 
 	for _, rec := range records {
 		switch rec.Op {
@@ -298,6 +307,15 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			ptr, ok := ridMap[rec.RID]
 			if !ok {
 				return fmt.Errorf("commitlog: missing rid %d", rec.RID)
+			}
+			if keepValueLogs {
+				if !hasPtrBatch {
+					return fmt.Errorf("commitlog: pointer batch unavailable")
+				}
+				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
+					return err
+				}
+				continue
 			}
 			if db.valueLogManager == nil {
 				return fmt.Errorf("commitlog: value log manager unavailable")

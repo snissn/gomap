@@ -89,9 +89,9 @@ Notes:
   cached mode (`ModeCached`, the default). Backend-only mode (`ModeBackend`) is
   a different engine path.
 - `DisableWAL=true` implies the cached value log is also disabled (no value-log
-  pointers, no value-log dictionary compression). To benchmark value-log
-  features, use `ProfileFastIngest` (or keep `DisableWAL=false` and use
-  `RelaxedSync=true` + `AllowUnsafe=true`) instead.
+  pointers, no value-log dictionary compression). To benchmark the value-log
+  path with the journal disabled, use `ProfileFastIngest` (or set
+  `DisableJournal=true` with `DisableWAL=false` and `AllowUnsafe=true`).
 
 Use when you want:
 
@@ -108,7 +108,8 @@ path enabled.
 
 Behavior:
 
-- Keeps WAL enabled (`DisableWAL=false`) so value-log pointers remain available.
+- Disables the journal/redo log (`DisableJournal=true`, `DisableWAL=false`) while
+  keeping the value-log path enabled.
 - Enables value-log path knobs:
   - `SplitValueLog=true`
   - `MemtableValueLogPointers=true`

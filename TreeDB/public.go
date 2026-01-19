@@ -101,6 +101,20 @@ func writePathFromOptions(opts Options) writePathInfo {
 			redoLog:    "off",
 		}
 	}
+	if opts.DisableJournal {
+		if opts.DisableValueLog {
+			return writePathInfo{
+				mode:       "cached",
+				valueStore: "backend_flush",
+				redoLog:    "off",
+			}
+		}
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "value_log",
+			redoLog:    "off",
+		}
+	}
 	if opts.DisableValueLog {
 		return writePathInfo{
 			mode:       "cached",
@@ -242,6 +256,7 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxDuration:             opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:              opts.FlushBuildConcurrency,
 		DisableWAL:                         opts.DisableWAL,
+		DisableJournal:                     opts.DisableJournal,
 		DisableValueLog:                    opts.DisableValueLog,
 		SplitValueLog:                      opts.SplitValueLog,
 		JournalLanes:                       opts.JournalLanes,
@@ -296,7 +311,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	// Auto checkpointing only manages cached-mode WAL segments. If WAL is
 	// disabled, skip starting the background loop to avoid unnecessary work.
-	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
+	if !opts.DisableWAL && !opts.DisableJournal && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -363,6 +378,12 @@ func computeDurabilityMode(opts Options) string {
 				mode = "wal_disabled_relaxed_sync"
 			} else {
 				mode = "wal_disabled_sync"
+			}
+		} else if opts.DisableJournal {
+			if opts.RelaxedSync {
+				mode = "journal_disabled_relaxed_sync"
+			} else {
+				mode = "journal_disabled_sync"
 			}
 		} else if opts.RelaxedSync {
 			mode = "wal_relaxed_sync"

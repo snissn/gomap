@@ -14,15 +14,16 @@ import (
 )
 
 type Reader struct {
-	f            *os.File
-	r            *bufio.Reader
-	pos          int64
-	fileID       uint32
-	verifies     bool
-	decodeValues bool
-	dictLookup   DictLookup
-	pending      []frameEntry
-	pendingIndex int
+	f             *os.File
+	r             *bufio.Reader
+	pos           int64
+	fileID        uint32
+	verifies      bool
+	decodeValues  bool
+	validateDicts bool
+	dictLookup    DictLookup
+	pending       []frameEntry
+	pendingIndex  int
 }
 
 type frameEntry struct {
@@ -51,6 +52,13 @@ func (r *Reader) DisableChecksum() {
 
 func (r *Reader) DisableValueDecode() {
 	r.decodeValues = false
+}
+
+// ValidateDicts enables dictionary existence checks even when value decoding is
+// disabled. This provides a low-cost "fail fast" validation pass during WAL
+// replay and open.
+func (r *Reader) ValidateDicts() {
+	r.validateDicts = true
 }
 
 func (r *Reader) SetDictLookup(lookup DictLookup) {
@@ -123,6 +131,17 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		raw, err = decodeFramePayload(frameHeader, framePayload, r.dictLookup, rawLen)
 		if err != nil {
 			return 0, nil, page.ValuePtr{}, err
+		}
+	} else if r.validateDicts && frameHeader.Flags&FrameFlagCompressed != 0 && frameHeader.DictID != 0 {
+		if r.dictLookup == nil {
+			return 0, nil, page.ValuePtr{}, ErrMissingDict
+		}
+		dict, err := r.dictLookup(frameHeader.DictID)
+		if err != nil {
+			return 0, nil, page.ValuePtr{}, err
+		}
+		if len(dict) == 0 {
+			return 0, nil, page.ValuePtr{}, ErrMissingDict
 		}
 	}
 
