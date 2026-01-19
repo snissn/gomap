@@ -60,9 +60,11 @@ func likelyCompressibleSample(value []byte) bool {
 			max = freq[b]
 		}
 	}
-	// Heuristic: high unique byte count with low max frequency is typically
-	// incompressible, so skip feeding it into dictionary training.
-	if unique > 200 && max < 12 {
+	// Heuristic: skip only when the inspected prefix looks strongly
+	// incompressible (near-uniform byte distribution). Keep this conservative:
+	// false negatives (training on incompressible samples) are handled by the
+	// adaptive pause logic, while false positives can prevent useful dictionaries.
+	if unique > 240 && max < 6 {
 		return false
 	}
 	return true
