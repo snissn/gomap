@@ -68,6 +68,7 @@ type DB struct {
 	cached         *caching.DB
 	backend        *db.DB
 	dictdb         *db.DB
+	writePath      writePathInfo
 	bgComp         bgCompactionWorker
 	bgVac          bgIndexVacuumWorker
 	notifyError    func(error)
@@ -75,6 +76,52 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
+}
+
+type writePathInfo struct {
+	mode       string
+	valueStore string
+	redoLog    string
+	warn       bool
+}
+
+func writePathFromOptions(opts Options) writePathInfo {
+	if opts.Mode == ModeBackend {
+		return writePathInfo{
+			mode:       "backend",
+			valueStore: "slab_direct",
+			redoLog:    "n/a",
+			warn:       !opts.ReadOnly,
+		}
+	}
+	if opts.DisableWAL {
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "backend_flush",
+			redoLog:    "off",
+		}
+	}
+	if opts.DisableValueLog {
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "backend_flush",
+			redoLog:    "on",
+		}
+	}
+	return writePathInfo{
+		mode:       "cached",
+		valueStore: "value_log",
+		redoLog:    "on",
+	}
+}
+
+func writePathStatsInto(stats map[string]string, info writePathInfo) {
+	if stats == nil {
+		return
+	}
+	stats["treedb.write_path.mode"] = info.mode
+	stats["treedb.write_path.value_store"] = info.valueStore
+	stats["treedb.write_path.redo_log"] = info.redoLog
 }
 
 func (db *DB) ensureOpen() error {
@@ -106,6 +153,12 @@ func Open(opts Options) (*DB, error) {
 		// Read-only opens are backend-only: the caching layer creates and rotates
 		// WAL segments (writes) and runs background maintenance loops.
 		opts.Mode = ModeBackend
+	}
+
+	writePath := writePathFromOptions(opts)
+	fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+	if writePath.warn {
+		fmt.Fprintf(os.Stderr, "treedb WARNING: backend-only write path uses slab_direct writer; cached+value_log is the intended fast ingest path\n")
 	}
 
 	rootDir := opts.Dir
@@ -156,7 +209,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend, dictdb: dictBackend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
+		return &DB{mode: ModeBackend, backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -215,7 +268,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	cached.SetDictStore(dictStore)
-	out := &DB{mode: ModeCached, cached: cached, backend: backend, dictdb: dictBackend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -686,6 +739,7 @@ func (db *DB) Stats() map[string]string {
 		if stats == nil {
 			stats = make(map[string]string)
 		}
+		writePathStatsInto(stats, db.writePath)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgCompactionStatsInto(stats, &db.bgComp)
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
@@ -695,6 +749,7 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgCompactionStatsInto(stats, &db.bgComp)
 	bgIndexVacuumStatsInto(stats, &db.bgVac)

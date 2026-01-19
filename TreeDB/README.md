@@ -93,6 +93,7 @@ Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
 - `ProfileFast`: relax durability/integrity knobs for throughput.
+- `ProfileFastIngest`: fast ingest profile that keeps cached value-log enabled.
 - `ProfileBench`: deterministic benchmarking profile (not production).
 
 Note: `DisableWAL=true` also disables cached value-log pointers (and therefore
