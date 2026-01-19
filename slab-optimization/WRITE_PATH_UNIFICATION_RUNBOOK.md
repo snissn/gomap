@@ -150,11 +150,59 @@ Exit criteria for Stage 1:
 
 ---
 
-## Stage 2 (deletion): Remove slab-direct writer; unify on value log
+## Stage 2 (PR12): Enable the cached-mode 1/2/3 matrix (decouple journal vs value-log)
 
 We treat TreeDB as pre-alpha: **no backward compatibility guarantees**. Use that freedom to simplify.
 
-### D) Unify the value store implementation
+Goal: make the following cached-mode comparisons possible and unambiguous:
+
+1) journal/WAL **off** + values go to backend flush (legacy slab-ish path)
+2) journal/WAL **off** + values go to the **new value log** (pointer path)
+3) journal/WAL **on** + values go to the **new value log** (pointer path)
+
+Current constraint (must be fixed in PR12):
+
+- `DisableWAL=true` currently implies value-log pointers are disabled in cached
+  mode, so (2) is not expressible.
+
+### D) Decouple redo/journal from value-log pointers
+
+Implementation requirements:
+
+- Add a new option (name TBD but recommended):
+  - `Options.DisableJournal` (or `DisableRedoLog`)
+  - Semantics: “do not write redo/journal records; crash loses writes since the
+    last checkpoint” **without** disabling value-log pointers/value store.
+- Keep `Options.DisableValueLog` meaning:
+  - “force legacy WAL framing / no value-log pointers”
+- Keep `Options.DisableWAL` as legacy “everything off” for now:
+  - `DisableWAL=true` still implies both journal and value-log pointers off
+    (case 1).
+
+After PR12, the matrix should be achievable with stable flags:
+
+- (1) `DisableWAL=true`
+- (2) `DisableJournal=true`, `DisableValueLog=false`, `SplitValueLog=true`, `MemtableValueLogPointers=true`
+- (3) `DisableJournal=false`, `DisableValueLog=false`, `SplitValueLog=true`, `MemtableValueLogPointers=true`
+
+Bench harness requirement:
+
+- stderr write-path summary must reflect the new state:
+  - `value_store=value_log redo_log=off` must be observable for case (2).
+
+Exit criteria for PR12:
+
+- unified_bench can run (1)/(2)/(3) with no ambiguity.
+- stderr output clearly identifies which case ran.
+
+---
+
+## Stage 3 (PR13, gated): Remove slab-direct writer; unify on value log
+
+PR13 is gated on (2) demonstrating the expected speedup over (1). If (2) is not
+a win, do not delete the slab-direct path yet.
+
+### E) Unify the value store implementation (deletion)
 
 Goal: there is exactly one way values are durably written to disk for the out-of-line path.
 
@@ -170,13 +218,7 @@ Notes:
 - If dropping on-disk backward compatibility reduces complexity (readers, migration, legacy replay), do so.
 - Prefer simplifying invariants and state machines over keeping old formats.
 
-### E) Delete the legacy path
-
-- Remove the slab-direct writer code path entirely.
-- Remove (or repurpose) configuration that selects the slab-direct writer.
-- Update docs/tests to match: “value log is the primary append-only value store”.
-
-Exit criteria for Stage 2:
+Exit criteria for PR13:
 
 - There is no configuration that produces slab-direct writes.
 - The stderr “slow path” warning becomes dead code and is removed.
@@ -196,9 +238,13 @@ Exit criteria for Stage 2:
   - Branch: `sprint/slabopt-pr11-writepath-guardrails-defaults`
   - PR title: `PR11: write path guardrails + defaults (stderr reporting)`
 
-- **PR12 / Stage 2 (deletion/unification)**
-  - Branch: `sprint/slabopt-pr12-writepath-delete-slab-direct`
-  - PR title: `PR12: delete slab-direct writer; unify on value-log (no legacy support)`
+- **PR12 / Stage 2 (enable 1/2/3 matrix)**
+  - Branch: `sprint/slabopt-pr12-disable-journal-keep-valuelog`
+  - PR title: `PR12: decouple journal off from value-log (enable 1/2/3 bench matrix)`
+
+- **PR13 / Stage 3 (gated deletion/unification)**
+  - Branch: `sprint/slabopt-pr13-delete-slab-direct`
+  - PR title: `PR13: delete slab-direct writer; unify on value-log (no legacy support)`
 - Commit early and often; push early and often.
 - Use `gh` CLI to open PRs and post bench results in PR comments.
 
