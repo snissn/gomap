@@ -58,7 +58,7 @@ ensure_main_worktree() {
   fi
   mkdir -p "$(dirname "$MAIN_WT")"
   if [[ -e "$MAIN_WT" ]]; then
-    rm -rf "$MAIN_WT"
+    git worktree remove --force "$MAIN_WT" >>"$LOG" 2>&1 || true
   fi
   git worktree add -f "$MAIN_WT" main >>"$LOG" 2>&1
 }
