@@ -4481,7 +4481,11 @@ func (db *DB) flushSyncRequested(sync bool) bool {
 	if sync {
 		return true
 	}
-	if db.disableJournal && !db.relaxedSync {
+	// Only force a synced flush when operating in the legacy "everything off"
+	// mode (DisableWAL semantics), where we have neither a redo/journal nor a
+	// value-log durability mechanism. Disabling the journal alone must not
+	// implicitly force fsync-heavy flush behavior.
+	if db.disableJournal && db.disableValueLog && !db.relaxedSync {
 		return true
 	}
 	return false
