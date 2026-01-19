@@ -330,6 +330,13 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
+	db.dictCurrentCached.Store(0)
+	db.dictCurrentOps.Store(0)
+	if store != nil {
+		if dictID, err := store.GetCurrent(context.Background()); err == nil {
+			db.dictCurrentCached.Store(dictID)
+		}
+	}
 	db.valueLogDictBytesMu.Lock()
 	db.valueLogDictBytesID = 0
 	db.valueLogDictBytes = nil
@@ -349,7 +356,19 @@ func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 	if db.valueLogDictPaused() {
 		return 0, nil
 	}
-	return db.dictStore.GetCurrent(ctx)
+	// Avoid per-write dictdb reads on the hot path; refresh every N uses.
+	const refreshEvery = uint64(1 << 16)
+	seq := db.dictCurrentOps.Add(1)
+	if seq&(refreshEvery-1) != 0 {
+		return db.dictCurrentCached.Load(), nil
+	}
+	dictID, err := db.dictStore.GetCurrent(ctx)
+	if err != nil {
+		// Fall back to cached value on transient errors (best-effort).
+		return db.dictCurrentCached.Load(), nil
+	}
+	db.dictCurrentCached.Store(dictID)
+	return dictID, nil
 }
 
 func (db *DB) dictBytes(ctx context.Context, dictID uint64) ([]byte, error) {
@@ -812,7 +831,7 @@ type Options struct {
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use a conservative default (4KiB).
+	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
@@ -932,6 +951,12 @@ type DB struct {
 	valueLogDictBytesMu             sync.Mutex
 	valueLogDictBytesID             uint64
 	valueLogDictBytes               []byte
+
+	// Cached dictdb current pointer to avoid per-write lookups on the hot path.
+	// A stale dictID is safe (it always points to a durable dict); at worst we
+	// lag adoption of a newly trained dictionary.
+	dictCurrentCached atomic.Uint64
+	dictCurrentOps    atomic.Uint64
 
 	// Config
 	dir                       string
@@ -1433,13 +1458,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
-	// Default-off for moderate values: value-log pointers add per-write overhead
-	// (extra log write + pointer indirection) that is often not worth it until
-	// values are several KiB.
-	const defaultValueLogPointerThreshold = 4 << 10
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
-		valueLogThreshold = defaultValueLogPointerThreshold
+		valueLogThreshold = page.DefaultInlineThreshold
 	}
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
 	if opts.SplitValueLog && disableValueLog {

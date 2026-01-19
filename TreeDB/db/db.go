@@ -233,7 +233,7 @@ type Options struct {
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use a conservative default (4KiB).
+	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
 	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
 	ForceValuePointers bool
