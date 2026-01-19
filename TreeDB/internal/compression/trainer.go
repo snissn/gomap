@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 )
 
 const (

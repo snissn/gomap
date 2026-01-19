@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/crc"

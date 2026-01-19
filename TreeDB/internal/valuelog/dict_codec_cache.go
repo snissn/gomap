@@ -4,7 +4,7 @@ import (
 	"container/list"
 	"sync"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 )
 
 type dictCodecKey struct {

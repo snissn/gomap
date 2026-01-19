@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 )
 
 const (
