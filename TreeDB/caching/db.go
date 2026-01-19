@@ -2388,6 +2388,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	k = db.clampValueLogDictK(k)
+	if dictID != 0 && len(dict) > 0 && db.disableJournal {
+		// When the redo/journal log is disabled (ingest-mode), favor maximum frame
+		// grouping for throughput. This reduces per-record framing overhead and
+		// syscall pressure, and is typically safe for write-heavy workloads where
+		// random point reads are not the dominant cost.
+		k = valuelog.MaxFrameK
+	}
 
 	type frameStatsWriter interface {
 		AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
