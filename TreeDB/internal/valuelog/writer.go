@@ -41,7 +41,21 @@ type Writer struct {
 	encScratch []byte
 	skipDictID uint64
 	noBenefit  uint8
+	skipRemain uint16
 	syncFn     func(*os.File) error
+}
+
+func dictSkipFrames(noBenefit uint8) uint16 {
+	// Exponential backoff with periodic probes:
+	// 1 no-benefit probe  -> skip 8 frames
+	// 2 no-benefit probes -> skip 16 frames
+	// ...
+	// (capped)            -> skip 256 frames
+	shift := uint(noBenefit) + 2
+	if shift > 8 {
+		shift = 8
+	}
+	return uint16(1 << shift)
 }
 
 func NewWriter(path string, fileID uint32) (*Writer, error) {
@@ -336,6 +350,7 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		if w.skipDictID != dictID {
 			w.skipDictID = dictID
 			w.noBenefit = 0
+			w.skipRemain = 0
 		}
 		k := len(records)
 		if k <= 0 || k > MaxFrameK {
@@ -359,11 +374,11 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 			offsets[i+1] = uint32(payloadOff)
 		}
 
-		// If we've seen enough consecutive "no benefit" frames for this dict,
-		// skip compression entirely and write raw values without concatenating
-		// them into a temporary buffer.
-		const noBenefitThreshold = 4
-		if w.noBenefit >= noBenefitThreshold {
+		// If recent probes show compression yields no benefit, temporarily skip
+		// zstd and write raw values without concatenating them into a temporary
+		// buffer. We periodically probe again so we can adapt if data changes.
+		if w.skipRemain > 0 {
+			w.skipRemain--
 			bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + rawPayloadBytes
 			if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
 				return nil, FrameStats{}, ErrRecordTooLarge
@@ -475,12 +490,14 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		if len(encoded) < len(raw) {
 			flags |= FrameFlagCompressed
 			w.noBenefit = 0
+			w.skipRemain = 0
 		} else {
 			encoded = raw
 			storedPayloadBytes = len(raw)
 			if w.noBenefit < 0xff {
 				w.noBenefit++
 			}
+			w.skipRemain = dictSkipFrames(w.noBenefit)
 		}
 
 		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
