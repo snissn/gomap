@@ -56,3 +56,32 @@ jobs:
       - name: Test Race
         working-directory: TreeDB
         run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./...
+
+  perf:
+    name: perf-smoke (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: ValueLog dict compressibility bench
+        run: |
+          go test ./TreeDB/internal/valuelog -run '^$' \
+            -bench 'BenchmarkValueLogDictCompressibilitySweep/(highly_compressible|medium_compressible|incompressible)/dict_(off|on)/k=4$' \
+            -benchmem -count=5 | tee vlog_dict_bench.txt
+
+      - name: Perf baseline checker (warning-only)
+        run: |
+          go run .github/scripts/check_vlog_dict_bench.go \
+            -bench-output vlog_dict_bench.txt \
+            -baseline .github/perf_baselines/vlog_dict_defaults.json \
+            -strict=false
