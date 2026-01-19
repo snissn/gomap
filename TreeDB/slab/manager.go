@@ -322,12 +322,28 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, err
 	}
 
-	for {
-		recordBytes, recordLen, err := sm.activeSlab.buildRecordBytes(key, encoded)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
+	keyLen := len(key)
+	valLen := len(encoded)
+	if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+		return page.ValuePtr{}, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+		return page.ValuePtr{}, ErrRecordTooLarge
+	}
+	recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+	if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+		return page.ValuePtr{}, ErrRecordTooLarge
+	}
+	recordLen := int(recordLen64)
 
+	var lenArr [6]byte
+	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+	sum := crc32.Update(0, crc32cTable, lenArr[:])
+	sum = crc32.Update(sum, crc32cTable, key)
+	sum = crc32.Update(sum, crc32cTable, encoded)
+
+	for {
 		virtualTail := int64(sm.activeSlab.Size) + int64(len(sm.appendBuf))
 		if virtualTail+int64(recordLen) > MaxSlabSize {
 			if err := sm.flushAppendBufLocked(); err != nil {
@@ -342,7 +358,36 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 			virtualTail = int64(sm.activeSlab.Size)
 		}
 
-		if len(sm.appendBuf) >= slabAppendBufTarget {
+		if recordLen > slabAppendBufTarget {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			offset, err := sm.activeSlab.Write(key, encoded)
+			if err == ErrSlabFull {
+				if err := sm.rotateLocked(); err != nil {
+					return page.ValuePtr{}, err
+				}
+				offset, err = sm.activeSlab.Write(key, encoded)
+			}
+			if err != nil {
+				return page.ValuePtr{}, err
+			}
+
+			length := uint32(2 + 4 + len(key) + len(encoded))
+			if compressed {
+				length = page.ValuePtrMarkCompressed(length)
+			}
+			return page.ValuePtr{
+				Offset: uint64(offset + 4),
+				Length: length,
+				FileID: sm.activeSlab.ID,
+			}, nil
+		}
+
+		if cap(sm.appendBuf) == 0 {
+			sm.appendBuf = make([]byte, 0, slabAppendBufTarget)
+		}
+		if len(sm.appendBuf)+recordLen > cap(sm.appendBuf) {
 			if err := sm.flushAppendBufLocked(); err != nil {
 				return page.ValuePtr{}, err
 			}
@@ -350,7 +395,15 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		}
 
 		recordStart := virtualTail
-		sm.appendBuf = append(sm.appendBuf, recordBytes[:recordLen]...)
+		start := len(sm.appendBuf)
+		end := start + recordLen
+		sm.appendBuf = sm.appendBuf[:end]
+		rec := sm.appendBuf[start:end]
+
+		binary.LittleEndian.PutUint32(rec[0:4], sum)
+		copy(rec[4:10], lenArr[:])
+		copy(rec[10:10+keyLen], key)
+		copy(rec[10+keyLen:], encoded)
 
 		length := uint32(2 + 4 + len(key) + len(encoded))
 		if compressed {
