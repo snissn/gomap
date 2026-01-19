@@ -5,7 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 
 OUT_DIR="${OUT_DIR:-$ROOT/artifacts/bench}"
-RUNS="${RUNS:-1}"
+RUNS="${RUNS:-3}"
 TS=$(date +%Y%m%d%H%M%S)
 LOG="$OUT_DIR/bench_slabopt_matrix_$TS.log"
 
