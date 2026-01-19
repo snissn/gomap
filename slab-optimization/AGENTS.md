@@ -916,3 +916,6 @@ Authoritative spec: `slab-optimization/spec.md`
 - PR12: updated `slab-optimization/WRITE_PATH_UNIFICATION_RUNBOOK.md` with explicit unified_bench commands for the cached-mode write-path matrix (1/2/3).
 - PR12: commit `a18507a113` + pushed branch `sprint/slabopt-pr12-disable-journal-keep-valuelog`.
 - PR12 CI: `gh pr checks 71` → all checks PASS.
+
+`2026-01-19 10:38:41 HST`
+- PR12: posted a PR comment noting CI green + the runbook’s unified_bench matrix command recipes.
