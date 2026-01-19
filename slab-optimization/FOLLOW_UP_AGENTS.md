@@ -401,3 +401,10 @@ Append-only log of actual runs, results, and next actions. Every entry should in
 - Bench gate run (WARMUP=1):
   - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118221956.log`
   - deltas: `batch_write +9.09%`, `random_write +3.21%` (regression cleared), `random_read +7.23%`, `prefix_scan +25.87%`
+
+`2026-01-18 22:30 HST`
+- Follow-up: `TestCachingDB_ValueLogHardCapDisablesPointers` exposed that periodic refresh caching delayed hard-cap enforcement for small op counts.
+- Fix: make hard-cap checks **exact and cheap** (no per-write allocations, no delayed refresh):
+  - Track retained closed bytes in `db.valueLogRetainedClosedBytes` (updated on vlog rotate + prune).
+  - Compute current retained bytes by adding per-lane `vlogLiveBytes` only when the current segment is actually retained (`vlogPath == vlogRetainedPath`).
+- Tests: `go test ./... -count=1` → PASS
