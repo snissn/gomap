@@ -52,27 +52,8 @@ func (w *Writer) writeFrameBatch(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	if w.f == nil {
-		_, err := w.bw.Write(buf)
-		return err
-	}
-	if err := w.bw.Flush(); err != nil {
-		return err
-	}
-	written := 0
-	for written < len(buf) {
-		n, err := w.f.Write(buf[written:])
-		if n > 0 {
-			written += n
-		}
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return errors.New("valuelog: short write")
-		}
-	}
-	return nil
+	_, err := w.bw.Write(buf)
+	return err
 }
 
 func dictSkipFrames(noBenefit uint8) uint16 {

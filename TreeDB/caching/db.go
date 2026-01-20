@@ -2568,6 +2568,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			err = w.Flush()
 		case journalDurabilitySync:
 			err = w.Sync()
+		default:
+			if db.deferredValueLogEnabled() {
+				// In deferred value-log mode, the index will publish pointers to
+				// value-log records during the flush/commit path. Ensure the value-log
+				// bytes are visible to readers even when durability is "none".
+				err = w.Flush()
+			}
 		}
 	}
 	if err == nil {
@@ -2638,6 +2645,10 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			err = w.Flush()
 		case journalDurabilitySync:
 			err = w.Sync()
+		default:
+			if db.deferredValueLogEnabled() {
+				err = w.Flush()
+			}
 		}
 	}
 	if err == nil {
