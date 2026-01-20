@@ -399,20 +399,17 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 
 	// Deduplicate to "newest wins" before any value-store side effects (slab/vlog).
 	last := make(map[string]int, len(ops))
-	keep := make([]bool, len(ops))
 	for i := range ops {
-		key := bytesToStringView(ops[i].Key)
-		if prev, ok := last[key]; ok {
-			keep[prev] = false
-		}
-		last[key] = i
-		keep[i] = true
+		last[bytesToStringView(ops[i].Key)] = i
 	}
+
 	deduped := ops[:0]
-	for i, op := range ops {
-		if keep[i] {
-			deduped = append(deduped, op)
+	for i := range ops {
+		op := ops[i]
+		if last[bytesToStringView(op.Key)] != i {
+			continue
 		}
+		deduped = append(deduped, op)
 	}
 	ops = deduped
 
