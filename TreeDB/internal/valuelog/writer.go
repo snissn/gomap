@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -15,12 +16,35 @@ import (
 	"github.com/snissn/gomap/TreeDB/slab"
 )
 
+const headerWithoutCRC = HeaderSize - 4
+
 const (
-	defaultBufferSize = 8 << 20
-	headerWithoutCRC  = HeaderSize - 4
+	envValueLogWriteBufferBytes = "TREEDB_VLOG_WRITE_BUFFER_BYTES"
+	minValueLogWriteBufferBytes = 1 << 20
+	maxValueLogWriteBufferBytes = 256 << 20
 )
 
+var defaultBufferSize = 8 << 20
+
 var syncDirFn = syncDir
+
+func init() {
+	v := os.Getenv(envValueLogWriteBufferBytes)
+	if v == "" {
+		return
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return
+	}
+	if n < minValueLogWriteBufferBytes {
+		n = minValueLogWriteBufferBytes
+	}
+	if n > maxValueLogWriteBufferBytes {
+		n = maxValueLogWriteBufferBytes
+	}
+	defaultBufferSize = n
+}
 
 func recordSizeExceedsMax(valueLen uint32) bool {
 	if slab.MaxRecordSize <= 0 {
