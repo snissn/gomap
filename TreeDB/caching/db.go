@@ -6402,6 +6402,11 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
+const (
+	streamSwitchMinEntries = 4096
+	streamSwitchMinBytes   = 1 << 20 // 1MiB
+)
+
 func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
 		return
@@ -6425,8 +6430,6 @@ func (b *Batch) maybeSwitchToStreaming() {
 	// We intentionally use a small threshold (rather than flushThreshold) so
 	// "BatchWrite1M" style workloads can switch early and avoid materializing the
 	// entire batch in memory before Write().
-	const streamSwitchMinEntries = 4096
-	const streamSwitchMinBytes = 1 << 20 // 1MiB
 	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
 		return
 	}
@@ -6548,6 +6551,12 @@ func (b *Batch) write(sync bool) error {
 		return err
 	}
 
+	if ok, err := b.tryWriteMode4StreamBypass(sync); err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+
 	// Optimization: Bypass for Large Batches
 	// Generalization: Only bypass if the batch is large enough to be comparable
 	// to a memtable flush. Small/Medium random batches cause high write amplification
@@ -6556,6 +6565,97 @@ func (b *Batch) write(sync bool) error {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
+}
+
+func (b *Batch) tryWriteMode4StreamBypass(sync bool) (bool, error) {
+	if b == nil || b.db == nil {
+		return false, nil
+	}
+	if !b.db.deferredValueLogEnabled() {
+		return false, nil
+	}
+	if b.backend != nil || !b.streamEligible {
+		return false, nil
+	}
+	if b.firstKey == nil || b.lastKey == nil {
+		return false, nil
+	}
+	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
+		return false, nil
+	}
+
+	// Only attempt streaming if the batch is strictly increasing and starts beyond
+	// the maximum key present in the in-memory layers.
+	b.db.mu.RLock()
+	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
+	queueLen := len(b.db.queue)
+	b.db.mu.RUnlock()
+	if queueLen > 0 && len(queueRanges) == 0 {
+		// Cannot reason about overlap without queue range tracking.
+		return false, nil
+	}
+
+	var maxKey []byte
+	mutableRange := b.db.snapshotMutableRange()
+	if mutableRange.valid {
+		maxKey = mutableRange.max
+	}
+	for _, r := range queueRanges {
+		if !r.valid {
+			continue
+		}
+		if maxKey == nil || bytes.Compare(r.max, maxKey) > 0 {
+			maxKey = r.max
+		}
+	}
+	if maxKey != nil && bytes.Compare(b.firstKey, maxKey) <= 0 {
+		return false, nil
+	}
+
+	// Mode4 streaming bypass: append large values to the value log and commit
+	// backend pointers directly, avoiding memtable ingestion costs for append-only
+	// workloads.
+	ops := getEntrySlice(len(b.entries))
+	ops = append(ops, b.entries...)
+	defer putEntrySlice(ops)
+
+	ops, err := b.db.deferValueLogOps(ops, sync && !b.db.relaxedSync)
+	if err != nil {
+		return false, err
+	}
+
+	backendBatch := b.db.backend.NewBatch()
+	if err := backendBatch.SetOps(ops); err != nil {
+		_ = backendBatch.Close()
+		return false, err
+	}
+
+	if sync && !b.db.relaxedSync {
+		b.db.flushMu.Lock()
+		err = backendBatch.WriteSync()
+		b.db.flushMu.Unlock()
+	} else {
+		b.db.flushMu.Lock()
+		err = backendBatch.Write()
+		b.db.flushMu.Unlock()
+	}
+	if cerr := backendBatch.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
+	}
+
+	b.db.mu.Lock()
+	b.db.backendRange.add(b.firstKey)
+	b.db.backendRange.add(b.lastKey)
+	b.db.mu.Unlock()
+
+	if b.size > 0 {
+		b.db.noteWrite()
+	}
+	b.Reset()
+	return true, nil
 }
 
 func (b *Batch) writeRegular(sync bool) error {
