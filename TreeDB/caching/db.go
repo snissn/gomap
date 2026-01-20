@@ -328,7 +328,7 @@ func (db *DB) currentValueLogPaths() []string {
 	return paths
 }
 
-func (db *DB) deferValueLogOps(ops []batch.Entry) ([]batch.Entry, error) {
+func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, error) {
 	if db == nil || len(ops) == 0 || !db.deferredValueLogEnabled() {
 		return ops, nil
 	}
@@ -397,7 +397,11 @@ func (db *DB) deferValueLogOps(ops []batch.Entry) ([]batch.Entry, error) {
 		records[i] = valuelog.Record{RID: rid, Value: op.Value}
 	}
 
-	ptrs, err := db.appendValueLog(lane, dictID, dictBytes, records, journalDurabilityFlush)
+	durability := journalDurabilityFlush
+	if sync {
+		durability = journalDurabilitySync
+	}
+	ptrs, err := db.appendValueLog(lane, dictID, dictBytes, records, durability)
 	if err != nil {
 		return nil, err
 	}
@@ -3187,6 +3191,13 @@ func (db *DB) Close() error {
 		l.walFastMu.Unlock()
 	}
 
+	// In deferred value-log mode, flush requires new value-log appends. The flushLoop
+	// runs on closeCh and would otherwise trip the appendValueLog closeCh guard.
+	// Flush once here while closeCh is still open and writers are blocked.
+	if hadMemtables && db.deferredValueLogEnabled() {
+		db.flushAll(true)
+	}
+
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
@@ -4808,7 +4819,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					putEntrySlice(memOps)
 				}
 
-				ops, err := db.deferValueLogOps(ops)
+				ops, err := db.deferValueLogOps(ops, sync)
 				if err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 					_ = backendBatch.Close()
@@ -4869,7 +4880,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					putEntrySlice(unitOps[i])
 				}
 
-				ops, err := db.deferValueLogOps(ops)
+				ops, err := db.deferValueLogOps(ops, sync)
 				if err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 					_ = backendBatch.Close()
@@ -5194,7 +5205,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				}
 				iter.Next()
 			}
-			ops, err := db.deferValueLogOps(ops)
+			ops, err := db.deferValueLogOps(ops, sync)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
