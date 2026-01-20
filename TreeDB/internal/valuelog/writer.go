@@ -35,6 +35,8 @@ type Writer struct {
 	bw         *bufio.Writer
 	size       int64
 	fileID     uint32
+	appendBuf  []byte
+	appendMax  int
 	scratch    []byte
 	prefixBuf  []byte
 	rawScratch []byte
@@ -45,15 +47,84 @@ type Writer struct {
 	syncFn     func(*os.File) error
 }
 
-func (w *Writer) writeFrameBatch(buf []byte) error {
+func (w *Writer) flushAppendBuf() error {
+	if w == nil {
+		return errors.New("valuelog: nil writer")
+	}
+	if len(w.appendBuf) == 0 {
+		return nil
+	}
+	if w.f == nil {
+		_, err := w.bw.Write(w.appendBuf)
+		w.appendBuf = w.appendBuf[:0]
+		return err
+	}
+	written := 0
+	for written < len(w.appendBuf) {
+		n, err := w.f.Write(w.appendBuf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("valuelog: short write")
+		}
+	}
+	w.appendBuf = w.appendBuf[:0]
+	return nil
+}
+
+func (w *Writer) writeBytes(buf []byte) error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
 	}
 	if len(buf) == 0 {
 		return nil
 	}
-	_, err := w.bw.Write(buf)
-	return err
+	if w.f == nil {
+		_, err := w.bw.Write(buf)
+		return err
+	}
+
+	max := w.appendMax
+	if max <= 0 {
+		max = defaultBufferSize
+	}
+	if len(buf) >= max {
+		if err := w.flushAppendBuf(); err != nil {
+			return err
+		}
+		written := 0
+		for written < len(buf) {
+			n, err := w.f.Write(buf[written:])
+			if n > 0 {
+				written += n
+			}
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return errors.New("valuelog: short write")
+			}
+		}
+		return nil
+	}
+	if len(w.appendBuf)+len(buf) > max {
+		if err := w.flushAppendBuf(); err != nil {
+			return err
+		}
+	}
+	w.appendBuf = append(w.appendBuf, buf...)
+	if len(w.appendBuf) >= max {
+		return w.flushAppendBuf()
+	}
+	return nil
+}
+
+func (w *Writer) writeFrameBatch(buf []byte) error {
+	return w.writeBytes(buf)
 }
 
 func dictSkipFrames(noBenefit uint8) uint16 {
@@ -88,6 +159,8 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		bw:        bufio.NewWriterSize(f, defaultBufferSize),
 		size:      info.Size(),
 		fileID:    fileID,
+		appendMax: defaultBufferSize,
+		appendBuf: make([]byte, 0, defaultBufferSize),
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		syncFn:    func(file *os.File) error { return file.Sync() },
@@ -98,6 +171,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	return &Writer{
 		bw:        bufio.NewWriterSize(sink, defaultBufferSize),
 		fileID:    fileID,
+		appendMax: 0,
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 	}
@@ -118,10 +192,16 @@ func (w *Writer) Size() int64 {
 }
 
 func (w *Writer) Flush() error {
-	if w == nil || w.f == nil {
+	if w == nil {
 		return nil
 	}
-	return w.bw.Flush()
+	if err := w.flushAppendBuf(); err != nil {
+		return err
+	}
+	if w.f == nil {
+		return w.bw.Flush()
+	}
+	return nil
 }
 
 func (w *Writer) RotateTo(path string, fileID uint32) error {
@@ -147,11 +227,17 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		w.bw.Reset(f)
 		w.size = info.Size()
 		w.fileID = fileID
+		w.appendMax = defaultBufferSize
+		if cap(w.appendBuf) < defaultBufferSize {
+			w.appendBuf = make([]byte, 0, defaultBufferSize)
+		} else {
+			w.appendBuf = w.appendBuf[:0]
+		}
 		w.scratch = w.scratch[:0]
 		return nil
 	}
 
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
@@ -179,6 +265,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	w.bw.Reset(f)
 	w.size = info.Size()
 	w.fileID = fileID
+	w.appendBuf = w.appendBuf[:0]
 	w.scratch = w.scratch[:0]
 	if err := old.Close(); err != nil {
 		return err
@@ -259,7 +346,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-		if _, err := w.bw.Write(buf); err != nil {
+		if err := w.writeBytes(buf); err != nil {
 			return page.ValuePtr{}, err
 		}
 		w.size += int64(recordLen)
@@ -354,7 +441,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-		if _, err := w.bw.Write(buf); err != nil {
+		if err := w.writeBytes(buf); err != nil {
 			return nil, FrameStats{}, err
 		}
 		w.size += int64(recordLen)
@@ -702,13 +789,13 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		sum := crc.ChecksumParts(header[4:], prefix, encoded)
 		binary.LittleEndian.PutUint32(header[0:4], sum)
 
-		if _, err := w.bw.Write(header[:]); err != nil {
+		if err := w.writeBytes(header[:]); err != nil {
 			return nil, FrameStats{}, err
 		}
-		if _, err := w.bw.Write(prefix); err != nil {
+		if err := w.writeBytes(prefix); err != nil {
 			return nil, FrameStats{}, err
 		}
-		if _, err := w.bw.Write(encoded); err != nil {
+		if err := w.writeBytes(encoded); err != nil {
 			return nil, FrameStats{}, err
 		}
 		w.size += int64(HeaderSize + bodyLen)
@@ -760,7 +847,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-	if _, err := w.bw.Write(buf); err != nil {
+	if err := w.writeBytes(buf); err != nil {
 		return nil, FrameStats{}, err
 	}
 	w.size += int64(recordLen)
@@ -791,8 +878,11 @@ func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		return err
+	}
+	if w.syncFn != nil {
+		return w.syncFn(w.f)
 	}
 	return w.f.Sync()
 }
@@ -801,7 +891,7 @@ func (w *Writer) Close() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		_ = w.f.Close()
 		return err
 	}
