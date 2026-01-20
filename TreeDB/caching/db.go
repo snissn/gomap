@@ -39,6 +39,62 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
+var valueLogEligiblePool sync.Pool // stores []int
+var valueLogRecordPool sync.Pool   // stores []valuelog.Record
+
+func getValueLogEligible(capacity int) []int {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogEligiblePool.Get(); v != nil {
+		if s, ok := v.([]int); ok {
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+		}
+	}
+	return make([]int, 0, capacity)
+}
+
+func putValueLogEligible(s []int) {
+	if s == nil {
+		return
+	}
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogEligiblePool.Put(s[:0])
+}
+
+func getValueLogRecords(n int) []valuelog.Record {
+	if n < 0 {
+		n = 0
+	}
+	if v := valueLogRecordPool.Get(); v != nil {
+		if s, ok := v.([]valuelog.Record); ok {
+			if cap(s) >= n {
+				return s[:n]
+			}
+		}
+	}
+	return make([]valuelog.Record, n)
+}
+
+func putValueLogRecords(s []valuelog.Record) {
+	if s == nil {
+		return
+	}
+	for i := range s {
+		s[i] = valuelog.Record{}
+	}
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogRecordPool.Put(s[:0])
+}
+
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 
@@ -371,7 +427,8 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 	ops = deduped
 
-	eligible := make([]int, 0, len(ops))
+	eligible := getValueLogEligible(len(ops))
+	defer putValueLogEligible(eligible)
 	for i := range ops {
 		op := &ops[i]
 		if op.Type != batch.OpPut || op.IsPtr {
@@ -408,7 +465,8 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		}
 	}
 
-	records := make([]valuelog.Record, len(eligible))
+	records := getValueLogRecords(len(eligible))
+	defer putValueLogRecords(records)
 	for i, idx := range eligible {
 		op := &ops[idx]
 		rid := db.nextRID.Add(1)
