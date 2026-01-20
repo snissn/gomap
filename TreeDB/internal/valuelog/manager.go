@@ -1,6 +1,8 @@
 package valuelog
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // File represents a value-log segment on disk.
@@ -21,6 +24,13 @@ type File struct {
 	RefCount   atomic.Int64
 	IsZombie   atomic.Bool
 	dictLookup DictLookup
+
+	cacheMu    sync.Mutex
+	cacheStart atomic.Int64
+	cacheK     int
+	cacheFlags byte
+	cacheLen   int
+	cacheOffs  [MaxFrameK + 1]uint32
 
 	closed atomic.Bool
 }
@@ -49,6 +59,161 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
 }
 
+func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
+	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
+		start := int64(ptr.Offset - 4)
+
+		// Read header to discover the frame length/flags.
+		var header [HeaderSize]byte
+		if _, err := f.File.ReadAt(header[:], start); err != nil {
+			return nil, err
+		}
+		if header[4] != Version {
+			return nil, ErrCorrupt
+		}
+		if header[5]&recordFlagGrouped == 0 {
+			return nil, ErrCorrupt
+		}
+		valueLen := binary.LittleEndian.Uint32(header[16:20])
+		if recordSizeExceedsMax(valueLen) {
+			return nil, ErrRecordTooLarge
+		}
+
+		frameOff := start + HeaderSize
+		subIndex := int(page.ValuePtrSubIndex(ptr))
+
+		// Cache hit?
+		if f.cacheStart.Load() == start {
+			f.cacheMu.Lock()
+			hit := f.cacheStart.Load() == start && f.cacheK > 0 && f.cacheLen > 0 && subIndex < f.cacheK && f.cacheFlags&FrameFlagCompressed == 0
+			if hit {
+				prefixLen := f.cacheLen
+				valStart := f.cacheOffs[subIndex]
+				valEnd := f.cacheOffs[subIndex+1]
+				rawLen := f.cacheOffs[f.cacheK]
+				f.cacheMu.Unlock()
+
+				if valEnd < valStart || valEnd > rawLen {
+					return nil, ErrCorrupt
+				}
+				if prefixLen+int(rawLen) != int(valueLen) {
+					return nil, ErrCorrupt
+				}
+
+				n := int(valEnd - valStart)
+				oldLen := len(dst)
+				dst = grow(dst, n)
+				if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
+					return nil, err
+				}
+				return dst, nil
+			}
+			f.cacheMu.Unlock()
+		}
+
+		// Cache miss: read frame header to get k/flags, then read full prefix.
+		var frameHeader [FrameHeaderSize]byte
+		if _, err := f.File.ReadAt(frameHeader[:], frameOff); err != nil {
+			return nil, err
+		}
+		if frameHeader[0] != FrameVersion {
+			return nil, ErrCorrupt
+		}
+		k := int(frameHeader[2])
+		if k <= 0 || k > MaxFrameK {
+			return nil, ErrCorrupt
+		}
+		fFlags := frameHeader[1]
+		if fFlags&FrameFlagCompressed != 0 {
+			// Fallback to the full decoder (will allocate).
+			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+			if err != nil {
+				return nil, err
+			}
+			oldLen := len(dst)
+			dst = grow(dst, len(val))
+			copy(dst[oldLen:], val)
+			return dst, nil
+		}
+		ridBytes := k * 8
+		offsetBytes := (k + 1) * 4
+		prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+		if int(valueLen) < prefixLen {
+			return nil, ErrCorrupt
+		}
+
+		const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+		var prefix [maxPrefixLen]byte
+		if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			return nil, err
+		}
+		if subIndex < 0 || subIndex >= k {
+			return nil, ErrCorrupt
+		}
+
+		off := FrameHeaderSize + ridBytes
+		var offsets [MaxFrameK + 1]uint32
+		prev := uint32(0)
+		for i := 0; i < k+1; i++ {
+			cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+			if cur < prev {
+				return nil, ErrCorrupt
+			}
+			offsets[i] = cur
+			prev = cur
+			off += 4
+		}
+
+		rawLen := offsets[k]
+		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+			return nil, ErrRecordTooLarge
+		}
+		if prefixLen+int(rawLen) != int(valueLen) {
+			return nil, ErrCorrupt
+		}
+		valStart := offsets[subIndex]
+		valEnd := offsets[subIndex+1]
+		if valEnd < valStart || valEnd > rawLen {
+			return nil, ErrCorrupt
+		}
+
+		// Publish prefix cache for future reads from this same grouped record.
+		f.cacheMu.Lock()
+		f.cacheK = k
+		f.cacheFlags = fFlags
+		f.cacheLen = prefixLen
+		f.cacheOffs = offsets
+		f.cacheStart.Store(start)
+		f.cacheMu.Unlock()
+
+		n := int(valEnd - valStart)
+		oldLen := len(dst)
+		dst = grow(dst, n)
+		if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
+			return nil, err
+		}
+		return dst, nil
+	}
+
+	// Slow path: use existing decoder and append.
+	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+	if err != nil {
+		return nil, err
+	}
+	oldLen := len(dst)
+	dst = grow(dst, len(val))
+	copy(dst[oldLen:], val)
+	return dst, nil
+}
+
+func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	return f.ReadAppend(ptr, verifyCRC, dst)
+}
+
 // Set is an immutable snapshot of value-log files for snapshot isolation.
 type Set struct {
 	Files               map[uint32]*File
@@ -70,6 +235,22 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
 	}
 	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
+}
+
+func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+	}
+	return f.ReadAppend(ptr, !s.disableReadChecksum, dst)
+}
+
+func (s *Set) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+	}
+	return f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst)
 }
 
 type Manager struct {
@@ -183,6 +364,22 @@ func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 	return f.ReadUnsafe(ptr, !m.disableReadChecksum)
+}
+
+func (m *Manager) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return nil, err
+	}
+	return f.ReadAppend(ptr, !m.disableReadChecksum, dst)
+}
+
+func (m *Manager) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return nil, err
+	}
+	return f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst)
 }
 
 func (m *Manager) fileFor(id uint32) (*File, error) {

@@ -511,6 +511,21 @@ func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
 	return db.valueLogReader.Read(ptr)
 }
 
+func (db *DB) readValueLogAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	if db.valueLogReader == nil {
+		return nil, errors.New("cachingdb: value-log reader unavailable")
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
+	}
+	if db.memtableValueLogPointers && db.valueLogEnabled() {
+		if err := db.flushValueLogForPtr(ptr); err != nil {
+			return nil, err
+		}
+	}
+	return db.valueLogReader.ReadAppend(ptr, dst)
+}
+
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
 	if !db.valueLogEnabled() {
 		return nil
@@ -5481,6 +5496,89 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	return nil, false, nil
 }
 
+func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
+	view := db.memtables.Load()
+	var (
+		mutables    []memtable.Table
+		mutablePtrs []*largePtrMap
+		queue       []memtable.Table
+		queuePtrs   []*largePtrMap
+	)
+	if view != nil {
+		mutables = view.mutables
+		mutablePtrs = view.mutablePtrs
+		queue = view.queue
+		queuePtrs = view.queuePtrs
+	} else {
+		db.mu.RLock()
+		if len(db.mutableShards) > 0 {
+			mutables = make([]memtable.Table, len(db.mutableShards))
+			mutablePtrs = make([]*largePtrMap, len(db.mutableShards))
+			for i := range db.mutableShards {
+				mutables[i] = db.mutableShards[i].mem
+				mutablePtrs[i] = db.mutableShards[i].largePtrs
+			}
+		}
+		queue = append([]memtable.Table(nil), db.queue...)
+		queuePtrs = append([]*largePtrMap(nil), db.queueLargePtrs...)
+		db.mu.RUnlock()
+	}
+
+	// check mutable
+	if len(mutables) > 0 {
+		idx := db.shardIndex(key)
+		if idx < len(mutables) && mutables[idx] != nil {
+			val, deleted, found := mutables[idx].Get(key)
+			if found {
+				if deleted {
+					return dst, true, tree.ErrKeyNotFound
+				}
+				if db.memtableValueLogPointers && db.valueLogReader != nil && len(val) == 0 {
+					if idx < len(mutablePtrs) && mutablePtrs[idx] != nil {
+						if ptr, ok := mutablePtrs[idx].Get(key); ok {
+							out, err := db.readValueLogAppend(ptr, dst)
+							if err != nil {
+								return dst, true, err
+							}
+							return out, true, nil
+						}
+					}
+				}
+				if val == nil {
+					return dst, true, nil
+				}
+				return append(dst, val...), true, nil
+			}
+		}
+	}
+
+	// check queue backwards (newest first)
+	for i := len(queue) - 1; i >= 0; i-- {
+		val, deleted, found := queue[i].Get(key)
+		if found {
+			if deleted {
+				return dst, true, tree.ErrKeyNotFound
+			}
+			if db.memtableValueLogPointers && db.valueLogReader != nil && len(val) == 0 {
+				if i < len(queuePtrs) && queuePtrs[i] != nil {
+					if ptr, ok := queuePtrs[i].Get(key); ok {
+						out, err := db.readValueLogAppend(ptr, dst)
+						if err != nil {
+							return dst, true, err
+						}
+						return out, true, nil
+					}
+				}
+			}
+			if val == nil {
+				return dst, true, nil
+			}
+			return append(dst, val...), true, nil
+		}
+	}
+	return dst, false, nil
+}
+
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	return db.Get(key)
@@ -5506,34 +5604,13 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	// 1. Memtable (Zero Copy)
-	val, found, err := db.getMemtable(key)
+	// 1. Memtable
+	out, found, err := db.getMemtableAppend(key, dst)
 	if err != nil {
 		return dst, err
 	}
 	if found {
-		if val == nil {
-			// Found tombstone or empty?
-			// getMemtable returns val=nil for deleted.
-			// Deleted means "Not Found" effectively for GetAppend?
-			// Yes.
-			// Wait, getMemtable returns found=true if tombstone OR value exists.
-			// If deleted (tombstone), val=nil.
-			// So if val==nil && found==true -> Key is Deleted.
-			// GetAppend should return ErrKeyNotFound.
-			// Wait, tree.ErrKeyNotFound is in tree package.
-			// caching package imports tree/tree? No.
-			// But db package imports it.
-			// We can define ErrKeyNotFound in caching or use a sentinel.
-			// Actually caching package doesn't seem to import tree.
-			// But DB struct has backend.
-			// I should probably import "github.com/snissn/gomap/TreeDB/tree" or define it.
-			// Let's assume tree import is fine or check imports.
-			// The file header imports internal/memtable etc.
-			// I will add the import.
-			return dst, tree.ErrKeyNotFound
-		}
-		return append(dst, val...), nil
+		return out, nil
 	}
 
 	// 2. Backend
