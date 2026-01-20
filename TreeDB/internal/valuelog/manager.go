@@ -33,6 +33,16 @@ type File struct {
 	cacheOffs  [MaxFrameK + 1]uint32
 
 	closed atomic.Bool
+
+	// mmapData holds the current read-only mapping. Readers load it without locks.
+	mmapData atomic.Value // stores []byte (may be nil slice)
+
+	remapMu        sync.Mutex
+	remapRequested atomic.Bool
+
+	deadMappings      [][]byte
+	remapCount        atomic.Uint64
+	deadMappingsCount atomic.Uint64
 }
 
 func openFile(path string, id uint32, lookup DictLookup) (*File, error) {
@@ -40,7 +50,10 @@ func openFile(path string, id uint32, lookup DictLookup) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &File{ID: id, Path: path, File: f, dictLookup: lookup}, nil
+	vf := &File{ID: id, Path: path, File: f, dictLookup: lookup}
+	vf.mmapData.Store([]byte(nil))
+	vf.maybeScheduleRemap()
+	return vf, nil
 }
 
 func (f *File) Close() error {
@@ -48,20 +61,53 @@ func (f *File) Close() error {
 		return nil
 	}
 	f.closed.Store(true)
+
+	f.remapMu.Lock()
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil {
+		_ = munmap(data)
+	}
+	for _, b := range f.deadMappings {
+		_ = munmap(b)
+	}
+	f.deadMappings = nil
+	f.deadMappingsCount.Store(0)
+	f.mmapData.Store([]byte(nil))
+	f.remapMu.Unlock()
+
 	return f.File.Close()
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		return val, err
+	}
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
+	if f == nil || f.File == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		return val, err
+	}
+	f.remapToFileSize()
+	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		return val, err
+	}
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
+	}
+	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+		return val, err
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
@@ -450,9 +496,14 @@ func (m *Manager) MarkZombie(id uint32) error {
 	return nil
 }
 
-// RemapStats returns zeros for compatibility with legacy stats.
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
-	return 0, 0
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		remaps += f.remapCount.Load()
+		deadMappings += f.deadMappingsCount.Load()
+	}
+	return remaps, deadMappings
 }
 
 func (m *Manager) RemoveSegment(id uint32) error {
