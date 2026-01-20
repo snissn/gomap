@@ -501,64 +501,128 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 
 		start := w.size
-		var header [HeaderSize]byte
-		header[4] = Version
-		header[5] = recordFlagGrouped
-		header[6] = 0
-		header[7] = 0
-		binary.LittleEndian.PutUint64(header[8:16], 0)
-		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
-
 		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
-		if cap(w.prefixBuf) < prefixLen {
-			w.prefixBuf = make([]byte, 0, prefixLen)
-		}
-		prefix := w.prefixBuf[:prefixLen]
-		prefixOff := 0
-		prefix[prefixOff] = FrameVersion
-		prefix[prefixOff+1] = 0
-		prefix[prefixOff+2] = byte(k)
-		prefix[prefixOff+3] = 0
-		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
-		prefixOff += FrameHeaderSize
-
-		for i := 0; i < k; i++ {
-			rid := records[i].RID
-			if rid == 0 {
-				return nil, FrameStats{}, errors.New("valuelog: missing rid")
-			}
-			binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
-			prefixOff += 8
-		}
-		for i := 0; i < k+1; i++ {
-			binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
-			prefixOff += 4
-		}
-
-		const maxKeepScratch = 16 << 20 // 16 MiB
 		totalLen := HeaderSize + prefixLen + rawPayloadBytes
-		var frame []byte
-		if totalLen <= maxKeepScratch {
-			if cap(w.rawScratch) < totalLen {
-				w.rawScratch = make([]byte, totalLen)
+		max := w.appendMax
+		if max <= 0 {
+			max = defaultBufferSize
+		}
+
+		// Hot path (mode4): write directly into the writer append buffer so we
+		// don't copy `frame` into `appendBuf` after building it.
+		if w.f != nil && totalLen <= max {
+			if len(w.appendBuf)+totalLen > max {
+				if err := w.flushAppendBuf(); err != nil {
+					return nil, FrameStats{}, err
+				}
 			}
-			frame = w.rawScratch[:totalLen]
+			if cap(w.appendBuf) < max {
+				w.appendBuf = make([]byte, len(w.appendBuf), max)
+			}
+			base := len(w.appendBuf)
+			w.appendBuf = w.appendBuf[:base+totalLen]
+			frame := w.appendBuf[base : base+totalLen]
+
+			frame[4] = Version
+			frame[5] = recordFlagGrouped
+			frame[6] = 0
+			frame[7] = 0
+			binary.LittleEndian.PutUint64(frame[8:16], 0)
+			binary.LittleEndian.PutUint32(frame[16:20], uint32(bodyLen))
+
+			off := HeaderSize
+			frame[off] = FrameVersion
+			frame[off+1] = 0
+			frame[off+2] = byte(k)
+			frame[off+3] = 0
+			binary.LittleEndian.PutUint64(frame[off+4:off+12], 0)
+			off += FrameHeaderSize
+
+			for i := 0; i < k; i++ {
+				rid := records[i].RID
+				if rid == 0 {
+					return nil, FrameStats{}, errors.New("valuelog: missing rid")
+				}
+				binary.LittleEndian.PutUint64(frame[off:off+8], rid)
+				off += 8
+			}
+			for i := 0; i < k+1; i++ {
+				binary.LittleEndian.PutUint32(frame[off:off+4], offsets[i])
+				off += 4
+			}
+
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
+			w.size += int64(HeaderSize + bodyLen)
+
+			if len(w.appendBuf) >= max {
+				if err := w.flushAppendBuf(); err != nil {
+					return nil, FrameStats{}, err
+				}
+			}
 		} else {
-			frame = make([]byte, totalLen)
+			if cap(w.prefixBuf) < prefixLen {
+				w.prefixBuf = make([]byte, 0, prefixLen)
+			}
+			prefix := w.prefixBuf[:prefixLen]
+			prefixOff := 0
+			prefix[prefixOff] = FrameVersion
+			prefix[prefixOff+1] = 0
+			prefix[prefixOff+2] = byte(k)
+			prefix[prefixOff+3] = 0
+			binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
+			prefixOff += FrameHeaderSize
+
+			for i := 0; i < k; i++ {
+				rid := records[i].RID
+				if rid == 0 {
+					return nil, FrameStats{}, errors.New("valuelog: missing rid")
+				}
+				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+				prefixOff += 8
+			}
+			for i := 0; i < k+1; i++ {
+				binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+				prefixOff += 4
+			}
+
+			const maxKeepScratch = 16 << 20 // 16 MiB
+			var header [HeaderSize]byte
+			header[4] = Version
+			header[5] = recordFlagGrouped
+			header[6] = 0
+			header[7] = 0
+			binary.LittleEndian.PutUint64(header[8:16], 0)
+			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+			var frame []byte
+			if totalLen <= maxKeepScratch {
+				if cap(w.rawScratch) < totalLen {
+					w.rawScratch = make([]byte, totalLen)
+				}
+				frame = w.rawScratch[:totalLen]
+			} else {
+				frame = make([]byte, totalLen)
+			}
+			copy(frame[0:HeaderSize], header[:])
+			copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
+			off := HeaderSize + prefixLen
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
+			if err := w.writeFrameBatch(frame); err != nil {
+				return nil, FrameStats{}, err
+			}
+			w.size += int64(HeaderSize + bodyLen)
 		}
-		copy(frame[0:HeaderSize], header[:])
-		copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
-		off := HeaderSize + prefixLen
-		for i := 0; i < k; i++ {
-			copy(frame[off:], records[i].Value)
-			off += len(records[i].Value)
-		}
-		sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
-		binary.LittleEndian.PutUint32(frame[0:4], sum)
-		if err := w.writeFrameBatch(frame); err != nil {
-			return nil, FrameStats{}, err
-		}
-		w.size += int64(HeaderSize + bodyLen)
 
 		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
 		for i := range records {
