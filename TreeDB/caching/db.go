@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -65,6 +66,10 @@ func putValueLogEligible(s []int) {
 		return
 	}
 	valueLogEligiblePool.Put(s[:0])
+}
+
+func bytesToStringView(b []byte) string {
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func getValueLogRecords(n int) []valuelog.Record {
@@ -393,30 +398,14 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 
 	// Deduplicate to "newest wins" before any value-store side effects (slab/vlog).
-	type dedupSlot struct {
-		key []byte
-		idx int
-	}
-	last := make(map[uint64][]dedupSlot, len(ops))
+	last := make(map[string]int, len(ops))
 	keep := make([]bool, len(ops))
 	for i := range ops {
-		key := ops[i].Key
-		h := xxhash.Sum64(key)
-		slots := last[h]
-		found := false
-		for j := range slots {
-			if bytes.Equal(slots[j].key, key) {
-				keep[slots[j].idx] = false
-				slots[j].idx = i
-				slots[j].key = key
-				found = true
-				break
-			}
+		key := bytesToStringView(ops[i].Key)
+		if prev, ok := last[key]; ok {
+			keep[prev] = false
 		}
-		if !found {
-			slots = append(slots, dedupSlot{key: key, idx: i})
-		}
-		last[h] = slots
+		last[key] = i
 		keep[i] = true
 	}
 	deduped := ops[:0]
