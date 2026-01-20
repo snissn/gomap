@@ -207,6 +207,10 @@ func (db *DB) splitValueLogEnabled() bool {
 	return db.splitValueLog && db.valueLogEnabled()
 }
 
+func (db *DB) deferredValueLogEnabled() bool {
+	return db != nil && db.disableJournal && db.splitValueLogEnabled() && !db.memtableValueLogPointers
+}
+
 func (db *DB) walUsesValueLog() bool {
 	return false
 }
@@ -322,6 +326,97 @@ func (db *DB) currentValueLogPaths() []string {
 		l.walMu.Unlock()
 	}
 	return paths
+}
+
+func (db *DB) deferValueLogOps(ops []batch.Entry) ([]batch.Entry, error) {
+	if db == nil || len(ops) == 0 || !db.deferredValueLogEnabled() {
+		return ops, nil
+	}
+	if !db.allowValueLogPointers() {
+		return ops, nil
+	}
+
+	last := make(map[string]int, len(ops))
+	for i := range ops {
+		op := &ops[i]
+		last[string(op.Key)] = i
+	}
+
+	// Deduplicate to "newest wins" before any value-store side effects (slab/vlog).
+	deduped := ops[:0]
+	for i := range ops {
+		op := ops[i]
+		if last[string(op.Key)] != i {
+			continue
+		}
+		deduped = append(deduped, op)
+	}
+	ops = deduped
+
+	eligible := make([]int, 0, len(ops))
+	for i := range ops {
+		op := &ops[i]
+		if op.Type != batch.OpPut || op.IsPtr {
+			continue
+		}
+		if len(op.Value) <= db.valueLogThreshold {
+			continue
+		}
+		eligible = append(eligible, i)
+	}
+	if len(eligible) == 0 {
+		return ops, nil
+	}
+
+	lane, err := db.pickLane(false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Best-effort: use the current dict when available.
+	dictID := uint64(0)
+	var dictBytes []byte
+	if db.dictStore != nil {
+		if id, err := db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+		if dictID != 0 {
+			if b, err := db.dictBytes(context.Background(), dictID); err == nil {
+				dictBytes = b
+			} else {
+				dictID = 0
+				dictBytes = nil
+			}
+		}
+	}
+
+	records := make([]valuelog.Record, len(eligible))
+	for i, idx := range eligible {
+		op := &ops[idx]
+		rid := db.nextRID.Add(1)
+		records[i] = valuelog.Record{RID: rid, Value: op.Value}
+	}
+
+	ptrs, err := db.appendValueLog(lane, dictID, dictBytes, records, journalDurabilityFlush)
+	if err != nil {
+		return nil, err
+	}
+	if len(ptrs) != len(eligible) {
+		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(eligible))
+	}
+
+	for i, idx := range eligible {
+		op := &ops[idx]
+		op.ValuePtr = ptrs[i]
+		op.IsPtr = true
+		op.Value = nil
+	}
+
+	retainPath := db.currentValueLogPath(lane)
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
+	}
+	return ops, nil
 }
 
 // SetDictStore installs the dictionary store for current-ID freezing.
@@ -3286,6 +3381,11 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	eligible := len(value) > db.valueLogThreshold
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
+	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
+		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
+		// so repeated overwrites can coalesce in the memtable before hitting disk.
+		allowPointers = false
+	}
 	if debugPtr && eligible {
 		db.debugPtrEligible.Add(1)
 	}
@@ -4619,7 +4719,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 		// Ensure value-log writes are flushed from user-space buffers before we
 		// commit backend pointers that may reference them.
-		if db.valueLogEnabled() {
+		if db.valueLogEnabled() && !db.deferredValueLogEnabled() {
 			if err := db.flushValueLog(); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
 				return false
@@ -4628,7 +4728,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 		backendBatch := db.backend.NewBatch()
 
-		if totalLen > 2000 {
+		if totalLen > 2000 || db.deferredValueLogEnabled() {
 			// Preserve "newest wins" semantics by concatenating per-memtable ops
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
@@ -4708,6 +4808,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					putEntrySlice(memOps)
 				}
 
+				ops, err := db.deferValueLogOps(ops)
+				if err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+					_ = backendBatch.Close()
+					putEntrySlice(ops)
+					return false
+				}
 				if err := backendBatch.SetOps(ops); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
@@ -4762,6 +4869,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					putEntrySlice(unitOps[i])
 				}
 
+				ops, err := db.deferValueLogOps(ops)
+				if err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+					_ = backendBatch.Close()
+					putEntrySlice(ops)
+					return false
+				}
 				if err := backendBatch.SetOps(ops); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
 					_ = backendBatch.Close()
@@ -5038,7 +5152,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		ptrLookups := ptrs != nil && db.valueLogEnabled()
 
 		// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
-		if mem.Len() > 2000 {
+		// Also force bulk mode when we need to rewrite ops for deferred value-log writes.
+		if mem.Len() > 2000 || db.deferredValueLogEnabled() {
 			ops := make([]batch.Entry, 0, mem.Len())
 			for iter.Valid() {
 				// Zero-copy: UnsafeKey/Value point to memtable nodes (heap).
@@ -5078,6 +5193,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
 				}
 				iter.Next()
+			}
+			ops, err := db.deferValueLogOps(ops)
+			if err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+				_ = iter.Close()
+				_ = backendBatch.Close()
+				return false
 			}
 			if err := backendBatch.SetOps(ops); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
@@ -6364,6 +6486,11 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 	eligibleCount := len(eligibleIdxs)
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
+	if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
+		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
+		// so repeated overwrites can coalesce in the memtable before hitting disk.
+		allowPointers = false
+	}
 	if debugPtr && eligibleCount > 0 {
 		b.db.debugPtrEligible.Add(int64(eligibleCount))
 		if !valueLogEnabled {

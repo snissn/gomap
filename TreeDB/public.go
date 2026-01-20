@@ -109,9 +109,16 @@ func writePathFromOptions(opts Options) writePathInfo {
 				redoLog:    "off",
 			}
 		}
+		if opts.MemtableValueLogPointers {
+			return writePathInfo{
+				mode:       "cached",
+				valueStore: "value_log_eager",
+				redoLog:    "off",
+			}
+		}
 		return writePathInfo{
 			mode:       "cached",
-			valueStore: "value_log",
+			valueStore: "value_log_deferred",
 			redoLog:    "off",
 		}
 	}
