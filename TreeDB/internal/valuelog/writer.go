@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultBufferSize = 4 << 20
+	defaultBufferSize = 8 << 20
 	headerWithoutCRC  = HeaderSize - 4
 )
 
