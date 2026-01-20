@@ -45,6 +45,36 @@ type Writer struct {
 	syncFn     func(*os.File) error
 }
 
+func (w *Writer) writeFrameBatch(buf []byte) error {
+	if w == nil {
+		return errors.New("valuelog: nil writer")
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	if w.f == nil {
+		_, err := w.bw.Write(buf)
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	written := 0
+	for written < len(buf) {
+		n, err := w.f.Write(buf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("valuelog: short write")
+		}
+	}
+	return nil
+}
+
 func dictSkipFrames(noBenefit uint8) uint16 {
 	// Exponential backoff with periodic probes:
 	// 1 no-benefit probe  -> skip 8 frames
@@ -364,8 +394,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 	// Fast path: grouped frame with no dict/compression.
 	//
-	// We can write the frame prefix + raw values directly to the buffered writer
-	// without first concatenating the payload into a temporary buffer.
+	// We can write the frame prefix + raw values directly without first
+	// concatenating the payload into a temporary buffer.
 	//
 	// This matters for high-throughput append workloads (e.g. IAVL node storage)
 	// where dict compression is disabled or not yet available.
@@ -444,16 +474,26 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 		binary.LittleEndian.PutUint32(header[0:4], sum)
 
-		if _, err := w.bw.Write(header[:]); err != nil {
-			return nil, FrameStats{}, err
-		}
-		if _, err := w.bw.Write(prefix); err != nil {
-			return nil, FrameStats{}, err
-		}
-		for i := 0; i < k; i++ {
-			if _, err := w.bw.Write(records[i].Value); err != nil {
-				return nil, FrameStats{}, err
+		const maxKeepScratch = 16 << 20 // 16 MiB
+		totalLen := HeaderSize + prefixLen + rawPayloadBytes
+		var frame []byte
+		if totalLen <= maxKeepScratch {
+			if cap(w.rawScratch) < totalLen {
+				w.rawScratch = make([]byte, totalLen)
 			}
+			frame = w.rawScratch[:totalLen]
+		} else {
+			frame = make([]byte, totalLen)
+		}
+		copy(frame[0:HeaderSize], header[:])
+		copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
+		off := HeaderSize + prefixLen
+		for i := 0; i < k; i++ {
+			copy(frame[off:], records[i].Value)
+			off += len(records[i].Value)
+		}
+		if err := w.writeFrameBatch(frame); err != nil {
+			return nil, FrameStats{}, err
 		}
 		w.size += int64(HeaderSize + bodyLen)
 
@@ -562,16 +602,26 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 			binary.LittleEndian.PutUint32(header[0:4], sum)
 
-			if _, err := w.bw.Write(header[:]); err != nil {
-				return nil, FrameStats{}, err
-			}
-			if _, err := w.bw.Write(prefix); err != nil {
-				return nil, FrameStats{}, err
-			}
-			for i := 0; i < k; i++ {
-				if _, err := w.bw.Write(records[i].Value); err != nil {
-					return nil, FrameStats{}, err
+			const maxKeepScratch = 16 << 20 // 16 MiB
+			totalLen := HeaderSize + prefixLen + rawPayloadBytes
+			var frame []byte
+			if totalLen <= maxKeepScratch {
+				if cap(w.rawScratch) < totalLen {
+					w.rawScratch = make([]byte, totalLen)
 				}
+				frame = w.rawScratch[:totalLen]
+			} else {
+				frame = make([]byte, totalLen)
+			}
+			copy(frame[0:HeaderSize], header[:])
+			copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
+			off := HeaderSize + prefixLen
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+			if err := w.writeFrameBatch(frame); err != nil {
+				return nil, FrameStats{}, err
 			}
 			w.size += int64(HeaderSize + bodyLen)
 
