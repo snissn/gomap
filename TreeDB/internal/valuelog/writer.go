@@ -468,12 +468,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			prefixOff += 4
 		}
 
-		sum := crc.ChecksumParts(header[4:], prefix)
-		for i := 0; i < k; i++ {
-			sum = crc.Update(sum, records[i].Value)
-		}
-		binary.LittleEndian.PutUint32(header[0:4], sum)
-
 		const maxKeepScratch = 16 << 20 // 16 MiB
 		totalLen := HeaderSize + prefixLen + rawPayloadBytes
 		var frame []byte
@@ -492,6 +486,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			copy(frame[off:], records[i].Value)
 			off += len(records[i].Value)
 		}
+		sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+		binary.LittleEndian.PutUint32(frame[0:4], sum)
 		if err := w.writeFrameBatch(frame); err != nil {
 			return nil, FrameStats{}, err
 		}
@@ -596,12 +592,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
-			sum := crc.ChecksumParts(header[4:], prefix)
-			for i := 0; i < k; i++ {
-				sum = crc.Update(sum, records[i].Value)
-			}
-			binary.LittleEndian.PutUint32(header[0:4], sum)
-
 			const maxKeepScratch = 16 << 20 // 16 MiB
 			totalLen := HeaderSize + prefixLen + rawPayloadBytes
 			var frame []byte
@@ -620,6 +610,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				copy(frame[off:], records[i].Value)
 				off += len(records[i].Value)
 			}
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
 			if err := w.writeFrameBatch(frame); err != nil {
 				return nil, FrameStats{}, err
 			}
