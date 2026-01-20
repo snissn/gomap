@@ -964,6 +964,41 @@ func TestCachingDB_DeferredValueLogCoalescesOverwrites(t *testing.T) {
 	}
 }
 
+func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 60,
+		SplitValueLog:            true,
+		ValueLogPointerThreshold: 1,
+		DisableJournal:           true,
+		MemtableValueLogPointers: false,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+
+	key := []byte("k1")
+	valSize := 1 << 20
+	val := bytes.Repeat([]byte("v"), valSize)
+	for i := 0; i < 4; i++ {
+		if err := cache.Set(key, val); err != nil {
+			_ = cache.Close()
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	if err := cache.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestCachingDB_MemtableValueLogPointers(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
