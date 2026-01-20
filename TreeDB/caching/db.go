@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -66,10 +65,6 @@ func putValueLogEligible(s []int) {
 		return
 	}
 	valueLogEligiblePool.Put(s[:0])
-}
-
-func bytesToStringView(b []byte) string {
-	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 func getValueLogRecords(n int) []valuelog.Record {
@@ -396,22 +391,6 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	if !db.allowValueLogPointers() {
 		return ops, nil
 	}
-
-	// Deduplicate to "newest wins" before any value-store side effects (slab/vlog).
-	last := make(map[string]int, len(ops))
-	for i := range ops {
-		last[bytesToStringView(ops[i].Key)] = i
-	}
-
-	deduped := ops[:0]
-	for i := range ops {
-		op := ops[i]
-		if last[bytesToStringView(op.Key)] != i {
-			continue
-		}
-		deduped = append(deduped, op)
-	}
-	ops = deduped
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
