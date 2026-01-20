@@ -246,34 +246,126 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 		return nil, ErrCorrupt
 	}
 	start := int64(ptr.Offset - 4)
-	recordLen := page.ValuePtrRecordLength(ptr)
-	if recordLen != 0 {
-		totalLen := int(recordLen) + 4
-		if totalLen < HeaderSize {
-			return nil, ErrCorrupt
-		}
-		buf := make([]byte, totalLen)
-		if _, err := f.ReadAt(buf, start); err != nil {
-			return nil, err
-		}
-		header := buf[:HeaderSize]
-		payload := buf[HeaderSize:]
-		return decodeRecord(header, payload, ptr, verifyCRC, dictLookup)
-	}
-
 	var header [HeaderSize]byte
 	if _, err := f.ReadAt(header[:], start); err != nil {
 		return nil, err
 	}
+
+	crcVal := binary.LittleEndian.Uint32(header[0:4])
+	version := header[4]
+	if version != Version {
+		return nil, ErrCorrupt
+	}
+	flags := header[5]
 	valueLen := binary.LittleEndian.Uint32(header[16:20])
 	if recordSizeExceedsMax(valueLen) {
 		return nil, ErrRecordTooLarge
 	}
+
+	if recordLen := page.ValuePtrRecordLength(ptr); recordLen != 0 {
+		expectedLen := uint32(headerWithoutCRC) + valueLen
+		if recordLen != expectedLen {
+			return nil, ErrCorrupt
+		}
+	}
+
+	// Fast path: for grouped, uncompressed frames with checksums disabled, read
+	// only the requested sub-record instead of allocating and reading the full
+	// frame payload.
+	if flags&recordFlagGrouped != 0 && page.ValuePtrIsGrouped(ptr) && !verifyCRC {
+		if valueLen < FrameHeaderSize {
+			return nil, ErrCorrupt
+		}
+		frameOff := start + HeaderSize
+
+		var frameHeader [FrameHeaderSize]byte
+		if _, err := f.ReadAt(frameHeader[:], frameOff); err != nil {
+			return nil, err
+		}
+		if frameHeader[0] != FrameVersion {
+			return nil, ErrCorrupt
+		}
+		k := int(frameHeader[2])
+		if k <= 0 || k > MaxFrameK {
+			return nil, ErrCorrupt
+		}
+		fFlags := frameHeader[1]
+		if fFlags&FrameFlagCompressed == 0 {
+			ridBytes := k * 8
+			offsetBytes := (k + 1) * 4
+			prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+			if int(valueLen) < prefixLen {
+				return nil, ErrCorrupt
+			}
+
+			const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+			var prefix [maxPrefixLen]byte
+			if _, err := f.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+				return nil, err
+			}
+
+			subIndex := int(page.ValuePtrSubIndex(ptr))
+			if subIndex < 0 || subIndex >= k {
+				return nil, ErrCorrupt
+			}
+
+			// Validate RIDs and parse offsets.
+			ridOff := FrameHeaderSize
+			for i := 0; i < k; i++ {
+				rid := binary.LittleEndian.Uint64(prefix[ridOff : ridOff+8])
+				if rid == 0 {
+					return nil, ErrCorrupt
+				}
+				ridOff += 8
+			}
+
+			off := FrameHeaderSize + ridBytes
+			var offsets [MaxFrameK + 1]uint32
+			prev := uint32(0)
+			for i := 0; i < k+1; i++ {
+				cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+				if cur < prev {
+					return nil, ErrCorrupt
+				}
+				offsets[i] = cur
+				prev = cur
+				off += 4
+			}
+
+			rawLen := offsets[k]
+			if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+				return nil, ErrRecordTooLarge
+			}
+			if prefixLen+int(rawLen) != int(valueLen) {
+				return nil, ErrCorrupt
+			}
+
+			valStart := offsets[subIndex]
+			valEnd := offsets[subIndex+1]
+			if valEnd < valStart || valEnd > rawLen {
+				return nil, ErrCorrupt
+			}
+
+			val := make([]byte, int(valEnd-valStart))
+			readOff := frameOff + int64(prefixLen) + int64(valStart)
+			if _, err := f.ReadAt(val, readOff); err != nil {
+				return nil, err
+			}
+			return val, nil
+		}
+	}
+
 	payload := make([]byte, int(valueLen))
 	if _, err := f.ReadAt(payload, start+HeaderSize); err != nil {
 		return nil, err
 	}
-	return decodeRecord(header[:], payload, ptr, verifyCRC, dictLookup)
+	if verifyCRC {
+		sum := crc.ChecksumParts(header[4:], payload)
+		if sum != crcVal {
+			return nil, ErrCorrupt
+		}
+	}
+	return decodeRecord(header[:], payload, ptr, false, dictLookup)
 }
 
 func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup) ([]byte, error) {
