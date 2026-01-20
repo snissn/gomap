@@ -336,20 +336,38 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return ops, nil
 	}
 
-	last := make(map[string]int, len(ops))
-	for i := range ops {
-		op := &ops[i]
-		last[string(op.Key)] = i
-	}
-
 	// Deduplicate to "newest wins" before any value-store side effects (slab/vlog).
-	deduped := ops[:0]
+	type dedupSlot struct {
+		key []byte
+		idx int
+	}
+	last := make(map[uint64][]dedupSlot, len(ops))
+	keep := make([]bool, len(ops))
 	for i := range ops {
-		op := ops[i]
-		if last[string(op.Key)] != i {
-			continue
+		key := ops[i].Key
+		h := xxhash.Sum64(key)
+		slots := last[h]
+		found := false
+		for j := range slots {
+			if bytes.Equal(slots[j].key, key) {
+				keep[slots[j].idx] = false
+				slots[j].idx = i
+				slots[j].key = key
+				found = true
+				break
+			}
 		}
-		deduped = append(deduped, op)
+		if !found {
+			slots = append(slots, dedupSlot{key: key, idx: i})
+		}
+		last[h] = slots
+		keep[i] = true
+	}
+	deduped := ops[:0]
+	for i, op := range ops {
+		if keep[i] {
+			deduped = append(deduped, op)
+		}
 	}
 	ops = deduped
 
