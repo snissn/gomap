@@ -65,6 +65,66 @@ C) **Mode3 (journal on)**
 2) **Alter streaming cutoff logic**
    - **Must** be treated as a behavior change with explicit approval.
 
+---
+
+## Memtable Compression Plan (SkipList / HashSorted / BTree)
+
+### Goal
+Reduce user‑space copy amplification in the **memtable path** by compressing
+values into memtable‑owned arena memory with **minimal extra copies**, while
+preserving the existing memtable vs streaming cutoffs. This is a surgical,
+write‑path optimization; no change to batching/ordering semantics.
+
+### Constraints (must)
+- Do **not** change memtable selection (skiplist/hash_sorted/btree) or streaming cutoff logic.
+- Do **not** change WAL/journal ordering semantics.
+- Any behavior change must be explicit and opt‑in (unsafe).
+- Ensure overwrite semantics remain “last write wins.”
+
+### SkipList (PR‑A: zero‑copy via Alloc‑Max/Compress/Trim)
+**Why:** SkipList is arena‑append and typically updated under a single writer lock; it allows
+direct compression into arena memory with no intermediate buffer.
+
+**Plan**
+1) Add `PutCompressed` to SkipList:
+   - Allocate **max encoded size**.
+   - Compress **directly** into arena slice (`EncodeAllPrewarmed`).
+   - If compressed ≥ raw, store raw instead (same node, overwrite payload).
+   - Patch node value length to actual size.
+   - Rewind arena cursor to reclaim unused space (only for in‑chunk allocs).
+2) Add `CompressedPutter` interface to memtable; implement for SkipList.
+3) Wire into write path (opt‑in flag only; unsafe unless explicitly enabled).
+
+**Safety note:** This stores compressed bytes in the memtable. Reads will return
+compressed bytes unless a decompression path is added. Therefore the write‑path
+hook **must be opt‑in** and treated as unsafe until read support exists.
+
+### HashSorted (future PR‑B: compress‑then‑copy)
+**Why:** HashSorted is RW‑locked; compression must occur **outside** the lock.
+
+**Plan**
+1) Add buffer pool for compressed scratch.
+2) Add `PutCompressed`:
+   - Compress into pooled scratch outside lock.
+   - Lock, allocate exact size in arena, copy once.
+3) Return scratch to pool immediately after copy.
+
+### BTree (future PR‑C: compress‑then‑copy)
+**Why:** BTree is RW‑locked and arena‑backed, same constraint as HashSorted.
+
+**Plan**
+1) Reuse the same buffer pool (shared with HashSorted).
+2) Add `PutCompressed`:
+   - Compress outside lock.
+   - Lock, allocate exact size in arena, copy once.
+   - Update size accounting for replace vs insert.
+3) Validate no regression to read concurrency.
+
+### Instrumentation & Success Criteria (must)
+- **Profiles:** capture memmove attribution before/after each PR.
+- **Benchmarks:** unified_bench vlog_dict (mode3/mode4, ultra + highly compressible).
+- **Expected:** SkipList shows the largest memmove drop; HashSorted/BTree show smaller but measurable wins.
+
 ## Depth‑First Execution Plan (after approval)
 1) **Must** implement direct‑to‑appendBuf dict‑on path (Writer) with rollback safety.
 2) **Must** validate correctness: valuelog tests + read‑back + corruption checks.
@@ -446,3 +506,11 @@ Add prewarm channels + lifecycle controls:
 - memmove focus (mode3 dict‑on): memmove shows heavy attribution to Memtable/SkipList plus AppendValueLog/Writer; zstd EncodeAll appears in memmove stacks (~12% cum). Commitlog path ~4–5% cum.
 - memmove focus (mode4 dict‑on): memmove dominated by Memtable/SkipList; AppendValueLog/Writer minimal (~2% cum).
 - Implication: further writer copy removal will help mode3 more than mode4; memtable copies remain the largest shared cost.
+
+### 2026‑01‑21 (PR‑A: SkipList PutCompressed + write‑path hook)
+- Added SkipList `PutCompressed` (Alloc‑Max/Compress/Trim) and `CompressedPutter` interface.
+- Added opt‑in `MemtableCompressValues` (unsafe) and wired into memtable write path.
+- Profile (mode4 ultra 1KiB, dict‑on):
+  - baseline: write 505.7ms, ~1.04M ops/s, memmove ~100ms flat.
+  - memtable‑compress: write 504.3ms, ~1.04M ops/s, memmove ~30ms flat.
+- Next: validate on Celestia with longer runs; evaluate memmove attribution with -nodefraction and cum stacks.
