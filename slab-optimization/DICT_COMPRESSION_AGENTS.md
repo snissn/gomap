@@ -126,13 +126,65 @@ Targets (in priority order):
    - Ensure decode path remains efficient and low-allocation.
 
 ### PR Final — Guardrails + docs
-Branch: `sprint/slabopt-prXX-dict-guardrails`
-Title: `PRXX: dict compression guardrails + docs`
-Deliverables:
-- Add a lightweight perf baseline check (warning-only at first) driven by the new benchmark(s):
-  - Incompressible + dict enabled must not exceed overhead budget.
-  - Compressible must achieve at least some ratio improvement.
-- Document recommended configs and how to interpret metrics.
+Default PR number: **PR25** (bump the number if we add extra PR23+ optimization PRs).
+
+Branch: `sprint/slabopt-pr25-dict-guardrails` (or `sprint/slabopt-pr<N>-dict-guardrails`)
+Title: `PR25: dict compression guardrails + docs`
+
+Goal:
+- Turn our benchmark learnings into **enforced guardrails** (CI or opt-in) + **clear docs** so we don’t regress.
+
+Concrete deliverables (files + exact steps):
+
+1) **Perf baseline file (JSON)**
+   - File: `.github/perf_baselines/vlog_dict_defaults.json`
+   - Action:
+     - Update benchmark names to match the current bench suite (including `valsize=...` and workload names).
+     - Add separate entries for at least:
+       - `valsize=1024` (overhead-sensitive)
+       - `valsize=16384` (compression-win-sensitive)
+     - Add thresholds for the new metrics once PR20 lands:
+       - `attempted_frac` (must be low for incompressible dict_on steady-state)
+       - `kept_frac` (optional; mostly informational)
+     - Keep thresholds conservative enough to be stable on GH runners.
+
+2) **Perf baseline checker script**
+   - File: `.github/scripts/check_vlog_dict_bench.go`
+   - Action:
+     - Extend parsing to ingest the new benchmark metrics:
+       - `attempted_frac` and `kept_frac` (or `compressed_frac` if that is the kept metric name)
+     - Extend the baseline schema to include min/max bounds for those metrics.
+     - Keep the “median-of-5” / trimmed-mean behavior (already implemented).
+
+3) **CI wiring**
+   - File: `.github/workflows/treedb-tests.yml` (job: `perf-smoke (linux)`)
+   - Action:
+     - Update the `go test ... -bench ... -count=5` regex to match the updated benchmark names.
+     - Run at least the “k=4” cases (fast enough for CI).
+     - Once tuning is stable, flip the checker to **gating** on linux:
+       - change `-strict=false` → `-strict=true`
+     - If CI noise is still an issue, keep `strict=false` but require an explicit opt-in label/flag to gate (document it).
+
+4) **Docs**
+   - Add a single, canonical doc page:
+     - File: `docs/valuelog_dict_compression.md` (new)
+   - Must include:
+     - “What dict compression does” (value-log grouped frames + dictID + K)
+     - “Always-on safety contract” (what we guarantee on incompressible data)
+     - Recommended baseline configs:
+       - how to disable training: `-treedb-vlog-dict-train-bytes -1`
+       - suggested defaults for training bytes, adaptive ratio, window bytes, pause bytes (once established)
+     - How to interpret metrics:
+       - `observed_ratio`, `attempted_frac`, `kept_frac`
+     - How to reproduce CI perf check locally:
+       - `go test ./TreeDB/internal/valuelog -run '^$' -bench 'BenchmarkValueLogDictCompressibilitySweep/valsize=(1024|16384)/(highly_compressible_tail64|medium_compressible|incompressible)/dict_(off|on)/k=4$' -benchmem -count=5 | tee vlog_dict_bench.txt`
+       - `go run .github/scripts/check_vlog_dict_bench.go -bench-output vlog_dict_bench.txt -baseline .github/perf_baselines/vlog_dict_defaults.json -strict=true`
+
+Acceptance for PR25:
+- CI perf check runs the intended benchmarks and either:
+  - gates (strict=true), or
+  - is warning-only with an explicit documented plan/date to flip to strict.
+- Docs explain how to reproduce and tune dict compression safely.
 
 ## Milestone 4 Optimization Loop (mandatory process)
 
@@ -278,4 +330,3 @@ Template:
 - Head: ...
 - Notes: ...
 ```
-
