@@ -1146,6 +1146,11 @@ func (db *DB) newLargePtrMap() *largePtrMap {
 	if !db.valueLogEnabled() {
 		return nil
 	}
+	// Deferred value-log mode never stores pointers in the memtable, so there is
+	// no need to maintain a per-shard pointer map on the write path.
+	if db.disableJournal && !db.memtableValueLogPointers {
+		return nil
+	}
 	return &largePtrMap{}
 }
 
@@ -1885,7 +1890,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	if !disableValueLog {
+	useLargePtrs := !disableValueLog && (opts.MemtableValueLogPointers || !disableJournal)
+	if useLargePtrs {
 		for i := range mutableShards {
 			mutableShards[i].largePtrs = &largePtrMap{}
 		}
