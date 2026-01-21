@@ -41,6 +41,7 @@ var iteratorDebugEnabled atomic.Bool
 
 var valueLogEligiblePool sync.Pool // stores []int
 var valueLogRecordPool sync.Pool   // stores []valuelog.Record
+var valueLogKeyPool sync.Pool      // stores [][]byte
 
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
@@ -93,6 +94,32 @@ func putValueLogRecords(s []valuelog.Record) {
 		return
 	}
 	valueLogRecordPool.Put(s[:0])
+}
+
+func getValueLogKeys(capacity int) [][]byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogKeyPool.Get(); v != nil {
+		if s, ok := v.([][]byte); ok {
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+		}
+	}
+	return make([][]byte, 0, capacity)
+}
+
+func putValueLogKeys(s [][]byte) {
+	if s == nil {
+		return
+	}
+	clear(s)
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogKeyPool.Put(s[:0])
 }
 
 const (
@@ -500,7 +527,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	recordsBuf := getValueLogRecords(memLen)
 	defer putValueLogRecords(recordsBuf)
 	records := recordsBuf[:0]
-	keys := make([][]byte, 0, memLen)
+	keys := getValueLogKeys(memLen)
+	defer func() { putValueLogKeys(keys) }()
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
