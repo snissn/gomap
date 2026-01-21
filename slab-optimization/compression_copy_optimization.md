@@ -333,6 +333,99 @@ Suggested benchmark hook:
 
 ---
 
+## Zstd Fork Plan: Async Prewarm Encoder Pool (EncodeAllPrewarmed)
+
+Goal: remove per‑call Reset cost from the hot path without changing the semantics of
+`EncodeAll`. We keep `EncodeAll` identical and add a **new explicit API** in the fork
+for optimized use (Go‑native, opt‑in).
+
+### High‑level approach (add, don’t modify)
+- **Keep** `EncodeAll` behavior unchanged (always Reset).
+- **Add** `EncodeAllPrewarmed(src, dst []byte) []byte` that uses a background‑reset
+  pool of encoders.
+- **TreeDB** calls the new API only in vetted hot paths (value‑log dict compression).
+
+### Zstd fork implementation (~/dev/snissn/compress/zstd)
+
+#### 1) Encoder struct extensions
+Add prewarm channels + lifecycle controls:
+- `cleanEncoders chan encoder`
+- `dirtyEncoders chan encoder`
+- `prewarmOnce sync.Once`
+- `prewarmStop chan struct{}`
+
+#### 2) Initialization
+- `initialize()` still sets up the standard pool `encoders`.
+- **Prewarm pool** created lazily on first use of `EncodeAllPrewarmed`.
+  - Same capacity as `o.concurrent`.
+  - Each encoder is **Reset once up front** with the dict.
+  - Start a background goroutine to re‑Reset “dirty” encoders.
+
+#### 3) Background worker
+- `maintainPool()` loop:
+  - blocks on `dirtyEncoders`
+  - calls `enc.Reset(e.o.dict, false)`
+  - pushes back to `cleanEncoders`
+- Stops when `prewarmStop` is closed.
+
+#### 4) New API
+- `EncodeAllPrewarmed(src, dst []byte) []byte`:
+  - ensure prewarm pool initialized (call `initPrewarm()`).
+  - **Get** encoder from `cleanEncoders`.
+  - call `encodeAll(enc, src, dst, doReset=false)`.
+  - **Return** encoder to `dirtyEncoders` for background Reset.
+- **Safety**: only use when the caller expects a “reset has already happened” encoder.
+
+#### 5) Preserve old API
+- `EncodeAll` continues to call `encodeAll(enc, src, dst, doReset=true)`.
+
+#### 6) Shutdown / safety
+- Add `Close()` or `finalizer`‑style cleanup to close `prewarmStop` and drain channels.
+- Do not share `encoders` between standard and prewarm pools (distinct instances).
+
+### TreeDB integration
+
+#### 1) New call site
+- In `TreeDB/internal/valuelog/writer.go`, replace:
+  - `enc.EncodeAll(payload, encDst)` with
+  - `enc.EncodeAllPrewarmed(payload, encDst)`
+  - **Only** for dict‑on write path.
+
+#### 2) No behavior change for non‑dict
+- Raw/inline frames continue to use existing code paths.
+- If `EncodeAllPrewarmed` not available (build flags), fall back to `EncodeAll`.
+
+#### 3) Guardrails
+- Only use prewarmed API for:
+  - dict‑on frames
+  - small/medium payloads (where Reset overhead is most visible)
+- Document explicitly in code comments.
+
+### Tests & Benchmarks (must)
+
+#### Zstd fork tests
+- New unit test: `TestEncodeAllPrewarmedMatchesEncodeAll` (random + compressible data)
+- Ensure no data races with `-race`.
+
+#### TreeDB tests
+- Run `TestDictAppendReadRoundTrip` (regression guard).
+- Run `vlog_dict` suite (mode3/mode4) and record:
+  - ops/sec
+  - MB/s
+  - observed_ratio
+  - attempted_frac
+
+#### Bench acceptance criteria
+- **Incompressible**: dict‑on overhead ~negligible vs dict‑off.
+- **Ultra‑compressible**: dict‑on throughput improves vs baseline.
+
+### Rollout / PR plan
+- **PR A (zstd fork)**: introduce `EncodeAllPrewarmed` + tests; publish tag.
+- **PR B (gomap)**: update `valuelog` to use prewarmed API; run benches.
+- **PR C (optional)**: tune threshold / limits for prewarm usage.
+
+---
+
 ## Work Log (append‑only)
 
 ### 2026‑01‑21
