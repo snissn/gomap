@@ -330,3 +330,14 @@ Suggested benchmark hook:
 - Name: vlog_dict_overwrite_heavy
 - batchsize=1000, keys=1 or 10, valsize=1024
 - pattern: repeat + small incrementing tail
+
+---
+
+## Work Log (append‑only)
+
+### 2026‑01‑21
+- Branch1 start (memtable path, below cutoff). Added mode3 vlogprof harness.
+- Profiles captured (batchSize=1000, valsize=1024; below streaming cutoff 1MiB):
+  - mode4 dict‑on ultra: ops/s ~863k, MB/s ~843; memmove ~41% flat; memtable/skiplist ~54% cum; appendValueLog ~8% cum.
+  - mode3 dict‑on ultra: ops/s ~519k, MB/s ~507; memmove ~41% flat; appendValueLog ~34% cum; zstd EncodeAll ~27% cum; memtable/skiplist ~31% cum; commitlog/write ~5% cum.
+- Next: annotate memmove stack attribution and identify writer vs memtable copy deltas for mode3 vs mode4.
