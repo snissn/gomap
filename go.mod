@@ -11,7 +11,7 @@ require (
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-errors/errors v1.5.1
 	github.com/nutsdb/nutsdb v1.1.0
-	github.com/snissn/compress v1.18.2-snissn.0
+	github.com/snissn/compress v1.18.2-snissn.0.0.20260121211600-755e66e4c605
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/btree v1.8.1
