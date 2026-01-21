@@ -18,7 +18,8 @@ const (
 	nodeFlagsOff   = 7
 	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
 
-	flagDeleted = 1
+	flagDeleted    = 1
+	flagCompressed = 2
 
 	// Arena Constants
 	// We use 4MiB chunks. With uint32 pointers, this provides a total addressable
@@ -303,6 +304,17 @@ func (s *SkipList) Put(key, value []byte) {
 	s.put(key, value, 0, nil)
 }
 
+// PutCompressed inserts or updates a key, compressing src directly into the arena.
+// The compressor should append to dst[:0] and return the resulting slice.
+// maxSz must be the maximum encoded size the compressor could emit.
+// If the compressed payload is not smaller than src, the raw src is stored instead.
+func (s *SkipList) PutCompressed(key, src []byte, flags uint8, maxSz int, compressor func(src, dst []byte) []byte, cb func(k, v []byte) error) error {
+	if compressor == nil {
+		return s.put(key, src, flags, cb)
+	}
+	return s.putCompressed(key, src, flags, maxSz, compressor, cb)
+}
+
 // PutWithCallback inserts key/value, calling cb with views into the arena before linking.
 func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
 	return s.put(key, value, 0, cb)
@@ -382,6 +394,61 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 	return nil
 }
 
+func (s *SkipList) insertCompressed(key, src []byte, flags uint8, maxSz int, compressor func(src, dst []byte) []byte, cb func(k, v []byte) error, prev *[maxHeight]uint32) error {
+	if maxSz < len(src) {
+		maxSz = len(src)
+	}
+	h := s.randomHeight()
+	if h > s.height {
+		s.height = h
+	}
+	newNode := s.allocNode(len(key), maxSz, h)
+	copy(s.getKey(newNode), key)
+	s.setFlags(newNode, flags)
+
+	dst := s.getValue(newNode)
+	encoded := compressor(src, dst[:0])
+	actualSz := len(encoded)
+
+	// If compression doesn't help, store the raw src instead.
+	if actualSz >= len(src) {
+		copy(dst, src)
+		actualSz = len(src)
+	}
+
+	if actualSz != maxSz {
+		binary.LittleEndian.PutUint32(s.bytesAt(newNode+nodeValLenOff, 4), uint32(actualSz))
+		if maxSz <= chunkSize {
+			waste := maxSz - actualSz
+			if waste > 0 && s.curChunkIdx == int(newNode>>chunkShift) && s.curChunkOff >= waste {
+				s.curChunkOff -= waste
+			}
+		}
+	}
+
+	// Callback (Before linking)
+	if cb != nil {
+		kView := s.getKey(newNode)
+		vView := s.getValue(newNode)
+		if err := cb(kView, vView); err != nil {
+			return err
+		}
+	}
+
+	for i := 0; i < h; i++ {
+		next := s.getNext(prev[i], i)
+		s.setNext(newNode, i, next)
+		s.setNext(prev[i], i, newNode)
+		if next == 0 {
+			s.tail[i] = newNode
+		}
+	}
+
+	s.size += int64(len(key) + actualSz)
+	s.count++
+	return nil
+}
+
 func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
 	if s.count == 0 {
 		var prev [maxHeight]uint32
@@ -451,6 +518,70 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	}
 
 	return s.insertNew(key, value, flags, cb, &prev)
+}
+
+func (s *SkipList) putCompressed(key, src []byte, flags uint8, maxSz int, compressor func(src, dst []byte) []byte, cb func(k, v []byte) error) error {
+	if s.count == 0 {
+		var prev [maxHeight]uint32
+		for i := 0; i < maxHeight; i++ {
+			prev[i] = s.tail[i]
+		}
+		return s.insertCompressed(key, src, flags, maxSz, compressor, cb, &prev)
+	}
+
+	last := s.tail[0]
+	if last != s.head {
+		if bytes.Compare(s.getKey(last), key) < 0 {
+			var prev [maxHeight]uint32
+			for i := 0; i < maxHeight; i++ {
+				prev[i] = s.tail[i]
+			}
+			return s.insertCompressed(key, src, flags, maxSz, compressor, cb, &prev)
+		}
+	}
+
+	var prev [maxHeight]uint32
+	for i := range prev {
+		prev[i] = s.head
+	}
+	x := s.head
+	top := s.height
+	if top < 1 {
+		top = 1
+	}
+	for i := top - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			k := s.getKey(next)
+			cmp := bytes.Compare(k, key)
+			if cmp > 0 {
+				break
+			}
+			if cmp == 0 {
+				break
+			}
+			x = next
+		}
+		prev[i] = x
+	}
+
+	next := s.getNext(x, 0)
+	if next != 0 && bytes.Equal(s.getKey(next), key) {
+		oldHeight := int(s.valAt(next, nodeHeightOff))
+		for i := 0; i < oldHeight; i++ {
+			if s.getNext(prev[i], i) == next {
+				s.setNext(prev[i], i, s.getNext(next, i))
+			}
+			if s.tail[i] == next {
+				s.tail[i] = prev[i]
+			}
+		}
+	}
+
+	return s.insertCompressed(key, src, flags, maxSz, compressor, cb, &prev)
 }
 
 func (s *SkipList) randomHeight() int {

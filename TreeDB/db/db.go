@@ -242,6 +242,9 @@ type Options struct {
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
+	// MemtableCompressValues compresses values before storing them in the memtable.
+	// Unsafe/experimental: memtable reads may return compressed bytes.
+	MemtableCompressValues bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
 	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
@@ -470,7 +473,7 @@ func validateUnsafeOptions(opts Options) error {
 	if opts.AllowUnsafe {
 		return nil
 	}
-	if opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
+	if opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers || opts.MemtableCompressValues {
 		return ErrUnsafeOptions
 	}
 	return nil

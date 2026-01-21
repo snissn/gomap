@@ -70,6 +70,12 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// CompressedPutter is an optional fast path for inserting compressed values
+// directly into the memtable arena.
+type CompressedPutter interface {
+	PutCompressedWithCallback(key, src []byte, flags uint8, maxSz int, compressor func(src, dst []byte) []byte, cb func(k, v []byte) error) error
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex
@@ -124,6 +130,14 @@ func (m *Memtable) PutWithCallback(key, value []byte, cb func(k, v []byte) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.sl.PutWithCallback(key, value, cb)
+}
+
+// PutCompressedWithCallback inserts a key and compresses src into the skiplist arena.
+// This is an unsafe/experimental path; reads may return compressed bytes.
+func (m *Memtable) PutCompressedWithCallback(key, src []byte, flags uint8, maxSz int, compressor func(src, dst []byte) []byte, cb func(k, v []byte) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sl.PutCompressed(key, src, flags, maxSz, compressor, cb)
 }
 
 func (m *Memtable) Delete(key []byte) {

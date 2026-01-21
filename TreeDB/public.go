@@ -272,6 +272,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                        opts.RelaxedSync,
 		DisableReadChecksum:                opts.DisableReadChecksum,
 		MemtableValueLogPointers:           opts.MemtableValueLogPointers,
+		MemtableCompressValues:             opts.MemtableCompressValues,
 		ValueLogPointerThreshold:           opts.ValueLogPointerThreshold,
 		ValueLogDictTrain:                  opts.ValueLogDictTrain,
 		ValueLogDictAdaptiveRatio:          opts.ValueLogDictAdaptiveRatio,

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
@@ -710,6 +711,48 @@ func (db *DB) dictBytes(ctx context.Context, dictID uint64) ([]byte, error) {
 	return out, nil
 }
 
+func (db *DB) memtableDictEncoderPool(dictID uint64) (*sync.Pool, error) {
+	if db == nil || dictID == 0 {
+		return nil, nil
+	}
+	db.memtableDictEncMu.Lock()
+	defer db.memtableDictEncMu.Unlock()
+	if db.memtableDictEncPool != nil && db.memtableDictEncID == dictID {
+		return db.memtableDictEncPool, nil
+	}
+	dictBytes, err := db.dictBytes(context.Background(), dictID)
+	if err != nil {
+		return nil, err
+	}
+	if len(dictBytes) == 0 {
+		return nil, nil
+	}
+	dictCopy := append([]byte(nil), dictBytes...)
+	newEnc := func() *zstd.Encoder {
+		enc, _ := zstd.NewWriter(nil,
+			zstd.WithEncoderDict(dictCopy),
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(16),
+			zstd.WithEncoderCRC(false),
+			zstd.WithNoEntropyCompression(true),
+		)
+		return enc
+	}
+	enc0 := newEnc()
+	if enc0 == nil {
+		return nil, errors.New("memtable dict encoder init failed")
+	}
+	pool := &sync.Pool{
+		New: func() any {
+			return newEnc()
+		},
+	}
+	pool.Put(enc0)
+	db.memtableDictEncPool = pool
+	db.memtableDictEncID = dictID
+	return pool, nil
+}
+
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
@@ -1251,6 +1294,9 @@ type Options struct {
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
+	// MemtableCompressValues compresses values before storing them in the memtable.
+	// This is unsafe/experimental: reads may return compressed bytes.
+	MemtableCompressValues bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
 	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
@@ -1339,6 +1385,7 @@ type DB struct {
 	inlineThreshold              int
 	valueLogThreshold            int
 	memtableValueLogPointers     bool
+	memtableCompressValues       bool
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
@@ -1384,6 +1431,10 @@ type DB struct {
 	valueLogDictBytesMu             sync.Mutex
 	valueLogDictBytesID             uint64
 	valueLogDictBytes               []byte
+
+	memtableDictEncMu   sync.Mutex
+	memtableDictEncID   uint64
+	memtableDictEncPool *sync.Pool
 
 	// Cached dictdb current pointer to avoid per-write lookups on the hot path.
 	// A stale dictID is safe (it always points to a durable dict); at worst we
@@ -1812,7 +1863,7 @@ func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
-	if !opts.AllowUnsafe && (opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.MemtableValueLogPointers) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.MemtableValueLogPointers || opts.MemtableCompressValues) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
@@ -2049,6 +2100,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		inlineThreshold:                inlineThreshold,
 		valueLogThreshold:              valueLogThreshold,
 		memtableValueLogPointers:       opts.MemtableValueLogPointers,
+		memtableCompressValues:         opts.MemtableCompressValues,
 		valueLogReader:                 valueLogReader,
 		valueLogRetain:                 retained,
 		debugFlushPointers:             debugFlushPointers,
@@ -3897,29 +3949,75 @@ func (db *DB) set(key, value []byte, sync bool) error {
 		}
 	}
 
+	memtableDictID := uint64(0)
+	if db.memtableCompressValues {
+		if db.valueLogDictTrain.TrainBytes > 0 {
+			if id, err := db.currentDictID(context.Background()); err == nil {
+				memtableDictID = id
+			}
+		} else {
+			memtableDictID = db.dictCurrentCached.Load()
+		}
+	}
+
 	shard.mu.Lock()
 	storeValue := value
 	if db.memtableValueLogPointers && usePointer {
 		storeValue = nil
 	}
 	if shard.largePtrs != nil {
-		err := shard.mem.PutWithCallback(key, storeValue, func(k, _ []byte) error {
-			keyStr := bytesToStringNoCopy(k)
-			if usePointer {
-				shard.largePtrs.SetString(keyStr, ptr)
-			} else {
-				shard.largePtrs.DeleteString(keyStr)
+		writeErr := error(nil)
+		if db.memtableCompressValues && storeValue != nil && memtableDictID != 0 {
+			if cp, ok := shard.mem.(memtable.CompressedPutter); ok {
+				if pool, err := db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
+					enc := pool.Get().(*zstd.Encoder)
+					maxSz := enc.MaxEncodedSize(len(storeValue))
+					writeErr = cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAllPrewarmed, func(k, _ []byte) error {
+						keyStr := bytesToStringNoCopy(k)
+						if usePointer {
+							shard.largePtrs.SetString(keyStr, ptr)
+						} else {
+							shard.largePtrs.DeleteString(keyStr)
+						}
+						return nil
+					})
+					pool.Put(enc)
+				}
 			}
-			return nil
-		})
-		if err != nil {
+		}
+		if writeErr == nil {
+			writeErr = shard.mem.PutWithCallback(key, storeValue, func(k, _ []byte) error {
+				keyStr := bytesToStringNoCopy(k)
+				if usePointer {
+					shard.largePtrs.SetString(keyStr, ptr)
+				} else {
+					shard.largePtrs.DeleteString(keyStr)
+				}
+				return nil
+			})
+		}
+		if writeErr != nil {
 			shard.mu.Unlock()
 			db.writeMu.RUnlock()
-			return err
+			return writeErr
 		}
 	} else {
+		if db.memtableCompressValues && storeValue != nil && memtableDictID != 0 {
+			if cp, ok := shard.mem.(memtable.CompressedPutter); ok {
+				if pool, err := db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
+					enc := pool.Get().(*zstd.Encoder)
+					maxSz := enc.MaxEncodedSize(len(storeValue))
+					if err := cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+						pool.Put(enc)
+						goto memtableDoneSet
+					}
+					pool.Put(enc)
+				}
+			}
+		}
 		shard.mem.Set(key, storeValue)
 	}
+memtableDoneSet:
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
 	delta := newBytes - shard.bytes
@@ -7230,6 +7328,18 @@ func (b *Batch) writeRegular(sync bool) error {
 	}
 
 	// 3. Memtable Update
+	memtableDictID := uint64(0)
+	if b.db.memtableCompressValues {
+		if b.dictIDValid {
+			memtableDictID = b.dictID
+		} else if b.db.valueLogDictTrain.TrainBytes > 0 {
+			if err := b.freezeDictID(context.Background()); err == nil {
+				memtableDictID = b.dictID
+			}
+		} else {
+			memtableDictID = b.db.dictCurrentCached.Load()
+		}
+	}
 
 	for i := range shardEntries {
 		entries := shardEntries[i]
@@ -7256,7 +7366,22 @@ func (b *Batch) writeRegular(sync bool) error {
 						if b.db.memtableValueLogPointers && op.IsPtr {
 							shard.mem.SetSteal(op.Key, nil)
 						} else {
-							shard.mem.SetSteal(op.Key, op.Value)
+							handled := false
+							if b.db.memtableCompressValues && memtableDictID != 0 {
+								if cp, ok := shard.mem.(memtable.CompressedPutter); ok {
+									if pool, err := b.db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
+										enc := pool.Get().(*zstd.Encoder)
+										maxSz := enc.MaxEncodedSize(len(op.Value))
+										if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+											handled = true
+										}
+										pool.Put(enc)
+									}
+								}
+							}
+							if !handled {
+								shard.mem.SetSteal(op.Key, op.Value)
+							}
 						}
 					}
 					shard.rng.add(op.Key)
@@ -7271,7 +7396,22 @@ func (b *Batch) writeRegular(sync bool) error {
 					if b.db.memtableValueLogPointers && op.IsPtr {
 						shard.mem.SetSteal(op.Key, nil)
 					} else {
-						shard.mem.SetSteal(op.Key, op.Value)
+						handled := false
+						if b.db.memtableCompressValues && memtableDictID != 0 {
+							if cp, ok := shard.mem.(memtable.CompressedPutter); ok {
+								if pool, err := b.db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
+									enc := pool.Get().(*zstd.Encoder)
+									maxSz := enc.MaxEncodedSize(len(op.Value))
+									if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+										handled = true
+									}
+									pool.Put(enc)
+								}
+							}
+						}
+						if !handled {
+							shard.mem.SetSteal(op.Key, op.Value)
+						}
 					}
 				}
 				shard.rng.add(op.Key)

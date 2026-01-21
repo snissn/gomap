@@ -48,6 +48,7 @@ var (
 	treedbSlabCompressionMinSavings = flag.Int("treedb-slab-compression-min-savings", 0, "TreeDB: minimum bytes saved to keep compressed (0=default)")
 	treedbValueLogThreshold         = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbMemtableValueLogPointers  = flag.Bool("treedb-memtable-value-log-pointers", false, "TreeDB: store large values as value-log pointers in memtables")
+	treedbMemtableCompressValues    = flag.Bool("treedb-memtable-compress", false, "TreeDB: compress values before memtable insert (unsafe)")
 	treedbSplitValueLog             = flag.Bool("treedb-split-value-log", false, "TreeDB: store WAL and value-log in separate segments")
 	treedbVlogDictTrainBytes        = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
 	treedbVlogDictDictBytes         = flag.Int("treedb-vlog-dict-dict-bytes", 0, "TreeDB: value-log dict size in bytes (0=default)")
@@ -191,6 +192,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		DisableReadChecksum:               *treedbDisableReadChecksum,
 		AllowUnsafe:                       *treedbAllowUnsafe,
 		JournalLanes:                      *treedbJournalLanes,
+		MemtableCompressValues:            *treedbMemtableCompressValues,
 		BackgroundCompactionInterval:      *treedbBgCompactionInterval,
 		BackgroundIndexVacuumInterval:     *treedbBgVacuumInterval,
 		BackgroundIndexVacuumSpanRatioPPM: clampUint32(*treedbBgVacuumSpanPPM),

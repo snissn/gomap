@@ -34,6 +34,11 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	restore := snapshotTreeDBFlags()
 	defer restore.restore()
 
+	if os.Getenv("VLOG_DICT_MEMTABLE_COMPRESS") == "1" {
+		*treedbMemtableCompressValues = true
+		*treedbAllowUnsafe = true
+	}
+
 	dictBytes := 40 << 10
 	if raw := os.Getenv("VLOG_DICT_BYTES"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
@@ -187,6 +192,11 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 
 	restore := snapshotTreeDBFlags()
 	defer restore.restore()
+
+	if os.Getenv("VLOG_DICT_MEMTABLE_COMPRESS") == "1" {
+		*treedbMemtableCompressValues = true
+		*treedbAllowUnsafe = true
+	}
 
 	dictBytes := 40 << 10
 	if raw := os.Getenv("VLOG_DICT_BYTES"); raw != "" {
