@@ -787,7 +787,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		if max <= 0 {
 			max = defaultBufferSize
 		}
-		if w.f != nil && rawPayloadBytes > 0 && rawPayloadBytes <= max {
+		const enableDictDirectAppend = false
+		if enableDictDirectAppend && w.f != nil && rawPayloadBytes > 0 && rawPayloadBytes <= max {
 			prefixLen = FrameHeaderSize + (k * 8) + ((k + 1) * 4)
 			encStart = len(w.appendBuf) + HeaderSize + prefixLen
 			limit := encStart + rawPayloadBytes
