@@ -732,7 +732,9 @@ func (db *DB) memtableDictEncoderPool(dictID uint64) (*sync.Pool, error) {
 		enc, _ := zstd.NewWriter(nil,
 			zstd.WithEncoderDict(dictCopy),
 			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderConcurrency(16),
+			// Per-encoder concurrency isn't needed here because the pool already
+			// provides parallelism across writers.
+			zstd.WithEncoderConcurrency(1),
 			zstd.WithEncoderCRC(false),
 			zstd.WithNoEntropyCompression(true),
 		)

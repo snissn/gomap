@@ -68,7 +68,10 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 	enc0, err := zstd.NewWriter(nil,
 		zstd.WithEncoderDict(dictCopy),
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(16),
+		// We already pool encoders at the TreeDB level. Keep per-encoder
+		// concurrency at 1 to avoid allocating (and prewarming) many internal
+		// encoder instances per dict entry.
+		zstd.WithEncoderConcurrency(1),
 		zstd.WithEncoderCRC(false),
 		// Trade ratio for throughput: dict-compressed payload streams tend to be
 		// match-heavy, so literal entropy coding can be an expensive marginal win.
@@ -87,7 +90,7 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 			enc, _ := zstd.NewWriter(nil,
 				zstd.WithEncoderDict(dictCopy),
 				zstd.WithEncoderLevel(zstd.SpeedFastest),
-				zstd.WithEncoderConcurrency(16),
+				zstd.WithEncoderConcurrency(1),
 				zstd.WithEncoderCRC(false),
 				zstd.WithNoEntropyCompression(true),
 			)
