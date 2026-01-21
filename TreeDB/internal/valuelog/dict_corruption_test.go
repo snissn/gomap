@@ -49,15 +49,20 @@ func TestDictAppendReadRoundTrip(t *testing.T) {
 	records := make([]Record, k)
 	var ptrs [k]page.ValuePtr
 	collected := make([]page.ValuePtr, 0, frames*k)
+	expected := make([][]byte, 0, frames*k)
 	for i := 0; i < frames; i++ {
 		for j := 0; j < k; j++ {
-			records[j] = Record{RID: uint64(i*k + j + 1), Value: values[(i+j)%len(values)]}
+			val := values[(i+j)%len(values)]
+			records[j] = Record{RID: uint64(i*k + j + 1), Value: val}
 		}
 		out, _, err := w.AppendFrameWithStatsInto(dictID, dict, records, ptrs[:])
 		if err != nil {
 			t.Fatalf("append: %v", err)
 		}
 		collected = append(collected, out...)
+		for j := 0; j < k; j++ {
+			expected = append(expected, records[j].Value)
+		}
 	}
 	if err := w.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
@@ -86,7 +91,7 @@ func TestDictAppendReadRoundTrip(t *testing.T) {
 		if len(val) != valueSize {
 			t.Fatalf("read %d: size=%d", i, len(val))
 		}
-		if !bytes.Equal(val, values[i%k]) {
+		if !bytes.Equal(val, expected[i]) {
 			t.Fatalf("read %d: value mismatch", i)
 		}
 	}
