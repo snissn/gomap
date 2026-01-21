@@ -1379,6 +1379,11 @@ type DB struct {
 	valueLogDictTrainerMu sync.Mutex
 	valueLogDictTrainer   *compression.Trainer
 	valueLogDictMetrics   compression.Metrics
+	valueLogDictFrames    struct {
+		total     atomic.Uint64
+		attempted atomic.Uint64
+		kept      atomic.Uint64
+	}
 
 	valueLogDictPauseRemaining      atomic.Uint64
 	valueLogDictLastAppliedDictHash atomic.Uint64
@@ -2783,6 +2788,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	storedPayloadBytes := 0
 	rawFrameBytes := 0
 	frameRecords := 0
+	framesTotal := 0
+	framesAttempted := 0
+	framesKept := 0
 	rawBatchUsed := false
 	if dictID == 0 && hasRawInto && len(records) > 1 {
 		ptrs = make([]page.ValuePtr, len(records))
@@ -2794,6 +2802,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			storedPayloadBytes = stats.StoredPayloadBytes
 			frameRecords = stats.Records
 			rawBatchUsed = true
+			if k > 0 {
+				framesTotal = (len(records) + k - 1) / k
+			}
 		}
 	} else {
 		ptrs = make([]page.ValuePtr, 0, len(records))
@@ -2816,6 +2827,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				rawFrameBytes += stats.RawPayloadBytes
 				storedPayloadBytes += stats.StoredPayloadBytes
 				frameRecords += stats.Records
+				framesTotal++
+				if stats.Attempted {
+					framesAttempted++
+				}
+				if stats.Compressed {
+					framesKept++
+				}
 				continue
 			}
 			if hasStats {
@@ -2828,6 +2846,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				rawFrameBytes += stats.RawPayloadBytes
 				storedPayloadBytes += stats.StoredPayloadBytes
 				frameRecords += stats.Records
+				framesTotal++
+				if stats.Attempted {
+					framesAttempted++
+				}
+				if stats.Compressed {
+					framesKept++
+				}
 				continue
 			}
 
@@ -2837,6 +2862,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				break
 			}
 			ptrs = append(ptrs, framePtrs...)
+			framesTotal++
 		}
 	}
 	if err == nil {
@@ -2860,6 +2886,15 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	l.vlogMu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if framesTotal > 0 {
+		db.valueLogDictFrames.total.Add(uint64(framesTotal))
+		if framesAttempted > 0 {
+			db.valueLogDictFrames.attempted.Add(uint64(framesAttempted))
+		}
+		if framesKept > 0 {
+			db.valueLogDictFrames.kept.Add(uint64(framesKept))
+		}
 	}
 	if dictID != 0 && len(dict) > 0 {
 		if rawFrameBytes == 0 {
@@ -6011,6 +6046,20 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.auto_checkpoint.last_wal_reclaimable_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALReclaimableAfter.Load())
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_trimmed"] = fmt.Sprintf("%d", db.autoCheckpointLastWALTrimmed.Load())
 	stats["treedb.cache.auto_checkpoint.last_unix_nano"] = fmt.Sprintf("%d", db.autoCheckpointLastUnixNano.Load())
+
+	vlogFramesTotal := db.valueLogDictFrames.total.Load()
+	vlogFramesAttempted := db.valueLogDictFrames.attempted.Load()
+	vlogFramesKept := db.valueLogDictFrames.kept.Load()
+	stats["treedb.cache.vlog_dict.frames_total"] = fmt.Sprintf("%d", vlogFramesTotal)
+	stats["treedb.cache.vlog_dict.frames_attempted"] = fmt.Sprintf("%d", vlogFramesAttempted)
+	stats["treedb.cache.vlog_dict.frames_kept"] = fmt.Sprintf("%d", vlogFramesKept)
+	if vlogFramesTotal > 0 {
+		stats["treedb.cache.vlog_dict.attempted_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesAttempted)/float64(vlogFramesTotal))
+		stats["treedb.cache.vlog_dict.kept_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesKept)/float64(vlogFramesTotal))
+	}
+	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
+	stats["treedb.cache.vlog_dict.last_applied_dict_id"] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictID.Load())
+	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
 	return stats
 }
 
