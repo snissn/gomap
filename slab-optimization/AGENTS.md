@@ -931,3 +931,13 @@ Authoritative spec: `slab-optimization/spec.md`
 - Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR32_description.md`).
 - PR created via `gh`: https://github.com/snissn/gomap/pull/91
 - PR32 CI: `gh pr checks 91 --watch` → all checks PASS.
+
+`2026-01-21 03:50:16 HST`
+- Created branch `sprint/slabopt-pr33-vlog-dict-k-selection` (based on `sprint/slabopt-pr32-vlog-dict-probe`).
+- PR33: extended dict K-selection (candidates up to 32) and added an encode-cost term:
+  - `TreeDB/internal/compression/profile.go`
+  - Adjusted dict profile publication policy in `TreeDB/caching/vlog_dict.go` (stop forcing `k>=8`).
+- Tests: `go test ./... -count=1` → PASS.
+- Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR33_description.md`).
+- PR created via `gh`: https://github.com/snissn/gomap/pull/92
+- PR33 CI: `gh pr checks 92 --watch` → all checks PASS.
