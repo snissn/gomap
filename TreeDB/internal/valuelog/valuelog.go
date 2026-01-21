@@ -45,6 +45,7 @@ type FrameStats struct {
 	Records            int
 	RawPayloadBytes    int
 	StoredPayloadBytes int
+	Attempted          bool
 	Compressed         bool
 }
 
