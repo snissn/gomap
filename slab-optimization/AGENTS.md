@@ -941,3 +941,14 @@ Authoritative spec: `slab-optimization/spec.md`
 - Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR33_description.md`).
 - PR created via `gh`: https://github.com/snissn/gomap/pull/92
 - PR33 CI: `gh pr checks 92 --watch` → all checks PASS.
+
+`2026-01-21 04:03:16 HST`
+- Created branch `sprint/slabopt-pr35-vlog-dict-ci-gate` (based on `sprint/slabopt-pr33-vlog-dict-k-selection`).
+- PR35: fixed vlog_dict perf baseline names/regex to match current bench output and enabled strict gating:
+  - `.github/workflows/treedb-tests.yml` (run dict sweep bench + strict checker)
+  - `.github/perf_baselines/vlog_dict_defaults.json` (updated benchmark names)
+- Local validation:
+  - `go test ./TreeDB/internal/valuelog -run '^$' -bench BenchmarkValueLogDictCompressibilitySweep/... -benchmem -count=5`
+  - `go run .github/scripts/check_vlog_dict_bench.go -strict=true`
+- PR created via `gh`: https://github.com/snissn/gomap/pull/93
+- PR35 CI: `gh pr checks 93 --watch` → all checks PASS.
