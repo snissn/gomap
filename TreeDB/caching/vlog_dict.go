@@ -3,6 +3,7 @@ package caching
 import (
 	"context"
 	"log"
+	"math/bits"
 	"time"
 
 	"github.com/snissn/compress/zstd"
@@ -47,24 +48,15 @@ func likelyCompressibleSample(value []byte) bool {
 	if n > 512 {
 		n = 512
 	}
-	var freq [256]uint16
-	unique := 0
-	max := uint16(0)
+	var seen [4]uint64
 	for i := 0; i < n; i++ {
 		b := value[i]
-		if freq[b] == 0 {
-			unique++
-		}
-		freq[b]++
-		if freq[b] > max {
-			max = freq[b]
-		}
+		seen[b>>6] |= 1 << (b & 63)
 	}
-	// Heuristic: skip only when the inspected prefix looks strongly
-	// incompressible (near-uniform byte distribution). Keep this conservative:
-	// false negatives (training on incompressible samples) are handled by the
-	// adaptive pause logic, while false positives can prevent useful dictionaries.
-	if unique > 240 && max < 6 {
+	unique := bits.OnesCount64(seen[0]) + bits.OnesCount64(seen[1]) + bits.OnesCount64(seen[2]) + bits.OnesCount64(seen[3])
+	// Heuristic: if the sample uses most of the byte alphabet, it's likely
+	// high-entropy / already-compressed data (where zstd dictionaries won't help).
+	if unique > 200 {
 		return false
 	}
 	return true
@@ -81,10 +73,32 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if db.valueLogDictPaused() {
 		return
 	}
+	stride := db.valueLogDictSampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+	var base uint64
+	if stride > 1 {
+		n := uint64(len(records))
+		if n == 0 {
+			return
+		}
+		// One atomic for the entire batch: treat the stride counter as a global
+		// record index, then sample records where (index % stride) == 0.
+		base = db.valueLogDictSampleStrideCount.Add(n) - n
+	}
 	for i := range records {
+		if stride > 1 && (base+uint64(i)+1)%stride != 0 {
+			continue
+		}
 		v := records[i].Value
 		if !likelyCompressibleSample(v) {
-			continue
+			pause := db.valueLogDictMetricsPauseBytes
+			if pause <= 0 {
+				pause = 64 << 20
+			}
+			db.valueLogDictPauseRemaining.Store(uint64(pause))
+			return
 		}
 		tr.Collect(v)
 	}
@@ -101,7 +115,19 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if db.valueLogDictPaused() {
 		return
 	}
+	stride := db.valueLogDictSampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+	if stride > 1 && db.valueLogDictSampleStrideCount.Add(1)%stride != 0 {
+		return
+	}
 	if !likelyCompressibleSample(value) {
+		pause := db.valueLogDictMetricsPauseBytes
+		if pause <= 0 {
+			pause = 64 << 20
+		}
+		db.valueLogDictPauseRemaining.Store(uint64(pause))
 		return
 	}
 	tr.Collect(value)
@@ -119,7 +145,18 @@ func (db *DB) ensureValueLogDictTrainer() {
 	// Trainer only needs an encoder level; use SpeedFastest to minimize CPU overhead
 	// for value-log dict compression (workloads are frequently CPU-bound).
 	cfg := compression.Config{Kind: compression.KindZSTD, Level: zstd.SpeedFastest}
-	tr := compression.NewTrainer(db.valueLogDictTrain, cfg, false, false)
+	trainCfg := db.valueLogDictTrain
+	stride := trainCfg.SampleStride
+	if stride <= 1 {
+		stride = 1
+	}
+	db.valueLogDictSampleStride = uint64(stride)
+	db.valueLogDictSampleStrideCount.Store(0)
+	// Apply sample stride gating in the write path so we don't run the
+	// compressibility heuristic on every record (the trainer itself samples
+	// every Collect call when SampleStride=1).
+	trainCfg.SampleStride = 1
+	tr := compression.NewTrainer(trainCfg, cfg, false, false)
 	if tr == nil {
 		return
 	}

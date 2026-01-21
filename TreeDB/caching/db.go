@@ -1370,6 +1370,8 @@ type DB struct {
 
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain             compression.TrainConfig
+	valueLogDictSampleStride      uint64
+	valueLogDictSampleStrideCount atomic.Uint64
 	valueLogDictAdaptiveRatio     float64
 	valueLogDictMinPayloadSavings float64
 	valueLogDictMetricsWindow     int
@@ -2775,7 +2777,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		if paused {
+		if paused && db.disableJournal {
 			k = valuelog.MaxFrameK
 		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
 			k = cur
