@@ -919,3 +919,15 @@ Authoritative spec: `slab-optimization/spec.md`
 
 `2026-01-19 10:38:41 HST`
 - PR12: posted a PR comment noting CI green + the runbook’s unified_bench matrix command recipes.
+
+`2026-01-21 03:34:53 HST`
+- Created branch `sprint/slabopt-pr32-vlog-dict-probe` (based on `sprint/slabopt-pr31-vlog-dict-maxk32`).
+- Added `slab-optimization/OLD_IMPLEMENTATION_AGENTS.md` (extracted pause/probe + K-selection + CI gate ideas from old PR50).
+- Implemented ValueLog dict pause+probe+resume + paused sampling + lazy dict bytes fetch:
+  - `TreeDB/caching/vlog_dict.go`
+  - `TreeDB/caching/db.go`
+  - New test `TreeDB/caching/vlog_dict_pause_probe_test.go` (`TestValueLogDictPauseAndProbeResume`).
+- Tests: `go test ./... -count=1` → PASS.
+- Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR32_description.md`).
+- PR created via `gh`: https://github.com/snissn/gomap/pull/91
+- PR32 CI: `gh pr checks 91 --watch` → all checks PASS.
