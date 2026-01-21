@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"io"
 	"log"
 	"os"
@@ -67,7 +68,13 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	closeDB := func() {
+		if db != nil {
+			_ = db.Close()
+			db = nil
+		}
+	}
+	defer closeDB()
 
 	batcher, ok := db.(kvstore.Batcher)
 	if !ok {
@@ -125,7 +132,41 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 
 	opsPerSec := float64(measureKeys) / elapsed.Seconds()
 	mbPerSec := float64(measureKeys*tc.valueSz) / elapsed.Seconds() / (1024 * 1024)
-	t.Logf("elapsed=%s ops/s=%.0f MB/s=%.1f profile=%s", elapsed, opsPerSec, mbPerSec, profilePath)
+
+	// Force a value-log flush by appending additional data beyond the append buffer.
+	const flushBytes = int64(32 << 20)
+	flushKeys := int((flushBytes + int64(tc.valueSz) - 1) / int64(tc.valueSz))
+	if flushKeys > 0 {
+		if _, err := writeBatches(batcher, keyBase+measureKeys, flushKeys, batchSize, values, valPos); err != nil {
+			t.Fatalf("flush write: %v", err)
+		}
+	}
+
+	if cp, ok := db.(interface{ Checkpoint() error }); ok {
+		if err := cp.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint before read: %v", err)
+		}
+	}
+	closeDB()
+	db, err = factory(dir)
+	if err != nil {
+		t.Fatalf("reopen for read: %v", err)
+	}
+
+	readStart := time.Now()
+	var key [8]byte
+	for i := 0; i < measureKeys; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(keyBase+i))
+		if _, err := db.Get(key[:]); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+	}
+	readElapsed := time.Since(readStart)
+	readOps := float64(measureKeys) / readElapsed.Seconds()
+	readMB := float64(measureKeys*tc.valueSz) / readElapsed.Seconds() / (1024 * 1024)
+
+	t.Logf("write elapsed=%s ops/s=%.0f MB/s=%.1f profile=%s", elapsed, opsPerSec, mbPerSec, profilePath)
+	t.Logf("read elapsed=%s ops/s=%.0f MB/s=%.1f", readElapsed, readOps, readMB)
 }
 
 func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
@@ -181,7 +222,13 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	closeDB := func() {
+		if db != nil {
+			_ = db.Close()
+			db = nil
+		}
+	}
+	defer closeDB()
 
 	batcher, ok := db.(kvstore.Batcher)
 	if !ok {
@@ -238,5 +285,39 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 
 	opsPerSec := float64(measureKeys) / elapsed.Seconds()
 	mbPerSec := float64(measureKeys*tc.valueSz) / elapsed.Seconds() / (1024 * 1024)
-	t.Logf("elapsed=%s ops/s=%.0f MB/s=%.1f profile=%s", elapsed, opsPerSec, mbPerSec, profilePath)
+
+	// Force a value-log flush by appending additional data beyond the append buffer.
+	const flushBytes = int64(32 << 20)
+	flushKeys := int((flushBytes + int64(tc.valueSz) - 1) / int64(tc.valueSz))
+	if flushKeys > 0 {
+		if _, err := writeBatches(batcher, keyBase+measureKeys, flushKeys, batchSize, values, valPos); err != nil {
+			t.Fatalf("flush write: %v", err)
+		}
+	}
+
+	if cp, ok := db.(interface{ Checkpoint() error }); ok {
+		if err := cp.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint before read: %v", err)
+		}
+	}
+	closeDB()
+	db, err = factory(dir)
+	if err != nil {
+		t.Fatalf("reopen for read: %v", err)
+	}
+
+	readStart := time.Now()
+	var key [8]byte
+	for i := 0; i < measureKeys; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(keyBase+i))
+		if _, err := db.Get(key[:]); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+	}
+	readElapsed := time.Since(readStart)
+	readOps := float64(measureKeys) / readElapsed.Seconds()
+	readMB := float64(measureKeys*tc.valueSz) / readElapsed.Seconds() / (1024 * 1024)
+
+	t.Logf("write elapsed=%s ops/s=%.0f MB/s=%.1f profile=%s", elapsed, opsPerSec, mbPerSec, profilePath)
+	t.Logf("read elapsed=%s ops/s=%.0f MB/s=%.1f", readElapsed, readOps, readMB)
 }
