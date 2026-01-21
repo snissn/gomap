@@ -202,10 +202,17 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: treedb does not implement kvstore.Batcher")
 	}
 
-	values := makeValuePool(seed, tc.pattern, tc.valueSz, 2048)
-
 	warmupKeys := int((tc.warmupB + int64(tc.valueSz) - 1) / int64(tc.valueSz))
 	measureKeys := int((tc.measureB + int64(tc.valueSz) - 1) / int64(tc.valueSz))
+
+	poolSize := 2048
+	if strings.Contains(strings.ToLower(tc.pattern), "incompressible") {
+		// Avoid repeated random values for "incompressible" cases: a small pool can
+		// accidentally introduce compressibility. Use a pool large enough to cover
+		// the full warmup+measure stream with unique values.
+		poolSize = warmupKeys + measureKeys
+	}
+	values := makeValuePool(seed, tc.pattern, tc.valueSz, poolSize)
 
 	keyBase := 0
 	valPos := 0
