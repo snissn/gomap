@@ -4992,7 +4992,24 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 		backendBatch := db.backend.NewBatch()
 
-		if totalLen > 2000 || db.deferredValueLogEnabled() {
+		if db.deferredValueLogEnabled() {
+			for _, unit := range units {
+				iter := unit.mem.NewIterator(nil, nil)
+				err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.ptrs, unit.memLen, sync)
+				cerr := iter.Close()
+				if err == nil {
+					err = cerr
+				}
+				if err == nil {
+					err = iter.Error()
+				}
+				if err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+					_ = backendBatch.Close()
+					return false
+				}
+			}
+		} else if totalLen > 2000 {
 			// Preserve "newest wins" semantics by concatenating per-memtable ops
 			// in queue order (oldest -> newest). Within a single memtable there are
 			// no duplicate keys.
