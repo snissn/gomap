@@ -29,6 +29,8 @@ type kScore struct {
 	totalBytes   int
 	payloadRatio float64
 	totalRatio   float64
+	encodeNs     int64
+	records      int
 	score        float64
 }
 
@@ -55,14 +57,18 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	}
 
 	nsPerByte := decodeCostEstimate(dict, eval)
-	ks := []int{1, 2, 3, 4, 5, 6, 7, 8}
+	ks := []int{1, 2, 4, 8, 16, 32}
 	scores := make([]kScore, 0, len(ks))
 	var baseline kScore
 	for _, k := range ks {
 		if k <= 0 {
 			continue
 		}
-		payload, meta, raw := batchTotals(dict, eval, k)
+		used := (len(eval) / k) * k
+		if used == 0 {
+			continue
+		}
+		payload, meta, raw, encodeNs := batchTotals(dict, eval[:used], k)
 		if raw == 0 {
 			continue
 		}
@@ -75,6 +81,8 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 			totalBytes:   total,
 			payloadRatio: float64(payload) / float64(raw),
 			totalRatio:   float64(total) / float64(raw),
+			encodeNs:     encodeNs,
+			records:      used,
 		}
 		if k == 1 {
 			baseline = kr
@@ -101,7 +109,8 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 		if decCost <= 0 {
 			decCost = 1
 		}
-		kr.score = bytesSaved / decCost
+		encCost := float64(kr.encodeNs)/float64(kr.records) + 1.0
+		kr.score = bytesSaved / (decCost + encCost)
 		if best.score < 0 || kr.score > best.score*1.02 || (math.Abs(kr.score-best.score) <= best.score*0.02 && kr.K < best.K) {
 			best = kr
 		}
@@ -123,13 +132,13 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	}
 }
 
-func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, raw int) {
+func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, raw int, encodeNs int64) {
 	if k <= 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	n := (len(samples) / k) * k
 	if n == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	samples = samples[:n]
 	batches := n / k
@@ -141,9 +150,10 @@ func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, r
 		enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	}
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	defer enc.Close()
+	started := time.Now()
 	for b := 0; b < batches; b++ {
 		start := b * k
 		end := start + k
@@ -162,7 +172,8 @@ func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, r
 		payload += len(c)
 		meta += 4 * (k + 1)
 	}
-	return
+	encodeNs = time.Since(started).Nanoseconds()
+	return payload, meta, raw, encodeNs
 }
 
 func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
