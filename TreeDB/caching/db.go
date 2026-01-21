@@ -432,10 +432,10 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 
 	records := getValueLogRecords(len(eligible))
 	defer putValueLogRecords(records)
+	startRID := db.nextRID.Add(uint64(len(eligible))) - uint64(len(eligible)) + 1
 	for i, idx := range eligible {
 		op := &ops[idx]
-		rid := db.nextRID.Add(1)
-		records[i] = valuelog.Record{RID: rid, Value: op.Value}
+		records[i] = valuelog.Record{RID: startRID + uint64(i), Value: op.Value}
 	}
 
 	durability := journalDurabilityFlush
@@ -462,6 +462,172 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		db.markValueLogRetain(retainPath)
 	}
 	return ops, nil
+}
+
+func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, ptrs *largePtrMap, memLen int, sync bool) error {
+	if db == nil {
+		return nil
+	}
+	if iter == nil {
+		return nil
+	}
+	if backendBatch == nil {
+		return errors.New("cachingdb: missing backend batch")
+	}
+	allowPointers := db.allowValueLogPointers()
+
+	type (
+		setViewer interface {
+			SetView(key, value []byte) error
+		}
+		deleteViewer interface {
+			DeleteView(key []byte) error
+		}
+		ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
+		ptrSetterView interface {
+			SetPointerView(key []byte, ptr page.ValuePtr) error
+		}
+	)
+	sv, _ := backendBatch.(setViewer)
+	dv, _ := backendBatch.(deleteViewer)
+	psv, _ := backendBatch.(ptrSetterView)
+	ps, _ := backendBatch.(ptrSetter)
+
+	ptrLookups := ptrs != nil && db.valueLogEnabled()
+
+	recordsBuf := getValueLogRecords(memLen)
+	defer putValueLogRecords(recordsBuf)
+	records := recordsBuf[:0]
+	keys := make([][]byte, 0, memLen)
+
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if iter.IsDeleted() {
+			var err error
+			if dv != nil {
+				err = dv.DeleteView(key)
+			} else {
+				err = backendBatch.Delete(key)
+			}
+			if err != nil {
+				return err
+			}
+			iter.Next()
+			continue
+		}
+
+		if ptrLookups {
+			if ptr, ok := ptrs.GetString(bytesToStringNoCopy(key)); ok {
+				if psv != nil {
+					if err := psv.SetPointerView(key, ptr); err != nil {
+						return err
+					}
+				} else if ps != nil {
+					if err := ps.SetPointer(key, ptr); err != nil {
+						return err
+					}
+				} else {
+					return errors.New("cachingdb: backend batch missing SetPointer")
+				}
+				iter.Next()
+				continue
+			}
+		}
+
+		val := iter.UnsafeValue()
+		if val == nil && db.memtableValueLogPointers {
+			return errors.New("cachingdb: flush missing value-log ptr for key")
+		}
+
+		if allowPointers && len(val) > db.valueLogThreshold {
+			keys = append(keys, key)
+			records = append(records, valuelog.Record{Value: val})
+		} else {
+			var err error
+			if sv != nil {
+				err = sv.SetView(key, val)
+			} else {
+				err = backendBatch.Set(key, val)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		iter.Next()
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+	if !allowPointers {
+		return nil
+	}
+	if len(records) != len(keys) {
+		return errors.New("cachingdb: internal deferred value-log mismatch")
+	}
+
+	lane, err := db.pickLane(false)
+	if err != nil {
+		return err
+	}
+
+	// Best-effort: use the current dict when available.
+	dictID := uint64(0)
+	var dictBytes []byte
+	if db.dictStore != nil {
+		if id, err := db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+		if dictID != 0 {
+			if b, err := db.dictBytes(context.Background(), dictID); err == nil {
+				dictBytes = b
+			} else {
+				dictID = 0
+				dictBytes = nil
+			}
+		}
+	}
+
+	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+	for i := range records {
+		records[i].RID = startRID + uint64(i)
+	}
+
+	durability := journalDurabilityFlush
+	if sync {
+		durability = journalDurabilitySync
+	}
+	vlogPtrs, err := db.appendValueLog(lane, dictID, dictBytes, records, durability)
+	if err != nil {
+		return err
+	}
+	if len(vlogPtrs) != len(keys) {
+		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(keys))
+	}
+
+	for i := range keys {
+		key := keys[i]
+		ptr := vlogPtrs[i]
+		if psv != nil {
+			if err := psv.SetPointerView(key, ptr); err != nil {
+				return err
+			}
+		} else if ps != nil {
+			if err := ps.SetPointer(key, ptr); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("cachingdb: backend batch missing SetPointer")
+		}
+	}
+
+	retainPath := db.currentValueLogPath(lane)
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
+	}
+	return nil
 }
 
 // SetDictStore installs the dictionary store for current-ID freezing.
@@ -5249,9 +5415,15 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		ptrLookups := ptrs != nil && db.valueLogEnabled()
 
-		// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
-		// Also force bulk mode when we need to rewrite ops for deferred value-log writes.
-		if mem.Len() > 2000 || db.deferredValueLogEnabled() {
+		if db.deferredValueLogEnabled() {
+			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, ptrs, memLen, sync); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+				_ = iter.Close()
+				_ = backendBatch.Close()
+				return false
+			}
+		} else if mem.Len() > 2000 {
+			// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
 			ops := make([]batch.Entry, 0, mem.Len())
 			for iter.Valid() {
 				// Zero-copy: UnsafeKey/Value point to memtable nodes (heap).
@@ -5291,13 +5463,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
 				}
 				iter.Next()
-			}
-			ops, err := db.deferValueLogOps(ops, sync)
-			if err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
-				_ = iter.Close()
-				_ = backendBatch.Close()
-				return false
 			}
 			if err := backendBatch.SetOps(ops); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
