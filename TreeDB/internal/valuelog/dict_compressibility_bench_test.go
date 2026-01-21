@@ -231,7 +231,7 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 		},
 	}
 
-	ks := []int{1, 4, 8}
+	ks := []int{1, 4, 8, 16, 32}
 	dictModes := []struct {
 		name   string
 		dictID uint64

@@ -81,7 +81,7 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 	}
 
 	valueSizes := []int{1 << 10, 16 << 10}
-	ks := []int{4, 8}
+	ks := []int{4, 8, 16, 32}
 
 	for _, valueSize := range valueSizes {
 		for _, workload := range workloads {
