@@ -268,6 +268,7 @@ func Open(opts Options) (*DB, error) {
 		SplitValueLog:                      opts.SplitValueLog,
 		JournalLanes:                       opts.JournalLanes,
 		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,
+		JournalCompression:                 opts.JournalCompression,
 		RelaxedSync:                        opts.RelaxedSync,
 		DisableReadChecksum:                opts.DisableReadChecksum,
 		MemtableValueLogPointers:           opts.MemtableValueLogPointers,

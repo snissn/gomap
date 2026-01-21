@@ -233,6 +233,12 @@ type Options struct {
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
+	// JournalCompression enables best-effort zstd compression for cached-mode
+	// journal/commitlog segments (metadata only).
+	//
+	// The redo log will only keep compressed bytes when they are smaller than the
+	// raw payload, so compression never causes size amplification.
+	JournalCompression bool
 	// MemtableValueLogPointers avoids storing large values in the memtable and
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
