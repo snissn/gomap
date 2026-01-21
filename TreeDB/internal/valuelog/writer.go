@@ -41,6 +41,8 @@ type Writer struct {
 	rawScratch []byte
 	encScratch []byte
 	skipDictID uint64
+	codecsID   uint64
+	codecs     *dictCodecEntry
 	noBenefit  uint8
 	skipRemain uint16
 	syncFn     func(*os.File) error
@@ -898,7 +900,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			pos += len(records[i].Value)
 		}
 
-		codecs := getDictCodecs(dictID, dict)
+		codecs := w.codecs
+		if codecs == nil || w.codecsID != dictID {
+			codecs = getDictCodecs(dictID, dict)
+			if codecs != nil {
+				w.codecsID = dictID
+				w.codecs = codecs
+			}
+		}
 		if codecs == nil || codecs.encPool == nil {
 			return nil, FrameStats{}, ErrMissingDict
 		}
