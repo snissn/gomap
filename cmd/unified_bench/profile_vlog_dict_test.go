@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime/pprof"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,15 +33,27 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	restore := snapshotTreeDBFlags()
 	defer restore.restore()
 
+	dictBytes := 40 << 10
+	if raw := os.Getenv("VLOG_DICT_BYTES"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			dictBytes = v
+		}
+	}
+	dictOff := os.Getenv("VLOG_DICT_DISABLE") == "1"
+
 	tc := valueLogDictSuiteCase{
 		mode:     "mode4",
-		dictOn:   true,
+		dictOn:   !dictOff,
 		pattern:  "ultra_compressible_repeat",
 		valueSz:  1024,
 		trainB:   4 << 20,
-		dictB:    40 << 10,
+		dictB:    dictBytes,
 		warmupB:  warmupBytes,
 		measureB: measureBytes,
+	}
+	if dictOff {
+		tc.trainB = -1
+		tc.dictB = 0
 	}
 	applyValueLogDictSuiteFlags(tc)
 
@@ -73,12 +86,14 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	}
 	keyBase += warmupKeys
 
-	if err := waitForDictPublish(db, 10*time.Second); err != nil {
-		t.Fatalf("waitForDictPublish: %v", err)
-	}
-	stats := getTreeDBStats(db)
-	if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
-		t.Fatalf("expected dict to be applied after warmup")
+	if !dictOff {
+		if err := waitForDictPublish(db, 10*time.Second); err != nil {
+			t.Fatalf("waitForDictPublish: %v", err)
+		}
+		stats := getTreeDBStats(db)
+		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
+			t.Fatalf("expected dict to be applied after warmup")
+		}
 	}
 
 	profilePath := os.Getenv("VLOG_DICT_CPUPROFILE")
@@ -132,15 +147,27 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 	restore := snapshotTreeDBFlags()
 	defer restore.restore()
 
+	dictBytes := 40 << 10
+	if raw := os.Getenv("VLOG_DICT_BYTES"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			dictBytes = v
+		}
+	}
+	dictOff := os.Getenv("VLOG_DICT_DISABLE") == "1"
+
 	tc := valueLogDictSuiteCase{
 		mode:     "mode3",
-		dictOn:   true,
+		dictOn:   !dictOff,
 		pattern:  "ultra_compressible_repeat",
 		valueSz:  1024,
 		trainB:   4 << 20,
-		dictB:    40 << 10,
+		dictB:    dictBytes,
 		warmupB:  warmupBytes,
 		measureB: measureBytes,
+	}
+	if dictOff {
+		tc.trainB = -1
+		tc.dictB = 0
 	}
 	applyValueLogDictSuiteFlags(tc)
 
@@ -173,12 +200,14 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 	}
 	keyBase += warmupKeys
 
-	if err := waitForDictPublish(db, 10*time.Second); err != nil {
-		t.Fatalf("waitForDictPublish: %v", err)
-	}
-	stats := getTreeDBStats(db)
-	if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
-		t.Fatalf("expected dict to be applied after warmup")
+	if !dictOff {
+		if err := waitForDictPublish(db, 10*time.Second); err != nil {
+			t.Fatalf("waitForDictPublish: %v", err)
+		}
+		stats := getTreeDBStats(db)
+		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
+			t.Fatalf("expected dict to be applied after warmup")
+		}
 	}
 
 	profilePath := os.Getenv("VLOG_DICT_CPUPROFILE")
