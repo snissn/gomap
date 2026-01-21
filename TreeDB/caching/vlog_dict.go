@@ -187,6 +187,11 @@ func (db *DB) applyValueLogDictProfile() {
 		db.reportError(err)
 		return
 	}
+	// Make new dictionaries visible to the write path immediately. We intentionally
+	// avoid per-write dictdb reads (currentDictID refreshes only every N uses), so
+	// a background publish must also refresh the cached current ID.
+	db.dictCurrentCached.Store(dictID)
+	db.dictCurrentOps.Store(0)
 	profileK := db.clampValueLogDictK(profile.K)
 	if ks, ok := store.(dictStoreK); ok {
 		if err := ks.SetK(ctx, dictID, profileK); err != nil {

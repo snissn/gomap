@@ -202,23 +202,22 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: treedb does not implement kvstore.Batcher")
 	}
 
-	val := makeValuePattern(seed, tc.pattern, tc.valueSz)
+	values := makeValuePool(seed, tc.pattern, tc.valueSz, 2048)
 
 	warmupKeys := int((tc.warmupB + int64(tc.valueSz) - 1) / int64(tc.valueSz))
 	measureKeys := int((tc.measureB + int64(tc.valueSz) - 1) / int64(tc.valueSz))
 
 	keyBase := 0
-	if err := writeBatches(batcher, keyBase, warmupKeys, batchSize, val); err != nil {
+	valPos := 0
+	valPos, err = writeBatches(batcher, keyBase, warmupKeys, batchSize, values, valPos)
+	if err != nil {
 		return valueLogDictSuiteResult{}, err
 	}
 	keyBase += warmupKeys
 
 	if tc.dictOn {
-		// Best-effort wait for a dictionary to be trained + applied. If training
-		// is async, we may need a small amount of additional writes to observe an
-		// applied dict id.
-		keyBase, err = ensureDictApplied(db, batcher, keyBase, batchSize, val)
-		if err != nil {
+		// Best-effort wait for a dictionary to be trained + published.
+		if err := waitForDictPublish(db, 5*time.Second); err != nil {
 			return valueLogDictSuiteResult{}, err
 		}
 	}
@@ -227,7 +226,8 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 	c0 := parseDictCounters(stats0)
 
 	start := time.Now()
-	if err := writeBatches(batcher, keyBase, measureKeys, batchSize, val); err != nil {
+	valPos, err = writeBatches(batcher, keyBase, measureKeys, batchSize, values, valPos)
+	if err != nil {
 		return valueLogDictSuiteResult{}, err
 	}
 	elapsed := time.Since(start)
@@ -298,40 +298,70 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 	}, nil
 }
 
-func makeValuePattern(seed int64, pattern string, size int) []byte {
+func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte {
 	rng := rand.New(rand.NewSource(seed))
-	buf := make([]byte, size)
-	switch strings.ToLower(strings.TrimSpace(pattern)) {
-	case "", "repeat", "highly_compressible", "highly_compressible_tail64":
-		for i := range buf {
-			buf[i] = 0x61
-		}
-		if len(buf) > 64 {
-			_, _ = rng.Read(buf[len(buf)-64:])
-		}
-	case "medium_compressible", "medium_compressible_sparse":
-		for i := range buf {
-			buf[i] = 0x61
-		}
-		if len(buf) > 0 {
-			half := len(buf) / 2
-			_, _ = rng.Read(buf[half:])
-		}
-	case "incompressible", "random":
-		_, _ = rng.Read(buf)
-	default:
-		_, _ = rng.Read(buf)
+	if poolSize <= 0 {
+		poolSize = 1
 	}
-	return buf
+	out := make([][]byte, poolSize)
+	mode := strings.ToLower(strings.TrimSpace(pattern))
+	for i := 0; i < poolSize; i++ {
+		buf := make([]byte, size)
+		switch mode {
+		case "", "repeat", "highly_compressible", "highly_compressible_tail64":
+			fillRepeatTail(rng, buf, 64, []byte("{\"key\":\"value\",\"active\":true}"))
+		case "medium_compressible", "medium_compressible_sparse":
+			fillSparseNoise(rng, buf, 256, 16, []byte("abcd1234"))
+		case "incompressible", "random":
+			_, _ = rng.Read(buf)
+		default:
+			_, _ = rng.Read(buf)
+		}
+		out[i] = buf
+	}
+	return out
 }
 
-func writeBatches(batcher kvstore.Batcher, keyBase, count, batchSize int, val []byte) error {
+func fillRepeatTail(rng *rand.Rand, dst []byte, tail int, pattern []byte) {
+	if len(dst) == 0 {
+		return
+	}
+	for i := 0; i < len(dst); {
+		n := copy(dst[i:], pattern)
+		i += n
+	}
+	if tail <= 0 || tail > len(dst) {
+		tail = len(dst)
+	}
+	if tail > 0 {
+		_, _ = rng.Read(dst[len(dst)-tail:])
+	}
+}
+
+func fillSparseNoise(rng *rand.Rand, dst []byte, stride, noise int, pattern []byte) {
+	fillRepeatTail(rng, dst, 0, pattern)
+	if stride <= 0 {
+		stride = 256
+	}
+	if noise <= 0 {
+		noise = 16
+	}
+	for off := 0; off < len(dst); off += stride {
+		end := off + noise
+		if end > len(dst) {
+			end = len(dst)
+		}
+		_, _ = rng.Read(dst[off:end])
+	}
+}
+
+func writeBatches(batcher kvstore.Batcher, keyBase, count, batchSize int, values [][]byte, valPos int) (int, error) {
 	total := count
 	var k [8]byte
 	for i := 0; i < total; i += batchSize {
 		batch, err := batcher.NewBatch()
 		if err != nil {
-			return fmt.Errorf("vlog_dict: new batch: %w", err)
+			return 0, fmt.Errorf("vlog_dict: new batch: %w", err)
 		}
 		end := i + batchSize
 		if end > total {
@@ -339,50 +369,42 @@ func writeBatches(batcher kvstore.Batcher, keyBase, count, batchSize int, val []
 		}
 		for j := i; j < end; j++ {
 			binary.BigEndian.PutUint64(k[:], uint64(keyBase+j))
-			if err := batch.Set(k[:], val); err != nil {
+			value := values[valPos%len(values)]
+			valPos++
+			if err := batch.Set(k[:], value); err != nil {
 				_ = batch.Close()
-				return fmt.Errorf("vlog_dict: set: %w", err)
+				return 0, fmt.Errorf("vlog_dict: set: %w", err)
 			}
 		}
 		if err := batch.Commit(); err != nil {
 			_ = batch.Close()
-			return fmt.Errorf("vlog_dict: commit: %w", err)
+			return 0, fmt.Errorf("vlog_dict: commit: %w", err)
 		}
 		if err := batch.Close(); err != nil {
-			return fmt.Errorf("vlog_dict: close batch: %w", err)
+			return 0, fmt.Errorf("vlog_dict: close batch: %w", err)
 		}
 	}
-	return nil
+	return valPos, nil
 }
 
-func ensureDictApplied(db kvstore.DB, batcher kvstore.Batcher, keyBase int, batchSize int, val []byte) (int, error) {
+func waitForDictPublish(db kvstore.DB, timeout time.Duration) error {
 	const (
-		timeout  = 20 * time.Second
 		interval = 50 * time.Millisecond
 	)
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		stats := getTreeDBStats(db)
 		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") != 0 {
-			return keyBase, nil
+			return nil
 		}
-
-		// Nudge the system with a small amount of write traffic to ensure that if
-		// the dictionary is ready, it is actually applied on a frame before the
-		// measured phase begins.
-		nudge := batchSize
-		if nudge <= 0 {
-			nudge = 128
-		}
-		if err := writeBatches(batcher, keyBase, nudge, nudge, val); err != nil {
-			return 0, err
-		}
-		keyBase += nudge
 		time.Sleep(interval)
 	}
-	// Incompressible streams can legitimately refuse to publish/apply dicts. Do
-	// not fail the suite; proceed without a dict.
-	return keyBase, nil
+	// Some workloads may legitimately refuse to publish dicts (e.g. no-op dict,
+	// invalid dict). Do not fail the suite.
+	return nil
 }
 
 func walDirBreakdown(path string) (walDirBytes, error) {
