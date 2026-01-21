@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/slab"
 )
@@ -42,8 +43,11 @@ type Writer struct {
 	f              *os.File
 	bw             *bufio.Writer
 	scratch        []byte
+	encScratch     []byte
 	size           int64
 	maxSegmentSize int64
+	compress       bool
+	enc            *zstd.Encoder
 	syncFn         func(*os.File) error
 }
 
@@ -65,12 +69,27 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	var enc *zstd.Encoder
+	if opts.Compress {
+		enc, err = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false),
+			zstd.WithNoEntropyCompression(true),
+		)
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+	}
 	return &Writer{
 		f:              f,
 		bw:             bufio.NewWriterSize(f, defaultBufferSize),
 		scratch:        make([]byte, 0, defaultBufferSize),
 		size:           info.Size(),
 		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		compress:       opts.Compress,
+		enc:            enc,
 		syncFn:         func(file *os.File) error { return file.Sync() },
 	}, nil
 }
@@ -225,17 +244,42 @@ func (w *Writer) AppendBatch(records []Record) error {
 }
 
 func (w *Writer) writeSegment(payload []byte) error {
+	stored := payload
+	length := uint32(len(payload))
+	wantCRC := crc.Checksum(payload)
+
+	var rawLenPrefix [4]byte
+	if w.compress && w.enc != nil && len(payload) > 0 {
+		encDst := w.encScratch[:0]
+		encoded := w.enc.EncodeAll(payload, encDst)
+		// Only keep compressed bytes when it is a strict size win even after
+		// including the raw-length prefix.
+		if len(encoded)+len(rawLenPrefix) < len(payload) && len(encoded) <= int(segmentLenMask)-len(rawLenPrefix) {
+			binary.LittleEndian.PutUint32(rawLenPrefix[:], uint32(len(payload)))
+			length = uint32(len(encoded) + len(rawLenPrefix))
+			length |= segmentFlagCompressed
+			wantCRC = crc.ChecksumParts(rawLenPrefix[:], encoded)
+			stored = encoded
+			w.encScratch = encoded[:0]
+		}
+	}
+
 	var header [segmentHeaderSize]byte
-	binary.LittleEndian.PutUint32(header[0:4], uint32(len(payload)))
-	binary.LittleEndian.PutUint32(header[4:8], crc.Checksum(payload))
+	binary.LittleEndian.PutUint32(header[0:4], length)
+	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
 
 	if _, err := w.bw.Write(header[:]); err != nil {
 		return err
 	}
-	if _, err := w.bw.Write(payload); err != nil {
+	if length&segmentFlagCompressed != 0 {
+		if _, err := w.bw.Write(rawLenPrefix[:]); err != nil {
+			return err
+		}
+	}
+	if _, err := w.bw.Write(stored); err != nil {
 		return err
 	}
-	w.size += int64(segmentHeaderSize + len(payload))
+	w.size += int64(segmentHeaderSize) + int64(length&segmentLenMask)
 	return nil
 }
 
@@ -289,6 +333,10 @@ func (w *Writer) Sync() error {
 func (w *Writer) Close() error {
 	if w == nil || w.f == nil {
 		return nil
+	}
+	if w.enc != nil {
+		w.enc.Close()
+		w.enc = nil
 	}
 	if err := w.bw.Flush(); err != nil {
 		_ = w.f.Close()

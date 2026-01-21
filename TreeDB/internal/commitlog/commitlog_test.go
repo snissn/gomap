@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -70,6 +71,95 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 	_ = reader.Close()
+}
+
+func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records0 := []Record{
+		{Op: OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 1},
+		{Op: OpDelete, Key: []byte("k3"), Seq: 1},
+	}
+	if err := writer.AppendBatch(records0); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	writer1, err := NewWriterWithOptions(path, Options{Compress: true})
+	if err != nil {
+		t.Fatalf("new writer compress: %v", err)
+	}
+	records1 := make([]Record, 0, 128)
+	for i := 0; i < 128; i++ {
+		records1 = append(records1, Record{
+			Op:    OpSetInline,
+			Key:   []byte("key-prefix-" + string('a'+byte(i%4))),
+			Value: bytes.Repeat([]byte("AAAAAAAAAAAAAAAA"), 64),
+			Seq:   2,
+		})
+	}
+	if err := writer1.AppendBatch(records1); err != nil {
+		_ = writer1.Close()
+		t.Fatalf("append compressed: %v", err)
+	}
+	if err := writer1.Close(); err != nil {
+		t.Fatalf("close compressed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) < segmentHeaderSize {
+		t.Fatalf("unexpected segment size %d", len(data))
+	}
+	lengthField := binary.LittleEndian.Uint32(data[0:4])
+	if lengthField&segmentFlagCompressed != 0 {
+		t.Fatalf("first segment unexpectedly compressed")
+	}
+	off := segmentHeaderSize + int(lengthField&segmentLenMask)
+	if off+segmentHeaderSize > len(data) {
+		t.Fatalf("missing second segment")
+	}
+	lengthField2 := binary.LittleEndian.Uint32(data[off : off+4])
+	if lengthField2&segmentFlagCompressed == 0 {
+		t.Fatalf("expected second segment to be compressed")
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	got0, err := reader.ReadBatch()
+	if err != nil {
+		t.Fatalf("read batch 0: %v", err)
+	}
+	if len(got0) != len(records0) {
+		t.Fatalf("record count 0: got %d want %d", len(got0), len(records0))
+	}
+
+	got1, err := reader.ReadBatch()
+	if err != nil {
+		t.Fatalf("read batch 1: %v", err)
+	}
+	if len(got1) != len(records1) {
+		t.Fatalf("record count 1: got %d want %d", len(got1), len(records1))
+	}
+
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF, got %v", err)
+	}
 }
 
 func TestCommitLogCorruptCRC(t *testing.T) {
