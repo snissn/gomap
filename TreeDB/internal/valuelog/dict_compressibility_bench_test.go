@@ -18,17 +18,49 @@ type dictBenchWorkload struct {
 }
 
 func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
+	makeRepeatTail := func(rng *rand.Rand, size, tail int, pattern []byte) []byte {
+		buf := make([]byte, size)
+		for i := 0; i < size; {
+			n := copy(buf[i:], pattern)
+			i += n
+		}
+		if tail > 0 && size > 0 {
+			if tail > size {
+				tail = size
+			}
+			rng.Read(buf[size-tail:])
+		}
+		return buf
+	}
+	makeSparseNoise := func(rng *rand.Rand, size, stride, noise int, pattern []byte) []byte {
+		buf := makeRepeatTail(rng, size, 0, pattern)
+		if stride <= 0 {
+			stride = 256
+		}
+		if noise <= 0 {
+			noise = 16
+		}
+		for off := 0; off < size; off += stride {
+			end := off + noise
+			if end > size {
+				end = size
+			}
+			rng.Read(buf[off:end])
+		}
+		return buf
+	}
+
 	workloads := []dictBenchWorkload{
 		{
-			name: "highly_compressible",
+			name: "highly_compressible_tail64",
 			make: func(rng *rand.Rand, size int) []byte {
-				pattern := bytes.Repeat([]byte("{\"key\":\"value\",\"active\":true}"), (size/32)+1)
-				buf := make([]byte, size)
-				copy(buf, pattern)
-				if size > 64 {
-					rng.Read(buf[size-64:])
-				}
-				return buf
+				return makeRepeatTail(rng, size, 64, []byte("{\"key\":\"value\",\"active\":true}"))
+			},
+		},
+		{
+			name: "medium_compressible_sparse",
+			make: func(rng *rand.Rand, size int) []byte {
+				return makeSparseNoise(rng, size, 256, 16, []byte("abcd1234"))
 			},
 		},
 		{
@@ -41,93 +73,143 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 		},
 	}
 
-	const valueSize = 16 << 10
+	dictModes := []struct {
+		name   string
+		dictID uint64
+	}{
+		{name: "dict_off", dictID: 0},
+		{name: "dict_on", dictID: 1},
+	}
+
+	valueSizes := []int{1 << 10, 16 << 10}
 	const poolSize = 2048
 	const trainSamples = 256
 
-	for _, workload := range workloads {
-		b.Run(workload.name, func(b *testing.B) {
-			fileID, _ := EncodeFileID(0, 1)
-			w := newWriterWithSink(io.Discard, fileID)
+	for _, valueSize := range valueSizes {
+		for _, workload := range workloads {
+			for _, mode := range dictModes {
+				name := fmt.Sprintf("valsize=%d/%s/%s", valueSize, workload.name, mode.name)
+				b.Run(name, func(b *testing.B) {
+					fileID, _ := EncodeFileID(0, 1)
+					w := newWriterWithSink(io.Discard, fileID)
 
-			rng := rand.New(rand.NewSource(1))
-			values := make([][]byte, poolSize)
-			for i := 0; i < poolSize; i++ {
-				values[i] = workload.make(rng, valueSize)
-			}
+					rng := rand.New(rand.NewSource(1))
+					values := make([][]byte, poolSize)
+					for i := 0; i < poolSize; i++ {
+						values[i] = workload.make(rng, valueSize)
+					}
 
-			samples := make([][]byte, 0, trainSamples)
-			for i := 0; i < trainSamples && i < len(values); i++ {
-				samples = append(samples, values[i])
-			}
-			dictID := uint64(1)
-			dict, err := buildBenchDict(uint32(dictID), samples)
-			if err != nil {
-				dict, err = buildFallbackBenchDict(uint32(dictID))
-				if err != nil {
-					b.Fatalf("build dict: %v", err)
-				}
-			}
+					var dict []byte
+					if mode.dictID != 0 {
+						samples := make([][]byte, 0, trainSamples)
+						for i := 0; i < trainSamples && i < len(values); i++ {
+							samples = append(samples, values[i])
+						}
+						var err error
+						dict, err = buildBenchDict(uint32(mode.dictID), samples)
+						if err != nil {
+							dict, err = buildFallbackBenchDict(uint32(mode.dictID))
+							if err != nil {
+								b.Fatalf("build dict: %v", err)
+							}
+						}
+					}
 
-			b.ReportAllocs()
-			b.SetBytes(int64(valueSize * 4))
-			b.ResetTimer()
+					const k = 4
+					b.ReportAllocs()
+					b.SetBytes(int64(valueSize * k))
+					b.ResetTimer()
 
-			rid := uint64(1)
-			records := make([]Record, 4)
-			var ptrScratch [4]page.ValuePtr
-			totalRaw := uint64(0)
-			totalStored := uint64(0)
-			for i := 0; i < b.N; i++ {
-				for j := 0; j < 4; j++ {
-					records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
-					rid++
-				}
-				_, stats, err := w.AppendFrameWithStatsInto(dictID, dict, records, ptrScratch[:])
-				if err != nil {
-					b.Fatalf("AppendFrameWithStats: %v", err)
-				}
-				totalRaw += uint64(stats.RawPayloadBytes)
-				totalStored += uint64(stats.StoredPayloadBytes)
-			}
-			b.StopTimer()
+					rid := uint64(1)
+					records := make([]Record, k)
+					var ptrScratch [k]page.ValuePtr
+					totalRaw := uint64(0)
+					totalStored := uint64(0)
+					totalFrames := uint64(0)
+					compressedFrames := uint64(0)
+					for i := 0; i < b.N; i++ {
+						for j := 0; j < k; j++ {
+							records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
+							rid++
+						}
+						_, stats, err := w.AppendFrameWithStatsInto(mode.dictID, dict, records, ptrScratch[:])
+						if err != nil {
+							b.Fatalf("AppendFrameWithStats: %v", err)
+						}
+						totalFrames++
+						if stats.Compressed {
+							compressedFrames++
+						}
+						totalRaw += uint64(stats.RawPayloadBytes)
+						totalStored += uint64(stats.StoredPayloadBytes)
+					}
+					b.StopTimer()
 
-			if totalRaw > 0 {
-				b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
+					if totalRaw > 0 {
+						b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
+					}
+					if totalFrames > 0 {
+						b.ReportMetric(float64(compressedFrames)/float64(totalFrames), "compressed_frac")
+					}
+				})
 			}
-		})
+		}
 	}
 }
 
 func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
+	makeRepeatTail := func(rng *rand.Rand, size, tail int, pattern []byte) []byte {
+		buf := make([]byte, size)
+		for i := 0; i < size; {
+			n := copy(buf[i:], pattern)
+			i += n
+		}
+		if tail > 0 && size > 0 {
+			if tail > size {
+				tail = size
+			}
+			rng.Read(buf[size-tail:])
+		}
+		return buf
+	}
+	makeSparseNoise := func(rng *rand.Rand, size, stride, noise int, pattern []byte) []byte {
+		buf := makeRepeatTail(rng, size, 0, pattern)
+		if stride <= 0 {
+			stride = 256
+		}
+		if noise <= 0 {
+			noise = 16
+		}
+		for off := 0; off < size; off += stride {
+			end := off + noise
+			if end > size {
+				end = size
+			}
+			rng.Read(buf[off:end])
+		}
+		return buf
+	}
+
 	workloads := []dictBenchWorkload{
 		{
-			name: "highly_compressible",
+			name: "highly_compressible_tail64",
 			make: func(rng *rand.Rand, size int) []byte {
-				pattern := bytes.Repeat([]byte("{\"key\":\"value\",\"active\":true}"), (size/32)+1)
-				buf := make([]byte, size)
-				copy(buf, pattern)
-				// Add a small noisy tail so we're not measuring a trivial all-zeros case.
-				if size > 64 {
-					rng.Read(buf[size-64:])
-				}
-				return buf
+				return makeRepeatTail(rng, size, 64, []byte("{\"key\":\"value\",\"active\":true}"))
 			},
 		},
 		{
 			name: "medium_compressible",
 			make: func(rng *rand.Rand, size int) []byte {
-				pattern := bytes.Repeat([]byte("abcd1234"), (size/8)+1)
-				buf := make([]byte, size)
-				copy(buf, pattern[:size])
-				// Inject sparse randomness to keep the stream realistic while still
-				// being largely compressible.
-				for off := 0; off < size; off += 256 {
-					end := off + 16
-					if end > size {
-						end = size
-					}
-					rng.Read(buf[off:end])
+				return makeSparseNoise(rng, size, 256, 16, []byte("abcd1234"))
+			},
+		},
+		{
+			name: "low_compressible_half_random",
+			make: func(rng *rand.Rand, size int) []byte {
+				buf := makeRepeatTail(rng, size, 0, []byte("abcd1234"))
+				half := size / 2
+				if half < size {
+					rng.Read(buf[half:])
 				}
 				return buf
 			},
@@ -151,95 +233,106 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 		{name: "dict_on", dictID: 1},
 	}
 
-	const valueSize = 16 << 10
+	valueSizes := []int{1 << 10, 16 << 10}
 	const poolSize = 2048
 	const trainSamples = 256
-	const trainSampleBytes = valueSize
 
-	for _, workload := range workloads {
-		for _, mode := range dictModes {
-			for _, k := range ks {
-				if k <= 0 || k > MaxFrameK {
-					continue
-				}
-				name := fmt.Sprintf("%s/%s/k=%d", workload.name, mode.name, k)
-				b.Run(name, func(b *testing.B) {
-					dir := b.TempDir()
-					fileID, _ := EncodeFileID(0, 1)
-					path := filepath.Join(dir, "value-l0-000001.log")
-					w, err := NewWriter(path, fileID)
-					if err != nil {
-						b.Fatalf("NewWriter: %v", err)
+	for _, valueSize := range valueSizes {
+		trainSampleBytes := valueSize
+		for _, workload := range workloads {
+			for _, mode := range dictModes {
+				for _, k := range ks {
+					if k <= 0 || k > MaxFrameK {
+						continue
 					}
-					defer w.Close()
-
-					// Pre-generate values so the benchmark measures encoding/writing,
-					// not value construction.
-					rng := rand.New(rand.NewSource(1))
-					values := make([][]byte, poolSize)
-					for i := 0; i < poolSize; i++ {
-						values[i] = workload.make(rng, valueSize)
-					}
-
-					var dict []byte
-					usedFallback := false
-					if mode.dictID != 0 {
-						samples := make([][]byte, 0, trainSamples)
-						for i := 0; i < trainSamples && i < len(values); i++ {
-							s := values[i]
-							if len(s) > trainSampleBytes {
-								s = s[:trainSampleBytes]
-							}
-							samples = append(samples, s)
-						}
-						var buildErr error
-						dict, buildErr = buildBenchDict(uint32(mode.dictID), samples)
-						if buildErr != nil {
-							primaryErr := buildErr
-							// Dictionary training can fail on pathological/incompressible
-							// inputs. Fall back to a deterministic, known-good training set so
-							// we can still measure the overhead/ratio behavior of dict mode.
-							dict, buildErr = buildFallbackBenchDict(uint32(mode.dictID))
-							if buildErr != nil {
-								b.Fatalf("build dict: %v", buildErr)
-							}
-							_ = primaryErr
-							usedFallback = true
-						}
-					}
-
-					b.ReportAllocs()
-					b.SetBytes(int64(valueSize * k))
-					b.ResetTimer()
-
-					rid := uint64(1)
-					totalRaw := uint64(0)
-					totalStored := uint64(0)
-					records := make([]Record, k)
-					ptrScratch := make([]page.ValuePtr, k)
-					for i := 0; i < b.N; i++ {
-						for j := 0; j < k; j++ {
-							records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
-							rid++
-						}
-						_, stats, err := w.AppendFrameWithStatsInto(mode.dictID, dict, records, ptrScratch)
+					name := fmt.Sprintf("valsize=%d/%s/%s/k=%d", valueSize, workload.name, mode.name, k)
+					b.Run(name, func(b *testing.B) {
+						dir := b.TempDir()
+						fileID, _ := EncodeFileID(0, 1)
+						path := filepath.Join(dir, "value-l0-000001.log")
+						w, err := NewWriter(path, fileID)
 						if err != nil {
-							b.Fatalf("AppendFrameWithStats: %v", err)
+							b.Fatalf("NewWriter: %v", err)
 						}
-						totalRaw += uint64(stats.RawPayloadBytes)
-						totalStored += uint64(stats.StoredPayloadBytes)
-					}
-					b.StopTimer()
+						defer w.Close()
 
-					if usedFallback {
-						b.ReportMetric(1, "dict_fallback")
-					} else {
-						b.ReportMetric(0, "dict_fallback")
-					}
-					if totalRaw > 0 {
-						b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
-					}
-				})
+						// Pre-generate values so the benchmark measures encoding/writing,
+						// not value construction.
+						rng := rand.New(rand.NewSource(1))
+						values := make([][]byte, poolSize)
+						for i := 0; i < poolSize; i++ {
+							values[i] = workload.make(rng, valueSize)
+						}
+
+						var dict []byte
+						usedFallback := false
+						if mode.dictID != 0 {
+							samples := make([][]byte, 0, trainSamples)
+							for i := 0; i < trainSamples && i < len(values); i++ {
+								s := values[i]
+								if len(s) > trainSampleBytes {
+									s = s[:trainSampleBytes]
+								}
+								samples = append(samples, s)
+							}
+							var buildErr error
+							dict, buildErr = buildBenchDict(uint32(mode.dictID), samples)
+							if buildErr != nil {
+								primaryErr := buildErr
+								// Dictionary training can fail on pathological/incompressible
+								// inputs. Fall back to a deterministic, known-good training set so
+								// we can still measure the overhead/ratio behavior of dict mode.
+								dict, buildErr = buildFallbackBenchDict(uint32(mode.dictID))
+								if buildErr != nil {
+									b.Fatalf("build dict: %v", buildErr)
+								}
+								_ = primaryErr
+								usedFallback = true
+							}
+						}
+
+						b.ReportAllocs()
+						b.SetBytes(int64(valueSize * k))
+						b.ResetTimer()
+
+						rid := uint64(1)
+						totalRaw := uint64(0)
+						totalStored := uint64(0)
+						totalFrames := uint64(0)
+						compressedFrames := uint64(0)
+						records := make([]Record, k)
+						ptrScratch := make([]page.ValuePtr, k)
+						for i := 0; i < b.N; i++ {
+							for j := 0; j < k; j++ {
+								records[j] = Record{RID: rid, Value: values[(i+j)%len(values)]}
+								rid++
+							}
+							_, stats, err := w.AppendFrameWithStatsInto(mode.dictID, dict, records, ptrScratch)
+							if err != nil {
+								b.Fatalf("AppendFrameWithStats: %v", err)
+							}
+							totalFrames++
+							if stats.Compressed {
+								compressedFrames++
+							}
+							totalRaw += uint64(stats.RawPayloadBytes)
+							totalStored += uint64(stats.StoredPayloadBytes)
+						}
+						b.StopTimer()
+
+						if usedFallback {
+							b.ReportMetric(1, "dict_fallback")
+						} else {
+							b.ReportMetric(0, "dict_fallback")
+						}
+						if totalRaw > 0 {
+							b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
+						}
+						if totalFrames > 0 {
+							b.ReportMetric(float64(compressedFrames)/float64(totalFrames), "compressed_frac")
+						}
+					})
+				}
 			}
 		}
 	}
