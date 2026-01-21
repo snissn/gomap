@@ -279,6 +279,12 @@ func main() {
 				log.Fatalf("lanes_probe suite: %v", err)
 			}
 			fmt.Print(out)
+		case "vlog_dict", "vlog-dict":
+			out, err := runValueLogDictSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("vlog_dict suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -630,6 +636,25 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			case "repeat":
 				for j := range v {
 					v[j] = 0x61
+				}
+			case "repeat_tail64":
+				for j := range v {
+					v[j] = 0x61
+				}
+				if len(v) > 64 {
+					if _, err := io.ReadFull(crand.Reader, v[len(v)-64:]); err != nil {
+						return nil, nil, fmt.Errorf("dataset val %d tail: %w", i, err)
+					}
+				}
+			case "half_repeat_half_random":
+				for j := range v {
+					v[j] = 0x61
+				}
+				if len(v) > 0 {
+					half := len(v) / 2
+					if _, err := io.ReadFull(crand.Reader, v[half:]); err != nil {
+						return nil, nil, fmt.Errorf("dataset val %d random: %w", i, err)
+					}
 				}
 			default:
 				return nil, nil, fmt.Errorf("dataset value pattern: %q", cfg.DatasetValuePattern)
