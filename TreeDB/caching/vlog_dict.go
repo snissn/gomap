@@ -78,6 +78,9 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
+	if db.valueLogDictPaused() {
+		return
+	}
 	for i := range records {
 		v := records[i].Value
 		if !likelyCompressibleSample(v) {
@@ -93,6 +96,9 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	}
 	tr := db.valueLogDictTrainer
 	if tr == nil || !tr.ShouldCollect() {
+		return
+	}
+	if db.valueLogDictPaused() {
 		return
 	}
 	if !likelyCompressibleSample(value) {
@@ -259,14 +265,13 @@ func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uin
 	if pause == 0 {
 		return
 	}
-	// Pause dict compression for subsequent frames and ask the trainer to re-collect.
+	// Pause dict compression for subsequent frames.
+	//
+	// NOTE: We intentionally do not immediately retrigger training here. On
+	// low-savings / incompressible streams, repeatedly re-collecting samples can
+	// dominate CPU even while compression is paused. A future optimization can
+	// re-enable retraining with backoff / probe budgets.
 	db.valueLogDictPauseRemaining.Store(pause)
-	db.valueLogDictTrainerMu.Lock()
-	tr := db.valueLogDictTrainer
-	db.valueLogDictTrainerMu.Unlock()
-	if tr != nil {
-		tr.SignalDegraded(1)
-	}
 }
 
 func (db *DB) valueLogDictK(dictID uint64) int {

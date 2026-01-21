@@ -1981,19 +1981,35 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
 		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
 	}
+	// Keep dict training overhead bounded by default. The trainer already applies
+	// its own backpressure (queue limits), but sampling less aggressively further
+	// reduces CPU+GC impact on write-heavy workloads.
+	if valueLogDictTrain.TrainBytes > 0 && valueLogDictTrain.SampleStride == 0 {
+		valueLogDictTrain.SampleStride = 4
+	}
 
 	// If dict training is enabled but no adaptive ratio is specified, default to
 	// a conservative pause threshold to avoid wasting CPU on incompressible
 	// payload streams.
 	if valueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
-		valueLogDictAdaptiveRatio = 0.995
+		// Require meaningful savings before staying in "dict mode". Payload ratios
+		// close to 1.0 can be slower than raw frames due to additional framing and
+		// encode/decode overhead, especially for small values and write-heavy batch
+		// workloads.
+		valueLogDictAdaptiveRatio = 0.98
 	}
 	if valueLogDictAdaptiveRatio > 0 {
 		if valueLogDictMetricsWindow <= 0 {
-			valueLogDictMetricsWindow = 1 << 20
+			// Smaller windows let us detect "no-op" dict streams quickly and avoid
+			// spending long stretches in the slower dict framing path on
+			// incompressible payloads.
+			valueLogDictMetricsWindow = 256 << 10
 		}
 		if valueLogDictMetricsPauseBytes <= 0 {
-			valueLogDictMetricsPauseBytes = 16 << 20
+			// Degraded streams should stay paused long enough that "dict enabled"
+			// is effectively free on incompressible data, while still allowing
+			// occasional probes to detect when compressibility returns.
+			valueLogDictMetricsPauseBytes = 64 << 20
 		}
 	}
 	lanes := make([]lane, laneCount)
@@ -2737,10 +2753,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
+	paused := db.valueLogDictPaused()
 	if rawPayloadBytes > 0 {
 		db.valueLogDictConsumePause(uint64(rawPayloadBytes))
 	}
 	if db.valueLogDictPaused() {
+		paused = true
 		dictID = 0
 		dict = nil
 	}
@@ -2757,7 +2775,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+		if paused {
+			k = valuelog.MaxFrameK
+		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
 			k = cur
 		} else {
 			k = 8
