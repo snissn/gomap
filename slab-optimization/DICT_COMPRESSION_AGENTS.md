@@ -17,6 +17,21 @@ Non-goals (for this sprint unless explicitly approved):
 - Adding new background threads or complex scheduling logic without measurement.
 - “Winning” by changing unrelated defaults (thresholds, modes) that make comparisons misleading.
 
+## Status (current branches / PRs)
+
+As of **2026-01-20**, we are actively in the Milestone 4 optimization loop.
+
+Open PRs / recent changes:
+- PR23 (#82): baseline incompressible bench stabilization (avoid value-pool accidental compressibility).
+- PR24 (#83): value-log writer hot-path for “dict enabled but skip compression” (write directly into `appendBuf`).
+- PR25 (#84): make dict-enabled cheap on incompressible (high-entropy gate + pause; unify_bench avoids waiting for dict publish when paused).
+- PR26 (#85): temporary K-selection tuning (prefer `k=8` for small/medium values).
+
+Key observation (important for interpreting numbers):
+- In `unified_bench -suite vlog_dict`, `observed_ratio` currently includes the **warmup/training write phase** which is often **uncompressed**.
+  - This can make a healthy steady-state compression stream look like “ratio ~0.39” even if the **steady-state ratio is ~0.08**.
+  - TODO: report **measure-only ratio** (delta bytes written during the measurement phase) so we can evaluate steady-state correctness.
+
 ## Current Starting Point / References
 
 Starting PR for this sprint:
@@ -36,6 +51,9 @@ Per benchmark case, we care about:
   - or `ops/sec` for end-to-end DB workloads
 - **Compression effectiveness**:
   - `observed_ratio = stored_payload_bytes / raw_payload_bytes` (lower is better)
+  - **NOTE:** for suite-style runs with warmup+measure phases, we must distinguish:
+    - `observed_ratio_total` (warmup+measure blended; can look “worse” if warmup is uncompressed)
+    - `observed_ratio_measure` (delta bytes in measure window / raw bytes in measure window; the real steady-state signal)
 - **Work avoidance** (critical for incompressible data):
   - `attempted_frac`: fraction of frames where we actually ran zstd encode (even if we discarded the result)
   - `kept_frac`: fraction of frames stored compressed (currently represented by `compressed_frac`)
@@ -64,6 +82,12 @@ Where to run what:
 ## Milestones and PR Sequencing (mapped to work)
 
 We work sequentially. Every PR branch is based on the previous PR branch and merged sequentially.
+
+### Immediate TODO (before deeper tuning)
+
+We must first verify “compression correctness” on *extremely* compressible payloads:
+- Add a **very/ultra compressible** pattern that should compress to near-zero (e.g. all-zero, or fully repeated pattern with no random tail).
+- Ensure the suite reports **measure-only ratio** so we’re not misled by warmup bytes.
 
 ### PR20 — Bench/Stats instrumentation (“attempted vs kept”)
 Branch: `sprint/slabopt-pr20-vlog-dict-metrics`
@@ -104,10 +128,14 @@ Deliverables:
   - mode3 and mode4
   - compression enabled vs disabled
   - compressible vs incompressible patterns
+  - **ultra-compressible** pattern to validate the “best case” ratio
   - at least 2 value sizes (e.g. 1KiB and 16KiB)
 - Include explicit warmup/training phase and then steady-state measurement so we can distinguish:
   - training cost vs steady-state encode/decode cost
 - Print: ops/sec, observed_ratio, attempted_frac, kept_frac, disk bytes (wal/vlog/index).
+  - MUST print both:
+    - `observed_ratio_total` (warmup+measure)
+    - `observed_ratio_measure` (delta during measurement window)
 
 Note:
 - unified-bench already supports `-dataset-val-pattern random|zero|repeat`. We likely need a “medium” pattern option (e.g. sparse noise) for realism; add it here if needed.
@@ -117,11 +145,15 @@ Branches: `sprint/slabopt-pr23-...`, `sprint/slabopt-pr24-...`, etc.
 Each PR should be narrow: 1–2 targeted optimizations, backed by profiles and before/after benchmark tables.
 
 Targets (in priority order):
+0) **Compression correctness on ultra-compressible data**
+   - Add/bench a pattern that should reliably compress to ~0 (or very close) for both 1KiB and 16KiB.
+   - If ratio is not “obviously great”, treat it as a correctness/benchmark bug first (before tuning).
 1) **Incompressible overhead at 1KiB**
    - Make “dict enabled” converge to `attempted_frac≈0` quickly.
    - Confirm mode3/mode4 ops/sec is ~unchanged vs dict disabled.
 2) **Compressible throughput + ratio**
    - For highly/medium compressible patterns, ensure we get strong `observed_ratio` while keeping throughput acceptable.
+   - Avoid hard-coding `k=8`; K should be **chosen dynamically** from data (and may exceed 8). `k=8` is a temporary stopgap.
 3) **Read throughput**
    - Ensure decode path remains efficient and low-allocation.
 
@@ -262,6 +294,7 @@ Value sizes (start):
 Compressibility patterns:
 - Highly compressible (repeat + small noisy tail)
 - Medium compressible (repeat base + sparse noise)
+- Ultra compressible (repeat w/ *no* tail, or all-zero)
 - Low compressible (half random)
 - Incompressible (random)
 
@@ -271,6 +304,8 @@ Dict modes:
 
 K values:
 - fixed `k=1`, `k=4`, `k=8` (plus dynamic K selection in end-to-end)
+- TODO: extend dynamic K exploration to include `k=16` and `k=MaxFrameK` where it makes sense (especially for write-heavy mode4),
+  while keeping read-path costs in mind.
 
 Workloads:
 - Write-heavy (mode4 and mode3)
