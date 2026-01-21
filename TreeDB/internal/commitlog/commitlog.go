@@ -40,6 +40,7 @@ type Options struct {
 	// Compress enables best-effort zstd compression for commitlog segments.
 	// Segments are only stored compressed when the compressed payload (plus a
 	// small header) is smaller than the raw payload, so compression never causes
-	// size amplification.
+	// size amplification. Small segments are left uncompressed to avoid adding
+	// hot-path CPU overhead for minimal disk savings.
 	Compress bool
 }

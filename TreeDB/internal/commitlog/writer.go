@@ -17,6 +17,7 @@ import (
 const (
 	defaultBufferSize     = 4 << 20
 	defaultMaxSegmentSize = 64 * 1024 * 1024
+	defaultCompressMinLen = 64 << 10
 )
 
 var syncDirFn = syncDir
@@ -249,7 +250,7 @@ func (w *Writer) writeSegment(payload []byte) error {
 	wantCRC := crc.Checksum(payload)
 
 	var rawLenPrefix [4]byte
-	if w.compress && w.enc != nil && len(payload) > 0 {
+	if w.compress && w.enc != nil && len(payload) >= defaultCompressMinLen {
 		encDst := w.encScratch[:0]
 		encoded := w.enc.EncodeAll(payload, encDst)
 		// Only keep compressed bytes when it is a strict size win even after
