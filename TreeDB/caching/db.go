@@ -1154,6 +1154,22 @@ func (db *DB) newLargePtrMap() *largePtrMap {
 	return &largePtrMap{}
 }
 
+func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
+	if db == nil || db.backend == nil {
+		return nil
+	}
+	type batchSizer interface {
+		NewBatchWithSize(size int) batch.Interface
+	}
+	if size < 0 {
+		size = 0
+	}
+	if sizer, ok := db.backend.(batchSizer); ok {
+		return sizer.NewBatchWithSize(size)
+	}
+	return db.backend.NewBatch()
+}
+
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
 type BackendDB interface {
 	Get(key []byte) ([]byte, error)
@@ -4996,7 +5012,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			}
 		}
 
-		backendBatch := db.backend.NewBatch()
+		backendBatch := db.newBackendBatchWithSize(totalLen)
 
 		if db.deferredValueLogEnabled() {
 			for _, unit := range units {
@@ -5433,7 +5449,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		}
 
 		// Flush 'mem' to backend
-		backendBatch := db.backend.NewBatch()
+		backendBatch := db.newBackendBatchWithSize(memLen)
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		ptrLookups := ptrs != nil && db.valueLogEnabled()

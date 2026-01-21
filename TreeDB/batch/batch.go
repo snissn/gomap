@@ -201,6 +201,18 @@ func (b *Batch) noteKeyOrder(key []byte) {
 	b.lastKey = key
 }
 
+// Reserve grows internal buffers to accommodate roughly n entries without
+// reallocation. It is intended as a best-effort performance hint for
+// high-throughput internal callers (e.g. flush).
+func (b *Batch) Reserve(n int) {
+	if b == nil || n <= 0 {
+		return
+	}
+	if cap(b.entries) < n {
+		b.entries = make([]Entry, 0, n)
+	}
+}
+
 // SetView is an internal-performance helper that records a Put without copying
 // key/value bytes. Callers must treat key/value as immutable until the batch is
 // committed (Write/WriteSync) or closed.
