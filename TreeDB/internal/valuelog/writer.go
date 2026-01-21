@@ -775,123 +775,57 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		if codecs == nil || codecs.encPool == nil {
 			return nil, FrameStats{}, ErrMissingDict
 		}
+		if cap(w.encScratch) < rawPayloadBytes {
+			w.encScratch = make([]byte, 0, rawPayloadBytes)
+		}
+		encDst := w.encScratch[:0]
 
 		enc := codecs.encPool.Get().(*zstd.Encoder)
 		var encoded []byte
 		var encodeErr error
-		directAppend := false
-		encStart := 0
-		base := 0
-		prefixLen := 0
-		max := w.appendMax
-		if max <= 0 {
-			max = defaultBufferSize
-		}
-		const enableDictDirectAppend = false
-		if enableDictDirectAppend && w.f != nil && rawPayloadBytes > 0 && rawPayloadBytes <= max {
-			prefixLen = FrameHeaderSize + (k * 8) + ((k + 1) * 4)
-			encStart = len(w.appendBuf) + HeaderSize + prefixLen
-			limit := encStart + rawPayloadBytes
-			if cap(w.appendBuf) < limit {
-				if err := w.flushAppendBuf(); err != nil {
-					codecs.encPool.Put(enc)
-					return nil, FrameStats{}, err
-				}
-				w.appendBuf = w.appendBuf[:0]
-				encStart = HeaderSize + prefixLen
-				limit = encStart + rawPayloadBytes
-				if cap(w.appendBuf) < limit {
-					w.appendBuf = make([]byte, 0, limit)
-				}
+		if k == 1 {
+			encoded = enc.EncodeAll(records[0].Value, encDst)
+		} else if rawPayloadBytes <= (1 << 20) {
+			// For small/medium grouped frames, it can be faster to encode a single
+			// contiguous payload via EncodeAll than to stream many small writes.
+			//
+			// This also avoids per-call allocations in the streaming encoder path.
+			if cap(w.rawScratch) < rawPayloadBytes {
+				w.rawScratch = make([]byte, rawPayloadBytes)
 			}
-			base = len(w.appendBuf)
-			w.appendBuf = w.appendBuf[:encStart]
-			directAppend = true
-		}
-
-		if directAppend {
-			encDst := w.appendBuf[:encStart]
-			if k == 1 {
-				encoded = enc.EncodeAll(records[0].Value, encDst)
-			} else if rawPayloadBytes <= (1 << 20) {
-				// For small/medium grouped frames, it can be faster to encode a single
-				// contiguous payload via EncodeAll than to stream many small writes.
-				if cap(w.rawScratch) < rawPayloadBytes {
-					w.rawScratch = make([]byte, rawPayloadBytes)
-				}
-				payload := w.rawScratch[:rawPayloadBytes]
-				off := 0
-				for i := 0; i < k; i++ {
-					off += copy(payload[off:], records[i].Value)
-				}
-				encoded = enc.EncodeAll(payload, encDst)
-			} else {
-				w.encLimiter.buf = encDst
-				w.encLimiter.limit = rawPayloadBytes - 1
-				enc.Reset(&w.encLimiter)
-				for i := 0; i < k; i++ {
-					if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
-						break
-					}
-				}
-				if encodeErr == nil {
-					encodeErr = enc.Close()
-				}
-				enc.Reset(nil)
-				encoded = w.encLimiter.buf
+			payload := w.rawScratch[:rawPayloadBytes]
+			off := 0
+			for i := 0; i < k; i++ {
+				off += copy(payload[off:], records[i].Value)
 			}
+			encoded = enc.EncodeAll(payload, encDst)
 		} else {
-			if cap(w.encScratch) < rawPayloadBytes {
-				w.encScratch = make([]byte, 0, rawPayloadBytes)
+			w.encLimiter.buf = encDst
+			w.encLimiter.limit = rawPayloadBytes - 1
+			enc.Reset(&w.encLimiter)
+			for i := 0; i < k; i++ {
+				if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
+					break
+				}
 			}
-			encDst := w.encScratch[:0]
-			if k == 1 {
-				encoded = enc.EncodeAll(records[0].Value, encDst)
-			} else if rawPayloadBytes <= (1 << 20) {
-				if cap(w.rawScratch) < rawPayloadBytes {
-					w.rawScratch = make([]byte, rawPayloadBytes)
-				}
-				payload := w.rawScratch[:rawPayloadBytes]
-				off := 0
-				for i := 0; i < k; i++ {
-					off += copy(payload[off:], records[i].Value)
-				}
-				encoded = enc.EncodeAll(payload, encDst)
-			} else {
-				w.encLimiter.buf = encDst
-				w.encLimiter.limit = rawPayloadBytes - 1
-				enc.Reset(&w.encLimiter)
-				for i := 0; i < k; i++ {
-					if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
-						break
-					}
-				}
-				if encodeErr == nil {
-					encodeErr = enc.Close()
-				}
-				enc.Reset(nil)
-				encoded = w.encLimiter.buf
+			if encodeErr == nil {
+				encodeErr = enc.Close()
 			}
-			w.encScratch = w.encScratch[:0]
+			enc.Reset(nil)
+			encoded = w.encLimiter.buf
 		}
 		codecs.encPool.Put(enc)
+		w.encScratch = w.encScratch[:0]
 
 		flags := byte(0)
 		storedPayloadBytes := rawPayloadBytes
 		switch {
-		case encodeErr == nil && len(encoded) < encStart+rawPayloadBytes:
+		case encodeErr == nil && len(encoded) < rawPayloadBytes:
 			flags |= FrameFlagCompressed
-			if len(encoded) >= encStart {
-				storedPayloadBytes = len(encoded) - encStart
-			} else {
-				storedPayloadBytes = 0
-			}
+			storedPayloadBytes = len(encoded)
 			w.noBenefit = 0
 			w.skipRemain = 0
 		case encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge):
-			if directAppend {
-				w.appendBuf = w.appendBuf[:base]
-			}
 			return nil, FrameStats{}, encodeErr
 		default:
 			// No benefit (or we aborted early because the output grew too large).
@@ -899,13 +833,10 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				w.noBenefit++
 			}
 			w.skipRemain = dictSkipFrames(w.noBenefit)
-			if directAppend {
-				w.appendBuf = w.appendBuf[:base]
-			}
 			return writeRaw()
 		}
 
-		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + storedPayloadBytes
+		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
 		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
@@ -917,102 +848,53 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 
 		start := w.size
-		if directAppend {
-			if len(encoded) > encStart {
-				w.appendBuf = encoded
-			} else {
-				w.appendBuf = w.appendBuf[:encStart]
-			}
-			start = w.size + int64(base)
-			header := w.appendBuf[base : base+HeaderSize]
-			prefix := w.appendBuf[base+HeaderSize : base+HeaderSize+prefixLen]
-			payload := w.appendBuf[base+HeaderSize+prefixLen : base+HeaderSize+prefixLen+storedPayloadBytes]
+		var header [HeaderSize]byte
+		header[4] = Version
+		header[5] = recordFlagGrouped
+		header[6] = 0
+		header[7] = 0
+		binary.LittleEndian.PutUint64(header[8:16], 0)
+		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
 
-			header[4] = Version
-			header[5] = recordFlagGrouped
-			header[6] = 0
-			header[7] = 0
-			binary.LittleEndian.PutUint64(header[8:16], 0)
-			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
-
-			prefixOff := 0
-			prefix[prefixOff] = FrameVersion
-			prefix[prefixOff+1] = flags
-			prefix[prefixOff+2] = byte(k)
-			prefix[prefixOff+3] = 0
-			binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
-			prefixOff += FrameHeaderSize
-
-			for i := 0; i < k; i++ {
-				rid := records[i].RID
-				if rid == 0 {
-					return nil, FrameStats{}, errors.New("valuelog: missing rid")
-				}
-				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
-				prefixOff += 8
-			}
-			for i := 0; i < k+1; i++ {
-				binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
-				prefixOff += 4
-			}
-
-			sum := crc.ChecksumParts(header[4:], prefix, payload)
-			binary.LittleEndian.PutUint32(header[0:4], sum)
-			w.size += int64(HeaderSize + bodyLen)
-			if len(w.appendBuf) >= max {
-				if err := w.flushAppendBuf(); err != nil {
-					return nil, FrameStats{}, err
-				}
-			}
-		} else {
-			var header [HeaderSize]byte
-			header[4] = Version
-			header[5] = recordFlagGrouped
-			header[6] = 0
-			header[7] = 0
-			binary.LittleEndian.PutUint64(header[8:16], 0)
-			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
-
-			prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
-			if cap(w.prefixBuf) < prefixLen {
-				w.prefixBuf = make([]byte, 0, prefixLen)
-			}
-			prefix := w.prefixBuf[:prefixLen]
-			prefixOff := 0
-			prefix[prefixOff] = FrameVersion
-			prefix[prefixOff+1] = flags
-			prefix[prefixOff+2] = byte(k)
-			prefix[prefixOff+3] = 0
-			binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
-			prefixOff += FrameHeaderSize
-
-			for i := 0; i < k; i++ {
-				rid := records[i].RID
-				if rid == 0 {
-					return nil, FrameStats{}, errors.New("valuelog: missing rid")
-				}
-				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
-				prefixOff += 8
-			}
-			for i := 0; i < k+1; i++ {
-				binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
-				prefixOff += 4
-			}
-
-			sum := crc.ChecksumParts(header[4:], prefix, encoded)
-			binary.LittleEndian.PutUint32(header[0:4], sum)
-
-			if err := w.writeBytes(header[:]); err != nil {
-				return nil, FrameStats{}, err
-			}
-			if err := w.writeBytes(prefix); err != nil {
-				return nil, FrameStats{}, err
-			}
-			if err := w.writeBytes(encoded); err != nil {
-				return nil, FrameStats{}, err
-			}
-			w.size += int64(HeaderSize + bodyLen)
+		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+		if cap(w.prefixBuf) < prefixLen {
+			w.prefixBuf = make([]byte, 0, prefixLen)
 		}
+		prefix := w.prefixBuf[:prefixLen]
+		prefixOff := 0
+		prefix[prefixOff] = FrameVersion
+		prefix[prefixOff+1] = flags
+		prefix[prefixOff+2] = byte(k)
+		prefix[prefixOff+3] = 0
+		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
+		prefixOff += FrameHeaderSize
+
+		for i := 0; i < k; i++ {
+			rid := records[i].RID
+			if rid == 0 {
+				return nil, FrameStats{}, errors.New("valuelog: missing rid")
+			}
+			binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+			prefixOff += 8
+		}
+		for i := 0; i < k+1; i++ {
+			binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+			prefixOff += 4
+		}
+
+		sum := crc.ChecksumParts(header[4:], prefix, encoded)
+		binary.LittleEndian.PutUint32(header[0:4], sum)
+
+		if err := w.writeBytes(header[:]); err != nil {
+			return nil, FrameStats{}, err
+		}
+		if err := w.writeBytes(prefix); err != nil {
+			return nil, FrameStats{}, err
+		}
+		if err := w.writeBytes(encoded); err != nil {
+			return nil, FrameStats{}, err
+		}
+		w.size += int64(HeaderSize + bodyLen)
 
 		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
 		for i := range records {
