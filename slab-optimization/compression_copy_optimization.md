@@ -341,3 +341,15 @@ Suggested benchmark hook:
   - mode4 dict‑on ultra: ops/s ~863k, MB/s ~843; memmove ~41% flat; memtable/skiplist ~54% cum; appendValueLog ~8% cum.
   - mode3 dict‑on ultra: ops/s ~519k, MB/s ~507; memmove ~41% flat; appendValueLog ~34% cum; zstd EncodeAll ~27% cum; memtable/skiplist ~31% cum; commitlog/write ~5% cum.
 - Next: annotate memmove stack attribution and identify writer vs memtable copy deltas for mode3 vs mode4.
+
+### 2026‑01‑21 (Branch1 Step 4 – Deltas)
+- Common hotspots (mode3 + mode4, below cutoff): memtable/skiplist copies dominate (Memtable.SetSteal → SkipList.put).
+- Mode3‑specific deltas: value‑log writer + zstd EncodeAll ~27% cum; commitlog/WAL ~5% cum; higher overall wall time.
+- Mode4‑specific deltas: writer share smaller (~8% cum); memtable share larger (~54% cum).
+- Interpretation: to move needle, we must remove writer‑side copies (dict‑on) **and** consider behavioral
+  options for memtable copy elimination if safe/approved.
+
+### 2026‑01‑21 (Branch1 Step 5 – memmove attribution)
+- memmove focus (mode3 dict‑on): memmove shows heavy attribution to Memtable/SkipList plus AppendValueLog/Writer; zstd EncodeAll appears in memmove stacks (~12% cum). Commitlog path ~4–5% cum.
+- memmove focus (mode4 dict‑on): memmove dominated by Memtable/SkipList; AppendValueLog/Writer minimal (~2% cum).
+- Implication: further writer copy removal will help mode3 more than mode4; memtable copies remain the largest shared cost.
