@@ -247,7 +247,7 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		}
 	}
 
-	walBefore, err := walDirBreakdown(filepath.Join(dir, "wal"))
+	walBefore, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
 	if err != nil {
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size (before): %w", err)
 	}
@@ -288,7 +288,7 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: close: %w", err)
 	}
 
-	walAfter, err := walDirBreakdown(filepath.Join(dir, "wal"))
+	walAfter, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
 	if err != nil {
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size (after): %w", err)
 	}
