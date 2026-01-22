@@ -993,3 +993,48 @@ Rollout (recommended):
 * Provide a single “kill switch” (env var or option) that forces Off.
 
 ---
+
+## Appendix A) Code map (symbols and responsibilities)
+
+This list exists to make the runbook executable without guesswork.
+
+### Value‑log writer / encoding
+- `internal/valuelog/valuelog.go`
+  - `type FrameStats`
+  - `const MaxFrameK`
+- `internal/valuelog/writer.go`
+  - `func (*Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []Record, ptrScratch []byte) (FrameStats, error)`
+  - raw helpers typically named like `appendRawFrameWithDictID(...)` (ensure Attempted survives fallbacks)
+
+### Compression training + profiling
+- `internal/compression/trainer.go`
+  - `type TrainConfig`
+  - `type Trainer`
+  - `func (t *Trainer) Add(value []byte)`
+  - `func (t *Trainer) Train(now time.Time, slabID uint64) (ActiveProfile, ok bool)`
+- `internal/compression/profile.go`
+  - `type ActiveProfile` (dict bytes/hash/historyBytes/k/ratios/cost estimates)
+  - `ChooseKForDict(...)`
+
+### Pause/probe ratio metrics
+- `internal/compression/metrics.go`
+  - `type Metrics`
+  - `func (m *Metrics) Add(slabID uint64, raw, stored, records int, compressed bool) (pauseBytes int)`
+  - `PauseThreshold`, `WindowBytes`, `MinRecords`, `PauseBytes`
+
+### Cached DB integration (value‑log dict loop + state)
+- `caching/vlog_dict.go`
+  - dict sampling, training loop, `applyValueLogDictProfile(...)`
+  - pause/probe fields (atomics) and counters
+- `caching/db.go`
+  - write paths that append to value log:
+    - `appendValueLogOne`
+    - `appendValueLogBatch`
+  - best place to measure wall time and feed observations into autotuner
+
+
+
+## Appendix B
+
+Worklog - update below with summary of each action - update on each commit
+- 2026-01-22 PR-AT0: added code-map appendix and worklog section; bench metrics now report `kept_frac` only; tests: `go test ./... -count=1`.
