@@ -791,7 +791,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 		canDirectEncodeAll := w.f != nil && (k == 1 || rawPayloadBytes <= (1<<20))
 		if canDirectEncodeAll {
-			recordMaxLen := HeaderSize + prefixLen + enc.MaxEncodedSize(rawPayloadBytes)
+			maxEncoded := enc.MaxEncodedSize(rawPayloadBytes)
+			if k > 1 {
+				// When encoding a multi-record frame we only keep compressed bytes
+				// if the output is a strict win. Cap the output to avoid oversized
+				// destinations and early-abort on no-benefit output growth.
+				maxEncoded = rawPayloadBytes - 1
+			}
+			recordMaxLen := HeaderSize + prefixLen + maxEncoded
 			if recordMaxLen > max {
 				canDirectEncodeAll = false
 			}
@@ -842,26 +849,32 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
-			var payload []byte
+			var encodeErr error
 			if k == 1 {
-				payload = records[0].Value
+				w.appendBuf = enc.EncodeAll(records[0].Value, w.appendBuf)
 			} else {
-				// For small/medium grouped frames, EncodeAll on a contiguous payload
-				// is typically faster than streaming many small writes.
-				if cap(w.rawScratch) < rawPayloadBytes {
-					w.rawScratch = make([]byte, rawPayloadBytes)
-				}
-				payload = w.rawScratch[:rawPayloadBytes]
-				off := 0
+				w.encLimiter.buf = w.appendBuf
+				w.encLimiter.limit = encodedStart + rawPayloadBytes - 1
+				enc.Reset(&w.encLimiter)
 				for i := 0; i < k; i++ {
-					off += copy(payload[off:], records[i].Value)
+					if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
+						break
+					}
 				}
+				if encodeErr == nil {
+					encodeErr = enc.Close()
+				}
+				enc.Reset(nil)
+				w.appendBuf = w.encLimiter.buf
 			}
-			w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
-			if encodedLen >= rawPayloadBytes {
+			if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
+				w.appendBuf = w.appendBuf[:recordStart]
+				return nil, FrameStats{}, encodeErr
+			}
+			if encodeErr != nil || encodedLen >= rawPayloadBytes {
 				w.appendBuf = w.appendBuf[:recordStart]
 				if w.noBenefit < 0xff {
 					w.noBenefit++
