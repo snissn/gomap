@@ -249,3 +249,4 @@ Stability:
 - 2026-01-22 13:05:12 HST: Updated PR 114 body with latest bench results + disk usage details.
 - 2026-01-22 13:11:30 HST: Windows CI failure traced to `TestCompactIndexImprovesSpanLocality` (span_ratio_ppm too high); relaxed the max span ratio on Windows in `TreeDB/db/vacuum_locality_test.go` and ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/db -run TestCompactIndexImprovesSpanLocality -count=1` (ok).
 - 2026-01-22 13:16:10 HST: `gh pr checks 114 --watch` confirms all CI checks passing after Windows locality threshold adjustment.
+- 2026-01-22 13:25:31 HST: `gh pr checks 114 --json ...` shows all CI checks passing after latest work-log commit.
