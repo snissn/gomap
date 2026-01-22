@@ -28,6 +28,12 @@ const (
 	MinProfileInterval    = 10 * time.Minute
 	ProfileDriftThreshold = 0.07 // 7%
 	ProfileImproveThresh  = 0.02 // 2% better to accept
+
+	// More aggressive gating when the stream is degraded (e.g., dict compression
+	// is paused due to poor observed savings).
+	MinProfileBytesDegraded    = 8 << 20 // 8 MiB
+	MinProfileRecordsDegraded  = 50_000  // records
+	MinProfileIntervalDegraded = 30 * time.Second
 )
 
 type Trainer struct {
@@ -92,6 +98,7 @@ type Trainer struct {
 	lastAcceptRecords atomic.Uint64
 	rollingRatioBase  atomic.Uint64 // math.Float64bits(last_profile_total_ratio)
 	rollingRatioCur   atomic.Uint64 // math.Float64bits(observed_total_ratio)
+	degraded          atomic.Bool
 	attempts          atomic.Uint64
 	accepts           atomic.Uint64
 	rejects           atomic.Uint64
@@ -246,10 +253,40 @@ func (t *Trainer) ForceCollecting() {
 	t.collecting.Store(true)
 }
 
+func (t *Trainer) hasActiveProfile() bool {
+	if t == nil {
+		return false
+	}
+	if p, ok := t.lastProfile.Load().(*ActiveProfile); ok && p != nil {
+		return true
+	}
+	return false
+}
+
+func (t *Trainer) restartCollecting(slabID uint32) {
+	if t == nil || t.closed.Load() || !t.enabled.Load() || t.targetBytes == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.samples) > 0 {
+		t.releaseSamples(t.samples)
+		t.samples = nil
+	}
+	t.sampleBytes = 0
+	t.sampleRecords = 0
+	t.lastSlabID = slabID
+	t.sampleGen.Add(1)
+	t.sampleStrideCounter.Store(0)
+	t.collecting.Store(true)
+}
+
 func (t *Trainer) SignalDegraded(slabID uint32) {
 	if t == nil || !t.enabled.Load() {
 		return
 	}
+	t.degraded.Store(true)
 	if t.training.Load() || t.collecting.Load() {
 		return
 	}
@@ -365,22 +402,33 @@ func (t *Trainer) appendSample(sample trainerSample) {
 }
 
 func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel, slabID uint32) {
-	defer t.training.Store(false)
 	defer func() {
+		if t != nil {
+			t.training.Store(false)
+		}
 		if r := recover(); r != nil {
 			// Suppress panic from zstd or internal logic, treat as failed training.
 			// Log as warning instead of PANIC.
 			log.Printf("treedb: slab compression training skipped slab=%d err=%v\n%s", slabID, r, debug.Stack())
 		}
+		// Continue collecting if we don't have a usable profile yet, or if the
+		// stream is degraded and we want to converge to a better dict/K.
+		if t == nil || t.closed.Load() || !t.enabled.Load() {
+			return
+		}
+		if t.degraded.Load() || !t.hasActiveProfile() {
+			t.restartCollecting(slabID)
+		}
 	}()
 	if len(samples) == 0 {
 		return
 	}
+	defer t.releaseSamples(samples)
+
 	now := time.Now()
 	if !t.allowRetrain(now) {
 		return
 	}
-	defer t.releaseSamples(samples)
 
 	var validSamples [][]byte
 	rawTotal := 0
@@ -393,83 +441,162 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	if rawTotal < 4096 || len(validSamples) < 8 {
 		return
 	}
-	if dictBytes > rawTotal {
-		dictBytes = rawTotal
-	}
-	history := make([]byte, 0, dictBytes)
-	for _, sample := range validSamples {
-		if len(history) >= dictBytes {
-			break
-		}
-		need := dictBytes - len(history)
-		if len(sample) > need {
-			history = append(history, sample[:need]...)
-		} else {
-			history = append(history, sample...)
-		}
-	}
-	if len(history) < 8 {
-		return
-	}
-
-	samplesHash := hashSamples(validSamples)
-	if cached, dictHash, ok := t.lookupCachedDict(samplesHash); ok {
-		t.trainCount.Add(1)
-		t.lastTrainDictHash.Store(dictHash)
-		t.lastTrainSamples.Store(uint64(len(validSamples)))
-		t.lastTrainDict.Store(uint64(len(cached)))
-		t.lastTrainDedupMode.Store(uint64(dictDedupCache))
-		t.lastTrainDedupFlag.Store(uint64(DictUseRef))
-		t.lastTrainDedupRef.Store(0)
-		if t.logOnce() {
-			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
-				slabID,
-				len(cached),
-				len(validSamples),
-				dictHash,
-				dedupModeString(dictDedupCache),
-				0,
-			)
-		}
-		return
-	}
-
-	t.trainCount.Add(1)
-
-	nonEmptySamples := make([][]byte, 0, len(validSamples))
-	for _, s := range validSamples {
-		if len(s) > 0 {
-			nonEmptySamples = append(nonEmptySamples, s)
-		}
-	}
-	validSamples = nonEmptySamples
-
-	if len(validSamples) < 8 {
-		return
-	}
 
 	dictID := slabID + 1
 	if dictID == 0 {
 		dictID = 1
 	}
 
-	dict, err := buildAndValidateDict(dictID, validSamples, history, level)
-	if err != nil || len(dict) == 0 {
+	t.trainCount.Add(1)
+
+	const (
+		minHistoryBytes = 8
+		maxHistoryBytes = 40 << 10
+	)
+	if dictBytes <= 0 {
+		dictBytes = DefaultTrainDictBytes
+	}
+	if dictBytes > maxHistoryBytes {
+		dictBytes = maxHistoryBytes
+	}
+	if dictBytes > rawTotal {
+		dictBytes = rawTotal
+	}
+	if dictBytes < minHistoryBytes {
 		return
 	}
 
-	dictHash := xxhash.Sum64(dict)
-	t.lastTrainDictHash.Store(dictHash)
-	mode, ref := t.recordDictHash(dictHash)
-	t.lastTrainDedupMode.Store(uint64(mode))
-	t.lastTrainDedupFlag.Store(uint64(dedupFlagFromMode(mode)))
-	if mode == dictDedupRef && ref >= 0 {
+	candidates := make([]int, 0, 4)
+	if dictBytes >= 16<<10 {
+		candidates = append(candidates, 16<<10)
+	}
+	if dictBytes >= 32<<10 {
+		candidates = append(candidates, 32<<10)
+	}
+	if dictBytes >= 40<<10 {
+		candidates = append(candidates, 40<<10)
+	}
+	isStd := dictBytes == 16<<10 || dictBytes == 32<<10 || dictBytes == 40<<10
+	if !isStd {
+		candidates = append(candidates, dictBytes)
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, dictBytes)
+	}
+
+	// Build a single max-sized history buffer and slice it for smaller candidates.
+	maxCandidate := candidates[len(candidates)-1]
+	if maxCandidate > rawTotal {
+		maxCandidate = rawTotal
+	}
+	historyMax := make([]byte, 0, maxCandidate)
+	for _, sample := range validSamples {
+		if len(historyMax) >= maxCandidate {
+			break
+		}
+		need := maxCandidate - len(historyMax)
+		if len(sample) > need {
+			historyMax = append(historyMax, sample[:need]...)
+		} else {
+			historyMax = append(historyMax, sample...)
+		}
+	}
+	if len(historyMax) < minHistoryBytes {
+		return
+	}
+
+	samplesHash := hashSamples(validSamples)
+	type dictCandidate struct {
+		profile   *ActiveProfile
+		fromCache bool
+	}
+	candProfiles := make([]dictCandidate, 0, len(candidates))
+	for _, historyBytes := range candidates {
+		if historyBytes <= 0 {
+			continue
+		}
+		if historyBytes > len(historyMax) {
+			historyBytes = len(historyMax)
+		}
+		if historyBytes < minHistoryBytes {
+			continue
+		}
+		cacheKey := dictCacheKey(samplesHash, historyBytes)
+		dict, dictHash, ok := t.lookupCachedDict(cacheKey)
+		fromCache := ok
+		if !ok {
+			var err error
+			dict, err = buildAndValidateDict(dictID, validSamples, historyMax[:historyBytes], level)
+			if err != nil || len(dict) == 0 {
+				continue
+			}
+			dictHash = xxhash.Sum64(dict)
+			t.storeCachedDict(cacheKey, dictHash, dict)
+		}
+		profile := ChooseKForDict(dict, validSamples)
+		if profile == nil || len(profile.Dict) == 0 {
+			continue
+		}
+		profile.DictHash = dictHash
+		profile.HistoryBytes = historyBytes
+		candProfiles = append(candProfiles, dictCandidate{profile: profile, fromCache: fromCache})
+	}
+	if len(candProfiles) == 0 {
+		return
+	}
+
+	// Select best dict bytes using a ratio-first, speed-second policy:
+	// - primary: lowest total ratio
+	// - within a small slack window, prefer lower encode cost
+	const ratioSlack = 0.01
+	bestTotal := candProfiles[0].profile.TotalRatio
+	for i := 1; i < len(candProfiles); i++ {
+		if candProfiles[i].profile.TotalRatio < bestTotal {
+			bestTotal = candProfiles[i].profile.TotalRatio
+		}
+	}
+	bestCut := bestTotal * (1.0 + ratioSlack)
+	bestIdx := -1
+	for i := range candProfiles {
+		p := candProfiles[i].profile
+		if p.TotalRatio > bestCut {
+			continue
+		}
+		if bestIdx < 0 {
+			bestIdx = i
+			continue
+		}
+		best := candProfiles[bestIdx].profile
+		if p.EncodeNsEstimate > 0 && (best.EncodeNsEstimate == 0 || p.EncodeNsEstimate < best.EncodeNsEstimate) {
+			bestIdx = i
+			continue
+		}
+		if p.EncodeNsEstimate == best.EncodeNsEstimate && p.HistoryBytes < best.HistoryBytes {
+			bestIdx = i
+			continue
+		}
+	}
+	if bestIdx < 0 {
+		bestIdx = 0
+	}
+	bestProfile := candProfiles[bestIdx].profile
+
+	t.lastTrainDictHash.Store(bestProfile.DictHash)
+	bestFromCache := candProfiles[bestIdx].fromCache
+	mode, ref := t.recordDictHash(bestProfile.DictHash)
+	dedupMode := mode
+	if dedupMode == dictDedupNone && bestFromCache {
+		dedupMode = dictDedupCache
+	}
+	t.lastTrainDedupMode.Store(uint64(dedupMode))
+	t.lastTrainDedupFlag.Store(uint64(dedupFlagFromMode(dedupMode)))
+	if dedupMode == dictDedupRef && ref >= 0 {
 		t.lastTrainDedupRef.Store(uint64(ref))
 	} else {
 		t.lastTrainDedupRef.Store(0)
 	}
 	if mode != dictDedupNone {
-		bytes := uint64(len(dict))
+		bytes := uint64(len(bestProfile.Dict))
 		t.dictDedupBytes.Add(bytes)
 		switch mode {
 		case dictDedupGlobal:
@@ -477,23 +604,21 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		case dictDedupRef:
 			t.dictDedupBytesRef.Add(bytes)
 		}
-		t.lastTrainSamples.Store(uint64(len(samples)))
-		t.lastTrainDict.Store(uint64(len(dict)))
+		t.lastTrainSamples.Store(uint64(len(validSamples)))
+		t.lastTrainDict.Store(uint64(len(bestProfile.Dict)))
 		if t.logOnce() {
 			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
 				slabID,
-				len(dict),
-				len(samples),
-				dictHash,
+				len(bestProfile.Dict),
+				len(validSamples),
+				bestProfile.DictHash,
 				dedupModeString(mode),
 				ref,
 			)
 		}
-		return
 	}
-	t.storeCachedDict(samplesHash, dictHash, dict)
 
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(dict))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(bestProfile.Dict))
 	if err != nil {
 		log.Printf("treedb: slab compression training encode setup failed slab=%d err=%v", slabID, err)
 		return
@@ -501,7 +626,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	defer enc.Close()
 
 	storedTotal := 0
-	for _, sample := range samples {
+	for _, sample := range validSamples {
 		storedTotal += len(enc.EncodeAll(sample, nil))
 	}
 	ratio := 1.0
@@ -509,22 +634,20 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		ratio = float64(storedTotal) / float64(rawTotal)
 	}
 	t.lastTrainRatio.Store(math.Float64bits(ratio))
-	t.lastTrainSamples.Store(uint64(len(samples)))
-	t.lastTrainDict.Store(uint64(len(dict)))
+	t.lastTrainSamples.Store(uint64(len(validSamples)))
+	t.lastTrainDict.Store(uint64(len(bestProfile.Dict)))
 	if t.logOnce() {
 		log.Printf("treedb: slab compression trained dict slab=%d dict_bytes=%d samples=%d raw=%d stored=%d ratio=%.3f",
 			slabID,
-			len(dict),
-			len(samples),
+			len(bestProfile.Dict),
+			len(validSamples),
 			rawTotal,
 			storedTotal,
 			ratio,
 		)
 	}
 	t.rollingRatioCur.Store(math.Float64bits(ratio))
-	if profile := ChooseKForDict(dict, samples); profile != nil {
-		t.maybeAcceptProfile(profile)
-	}
+	t.maybeAcceptProfile(bestProfile)
 }
 
 func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level zstd.EncoderLevel) (dict []byte, err error) {
@@ -724,7 +847,16 @@ func (t *Trainer) allowRetrain(now time.Time) bool {
 		return false
 	}
 	lastTime, _ := t.lastAcceptTime.Load().(time.Time)
-	if !lastTime.IsZero() && now.Sub(lastTime) < MinProfileInterval {
+	degraded := t.degraded.Load()
+	minInterval := MinProfileInterval
+	minBytes := uint64(MinProfileBytes)
+	minRecords := uint64(MinProfileRecords)
+	if degraded {
+		minInterval = MinProfileIntervalDegraded
+		minBytes = uint64(MinProfileBytesDegraded)
+		minRecords = uint64(MinProfileRecordsDegraded)
+	}
+	if !lastTime.IsZero() && now.Sub(lastTime) < minInterval {
 		return false
 	}
 	bytesSeen := t.totalBytesSeen.Load()
@@ -737,8 +869,11 @@ func (t *Trainer) allowRetrain(now time.Time) bool {
 	if bytesSeen <= lastBytes && recordsSeen <= lastRecords {
 		return false
 	}
-	if bytesSeen-lastBytes < MinProfileBytes && recordsSeen-lastRecords < MinProfileRecords {
+	if bytesSeen-lastBytes < minBytes && recordsSeen-lastRecords < minRecords {
 		return false
+	}
+	if degraded {
+		return true
 	}
 	base := math.Float64frombits(t.rollingRatioBase.Load())
 	cur := math.Float64frombits(t.rollingRatioCur.Load())
@@ -778,6 +913,7 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	}
 	t.lastProfile.Store(profile)
 	t.accepts.Add(1)
+	t.degraded.Store(false)
 	t.lastAcceptTime.Store(profile.Timestamp)
 	t.lastAcceptBytes.Store(t.totalBytesSeen.Load())
 	t.lastAcceptRecords.Store(t.totalRecordsSeen.Load())
@@ -924,7 +1060,15 @@ func hashSamples(samples [][]byte) uint64 {
 	return hasher.Sum64()
 }
 
-func (t *Trainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
+func dictCacheKey(samplesHash uint64, dictBytes int) uint64 {
+	if samplesHash == 0 {
+		return 0
+	}
+	const prime = uint64(0x9e3779b97f4a7c15)
+	return samplesHash ^ (uint64(uint32(dictBytes)) * prime)
+}
+
+func (t *Trainer) lookupCachedDict(cacheKey uint64) ([]byte, uint64, bool) {
 	if t == nil {
 		return nil, 0, false
 	}
@@ -933,7 +1077,7 @@ func (t *Trainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
 	if t.dictCacheHashes == nil || t.dictCacheDicts == nil {
 		return nil, 0, false
 	}
-	if idx, ok := t.dictCacheIndex[samplesHash]; ok && samplesHash != 0 {
+	if idx, ok := t.dictCacheIndex[cacheKey]; ok && cacheKey != 0 {
 		dict := t.dictCacheDicts[idx]
 		dictHash := t.dictCacheDictHashes[idx]
 		if len(dict) == 0 {
@@ -949,7 +1093,7 @@ func (t *Trainer) lookupCachedDict(samplesHash uint64) ([]byte, uint64, bool) {
 	return nil, 0, false
 }
 
-func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
+func (t *Trainer) storeCachedDict(cacheKey, dictHash uint64, dict []byte) {
 	if t == nil {
 		return
 	}
@@ -969,7 +1113,7 @@ func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
 		t.dictCachePos = 0
 		t.dictCacheIndex = make(map[uint64]int, window)
 	}
-	if dictHash == 0 || samplesHash == 0 {
+	if dictHash == 0 || cacheKey == 0 {
 		return
 	}
 	if len(t.dictCacheHashes) == 0 {
@@ -981,9 +1125,9 @@ func (t *Trainer) storeCachedDict(samplesHash, dictHash uint64, dict []byte) {
 	if old != 0 {
 		delete(t.dictCacheIndex, old)
 	}
-	t.dictCacheHashes[t.dictCachePos] = samplesHash
+	t.dictCacheHashes[t.dictCachePos] = cacheKey
 	t.dictCacheDicts[t.dictCachePos] = entry
 	t.dictCacheDictHashes[t.dictCachePos] = dictHash
-	t.dictCacheIndex[samplesHash] = t.dictCachePos
+	t.dictCacheIndex[cacheKey] = t.dictCachePos
 	t.dictCachePos = (t.dictCachePos + 1) % len(t.dictCacheHashes)
 }

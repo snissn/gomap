@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestStorePutGetDedup(t *testing.T) {
@@ -99,15 +100,15 @@ func TestStoreKMeta(t *testing.T) {
 	if k != 0 {
 		t.Fatalf("expected missing k=0 got %d", k)
 	}
-	if err := store.SetK(ctx, id, 4); err != nil {
+	if err := store.SetK(ctx, id, valuelog.MaxFrameK); err != nil {
 		t.Fatalf("set k: %v", err)
 	}
 	k, err = store.GetK(ctx, id)
 	if err != nil {
 		t.Fatalf("get k: %v", err)
 	}
-	if k != 4 {
-		t.Fatalf("expected k=4 got %d", k)
+	if k != valuelog.MaxFrameK {
+		t.Fatalf("expected k=%d got %d", valuelog.MaxFrameK, k)
 	}
 }
 

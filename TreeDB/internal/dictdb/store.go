@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 var errStoreUnavailable = errors.New("dictdb: store unavailable")
@@ -22,7 +23,7 @@ type Store struct {
 
 const (
 	dictKMin = 1
-	dictKMax = 8
+	dictKMax = valuelog.MaxFrameK
 )
 
 // Open opens a dictdb backend at path and returns a Store.
