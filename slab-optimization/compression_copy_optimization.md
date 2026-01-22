@@ -200,6 +200,72 @@ mode3 (journal on) and mode4 (journal off).
 Reduce copy amplification and allocations inside the value‑log writer, independent of memtable vs
 streaming path, for both dict‑on and dict‑off modes.
 
+### Autopilot Runbook (agent-friendly)
+This section is written so an agent can execute Branch 3 with minimal interpretation.
+
+#### Baseline inputs (must keep constant when comparing)
+- mode: **mode3** and **mode4**
+- dict: **on** (primary) and **off** (secondary)
+- pattern: `ultra_compressible_repeat`
+- value size: `1024`
+- batch size: `1000` (below streaming cutoff; for streaming path use Branch 2)
+- measure window: `512MiB` of writes (steady-state)
+
+#### Profile commands (copy/paste)
+Write CPU profiles:
+- mode4 dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode4_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode4_DictOn_Ultra_1024 -count=1 -v`
+- mode3 dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+
+Optional “control” profiles:
+- mode4 dict-off:
+  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode4_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode4_DictOn_Ultra_1024 -count=1 -v`
+- mode3 dict-off:
+  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+
+#### pprof “what to check” (must)
+For each profile, capture both a normal top and a memmove-focused top:
+- `go tool pprof -top -nodecount=40 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=memmove -nodecount=40 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+
+Success is measured as:
+- writer-stack `memmove` attribution drops materially (target: ≥30% *relative* drop in writer-related memmove)
+- dict-on ops/sec improves (or stays flat) with no correctness regressions
+
+#### Implementation target (exact)
+Edit: `TreeDB/internal/valuelog/writer.go`
+- Function: `(*Writer) AppendFrameWithStatsInto`
+- Block: dict-on (`dictID != 0`)
+
+Must implement (safe, semantics-preserving):
+1) **Direct-to-appendBuf dict-on encode** (mode4 hot path, and small frames generally)
+   - Write header+prefix into the writer `appendBuf`.
+   - Stream zstd output directly into `appendBuf` (no `encoded → appendBuf` copy).
+   - Enforce **no-benefit cap**: abort if compressed bytes would be `>= rawPayloadBytes`.
+   - On no benefit: rollback `appendBuf` and fall back to raw frame write; update skip/probe counters.
+   - Must be rollback-safe: no partial writes, restore `appendBuf` length, do not advance `w.size`.
+2) **Remove dict-on raw payload concatenation**
+   - Must not copy `k>1` values into a temporary contiguous payload just to call `EncodeAll`.
+   - Stream values into the encoder instead.
+3) **Keep scratch reuse + correctness invariants**
+   - No new per-frame allocations on the hot path.
+   - Encoder must always be reset/detached from writers before returning to pool.
+
+Rollback invariants (must):
+- Any early return/error from the direct-append path restores:
+  - `w.appendBuf` length to its pre-attempt value
+  - encoder state (`enc.Reset(nil)`), then returns encoder to pool
+- Only update `w.size` after the final record bytes are committed to `appendBuf`.
+
+#### Validation commands (must)
+- `go test ./TreeDB/internal/valuelog -run TestDictAppendReadRoundTrip -count=1`
+- `go test ./... -count=1`
+
+#### Guardrail: corruption regression
+- `TreeDB/internal/valuelog/dict_corruption_test.go` must pass before/after.
+- If corruption occurs, revert the optimization and fix rollback/CRC/bodyLen logic first.
+
 ### Success Criteria (must hit)
 - **Must** reduce value‑log writer memmove share in steady‑state profiles (dict‑on) by a clear margin
   (target: ≥30% relative drop in writer‑stack memmove, or documented reason if not achievable).
