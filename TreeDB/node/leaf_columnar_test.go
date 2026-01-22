@@ -68,3 +68,49 @@ func TestLeafColumnarRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected value for c: %q", v)
 	}
 }
+
+func TestLeafColumnarAddLeafEntryWithPrefix(t *testing.T) {
+	data := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(data, page.PageTypeLeaf, BuilderOptions{LeafColumnar: true})
+	b.SetPageID(1)
+
+	entrySize, prefixLen, suffixLen := b.LeafEntrySizeWithPrefix([]byte("a"), []byte("value"), FlagInline)
+	if err := b.AddLeafEntryWithPrefix([]byte("a"), []byte("value"), FlagInline, page.ValuePtr{}, entrySize, prefixLen, suffixLen); err != nil {
+		t.Fatalf("add inline entry: %v", err)
+	}
+
+	ptr := page.ValuePtr{Offset: 42, Length: 99, FileID: 7}
+	entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix([]byte("b"), nil, FlagPointer)
+	if err := b.AddLeafEntryWithPrefix([]byte("b"), nil, FlagPointer, ptr, entrySize, prefixLen, suffixLen); err != nil {
+		t.Fatalf("add pointer entry: %v", err)
+	}
+
+	n := b.Finish()
+	if !n.leafColumnar() {
+		t.Fatalf("expected columnar leaf flag set")
+	}
+
+	idx, found, err := n.SearchLeaf([]byte("a"))
+	if err != nil || !found {
+		t.Fatalf("search leaf a: found=%v err=%v", found, err)
+	}
+	_, v, _, flags, err := n.GetLeafEntryView(idx)
+	if err != nil {
+		t.Fatalf("get leaf a: %v", err)
+	}
+	if flags != FlagInline || !bytes.Equal(v, []byte("value")) {
+		t.Fatalf("unexpected inline entry: val=%q flags=%v", v, flags)
+	}
+
+	idx, found, err = n.SearchLeaf([]byte("b"))
+	if err != nil || !found {
+		t.Fatalf("search leaf b: found=%v err=%v", found, err)
+	}
+	_, v, vp, flags, err := n.GetLeafEntryView(idx)
+	if err != nil {
+		t.Fatalf("get leaf b: %v", err)
+	}
+	if flags&FlagPointer == 0 || v != nil || vp != ptr {
+		t.Fatalf("unexpected pointer entry: val=%v flags=%v ptr=%v", v, flags, vp)
+	}
+}
