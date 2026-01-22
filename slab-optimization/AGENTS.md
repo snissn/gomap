@@ -952,3 +952,6 @@ Authoritative spec: `slab-optimization/spec.md`
   - `go run .github/scripts/check_vlog_dict_bench.go -strict=true`
 - PR created via `gh`: https://github.com/snissn/gomap/pull/93
 - PR35 CI: `gh pr checks 93 --watch` → all checks PASS.
+
+`2026-01-22 10:25:55 HST`
+- Added `slab-optimization/AGENTS_LIVE_BENCH.md` (live throughput bench runbook: mode1/mode3/mode4; compression on/off; public TreeDB KV API; no-fsync focus).
