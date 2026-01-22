@@ -3,6 +3,11 @@
 Goal: reduce user‑space copy amplification in the value‑log dict compression write path, without changing
 memtable vs direct write semantics unless explicitly approved. Focus: mode4/mode3 dict‑on write throughput.
 
+## Current Status (2026-01-22)
+- Memtable-compression experiments (e.g., storing compressed bytes in memtables) are **out of scope** for now.
+- We still profile the “memtable path” because it is the default below-cutoff write branch and it exercises the
+  value‑log writer; the intended wins are **copy reductions inside the value‑log writer**, not new memtable behavior.
+
 ## Scope and Guardrails
 - **Default:** only copy‑reduction refactors (no behavior changes).
 - **Out of scope unless approved:** changing when/where the memtable is skipped or forcing direct streaming.
