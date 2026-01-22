@@ -1462,7 +1462,7 @@ type keyRange struct {
 }
 
 type largePtrMap struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 	m  map[string]page.ValuePtr
 }
 
@@ -1470,9 +1470,9 @@ func (l *largePtrMap) GetString(key string) (page.ValuePtr, bool) {
 	if l == nil {
 		return page.ValuePtr{}, false
 	}
-	l.mu.Lock()
+	l.mu.RLock()
 	ptr, ok := l.m[key]
-	l.mu.Unlock()
+	l.mu.RUnlock()
 	return ptr, ok
 }
 
@@ -1487,9 +1487,9 @@ func (l *largePtrMap) Len() int {
 	if l == nil {
 		return 0
 	}
-	l.mu.Lock()
+	l.mu.RLock()
 	n := len(l.m)
-	l.mu.Unlock()
+	l.mu.RUnlock()
 	return n
 }
 
@@ -1499,7 +1499,7 @@ func (l *largePtrMap) SetString(key string, ptr page.ValuePtr) {
 	}
 	l.mu.Lock()
 	if l.m == nil {
-		l.m = make(map[string]page.ValuePtr, 1024)
+		l.m = make(map[string]page.ValuePtr)
 	}
 	l.m[key] = ptr
 	l.mu.Unlock()
