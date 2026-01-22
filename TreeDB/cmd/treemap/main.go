@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -29,7 +30,9 @@ Commands:
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
+  scan-jsonl      Scan keys and values to JSONL {key,val} (requires -allow-values)
   dump            Alias for scan
+  dump-jsonl      Alias for scan-jsonl
   vacuum          Rebuild index (offline by default; use -online for online vacuum)
   compact         Compact slab files (by candidate selection or slab id)
 
@@ -73,6 +76,8 @@ func main() {
 		runKeys(dir, args)
 	case "scan", "dump":
 		runScan(dir, args)
+	case "scan-jsonl", "dump-jsonl":
+		runScanJSONL(dir, args)
 	case "vacuum":
 		runVacuum(dir, args)
 	case "compact":
@@ -290,6 +295,71 @@ func runScan(dir string, args []string) {
 			fatalf("output error: %v", err)
 		}
 		fmt.Printf("%s\t%s\n", keyStr, valStr)
+		printCount++
+		if *limit > 0 && printCount >= *limit {
+			break
+		}
+	}
+	if err := it.Error(); err != nil {
+		fatalf("Iterator error: %v", err)
+	}
+}
+
+type jsonKV struct {
+	Key      string `json:"key"`
+	Val      string `json:"val"`
+	Encoding string `json:"encoding,omitempty"`
+}
+
+func runScanJSONL(dir string, args []string) {
+	fs := flag.NewFlagSet("scan-jsonl", flag.ExitOnError)
+	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
+	start := fs.String("start", "", "Start key (inclusive)")
+	end := fs.String("end", "", "End key (exclusive)")
+	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
+	limit := fs.Int("limit", 0, "Limit number of entries (0=unlimited)")
+	reverse := fs.Bool("reverse", false, "Iterate in reverse order")
+	hexInput := fs.Bool("hex", false, "Interpret input keys as hex")
+	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
+	encoding := fs.String("encoding", "base64", "JSONL encoding for key/val: string|hex|base64")
+	omitEncoding := fs.Bool("omit-encoding", false, "Omit encoding field in JSON output")
+	_ = fs.Parse(args)
+
+	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
+	if !*allowValues {
+		fatalf("scan-jsonl requires -allow-values to print values; use keys to dump keys only")
+	}
+
+	db := openTreeDB(dir, *backend, *rw)
+	defer closeTreeDB(db)
+
+	it, err := openIterator(db, startKey, endKey, *reverse)
+	if err != nil {
+		fatalf("Iterator error: %v", err)
+	}
+	defer func() { _ = it.Close() }()
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+
+	printCount := 0
+	for ; it.Valid(); it.Next() {
+		keyStr, err := formatOutput(it.Key(), *encoding)
+		if err != nil {
+			fatalf("output error: %v", err)
+		}
+		valStr, err := formatOutput(it.Value(), *encoding)
+		if err != nil {
+			fatalf("output error: %v", err)
+		}
+		rec := jsonKV{Key: keyStr, Val: valStr}
+		if !*omitEncoding {
+			rec.Encoding = *encoding
+		}
+		if err := encoder.Encode(rec); err != nil {
+			fatalf("output error: %v", err)
+		}
 		printCount++
 		if *limit > 0 && printCount >= *limit {
 			break
