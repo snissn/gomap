@@ -1282,6 +1282,10 @@ type Options struct {
 	// does not improve by at least this fraction (0 uses default).
 	ValueLogDictMinPayloadSavingsRatio float64
 
+	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
+	// Cached mode only (SplitValueLog must be enabled).
+	ValueLogCompressionAutotune valuelog.AutotuneOptions
+
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
 }
@@ -1370,7 +1374,10 @@ type DB struct {
 		attempted atomic.Uint64
 		kept      atomic.Uint64
 	}
-	valueLogAutotuneMetrics vlogAutotuneMetrics
+	valueLogAutotuneMetrics          vlogAutotuneMetrics
+	valueLogAutotuneOptions          valuelog.AutotuneOptions
+	valueLogAutotuneLastProfile      atomic.Value // *vlogAutotuneProfile
+	valueLogAutotuneLastSwitchFrames atomic.Uint64
 
 	valueLogDictPauseRemaining      atomic.Uint64
 	valueLogDictProbeBytes          uint64
@@ -1965,19 +1972,28 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if !disableValueLog {
 		splitValueLog = true
 	}
+	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, splitValueLog)
 
 	// Value-log dictionary compression is a core performance feature of the
 	// value-store path. For unsafe/bench workloads (AllowUnsafe=true), enable
 	// background dict training by default when the value log is active unless
 	// the caller explicitly configured it.
 	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
-		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+		if valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.MaxSampleBytes > 0 {
+			valueLogDictTrain.TrainBytes = int(valueLogAutotune.MaxSampleBytes)
+		} else {
+			valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+		}
 	}
 	// Keep dict training overhead bounded by default. The trainer already applies
 	// its own backpressure (queue limits), but sampling less aggressively further
 	// reduces CPU+GC impact on write-heavy workloads.
 	if valueLogDictTrain.TrainBytes > 0 && valueLogDictTrain.SampleStride == 0 {
-		valueLogDictTrain.SampleStride = 4
+		if valueLogAutotune.SampleStride > 0 {
+			valueLogDictTrain.SampleStride = int(valueLogAutotune.SampleStride)
+		} else {
+			valueLogDictTrain.SampleStride = 4
+		}
 	}
 
 	// If dict training is enabled but no adaptive ratio is specified, default to
@@ -1997,6 +2013,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			// incompressible payloads.
 			valueLogDictMetricsWindow = 256 << 10
 		}
+		if valueLogDictMetricsPauseBytes <= 0 && valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.PauseBytes > 0 {
+			valueLogDictMetricsPauseBytes = int(valueLogAutotune.PauseBytes)
+		}
 		if valueLogDictMetricsPauseBytes <= 0 {
 			// Degraded streams should stay paused long enough that "dict enabled"
 			// is effectively free on incompressible data, while still allowing
@@ -2008,6 +2027,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// When dict compression is paused, periodically probe compression to recover
 	// quickly if the payload stream becomes compressible again.
 	probeBytes := valueLogDictMetricsPauseBytes
+	if probeBytes <= 0 && valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.ProbeBytes > 0 {
+		probeBytes = int(valueLogAutotune.ProbeBytes)
+	}
 	if probeBytes <= 0 {
 		probeBytes = 64 << 20
 	}
@@ -2063,6 +2085,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictMetricsPauseBytes:  valueLogDictMetricsPauseBytes,
 		valueLogDictProbeBytes:         uint64(probeBytes),
 		valueLogDictPausedSampleStride: pausedSampleStride,
+		valueLogAutotuneOptions:        valueLogAutotune,
 		mutableShards:                  mutableShards,
 		mutableShardMask:               uint64(shardCount - 1),
 		hashSortedIndexer:              indexer,
@@ -2757,12 +2780,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogMu.Unlock()
 		return nil, errWALUnavailable
 	}
-	if policySetter, ok := any(w).(interface {
-		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
-	}); ok {
-		snap := db.valueLogAutotuneMetrics.snapshot()
-		policySetter.SetKeepPolicy(snap.IoNsPerStoredByte, snap.EncodeNsPerRawByte, valuelog.DefaultKeepSafetyMargin)
-	}
 	startSize := w.Size()
 
 	rawPayloadBytes := 0
@@ -2774,6 +2791,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		dictID = 0
 		dict = nil
 	}
+	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
+		avg := rawPayloadBytes / len(records)
+		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
+			dictID = 0
+			dict = nil
+		}
+	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
 			dict = b
@@ -2784,6 +2808,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	db.valueLogDictCollectSamples(records)
+
+	if policySetter, ok := any(w).(interface {
+		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
+	}); ok {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		ioNsPerStored := snap.IoNsPerStoredByte
+		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff || probeCompression {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	}
 
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
@@ -3003,16 +3040,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
-	if policySetter, ok := any(w).(interface {
-		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
-	}); ok {
-		snap := db.valueLogAutotuneMetrics.snapshot()
-		policySetter.SetKeepPolicy(snap.IoNsPerStoredByte, snap.EncodeNsPerRawByte, valuelog.DefaultKeepSafetyMargin)
-	}
 	startSize := w.Size()
 
 	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
 	if dictID != 0 && !attemptCompression {
+		dictID = 0
+		dict = nil
+	}
+	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
 	}
@@ -3025,6 +3060,19 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	db.valueLogDictCollectSample(value)
+
+	if policySetter, ok := any(w).(interface {
+		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
+	}); ok {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		ioNsPerStored := snap.IoNsPerStoredByte
+		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff || probeCompression {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	}
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if dictID == 0 {

@@ -279,6 +279,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogDictMetricsMinRecords:      opts.ValueLogDictMetricsMinRecords,
 		ValueLogDictMetricsPauseBytes:      opts.ValueLogDictMetricsPauseBytes,
 		ValueLogDictMinPayloadSavingsRatio: opts.ValueLogDictMinPayloadSavingsRatio,
+		ValueLogCompressionAutotune:        opts.ValueLogCompressionAutotune,
 		AllowUnsafe:                        opts.AllowUnsafe,
 		MaxValueLogRetainedBytes:           opts.MaxValueLogRetainedBytes,
 		MaxValueLogRetainedBytesHard:       opts.MaxValueLogRetainedBytesHard,

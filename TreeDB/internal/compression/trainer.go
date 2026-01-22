@@ -115,6 +115,10 @@ type Trainer struct {
 	dictCacheDictHashes []uint64
 	dictCachePos        int
 	dictCacheIndex      map[uint64]int
+
+	candidateK            []int
+	candidateHistoryBytes []int
+	ioNsPerStoredByte     atomic.Uint64
 }
 
 type trainerSample struct {
@@ -227,6 +231,28 @@ func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool
 	trainer.collecting.Store(true)
 	go trainer.run()
 	return trainer
+}
+
+func (t *Trainer) SetAutotuneCandidates(candidateK, candidateHistoryBytes []int) {
+	if t == nil {
+		return
+	}
+	if len(candidateK) > 0 {
+		t.candidateK = append([]int(nil), candidateK...)
+	}
+	if len(candidateHistoryBytes) > 0 {
+		t.candidateHistoryBytes = append([]int(nil), candidateHistoryBytes...)
+	}
+}
+
+func (t *Trainer) SetAutotuneIOCost(ioNsPerStoredByte float64) {
+	if t == nil {
+		return
+	}
+	if ioNsPerStoredByte <= 0 || math.IsNaN(ioNsPerStoredByte) || math.IsInf(ioNsPerStoredByte, 0) {
+		return
+	}
+	t.ioNsPerStoredByte.Store(math.Float64bits(ioNsPerStoredByte))
 }
 
 func (t *Trainer) Close() {
@@ -467,18 +493,35 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	}
 
 	candidates := make([]int, 0, 4)
-	if dictBytes >= 16<<10 {
-		candidates = append(candidates, 16<<10)
-	}
-	if dictBytes >= 32<<10 {
-		candidates = append(candidates, 32<<10)
-	}
-	if dictBytes >= 40<<10 {
-		candidates = append(candidates, 40<<10)
-	}
-	isStd := dictBytes == 16<<10 || dictBytes == 32<<10 || dictBytes == 40<<10
-	if !isStd {
-		candidates = append(candidates, dictBytes)
+	if len(t.candidateHistoryBytes) > 0 {
+		seen := make(map[int]struct{}, len(t.candidateHistoryBytes))
+		for _, v := range t.candidateHistoryBytes {
+			if v <= 0 {
+				continue
+			}
+			if dictBytes > 0 && v > dictBytes {
+				continue
+			}
+			if _, ok := seen[v]; ok {
+				continue
+			}
+			seen[v] = struct{}{}
+			candidates = append(candidates, v)
+		}
+	} else {
+		if dictBytes >= 16<<10 {
+			candidates = append(candidates, 16<<10)
+		}
+		if dictBytes >= 32<<10 {
+			candidates = append(candidates, 32<<10)
+		}
+		if dictBytes >= 40<<10 {
+			candidates = append(candidates, 40<<10)
+		}
+		isStd := dictBytes == 16<<10 || dictBytes == 32<<10 || dictBytes == 40<<10
+		if !isStd {
+			candidates = append(candidates, dictBytes)
+		}
 	}
 	if len(candidates) == 0 {
 		candidates = append(candidates, dictBytes)
@@ -510,6 +553,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		profile   *ActiveProfile
 		fromCache bool
 	}
+	ioNsPerStoredByte := math.Float64frombits(t.ioNsPerStoredByte.Load())
 	candProfiles := make([]dictCandidate, 0, len(candidates))
 	for _, historyBytes := range candidates {
 		if historyBytes <= 0 {
@@ -533,7 +577,10 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			dictHash = xxhash.Sum64(dict)
 			t.storeCachedDict(cacheKey, dictHash, dict)
 		}
-		profile := ChooseKForDict(dict, validSamples)
+		profile := ChooseKForDictOptions(dict, validSamples, ChooseKOptions{
+			CandidateK:        t.candidateK,
+			IoNsPerStoredByte: ioNsPerStoredByte,
+		})
 		if profile == nil || len(profile.Dict) == 0 {
 			continue
 		}
@@ -545,44 +592,101 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		return
 	}
 
-	// Select best dict bytes using a ratio-first, speed-second policy:
-	// - primary: lowest total ratio
-	// - within a small slack window, prefer lower encode cost
+	// Select best dict bytes using throughput when IO cost is known; otherwise
+	// fall back to ratio-first, speed-second policy.
 	const ratioSlack = 0.01
-	bestTotal := candProfiles[0].profile.TotalRatio
-	for i := 1; i < len(candProfiles); i++ {
-		if candProfiles[i].profile.TotalRatio < bestTotal {
-			bestTotal = candProfiles[i].profile.TotalRatio
-		}
-	}
-	bestCut := bestTotal * (1.0 + ratioSlack)
 	bestIdx := -1
-	for i := range candProfiles {
-		p := candProfiles[i].profile
-		if p.TotalRatio > bestCut {
-			continue
+	bestProfile := candProfiles[0].profile
+	bestFromCache := candProfiles[0].fromCache
+	bestScore := -1.0
+	bestEncCost := math.Inf(1)
+	if ioNsPerStoredByte > 0 {
+		scores := make([]float64, len(candProfiles))
+		encCosts := make([]float64, len(candProfiles))
+		for i := range candProfiles {
+			p := candProfiles[i].profile
+			if p == nil || p.TotalRatio <= 0 {
+				continue
+			}
+			encodeNsPerRaw := 0.0
+			if p.EncodeNsEstimate > 0 && p.AvgSampleBytes > 0 {
+				encodeNsPerRaw = float64(p.EncodeNsEstimate) / float64(p.AvgSampleBytes)
+			}
+			denom := encodeNsPerRaw + ioNsPerStoredByte*p.TotalRatio
+			if denom <= 0 {
+				continue
+			}
+			scores[i] = 1.0 / denom
+			encCosts[i] = encodeNsPerRaw
+			if scores[i] > bestScore {
+				bestScore = scores[i]
+			}
 		}
-		if bestIdx < 0 {
-			bestIdx = i
-			continue
-		}
-		best := candProfiles[bestIdx].profile
-		if p.EncodeNsEstimate > 0 && (best.EncodeNsEstimate == 0 || p.EncodeNsEstimate < best.EncodeNsEstimate) {
-			bestIdx = i
-			continue
-		}
-		if p.EncodeNsEstimate == best.EncodeNsEstimate && p.HistoryBytes < best.HistoryBytes {
-			bestIdx = i
-			continue
+		if bestScore > 0 {
+			cut := bestScore * (1.0 - ratioSlack)
+			for i := range candProfiles {
+				if scores[i] <= 0 || scores[i] < cut {
+					continue
+				}
+				if bestIdx < 0 {
+					bestIdx = i
+					bestEncCost = encCosts[i]
+					continue
+				}
+				if scores[i] > bestScore {
+					bestIdx = i
+					bestScore = scores[i]
+					bestEncCost = encCosts[i]
+					continue
+				}
+				if encCosts[i] < bestEncCost {
+					bestIdx = i
+					bestEncCost = encCosts[i]
+					continue
+				}
+				if encCosts[i] == bestEncCost && candProfiles[i].profile.HistoryBytes < candProfiles[bestIdx].profile.HistoryBytes {
+					bestIdx = i
+					bestEncCost = encCosts[i]
+					continue
+				}
+			}
 		}
 	}
 	if bestIdx < 0 {
-		bestIdx = 0
+		bestTotal := candProfiles[0].profile.TotalRatio
+		for i := 1; i < len(candProfiles); i++ {
+			if candProfiles[i].profile.TotalRatio < bestTotal {
+				bestTotal = candProfiles[i].profile.TotalRatio
+			}
+		}
+		bestCut := bestTotal * (1.0 + ratioSlack)
+		for i := range candProfiles {
+			p := candProfiles[i].profile
+			if p.TotalRatio > bestCut {
+				continue
+			}
+			if bestIdx < 0 {
+				bestIdx = i
+				continue
+			}
+			best := candProfiles[bestIdx].profile
+			if p.EncodeNsEstimate > 0 && (best.EncodeNsEstimate == 0 || p.EncodeNsEstimate < best.EncodeNsEstimate) {
+				bestIdx = i
+				continue
+			}
+			if p.EncodeNsEstimate == best.EncodeNsEstimate && p.HistoryBytes < best.HistoryBytes {
+				bestIdx = i
+				continue
+			}
+		}
+		if bestIdx < 0 {
+			bestIdx = 0
+		}
 	}
-	bestProfile := candProfiles[bestIdx].profile
+	bestProfile = candProfiles[bestIdx].profile
+	bestFromCache = candProfiles[bestIdx].fromCache
 
 	t.lastTrainDictHash.Store(bestProfile.DictHash)
-	bestFromCache := candProfiles[bestIdx].fromCache
 	mode, ref := t.recordDictHash(bestProfile.DictHash)
 	dedupMode := mode
 	if dedupMode == dictDedupNone && bestFromCache {
