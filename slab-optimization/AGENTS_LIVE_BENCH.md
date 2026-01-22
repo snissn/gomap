@@ -174,15 +174,17 @@ Sanity check: print `db.Stats()` write-path keys at startup and fail if the mode
 
 Use a big dataset (or lower `-train/-eval`) so we have enough samples.
 
+Run from repo root (`/Users/michaelseiler/dev/snissn/gomap`). If you’re already in `TreeDB/`, drop the `TreeDB/` path prefix.
+
 ### Compression OFF matrix
 Run each and save logs:
-- `go run ./cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode1 -bench-compression off | tee ~/bench_mode1_off.log`
-- `go run ./cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression off | tee ~/bench_mode3_off.log`
-- `go run ./cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression off | tee ~/bench_mode4_off.log`
+- `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode1 -bench-compression off | tee ~/bench_mode1_off.log`
+- `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression off | tee ~/bench_mode3_off.log`
+- `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression off | tee ~/bench_mode4_off.log`
 
 ### Compression ON matrix
-- `go run ./cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression on | tee ~/bench_mode3_on.log`
-- `go run ./cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression on | tee ~/bench_mode4_on.log`
+- `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression on | tee ~/bench_mode3_on.log`
+- `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression on | tee ~/bench_mode4_on.log`
 
 ---
 
@@ -212,4 +214,3 @@ Stability:
 - If you forget to force pointers (threshold too high), mode3/mode4 can silently benchmark the “inline values” path.
 - Mode4 can look “too fast” if you accidentally benchmark a key pattern that triggers the mode4 streaming bypass; default to random keys.
 - On macOS, results can be noisy. Prefer the Linux dev server for final numbers.
-

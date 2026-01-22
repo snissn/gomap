@@ -1,4 +1,4 @@
-# TreeDB Mode3/Mode4 Merge Gate Runbook (Journal + ValueLog + Autotune)
+# TreeDB Mode3/Mode4 Merge Gate Runbook (Journal + ValueLog + Autotune + Live Bench)
 
 Status: **Ready-to-execute runbook** (intended to be autonomously executable by a coding agent)  
 Updated: 2026-01-22
@@ -18,6 +18,23 @@ This runbook gates a merge that:
 5. Ensures index/key optimizations are correctness-gated and performance-characterized before being enabled by default.
 
 Non-goal: user data migration and compatibility guarantees. TreeDB is pre-alpha dev software.
+
+### 0.1 Assumption: live KV throughput bench already exists
+
+This runbook assumes the work described in:
+- `slab-optimization/AGENTS_LIVE_BENCH.md`
+- `slab-optimization/AGENTS_LIVE_BENCH_PROMPT.md`
+
+…has already been completed and the **live KV throughput benchmark** is available via:
+- `go run ./TreeDB/cmd/vlog_dict_realdata ... -bench-kv ...`
+
+Before using this runbook, do a quick existence check:
+
+```bash
+go run ./TreeDB/cmd/vlog_dict_realdata -h | rg -n "bench-kv|bench-mode|bench-compression"
+```
+
+If those flags do not exist yet, stop and execute `slab-optimization/AGENTS_LIVE_BENCH_PROMPT.md` first.
 
 ---
 
@@ -287,12 +304,16 @@ See Section 5.3 for the marquee definition.
 
 ### 5.1 Benchmark tooling
 
-Benchmarks are run with two tools:
+Benchmarks are run with three tools:
 
-1. End-to-end harness: `cmd/unified_bench`
-   - Reproducible dataset generation (seeded)
-   - Comparable across branches when dataset generation is consistent
-2. Go microbenchmarks: `go test -bench ...` + `benchstat`
+1. End-to-end harness (repo root): `cmd/unified_bench`
+   - Reproducible dataset generation (seeded).
+   - Useful for mode comparisons and scan regressions across DBs.
+2. Deterministic autotune suite (TreeDB-local): `TreeDB/cmd/unified_bench`
+   - Deterministic “marks” and `-validate` gating for autotuner correctness.
+3. Live KV throughput bench (TreeDB-local): `TreeDB/cmd/vlog_dict_realdata -bench-kv`
+   - Public TreeDB KV API (`treedb.Open` + `Batch.Set` + `Batch.Write`).
+   - Wall-clock throughput numbers (non-deterministic); intended as a **local merge gate** with logs attached to PRs.
 
 Guiding principle:
 - Use deterministic validation marks for CI gating (autotune behavior, invariants).
@@ -301,6 +322,37 @@ Guiding principle:
 ### 5.2 Mode3/Mode4 vs deprecated mode1 (local merge gate)
 
 You must run the following comparisons on the same host.
+
+#### 5.2.A Live KV throughput (primary, real dataset)
+
+Use the live bench implemented via `AGENTS_LIVE_BENCH_PROMPT.md` (see `AGENTS_LIVE_BENCH.md` for details and option mapping).
+
+Run the full matrix and save logs:
+
+```bash
+# Compression OFF baseline set
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode1 -bench-compression off | tee out/live_mode1_off.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression off | tee out/live_mode3_off.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression off | tee out/live_mode4_off.log
+
+# Compression ON feature set
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression on  | tee out/live_mode3_on.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression on  | tee out/live_mode4_on.log
+```
+
+Acceptance criteria (practical, not absolute):
+- Each run prints a single “headline” steady-state metric (e.g. `steady_raw_MBps=...`) and the selected write-path keys (`treedb.write_path.*`).
+- `compression=off` runs show no dict activity (`dict_id==0` and `kept_frac≈0`).
+- For compressible datasets, `compression=on` runs show dict activity (`dict_id!=0`, `kept_frac>0`) and should not regress steady-state throughput versus `off` without an explanation.
+- Mode expectations should match:
+  - mode1 ⇒ `value_store=backend_flush`, `redo_log=on`
+  - mode3 ⇒ `value_store=value_log`, `redo_log=on`
+  - mode4 ⇒ `value_store=value_log_deferred`, `redo_log=off`
+
+Notes:
+- This bench is explicitly **no-fsync / relaxed durability** (uses `Batch.Write()` only). It is intended to answer “how fast can we ingest” under current development priorities.
+
+#### 5.2.B Synthetic mode comparisons (secondary, regression trending)
 
 **Workload A: large-value ingest (cached mode)**
 
@@ -336,7 +388,10 @@ If the wall-time autotuner exists, implement a suite similar to:
 
 ```bash
 # Deterministic: validates behavioral marks and exits non-zero on failure.
-go run ./cmd/unified_bench -suite vlog_autotune -validate -out out/vlog_autotune.json
+go run ./TreeDB/cmd/unified_bench -suite vlog_autotune -validate
+
+# (Optional) JSON output
+go run ./TreeDB/cmd/unified_bench -suite vlog_autotune -validate -json > out/vlog_autotune.json
 ```
 
 Required scenarios:
@@ -443,14 +498,14 @@ go test ./... -race -count=1
 Goal: make behavior and regressions visible and reviewable.
 
 Tasks:
-1. Add `unified_bench -suite vlog_autotune -validate` (or equivalent) per Section 5.3.
+1. Add `TreeDB/cmd/unified_bench -suite vlog_autotune -validate` (or equivalent) per Section 5.3.
 2. Ensure benchmark output is machine-readable (JSON) and human-readable (markdown summary).
 3. Add a “marks” layer (pass/fail assertions) that is deterministic.
 4. Add CI wiring so marks run on every PR.
 
 Validation:
 ```bash
-go run ./cmd/unified_bench -suite vlog_autotune -validate
+go run ./TreeDB/cmd/unified_bench -suite vlog_autotune -validate
 ```
 
 ### PR3 — Defaults flip + feature flag cleanup
