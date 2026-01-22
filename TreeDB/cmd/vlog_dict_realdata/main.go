@@ -24,6 +24,11 @@ type kvRecord struct {
 	Val string `json:"val"`
 }
 
+type traceRecord struct {
+	Op       string `json:"op"`
+	ValueLen int    `json:"value_len"`
+}
+
 type datasetStats struct {
 	count int
 	total int
@@ -145,6 +150,9 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 	defer f.Close()
 
 	stats.min = math.MaxInt32
+	traceCount := 0
+	traceBytes := 0
+	traceMax := 0
 	reader := bufio.NewReaderSize(f, 1<<20)
 	for {
 		line, readErr := reader.ReadBytes('\n')
@@ -173,6 +181,16 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 				} else if len(eval) < evalN {
 					eval = append(eval, val)
 				}
+				if len(val) == 0 {
+					var tr traceRecord
+					if te := json.Unmarshal(bytes.TrimSpace(line), &tr); te == nil && tr.ValueLen > 0 {
+						traceCount++
+						traceBytes += tr.ValueLen
+						if tr.ValueLen > traceMax {
+							traceMax = tr.ValueLen
+						}
+					}
+				}
 			}
 		}
 		if len(train) >= trainN && len(eval) >= evalN {
@@ -187,6 +205,9 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 	}
 	if stats.min == math.MaxInt32 {
 		stats.min = 0
+	}
+	if stats.count == 0 && traceCount > 0 {
+		return nil, nil, stats, fmt.Errorf("input appears to be treedb trace JSONL (value_len present, no val payloads): trace_values=%d trace_bytes=%d trace_max=%d; vlog_dict_realdata expects JSONL records like {\"key\":\"...\",\"val\":\"...\"}", traceCount, traceBytes, traceMax)
 	}
 	return train, eval, stats, nil
 }
