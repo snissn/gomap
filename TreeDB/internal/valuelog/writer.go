@@ -787,12 +787,18 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			max = defaultBufferSize
 		}
 
-		recordMaxLen := HeaderSize + prefixLen + rawPayloadBytes - 1
-		canDirectAppend := w.f != nil && recordMaxLen <= max
-
 		enc := codecs.encPool.Get().(*zstd.Encoder)
 
-		if canDirectAppend {
+		canDirectEncodeAll := w.f != nil && (k == 1 || rawPayloadBytes <= (1<<20))
+		if canDirectEncodeAll {
+			recordMaxLen := HeaderSize + prefixLen + enc.MaxEncodedSize(rawPayloadBytes)
+			if recordMaxLen > max {
+				canDirectEncodeAll = false
+			}
+		}
+
+		if canDirectEncodeAll {
+			recordMaxLen := HeaderSize + prefixLen + enc.MaxEncodedSize(rawPayloadBytes)
 			if len(w.appendBuf)+recordMaxLen > max {
 				if err := w.flushAppendBuf(); err != nil {
 					codecs.encPool.Put(enc)
@@ -836,40 +842,26 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
-			// Stream zstd output directly into appendBuf. Cap at rawPayloadBytes-1
-			// so the "compressed" record is only accepted when it is strictly smaller.
-			w.encLimiter.buf = w.appendBuf
-			w.encLimiter.limit = encodedStart + rawPayloadBytes - 1
-			enc.Reset(&w.encLimiter)
-			var encodeErr error
-			for i := 0; i < k; i++ {
-				if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
-					break
+			var payload []byte
+			if k == 1 {
+				payload = records[0].Value
+			} else {
+				// For small/medium grouped frames, EncodeAll on a contiguous payload
+				// is typically faster than streaming many small writes.
+				if cap(w.rawScratch) < rawPayloadBytes {
+					w.rawScratch = make([]byte, rawPayloadBytes)
+				}
+				payload = w.rawScratch[:rawPayloadBytes]
+				off := 0
+				for i := 0; i < k; i++ {
+					off += copy(payload[off:], records[i].Value)
 				}
 			}
-			if encodeErr == nil {
-				encodeErr = enc.Close()
-			}
-			enc.Reset(nil)
-			w.appendBuf = w.encLimiter.buf
+			w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
 			codecs.encPool.Put(enc)
-
-			if encodeErr != nil {
-				w.appendBuf = w.appendBuf[:recordStart]
-				if !errors.Is(encodeErr, errEncodedTooLarge) {
-					return nil, FrameStats{}, encodeErr
-				}
-				// No benefit: skip a while and write a raw frame instead.
-				if w.noBenefit < 0xff {
-					w.noBenefit++
-				}
-				w.skipRemain = dictSkipFrames(w.noBenefit)
-				return writeRaw()
-			}
 
 			encodedLen := len(w.appendBuf) - encodedStart
 			if encodedLen >= rawPayloadBytes {
-				// Should be prevented by the limiter, but keep a hard guardrail.
 				w.appendBuf = w.appendBuf[:recordStart]
 				if w.noBenefit < 0xff {
 					w.noBenefit++
@@ -937,23 +929,39 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 		encDst := w.encScratch[:0]
 
-		// Stream values directly into the encoder to avoid concatenating the raw
-		// payload. Cap output at rawPayloadBytes-1 so compression is only kept
-		// when strictly beneficial.
-		w.encLimiter.buf = encDst
-		w.encLimiter.limit = rawPayloadBytes - 1
-		enc.Reset(&w.encLimiter)
+		var encoded []byte
 		var encodeErr error
-		for i := 0; i < k; i++ {
-			if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
-				break
+		if k == 1 {
+			encoded = enc.EncodeAll(records[0].Value, encDst)
+		} else if rawPayloadBytes <= (1 << 20) {
+			// For small/medium grouped frames, it can be faster to encode a single
+			// contiguous payload via EncodeAll than to stream many small writes.
+			//
+			// This also avoids per-call allocations in the streaming encoder path.
+			if cap(w.rawScratch) < rawPayloadBytes {
+				w.rawScratch = make([]byte, rawPayloadBytes)
 			}
+			payload := w.rawScratch[:rawPayloadBytes]
+			off := 0
+			for i := 0; i < k; i++ {
+				off += copy(payload[off:], records[i].Value)
+			}
+			encoded = enc.EncodeAll(payload, encDst)
+		} else {
+			w.encLimiter.buf = encDst
+			w.encLimiter.limit = rawPayloadBytes - 1
+			enc.Reset(&w.encLimiter)
+			for i := 0; i < k; i++ {
+				if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
+					break
+				}
+			}
+			if encodeErr == nil {
+				encodeErr = enc.Close()
+			}
+			enc.Reset(nil)
+			encoded = w.encLimiter.buf
 		}
-		if encodeErr == nil {
-			encodeErr = enc.Close()
-		}
-		enc.Reset(nil)
-		encoded := w.encLimiter.buf
 		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
