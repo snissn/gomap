@@ -84,7 +84,7 @@ Rationale:
 
 ## Dataset considerations (must not accidentally benchmark “inline values”)
 
-Your real dataset example (`celestia-db.head.jsonl`) has `avg≈164B`, and TreeDB’s default inline threshold is 256B. Without forcing pointers, most values will **not** go to the value log and you won’t be benchmarking value-log compression.
+Your real dataset example (`/Users/michaelseiler/dev/snissn/celestia-db.head.jsonl`) has `avg≈164B`, and TreeDB’s default inline threshold is 256B. Without forcing pointers, most values will **not** go to the value log and you won’t be benchmarking value-log compression.
 
 For this runbook, the benchmark must force values through the value-log path:
 - set `ValueLogPointerThreshold=1` (or another value < typical payload size), OR
