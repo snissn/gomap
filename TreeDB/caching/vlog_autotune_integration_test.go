@@ -24,8 +24,12 @@ func TestVlogAutotuneMetricsVirtualTime(t *testing.T) {
 	metrics.observe(start, rawBytes, storedBytes, encodeNs, encodeRawBytes)
 
 	snap := metrics.snapshot()
-	if math.Abs(snap.IoNsPerStoredByte-float64(nsPerStoredByte)) > 0.001 {
-		t.Fatalf("io_ns_per_stored_byte got %.3f want %.3f", snap.IoNsPerStoredByte, float64(nsPerStoredByte))
+	expectedIoNs := float64(nsPerStoredByte)
+	if encodeNs > 0 && encodeNs < int64(storedBytes)*nsPerStoredByte {
+		expectedIoNs = float64(int64(storedBytes)*nsPerStoredByte-encodeNs) / float64(storedBytes)
+	}
+	if math.Abs(snap.IoNsPerStoredByte-expectedIoNs) > 0.001 {
+		t.Fatalf("io_ns_per_stored_byte got %.3f want %.3f", snap.IoNsPerStoredByte, expectedIoNs)
 	}
 	if snap.EncodeNsPerRawByte <= 0 {
 		t.Fatalf("expected encode_ns_per_raw_byte to be set")
