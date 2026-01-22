@@ -1042,3 +1042,4 @@ Worklog - update below with summary of each action - update on each commit
 - 2026-01-22 PR-AT2: added wall-time EWMAs + vlog autotune metrics/logging, wired append boundary measurements; tests: `go test ./... -count=1`.
 - 2026-01-22 PR-AT3: throughput-aware keep decision + unit tests; writer uses EWMA estimates; tests: `go test ./internal/valuelog -count=1`, `go test ./... -count=1`.
 - 2026-01-22 PR-AT4: added AutotuneOptions, throughput-based dict/K selection with gain/dwell gating, and candidate tuning wiring; tests: `go test ./... -count=1`.
+- 2026-01-22 PR-AT5: added virtual-time tests + fuzz decode + race checks; tests: `go test ./internal/valuelog -count=1`, `go test ./... -count=1`, `go test ./caching ./internal/valuelog ./internal/compression -race`.
