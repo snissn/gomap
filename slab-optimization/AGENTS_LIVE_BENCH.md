@@ -239,3 +239,11 @@ Stability:
 - 2026-01-22 12:52:07 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test -v ./TreeDB/... -count=1` to diagnose slow tests; longest in `TreeDB/db` were `TestLeafFillTarget_IsEnforced` (33.19s), `TestCompactIndexImprovesSpanLocality` (25.82s), and `TestCompactIndexRetiresOldPages` (18.06s); full package time 88.8s.
 - 2026-01-22 12:52:07 HST: Downscoped Windows-only test sizes in `TreeDB/db/fill_factor_test.go`, `TreeDB/db/compact_index_test.go`, and `TreeDB/db/vacuum_locality_test.go`; updated `TreeDB/cmd/vlog_dict_realdata/main.go` to parse uint64 dict IDs, emit dict frame counts + kept-of-attempted ratio, and report on-disk value-log/slab/index bytes; ran `gofmt` and `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/db -run TestLeafFillTarget_IsEnforced -count=1` (ok).
 - 2026-01-22 13:00:14 HST: Fixed bench disk-usage reporting to look under `maindb/` (TreeDB public API layout) in `TreeDB/cmd/vlog_dict_realdata/main.go`; ran `gofmt` and pushed update.
+- 2026-01-22 13:05:12 HST: Reran live bench matrix on 192.168.0.185 (go1.25.5, ~/celestia-db.out.jsonl) with `-bench-raw-mib 512 -bench-batch 1024 -bench-pointer-threshold 1 -train 200000 -eval 50000` after disk-usage fix:
+  - mode1/off: steady_raw_MBps=204.341; disk value_log=0.0 MiB slab=0.0 MiB (index=1984.0 MiB)
+  - mode3/off: steady_raw_MBps=169.091; disk value_log=583.1 MiB slab=0.0 MiB (index=640.0 MiB)
+  - mode4/off: steady_raw_MBps=269.745; disk value_log=267.6 MiB slab=0.0 MiB (index=256.0 MiB)
+  - mode3/on: steady_raw_MBps=135.762; attempted_frac=0.092518 kept_frac=0.092518 current_k=16 dict_id=13057158443945771566; disk value_log=547.3 MiB slab=0.0 MiB (index=960.0 MiB)
+  - mode4/on: steady_raw_MBps=241.403; attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0; disk value_log=266.2 MiB slab=0.0 MiB (index=256.0 MiB); dict published after steady id=14760976363574014523 k=16
+  - Logs saved on server under ~/bench_logs/live_mode*_{20260122_130103}.log
+- 2026-01-22 13:05:12 HST: Updated PR 114 body with latest bench results + disk usage details.
