@@ -1043,3 +1043,4 @@ Worklog - update below with summary of each action - update on each commit
 - 2026-01-22 PR-AT3: throughput-aware keep decision + unit tests; writer uses EWMA estimates; tests: `go test ./internal/valuelog -count=1`, `go test ./... -count=1`.
 - 2026-01-22 PR-AT4: added AutotuneOptions, throughput-based dict/K selection with gain/dwell gating, and candidate tuning wiring; tests: `go test ./... -count=1`.
 - 2026-01-22 PR-AT5: added virtual-time tests + fuzz decode + race checks; tests: `go test ./internal/valuelog -count=1`, `go test ./... -count=1`, `go test ./caching ./internal/valuelog ./internal/compression -race`.
+- 2026-01-22 PR-AT6: added deterministic autotune bench suite + unified bench CLI, encode-cost modeling + virtual sink hooks, workload scenarios, and keep microbench; tests: `go test ./... -count=1`, `go test ./internal/valuelog -count=1`; bench: `go run ./cmd/unified_bench -suite vlog_autotune -case marquee_regime_shift -validate`.
