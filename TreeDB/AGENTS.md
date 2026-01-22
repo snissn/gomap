@@ -1038,3 +1038,4 @@ This list exists to make the runbook executable without guesswork.
 
 Worklog - update below with summary of each action - update on each commit
 - 2026-01-22 PR-AT0: added code-map appendix and worklog section; bench metrics now report `kept_frac` only; tests: `go test ./... -count=1`.
+- 2026-01-22 PR-AT1: FrameStats now uses Attempted/Kept + sampled EncodeNs; writer reports Attempted on fallback; updated caching + benches for Kept; tests: `go test ./... -count=1`.

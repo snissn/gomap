@@ -45,8 +45,12 @@ type FrameStats struct {
 	Records            int
 	RawPayloadBytes    int
 	StoredPayloadBytes int
-	Attempted          bool
-	Compressed         bool
+	// Attempted is true when zstd encoding was executed (even if we fell back to raw).
+	Attempted bool
+	// Kept is true when compressed bytes were stored.
+	Kept bool
+	// EncodeNs is the sampled encode time (monotonic ns); 0 when not measured.
+	EncodeNs int64
 }
 
 type FrameHeader struct {

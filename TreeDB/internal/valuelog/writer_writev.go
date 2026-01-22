@@ -52,7 +52,7 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 	// small average values, iov limits can force tiny writev calls and regress
 	// syscall counts compared to the contiguous-buffer path.
 	if !writevSupported || w.f == nil || (rawPayloadBytes/len(records)) < writevMinAvgValueSize {
-		stats := FrameStats{Compressed: false}
+		stats := FrameStats{Kept: false}
 		for i := 0; i < len(records); i += k {
 			end := i + k
 			if end > len(records) {
@@ -216,6 +216,6 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		Records:            len(records),
 		RawPayloadBytes:    rawPayloadBytes,
 		StoredPayloadBytes: rawPayloadBytes,
-		Compressed:         false,
+		Kept:               false,
 	}, nil
 }

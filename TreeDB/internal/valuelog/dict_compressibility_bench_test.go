@@ -141,7 +141,7 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 						if stats.Attempted {
 							attemptedFrames++
 						}
-						if stats.Compressed {
+						if stats.Kept {
 							keptFrames++
 						}
 						totalRaw += uint64(stats.RawPayloadBytes)
@@ -322,7 +322,7 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 							if stats.Attempted {
 								attemptedFrames++
 							}
-							if stats.Compressed {
+							if stats.Kept {
 								keptFrames++
 							}
 							totalRaw += uint64(stats.RawPayloadBytes)

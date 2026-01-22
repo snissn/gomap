@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -30,23 +31,26 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
-	f          *os.File
-	bw         *bufio.Writer
-	size       int64
-	fileID     uint32
-	appendBuf  []byte
-	appendMax  int
-	scratch    []byte
-	prefixBuf  []byte
-	rawScratch []byte
-	encScratch []byte
-	encLimiter limitedSliceWriter
-	skipDictID uint64
-	codecsID   uint64
-	codecs     *dictCodecEntry
-	noBenefit  uint8
-	skipRemain uint16
-	syncFn     func(*os.File) error
+	f                  *os.File
+	bw                 *bufio.Writer
+	size               int64
+	fileID             uint32
+	appendBuf          []byte
+	appendMax          int
+	scratch            []byte
+	prefixBuf          []byte
+	rawScratch         []byte
+	encScratch         []byte
+	encLimiter         limitedSliceWriter
+	skipDictID         uint64
+	codecsID           uint64
+	codecs             *dictCodecEntry
+	noBenefit          uint8
+	skipRemain         uint16
+	syncFn             func(*os.File) error
+	clock              Clock
+	encodeSampleStride uint64
+	encodeSampleCount  uint64
 }
 
 var errEncodedTooLarge = errors.New("valuelog: encoded payload too large")
@@ -184,6 +188,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		syncFn:    func(file *os.File) error { return file.Sync() },
+		clock:     realClock{},
 	}, nil
 }
 
@@ -194,7 +199,54 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		appendMax: 0,
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		clock:     realClock{},
 	}
+}
+
+func (w *Writer) SetClock(clock Clock) {
+	if w == nil {
+		return
+	}
+	if clock == nil {
+		w.clock = realClock{}
+		return
+	}
+	w.clock = clock
+}
+
+func (w *Writer) SetEncodeSampleStride(stride uint64) {
+	if w == nil {
+		return
+	}
+	w.encodeSampleStride = stride
+}
+
+func (w *Writer) sampleEncodeStart() time.Time {
+	if w == nil {
+		return time.Time{}
+	}
+	stride := w.encodeSampleStride
+	if stride == 0 {
+		return time.Time{}
+	}
+	w.encodeSampleCount++
+	if stride > 1 && w.encodeSampleCount%stride != 0 {
+		return time.Time{}
+	}
+	if w.clock == nil {
+		w.clock = realClock{}
+	}
+	return w.clock.Now()
+}
+
+func (w *Writer) sampleEncodeEnd(start time.Time) int64 {
+	if start.IsZero() {
+		return 0
+	}
+	if w.clock == nil {
+		w.clock = realClock{}
+	}
+	return w.clock.Now().Sub(start).Nanoseconds()
 }
 
 func (w *Writer) FileID() uint32 {
@@ -532,7 +584,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
 			FileID: w.fileID,
 		}
-		return dst[:1], FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Compressed: false}, nil
+		return dst[:1], FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Kept: false}, nil
 	}
 
 	rawPayloadBytes := 0
@@ -718,7 +770,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			Records:            k,
 			RawPayloadBytes:    rawPayloadBytes,
 			StoredPayloadBytes: rawPayloadBytes,
-			Compressed:         false,
+			Kept:               false,
 		}, nil
 	}
 
@@ -753,15 +805,23 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			offsets[i+1] = uint32(payloadOff)
 		}
 
-		writeRaw := func() ([]page.ValuePtr, FrameStats, error) {
-			return w.appendRawFrameWithDictID(dictID, records, &offsets, rawPayloadBytes, dst)
+		writeRaw := func(attempted bool, encodeNs int64) ([]page.ValuePtr, FrameStats, error) {
+			ptrs, stats, err := w.appendRawFrameWithDictID(dictID, records, &offsets, rawPayloadBytes, dst)
+			if err != nil {
+				return nil, FrameStats{}, err
+			}
+			if attempted {
+				stats.Attempted = true
+				stats.EncodeNs = encodeNs
+			}
+			return ptrs, stats, nil
 		}
 
 		// If recent probes show compression yields no benefit, temporarily skip
 		// zstd. We periodically probe again so we can adapt if data changes.
 		if w.skipRemain > 0 {
 			w.skipRemain--
-			return writeRaw()
+			return writeRaw(false, 0)
 		}
 
 		codecs := w.codecs
@@ -776,7 +836,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			return nil, FrameStats{}, ErrMissingDict
 		}
 		if rawPayloadBytes == 0 {
-			return writeRaw()
+			return writeRaw(false, 0)
 		}
 
 		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
@@ -857,7 +917,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 					off += copy(payload[off:], records[i].Value)
 				}
 			}
+			encodeStart := w.sampleEncodeStart()
 			w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
+			encodeNs := w.sampleEncodeEnd(encodeStart)
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
@@ -867,7 +929,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 					w.noBenefit++
 				}
 				w.skipRemain = dictSkipFrames(w.noBenefit)
-				return writeRaw()
+				return writeRaw(true, encodeNs)
 			}
 
 			bodyLen := prefixLen + encodedLen
@@ -920,7 +982,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				RawPayloadBytes:    rawPayloadBytes,
 				StoredPayloadBytes: encodedLen,
 				Attempted:          true,
-				Compressed:         true,
+				Kept:               true,
+				EncodeNs:           encodeNs,
 			}, nil
 		}
 
@@ -931,6 +994,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 		var encoded []byte
 		var encodeErr error
+		encodeStart := w.sampleEncodeStart()
 		if k == 1 {
 			encoded = enc.EncodeAll(records[0].Value, encDst)
 		} else if rawPayloadBytes <= (1 << 20) {
@@ -962,6 +1026,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			enc.Reset(nil)
 			encoded = w.encLimiter.buf
 		}
+		encodeNs := w.sampleEncodeEnd(encodeStart)
 		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
@@ -979,7 +1044,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				w.noBenefit++
 			}
 			w.skipRemain = dictSkipFrames(w.noBenefit)
-			return writeRaw()
+			return writeRaw(true, encodeNs)
 		}
 
 		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
@@ -1054,7 +1119,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			RawPayloadBytes:    rawPayloadBytes,
 			StoredPayloadBytes: storedPayloadBytes,
 			Attempted:          true,
-			Compressed:         true,
+			Kept:               true,
+			EncodeNs:           encodeNs,
 		}, nil
 	}
 
@@ -1111,7 +1177,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,
 		StoredPayloadBytes: storedPayloadBytes,
-		Compressed:         header.Flags&FrameFlagCompressed != 0,
+		Attempted:          dictID != 0 && len(dict) > 0 && rawPayloadBytes > 0,
+		Kept:               header.Flags&FrameFlagCompressed != 0,
 	}, nil
 }
 
@@ -1277,7 +1344,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 		Records:            k,
 		RawPayloadBytes:    rawPayloadBytes,
 		StoredPayloadBytes: rawPayloadBytes,
-		Compressed:         false,
+		Kept:               false,
 	}, nil
 }
 
