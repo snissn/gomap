@@ -188,7 +188,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		syncFn:    func(file *os.File) error { return file.Sync() },
-		clock:     realClock{},
+		clock:     RealClock{},
 	}, nil
 }
 
@@ -199,7 +199,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		appendMax: 0,
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		clock:     realClock{},
+		clock:     RealClock{},
 	}
 }
 
@@ -208,7 +208,7 @@ func (w *Writer) SetClock(clock Clock) {
 		return
 	}
 	if clock == nil {
-		w.clock = realClock{}
+		w.clock = RealClock{}
 		return
 	}
 	w.clock = clock
@@ -234,7 +234,7 @@ func (w *Writer) sampleEncodeStart() time.Time {
 		return time.Time{}
 	}
 	if w.clock == nil {
-		w.clock = realClock{}
+		w.clock = RealClock{}
 	}
 	return w.clock.Now()
 }
@@ -244,7 +244,7 @@ func (w *Writer) sampleEncodeEnd(start time.Time) int64 {
 		return 0
 	}
 	if w.clock == nil {
-		w.clock = realClock{}
+		w.clock = RealClock{}
 	}
 	return w.clock.Now().Sub(start).Nanoseconds()
 }
