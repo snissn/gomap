@@ -775,34 +775,73 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		if codecs == nil || codecs.encPool == nil {
 			return nil, FrameStats{}, ErrMissingDict
 		}
-		if cap(w.encScratch) < rawPayloadBytes {
-			w.encScratch = make([]byte, 0, rawPayloadBytes)
+		if rawPayloadBytes == 0 {
+			return writeRaw()
 		}
-		encDst := w.encScratch[:0]
+
+		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+		start := w.size
+
+		max := w.appendMax
+		if max <= 0 {
+			max = defaultBufferSize
+		}
+
+		recordMaxLen := HeaderSize + prefixLen + rawPayloadBytes - 1
+		canDirectAppend := w.f != nil && recordMaxLen <= max
 
 		enc := codecs.encPool.Get().(*zstd.Encoder)
-		var encoded []byte
-		var encodeErr error
-		if k == 1 {
-			encoded = enc.EncodeAll(records[0].Value, encDst)
-		} else if rawPayloadBytes <= (1 << 20) {
-			// For small/medium grouped frames, it can be faster to encode a single
-			// contiguous payload via EncodeAll than to stream many small writes.
-			//
-			// This also avoids per-call allocations in the streaming encoder path.
-			if cap(w.rawScratch) < rawPayloadBytes {
-				w.rawScratch = make([]byte, rawPayloadBytes)
+
+		if canDirectAppend {
+			if len(w.appendBuf)+recordMaxLen > max {
+				if err := w.flushAppendBuf(); err != nil {
+					codecs.encPool.Put(enc)
+					return nil, FrameStats{}, err
+				}
 			}
-			payload := w.rawScratch[:rawPayloadBytes]
-			off := 0
+			if cap(w.appendBuf) < max {
+				newBuf := make([]byte, len(w.appendBuf), max)
+				copy(newBuf, w.appendBuf)
+				w.appendBuf = newBuf
+			}
+
+			recordStart := len(w.appendBuf)
+			headerEnd := recordStart + HeaderSize
+			encodedStart := headerEnd + prefixLen
+			w.appendBuf = w.appendBuf[:encodedStart]
+			header := w.appendBuf[recordStart:headerEnd]
+			prefix := w.appendBuf[headerEnd:encodedStart]
+
+			// Build prefix in-place (compressed).
+			prefixOff := 0
+			prefix[prefixOff] = FrameVersion
+			prefix[prefixOff+1] = FrameFlagCompressed
+			prefix[prefixOff+2] = byte(k)
+			prefix[prefixOff+3] = 0
+			binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
+			prefixOff += FrameHeaderSize
+
 			for i := 0; i < k; i++ {
-				off += copy(payload[off:], records[i].Value)
+				rid := records[i].RID
+				if rid == 0 {
+					w.appendBuf = w.appendBuf[:recordStart]
+					codecs.encPool.Put(enc)
+					return nil, FrameStats{}, errors.New("valuelog: missing rid")
+				}
+				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+				prefixOff += 8
 			}
-			encoded = enc.EncodeAll(payload, encDst)
-		} else {
-			w.encLimiter.buf = encDst
-			w.encLimiter.limit = rawPayloadBytes - 1
+			for i := 0; i < k+1; i++ {
+				binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+				prefixOff += 4
+			}
+
+			// Stream zstd output directly into appendBuf. Cap at rawPayloadBytes-1
+			// so the "compressed" record is only accepted when it is strictly smaller.
+			w.encLimiter.buf = w.appendBuf
+			w.encLimiter.limit = encodedStart + rawPayloadBytes - 1
 			enc.Reset(&w.encLimiter)
+			var encodeErr error
 			for i := 0; i < k; i++ {
 				if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
 					break
@@ -812,16 +851,115 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				encodeErr = enc.Close()
 			}
 			enc.Reset(nil)
-			encoded = w.encLimiter.buf
+			w.appendBuf = w.encLimiter.buf
+			codecs.encPool.Put(enc)
+
+			if encodeErr != nil {
+				w.appendBuf = w.appendBuf[:recordStart]
+				if !errors.Is(encodeErr, errEncodedTooLarge) {
+					return nil, FrameStats{}, encodeErr
+				}
+				// No benefit: skip a while and write a raw frame instead.
+				if w.noBenefit < 0xff {
+					w.noBenefit++
+				}
+				w.skipRemain = dictSkipFrames(w.noBenefit)
+				return writeRaw()
+			}
+
+			encodedLen := len(w.appendBuf) - encodedStart
+			if encodedLen >= rawPayloadBytes {
+				// Should be prevented by the limiter, but keep a hard guardrail.
+				w.appendBuf = w.appendBuf[:recordStart]
+				if w.noBenefit < 0xff {
+					w.noBenefit++
+				}
+				w.skipRemain = dictSkipFrames(w.noBenefit)
+				return writeRaw()
+			}
+
+			bodyLen := prefixLen + encodedLen
+			if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+				w.appendBuf = w.appendBuf[:recordStart]
+				return nil, FrameStats{}, ErrRecordTooLarge
+			}
+			if bodyLen > int(^uint32(0)) {
+				w.appendBuf = w.appendBuf[:recordStart]
+				return nil, FrameStats{}, ErrRecordTooLarge
+			}
+			if recordSizeExceedsMax(uint32(bodyLen)) {
+				w.appendBuf = w.appendBuf[:recordStart]
+				return nil, FrameStats{}, ErrRecordTooLarge
+			}
+
+			// Build header in-place (now that we know bodyLen).
+			header[4] = Version
+			header[5] = recordFlagGrouped
+			header[6] = 0
+			header[7] = 0
+			binary.LittleEndian.PutUint64(header[8:16], 0)
+			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+			encoded := w.appendBuf[encodedStart:]
+			sum := crc.ChecksumParts(header[4:HeaderSize], prefix, encoded)
+			binary.LittleEndian.PutUint32(header[0:4], sum)
+
+			w.size += int64(HeaderSize + bodyLen)
+			w.noBenefit = 0
+			w.skipRemain = 0
+
+			if len(w.appendBuf) >= max {
+				if err := w.flushAppendBuf(); err != nil {
+					return nil, FrameStats{}, err
+				}
+			}
+
+			recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+			for i := range records {
+				dst[i] = page.ValuePtr{
+					Offset: uint64(start + 4),
+					Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+					FileID: w.fileID,
+				}
+			}
+
+			return dst, FrameStats{
+				Records:            k,
+				RawPayloadBytes:    rawPayloadBytes,
+				StoredPayloadBytes: encodedLen,
+				Attempted:          true,
+				Compressed:         true,
+			}, nil
 		}
+
+		if cap(w.encScratch) < rawPayloadBytes {
+			w.encScratch = make([]byte, 0, rawPayloadBytes)
+		}
+		encDst := w.encScratch[:0]
+
+		// Stream values directly into the encoder to avoid concatenating the raw
+		// payload. Cap output at rawPayloadBytes-1 so compression is only kept
+		// when strictly beneficial.
+		w.encLimiter.buf = encDst
+		w.encLimiter.limit = rawPayloadBytes - 1
+		enc.Reset(&w.encLimiter)
+		var encodeErr error
+		for i := 0; i < k; i++ {
+			if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
+				break
+			}
+		}
+		if encodeErr == nil {
+			encodeErr = enc.Close()
+		}
+		enc.Reset(nil)
+		encoded := w.encLimiter.buf
 		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
-		flags := byte(0)
 		storedPayloadBytes := rawPayloadBytes
 		switch {
 		case encodeErr == nil && len(encoded) < rawPayloadBytes:
-			flags |= FrameFlagCompressed
 			storedPayloadBytes = len(encoded)
 			w.noBenefit = 0
 			w.skipRemain = 0
@@ -847,7 +985,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 
-		start := w.size
 		var header [HeaderSize]byte
 		header[4] = Version
 		header[5] = recordFlagGrouped
@@ -856,14 +993,13 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		binary.LittleEndian.PutUint64(header[8:16], 0)
 		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
 
-		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
 		if cap(w.prefixBuf) < prefixLen {
 			w.prefixBuf = make([]byte, 0, prefixLen)
 		}
 		prefix := w.prefixBuf[:prefixLen]
 		prefixOff := 0
 		prefix[prefixOff] = FrameVersion
-		prefix[prefixOff+1] = flags
+		prefix[prefixOff+1] = FrameFlagCompressed
 		prefix[prefixOff+2] = byte(k)
 		prefix[prefixOff+3] = 0
 		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
@@ -910,7 +1046,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			RawPayloadBytes:    rawPayloadBytes,
 			StoredPayloadBytes: storedPayloadBytes,
 			Attempted:          true,
-			Compressed:         flags&FrameFlagCompressed != 0,
+			Compressed:         true,
 		}, nil
 	}
 
