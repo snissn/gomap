@@ -106,7 +106,7 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 			return nil, FrameHeader{}, ErrMissingDict
 		}
 		enc := codecs.encPool.Get().(*zstd.Encoder)
-		encoded = enc.EncodeAllPrewarmed(payload, nil)
+		encoded = enc.EncodeAll(payload, nil)
 		codecs.encPool.Put(enc)
 		if len(encoded) < len(payload) {
 			flags |= FrameFlagCompressed

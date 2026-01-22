@@ -784,7 +784,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		var encoded []byte
 		var encodeErr error
 		if k == 1 {
-			encoded = enc.EncodeAllPrewarmed(records[0].Value, encDst)
+			encoded = enc.EncodeAll(records[0].Value, encDst)
 		} else if rawPayloadBytes <= (1 << 20) {
 			// For small/medium grouped frames, it can be faster to encode a single
 			// contiguous payload via EncodeAll than to stream many small writes.
@@ -798,7 +798,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			for i := 0; i < k; i++ {
 				off += copy(payload[off:], records[i].Value)
 			}
-			encoded = enc.EncodeAllPrewarmed(payload, encDst)
+			encoded = enc.EncodeAll(payload, encDst)
 		} else {
 			w.encLimiter.buf = encDst
 			w.encLimiter.limit = rawPayloadBytes - 1

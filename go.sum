@@ -145,6 +145,8 @@ github.com/snissn/compress v1.18.2-snissn.0 h1:WI4/sukxm7KrO6POXZrH/umB3wbU1TApg
 github.com/snissn/compress v1.18.2-snissn.0/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/compress v1.18.2-snissn.0.0.20260121211600-755e66e4c605 h1:Qk84h9sxb6XkwRVnMzUE3XAJ47j+vjKt0Tb5PDqvg3w=
 github.com/snissn/compress v1.18.2-snissn.0.0.20260121211600-755e66e4c605/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
+github.com/snissn/compress v1.18.2-snissn.0.0.20260122010007-c88e68ccd2cf h1:GMxdcJmYx8oC1wXwkVXsfyY7xkwW/gVEhd+x2rGYmd0=
+github.com/snissn/compress v1.18.2-snissn.0.0.20260122010007-c88e68ccd2cf/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=

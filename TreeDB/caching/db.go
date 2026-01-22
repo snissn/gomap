@@ -3974,7 +3974,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				if pool, err := db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
 					enc := pool.Get().(*zstd.Encoder)
 					maxSz := enc.MaxEncodedSize(len(storeValue))
-					writeErr = cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAllPrewarmed, func(k, _ []byte) error {
+					writeErr = cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAll, func(k, _ []byte) error {
 						keyStr := bytesToStringNoCopy(k)
 						if usePointer {
 							shard.largePtrs.SetString(keyStr, ptr)
@@ -4009,7 +4009,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				if pool, err := db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
 					enc := pool.Get().(*zstd.Encoder)
 					maxSz := enc.MaxEncodedSize(len(storeValue))
-					if err := cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+					if err := cp.PutCompressedWithCallback(key, storeValue, 0, maxSz, enc.EncodeAll, nil); err == nil {
 						pool.Put(enc)
 						goto memtableDoneSet
 					}
@@ -7374,7 +7374,7 @@ func (b *Batch) writeRegular(sync bool) error {
 									if pool, err := b.db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
 										enc := pool.Get().(*zstd.Encoder)
 										maxSz := enc.MaxEncodedSize(len(op.Value))
-										if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+										if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAll, nil); err == nil {
 											handled = true
 										}
 										pool.Put(enc)
@@ -7404,7 +7404,7 @@ func (b *Batch) writeRegular(sync bool) error {
 								if pool, err := b.db.memtableDictEncoderPool(memtableDictID); err == nil && pool != nil {
 									enc := pool.Get().(*zstd.Encoder)
 									maxSz := enc.MaxEncodedSize(len(op.Value))
-									if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAllPrewarmed, nil); err == nil {
+									if err := cp.PutCompressedWithCallback(op.Key, op.Value, 0, maxSz, enc.EncodeAll, nil); err == nil {
 										handled = true
 									}
 									pool.Put(enc)
