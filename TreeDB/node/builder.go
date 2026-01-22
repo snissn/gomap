@@ -189,6 +189,14 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		return ErrInvalidType
 	}
 
+	// Columnar leaves do not use prefix lengths; they have their own header
+	// encoding with explicit key/value offsets. The zipper uses
+	// AddLeafEntryWithPrefix for all leaf modes, so route columnar pages through
+	// the columnar encoder.
+	if b.leafColumnar {
+		return b.addLeafEntryColumnar(key, value, flags, valPtr)
+	}
+
 	headerSize := 7
 	if b.leafPrefixCompression {
 		headerSize = 9
