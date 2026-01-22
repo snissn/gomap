@@ -228,3 +228,11 @@ Stability:
   - Output snippet: `headline: steady_raw_MBps=99.649 speedup_vs_off=1.000 attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0` (also prints `write_path: mode=cached value_store=value_log redo_log=on`).
 - 2026-01-22 11:58:31 HST: Opened PR https://github.com/snissn/gomap/pull/114 from `sprint/live_bench_1` -> `sprint/autotuner_7`; `gh pr checks 114 --watch` reported all CI checks passing.
 - 2026-01-22 12:08:44 HST: After pushing work-log update, reran `gh pr checks 114 --watch`; all CI checks passed (windows-latest finished in 9m24s).
+- 2026-01-22 12:22:43 HST: Ran live bench matrix on 192.168.0.185 (go1.25.5, ~/celestia-db.out.jsonl) with `-bench-raw-mib 512 -bench-batch 1024 -bench-pointer-threshold 1 -train 200000 -eval 50000`:
+  - mode1/off: steady_raw_MBps=157.227
+  - mode3/off: steady_raw_MBps=169.177 (attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0)
+  - mode4/off: steady_raw_MBps=269.502 (attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0)
+  - mode3/on: steady_raw_MBps=135.598 (attempted_frac=0.092345 kept_frac=0.092345 current_k=16 dict_id=n/a; dict published id=13057158443945771566 k=16)
+  - mode4/on: steady_raw_MBps=242.491 (attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0; dict published after steady id=5830108699136000008 k=16)
+  - Logs saved on server under ~/bench_logs/live_mode*_*.log
+- 2026-01-22 12:22:43 HST: Posted results to PR 114 comment: https://github.com/snissn/gomap/pull/114#issuecomment-3787045319
