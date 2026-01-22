@@ -13,6 +13,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +90,14 @@ type benchReport struct {
 	AttemptedFrac       *float64 `json:"attempted_frac,omitempty"`
 	KeptFrac            *float64 `json:"kept_frac,omitempty"`
 	CurrentK            *int     `json:"current_k,omitempty"`
-	DictID              *int     `json:"dict_id,omitempty"`
+	DictID              *uint64  `json:"dict_id,omitempty"`
+	FramesTotal         *uint64  `json:"frames_total,omitempty"`
+	FramesAttempted     *uint64  `json:"frames_attempted,omitempty"`
+	FramesKept          *uint64  `json:"frames_kept,omitempty"`
+	KeptOfAttemptedFrac *float64 `json:"kept_of_attempted_frac,omitempty"`
+	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
+	SlabBytes           int64    `json:"slab_bytes,omitempty"`
+	IndexBytes          int64    `json:"index_bytes,omitempty"`
 	WritePathMode       string   `json:"write_path_mode"`
 	WritePathValueStore string   `json:"write_path_value_store"`
 	WritePathRedoLog    string   `json:"write_path_redo_log"`
@@ -105,6 +113,12 @@ type benchWritePath struct {
 	mode       string
 	valueStore string
 	redoLog    string
+}
+
+type benchDiskUsage struct {
+	valueLogBytes int64
+	slabBytes     int64
+	indexBytes    int64
 }
 
 func main() {
@@ -549,9 +563,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 	if cfg.Compression == "on" {
 		active, snap := waitForDictActivation(db, 30*time.Second)
-		dictID, _ := parseStatInt(snap, "treedb.cache.vlog_dict.last_applied_dict_id")
-		keptFrames, _ := parseStatInt(snap, "treedb.cache.vlog_dict.frames_kept")
-		fmt.Printf("dict:     active=%t dict_id=%d kept_frames=%d\n", active, dictID, keptFrames)
+		dictID, dictOK := parseStatUint(snap, "treedb.cache.vlog_dict.last_applied_dict_id")
+		keptFrames, keptOK := parseStatUint(snap, "treedb.cache.vlog_dict.frames_kept")
+		fmt.Printf("dict:     active=%t dict_id=%s kept_frames=%s\n",
+			active,
+			formatStatUint(dictID, dictOK),
+			formatStatUint(keptFrames, keptOK),
+		)
 	}
 
 	targetRawBytes := int64(cfg.RawMiB) * 1024 * 1024
@@ -576,13 +594,37 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	attemptedFrac, attemptedOK := parseStatFloat(statsEnd, "treedb.cache.vlog_dict.attempted_frac")
 	keptFrac, keptOK := parseStatFloat(statsEnd, "treedb.cache.vlog_dict.kept_frac")
 	currentK, currentOK := parseStatInt(statsEnd, "treedb.cache.vlog_dict.current_k")
-	dictID, dictOK := parseStatInt(statsEnd, "treedb.cache.vlog_dict.last_applied_dict_id")
+	dictID, dictOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.last_applied_dict_id")
+	framesTotal, framesTotalOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_total")
+	framesAttempted, framesAttemptedOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_attempted")
+	framesKept, framesKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_kept")
+	keptOfAttempted := 0.0
+	keptOfAttemptedOK := false
+	if framesAttemptedOK && framesKeptOK && framesAttempted > 0 {
+		keptOfAttempted = float64(framesKept) / float64(framesAttempted)
+		keptOfAttemptedOK = true
+	}
+	diskUsage, err := measureBenchDiskUsage(benchDir)
+	if err != nil {
+		return nil, err
+	}
 
 	fmt.Printf("vlog_dict: attempted_frac=%s kept_frac=%s current_k=%s dict_id=%s\n",
 		formatStatFloat(attemptedFrac, attemptedOK),
 		formatStatFloat(keptFrac, keptOK),
 		formatStatInt(currentK, currentOK),
-		formatStatInt(dictID, dictOK),
+		formatStatUint(dictID, dictOK),
+	)
+	fmt.Printf("vlog_dict_frames: total=%s attempted=%s kept=%s kept_of_attempted=%s\n",
+		formatStatUint(framesTotal, framesTotalOK),
+		formatStatUint(framesAttempted, framesAttemptedOK),
+		formatStatUint(framesKept, framesKeptOK),
+		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
+	)
+	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) slab_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
+		diskUsage.valueLogBytes, bytesToMiB(diskUsage.valueLogBytes),
+		diskUsage.slabBytes, bytesToMiB(diskUsage.slabBytes),
+		diskUsage.indexBytes, bytesToMiB(diskUsage.indexBytes),
 	)
 
 	var attemptedPtr *float64
@@ -600,10 +642,30 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		v := currentK
 		currentKPtr = &v
 	}
-	var dictIDPtr *int
+	var dictIDPtr *uint64
 	if dictOK {
 		v := dictID
 		dictIDPtr = &v
+	}
+	var framesTotalPtr *uint64
+	if framesTotalOK {
+		v := framesTotal
+		framesTotalPtr = &v
+	}
+	var framesAttemptedPtr *uint64
+	if framesAttemptedOK {
+		v := framesAttempted
+		framesAttemptedPtr = &v
+	}
+	var framesKeptPtr *uint64
+	if framesKeptOK {
+		v := framesKept
+		framesKeptPtr = &v
+	}
+	var keptOfAttemptedPtr *float64
+	if keptOfAttemptedOK {
+		v := keptOfAttempted
+		keptOfAttemptedPtr = &v
 	}
 
 	var speedupPtr *float64
@@ -623,7 +685,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatFloat(attemptedFrac, attemptedOK),
 		formatStatFloat(keptFrac, keptOK),
 		formatStatInt(currentK, currentOK),
-		formatStatInt(dictID, dictOK),
+		formatStatUint(dictID, dictOK),
 	)
 
 	report := &benchReport{
@@ -647,6 +709,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		KeptFrac:            keptPtr,
 		CurrentK:            currentKPtr,
 		DictID:              dictIDPtr,
+		FramesTotal:         framesTotalPtr,
+		FramesAttempted:     framesAttemptedPtr,
+		FramesKept:          framesKeptPtr,
+		KeptOfAttemptedFrac: keptOfAttemptedPtr,
+		ValueLogBytes:       diskUsage.valueLogBytes,
+		SlabBytes:           diskUsage.slabBytes,
+		IndexBytes:          diskUsage.indexBytes,
 		WritePathMode:       writePathMode,
 		WritePathValueStore: writePathValueStore,
 		WritePathRedoLog:    writePathRedoLog,
@@ -862,10 +931,10 @@ func waitForDictActivation(db *treedb.DB, maxWait time.Duration) (bool, map[stri
 	deadline := time.Now().Add(maxWait)
 	for {
 		stats := db.Stats()
-		if dictID, ok := parseStatInt(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
+		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
 			return true, stats
 		}
-		if kept, ok := parseStatInt(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
+		if kept, ok := parseStatUint(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
 			return true, stats
 		}
 		if time.Now().After(deadline) {
@@ -884,6 +953,21 @@ func parseStatInt(stats map[string]string, key string) (int, bool) {
 		return 0, false
 	}
 	n, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func parseStatUint(stats map[string]string, key string) (uint64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	val, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(val, 10, 64)
 	if err != nil {
 		return 0, false
 	}
@@ -917,6 +1001,81 @@ func formatStatInt(val int, ok bool) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%d", val)
+}
+
+func formatStatUint(val uint64, ok bool) string {
+	if !ok {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d", val)
+}
+
+func bytesToMiB(n int64) float64 {
+	return float64(n) / (1024 * 1024)
+}
+
+func measureBenchDiskUsage(dir string) (benchDiskUsage, error) {
+	var usage benchDiskUsage
+	if dir == "" {
+		return usage, nil
+	}
+	valueBytes, err := sumDirFiles(dir, "wal", "value-", "")
+	if err != nil {
+		return usage, err
+	}
+	slabBytes, err := sumDirFiles(dir, "data", "", ".slab")
+	if err != nil {
+		return usage, err
+	}
+	indexBytes, err := statFileSize(filepath.Join(dir, "index.db"))
+	if err != nil {
+		return usage, err
+	}
+	usage.valueLogBytes = valueBytes
+	usage.slabBytes = slabBytes
+	usage.indexBytes = indexBytes
+	return usage, nil
+}
+
+func sumDirFiles(root, subdir, prefix, suffix string) (int64, error) {
+	path := filepath.Join(root, subdir)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var total int64
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if suffix != "" && !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		info, err := ent.Info()
+		if err != nil {
+			return 0, err
+		}
+		total += info.Size()
+	}
+	return total, nil
+}
+
+func statFileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 func writeBenchJSON(path string, report *benchReport) error {

@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 )
 
@@ -15,7 +16,11 @@ func TestCompactIndexRetiresOldPages(t *testing.T) {
 	defer d.Close()
 
 	val := bytes.Repeat([]byte("x"), 10)
-	for i := 0; i < 2000; i++ {
+	keys := 2000
+	if runtime.GOOS == "windows" {
+		keys = 1000
+	}
+	for i := 0; i < keys; i++ {
 		k := []byte{byte(i >> 8), byte(i)}
 		if err := d.SetSync(k, val); err != nil {
 			t.Fatalf("set: %v", err)

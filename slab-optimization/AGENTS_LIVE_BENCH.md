@@ -236,3 +236,5 @@ Stability:
   - mode4/on: steady_raw_MBps=242.491 (attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0; dict published after steady id=5830108699136000008 k=16)
   - Logs saved on server under ~/bench_logs/live_mode*_*.log
 - 2026-01-22 12:22:43 HST: Posted results to PR 114 comment: https://github.com/snissn/gomap/pull/114#issuecomment-3787045319
+- 2026-01-22 12:52:07 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test -v ./TreeDB/... -count=1` to diagnose slow tests; longest in `TreeDB/db` were `TestLeafFillTarget_IsEnforced` (33.19s), `TestCompactIndexImprovesSpanLocality` (25.82s), and `TestCompactIndexRetiresOldPages` (18.06s); full package time 88.8s.
+- 2026-01-22 12:52:07 HST: Downscoped Windows-only test sizes in `TreeDB/db/fill_factor_test.go`, `TreeDB/db/compact_index_test.go`, and `TreeDB/db/vacuum_locality_test.go`; updated `TreeDB/cmd/vlog_dict_realdata/main.go` to parse uint64 dict IDs, emit dict frame counts + kept-of-attempted ratio, and report on-disk value-log/slab/index bytes; ran `gofmt` and `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/db -run TestLeafFillTarget_IsEnforced -count=1` (ok).

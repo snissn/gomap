@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"runtime"
 	"strconv"
 	"testing"
 )
@@ -16,7 +17,11 @@ func TestCompactIndexImprovesSpanLocality(t *testing.T) {
 	defer d.Close()
 
 	val := bytes.Repeat([]byte("x"), 16)
-	for i := 0; i < 4000; i++ {
+	keys := 4000
+	if runtime.GOOS == "windows" {
+		keys = 1200
+	}
+	for i := 0; i < keys; i++ {
 		k := []byte{byte(i >> 8), byte(i)}
 		if err := d.SetSync(k, val); err != nil {
 			t.Fatalf("set: %v", err)
