@@ -226,3 +226,4 @@ Stability:
 - 2026-01-22 11:52:16 HST: Ran representative live bench (mode3/off) with go1.25.5:
   - Command: `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go run ./TreeDB/cmd/vlog_dict_realdata -input /Users/michaelseiler/dev/snissn/celestia-db.head.jsonl -bench-kv -bench-mode mode3 -bench-compression off -train 20000 -eval 5000 -bench-raw-mib 64`
   - Output snippet: `headline: steady_raw_MBps=99.649 speedup_vs_off=1.000 attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0` (also prints `write_path: mode=cached value_store=value_log redo_log=on`).
+- 2026-01-22 11:58:31 HST: Opened PR https://github.com/snissn/gomap/pull/114 from `sprint/live_bench_1` -> `sprint/autotuner_7`; `gh pr checks 114 --watch` reported all CI checks passing.
