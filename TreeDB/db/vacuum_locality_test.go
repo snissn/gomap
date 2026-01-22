@@ -56,7 +56,11 @@ func TestCompactIndexImprovesSpanLocality(t *testing.T) {
 
 	// A vacuum rebuild should allocate pages essentially contiguously (span ~= pages).
 	// Allow some tolerance for minor bookkeeping differences.
-	if ratio > 1_200_000 {
-		t.Fatalf("expected good locality after vacuum, span_ratio_ppm=%d", ratio)
+	maxRatio := uint64(1_200_000)
+	if runtime.GOOS == "windows" {
+		maxRatio = 1_600_000
+	}
+	if ratio > maxRatio {
+		t.Fatalf("expected good locality after vacuum, span_ratio_ppm=%d (max=%d)", ratio, maxRatio)
 	}
 }

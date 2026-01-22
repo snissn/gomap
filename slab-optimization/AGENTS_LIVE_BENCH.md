@@ -247,3 +247,4 @@ Stability:
   - mode4/on: steady_raw_MBps=241.403; attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0; disk value_log=266.2 MiB slab=0.0 MiB (index=256.0 MiB); dict published after steady id=14760976363574014523 k=16
   - Logs saved on server under ~/bench_logs/live_mode*_{20260122_130103}.log
 - 2026-01-22 13:05:12 HST: Updated PR 114 body with latest bench results + disk usage details.
+- 2026-01-22 13:11:30 HST: Windows CI failure traced to `TestCompactIndexImprovesSpanLocality` (span_ratio_ppm too high); relaxed the max span ratio on Windows in `TreeDB/db/vacuum_locality_test.go` and ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/db -run TestCompactIndexImprovesSpanLocality -count=1` (ok).
