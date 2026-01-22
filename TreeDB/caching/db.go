@@ -2815,7 +2815,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
-		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff || probeCompression {
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}
@@ -3067,7 +3067,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
-		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff || probeCompression {
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
 			ioNsPerStored = 0
 			encodeNsPerRaw = 0
 		}

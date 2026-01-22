@@ -361,6 +361,13 @@ func warmupDictTrainer(db *DB, writer *benchValueWriter, sink *valuelog.VirtualS
 	}))
 
 	values := valuelog.GenerateAutotuneValues(seg.Workload, seg.ValueSize, 256, 42)
+	wantDict := false
+	for i := 0; i < len(values) && i < 8; i++ {
+		if likelyCompressibleSample(values[i]) {
+			wantDict = true
+			break
+		}
+	}
 	lane := &db.lanes[0]
 	rid := uint64(1)
 	records := make([]valuelog.Record, 0, 128)
@@ -382,6 +389,20 @@ func warmupDictTrainer(db *DB, writer *benchValueWriter, sink *valuelog.VirtualS
 		}
 		time.Sleep(1 * time.Millisecond)
 	}
+	if !wantDict {
+		return nil
+	}
+	if tr := db.valueLogDictTrainer; tr != nil {
+		if prof, ok := tr.ActiveProfile(); ok && prof != nil {
+			minSavings := db.valueLogDictMinPayloadSavings
+			if minSavings <= 0 {
+				minSavings = 0.005
+			}
+			if prof.PayloadRatio >= 1.0-minSavings {
+				return nil
+			}
+		}
+	}
 	return errors.New("dict warmup failed")
 }
 
@@ -400,6 +421,10 @@ func runBenchSegment(db *DB, writer *benchValueWriter, sink *valuelog.VirtualSin
 	}))
 	writer.ResetCompressionHints()
 	writer.resetStats()
+	snap := db.valueLogAutotuneMetrics.snapshot()
+	if snap.EncodeNsPerRawByte <= 0 || snap.IoNsPerStoredByte <= 0 {
+		db.valueLogAutotuneMetrics.seed(seg.EncodeNsPerRawByte, seg.IoNsPerStoredByte)
+	}
 
 	ioClock, ok := db.valueLogAutotuneMetrics.clock.(*valuelog.VirtualClock)
 	if !ok || ioClock == nil {

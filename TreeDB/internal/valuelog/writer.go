@@ -168,6 +168,30 @@ func dictSkipFrames(noBenefit uint8) uint16 {
 	return uint16(1 << shift)
 }
 
+func dictSkipFramesAggressive(noBenefit uint8, rawPayloadBytes, encodedLen int, encodeNs int64, ioNsPerStoredByte, safetyMargin float64) uint16 {
+	skip := dictSkipFrames(noBenefit)
+	if rawPayloadBytes <= 0 || encodedLen <= 0 || encodedLen >= rawPayloadBytes {
+		return skip
+	}
+	if encodeNs <= 0 || ioNsPerStoredByte <= 0 {
+		return skip
+	}
+	savings := float64(rawPayloadBytes-encodedLen) * ioNsPerStoredByte
+	cost := float64(encodeNs)
+	if safetyMargin > 0 {
+		cost *= 1 + safetyMargin
+	}
+	if savings <= 0 {
+		return skip
+	}
+	if cost/savings >= 4 {
+		if skip < 512 {
+			return 512
+		}
+	}
+	return skip
+}
+
 func NewWriter(path string, fileID uint32) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -307,6 +331,20 @@ func (w *Writer) shouldKeepCompressed(rawPayloadBytes, encodedLen int, encodeNs 
 		encodeNsUsed = int64(w.keepEncodeNsPerRawByte * float64(rawPayloadBytes))
 	}
 	return ShouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNsUsed, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
+}
+
+func (w *Writer) shouldSkipCompression(rawPayloadBytes int) bool {
+	if w == nil || rawPayloadBytes <= 0 {
+		return false
+	}
+	if w.keepIoNsPerStoredByte <= 0 || w.keepEncodeNsPerRawByte <= 0 {
+		return false
+	}
+	costPerRaw := w.keepEncodeNsPerRawByte
+	if w.keepSafetyMargin > 0 {
+		costPerRaw *= 1 + w.keepSafetyMargin
+	}
+	return w.keepIoNsPerStoredByte <= costPerRaw
 }
 
 func (w *Writer) FileID() uint32 {
@@ -883,6 +921,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			w.skipRemain--
 			return writeRaw(false, 0)
 		}
+		if w.shouldSkipCompression(rawPayloadBytes) {
+			return writeRaw(false, 0)
+		}
 
 		codecs := w.codecs
 		if codecs == nil || w.codecsID != dictID {
@@ -988,7 +1029,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				if w.noBenefit < 0xff {
 					w.noBenefit++
 				}
-				w.skipRemain = dictSkipFrames(w.noBenefit)
+				w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, encodedLen, encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 				return writeRaw(true, encodeNs)
 			}
 
@@ -1102,7 +1143,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			if w.noBenefit < 0xff {
 				w.noBenefit++
 			}
-			w.skipRemain = dictSkipFrames(w.noBenefit)
+			w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 			return writeRaw(true, encodeNs)
 		}
 		storedPayloadBytes := len(encoded)
