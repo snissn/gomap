@@ -20,3 +20,12 @@ Reduce extra user-space copies in the mode3 commitlog write path without changin
 
 ## Notes
 - This is expected to matter most when commitlog carries inline values (not RID-only entries).
+
+## Benchmark (CPU / copy-focused)
+This uses `io.Discard` to isolate user-space copy/CRC costs (not filesystem performance).
+
+- Command:
+  - `go test ./TreeDB/internal/commitlog -run '^$' -bench BenchmarkCommitLogAppendBatch_UncompressedInline_Discard -benchmem -count=5`
+- Before/after (benchstat):
+  - geomean: -1.67% sec/op (small/noisy overall)
+  - best case in this run: `records=3/val=16384`: -4.68% sec/op (+4.92% B/s), p=0.008
