@@ -214,3 +214,15 @@ Stability:
 - If you forget to force pointers (threshold too high), mode3/mode4 can silently benchmark the “inline values” path.
 - Mode4 can look “too fast” if you accidentally benchmark a key pattern that triggers the mode4 streaming bypass; default to random keys.
 - On macOS, results can be noisy. Prefer the Linux dev server for final numbers.
+
+## Work Log (append-only)
+
+- 2026-01-22 11:37:24 HST: Started live bench runbook execution. Read `slab-optimization/AGENTS_LIVE_BENCH.md` to scope required flags/behavior and checked existing `TreeDB/cmd/vlog_dict_realdata/main.go` for extension points.
+- 2026-01-22 11:48:22 HST: Implemented KV throughput bench in `TreeDB/cmd/vlog_dict_realdata/main.go` with new `-bench-*` flags, dataset key loading, TreeDB public API write phases, write-path validation, compression stats, headline output, and optional JSON report; ran `gofmt` on the file.
+- 2026-01-22 11:48:45 HST: Ran `go test ./TreeDB/... -count=1` -> failed due to Go toolchain mismatch (compile version go1.25.5 vs tool go1.25.4).
+- 2026-01-22 11:49:05 HST: Attempted `go run ./TreeDB/cmd/vlog_dict_realdata -h` to confirm flags; failed with same Go toolchain mismatch (compile version go1.25.5 vs tool go1.25.4).
+- 2026-01-22 11:51:33 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1` to avoid toolchain mismatch; all TreeDB packages passed.
+- 2026-01-22 11:51:45 HST: Verified `go run ./TreeDB/cmd/vlog_dict_realdata -h` using go1.25.5; new `-bench-*` flags show in help output.
+- 2026-01-22 11:52:16 HST: Ran representative live bench (mode3/off) with go1.25.5:
+  - Command: `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go run ./TreeDB/cmd/vlog_dict_realdata -input /Users/michaelseiler/dev/snissn/celestia-db.head.jsonl -bench-kv -bench-mode mode3 -bench-compression off -train 20000 -eval 5000 -bench-raw-mib 64`
+  - Output snippet: `headline: steady_raw_MBps=99.649 speedup_vs_off=1.000 attempted_frac=0.000000 kept_frac=0.000000 current_k=0 dict_id=0` (also prints `write_path: mode=cached value_store=value_log redo_log=on`).
