@@ -109,6 +109,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	}
 
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
+	disableJournal := os.Getenv("TREEDB_CRASH_DISABLE_JOURNAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
@@ -118,10 +119,11 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		Dir:             dir,
 		ChunkSize:       64 * 1024,
 		DisableWAL:      disableWAL,
+		DisableJournal:  disableJournal,
 		RelaxedSync:     relaxedSync,
 		DisableValueLog: disableValueLog,
 		SplitValueLog:   splitValueLog,
-		AllowUnsafe:     disableWAL || relaxedSync,
+		AllowUnsafe:     disableWAL || disableJournal || relaxedSync,
 	}
 
 	db, err := treedb.Open(opts)
@@ -320,6 +322,18 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 			expectLarge: true,
 		},
+		{
+			name: "mode4_disable_journal_value_log",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_DISABLE_JOURNAL=1",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectLarge: true,
+		},
 	}
 
 	for _, tc := range tiers {
@@ -368,6 +382,65 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("expected logs to be clean after recovery; found log segments")
 			}
 		})
+	}
+}
+
+func TestCrashRecovery_Mode4_DisableJournalValueLog(t *testing.T) {
+	// Mode4 semantics: disable journal (redo log), keep value log on, split value log.
+	dir := t.TempDir()
+	runCrashRecoveryDurabilityWriter(t, dir,
+		"TREEDB_CRASH_DISABLE_WAL=0",
+		"TREEDB_CRASH_DISABLE_JOURNAL=1",
+		"TREEDB_CRASH_RELAXED_SYNC=0",
+		"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+		"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+		"TREEDB_CRASH_LARGE_VALUE=1",
+	)
+
+	opts := treedb.Options{
+		Dir:             dir,
+		ChunkSize:       64 * 1024,
+		DisableJournal:  true,
+		DisableValueLog: false,
+		SplitValueLog:   true,
+		AllowUnsafe:     true,
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after crash: %v", err)
+	}
+	defer db.Close()
+
+	val, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get k: %v", err)
+	}
+	if len(val) != 4096 {
+		t.Fatalf("get k: got len %d, want %d", len(val), 4096)
+	}
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("create iterator: %v", err)
+	}
+	defer it.Close()
+
+	found := false
+	for it.Valid() {
+		if bytes.Equal(it.Key(), []byte("k")) {
+			found = true
+			if len(it.Value()) != 4096 {
+				t.Fatalf("iterator: k corrupted length %d", len(it.Value()))
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected key k to be present after crash recovery")
 	}
 }
 
