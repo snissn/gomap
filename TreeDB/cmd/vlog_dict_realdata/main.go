@@ -72,6 +72,11 @@ type benchConfig struct {
 	OutJSON           string
 }
 
+const (
+	defaultBenchDictTrainMiB     = 1
+	defaultBenchDictSampleStride = 1
+)
+
 type benchReport struct {
 	Mode                string   `json:"mode"`
 	Compression         string   `json:"compression"`
@@ -143,8 +148,8 @@ func main() {
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
 	benchPointerThreshold := flag.Int("bench-pointer-threshold", 1, "Value-log pointer threshold (bytes)")
 	benchFlushThresholdMiB := flag.Int("bench-flush-threshold-mib", 0, "Flush threshold for cached mode (MiB, 0=default)")
-	benchDictTrainMiB := flag.Int("bench-dict-train-mib", 8, "Dict training sample target (MiB, compression on)")
-	benchDictSampleStride := flag.Int("bench-dict-sample-stride", 0, "Dict training sample stride (0=default)")
+	benchDictTrainMiB := flag.Int("bench-dict-train-mib", defaultBenchDictTrainMiB, "Dict training sample target (MiB, compression on; 0=auto)")
+	benchDictSampleStride := flag.Int("bench-dict-sample-stride", defaultBenchDictSampleStride, "Dict training sample stride (records; 0=auto)")
 	benchOutJSON := flag.String("bench-out-json", "", "Optional JSON output path (bench only)")
 	flag.Parse()
 
@@ -507,6 +512,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.Compression != "on" {
 		cfg.DictTrainMiB = 0
 		cfg.DictSampleStride = 0
+	} else {
+		if cfg.DictTrainMiB == 0 {
+			cfg.DictTrainMiB = defaultBenchDictTrainMiB
+		}
+		if cfg.DictSampleStride == 0 {
+			cfg.DictSampleStride = defaultBenchDictSampleStride
+		}
 	}
 	if (cfg.Mode == "mode3" || cfg.Mode == "mode4") && cfg.PointerThreshold <= 0 {
 		return nil, fmt.Errorf("bench modes %s require -bench-pointer-threshold > 0 to force value-log pointers", cfg.Mode)
@@ -786,11 +798,15 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	if cfg.Compression == "on" {
 		trainMiB := cfg.DictTrainMiB
 		if trainMiB == 0 {
-			trainMiB = 8
+			trainMiB = defaultBenchDictTrainMiB
+		}
+		sampleStride := cfg.DictSampleStride
+		if sampleStride == 0 {
+			sampleStride = defaultBenchDictSampleStride
 		}
 		opts.ValueLogDictTrain = compression.TrainConfig{
 			TrainBytes:   trainMiB << 20,
-			SampleStride: cfg.DictSampleStride,
+			SampleStride: sampleStride,
 		}
 		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
 	} else {

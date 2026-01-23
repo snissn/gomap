@@ -251,3 +251,4 @@ Stability:
 - 2026-01-22 13:16:10 HST: `gh pr checks 114 --watch` confirms all CI checks passing after Windows locality threshold adjustment.
 - 2026-01-22 13:25:31 HST: `gh pr checks 114 --json ...` shows all CI checks passing after latest work-log commit.
 - 2026-01-22 13:30:25 HST: `gh pr checks 114 --json ...` confirms all CI checks passing after the final work-log commit.
+- 2026-01-22 14:03:21 HST: Tightened dict-training defaults + early activation in `TreeDB/caching/db.go` (auto TrainBytes=DefaultTrainBytes, SampleStride=1, paused stride=32) and `TreeDB/caching/vlog_dict.go` (skip incompressible pause before first dict); updated bench defaults in `TreeDB/cmd/vlog_dict_realdata/main.go` (dict_train_mib=1, dict_sample_stride=1, defaults applied for printing/options); ran `gofmt` on touched files. Ran `go test ./TreeDB/... -count=1` -> failed due to Go toolchain mismatch (compile go1.25.5 vs tool go1.25.4).
