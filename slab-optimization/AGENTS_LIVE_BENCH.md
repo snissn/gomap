@@ -262,3 +262,4 @@ Stability:
 - 2026-01-22 14:23:06 HST: Reduced default index.db chunk sizes: `TreeDB/public.go` now defaults to 4MiB chunks and uses 1MiB for dictdb when ChunkSize is unset; `TreeDB/db/db.go` + `TreeDB/db/vacuum_offline.go` default ChunkSize updated to 4MiB; updated `TreeDB/specs/spec.md` to match new default. Ran `gofmt` on touched Go files.
 - 2026-01-22 14:24:57 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 80.264s).
 - 2026-01-22 14:26:01 HST: Updated PR 114 body to include default chunk size reductions (maindb 4MiB, dictdb 1MiB) and latest test command.
+- 2026-01-22 14:30:20 HST: `gh pr checks 114 --watch` confirms all CI checks passing after chunk-size changes (race-check 3m5s; windows-latest 3m15s).
