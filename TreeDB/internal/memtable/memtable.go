@@ -8,6 +8,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/skiplist"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -47,12 +48,19 @@ func (m Mode) String() string {
 
 type Table interface {
 	Set(key, value []byte)
+	// SetEntry stores a value with explicit flags and optional value pointer.
+	// When flags include node.FlagPointer, value may be nil and ptr must be set.
+	SetEntry(key, value []byte, ptr page.ValuePtr, flags byte)
 	PutWithCallback(key, value []byte, cb func(k, v []byte) error) error
 	Delete(key []byte)
 	DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	SetSteal(key, value []byte)
+	// SetEntrySteal is like SetEntry but allows stealing the provided value slice.
+	SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte)
 	DeleteSteal(key []byte)
 	Get(key []byte) ([]byte, bool, bool)
+	// GetEntry returns the raw entry, including pointer and flags, if present.
+	GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool)
 	Size() int64
 	Len() int
 	// NewIterator may hold a read lock until Close; callers should avoid
@@ -120,6 +128,12 @@ func (m *Memtable) Set(key, value []byte) {
 	m.sl.Put(key, value)
 }
 
+func (m *Memtable) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sl.PutEntry(key, value, ptr, flags)
+}
+
 func (m *Memtable) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -151,6 +165,10 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 			for _, op := range entries {
 				if op.Type == batchpkg.OpDelete {
 					m.sl.AppendDelete(op.Key)
+				} else if op.IsPtr {
+					var buf [page.ValuePtrSize]byte
+					op.ValuePtr.Encode(buf[:])
+					_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
 				} else {
 					m.sl.Append(op.Key, op.Value)
 				}
@@ -165,6 +183,8 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 	for _, op := range entries {
 		if op.Type == batchpkg.OpDelete {
 			m.sl.Delete(op.Key)
+		} else if op.IsPtr {
+			m.sl.PutEntry(op.Key, nil, op.ValuePtr, node.FlagPointer)
 		} else {
 			m.sl.Put(op.Key, op.Value)
 		}
@@ -179,6 +199,11 @@ func (m *Memtable) SetSteal(key, value []byte) {
 	m.Set(key, value)
 }
 
+// SetEntrySteal - SkipList copies data, so Steal is same as SetEntry.
+func (m *Memtable) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntry(key, value, ptr, flags)
+}
+
 // DeleteSteal - SkipList copies data, so Steal is same as Delete.
 func (m *Memtable) DeleteSteal(key []byte) {
 	m.Delete(key)
@@ -188,6 +213,12 @@ func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.sl.Get(key)
+}
+
+func (m *Memtable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sl.GetEntry(key)
 }
 
 // Size returns the total memory usage (arena size).

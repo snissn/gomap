@@ -16,8 +16,8 @@ const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
 
 type btreeEntry struct {
-	value   []byte
-	deleted bool
+	value []byte
+	flags byte
 }
 
 type BTree struct {
@@ -45,19 +45,20 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 
 		if op.Type == batchpkg.OpDelete {
 			if m.hasLast && keyStr > m.lastKey {
-				prev, replaced = m.tree.Load(keyStr, btreeEntry{deleted: true})
+				prev, replaced = m.tree.Load(keyStr, btreeEntry{flags: node.FlagTombstone})
 			} else {
-				prev, replaced = m.tree.Set(keyStr, btreeEntry{deleted: true})
+				prev, replaced = m.tree.Set(keyStr, btreeEntry{flags: node.FlagTombstone})
 			}
 			if replaced {
-				if !prev.deleted {
+				if prev.flags&node.FlagTombstone == 0 {
 					m.sizeBytes -= int64(len(prev.value))
 				}
 			} else {
 				m.sizeBytes += int64(len(op.Key))
 			}
-		} else {
-			entry := btreeEntry{value: op.Value}
+		} else if op.IsPtr {
+			valCopy := m.encodeEntryValue(nil, op.ValuePtr, node.FlagPointer, true)
+			entry := btreeEntry{value: valCopy, flags: node.FlagPointer}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
@@ -65,7 +66,23 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 			}
 			if replaced {
 				oldLen := len(prev.value)
-				if prev.deleted {
+				if prev.flags&node.FlagTombstone != 0 {
+					oldLen = 0
+				}
+				m.sizeBytes += int64(len(valCopy) - oldLen)
+			} else {
+				m.sizeBytes += int64(len(op.Key) + len(valCopy))
+			}
+		} else {
+			entry := btreeEntry{value: op.Value, flags: node.FlagInline}
+			if m.hasLast && keyStr > m.lastKey {
+				prev, replaced = m.tree.Load(keyStr, entry)
+			} else {
+				prev, replaced = m.tree.Set(keyStr, entry)
+			}
+			if replaced {
+				oldLen := len(prev.value)
+				if prev.flags&node.FlagTombstone != 0 {
 					oldLen = 0
 				}
 				m.sizeBytes += int64(len(op.Value) - oldLen)
@@ -112,7 +129,7 @@ func (m *BTree) Reset() {
 }
 
 func (m *BTree) Set(key, value []byte) {
-	_ = m.PutWithCallback(key, value, nil)
+	m.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
 func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
@@ -120,7 +137,7 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 		return nil
 	}
 	keyCopy := m.arena.Copy(key)
-	valCopy := m.arena.Copy(value)
+	valCopy := m.encodeEntryValue(value, page.ValuePtr{}, node.FlagInline, false)
 	if cb != nil {
 		if err := cb(keyCopy, valCopy); err != nil {
 			return err
@@ -131,10 +148,10 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy})
+	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: node.FlagInline})
 	if replaced {
 		oldLen := len(prev.value)
-		if prev.deleted {
+		if prev.flags&node.FlagTombstone != 0 {
 			oldLen = 0
 		}
 		m.sizeBytes += int64(len(valCopy) - oldLen)
@@ -149,24 +166,56 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 }
 
 func (m *BTree) SetSteal(key, value []byte) {
+	m.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
+}
+
+func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	if key == nil {
 		return
 	}
-	keyStr := bytesToStringNoCopy(key)
+	keyCopy := m.arena.Copy(key)
+	valCopy := m.encodeEntryValue(value, ptr, flags, false)
+	keyStr := bytesToStringNoCopy(keyCopy)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: value})
+	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
 	if replaced {
 		oldLen := len(prev.value)
-		if prev.deleted {
+		if prev.flags&node.FlagTombstone != 0 {
 			oldLen = 0
 		}
-		m.sizeBytes += int64(len(value) - oldLen)
+		m.sizeBytes += int64(len(valCopy) - oldLen)
 		return
 	}
-	m.sizeBytes += int64(len(key) + len(value))
+	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+	if !m.hasLast || keyStr > m.lastKey {
+		m.lastKey = keyStr
+		m.hasLast = true
+	}
+}
+
+func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	if key == nil {
+		return
+	}
+	keyStr := bytesToStringNoCopy(key)
+	valCopy := m.encodeEntryValue(value, ptr, flags, true)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
+	if replaced {
+		oldLen := len(prev.value)
+		if prev.flags&node.FlagTombstone != 0 {
+			oldLen = 0
+		}
+		m.sizeBytes += int64(len(valCopy) - oldLen)
+		return
+	}
+	m.sizeBytes += int64(len(key) + len(valCopy))
 	if !m.hasLast || keyStr > m.lastKey {
 		m.lastKey = keyStr
 		m.hasLast = true
@@ -174,7 +223,7 @@ func (m *BTree) SetSteal(key, value []byte) {
 }
 
 func (m *BTree) Delete(key []byte) {
-	_ = m.DeleteWithCallback(key, nil)
+	m.SetEntry(key, nil, page.ValuePtr{}, node.FlagTombstone)
 }
 
 func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
@@ -192,9 +241,9 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	prev, replaced := m.tree.Set(keyStr, btreeEntry{deleted: true})
+	prev, replaced := m.tree.Set(keyStr, btreeEntry{flags: node.FlagTombstone})
 	if replaced {
-		if !prev.deleted {
+		if prev.flags&node.FlagTombstone == 0 {
 			m.sizeBytes -= int64(len(prev.value))
 		}
 		return nil
@@ -204,22 +253,22 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 }
 
 func (m *BTree) DeleteSteal(key []byte) {
-	if key == nil {
-		return
-	}
-	keyStr := bytesToStringNoCopy(key)
+	m.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	prev, replaced := m.tree.Set(keyStr, btreeEntry{deleted: true})
-	if replaced {
-		if !prev.deleted {
-			m.sizeBytes -= int64(len(prev.value))
-		}
-		return
+func (m *BTree) encodeEntryValue(value []byte, ptr page.ValuePtr, flags byte, steal bool) []byte {
+	if flags&node.FlagPointer != 0 {
+		var buf [page.ValuePtrSize]byte
+		ptr.Encode(buf[:])
+		return m.arena.Copy(buf[:])
 	}
-	m.sizeBytes += int64(len(key))
+	if flags&node.FlagTombstone != 0 {
+		return nil
+	}
+	if steal {
+		return value
+	}
+	return m.arena.Copy(value)
 }
 
 func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
@@ -229,7 +278,26 @@ func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
 	if !ok {
 		return nil, false, false
 	}
-	return val.value, val.deleted, true
+	if val.flags&node.FlagPointer != 0 {
+		return nil, val.flags&node.FlagTombstone != 0, true
+	}
+	return val.value, val.flags&node.FlagTombstone != 0, true
+}
+
+func (m *BTree) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	val, ok := m.tree.Get(bytesToStringNoCopy(key))
+	if !ok {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	if val.flags&node.FlagPointer != 0 {
+		if len(val.value) >= page.ValuePtrSize {
+			return nil, page.DecodeValuePtr(val.value[:page.ValuePtrSize]), val.flags, true
+		}
+		return nil, page.ValuePtr{}, val.flags, true
+	}
+	return val.value, page.ValuePtr{}, val.flags, true
 }
 
 func (m *BTree) Size() int64 {
@@ -323,12 +391,24 @@ func (it *btreeIterator) UnsafeValue() []byte {
 	if !it.hasCur {
 		return nil
 	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		return nil
+	}
 	return it.cur.value
 }
 
 func (it *btreeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if !it.hasCur || it.cur.deleted {
+	if !it.hasCur {
 		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) >= page.ValuePtrSize {
+			return nil, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
+		}
+		return nil, page.ValuePtr{}, it.cur.flags
 	}
 	return it.cur.value, page.ValuePtr{}, node.FlagInline
 }
@@ -361,7 +441,7 @@ func (it *btreeIterator) IsDeleted() bool {
 	if !it.hasCur {
 		return false
 	}
-	return it.cur.deleted
+	return it.cur.flags&node.FlagTombstone != 0
 }
 
 func (it *btreeIterator) Error() error {
