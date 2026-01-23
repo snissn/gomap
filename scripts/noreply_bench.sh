@@ -20,6 +20,9 @@ NR_TEST_TIME="${NR_TEST_TIME:-10s}"
 NR_PIPELINE="${NR_PIPELINE:-}"
 NR_KEYSPACE="${NR_KEYSPACE:-100000}"
 NR_VALSIZE="${NR_VALSIZE:-128}"
+NR_VALSIZE_LIST="${NR_VALSIZE_LIST:-}"
+NR_CLIENTS_LIST="${NR_CLIENTS_LIST:-}"
+NR_PIPELINE_LIST="${NR_PIPELINE_LIST:-}"
 NR_RESP3="${NR_RESP3:-1}"
 NR_REPLY_OFF="${NR_REPLY_OFF:-1}"
 
@@ -97,7 +100,7 @@ stop_pid() {
 write_markdown() {
   {
     echo "| Engine | Scenario | RPS |"
-    echo "|---|---|---:|---:|"
+    echo "|---|---|---:|"
     tail -n +2 "$RESULTS_CSV" | while IFS=',' read -r engine scenario rps; do
       printf '| %s | %s | %s |\n' "$engine" "$scenario" "$rps"
     done
@@ -107,6 +110,12 @@ write_markdown() {
     cp "$RESULTS_CSV" "$BENCH_DOCS_DIR/noreply_bench_results.csv"
     cp "$RESULTS_MD" "$BENCH_DOCS_DIR/noreply_bench_results.md"
   fi
+}
+
+split_csv() {
+  local list="$1"
+  IFS=',' read -r -a items <<< "$list"
+  echo "${items[@]}"
 }
 
 main() {
@@ -137,126 +146,149 @@ main() {
     NR_PIPELINE=32
   fi
 
+  local clients_list pipeline_list valsize_list
+  if [[ -n "$NR_CLIENTS_LIST" ]]; then
+    clients_list="$(split_csv "$NR_CLIENTS_LIST")"
+  else
+    clients_list="$NR_CLIENTS"
+  fi
+  if [[ -n "$NR_PIPELINE_LIST" ]]; then
+    pipeline_list="$(split_csv "$NR_PIPELINE_LIST")"
+  else
+    pipeline_list="$NR_PIPELINE"
+  fi
+  if [[ -n "$NR_VALSIZE_LIST" ]]; then
+    valsize_list="$(split_csv "$NR_VALSIZE_LIST")"
+  else
+    valsize_list="$NR_VALSIZE"
+  fi
+
   IFS=',' read -r -a servers <<< "$NR_SERVERS"
   local port="$NR_BASE_PORT"
 
-  for server in "${servers[@]}"; do
-    server="$(echo "$server" | xargs)"
-    if [[ -z "$server" ]]; then
-      continue
-    fi
+  for clients in $clients_list; do
+    for pipeline in $pipeline_list; do
+      for valsize in $valsize_list; do
+        for server in "${servers[@]}"; do
+          server="$(echo "$server" | xargs)"
+          if [[ -z "$server" ]]; then
+            continue
+          fi
 
-    case "$server" in
-      hashdb|treedb)
-        log "starting $server"
-        tmpdir="$(mktemp -d)"
-        pid=$(start_redisserver "$server" "$port" "$tmpdir")
-        ;;
-      redis)
-        if [[ "$USE_DOCKER" -ne 1 ]]; then
-          log "skipping redis (docker required)"
+          case "$server" in
+            hashdb|treedb)
+              log "starting $server"
+              tmpdir="$(mktemp -d)"
+              pid=$(start_redisserver "$server" "$port" "$tmpdir")
+              ;;
+            redis)
+              if [[ "$USE_DOCKER" -ne 1 ]]; then
+                log "skipping redis (docker required)"
+                port=$((port + 1))
+                continue
+              fi
+              log "starting redis docker ($REDIS_IMAGE)"
+              cid=$(start_docker "$REDIS_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
+              ;;
+            valkey)
+              if [[ "$USE_DOCKER" -ne 1 ]]; then
+                log "skipping valkey (docker required)"
+                port=$((port + 1))
+                continue
+              fi
+              log "starting valkey docker ($VALKEY_IMAGE)"
+              cid=$(start_docker "$VALKEY_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
+              ;;
+            dragonfly)
+              if [[ "$USE_DOCKER" -ne 1 ]]; then
+                log "skipping dragonfly (docker required)"
+                port=$((port + 1))
+                continue
+              fi
+              log "starting dragonfly docker ($DRAGONFLY_IMAGE)"
+              cid=$(start_docker "$DRAGONFLY_IMAGE" "$port")
+              ;;
+            *)
+              echo "unknown server: $server" >&2
+              exit 1
+              ;;
+          esac
+
+          if ! wait_for_port "$NR_ADDR" "$port"; then
+            echo "failed to start $server" >&2
+            if [[ "${cid:-}" != "" ]]; then
+              docker rm -f "$cid" >/dev/null || true
+            else
+              stop_pid "${pid:-}"
+            fi
+            rm -rf "${tmpdir:-}"
+            exit 1
+          fi
+
+          scenario="clients=${clients};pipeline=${pipeline};req=${NR_REQUESTS};val=${valsize};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
+          if [[ "$NR_TEST_TIME" != "0" && "$NR_TEST_TIME" != "0s" ]]; then
+            scenario="clients=${clients};pipeline=${pipeline};time=${NR_TEST_TIME};val=${valsize};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
+          fi
+          log "noreply $server $scenario"
+
+          set +e
+          output="$("$BENCH_BIN" \
+            -addr "$NR_ADDR:$port" \
+            -label "$server" \
+            -clients "$clients" \
+            -pipeline "$pipeline" \
+            -requests "$NR_REQUESTS" \
+            -test-time "$NR_TEST_TIME" \
+            -keyspace "$NR_KEYSPACE" \
+            -value-size "$valsize" \
+            -resp3=$([[ "$NR_RESP3" -eq 1 ]] && echo true || echo false) \
+            -reply-off=$([[ "$NR_REPLY_OFF" -eq 1 ]] && echo true || echo false) 2>&1)"
+          status=$?
+          set -e
+          if [[ "$status" -ne 0 ]]; then
+            log "noreply bench failed for $server: $output"
+            # Likely unsupported CLIENT REPLY OFF; skip.
+            case "$server" in
+              hashdb|treedb)
+                stop_pid "$pid"
+                rm -rf "$tmpdir"
+                ;;
+              redis|valkey|dragonfly)
+                docker rm -f "$cid" >/dev/null || true
+                ;;
+            esac
+            unset cid pid tmpdir
+            port=$((port + 1))
+            continue
+          fi
+
+          rps=$(echo "$output" | awk -F'rps=' '{print $2}' | awk '{print $1}')
+          if [[ -z "$rps" ]]; then
+            echo "failed to parse rps from output: $output" >&2
+            if [[ "${cid:-}" != "" ]]; then
+              docker rm -f "$cid" >/dev/null || true
+            else
+              stop_pid "$pid"
+              rm -rf "$tmpdir"
+            fi
+            exit 1
+          fi
+          echo "${server},${scenario},${rps}" >> "$RESULTS_CSV"
+
+          case "$server" in
+            hashdb|treedb)
+              stop_pid "$pid"
+              rm -rf "$tmpdir"
+              ;;
+            redis|valkey|dragonfly)
+              docker rm -f "$cid" >/dev/null || true
+              ;;
+          esac
+          unset cid pid tmpdir
           port=$((port + 1))
-          continue
-        fi
-        log "starting redis docker ($REDIS_IMAGE)"
-        cid=$(start_docker "$REDIS_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
-        ;;
-      valkey)
-        if [[ "$USE_DOCKER" -ne 1 ]]; then
-          log "skipping valkey (docker required)"
-          port=$((port + 1))
-          continue
-        fi
-        log "starting valkey docker ($VALKEY_IMAGE)"
-        cid=$(start_docker "$VALKEY_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
-        ;;
-      dragonfly)
-        if [[ "$USE_DOCKER" -ne 1 ]]; then
-          log "skipping dragonfly (docker required)"
-          port=$((port + 1))
-          continue
-        fi
-        log "starting dragonfly docker ($DRAGONFLY_IMAGE)"
-        cid=$(start_docker "$DRAGONFLY_IMAGE" "$port")
-        ;;
-      *)
-        echo "unknown server: $server" >&2
-        exit 1
-        ;;
-    esac
-
-    if ! wait_for_port "$NR_ADDR" "$port"; then
-      echo "failed to start $server" >&2
-      if [[ "${cid:-}" != "" ]]; then
-        docker rm -f "$cid" >/dev/null || true
-      else
-        stop_pid "${pid:-}"
-      fi
-      rm -rf "${tmpdir:-}"
-      exit 1
-    fi
-
-    scenario="clients=${NR_CLIENTS};pipeline=${NR_PIPELINE};req=${NR_REQUESTS};val=${NR_VALSIZE};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
-    if [[ "$NR_TEST_TIME" != "0" && "$NR_TEST_TIME" != "0s" ]]; then
-      scenario="clients=${NR_CLIENTS};pipeline=${NR_PIPELINE};time=${NR_TEST_TIME};val=${NR_VALSIZE};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
-    fi
-    log "noreply $server $scenario"
-
-    set +e
-    output="$("$BENCH_BIN" \
-      -addr "$NR_ADDR:$port" \
-      -label "$server" \
-      -clients "$NR_CLIENTS" \
-      -pipeline "$NR_PIPELINE" \
-      -requests "$NR_REQUESTS" \
-      -test-time "$NR_TEST_TIME" \
-      -keyspace "$NR_KEYSPACE" \
-      -value-size "$NR_VALSIZE" \
-      -resp3=$([[ "$NR_RESP3" -eq 1 ]] && echo true || echo false) \
-      -reply-off=$([[ "$NR_REPLY_OFF" -eq 1 ]] && echo true || echo false))"
-    status=$?
-    set -e
-    if [[ "$status" -ne 0 ]]; then
-      log "noreply bench failed for $server: $output"
-      # Likely unsupported CLIENT REPLY OFF; skip.
-      case "$server" in
-        hashdb|treedb)
-          stop_pid "$pid"
-          rm -rf "$tmpdir"
-          ;;
-        redis|valkey|dragonfly)
-          docker rm -f "$cid" >/dev/null || true
-          ;;
-      esac
-      unset cid pid tmpdir
-      port=$((port + 1))
-      continue
-    fi
-
-    rps=$(echo "$output" | awk -F'rps=' '{print $2}' | awk '{print $1}')
-    if [[ -z "$rps" ]]; then
-      echo "failed to parse rps from output: $output" >&2
-      if [[ "${cid:-}" != "" ]]; then
-        docker rm -f "$cid" >/dev/null || true
-      else
-        stop_pid "$pid"
-        rm -rf "$tmpdir"
-      fi
-      exit 1
-    fi
-    echo "${server},${scenario},${rps}" >> "$RESULTS_CSV"
-
-    case "$server" in
-      hashdb|treedb)
-        stop_pid "$pid"
-        rm -rf "$tmpdir"
-        ;;
-      redis|valkey|dragonfly)
-        docker rm -f "$cid" >/dev/null || true
-        ;;
-    esac
-    unset cid pid tmpdir
-    port=$((port + 1))
+        done
+      done
+    done
   done
 
   write_markdown
