@@ -1,10 +1,15 @@
 package compression
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 
 const DefaultMetricsWindowBytes = 4 << 20
 
 type Metrics struct {
+	mu sync.Mutex
+
 	Enabled          bool
 	LogWindows       bool
 	WindowBytes      uint64
@@ -64,6 +69,8 @@ func (m *Metrics) SetSlab(id uint32) {
 	if !m.Enabled {
 		return
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.SlabID = id
 }
 
@@ -71,12 +78,15 @@ func (m *Metrics) Add(slabID uint32, rawBytes, storedBytes, records, compressedC
 	if !m.Enabled || rawBytes <= 0 || records <= 0 {
 		return 0
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.SlabID == 0 {
 		m.SlabID = slabID
 	}
 	if m.SlabID != slabID {
-		m.Finish("slab-switch")
-		m.Reset(slabID)
+		m.finishLocked("slab-switch")
+		m.resetLocked(slabID)
 	}
 	m.WindowRaw += uint64(rawBytes)
 	m.WindowStored += uint64(storedBytes)
@@ -90,7 +100,7 @@ func (m *Metrics) Add(slabID uint32, rawBytes, storedBytes, records, compressedC
 	m.TotalFull += uint64(fullCount)
 
 	if m.WindowRaw >= m.WindowBytes {
-		pauseBytes := m.LogWindow()
+		pauseBytes := m.logWindowLocked()
 		m.WindowRaw = 0
 		m.WindowStored = 0
 		m.WindowRecords = 0
@@ -102,7 +112,16 @@ func (m *Metrics) Add(slabID uint32, rawBytes, storedBytes, records, compressedC
 }
 
 func (m *Metrics) Finish(reason string) {
-	if !m.Enabled || m.SlabID == 0 || m.TotalRaw == 0 {
+	if !m.Enabled {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.finishLocked(reason)
+}
+
+func (m *Metrics) finishLocked(reason string) {
+	if m.SlabID == 0 || m.TotalRaw == 0 {
 		return
 	}
 	if !m.LogWindows {
@@ -122,6 +141,16 @@ func (m *Metrics) Finish(reason string) {
 }
 
 func (m *Metrics) Reset(nextSlabID uint32) {
+	if !m.Enabled {
+		m.resetLocked(nextSlabID)
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetLocked(nextSlabID)
+}
+
+func (m *Metrics) resetLocked(nextSlabID uint32) {
 	m.SlabID = nextSlabID
 	m.WindowRaw = 0
 	m.WindowStored = 0
@@ -136,6 +165,15 @@ func (m *Metrics) Reset(nextSlabID uint32) {
 }
 
 func (m *Metrics) LogWindow() uint64 {
+	if !m.Enabled {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.logWindowLocked()
+}
+
+func (m *Metrics) logWindowLocked() uint64 {
 	if m.WindowRaw == 0 {
 		return 0
 	}
