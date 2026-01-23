@@ -88,6 +88,8 @@ type benchReport struct {
 	DictTrainMiB        int      `json:"dict_train_mib,omitempty"`
 	DictSampleStride    int      `json:"dict_sample_stride,omitempty"`
 	LoadSeconds         float64  `json:"load_seconds"`
+	PreSteadyDictID     *uint64  `json:"pre_steady_dict_id,omitempty"`
+	PreSteadyFramesKept *uint64  `json:"pre_steady_frames_kept,omitempty"`
 	TrainSeconds        float64  `json:"train_seconds"`
 	TrainRawBytes       int64    `json:"train_raw_bytes"`
 	TrainRecords        int      `json:"train_records"`
@@ -581,6 +583,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 	keyState := newBenchKeyState(cfg.KeyMode)
 
+	var preSteadyDictIDPtr *uint64
+	var preSteadyKeptFramesPtr *uint64
+
 	warmStart := time.Now()
 	warmRaw, warmRecords, err := writeSamplesOnce(db, train, cfg.Batch, cfg.KeyMode, keyState)
 	if err != nil {
@@ -595,9 +600,20 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	fmt.Printf("warmup:   raw_bytes=%d records=%d elapsed=%.3fs raw_MBps=%.3f\n", warmRaw, warmRecords, warmSecs, warmMBps)
 
 	if cfg.Compression == "on" {
-		active, snap := waitForDictActivation(db, 30*time.Second)
+		active, snap, err := ensureDictActiveBeforeSteady(db, cfg)
+		if err != nil {
+			return nil, err
+		}
 		dictID, dictOK := parseStatUint(snap, "treedb.cache.vlog_dict.last_applied_dict_id")
 		keptFrames, keptOK := parseStatUint(snap, "treedb.cache.vlog_dict.frames_kept")
+		if dictOK {
+			v := dictID
+			preSteadyDictIDPtr = &v
+		}
+		if keptOK {
+			v := keptFrames
+			preSteadyKeptFramesPtr = &v
+		}
 		fmt.Printf("dict:     active=%t dict_id=%s kept_frames=%s\n",
 			active,
 			formatStatUint(dictID, dictOK),
@@ -732,6 +748,8 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		DictTrainMiB:        cfg.DictTrainMiB,
 		DictSampleStride:    cfg.DictSampleStride,
 		LoadSeconds:         loadDur.Seconds(),
+		PreSteadyDictID:     preSteadyDictIDPtr,
+		PreSteadyFramesKept: preSteadyKeptFramesPtr,
 		TrainSeconds:        warmSecs,
 		TrainRawBytes:       warmRaw,
 		TrainRecords:        warmRecords,
@@ -988,6 +1006,33 @@ func waitForDictActivation(db *treedb.DB, maxWait time.Duration) (bool, map[stri
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[string]string, error) {
+	// Mode4 uses deferred value-log pointers, so warmup writes may not hit the
+	// value log until a flush/checkpoint happens. If we start steady-state before
+	// the dict is applied, stats will misleadingly show dict_id=0/attempted_frac=0
+	// and the dict publish log may appear after steady completes (issue #116).
+
+	// Fast-path: if the dict becomes active quickly, don't perturb mode behavior.
+	if active, snap := waitForDictActivation(db, 2*time.Second); active {
+		return true, snap, nil
+	}
+
+	if cfg.Mode == "mode4" {
+		// Force a flush boundary so deferred values reach the value log and dict
+		// training/publish can complete before we start the steady timer.
+		fmt.Printf("dict:     pre-steady not active; forcing Checkpoint() (mode4 deferred value log) to enable dict during steady\n")
+		if err := db.Checkpoint(); err != nil {
+			return false, db.Stats(), fmt.Errorf("checkpoint before steady (mode4) failed: %w", err)
+		}
+	}
+
+	active, snap := waitForDictActivation(db, 10*time.Second)
+	if !active {
+		return false, snap, fmt.Errorf("value-log dict did not become active before steady (mode=%s). Try increasing -train/-bench-raw-mib or lowering -bench-flush-threshold-mib; if it persists, this is a bug", cfg.Mode)
+	}
+	return true, snap, nil
 }
 
 func parseStatInt(stats map[string]string, key string) (int, bool) {
