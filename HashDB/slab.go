@@ -163,7 +163,12 @@ func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 }
 
 func (h *DB) addManySlabs(items []Item) ([]Key, error) {
-	slabOffsets := make([]Key, len(items))
+	if cap(h.slabOffsets) < len(items) {
+		h.slabOffsets = make([]Key, len(items))
+	} else {
+		h.slabOffsets = h.slabOffsets[:len(items)]
+	}
+	slabOffsets := h.slabOffsets
 	if cap(h.slabData) < 1<<20 {
 		h.slabData = make([]byte, 0, 1<<20) // 1MB starting point; grows as needed.
 	} else {

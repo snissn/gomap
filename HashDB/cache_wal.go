@@ -103,11 +103,12 @@ scan:
 			break scan
 		}
 		pos += int64(klen)
+		k := bytesToString(key)
 
 		switch op {
 		case cacheWALOpPut:
 			if vlen == 0 {
-				entries[string(key)] = cacheEntry{value: nil}
+				entries[k] = cacheEntry{key: key, value: nil}
 				lastGoodPos = pos
 				continue
 			}
@@ -116,7 +117,7 @@ scan:
 				break scan
 			}
 			pos += int64(vlen)
-			entries[string(key)] = cacheEntry{value: val}
+			entries[k] = cacheEntry{key: key, value: val}
 		case cacheWALOpDelete:
 			// vlen is expected to be 0; ignore if not.
 			if vlen > 0 {
@@ -125,7 +126,7 @@ scan:
 				}
 				pos += int64(vlen)
 			}
-			entries[string(key)] = cacheEntry{del: true}
+			entries[k] = cacheEntry{key: key, del: true}
 		default:
 			// Unknown op: treat as corruption.
 			break scan
@@ -250,7 +251,10 @@ func (w *cacheWAL) rewrite(pending map[string]cacheEntry) error {
 
 	tmpW := &cacheWAL{f: tmp}
 	for k, e := range pending {
-		key := []byte(k)
+		key := e.key
+		if len(key) == 0 && len(k) > 0 {
+			key = []byte(k)
+		}
 		if e.del {
 			if err := tmpW.appendDelete(key); err != nil {
 				_ = tmp.Close()

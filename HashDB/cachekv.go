@@ -23,6 +23,7 @@ type hashManyGetter interface {
 
 // cacheEntry stores a pending write or delete.
 type cacheEntry struct {
+	key   []byte
 	value []byte
 	del   bool
 }
@@ -44,6 +45,9 @@ type CacheKV struct {
 
 	maxEntries int
 	maxBytes   int
+
+	batchKeys [][]byte
+	batchVals [][]byte
 
 	flushInterval time.Duration
 	stopCh        chan struct{}
@@ -101,10 +105,14 @@ func NewCacheKVWithWAL(backend KVStore, maxEntries, maxBytes int, flushInterval 
 	if recovered != nil {
 		c.pending = recovered
 		for k, e := range recovered {
+			keyLen := len(e.key)
+			if keyLen == 0 {
+				keyLen = len(k)
+			}
 			if e.del {
-				c.pendingLen += len(k)
+				c.pendingLen += keyLen
 			} else {
-				c.pendingLen += len(k) + len(e.value)
+				c.pendingLen += keyLen + len(e.value)
 			}
 		}
 	} else {
@@ -120,7 +128,7 @@ func NewCacheKVWithWAL(backend KVStore, maxEntries, maxBytes int, flushInterval 
 
 // Get returns the cached value for a key (or fetches it from the backend).
 func (c *CacheKV) Get(key []byte) ([]byte, error) {
-	k := string(key)
+	k := bytesToString(key)
 	c.mu.RLock()
 	if e, ok := c.pending[k]; ok {
 		c.mu.RUnlock()
@@ -141,7 +149,7 @@ func (c *CacheKV) Get(key []byte) ([]byte, error) {
 }
 
 func (c *CacheKV) getWithHash(key []byte, keyHash Hash) ([]byte, error) {
-	k := string(key)
+	k := bytesToString(key)
 	c.mu.RLock()
 	if e, ok := c.pending[k]; ok {
 		c.mu.RUnlock()
@@ -180,7 +188,7 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 	pending := c.pending
 	flushing := c.flushing
 	for i, key := range keys {
-		k := string(key)
+		k := bytesToString(key)
 		if e, ok := pending[k]; ok {
 			if e.del {
 				values[i] = nil
@@ -247,18 +255,20 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 
 // Put inserts or updates a key in the write-back cache.
 func (c *CacheKV) Put(key, value []byte) error {
-	k := string(key)
+	keyCopy := append([]byte(nil), key...)
+	k := bytesToString(keyCopy)
+	valCopy := append([]byte(nil), value...)
 
 	c.walMu.Lock()
 	if c.wal != nil {
-		if err := c.wal.appendPut(key, value); err != nil {
+		if err := c.wal.appendPut(keyCopy, valCopy); err != nil {
 			c.walMu.Unlock()
 			return err
 		}
 	}
 	c.mu.Lock()
-	c.pending[k] = cacheEntry{value: append([]byte(nil), value...)}
-	c.pendingLen += len(k) + len(value)
+	c.pending[k] = cacheEntry{key: keyCopy, value: valCopy}
+	c.pendingLen += len(keyCopy) + len(valCopy)
 	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
 	c.mu.Unlock()
 	c.walMu.Unlock()
@@ -270,18 +280,19 @@ func (c *CacheKV) Put(key, value []byte) error {
 
 // Delete removes a key via the write-back cache.
 func (c *CacheKV) Delete(key []byte) error {
-	k := string(key)
+	keyCopy := append([]byte(nil), key...)
+	k := bytesToString(keyCopy)
 
 	c.walMu.Lock()
 	if c.wal != nil {
-		if err := c.wal.appendDelete(key); err != nil {
+		if err := c.wal.appendDelete(keyCopy); err != nil {
 			c.walMu.Unlock()
 			return err
 		}
 	}
 	c.mu.Lock()
-	c.pending[k] = cacheEntry{del: true}
-	c.pendingLen += len(k)
+	c.pending[k] = cacheEntry{key: keyCopy, del: true}
+	c.pendingLen += len(keyCopy)
 	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
 	c.mu.Unlock()
 	c.walMu.Unlock()
@@ -318,10 +329,14 @@ func (c *CacheKV) Flush() error {
 			}
 			for k, e := range c.flushing {
 				c.pending[k] = e
+				keyLen := len(e.key)
+				if keyLen == 0 {
+					keyLen = len(k)
+				}
 				if e.del {
-					c.pendingLen += len(k)
+					c.pendingLen += keyLen
 				} else {
-					c.pendingLen += len(k) + len(e.value)
+					c.pendingLen += keyLen + len(e.value)
 				}
 			}
 		}
@@ -329,17 +344,31 @@ func (c *CacheKV) Flush() error {
 		c.mu.Unlock()
 	}()
 
-	var batchKeys [][]byte
-	var batchVals [][]byte
+	if cap(c.batchKeys) < len(entries) {
+		c.batchKeys = make([][]byte, 0, len(entries))
+	} else {
+		c.batchKeys = c.batchKeys[:0]
+	}
+	if cap(c.batchVals) < len(entries) {
+		c.batchVals = make([][]byte, 0, len(entries))
+	} else {
+		c.batchVals = c.batchVals[:0]
+	}
+	batchKeys := c.batchKeys
+	batchVals := c.batchVals
 	for k, e := range entries {
+		keyBytes := e.key
+		if len(keyBytes) == 0 && len(k) > 0 {
+			keyBytes = []byte(k)
+		}
 		if e.del {
-			if err := c.backend.Delete([]byte(k)); err != nil {
+			if err := c.backend.Delete(keyBytes); err != nil {
 				backendErr = err
 				return backendErr
 			}
 			continue
 		}
-		batchKeys = append(batchKeys, []byte(k))
+		batchKeys = append(batchKeys, keyBytes)
 		batchVals = append(batchVals, e.value)
 	}
 
@@ -360,6 +389,8 @@ func (c *CacheKV) Flush() error {
 			}
 		}
 	}
+	c.batchKeys = batchKeys
+	c.batchVals = batchVals
 
 	// WAL compaction: rewrite to contain only still-pending writes (those that arrived during this flush).
 	if c.wal != nil {

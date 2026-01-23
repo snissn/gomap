@@ -56,7 +56,8 @@ type DB struct {
 	resizeTime time.Duration
 	slabTime   time.Duration
 
-	slabData []byte
+	slabData    []byte
+	slabOffsets []Key
 
 	slabFiles       map[uint16]*os.File
 	activeSegmentID uint16
