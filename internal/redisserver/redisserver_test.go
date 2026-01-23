@@ -363,3 +363,88 @@ func TestScanAndKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestStringOps(t *testing.T) {
+	for _, engine := range []string{"hashdb", "treedb"} {
+		t.Run(engine, func(t *testing.T) {
+			addr, cleanup := startTestServer(t, engine, false)
+			defer cleanup()
+			c := newRespClient(t, addr)
+			defer c.Close()
+
+			v := c.Do([]byte("SETNX"), []byte("k1"), []byte("v1"))
+			if v.kind != ':' || v.num != 1 {
+				t.Fatalf("SETNX expected 1: %#v", v)
+			}
+			v = c.Do([]byte("SETNX"), []byte("k1"), []byte("v2"))
+			if v.kind != ':' || v.num != 0 {
+				t.Fatalf("SETNX expected 0: %#v", v)
+			}
+
+			v = c.Do([]byte("GETSET"), []byte("k1"), []byte("v3"))
+			if v.kind != '$' || string(v.bulk) != "v1" {
+				t.Fatalf("GETSET old value: %#v", v)
+			}
+
+			v = c.Do([]byte("GETDEL"), []byte("k1"))
+			if v.kind != '$' || string(v.bulk) != "v3" {
+				t.Fatalf("GETDEL value: %#v", v)
+			}
+			v = c.Do([]byte("GET"), []byte("k1"))
+			if v.kind != '$' || v.bulk != nil {
+				t.Fatalf("GET after GETDEL expected null: %#v", v)
+			}
+
+			_ = c.Do([]byte("SET"), []byte("k2"), []byte("hi"))
+			v = c.Do([]byte("APPEND"), []byte("k2"), []byte("!"))
+			if v.kind != ':' || v.num != 3 {
+				t.Fatalf("APPEND length: %#v", v)
+			}
+			v = c.Do([]byte("STRLEN"), []byte("k2"))
+			if v.kind != ':' || v.num != 3 {
+				t.Fatalf("STRLEN: %#v", v)
+			}
+
+			_ = c.Do([]byte("SET"), []byte("k3"), []byte("hello"))
+			v = c.Do([]byte("GETRANGE"), []byte("k3"), []byte("1"), []byte("3"))
+			if v.kind != '$' || string(v.bulk) != "ell" {
+				t.Fatalf("GETRANGE: %#v", v)
+			}
+			v = c.Do([]byte("SETRANGE"), []byte("k3"), []byte("6"), []byte("!"))
+			if v.kind != ':' || v.num != 7 {
+				t.Fatalf("SETRANGE len: %#v", v)
+			}
+			v = c.Do([]byte("GET"), []byte("k3"))
+			if v.kind != '$' || string(v.bulk) != "hello\x00!" {
+				t.Fatalf("SETRANGE result: %#v", v)
+			}
+		})
+	}
+}
+
+func TestRenameAndDBSize(t *testing.T) {
+	for _, engine := range []string{"hashdb", "treedb"} {
+		t.Run(engine, func(t *testing.T) {
+			addr, cleanup := startTestServer(t, engine, false)
+			defer cleanup()
+			c := newRespClient(t, addr)
+			defer c.Close()
+
+			_ = c.Do([]byte("MSET"), []byte("a"), []byte("1"), []byte("b"), []byte("2"))
+			v := c.Do([]byte("DBSIZE"))
+			if v.kind != ':' || v.num < 2 {
+				t.Fatalf("DBSIZE: %#v", v)
+			}
+
+			v = c.Do([]byte("RENAME"), []byte("a"), []byte("c"))
+			if v.kind != '+' {
+				t.Fatalf("RENAME: %#v", v)
+			}
+
+			v = c.Do([]byte("RENAMENX"), []byte("b"), []byte("c"))
+			if v.kind != ':' || v.num != 0 {
+				t.Fatalf("RENAMENX should fail: %#v", v)
+			}
+		})
+	}
+}
