@@ -99,13 +99,15 @@ const (
 	ModeBackend
 )
 
+const defaultChunkSize = 4 * 1024 * 1024
+
 type Options struct {
 	Dir string
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
 	ReadOnly   bool
-	ChunkSize  int64  // Default 256MB
+	ChunkSize  int64  // Default 4MiB
 	KeepRecent uint64 // Default 10000
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
 	// behavior). When false (default), a bounded background pruner frees pages
@@ -409,7 +411,7 @@ func Open(opts Options) (*DB, error) {
 		return nil, errors.New("db dir required")
 	}
 	if opts.ChunkSize == 0 {
-		opts.ChunkSize = 256 * 1024 * 1024
+		opts.ChunkSize = defaultChunkSize
 	}
 	if opts.KeepRecent == 0 {
 		opts.KeepRecent = 10000

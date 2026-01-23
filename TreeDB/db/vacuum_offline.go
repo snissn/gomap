@@ -41,7 +41,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return errors.New("db dir required")
 	}
 	if opts.ChunkSize == 0 {
-		opts.ChunkSize = 256 * 1024 * 1024
+		opts.ChunkSize = defaultChunkSize
 	}
 	opts.DisableBackgroundPrune = true
 	opts.ReadOnly = true

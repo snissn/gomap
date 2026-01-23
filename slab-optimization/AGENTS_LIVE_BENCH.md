@@ -259,3 +259,5 @@ Stability:
 - 2026-01-22 14:07:46 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 90.968s).
 - 2026-01-22 14:09:04 HST: Updated PR 114 body with aggressive-default bench results (mode3/on + mode4/on), dict activation notes, and full TreeDB test command.
 - 2026-01-22 14:12:42 HST: `gh pr checks 114 --watch` confirms all CI checks passing after latest push (race-check 3m1s; windows-latest 2m55s).
+- 2026-01-22 14:23:06 HST: Reduced default index.db chunk sizes: `TreeDB/public.go` now defaults to 4MiB chunks and uses 1MiB for dictdb when ChunkSize is unset; `TreeDB/db/db.go` + `TreeDB/db/vacuum_offline.go` default ChunkSize updated to 4MiB; updated `TreeDB/specs/spec.md` to match new default. Ran `gofmt` on touched Go files.
+- 2026-01-22 14:24:57 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 80.264s).
