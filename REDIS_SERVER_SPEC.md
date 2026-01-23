@@ -147,14 +147,13 @@ Engine-specific options (minimal set; add only as needed):
   - `-hashdb-compression` (default false, benchmark-friendly)
 - TreeDB:
   - `-treedb-mode` (`cached` | `backend`, default `cached`)
-  - `-treedb-flush-threshold-bytes` (default something conservative, e.g. 64MiB)
-  - `-treedb-value-log-threshold` (default 0; see safety note below)
-  - `-treedb-disable-value-log` (default true; safety-first until WAL/vlog is unified)
+  - `-treedb-flush-threshold` (default something conservative, e.g. 64MiB)
+  - `-treedb-value-log-threshold` (default 0 = TreeDB default inline threshold)
+  - `-treedb-disable-value-log` (default false; legacy WAL framing when true)
 
-Safety note (TreeDB value-log pointers):
-- Until the WAL/vlog lifecycle is unified (see `AGENTS.md` in repo root), default
-  `ValueLogPointerThreshold` to 0 and disable the value log by default unless explicitly
-  overridden.
+Mode default (TreeDB):
+- The Redis server defaults to **mode3** semantics: value-log enabled + journal enabled.
+- To force legacy behavior (inline values only), set `-treedb-disable-value-log=true`.
 
 ## redcon Server Model
 

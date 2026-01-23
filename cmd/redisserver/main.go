@@ -30,7 +30,7 @@ func main() {
 	flag.StringVar(&cfg.TreeDBMode, "treedb-mode", "cached", "TreeDB mode: cached|backend")
 	flag.Int64Var(&cfg.TreeDBFlushThreshold, "treedb-flush-threshold", 64*1024*1024, "TreeDB flush threshold in bytes")
 	flag.IntVar(&cfg.TreeDBValueLogThreshold, "treedb-value-log-threshold", 0, "TreeDB value-log pointer threshold")
-	flag.BoolVar(&cfg.TreeDBDisableValueLog, "treedb-disable-value-log", true, "TreeDB: disable value-log pointers (safety default)")
+	flag.BoolVar(&cfg.TreeDBDisableValueLog, "treedb-disable-value-log", false, "TreeDB: disable value-log pointers (legacy mode)")
 	flag.BoolVar(&cfg.TreeDBDisableWAL, "treedb-disable-wal", false, "TreeDB: disable WAL")
 	flag.BoolVar(&cfg.TreeDBDisableJournal, "treedb-disable-journal", false, "TreeDB: disable journal")
 	flag.BoolVar(&cfg.TreeDBRelaxedSync, "treedb-relaxed-sync", false, "TreeDB: relaxed sync")
@@ -57,7 +57,7 @@ func main() {
 	engine := strings.ToLower(strings.TrimSpace(cfg.Engine))
 	log.Printf("redisserver: engine=%s addr=%s dir=%s", engine, cfg.Addr, cfg.Dir)
 	if cfg.TreeDBDisableValueLog && engine == "treedb" {
-		log.Printf("redisserver: treedb value-log disabled (override with -treedb-disable-value-log=false)")
+		log.Printf("redisserver: treedb value-log disabled (legacy mode)")
 	}
 
 	server, err := redisserver.New(cfg)
