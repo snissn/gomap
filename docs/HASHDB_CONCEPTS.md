@@ -56,7 +56,7 @@ See `docs/HASHDB_SNAPSHOT.md`.
 
 `*hashdb.HashDB` uses per-shard `CachedDB` instances:
 
-- The cache is a write-back buffer (no journal by default).
+- The cache is a write-back buffer (no WAL).
 - Durable writes (`*Sync`) flush the cache first and then commit durably to the backend shard.
 
 ## Related Docs

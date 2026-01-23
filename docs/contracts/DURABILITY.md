@@ -58,7 +58,7 @@ Durability contract:
 - The mmap index (`hashctl-*`, `hashkeys-*`) is treated as a derived cache; on open after an unclean shutdown HashDB rebuilds the index by scanning the slab log and truncates torn tail records.
 
 Notes:
-- HashDB’s sharded `Open/OpenWithShards` entrypoint uses a write-back cache. By default there is no cache journal (legacy WAL), so pending cache writes are volatile until flushed. `PutSync`/`DeleteSync` flush the cache and then perform a durable backend write.
-- Optional: a per-shard cache journal (legacy WAL) can be enabled via `hashdb.OpenWithOptions` / `hashdb.OpenWithShardsAndOptions` (`HashDBOptions.CacheWAL`). Depending on the fsync policy, non-`*Sync` cache writes may be recoverable after a crash.
+- HashDB’s sharded `Open/OpenWithShards` entrypoint uses a write-back cache. By default there is no cache WAL, so pending cache writes are volatile until flushed. `PutSync`/`DeleteSync` flush the cache and then perform a durable backend write.
+- Optional: a per-shard cache WAL can be enabled via `hashdb.OpenWithOptions` / `hashdb.OpenWithShardsAndOptions` (`HashDBOptions.CacheWAL`). Depending on the fsync policy, non-`*Sync` cache writes may be recoverable after a crash.
 - For the sharded `*hashdb.HashDB` entrypoint, `ApplyBatchSync` is atomic per shard, but not atomic across shards.
 - If you need fully integrated journal-based durability with stronger corruption detection, use TreeDB `*Sync` operations today.
