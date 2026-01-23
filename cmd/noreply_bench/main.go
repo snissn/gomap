@@ -94,6 +94,13 @@ func main() {
 }
 
 func runClient(cfg config, id int, value []byte, valLen string, startCh <-chan struct{}, ready *sync.WaitGroup, total *atomic.Uint64) error {
+	readyDone := false
+	defer func() {
+		if !readyDone {
+			ready.Done()
+		}
+	}()
+
 	conn, err := net.Dial("tcp", cfg.addr)
 	if err != nil {
 		return err
@@ -140,6 +147,7 @@ func runClient(cfg config, id int, value []byte, valLen string, startCh <-chan s
 		}
 	}
 
+	readyDone = true
 	ready.Done()
 	<-startCh
 
