@@ -391,6 +391,36 @@ go run ./cmd/unified_bench   -dbs treedbbackend -exclude-dbs \"\"   -test full_s
 
 Run baseline and with each index/key encoding flag under test.
 
+#### 5.2.C Head-to-head main vs rc (required before merge)
+
+Before merging `sprint/rc_1` to `main`, run a **head-to-head** comparison on the
+same host to highlight deltas between branches.
+
+Minimum required comparisons:
+
+1) **Live KV throughput (one compressible config + one incompressible config)**  
+   - Run on **both** branches (`main` and `sprint/rc_1`) with identical flags:
+     - `mode3` + `compression=off`
+     - `mode3` + `compression=on`
+   - Use the same dataset and `-bench-raw-mib/-bench-batch/-train/-eval` values.
+   - If `main` does **not** have `-bench-kv` flags, record the absence and skip the
+     live bench on `main` (do not backport just for this comparison).
+
+2) **Synthetic large-value comparisons**  
+   Run the Workload A `cmd/unified_bench` matrix on **both** branches:
+   - mode3 (default)
+   - mode4 (disable journal + allow unsafe)
+   - mode1 WAL on (disable value log)
+   - mode1 WAL off (disable WAL + allow unsafe)
+
+Artifacts (store separately per branch):
+- `out/head_to_head_main/*`
+- `out/head_to_head_rc/*`
+
+Summarize deltas:
+- Report any **>10% regression** in steady throughput or synthetic writes.
+- Note any qualitative differences (e.g., dict activity missing/present).
+
 ### 5.3 Autotuner benchmark suite (CI-gated)
 
 If the wall-time autotuner exists, implement a suite similar to:
