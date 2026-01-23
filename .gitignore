@@ -10,3 +10,4 @@ treedb.prof
 treedb_opt_node.prof
 *.prof
 TreeDB/db/test-*
+out/
