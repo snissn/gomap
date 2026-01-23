@@ -244,13 +244,20 @@ func TestClientReplyOffSuppressesOK(t *testing.T) {
 	c := newRespClient(t, addr)
 	defer c.Close()
 
-	if v := c.Do([]byte("CLIENT"), []byte("REPLY"), []byte("OFF")); v.kind != '+' {
-		t.Fatalf("CLIENT REPLY OFF failed: %#v", v)
+	writeCommand(nil, c.c, [][]byte{[]byte("CLIENT"), []byte("REPLY"), []byte("OFF")})
+	_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err := readResp(c.r)
+	if err == nil {
+		t.Fatalf("expected no reply to CLIENT REPLY OFF")
 	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	_ = c.c.SetReadDeadline(time.Time{})
 
 	writeCommand(nil, c.c, [][]byte{[]byte("SET"), []byte("k1"), []byte("v1")})
 	_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	_, err := readResp(c.r)
+	_, err = readResp(c.r)
 	if err == nil {
 		t.Fatalf("expected no reply after CLIENT REPLY OFF")
 	}
@@ -266,9 +273,16 @@ func TestClientReplyOffStillReturnsErrors(t *testing.T) {
 	c := newRespClient(t, addr)
 	defer c.Close()
 
-	if v := c.Do([]byte("CLIENT"), []byte("REPLY"), []byte("OFF")); v.kind != '+' {
-		t.Fatalf("CLIENT REPLY OFF failed: %#v", v)
+	writeCommand(nil, c.c, [][]byte{[]byte("CLIENT"), []byte("REPLY"), []byte("OFF")})
+	_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err := readResp(c.r)
+	if err == nil {
+		t.Fatalf("expected no reply to CLIENT REPLY OFF")
 	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	_ = c.c.SetReadDeadline(time.Time{})
 
 	writeCommand(nil, c.c, [][]byte{[]byte("GET")})
 	v, err := readResp(c.r)
@@ -277,6 +291,34 @@ func TestClientReplyOffStillReturnsErrors(t *testing.T) {
 	}
 	if v.kind != '-' {
 		t.Fatalf("expected error reply, got %#v", v)
+	}
+}
+
+func TestClientReplyOnRestoresReplies(t *testing.T) {
+	addr, cleanup := startTestServer(t, "hashdb", false)
+	defer cleanup()
+	c := newRespClient(t, addr)
+	defer c.Close()
+
+	writeCommand(nil, c.c, [][]byte{[]byte("CLIENT"), []byte("REPLY"), []byte("OFF")})
+	_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err := readResp(c.r)
+	if err == nil {
+		t.Fatalf("expected no reply to CLIENT REPLY OFF")
+	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	_ = c.c.SetReadDeadline(time.Time{})
+
+	v := c.Do([]byte("CLIENT"), []byte("REPLY"), []byte("ON"))
+	if v.kind != '+' || v.str != "OK" {
+		t.Fatalf("CLIENT REPLY ON mismatch: %#v", v)
+	}
+
+	v = c.Do([]byte("PING"))
+	if v.kind != '+' || v.str != "PONG" {
+		t.Fatalf("PING mismatch after reply on: %#v", v)
 	}
 }
 

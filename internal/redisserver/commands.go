@@ -847,15 +847,17 @@ func (s *Server) handleClient(conn redcon.Conn, st *connState, cmd redcon.Comman
 		switch mode {
 		case "ON":
 			st.replyOff = false
+			st.replySkip = false
+			conn.WriteString("OK")
 		case "OFF":
 			st.replyOff = true
+			st.replySkip = false
 		case "SKIP":
 			st.replySkip = true
 		default:
 			conn.WriteError("ERR syntax error")
 			return
 		}
-		conn.WriteString("OK")
 	default:
 		unsupported(conn)
 	}

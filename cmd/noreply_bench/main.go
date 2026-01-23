@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -48,12 +49,12 @@ func main() {
 	flag.Parse()
 
 	if cfg.clients <= 0 || cfg.pipeline <= 0 || cfg.keyspace <= 0 {
-		fmt.Printf("invalid config: clients=%d pipeline=%d keyspace=%d\n", cfg.clients, cfg.pipeline, cfg.keyspace)
-		return
+		fmt.Fprintf(os.Stderr, "invalid config: clients=%d pipeline=%d keyspace=%d\n", cfg.clients, cfg.pipeline, cfg.keyspace)
+		os.Exit(2)
 	}
 	if cfg.testTime <= 0 && cfg.requests <= 0 {
-		fmt.Printf("invalid config: requests=%d test-time=%s\n", cfg.requests, cfg.testTime)
-		return
+		fmt.Fprintf(os.Stderr, "invalid config: requests=%d test-time=%s\n", cfg.requests, cfg.testTime)
+		os.Exit(2)
 	}
 
 	value := bytes.Repeat([]byte("v"), cfg.valueSize)
@@ -83,8 +84,8 @@ func main() {
 	close(errCh)
 
 	if err, ok := <-errCh; ok {
-		fmt.Printf("error: %v\n", err)
-		return
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 
 	elapsed := time.Since(start)
@@ -135,16 +136,38 @@ func runClient(cfg config, id int, value []byte, valLen string, startCh <-chan s
 		if err := flushWithBackoff(w); err != nil {
 			return err
 		}
-		resp, err := readResp(r)
-		if err != nil {
-			return err
-		}
-		if resp.kind != '+' {
+
+		// Redis-style behavior is to suppress the reply to CLIENT REPLY OFF itself.
+		// Some servers may still reply +OK; accept either by best-effort reading.
+		_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		if resp, err := readResp(r); err == nil {
 			if resp.kind == '-' {
 				return fmt.Errorf("CLIENT REPLY OFF failed: %s", resp.line)
 			}
-			return fmt.Errorf("CLIENT REPLY OFF unexpected reply kind: %q", resp.kind)
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			// Expected: no reply.
+		} else {
+			return err
 		}
+		_ = conn.SetReadDeadline(time.Time{})
+
+		// Verify replies are actually suppressed by sending a PING and ensuring
+		// we don't receive any response.
+		if err := writeCommand(w, "PING"); err != nil {
+			return err
+		}
+		if err := flushWithBackoff(w); err != nil {
+			return err
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		if resp, err := readResp(r); err == nil {
+			return fmt.Errorf("expected no reply after CLIENT REPLY OFF, got kind=%q line=%q", resp.kind, resp.line)
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			// OK.
+		} else {
+			return err
+		}
+		_ = conn.SetReadDeadline(time.Time{})
 	}
 
 	readyDone = true
@@ -205,7 +228,7 @@ func flushWithBackoff(w *bufio.Writer) error {
 		}
 		if errors.Is(err, syscall.ENOBUFS) {
 			if time.Now().After(deadline) {
-				return err
+				return fmt.Errorf("write: ENOBUFS (try lowering -clients/-pipeline or increasing OS socket buffers): %w", err)
 			}
 			time.Sleep(backoff)
 			if backoff < 10*time.Millisecond {
