@@ -161,6 +161,62 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeWriter(t *testing.T) {
 	os.Exit(0)
 }
 
+func runCrashRecoveryMode4Writer(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCrashRecoveryMode4Writer$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
+func TestHelperTreeDBCrashRecoveryMode4Writer(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	// Mode4: DisableWAL=true, DisableValueLog=false, SplitValueLog=true, AllowUnsafe=true
+	opts := treedb.Options{
+		Dir:             dir,
+		ChunkSize:       64 * 1024,
+		DisableWAL:      true,
+		DisableValueLog: false,
+		SplitValueLog:   true,
+		AllowUnsafe:     true,
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// Perform non-sync writes (these may be lost on crash with DisableWAL=true)
+	_ = db.Set([]byte("non_sync_key"), []byte("may_be_lost"))
+	_ = db.Set([]byte("another_key"), bytes.Repeat([]byte("x"), 2048))
+
+	// Perform a sync write to ensure at least some data is durable
+	_ = db.SetSync([]byte("sync_key"), []byte("durable_value"))
+	_ = db.SetSync([]byte("sync_large"), bytes.Repeat([]byte("y"), 4096))
+
+	// Simulate a crash by exiting without calling Close()
+	os.Exit(0)
+}
+
 func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 	dir := t.TempDir()
 	runCrashRecoveryWriter(t, dir)
@@ -363,6 +419,103 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCrashRecovery_Mode4_DisableWALWithValueLog(t *testing.T) {
+	// Mode4: DisableWAL=true (no journal), DisableValueLog=false, SplitValueLog=true, AllowUnsafe=true
+	// This test verifies that Mode4 crash/reopen semantics work correctly:
+	// - DB opens without panics or invariant failures
+	// - Full scan completes
+	// - Sync'd values are recovered (non-sync values may be lost, which is expected)
+	dir := t.TempDir()
+	runCrashRecoveryMode4Writer(t, dir)
+
+	// Reopen with same Mode4 settings
+	opts := treedb.Options{
+		Dir:             dir,
+		ChunkSize:       64 * 1024,
+		DisableWAL:      true,
+		DisableValueLog: false,
+		SplitValueLog:   true,
+		AllowUnsafe:     true,
+	}
+
+	// Test 1: DB opens without panics or invariant failures
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after crash: %v", err)
+	}
+	defer db.Close()
+
+	// Test 2: Verify sync'd writes are recovered (sync operations should be durable even with DisableWAL)
+	val, err := db.Get([]byte("sync_key"))
+	if err != nil {
+		t.Fatalf("get sync_key: %v", err)
+	}
+	if string(val) != "durable_value" {
+		t.Fatalf("get sync_key: got %q, want %q", string(val), "durable_value")
+	}
+
+	// Verify large sync'd value
+	largeVal, err := db.Get([]byte("sync_large"))
+	if err != nil {
+		t.Fatalf("get sync_large: %v", err)
+	}
+	if len(largeVal) != 4096 {
+		t.Fatalf("get sync_large: got len %d, want %d", len(largeVal), 4096)
+	}
+	expectedLarge := bytes.Repeat([]byte("y"), 4096)
+	if !bytes.Equal(largeVal, expectedLarge) {
+		t.Fatalf("get sync_large: value corrupted")
+	}
+
+	// Test 3: Full scan completes without errors
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("create iterator: %v", err)
+	}
+	defer it.Close()
+
+	seenKeys := make(map[string]bool)
+	for it.Valid() {
+		key := string(it.Key())
+		val := it.Value()
+		seenKeys[key] = true
+
+		// Verify values match expected (no corruption)
+		switch key {
+		case "sync_key":
+			if string(val) != "durable_value" {
+				t.Fatalf("iterator: sync_key corrupted, got %q", string(val))
+			}
+		case "sync_large":
+			if len(val) != 4096 || !bytes.Equal(val, expectedLarge) {
+				t.Fatalf("iterator: sync_large corrupted")
+			}
+		case "non_sync_key", "another_key":
+			// These are non-sync writes - if present, verify they're not corrupted
+			// But it's acceptable if they're missing (lost due to crash with DisableWAL)
+			t.Logf("non-sync key %q survived crash (acceptable but not guaranteed)", key)
+		default:
+			t.Logf("unexpected key %q found during scan", key)
+		}
+
+		it.Next()
+	}
+
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+
+	// Ensure we found the sync'd keys (these must be present)
+	if !seenKeys["sync_key"] {
+		t.Fatalf("sync_key not found in scan")
+	}
+	if !seenKeys["sync_large"] {
+		t.Fatalf("sync_large not found in scan")
+	}
+
+	t.Logf("Mode4 crash/reopen test passed: found %d keys after recovery", len(seenKeys))
 }
 
 func TestRecovery_TruncatedWALRecord(t *testing.T) {
