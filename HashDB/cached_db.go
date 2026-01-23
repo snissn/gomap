@@ -193,6 +193,13 @@ func (c *CachedDB) SetCompression(enabled bool) {
 	c.db.SetCompression(enabled)
 }
 
+// SetMaxProbeGroupsBeforeResize sets a probe-length guard on the backend DB.
+func (c *CachedDB) SetMaxProbeGroupsBeforeResize(groups uint64) {
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	c.db.SetMaxProbeGroupsBeforeResize(groups)
+}
+
 // Update performs a read-modify-write against the backend with cache flush.
 func (c *CachedDB) Update(key []byte, callback func([]byte) ([]byte, error)) error {
 	// For simplicity, bypass cache for read-modify-write to avoid stale reads.
