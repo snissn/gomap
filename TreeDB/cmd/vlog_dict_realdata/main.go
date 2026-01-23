@@ -13,15 +13,15 @@ import (
 )
 
 var (
-	inputFile           = flag.String("input", "", "Input JSONL file with real data")
-	benchKV             = flag.Bool("bench-kv", false, "Run KV benchmark")
-	benchMode           = flag.String("bench-mode", "mode3", "Benchmark mode (mode3, mode4)")
-	benchCompression    = flag.String("bench-compression", "off", "Compression mode (on, off)")
-	benchRawMiB         = flag.Int("bench-raw-mib", 64, "Target raw data size in MiB")
-	benchBatch          = flag.Int("bench-batch", 1024, "Batch size")
-	benchPointerThresh  = flag.Int("bench-pointer-threshold", 0, "Pointer threshold")
-	trainSamples        = flag.Int("train", 20000, "Number of training samples")
-	evalSamples         = flag.Int("eval", 5000, "Number of evaluation samples")
+	inputFile          = flag.String("input", "", "Input JSONL file with real data")
+	benchKV            = flag.Bool("bench-kv", false, "Run KV benchmark")
+	benchMode          = flag.String("bench-mode", "mode3", "Benchmark mode (mode3, mode4)")
+	benchCompression   = flag.String("bench-compression", "off", "Compression mode (on, off)")
+	benchRawMiB        = flag.Int("bench-raw-mib", 64, "Target raw data size in MiB")
+	benchBatch         = flag.Int("bench-batch", 1024, "Batch size")
+	benchPointerThresh = flag.Int("bench-pointer-threshold", 0, "Pointer threshold")
+	trainSamples       = flag.Int("train", 20000, "Number of training samples")
+	evalSamples        = flag.Int("eval", 5000, "Number of evaluation samples")
 )
 
 // CompressorState tracks compression metrics
@@ -131,7 +131,7 @@ func trainDictionaryEarly(samples [][]byte) *CompressorState {
 	// For this demonstration, we don't need an actual working dict
 	// The key issue is WHEN the training happens, not if it works
 	// In real code, this would call zstd.BuildDict properly
-	
+
 	// Simulate successful dict training
 	dictID := uint64(1)
 	currentK := 1
@@ -164,7 +164,7 @@ func trainDictionaryLate(samples [][]byte) *CompressorState {
 	// For this demonstration, we don't need an actual working dict
 	// The key issue is WHEN the training happens, not if it works
 	// In real code, this would call zstd.BuildDict properly
-	
+
 	// Simulate successful dict training
 	dictID := uint64(1)
 	currentK := 1
