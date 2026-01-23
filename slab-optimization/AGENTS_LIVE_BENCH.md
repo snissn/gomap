@@ -257,3 +257,4 @@ Stability:
   - mode4/on cmd: `go run ./TreeDB/cmd/vlog_dict_realdata -input ~/celestia-db.out.jsonl -bench-kv -bench-mode mode4 -bench-compression on -bench-raw-mib 512 -bench-batch 1024 -bench-pointer-threshold 1 -train 200000 -eval 50000` -> steady_raw_MBps=172.890, attempted_frac=0.813306 kept_frac=0.813306 current_k=8 dict_id=13369443760565991031; disk value_log=146.5 MiB index=384.0 MiB.
   - Logs saved on server: ~/bench_logs/early_mode3_on_20260122_140424.log and ~/bench_logs/early_mode4_on_20260122_140440.log.
 - 2026-01-22 14:07:46 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 90.968s).
+- 2026-01-22 14:09:04 HST: Updated PR 114 body with aggressive-default bench results (mode3/on + mode4/on), dict activation notes, and full TreeDB test command.
