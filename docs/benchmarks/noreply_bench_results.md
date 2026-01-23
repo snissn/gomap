@@ -1,0 +1,4 @@
+| Engine | Scenario | RPS |
+|---|---|---:|---:|
+| hashdb | clients=32;pipeline=32;req=100000;val=128;resp3=1;replyoff=1 | 5470509.39 |
+| treedb | clients=32;pipeline=32;req=100000;val=128;resp3=1;replyoff=1 | 1623832.69 |

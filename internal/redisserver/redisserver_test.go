@@ -226,6 +226,60 @@ func TestSETGET(t *testing.T) {
 	}
 }
 
+func TestHelloResp3(t *testing.T) {
+	addr, cleanup := startTestServer(t, "hashdb", false)
+	defer cleanup()
+	c := newRespClient(t, addr)
+	defer c.Close()
+
+	v := c.Do([]byte("HELLO"), []byte("3"))
+	if v.kind != '+' || v.str != "OK" {
+		t.Fatalf("HELLO resp3 mismatch: %#v", v)
+	}
+}
+
+func TestClientReplyOffSuppressesOK(t *testing.T) {
+	addr, cleanup := startTestServer(t, "hashdb", false)
+	defer cleanup()
+	c := newRespClient(t, addr)
+	defer c.Close()
+
+	if v := c.Do([]byte("CLIENT"), []byte("REPLY"), []byte("OFF")); v.kind != '+' {
+		t.Fatalf("CLIENT REPLY OFF failed: %#v", v)
+	}
+
+	writeCommand(nil, c.c, [][]byte{[]byte("SET"), []byte("k1"), []byte("v1")})
+	_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, err := readResp(c.r)
+	if err == nil {
+		t.Fatalf("expected no reply after CLIENT REPLY OFF")
+	}
+	if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	_ = c.c.SetReadDeadline(time.Time{})
+}
+
+func TestClientReplyOffStillReturnsErrors(t *testing.T) {
+	addr, cleanup := startTestServer(t, "hashdb", false)
+	defer cleanup()
+	c := newRespClient(t, addr)
+	defer c.Close()
+
+	if v := c.Do([]byte("CLIENT"), []byte("REPLY"), []byte("OFF")); v.kind != '+' {
+		t.Fatalf("CLIENT REPLY OFF failed: %#v", v)
+	}
+
+	writeCommand(nil, c.c, [][]byte{[]byte("GET")})
+	v, err := readResp(c.r)
+	if err != nil {
+		t.Fatalf("read resp: %v", err)
+	}
+	if v.kind != '-' {
+		t.Fatalf("expected error reply, got %#v", v)
+	}
+}
+
 func TestMSETMGET(t *testing.T) {
 	for _, engine := range []string{"hashdb", "treedb"} {
 		t.Run(engine, func(t *testing.T) {

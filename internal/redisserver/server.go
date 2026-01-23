@@ -50,6 +50,10 @@ type connState struct {
 	pending          int
 	batch            kvstore.Batch
 	batchUnsupported bool
+
+	replyOff  bool
+	replySkip bool
+	resp3     bool
 }
 
 // New creates a configured server and opens the backing engine.

@@ -194,6 +194,8 @@ Implement as minimal, server-local state + best-effort replies:
   - One arg: bulk reply with the same payload
 - `ECHO <message>`: bulk reply with the same payload
 - `QUIT`: `+OK` then close connection
+- `HELLO [proto]`: accept `HELLO 2` / `HELLO 3` and reply `+OK`
+- `CLIENT REPLY ON|OFF|SKIP`: supported to allow benchmark modes without replies
 - `INFO`:
   - Return a Redis-style bulk string with a minimal set of sections/fields.
   - Include engine name and `Stats()` output if available.

@@ -40,7 +40,7 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 
 	if s.cfg.Auth != "" && !st.authed {
 		switch name {
-		case "AUTH", "PING", "QUIT":
+		case "AUTH", "PING", "QUIT", "HELLO", "CLIENT":
 		default:
 			notAuthed(conn)
 			return
@@ -52,6 +52,19 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 			conn.WriteError(err.Error())
 			return
 		}
+	}
+
+	if name == "CLIENT" {
+		s.handleClient(conn, st, cmd)
+		return
+	}
+
+	quiet := st.replyOff || st.replySkip
+	if st.replySkip {
+		st.replySkip = false
+	}
+	if quiet {
+		conn = &silentConn{Conn: conn}
 	}
 
 	switch name {
@@ -110,8 +123,8 @@ func (s *Server) handle(conn redcon.Conn, cmd redcon.Command) {
 		}
 		conn.WriteString("OK")
 
-	case "CLIENT":
-		s.handleClient(conn, st, cmd)
+	case "HELLO":
+		s.handleHello(conn, st, cmd)
 
 	case "COMMAND":
 		s.handleCommand(conn, cmd)
@@ -825,9 +838,39 @@ func (s *Server) handleClient(conn redcon.Conn, st *connState, cmd redcon.Comman
 	case "INFO":
 		info := fmt.Sprintf("id=%d addr=%s name=%s", st.id, conn.RemoteAddr(), st.name)
 		conn.WriteBulkString(info)
+	case "REPLY":
+		if len(cmd.Args) != 3 {
+			wrongArgs(conn, "CLIENT")
+			return
+		}
+		mode := prefixUpper(cmd.Args[2])
+		switch mode {
+		case "ON":
+			st.replyOff = false
+		case "OFF":
+			st.replyOff = true
+		case "SKIP":
+			st.replySkip = true
+		default:
+			conn.WriteError("ERR syntax error")
+			return
+		}
+		conn.WriteString("OK")
 	default:
 		unsupported(conn)
 	}
+}
+
+func (s *Server) handleHello(conn redcon.Conn, st *connState, cmd redcon.Command) {
+	if len(cmd.Args) > 1 {
+		proto, err := strconv.Atoi(string(cmd.Args[1]))
+		if err != nil || (proto != 2 && proto != 3) {
+			conn.WriteError("ERR unsupported protocol version")
+			return
+		}
+		st.resp3 = proto == 3
+	}
+	conn.WriteString("OK")
 }
 
 type commandInfo struct {
@@ -859,6 +902,7 @@ var commandTable = []commandInfo{
 	{"getdel", 2, []string{"write"}, 1, 1, 1},
 	{"getrange", 4, []string{"readonly"}, 1, 1, 1},
 	{"getset", 3, []string{"write"}, 1, 1, 1},
+	{"hello", -1, []string{"fast"}, 0, 0, 0},
 	{"incr", 2, []string{"write"}, 1, 1, 1},
 	{"incrby", 3, []string{"write"}, 1, 1, 1},
 	{"info", 1, []string{"fast"}, 0, 0, 0},

@@ -12,6 +12,8 @@ BENCH_DOCS_DIR="${BENCH_DOCS_DIR:-}"
 BENCH_KEYS="${BENCH_KEYS:-100000}"
 BENCH_VALSIZE="${BENCH_VALSIZE:-128}"
 BENCH_PIPELINE="${BENCH_PIPELINE:-16}"
+BENCH_EXTRA_PIPELINES="${BENCH_EXTRA_PIPELINES:-64,128}"
+BENCH_RESP3="${BENCH_RESP3:-1}"
 BENCH_CONCURRENCY="${BENCH_CONCURRENCY:-}"
 BENCH_SERVERS="${BENCH_SERVERS:-hashdb,treedb,redis,valkey,dragonfly}"
 
@@ -246,6 +248,28 @@ main() {
           ;;
       esac
     done
+
+    if [[ -n "$BENCH_EXTRA_PIPELINES" ]]; then
+      for pipe in $(echo "$BENCH_EXTRA_PIPELINES" | tr ',' ' '); do
+        pipe="$(echo "$pipe" | xargs)"
+        if [[ -z "$pipe" ]]; then
+          continue
+        fi
+        SCENARIO="Pipeline${pipe}"
+        run_bench "$server" "$port" -t set,get -c "$BENCH_CONCURRENCY" -P "$pipe" -n "$BENCH_KEYS" -d "$BENCH_VALSIZE"
+        SCENARIO="RandomKeysP${pipe}"
+        run_bench "$server" "$port" -t set,get -c "$BENCH_CONCURRENCY" -P "$pipe" -r "$BENCH_KEYS" -n "$BENCH_KEYS" -d "$BENCH_VALSIZE"
+        SCENARIO="LargeVal1KBP${pipe}"
+        run_bench "$server" "$port" -t set,get -c "$BENCH_CONCURRENCY" -P "$pipe" -n "$BENCH_KEYS" -d 1024
+      done
+    fi
+
+    if [[ "$BENCH_RESP3" -eq 1 ]]; then
+      SCENARIO="Standard_RESP3"
+      run_bench "$server" "$port" -3 -t set,get -c "$BENCH_CONCURRENCY" -n "$BENCH_KEYS" -d "$BENCH_VALSIZE"
+      SCENARIO="Pipeline${BENCH_PIPELINE}_RESP3"
+      run_bench "$server" "$port" -3 -t set,get -c "$BENCH_CONCURRENCY" -P "$BENCH_PIPELINE" -n "$BENCH_KEYS" -d "$BENCH_VALSIZE"
+    fi
 
     case "$server" in
       hashdb|treedb)

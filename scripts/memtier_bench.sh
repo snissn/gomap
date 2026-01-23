@@ -19,11 +19,12 @@ BASE_PORT="${BASE_PORT:-6380}"
 KEYS_LIST="${KEYS_LIST:-100000}"
 CLIENTS_LIST="${CLIENTS_LIST:-}"
 THREADS_LIST="${THREADS_LIST:-}"
-PIPELINE_LIST="${PIPELINE_LIST:-1}"
+PIPELINE_LIST="${PIPELINE_LIST:-1,16,64}"
 DATA_LIST="${DATA_LIST:-128}"
 RATIO_LIST="${RATIO_LIST:-1:1}"
 KEYPATTERN_LIST="${KEYPATTERN_LIST:-S:S,R:R}"
 TEST_TIME="${TEST_TIME:-10}"
+PROTOCOL_LIST="${PROTOCOL_LIST:-resp2,resp3}"
 
 REDIS_IMAGE="${REDIS_IMAGE:-redis:8.4.0}"
 VALKEY_IMAGE="${VALKEY_IMAGE:-valkey/valkey:9.0.1}"
@@ -112,13 +113,14 @@ memtier_cmd() {
   local keymin="$8"
   local keymax="$9"
   local keypattern="${10}"
-  local outfile="${11}"
+  local protocol="${11}"
+  local outfile="${12}"
 
   if command -v memtier_benchmark >/dev/null 2>&1 && [[ "$MEMTIER_USE_DOCKER" != "1" ]]; then
     memtier_benchmark \
       --server "$host" \
       --port "$port" \
-      --protocol redis \
+      --protocol "$protocol" \
       --test-time "$TEST_TIME" \
       --threads "$threads" \
       --clients "$clients" \
@@ -149,7 +151,7 @@ memtier_cmd() {
   docker run --rm --network host "$MEMTIER_IMAGE" \
     --server "$host" \
     --port "$port" \
-    --protocol redis \
+    --protocol "$protocol" \
     --test-time "$TEST_TIME" \
     --threads "$threads" \
     --clients "$clients" \
@@ -169,10 +171,10 @@ parse_memtier() {
   local scenario="$2"
   local file="$3"
   awk -v name="$name" -v scenario="$scenario" '
-    $1=="ALL" && $2=="STATS" {in=1; next}
-    in && $1 ~ /^-+/ {next}
-    in && NF==0 {exit}
-    in && ($1=="Sets" || $1=="Gets" || $1=="Totals") {
+    $1=="ALL" && $2=="STATS" {inblock=1; next}
+    inblock && $1 ~ /^-+/ {next}
+    inblock && NF==0 {exit}
+    inblock && ($1=="Sets" || $1=="Gets" || $1=="Totals") {
       cmd = ($1=="Sets" ? "SET" : ($1=="Gets" ? "GET" : "TOTAL"))
       printf "%s,%s,%s,%s\n", name, scenario, cmd, $2
     }
@@ -316,12 +318,14 @@ main() {
             for data in $(split_list "$DATA_LIST"); do
               for ratio in $(split_list "$RATIO_LIST"); do
                 for keypattern in $(split_list "$KEYPATTERN_LIST"); do
-                  scenario="keys=${keys};clients=${clients};threads=${threads};pipe=${pipeline};data=${data};ratio=${ratio};pattern=${keypattern}"
-                  outfile="$(mktemp)"
-                  log "memtier $server $scenario"
-                  memtier_cmd "127.0.0.1" "$port" "$threads" "$clients" "$pipeline" "$ratio" "$data" "$keymin" "$keymax" "$keypattern" "$outfile"
-                  parse_memtier "$server" "$scenario" "$outfile"
-                  rm -f "$outfile"
+                  for proto in $(split_list "$PROTOCOL_LIST"); do
+                    scenario="keys=${keys};clients=${clients};threads=${threads};pipe=${pipeline};data=${data};ratio=${ratio};pattern=${keypattern};proto=${proto}"
+                    outfile="$(mktemp)"
+                    log "memtier $server $scenario"
+                    memtier_cmd "127.0.0.1" "$port" "$threads" "$clients" "$pipeline" "$ratio" "$data" "$keymin" "$keymax" "$keypattern" "$proto" "$outfile"
+                    parse_memtier "$server" "$scenario" "$outfile"
+                    rm -f "$outfile"
+                  done
                 done
               done
             done
