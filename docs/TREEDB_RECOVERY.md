@@ -20,7 +20,7 @@ Depending on timing, after an unclean shutdown the DB directory may contain:
 
 - A consistent backend state (pages + slabs), possibly missing the most recent cached writes that hadn’t flushed yet.
 - One or more journal segments in `Dir/wal/` representing cached writes that are not yet reflected in the backend.
-- A torn/partial final WAL record (e.g. crash mid-write).
+- A torn/partial final journal record (e.g. crash mid-write).
 
 ## Recovery Pipeline
 

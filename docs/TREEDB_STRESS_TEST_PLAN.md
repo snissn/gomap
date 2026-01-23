@@ -35,7 +35,7 @@ Plan:
 Artifacts on timeout:
 - Goroutine dump.
 - Queue backlog stats.
-- WAL/vlog stats if available.
+- journal and value log stats if available.
 
 Concrete tests (caching):
 - `TestWaitForStopSchedulesFlush` (already added)
@@ -134,7 +134,7 @@ Pseudo-code:
 ### 4) Fault Injection (I/O pause + transient errors)
 Purpose: Verify error paths don’t deadlock or corrupt.
 Plan:
-- Wrap WAL/value-log writers to inject:
+- Wrap journal and value log writers to inject:
   - transient errors (N% of ops),
   - artificial delays (pause/slow I/O),
   - intermittent read failures for vlog reads.

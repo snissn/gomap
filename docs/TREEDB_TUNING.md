@@ -6,7 +6,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 ## TL;DR Defaults
 
 - `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
-- `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/WAL rotation threshold)
+- `FlushThreshold`: defaults to 64 MiB in cached mode (memtable and journal rotation threshold)
 - `KeepRecent`:
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
   - backend mode (`treedb.OpenBackend`): defaults to `10,000`
@@ -45,14 +45,14 @@ Larger chunks:
 
 ### `Options.FlushThreshold` (cached mode)
 
-Controls when cached mode rotates the active memtable/WAL and triggers background flush work.
+Controls when cached mode rotates the active memtable and journal and triggers background flush work.
 
 Higher threshold:
 - more batching and better throughput on random small writes,
 - but higher peak memory and journal footprint, and potentially longer recovery (more journal segments to replay).
 
 Lower threshold:
-- less memory/WAL footprint,
+- less memory and journal footprint,
 - but potentially lower write throughput due to more frequent flush work.
 
 ### `Options.MaxQueuedMemtables` (cached mode)
