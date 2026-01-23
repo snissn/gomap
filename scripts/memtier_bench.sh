@@ -17,8 +17,8 @@ BASE_PORT="${BASE_PORT:-6380}"
 
 # Matrix inputs (comma-separated).
 KEYS_LIST="${KEYS_LIST:-100000}"
-CLIENTS_LIST="${CLIENTS_LIST:-50}"
-THREADS_LIST="${THREADS_LIST:-4}"
+CLIENTS_LIST="${CLIENTS_LIST:-}"
+THREADS_LIST="${THREADS_LIST:-}"
 PIPELINE_LIST="${PIPELINE_LIST:-1}"
 DATA_LIST="${DATA_LIST:-128}"
 RATIO_LIST="${RATIO_LIST:-1:1}"
@@ -43,6 +43,22 @@ need_cmd() {
 
 docker_available() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+cpu_cores() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu
+    return
+  fi
+  echo 4
 }
 
 wait_for_port() {
@@ -194,6 +210,23 @@ main() {
     else
       USE_DOCKER=0
     fi
+  fi
+
+  if [[ -z "${CI:-}" ]]; then
+    local cores
+    cores="$(cpu_cores)"
+    if [[ -z "$THREADS_LIST" ]]; then
+      THREADS_LIST="$cores"
+    fi
+    if [[ -z "$CLIENTS_LIST" ]]; then
+      CLIENTS_LIST="2"
+    fi
+  fi
+  if [[ -z "$THREADS_LIST" ]]; then
+    THREADS_LIST="4"
+  fi
+  if [[ -z "$CLIENTS_LIST" ]]; then
+    CLIENTS_LIST="50"
   fi
 
   build_server

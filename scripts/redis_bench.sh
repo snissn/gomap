@@ -12,7 +12,7 @@ BENCH_DOCS_DIR="${BENCH_DOCS_DIR:-}"
 BENCH_KEYS="${BENCH_KEYS:-100000}"
 BENCH_VALSIZE="${BENCH_VALSIZE:-128}"
 BENCH_PIPELINE="${BENCH_PIPELINE:-16}"
-BENCH_CONCURRENCY="${BENCH_CONCURRENCY:-50}"
+BENCH_CONCURRENCY="${BENCH_CONCURRENCY:-}"
 BENCH_SERVERS="${BENCH_SERVERS:-hashdb,treedb,redis,valkey,dragonfly}"
 
 REDIS_IMAGE="${REDIS_IMAGE:-redis:8.4.0}"
@@ -35,6 +35,22 @@ need_cmd() {
 
 docker_available() {
   command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+cpu_cores() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu
+    return
+  fi
+  echo 4
 }
 
 wait_for_port() {
@@ -117,6 +133,14 @@ main() {
   need_cmd redis-benchmark
   mkdir -p "$ART_DIR"
   echo "engine,scenario,command,rps" > "$RESULTS_CSV"
+
+  if [[ -z "${CI:-}" && -z "$BENCH_CONCURRENCY" ]]; then
+    cores="$(cpu_cores)"
+    BENCH_CONCURRENCY=$((cores * 2))
+  fi
+  if [[ -z "$BENCH_CONCURRENCY" ]]; then
+    BENCH_CONCURRENCY=50
+  fi
 
   if [[ "$USE_DOCKER" == "auto" ]]; then
     if docker_available; then
