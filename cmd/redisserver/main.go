@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime/pprof"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/internal/redisserver"
 )
@@ -44,6 +46,9 @@ func main() {
 	flag.Int64Var(&cfg.CompactCopyBurstBytes, "compact-copy-burst", 0, "compaction copy burst (bytes)")
 
 	idleClose := flag.Duration("idle-close", 0, "close idle connections after this duration")
+	cpuprofile := flag.String("cpuprofile", "", "write CPU profile to file (optional)")
+	cpuprofileSeconds := flag.Int("cpuprofile-seconds", 0, "seconds to capture CPU profile (0=until process exit)")
+	cpuprofileDelay := flag.Int("cpuprofile-delay", 2, "seconds to wait before starting CPU profile")
 
 	flag.Parse()
 
@@ -63,6 +68,46 @@ func main() {
 	server, err := redisserver.New(cfg)
 	if err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+
+	if *cpuprofile != "" {
+		if *cpuprofileSeconds <= 0 {
+			f, err := os.Create(*cpuprofile)
+			if err != nil {
+				log.Fatalf("cpuprofile create: %v", err)
+			}
+			if err := pprof.StartCPUProfile(f); err != nil {
+				_ = f.Close()
+				log.Fatalf("cpuprofile start: %v", err)
+			}
+			defer func() {
+				pprof.StopCPUProfile()
+				_ = f.Close()
+			}()
+		} else {
+			path := *cpuprofile
+			seconds := *cpuprofileSeconds
+			delay := *cpuprofileDelay
+			go func() {
+				if delay > 0 {
+					time.Sleep(time.Duration(delay) * time.Second)
+				}
+				f, err := os.Create(path)
+				if err != nil {
+					log.Printf("cpuprofile create: %v", err)
+					return
+				}
+				if err := pprof.StartCPUProfile(f); err != nil {
+					_ = f.Close()
+					log.Printf("cpuprofile start: %v", err)
+					return
+				}
+				time.Sleep(time.Duration(seconds) * time.Second)
+				pprof.StopCPUProfile()
+				_ = f.Close()
+				log.Printf("cpuprofile written: %s", path)
+			}()
+		}
 	}
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server error: %v", err)
