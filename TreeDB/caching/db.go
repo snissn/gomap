@@ -3993,7 +3993,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					}
 					continue
 				}
-				shard.mem.Delete(key)
+				if err := shard.mem.DeleteWithCallback(key, nil); err != nil {
+					shard.mu.Unlock()
+					return err
+				}
 				shard.rng.add(key)
 				newBytes := shard.mem.Size()
 				delta := newBytes - shard.bytes
