@@ -10,7 +10,6 @@ import (
 
 type valueLogIterator struct {
 	iter iterator.UnsafeIterator
-	ptrs *largePtrMap
 	read func(page.ValuePtr) ([]byte, error)
 
 	cached       bool
@@ -20,13 +19,12 @@ type valueLogIterator struct {
 	err          error
 }
 
-func newValueLogIterator(iter iterator.UnsafeIterator, ptrs *largePtrMap, read func(page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
-	if iter == nil || ptrs == nil || read == nil {
+func newValueLogIterator(iter iterator.UnsafeIterator, read func(page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
+	if iter == nil || read == nil {
 		return iter
 	}
 	return &valueLogIterator{
 		iter: iter,
-		ptrs: ptrs,
 		read: read,
 	}
 }
@@ -127,16 +125,12 @@ func (it *valueLogIterator) loadValue() {
 		return
 	}
 	it.cached = true
-	it.cachedValue = it.iter.UnsafeValue()
-	if it.iter.IsDeleted() || it.ptrs == nil || it.read == nil {
+	val, ptr, flags := it.iter.UnsafeEntry()
+	it.cachedValue = val
+	if it.iter.IsDeleted() || it.read == nil {
 		return
 	}
-	if len(it.cachedValue) > 0 {
-		return
-	}
-	key := bytesToStringNoCopy(it.iter.UnsafeKey())
-	ptr, ok := it.ptrs.GetString(key)
-	if !ok {
+	if flags&node.FlagPointer == 0 {
 		return
 	}
 	it.cachedHasPtr = true
