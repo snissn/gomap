@@ -49,7 +49,8 @@ func (m Mode) String() string {
 type Table interface {
 	Set(key, value []byte)
 	// SetEntry stores a value with explicit flags and optional value pointer.
-	// When flags include node.FlagPointer, value may be nil and ptr must be set.
+	// When flags include node.FlagPointer, value may be nil and ptr must be set;
+	// if value is non-nil it is stored alongside the pointer bytes.
 	SetEntry(key, value []byte, ptr page.ValuePtr, flags byte)
 	PutWithCallback(key, value []byte, cb func(k, v []byte) error) error
 	Delete(key []byte)
@@ -166,9 +167,16 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 				if op.Type == batchpkg.OpDelete {
 					m.sl.AppendDelete(op.Key)
 				} else if op.IsPtr {
-					var buf [page.ValuePtrSize]byte
-					op.ValuePtr.Encode(buf[:])
-					_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+					if len(op.Value) > 0 {
+						buf := make([]byte, page.ValuePtrSize+len(op.Value))
+						op.ValuePtr.Encode(buf[:page.ValuePtrSize])
+						copy(buf[page.ValuePtrSize:], op.Value)
+						_ = m.sl.AppendWithCallback(op.Key, buf, node.FlagPointer, nil)
+					} else {
+						var buf [page.ValuePtrSize]byte
+						op.ValuePtr.Encode(buf[:])
+						_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+					}
 				} else {
 					m.sl.Append(op.Key, op.Value)
 				}
@@ -184,7 +192,7 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 		if op.Type == batchpkg.OpDelete {
 			m.sl.Delete(op.Key)
 		} else if op.IsPtr {
-			m.sl.PutEntry(op.Key, nil, op.ValuePtr, node.FlagPointer)
+			m.sl.PutEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
 		} else {
 			m.sl.Put(op.Key, op.Value)
 		}

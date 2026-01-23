@@ -3815,7 +3815,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	}
 	eligible := len(value) > db.valueLogThreshold
 	valueLogEnabled := db.valueLogEnabled()
-	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers() && db.memtableValueLogPointers
+	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
 		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
@@ -3895,7 +3895,11 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	shard.mu.Lock()
 	if usePointer {
-		shard.mem.SetEntry(key, nil, ptr, node.FlagPointer)
+		memVal := []byte(nil)
+		if !db.memtableValueLogPointers {
+			memVal = value
+		}
+		shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
 	} else {
 		shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 	}
@@ -6944,7 +6948,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		}
 	}
 	eligibleCount := len(eligibleIdxs)
-	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers() && b.db.memtableValueLogPointers
+	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 	if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
 		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
@@ -7002,6 +7006,9 @@ func (b *Batch) writeRegular(sync bool) error {
 				op := &b.entries[idx]
 				op.ValuePtr = ptrs[i]
 				op.IsPtr = true
+				if b.db.memtableValueLogPointers {
+					op.Value = nil
+				}
 				if debugPtr {
 					b.db.debugPtrUsed.Add(1)
 				}
@@ -7088,7 +7095,11 @@ func (b *Batch) writeRegular(sync bool) error {
 						shard.mem.DeleteSteal(op.Key)
 					} else {
 						if op.IsPtr {
-							shard.mem.SetEntrySteal(op.Key, nil, op.ValuePtr, node.FlagPointer)
+							memVal := []byte(nil)
+							if !b.db.memtableValueLogPointers {
+								memVal = op.Value
+							}
+							shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 						} else {
 							shard.mem.SetSteal(op.Key, op.Value)
 						}
@@ -7103,7 +7114,11 @@ func (b *Batch) writeRegular(sync bool) error {
 					shard.mem.DeleteSteal(op.Key)
 				} else {
 					if op.IsPtr {
-						shard.mem.SetEntrySteal(op.Key, nil, op.ValuePtr, node.FlagPointer)
+						memVal := []byte(nil)
+						if !b.db.memtableValueLogPointers {
+							memVal = op.Value
+						}
+						shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 					} else {
 						shard.mem.SetSteal(op.Key, op.Value)
 					}

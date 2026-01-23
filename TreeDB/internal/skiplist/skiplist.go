@@ -311,9 +311,17 @@ func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error
 }
 
 // PutEntry inserts key/value with explicit flags and optional value pointer.
-// When flags include FlagPointer, value is ignored and ptr is encoded into the value area.
+// When flags include FlagPointer, ptr is encoded into the value area; if value is
+// non-nil, it is appended after the pointer bytes.
 func (s *SkipList) PutEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	if flags&flagPointer != 0 {
+		if len(value) > 0 {
+			buf := make([]byte, page.ValuePtrSize+len(value))
+			ptr.Encode(buf[:page.ValuePtrSize])
+			copy(buf[page.ValuePtrSize:], value)
+			_ = s.put(key, buf, flags, nil)
+			return
+		}
 		var buf [page.ValuePtrSize]byte
 		ptr.Encode(buf[:])
 		_ = s.put(key, buf[:], flags, nil)
@@ -496,6 +504,10 @@ func (s *SkipList) Get(key []byte) ([]byte, bool, bool) {
 			if cmp == 0 {
 				flags := s.getFlags(next)
 				if flags&flagPointer != 0 {
+					val := s.getValue(next)
+					if len(val) > page.ValuePtrSize {
+						return val[page.ValuePtrSize:], flags&flagDeleted != 0, true
+					}
 					return nil, flags&flagDeleted != 0, true
 				}
 				return s.getValue(next), flags&flagDeleted != 0, true
@@ -525,7 +537,11 @@ func (s *SkipList) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				val := s.getValue(next)
 				if flags&flagPointer != 0 {
 					if len(val) >= page.ValuePtrSize {
-						return nil, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, true
+						inline := []byte(nil)
+						if len(val) > page.ValuePtrSize {
+							inline = val[page.ValuePtrSize:]
+						}
+						return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, true
 					}
 					return nil, page.ValuePtr{}, flags, true
 				}
@@ -604,6 +620,10 @@ func (it *Iterator) UnsafeKey() []byte {
 func (it *Iterator) UnsafeValue() []byte {
 	flags := it.sl.getFlags(it.curr)
 	if flags&flagPointer != 0 {
+		val := it.sl.getValue(it.curr)
+		if len(val) > page.ValuePtrSize {
+			return val[page.ValuePtrSize:]
+		}
 		return nil
 	}
 	return it.sl.getValue(it.curr)
@@ -614,7 +634,11 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	flags := it.sl.getFlags(it.curr)
 	if flags&flagPointer != 0 {
 		if len(val) >= page.ValuePtrSize {
-			return nil, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+			inline := []byte(nil)
+			if len(val) > page.ValuePtrSize {
+				inline = val[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
 		}
 		return nil, page.ValuePtr{}, flags
 	}

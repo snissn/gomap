@@ -328,6 +328,9 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 		return nil, false, false
 	}
 	if ent.flags&node.FlagPointer != 0 {
+		if len(ent.value) > page.ValuePtrSize {
+			return ent.value[page.ValuePtrSize:], ent.flags&node.FlagTombstone != 0, true
+		}
 		return nil, ent.flags&node.FlagTombstone != 0, true
 	}
 	return ent.value, ent.flags&node.FlagTombstone != 0, true
@@ -342,7 +345,11 @@ func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	}
 	if ent.flags&node.FlagPointer != 0 {
 		if len(ent.value) >= page.ValuePtrSize {
-			return nil, page.DecodeValuePtr(ent.value[:page.ValuePtrSize]), ent.flags, true
+			inline := []byte(nil)
+			if len(ent.value) > page.ValuePtrSize {
+				inline = ent.value[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(ent.value[:page.ValuePtrSize]), ent.flags, true
 		}
 		return nil, page.ValuePtr{}, ent.flags, true
 	}
@@ -663,9 +670,13 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 
 func (m *HashSorted) encodeEntryValueLocked(value []byte, ptr page.ValuePtr, flags byte, steal bool) []byte {
 	if flags&node.FlagPointer != 0 {
-		dst := m.arena.alloc(page.ValuePtrSize)
+		size := page.ValuePtrSize + len(value)
+		dst := m.arena.alloc(size)
 		ptr.Encode(dst[:page.ValuePtrSize])
-		return dst[:page.ValuePtrSize]
+		if len(value) > 0 {
+			copy(dst[page.ValuePtrSize:], value)
+		}
+		return dst[:size]
 	}
 	if flags&node.FlagTombstone != 0 {
 		return nil
@@ -923,6 +934,9 @@ func (it *hashIterator) UnsafeValue() []byte {
 	}
 	it.ensureLoaded()
 	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) > page.ValuePtrSize {
+			return it.cur.value[page.ValuePtrSize:]
+		}
 		return nil
 	}
 	return it.cur.value
@@ -938,7 +952,11 @@ func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
 		if len(it.cur.value) >= page.ValuePtrSize {
-			return nil, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
+			inline := []byte(nil)
+			if len(it.cur.value) > page.ValuePtrSize {
+				inline = it.cur.value[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
 		}
 		return nil, page.ValuePtr{}, it.cur.flags
 	}
