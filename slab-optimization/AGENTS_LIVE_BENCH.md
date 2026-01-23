@@ -263,3 +263,8 @@ Stability:
 - 2026-01-22 14:24:57 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 80.264s).
 - 2026-01-22 14:26:01 HST: Updated PR 114 body to include default chunk size reductions (maindb 4MiB, dictdb 1MiB) and latest test command.
 - 2026-01-22 14:30:20 HST: `gh pr checks 114 --watch` confirms all CI checks passing after chunk-size changes (race-check 3m5s; windows-latest 3m15s).
+- 2026-01-22 14:34:59 HST: `gh pr checks 114 --watch` confirms all CI checks passing after the latest work-log push (race-check 2m53s; windows-latest 3m51s).
+- 2026-01-22 15:20:45 HST: Updated server-side Celestia run wiring for mode4 + value-log compression and verified:
+  - Changes: added `TREEDB_BENCH_DISABLE_JOURNAL` support in `/home/mikers/dev/snissn/cosmos-db/treedb.go` and `/home/mikers/dev/snissn/cometbft-db/treedb.go` (AllowUnsafe gating + DisableJournal option); updated `~/run_celestia_compression.sh` envs to `TREEDB_BENCH_*`, added `TREEDB_BENCH_DISABLE_JOURNAL=1`, and set `GOWORK=/home/mikers/dev/snissn/go.work.celestia` for builds; created `/home/mikers/dev/snissn/go.work.celestia` (celestia-app + cometbft-db + cosmos-db + gomap only) to avoid iavl-bench workspace conflicts.
+  - Command: `timeout 180s ~/run_celestia_compression.sh > ~/celestia_compression_run3.log 2>&1 || true`
+  - Verification: `rg -n "treedb write_path" -a /home/mikers/.celestia-app-mainnet-treedb-20260122151641/sync/node.log` shows all opens as `mode=cached value_store=value_log_deferred redo_log=off` (lines 1-2, 28-29, 39), confirming mode4 across DBs with the new env wiring.
