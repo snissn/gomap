@@ -1979,7 +1979,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// background dict training by default when the value log is active unless
 	// the caller explicitly configured it. Favor early dict availability by
 	// using a smaller initial sample target.
-	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
+	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 && valueLogAutotune.Mode != valuelog.AutotuneOff {
 		trainBytes := compression.DefaultTrainBytes
 		if valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.MaxSampleBytes > 0 {
 			if valueLogAutotune.MaxSampleBytes < uint64(trainBytes) {
