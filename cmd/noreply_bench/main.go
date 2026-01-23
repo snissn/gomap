@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -19,6 +21,7 @@ type config struct {
 	label     string
 	clients   int
 	requests  int
+	testTime  time.Duration
 	pipeline  int
 	keyspace  int
 	valueSize int
@@ -34,6 +37,7 @@ func main() {
 	flag.StringVar(&cfg.label, "label", "run", "label to include in output")
 	flag.IntVar(&cfg.clients, "clients", 64, "number of client connections")
 	flag.IntVar(&cfg.requests, "requests", 100000, "requests per client")
+	flag.DurationVar(&cfg.testTime, "test-time", 0, "run for this duration (overrides -requests when > 0)")
 	flag.IntVar(&cfg.pipeline, "pipeline", 64, "pipeline depth")
 	flag.IntVar(&cfg.keyspace, "keyspace", 100000, "keyspace size")
 	flag.IntVar(&cfg.valueSize, "value-size", 128, "value size in bytes")
@@ -43,8 +47,12 @@ func main() {
 	flag.BoolVar(&cfg.replyOff, "reply-off", true, "send CLIENT REPLY OFF before benchmarking")
 	flag.Parse()
 
-	if cfg.clients <= 0 || cfg.requests <= 0 || cfg.pipeline <= 0 || cfg.keyspace <= 0 {
-		fmt.Printf("invalid config: clients=%d requests=%d pipeline=%d keyspace=%d\n", cfg.clients, cfg.requests, cfg.pipeline, cfg.keyspace)
+	if cfg.clients <= 0 || cfg.pipeline <= 0 || cfg.keyspace <= 0 {
+		fmt.Printf("invalid config: clients=%d pipeline=%d keyspace=%d\n", cfg.clients, cfg.pipeline, cfg.keyspace)
+		return
+	}
+	if cfg.testTime <= 0 && cfg.requests <= 0 {
+		fmt.Printf("invalid config: requests=%d test-time=%s\n", cfg.requests, cfg.testTime)
 		return
 	}
 
@@ -52,19 +60,25 @@ func main() {
 	valLen := strconv.Itoa(len(value))
 
 	var total atomic.Uint64
-	start := time.Now()
 	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	startCh := make(chan struct{})
 	errCh := make(chan error, cfg.clients)
 
+	ready.Add(cfg.clients)
 	for i := 0; i < cfg.clients; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			if err := runClient(cfg, id, value, valLen, &total); err != nil {
+			if err := runClient(cfg, id, value, valLen, startCh, &ready, &total); err != nil {
 				errCh <- err
 			}
 		}(i)
 	}
+
+	ready.Wait()
+	start := time.Now()
+	close(startCh)
 	wg.Wait()
 	close(errCh)
 
@@ -79,25 +93,31 @@ func main() {
 	fmt.Printf("result label=%s total=%d seconds=%.2f rps=%.2f\n", cfg.label, totalReq, elapsed.Seconds(), rps)
 }
 
-func runClient(cfg config, id int, value []byte, valLen string, total *atomic.Uint64) error {
+func runClient(cfg config, id int, value []byte, valLen string, startCh <-chan struct{}, ready *sync.WaitGroup, total *atomic.Uint64) error {
 	conn, err := net.Dial("tcp", cfg.addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	w := bufio.NewWriterSize(conn, 1<<20)
+	// Keep per-connection buffers modest; large client counts can otherwise
+	// exhaust kernel mbufs on loopback (macOS shows ENOBUFS).
+	w := bufio.NewWriterSize(conn, 64<<10)
 	r := bufio.NewReader(conn)
 
 	if cfg.resp3 {
 		if err := writeCommand(w, "HELLO", "3"); err != nil {
 			return err
 		}
-		if err := w.Flush(); err != nil {
+		if err := flushWithBackoff(w); err != nil {
 			return err
 		}
-		if _, err := readResp(r); err != nil {
+		resp, err := readResp(r)
+		if err != nil {
 			return err
+		}
+		if resp.kind == '-' {
+			return fmt.Errorf("HELLO failed: %s", resp.line)
 		}
 	}
 
@@ -105,16 +125,44 @@ func runClient(cfg config, id int, value []byte, valLen string, total *atomic.Ui
 		if err := writeCommand(w, "CLIENT", "REPLY", "OFF"); err != nil {
 			return err
 		}
-		if err := w.Flush(); err != nil {
+		if err := flushWithBackoff(w); err != nil {
 			return err
 		}
-		if _, err := readResp(r); err != nil {
+		resp, err := readResp(r)
+		if err != nil {
 			return err
+		}
+		if resp.kind != '+' {
+			if resp.kind == '-' {
+				return fmt.Errorf("CLIENT REPLY OFF failed: %s", resp.line)
+			}
+			return fmt.Errorf("CLIENT REPLY OFF unexpected reply kind: %q", resp.kind)
 		}
 	}
 
+	ready.Done()
+	<-startCh
+
 	rng := rand.New(rand.NewSource(cfg.seed + int64(id)))
 	var keyBuf [32]byte
+
+	if cfg.testTime > 0 {
+		deadline := time.Now().Add(cfg.testTime)
+		for time.Now().Before(deadline) {
+			for i := 0; i < cfg.pipeline; i++ {
+				keyID := rng.Intn(cfg.keyspace)
+				key := buildKey(keyBuf[:0], cfg.keyPrefix, keyID)
+				if err := writeSet(w, key, value, valLen); err != nil {
+					return err
+				}
+			}
+			if err := flushWithBackoff(w); err != nil {
+				return err
+			}
+			total.Add(uint64(cfg.pipeline))
+		}
+		return nil
+	}
 
 	remaining := cfg.requests
 	for remaining > 0 {
@@ -129,7 +177,7 @@ func runClient(cfg config, id int, value []byte, valLen string, total *atomic.Ui
 				return err
 			}
 		}
-		if err := w.Flush(); err != nil {
+		if err := flushWithBackoff(w); err != nil {
 			return err
 		}
 		total.Add(uint64(batch))
@@ -137,6 +185,28 @@ func runClient(cfg config, id int, value []byte, valLen string, total *atomic.Ui
 	}
 
 	return nil
+}
+
+func flushWithBackoff(w *bufio.Writer) error {
+	backoff := 50 * time.Microsecond
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := w.Flush()
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, syscall.ENOBUFS) {
+			if time.Now().After(deadline) {
+				return err
+			}
+			time.Sleep(backoff)
+			if backoff < 10*time.Millisecond {
+				backoff *= 2
+			}
+			continue
+		}
+		return err
+	}
 }
 
 func writeCommand(w *bufio.Writer, args ...string) error {
@@ -206,63 +276,73 @@ func buildKey(dst []byte, prefix string, id int) []byte {
 	return dst
 }
 
-func readResp(r *bufio.Reader) (byte, error) {
+type resp struct {
+	kind byte
+	line string
+}
+
+func readResp(r *bufio.Reader) (resp, error) {
 	b, err := r.ReadByte()
 	if err != nil {
-		return 0, err
+		return resp{}, err
 	}
 	switch b {
 	case '+', '-', ':':
-		if _, err := r.ReadString('\n'); err != nil {
-			return 0, err
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return resp{}, err
 		}
-		return b, nil
+		// Strip trailing CRLF if present.
+		if len(line) >= 2 && line[len(line)-2] == '\r' {
+			line = line[:len(line)-2]
+		}
+		return resp{kind: b, line: line}, nil
 	case '$':
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		n, err := strconv.Atoi(line[:len(line)-2])
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		if n == -1 {
-			return b, nil
+			return resp{kind: b}, nil
 		}
 		buf := make([]byte, n+2)
 		_, err = io.ReadFull(r, buf)
-		return b, err
+		return resp{kind: b}, err
 	case '*':
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		n, err := strconv.Atoi(line[:len(line)-2])
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		for i := 0; i < n; i++ {
 			if _, err := readResp(r); err != nil {
-				return 0, err
+				return resp{}, err
 			}
 		}
-		return b, nil
+		return resp{kind: b}, nil
 	case '%':
 		line, err := r.ReadString('\n')
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		n, err := strconv.Atoi(line[:len(line)-2])
 		if err != nil {
-			return 0, err
+			return resp{}, err
 		}
 		for i := 0; i < n*2; i++ {
 			if _, err := readResp(r); err != nil {
-				return 0, err
+				return resp{}, err
 			}
 		}
-		return b, nil
+		return resp{kind: b}, nil
 	default:
-		return b, nil
+		return resp{kind: b}, nil
 	}
 }

@@ -10,19 +10,46 @@ RESULTS_CSV="$ART_DIR/noreply_bench_results.csv"
 RESULTS_MD="$ART_DIR/noreply_bench_results.md"
 BENCH_DOCS_DIR="${BENCH_DOCS_DIR:-}"
 
-NR_ENGINES="${NR_ENGINES:-hashdb,treedb}"
+NR_ENGINES="${NR_ENGINES:-}"
+NR_SERVERS="${NR_SERVERS:-${NR_ENGINES:-hashdb,treedb,redis,valkey,dragonfly}}"
 NR_ADDR="${NR_ADDR:-127.0.0.1}"
 NR_BASE_PORT="${NR_BASE_PORT:-6390}"
-NR_CLIENTS="${NR_CLIENTS:-32}"
-NR_REQUESTS="${NR_REQUESTS:-100000}"
-NR_PIPELINE="${NR_PIPELINE:-32}"
+NR_CLIENTS="${NR_CLIENTS:-}"
+NR_REQUESTS="${NR_REQUESTS:-0}"
+NR_TEST_TIME="${NR_TEST_TIME:-10s}"
+NR_PIPELINE="${NR_PIPELINE:-}"
 NR_KEYSPACE="${NR_KEYSPACE:-100000}"
 NR_VALSIZE="${NR_VALSIZE:-128}"
 NR_RESP3="${NR_RESP3:-1}"
 NR_REPLY_OFF="${NR_REPLY_OFF:-1}"
 
+REDIS_IMAGE="${REDIS_IMAGE:-redis:8.4.0}"
+VALKEY_IMAGE="${VALKEY_IMAGE:-valkey/valkey:9.0.1}"
+DRAGONFLY_IMAGE="${DRAGONFLY_IMAGE:-docker.dragonflydb.io/dragonflydb/dragonfly:v1.34.2}"
+USE_DOCKER="${USE_DOCKER:-auto}"
+
 log() {
   echo "[$(date +%H:%M:%S)] $*"
+}
+
+docker_available() {
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+cpu_cores() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return
+  fi
+  if command -v getconf >/dev/null 2>&1; then
+    getconf _NPROCESSORS_ONLN
+    return
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.ncpu
+    return
+  fi
+  echo 4
 }
 
 build_bins() {
@@ -53,6 +80,13 @@ start_redisserver() {
   echo $!
 }
 
+start_docker() {
+  local image="$1"
+  local port="$2"
+  shift 2
+  docker run -d --rm -p "$port:6379" "$image" "$@"
+}
+
 stop_pid() {
   local pid="$1"
   if kill "$pid" >/dev/null 2>&1; then
@@ -79,49 +113,149 @@ main() {
   build_bins
   echo "engine,scenario,rps" > "$RESULTS_CSV"
 
-  IFS=',' read -r -a engines <<< "$NR_ENGINES"
+  if [[ "$USE_DOCKER" == "auto" ]]; then
+    if docker_available; then
+      USE_DOCKER=1
+    else
+      USE_DOCKER=0
+    fi
+  fi
+
+  if [[ -z "${CI:-}" ]]; then
+    cores="$(cpu_cores)"
+    if [[ -z "$NR_CLIENTS" ]]; then
+      NR_CLIENTS=$((cores * 2))
+    fi
+    if [[ -z "$NR_PIPELINE" ]]; then
+      NR_PIPELINE=64
+    fi
+  fi
+  if [[ -z "$NR_CLIENTS" ]]; then
+    NR_CLIENTS=32
+  fi
+  if [[ -z "$NR_PIPELINE" ]]; then
+    NR_PIPELINE=32
+  fi
+
+  IFS=',' read -r -a servers <<< "$NR_SERVERS"
   local port="$NR_BASE_PORT"
 
-  for engine in "${engines[@]}"; do
-    engine="$(echo "$engine" | xargs)"
-    if [[ -z "$engine" ]]; then
+  for server in "${servers[@]}"; do
+    server="$(echo "$server" | xargs)"
+    if [[ -z "$server" ]]; then
       continue
     fi
 
-    log "starting $engine"
-    tmpdir="$(mktemp -d)"
-    pid=$(start_redisserver "$engine" "$port" "$tmpdir")
+    case "$server" in
+      hashdb|treedb)
+        log "starting $server"
+        tmpdir="$(mktemp -d)"
+        pid=$(start_redisserver "$server" "$port" "$tmpdir")
+        ;;
+      redis)
+        if [[ "$USE_DOCKER" -ne 1 ]]; then
+          log "skipping redis (docker required)"
+          port=$((port + 1))
+          continue
+        fi
+        log "starting redis docker ($REDIS_IMAGE)"
+        cid=$(start_docker "$REDIS_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
+        ;;
+      valkey)
+        if [[ "$USE_DOCKER" -ne 1 ]]; then
+          log "skipping valkey (docker required)"
+          port=$((port + 1))
+          continue
+        fi
+        log "starting valkey docker ($VALKEY_IMAGE)"
+        cid=$(start_docker "$VALKEY_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
+        ;;
+      dragonfly)
+        if [[ "$USE_DOCKER" -ne 1 ]]; then
+          log "skipping dragonfly (docker required)"
+          port=$((port + 1))
+          continue
+        fi
+        log "starting dragonfly docker ($DRAGONFLY_IMAGE)"
+        cid=$(start_docker "$DRAGONFLY_IMAGE" "$port")
+        ;;
+      *)
+        echo "unknown server: $server" >&2
+        exit 1
+        ;;
+    esac
+
     if ! wait_for_port "$NR_ADDR" "$port"; then
-      stop_pid "$pid"
-      echo "failed to start $engine" >&2
+      echo "failed to start $server" >&2
+      if [[ "${cid:-}" != "" ]]; then
+        docker rm -f "$cid" >/dev/null || true
+      else
+        stop_pid "${pid:-}"
+      fi
+      rm -rf "${tmpdir:-}"
       exit 1
     fi
 
     scenario="clients=${NR_CLIENTS};pipeline=${NR_PIPELINE};req=${NR_REQUESTS};val=${NR_VALSIZE};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
-    log "noreply $engine $scenario"
+    if [[ "$NR_TEST_TIME" != "0" && "$NR_TEST_TIME" != "0s" ]]; then
+      scenario="clients=${NR_CLIENTS};pipeline=${NR_PIPELINE};time=${NR_TEST_TIME};val=${NR_VALSIZE};resp3=${NR_RESP3};replyoff=${NR_REPLY_OFF}"
+    fi
+    log "noreply $server $scenario"
 
+    set +e
     output="$("$BENCH_BIN" \
       -addr "$NR_ADDR:$port" \
-      -label "$engine" \
+      -label "$server" \
       -clients "$NR_CLIENTS" \
       -pipeline "$NR_PIPELINE" \
       -requests "$NR_REQUESTS" \
+      -test-time "$NR_TEST_TIME" \
       -keyspace "$NR_KEYSPACE" \
       -value-size "$NR_VALSIZE" \
       -resp3=$([[ "$NR_RESP3" -eq 1 ]] && echo true || echo false) \
       -reply-off=$([[ "$NR_REPLY_OFF" -eq 1 ]] && echo true || echo false))"
+    status=$?
+    set -e
+    if [[ "$status" -ne 0 ]]; then
+      log "noreply bench failed for $server: $output"
+      # Likely unsupported CLIENT REPLY OFF; skip.
+      case "$server" in
+        hashdb|treedb)
+          stop_pid "$pid"
+          rm -rf "$tmpdir"
+          ;;
+        redis|valkey|dragonfly)
+          docker rm -f "$cid" >/dev/null || true
+          ;;
+      esac
+      unset cid pid tmpdir
+      port=$((port + 1))
+      continue
+    fi
 
     rps=$(echo "$output" | awk -F'rps=' '{print $2}' | awk '{print $1}')
     if [[ -z "$rps" ]]; then
       echo "failed to parse rps from output: $output" >&2
-      stop_pid "$pid"
-      rm -rf "$tmpdir"
+      if [[ "${cid:-}" != "" ]]; then
+        docker rm -f "$cid" >/dev/null || true
+      else
+        stop_pid "$pid"
+        rm -rf "$tmpdir"
+      fi
       exit 1
     fi
-    echo "${engine},${scenario},${rps}" >> "$RESULTS_CSV"
+    echo "${server},${scenario},${rps}" >> "$RESULTS_CSV"
 
-    stop_pid "$pid"
-    rm -rf "$tmpdir"
+    case "$server" in
+      hashdb|treedb)
+        stop_pid "$pid"
+        rm -rf "$tmpdir"
+        ;;
+      redis|valkey|dragonfly)
+        docker rm -f "$cid" >/dev/null || true
+        ;;
+    esac
+    unset cid pid tmpdir
     port=$((port + 1))
   done
 
