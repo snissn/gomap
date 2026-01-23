@@ -396,9 +396,18 @@ func TestBatchSetsFlushOnClose(t *testing.T) {
 
 			c2 := newRespClient(t, addr)
 			defer c2.Close()
-			v = c2.Do([]byte("GET"), []byte("k3"))
-			if v.kind != '$' || string(v.bulk) != "v3" {
-				t.Fatalf("expected flushed batch: %#v", v)
+			// Flush-on-close happens asynchronously from the client's perspective.
+			// Poll briefly to avoid flakes under slower CI scheduling.
+			deadline := time.Now().Add(1 * time.Second)
+			for {
+				v = c2.Do([]byte("GET"), []byte("k3"))
+				if v.kind == '$' && string(v.bulk) == "v3" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("expected flushed batch: %#v", v)
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 		})
 	}
