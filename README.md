@@ -26,8 +26,8 @@ More docs:
 
 High-level guidance:
 
-- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort, and sharded HashDB uses a write-back cache with no WAL).
-- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort; sharded HashDB uses a write-back cache and can optionally enable a per-shard cache WAL via `OpenWithOptions`).
+- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort, and sharded HashDB uses a write-back cache with no journal by default).
+- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort; sharded HashDB uses a write-back cache and can optionally enable a per-shard cache journal (legacy WAL) via `OpenWithOptions`).
 - **TreeDB (cached, default)**: best for workloads dominated by many small random writes; use `*Sync` for durability.
 - **TreeDB (backend-only)**: best when you batch writes yourself or want the simplest engine path; scans can be faster.
 

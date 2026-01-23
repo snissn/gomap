@@ -13,7 +13,7 @@ trace-based replays that approximate Celestia workloads.
 ## Common Principles
 
 - Use the same hardware when comparing results.
-- Keep env and flags identical (WAL, vlog, compression, memtable settings).
+- Keep env and flags identical (journal, value log, compression, memtable settings).
 - Prefer multiple runs or `-count` to reduce noise.
 - Record inputs (trace file, summary, scaling, memtable mode) with results.
 
@@ -123,7 +123,7 @@ Note that results can converge as timeline duration increases.
 These apply to trace replay benchmarks:
 
 - `TREEDB_TRACE_MODE`: `cached` (default) or `backend`
-- `TREEDB_TRACE_DISABLE_WAL`: `1/0`
+- `TREEDB_TRACE_DISABLE_WAL`: `1/0` (legacy name; disables the journal)
 - `TREEDB_TRACE_DISABLE_VLOG`: `1/0`
 - `TREEDB_TRACE_FLUSH_THRESHOLD`: bytes
 - `TREEDB_TRACE_MEMTABLE_SHARDS`: int
@@ -137,6 +137,6 @@ When you share results, always include:
 - Trace ID or JSONL path
 - Timeline duration (if timeline replay)
 - Hardware / CPU model
-- Memtable mode and key options (WAL/vlog/thresholds)
+- Memtable mode and key options (journal/value log/thresholds)
 
 This makes comparisons reproducible.

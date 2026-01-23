@@ -5,6 +5,8 @@ It is written to be *actionable* and *mergeable*: every milestone below is a PR-
 
 Backwards compatibility is **not required** (pre-alpha), but **silent corruption is not acceptable**.
 
+**Terminology note (legacy):** some older docs use **WAL** as a synonym for the cached-mode **journal** (redo/commit log). The **value log** is distinct from backend slabs.
+
 ---
 
 ## 0) Sprint Outcome (End State)
@@ -27,7 +29,7 @@ At the end of this sprint, `main` contains:
 4) **Micro-batched value compression (bounded point reads)**
    - Optional micro-batching (`K`) for near-streaming ratios, while bounding point-read decode cost.
 
-5) **Combined WAL + slab write protocol (synchronous first cut)**
+5) **Combined journal + slab write protocol (synchronous first cut)**
    - A clean write/durability ordering is enforced without async slab writer goroutines.
    - Clear “written vs durable” semantics with explicit watermarks.
    - A clean path to future double/triple buffering is defined.
@@ -66,7 +68,7 @@ TreeDB already uses mmap for:
 - `data-*.slab` read-mostly views (existing behavior)
 
 This sprint must not introduce **additional** mmap usage beyond that baseline:
-- no mmap on WAL/vlog
+- no mmap on journal/value log
 - no mmap on `dict.db` (use `pread` in this sprint)
 - no new mmap on any file that is truncated/rotated at runtime
 
@@ -293,7 +295,7 @@ Mechanism:
   - still sample training data at low duty cycle
   - periodically probe to resume
 
-### A5 — Synchronous combined WAL + slab protocol (first cut)
+### A5 — Synchronous combined journal + slab protocol (first cut)
 
 Definitions (normative):
 - written: bytes appended to slab file (page cache)
@@ -301,7 +303,7 @@ Definitions (normative):
 
 Sync ordering (normative):
 1. slab payload durable (fsync)
-2. WAL durable (fsync)
+2. journal durable (fsync)
 3. index/meta durable
 4. ack
 
@@ -667,7 +669,7 @@ Implement `TreeDB/internal/dictstore` with:
 - Add: `TreeDB/internal/compression/trainer_test.go`
 
 **Locked scope (explicit)**
-- This PR is **pure library + unit tests**. It does NOT modify slabs, the B-tree, WAL, or compaction.
+- This PR is **pure library + unit tests**. It does NOT modify slabs, the B-tree, journal, or compaction.
 
 **API (explicit)**
 Implement the following (port/adapt from `feature/slab-optimizations:TreeDB/internal/compression/*`):
@@ -951,7 +953,7 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 
 ---
 
-### PR 6 — Combined WAL+slab protocol (synchronous first cut)
+### PR 6 — Combined journal+slab protocol (synchronous first cut)
 
 **Goal**
 - Make the durability ordering explicit and enforced with tests.
@@ -965,11 +967,11 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 
 **Deliverables (explicit)**
 1) A **normative ordering contract** is enforced by code:
-   - `slab data durable` happens-before `WAL durable` happens-before `index durable` happens-before `WriteSync ack`
+   - `slab data durable` happens-before `journal durable` happens-before `index durable` happens-before `WriteSync ack`
 2) Explicit “written vs durable” state exists in the write path:
    - written = appended to file (page cache)
    - durable = crossed `fsync`
-3) WAL reader is OOM-safe:
+3) journal reader is OOM-safe:
    - length fields are validated and capped before any allocation
    - CRC/parse failures are clean errors (no panic)
 
@@ -978,7 +980,7 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 - `go test ./TreeDB/internal/wal -count=1`
 - `go test ./TreeDB/caching -count=1`
 - `go test -race ./TreeDB/caching -count=1`
-- Fuzz WAL reader hardening:
+- Fuzz journal reader hardening:
   - `go test ./TreeDB/internal/wal -run '^$' -fuzz FuzzWALReader -fuzztime=10s -count=1`
 - Ordering test requirements:
   - `TreeDB/caching/durability_order_test.go` MUST use latches/hooks (no sleeps)
@@ -1098,7 +1100,7 @@ Update `TreeDB/compaction/compactor.go` so it never relies on raw struct equalit
 1) Open an existing TreeDB directory in read-only mode.
 2) Iterate all keys in sorted order using snapshots.
 3) Route each key to a partition via the nibble rule.
-4) Build one index file per partition using the existing `bulk.Builder` (no slab/WAL changes).
+4) Build one index file per partition using the existing `bulk.Builder` (no slab/journal changes).
 5) Emit `index.manifest` referencing the new partition index files.
 
 **Important scope limit (explicit)**

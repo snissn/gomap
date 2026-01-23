@@ -7,12 +7,12 @@ This doc collects practical knobs and tradeoffs for HashDB.
 - Default shard count is optimized for concurrency; you can choose explicitly with `hashdb.OpenWithShards(dir, n)`.
 - More shards increases parallelism and reduces lock contention, but increases overhead (more files, more background flush loops).
 
-## Sharded Cache WAL (Optional)
+## Sharded Cache Journal (Optional)
 
 The sharded engine uses a write-back cache per shard.
 
-- Default: no cache WAL (highest throughput; pending writes are lost on crash before flush).
-- Optional: enable a per-shard cache WAL via `hashdb.OpenWithOptions` / `hashdb.OpenWithShardsAndOptions`:
+- Default: no cache journal (highest throughput; pending writes are lost on crash before flush).
+- Optional: enable a per-shard cache journal (legacy WAL) via `hashdb.OpenWithOptions` / `hashdb.OpenWithShardsAndOptions`:
   - `CacheWALFsyncOnSync`: fsync only when a higher-level `*Sync` call requests it.
   - `CacheWALFsyncAlways`: fsync every cache write (stronger durability, slower).
 

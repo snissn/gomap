@@ -78,7 +78,7 @@ Goal: maximize throughput by relaxing safety knobs.
 Behavior:
 
 - Disables or relaxes safety knobs:
-  - disables cached-mode WAL (`DisableWAL=true`) **(legacy mode1; deprecated)**
+  - disables cached-mode journal via `DisableWAL=true` **(legacy mode1; deprecated)**
   - relaxes sync policy (`RelaxedSync=true`)
   - skips read checksums (`DisableReadChecksum=true`)
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)

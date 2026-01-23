@@ -111,8 +111,8 @@ This note summarizes the main engine and benchmark changes made during the recen
   - Systematically benchmark different compression thresholds and possibly alternative codecs for large values (e.g., only compress >4KB or user-configurable).
   - Expose per-DB or per-shard compression modes (off / fast / aggressive) and document recommended defaults for common workloads.
 
-- **Durability and WAL improvements**
-  - If stronger durability is desired, add an explicit small WAL (separate from the slab segments) with configurable fsync policies.
+- **Durability and journal improvements**
+  - If stronger durability is desired, add an explicit small journal (legacy WAL term) separate from the slab segments with configurable fsync policies.
   - Keep the current slab-based log as the primary recovery mechanism, but allow stricter durability modes for users who need them.
 
 ## Compression Bench Notes (s2)
