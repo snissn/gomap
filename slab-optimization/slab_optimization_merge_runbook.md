@@ -421,6 +421,74 @@ Summarize deltas:
 - Report any **>10% regression** in steady throughput or synthetic writes.
 - Note any qualitative differences (e.g., dict activity missing/present).
 
+#### 5.2.C.1 Extended head-to-head (recommended)
+
+The minimum comparisons above are often insufficient to explain tradeoffs across:
+- small vs medium vs large values,
+- point writes vs dataset-like writes,
+- scan regressions,
+- and compression on/off costs.
+
+Run a small sweep of `cmd/unified_bench` on **both** branches with identical flags,
+capturing markdown outputs and (optionally) keeping the data directories so disk
+bytes can be inspected.
+
+Recommended sweep (keep it stable; expand only when investigating a regression):
+
+```bash
+# Use a fixed seed for comparability.
+seed=1
+keys=20000
+batch=1000
+valsizes="128 1024 16384"
+tests="random_write,dataset_write_random,random_read"
+
+# On main: avoid value-log pointer paths if they are known-unsafe on your main
+# branch (historic WAL-pointer corruption). Use a huge threshold so values land
+# in the backend slabs instead of pointers.
+main_flags="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum -treedb-value-log-threshold 1073741824"
+
+# On rc: run both "default threshold" (0=default inline threshold) and
+# "force pointers" (threshold=1) sweeps when needed.
+rc_default_threshold="-treedb-value-log-threshold 0"
+rc_force_pointers="-treedb-value-log-threshold 1"
+
+# rc mode3 (journal ON + value log ON) knobs
+rc_mode3="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum"
+
+# rc mode4 (journal OFF + value log ON) knobs
+rc_mode4="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum -treedb-disable-journal -treedb-memtable-value-log-pointers=false"
+
+# rc compression toggles (dict compression)
+rc_comp_off="-treedb-vlog-dict-train-bytes -1"
+rc_comp_on="-treedb-vlog-dict-train-bytes 1048576 -treedb-vlog-dict-sample-stride 1"
+
+for v in $valsizes; do
+  # main WAL on/off baselines
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $main_flags > out/head_main_wal_on_v${v}.md
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $main_flags -treedb-disable-wal > out/head_main_wal_off_v${v}.md
+
+  # rc mode3 (off/on)
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode3 $rc_default_threshold $rc_comp_off > out/head_rc_mode3_off_v${v}.md
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode3 $rc_default_threshold $rc_comp_on  > out/head_rc_mode3_on_v${v}.md
+
+  # rc mode4 (off/on)
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode4 $rc_default_threshold $rc_comp_off > out/head_rc_mode4_off_v${v}.md
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode4 $rc_default_threshold $rc_comp_on  > out/head_rc_mode4_on_v${v}.md
+done
+
+# Scan regressions (settled): run at least once per branch + config.
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $main_flags > out/head_main_scan.md
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_mode3 $rc_default_threshold $rc_comp_off > out/head_rc_mode3_scan.md
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_mode4 $rc_default_threshold $rc_comp_off > out/head_rc_mode4_scan.md
+```
+
+Interpretation guidance:
+- Do not interpret scan results from a “force pointers” run as a general scan regression:
+  pointer-chasing scans are expected to be slower than inline leaf scans.
+- For compressibility validation, prefer a real dataset (`vlog_dict_realdata -bench-kv`)
+  or a synthetic workload that uses non-random values (e.g., repeat/zero patterns).
+
 ### 5.3 Autotuner benchmark suite (CI-gated)
 
 If the wall-time autotuner exists, implement a suite similar to:
