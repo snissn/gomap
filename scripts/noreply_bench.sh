@@ -26,6 +26,10 @@ NR_PIPELINE_LIST="${NR_PIPELINE_LIST:-}"
 NR_RESP3="${NR_RESP3:-1}"
 NR_REPLY_OFF="${NR_REPLY_OFF:-1}"
 
+REDISSERVER_ARGS_ALL="${REDISSERVER_ARGS_ALL:-}"
+REDISSERVER_ARGS_HASHDB="${REDISSERVER_ARGS_HASHDB:-}"
+REDISSERVER_ARGS_TREEDB="${REDISSERVER_ARGS_TREEDB:-}"
+
 REDIS_IMAGE="${REDIS_IMAGE:-redis:8.4.0}"
 VALKEY_IMAGE="${VALKEY_IMAGE:-valkey/valkey:9.0.1}"
 DRAGONFLY_IMAGE="${DRAGONFLY_IMAGE:-docker.dragonflydb.io/dragonflydb/dragonfly:v1.34.2}"
@@ -79,7 +83,13 @@ start_redisserver() {
   local engine="$1"
   local port="$2"
   local dir="$3"
-  "$SERVER_BIN" -engine "$engine" -dir "$dir" -addr ":$port" >/dev/null 2>&1 &
+  local extra="$REDISSERVER_ARGS_ALL"
+  case "$engine" in
+    hashdb) extra="$extra $REDISSERVER_ARGS_HASHDB" ;;
+    treedb) extra="$extra $REDISSERVER_ARGS_TREEDB" ;;
+  esac
+  # shellcheck disable=SC2086
+  "$SERVER_BIN" -engine "$engine" -dir "$dir" -addr ":$port" $extra >/dev/null 2>&1 &
   echo $!
 }
 

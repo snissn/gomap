@@ -15,6 +15,10 @@ MEMTIER_USE_DOCKER="${MEMTIER_USE_DOCKER:-auto}"
 BENCH_SERVERS="${BENCH_SERVERS:-hashdb,treedb,redis,valkey,dragonfly}"
 BASE_PORT="${BASE_PORT:-6380}"
 
+REDISSERVER_ARGS_ALL="${REDISSERVER_ARGS_ALL:-}"
+REDISSERVER_ARGS_HASHDB="${REDISSERVER_ARGS_HASHDB:-}"
+REDISSERVER_ARGS_TREEDB="${REDISSERVER_ARGS_TREEDB:-}"
+
 # Matrix inputs (comma-separated).
 KEYS_LIST="${KEYS_LIST:-100000}"
 CLIENTS_LIST="${CLIENTS_LIST:-}"
@@ -84,7 +88,13 @@ start_redisserver() {
   local engine="$1"
   local port="$2"
   local dir="$3"
-  "$BIN" -engine "$engine" -dir "$dir" -addr ":$port" >/dev/null 2>&1 &
+  local extra="$REDISSERVER_ARGS_ALL"
+  case "$engine" in
+    hashdb) extra="$extra $REDISSERVER_ARGS_HASHDB" ;;
+    treedb) extra="$extra $REDISSERVER_ARGS_TREEDB" ;;
+  esac
+  # shellcheck disable=SC2086
+  "$BIN" -engine "$engine" -dir "$dir" -addr ":$port" $extra >/dev/null 2>&1 &
   echo $!
 }
 
