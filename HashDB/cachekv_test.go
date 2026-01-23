@@ -90,3 +90,29 @@ func TestCacheKVTicker(t *testing.T) {
 		t.Fatalf("expected ticker flush, got %s", v)
 	}
 }
+
+func TestCacheKVPutNoCopy(t *testing.T) {
+	base := &DummyKV{data: make(map[string][]byte)}
+	c := NewCacheKV(base, 100, 1<<20, 0)
+
+	val := []byte("v1")
+	if err := c.PutNoCopy([]byte("a"), val); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutating val affects cached value because PutNoCopy avoids copying.
+	val[0] = 'V'
+
+	got, _ := c.Get([]byte("a"))
+	if string(got) != "V1" {
+		t.Fatalf("expected no-copy value, got %s", got)
+	}
+
+	if err := c.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = base.Get([]byte("a"))
+	if string(got) != "V1" {
+		t.Fatalf("expected flushed no-copy value, got %s", got)
+	}
+}
