@@ -206,12 +206,20 @@ func TestHelperTreeDBCrashRecoveryMode4Writer(t *testing.T) {
 	}
 
 	// Perform non-sync writes (these may be lost on crash with DisableWAL=true)
-	_ = db.Set([]byte("non_sync_key"), []byte("may_be_lost"))
-	_ = db.Set([]byte("another_key"), bytes.Repeat([]byte("x"), 2048))
+	if err := db.Set([]byte("non_sync_key"), []byte("may_be_lost")); err != nil {
+		t.Fatalf("Set non_sync_key: %v", err)
+	}
+	if err := db.Set([]byte("another_key"), bytes.Repeat([]byte("x"), 2048)); err != nil {
+		t.Fatalf("Set another_key: %v", err)
+	}
 
 	// Perform a sync write to ensure at least some data is durable
-	_ = db.SetSync([]byte("sync_key"), []byte("durable_value"))
-	_ = db.SetSync([]byte("sync_large"), bytes.Repeat([]byte("y"), 4096))
+	if err := db.SetSync([]byte("sync_key"), []byte("durable_value")); err != nil {
+		t.Fatalf("SetSync sync_key: %v", err)
+	}
+	if err := db.SetSync([]byte("sync_large"), bytes.Repeat([]byte("y"), 4096)); err != nil {
+		t.Fatalf("SetSync sync_large: %v", err)
+	}
 
 	// Simulate a crash by exiting without calling Close()
 	os.Exit(0)
