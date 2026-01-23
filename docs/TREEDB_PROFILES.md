@@ -44,7 +44,7 @@ opts.AllowUnsafe = true // required for ProfileFast/ProfileBench
 
 A `Profile` is a named preset for a small set of **policy** knobs:
 
-- Durability / integrity checks (WAL, sync policy, read checksums)
+- Durability / integrity checks (journal/WAL, sync policy, read checksums)
 - Background work (vacuum / checkpoint / pruning) that can affect latency and
   benchmark stability
 
@@ -60,7 +60,7 @@ Goal: safest default for production use.
 Behavior:
 
 - Keeps cached-mode durability/integrity features enabled:
-  - WAL enabled (`DisableWAL=false`)
+  - journal enabled (`DisableWAL=false`)
   - fsync policy unchanged (`RelaxedSync=false`)
   - read checksums enabled (`DisableReadChecksum=false`)
 - Leaves background workers at their default settings.
@@ -77,7 +77,7 @@ Goal: maximize throughput by relaxing safety knobs.
 Behavior:
 
 - Disables or relaxes safety knobs:
-  - disables cached-mode WAL (`DisableWAL=true`)
+  - disables cached-mode journal (`DisableWAL=true`)
   - relaxes sync policy (`RelaxedSync=true`)
   - skips read checksums (`DisableReadChecksum=true`)
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
@@ -102,7 +102,7 @@ Behavior:
   - background index vacuum disabled (`BackgroundIndexVacuumInterval < 0`)
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,
-    `MaxWALBytes < 0`)
+    `MaxWALBytes < 0` — note: MaxWALBytes controls journal growth)
   - disables background pruning (`DisableBackgroundPrune=true`)
 
 Use when you want:

@@ -15,7 +15,7 @@
 
 Cached TreeDB is not a read-cache. It’s a write-back layer:
 
-`memtable + WAL + background flush → backend`
+`memtable + journal (WAL) + background flush → backend`
 
 It reduces write amplification by batching/deferring expensive tree merges into larger flushes.
 
@@ -28,13 +28,13 @@ Best when:
 - You want higher throughput by batching work into flushes.
 
 Costs:
-- Additional WAL I/O and memtable merge logic.
+- Additional journal (WAL) I/O and memtable merge logic.
 - Scan/iterator paths may be slower than backend-only mode because they can merge multiple sources (memtable + queue + backend).
 
 ### Backend-only mode
 
 Best when:
-- You want the simplest storage stack (no WAL/memtable layer).
+- You want the simplest storage stack (no journal/memtable layer).
 - Scans dominate and you want to avoid merging multiple iterator sources.
 - You already batch writes explicitly (use `NewBatch` and `Batch.WriteSync`).
 

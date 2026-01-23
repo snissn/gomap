@@ -25,7 +25,7 @@ DB directory containing:
 
 - `index.db` (backend index)
 - slab/value files (backend)
-- `wal/` directory (cached mode WAL segments)
+- `wal/` directory (cached mode journal segments)
 - `LOCK` file (exclusive open)
 
 ### `Options.Mode`
@@ -49,7 +49,7 @@ Controls when cached mode rotates the active memtable/WAL and triggers backgroun
 
 Higher threshold:
 - more batching and better throughput on random small writes,
-- but higher peak memory/WAL footprint and potentially longer recovery (more WAL to replay).
+- but higher peak memory and journal footprint, and potentially longer recovery (more journal segments to replay).
 
 Lower threshold:
 - less memory/WAL footprint,
@@ -114,18 +114,18 @@ How to evaluate safely:
 ### Write concurrency (current limits)
 
 TreeDB currently serializes write commits per DB handle (a single writer at a
-time). This keeps WAL ordering and B+Tree root updates simple and safe, but it
+time). This keeps journal ordering and B+Tree root updates simple and safe, but it
 means multi-core write throughput is gated by one writer lock.
 
 Mitigations:
 - Batch writes (`db.NewBatch`, `batch.Set`, `batch.Write`) to amortize lock hold
   time and reduce per-write overhead.
-- Use cached mode (memtables + WAL) to absorb bursts and keep read latency
+- Use cached mode (memtables + journal (WAL)) to absorb bursts and keep read latency
   stable under write-heavy workloads.
 
 ### Cached-mode auto checkpointing (cached wrapper)
 
-TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the default
+TreeDB cached mode uses a journal (WAL) for crash recovery, but (like many engines) the default
 `Set`/`Batch.Write` path does not force an `fsync` per operation.
 
 To keep `wal/` from growing without bound in long-running workloads, TreeDB enables a
@@ -137,9 +137,9 @@ periodic cached-mode checkpoint by default:
 
 A checkpoint:
 - blocks writers briefly,
-- rotates to a fresh WAL segment,
+- rotates to a fresh journal segment,
 - flushes queued memtables to the backend with `WriteSync`,
-- trims old WAL segments.
+- trims old journal segments.
 
 Tuning/disable:
 - Set `BackgroundCheckpointInterval < 0` to disable periodic checkpoints.

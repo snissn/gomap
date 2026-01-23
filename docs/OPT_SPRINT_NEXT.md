@@ -1,5 +1,7 @@
 # Optimization Sprint Next (2026-01): Compression + Storage Simplification
 
+> **Note**: This is a historical planning document. When reading references to "WAL" in the context of cached-mode durability, interpret this as the journal (write-ahead log in `Dir/wal/`). The value log is distinct from backend slabs.
+
 This is the **full sprint execution spec** for the next TreeDB optimization sprint.
 It is written to be *actionable* and *mergeable*: every milestone below is a PR-sized unit with explicit deliverables, acceptance criteria, and test/bench requirements.
 
@@ -27,7 +29,7 @@ At the end of this sprint, `main` contains:
 4) **Micro-batched value compression (bounded point reads)**
    - Optional micro-batching (`K`) for near-streaming ratios, while bounding point-read decode cost.
 
-5) **Combined WAL + slab write protocol (synchronous first cut)**
+5) **Combined journal + slab write protocol (synchronous first cut)**
    - A clean write/durability ordering is enforced without async slab writer goroutines.
    - Clear “written vs durable” semantics with explicit watermarks.
    - A clean path to future double/triple buffering is defined.
@@ -66,7 +68,7 @@ TreeDB already uses mmap for:
 - `data-*.slab` read-mostly views (existing behavior)
 
 This sprint must not introduce **additional** mmap usage beyond that baseline:
-- no mmap on WAL/vlog
+- no mmap on journal (WAL) or value log
 - no mmap on `dict.db` (use `pread` in this sprint)
 - no new mmap on any file that is truncated/rotated at runtime
 

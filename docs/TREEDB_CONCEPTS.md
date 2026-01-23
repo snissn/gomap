@@ -5,7 +5,7 @@ TreeDB is a persistent ordered key/value store built around a B+Tree. The public
 
 TreeDB has two modes behind one public handle:
 
-- **Cached mode (default)**: `treedb.Open(...)` wraps the backend with a write-back layer (`memtable + WAL + background flush → backend`).
+- **Cached mode (default)**: `treedb.Open(...)` wraps the backend with a write-back layer (`memtable + journal (WAL) + background flush → backend`).
 - **Backend-only mode**: `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`) opens just the backend engine.
 
 This doc is intentionally high-level; the normative behavior is captured in `docs/contracts/`.
@@ -44,14 +44,14 @@ Backend writes are “commit-like”: a batch updates pages + slabs and then upd
   - B+Tree pages (internal + leaf nodes)
   - freelist / lifecycle metadata
   - redundant meta (“superblock”) pages used for recovery
-- `Dir/data-*.slab`: append-only value log segments (“slabs”) used for storing larger values efficiently.
-- `Dir/wal/`: cached-mode WAL segments (`wal-<seq>.log`) for durable write-back.
+- `Dir/data-*.slab`: append-only backend value log segments (“slabs”) used for storing larger values efficiently.
+- `Dir/wal/`: cached-mode journal segments (`wal-<seq>.log`) for durable write-back.
 - `Dir/LOCK`: the cross-process exclusive-open lock file.
 
 ### Inline vs slab values
 
 TreeDB stores small values inline in leaf pages up to an internal threshold (currently `256` bytes).
-Larger values are stored out-of-line in the slab log and referenced by a pointer stored in the tree.
+Larger values are stored out-of-line in the backend value log (slab segments) and referenced by a pointer stored in the tree.
 
 ### Copy-on-write and the “zipper” merge
 
@@ -80,7 +80,7 @@ Cached mode is not a read cache. It is a write-back layer used to batch work:
 
 - Incoming writes go to:
   - an in-memory memtable, and
-  - a WAL segment under `Dir/wal/` (for durability / crash recovery).
+  - a journal segment under `Dir/wal/` (WAL for durability / crash recovery).
 - A background flusher periodically writes memtables into the backend using a backend batch.
 
 Practical effects:

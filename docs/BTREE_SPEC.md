@@ -365,7 +365,7 @@ To keep things robust:
 ## 8. Future Extensions
 
 - Replace coarse `RWMutex` with latch coupling / node-level locks for higher concurrency.
-- Add optional transactional semantics using an external WAL layered above Gomap.
+- Add optional transactional semantics using an external journal (WAL) layered above Gomap.
 - Support secondary indexes by storing (index key → primary key) mappings in the B+Tree and resolving via Gomap.
 - Compress node pages (e.g. prefix compression on keys) before storing as Gomap values for better cache locality.
 

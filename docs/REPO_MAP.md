@@ -19,7 +19,7 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 │ TreeDB (Cached Layer)                                                        │
 │                                                                              │
 │  ┌──────────────┐        ┌──────────────────┐                                │
-│  │   Memtable   │◄───────┤    Log (WAL)     │◄── Write-Ahead Log (Durability)│
+│  │   Memtable   │◄───────┤  Journal (WAL)   │◄── Write-Ahead Log (Durability)│
 │  │ (SkipList)   │        │   Dir/wal/*.log  │                                │
 │  └──────┬───────┘        └──────────────────┘                                │
 │         │                                                                    │
@@ -42,9 +42,10 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 └───────────────────────────────────────┘
 ```
 
-- **Write Path**: `Set` -> Memtable + WAL.
+- **Write Path**: `Set` -> Memtable + Journal (WAL for durability).
 - **Read Path**: `Get` checks Memtable -> Backend (merged view).
 - **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
+- **Value Storage**: Small values inline in B+Tree pages; large values in backend slabs (`Dir/data-*.slab`).
 
 ### 2. HashDB (Sharded)
 
@@ -90,7 +91,7 @@ Key directories and their purpose.
 │   └── sharded_db.go           # The main sharded engine entrypoint
 │
 ├── TreeDB/                     # TreeDB Engine (Public Package: treedb)
-│   ├── caching/                # Cached write-back layer (Memtable + WAL)
+│   ├── caching/                # Cached write-back layer (Memtable + Journal/WAL)
 │   ├── db/                     # Backend B+Tree implementation (Pages, Nodes)
 │   ├── internal/
 │   │   ├── memtable/           # Arena-backed SkipList
@@ -118,7 +119,7 @@ Key directories and their purpose.
 | Component | Path | Description |
 |---|---|---|
 | **TreeDB Backend** | `TreeDB/db/` | The persistent B+Tree engine (pages, meta, freelist). |
-| **TreeDB Caching** | `TreeDB/caching/` | The write-back layer that handles WAL and memtables. |
+| **TreeDB Caching** | `TreeDB/caching/` | The write-back layer that handles the journal (WAL) and memtables for durability. |
 | **TreeDB Merge** | `TreeDB/zipper/` | The algorithm that merges a batch into the B+Tree (COW). |
 | **HashDB Index** | `HashDB/hashindex.go` | The memory-mapped Swiss Table implementation. |
 | **HashDB Sharding** | `HashDB/sharded_db.go` | Orchestrates multiple HashDB shards. |
