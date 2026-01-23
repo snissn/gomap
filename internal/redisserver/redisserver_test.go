@@ -168,6 +168,10 @@ func readLine(r *bufio.Reader) (string, error) {
 }
 
 func startTestServer(t *testing.T, engine string, batch bool) (addr string, cleanup func()) {
+	return startTestServerWithBatchMode(t, engine, batch, true)
+}
+
+func startTestServerWithBatchMode(t *testing.T, engine string, batch bool, flushOnNonset bool) (addr string, cleanup func()) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := Config{
@@ -176,7 +180,7 @@ func startTestServer(t *testing.T, engine string, batch bool) (addr string, clea
 		Engine:                  engine,
 		BatchSets:               batch,
 		BatchSize:               4,
-		BatchFlushOnNonset:      true,
+		BatchFlushOnNonset:      flushOnNonset,
 		BatchFlushOnNonsetSet:   true,
 		TreeDBDisableValueLog:   true,
 		TreeDBFlushThreshold:    4 * 1024 * 1024,
@@ -281,17 +285,22 @@ func TestINCR(t *testing.T) {
 func TestBatchSetsFlushOnClose(t *testing.T) {
 	for _, engine := range []string{"hashdb", "treedb"} {
 		t.Run(engine, func(t *testing.T) {
-			addr, cleanup := startTestServer(t, engine, true)
+			addr, cleanup := startTestServerWithBatchMode(t, engine, true, false)
 			defer cleanup()
 
 			c := newRespClient(t, addr)
 			// Write raw SETs without reading responses to simulate pipelining.
 			c.DoRaw(multiSetRaw([][2]string{{"k1", "v1"}, {"k2", "v2"}, {"k3", "v3"}}))
+			// Ensure the server processed the pipeline before closing the connection.
+			v := c.Do([]byte("PING"))
+			if v.kind != '+' {
+				t.Fatalf("PING failed: %#v", v)
+			}
 			c.Close()
 
 			c2 := newRespClient(t, addr)
 			defer c2.Close()
-			v := c2.Do([]byte("GET"), []byte("k3"))
+			v = c2.Do([]byte("GET"), []byte("k3"))
 			if v.kind != '$' || string(v.bulk) != "v3" {
 				t.Fatalf("expected flushed batch: %#v", v)
 			}
