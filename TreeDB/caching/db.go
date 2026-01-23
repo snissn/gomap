@@ -130,7 +130,6 @@ const (
 	adaptiveMinWrites          = 1024
 	adaptiveSequentialWritePct = 0.85
 	adaptiveWarmupBytes        = 16 * 1024 * 1024
-	adaptiveModeSwitchStreak   = 2
 	maxMemtableBytesPerShard   = int64(3 << 30)
 )
 
@@ -1382,26 +1381,24 @@ type DB struct {
 	dictCurrentOps    atomic.Uint64
 
 	// Config
-	dir                       string
-	flushThreshold            int64
-	memtableCap               int
-	memtableMode              memtable.Mode
-	memtableAdaptive          bool
-	memtableWarmupActive      bool
-	memtableWarmupThreshold   int64
-	memtableAdaptiveCandidate memtable.Mode
-	memtableAdaptiveStreak    uint8
-	statsMu                   sync.Mutex
-	memtableStats             memtableStats
-	maxQueuedMemtables        int
-	slowdownBacklogSeconds    float64
-	stopBacklogSeconds        float64
-	maxBacklogBytes           int64
-	writerFlushMaxMemtables   int
-	writerFlushMaxDuration    time.Duration
-	flushBuildConcurrency     int
-	walMaxSegmentBytes        int64
-	journalCompression        bool
+	dir                     string
+	flushThreshold          int64
+	memtableCap             int
+	memtableMode            memtable.Mode
+	memtableAdaptive        bool
+	memtableWarmupActive    bool
+	memtableWarmupThreshold int64
+	statsMu                 sync.Mutex
+	memtableStats           memtableStats
+	maxQueuedMemtables      int
+	slowdownBacklogSeconds  float64
+	stopBacklogSeconds      float64
+	maxBacklogBytes         int64
+	writerFlushMaxMemtables int
+	writerFlushMaxDuration  time.Duration
+	flushBuildConcurrency   int
+	walMaxSegmentBytes      int64
+	journalCompression      bool
 
 	disableJournal     bool
 	relaxedSync        bool
@@ -1711,27 +1708,10 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	return memtable.ModeHashSorted
 }
 
-func (db *DB) maybeSwitchAdaptiveMemtableModeLocked() memtable.Mode {
+func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	desired := db.chooseAdaptiveMemtableModeLocked()
-	if desired == db.memtableMode {
-		db.memtableAdaptiveCandidate = desired
-		db.memtableAdaptiveStreak = 0
-		return desired
-	}
-	if db.memtableAdaptiveCandidate != desired {
-		db.memtableAdaptiveCandidate = desired
-		db.memtableAdaptiveStreak = 1
-		return db.memtableMode
-	}
-	if db.memtableAdaptiveStreak < 255 {
-		db.memtableAdaptiveStreak++
-	}
-	if db.memtableAdaptiveStreak >= adaptiveModeSwitchStreak {
-		db.memtableMode = desired
-		db.memtableAdaptiveStreak = 0
-		db.memtableAdaptiveCandidate = desired
-	}
-	return db.memtableMode
+	db.memtableMode = desired
+	return desired
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
@@ -1882,20 +1862,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, splitValueLog)
 
-	// Value-log dictionary compression is a core performance feature of the
-	// value-store path. For unsafe/bench workloads (AllowUnsafe=true), enable
-	// background dict training by default when the value log is active unless
-	// the caller explicitly configured it. Favor early dict availability by
-	// using a smaller initial sample target.
-	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
-		trainBytes := compression.DefaultTrainBytes
-		if valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.MaxSampleBytes > 0 {
-			if valueLogAutotune.MaxSampleBytes < uint64(trainBytes) {
-				trainBytes = int(valueLogAutotune.MaxSampleBytes)
-			}
-		}
-		valueLogDictTrain.TrainBytes = trainBytes
-	}
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
 	if valueLogDictTrain.TrainBytes > 0 && valueLogDictTrain.SampleStride == 0 {
@@ -1960,7 +1926,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableAdaptive:               adaptive,
 		memtableWarmupActive:           adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:        warmupThreshold,
-		memtableAdaptiveCandidate:      mode,
 		maxQueuedMemtables:             opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:         opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:             opts.StopBacklogSeconds,
@@ -4190,7 +4155,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			curMode := db.memtableMode
 			nextMode := curMode
 			if db.memtableAdaptive {
-				nextMode = db.maybeSwitchAdaptiveMemtableModeLocked()
+				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
 				db.resetMemtableStatsLocked()
 			}
@@ -4246,7 +4211,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			curMode := db.memtableMode
 			nextMode := curMode
 			if db.memtableAdaptive {
-				nextMode = db.maybeSwitchAdaptiveMemtableModeLocked()
+				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
 				db.resetMemtableStatsLocked()
 			}
@@ -4611,7 +4576,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		newCapacity = db.memtableCap
 	}
 	if db.memtableAdaptive {
-		db.maybeSwitchAdaptiveMemtableModeLocked()
+		db.applyAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
@@ -4722,7 +4687,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		newCapacity = db.memtableCap
 	}
 	if db.memtableAdaptive {
-		db.maybeSwitchAdaptiveMemtableModeLocked()
+		db.applyAdaptiveMemtableModeLocked()
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
@@ -5929,7 +5894,10 @@ func (db *DB) Stats() map[string]string {
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
 	memtableMode := db.memtableMode
+	memtableAdaptive := db.memtableAdaptive
+	memtableWarmupActive := db.memtableWarmupActive
 	maxQueued := db.maxQueuedMemtables
+	vlogAutotuneMode := db.valueLogAutotuneOptions.Mode
 	db.mu.RUnlock()
 	var walCurrentBytes int64
 	var walClosedBytes int64
@@ -5943,6 +5911,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
+	if memtableAdaptive {
+		stats["treedb.cache.memtable_mode_config"] = "adaptive"
+	} else {
+		stats["treedb.cache.memtable_mode_config"] = "fixed"
+	}
+	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
@@ -5983,6 +5957,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.last_applied_dict_id"] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictID.Load())
 	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
+	switch vlogAutotuneMode {
+	case valuelog.AutotuneOff:
+		stats["treedb.cache.vlog_compression_autotune.mode"] = "off"
+	case valuelog.AutotuneMedium:
+		stats["treedb.cache.vlog_compression_autotune.mode"] = "medium"
+	case valuelog.AutotuneAggressive:
+		stats["treedb.cache.vlog_compression_autotune.mode"] = "aggressive"
+	default:
+		stats["treedb.cache.vlog_compression_autotune.mode"] = fmt.Sprintf("%d", vlogAutotuneMode)
+	}
 	if snap := db.valueLogAutotuneMetrics.snapshot(); snap.hasData() {
 		stats["treedb.cache.vlog_autotune.encode_ns_per_raw_byte"] = fmt.Sprintf("%.3f", snap.EncodeNsPerRawByte)
 		stats["treedb.cache.vlog_autotune.io_ns_per_stored_byte"] = fmt.Sprintf("%.3f", snap.IoNsPerStoredByte)
