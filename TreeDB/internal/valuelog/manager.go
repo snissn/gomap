@@ -92,11 +92,11 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
-	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		return val, err
 	}
 	f.remapToFileSize()
-	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		return val, err
 	}
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
