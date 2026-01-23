@@ -1252,7 +1252,8 @@ type Options struct {
 	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
 	MemtableValueLogPointers bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a conservative default (1024 bytes) to avoid double-writing
+	// mid-sized values (vlog + journal) on common workloads.
 	ValueLogPointerThreshold int
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
@@ -1902,7 +1903,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
-		valueLogThreshold = page.DefaultInlineThreshold
+		// Default higher than page.DefaultInlineThreshold: for cached-mode writes,
+		// values above the page inline threshold can still land in slabs at flush,
+		// so keeping 512B-1KiB values inline in the journal avoids an extra vlog IO.
+		valueLogThreshold = 1024
 	}
 	disableJournal := opts.DisableJournal || opts.DisableWAL
 	disableValueLog := opts.DisableValueLog || opts.DisableWAL
