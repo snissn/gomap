@@ -771,7 +771,12 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
-		Level:    level,
+		// Important: BuildDict does not guarantee it will discover 3 non-zero
+		// offsets when content is small/degenerate (it only updates offsets it
+		// observes). If we pass zero offsets, it can emit dictionaries that fail
+		// to load with "invalid offset in dictionary" (issue #117).
+		Offsets: [3]int{1, 4, 8},
+		Level:   level,
 	})
 	if err != nil || len(dict) == 0 {
 		if err != nil {
