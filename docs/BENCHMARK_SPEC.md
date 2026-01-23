@@ -33,7 +33,7 @@ The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent wo
 
 1.  **Batch Write** (`batch_write`)
     - Writes `N` keys sequentially in batches of size `1000` (default).
-    - Tests the amortized write path (WAL commit / Transaction commit).
+    - Tests the amortized write path (journal commit / transaction commit).
 
 2.  **Batch Random** (`batch_write_random`)
     - Writes `N` keys randomly selected from `[0, 10*N)` in batches.
@@ -52,7 +52,7 @@ The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent wo
 ## Comparison Baselines
 
 - **TreeDB (Cached)**: `treedb`
-  - Default mode. Memtable + WAL -> Async Flush.
+  - Default mode. Memtable + journal -> Async Flush.
 - **TreeDB (Backend)**: `treedbbackend`
   - Direct B+Tree writes. No memtable.
 - **HashDB**: `hashdb`
