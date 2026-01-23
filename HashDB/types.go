@@ -86,6 +86,7 @@ type DB struct {
 	rehashIdx            uint64
 
 	resizeThreshold uint64
+	probeStats      ProbeStats
 }
 
 // Hashmap is kept as a compatibility alias for older code.

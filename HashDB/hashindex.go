@@ -107,6 +107,7 @@ func loadGroup(controls []byte, i uint64, capacity uint64) uint64 {
 // probeWithHash searches for a key in the provided keys slice using a precomputed hash.
 // It returns the index, the item (if found), whether it was found, and any error.
 func (h *DB) probeWithHash(keys []Key, controls []byte, capacity uint64, key []byte, myhash Hash) (uint64, *Item, bool, error) {
+	h.probeStats.GetCalls++
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
@@ -118,6 +119,7 @@ func (h *DB) probeWithHash(keys []Key, controls []byte, capacity uint64, key []b
 	// But strictly, we loop until we find Empty.
 
 	for probes < capacity {
+		h.probeStats.GetGroups++
 		group := loadGroup(controls, idx, capacity)
 
 		// Check for matches
@@ -130,9 +132,12 @@ func (h *DB) probeWithHash(keys []Key, controls []byte, capacity uint64, key []b
 
 			candidateIdx := (idx + groupOffset) % capacity
 
+			h.probeStats.H2Matches++
+
 			// Verify candidate
 			bucket := keys[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
+				h.probeStats.HashHits++
 				item, err := h.unmarshalItemFromSlab(bucket)
 				if err != nil {
 					return 0, nil, false, err
@@ -234,6 +239,7 @@ func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
 }
 
 func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) {
+	h.probeStats.AddCalls++
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
@@ -244,6 +250,7 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 	probes := uint64(0)
 
 	for probes < h.capacity {
+		h.probeStats.AddGroups++
 		group := loadGroup(h.controls, idx, h.capacity)
 
 		// 1. Check if key already exists
@@ -255,9 +262,12 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 
 			candidateIdx := (idx + groupOffset) % h.capacity
 
+			h.probeStats.H2Matches++
+
 			// Verify
 			bucket := h.keys[candidateIdx]
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
+				h.probeStats.HashHits++
 				slabKey, err := h.unmarshalKeyFromSlab(bucket)
 				if err != nil {
 					return 0, false, err

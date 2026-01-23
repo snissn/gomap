@@ -342,6 +342,8 @@ func (h *DB) unmarshalKeyFromSlab(slabValues Key) ([]byte, error) {
 	if keyLength == 0 {
 		return nil, nil
 	}
+	h.probeStats.KeyReads++
+	h.probeStats.KeyBytes += keyLength
 
 	keyBytes, err := h.ReadBytes(slabValues.slabOffset+16, int64(keyLength))
 	if err != nil {
@@ -367,6 +369,8 @@ func (h *DB) unmarshalItemFromSlab(slabValues Key) (Item, error) {
 	valueLength, flags := unpackLength(valueLengthPacked)
 
 	totalLen := int64(16) + int64(keyLength) + int64(valueLength)
+	h.probeStats.ItemReads++
+	h.probeStats.ItemBytes += keyLength + valueLength
 
 	var valuesBytes []byte
 	if totalLen <= int64(len(buf)) {
