@@ -66,7 +66,8 @@ start_redisserver() {
 start_docker() {
   local image="$1"
   local port="$2"
-  docker run -d --rm -p "$port:6379" "$image"
+  shift 2
+  docker run -d --rm -p "$port:6379" "$image" "$@"
 }
 
 stop_pid() {
@@ -151,7 +152,7 @@ main() {
       redis)
         if [[ "$USE_DOCKER" -eq 1 ]]; then
           log "starting redis docker ($REDIS_IMAGE)"
-          cid=$(start_docker "$REDIS_IMAGE" "$port")
+          cid=$(start_docker "$REDIS_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
         else
           log "starting local redis-server"
           redis-server --port "$port" --save "" --appendonly no >/dev/null 2>&1 &
@@ -161,11 +162,12 @@ main() {
           echo "failed to start redis" >&2
           exit 1
         fi
+        sleep 1
         ;;
       valkey)
         if [[ "$USE_DOCKER" -eq 1 ]]; then
           log "starting valkey docker ($VALKEY_IMAGE)"
-          cid=$(start_docker "$VALKEY_IMAGE" "$port")
+          cid=$(start_docker "$VALKEY_IMAGE" "$port" --save "" --appendonly no --protected-mode no)
         else
           if command -v valkey-server >/dev/null 2>&1; then
             log "starting local valkey-server"
@@ -181,6 +183,7 @@ main() {
           echo "failed to start valkey" >&2
           exit 1
         fi
+        sleep 1
         ;;
       dragonfly)
         if [[ "$USE_DOCKER" -eq 1 ]]; then
@@ -195,6 +198,7 @@ main() {
           echo "failed to start dragonfly" >&2
           exit 1
         fi
+        sleep 1
         ;;
       *)
         echo "unknown server: $server" >&2
