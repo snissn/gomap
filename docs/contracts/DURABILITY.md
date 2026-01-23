@@ -14,7 +14,7 @@
 
 TreeDB has two modes behind one API:
 
-- **Cached mode (default)**: a write-back layer (`memtable + WAL + background flush → backend`).
+- **Cached mode (default)**: a write-back layer (`memtable + journal + value log + background flush → backend`).
 - **Backend-only mode**: the base B+Tree engine without the cached write-back layer.
 
 ### Backend-only mode (`opts.Mode = treedb.ModeBackend`)
@@ -29,15 +29,16 @@ Crash recovery:
 
 ### Cached mode (default)
 
-Cached mode writes to a WAL first, then eventually flushes to the backend.
+Cached mode writes to the journal (and the value log for large values), then
+eventually flushes to the backend.
 
-- `Set`: appends to WAL but does not `fsync` it; not guaranteed durable on power loss.
-- `Batch.Write`: appends to WAL but does not `fsync` it; not guaranteed durable on power loss.
-- `SetSync`: appends to WAL and `fsync`s it; durable.
-- `Batch.WriteSync`: appends the entire batch to WAL as a single checksummed segment and `fsync`s it; **atomic and durable**. On recovery, either the entire batch is applied or none of it is.
+- `Set`: appends to the journal (and value log if needed) but does not `fsync`; not guaranteed durable on power loss.
+- `Batch.Write`: appends to the journal (and value log if needed) but does not `fsync`; not guaranteed durable on power loss.
+- `SetSync`: appends to the journal and `fsync`s it; durable.
+- `Batch.WriteSync`: appends the entire batch to the journal as a single checksummed segment and `fsync`s it; **atomic and durable**. On recovery, either the entire batch is applied or none of it is.
 
 Crash recovery:
-- On open (cached or backend), any WAL segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
+- On open (cached or backend), any journal segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
 - This makes recovery coherent: reopening as cached vs backend yields the same recovered state.
 
 ### Operational notes

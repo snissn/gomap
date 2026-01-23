@@ -150,8 +150,17 @@ go test ./... -race -count=1
 
 # Fuzz tests (time-bounded)
 # Prefer existing fuzz targets; run at least a short fuzz interval in CI
-# and longer locally.
-go test ./... -run '^$' -fuzz=Fuzz -fuzztime=30s
+# and longer locally. Note: Go requires fuzzing a single package/test at a time.
+# Example (30s each):
+#   go test ./TreeDB/page -run '^$' -fuzz=FuzzDecodeHeader -fuzztime=30s
+#   go test ./TreeDB/page -run '^$' -fuzz=FuzzDecodeValuePtr -fuzztime=30s
+#   go test ./TreeDB/internal/vlog -run '^$' -fuzz=FuzzVlogReader -fuzztime=30s
+#   go test ./TreeDB/internal/merging -run '^$' -fuzz=FuzzMergingIterator -fuzztime=30s
+#   go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommitLogReader -fuzztime=30s
+#   go test ./TreeDB/node -run '^$' -fuzz=FuzzNodeDecode -fuzztime=30s
+#   go test ./TreeDB/internal/wal -run '^$' -fuzz=FuzzWALReader -fuzztime=30s
+#   go test ./TreeDB/internal/valuelog -run '^$' -fuzz=FuzzDecodeFrame -fuzztime=30s
+#   go test ./TreeDB/internal/valuelog -run '^$' -fuzz=FuzzValueLogReader -fuzztime=30s
 ```
 
 ### 3.2 Correctness gate: mode semantics
@@ -358,7 +367,7 @@ Notes:
 
 ```bash
 # Recommend pinning: seed=1, valsize=16384, keys=20000
-go run ./cmd/unified_bench   -dbs treedb   -test random_write,dataset_write_random   -keys 20000 -valsize 16384 -batchsize 1000 -seed 1   -format markdown -progress=false   -out out/mode_compare_large_values.md
+go run ./cmd/unified_bench   -dbs treedb   -test random_write,dataset_write_random   -keys 20000 -valsize 16384 -batchsize 1000 -seed 1   -format markdown -progress=false   > out/mode_compare_large_values.md
 ```
 
 Run it for:
@@ -377,7 +386,7 @@ If any comparison fails:
 **Workload B: scan regressions + index/key flags (backend-only)**
 
 ```bash
-go run ./cmd/unified_bench   -dbs treedbbackend   -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1   -settle-before-scans   -format markdown -progress=false   -out out/scan_compare.md
+go run ./cmd/unified_bench   -dbs treedbbackend -exclude-dbs \"\"   -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1   -settle-before-scans   -format markdown -progress=false   > out/scan_compare.md
 ```
 
 Run baseline and with each index/key encoding flag under test.
@@ -440,7 +449,7 @@ Acceptance criteria:
   - a benchmark diff artifact
   - a plan and owner
 
-Operational note: ensure `treedb.Open` does not print to stderr by default; otherwise `benchstat` parsing is degraded.
+Operational note: ensure `treedb.Open` does not print to stderr by default; otherwise `benchstat` parsing is degraded. Use `TREEDB_WRITE_PATH_LOG=1` only for explicit debugging.
 
 ---
 

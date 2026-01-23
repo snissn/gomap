@@ -183,9 +183,11 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	writePath := writePathFromOptions(opts)
-	fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
-	if writePath.warn {
-		fmt.Fprintf(os.Stderr, "treedb WARNING: backend-only write path uses slab_direct writer; cached+value_log is the intended fast ingest path\n")
+	if envBool(envWritePathLog) {
+		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+		if writePath.warn {
+			fmt.Fprintf(os.Stderr, "treedb WARNING: backend-only write path uses slab_direct writer; cached+value_log is the intended fast ingest path\n")
+		}
 	}
 
 	rootDir := opts.Dir
@@ -428,6 +430,7 @@ const (
 	envCloseVacuumTimeout     = "TREEDB_CLOSE_VACUUM_TIMEOUT"
 	envCloseLog               = "TREEDB_CLOSE_LOG"
 	envCloseScopeContains     = "TREEDB_CLOSE_SCOPE_CONTAINS"
+	envWritePathLog           = "TREEDB_WRITE_PATH_LOG"
 )
 
 func envBool(name string) bool {
