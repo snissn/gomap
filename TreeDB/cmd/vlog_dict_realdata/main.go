@@ -137,9 +137,13 @@ func trainDictionaryEarly(samples [][]byte) *CompressorState {
 	currentK := 1
 
 	// Create a simple encoder without dict for demo purposes
-	enc, _ := zstd.NewWriter(nil,
+	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderCRC(false))
+	if err != nil {
+		log.Printf("failed to create encoder: %v", err)
+		return &CompressorState{}
+	}
 
 	log.Printf("treedb: dict id=%d k=%d training complete", dictID, currentK)
 
@@ -151,6 +155,9 @@ func trainDictionaryEarly(samples [][]byte) *CompressorState {
 	}
 }
 
+// trainDictionaryLate demonstrates the OLD buggy behavior where dict training
+// happened too late (after steady state). This function is kept for reference
+// and comparison purposes but is not used in the fixed code.
 func trainDictionaryLate(samples [][]byte) *CompressorState {
 	log.Printf("treedb: slab compression trained dict (AFTER steady - TOO LATE)")
 
@@ -163,9 +170,13 @@ func trainDictionaryLate(samples [][]byte) *CompressorState {
 	currentK := 1
 
 	// Create a simple encoder without dict for demo purposes
-	enc, _ := zstd.NewWriter(nil,
+	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderCRC(false))
+	if err != nil {
+		log.Printf("failed to create encoder: %v", err)
+		return &CompressorState{}
+	}
 
 	log.Printf("treedb: dict id=%d k=%d training complete (but steady-state metrics already reported with dict_id=0)", dictID, currentK)
 
