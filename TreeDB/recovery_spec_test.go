@@ -322,6 +322,18 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 			expectLarge: true,
 		},
+		{
+			name: "mode4_disable_journal_value_log",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_DISABLE_JOURNAL=1",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectLarge: true,
+		},
 	}
 
 	for _, tc := range tiers {
