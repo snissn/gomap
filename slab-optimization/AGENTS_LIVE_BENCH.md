@@ -258,3 +258,4 @@ Stability:
   - Logs saved on server: ~/bench_logs/early_mode3_on_20260122_140424.log and ~/bench_logs/early_mode4_on_20260122_140440.log.
 - 2026-01-22 14:07:46 HST: Ran `/Users/michaelseiler/.gvm/gos/go1.25.5/bin/go test ./TreeDB/... -count=1`; all TreeDB packages passed (TreeDB/db 90.968s).
 - 2026-01-22 14:09:04 HST: Updated PR 114 body with aggressive-default bench results (mode3/on + mode4/on), dict activation notes, and full TreeDB test command.
+- 2026-01-22 14:12:42 HST: `gh pr checks 114 --watch` confirms all CI checks passing after latest push (race-check 3m1s; windows-latest 2m55s).
