@@ -6862,7 +6862,6 @@ func (b *Batch) writeRegular(sync bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
-	hasPtr := false
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -7006,7 +7005,6 @@ func (b *Batch) writeRegular(sync bool) error {
 				if debugPtr {
 					b.db.debugPtrUsed.Add(1)
 				}
-				hasPtr = true
 			}
 			retainPath := b.db.currentValueLogPath(lane)
 			if retainPath != "" {
