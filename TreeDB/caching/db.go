@@ -2862,7 +2862,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				if stats.Attempted {
 					framesAttempted++
 				}
-				if stats.Compressed {
+				if stats.Kept {
 					framesKept++
 				}
 				continue
@@ -2881,7 +2881,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				if stats.Attempted {
 					framesAttempted++
 				}
-				if stats.Compressed {
+				if stats.Kept {
 					framesKept++
 				}
 				continue
@@ -3053,13 +3053,13 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if stats.Attempted {
 		db.valueLogDictFrames.attempted.Add(1)
 	}
-	if stats.Compressed {
+	if stats.Kept {
 		db.valueLogDictFrames.kept.Add(1)
 	}
 	if dictID != 0 && len(dict) > 0 {
 		db.valueLogDictObservePayload(uint64(stats.RawPayloadBytes), uint64(stats.StoredPayloadBytes), stats.Records)
 	}
-	if probeCompression && stats.Compressed {
+	if probeCompression && stats.Kept {
 		db.valueLogDictPauseRemaining.Store(0)
 		if db.valueLogDictProbeBytes > 0 {
 			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
