@@ -65,12 +65,15 @@ type DB struct {
 	leafPrefixCompression  bool
 	indexColumnarLeaves    bool
 	indexInternalBaseDelta bool
+	piggybackCompaction    bool
 
-	mu         sync.RWMutex
-	writeMu    sync.RWMutex
-	commitMu   sync.Mutex
-	meta       page.MetaPageBody
-	metaPageID uint64
+	mu               sync.RWMutex
+	writeMu          sync.RWMutex
+	commitMu         sync.Mutex
+	vacuumInProgress atomic.Bool
+	vacuum           vacuumRecorder
+	meta             page.MetaPageBody
+	metaPageID       uint64
 
 	state atomic.Pointer[DBState]
 
@@ -463,6 +466,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		leafPrefixCompression:  opts.LeafPrefixCompression,
 		indexColumnarLeaves:    opts.IndexColumnarLeaves,
 		indexInternalBaseDelta: opts.IndexInternalBaseDelta,
+		piggybackCompaction:    !opts.DisablePiggybackCompaction,
 		dir:                    opts.Dir,
 		chunkSize:              opts.ChunkSize,
 		preferAppendAlloc:      opts.PreferAppendAlloc,

@@ -28,8 +28,8 @@ Commands:
   stats           Print stats
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
-  compact         Compact/rebuild the index.db (requires -rw)
-  vacuum          Alias for compact (index-only)
+  compact         Compact/rebuild the index.db in-place (requires -rw)
+  vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -72,8 +72,10 @@ func main() {
 		runFrag(dir, args)
 	case "verify":
 		runVerify(dir, args)
-	case "compact", "vacuum":
+	case "compact":
 		runCompact(dir, args)
+	case "vacuum":
+		runVacuum(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":
@@ -191,6 +193,21 @@ func runCompact(dir string, args []string) {
 		fatalf("CompactIndex error: %v", err)
 	}
 	fmt.Println("Index compaction complete.")
+}
+
+func runVacuum(dir string, args []string) {
+	fs := flag.NewFlagSet("vacuum", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("vacuum requires -rw")
+	}
+
+	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+		fatalf("VacuumIndexOffline error: %v", err)
+	}
+	fmt.Println("Index vacuum complete.")
 }
 
 func runGet(dir string, args []string) {
