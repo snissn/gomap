@@ -26,6 +26,9 @@ type ActiveProfile struct {
 type ChooseKOptions struct {
 	CandidateK        []int
 	IoNsPerStoredByte float64
+	// Deterministic timing overrides (ns per raw byte).
+	EncodeNsPerRawByte float64
+	DecodeNsPerRawByte float64
 }
 
 type kScore struct {
@@ -68,6 +71,9 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 	}
 
 	nsPerByte := decodeCostEstimate(dict, eval)
+	if opts.DecodeNsPerRawByte > 0 {
+		nsPerByte = opts.DecodeNsPerRawByte
+	}
 	ks := opts.CandidateK
 	if len(ks) == 0 {
 		ks = []int{1, 2, 4, 8, 16, 32}
@@ -83,7 +89,7 @@ func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (
 		if used == 0 {
 			continue
 		}
-		payload, meta, raw, encodeNs := batchTotals(dict, eval[:used], k)
+		payload, meta, raw, encodeNs := batchTotals(dict, eval[:used], k, opts.EncodeNsPerRawByte)
 		if raw == 0 {
 			continue
 		}
@@ -185,7 +191,7 @@ func normalizeCandidateK(values []int) []int {
 	return out
 }
 
-func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, raw int, encodeNs int64) {
+func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float64) (payload int, meta int, raw int, encodeNs int64) {
 	if k <= 0 {
 		return 0, 0, 0, 0
 	}
@@ -225,7 +231,11 @@ func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, r
 		payload += len(c)
 		meta += 4 * (k + 1)
 	}
-	encodeNs = time.Since(started).Nanoseconds()
+	if encodeNsPerRawByte > 0 {
+		encodeNs = int64(float64(raw) * encodeNsPerRawByte)
+	} else {
+		encodeNs = time.Since(started).Nanoseconds()
+	}
 	return payload, meta, raw, encodeNs
 }
 

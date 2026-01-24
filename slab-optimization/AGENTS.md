@@ -952,3 +952,13 @@ Authoritative spec: `slab-optimization/spec.md`
   - `go run .github/scripts/check_vlog_dict_bench.go -strict=true`
 - PR created via `gh`: https://github.com/snissn/gomap/pull/93
 - PR35 CI: `gh pr checks 93 --watch` → all checks PASS.
+
+`2026-01-22 10:25:55 HST`
+- Added `slab-optimization/AGENTS_LIVE_BENCH.md` (live throughput bench runbook: mode1/mode3/mode4; compression on/off; public TreeDB KV API; no-fsync focus).
+
+`2026-01-22 10:44:03 HST`
+- Updated `slab-optimization/slab_optimization_merge_runbook.md` to assume the live KV throughput bench exists and to use the correct TreeDB-local bench runners (`TreeDB/cmd/vlog_dict_realdata -bench-kv`, `TreeDB/cmd/unified_bench -suite vlog_autotune -validate`).
+- Updated `slab-optimization/AGENTS_LIVE_BENCH.md` to show repo-root command paths (`./TreeDB/cmd/...`) and avoid TreeDB-vs-root `cmd/` confusion.
+
+`2026-01-22 10:50:59 HST`
+- Added `slab-optimization/slab_optimization_merge_runbook_PROMPT.md` (agent prompt for executing the merge-gate runbook after the live bench work is complete).

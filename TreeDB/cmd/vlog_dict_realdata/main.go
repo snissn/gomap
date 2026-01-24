@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,8 +22,14 @@ import (
 )
 
 type kvRecord struct {
-	Key string `json:"key"`
-	Val string `json:"val"`
+	Key      string `json:"key"`
+	Val      string `json:"val"`
+	Encoding string `json:"encoding,omitempty"`
+}
+
+type traceRecord struct {
+	Op       string `json:"op"`
+	ValueLen int    `json:"value_len"`
 }
 
 type datasetStats struct {
@@ -44,6 +52,7 @@ type evalResult struct {
 
 func main() {
 	input := flag.String("input", "tmp/treedb_kv_full.jsonl", "Path to JSONL dataset with {key,val} records")
+	inputEncoding := flag.String("input-encoding", "auto", "Input JSONL encoding for key/val: auto|string|base64|hex")
 	trainN := flag.Int("train", 200_000, "Number of training samples to load")
 	evalN := flag.Int("eval", 50_000, "Number of eval samples to load")
 	capBytes := flag.Int("cap", 512, "Maximum bytes kept per value (0 disables)")
@@ -63,7 +72,7 @@ func main() {
 		failf("unsupported -level=%q (expected fastest|default)", *levelName)
 	}
 
-	train, eval, stats, err := loadDataset(*input, *trainN, *evalN, *capBytes)
+	train, eval, stats, err := loadDataset(*input, *trainN, *evalN, *capBytes, *inputEncoding)
 	if err != nil {
 		fail(err)
 	}
@@ -137,7 +146,7 @@ func main() {
 	}
 }
 
-func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval [][]byte, stats datasetStats, err error) {
+func loadDataset(path string, trainN, evalN, capBytes int, inputEncoding string) (train [][]byte, eval [][]byte, stats datasetStats, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, datasetStats{}, err
@@ -145,16 +154,28 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 	defer f.Close()
 
 	stats.min = math.MaxInt32
+	traceCount := 0
+	traceBytes := 0
+	traceMax := 0
 	reader := bufio.NewReaderSize(f, 1<<20)
+	lineNum := 0
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if readErr != nil && readErr != io.EOF {
 			return nil, nil, datasetStats{}, readErr
 		}
 		if len(line) > 0 {
+			lineNum++
 			var rec kvRecord
 			if e := json.Unmarshal(bytes.TrimSpace(line), &rec); e == nil {
-				val := []byte(rec.Val)
+				enc, encErr := resolveInputEncoding(inputEncoding, rec)
+				if encErr != nil {
+					return nil, nil, datasetStats{}, fmt.Errorf("line %d: %w", lineNum, encErr)
+				}
+				val, decErr := decodeValue(rec.Val, enc)
+				if decErr != nil {
+					return nil, nil, datasetStats{}, fmt.Errorf("line %d: %w", lineNum, decErr)
+				}
 				if capBytes > 0 && len(val) > capBytes {
 					val = val[:capBytes]
 				}
@@ -173,6 +194,16 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 				} else if len(eval) < evalN {
 					eval = append(eval, val)
 				}
+				if len(val) == 0 {
+					var tr traceRecord
+					if te := json.Unmarshal(bytes.TrimSpace(line), &tr); te == nil && tr.ValueLen > 0 {
+						traceCount++
+						traceBytes += tr.ValueLen
+						if tr.ValueLen > traceMax {
+							traceMax = tr.ValueLen
+						}
+					}
+				}
 			}
 		}
 		if len(train) >= trainN && len(eval) >= evalN {
@@ -188,7 +219,48 @@ func loadDataset(path string, trainN, evalN, capBytes int) (train [][]byte, eval
 	if stats.min == math.MaxInt32 {
 		stats.min = 0
 	}
+	if stats.count == 0 && traceCount > 0 {
+		return nil, nil, stats, fmt.Errorf("input appears to be treedb trace JSONL (value_len present, no val payloads): trace_values=%d trace_bytes=%d trace_max=%d; vlog_dict_realdata expects JSONL records like {\"key\":\"...\",\"val\":\"...\"} (optionally with encoding=base64|hex or -input-encoding)", traceCount, traceBytes, traceMax)
+	}
 	return train, eval, stats, nil
+}
+
+func resolveInputEncoding(inputEncoding string, rec kvRecord) (string, error) {
+	enc := strings.ToLower(strings.TrimSpace(inputEncoding))
+	if enc == "" || enc == "auto" {
+		enc = strings.ToLower(strings.TrimSpace(rec.Encoding))
+	}
+	switch enc {
+	case "", "string", "raw":
+		return "string", nil
+	case "base64", "b64":
+		return "base64", nil
+	case "hex":
+		return "hex", nil
+	default:
+		return "", fmt.Errorf("unsupported input encoding %q", enc)
+	}
+}
+
+func decodeValue(value string, encoding string) ([]byte, error) {
+	switch encoding {
+	case "string":
+		return []byte(value), nil
+	case "base64":
+		out, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base64 value: %w", err)
+		}
+		return out, nil
+	case "hex":
+		out, err := hex.DecodeString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid hex value: %w", err)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported input encoding %q", encoding)
+	}
 }
 
 func trainDictFixedSize(dictID uint32, samples [][]byte, dictBytes int, level zstd.EncoderLevel, fixedSize int) ([]byte, error) {

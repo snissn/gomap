@@ -119,6 +119,8 @@ type Trainer struct {
 	candidateK            []int
 	candidateHistoryBytes []int
 	ioNsPerStoredByte     atomic.Uint64
+	encodeNsPerRawByte    float64
+	decodeNsPerRawByte    float64
 }
 
 type trainerSample struct {
@@ -217,15 +219,17 @@ func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool
 	}
 
 	trainer := &Trainer{
-		targetBytes:     uint64(target),
-		minRecords:      uint64(minRecords),
-		maxRecord:       maxRecord,
-		dictBytes:       dictBytes,
-		level:           cfg.Level,
-		sampleStride:    uint64(sampleStride),
-		sampleCh:        make(chan trainerSample, DefaultTrainQueue),
-		measureCollect:  metricsEnabled,
-		dictDedupWindow: dedupWindow,
+		targetBytes:        uint64(target),
+		minRecords:         uint64(minRecords),
+		maxRecord:          maxRecord,
+		dictBytes:          dictBytes,
+		level:              cfg.Level,
+		sampleStride:       uint64(sampleStride),
+		sampleCh:           make(chan trainerSample, DefaultTrainQueue),
+		measureCollect:     metricsEnabled,
+		dictDedupWindow:    dedupWindow,
+		encodeNsPerRawByte: opts.EncodeNsPerRawByte,
+		decodeNsPerRawByte: opts.DecodeNsPerRawByte,
 	}
 	trainer.enabled.Store(true)
 	trainer.collecting.Store(true)
@@ -578,8 +582,10 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 			t.storeCachedDict(cacheKey, dictHash, dict)
 		}
 		profile := ChooseKForDictOptions(dict, validSamples, ChooseKOptions{
-			CandidateK:        t.candidateK,
-			IoNsPerStoredByte: ioNsPerStoredByte,
+			CandidateK:         t.candidateK,
+			IoNsPerStoredByte:  ioNsPerStoredByte,
+			EncodeNsPerRawByte: t.encodeNsPerRawByte,
+			DecodeNsPerRawByte: t.decodeNsPerRawByte,
 		})
 		if profile == nil || len(profile.Dict) == 0 {
 			continue
@@ -765,7 +771,12 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
-		Level:    level,
+		// Important: BuildDict does not guarantee it will discover 3 non-zero
+		// offsets when content is small/degenerate (it only updates offsets it
+		// observes). If we pass zero offsets, it can emit dictionaries that fail
+		// to load with "invalid offset in dictionary" (issue #117).
+		Offsets: [3]int{1, 4, 8},
+		Level:   level,
 	})
 	if err != nil || len(dict) == 0 {
 		if err != nil {

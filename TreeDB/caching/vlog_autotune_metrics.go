@@ -110,8 +110,12 @@ func (m *vlogAutotuneMetrics) observe(start time.Time, rawBytes, storedBytes int
 	if storedBytes <= 0 {
 		storedBytes = rawBytes
 	}
+	ioWallNs := wallNs
+	if encodeNs > 0 && encodeNs < wallNs {
+		ioWallNs = wallNs - encodeNs
+	}
 	throughput := float64(rawBytes) * 1e3 / float64(wallNs)
-	ioNsPerStored := float64(wallNs) / float64(storedBytes)
+	ioNsPerStored := float64(ioWallNs) / float64(storedBytes)
 	observedRatio := float64(storedBytes) / float64(rawBytes)
 
 	updateEWMA(&m.throughputRawMBps, throughput)
@@ -156,6 +160,18 @@ func (m *vlogAutotuneMetrics) snapshot() vlogAutotuneSnapshot {
 		IoNsPerStoredByte:  math.Float64frombits(m.ioNsPerStoredByte.Load()),
 		ThroughputRawMBps:  math.Float64frombits(m.throughputRawMBps.Load()),
 		ObservedRatio:      math.Float64frombits(m.observedRatio.Load()),
+	}
+}
+
+func (m *vlogAutotuneMetrics) seed(encodeNsPerRawByte, ioNsPerStoredByte float64) {
+	if m == nil {
+		return
+	}
+	if encodeNsPerRawByte > 0 {
+		m.encodeNsPerRawByte.Store(math.Float64bits(encodeNsPerRawByte))
+	}
+	if ioNsPerStoredByte > 0 {
+		m.ioNsPerStoredByte.Store(math.Float64bits(ioNsPerStoredByte))
 	}
 }
 

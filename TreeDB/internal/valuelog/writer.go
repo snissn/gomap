@@ -49,6 +49,7 @@ type Writer struct {
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
 	clock                  Clock
+	encodeCostModel        EncodeCostModel
 	encodeSampleStride     uint64
 	encodeSampleCount      uint64
 	keepIoNsPerStoredByte  float64
@@ -167,6 +168,30 @@ func dictSkipFrames(noBenefit uint8) uint16 {
 	return uint16(1 << shift)
 }
 
+func dictSkipFramesAggressive(noBenefit uint8, rawPayloadBytes, encodedLen int, encodeNs int64, ioNsPerStoredByte, safetyMargin float64) uint16 {
+	skip := dictSkipFrames(noBenefit)
+	if rawPayloadBytes <= 0 || encodedLen <= 0 || encodedLen >= rawPayloadBytes {
+		return skip
+	}
+	if encodeNs <= 0 || ioNsPerStoredByte <= 0 {
+		return skip
+	}
+	savings := float64(rawPayloadBytes-encodedLen) * ioNsPerStoredByte
+	cost := float64(encodeNs)
+	if safetyMargin > 0 {
+		cost *= 1 + safetyMargin
+	}
+	if savings <= 0 {
+		return skip
+	}
+	if cost/savings >= 4 {
+		if skip < 512 {
+			return 512
+		}
+	}
+	return skip
+}
+
 func NewWriter(path string, fileID uint32) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
@@ -208,6 +233,15 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	}
 }
 
+// NewWriterWithSink creates a value-log writer that writes to the provided sink.
+// Intended for deterministic tests/benchmarks (no file-backed durability).
+func NewWriterWithSink(sink io.Writer, fileID uint32) *Writer {
+	if sink == nil {
+		return newWriterWithSink(io.Discard, fileID)
+	}
+	return newWriterWithSink(sink, fileID)
+}
+
 func (w *Writer) SetClock(clock Clock) {
 	if w == nil {
 		return
@@ -226,6 +260,13 @@ func (w *Writer) SetEncodeSampleStride(stride uint64) {
 	w.encodeSampleStride = stride
 }
 
+func (w *Writer) SetEncodeCostModel(model EncodeCostModel) {
+	if w == nil {
+		return
+	}
+	w.encodeCostModel = model
+}
+
 func (w *Writer) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
 	if w == nil {
 		return
@@ -236,6 +277,16 @@ func (w *Writer) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMarg
 		safetyMargin = 0
 	}
 	w.keepSafetyMargin = safetyMargin
+}
+
+// ResetCompressionHints clears skip/backoff state for deterministic benches.
+func (w *Writer) ResetCompressionHints() {
+	if w == nil {
+		return
+	}
+	w.noBenefit = 0
+	w.skipRemain = 0
+	w.skipDictID = 0
 }
 
 func (w *Writer) sampleEncodeStart() time.Time {
@@ -256,9 +307,17 @@ func (w *Writer) sampleEncodeStart() time.Time {
 	return w.clock.Now()
 }
 
-func (w *Writer) sampleEncodeEnd(start time.Time) int64 {
+func (w *Writer) sampleEncodeEnd(start time.Time, rawPayloadBytes, records int) int64 {
 	if start.IsZero() {
 		return 0
+	}
+	if w.encodeCostModel != nil {
+		if ns := w.encodeCostModel.EncodeNs(rawPayloadBytes, records); ns > 0 {
+			if adv, ok := w.clock.(interface{ Advance(int64) }); ok {
+				adv.Advance(ns)
+			}
+			return ns
+		}
 	}
 	if w.clock == nil {
 		w.clock = RealClock{}
@@ -272,6 +331,20 @@ func (w *Writer) shouldKeepCompressed(rawPayloadBytes, encodedLen int, encodeNs 
 		encodeNsUsed = int64(w.keepEncodeNsPerRawByte * float64(rawPayloadBytes))
 	}
 	return ShouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNsUsed, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
+}
+
+func (w *Writer) shouldSkipCompression(rawPayloadBytes int) bool {
+	if w == nil || rawPayloadBytes <= 0 {
+		return false
+	}
+	if w.keepIoNsPerStoredByte <= 0 || w.keepEncodeNsPerRawByte <= 0 {
+		return false
+	}
+	costPerRaw := w.keepEncodeNsPerRawByte
+	if w.keepSafetyMargin > 0 {
+		costPerRaw *= 1 + w.keepSafetyMargin
+	}
+	return w.keepIoNsPerStoredByte <= costPerRaw
 }
 
 func (w *Writer) FileID() uint32 {
@@ -848,6 +921,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			w.skipRemain--
 			return writeRaw(false, 0)
 		}
+		if w.shouldSkipCompression(rawPayloadBytes) {
+			return writeRaw(false, 0)
+		}
 
 		codecs := w.codecs
 		if codecs == nil || w.codecsID != dictID {
@@ -944,7 +1020,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 			encodeStart := w.sampleEncodeStart()
 			w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
-			encodeNs := w.sampleEncodeEnd(encodeStart)
+			encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
@@ -953,7 +1029,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				if w.noBenefit < 0xff {
 					w.noBenefit++
 				}
-				w.skipRemain = dictSkipFrames(w.noBenefit)
+				w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, encodedLen, encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 				return writeRaw(true, encodeNs)
 			}
 
@@ -1051,7 +1127,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			enc.Reset(nil)
 			encoded = w.encLimiter.buf
 		}
-		encodeNs := w.sampleEncodeEnd(encodeStart)
+		encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
@@ -1067,7 +1143,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			if w.noBenefit < 0xff {
 				w.noBenefit++
 			}
-			w.skipRemain = dictSkipFrames(w.noBenefit)
+			w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 			return writeRaw(true, encodeNs)
 		}
 		storedPayloadBytes := len(encoded)

@@ -22,4 +22,8 @@ type TrainConfig struct {
 	SampleStride   int
 	DedupWindow    int
 	Level          int
+	// Deterministic cost modeling (tests/benches only). When >0, overrides
+	// encode/decode timing estimates in training evaluation.
+	EncodeNsPerRawByte float64
+	DecodeNsPerRawByte float64
 }
