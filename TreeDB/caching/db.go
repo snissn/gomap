@@ -1370,6 +1370,7 @@ type DB struct {
 		attempted atomic.Uint64
 		kept      atomic.Uint64
 	}
+	valueLogAutotuneMetrics vlogAutotuneMetrics
 
 	valueLogDictPauseRemaining      atomic.Uint64
 	valueLogDictProbeBytes          uint64
@@ -2071,6 +2072,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh:          make(chan struct{}, 1),
 		lanes:                          lanes,
 	}
+	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -2742,6 +2744,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		return nil, errWALClosed
 	default:
 	}
+	wallStart := db.valueLogAutotuneMetrics.now()
 
 	var (
 		totalBytes int64
@@ -2822,6 +2825,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	framesTotal := 0
 	framesAttempted := 0
 	framesKept := 0
+	encodeNsTotal := int64(0)
+	encodeRawBytes := 0
 	rawBatchUsed := false
 	if dictID == 0 && hasRawInto && len(records) > 1 {
 		ptrs = make([]page.ValuePtr, len(records))
@@ -2865,6 +2870,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				if stats.Kept {
 					framesKept++
 				}
+				if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
+					encodeNsTotal += stats.EncodeNs
+					encodeRawBytes += stats.RawPayloadBytes
+				}
 				continue
 			}
 			if hasStats {
@@ -2883,6 +2892,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				}
 				if stats.Kept {
 					framesKept++
+				}
+				if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
+					encodeNsTotal += stats.EncodeNs
+					encodeRawBytes += stats.RawPayloadBytes
 				}
 				continue
 			}
@@ -2951,6 +2964,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
+	storedForMetrics := storedPayloadBytes
+	if storedForMetrics == 0 && totalBytes > 0 {
+		storedForMetrics = int(totalBytes)
+	}
+	db.valueLogAutotuneMetrics.observe(wallStart, rawPayloadBytes, storedForMetrics, encodeNsTotal, encodeRawBytes)
 	return ptrs, nil
 }
 
@@ -2966,6 +2984,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
+	wallStart := db.valueLogAutotuneMetrics.now()
 
 	var (
 		totalBytes int64
@@ -3068,6 +3087,17 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
+	encodeNsTotal := int64(0)
+	encodeRawBytes := 0
+	if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
+		encodeNsTotal = stats.EncodeNs
+		encodeRawBytes = stats.RawPayloadBytes
+	}
+	storedForMetrics := stats.StoredPayloadBytes
+	if storedForMetrics == 0 && totalBytes > 0 {
+		storedForMetrics = int(totalBytes)
+	}
+	db.valueLogAutotuneMetrics.observe(wallStart, len(value), storedForMetrics, encodeNsTotal, encodeRawBytes)
 	return ptr, retainPath, nil
 }
 
@@ -6140,6 +6170,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.last_applied_dict_id"] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictID.Load())
 	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
+	if snap := db.valueLogAutotuneMetrics.snapshot(); snap.hasData() {
+		stats["treedb.cache.vlog_autotune.encode_ns_per_raw_byte"] = fmt.Sprintf("%.3f", snap.EncodeNsPerRawByte)
+		stats["treedb.cache.vlog_autotune.io_ns_per_stored_byte"] = fmt.Sprintf("%.3f", snap.IoNsPerStoredByte)
+		stats["treedb.cache.vlog_autotune.throughput_raw_MBps"] = fmt.Sprintf("%.3f", snap.ThroughputRawMBps)
+		stats["treedb.cache.vlog_autotune.observed_ratio"] = fmt.Sprintf("%.6f", snap.ObservedRatio)
+	}
 	return stats
 }
 
