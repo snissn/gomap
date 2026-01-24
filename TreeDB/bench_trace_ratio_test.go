@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 )
 
 // TestTraceReplayCompressionRatios is a lightweight POC that estimates

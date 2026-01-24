@@ -117,7 +117,7 @@ This note summarizes the main engine and benchmark changes made during the recen
 
 ## Compression Bench Notes (s2)
 
-HashDB compresses values using `klauspost/compress/s2` when enabled and when it is beneficial.
+HashDB compresses values using `snissn/compress/s2` when enabled and when it is beneficial.
 There is a minimum size threshold (`minValueBytesForCompression`, currently 32 bytes) to avoid overhead on tiny values.
 
 Example run (Apple M3, darwin/arm64):

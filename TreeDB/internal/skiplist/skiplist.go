@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -18,7 +19,8 @@ const (
 	nodeFlagsOff   = 7
 	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
 
-	flagDeleted = 1
+	flagPointer = node.FlagPointer
+	flagDeleted = node.FlagTombstone
 
 	// Arena Constants
 	// We use 4MiB chunks. With uint32 pointers, this provides a total addressable
@@ -308,6 +310,30 @@ func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error
 	return s.put(key, value, 0, cb)
 }
 
+// PutEntry inserts key/value with explicit flags and optional value pointer.
+// When flags include FlagPointer, ptr is encoded into the value area; if value is
+// non-nil, it is appended after the pointer bytes.
+func (s *SkipList) PutEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	if flags&flagPointer != 0 {
+		if len(value) > 0 {
+			buf := make([]byte, page.ValuePtrSize+len(value))
+			ptr.Encode(buf[:page.ValuePtrSize])
+			copy(buf[page.ValuePtrSize:], value)
+			_ = s.put(key, buf, flags, nil)
+			return
+		}
+		var buf [page.ValuePtrSize]byte
+		ptr.Encode(buf[:])
+		_ = s.put(key, buf[:], flags, nil)
+		return
+	}
+	if flags&flagDeleted != 0 {
+		_ = s.put(key, nil, flags, nil)
+		return
+	}
+	_ = s.put(key, value, flags, nil)
+}
+
 // LastKey returns the largest key currently in the skiplist, or nil if empty.
 func (s *SkipList) LastKey() []byte {
 	last := s.tail[0]
@@ -477,12 +503,54 @@ func (s *SkipList) Get(key []byte) ([]byte, bool, bool) {
 			}
 			if cmp == 0 {
 				flags := s.getFlags(next)
+				if flags&flagPointer != 0 {
+					val := s.getValue(next)
+					if len(val) > page.ValuePtrSize {
+						return val[page.ValuePtrSize:], flags&flagDeleted != 0, true
+					}
+					return nil, flags&flagDeleted != 0, true
+				}
 				return s.getValue(next), flags&flagDeleted != 0, true
 			}
 			x = next
 		}
 	}
 	return nil, false, false
+}
+
+// GetEntry returns the raw entry, including pointer and flags, if present.
+func (s *SkipList) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	x := s.head
+	for i := maxHeight - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			k := s.getKey(next)
+			cmp := bytes.Compare(k, key)
+			if cmp > 0 {
+				break
+			}
+			if cmp == 0 {
+				flags := s.getFlags(next)
+				val := s.getValue(next)
+				if flags&flagPointer != 0 {
+					if len(val) >= page.ValuePtrSize {
+						inline := []byte(nil)
+						if len(val) > page.ValuePtrSize {
+							inline = val[page.ValuePtrSize:]
+						}
+						return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, true
+					}
+					return nil, page.ValuePtr{}, flags, true
+				}
+				return val, page.ValuePtr{}, flags, true
+			}
+			x = next
+		}
+	}
+	return nil, page.ValuePtr{}, 0, false
 }
 
 func (s *SkipList) Size() int64 {
@@ -550,12 +618,30 @@ func (it *Iterator) UnsafeKey() []byte {
 }
 
 func (it *Iterator) UnsafeValue() []byte {
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		val := it.sl.getValue(it.curr)
+		if len(val) > page.ValuePtrSize {
+			return val[page.ValuePtrSize:]
+		}
+		return nil
+	}
 	return it.sl.getValue(it.curr)
 }
 
 func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	val := it.sl.getValue(it.curr)
 	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		if len(val) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(val) > page.ValuePtrSize {
+				inline = val[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+		}
+		return nil, page.ValuePtr{}, flags
+	}
 	return val, page.ValuePtr{}, flags
 }
 

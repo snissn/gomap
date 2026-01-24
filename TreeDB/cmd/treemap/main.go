@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -29,7 +33,10 @@ Commands:
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
+  scan-jsonl      Scan keys and values to JSONL {key,val} (requires -allow-values)
   dump            Alias for scan
+  dump-jsonl      Alias for scan-jsonl
+  import-jsonl    Import JSONL {key,val} into the store
   vacuum          Rebuild index (offline by default; use -online for online vacuum)
   compact         Compact slab files (by candidate selection or slab id)
 
@@ -73,6 +80,10 @@ func main() {
 		runKeys(dir, args)
 	case "scan", "dump":
 		runScan(dir, args)
+	case "scan-jsonl", "dump-jsonl":
+		runScanJSONL(dir, args)
+	case "import-jsonl":
+		runImportJSONL(dir, args)
 	case "vacuum":
 		runVacuum(dir, args)
 	case "compact":
@@ -297,6 +308,239 @@ func runScan(dir string, args []string) {
 	}
 	if err := it.Error(); err != nil {
 		fatalf("Iterator error: %v", err)
+	}
+}
+
+type jsonKV struct {
+	Key      string `json:"key"`
+	Val      string `json:"val"`
+	Encoding string `json:"encoding,omitempty"`
+}
+
+func runScanJSONL(dir string, args []string) {
+	fs := flag.NewFlagSet("scan-jsonl", flag.ExitOnError)
+	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
+	start := fs.String("start", "", "Start key (inclusive)")
+	end := fs.String("end", "", "End key (exclusive)")
+	prefix := fs.String("prefix", "", "Prefix (mutually exclusive with start/end)")
+	limit := fs.Int("limit", 0, "Limit number of entries (0=unlimited)")
+	reverse := fs.Bool("reverse", false, "Iterate in reverse order")
+	hexInput := fs.Bool("hex", false, "Interpret input keys as hex")
+	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
+	encoding := fs.String("encoding", "base64", "JSONL encoding for key/val: string|hex|base64")
+	omitEncoding := fs.Bool("omit-encoding", false, "Omit encoding field in JSON output")
+	_ = fs.Parse(args)
+
+	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
+	if !*allowValues {
+		fatalf("scan-jsonl requires -allow-values to print values; use keys to dump keys only")
+	}
+
+	db := openTreeDB(dir, *backend, *rw)
+	defer closeTreeDB(db)
+
+	it, err := openIterator(db, startKey, endKey, *reverse)
+	if err != nil {
+		fatalf("Iterator error: %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	if _, err := scanJSONL(it, *encoding, *omitEncoding, *limit, os.Stdout); err != nil {
+		fatalf("output error: %v", err)
+	}
+}
+
+func runImportJSONL(dir string, args []string) {
+	fs := flag.NewFlagSet("import-jsonl", flag.ExitOnError)
+	backend := fs.Bool("backend", false, "Open backend-only (skip cached layer)")
+	input := fs.String("input", "-", "Input JSONL path ('-' for stdin)")
+	inputEncoding := fs.String("input-encoding", "auto", "Input JSONL encoding for key/val: auto|string|base64|hex")
+	batchSize := fs.Int("batch", 1024, "Batch size for writes (0 or 1 disables batching)")
+	_ = fs.Parse(args)
+
+	db := openTreeDB(dir, *backend, true)
+	defer closeTreeDB(db)
+
+	var reader io.Reader
+	if *input == "-" {
+		reader = os.Stdin
+	} else {
+		f, err := os.Open(*input)
+		if err != nil {
+			fatalf("input error: %v", err)
+		}
+		defer f.Close()
+		reader = f
+	}
+
+	count, err := importJSONL(db, reader, *inputEncoding, *batchSize)
+	if err != nil {
+		fatalf("import error: %v", err)
+	}
+	fmt.Printf("Imported %d records\n", count)
+}
+
+func scanJSONL(it treedb.Iterator, encoding string, omitEncoding bool, limit int, w io.Writer) (int, error) {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	printCount := 0
+	for ; it.Valid(); it.Next() {
+		keyStr, err := formatOutput(it.Key(), encoding)
+		if err != nil {
+			return printCount, err
+		}
+		valStr, err := formatOutput(it.Value(), encoding)
+		if err != nil {
+			return printCount, err
+		}
+		rec := jsonKV{Key: keyStr, Val: valStr}
+		if !omitEncoding {
+			rec.Encoding = encoding
+		}
+		if err := encoder.Encode(rec); err != nil {
+			return printCount, err
+		}
+		printCount++
+		if limit > 0 && printCount >= limit {
+			break
+		}
+	}
+	if err := it.Error(); err != nil {
+		return printCount, err
+	}
+	return printCount, nil
+}
+
+func importJSONL(db *treedb.DB, reader io.Reader, inputEncoding string, batchSize int) (int, error) {
+	if batchSize < 2 {
+		batchSize = 0
+	}
+	buf := bufio.NewReaderSize(reader, 1<<20)
+	lineNum := 0
+	count := 0
+	var batch treedb.Batch
+	batchEntries := 0
+	if batchSize > 0 {
+		batch = db.NewBatch()
+	}
+	for {
+		line, readErr := buf.ReadBytes('\n')
+		if readErr != nil && readErr != io.EOF {
+			if batch != nil {
+				_ = batch.Close()
+			}
+			return count, readErr
+		}
+		if len(line) > 0 {
+			lineNum++
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				if readErr == io.EOF {
+					break
+				}
+				continue
+			}
+			var rec jsonKV
+			if err := json.Unmarshal(line, &rec); err != nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			enc, err := resolveJSONLEncoding(inputEncoding, rec.Encoding)
+			if err != nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			key, err := decodeJSONLValue(rec.Key, enc)
+			if err != nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			val, err := decodeJSONLValue(rec.Val, enc)
+			if err != nil {
+				if batch != nil {
+					_ = batch.Close()
+				}
+				return count, fmt.Errorf("line %d: %w", lineNum, err)
+			}
+			if batch != nil {
+				if err := batch.Set(key, val); err != nil {
+					_ = batch.Close()
+					return count, fmt.Errorf("line %d: %w", lineNum, err)
+				}
+				batchEntries++
+				if batchEntries >= batchSize {
+					if err := batch.Write(); err != nil {
+						_ = batch.Close()
+						return count, err
+					}
+					_ = batch.Close()
+					batch = db.NewBatch()
+					batchEntries = 0
+				}
+			} else {
+				if err := db.Set(key, val); err != nil {
+					return count, fmt.Errorf("line %d: %w", lineNum, err)
+				}
+			}
+			count++
+		}
+		if readErr == io.EOF {
+			break
+		}
+	}
+	if batch != nil {
+		if batchEntries > 0 {
+			if err := batch.Write(); err != nil {
+				_ = batch.Close()
+				return count, err
+			}
+		}
+		_ = batch.Close()
+	}
+	return count, nil
+}
+
+func resolveJSONLEncoding(inputEncoding string, recordEncoding string) (string, error) {
+	enc := strings.ToLower(strings.TrimSpace(inputEncoding))
+	if enc == "" || enc == "auto" {
+		enc = strings.ToLower(strings.TrimSpace(recordEncoding))
+	}
+	switch enc {
+	case "", "string", "raw":
+		return "string", nil
+	case "base64", "b64":
+		return "base64", nil
+	case "hex":
+		return "hex", nil
+	default:
+		return "", fmt.Errorf("unsupported encoding %q", enc)
+	}
+}
+
+func decodeJSONLValue(value string, encoding string) ([]byte, error) {
+	switch encoding {
+	case "string":
+		return []byte(value), nil
+	case "base64":
+		out, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base64: %w", err)
+		}
+		return out, nil
+	case "hex":
+		out, err := hex.DecodeString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid hex: %w", err)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported encoding %q", encoding)
 	}
 }
 

@@ -1,6 +1,6 @@
 # TreeDB
 
-TreeDB is a high-performance, persistent key-value store optimized for the Cosmos SDK workload. It features a B+Tree index backed by a memory-mapped file (`index.db`) and a value log (`data-*.slab`) for storing large values efficiently.
+TreeDB is a high-performance, persistent key-value store optimized for the Cosmos SDK workload. It features a B+Tree index backed by a memory-mapped file (`index.db`) and a backend slab store (`data-*.slab`). In cached mode, large values are written to a separate value log under `wal/` while metadata is recorded in the journal.
 
 ## Features
 
@@ -8,7 +8,8 @@ TreeDB is a high-performance, persistent key-value store optimized for the Cosmo
 -   **Snapshot Isolation:** Lock-free concurrent readers using Multi-Version Concurrency Control (MVCC) and Reference Counting.
 -   **Hybrid Storage:**
     -   **Index:** Memory-mapped B+Tree for keys and small values.
-    -   **Slabs:** Append-only log for large values (Contract code, blobs) to reduce write amplification and memory pressure.
+    -   **Backend slabs:** Append-only files for larger values in backend-only mode.
+    -   **Value log (cached mode):** Append-only log for large values (contract code, blobs) to reduce write amplification and memory pressure.
 -   **Compaction:** Background compaction mechanism ("Ghost Copy") to reclaim space from dead records in slabs.
 -   **Crash Recovery:** Automatic recovery from torn writes using strict write-ordering and checksum verification.
 -   **Lifecycle Management:** Safe page reclamation using a Graveyard and Reader Registry to protect active snapshots.
@@ -18,7 +19,8 @@ TreeDB is a high-performance, persistent key-value store optimized for the Cosmo
 ### Storage Layout
 -   **Pages:** 4KB fixed-size blocks in `index.db`.
 -   **Nodes:** Slotted pages supporting variable-length keys.
--   **Slabs:** Append-only files (`data-0000.slab`) storing value records with CRC checksums.
+-   **Backend slabs:** Append-only files (`data-0000.slab`) storing value records with CRC checksums.
+-   **Cached-mode logs:** `wal/commit-*.log` (journal) and `wal/value-*.log` (value log, when enabled).
 
 ### Write Path ("The Zipper")
 Writes are batched and applied using a recursive "Zipper" merge algorithm. This creates a new version of the tree path (COW) without modifying existing on-disk pages, ensuring crash safety and snapshot isolation.
@@ -93,7 +95,15 @@ Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
 - `ProfileFast`: relax durability/integrity knobs for throughput.
+- `ProfileFastIngest`: fast ingest profile that keeps cached value-log enabled (and may disable the journal/redo log).
 - `ProfileBench`: deterministic benchmarking profile (not production).
+
+Note: `DisableWAL=true` disables both the journal/redo log and cached value-log
+pointers (legacy mode1; deprecated). To benchmark the value-log path with the
+journal disabled, use `DisableJournal=true` (and keep `DisableValueLog=false`)
+with `AllowUnsafe=true`.
+
+Details: `docs/TREEDB_WRITE_PATHS.md`.
 
 Unsafe profiles require an explicit acknowledgement:
 
@@ -107,7 +117,7 @@ Details: `docs/TREEDB_PROFILES.md`.
 
 ## Durability & Safety Notes
 
-- Safe defaults keep WAL, fsync, and read checksums enabled; unsafe toggles require `AllowUnsafe`.
+- Safe defaults keep the journal, fsync, and read checksums enabled; unsafe toggles require `AllowUnsafe`.
 - With `RelaxedSync` enabled, `SetSync`/`WriteSync` are crash-consistent only (no fsync) and may not survive power loss.
 - Page checksums are verified once and cached until the page is rewritten; use `VerifyOnRead` for paranoid always-verify behavior. `DisableReadChecksum` disables slab/value-log CRC checks entirely.
 - CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
@@ -120,16 +130,18 @@ Details: `docs/TREEDB_PROFILES.md`.
 
 ### Durability Matrix (Cached Mode)
 
-| Options | WAL | Sync boundary | Power-loss durability | Notes |
+| Options | Journal | Sync boundary | Power-loss durability | Notes |
 | --- | --- | --- | --- | --- |
 | Defaults | on | fsync | yes | safest default |
 | `RelaxedSync` | on | flush-only | no | crash-consistent only |
+| `DisableJournal` | off | backend checkpoint | yes (if not relaxed) | no redo log; durable only after checkpoint |
+| `DisableJournal` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
 | `DisableWAL` | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
 | `DisableWAL` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
 
 ## Tuning (Cached Mode)
 
-`treedb.Open` defaults to cached mode (memtable + WAL + background flush). The most important knobs:
+`treedb.Open` defaults to cached mode (memtable + journal + value log + background flush). The most important knobs:
 
 - `Options.FlushThreshold` + `Options.MaxQueuedMemtables` (throughput vs. backlog/memory)
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`

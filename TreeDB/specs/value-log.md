@@ -15,6 +15,7 @@ This doc is a *plan for review* and is intentionally explicit so future agents c
 
 - Value-log segments live in `wal/vlog-*.log` and store v2 records (CRC + KeyLen + ValueLen + Op + key/value).
 - Cached mode uses the value log by default; use `Options.DisableValueLog` (or `DisableWAL`) to revert to classic WAL.
+- Note: `DisableWAL` disables the WAL/value-log subsystem together; there is not currently a “journal off but value-log on” mode.
 - Backend reads dispatch by `ValuePtr.FileID` high bit via `ValueReader` (`page.IsValueLogFileID`).
 - Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
 - Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.

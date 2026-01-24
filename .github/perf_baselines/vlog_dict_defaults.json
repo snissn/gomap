@@ -1,0 +1,46 @@
+{
+  "benchmarks": [
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/highly_compressible_tail64/dict_off/k=4",
+      "min_mbps": 50,
+      "min_observed_ratio": 0.98,
+      "max_observed_ratio": 1.02,
+      "max_dict_fallback": 0
+    },
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/highly_compressible_tail64/dict_on/k=4",
+      "min_mbps": 50,
+      "min_observed_ratio": 0,
+      "max_observed_ratio": 0.10,
+      "max_dict_fallback": 0
+    },
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/medium_compressible/dict_off/k=4",
+      "min_mbps": 50,
+      "min_observed_ratio": 0.98,
+      "max_observed_ratio": 1.02,
+      "max_dict_fallback": 0
+    },
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/medium_compressible/dict_on/k=4",
+      "min_mbps": 50,
+      "min_observed_ratio": 0,
+      "max_observed_ratio": 0.20,
+      "max_dict_fallback": 0
+    },
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/incompressible/dict_off/k=4",
+      "min_mbps": 50,
+      "min_observed_ratio": 0.98,
+      "max_observed_ratio": 1.02,
+      "max_dict_fallback": 0
+    },
+    {
+      "name": "BenchmarkValueLogDictCompressibilitySweep/valsize=1024/incompressible/dict_on/k=4",
+      "min_mbps": 20,
+      "min_observed_ratio": 0.90,
+      "max_observed_ratio": 1.10,
+      "max_dict_fallback": 1
+    }
+  ]
+}

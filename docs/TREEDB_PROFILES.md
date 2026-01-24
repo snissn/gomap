@@ -8,7 +8,8 @@ different trade-offs:
 - steady-state performance vs benchmark determinism
 
 Most callers, however, want a small number of *intention-level* configurations.
-TreeDB profiles provide those as a convenience API.
+TreeDB profiles provide those as a convenience API. For cached-mode write-path
+semantics (Mode3/Mode4 and deprecated Mode1), see `docs/TREEDB_WRITE_PATHS.md`.
 
 ## Quick Start
 
@@ -44,7 +45,7 @@ opts.AllowUnsafe = true // required for ProfileFast/ProfileBench
 
 A `Profile` is a named preset for a small set of **policy** knobs:
 
-- Durability / integrity checks (WAL, sync policy, read checksums)
+- Durability / integrity checks (journal, sync policy, read checksums)
 - Background work (vacuum / checkpoint / pruning) that can affect latency and
   benchmark stability
 
@@ -60,7 +61,7 @@ Goal: safest default for production use.
 Behavior:
 
 - Keeps cached-mode durability/integrity features enabled:
-  - WAL enabled (`DisableWAL=false`)
+  - journal enabled (`DisableJournal=false`, `DisableWAL=false`)
   - fsync policy unchanged (`RelaxedSync=false`)
   - read checksums enabled (`DisableReadChecksum=false`)
 - Leaves background workers at their default settings.
@@ -77,11 +78,23 @@ Goal: maximize throughput by relaxing safety knobs.
 Behavior:
 
 - Disables or relaxes safety knobs:
-  - disables cached-mode WAL (`DisableWAL=true`)
+  - disables cached-mode journal via `DisableWAL=true` **(legacy mode1; deprecated)**
   - relaxes sync policy (`RelaxedSync=true`)
   - skips read checksums (`DisableReadChecksum=true`)
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
 - Leaves background maintenance enabled by default.
+
+Notes:
+
+- Profiles do not change `Options.Mode`. For write-heavy throughput tests, prefer
+  cached mode (`ModeCached`, the default). Backend-only mode (`ModeBackend`) is
+  a different engine path.
+- `DisableWAL=true` implies the cached value log is also disabled (no value-log
+  pointers, no value-log dictionary compression). To benchmark the value-log
+  path with the journal disabled, use `ProfileFastIngest` (or set
+  `DisableJournal=true` with `DisableWAL=false` and `AllowUnsafe=true`).
+  The value-log-disabled path is legacy and should not be recommended for new
+  deployments.
 
 Use when you want:
 
@@ -90,6 +103,30 @@ Use when you want:
   you are willing to trade durability/integrity for throughput
 
 Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
+
+### `ProfileFastIngest`
+
+Goal: maximize write throughput while explicitly keeping the cached **value-log**
+path enabled (Mode4).
+
+Behavior:
+
+- Disables the journal/redo log (`DisableJournal=true`, `DisableWAL=false`) while
+  keeping the value-log path enabled.
+- Enables value-log path knobs:
+  - `SplitValueLog=true`
+  - `MemtableValueLogPointers=true`
+- Relaxes integrity/durability for throughput:
+  - `RelaxedSync=true`
+  - `DisableReadChecksum=true`
+- Prefers append allocation (`PreferAppendAlloc=true`)
+
+Use when you want:
+
+- a stable “fast ingest” default that exercises cached+value-log behavior
+- benchmarks aligned with the intended write-path architecture (avoid backend-only slab-direct writes)
+
+Note: `ProfileFastIngest` requires `Options.AllowUnsafe = true` to open.
 
 ### `ProfileBench`
 

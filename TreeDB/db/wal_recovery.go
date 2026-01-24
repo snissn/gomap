@@ -10,13 +10,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/snissn/gomap/TreeDB/internal/vlog"
-	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type logSegment struct {
 	seq      uint64
+	lane     int
 	path     string
 	valueLog bool
 	fileID   uint32
@@ -39,7 +40,7 @@ func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 		}
 
 		name := entry.Name()
-		seq, valueLog, ok := parseLogSeq(name)
+		lane, seq, valueLog, ok := parseLogSeq(name)
 		if !ok {
 			continue
 		}
@@ -49,267 +50,308 @@ func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 
 		seg := logSegment{
 			seq:      seq,
+			lane:     lane,
 			path:     filepath.Join(walDir, name),
 			valueLog: valueLog,
 		}
 		if valueLog {
-			seg.fileID = page.ValueLogFileID(uint32(seq))
+			if lane < 0 {
+				continue
+			}
+			fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(seq))
+			if err != nil {
+				continue
+			}
+			seg.fileID = fileID
 		}
 		segments = append(segments, seg)
 	}
 
 	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
 		return segments[i].seq < segments[j].seq
 	})
 	return segments, nil
 }
 
-func parseLogSeq(name string) (uint64, bool, bool) {
+func parseLogSeq(name string) (int, uint64, bool, bool) {
 	const (
-		walPrefix  = "wal-"
-		vlogPrefix = "vlog-"
-		suffix     = ".log"
+		commitPrefix = "commit-"
+		valuePrefix  = "value-"
+		walPrefix    = "wal-"
+		vlogPrefix   = "vlog-"
+		suffix       = ".log"
 	)
 	if !strings.HasSuffix(name, suffix) {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	if strings.HasPrefix(name, walPrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, walPrefix), suffix)
+	base := strings.TrimSuffix(name, suffix)
+
+	parseLaneSeq := func(rest string) (int, uint64, bool) {
+		parts := strings.SplitN(rest, "-", 2)
+		if len(parts) != 2 {
+			return 0, 0, false
+		}
+		lane, err := strconv.Atoi(parts[0])
+		if err != nil || lane < 0 {
+			return 0, 0, false
+		}
+		seq, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		return lane, seq, true
+	}
+
+	if strings.HasPrefix(base, "commit-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "commit-l"))
+		return lane, seq, false, ok
+	}
+	if strings.HasPrefix(base, "value-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "value-l"))
+		return lane, seq, true, ok
+	}
+	if strings.HasPrefix(base, commitPrefix) {
+		num := strings.TrimPrefix(base, commitPrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, false, true
+		return 0, seq, false, true
 	}
-	if strings.HasPrefix(name, vlogPrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, vlogPrefix), suffix)
+	if strings.HasPrefix(base, valuePrefix) {
+		num := strings.TrimPrefix(base, valuePrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, true, true
+		return 0, seq, true, true
 	}
-	return 0, false, false
+	if strings.HasPrefix(base, walPrefix) {
+		num := strings.TrimPrefix(base, walPrefix)
+		seq, err := strconv.ParseUint(num, 10, 64)
+		if err != nil {
+			return 0, 0, false, false
+		}
+		return 0, seq, false, true
+	}
+	if strings.HasPrefix(base, vlogPrefix) {
+		num := strings.TrimPrefix(base, vlogPrefix)
+		seq, err := strconv.ParseUint(num, 10, 64)
+		if err != nil {
+			return 0, 0, false, false
+		}
+		return 0, seq, true, true
+	}
+	return 0, 0, false, false
 }
 
 func isTruncatedLogError(err error) bool {
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, wal.ErrCorrupt) ||
-		errors.Is(err, vlog.ErrCorrupt)
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64) error {
-	const maxOpsPerBatch = 10_000
+func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, keepValueLogs bool, dictLookup valuelog.DictLookup) error {
+	ridMap, err := scanValueLogSegments(segments, dictLookup)
+	if err != nil {
+		return err
+	}
+	if err := replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes, keepValueLogs); err != nil {
+		return err
+	}
+	if keepValueLogs {
+		return nil
+	}
+	return removeValueLogSegments(db, segments)
+}
 
-	markedZombie := false
+func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {
+	ridMap := make(map[uint64]page.ValuePtr)
+	for _, segment := range segments {
+		if !segment.valueLog {
+			continue
+		}
+		reader, err := valuelog.NewReader(segment.path, segment.fileID)
+		if err != nil {
+			return nil, err
+		}
+		reader.DisableValueDecode()
+		reader.ValidateDicts()
+		reader.SetDictLookup(dictLookup)
+		for {
+			rid, _, ptr, err := reader.ReadNext()
+			if err == nil {
+				if _, exists := ridMap[rid]; exists {
+					_ = reader.Close()
+					return nil, fmt.Errorf("valuelog: duplicate rid %d", rid)
+				}
+				ridMap[rid] = ptr
+				continue
+			}
+			if isTruncatedLogError(err) {
+				break
+			}
+			_ = reader.Close()
+			return nil, err
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return ridMap, nil
+}
+
+func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64, keepValueLogs bool) error {
+	type commitBatch struct {
+		seq     uint64
+		order   int
+		records []commitlog.Record
+	}
+
+	var (
+		batches       []commitBatch
+		legacyBatches []commitBatch
+		commitPaths   []string
+		readOrder     int
+	)
 	for _, segment := range segments {
 		if segment.valueLog {
-			zombie, err := replayValueLogSegment(db, segment, maxOpsPerBatch)
-			if err != nil {
+			continue
+		}
+		reader, err := commitlog.NewReaderWithOptions(segment.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return err
+		}
+		truncated := false
+		for {
+			records, err := reader.ReadBatch()
+			if err == nil {
+				if len(records) == 0 {
+					continue
+				}
+				seq := records[0].Seq
+				batch := commitBatch{seq: seq, order: readOrder, records: records}
+				readOrder++
+				if seq == 0 {
+					// Legacy commit logs don't carry sequence numbers; preserve read order.
+					legacyBatches = append(legacyBatches, batch)
+				} else {
+					batches = append(batches, batch)
+				}
+				continue
+			}
+			if isTruncatedLogError(err) {
+				truncated = true
+				break
+			}
+			_ = reader.Close()
+			return err
+		}
+		if err := reader.Close(); err != nil {
+			return err
+		}
+		commitPaths = append(commitPaths, segment.path)
+		if truncated {
+			break
+		}
+	}
+	if len(batches) > 1 {
+		sort.Slice(batches, func(i, j int) bool {
+			if batches[i].seq == batches[j].seq {
+				return batches[i].order < batches[j].order
+			}
+			return batches[i].seq < batches[j].seq
+		})
+	}
+	for _, batch := range legacyBatches {
+		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
+			return err
+		}
+	}
+	for _, batch := range batches {
+		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
+			return err
+		}
+	}
+	for _, path := range commitPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, keepValueLogs bool) error {
+	if len(records) == 0 {
+		return nil
+	}
+	batch := db.NewBatch()
+	defer func() { _ = batch.Close() }()
+
+	ptrBatch, hasPtrBatch := batch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+
+	for _, rec := range records {
+		switch rec.Op {
+		case commitlog.OpDelete:
+			if err := batch.Delete(rec.Key); err != nil {
 				return err
 			}
-			if zombie {
-				markedZombie = true
+		case commitlog.OpSetInline:
+			if err := batch.Set(rec.Key, rec.Value); err != nil {
+				return err
+			}
+		case commitlog.OpSetRID:
+			ptr, ok := ridMap[rec.RID]
+			if !ok {
+				return fmt.Errorf("commitlog: missing rid %d", rec.RID)
+			}
+			if keepValueLogs {
+				if !hasPtrBatch {
+					return fmt.Errorf("commitlog: pointer batch unavailable")
+				}
+				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
+					return err
+				}
+				continue
+			}
+			if db.valueLogManager == nil {
+				return fmt.Errorf("commitlog: value log manager unavailable")
+			}
+			val, err := db.valueLogManager.Read(ptr)
+			if err != nil {
+				return fmt.Errorf("commitlog: read rid %d: %w", rec.RID, err)
+			}
+			if err := batch.Set(rec.Key, val); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("commitlog: unknown op %d", rec.Op)
+		}
+	}
+
+	if err := batch.WriteSync(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeValueLogSegments(db *DB, segments []logSegment) error {
+	for _, segment := range segments {
+		if !segment.valueLog {
+			continue
+		}
+		if db.valueLogManager != nil {
+			if err := db.valueLogManager.RemoveSegmentForce(segment.fileID); err != nil && !os.IsNotExist(err) {
+				return err
 			}
 			continue
 		}
-		if err := replayWALSegment(db, segment, maxOpsPerBatch, maxSegmentBytes); err != nil {
-			return err
-		}
-	}
-
-	if markedZombie {
-		if err := db.RefreshSlabSet(); err != nil {
+		if err := os.Remove(segment.path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
-}
-
-func replayWALSegment(db *DB, segment logSegment, maxOpsPerBatch int, maxSegmentBytes int64) error {
-	reader, err := wal.NewReaderWithOptions(segment.path, wal.Options{MaxSegmentSize: maxSegmentBytes})
-	if err != nil {
-		return err
-	}
-
-	var (
-		opsInBatch int
-		batch      = db.NewBatch()
-	)
-	ptrBatch, _ := batch.(interface {
-		SetPointer(key []byte, ptr page.ValuePtr) error
-	})
-
-	for {
-		op, key, val, err := reader.ReadNext()
-		if err != nil {
-			if isTruncatedLogError(err) {
-				break
-			}
-			_ = batch.Close()
-			_ = reader.Close()
-			return err
-		}
-
-		switch op {
-		case wal.OpSet:
-			if err := batch.Set(key, val); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return err
-			}
-		case wal.OpDelete:
-			if err := batch.Delete(key); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return err
-			}
-		case wal.OpSetPointer:
-			if ptrBatch == nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return fmt.Errorf("wal: pointer op without pointer support")
-			}
-			if len(val) < page.ValuePtrSize {
-				_ = batch.Close()
-				_ = reader.Close()
-				return fmt.Errorf("wal: invalid pointer length %d", len(val))
-			}
-			ptr := page.DecodeValuePtr(val)
-			if err := ptrBatch.SetPointer(key, ptr); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return err
-			}
-		default:
-			_ = batch.Close()
-			_ = reader.Close()
-			return fmt.Errorf("wal: unknown op %d", op)
-		}
-
-		opsInBatch++
-		if opsInBatch >= maxOpsPerBatch {
-			if err := batch.WriteSync(); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return err
-			}
-			_ = batch.Close()
-			batch = db.NewBatch()
-			ptrBatch, _ = batch.(interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			})
-			opsInBatch = 0
-		}
-	}
-
-	_ = reader.Close()
-
-	if opsInBatch > 0 {
-		if err := batch.WriteSync(); err != nil {
-			_ = batch.Close()
-			return err
-		}
-	}
-	_ = batch.Close()
-
-	if err := os.Remove(segment.path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-func replayValueLogSegment(db *DB, segment logSegment, maxOpsPerBatch int) (bool, error) {
-	reader, err := vlog.NewReader(segment.path, segment.fileID)
-	if err != nil {
-		return false, err
-	}
-
-	var (
-		opsInBatch int
-		batch      = db.NewBatch()
-		threshold  = db.InlineThreshold()
-		keepSeg    bool
-	)
-	ptrBatch, _ := batch.(interface {
-		SetPointer(key []byte, ptr page.ValuePtr) error
-	})
-
-	for {
-		op, key, val, ptr, err := reader.ReadNext()
-		if err != nil {
-			if isTruncatedLogError(err) {
-				break
-			}
-			_ = batch.Close()
-			_ = reader.Close()
-			return false, err
-		}
-
-		switch op {
-		case vlog.OpSet:
-			if len(val) > threshold && ptrBatch != nil {
-				keepSeg = true
-				if err := ptrBatch.SetPointer(key, ptr); err != nil {
-					_ = batch.Close()
-					_ = reader.Close()
-					return false, err
-				}
-			} else if err := batch.Set(key, val); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return false, err
-			}
-		case vlog.OpDelete:
-			if err := batch.Delete(key); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return false, err
-			}
-		default:
-			_ = batch.Close()
-			_ = reader.Close()
-			return false, fmt.Errorf("vlog: unknown op %d", op)
-		}
-
-		opsInBatch++
-		if opsInBatch >= maxOpsPerBatch {
-			if err := batch.WriteSync(); err != nil {
-				_ = batch.Close()
-				_ = reader.Close()
-				return false, err
-			}
-			_ = batch.Close()
-			batch = db.NewBatch()
-			ptrBatch, _ = batch.(interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			})
-			opsInBatch = 0
-		}
-	}
-
-	_ = reader.Close()
-
-	if opsInBatch > 0 {
-		if err := batch.WriteSync(); err != nil {
-			_ = batch.Close()
-			return false, err
-		}
-	}
-	_ = batch.Close()
-
-	if keepSeg {
-		return false, nil
-	}
-	if segment.fileID != 0 {
-		if err := db.valueLogManager.MarkZombie(segment.fileID); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if err := os.Remove(segment.path); err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	return false, nil
 }

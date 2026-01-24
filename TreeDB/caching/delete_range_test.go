@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type countingLogWriter struct {
@@ -13,21 +13,21 @@ type countingLogWriter struct {
 	batchCalls  int
 }
 
-func (w *countingLogWriter) Append(op byte, key, value []byte) (page.ValuePtr, error) {
+func (w *countingLogWriter) Append(record commitlog.Record) error {
 	w.appendCalls++
-	return page.ValuePtr{}, nil
+	return nil
 }
 
-func (w *countingLogWriter) AppendBatch(records []logRecord) ([]page.ValuePtr, error) {
+func (w *countingLogWriter) AppendBatch(records []commitlog.Record) error {
 	w.batchCalls++
-	return nil, errors.New("append batch not expected")
+	return errors.New("append batch not expected")
 }
 
-func (w *countingLogWriter) RotateTo(_ string, _ uint32) error { return nil }
-func (w *countingLogWriter) Size() int64                       { return 0 }
-func (w *countingLogWriter) Flush() error                      { return nil }
-func (w *countingLogWriter) Sync() error                       { return nil }
-func (w *countingLogWriter) Close() error                      { return nil }
+func (w *countingLogWriter) RotateTo(_ string) error { return nil }
+func (w *countingLogWriter) Size() int64             { return 0 }
+func (w *countingLogWriter) Flush() error            { return nil }
+func (w *countingLogWriter) Sync() error             { return nil }
+func (w *countingLogWriter) Close() error            { return nil }
 
 type errMemtable struct {
 	memtable.Table
@@ -45,6 +45,7 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:  1 << 30,
 		DisableValueLog: true,
+		JournalLanes:    1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -72,13 +73,15 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	failErr := errors.New("apply delete failed")
 
 	db.mu.Lock()
-	origWal := db.wal
-	db.wal = stub
+	l := &db.lanes[0]
+	l.walMu.Lock()
+	origWal := l.wal
+	l.wal = stub
+	l.walMu.Unlock()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		shard.mem = &errMemtable{Table: shard.mem, deleteErr: failErr}
-		shard.largePtrs = &largePtrMap{}
 		shard.mu.Unlock()
 	}
 	db.mu.Unlock()
@@ -88,7 +91,9 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	db.wal = origWal
+	l.walMu.Lock()
+	l.wal = origWal
+	l.walMu.Unlock()
 	db.mu.Unlock()
 	if stub.appendCalls == 0 {
 		t.Fatalf("expected Append to be called")

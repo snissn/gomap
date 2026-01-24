@@ -3,8 +3,10 @@ package treedb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
@@ -27,6 +31,11 @@ const (
 	ModeCached = db.ModeCached
 	// ModeBackend opens TreeDB in backend-only mode (no caching layer).
 	ModeBackend = db.ModeBackend
+)
+
+const (
+	defaultChunkSize     = 4 * 1024 * 1024
+	defaultDictChunkSize = 1 * 1024 * 1024
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
@@ -63,6 +72,8 @@ type DB struct {
 	mode           Mode
 	cached         *caching.DB
 	backend        *db.DB
+	dictdb         *db.DB
+	writePath      writePathInfo
 	bgComp         bgCompactionWorker
 	bgVac          bgIndexVacuumWorker
 	notifyError    func(error)
@@ -70,6 +81,73 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
+}
+
+type writePathInfo struct {
+	mode       string
+	valueStore string
+	redoLog    string
+	warn       bool
+}
+
+func writePathFromOptions(opts Options) writePathInfo {
+	if opts.Mode == ModeBackend {
+		return writePathInfo{
+			mode:       "backend",
+			valueStore: "slab_direct",
+			redoLog:    "n/a",
+			warn:       !opts.ReadOnly,
+		}
+	}
+	if opts.DisableWAL {
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "backend_flush",
+			redoLog:    "off",
+		}
+	}
+	if opts.DisableJournal {
+		if opts.DisableValueLog {
+			return writePathInfo{
+				mode:       "cached",
+				valueStore: "backend_flush",
+				redoLog:    "off",
+			}
+		}
+		if opts.MemtableValueLogPointers {
+			return writePathInfo{
+				mode:       "cached",
+				valueStore: "value_log_eager",
+				redoLog:    "off",
+			}
+		}
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "value_log_deferred",
+			redoLog:    "off",
+		}
+	}
+	if opts.DisableValueLog {
+		return writePathInfo{
+			mode:       "cached",
+			valueStore: "backend_flush",
+			redoLog:    "on",
+		}
+	}
+	return writePathInfo{
+		mode:       "cached",
+		valueStore: "value_log",
+		redoLog:    "on",
+	}
+}
+
+func writePathStatsInto(stats map[string]string, info writePathInfo) {
+	if stats == nil {
+		return
+	}
+	stats["treedb.write_path.mode"] = info.mode
+	stats["treedb.write_path.value_store"] = info.valueStore
+	stats["treedb.write_path.redo_log"] = info.redoLog
 }
 
 func (db *DB) ensureOpen() error {
@@ -87,8 +165,9 @@ func Open(opts Options) (*DB, error) {
 	// can therefore delay page reuse for a very long time (and cause index.db to
 	// balloon under update-heavy workloads). Default to aggressive reuse in cached
 	// mode unless the caller specifies otherwise.
-	if opts.ChunkSize == 0 {
-		opts.ChunkSize = 64 * 1024 * 1024
+	chunkSizeDefaulted := opts.ChunkSize == 0
+	if chunkSizeDefaulted {
+		opts.ChunkSize = defaultChunkSize
 	}
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
@@ -103,13 +182,66 @@ func Open(opts Options) (*DB, error) {
 		opts.Mode = ModeBackend
 	}
 
+	writePath := writePathFromOptions(opts)
+	if envBool(envWritePathLog) {
+		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+		if writePath.warn {
+			fmt.Fprintf(os.Stderr, "treedb WARNING: backend-only write path uses slab_direct writer; cached+value_log is the intended fast ingest path\n")
+		}
+	}
+
+	rootDir := opts.Dir
+	maindbDir := filepath.Join(rootDir, "maindb")
+	dictdbDir := filepath.Join(rootDir, "dictdb")
+	if opts.ReadOnly {
+		if _, err := os.Stat(maindbDir); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: maindb directory missing for read-only open: %s", maindbDir)
+			}
+			return nil, err
+		}
+		if _, err := os.Stat(dictdbDir); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: dictdb directory missing for read-only open: %s", dictdbDir)
+			}
+			return nil, err
+		}
+	} else {
+		if err := os.MkdirAll(maindbDir, 0755); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(dictdbDir, 0755); err != nil {
+			return nil, err
+		}
+	}
+
+	dictOpts := opts
+	dictOpts.Dir = dictdbDir
+	dictOpts.Mode = ModeBackend
+	dictOpts.DisableBackgroundPrune = true
+	dictOpts.SlabCompression = slab.CompressionOptions{Kind: slab.CompressionNone}
+	dictOpts.DictLookup = nil
+	if chunkSizeDefaulted {
+		dictOpts.ChunkSize = defaultDictChunkSize
+	}
+	dictBackend, err := db.Open(dictOpts)
+	if err != nil {
+		return nil, err
+	}
+	dictStore := dictdb.New(dictBackend)
+
+	opts.DictLookup = func(dictID uint64) ([]byte, error) {
+		return dictStore.GetDictBytes(context.Background(), dictID)
+	}
+	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {
+		_ = dictBackend.Close()
 		return nil, err
 	}
 
 	if opts.Mode == ModeBackend {
-		return &DB{mode: ModeBackend, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}, nil
+		return &DB{mode: ModeBackend, backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -131,35 +263,47 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
-		FlushThreshold:               opts.FlushThreshold,
-		MemtableMode:                 opts.MemtableMode,
-		MemtableShards:               opts.MemtableShards,
-		MaxQueuedMemtables:           opts.MaxQueuedMemtables,
-		SlowdownBacklogSeconds:       opts.SlowdownBacklogSeconds,
-		StopBacklogSeconds:           opts.StopBacklogSeconds,
-		MaxBacklogBytes:              opts.MaxBacklogBytes,
-		WriterFlushMaxMemtables:      opts.WriterFlushMaxMemtables,
-		WriterFlushMaxDuration:       opts.WriterFlushMaxDuration,
-		FlushBuildConcurrency:        opts.FlushBuildConcurrency,
-		DisableWAL:                   opts.DisableWAL,
-		DisableValueLog:              opts.DisableValueLog,
-		SplitValueLog:                opts.SplitValueLog,
-		WALMaxSegmentBytes:           opts.WALMaxSegmentBytes,
-		RelaxedSync:                  opts.RelaxedSync,
-		DisableReadChecksum:          opts.DisableReadChecksum,
-		MemtableValueLogPointers:     opts.MemtableValueLogPointers,
-		ValueLogPointerThreshold:     opts.ValueLogPointerThreshold,
-		AllowUnsafe:                  opts.AllowUnsafe,
-		MaxValueLogRetainedBytes:     opts.MaxValueLogRetainedBytes,
-		MaxValueLogRetainedBytesHard: opts.MaxValueLogRetainedBytesHard,
-		NotifyError:                  opts.NotifyError,
+		FlushThreshold:                     opts.FlushThreshold,
+		MemtableMode:                       opts.MemtableMode,
+		MemtableShards:                     opts.MemtableShards,
+		MaxQueuedMemtables:                 opts.MaxQueuedMemtables,
+		SlowdownBacklogSeconds:             opts.SlowdownBacklogSeconds,
+		StopBacklogSeconds:                 opts.StopBacklogSeconds,
+		MaxBacklogBytes:                    opts.MaxBacklogBytes,
+		WriterFlushMaxMemtables:            opts.WriterFlushMaxMemtables,
+		WriterFlushMaxDuration:             opts.WriterFlushMaxDuration,
+		FlushBuildConcurrency:              opts.FlushBuildConcurrency,
+		DisableWAL:                         opts.DisableWAL,
+		DisableJournal:                     opts.DisableJournal,
+		DisableValueLog:                    opts.DisableValueLog,
+		SplitValueLog:                      opts.SplitValueLog,
+		JournalLanes:                       opts.JournalLanes,
+		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,
+		JournalCompression:                 opts.JournalCompression,
+		RelaxedSync:                        opts.RelaxedSync,
+		DisableReadChecksum:                opts.DisableReadChecksum,
+		MemtableValueLogPointers:           opts.MemtableValueLogPointers,
+		ValueLogPointerThreshold:           opts.ValueLogPointerThreshold,
+		ValueLogDictTrain:                  opts.ValueLogDictTrain,
+		ValueLogDictAdaptiveRatio:          opts.ValueLogDictAdaptiveRatio,
+		ValueLogDictMetricsWindowBytes:     opts.ValueLogDictMetricsWindowBytes,
+		ValueLogDictMetricsMinRecords:      opts.ValueLogDictMetricsMinRecords,
+		ValueLogDictMetricsPauseBytes:      opts.ValueLogDictMetricsPauseBytes,
+		ValueLogDictMinPayloadSavingsRatio: opts.ValueLogDictMinPayloadSavingsRatio,
+		ValueLogCompressionAutotune:        opts.ValueLogCompressionAutotune,
+		AllowUnsafe:                        opts.AllowUnsafe,
+		MaxValueLogRetainedBytes:           opts.MaxValueLogRetainedBytes,
+		MaxValueLogRetainedBytesHard:       opts.MaxValueLogRetainedBytesHard,
+		NotifyError:                        opts.NotifyError,
 	})
 	if err != nil {
 		_ = backend.Close()
+		_ = dictBackend.Close()
 		return nil, err
 	}
 
-	out := &DB{mode: ModeCached, cached: cached, backend: backend, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: opts.Dir}
+	cached.SetDictStore(dictStore)
+	out := &DB{mode: ModeCached, cached: cached, backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -187,7 +331,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	// Auto checkpointing only manages cached-mode WAL segments. If WAL is
 	// disabled, skip starting the background loop to avoid unnecessary work.
-	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
+	if !opts.DisableWAL && !opts.DisableJournal && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -255,6 +399,12 @@ func computeDurabilityMode(opts Options) string {
 			} else {
 				mode = "wal_disabled_sync"
 			}
+		} else if opts.DisableJournal {
+			if opts.RelaxedSync {
+				mode = "journal_disabled_relaxed_sync"
+			} else {
+				mode = "journal_disabled_sync"
+			}
 		} else if opts.RelaxedSync {
 			mode = "wal_relaxed_sync"
 		} else {
@@ -280,6 +430,7 @@ const (
 	envCloseVacuumTimeout     = "TREEDB_CLOSE_VACUUM_TIMEOUT"
 	envCloseLog               = "TREEDB_CLOSE_LOG"
 	envCloseScopeContains     = "TREEDB_CLOSE_SCOPE_CONTAINS"
+	envWritePathLog           = "TREEDB_WRITE_PATH_LOG"
 )
 
 func envBool(name string) bool {
@@ -411,6 +562,10 @@ func (db *DB) Close() error {
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
+	}
+	if db.dictdb != nil {
+		err = errors.Join(err, db.dictdb.Close())
+		db.dictdb = nil
 	}
 
 	return errors.Join(err, db.backgroundError())
@@ -626,6 +781,7 @@ func (db *DB) Stats() map[string]string {
 		if stats == nil {
 			stats = make(map[string]string)
 		}
+		writePathStatsInto(stats, db.writePath)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgCompactionStatsInto(stats, &db.bgComp)
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
@@ -635,6 +791,7 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgCompactionStatsInto(stats, &db.bgComp)
 	bgIndexVacuumStatsInto(stats, &db.bgVac)

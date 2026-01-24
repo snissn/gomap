@@ -2,14 +2,19 @@ package treedb_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/snissn/compress/zstd"
 	treedb "github.com/snissn/gomap/TreeDB"
-	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func runCrashRecoveryWriter(t *testing.T, dir string) {
@@ -104,17 +109,21 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	}
 
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
+	disableJournal := os.Getenv("TREEDB_CRASH_DISABLE_JOURNAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
+	splitValueLog := os.Getenv("TREEDB_CRASH_SPLIT_VALUE_LOG") == "1"
 
 	opts := treedb.Options{
 		Dir:             dir,
 		ChunkSize:       64 * 1024,
 		DisableWAL:      disableWAL,
+		DisableJournal:  disableJournal,
 		RelaxedSync:     relaxedSync,
 		DisableValueLog: disableValueLog,
-		AllowUnsafe:     disableWAL || relaxedSync,
+		SplitValueLog:   splitValueLog,
+		AllowUnsafe:     disableWAL || disableJournal || relaxedSync,
 	}
 
 	db, err := treedb.Open(opts)
@@ -153,7 +162,7 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeWriter(t *testing.T) {
 	_ = db.SetSync([]byte("c"), []byte("3"))
 
 	// DeleteRange itself is not a Sync operation. Add a subsequent Sync write so
-	// the WAL (including the range delete tombstones) is persisted before we
+	// the commit log (including the range delete tombstones) is persisted before we
 	// simulate a crash.
 	_ = db.DeleteRange([]byte("b"), []byte("d"))
 	_ = db.SetSync([]byte("z"), []byte("9"))
@@ -194,14 +203,14 @@ func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
 		t.Fatalf("close backend: %v", err)
 	}
 
-	// WAL segments should be retired after successful recovery.
-	walDir := filepath.Join(dir, "wal")
+	// Log segments should be retired after successful recovery.
+	walDir := filepath.Join(dir, "maindb", "wal")
 	if entries, err := os.ReadDir(walDir); err == nil {
 		for _, entry := range entries {
 			name := entry.Name()
 			if strings.HasSuffix(name, ".log") &&
-				(strings.HasPrefix(name, "wal-") || strings.HasPrefix(name, "vlog-")) {
-				t.Fatalf("expected WAL to be clean after recovery; found %q", name)
+				strings.HasPrefix(name, "commit-") {
+				t.Fatalf("expected logs to be clean after recovery; found %q", name)
 			}
 		}
 	}
@@ -266,10 +275,9 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 
 func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 	type tier struct {
-		name            string
-		env             []string
-		expectWALRetain bool
-		expectLarge     bool
+		name        string
+		env         []string
+		expectLarge bool
 	}
 
 	tiers := []tier{
@@ -295,15 +303,36 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 		},
 		{
-			name: "value_log_pointer_replays_and_retains_segment",
+			name: "value_log_pointer_replays",
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=0",
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
-			expectWALRetain: true,
-			expectLarge:     true,
+			expectLarge: true,
+		},
+		{
+			name: "split_value_log_write_sync_requires_commit_and_payload",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectLarge: true,
+		},
+		{
+			name: "mode4_disable_journal_value_log",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_DISABLE_JOURNAL=1",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+			},
+			expectLarge: true,
 		},
 	}
 
@@ -333,7 +362,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("close backend: %v", err)
 			}
 
-			entries, err := os.ReadDir(filepath.Join(dir, "wal"))
+			entries, err := os.ReadDir(filepath.Join(dir, "maindb", "wal"))
 			if err != nil {
 				if os.IsNotExist(err) {
 					return
@@ -342,58 +371,366 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			}
 
 			foundLog := false
-			foundVlog := false
 			for _, entry := range entries {
 				name := entry.Name()
 				if strings.HasSuffix(name, ".log") &&
-					(strings.HasPrefix(name, "wal-") || strings.HasPrefix(name, "vlog-")) {
+					strings.HasPrefix(name, "commit-") {
 					foundLog = true
-					if strings.HasPrefix(name, "vlog-") {
-						foundVlog = true
-					}
 				}
 			}
-
-			if tc.expectWALRetain {
-				if !foundVlog {
-					t.Fatalf("expected a retained value-log segment after recovery, found none")
-				}
-			} else if foundLog {
-				t.Fatalf("expected WAL to be clean after recovery; found log segments")
+			if foundLog {
+				t.Fatalf("expected logs to be clean after recovery; found log segments")
 			}
 		})
 	}
 }
 
-func TestRecovery_TruncatedWALRecord(t *testing.T) {
+func TestCrashRecovery_Mode4_DisableJournalValueLog(t *testing.T) {
+	// Mode4 semantics: disable journal (redo log), keep value log on, split value log.
+	dir := t.TempDir()
+	runCrashRecoveryDurabilityWriter(t, dir,
+		"TREEDB_CRASH_DISABLE_WAL=0",
+		"TREEDB_CRASH_DISABLE_JOURNAL=1",
+		"TREEDB_CRASH_RELAXED_SYNC=0",
+		"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
+		"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+		"TREEDB_CRASH_LARGE_VALUE=1",
+	)
+
+	opts := treedb.Options{
+		Dir:             dir,
+		ChunkSize:       64 * 1024,
+		DisableJournal:  true,
+		DisableValueLog: false,
+		SplitValueLog:   true,
+		AllowUnsafe:     true,
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after crash: %v", err)
+	}
+	defer db.Close()
+
+	val, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get k: %v", err)
+	}
+	if len(val) != 4096 {
+		t.Fatalf("get k: got len %d, want %d", len(val), 4096)
+	}
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("create iterator: %v", err)
+	}
+	defer it.Close()
+
+	found := false
+	for it.Valid() {
+		if bytes.Equal(it.Key(), []byte("k")) {
+			found = true
+			if len(it.Value()) != 4096 {
+				t.Fatalf("iterator: k corrupted length %d", len(it.Value()))
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected key k to be present after crash recovery")
+	}
+}
+
+func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	dir := t.TempDir()
 
-	walDir := filepath.Join(dir, "wal")
+	walDir := filepath.Join(dir, "maindb", "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
 
-	walPath := filepath.Join(walDir, "wal-000001.log")
-	writer, err := wal.NewWriter(walPath)
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
-		t.Fatalf("wal.NewWriter: %v", err)
+		t.Fatalf("valuelog.NewWriter: %v", err)
 	}
-	if err := writer.Append(wal.OpSet, []byte("k1"), []byte("v1")); err != nil {
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1}
+	if err := cw.AppendBatch([]commitlog.Record{rec}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(val) != "v1" {
+		t.Fatalf("get: got %q, want %q", string(val), "v1")
+	}
+
+	if _, err := os.Stat(commitPath); err == nil {
+		t.Fatalf("expected commitlog file to be removed after recovery")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
+	}
+}
+
+func TestRecovery_MultiLaneOrdering(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPathLane0 := filepath.Join(walDir, "commit-l0-000001.log")
+	cw0, err := commitlog.NewWriter(commitPathLane0)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane0: %v", err)
+	}
+	rec0 := commitlog.Record{Op: commitlog.OpSetInline, Key: []byte("k"), Value: []byte("v2"), Seq: 2}
+	if err := cw0.AppendBatch([]commitlog.Record{rec0}); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.AppendBatch lane0: %v", err)
+	}
+	if err := cw0.Sync(); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.Sync lane0: %v", err)
+	}
+	if err := cw0.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane0: %v", err)
+	}
+
+	commitPathLane1 := filepath.Join(walDir, "commit-l1-000001.log")
+	cw1, err := commitlog.NewWriter(commitPathLane1)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane1: %v", err)
+	}
+	rec1 := commitlog.Record{Op: commitlog.OpSetInline, Key: []byte("k"), Value: []byte("v1"), Seq: 1}
+	if err := cw1.AppendBatch([]commitlog.Record{rec1}); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.AppendBatch lane1: %v", err)
+	}
+	if err := cw1.Sync(); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.Sync lane1: %v", err)
+	}
+	if err := cw1.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane1: %v", err)
+	}
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(val) != "v2" {
+		t.Fatalf("expected replay order to honor Seq; got %q", string(val))
+	}
+}
+
+func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	var header [8]byte
+	binary.LittleEndian.PutUint32(header[0:4], 32)
+	if err := os.WriteFile(commitPath, header[:], 0600); err != nil {
+		t.Fatalf("write commit header: %v", err)
+	}
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected partial batch to be ignored, got %q", string(val))
+	}
+
+	if _, err := os.Stat(commitPath); err == nil {
+		t.Fatalf("expected commitlog file to be removed after recovery")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+}
+
+func TestRecovery_MissingDictFails(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dictdb"), 0755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+
+	dictID := uint64(1)
+	records := []valuelog.Record{{RID: 1, Value: bytes.Repeat([]byte("value"), 1024)}}
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	frame, _, err := valuelog.EncodeFrame(0, nil, records)
+	if err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	frameHeader, _, _, framePayload, err := valuelog.DecodeFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll(framePayload, nil)
+	enc.Close()
+	if len(compressed) >= len(framePayload) {
+		t.Fatalf("expected payload to compress for missing-dict test (raw=%d compressed=%d)", len(framePayload), len(compressed))
+	}
+
+	payloadStart := len(frame) - len(framePayload)
+	compressedFrame := make([]byte, payloadStart+len(compressed))
+	copy(compressedFrame, frame[:payloadStart])
+	copy(compressedFrame[payloadStart:], compressed)
+	compressedFrame[1] = frameHeader.Flags | valuelog.FrameFlagCompressed
+	binary.LittleEndian.PutUint64(compressedFrame[4:12], dictID)
+
+	raw := make([]byte, valuelog.HeaderSize+len(compressedFrame))
+	raw[4] = valuelog.Version
+	raw[5] = 1 // recordFlagGrouped
+	raw[6] = 0
+	raw[7] = 0
+	binary.LittleEndian.PutUint64(raw[8:16], 0)
+	binary.LittleEndian.PutUint32(raw[16:20], uint32(len(compressedFrame)))
+	copy(raw[valuelog.HeaderSize:], compressedFrame)
+	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], compressedFrame)
+	binary.LittleEndian.PutUint32(raw[0:4], sum)
+	if err := os.WriteFile(valuePath, raw, 0600); err != nil {
+		t.Fatalf("write valuelog: %v", err)
+	}
+
+	payload := raw[valuelog.HeaderSize:]
+	frameHeader, _, _, _, err = valuelog.DecodeFrame(payload)
+	if err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame for missing-dict test")
+	}
+	if frameHeader.DictID != dictID {
+		t.Fatalf("expected dict ID %d, got %d", dictID, frameHeader.DictID)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1}
+	if err := cw.AppendBatch([]commitlog.Record{rec}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	if _, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024}); err == nil {
+		t.Fatalf("expected recovery error due to missing dict")
+	}
+	if _, err := os.Stat(commitPath); err != nil {
+		t.Fatalf("expected commitlog to remain after failed recovery: %v", err)
+	}
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog to remain after failed recovery: %v", err)
+	}
+}
+
+func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	writer, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	rec := commitlog.Record{Op: commitlog.OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 1}
+	if err := writer.AppendBatch([]commitlog.Record{rec}); err != nil {
 		_ = writer.Close()
-		t.Fatalf("wal.Append: %v", err)
+		t.Fatalf("commitlog.AppendBatch: %v", err)
 	}
 	if err := writer.Sync(); err != nil {
 		_ = writer.Close()
-		t.Fatalf("wal.Sync: %v", err)
+		t.Fatalf("commitlog.Sync: %v", err)
 	}
 	if err := writer.Close(); err != nil {
-		t.Fatalf("wal.Close: %v", err)
+		t.Fatalf("commitlog.Close: %v", err)
 	}
 
 	// Append a partial record to simulate a torn write.
-	f, err := os.OpenFile(walPath, os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := os.OpenFile(commitPath, os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
-		t.Fatalf("open wal for append: %v", err)
+		t.Fatalf("open commitlog for append: %v", err)
 	}
 	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
 	_ = f.Close()
@@ -412,9 +749,84 @@ func TestRecovery_TruncatedWALRecord(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(walPath); err == nil {
-		t.Fatalf("expected wal file to be removed after recovery")
+	if _, err := os.Stat(commitPath); err == nil {
+		t.Fatalf("expected commitlog file to be removed after recovery")
 	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat wal file: %v", err)
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+}
+
+func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1}
+	if err := cw.AppendBatch([]commitlog.Record{rec}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	// Append a partial record to simulate a torn write.
+	f, err := os.OpenFile(valuePath, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatalf("open valuelog for append: %v", err)
+	}
+	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
+	_ = f.Close()
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(val) != "v1" {
+		t.Fatalf("get: got %q, want %q", string(val), "v1")
+	}
+
+	if _, err := os.Stat(commitPath); err == nil {
+		t.Fatalf("expected commitlog file to be removed after recovery")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}
 }

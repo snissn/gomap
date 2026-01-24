@@ -5,7 +5,7 @@ TreeDB is a persistent ordered key/value store built around a B+Tree. The public
 
 TreeDB has two modes behind one public handle:
 
-- **Cached mode (default)**: `treedb.Open(...)` wraps the backend with a write-back layer (`memtable + WAL + background flush → backend`).
+- **Cached mode (default)**: `treedb.Open(...)` wraps the backend with a write-back layer (`memtable + journal + value log + background flush → backend`).
 - **Backend-only mode**: `opts.Mode = treedb.ModeBackend` (or `treedb.OpenBackend`) opens just the backend engine.
 
 This doc is intentionally high-level; the normative behavior is captured in `docs/contracts/`.
@@ -34,7 +34,7 @@ See: `docs/API_STABILITY.md`.
 At a conceptual level, the backend engine stores:
 
 - A memory-mapped index file (`Dir/index.db`) containing B+Tree pages and metadata.
-- One or more slab/value files under `Dir/` used to store larger values efficiently.
+- One or more backend slab files under `Dir/` used to store larger values efficiently.
 
 Backend writes are “commit-like”: a batch updates pages + slabs and then updates the active meta page.
 
@@ -44,8 +44,10 @@ Backend writes are “commit-like”: a batch updates pages + slabs and then upd
   - B+Tree pages (internal + leaf nodes)
   - freelist / lifecycle metadata
   - redundant meta (“superblock”) pages used for recovery
-- `Dir/data-*.slab`: append-only value log segments (“slabs”) used for storing larger values efficiently.
-- `Dir/wal/`: cached-mode WAL segments (`wal-<seq>.log`) for durable write-back.
+- `Dir/data-*.slab`: append-only backend slab segments used for storing larger values efficiently.
+- `Dir/wal/`: cached-mode logs (journal + value log):
+  - `commit-*.log` (journal / redo log)
+  - `value-*.log` (value log for large values, when enabled)
 - `Dir/LOCK`: the cross-process exclusive-open lock file.
 
 ### Inline vs slab values
@@ -80,7 +82,8 @@ Cached mode is not a read cache. It is a write-back layer used to batch work:
 
 - Incoming writes go to:
   - an in-memory memtable, and
-  - a WAL segment under `Dir/wal/` (for durability / crash recovery).
+  - a journal segment under `Dir/wal/` (for durability / crash recovery), plus
+  - the value log for large values when enabled.
 - A background flusher periodically writes memtables into the backend using a backend batch.
 
 Practical effects:

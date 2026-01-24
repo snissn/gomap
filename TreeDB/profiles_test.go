@@ -30,6 +30,39 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	}
 }
 
+func TestApplyProfile_FastIngestEnablesValueLogPath(t *testing.T) {
+	var opts Options
+	ApplyProfile(&opts, ProfileFastIngest)
+
+	if opts.Mode != ModeCached {
+		t.Fatalf("expected ModeCached (default), got %v", opts.Mode)
+	}
+	if opts.DisableWAL {
+		t.Fatalf("expected DisableWAL=false for fast_ingest profile")
+	}
+	if !opts.DisableJournal {
+		t.Fatalf("expected DisableJournal=true for fast_ingest profile")
+	}
+	if opts.DisableValueLog {
+		t.Fatalf("expected DisableValueLog=false for fast_ingest profile")
+	}
+	if !opts.SplitValueLog {
+		t.Fatalf("expected SplitValueLog=true for fast_ingest profile")
+	}
+	if !opts.MemtableValueLogPointers {
+		t.Fatalf("expected MemtableValueLogPointers=true for fast_ingest profile")
+	}
+	if !opts.RelaxedSync {
+		t.Fatalf("expected RelaxedSync=true for fast_ingest profile")
+	}
+	if !opts.DisableReadChecksum {
+		t.Fatalf("expected DisableReadChecksum=true for fast_ingest profile")
+	}
+	if !opts.PreferAppendAlloc {
+		t.Fatalf("expected PreferAppendAlloc=true for fast_ingest profile")
+	}
+}
+
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)

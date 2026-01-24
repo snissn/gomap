@@ -29,8 +29,15 @@ type SlabManager struct {
 	disableReadChecksum bool
 	compression         compressionConfig
 
+	appendBuf []byte
+
 	appendManyScratch []byte
 }
+
+const (
+	slabAppendBufTarget  = 4 << 20  // 4 MiB
+	slabAppendBufMaxKeep = 16 << 20 // 16 MiB
+)
 
 func NewSlabManager(dir string) (*SlabManager, error) {
 	return NewSlabManagerWithOptions(dir, Options{})
@@ -147,6 +154,9 @@ func decodeValue(ptr page.ValuePtr, val []byte, compression *compressionConfig) 
 func (sm *SlabManager) Close() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if !sm.readOnly {
+		_ = sm.flushAppendBufLocked()
+	}
 
 	for _, s := range sm.slabs {
 		_ = s.Close()
@@ -160,12 +170,85 @@ func (sm *SlabManager) GetSlabPath(id uint32) string {
 	return filepath.Join(sm.dir, fmt.Sprintf("data-%04d.slab", id))
 }
 
+func (sm *SlabManager) needsFlushForReadLocked(ptr page.ValuePtr) bool {
+	if sm.readOnly || len(sm.appendBuf) == 0 || sm.activeSlab == nil {
+		return false
+	}
+	if ptr.FileID != sm.activeSlab.ID {
+		return false
+	}
+	if ptr.Offset < 4 {
+		return false
+	}
+	recordStart := ptr.Offset - 4
+	onDisk := uint64(sm.activeSlab.Size)
+	if recordStart < onDisk {
+		return false
+	}
+	return recordStart < onDisk+uint64(len(sm.appendBuf))
+}
+
+func (sm *SlabManager) flushAppendBufLocked() error {
+	if sm.readOnly {
+		return ErrReadOnly
+	}
+	if len(sm.appendBuf) == 0 {
+		return nil
+	}
+	if sm.activeSlab == nil {
+		return fmt.Errorf("missing active slab")
+	}
+	if err := sm.activeSlab.ensureOpen(); err != nil {
+		return err
+	}
+
+	expectedBase := sm.activeSlab.Size
+	base, err := sm.activeSlab.WriteBatch(sm.appendBuf)
+	if err != nil {
+		return err
+	}
+	if base != expectedBase {
+		return fmt.Errorf("slab: unexpected append base %d (expected %d)", base, expectedBase)
+	}
+
+	if cap(sm.appendBuf) > slabAppendBufMaxKeep {
+		sm.appendBuf = nil
+	} else {
+		sm.appendBuf = sm.appendBuf[:0]
+	}
+	return nil
+}
+
+// Flush writes any buffered appends to disk (without fsync).
+func (sm *SlabManager) Flush() error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.readOnly {
+		return ErrReadOnly
+	}
+	return sm.flushAppendBufLocked()
+}
+
 // Read reads from the slab file identified by ptr.FileID.
 // For Snapshot Isolation, the caller should ensure the file is pinned via a Snapshot.
 // If accessing without snapshot (e.g. during Compaction or internal ops), care must be taken.
 // Current impl uses RLock on the master map, so it's safe against concurrent Close() initiated by Prune/Compaction
 // IF Prune/Compaction removes from map.
 func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
+	sm.mu.RLock()
+	needsFlush := sm.needsFlushForReadLocked(ptr)
+	sm.mu.RUnlock()
+	if needsFlush {
+		sm.mu.Lock()
+		if sm.needsFlushForReadLocked(ptr) {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				sm.mu.Unlock()
+				return nil, err
+			}
+		}
+		sm.mu.Unlock()
+	}
+
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
@@ -184,6 +267,20 @@ func (sm *SlabManager) Read(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func (sm *SlabManager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	sm.mu.RLock()
+	needsFlush := sm.needsFlushForReadLocked(ptr)
+	sm.mu.RUnlock()
+	if needsFlush {
+		sm.mu.Lock()
+		if sm.needsFlushForReadLocked(ptr) {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				sm.mu.Unlock()
+				return nil, err
+			}
+		}
+		sm.mu.Unlock()
+	}
+
 	sm.mu.RLock()
 	s, ok := sm.slabs[ptr.FileID]
 	verifyCRC := !sm.disableReadChecksum
@@ -218,28 +315,107 @@ func (sm *SlabManager) Append(key, value []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, ErrReadOnly
 	}
 
-	offset, err := sm.activeSlab.Write(key, encoded)
-	if err == ErrSlabFull {
-		if err := sm.rotateLocked(); err != nil {
-			return page.ValuePtr{}, err
-		}
-		offset, err = sm.activeSlab.Write(key, encoded)
+	if sm.activeSlab == nil {
+		return page.ValuePtr{}, fmt.Errorf("missing active slab")
 	}
-
-	if err != nil {
+	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return page.ValuePtr{}, err
 	}
 
-	length := uint32(2 + 4 + len(key) + len(encoded))
-	if compressed {
-		length = page.ValuePtrMarkCompressed(length)
+	keyLen := len(key)
+	valLen := len(encoded)
+	if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+		return page.ValuePtr{}, ErrRecordTooLarge
 	}
+	if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+		return page.ValuePtr{}, ErrRecordTooLarge
+	}
+	recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+	if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) || recordLen64 > MaxSlabSize {
+		return page.ValuePtr{}, ErrRecordTooLarge
+	}
+	recordLen := int(recordLen64)
 
-	return page.ValuePtr{
-		Offset: uint64(offset + 4),
-		Length: length,
-		FileID: sm.activeSlab.ID,
-	}, nil
+	var lenArr [6]byte
+	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+	sum := crc32.Update(0, crc32cTable, lenArr[:])
+	sum = crc32.Update(sum, crc32cTable, key)
+	sum = crc32.Update(sum, crc32cTable, encoded)
+
+	for {
+		virtualTail := int64(sm.activeSlab.Size) + int64(len(sm.appendBuf))
+		if virtualTail+int64(recordLen) > MaxSlabSize {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			if int64(sm.activeSlab.Size)+int64(recordLen) > MaxSlabSize {
+				if err := sm.rotateLocked(); err != nil {
+					return page.ValuePtr{}, err
+				}
+				continue
+			}
+			virtualTail = int64(sm.activeSlab.Size)
+		}
+
+		if recordLen > slabAppendBufTarget {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			offset, err := sm.activeSlab.Write(key, encoded)
+			if err == ErrSlabFull {
+				if err := sm.rotateLocked(); err != nil {
+					return page.ValuePtr{}, err
+				}
+				offset, err = sm.activeSlab.Write(key, encoded)
+			}
+			if err != nil {
+				return page.ValuePtr{}, err
+			}
+
+			length := uint32(2 + 4 + len(key) + len(encoded))
+			if compressed {
+				length = page.ValuePtrMarkCompressed(length)
+			}
+			return page.ValuePtr{
+				Offset: uint64(offset + 4),
+				Length: length,
+				FileID: sm.activeSlab.ID,
+			}, nil
+		}
+
+		if cap(sm.appendBuf) == 0 {
+			sm.appendBuf = make([]byte, 0, slabAppendBufTarget)
+		}
+		if len(sm.appendBuf)+recordLen > cap(sm.appendBuf) {
+			if err := sm.flushAppendBufLocked(); err != nil {
+				return page.ValuePtr{}, err
+			}
+			virtualTail = int64(sm.activeSlab.Size)
+		}
+
+		recordStart := virtualTail
+		start := len(sm.appendBuf)
+		end := start + recordLen
+		sm.appendBuf = sm.appendBuf[:end]
+		rec := sm.appendBuf[start:end]
+
+		binary.LittleEndian.PutUint32(rec[0:4], sum)
+		copy(rec[4:10], lenArr[:])
+		copy(rec[10:10+keyLen], key)
+		copy(rec[10+keyLen:], encoded)
+
+		length := uint32(2 + 4 + len(key) + len(encoded))
+		if compressed {
+			length = page.ValuePtrMarkCompressed(length)
+		}
+
+		return page.ValuePtr{
+			Offset: uint64(recordStart + 4),
+			Length: length,
+			FileID: sm.activeSlab.ID,
+		}, nil
+	}
 }
 
 type appendManyMeta struct {
@@ -328,6 +504,9 @@ func (sm *SlabManager) AppendMany(keys [][]byte, values [][]byte) ([]page.ValueP
 	defer sm.mu.Unlock()
 	if sm.readOnly {
 		return nil, ErrReadOnly
+	}
+	if err := sm.flushAppendBufLocked(); err != nil {
+		return nil, err
 	}
 
 	ptrs := make([]page.ValuePtr, len(keys))
@@ -470,6 +649,9 @@ func (sm *SlabManager) rotateLocked() error {
 	if sm.readOnly {
 		return ErrReadOnly
 	}
+	if err := sm.flushAppendBufLocked(); err != nil {
+		return err
+	}
 	if err := sm.activeSlab.Sync(); err != nil {
 		return err
 	}
@@ -501,6 +683,9 @@ func (sm *SlabManager) Sync() error {
 	if sm.readOnly {
 		return ErrReadOnly
 	}
+	if err := sm.flushAppendBufLocked(); err != nil {
+		return err
+	}
 	return sm.activeSlab.Sync()
 }
 
@@ -513,12 +698,20 @@ func (sm *SlabManager) ActiveSlabID() uint32 {
 func (sm *SlabManager) ActiveSlabTail() uint64 {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return uint64(sm.activeSlab.Size)
+	if sm.activeSlab == nil {
+		return 0
+	}
+	return uint64(sm.activeSlab.Size) + uint64(len(sm.appendBuf))
 }
 
 func (sm *SlabManager) SetActiveSlab(id uint32) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if !sm.readOnly {
+		if err := sm.flushAppendBufLocked(); err != nil {
+			return err
+		}
+	}
 
 	s, ok := sm.slabs[id]
 	if !ok {
@@ -547,6 +740,9 @@ func (sm *SlabManager) TruncateActiveSlab(offset uint64) error {
 	if sm.readOnly {
 		return ErrReadOnly
 	}
+	if err := sm.flushAppendBufLocked(); err != nil {
+		return err
+	}
 	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return err
 	}
@@ -563,6 +759,9 @@ func (sm *SlabManager) RepairActiveSlabTail() (uint64, error) {
 	}
 	if sm.activeSlab == nil {
 		return 0, fmt.Errorf("no active slab")
+	}
+	if err := sm.flushAppendBufLocked(); err != nil {
+		return 0, err
 	}
 	if err := sm.activeSlab.ensureOpen(); err != nil {
 		return 0, err
