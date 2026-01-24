@@ -95,45 +95,61 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 	if len(varMask) != maskLenFull {
 		varMask = nil
 	}
-	varCount := 0
-	if varMask != nil {
-		for _, b := range varMask {
-			varCount += bits.OnesCount8(b)
+	if varMask == nil {
+		maxLen := payloadHeader + uvarintLen(templateID) + maskLenFull + rawLen
+		full := make([]byte, maxLen)
+		full[0] = magic0
+		full[1] = magic1
+		full[2] = payloadVer
+		full[3] = flagEncoded | flagMask | flagMaskFull
+		off := payloadHeader
+		off += binary.PutUvarint(full[off:], templateID)
+		maskOff := off
+		diffOff := maskOff + maskLenFull
+		idx := 0
+		for i := 0; i < len(def.Base); i++ {
+			if value[i] == def.Base[i] {
+				continue
+			}
+			full[maskOff+i/8] |= 1 << uint(i%8)
+			full[diffOff+idx] = value[i]
+			idx++
 		}
+		fullLen := diffOff + idx
+		if rawLen-fullLen < cfg.MinSavingsBytes {
+			return nil, fullLen, reasonMatchExpectedSavings, false
+		}
+		payload = full[:fullLen]
+		encLen = fullLen
+		return payload, encLen, "", true
 	}
-	maxLen := payloadHeader + uvarintLen(templateID) + maskLenFull + rawLen
-	full := make([]byte, maxLen)
-	full[0] = magic0
-	full[1] = magic1
-	full[2] = payloadVer
-	full[3] = flagEncoded | flagMask | flagMaskFull
-	off := payloadHeader
-	off += binary.PutUvarint(full[off:], templateID)
-	maskOff := off
-	diffOff := maskOff + maskLenFull
-	idx := 0
+
+	varCount := 0
+	for _, b := range varMask {
+		varCount += bits.OnesCount8(b)
+	}
+	varBytes := make([]byte, varCount)
+	varIdx := 0
+	diffCount := 0
 	constMismatch := false
 	for i := 0; i < len(def.Base); i++ {
-		if value[i] == def.Base[i] {
-			continue
+		if varMask[i/8]&(1<<uint(i%8)) != 0 {
+			varBytes[varIdx] = value[i]
+			varIdx++
 		}
-		full[maskOff+i/8] |= 1 << uint(i%8)
-		full[diffOff+idx] = value[i]
-		idx++
-		if varMask != nil && varMask[i/8]&(1<<uint(i%8)) == 0 {
-			constMismatch = true
+		if value[i] != def.Base[i] {
+			diffCount++
+			if varMask[i/8]&(1<<uint(i%8)) == 0 {
+				constMismatch = true
+			}
 		}
 	}
-	fullLen := diffOff + idx
+	fullLen := payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
+	sparseLen := payloadHeader + uvarintLen(templateID) + varCount
+	useSparse := !constMismatch && sparseLen <= fullLen
 	bestLen := fullLen
-	useSparse := false
-	sparseLen := 0
-	if varMask != nil && !constMismatch {
-		sparseLen = payloadHeader + uvarintLen(templateID) + varCount
-		if sparseLen <= fullLen {
-			bestLen = sparseLen
-			useSparse = true
-		}
+	if useSparse {
+		bestLen = sparseLen
 	}
 	if rawLen-bestLen < cfg.MinSavingsBytes {
 		return nil, bestLen, reasonMatchExpectedSavings, false
@@ -146,18 +162,30 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 		out[3] = flagEncoded | flagMask
 		off := payloadHeader
 		off += binary.PutUvarint(out[off:], templateID)
-		pos := off
-		for i := 0; i < len(def.Base); i++ {
-			if varMask[i/8]&(1<<uint(i%8)) != 0 {
-				out[pos] = value[i]
-				pos++
-			}
-		}
+		copy(out[off:], varBytes)
 		payload = out
 		encLen = sparseLen
 		return payload, encLen, "", true
 	}
-	payload = full[:fullLen]
+	full := make([]byte, fullLen)
+	full[0] = magic0
+	full[1] = magic1
+	full[2] = payloadVer
+	full[3] = flagEncoded | flagMask | flagMaskFull
+	off := payloadHeader
+	off += binary.PutUvarint(full[off:], templateID)
+	maskOff := off
+	diffOff := maskOff + maskLenFull
+	idx := 0
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] == def.Base[i] {
+			continue
+		}
+		full[maskOff+i/8] |= 1 << uint(i%8)
+		full[diffOff+idx] = value[i]
+		idx++
+	}
+	payload = full
 	encLen = fullLen
 	return payload, encLen, "", true
 }
