@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/slab"
+	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -285,6 +286,11 @@ type Options struct {
 	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
 	// Cached mode only (SplitValueLog must be enabled).
 	ValueLogCompressionAutotune valuelog.AutotuneOptions
+
+	// ValueLogTemplateCompression enables template-based compression for value-log values.
+	ValueLogTemplateCompression bool
+	// ValueLogTemplateConfig controls template creation and encoding behavior.
+	ValueLogTemplateConfig template.Config
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only

@@ -202,7 +202,7 @@ func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 
 	expect := []string{"alpha", "beta", "gamma"}
 	for i, ptr := range ptrs {
-		got, err := ReadAtWithDict(f, ptr, false, nil)
+		got, err := ReadAtWithDict(f, ptr, false, nil, nil)
 		if err != nil {
 			t.Fatalf("read at ptr%d: %v", i+1, err)
 		}
@@ -214,7 +214,7 @@ func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 		// grouped flag and sub-index are still set.
 		legacy := ptr
 		legacy.Length = page.ValuePtrMarkGrouped(0, page.ValuePtrSubIndex(ptr))
-		gotLegacy, err := ReadAtWithDict(f, legacy, false, nil)
+		gotLegacy, err := ReadAtWithDict(f, legacy, false, nil, nil)
 		if err != nil {
 			t.Fatalf("read at legacy ptr%d: %v", i+1, err)
 		}

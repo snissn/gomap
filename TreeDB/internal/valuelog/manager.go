@@ -18,12 +18,13 @@ import (
 
 // File represents a value-log segment on disk.
 type File struct {
-	ID         uint32
-	Path       string
-	File       *os.File
-	RefCount   atomic.Int64
-	IsZombie   atomic.Bool
-	dictLookup DictLookup
+	ID             uint32
+	Path           string
+	File           *os.File
+	RefCount       atomic.Int64
+	IsZombie       atomic.Bool
+	dictLookup     DictLookup
+	templateLookup TemplateLookup
 
 	cacheMu    sync.Mutex
 	cacheStart atomic.Int64
@@ -45,12 +46,12 @@ type File struct {
 	deadMappingsCount atomic.Uint64
 }
 
-func openFile(path string, id uint32, lookup DictLookup) (*File, error) {
+func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	vf := &File{ID: id, Path: path, File: f, dictLookup: lookup}
+	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
 	return vf, nil
@@ -85,7 +86,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -99,7 +100,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
@@ -176,7 +177,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
 			if err != nil {
 				return nil, err
 			}
@@ -246,7 +247,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	}
 
 	// Slow path: use existing decoder and append.
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup)
+	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
 	if err != nil {
 		return nil, err
 	}
@@ -307,6 +308,7 @@ type Manager struct {
 
 	disableReadChecksum bool
 	dictLookup          DictLookup
+	templateLookup      TemplateLookup
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -332,6 +334,15 @@ func (m *Manager) SetDictLookup(lookup DictLookup) {
 	m.dictLookup = lookup
 	for _, f := range m.files {
 		f.dictLookup = lookup
+	}
+}
+
+func (m *Manager) SetTemplateLookup(lookup TemplateLookup) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.templateLookup = lookup
+	for _, f := range m.files {
+		f.templateLookup = lookup
 	}
 }
 func (m *Manager) Close() error {
@@ -365,7 +376,7 @@ func (m *Manager) Refresh() error {
 		if _, ok := m.files[seg.id]; ok {
 			continue
 		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup)
+		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup)
 		if err != nil {
 			return err
 		}

@@ -48,7 +48,7 @@ func TestMmapSafety_ZeroCopy_Remap(t *testing.T) {
 		t.Fatalf("Flush 1: %v", err)
 	}
 
-	f, err := openFile(path, fileID, nil)
+	f, err := openFile(path, fileID, nil, nil)
 	if err != nil {
 		t.Fatalf("openFile: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMmapSafety_Concurrent_Remap(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	f, err := openFile(path, fileID, nil)
+	f, err := openFile(path, fileID, nil, nil)
 	if err != nil {
 		t.Fatalf("openFile: %v", err)
 	}
