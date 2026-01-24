@@ -3,6 +3,7 @@ package valuelog
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/compress/zstd"
 )
@@ -28,6 +29,13 @@ type dictCodecCache struct {
 const defaultDictCodecCacheSize = 64
 
 var dictCodecs = newDictCodecCache(defaultDictCodecCacheSize)
+
+type dictCodecsFastEntry struct {
+	dictID uint64
+	entry  *dictCodecEntry
+}
+
+var dictCodecsFast atomic.Pointer[dictCodecsFastEntry]
 
 func newDictCodecCache(capacity int) *dictCodecCache {
 	if capacity < 0 {
@@ -108,5 +116,15 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 }
 
 func getDictCodecs(dictID uint64, dict []byte) *dictCodecEntry {
-	return dictCodecs.getOrAdd(dictID, dict)
+	if dictID == 0 {
+		return nil
+	}
+	if fast := dictCodecsFast.Load(); fast != nil && fast.dictID == dictID && fast.entry != nil {
+		return fast.entry
+	}
+	entry := dictCodecs.getOrAdd(dictID, dict)
+	if entry != nil {
+		dictCodecsFast.Store(&dictCodecsFastEntry{dictID: dictID, entry: entry})
+	}
+	return entry
 }

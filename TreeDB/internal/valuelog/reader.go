@@ -6,12 +6,40 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
 )
+
+const maxDecodeScratchKeep = 256 << 10 // 256KiB
+
+var decodeScratchPool = sync.Pool{
+	New: func() any { return make([]byte, 0, 8<<10) }, // 8KiB default
+}
+
+func getDecodeScratch(minCap int) []byte {
+	if minCap <= 0 {
+		return nil
+	}
+	buf, _ := decodeScratchPool.Get().([]byte)
+	if cap(buf) < minCap {
+		buf = make([]byte, 0, minCap)
+	}
+	return buf[:0]
+}
+
+func putDecodeScratch(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		return
+	}
+	decodeScratchPool.Put(buf[:0])
+}
 
 type Reader struct {
 	f             *os.File
@@ -188,30 +216,34 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 		}
 		return payload, nil
 	}
+	return decodeFramePayloadTo(header, payload, dictLookup, rawLen, nil)
+}
+
+func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32, dst []byte) ([]byte, error) {
 	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
 		return nil, ErrRecordTooLarge
-	}
-	var dict []byte
-	if header.DictID != 0 {
-		if dictLookup == nil {
-			return nil, ErrMissingDict
-		}
-		var err error
-		dict, err = dictLookup(header.DictID)
-		if err != nil {
-			return nil, err
-		}
-		if len(dict) == 0 {
-			return nil, ErrMissingDict
-		}
 	}
 
 	var dec *zstd.Decoder
 	var release func()
-	if len(dict) > 0 {
-		codecs := getDictCodecs(header.DictID, dict)
-		if codecs == nil || codecs.decPool == nil {
+	if header.DictID != 0 {
+		if dictLookup == nil {
 			return nil, ErrMissingDict
+		}
+		// Fast path: reuse pooled decoders if this dictID is already cached.
+		codecs := getDictCodecs(header.DictID, nil)
+		if codecs == nil || codecs.decPool == nil {
+			dict, err := dictLookup(header.DictID)
+			if err != nil {
+				return nil, err
+			}
+			if len(dict) == 0 {
+				return nil, ErrMissingDict
+			}
+			codecs = getDictCodecs(header.DictID, dict)
+			if codecs == nil || codecs.decPool == nil {
+				return nil, ErrMissingDict
+			}
 		}
 		dec = codecs.decPool.Get().(*zstd.Decoder)
 		release = func() { codecs.decPool.Put(dec) }
@@ -224,7 +256,16 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 	}
 	defer release()
 
-	out, err := dec.DecodeAll(payload, make([]byte, 0, rawLen))
+	if dst == nil {
+		dst = make([]byte, 0, rawLen)
+	} else {
+		if cap(dst) < int(rawLen) {
+			dst = make([]byte, 0, rawLen)
+		} else {
+			dst = dst[:0]
+		}
+	}
+	out, err := dec.DecodeAll(payload, dst)
 	if err != nil {
 		return nil, err
 	}
@@ -423,12 +464,34 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
+	start := offsets[subIndex]
+	end := offsets[subIndex+1]
+	if frameHeader.Flags&FrameFlagCompressed != 0 {
+		// Random-access decode wants only a single value. Decode into a pooled
+		// buffer and then copy just the requested range so we don't retain the
+		// full frame allocation.
+		if end < start || end > rawLen {
+			return nil, ErrCorrupt
+		}
+		scratch := getDecodeScratch(int(rawLen))
+		raw, err := decodeFramePayloadTo(frameHeader, framePayload, dictLookup, rawLen, scratch)
+		if err != nil {
+			putDecodeScratch(scratch)
+			return nil, err
+		}
+		if uint32(len(raw)) != rawLen {
+			putDecodeScratch(raw)
+			return nil, ErrCorrupt
+		}
+		val := make([]byte, int(end-start))
+		copy(val, raw[start:end])
+		putDecodeScratch(raw)
+		return val, nil
+	}
 	raw, err := decodeFramePayload(frameHeader, framePayload, dictLookup, rawLen)
 	if err != nil {
 		return nil, err
 	}
-	start := offsets[subIndex]
-	end := offsets[subIndex+1]
 	if end < start || end > uint32(len(raw)) {
 		return nil, ErrCorrupt
 	}
