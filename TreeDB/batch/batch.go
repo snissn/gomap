@@ -329,6 +329,30 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	return nil
 }
 
+// SetPointerView is an internal-performance helper that records a pointer Put
+// without copying the key bytes. Callers must treat key as immutable until the
+// batch is committed (Write/WriteSync) or closed.
+//
+// This is intentionally not part of the public batch.Interface; it is a
+// best-effort optimization used by higher-level layers (e.g. cached flush
+// streaming).
+func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	b.entries = append(b.entries, Entry{
+		Type:     OpPut,
+		Key:      key,
+		ValuePtr: ptr,
+		IsPtr:    true,
+	})
+	b.noteKeyOrder(key)
+	return nil
+}
+
 // Delete adds or replaces a delete operation.
 func (b *Batch) Delete(key []byte) error {
 	if err := b.ensureOpen(); err != nil {

@@ -58,6 +58,11 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	return b.batch.SetPointer(key, ptr)
 }
 
+// SetPointerView records a pointer without copying the key bytes.
+func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	return b.batch.SetPointerView(key, ptr)
+}
+
 func (b *Batch) SetOps(ops []batch.Entry) error {
 	return b.batch.SetOps(ops)
 }
