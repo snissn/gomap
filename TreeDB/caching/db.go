@@ -1581,6 +1581,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	debugFlushPointers := envBool(envDebugFlushPointers)
 
+	valueLogDictTrain := opts.ValueLogDictTrain
+
 	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
 	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
 	valueLogDictMetricsMinRecords := opts.ValueLogDictMetricsMinRecords
@@ -1596,10 +1598,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		splitValueLog = true
 	}
 
+	// Value-log dictionary compression is a core performance feature of the
+	// value-store path. For unsafe/bench workloads (AllowUnsafe=true), enable
+	// background dict training by default when the value log is active unless
+	// the caller explicitly configured it.
+	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
+		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+	}
+
 	// If dict training is enabled but no adaptive ratio is specified, default to
 	// a conservative pause threshold to avoid wasting CPU on incompressible
 	// payload streams.
-	if opts.ValueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
+	if valueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
 		valueLogDictAdaptiveRatio = 0.995
 	}
 	if valueLogDictAdaptiveRatio > 0 {
@@ -1647,7 +1657,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		debugFlushPointers:            debugFlushPointers,
 		maxValueLogRetainedBytes:      opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:  opts.MaxValueLogRetainedBytesHard,
-		valueLogDictTrain:             opts.ValueLogDictTrain,
+		valueLogDictTrain:             valueLogDictTrain,
 		valueLogDictAdaptiveRatio:     valueLogDictAdaptiveRatio,
 		valueLogDictMinPayloadSavings: minPayloadSavings,
 		valueLogDictMetricsWindow:     valueLogDictMetricsWindow,
@@ -2364,8 +2374,27 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
+	} else if len(records) > 1 {
+		// Even when dictionary compression is disabled/paused, grouping records into
+		// frames reduces per-record overhead (CRC/header writes) on append-heavy
+		// workloads.
+		//
+		// When no dict is available, we write raw frames (uncompressed) and still
+		// benefit from fewer syscalls and less framing work.
+		if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+			k = cur
+		} else {
+			k = 8
+		}
 	}
 	k = db.clampValueLogDictK(k)
+	if dictID != 0 && len(dict) > 0 && db.disableJournal {
+		// When the redo/journal log is disabled (ingest-mode), favor maximum frame
+		// grouping for throughput. This reduces per-record framing overhead and
+		// syscall pressure, and is typically safe for write-heavy workloads where
+		// random point reads are not the dominant cost.
+		k = valuelog.MaxFrameK
+	}
 
 	type frameStatsWriter interface {
 		AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
