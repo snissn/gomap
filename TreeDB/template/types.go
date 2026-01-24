@@ -2,6 +2,14 @@ package template
 
 import "context"
 
+// TemplateKind indicates how a template encodes its payload.
+type TemplateKind uint8
+
+const (
+	TemplateAnchors TemplateKind = iota + 1
+	TemplateMask
+)
+
 // Candidate represents a routing candidate from templatedb.
 type Candidate struct {
 	ID   uint64
@@ -17,7 +25,11 @@ type Store interface {
 
 // TemplateDef is an ordered list of anchors.
 type TemplateDef struct {
-	Anchors [][]byte
+	Kind         TemplateKind
+	Anchors      [][]byte
+	Mask         []byte
+	Base         []byte
+	VarPositions []int
 }
 
 // DecodeOptions control TemplateValue decoding limits.

@@ -10,6 +10,7 @@ const (
 	magic1        = 'M'
 	payloadVer    = 1
 	flagEncoded   = 1 << 0
+	flagMask      = 1 << 1
 	payloadHeader = 4
 )
 
@@ -57,6 +58,25 @@ func EncodePayload(templateID uint64, gaps [][]byte) ([]byte, error) {
 	return out, nil
 }
 
+// EncodeMaskPayload builds a TemplateValue payload for mask templates.
+func EncodeMaskPayload(templateID uint64, vars []byte) ([]byte, error) {
+	payloadLen := payloadHeader + uvarintLen(templateID) + uvarintLen(uint64(len(vars))) + len(vars)
+	out := make([]byte, payloadLen)
+	out[0] = magic0
+	out[1] = magic1
+	out[2] = payloadVer
+	out[3] = flagEncoded | flagMask
+	off := payloadHeader
+	off += binary.PutUvarint(out[off:], templateID)
+	off += binary.PutUvarint(out[off:], uint64(len(vars)))
+	copy(out[off:], vars)
+	off += len(vars)
+	if off != payloadLen {
+		return nil, ErrCorrupt
+	}
+	return out, nil
+}
+
 // DecodePayload decodes a TemplateValue payload using the provided lookup.
 // If payload is not template-encoded, it is returned as-is.
 func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts DecodeOptions) ([]byte, error) {
@@ -66,12 +86,56 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 	if lookup == nil {
 		return nil, ErrMissingTemplate
 	}
+	isMask := payload[3]&flagMask != 0
 	off := payloadHeader
 	id, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
 		return nil, ErrCorrupt
 	}
 	off += n
+	if isMask {
+		varLen64, n := binary.Uvarint(payload[off:])
+		if n <= 0 {
+			return nil, ErrCorrupt
+		}
+		off += n
+		if varLen64 > uint64(len(payload)-off) {
+			return nil, ErrCorrupt
+		}
+		varLen := int(varLen64)
+		varBytes := payload[off : off+varLen]
+		off += varLen
+		if off != len(payload) {
+			return nil, ErrCorrupt
+		}
+		defBytes, err := lookup(id)
+		if err != nil {
+			return nil, err
+		}
+		def, err := DecodeTemplateDef(defBytes)
+		if err != nil {
+			return nil, err
+		}
+		if def.Kind != TemplateMask {
+			return nil, ErrCorrupt
+		}
+		decodedLen := len(def.Base)
+		if opts.MaxDecodedBytes > 0 && decodedLen > opts.MaxDecodedBytes {
+			return nil, ErrCorrupt
+		}
+		if len(def.VarPositions) != varLen {
+			return nil, ErrCorrupt
+		}
+		out := make([]byte, decodedLen)
+		copy(out, def.Base)
+		for i, pos := range def.VarPositions {
+			if pos < 0 || pos >= decodedLen {
+				return nil, ErrCorrupt
+			}
+			out[pos] = varBytes[i]
+		}
+		return out, nil
+	}
 	gapCount64, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
 		return nil, ErrCorrupt
@@ -110,6 +174,9 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 	def, err := DecodeTemplateDef(defBytes)
 	if err != nil {
 		return nil, err
+	}
+	if def.Kind != TemplateAnchors {
+		return nil, ErrCorrupt
 	}
 	if len(def.Anchors)+1 != gapCount {
 		return nil, ErrCorrupt

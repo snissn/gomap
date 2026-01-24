@@ -157,6 +157,10 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			e.stats.addReason(reasonTemplateFetchErr)
 			continue
 		}
+		if def.Kind != 0 && def.Kind != TemplateAnchors {
+			e.stats.addReason(reasonTemplateFetchErr)
+			continue
+		}
 		e.stats.CandidateTemplatesConsidered.Add(1)
 		gaps, encLen, reason, matched := matchTemplate(value, def.Anchors, cand.id, cfg)
 		if reason != "" {
@@ -435,7 +439,7 @@ func synthesizeTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool
 	if len(selected) == 0 {
 		return TemplateDef{}, nil, false, false
 	}
-	def := TemplateDef{Anchors: selected}
+	def := TemplateDef{Kind: TemplateAnchors, Anchors: selected}
 	// Quality gate + activation.
 	hits, saved, meanRatio := simulateEncoding(def.Anchors, samples, sampleLimit, cfg)
 	if hits == 0 {
