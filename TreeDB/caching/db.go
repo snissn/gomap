@@ -2557,51 +2557,71 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	type frameStatsWriterInto interface {
 		AppendFrameWithStatsInto(dictID uint64, dict []byte, records []valuelog.Record, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
 	}
+	type rawFrameBatchWriterInto interface {
+		AppendRawFramesWritevInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
+	}
 	statsWriter, hasStats := w.(frameStatsWriter)
 	statsWriterInto, hasInto := w.(frameStatsWriterInto)
+	rawWriterInto, hasRawInto := w.(rawFrameBatchWriterInto)
 
-	ptrs = make([]page.ValuePtr, 0, len(records))
 	storedPayloadBytes := 0
 	rawFrameBytes := 0
 	frameRecords := 0
+	rawBatchUsed := false
+	if dictID == 0 && hasRawInto && len(records) > 1 {
+		ptrs = make([]page.ValuePtr, len(records))
+		_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
+		if batchErr != nil {
+			err = batchErr
+		} else {
+			rawFrameBytes = stats.RawPayloadBytes
+			storedPayloadBytes = stats.StoredPayloadBytes
+			frameRecords = stats.Records
+			rawBatchUsed = true
+		}
+	} else {
+		ptrs = make([]page.ValuePtr, 0, len(records))
+	}
 	var framePtrScratch [valuelog.MaxFrameK]page.ValuePtr
-	for i := 0; i < len(records); i += k {
-		end := i + k
-		if end > len(records) {
-			end = len(records)
-		}
-		if hasInto {
-			scratch := framePtrScratch[:end-i]
-			framePtrs, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], scratch)
-			if frameErr != nil {
-				err = frameErr
-				break
+	if err == nil && !rawBatchUsed {
+		for i := 0; i < len(records); i += k {
+			end := i + k
+			if end > len(records) {
+				end = len(records)
 			}
-			ptrs = append(ptrs, framePtrs...)
-			rawFrameBytes += stats.RawPayloadBytes
-			storedPayloadBytes += stats.StoredPayloadBytes
-			frameRecords += stats.Records
-			continue
-		}
-		if hasStats {
-			framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(dictID, dict, records[i:end])
-			if frameErr != nil {
-				err = frameErr
-				break
+			if hasInto {
+				scratch := framePtrScratch[:end-i]
+				framePtrs, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], scratch)
+				if frameErr != nil {
+					err = frameErr
+					break
+				}
+				ptrs = append(ptrs, framePtrs...)
+				rawFrameBytes += stats.RawPayloadBytes
+				storedPayloadBytes += stats.StoredPayloadBytes
+				frameRecords += stats.Records
+				continue
 			}
-			ptrs = append(ptrs, framePtrs...)
-			rawFrameBytes += stats.RawPayloadBytes
-			storedPayloadBytes += stats.StoredPayloadBytes
-			frameRecords += stats.Records
-			continue
-		}
+			if hasStats {
+				framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(dictID, dict, records[i:end])
+				if frameErr != nil {
+					err = frameErr
+					break
+				}
+				ptrs = append(ptrs, framePtrs...)
+				rawFrameBytes += stats.RawPayloadBytes
+				storedPayloadBytes += stats.StoredPayloadBytes
+				frameRecords += stats.Records
+				continue
+			}
 
-		framePtrs, frameErr := w.AppendFrame(dictID, dict, records[i:end])
-		if frameErr != nil {
-			err = frameErr
-			break
+			framePtrs, frameErr := w.AppendFrame(dictID, dict, records[i:end])
+			if frameErr != nil {
+				err = frameErr
+				break
+			}
+			ptrs = append(ptrs, framePtrs...)
 		}
-		ptrs = append(ptrs, framePtrs...)
 	}
 	if err == nil {
 		switch durability {
