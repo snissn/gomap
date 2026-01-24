@@ -18,3 +18,10 @@ func ChecksumParts(parts ...[]byte) uint32 {
 	}
 	return sum
 }
+
+func Update(sum uint32, data []byte) uint32 {
+	if len(data) == 0 {
+		return sum
+	}
+	return crc32.Update(sum, table, data)
+}

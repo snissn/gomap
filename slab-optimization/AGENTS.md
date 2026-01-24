@@ -14,8 +14,9 @@ Operational rules:
 - MUST use `rg -n` to re-confirm symbol line numbers before editing.
 - MUST create a branch per PR: `sprint/slabopt-pr<N>-<slug>`.
 - MUST write a PR description at `.pr/PR<N>_description.md` and create the PR via `gh` (see “GitHub CLI policy”).
-- MUST open a PR via the GitHub CLI for every PR stage (no web UI/manual PR creation).
-- MUST include unified_bench output samples in every PR body (include the relevant suite(s) for that stage).
+- MUST open a PR via the GitHub CLI (`gh pr create`) for every PR stage (no web UI/manual PR creation).
+- MUST include unified_bench output samples in every PR body on GitHub (include the relevant suite(s) for that stage).
+- MUST base each PR branch on the previous PR branch and work sequentially (no skipping ahead).
 - MUST NOT merge PRs.
 - MUST fail-closed: all new parsers MUST cap lengths before allocation; on invalid data MUST return errors (no panic/OOM).
 
@@ -681,3 +682,283 @@ Authoritative spec: `slab-optimization/spec.md`
 - Commit: `PR0: add unified bench lanes probe suite`.
 - Pushed branch to origin.
 - PR created via `gh`: https://github.com/snissn/gomap/pull/59
+
+`2026-01-17 19:14:16 HST`
+- Updated PR sequencing requirement in `slab-optimization/AGENTS.md`.
+
+`2026-01-17 19:26:55 HST`
+- Created branch `sprint/slabopt-pr1-journal-abstraction` (based on PR0 branch).
+- Updated journal durability naming/semantics in `TreeDB/caching/db.go`.
+- Added WAL replay payload validation in `TreeDB/db/wal_recovery.go`.
+- Added split value-log crash durability case in `TreeDB/recovery_spec_test.go`.
+- Added missing-commit/missing-payload recovery tests in `TreeDB/caching/unified_wal_comprehensive_test.go`.
+
+`2026-01-17 19:32:26 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery_DurabilityTiers -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-17 19:33:04 HST`
+- Created `.pr/PR1_description.md` with unified_bench outputs.
+
+`2026-01-17 19:34:12 HST`
+- Commit: `PR1: journal durability + crash tests`.
+- Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
+
+`2026-01-17 20:03:38 HST`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery_DurabilityTiers -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-17 20:04:32 HST`
+- Created `.pr/PR2_description.md` with unified_bench outputs and test list.
+
+`2026-01-17 20:06:27 HST`
+- Commit: `PR2: dictdb separate TreeDB instance` (lefthook `go-fmt`).
+
+`2026-01-17 20:11:27 HST`
+- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr1-journal-abstraction`): https://github.com/snissn/gomap/pull/61
+- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 20:12:24 HST`
+- Created branch `sprint/slabopt-pr3-rid-join` (based on `sprint/slabopt-pr2-dictdb`).
+
+`2026-01-17 21:29:15 HST`
+- Updated commit/value log recovery tests and log naming checks in `TreeDB/recovery_spec_test.go` and `TreeDB/db/readonly_open_test.go`.
+- Updated log naming docs in `TreeDB/caching/unified_wal_comprehensive_test.go` and `TreeDB/caching/checkpoint_test.go`.
+- Added forced value-log segment removal for recovery cleanup in `TreeDB/internal/valuelog/manager.go` + `TreeDB/db/wal_recovery.go` and delayed state initialization in `TreeDB/db/db.go`.
+- Updated PR process notes in `slab-optimization/spec.md` and `slab-optimization/AGENTS.md`; created `.pr/PR3_description.md`.
+- Tests: `go test ./TreeDB/internal/commitlog -count=1` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 21:35:34 HST`
+- Commit: `PR3: RID join for CommitLog/ValueLog + recovery v1`.
+- Pushed branch `sprint/slabopt-pr3-rid-join` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr2-dictdb`): https://github.com/snissn/gomap/pull/62
+- CI: `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 21:41:31 HST`
+- CI (post-log update): `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 22:40:59 HST`
+- Added `TreeDB/internal/compression` (ported package) and wired dynamic-K selection into value-log writes.
+- Extended valuelog grouped frame parsing/flags, dict lookup plumbing, and stricter grouped pointer validation.
+- Wired dict lookup through cached/backend opens and updated value-log writer/readers/tests for dict frames.
+- Added compressible dataset test `TreeDB/caching/dict_k_compression_test.go`.
+- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-17 22:42:22 HST`
+- Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 22:50:23 HST`
+- Commit: `PR4: dict + dynamic-K grouped ValueLog encoding`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr3-rid-join`): https://github.com/snissn/gomap/pull/63
+- CI: `gh pr checks 63 --watch` → FAIL (windows-latest: https://github.com/snissn/gomap/actions/runs/21108956317/job/60704603039; others PASS).
+
+`2026-01-17 23:06:28 HST`
+- Commit: `fix: make dict compression test use vlog size`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 23:13:49 HST`
+- CI: `gh pr checks 63` → pending (windows-latest job still pending; others pass).
+
+`2026-01-17 23:14:06 HST`
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 00:20:33 HST`
+- Updated cached-mode tests for per-lane WAL/value-log writers in `TreeDB/caching/checkpoint_test.go`, `TreeDB/caching/delete_range_test.go`, `TreeDB/caching/dict_k_compression_test.go`, and `TreeDB/caching/unsafe_options_test.go`.
+- Added `.pr/PR5_description.md` with summary, tests, and unified_bench output.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-18 00:26:10 HST`
+- Commit: `PR5: parallel active journal lanes`.
+- Pushed branch `sprint/slabopt-pr5-parallel-lanes` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr4-dict-dynamick`): https://github.com/snissn/gomap/pull/64
+- CI: `gh pr checks 64 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 03:34:43 HST`
+- Created branch `sprint/slabopt-pr6-recovery-hardening` from `sprint/slabopt-pr5-parallel-lanes`.
+- Added commitlog/valuelog fuzz tests in `TreeDB/internal/commitlog/commitlog_fuzz_test.go` and `TreeDB/internal/valuelog/valuelog_fuzz_test.go`.
+- Added recovery hardening cases (multi-lane ordering, partial commit batch, missing dict) in `TreeDB/recovery_spec_test.go`.
+- Tests: `go test ./TreeDB -run "CrashRecovery|Recovery" -count=1` → PASS
+
+`2026-01-18 03:40:38 HST`
+- Tests: `go test ./TreeDB/internal/commitlog -run Fuzz -fuzz=Fuzz -fuzztime=10s` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -run Fuzz -fuzz=Fuzz -fuzztime=10s` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-18 03:41:31 HST`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-18 07:35:51 HST`
+- Created branch `sprint/slabopt-pr7-index-flags` from `sprint/slabopt-pr6-recovery-hardening`.
+
+`2026-01-18 07:47:44 HST`
+- Added PR7 index flags to `TreeDB/db/db.go` and plumbed into zipper/bulk builders.
+- Added columnar leaf encoding scaffolding (`TreeDB/node/leaf_columnar.go`) and wiring in leaf/builder/split/compact paths.
+- Added columnar leaf smoke test in `TreeDB/node/leaf_columnar_test.go`.
+- Updated index rebuild paths in `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/vacuum_online.go`, and `TreeDB/db/vacuum_offline.go`.
+
+`2026-01-18 07:49:12 HST`
+- gofmt: `TreeDB/db/compaction_index_swap.go`, `TreeDB/db/db.go`, `TreeDB/db/vacuum_offline.go`, `TreeDB/db/vacuum_online.go`, `TreeDB/internal/bulk/builder.go`, `TreeDB/node/builder.go`, `TreeDB/node/compact.go`, `TreeDB/node/leaf.go`, `TreeDB/node/node.go`, `TreeDB/node/split.go`, `TreeDB/node/leaf_columnar.go`, `TreeDB/node/leaf_columnar_test.go`, `TreeDB/zipper/zipper.go`.
+
+`2026-01-18 07:54:15 HST`
+- Tests: `go test ./TreeDB/node -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-18 07:54:43 HST`
+- Created `.pr/PR7_description.md`.
+
+`2026-01-18 07:55:17 HST`
+- Commit: `PR7: index work flags + columnar leaf scaffold`.
+
+`2026-01-18 07:55:57 HST`
+- Pushed branch `sprint/slabopt-pr7-index-flags` to origin.
+
+`2026-01-18 07:59:45 HST`
+- PR created via `gh` (base `sprint/slabopt-pr6-recovery-hardening`): https://github.com/snissn/gomap/pull/66
+- CI: `gh pr checks 66 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
+
+`2026-01-18 09:18:36 HST`
+- PR6: merged `sprint/slabopt-pr6-recovery-hardening` into `sprint/slabopt-pr7-index-flags` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:26:29 HST`
+- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:28:24 HST`
+- PR5: merged `sprint/slabopt-pr5-parallel-lanes` into `sprint/slabopt-pr6-recovery-hardening` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:30:00 HST`
+- PR6: merged `sprint/slabopt-pr6-recovery-hardening` into `sprint/slabopt-pr7-index-flags` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:42:31 HST`
+- PR5: skip empty commit batches, preserve legacy commit-log ordering, and clean up lane WAL/vlog writers on open failures.
+- PR5: document lane/segment limits in options and skip legacy value-log segments that would collide with lane-encoded IDs.
+- Updated unified bench outputs in `.pr/PR5_description.md`.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-18 09:46:17 HST`
+- PR7: simplify zipper leaf builder option wiring and add columnar layout bounds check.
+- Tests: `go test ./TreeDB/node -count=1` → PASS
+
+`2026-01-18 11:29:26 HST`
+- PR8: add unified_bench dataset value patterns and optional TreeDB flags for regression benchmarking.
+- Tests: `go test ./cmd/unified_bench -count=1` → PASS
+
+`2026-01-18 11:31:21 HST`
+- Added `.pr/PR8_description.md`.
+- Pushed branch `sprint/slabopt-pr8-regression-rc` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr7-index-flags`): https://github.com/snissn/gomap/pull/67
+
+`2026-01-18 11:41:28 HST`
+- PR4 regression fix: skip value-log compression when no dict is active; add regression test.
+- Cherry-picked fix into PR5/PR6/PR7/PR8.
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+
+`2026-01-18 11:48:55 HST`
+- PR8: added `scripts/bench_slabopt_matrix.sh` for slabopt regression sweeps (PR8/main comparison).
+
+`2026-01-18 15:18:06 HST`
+- PR8: set slabopt bench matrix default to RUNS=3 and ran PR8 vs main sweep.
+- PR8: ran PR1–PR8 baseline batch_write sweep (RUNS=3) for regression staging.
+
+`2026-01-18 15:30:03 HST`
+- PR8: PR1 vs main high-keys batch_write sweep (RUNS=3) with journal lanes flag; confirmed PR1 within ~5% of main and lanes ignored pre-PR5.
+
+`2026-01-18 20:45:00 HST`
+- PR8: restored default `ValueLogPointerThreshold` behavior to match the inline threshold (256 bytes).
+- PR8: profiled `random_write` regression vs `main` and removed per-write allocations on the value-log append hot path:
+  - Added `caching.(*DB).appendValueLogOne` and used it for single-key `Set` pointer writes.
+  - Optimized `valuelog.(*Writer).Append` for `dictID==0` (no dict/compression) to avoid `[]ValuePtr{...}` allocations.
+- Tests: `go test ./... -count=1` → PASS
+- Bench gate (RUNS=5 KEEP=3 SLEEP_S=5, keys=1,000,000 valsize=1024 batchsize=1000): `scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118204204.log`
+
+`2026-01-19 10:37:48 HST`
+- PR12: updated `slab-optimization/WRITE_PATH_UNIFICATION_RUNBOOK.md` with explicit unified_bench commands for the cached-mode write-path matrix (1/2/3).
+- PR12: commit `a18507a113` + pushed branch `sprint/slabopt-pr12-disable-journal-keep-valuelog`.
+- PR12 CI: `gh pr checks 71` → all checks PASS.
+
+`2026-01-19 10:38:41 HST`
+- PR12: posted a PR comment noting CI green + the runbook’s unified_bench matrix command recipes.
+
+`2026-01-21 03:34:53 HST`
+- Created branch `sprint/slabopt-pr32-vlog-dict-probe` (based on `sprint/slabopt-pr31-vlog-dict-maxk32`).
+- Added `slab-optimization/OLD_IMPLEMENTATION_AGENTS.md` (extracted pause/probe + K-selection + CI gate ideas from old PR50).
+- Implemented ValueLog dict pause+probe+resume + paused sampling + lazy dict bytes fetch:
+  - `TreeDB/caching/vlog_dict.go`
+  - `TreeDB/caching/db.go`
+  - New test `TreeDB/caching/vlog_dict_pause_probe_test.go` (`TestValueLogDictPauseAndProbeResume`).
+- Tests: `go test ./... -count=1` → PASS.
+- Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR32_description.md`).
+- PR created via `gh`: https://github.com/snissn/gomap/pull/91
+- PR32 CI: `gh pr checks 91 --watch` → all checks PASS.
+
+`2026-01-21 03:50:16 HST`
+- Created branch `sprint/slabopt-pr33-vlog-dict-k-selection` (based on `sprint/slabopt-pr32-vlog-dict-probe`).
+- PR33: extended dict K-selection (candidates up to 32) and added an encode-cost term:
+  - `TreeDB/internal/compression/profile.go`
+  - Adjusted dict profile publication policy in `TreeDB/caching/vlog_dict.go` (stop forcing `k>=8`).
+- Tests: `go test ./... -count=1` → PASS.
+- Bench: `make unified-bench && ./bin/unified-bench -suite vlog_dict -dbs treedb` (output in `.pr/PR33_description.md`).
+- PR created via `gh`: https://github.com/snissn/gomap/pull/92
+- PR33 CI: `gh pr checks 92 --watch` → all checks PASS.
+
+`2026-01-21 04:03:16 HST`
+- Created branch `sprint/slabopt-pr35-vlog-dict-ci-gate` (based on `sprint/slabopt-pr33-vlog-dict-k-selection`).
+- PR35: fixed vlog_dict perf baseline names/regex to match current bench output and enabled strict gating:
+  - `.github/workflows/treedb-tests.yml` (run dict sweep bench + strict checker)
+  - `.github/perf_baselines/vlog_dict_defaults.json` (updated benchmark names)
+- Local validation:
+  - `go test ./TreeDB/internal/valuelog -run '^$' -bench BenchmarkValueLogDictCompressibilitySweep/... -benchmem -count=5`
+  - `go run .github/scripts/check_vlog_dict_bench.go -strict=true`
+- PR created via `gh`: https://github.com/snissn/gomap/pull/93
+- PR35 CI: `gh pr checks 93 --watch` → all checks PASS.
+
+`2026-01-22 10:25:55 HST`
+- Added `slab-optimization/AGENTS_LIVE_BENCH.md` (live throughput bench runbook: mode1/mode3/mode4; compression on/off; public TreeDB KV API; no-fsync focus).
+
+`2026-01-22 10:44:03 HST`
+- Updated `slab-optimization/slab_optimization_merge_runbook.md` to assume the live KV throughput bench exists and to use the correct TreeDB-local bench runners (`TreeDB/cmd/vlog_dict_realdata -bench-kv`, `TreeDB/cmd/unified_bench -suite vlog_autotune -validate`).
+- Updated `slab-optimization/AGENTS_LIVE_BENCH.md` to show repo-root command paths (`./TreeDB/cmd/...`) and avoid TreeDB-vs-root `cmd/` confusion.
+
+`2026-01-22 10:50:59 HST`
+- Added `slab-optimization/slab_optimization_merge_runbook_PROMPT.md` (agent prompt for executing the merge-gate runbook after the live bench work is complete).

@@ -66,6 +66,18 @@ const (
 	// for keeping the index compact and read-friendly.
 	ProfileFast Profile = "fast"
 
+	// ProfileFastIngest is a "fast ingest" profile that explicitly keeps the
+	// cached value-log path enabled.
+	//
+	// It is intended for write-heavy benchmarks and bulk ingest workloads where:
+	//   - cached mode should be used, and
+	//   - out-of-line values should flow through the value log (pointer-based),
+	//     rather than being forced through backend-only slab-direct writes.
+	//
+	// Note: This profile is unsafe (RelaxedSync + DisableReadChecksum) and
+	// requires `Options.AllowUnsafe = true` to open.
+	ProfileFastIngest Profile = "fast_ingest"
+
 	// ProfileBench is a "fast + deterministic" profile intended specifically for
 	// benchmarking.
 	//
@@ -112,6 +124,8 @@ func ApplyProfile(opts *Options, profile Profile) {
 		applyDurableProfile(opts)
 	case ProfileFast:
 		applyFastProfile(opts)
+	case ProfileFastIngest:
+		applyFastIngestProfile(opts)
 	case ProfileBench:
 		applyBenchProfile(opts)
 	default:
@@ -155,6 +169,23 @@ func applyFastProfile(opts *Options) {
 	if !opts.PreferAppendAlloc {
 		opts.PreferAppendAlloc = true
 	}
+}
+
+func applyFastIngestProfile(opts *Options) {
+	// Fast ingest keeps the value-log path enabled but disables the journal/redo
+	// log (a crash can lose writes since the last checkpoint).
+	opts.DisableWAL = false
+	opts.DisableJournal = true
+	opts.DisableValueLog = false
+	opts.SplitValueLog = true
+	opts.MemtableValueLogPointers = true
+
+	// Unsafe speed knobs.
+	opts.RelaxedSync = true
+	opts.DisableReadChecksum = true
+
+	// Prefer appending new pages for throughput under churn.
+	opts.PreferAppendAlloc = true
 }
 
 func applyBenchProfile(opts *Options) {

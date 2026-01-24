@@ -28,6 +28,8 @@ type leafEntryLayout struct {
 	keyLen     int
 	valLen     int
 	flags      byte
+	keyOff     int
+	valOff     int
 }
 
 func (n *Node) ensureKeyScratch(size int) []byte {
@@ -45,6 +47,10 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
 
+	if n.leafColumnar() {
+		return parseLeafColumnarLayout(n.data, offset)
+	}
+
 	if n.leafPrefixCompressed() {
 		if offset+9 > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
@@ -57,6 +63,7 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 		if keyStart+suffixLen > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
+		keyOff := 9
 		return leafEntryLayout{
 			headerSize: 9,
 			prefixLen:  prefixLen,
@@ -64,6 +71,8 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 			keyLen:     prefixLen + suffixLen,
 			valLen:     valLen,
 			flags:      flags,
+			keyOff:     keyOff,
+			valOff:     keyOff + suffixLen,
 		}, nil
 	}
 
@@ -77,12 +86,15 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 	if keyStart+keyLen > len(n.data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
+	keyOff := 7
 	return leafEntryLayout{
 		headerSize: 7,
 		suffixLen:  keyLen,
 		keyLen:     keyLen,
 		valLen:     valLen,
 		flags:      flags,
+		keyOff:     keyOff,
+		valOff:     keyOff + keyLen,
 	}, nil
 }
 
@@ -96,12 +108,27 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 	}
 	entryStart = int(offset)
 
+	if n.leafColumnar() {
+		layout, err = n.leafEntryLayoutAt(entryStart)
+		if err != nil {
+			return nil, leafEntryLayout{}, 0, err
+		}
+		keyStart := entryStart + layout.keyOff
+		keyEnd := keyStart + layout.keyLen
+		if keyEnd > len(n.data) {
+			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+		}
+		key = n.data[keyStart:keyEnd]
+		n.leafValid = false
+		return key, layout, entryStart, nil
+	}
+
 	if !n.leafPrefixCompressed() {
 		layout, err = n.leafEntryLayoutAt(entryStart)
 		if err != nil {
 			return nil, leafEntryLayout{}, 0, err
 		}
-		keyStart := entryStart + layout.headerSize
+		keyStart := entryStart + layout.keyOff
 		if keyStart+layout.keyLen > len(n.data) {
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 		}
@@ -122,7 +149,7 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		if index%leafPrefixRestartInterval == 0 && layout.prefixLen != 0 {
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
 		}
-		keyStart := entryStart + layout.headerSize
+		keyStart := entryStart + layout.keyOff
 		keyEnd := keyStart + layout.suffixLen
 		if keyEnd > len(n.data) {
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
@@ -169,7 +196,7 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		if err != nil {
 			return nil, leafEntryLayout{}, 0, err
 		}
-		keyStart := ptr + layout.headerSize
+		keyStart := ptr + layout.keyOff
 		keyEnd := keyStart + layout.suffixLen
 		if keyEnd > len(n.data) {
 			return nil, leafEntryLayout{}, 0, ErrCorruptedNode
@@ -224,7 +251,7 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 		return key, nil, page.ValuePtr{}, flags, nil
 	}
 
-	valueStart := entryStart + layout.headerSize + layout.suffixLen
+	valueStart := entryStart + layout.valOff
 	if flags&FlagPointer != 0 {
 		if valueStart+page.ValuePtrSize > len(n.data) {
 			return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
@@ -276,7 +303,7 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 		return false, nil
 	}
 
-	ptr += layout.headerSize + layout.suffixLen
+	ptr += layout.valOff
 	if ptr+page.ValuePtrSize > len(n.data) {
 		return false, ErrCorruptedNode
 	}
@@ -321,6 +348,9 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 // If key is found, found=true.
 // If key is greater than all entries, returns Count, false.
 func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
+	if n.leafColumnar() {
+		return n.searchLeafColumnar(key)
+	}
 	if n.leafPrefixCompressed() {
 		return n.searchLeafPrefixCompressed(key)
 	}
@@ -406,6 +436,10 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	return uint16(i), false, nil
 }
 
+func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
+	return n.searchLeafPrefixCompressed(key)
+}
+
 func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
 	count := n.Count()
 	if count == 0 {
@@ -461,6 +495,9 @@ func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
 func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr) error {
 	if n.Type() != page.PageTypeLeaf {
 		return ErrInvalidType
+	}
+	if n.leafColumnar() {
+		return n.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
 	if n.leafPrefixCompressed() {
 		return n.addLeafEntryPrefixCompressed(key, value, flags, valPtr)
@@ -573,6 +610,88 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 		// Dest: NodeHeaderSize + (idx+1)*2
 		// Len: (count - idx) * 2
 
+		srcPos := NodeHeaderSize + int(idx)*2
+		destPos := srcPos + 2
+		moveLen := int(count-idx) * 2
+
+		if moveLen > 0 {
+			copy(n.data[destPos:destPos+moveLen], n.data[srcPos:srcPos+moveLen])
+		}
+
+		n.setOffset(idx, uint16(newOffset))
+		n.SetCount(count + 1)
+	}
+
+	n.UpdateChecksum()
+	return nil
+}
+
+func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	valLen := 0
+	entrySize := leafColumnarHeaderSize + len(key)
+	if flags&FlagPointer != 0 {
+		entrySize += page.ValuePtrSize
+	} else if flags&FlagTombstone == 0 {
+		valLen = len(value)
+		entrySize += valLen
+	}
+
+	idx, found, err := n.SearchLeaf(key)
+	if err != nil {
+		return err
+	}
+
+	needed := entrySize
+	if !found {
+		needed += DirectoryEntrySize
+	}
+
+	if n.FreeSpace() < needed {
+		if err := n.Compact(); err != nil {
+			return err
+		}
+		if n.FreeSpace() < needed {
+			return ErrNodeFull
+		}
+	}
+
+	buf := make([]byte, entrySize)
+	keyOff := leafColumnarHeaderSize
+	valOff := keyOff + len(key)
+	writeLeafColumnarHeader(buf[:leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
+	copy(buf[keyOff:keyOff+len(key)], key)
+
+	valueStart := valOff
+	if flags&FlagPointer != 0 {
+		valPtr.Encode(buf[valueStart : valueStart+page.ValuePtrSize])
+	} else if flags&FlagTombstone == 0 {
+		copy(buf[valueStart:valueStart+valLen], value)
+	}
+
+	heapStart := int(page.PageSize)
+	count := n.Count()
+	for k := uint16(0); k < count; k++ {
+		off := getUint16(n.data[NodeHeaderSize+int(k)*2:])
+		if int(off) < heapStart && int(off) != 0 {
+			heapStart = int(off)
+		}
+	}
+
+	newOffset := heapStart - entrySize
+	dirEnd := NodeHeaderSize + int(count)*2
+	if !found {
+		dirEnd += 2
+	}
+
+	if newOffset < dirEnd {
+		return ErrNodeFull
+	}
+
+	copy(n.data[newOffset:], buf)
+
+	if found {
+		n.setOffset(idx, uint16(newOffset))
+	} else {
 		srcPos := NodeHeaderSize + int(idx)*2
 		destPos := srcPos + 2
 		moveLen := int(count-idx) * 2

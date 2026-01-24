@@ -8,7 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/vlog"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/slab"
@@ -47,8 +47,8 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
-	vlogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := vlog.NewManager(vlogDir)
+	valueLogDir := filepath.Join(opts.Dir, "wal")
+	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		_ = p.Close()
 		_ = sm.Close()
@@ -56,6 +56,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	vm.SetDictLookup(opts.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -134,14 +135,15 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
 
-	vlogDir := filepath.Join(opts.Dir, "wal")
-	vm, err := vlog.NewManager(vlogDir)
+	valueLogDir := filepath.Join(opts.Dir, "wal")
+	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		_ = p.Close()
 		_ = sm.Close()
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	vm.SetDictLookup(opts.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)

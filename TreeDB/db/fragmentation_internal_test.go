@@ -56,17 +56,17 @@ func TestReadFreelistStats(t *testing.T) {
 		t.Fatalf("Free(1): %v", err)
 	}
 
-	got, err := readFreelistStats(p, a.Head(), p.PageCount())
+	got, err := a.Stats(p.PageCount())
 	if err != nil {
-		t.Fatalf("readFreelistStats: %v", err)
+		t.Fatalf("Stats: %v", err)
 	}
-	if got.pages != 1 {
-		t.Fatalf("pages mismatch: got %d", got.pages)
+	if got.Pages != 1 {
+		t.Fatalf("pages mismatch: got %d", got.Pages)
 	}
-	if got.freeIDs != 1 {
-		t.Fatalf("freeIDs mismatch: got %d", got.freeIDs)
+	if got.FreeIDs != 1 {
+		t.Fatalf("freeIDs mismatch: got %d", got.FreeIDs)
 	}
-	if got.reclaimablePages() != 2 {
-		t.Fatalf("reclaimable mismatch: got %d", got.reclaimablePages())
+	if got.ReclaimablePages() != 2 {
+		t.Fatalf("reclaimable mismatch: got %d", got.ReclaimablePages())
 	}
 }

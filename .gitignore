@@ -12,3 +12,5 @@ treedb_opt_node.prof
 *.pprof
 unified_bench
 TreeDB/db/test-*
+.worktrees/
+artifacts/

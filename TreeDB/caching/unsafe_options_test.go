@@ -25,8 +25,15 @@ func TestDisableWAL_NoFilesCreated(t *testing.T) {
 	}
 
 	// Check internal state
-	if cdb.wal != nil {
-		t.Error("expected db.wal to be nil when DisableWAL is true")
+	for i := range cdb.lanes {
+		l := &cdb.lanes[i]
+		l.walMu.Lock()
+		if l.wal != nil {
+			l.walMu.Unlock()
+			t.Error("expected lane WAL to be nil when DisableWAL is true")
+			break
+		}
+		l.walMu.Unlock()
 	}
 
 	// Write data

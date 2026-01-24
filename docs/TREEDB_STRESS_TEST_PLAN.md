@@ -10,7 +10,7 @@
 - Benchmark absolute performance or latency SLOs (use separate perf tooling).
 
 ## Scope
-- TreeDB cached mode (caching layer, WAL/value log, memtables, flush, checkpoint).
+- TreeDB cached mode (caching layer, journal/value log, memtables, flush, checkpoint).
 - Backend mode correctness under stress.
 - Snapshot-style workloads (large batched writes, background disabled).
 - Error-handling and backpressure edge cases (timeouts, deadlocks).
@@ -35,7 +35,7 @@ Plan:
 Artifacts on timeout:
 - Goroutine dump.
 - Queue backlog stats.
-- WAL/vlog stats if available.
+- Journal/value-log stats if available.
 
 Concrete tests (caching):
 - `TestWaitForStopSchedulesFlush` (already added)
@@ -46,7 +46,7 @@ Concrete tests (caching):
   - Validates `bpCond.Broadcast` wake path.
 - `TestCheckpointProgressNoBG`
   - Disable BG checkpoint, call `Checkpoint()` explicitly under heavy backlog.
-  - Assert returns and WAL shrinks (if WAL enabled).
+  - Assert returns and journal shrinks (if journal enabled).
 - `TestBackpressure_NoFlushSignalIteratorRotation`
   - Create backlog via iterator-driven rotation path and ensure writes progress.
 
@@ -66,9 +66,9 @@ Pseudo-code sketches:
   - start goroutine `Set("blocked", "v")` and confirm it blocks briefly.
   - call `db.TriggerFlush()` and wait for `Set` to finish within 2s.
 - `TestCheckpointProgressNoBG`
-  - open cached db with `BackgroundCheckpointInterval=-1`, `MaxWALBytes=-1`.
+  - open cached db with `BackgroundCheckpointInterval=-1`, `MaxWALBytes=-1` (journal cap).
   - write until backlog exceeds stop.
-  - call `db.Checkpoint()` with watchdog; ensure returns and `Stats()` shows WAL trimmed.
+  - call `db.Checkpoint()` with watchdog; ensure returns and `Stats()` shows journal trimmed.
 - `TestBackpressure_NoFlushSignalIteratorRotation`
   - create large iterator that forces `rotateMemtableLockedForIterator`.
   - verify subsequent `Set()` completes quickly (no deadlock).
@@ -134,7 +134,7 @@ Pseudo-code:
 ### 4) Fault Injection (I/O pause + transient errors)
 Purpose: Verify error paths don’t deadlock or corrupt.
 Plan:
-- Wrap WAL/value-log writers to inject:
+- Wrap journal/value-log writers to inject:
   - transient errors (N% of ops),
   - artificial delays (pause/slow I/O),
   - intermittent read failures for vlog reads.
@@ -150,7 +150,7 @@ Concrete implementation:
 - Add `faultyValueLogReader` for `Read(ptr)` error injection.
 
 Test cases:
-- `TestWALAppendErrorPropagates`
+- `TestJournalAppendErrorPropagates`
   - Inject error; assert `Set()` returns error and no deadlock.
 - `TestFlushValueLogErrorUnblocks`
   - Force `flushValueLog()` error during `flushOneLocked`.
@@ -164,7 +164,7 @@ Fault injection mechanics:
 - For concurrency, use a `sync.Mutex` or `atomic.Pointer[error]`.
 
 Additional test cases:
-- `TestWALSyncErrorDoesNotDeadlock`
+- `TestJournalSyncErrorDoesNotDeadlock`
   - Inject sync error; verify writer returns error quickly.
 - `TestValueLogReadTransientError`
   - Inject one read error, retry with subsequent `Set()` and verify progress.
@@ -217,7 +217,7 @@ Concrete test design:
     - `BackgroundIndexVacuumInterval = -1`
     - `BackgroundCheckpointInterval = -1`
     - `BackgroundCheckpointIdleDuration = -1`
-    - `MaxWALBytes = -1`
+    - `MaxWALBytes = -1` (journal cap)
   - Write N batches of size M (e.g., 100 batches x 10k keys).
   - Periodically rotate memtables to emulate snapshot chunk boundaries.
   - Final batch must complete within 5-10 seconds.
@@ -240,8 +240,8 @@ Failure signals:
 ## Test Harness Utilities (Planned)
 - `WithTimeout(t, d, func(ctx) error)` to enforce deadline and collect diagnostics.
 - `DumpGoroutines(prefix)` helper to collect goroutine stacks on failure.
-- `CollectTreeDBStats(db)` to include queue backlog, flush bps, WAL bytes.
-- `FaultyLogWriter` wrapper for WAL/vlog that can inject delays/errors.
+- `CollectTreeDBStats(db)` to include queue backlog, flush bps, journal bytes.
+- `FaultyLogWriter` wrapper for journal/value log that can inject delays/errors.
 - `ProgressWatchdog` that validates monotonic progress signals.
 
 Concrete file layout:
@@ -277,7 +277,7 @@ Environment toggles:
 
 Concrete CI matrix:
 - PR: `go test ./TreeDB/caching -run 'TestWaitForStop|TestBackpressure' -timeout=3m`
-- Daily: `go test ./TreeDB/caching -run 'TestConcurrentMixedOpsProgress|TestWAL.*Error' -race -timeout=10m`
+- Daily: `go test ./TreeDB/caching -run 'TestConcurrentMixedOpsProgress|TestJournal.*Error' -race -timeout=10m`
 - Weekly: `go test ./TreeDB/caching -run 'TestConcurrentMixedOpsProgress' -race -count=20 -timeout=30m`
 
 ## Failure Artifacts
@@ -304,7 +304,7 @@ Storage location:
 Detailed milestones:
 - M1: Add timeout + dump helpers and convert existing progress tests.
 - M2: Add snapshot-style restore test (BG disabled).
-- M3: Add faulty WAL/vlog injection and 3 error-path tests.
+- M3: Add faulty journal/value-log injection and 3 error-path tests.
 - M4: Add concurrent mixed-ops stress test with watchdog.
 - M5: Add goroutine leak check helper and apply to stress tests.
 
@@ -319,34 +319,34 @@ Additional criteria:
 - Error injection tests validate error propagation and no silent stalls.
 
 ## Open Questions
-- Should stress tests run against both `DisableWAL` true/false variants?
+- Should stress tests run against both `DisableWAL` true/false variants? (legacy name: disables journal + value log)
 - Should we gate "heavy" tests on an env var or a build tag?
 - Which DB modes (cached/backend) must be covered in each stress test?
 
 ## Appendix: Config Matrix (Recommended)
 For each stress suite, consider these variants:
 - Mode: cached vs backend.
-- WAL: enabled vs disabled (`DisableWAL`).
+- Journal: enabled vs disabled (`DisableWAL`).
 - Value log: enabled vs disabled (`DisableValueLog`).
 - Background tasks: enabled vs disabled (`TREEDB_BENCH_DISABLE_BG=1` parity).
 
 Example matrix for `TestConcurrentMixedOpsProgress`:
-- cached + WAL + value log + BG on
-- cached + WAL + value log + BG off
-- cached + no WAL + no vlog + BG off (unsafe mode)
+- cached + journal + value log + BG on
+- cached + journal + value log + BG off
+- cached + no journal + no vlog + BG off (unsafe mode)
 
 Tier selection rule (recommended):
 - `pr`: minimal critical path
-  - cached + WAL + vlog + BG on
-  - cached + WAL + vlog + BG off
+  - cached + journal + value log + BG on
+  - cached + journal + value log + BG off
 - `daily`: expanded coverage
-  - cached + WAL + vlog + BG on
-  - cached + WAL + vlog + BG off
-  - cached + no WAL + no vlog + BG off
-  - backend + WAL off (backend mode)
+  - cached + journal + value log + BG on
+  - cached + journal + value log + BG off
+  - cached + no journal + no vlog + BG off
+  - backend + journal off (backend mode)
 - `nightly`: full matrix
-  - cached/backend × WAL on/off × vlog on/off × BG on/off
-  - Skip invalid combos (vlog on with WAL off).
+  - cached/backend × journal on/off × value log on/off × BG on/off
+  - Skip invalid combos (value log on with journal off).
 
 Implementation sketch:
 - Define `type testVariant struct { mode, wal, vlog, bg string }`.

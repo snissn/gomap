@@ -1,6 +1,6 @@
 package hashdb
 
-import "github.com/klauspost/compress/s2"
+import "github.com/snissn/compress/s2"
 
 const minValueBytesForCompression = 32
 

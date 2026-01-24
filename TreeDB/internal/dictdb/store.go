@@ -1,0 +1,245 @@
+package dictdb
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+)
+
+var errStoreUnavailable = errors.New("dictdb: store unavailable")
+
+// Store provides access to dictionary storage backed by a TreeDB backend.
+type Store struct {
+	backend *db.DB
+	mu      sync.Mutex
+}
+
+const (
+	dictKMin = 1
+	dictKMax = valuelog.MaxFrameK
+)
+
+// Open opens a dictdb backend at path and returns a Store.
+func Open(path string, opts db.Options) (*Store, error) {
+	opts.Dir = path
+	backend, err := db.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{backend: backend}, nil
+}
+
+// New wraps an existing backend.
+func New(backend *db.DB) *Store {
+	return &Store{backend: backend}
+}
+
+// Close closes the underlying backend.
+func (s *Store) Close() error {
+	if s == nil || s.backend == nil {
+		return nil
+	}
+	return s.backend.Close()
+}
+
+// GetCurrent returns the current dictionary ID or 0 if unset.
+func (s *Store) GetCurrent(_ context.Context) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	val, err := s.backend.Get(currentKey())
+	if err != nil {
+		return 0, err
+	}
+	if val == nil {
+		return 0, nil
+	}
+	if len(val) != 8 {
+		return 0, fmt.Errorf("dictdb: invalid current size %d", len(val))
+	}
+	return binary.BigEndian.Uint64(val), nil
+}
+
+// PutDictBytes inserts dict bytes (deduped by hash) and returns its dictID.
+func (s *Store) PutDictBytes(ctx context.Context, dictBytes []byte) (uint64, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if dictBytes == nil {
+		dictBytes = []byte{}
+	}
+	checksum := sha256.Sum256(dictBytes)
+	hashKey := hashKey(checksum)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	val, err := s.backend.Get(hashKey)
+	if err != nil {
+		return 0, err
+	}
+	if val != nil {
+		if len(val) != 8 {
+			return 0, fmt.Errorf("dictdb: invalid hash entry size %d", len(val))
+		}
+		return binary.BigEndian.Uint64(val), nil
+	}
+
+	// dictID uses the first 8 bytes of SHA256; verify content on collision.
+	dictID := binary.BigEndian.Uint64(checksum[:8])
+	bytesKey := bytesKey(dictID)
+	existing, err := s.backend.Get(bytesKey)
+	if err != nil {
+		return 0, err
+	}
+	if existing != nil {
+		if bytes.Equal(existing, dictBytes) {
+			valBuf := make([]byte, 8)
+			binary.BigEndian.PutUint64(valBuf, dictID)
+			if err := s.backend.SetSync(hashKey, valBuf); err != nil {
+				return 0, err
+			}
+			return dictID, nil
+		}
+		return 0, fmt.Errorf("dictdb: dict id collision for %d", dictID)
+	}
+
+	batch := s.backend.NewBatch()
+	if err := batch.Set(bytesKey, dictBytes); err != nil {
+		_ = batch.Close()
+		return 0, err
+	}
+	valBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(valBuf, dictID)
+	if err := batch.Set(hashKey, valBuf); err != nil {
+		_ = batch.Close()
+		return 0, err
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		return 0, err
+	}
+	if err := batch.Close(); err != nil {
+		return 0, err
+	}
+	return dictID, nil
+}
+
+// SetCurrent marks dictID as the current dictionary.
+func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if dictID == 0 {
+		// Clear current dict marker.
+		return s.backend.DeleteSync(currentKey())
+	}
+
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, dictID)
+	return s.backend.SetSync(currentKey(), buf)
+}
+
+// SetK stores the preferred frame group size (K) for dictID.
+func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	if dictID == 0 {
+		return nil
+	}
+	if k < dictKMin || k > dictKMax {
+		return fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	// Ensure dict exists (best-effort).
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	return s.backend.SetSync(kKey(dictID), []byte{byte(k)})
+}
+
+// GetK loads the preferred frame group size (K) for dictID.
+// Returns 0 when unset.
+func (s *Store) GetK(ctx context.Context, dictID uint64) (int, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if dictID == 0 {
+		return 0, nil
+	}
+	val, err := s.backend.Get(kKey(dictID))
+	if err != nil {
+		return 0, err
+	}
+	if len(val) == 0 {
+		return 0, nil
+	}
+	if len(val) != 1 {
+		return 0, fmt.Errorf("dictdb: invalid dict K size %d", len(val))
+	}
+	k := int(val[0])
+	if k < dictKMin || k > dictKMax {
+		return 0, fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	return k, nil
+}
+
+// GetDictBytes returns the dictionary bytes for dictID.
+func (s *Store) GetDictBytes(_ context.Context, dictID uint64) ([]byte, error) {
+	if s == nil || s.backend == nil {
+		return nil, errStoreUnavailable
+	}
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	return val, nil
+}
+
+func bytesKey(dictID uint64) []byte {
+	buf := make([]byte, len("bytes/")+8)
+	copy(buf, "bytes/")
+	binary.BigEndian.PutUint64(buf[len("bytes/"):], dictID)
+	return buf
+}
+
+func hashKey(sum [32]byte) []byte {
+	buf := make([]byte, len("hash/")+len(sum))
+	copy(buf, "hash/")
+	copy(buf[len("hash/"):], sum[:])
+	return buf
+}
+
+func kKey(dictID uint64) []byte {
+	buf := make([]byte, len("k/")+8)
+	copy(buf, "k/")
+	binary.BigEndian.PutUint64(buf[len("k/"):], dictID)
+	return buf
+}
+
+func currentKey() []byte {
+	return []byte("current")
+}

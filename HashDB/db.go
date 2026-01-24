@@ -468,6 +468,13 @@ func (h *DB) SetResizeThreshold(percent uint64) {
 	h.resizeThreshold = percent
 }
 
+// SetMaxProbeGroupsBeforeResize sets a probe-length guard for inserts.
+// If a new insert scans more than this many probe groups, the DB will trigger
+// an incremental resize. Set to 0 to disable.
+func (h *DB) SetMaxProbeGroupsBeforeResize(groups uint64) {
+	h.maxProbeGroupsBeforeResize = groups
+}
+
 // Clear wipes the database (deletes all data) and resets it.
 func (h *DB) Clear() error {
 	// Close resources
