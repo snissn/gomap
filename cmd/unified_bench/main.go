@@ -31,6 +31,7 @@ import (
 var (
 	numKeys       = flag.Int("keys", 100000, "Number of keys")
 	valSize       = flag.Int("valsize", 128, "Value size in bytes")
+	datasetValPat = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat)")
 	batchSize     = flag.Int("batchsize", 1000, "Size of batches")
 	rangeQueries  = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan     = flag.Int("range-span", 100, "number of keys per range")
@@ -82,9 +83,10 @@ type BenchConfig struct {
 	DBsExcludeArg string
 	TestsArg      string
 
-	KeepDir  bool
-	Progress bool
-	SeedUsed int64
+	KeepDir             bool
+	Progress            bool
+	SeedUsed            int64
+	DatasetValuePattern string
 
 	CPUProfile string
 
@@ -189,6 +191,7 @@ func main() {
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
+		DatasetValuePattern:              *datasetValPat,
 		CPUProfile:                       *cpuProfile,
 		BlockProfile:                     *blockProfile,
 		BlockProfileRate:                 *blockRate,
@@ -608,6 +611,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		datasetErr        error
 	)
 	makeWriteDataset := func(count, ksize, vsize int, order bool) ([][]byte, [][]byte, error) {
+		pattern := strings.ToLower(strings.TrimSpace(cfg.DatasetValuePattern))
 		keys := make([][]byte, count)
 		vals := make([][]byte, count)
 		for i := 0; i < count; i++ {
@@ -616,8 +620,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return nil, nil, fmt.Errorf("dataset key %d: %w", i, err)
 			}
 			v := make([]byte, vsize)
-			if _, err := io.ReadFull(crand.Reader, v); err != nil {
-				return nil, nil, fmt.Errorf("dataset val %d: %w", i, err)
+			switch pattern {
+			case "", "random", "rand":
+				if _, err := io.ReadFull(crand.Reader, v); err != nil {
+					return nil, nil, fmt.Errorf("dataset val %d: %w", i, err)
+				}
+			case "zero", "zeros":
+				// leave zeroed
+			case "repeat":
+				for j := range v {
+					v[j] = 0x61
+				}
+			default:
+				return nil, nil, fmt.Errorf("dataset value pattern: %q", cfg.DatasetValuePattern)
 			}
 			keys[i] = k
 			vals[i] = v

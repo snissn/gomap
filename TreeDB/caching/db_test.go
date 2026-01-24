@@ -800,7 +800,11 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		t.Fatalf("backend open: %v", err)
 	}
 
-	cache, err := Open(dir, backend, Options{FlushThreshold: 1})
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:           1,
+		SplitValueLog:            true,
+		ValueLogPointerThreshold: 1,
+	})
 	if err != nil {
 		_ = backend.Close()
 		t.Fatalf("cache open: %v", err)
@@ -965,7 +969,11 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("backend open: %v", err)
 	}
 
-	cache, err := Open(dir, backend, Options{FlushThreshold: 1})
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:           1,
+		SplitValueLog:            true,
+		ValueLogPointerThreshold: 1,
+	})
 	if err != nil {
 		_ = backend.Close()
 		t.Fatalf("cache open: %v", err)

@@ -41,6 +41,13 @@ type Record struct {
 	Value []byte
 }
 
+type FrameStats struct {
+	Records            int
+	RawPayloadBytes    int
+	StoredPayloadBytes int
+	Compressed         bool
+}
+
 type FrameHeader struct {
 	Version  byte
 	Flags    byte
@@ -93,12 +100,13 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 	flags := byte(0)
 	encoded := payload
 	if rawTotal > 0 && len(dict) > 0 {
-		enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
-		if err != nil {
-			return nil, FrameHeader{}, err
+		codecs := getDictCodecs(dictID, dict)
+		if codecs == nil || codecs.encPool == nil {
+			return nil, FrameHeader{}, ErrMissingDict
 		}
+		enc := codecs.encPool.Get().(*zstd.Encoder)
 		encoded = enc.EncodeAll(payload, nil)
-		enc.Close()
+		codecs.encPool.Put(enc)
 		if len(encoded) < len(payload) {
 			flags |= FrameFlagCompressed
 		} else {

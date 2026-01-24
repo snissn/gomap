@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -244,6 +245,29 @@ type Options struct {
 	MaxValueLogRetainedBytesHard int64
 	// DictLookup provides dictionary bytes for value-log decoding.
 	DictLookup valuelog.DictLookup
+
+	// ValueLogDictTrain configures background dictionary training for value-log
+	// frame compression in cached mode.
+	//
+	// Semantics:
+	// - TrainBytes <= 0 disables training entirely (dictID remains 0 unless set externally).
+	// - TrainBytes > 0 enables training and uses TrainBytes as the raw sampling target.
+	// - DictBytes/MinRecords/MaxRecordBytes/SampleStride/DedupWindow mirror the slab trainer.
+	ValueLogDictTrain compression.TrainConfig
+	// ValueLogDictAdaptiveRatio enables best-effort adaptive disable/pause of value-log
+	// dictionary compression when payload compression ratios degrade (0 disables).
+	ValueLogDictAdaptiveRatio float64
+	// ValueLogDictMetricsWindowBytes controls the rolling window size for ratio tracking (0=default).
+	ValueLogDictMetricsWindowBytes int
+	// ValueLogDictMetricsMinRecords controls how many records must be observed in a window
+	// before adaptive pause triggers (0=default).
+	ValueLogDictMetricsMinRecords int
+	// ValueLogDictMetricsPauseBytes controls how long to pause dict compression after a degraded
+	// window is detected (0=default).
+	ValueLogDictMetricsPauseBytes int
+	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
+	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
+	ValueLogDictMinPayloadSavingsRatio float64
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only

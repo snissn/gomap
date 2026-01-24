@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -547,47 +548,57 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 
 	dictID := uint64(1)
 	records := []valuelog.Record{{RID: 1, Value: bytes.Repeat([]byte("value"), 1024)}}
-
-	fileID, err := valuelog.EncodeFileID(0, 1)
-	if err != nil {
-		t.Fatalf("encode file id: %v", err)
-	}
 	valuePath := filepath.Join(walDir, "value-l0-000001.log")
-	vw, err := valuelog.NewWriter(valuePath, fileID)
+	frame, _, err := valuelog.EncodeFrame(0, nil, records)
 	if err != nil {
-		t.Fatalf("valuelog.NewWriter: %v", err)
+		t.Fatalf("EncodeFrame: %v", err)
 	}
-	if _, err := vw.AppendFrame(0, nil, records); err != nil {
-		_ = vw.Close()
-		t.Fatalf("valuelog.AppendFrame: %v", err)
-	}
-	if err := vw.Sync(); err != nil {
-		_ = vw.Close()
-		t.Fatalf("valuelog.Sync: %v", err)
-	}
-	if err := vw.Close(); err != nil {
-		t.Fatalf("valuelog.Close: %v", err)
-	}
-	raw, err := os.ReadFile(valuePath)
+	frameHeader, _, _, framePayload, err := valuelog.DecodeFrame(frame)
 	if err != nil {
-		t.Fatalf("read valuelog: %v", err)
+		t.Fatalf("DecodeFrame: %v", err)
 	}
-	if len(raw) < valuelog.HeaderSize {
-		t.Fatalf("valuelog too small: %d", len(raw))
+
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderCRC(false))
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
 	}
+	compressed := enc.EncodeAll(framePayload, nil)
+	enc.Close()
+	if len(compressed) >= len(framePayload) {
+		t.Fatalf("expected payload to compress for missing-dict test (raw=%d compressed=%d)", len(framePayload), len(compressed))
+	}
+
+	payloadStart := len(frame) - len(framePayload)
+	compressedFrame := make([]byte, payloadStart+len(compressed))
+	copy(compressedFrame, frame[:payloadStart])
+	copy(compressedFrame[payloadStart:], compressed)
+	compressedFrame[1] = frameHeader.Flags | valuelog.FrameFlagCompressed
+	binary.LittleEndian.PutUint64(compressedFrame[4:12], dictID)
+
+	raw := make([]byte, valuelog.HeaderSize+len(compressedFrame))
+	raw[4] = valuelog.Version
+	raw[5] = 1 // recordFlagGrouped
+	raw[6] = 0
+	raw[7] = 0
+	binary.LittleEndian.PutUint64(raw[8:16], 0)
+	binary.LittleEndian.PutUint32(raw[16:20], uint32(len(compressedFrame)))
+	copy(raw[valuelog.HeaderSize:], compressedFrame)
+	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], compressedFrame)
+	binary.LittleEndian.PutUint32(raw[0:4], sum)
+	if err := os.WriteFile(valuePath, raw, 0600); err != nil {
+		t.Fatalf("write valuelog: %v", err)
+	}
+
 	payload := raw[valuelog.HeaderSize:]
-	frameHeader, _, _, _, err := valuelog.DecodeFrame(payload)
+	frameHeader, _, _, _, err = valuelog.DecodeFrame(payload)
 	if err != nil {
 		t.Fatalf("decode frame: %v", err)
 	}
 	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
 		t.Fatalf("expected compressed frame for missing-dict test")
 	}
-	binary.LittleEndian.PutUint64(payload[4:12], dictID)
-	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], payload)
-	binary.LittleEndian.PutUint32(raw[0:4], sum)
-	if err := os.WriteFile(valuePath, raw, 0600); err != nil {
-		t.Fatalf("rewrite valuelog: %v", err)
+	if frameHeader.DictID != dictID {
+		t.Fatalf("expected dict ID %d, got %d", dictID, frameHeader.DictID)
 	}
 
 	commitPath := filepath.Join(walDir, "commit-l0-000001.log")

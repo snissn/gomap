@@ -20,6 +20,11 @@ type Store struct {
 	mu      sync.Mutex
 }
 
+const (
+	dictKMin = 1
+	dictKMax = 8
+)
+
 // Open opens a dictdb backend at path and returns a Store.
 func Open(path string, opts db.Options) (*Store, error) {
 	opts.Dir = path
@@ -133,6 +138,11 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if dictID == 0 {
+		// Clear current dict marker.
+		return s.backend.DeleteSync(currentKey())
+	}
+
 	val, err := s.backend.Get(bytesKey(dictID))
 	if err != nil {
 		return err
@@ -143,6 +153,54 @@ func (s *Store) SetCurrent(ctx context.Context, dictID uint64) error {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, dictID)
 	return s.backend.SetSync(currentKey(), buf)
+}
+
+// SetK stores the preferred frame group size (K) for dictID.
+func (s *Store) SetK(ctx context.Context, dictID uint64, k int) error {
+	if s == nil || s.backend == nil {
+		return errStoreUnavailable
+	}
+	if dictID == 0 {
+		return nil
+	}
+	if k < dictKMin || k > dictKMax {
+		return fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	// Ensure dict exists (best-effort).
+	val, err := s.backend.Get(bytesKey(dictID))
+	if err != nil {
+		return err
+	}
+	if val == nil {
+		return fmt.Errorf("dictdb: dict %d not found", dictID)
+	}
+	return s.backend.SetSync(kKey(dictID), []byte{byte(k)})
+}
+
+// GetK loads the preferred frame group size (K) for dictID.
+// Returns 0 when unset.
+func (s *Store) GetK(ctx context.Context, dictID uint64) (int, error) {
+	if s == nil || s.backend == nil {
+		return 0, errStoreUnavailable
+	}
+	if dictID == 0 {
+		return 0, nil
+	}
+	val, err := s.backend.Get(kKey(dictID))
+	if err != nil {
+		return 0, err
+	}
+	if len(val) == 0 {
+		return 0, nil
+	}
+	if len(val) != 1 {
+		return 0, fmt.Errorf("dictdb: invalid dict K size %d", len(val))
+	}
+	k := int(val[0])
+	if k < dictKMin || k > dictKMax {
+		return 0, fmt.Errorf("dictdb: invalid dict K=%d", k)
+	}
+	return k, nil
 }
 
 // GetDictBytes returns the dictionary bytes for dictID.
@@ -171,6 +229,13 @@ func hashKey(sum [32]byte) []byte {
 	buf := make([]byte, len("hash/")+len(sum))
 	copy(buf, "hash/")
 	copy(buf[len("hash/"):], sum[:])
+	return buf
+}
+
+func kKey(dictID uint64) []byte {
+	buf := make([]byte, len("k/")+8)
+	copy(buf, "k/")
+	binary.BigEndian.PutUint64(buf[len("k/"):], dictID)
 	return buf
 }
 

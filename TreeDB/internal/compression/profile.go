@@ -134,9 +134,9 @@ func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, r
 	var enc *zstd.Encoder
 	var err error
 	if dict != nil {
-		enc, err = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
+		enc, err = zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest))
 	} else {
-		enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
 	}
 	if err != nil {
 		return 0, 0, 0
@@ -168,7 +168,7 @@ func decodeCostEstimate(dict []byte, samples [][]byte) float64 {
 	if n > 500 {
 		n = 500
 	}
-	enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedDefault))
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dict), zstd.WithEncoderLevel(zstd.SpeedFastest))
 	if err != nil {
 		return 1.0
 	}

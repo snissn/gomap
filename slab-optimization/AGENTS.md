@@ -878,3 +878,36 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-18 09:46:17 HST`
 - PR7: simplify zipper leaf builder option wiring and add columnar layout bounds check.
 - Tests: `go test ./TreeDB/node -count=1` → PASS
+
+`2026-01-18 11:29:26 HST`
+- PR8: add unified_bench dataset value patterns and optional TreeDB flags for regression benchmarking.
+- Tests: `go test ./cmd/unified_bench -count=1` → PASS
+
+`2026-01-18 11:31:21 HST`
+- Added `.pr/PR8_description.md`.
+- Pushed branch `sprint/slabopt-pr8-regression-rc` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr7-index-flags`): https://github.com/snissn/gomap/pull/67
+
+`2026-01-18 11:41:28 HST`
+- PR4 regression fix: skip value-log compression when no dict is active; add regression test.
+- Cherry-picked fix into PR5/PR6/PR7/PR8.
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+
+`2026-01-18 11:48:55 HST`
+- PR8: added `scripts/bench_slabopt_matrix.sh` for slabopt regression sweeps (PR8/main comparison).
+
+`2026-01-18 15:18:06 HST`
+- PR8: set slabopt bench matrix default to RUNS=3 and ran PR8 vs main sweep.
+- PR8: ran PR1–PR8 baseline batch_write sweep (RUNS=3) for regression staging.
+
+`2026-01-18 15:30:03 HST`
+- PR8: PR1 vs main high-keys batch_write sweep (RUNS=3) with journal lanes flag; confirmed PR1 within ~5% of main and lanes ignored pre-PR5.
+
+`2026-01-18 20:45:00 HST`
+- PR8: restored default `ValueLogPointerThreshold` behavior to match the inline threshold (256 bytes).
+- PR8: profiled `random_write` regression vs `main` and removed per-write allocations on the value-log append hot path:
+  - Added `caching.(*DB).appendValueLogOne` and used it for single-key `Set` pointer writes.
+  - Optimized `valuelog.(*Writer).Append` for `dictID==0` (no dict/compression) to avoid `[]ValuePtr{...}` allocations.
+- Tests: `go test ./... -count=1` → PASS
+- Bench gate (RUNS=5 KEEP=3 SLEEP_S=5, keys=1,000,000 valsize=1024 batchsize=1000): `scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118204204.log`
