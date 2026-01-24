@@ -216,6 +216,9 @@ type Options struct {
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
 	// segments, and WAL entries reference them via pointers.
 	SplitValueLog bool
+	// JournalLanes controls the number of active commit/value log lanes (0=default).
+	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
+	JournalLanes int
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64

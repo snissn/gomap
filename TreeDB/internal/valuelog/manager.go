@@ -122,7 +122,8 @@ func (m *Manager) Close() error {
 
 func (m *Manager) SegmentPath(id uint32) string {
 	seg := page.ValueLogSegmentID(id)
-	return filepath.Join(m.dir, fmt.Sprintf("value-%06d.log", seg))
+	lane, seq := DecodeSegmentID(seg)
+	return filepath.Join(m.dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
 // Refresh scans the directory and registers any new segments.
@@ -316,12 +317,49 @@ func listSegments(dir string) ([]segmentInfo, error) {
 		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
 			continue
 		}
-		core := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
-		seq, err := strconv.ParseUint(core, 10, 32)
-		if err != nil {
-			continue
+
+		parseLaneSeq := func(rest string) (uint32, uint32, bool) {
+			parts := strings.SplitN(rest, "-", 2)
+			if len(parts) != 2 {
+				return 0, 0, false
+			}
+			lane, err := strconv.ParseUint(parts[0], 10, 32)
+			if err != nil {
+				return 0, 0, false
+			}
+			seq, err := strconv.ParseUint(parts[1], 10, 32)
+			if err != nil {
+				return 0, 0, false
+			}
+			return uint32(lane), uint32(seq), true
 		}
-		id := page.ValueLogFileID(uint32(seq))
+
+		var (
+			id  uint32
+			err error
+		)
+		core := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+		if strings.HasPrefix(core, "l") {
+			lane, seq, ok := parseLaneSeq(strings.TrimPrefix(core, "l"))
+			if !ok {
+				continue
+			}
+			id, err = EncodeFileID(lane, seq)
+			if err != nil {
+				continue
+			}
+		} else {
+			seq, parseErr := strconv.ParseUint(core, 10, 32)
+			if parseErr != nil {
+				continue
+			}
+			if seq > maxSegmentSeq {
+				// Legacy segments use raw seq; skip ones that would collide with lane-encoded IDs.
+				continue
+			}
+			id = page.ValueLogFileID(uint32(seq))
+		}
+
 		segments = append(segments, segmentInfo{
 			id:   id,
 			path: filepath.Join(dir, name),

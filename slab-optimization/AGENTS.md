@@ -780,17 +780,45 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 - CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
 
+`2026-01-17 23:13:49 HST`
+- CI: `gh pr checks 63` → pending (windows-latest job still pending; others pass).
+
+`2026-01-17 23:14:06 HST`
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-18 00:20:33 HST`
+- Updated cached-mode tests for per-lane WAL/value-log writers in `TreeDB/caching/checkpoint_test.go`, `TreeDB/caching/delete_range_test.go`, `TreeDB/caching/dict_k_compression_test.go`, and `TreeDB/caching/unsafe_options_test.go`.
+- Added `.pr/PR5_description.md` with summary, tests, and unified_bench output.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-18 00:26:10 HST`
+- Commit: `PR5: parallel active journal lanes`.
+- Pushed branch `sprint/slabopt-pr5-parallel-lanes` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr4-dict-dynamick`): https://github.com/snissn/gomap/pull/64
+- CI: `gh pr checks 64 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
 `2026-01-18 08:58:31 HST`
 - PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
 
 `2026-01-18 08:59:33 HST`
 - Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
 
-`2026-01-18 09:14:11 HST`
-- PR3: merged `sprint/slabopt-pr3-rid-join` into `sprint/slabopt-pr4-dict-dynamick` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
+`2026-01-18 09:15:24 HST`
+- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
 
-`2026-01-18 09:22:54 HST`
-- PR4: handle zstd encoder/decoder creation errors in `TreeDB/internal/compression/profile.go`, remove dead baseline check, and pad reduced dictionaries in `TreeDB/internal/compression/trainer.go`.
+`2026-01-18 09:26:29 HST`
+- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` after resolving `slab-optimization/AGENTS.md`.
 
-`2026-01-18 09:23:59 HST`
-- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS
+`2026-01-18 09:42:31 HST`
+- PR5: skip empty commit batches, preserve legacy commit-log ordering, and clean up lane WAL/vlog writers on open failures.
+- PR5: document lane/segment limits in options and skip legacy value-log segments that would collide with lane-encoded IDs.
+- Updated unified bench outputs in `.pr/PR5_description.md`.
+- Tests: `go test ./TreeDB/caching -run "Race|Rotate|Consistency" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 1`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 500000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`

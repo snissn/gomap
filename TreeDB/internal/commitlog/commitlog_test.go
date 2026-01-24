@@ -18,9 +18,9 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 		t.Fatalf("new writer: %v", err)
 	}
 	records := []Record{
-		{Op: OpSetRID, Key: []byte("k1"), RID: 1},
-		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2")},
-		{Op: OpDelete, Key: []byte("k3")},
+		{Op: OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 1},
+		{Op: OpDelete, Key: []byte("k3"), Seq: 1},
 	}
 	if err := writer.AppendBatch(records); err != nil {
 		_ = writer.Close()
@@ -60,6 +60,10 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 			_ = reader.Close()
 			t.Fatalf("record %d rid mismatch", i)
 		}
+		if got[i].Seq != records[i].Seq {
+			_ = reader.Close()
+			t.Fatalf("record %d seq mismatch", i)
+		}
 	}
 	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
 		_ = reader.Close()
@@ -76,7 +80,7 @@ func TestCommitLogCorruptCRC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
-	if err := writer.AppendBatch([]Record{{Op: OpSetRID, Key: []byte("k"), RID: 1}}); err != nil {
+	if err := writer.AppendBatch([]Record{{Op: OpSetRID, Key: []byte("k"), RID: 1, Seq: 1}}); err != nil {
 		_ = writer.Close()
 		t.Fatalf("append: %v", err)
 	}

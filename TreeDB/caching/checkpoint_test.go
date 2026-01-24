@@ -24,7 +24,13 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 		t.Helper()
 		db.writeMu.Lock()
 		db.mu.Lock()
-		err := db.rotateWALLocked()
+		var err error
+		for i := range db.lanes {
+			err = db.rotateWALLocked(&db.lanes[i])
+			if err != nil {
+				break
+			}
+		}
 		db.mu.Unlock()
 		db.writeMu.Unlock()
 		if err != nil {
@@ -75,8 +81,8 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 		}
 		walFilesAfter++
 	}
-	if walFilesAfter != 1 {
-		t.Fatalf("expected exactly 1 WAL segment after checkpoint, got %d", walFilesAfter)
+	if walFilesAfter != len(db.lanes) {
+		t.Fatalf("expected exactly %d WAL segments after checkpoint, got %d", len(db.lanes), walFilesAfter)
 	}
 }
 
@@ -140,7 +146,13 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 		t.Helper()
 		db.writeMu.Lock()
 		db.mu.Lock()
-		err := db.rotateWALLocked()
+		var err error
+		for i := range db.lanes {
+			err = db.rotateWALLocked(&db.lanes[i])
+			if err != nil {
+				break
+			}
+		}
 		db.mu.Unlock()
 		db.writeMu.Unlock()
 		if err != nil {
@@ -187,7 +199,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 			}
 			walFiles++
 		}
-		if walFiles == 1 {
+		if walFiles == len(db.lanes) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -323,7 +335,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
 	preexisting := []string{
-		filepath.Join(walDir, "commit-000010.log"),
+		filepath.Join(walDir, "commit-l0-000010.log"),
 	}
 	for _, path := range preexisting {
 		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {

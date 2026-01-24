@@ -215,6 +215,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 		binary.LittleEndian.PutUint16(buf[off+1:off+3], keyLen)
 		binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 		binary.LittleEndian.PutUint64(buf[off+7:off+15], r.RID)
+		binary.LittleEndian.PutUint64(buf[off+15:off+23], r.Seq)
 		copy(buf[off+recordHeaderSize:], r.Key)
 		copy(buf[off+recordHeaderSize+len(r.Key):], r.Value)
 		off += recordHeaderSize + len(r.Key) + len(r.Value)

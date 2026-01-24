@@ -58,7 +58,7 @@ func TestReadOnlyDoesNotReplayOrRemoveCommitLog(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	commitPath := filepath.Join(walDir, "commit-000001.log")
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
 
 	ww, err := commitlog.NewWriter(commitPath)
 	if err != nil {
@@ -68,6 +68,7 @@ func TestReadOnlyDoesNotReplayOrRemoveCommitLog(t *testing.T) {
 		Op:    commitlog.OpSetInline,
 		Key:   []byte("k"),
 		Value: []byte("v"),
+		Seq:   1,
 	}}); err != nil {
 		_ = ww.Close()
 		t.Fatalf("commitlog.AppendBatch: %v", err)

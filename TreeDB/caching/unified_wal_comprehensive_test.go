@@ -105,7 +105,7 @@ func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 		t.Fatalf("mkdir wal: %v", err)
 	}
 
-	valuePath := filepath.Join(walDir, "value-000001.log")
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
 	writer, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
 	if err != nil {
 		t.Fatalf("valuelog.NewWriter: %v", err)
@@ -147,12 +147,12 @@ func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
 		t.Fatalf("mkdir wal: %v", err)
 	}
 
-	commitPath := filepath.Join(walDir, "commit-000001.log")
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
 	writer, err := commitlog.NewWriter(commitPath)
 	if err != nil {
 		t.Fatalf("commitlog.NewWriter: %v", err)
 	}
-	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k2"), RID: 1}
+	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k2"), RID: 1, Seq: 1}
 	if err := writer.AppendBatch([]commitlog.Record{rec}); err != nil {
 		_ = writer.Close()
 		t.Fatalf("commitlog.AppendBatch: %v", err)

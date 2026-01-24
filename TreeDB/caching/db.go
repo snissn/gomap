@@ -211,18 +211,117 @@ func (db *DB) walUsesValueLog() bool {
 	return false
 }
 
-func (db *DB) currentValueLogPath() string {
-	if db.splitValueLogEnabled() {
-		return db.vlogPath
+func (db *DB) pickLane(sync bool) (*lane, error) {
+	if db == nil || len(db.lanes) == 0 {
+		return nil, errWALUnavailable
 	}
-	return db.walPath
+	db.laneMu.Lock()
+	defer db.laneMu.Unlock()
+	for {
+		select {
+		case <-db.closeCh:
+			return nil, errWALClosed
+		default:
+		}
+		start := db.nextLane
+		for i := 0; i < len(db.lanes); i++ {
+			idx := (start + i) % len(db.lanes)
+			l := &db.lanes[idx]
+			if l.syncing.Load() {
+				continue
+			}
+			db.nextLane = (idx + 1) % len(db.lanes)
+			if sync {
+				l.syncing.Store(true)
+			}
+			return l, nil
+		}
+		db.laneCond.Wait()
+	}
 }
 
-func (db *DB) currentValueLogSeq() int {
-	if db.splitValueLogEnabled() {
-		return db.vlogSeq
+func (db *DB) releaseLaneSync(l *lane) {
+	if l == nil {
+		return
 	}
-	return db.walSeq
+	if !l.syncing.CompareAndSwap(true, false) {
+		return
+	}
+	db.laneMu.Lock()
+	db.laneCond.Broadcast()
+	db.laneMu.Unlock()
+}
+
+func (db *DB) currentValueLogPath(l *lane) string {
+	if l == nil {
+		return ""
+	}
+	if db.splitValueLogEnabled() {
+		l.vlogMu.Lock()
+		path := l.vlogPath
+		l.vlogMu.Unlock()
+		return path
+	}
+	l.walMu.Lock()
+	path := l.walPath
+	l.walMu.Unlock()
+	return path
+}
+
+func (db *DB) currentValueLogSeq(l *lane) int {
+	if l == nil {
+		return 0
+	}
+	if db.splitValueLogEnabled() {
+		l.vlogMu.Lock()
+		seq := l.vlogSeq
+		l.vlogMu.Unlock()
+		return seq
+	}
+	l.walMu.Lock()
+	seq := l.walSeq
+	l.walMu.Unlock()
+	return seq
+}
+
+func (db *DB) currentWALPaths() []string {
+	if db == nil || db.disableWAL {
+		return nil
+	}
+	paths := make([]string, 0, len(db.lanes))
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.walMu.Lock()
+		if l.walPath != "" {
+			paths = append(paths, l.walPath)
+		}
+		l.walMu.Unlock()
+	}
+	return paths
+}
+
+func (db *DB) currentValueLogPaths() []string {
+	if db == nil || !db.valueLogEnabled() {
+		return nil
+	}
+	paths := make([]string, 0, len(db.lanes))
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		if db.splitValueLogEnabled() {
+			l.vlogMu.Lock()
+			if l.vlogPath != "" {
+				paths = append(paths, l.vlogPath)
+			}
+			l.vlogMu.Unlock()
+			continue
+		}
+		l.walMu.Lock()
+		if l.walPath != "" {
+			paths = append(paths, l.walPath)
+		}
+		l.walMu.Unlock()
+	}
+	return paths
 }
 
 // SetDictStore installs the dictionary store for current-ID freezing.
@@ -263,37 +362,69 @@ func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
 		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
 	}
 	if db.memtableValueLogPointers && db.valueLogEnabled() {
-		db.mu.RLock()
-		curSeq := db.currentValueLogSeq()
-		db.mu.RUnlock()
-		if page.ValueLogFileID(uint32(curSeq)) == ptr.FileID {
-			if err := db.flushValueLog(); err != nil {
-				return nil, err
-			}
+		if err := db.flushValueLogForPtr(ptr); err != nil {
+			return nil, err
 		}
 	}
 	return db.valueLogReader.Read(ptr)
+}
+
+func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
+	if !db.valueLogEnabled() {
+		return nil
+	}
+	laneID, seq := valuelog.DecodeFileID(ptr.FileID)
+	if laneID >= uint32(len(db.lanes)) {
+		return nil
+	}
+	l := &db.lanes[laneID]
+	currentSeq := db.currentValueLogSeq(l)
+	if currentSeq == int(seq) {
+		return db.flushValueLogLane(l)
+	}
+	return nil
 }
 
 func (db *DB) flushValueLog() error {
 	if !db.valueLogEnabled() {
 		return nil
 	}
-	db.mu.RLock()
-	w := db.vlog
-	lock := &db.vlogMu
-	db.mu.RUnlock()
-	if w == nil {
+	for i := range db.lanes {
+		if err := db.flushValueLogLane(&db.lanes[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) flushValueLogLane(l *lane) error {
+	if l == nil {
 		return errWALUnavailable
 	}
-	lock.Lock()
+	if db.splitValueLogEnabled() {
+		l.vlogMu.Lock()
+		w := l.vlog
+		if w == nil {
+			l.vlogMu.Unlock()
+			return errWALUnavailable
+		}
+		err := w.Flush()
+		l.vlogMu.Unlock()
+		return err
+	}
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
 	err := w.Flush()
-	lock.Unlock()
+	l.walMu.Unlock()
 	return err
 }
 
-func (db *DB) logSegmentPrefix() string {
-	return "commit-"
+func (db *DB) logSegmentPrefix(laneID int) string {
+	return fmt.Sprintf("commit-l%d-", laneID)
 }
 
 func (db *DB) markValueLogRetain(path string) {
@@ -323,11 +454,17 @@ func (db *DB) dropValueLogSegment(path string) {
 	if db.valueLogReader == nil || path == "" {
 		return
 	}
-	seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+	laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
 	if !ok || !valueLog {
 		return
 	}
-	id := page.ValueLogFileID(uint32(seq))
+	if laneID < 0 {
+		return
+	}
+	id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+	if err != nil {
+		return
+	}
 	_ = db.valueLogReader.RemoveSegment(id)
 }
 
@@ -353,38 +490,41 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 	}
 	db.valueLogMu.Unlock()
 
-	var closedSizes map[string]int64
-	var currentPath string
-	var currentBytes int64
-	db.mu.RLock()
+	pathSizes := make(map[string]int64)
+	currentSizes := make(map[string]int64)
 	if db.splitValueLogEnabled() {
-		if len(db.vlogClosedSizes) > 0 {
-			closedSizes = make(map[string]int64, len(db.vlogClosedSizes))
-			for path, size := range db.vlogClosedSizes {
-				closedSizes[path] = size
+		for i := range db.lanes {
+			l := &db.lanes[i]
+			l.vlogMu.Lock()
+			for path, size := range l.vlogClosedSizes {
+				pathSizes[path] = size
 			}
+			if l.vlogPath != "" {
+				currentSizes[l.vlogPath] = l.vlogLiveBytes.Load()
+			}
+			l.vlogMu.Unlock()
 		}
-		currentPath = db.vlogPath
-		currentBytes = db.vlogLiveBytes.Load()
 	} else {
-		if len(db.walClosedSizes) > 0 {
-			closedSizes = make(map[string]int64, len(db.walClosedSizes))
-			for path, size := range db.walClosedSizes {
-				closedSizes[path] = size
+		for i := range db.lanes {
+			l := &db.lanes[i]
+			l.walMu.Lock()
+			for path, size := range l.walClosedSizes {
+				pathSizes[path] = size
 			}
+			if l.walPath != "" {
+				currentSizes[l.walPath] = l.walLiveBytes.Load()
+			}
+			l.walMu.Unlock()
 		}
-		currentPath = db.walPath
-		currentBytes = db.walLiveBytes.Load()
 	}
-	db.mu.RUnlock()
 
 	for _, path := range paths {
 		segments++
-		if path == currentPath {
-			bytes += currentBytes
+		if size, ok := currentSizes[path]; ok {
+			bytes += size
 			continue
 		}
-		if size, ok := closedSizes[path]; ok {
+		if size, ok := pathSizes[path]; ok {
 			bytes += size
 		}
 	}
@@ -484,23 +624,25 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 
 	inUse := make(map[string]struct{})
-	db.mu.RLock()
 	if db.splitValueLogEnabled() {
-		if db.vlogPath != "" {
-			inUse[db.vlogPath] = struct{}{}
-		}
-		for _, path := range db.queueValueLogPaths {
+		for _, path := range db.currentValueLogPaths() {
 			inUse[path] = struct{}{}
+		}
+		for _, paths := range db.queueValueLogPaths {
+			for _, path := range paths {
+				inUse[path] = struct{}{}
+			}
 		}
 	} else {
-		if db.walPath != "" {
-			inUse[db.walPath] = struct{}{}
-		}
-		for _, path := range db.queueWALPaths {
+		for _, path := range db.currentWALPaths() {
 			inUse[path] = struct{}{}
 		}
+		for _, paths := range db.queueWALPaths {
+			for _, path := range paths {
+				inUse[path] = struct{}{}
+			}
+		}
 	}
-	db.mu.RUnlock()
 
 	removed := false
 	marked := false
@@ -508,11 +650,17 @@ func (db *DB) pruneRetainedValueLogs() {
 		if _, ok := inUse[path]; ok {
 			continue
 		}
-		seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
 		if !ok || !valueLog {
 			continue
 		}
-		id := page.ValueLogFileID(uint32(seq))
+		if laneID < 0 {
+			continue
+		}
+		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+		if err != nil {
+			continue
+		}
 		if _, ok := live[id]; ok {
 			continue
 		}
@@ -628,6 +776,9 @@ type Options struct {
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
 	// segments, and WAL entries reference them via pointers.
 	SplitValueLog bool
+	// JournalLanes controls the number of active commit/value log lanes (0=default).
+	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
+	JournalLanes int
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
@@ -665,7 +816,6 @@ type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
 	writeMu sync.RWMutex
-	walMu   sync.Mutex
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
@@ -686,8 +836,8 @@ type DB struct {
 	memtables          atomic.Pointer[memtableView]
 	hashSortedIndexer  *memtable.HashSortedIndexer
 	queueRanges        []keyRange
-	queueWALPaths      []string
-	queueValueLogPaths []string
+	queueWALPaths      [][]string
+	queueValueLogPaths [][]string
 	queueLargePtrs     []*largePtrMap
 	backendRange       keyRange
 	backendRangeKnown  bool
@@ -695,32 +845,14 @@ type DB struct {
 	backendRangeErr    error
 
 	// Durability
-	wal           commitWriter
-	walPath       string
-	walSeq        int // Sequence number for WAL files
-	vlog          valueWriter
-	vlogPath      string
-	vlogSeq       int // Sequence number for value-log files
-	walCh         chan walWriteRequest
-	walStopCh     chan struct{}
+	lanes         []lane
+	laneMu        sync.Mutex
+	laneCond      *sync.Cond
+	nextLane      int
+	nextCommitSeq atomic.Uint64
 	walAckMu      sync.Mutex
 	walErr        error
-	walFastMu     sync.Mutex
-	walFastCond   *sync.Cond
-	walFastQueue  []walFastItem
-	walFastHead   int
-	walFastClosed bool
-	// walClosedBytes is an in-memory estimate of retained (non-current) WAL
-	// segment bytes. It is updated on WAL rotation and segment deletion.
-	walClosedBytes atomic.Int64
-	// walLiveBytes tracks the current WAL size to avoid lock contention.
-	walLiveBytes    atomic.Int64
-	walClosedSizes  map[string]int64
-	vlogMu          sync.Mutex
-	vlogClosedBytes atomic.Int64
-	vlogLiveBytes   atomic.Int64
-	vlogClosedSizes map[string]int64
-	nextRID         atomic.Uint64
+	nextRID       atomic.Uint64
 
 	disableValueLog              bool
 	splitValueLog                bool
@@ -1210,16 +1342,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
-	maxWALSeq := 0
-	maxVlogSeq := 0
+	maxLaneID := -1
+	maxWALSeq := make(map[int]int)
+	maxVlogSeq := make(map[int]int)
 	for _, seg := range segments {
-		if seg.valueLog {
-			if seg.seq > maxVlogSeq {
-				maxVlogSeq = seg.seq
-			}
-		} else if seg.seq > maxWALSeq {
-			maxWALSeq = seg.seq
+		if seg.lane > maxLaneID {
+			maxLaneID = seg.lane
 		}
+		if seg.valueLog {
+			if seg.seq > maxVlogSeq[seg.lane] {
+				maxVlogSeq[seg.lane] = seg.seq
+			}
+		} else if seg.seq > maxWALSeq[seg.lane] {
+			maxWALSeq[seg.lane] = seg.seq
+		}
+	}
+	laneCount := opts.JournalLanes
+	if laneCount <= 0 {
+		laneCount = 1
+	}
+	if maxLaneID+1 > laneCount {
+		laneCount = maxLaneID + 1
 	}
 
 	inlineThreshold := page.DefaultInlineThreshold
@@ -1282,10 +1425,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	debugFlushPointers := envBool(envDebugFlushPointers)
 
-	walSeq := maxWALSeq
 	splitValueLog := opts.SplitValueLog
 	if !disableValueLog {
 		splitValueLog = true
+	}
+	lanes := make([]lane, laneCount)
+	for i := range lanes {
+		lanes[i].id = i
+		lanes[i].walSeq = maxWALSeq[i]
+		lanes[i].vlogSeq = maxVlogSeq[i]
 	}
 
 	db := &DB{
@@ -1326,58 +1474,70 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCh:                      make(chan struct{}, 1),
 		autoCheckpointOnceCh:         make(chan struct{}, 1),
 		autoCheckpointWriteCh:        make(chan struct{}, 1),
-		walSeq:                       walSeq,
-		vlogSeq:                      maxVlogSeq,
+		lanes:                        lanes,
 	}
 	db.bpCond = sync.NewCond(&db.bpMu)
+	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial WAL
 	if !db.disableWAL {
-		if err := db.rotateWALLocked(); err != nil {
-			if db.valueLogReader != nil {
-				_ = db.valueLogReader.Close()
-				db.valueLogReader = nil
+		for i := range db.lanes {
+			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.Close()
+					db.valueLogReader = nil
+				}
+				for j := 0; j <= i && j < len(db.lanes); j++ {
+					db.cleanupLaneWALWriters(&db.lanes[j])
+				}
+				return nil, err
 			}
-			return nil, err
 		}
 		if len(segments) > 0 {
-			db.mu.Lock()
-			if db.walClosedSizes == nil {
-				db.walClosedSizes = make(map[string]int64, len(segments))
-			}
-			if db.splitValueLogEnabled() && db.vlogClosedSizes == nil {
-				db.vlogClosedSizes = make(map[string]int64, len(segments))
-			}
 			for _, seg := range segments {
+				if seg.lane < 0 || seg.lane >= len(db.lanes) {
+					continue
+				}
+				l := &db.lanes[seg.lane]
 				if db.splitValueLogEnabled() {
 					if seg.valueLog {
-						if seg.path == db.vlogPath {
+						if seg.path == l.vlogPath {
 							continue
 						}
-						db.vlogClosedSizes[seg.path] = seg.size
-						db.vlogClosedBytes.Add(seg.size)
+						if l.vlogClosedSizes == nil {
+							l.vlogClosedSizes = make(map[string]int64)
+						}
+						l.vlogClosedSizes[seg.path] = seg.size
+						l.vlogClosedBytes.Add(seg.size)
 					} else {
-						if seg.path == db.walPath {
+						if seg.path == l.walPath {
 							continue
 						}
-						db.walClosedSizes[seg.path] = seg.size
-						db.walClosedBytes.Add(seg.size)
+						if l.walClosedSizes == nil {
+							l.walClosedSizes = make(map[string]int64)
+						}
+						l.walClosedSizes[seg.path] = seg.size
+						l.walClosedBytes.Add(seg.size)
 					}
 					continue
 				}
 				if seg.valueLog != db.walUsesValueLog() {
 					continue
 				}
-				if seg.path == db.walPath {
+				if seg.path == l.walPath {
 					continue
 				}
-				db.walClosedSizes[seg.path] = seg.size
-				db.walClosedBytes.Add(seg.size)
+				if l.walClosedSizes == nil {
+					l.walClosedSizes = make(map[string]int64)
+				}
+				l.walClosedSizes[seg.path] = seg.size
+				l.walClosedBytes.Add(seg.size)
 			}
-			db.mu.Unlock()
 		}
-		db.startWALWriter()
+		for i := range db.lanes {
+			db.startWALWriter(&db.lanes[i])
+		}
 	}
 
 	// Publish initial memtable snapshot for lock-free reads.
@@ -1551,7 +1711,12 @@ func (db *DB) effectiveWALBytes() int64 {
 	if db == nil {
 		return 0
 	}
-	return db.walClosedBytes.Load() + db.walLiveBytes.Load()
+	var total int64
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		total += l.walClosedBytes.Load() + l.walLiveBytes.Load()
+	}
+	return total
 }
 
 func (db *DB) reclaimableWALBytes() int64 {
@@ -1592,7 +1757,7 @@ func (db *DB) minIdleCheckpointWALBytes() int64 {
 const (
 	commitLogSegmentHeaderBytes = 8
 	commitLogBatchHeaderBytes   = 1 + 4
-	commitLogRecordHeaderBytes  = 1 + 2 + 4 + 8
+	commitLogRecordHeaderBytes  = 1 + 2 + 4 + 8 + 8
 )
 
 func (db *DB) logRecordSize(key, value []byte) int64 {
@@ -1608,6 +1773,16 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 		total += commitLogRecordHeaderBytes + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+func (db *DB) assignCommitSeq(records []logRecord) {
+	if len(records) == 0 {
+		return
+	}
+	seq := db.nextCommitSeq.Add(1)
+	for i := range records {
+		records[i].Seq = seq
+	}
 }
 
 type walWriteRequest struct {
@@ -1667,19 +1842,20 @@ const (
 	walFastQueueMax  = 16384
 )
 
-func (db *DB) startWALWriter() {
-	db.walCh = make(chan walWriteRequest, walWriteBuffer)
-	db.walStopCh = make(chan struct{})
-	db.walFastCond = sync.NewCond(&db.walFastMu)
+func (db *DB) startWALWriter(l *lane) {
+	if l == nil {
+		return
+	}
+	l.walCh = make(chan walWriteRequest, walWriteBuffer)
+	l.walFastCond = sync.NewCond(&l.walFastMu)
 	db.wg.Add(1)
-	go db.walWriteLoop()
+	go db.walWriteLoop(l)
 	db.wg.Add(1)
-	go db.walFastLoop()
+	go db.walFastLoop(l)
 }
 
-func (db *DB) walWriteLoop() {
+func (db *DB) walWriteLoop(l *lane) {
 	defer db.wg.Done()
-	defer close(db.walStopCh)
 
 	batch := make([]walWriteRequest, 0, walWriteBatchMax)
 	for {
@@ -1688,16 +1864,16 @@ func (db *DB) walWriteLoop() {
 		var req walWriteRequest
 		select {
 		case <-db.closeCh:
-			db.drainWALWriter(batch)
+			db.drainWALWriter(l, batch)
 			return
-		case req = <-db.walCh:
+		case req = <-l.walCh:
 		}
 		batch = append(batch, req)
 
 	drain:
 		for len(batch) < walWriteBatchMax {
 			select {
-			case req = <-db.walCh:
+			case req = <-l.walCh:
 				batch = append(batch, req)
 			default:
 				break drain
@@ -1712,7 +1888,7 @@ func (db *DB) walWriteLoop() {
 			continue
 		}
 
-		err := db.flushWALRequests(batch)
+		err := db.flushWALRequests(l, batch)
 		if err != nil {
 			db.walAckMu.Lock()
 			if db.walErr == nil {
@@ -1728,23 +1904,23 @@ func (db *DB) walWriteLoop() {
 	}
 }
 
-func (db *DB) walFastLoop() {
+func (db *DB) walFastLoop(l *lane) {
 	defer db.wg.Done()
 
 	batch := make([]walFastItem, 0, walFastBatchMax)
 	records := make([]logRecord, 0, walFastBatchMax)
 
 	for {
-		db.walFastMu.Lock()
-		for !db.walFastClosed && len(db.walFastQueue)-db.walFastHead == 0 {
-			db.walFastCond.Wait()
+		l.walFastMu.Lock()
+		for !l.walFastClosed && len(l.walFastQueue)-l.walFastHead == 0 {
+			l.walFastCond.Wait()
 		}
 
-		if db.walFastClosed {
-			batch = append(batch[:0], db.walFastQueue[db.walFastHead:]...)
-			db.walFastQueue = nil
-			db.walFastHead = 0
-			db.walFastMu.Unlock()
+		if l.walFastClosed {
+			batch = append(batch[:0], l.walFastQueue[l.walFastHead:]...)
+			l.walFastQueue = nil
+			l.walFastHead = 0
+			l.walFastMu.Unlock()
 
 			for i := range batch {
 				ack := batch[i].ack
@@ -1754,30 +1930,30 @@ func (db *DB) walFastLoop() {
 			return
 		}
 
-		available := len(db.walFastQueue) - db.walFastHead
+		available := len(l.walFastQueue) - l.walFastHead
 		n := available
 		if n > walFastBatchMax {
 			n = walFastBatchMax
 		}
-		batch = append(batch[:0], db.walFastQueue[db.walFastHead:db.walFastHead+n]...)
-		db.walFastHead += n
+		batch = append(batch[:0], l.walFastQueue[l.walFastHead:l.walFastHead+n]...)
+		l.walFastHead += n
 
-		if db.walFastHead == len(db.walFastQueue) {
-			db.walFastQueue = db.walFastQueue[:0]
-			db.walFastHead = 0
-		} else if db.walFastHead > 1024 && db.walFastHead*2 >= len(db.walFastQueue) {
-			copy(db.walFastQueue, db.walFastQueue[db.walFastHead:])
-			db.walFastQueue = db.walFastQueue[:len(db.walFastQueue)-db.walFastHead]
-			db.walFastHead = 0
+		if l.walFastHead == len(l.walFastQueue) {
+			l.walFastQueue = l.walFastQueue[:0]
+			l.walFastHead = 0
+		} else if l.walFastHead > 1024 && l.walFastHead*2 >= len(l.walFastQueue) {
+			copy(l.walFastQueue, l.walFastQueue[l.walFastHead:])
+			l.walFastQueue = l.walFastQueue[:len(l.walFastQueue)-l.walFastHead]
+			l.walFastHead = 0
 		}
-		db.walFastCond.Broadcast()
-		db.walFastMu.Unlock()
+		l.walFastCond.Broadcast()
+		l.walFastMu.Unlock()
 
 		records = records[:0]
 		for i := range batch {
 			records = append(records, batch[i].record)
 		}
-		err := db.appendWALDirect(records, false)
+		err := db.appendWALDirect(l, records, false)
 		for i := range batch {
 			ack := batch[i].ack
 			ack.err = err
@@ -1786,15 +1962,15 @@ func (db *DB) walFastLoop() {
 	}
 }
 
-func (db *DB) drainWALWriter(batch []walWriteRequest) {
+func (db *DB) drainWALWriter(l *lane, batch []walWriteRequest) {
 	for {
 		select {
-		case req := <-db.walCh:
+		case req := <-l.walCh:
 			batch = append(batch[:0], req)
 		drain:
 			for len(batch) < walWriteBatchMax {
 				select {
-				case req = <-db.walCh:
+				case req = <-l.walCh:
 					batch = append(batch, req)
 				default:
 					break drain
@@ -1808,7 +1984,7 @@ func (db *DB) drainWALWriter(batch []walWriteRequest) {
 				continue
 			}
 
-			err := db.flushWALRequests(batch)
+			err := db.flushWALRequests(l, batch)
 			if err != nil {
 				db.walAckMu.Lock()
 				if db.walErr == nil {
@@ -1837,15 +2013,11 @@ func (db *DB) finishWALRequests(requests []walWriteRequest, err error) {
 	}
 }
 
-func (db *DB) flushWALRequests(requests []walWriteRequest) error {
+func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 	if len(requests) == 0 {
 		return nil
 	}
-
-	db.mu.RLock()
-	w := db.wal
-	db.mu.RUnlock()
-	if w == nil {
+	if l == nil {
 		return errWALUnavailable
 	}
 
@@ -1854,21 +2026,26 @@ func (db *DB) flushWALRequests(requests []walWriteRequest) error {
 		needSync   bool
 	)
 
-	db.walMu.Lock()
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
 	for i := range requests {
 		req := &requests[i]
 		if len(req.records) == 1 {
 			rec := req.records[0]
 			err := w.Append(rec)
 			if err != nil {
-				db.walMu.Unlock()
+				l.walMu.Unlock()
 				return err
 			}
 			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
 			err := w.AppendBatch(req.records)
 			if err != nil {
-				db.walMu.Unlock()
+				l.walMu.Unlock()
 				return err
 			}
 			totalBytes += db.logBatchSize(req.records)
@@ -1879,14 +2056,14 @@ func (db *DB) flushWALRequests(requests []walWriteRequest) error {
 	}
 	if needSync {
 		if err := w.Sync(); err != nil {
-			db.walMu.Unlock()
+			l.walMu.Unlock()
 			return err
 		}
 	}
-	db.walMu.Unlock()
+	l.walMu.Unlock()
 
 	if totalBytes > 0 {
-		db.walLiveBytes.Add(totalBytes)
+		l.walLiveBytes.Add(totalBytes)
 	}
 	return nil
 }
@@ -1902,12 +2079,15 @@ const (
 	journalDurabilitySync
 )
 
-func (db *DB) appendWAL(records []logRecord, durability journalDurability) error {
+func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurability) error {
 	if db.disableWAL {
 		return nil
 	}
 	if len(records) == 0 {
 		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
 	}
 	select {
 	case <-db.closeCh:
@@ -1922,13 +2102,15 @@ func (db *DB) appendWAL(records []logRecord, durability journalDurability) error
 	}
 	db.walAckMu.Unlock()
 
+	db.assignCommitSeq(records)
+
 	switch durability {
 	case journalDurabilitySync:
-		return db.appendWALDirect(records, true)
+		return db.appendWALDirect(l, records, true)
 	case journalDurabilityFlush:
-		return db.appendWALInline(records, true)
+		return db.appendWALInline(l, records, true)
 	default:
-		return db.appendWALInline(records, false)
+		return db.appendWALInline(l, records, false)
 	}
 }
 
@@ -1953,23 +2135,20 @@ func chooseValueLogK(dict []byte, records []valuelog.Record) int {
 	return profile.K
 }
 
-func (db *DB) appendValueLog(dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
 	if len(records) == 0 {
 		return nil, nil
 	}
+	if l == nil {
+		return nil, errWALUnavailable
+	}
 	select {
 	case <-db.closeCh:
 		return nil, errWALClosed
 	default:
-	}
-	db.mu.RLock()
-	w := db.vlog
-	db.mu.RUnlock()
-	if w == nil {
-		return nil, errWALUnavailable
 	}
 
 	var (
@@ -1977,7 +2156,12 @@ func (db *DB) appendValueLog(dictID uint64, dict []byte, records []valuelog.Reco
 		ptrs       []page.ValuePtr
 		err        error
 	)
-	db.vlogMu.Lock()
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return nil, errWALUnavailable
+	}
 	startSize := w.Size()
 	k := chooseValueLogK(dict, records)
 	if k <= 0 {
@@ -2007,21 +2191,18 @@ func (db *DB) appendValueLog(dictID uint64, dict []byte, records []valuelog.Reco
 	if err == nil {
 		totalBytes = w.Size() - startSize
 	}
-	db.vlogMu.Unlock()
+	l.vlogMu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 	if totalBytes > 0 {
-		db.vlogLiveBytes.Add(totalBytes)
+		l.vlogLiveBytes.Add(totalBytes)
 	}
 	return ptrs, nil
 }
 
-func (db *DB) appendWALInline(records []logRecord, flush bool) error {
-	db.mu.RLock()
-	w := db.wal
-	db.mu.RUnlock()
-	if w == nil {
+func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
+	if l == nil {
 		return errWALUnavailable
 	}
 
@@ -2030,7 +2211,12 @@ func (db *DB) appendWALInline(records []logRecord, flush bool) error {
 		err        error
 	)
 
-	db.walMu.Lock()
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
 	if len(records) == 1 {
 		rec := records[0]
 		err = w.Append(rec)
@@ -2042,7 +2228,7 @@ func (db *DB) appendWALInline(records []logRecord, flush bool) error {
 	if err == nil && flush {
 		err = w.Flush()
 	}
-	db.walMu.Unlock()
+	l.walMu.Unlock()
 
 	if err != nil {
 		db.walAckMu.Lock()
@@ -2054,19 +2240,22 @@ func (db *DB) appendWALInline(records []logRecord, flush bool) error {
 	}
 
 	if totalBytes > 0 {
-		db.walLiveBytes.Add(totalBytes)
+		l.walLiveBytes.Add(totalBytes)
 	}
 	return nil
 }
 
-func (db *DB) appendWALDirect(records []logRecord, sync bool) error {
+func (db *DB) appendWALDirect(l *lane, records []logRecord, sync bool) error {
+	if l == nil {
+		return errWALUnavailable
+	}
 	ack := walAckPool.Get().(*walAck)
 	ack.err = nil
 	ack.wg.Add(1)
 
 	req := walWriteRequest{records: records, sync: sync, ack: ack}
 	select {
-	case db.walCh <- req:
+	case l.walCh <- req:
 		// wait for ack
 	case <-db.closeCh:
 		ack.err = errWALClosed
@@ -2081,25 +2270,34 @@ func (db *DB) appendWALDirect(records []logRecord, sync bool) error {
 	return err
 }
 
-func (db *DB) appendWALFast(record logRecord) error {
+func (db *DB) appendWALFast(l *lane, record logRecord) error {
 	ack := walAckPool.Get().(*walAck)
 	ack.err = nil
 	ack.wg.Add(1)
 
-	db.walFastMu.Lock()
-	for !db.walFastClosed && len(db.walFastQueue)-db.walFastHead >= walFastQueueMax {
-		db.walFastCond.Wait()
+	if l == nil {
+		ack.err = errWALUnavailable
+		ack.wg.Done()
+		walAckPool.Put(ack)
+		return errWALUnavailable
 	}
-	if db.walFastClosed {
-		db.walFastMu.Unlock()
+
+	record.Seq = db.nextCommitSeq.Add(1)
+
+	l.walFastMu.Lock()
+	for !l.walFastClosed && len(l.walFastQueue)-l.walFastHead >= walFastQueueMax {
+		l.walFastCond.Wait()
+	}
+	if l.walFastClosed {
+		l.walFastMu.Unlock()
 		ack.err = errWALClosed
 		ack.wg.Done()
 		walAckPool.Put(ack)
 		return errWALClosed
 	}
-	db.walFastQueue = append(db.walFastQueue, walFastItem{record: record, ack: ack})
-	db.walFastCond.Signal()
-	db.walFastMu.Unlock()
+	l.walFastQueue = append(l.walFastQueue, walFastItem{record: record, ack: ack})
+	l.walFastCond.Signal()
+	l.walFastMu.Unlock()
 
 	ack.wg.Wait()
 	err := ack.err
@@ -2345,12 +2543,13 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 	}
-	if err := db.rotateWALLocked(); err != nil {
-		db.mu.Unlock()
-		return err
-	}
 	walDir := db.dir
 	db.mu.Unlock()
+	for i := range db.lanes {
+		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
+			return err
+		}
+	}
 
 	// Flush all queued memtables with backend sync.
 	for db.flushCombinedLocked(true) {
@@ -2383,14 +2582,15 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 
-	db.mu.RLock()
-	currentWAL := db.walPath
-	db.mu.RUnlock()
+	currentWALs := make(map[string]struct{})
+	for _, path := range db.currentWALPaths() {
+		currentWALs[path] = struct{}{}
+	}
 
 	removed := false
 	for _, seg := range segments {
 		path := seg.path
-		if path == currentWAL {
+		if _, ok := currentWALs[path]; ok {
 			continue
 		}
 		if db.valueLogRetained(path) {
@@ -2539,12 +2739,15 @@ func (db *DB) Close() error {
 	}
 	db.mu.Unlock()
 
-	db.walFastMu.Lock()
-	db.walFastClosed = true
-	if db.walFastCond != nil {
-		db.walFastCond.Broadcast()
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.walFastMu.Lock()
+		l.walFastClosed = true
+		if l.walFastCond != nil {
+			l.walFastCond.Broadcast()
+		}
+		l.walFastMu.Unlock()
 	}
-	db.walFastMu.Unlock()
 
 	close(db.closeCh)
 	db.writeMu.Unlock()
@@ -2562,34 +2765,35 @@ func (db *DB) Close() error {
 
 	var walBytes int64
 	var walPaths []string
-
-	db.mu.Lock()
-	walBytes = db.walClosedBytes.Load()
-	if len(db.walClosedSizes) > 0 {
-		walPaths = make([]string, 0, len(db.walClosedSizes)+1)
-		for path := range db.walClosedSizes {
+	walPaths = make([]string, 0, len(db.lanes))
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.walMu.Lock()
+		walBytes += l.walClosedBytes.Load()
+		for path := range l.walClosedSizes {
 			walPaths = append(walPaths, path)
 		}
-	} else {
-		walPaths = make([]string, 0, 1)
-	}
-	if db.wal != nil {
-		walBytes += db.wal.Size()
-		db.walLiveBytes.Store(0)
-		if db.walPath != "" {
-			walPaths = append(walPaths, db.walPath)
+		if l.wal != nil {
+			walBytes += l.wal.Size()
+			l.walLiveBytes.Store(0)
+			if l.walPath != "" {
+				walPaths = append(walPaths, l.walPath)
+			}
+			_ = l.wal.Close()
+			l.wal = nil
+		} else if l.walPath != "" {
+			walPaths = append(walPaths, l.walPath)
 		}
-		_ = db.wal.Close()
-		db.wal = nil
-	} else if db.walPath != "" {
-		walPaths = append(walPaths, db.walPath)
+		l.walMu.Unlock()
+
+		l.vlogMu.Lock()
+		if l.vlog != nil {
+			_ = l.vlog.Close()
+			l.vlog = nil
+			l.vlogLiveBytes.Store(0)
+		}
+		l.vlogMu.Unlock()
 	}
-	if db.vlog != nil {
-		_ = db.vlog.Close()
-		db.vlog = nil
-		db.vlogLiveBytes.Store(0)
-	}
-	db.mu.Unlock()
 
 	if walBytes > 0 && !hadMemtables {
 		backendBatch := db.backend.NewBatch()
@@ -2734,6 +2938,14 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
+		lane, err := db.pickLane(durability == journalDurabilitySync)
+		if err != nil {
+			db.writeMu.RUnlock()
+			return err
+		}
+		if durability == journalDurabilitySync {
+			defer db.releaseLaneSync(lane)
+		}
 		eligible := len(value) > db.valueLogThreshold
 		valueLogEnabled := db.valueLogEnabled()
 		allowPointers := valueLogEnabled && db.allowValueLogPointers()
@@ -2748,7 +2960,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				db.writeMu.RUnlock()
 				return err
 			}
-			ptrs, err := db.appendValueLog(dictID, dictBytes, []valuelog.Record{{RID: rid, Value: value}}, durability)
+			ptrs, err := db.appendValueLog(lane, dictID, dictBytes, []valuelog.Record{{RID: rid, Value: value}}, durability)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -2759,14 +2971,12 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				if debugPtr {
 					db.debugPtrUsed.Add(1)
 				}
-				db.mu.RLock()
-				retainPath = db.currentValueLogPath()
-				db.mu.RUnlock()
+				retainPath = db.currentValueLogPath(lane)
 			} else if debugPtr {
 				db.debugPtrNoPtr.Add(1)
 			}
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
-			if err := db.appendWAL([]logRecord{rec}, durability); err != nil {
+			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
 			}
@@ -2779,7 +2989,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 				}
 			}
 			rec := logRecord{Op: logOpSetInline, Key: key, Value: value}
-			if err := db.appendWAL([]logRecord{rec}, durability); err != nil {
+			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
 			}
@@ -2975,12 +3185,16 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return nil
 		}
 
+		lane, err := db.pickLane(false)
+		if err != nil {
+			return err
+		}
 		for it.Valid() {
 			key := it.Key()
 			if err := preRotate(key); err != nil {
 				return err
 			}
-			if err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, journalDurabilityNone); err != nil {
+			if err := db.appendWAL(lane, []logRecord{{Op: logOpDelete, Key: key}}, journalDurabilityNone); err != nil {
 				return err
 			}
 			if err := applyDelete(key); err != nil {
@@ -3245,12 +3459,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
 				} else {
-					dstWALPaths = append(dstWALPaths, "")
+					dstWALPaths = append(dstWALPaths, nil)
 				}
 				if i < len(db.queueValueLogPaths) {
 					dstValueLogPaths = append(dstValueLogPaths, db.queueValueLogPaths[i])
 				} else {
-					dstValueLogPaths = append(dstValueLogPaths, "")
+					dstValueLogPaths = append(dstValueLogPaths, nil)
 				}
 				if i < len(db.queueLargePtrs) {
 					dstLargePtrs = append(dstLargePtrs, db.queueLargePtrs[i])
@@ -3459,8 +3673,16 @@ func (db *DB) delete(key []byte, sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
+		lane, err := db.pickLane(durability == journalDurabilitySync)
+		if err != nil {
+			db.writeMu.RUnlock()
+			return err
+		}
+		if durability == journalDurabilitySync {
+			defer db.releaseLaneSync(lane)
+		}
 		rec := logRecord{Op: logOpDelete, Key: key}
-		if err := db.appendWAL([]logRecord{rec}, durability); err != nil {
+		if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
@@ -3513,14 +3735,31 @@ func (db *DB) delete(key []byte, sync bool) error {
 	return nil
 }
 
+func (db *DB) canReuseWALSegments() bool {
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.walMu.Lock()
+		w := l.wal
+		live := l.walLiveBytes.Load()
+		l.walMu.Unlock()
+		if w == nil {
+			return false
+		}
+		if live >= 10*1024*1024 {
+			return false
+		}
+	}
+	return true
+}
+
 func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
-	walPath := ""
-	valueLogPath := ""
+	var walPaths []string
+	var valueLogPaths []string
 	if !db.disableWAL {
-		walPath = db.walPath
+		walPaths = db.currentWALPaths()
 	}
 	if db.valueLogEnabled() {
-		valueLogPath = db.currentValueLogPath()
+		valueLogPaths = db.currentValueLogPaths()
 	}
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
@@ -3540,8 +3779,8 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queue = append(db.queue, shard.mem)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPath)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPath)
+		db.queueWALPaths = append(db.queueWALPaths, walPaths)
+		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
 		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
@@ -3564,7 +3803,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
 	if !db.disableWAL {
-		if db.wal != nil && db.walLiveBytes.Load() < 10*1024*1024 {
+		if db.canReuseWALSegments() {
 			if triggerFlush {
 				select {
 				case db.flushCh <- struct{}{}:
@@ -3573,13 +3812,11 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			}
 			return nil
 		}
-
-		if err := db.rotateWALLocked(); err != nil {
-			return err
+		for i := range db.lanes {
+			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
+				return err
+			}
 		}
-	} else {
-		// WAL disabled: just trigger flush if needed
-		db.walPath = "" // Ensure no WAL path is tracked
 	}
 
 	if triggerFlush {
@@ -3646,13 +3883,13 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 	}
-	walPath := ""
+	var walPaths []string
 	if !db.disableWAL {
-		walPath = db.walPath
+		walPaths = db.currentWALPaths()
 	}
-	valueLogPath := ""
+	var valueLogPaths []string
 	if db.valueLogEnabled() {
-		valueLogPath = db.currentValueLogPath()
+		valueLogPaths = db.currentValueLogPaths()
 	}
 
 	locked := make([]*memShard, 0, len(db.mutableShards))
@@ -3679,8 +3916,8 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queue = append(db.queue, shard.mem)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPath)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPath)
+		db.queueWALPaths = append(db.queueWALPaths, walPaths)
+		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 		db.queueLargePtrs = append(db.queueLargePtrs, shard.largePtrs)
 
 		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
@@ -3711,125 +3948,166 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	return nil
 }
 
-func (db *DB) rotateWALLocked() error {
+func (db *DB) cleanupLaneWALWriters(l *lane) {
+	if l == nil {
+		return
+	}
+	l.walMu.Lock()
+	if l.wal != nil {
+		_ = l.wal.Close()
+		l.wal = nil
+	}
+	l.walMu.Unlock()
+	l.vlogMu.Lock()
+	if l.vlog != nil {
+		_ = l.vlog.Close()
+		l.vlog = nil
+	}
+	l.vlogMu.Unlock()
+}
+
+func (db *DB) rotateWALLocked(l *lane) error {
 	if db.disableWAL {
 		return nil
 	}
-	db.walMu.Lock()
-	defer db.walMu.Unlock()
-	db.walSeq++
-	name := fmt.Sprintf("%s%06d.log", db.logSegmentPrefix(), db.walSeq)
+	if l == nil {
+		return errWALUnavailable
+	}
+	l.walMu.Lock()
+	defer l.walMu.Unlock()
+	l.walSeq++
+	name := commitLogName(l.id, l.walSeq)
 	path := filepath.Join(db.dir, name)
 
-	if db.wal != nil {
-		oldPath := db.walPath
-		oldSize := db.wal.Size()
-		if err := db.wal.RotateTo(path); err != nil {
+	if l.wal != nil {
+		oldPath := l.walPath
+		oldSize := l.wal.Size()
+		if err := l.wal.RotateTo(path); err != nil {
 			return err
 		}
-		db.walLiveBytes.Store(0)
+		l.walLiveBytes.Store(0)
 		if oldPath != "" {
-			if db.walClosedSizes == nil {
-				db.walClosedSizes = make(map[string]int64)
+			if l.walClosedSizes == nil {
+				l.walClosedSizes = make(map[string]int64)
 			}
-			prev := db.walClosedSizes[oldPath]
-			db.walClosedSizes[oldPath] = oldSize
-			db.walClosedBytes.Add(oldSize - prev)
+			prev := l.walClosedSizes[oldPath]
+			l.walClosedSizes[oldPath] = oldSize
+			l.walClosedBytes.Add(oldSize - prev)
 		}
 	} else {
 		w, err := commitlog.NewWriterWithOptions(path, commitlog.Options{MaxSegmentSize: db.walMaxSegmentBytes})
 		if err != nil {
 			return err
 		}
-		db.wal = w
-		db.walLiveBytes.Store(0)
+		l.wal = w
+		l.walLiveBytes.Store(0)
 	}
-	db.walPath = path
-	db.walLiveBytes.Store(0)
+	l.walPath = path
+	l.walLiveBytes.Store(0)
 	if db.splitValueLogEnabled() {
-		if err := db.rotateValueLogLocked(); err != nil {
+		if err := db.rotateValueLogLocked(l); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (db *DB) rotateValueLogLocked() error {
+func (db *DB) rotateValueLogLocked(l *lane) error {
 	if !db.splitValueLogEnabled() {
 		return nil
 	}
-	db.vlogMu.Lock()
-	defer db.vlogMu.Unlock()
-	db.vlogSeq++
-	name := fmt.Sprintf("value-%06d.log", db.vlogSeq)
+	if l == nil {
+		return errWALUnavailable
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	l.vlogSeq++
+	name := valueLogName(l.id, l.vlogSeq)
 	path := filepath.Join(db.dir, name)
-	fileID := page.ValueLogFileID(uint32(db.vlogSeq))
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+	if err != nil {
+		return err
+	}
 
-	if db.vlog != nil {
-		oldPath := db.vlogPath
-		oldSize := db.vlog.Size()
-		if err := db.vlog.RotateTo(path, fileID); err != nil {
+	if l.vlog != nil {
+		oldPath := l.vlogPath
+		oldSize := l.vlog.Size()
+		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
 		}
-		db.vlogLiveBytes.Store(0)
+		l.vlogLiveBytes.Store(0)
 		if oldPath != "" {
-			if db.vlogClosedSizes == nil {
-				db.vlogClosedSizes = make(map[string]int64)
+			if l.vlogClosedSizes == nil {
+				l.vlogClosedSizes = make(map[string]int64)
 			}
-			prev := db.vlogClosedSizes[oldPath]
-			db.vlogClosedSizes[oldPath] = oldSize
-			db.vlogClosedBytes.Add(oldSize - prev)
+			prev := l.vlogClosedSizes[oldPath]
+			l.vlogClosedSizes[oldPath] = oldSize
+			l.vlogClosedBytes.Add(oldSize - prev)
 		}
 	} else {
 		w, err := valuelog.NewWriter(path, fileID)
 		if err != nil {
 			return err
 		}
-		db.vlog = w
-		db.vlogLiveBytes.Store(0)
+		l.vlog = w
+		l.vlogLiveBytes.Store(0)
 	}
-	db.vlogPath = path
-	db.vlogLiveBytes.Store(0)
+	l.vlogPath = path
+	l.vlogLiveBytes.Store(0)
 	return nil
 }
 
 func (db *DB) untrackWALSegmentLocked(path string) {
-	if db.walClosedSizes == nil || path == "" {
+	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
+	if !ok || laneID < 0 || laneID >= len(db.lanes) {
 		return
 	}
-	size, ok := db.walClosedSizes[path]
+	l := &db.lanes[laneID]
+	l.walMu.Lock()
+	defer l.walMu.Unlock()
+	if l.walClosedSizes == nil || path == "" {
+		return
+	}
+	size, ok := l.walClosedSizes[path]
 	if !ok {
 		return
 	}
-	delete(db.walClosedSizes, path)
+	delete(l.walClosedSizes, path)
 	for {
-		cur := db.walClosedBytes.Load()
+		cur := l.walClosedBytes.Load()
 		next := cur - size
 		if next < 0 {
 			next = 0
 		}
-		if db.walClosedBytes.CompareAndSwap(cur, next) {
+		if l.walClosedBytes.CompareAndSwap(cur, next) {
 			break
 		}
 	}
 }
 
 func (db *DB) untrackValueLogSegmentLocked(path string) {
-	if db.vlogClosedSizes == nil || path == "" {
+	laneID, _, _, ok := parseLogSeq(filepath.Base(path))
+	if !ok || laneID < 0 || laneID >= len(db.lanes) {
 		return
 	}
-	size, ok := db.vlogClosedSizes[path]
+	l := &db.lanes[laneID]
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlogClosedSizes == nil || path == "" {
+		return
+	}
+	size, ok := l.vlogClosedSizes[path]
 	if !ok {
 		return
 	}
-	delete(db.vlogClosedSizes, path)
+	delete(l.vlogClosedSizes, path)
 	for {
-		cur := db.vlogClosedBytes.Load()
+		cur := l.vlogClosedBytes.Load()
 		next := cur - size
 		if next < 0 {
 			next = 0
 		}
-		if db.vlogClosedBytes.CompareAndSwap(cur, next) {
+		if l.vlogClosedBytes.CompareAndSwap(cur, next) {
 			break
 		}
 	}
@@ -3897,7 +4175,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	mems := make([]memtable.Table, max)
 	ranges := make([]keyRange, max)
-	walPaths := make([]string, max)
+	walPaths := make([][]string, max)
 	largePtrs := make([]*largePtrMap, max)
 	copy(mems, db.queue[:max])
 	copy(ranges, db.queueRanges[:max])
@@ -3915,7 +4193,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		memBytes int64
 		memLen   int
 		memRange keyRange
-		walPath  string
+		walPaths []string
 		ptrs     *largePtrMap
 	}
 
@@ -3935,7 +4213,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			memBytes: memBytes,
 			memLen:   memLen,
 			memRange: ranges[i],
-			walPath:  walPaths[i],
+			walPaths: walPaths[i],
 			ptrs:     largePtrs[i],
 		})
 		totalBytes += memBytes
@@ -4234,27 +4512,31 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	deletable := make([]string, 0, len(units))
 	if sync {
+		inUse := make(map[string]struct{})
+		for _, path := range db.currentWALPaths() {
+			inUse[path] = struct{}{}
+		}
+		for _, paths := range db.queueWALPaths {
+			for _, path := range paths {
+				inUse[path] = struct{}{}
+			}
+		}
+		seen := make(map[string]struct{})
 		for _, unit := range units {
-			walPath := unit.walPath
-			if walPath == "" {
-				continue
-			}
-
-			inUse := false
-			if db.walPath == walPath {
-				inUse = true
-			} else {
-				for _, p := range db.queueWALPaths {
-					if p == walPath {
-						inUse = true
-						break
-					}
+			for _, walPath := range unit.walPaths {
+				if walPath == "" {
+					continue
 				}
-			}
-			if !inUse {
+				if _, ok := inUse[walPath]; ok {
+					continue
+				}
+				if _, ok := seen[walPath]; ok {
+					continue
+				}
 				if db.valueLogRetained(walPath) {
 					continue
 				}
+				seen[walPath] = struct{}{}
 				deletable = append(deletable, walPath)
 			}
 		}
@@ -4310,9 +4592,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueRanges) > 0 {
 		memRange = db.queueRanges[0]
 	}
-	walPath := ""
+	var walPaths []string
 	if len(db.queueWALPaths) > 0 {
-		walPath = db.queueWALPaths[0]
+		walPaths = db.queueWALPaths[0]
 	}
 	var ptrs *largePtrMap
 	if len(db.queueLargePtrs) > 0 {
@@ -4480,34 +4762,48 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	db.queueBacklogBytes.Add(-memBytes)
 	db.publishMemtablesLocked()
 
-	// Check if WAL is still in use
-	inUse := false
-	if db.walPath == walPath {
-		inUse = true
-	} else {
-		for _, p := range db.queueWALPaths {
-			if p == walPath {
-				inUse = true
-				break
+	deletable := make([]string, 0, len(walPaths))
+	if sync {
+		inUse := make(map[string]struct{})
+		for _, path := range db.currentWALPaths() {
+			inUse[path] = struct{}{}
+		}
+		for _, paths := range db.queueWALPaths {
+			for _, path := range paths {
+				inUse[path] = struct{}{}
 			}
+		}
+		seen := make(map[string]struct{})
+		for _, walPath := range walPaths {
+			if walPath == "" {
+				continue
+			}
+			if _, ok := inUse[walPath]; ok {
+				continue
+			}
+			if _, ok := seen[walPath]; ok {
+				continue
+			}
+			if db.valueLogRetained(walPath) {
+				continue
+			}
+			seen[walPath] = struct{}{}
+			deletable = append(deletable, walPath)
 		}
 	}
 	db.mu.Unlock()
 
-	if sync && walPath != "" && !inUse {
-		retain := db.valueLogRetained(walPath)
-		if !retain {
-			db.dropValueLogSegment(walPath)
-			if err := db.removeFileRetry(walPath); err != nil {
-				// Best effort cleanup
-			} else {
-				db.mu.Lock()
-				db.untrackWALSegmentLocked(walPath)
-				db.mu.Unlock()
-				db.forgetValueLogRetain(walPath)
-				db.syncDirBestEffort(db.dir)
-			}
+	for _, walPath := range deletable {
+		db.dropValueLogSegment(walPath)
+		if err := db.removeFileRetry(walPath); err != nil {
+			// Best effort cleanup
+			continue
 		}
+		db.mu.Lock()
+		db.untrackWALSegmentLocked(walPath)
+		db.mu.Unlock()
+		db.forgetValueLogRetain(walPath)
+		db.syncDirBestEffort(db.dir)
 	}
 	db.checkValueLogRetention()
 
@@ -4724,9 +5020,14 @@ func (db *DB) Stats() map[string]string {
 	flushThreshold := db.flushThreshold
 	memtableMode := db.memtableMode
 	maxQueued := db.maxQueuedMemtables
-	walCurrentBytes := db.walLiveBytes.Load()
-	walClosedBytes := db.walClosedBytes.Load()
 	db.mu.RUnlock()
+	var walCurrentBytes int64
+	var walClosedBytes int64
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		walCurrentBytes += l.walLiveBytes.Load()
+		walClosedBytes += l.walClosedBytes.Load()
+	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
@@ -5608,6 +5909,14 @@ func (b *Batch) writeRegular(sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
+		lane, err := b.db.pickLane(durability == journalDurabilitySync)
+		if err != nil {
+			b.db.writeMu.RUnlock()
+			return err
+		}
+		if durability == journalDurabilitySync {
+			defer b.db.releaseLaneSync(lane)
+		}
 		debugPtr := b.db.debugFlushPointers
 		valueLogEnabled := b.db.valueLogEnabled()
 
@@ -5650,7 +5959,7 @@ func (b *Batch) writeRegular(sync bool) error {
 				b.db.writeMu.RUnlock()
 				return err
 			}
-			ptrs, err := b.db.appendValueLog(b.dictID, dictBytes, valueRecords, durability)
+			ptrs, err := b.db.appendValueLog(lane, b.dictID, dictBytes, valueRecords, durability)
 			if err != nil {
 				b.db.writeMu.RUnlock()
 				return err
@@ -5665,9 +5974,7 @@ func (b *Batch) writeRegular(sync bool) error {
 					}
 					hasPtr = true
 				}
-				b.db.mu.RLock()
-				retainPath := b.db.currentValueLogPath()
-				b.db.mu.RUnlock()
+				retainPath := b.db.currentValueLogPath(lane)
 				if retainPath != "" {
 					b.db.markValueLogRetain(retainPath)
 				}
@@ -5694,7 +6001,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			}
 		}
 		b.walBuf = records
-		if err := b.db.appendWAL(records, durability); err != nil {
+		if err := b.db.appendWAL(lane, records, durability); err != nil {
 			b.db.writeMu.RUnlock()
 			return err
 		}
@@ -5829,6 +6136,7 @@ type logSegmentInfo struct {
 	path     string
 	size     int64
 	seq      int
+	lane     int
 	valueLog bool
 }
 
@@ -5843,7 +6151,7 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 			continue
 		}
 		name := entry.Name()
-		seq, valueLog, ok := parseLogSeq(name)
+		lane, seq, valueLog, ok := parseLogSeq(name)
 		if !ok {
 			continue
 		}
@@ -5852,7 +6160,7 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 			continue
 		}
 		path := filepath.Join(walDir, name)
-		segments = append(segments, logSegmentInfo{path: path, size: info.Size(), seq: seq, valueLog: valueLog})
+		segments = append(segments, logSegmentInfo{path: path, size: info.Size(), seq: seq, lane: lane, valueLog: valueLog})
 		if info.Size() > 0 {
 			nonEmptyBytes += info.Size()
 		}
@@ -5860,7 +6168,7 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 	return segments, nonEmptyBytes
 }
 
-func parseLogSeq(name string) (int, bool, bool) {
+func parseLogSeq(name string) (int, int, bool, bool) {
 	const (
 		commitPrefix = "commit-"
 		valuePrefix  = "value-"
@@ -5868,53 +6176,79 @@ func parseLogSeq(name string) (int, bool, bool) {
 		vlogPrefix   = "vlog-"
 	)
 	if filepath.Ext(name) != ".log" {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	if strings.HasPrefix(name, commitPrefix) {
-		core := strings.TrimSuffix(strings.TrimPrefix(name, commitPrefix), ".log")
+	base := strings.TrimSuffix(name, ".log")
+
+	parseLaneSeq := func(rest string) (int, int, bool) {
+		parts := strings.SplitN(rest, "-", 2)
+		if len(parts) != 2 {
+			return 0, 0, false
+		}
+		lane, err := strconv.Atoi(parts[0])
+		if err != nil || lane < 0 {
+			return 0, 0, false
+		}
+		seq, err := strconv.Atoi(parts[1])
+		if err != nil || seq < 0 {
+			return 0, 0, false
+		}
+		return lane, seq, true
+	}
+
+	if strings.HasPrefix(base, "commit-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "commit-l"))
+		return lane, seq, false, ok
+	}
+	if strings.HasPrefix(base, "value-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "value-l"))
+		return lane, seq, true, ok
+	}
+	if strings.HasPrefix(base, commitPrefix) {
+		core := strings.TrimPrefix(base, commitPrefix)
 		if core == "" {
-			return 0, false, false
+			return 0, 0, false, false
 		}
 		seq, err := strconv.Atoi(core)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, false, true
+		return 0, seq, false, true
 	}
-	if strings.HasPrefix(name, valuePrefix) {
-		core := strings.TrimSuffix(strings.TrimPrefix(name, valuePrefix), ".log")
+	if strings.HasPrefix(base, valuePrefix) {
+		core := strings.TrimPrefix(base, valuePrefix)
 		if core == "" {
-			return 0, false, false
+			return 0, 0, false, false
 		}
 		seq, err := strconv.Atoi(core)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, true, true
+		return 0, seq, true, true
 	}
-	if strings.HasPrefix(name, walPrefix) {
-		core := strings.TrimSuffix(strings.TrimPrefix(name, walPrefix), ".log")
+	if strings.HasPrefix(base, walPrefix) {
+		core := strings.TrimPrefix(base, walPrefix)
 		if core == "" {
-			return 0, false, false
+			return 0, 0, false, false
 		}
 		seq, err := strconv.Atoi(core)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, false, true
+		return 0, seq, false, true
 	}
-	if strings.HasPrefix(name, vlogPrefix) {
-		core := strings.TrimSuffix(strings.TrimPrefix(name, vlogPrefix), ".log")
+	if strings.HasPrefix(base, vlogPrefix) {
+		core := strings.TrimPrefix(base, vlogPrefix)
 		if core == "" {
-			return 0, false, false
+			return 0, 0, false, false
 		}
 		seq, err := strconv.Atoi(core)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, true, true
+		return 0, seq, true, true
 	}
-	return 0, false, false
+	return 0, 0, false, false
 }
 
 func (b *Batch) writeBypass(sync bool) error {

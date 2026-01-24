@@ -11,7 +11,7 @@ const (
 
 	segmentHeaderSize = 8
 	batchHeaderSize   = 1 + 4
-	recordHeaderSize  = 1 + 2 + 4 + 8
+	recordHeaderSize  = 1 + 2 + 4 + 8 + 8
 )
 
 var (
@@ -24,6 +24,7 @@ type Record struct {
 	Key   []byte
 	Value []byte
 	RID   uint64
+	Seq   uint64
 }
 
 type Options struct {

@@ -17,6 +17,7 @@ import (
 
 type logSegment struct {
 	seq      uint64
+	lane     int
 	path     string
 	valueLog bool
 	fileID   uint32
@@ -39,7 +40,7 @@ func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 		}
 
 		name := entry.Name()
-		seq, valueLog, ok := parseLogSeq(name)
+		lane, seq, valueLog, ok := parseLogSeq(name)
 		if !ok {
 			continue
 		}
@@ -49,22 +50,33 @@ func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 
 		seg := logSegment{
 			seq:      seq,
+			lane:     lane,
 			path:     filepath.Join(walDir, name),
 			valueLog: valueLog,
 		}
 		if valueLog {
-			seg.fileID = page.ValueLogFileID(uint32(seq))
+			if lane < 0 {
+				continue
+			}
+			fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(seq))
+			if err != nil {
+				continue
+			}
+			seg.fileID = fileID
 		}
 		segments = append(segments, seg)
 	}
 
 	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
 		return segments[i].seq < segments[j].seq
 	})
 	return segments, nil
 }
 
-func parseLogSeq(name string) (uint64, bool, bool) {
+func parseLogSeq(name string) (int, uint64, bool, bool) {
 	const (
 		commitPrefix = "commit-"
 		valuePrefix  = "value-"
@@ -73,41 +85,67 @@ func parseLogSeq(name string) (uint64, bool, bool) {
 		suffix       = ".log"
 	)
 	if !strings.HasSuffix(name, suffix) {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	if strings.HasPrefix(name, commitPrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, commitPrefix), suffix)
+	base := strings.TrimSuffix(name, suffix)
+
+	parseLaneSeq := func(rest string) (int, uint64, bool) {
+		parts := strings.SplitN(rest, "-", 2)
+		if len(parts) != 2 {
+			return 0, 0, false
+		}
+		lane, err := strconv.Atoi(parts[0])
+		if err != nil || lane < 0 {
+			return 0, 0, false
+		}
+		seq, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		return lane, seq, true
+	}
+
+	if strings.HasPrefix(base, "commit-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "commit-l"))
+		return lane, seq, false, ok
+	}
+	if strings.HasPrefix(base, "value-l") {
+		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "value-l"))
+		return lane, seq, true, ok
+	}
+	if strings.HasPrefix(base, commitPrefix) {
+		num := strings.TrimPrefix(base, commitPrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, false, true
+		return 0, seq, false, true
 	}
-	if strings.HasPrefix(name, valuePrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, valuePrefix), suffix)
+	if strings.HasPrefix(base, valuePrefix) {
+		num := strings.TrimPrefix(base, valuePrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, true, true
+		return 0, seq, true, true
 	}
-	if strings.HasPrefix(name, walPrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, walPrefix), suffix)
+	if strings.HasPrefix(base, walPrefix) {
+		num := strings.TrimPrefix(base, walPrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, false, true
+		return 0, seq, false, true
 	}
-	if strings.HasPrefix(name, vlogPrefix) {
-		num := strings.TrimSuffix(strings.TrimPrefix(name, vlogPrefix), suffix)
+	if strings.HasPrefix(base, vlogPrefix) {
+		num := strings.TrimPrefix(base, vlogPrefix)
 		seq, err := strconv.ParseUint(num, 10, 64)
 		if err != nil {
-			return 0, false, false
+			return 0, 0, false, false
 		}
-		return seq, true, true
+		return 0, seq, true, true
 	}
-	return 0, false, false
+	return 0, 0, false, false
 }
 
 func isTruncatedLogError(err error) bool {
@@ -160,6 +198,18 @@ func scanValueLogSegments(segments []logSegment) (map[uint64]page.ValuePtr, erro
 }
 
 func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
+	type commitBatch struct {
+		seq     uint64
+		order   int
+		records []commitlog.Record
+	}
+
+	var (
+		batches       []commitBatch
+		legacyBatches []commitBatch
+		commitPaths   []string
+		readOrder     int
+	)
 	for _, segment := range segments {
 		if segment.valueLog {
 			continue
@@ -172,9 +222,17 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		for {
 			records, err := reader.ReadBatch()
 			if err == nil {
-				if err := applyCommitBatch(db, records, ridMap); err != nil {
-					_ = reader.Close()
-					return err
+				if len(records) == 0 {
+					continue
+				}
+				seq := records[0].Seq
+				batch := commitBatch{seq: seq, order: readOrder, records: records}
+				readOrder++
+				if seq == 0 {
+					// Legacy commit logs don't carry sequence numbers; preserve read order.
+					legacyBatches = append(legacyBatches, batch)
+				} else {
+					batches = append(batches, batch)
 				}
 				continue
 			}
@@ -188,11 +246,32 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		if err := reader.Close(); err != nil {
 			return err
 		}
-		if err := os.Remove(segment.path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+		commitPaths = append(commitPaths, segment.path)
 		if truncated {
 			break
+		}
+	}
+	if len(batches) > 1 {
+		sort.Slice(batches, func(i, j int) bool {
+			if batches[i].seq == batches[j].seq {
+				return batches[i].order < batches[j].order
+			}
+			return batches[i].seq < batches[j].seq
+		})
+	}
+	for _, batch := range legacyBatches {
+		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+			return err
+		}
+	}
+	for _, batch := range batches {
+		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+			return err
+		}
+	}
+	for _, path := range commitPaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
 	return nil
