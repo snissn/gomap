@@ -2,6 +2,7 @@ package treedb_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -434,6 +436,186 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 		t.Fatalf("expected valuelog file to be removed after recovery")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat valuelog file: %v", err)
+	}
+}
+
+func TestRecovery_MultiLaneOrdering(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPathLane0 := filepath.Join(walDir, "commit-l0-000001.log")
+	cw0, err := commitlog.NewWriter(commitPathLane0)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane0: %v", err)
+	}
+	rec0 := commitlog.Record{Op: commitlog.OpSetInline, Key: []byte("k"), Value: []byte("v2"), Seq: 2}
+	if err := cw0.AppendBatch([]commitlog.Record{rec0}); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.AppendBatch lane0: %v", err)
+	}
+	if err := cw0.Sync(); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.Sync lane0: %v", err)
+	}
+	if err := cw0.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane0: %v", err)
+	}
+
+	commitPathLane1 := filepath.Join(walDir, "commit-l1-000001.log")
+	cw1, err := commitlog.NewWriter(commitPathLane1)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane1: %v", err)
+	}
+	rec1 := commitlog.Record{Op: commitlog.OpSetInline, Key: []byte("k"), Value: []byte("v1"), Seq: 1}
+	if err := cw1.AppendBatch([]commitlog.Record{rec1}); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.AppendBatch lane1: %v", err)
+	}
+	if err := cw1.Sync(); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.Sync lane1: %v", err)
+	}
+	if err := cw1.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane1: %v", err)
+	}
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(val) != "v2" {
+		t.Fatalf("expected replay order to honor Seq; got %q", string(val))
+	}
+}
+
+func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	var header [8]byte
+	binary.LittleEndian.PutUint32(header[0:4], 32)
+	if err := os.WriteFile(commitPath, header[:], 0600); err != nil {
+		t.Fatalf("write commit header: %v", err)
+	}
+
+	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	val, err := backend.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if val != nil {
+		t.Fatalf("expected partial batch to be ignored, got %q", string(val))
+	}
+
+	if _, err := os.Stat(commitPath); err == nil {
+		t.Fatalf("expected commitlog file to be removed after recovery")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+}
+
+func TestRecovery_MissingDictFails(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dictdb"), 0755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+
+	dictID := uint64(1)
+	records := []valuelog.Record{{RID: 1, Value: bytes.Repeat([]byte("value"), 1024)}}
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, fileID)
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.AppendFrame(0, nil, records); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.AppendFrame: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+	raw, err := os.ReadFile(valuePath)
+	if err != nil {
+		t.Fatalf("read valuelog: %v", err)
+	}
+	if len(raw) < valuelog.HeaderSize {
+		t.Fatalf("valuelog too small: %d", len(raw))
+	}
+	payload := raw[valuelog.HeaderSize:]
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(payload)
+	if err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame for missing-dict test")
+	}
+	binary.LittleEndian.PutUint64(payload[4:12], dictID)
+	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], payload)
+	binary.LittleEndian.PutUint32(raw[0:4], sum)
+	if err := os.WriteFile(valuePath, raw, 0600); err != nil {
+		t.Fatalf("rewrite valuelog: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	rec := commitlog.Record{Op: commitlog.OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1}
+	if err := cw.AppendBatch([]commitlog.Record{rec}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	if _, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024}); err == nil {
+		t.Fatalf("expected recovery error due to missing dict")
+	}
+	if _, err := os.Stat(commitPath); err != nil {
+		t.Fatalf("expected commitlog to remain after failed recovery: %v", err)
+	}
+	if _, err := os.Stat(valuePath); err != nil {
+		t.Fatalf("expected valuelog to remain after failed recovery: %v", err)
 	}
 }
 

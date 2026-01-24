@@ -801,17 +801,35 @@ Authoritative spec: `slab-optimization/spec.md`
 - PR created via `gh` (base `sprint/slabopt-pr4-dict-dynamick`): https://github.com/snissn/gomap/pull/64
 - CI: `gh pr checks 64 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
 
+`2026-01-18 03:34:43 HST`
+- Created branch `sprint/slabopt-pr6-recovery-hardening` from `sprint/slabopt-pr5-parallel-lanes`.
+- Added commitlog/valuelog fuzz tests in `TreeDB/internal/commitlog/commitlog_fuzz_test.go` and `TreeDB/internal/valuelog/valuelog_fuzz_test.go`.
+- Added recovery hardening cases (multi-lane ordering, partial commit batch, missing dict) in `TreeDB/recovery_spec_test.go`.
+- Tests: `go test ./TreeDB -run "CrashRecovery|Recovery" -count=1` → PASS
+
+`2026-01-18 03:40:38 HST`
+- Tests: `go test ./TreeDB/internal/commitlog -run Fuzz -fuzz=Fuzz -fuzztime=10s` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -run Fuzz -fuzz=Fuzz -fuzztime=10s` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+
+`2026-01-18 03:41:31 HST`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
 `2026-01-18 08:58:31 HST`
 - PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
 
 `2026-01-18 08:59:33 HST`
 - Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
 
-`2026-01-18 09:15:24 HST`
-- PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
+`2026-01-18 09:16:41 HST`
+- PR5: merged `sprint/slabopt-pr5-parallel-lanes` into `sprint/slabopt-pr6-recovery-hardening` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
 
 `2026-01-18 09:26:29 HST`
 - PR4: merged `sprint/slabopt-pr4-dict-dynamick` into `sprint/slabopt-pr5-parallel-lanes` after resolving `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:28:24 HST`
+- PR5: merged `sprint/slabopt-pr5-parallel-lanes` into `sprint/slabopt-pr6-recovery-hardening` after resolving `slab-optimization/AGENTS.md`.
 
 `2026-01-18 09:42:31 HST`
 - PR5: skip empty commit batches, preserve legacy commit-log ordering, and clean up lane WAL/vlog writers on open failures.
