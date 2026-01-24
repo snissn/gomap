@@ -28,6 +28,8 @@ Commands:
   stats           Print stats
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
+  compact         Compact/rebuild the index.db (requires -rw)
+  vacuum          Alias for compact (index-only)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -70,6 +72,8 @@ func main() {
 		runFrag(dir, args)
 	case "verify":
 		runVerify(dir, args)
+	case "compact", "vacuum":
+		runCompact(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":
@@ -169,6 +173,24 @@ func runVerify(dir string, args []string) {
 		fatalf("Iterator error: %v", err)
 	}
 	fmt.Printf("Verification successful. Items: %d\n", count)
+}
+
+func runCompact(dir string, args []string) {
+	fs := flag.NewFlagSet("compact", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("compact requires -rw")
+	}
+
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
+
+	if err := db.CompactIndex(); err != nil {
+		fatalf("CompactIndex error: %v", err)
+	}
+	fmt.Println("Index compaction complete.")
 }
 
 func runGet(dir string, args []string) {
