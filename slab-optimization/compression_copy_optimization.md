@@ -309,6 +309,51 @@ Rollback invariants (must):
 ### Goal
 Ensure journal/commitlog writes do not add unnecessary copy amplification on dict‑on write workloads.
 
+### Autopilot Runbook (agent-friendly)
+This section is written so an agent can execute Branch 4 with minimal interpretation.
+
+#### Baseline inputs (must keep constant when comparing)
+- mode: **mode3** (journal on)
+- dict: **on**
+- pattern: `ultra_compressible_repeat`
+- value size: `1024`
+- batch size: `1000`
+- measure window: `512MiB` of writes (steady-state)
+
+#### Profile commands (copy/paste)
+- mode3 dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+
+#### pprof “what to check” (must)
+Focus the journal/commitlog area and then confirm copy hot spots:
+- `go tool pprof -top -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=commitlog -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=memmove -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+
+Record for the PR:
+- commitlog cumulative time and where it comes from (formatting vs write buffering)
+- whether commitlog payloads are mostly RID-only (no inline values) vs inline (value copies)
+
+#### Implementation target (exact)
+Edit: `TreeDB/internal/commitlog/writer.go`
+- Function: `(*Writer) AppendBatch`
+
+Safe optimization (no behavior change):
+- When commitlog segment compression is **disabled**, avoid building a contiguous `payload` buffer.
+  - Compute payload CRC incrementally from the record parts (batch header, per-record header, key, value).
+  - Write the segment header (len + CRC) followed by the payload parts directly to the buffered writer.
+  - This removes the extra “record-bytes → scratch → bufio” copy.
+
+Constraints (must):
+- On-disk format is unchanged (same bytes, same CRC semantics).
+- Segment `length` must match exact payload bytes written.
+- Must update `w.size` exactly as before.
+
+#### Validation commands (must)
+- `go test ./TreeDB/internal/commitlog -count=1`
+- `go test ./TreeDB/internal/valuelog -run TestDictAppendReadRoundTrip -count=1`
+- `go test ./... -count=1`
+
 ### Success Criteria (must hit)
 - **Must** show journal‑on (mode3) throughput improvements or clear parity vs baseline after copy fixes.
 - **Must** not regress recovery correctness; crash/replay tests must pass.
