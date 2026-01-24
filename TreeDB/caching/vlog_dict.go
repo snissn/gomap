@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )

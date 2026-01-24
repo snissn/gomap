@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/klauspost/compress/zstd"
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/slab"
 )
 

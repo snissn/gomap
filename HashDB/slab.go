@@ -11,7 +11,7 @@ import (
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/go-errors/errors"
-	"github.com/klauspost/compress/s2"
+	"github.com/snissn/compress/s2"
 )
 
 // FlagCompressed marks slab records with s2-compressed payloads.

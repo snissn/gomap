@@ -945,7 +945,14 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		}
 	}
 
-	// 1. Sync Data (Slabs + Index Pages) - No DB Lock
+	// 1. Flush any buffered slab appends before we compute the meta tail and/or
+	// publish pointers. This is required even when sync=false so in-process reads
+	// cannot observe pointers beyond the on-disk slab size.
+	if err := db.slabManager.Flush(); err != nil {
+		return err
+	}
+
+	// 2. Sync Data (Slabs + Index Pages) - No DB Lock
 	if sync {
 		if err := db.slabManager.Sync(); err != nil {
 			return err
@@ -955,7 +962,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		}
 	}
 
-	// 2. Prepare Meta - Short Lock
+	// 3. Prepare Meta - Short Lock
 	db.mu.Lock()
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
@@ -972,19 +979,19 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	}
 	db.mu.Unlock()
 
-	// 3. Write Meta - No DB Lock
+	// 4. Write Meta - No DB Lock
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return err
 	}
 
-	// 4. Sync Meta - No DB Lock
+	// 5. Sync Meta - No DB Lock
 	if sync {
 		if err := idx.pager.Sync(); err != nil {
 			return err
 		}
 	}
 
-	// 5. Update State (Visible) - Short Lock
+	// 6. Update State (Visible) - Short Lock
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

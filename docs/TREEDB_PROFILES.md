@@ -83,6 +83,16 @@ Behavior:
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
 - Leaves background maintenance enabled by default.
 
+Notes:
+
+- Profiles do not change `Options.Mode`. For write-heavy throughput tests, prefer
+  cached mode (`ModeCached`, the default). Backend-only mode (`ModeBackend`) is
+  a different engine path.
+- `DisableWAL=true` implies the cached value log is also disabled (no value-log
+  pointers, no value-log dictionary compression). To benchmark value-log
+  features, keep `DisableWAL=false` and use `RelaxedSync=true` (plus
+  `AllowUnsafe=true`) instead.
+
 Use when you want:
 
 - “how fast can it go” exploration

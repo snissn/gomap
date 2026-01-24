@@ -628,6 +628,60 @@ func (s *SlabFile) Write(key, value []byte) (int64, error) {
 	return offset, nil
 }
 
+// buildRecordBytes builds a slab record (including CRC + lengths) into a reusable
+// scratch buffer. The returned slice is only valid until the next write/build on
+// this SlabFile.
+//
+// Thread-safety: SlabManager serializes writers for a given SlabFile.
+func (s *SlabFile) buildRecordBytes(key, value []byte) ([]byte, int, error) {
+	keyLen := len(key)
+	valLen := len(value)
+
+	if keyLen > int(^uint16(0)) || valLen > int(^uint32(0)) {
+		return nil, 0, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint16(keyLen), uint32(valLen)) {
+		return nil, 0, ErrRecordTooLarge
+	}
+
+	recordLen64 := int64(HeaderSize) + int64(keyLen) + int64(valLen)
+	if recordLen64 < 0 || recordLen64 > int64(int(recordLen64)) {
+		return nil, 0, ErrRecordTooLarge
+	}
+	if recordLen64 > MaxSlabSize {
+		return nil, 0, ErrRecordTooLarge
+	}
+
+	recordLen := int(recordLen64)
+	var lenArr [6]byte
+	binary.LittleEndian.PutUint16(lenArr[0:2], uint16(keyLen))
+	binary.LittleEndian.PutUint32(lenArr[2:6], uint32(valLen))
+
+	checksum := crc32.Update(0, crc32cTable, lenArr[:])
+	checksum = crc32.Update(checksum, crc32cTable, key)
+	checksum = crc32.Update(checksum, crc32cTable, value)
+
+	// Prepare record buffer. Reuse scratch for common case to avoid allocating per record.
+	// Cap reuse so a single large value doesn't pin a huge buffer forever.
+	const maxScratch = 1 << 20 // 1 MiB
+	var buf []byte
+	if recordLen <= maxScratch {
+		if cap(s.writeScratch) < recordLen {
+			s.writeScratch = make([]byte, recordLen)
+		}
+		buf = s.writeScratch[:recordLen]
+	} else {
+		buf = make([]byte, recordLen)
+	}
+
+	binary.LittleEndian.PutUint32(buf[0:4], checksum)
+	copy(buf[4:10], lenArr[:])
+	copy(buf[10:10+keyLen], key)
+	copy(buf[10+keyLen:], value)
+
+	return buf, recordLen, nil
+}
+
 // WriteBatch appends a pre-built record stream to the slab and returns the
 // starting file offset. Thread-safety: This should be called by a single writer
 // (SlabManager mutex).
