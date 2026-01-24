@@ -1,6 +1,9 @@
 package template
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestTemplateDefRoundtrip(t *testing.T) {
 	cfg := Config{MinAnchorLen: 2, MaxAnchorLen: 64, MaxAnchorsPerTemplate: 4, MaxAnchorBytesTotal: 128}
@@ -42,17 +45,37 @@ func TestTemplateMaskRoundtrip(t *testing.T) {
 		t.Fatalf("base mismatch")
 	}
 	vars := []byte{'X', 'Y', 'Z'}
-	payload, err := EncodeMaskPayload(1, mask, vars)
-	if err != nil {
-		t.Fatalf("encode payload: %v", err)
-	}
-	out, err := DecodePayload(payload, func(uint64) ([]byte, error) {
+	// Sparse payload (variable bytes only).
+	sparseLen := payloadHeader + uvarintLen(1) + len(vars)
+	sparse := make([]byte, sparseLen)
+	sparse[0] = magic0
+	sparse[1] = magic1
+	sparse[2] = payloadVer
+	sparse[3] = flagEncoded | flagMask
+	off := payloadHeader
+	off += binary.PutUvarint(sparse[off:], 1)
+	copy(sparse[off:], vars)
+	out, err := DecodePayload(sparse, func(uint64) ([]byte, error) {
 		return enc, nil
 	}, DecodeOptions{MaxDecodedBytes: 128})
 	if err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
 	want := []byte("abXYeZ")
+	if string(out) != string(want) {
+		t.Fatalf("payload mismatch: %q != %q", out, want)
+	}
+	// Full payload (mask + diffs).
+	full, err := EncodeMaskPayload(1, mask, vars)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	out, err = DecodePayload(full, func(uint64) ([]byte, error) {
+		return enc, nil
+	}, DecodeOptions{MaxDecodedBytes: 128})
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
 	if string(out) != string(want) {
 		t.Fatalf("payload mismatch: %q != %q", out, want)
 	}

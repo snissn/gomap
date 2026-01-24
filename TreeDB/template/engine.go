@@ -3,6 +3,7 @@ package template
 import (
 	"bytes"
 	"context"
+	"math/bits"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -523,6 +524,8 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 		return TemplateDef{}, nil, false, false
 	}
 	base := make([]byte, bestLen)
+	maskLen := (bestLen + 7) / 8
+	mask := make([]byte, maskLen)
 	constCount := 0
 	for pos := 0; pos < bestLen; pos++ {
 		maxCount := 0
@@ -534,11 +537,13 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 			}
 		}
 		base[pos] = maxByte
-		if float64(maxCount)/float64(totalSamples) >= cfg.MaskMinPresenceRatio {
+		ratio := float64(maxCount) / float64(totalSamples)
+		if ratio >= cfg.MaskMinPresenceRatio {
 			constCount++
+		} else {
+			mask[pos/8] |= 1 << uint(pos%8)
 		}
 	}
-	maskLen := (bestLen + 7) / 8
 	minConst := cfg.MaskMinConstBytes
 	if minConst < int(float64(bestLen)*cfg.MaskMinConstFrac) {
 		minConst = int(float64(bestLen) * cfg.MaskMinConstFrac)
@@ -546,8 +551,9 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 	if constCount < minConst {
 		return TemplateDef{}, nil, false, false
 	}
-	encHeader := payloadHeader + uvarintLen(1) + maskLen
-	hits, saved, meanRatio := simulateMaskEncoding(base, samples, sampleLimit, encHeader)
+	fullHeader := payloadHeader + uvarintLen(1) + maskLen
+	sparseHeader := payloadHeader + uvarintLen(1)
+	hits, saved, meanRatio := simulateMaskEncoding(base, mask, samples, sampleLimit, fullHeader, sparseHeader)
 	if hits == 0 {
 		return TemplateDef{}, nil, false, false
 	}
@@ -566,7 +572,7 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 			}
 		}
 	}
-	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: make([]byte, maskLen)}
+	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask}
 	return def, refValue, activated, true
 }
 
@@ -697,9 +703,19 @@ func simulateEncoding(anchors [][]byte, samples []sample, limit int, cfg Config)
 	return hits, saved, meanRatio
 }
 
-func simulateMaskEncoding(base []byte, samples []sample, limit int, encHeader int) (hits int, saved int, meanRatio float64) {
+func simulateMaskEncoding(base []byte, mask []byte, samples []sample, limit int, fullHeader int, sparseHeader int) (hits int, saved int, meanRatio float64) {
 	if limit == 0 || len(base) == 0 {
 		return 0, 0, 1
+	}
+	maskLenFull := (len(base) + 7) / 8
+	if len(mask) != maskLenFull {
+		mask = nil
+	}
+	varCount := 0
+	if mask != nil {
+		for _, b := range mask {
+			varCount += bits.OnesCount8(b)
+		}
 	}
 	ratioSum := 0.0
 	for i := 0; i < limit; i++ {
@@ -708,12 +724,22 @@ func simulateMaskEncoding(base []byte, samples []sample, limit int, encHeader in
 			continue
 		}
 		diffCount := 0
+		constMismatch := false
 		for j := 0; j < len(base); j++ {
 			if val[j] != base[j] {
 				diffCount++
+				if mask != nil && mask[j/8]&(1<<uint(j%8)) == 0 {
+					constMismatch = true
+				}
 			}
 		}
-		encLen := encHeader + diffCount
+		encLen := fullHeader + diffCount
+		if mask != nil && !constMismatch {
+			sparseLen := sparseHeader + varCount
+			if sparseLen < encLen {
+				encLen = sparseLen
+			}
+		}
 		if encLen >= len(val) {
 			continue
 		}
