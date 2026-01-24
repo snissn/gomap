@@ -23,13 +23,14 @@ type lane struct {
 	walClosedBytes atomic.Int64
 	walClosedSizes map[string]int64
 
-	vlog            valueWriter
-	vlogPath        string
-	vlogSeq         int
-	vlogMu          sync.Mutex
-	vlogLiveBytes   atomic.Int64
-	vlogClosedBytes atomic.Int64
-	vlogClosedSizes map[string]int64
+	vlog             valueWriter
+	vlogPath         string
+	vlogSeq          int
+	vlogRetainedPath string
+	vlogMu           sync.Mutex
+	vlogLiveBytes    atomic.Int64
+	vlogClosedBytes  atomic.Int64
+	vlogClosedSizes  map[string]int64
 
 	syncing atomic.Bool
 }

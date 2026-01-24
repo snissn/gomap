@@ -632,7 +632,15 @@ func (db *DB) allowValueLogPointers() bool {
 	if limit <= 0 {
 		return true
 	}
-	_, bytes := db.valueLogRetainedStats()
+	bytes := db.valueLogRetainedClosedBytes.Load()
+	if db.splitValueLogEnabled() {
+		for i := range db.lanes {
+			l := &db.lanes[i]
+			if l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
+				bytes += l.vlogLiveBytes.Load()
+			}
+		}
+	}
 	if bytes >= limit {
 		if db.valueLogHardCapWarned.CompareAndSwap(false, true) {
 			db.reportError(fmt.Errorf("cachingdb: retained value-log bytes %d exceed hard cap %d; disabling new value-log pointers", bytes, limit))
@@ -923,6 +931,7 @@ type DB struct {
 	valueLogRetain               map[string]struct{}
 	valueLogWarned               atomic.Bool
 	valueLogHardCapWarned        atomic.Bool
+	valueLogRetainedClosedBytes  atomic.Int64
 	maxValueLogRetainedBytes     int64
 	maxValueLogRetainedBytesHard int64
 
@@ -2348,16 +2357,16 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	return ptrs, nil
 }
 
-func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, error) {
+func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if l == nil {
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	select {
 	case <-db.closeCh:
-		return page.ValuePtr{}, errWALClosed
+		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
 
@@ -2370,7 +2379,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		return page.ValuePtr{}, errWALUnavailable
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	startSize := w.Size()
 
@@ -2395,14 +2404,19 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if err == nil {
 		totalBytes = w.Size() - startSize
 	}
+	retainPath := ""
+	if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+		l.vlogRetainedPath = l.vlogPath
+		retainPath = l.vlogPath
+	}
 	l.vlogMu.Unlock()
 	if err != nil {
-		return page.ValuePtr{}, err
+		return page.ValuePtr{}, "", err
 	}
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
-	return ptr, nil
+	return ptr, retainPath, nil
 }
 
 func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
@@ -3184,7 +3198,8 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			}
 
 			rid := db.nextRID.Add(1)
-			ptr, err = db.appendValueLogOne(lane, dictID, dictBytes, rid, value, durability)
+			var retain string
+			ptr, retain, err = db.appendValueLogOne(lane, dictID, dictBytes, rid, value, durability)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -3193,7 +3208,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			if debugPtr {
 				db.debugPtrUsed.Add(1)
 			}
-			retainPath = db.currentValueLogPath(lane)
+			retainPath = retain
 
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
 			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
@@ -4263,6 +4278,9 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 			prev := l.vlogClosedSizes[oldPath]
 			l.vlogClosedSizes[oldPath] = oldSize
 			l.vlogClosedBytes.Add(oldSize - prev)
+			if oldPath == l.vlogRetainedPath {
+				db.valueLogRetainedClosedBytes.Add(oldSize - prev)
+			}
 		}
 	} else {
 		w, err := valuelog.NewWriter(path, fileID)
@@ -4321,6 +4339,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 		return
 	}
 	delete(l.vlogClosedSizes, path)
+	db.valueLogRetainedClosedBytes.Add(-size)
 	for {
 		cur := l.vlogClosedBytes.Load()
 		next := cur - size

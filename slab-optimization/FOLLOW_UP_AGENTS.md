@@ -370,3 +370,41 @@ If profiling indicates we’re missing signal, consider follow‑ups:
 - add a “concurrent writers” mode for `random_write` / `batch_write` to better exercise journal lanes
 - add explicit disk usage reporting per DB in unified_bench output for every test
 - add optional RSS reporting (Linux) into unified_bench runner output
+
+## Activity Log (PR9)
+
+Append-only log of actual runs, results, and next actions. Every entry should include: timestamp, commit/branch, commands, and `artifacts/bench/...` paths.
+
+`2026-01-18 21:39 HST`
+- Branch: `sprint/slabopt-pr9-perf-followups` (PR: https://github.com/snissn/gomap/pull/68)
+- Host: macOS 15.6.1 (Darwin 24.6.0) arm64, CPU `Apple M3`, Go `go1.25.5`, disk `df -h .` shows ~94% used (note: may increase IO variance)
+- Baseline gate run #1 (RUNS=5 KEEP=3 SLEEP_S=5; keys=1,000,000 valsize=1024 batchsize=1000):
+  - cmd: `RUNS=5 KEEP=3 SLEEP_S=5 KEYS=1000000 VALSIZE=1024 BATCHSIZE=1000 bash scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118213913.log`
+  - deltas: `batch_write +34.22%`, `random_write -9.64%`, `random_read -40.84%` (suspected outlier), `prefix_scan +7.08%`
+- Baseline gate run #2 (same settings):
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118214516.log`
+  - deltas: `batch_write +39.10%`, `random_write -16.83%`, `random_read -1.71%`, `prefix_scan +14.80%`
+- Next: treat `random_write` regression as real (2 consecutive runs) and profile `main` vs PR9 for `random_write` with `-trace` + `-pprof=syscall|sync|sched`, then implement targeted fixes without changing defaults.
+
+`2026-01-18 22:04 HST`
+- Hypothesis: `random_write` regression is dominated by per-write overhead in `allowValueLogPointers()` calling `valueLogRetainedStats()` (allocates slices + maps and scales with retained-path count).
+- Fix: amortize retained-bytes computation and refresh periodically (`valueLogRetainedBytesApprox()`), so the hard-cap check no longer allocates on every write.
+- Bench gate run (WARMUP=1 added; unified_bench forced to `-progress=false` to reduce output noise):
+  - cmd: `RUNS=5 KEEP=3 SLEEP_S=5 WARMUP=1 KEYS=1000000 VALSIZE=1024 BATCHSIZE=1000 bash scripts/bench_compare_pr8_vs_main_trimmed.sh`
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118220332.log`
+  - deltas: `random_write -8.07%` (improved from ~-16%/~-19% prior); other cells still show high variance (investigate after stabilizing disk/IO conditions).
+
+`2026-01-18 22:20 HST`
+- Additional fix: avoid per-write `markValueLogRetain()` calls on the hot path for single-key `Set()` pointer writes.
+  - Track per-lane `vlogRetainedPath` and only emit a retain mark when the active segment path changes (once per segment, not once per write).
+- Bench gate run (WARMUP=1):
+  - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118221956.log`
+  - deltas: `batch_write +9.09%`, `random_write +3.21%` (regression cleared), `random_read +7.23%`, `prefix_scan +25.87%`
+
+`2026-01-18 22:30 HST`
+- Follow-up: `TestCachingDB_ValueLogHardCapDisablesPointers` exposed that periodic refresh caching delayed hard-cap enforcement for small op counts.
+- Fix: make hard-cap checks **exact and cheap** (no per-write allocations, no delayed refresh):
+  - Track retained closed bytes in `db.valueLogRetainedClosedBytes` (updated on vlog rotate + prune).
+  - Compute current retained bytes by adding per-lane `vlogLiveBytes` only when the current segment is actually retained (`vlogPath == vlogRetainedPath`).
+- Tests: `go test ./... -count=1` → PASS
