@@ -75,6 +75,10 @@ func (c *CachedDB) Get(key []byte) ([]byte, error) { return c.cache.Get(key) }
 // Put inserts or updates a key in the write-back cache.
 func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key, value) }
 
+// PutNoCopy inserts or updates a key in the write-back cache without copying the value.
+// Caller must not mutate value after calling (it may be retained until flushed).
+func (c *CachedDB) PutNoCopy(key []byte, value []byte) error { return c.cache.PutNoCopy(key, value) }
+
 // Add is a compatibility alias for Put.
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
 

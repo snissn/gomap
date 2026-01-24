@@ -278,6 +278,35 @@ func (c *CacheKV) Put(key, value []byte) error {
 	return nil
 }
 
+// PutNoCopy inserts or updates a key without copying the value.
+// Caller must not mutate value after calling (it may be retained until flushed).
+func (c *CacheKV) PutNoCopy(key, value []byte) error {
+	keyCopy := append([]byte(nil), key...)
+	k := bytesToString(keyCopy)
+	// Prevent accidental in-place growth when callers append() to values
+	// returned from Get(). This matches the cap=len behavior of Put() without
+	// forcing an extra allocation here.
+	value = value[:len(value):len(value)]
+
+	c.walMu.Lock()
+	if c.wal != nil {
+		if err := c.wal.appendPut(keyCopy, value); err != nil {
+			c.walMu.Unlock()
+			return err
+		}
+	}
+	c.mu.Lock()
+	c.pending[k] = cacheEntry{key: keyCopy, value: value}
+	c.pendingLen += len(keyCopy) + len(value)
+	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
+	c.mu.Unlock()
+	c.walMu.Unlock()
+	if shouldFlush {
+		return c.Flush()
+	}
+	return nil
+}
+
 // Delete removes a key via the write-back cache.
 func (c *CacheKV) Delete(key []byte) error {
 	keyCopy := append([]byte(nil), key...)
