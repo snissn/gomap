@@ -40,11 +40,11 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 		return "", fmt.Errorf("lanes_probe: missing results for %s/%s", testName, dbName)
 	}
 
-	indexBytes, err := fileSize(filepath.Join(inst.Dir, "index.db"))
+	indexBytes, err := fileSize(filepath.Join(inst.Dir, "maindb", "index.db"))
 	if err != nil {
 		return "", fmt.Errorf("lanes_probe: index.db size: %w", err)
 	}
-	walBytes, err := dirSize(filepath.Join(inst.Dir, "wal"))
+	walBytes, err := dirSize(filepath.Join(inst.Dir, "maindb", "wal"))
 	if err != nil {
 		return "", fmt.Errorf("lanes_probe: wal size: %w", err)
 	}

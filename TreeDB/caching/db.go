@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -221,6 +222,21 @@ func (db *DB) currentValueLogSeq() int {
 		return db.vlogSeq
 	}
 	return db.walSeq
+}
+
+// SetDictStore installs the dictionary store for current-ID freezing.
+func (db *DB) SetDictStore(store DictStore) {
+	if db == nil {
+		return
+	}
+	db.dictStore = store
+}
+
+func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
+	if db == nil || db.dictStore == nil {
+		return 0, nil
+	}
+	return db.dictStore.GetCurrent(ctx)
 }
 
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
@@ -630,6 +646,11 @@ type Options struct {
 	NotifyError func(error)
 }
 
+// DictStore provides access to the current dictionary ID for write freezing.
+type DictStore interface {
+	GetCurrent(ctx context.Context) (uint64, error)
+}
+
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
@@ -704,7 +725,8 @@ type DB struct {
 	maxValueLogRetainedBytesHard int64
 
 	// Level 1 (Disk)
-	backend BackendDB
+	backend   BackendDB
+	dictStore DictStore
 
 	// Config
 	dir                       string
@@ -2691,6 +2713,9 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
+	if _, err := db.currentDictID(context.Background()); err != nil {
+		return err
+	}
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -5149,6 +5174,8 @@ type Batch struct {
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
+	dictID         uint64
+	dictIDValid    bool
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -5193,6 +5220,8 @@ func (b *Batch) Reset() {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
+	b.dictID = 0
+	b.dictIDValid = false
 }
 
 func (b *Batch) Set(key, value []byte) error {
@@ -5474,12 +5503,32 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+func (b *Batch) freezeDictID(ctx context.Context) error {
+	if b.dictIDValid {
+		return nil
+	}
+	if b.db == nil {
+		return nil
+	}
+	dictID, err := b.db.currentDictID(ctx)
+	if err != nil {
+		return err
+	}
+	b.dictID = dictID
+	b.dictIDValid = true
+	return nil
+}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
 	b.db.waitForStop()
+
+	if err := b.freezeDictID(context.Background()); err != nil {
+		return err
+	}
 
 	if b.backend != nil {
 		var err error

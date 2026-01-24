@@ -20,7 +20,7 @@ const (
 )
 
 func (h *DB) addKey(key []byte, slabOffset Key) error {
-	myhash := hash(key)
+	myhash := slabOffset.hash
 	hkey, isnew, err := h.probeForAddWithHash(key, myhash)
 	if err != nil {
 		return err
@@ -59,8 +59,10 @@ func (h *DB) addBucket(key []byte, slabOffset Key) error {
 }
 
 func hash(key []byte) Hash {
-	return Hash(xxhash.Sum64(key))
+	return Hash(hashFn(key))
 }
+
+var hashFn = xxhash.Sum64
 
 func (h *DB) getKeys() []Key {
 	// Deprecated/Internal use: returns slice of keys.
