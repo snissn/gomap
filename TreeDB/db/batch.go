@@ -24,9 +24,14 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	if db.adaptive != nil {
 		threshold = db.adaptive.GetThreshold()
 	}
+	if size < 0 {
+		size = 0
+	}
+	internal := batch.New(db.slabManager, threshold)
+	internal.Reserve(size)
 	return &Batch{
 		db:    db,
-		batch: batch.New(db.slabManager, threshold),
+		batch: internal,
 	}
 }
 
@@ -56,6 +61,11 @@ func (b *Batch) DeleteView(key []byte) error {
 // SetPointer records a pointer without copying the value bytes.
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	return b.batch.SetPointer(key, ptr)
+}
+
+// SetPointerView records a pointer without copying the key bytes.
+func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	return b.batch.SetPointerView(key, ptr)
 }
 
 func (b *Batch) SetOps(ops []batch.Entry) error {
@@ -226,7 +236,38 @@ func (b *Batch) Reset() {
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {
-	return b.batch.Replay(fn)
+	if b == nil || b.batch == nil {
+		return nil
+	}
+	entries := b.batch.SortedEntries()
+	for _, entry := range entries {
+		if entry.IsPtr && entry.Value == nil {
+			ptr := entry.ValuePtr
+			var (
+				val []byte
+				err error
+			)
+			if page.IsValueLogFileID(ptr.FileID) {
+				if b.db == nil || b.db.valueLogManager == nil {
+					return fmt.Errorf("missing value log manager")
+				}
+				val, err = b.db.valueLogManager.Read(ptr)
+			} else {
+				if b.db == nil || b.db.slabManager == nil {
+					return fmt.Errorf("missing slab manager")
+				}
+				val, err = b.db.slabManager.Read(ptr)
+			}
+			if err != nil {
+				return err
+			}
+			entry.Value = val
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Batch) GetByteSize() (int, error) {

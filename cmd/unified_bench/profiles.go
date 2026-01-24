@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, durable, balanced). Overrides default flags unless explicitly set.")
+	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, fast_ingest, durable, balanced). Overrides default flags unless explicitly set.")
 )
 
 type Profile struct {
@@ -47,10 +47,38 @@ func init() {
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
 	}
 
+	applyFastIngest := func(isSet map[string]bool) {
+		// TreeDB: keep cached+value-log–centric write path enabled, but relax durability.
+		//
+		// Notes:
+		// - We keep WAL enabled to avoid implicitly disabling value-log pointers.
+		// - We still set unsafe knobs for throughput (RelaxedSync + DisableReadChecksum).
+		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
+		setBoolIfUnset("treedb-disable-value-log", false, isSet, treedbDisableValueLog)
+		setBoolIfUnset("treedb-split-value-log", true, isSet, treedbSplitValueLog)
+		setBoolIfUnset("treedb-memtable-value-log-pointers", true, isSet, treedbMemtableValueLogPointers)
+		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
+		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
+		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
+
+		// Other DBs: match "fast" behavior (nosync).
+		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
+		setBoolIfUnset("bbolt-nosync", true, isSet, bboltNoSync)
+		setBoolIfUnset("lmdb-nosync", true, isSet, lmdbNoSync)
+		setBoolIfUnset("lmdb-nometasync", true, isSet, lmdbNoMetaSync)
+		setBoolIfUnset("pebble-nosync", true, isSet, pebbleNoSync)
+		setBoolIfUnset("pogreb-nosync", true, isSet, pogrebNoSync)
+		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
+	}
+
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables WAL/sync for all supported DBs. UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (and value-log pointers). UNSAFE for production data.",
 			Apply:       applyFast,
+		},
+		"fast_ingest": {
+			Description: "TreeDB ingest profile: cached+value-log enabled + relaxed durability (WAL on, fsync/checksums off).",
+			Apply:       applyFastIngest,
 		},
 		"unsafe": { // Alias for fast
 			Description: "Alias for 'fast'",

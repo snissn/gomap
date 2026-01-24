@@ -123,6 +123,17 @@ func (h *HashDB) SetCompression(enabled bool) {
 	}
 }
 
+// SetMaxProbeGroupsBeforeResize sets a probe-length guard on all shards.
+// If a new insert scans more than this many probe groups, the shard will
+// trigger an incremental resize. Set to 0 to disable.
+func (h *HashDB) SetMaxProbeGroupsBeforeResize(groups uint64) {
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].Lock()
+		h.shards[i].SetMaxProbeGroupsBeforeResize(groups)
+		h.locks[i].Unlock()
+	}
+}
+
 // Get retrieves the value for a given key.
 // It returns nil if the key does not exist.
 func (h *HashDB) Get(key []byte) ([]byte, error) {

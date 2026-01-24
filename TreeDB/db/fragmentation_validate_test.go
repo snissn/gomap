@@ -3,6 +3,9 @@ package db
 import (
 	"bytes"
 	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/freelist"
 )
 
 func TestValidateFragmentationReport_EndToEnd(t *testing.T) {
@@ -56,6 +59,76 @@ func TestValidateFragmentationReport_EndToEnd(t *testing.T) {
 		t.Fatalf("FragmentationReport: %v", err)
 	}
 	if err := ValidateFragmentationReport(rep); err != nil {
+		t.Fatalf("ValidateFragmentationReport: %v", err)
+	}
+}
+
+func TestFragmentationReportWaitsForFreelistUpdate(t *testing.T) {
+	dir := t.TempDir()
+
+	d, err := Open(Options{Dir: dir, KeepRecent: 1, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	idx := d.idx.Load()
+	if idx == nil {
+		t.Fatalf("missing index")
+	}
+
+	base, err := idx.pager.Alloc(2)
+	if err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	headID := base
+	entryID := base + 1
+	if headID == 0 || entryID == 0 {
+		t.Fatalf("unexpected page ids: head=%d entry=%d", headID, entryID)
+	}
+
+	if err := idx.allocator.Free(headID); err != nil {
+		t.Fatalf("free head: %v", err)
+	}
+
+	reached := make(chan struct{}, 1)
+	release := make(chan struct{})
+	freelist.TestHookFreeBeforeChecksum = func() {
+		select {
+		case reached <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+	defer func() { freelist.TestHookFreeBeforeChecksum = nil }()
+
+	freeDone := make(chan error, 1)
+	go func() {
+		freeDone <- idx.allocator.Free(entryID)
+	}()
+
+	<-reached
+
+	repDone := make(chan error, 1)
+	go func() {
+		rep, err := d.FragmentationReport()
+		if err == nil {
+			err = ValidateFragmentationReport(rep)
+		}
+		repDone <- err
+	}()
+
+	select {
+	case err := <-repDone:
+		t.Fatalf("expected FragmentationReport to block until freelist update completes, got %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-freeDone; err != nil {
+		t.Fatalf("free entry: %v", err)
+	}
+	if err := <-repDone; err != nil {
 		t.Fatalf("ValidateFragmentationReport: %v", err)
 	}
 }

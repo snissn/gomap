@@ -1,6 +1,7 @@
 package hashdb
 
 import (
+	"net"
 	"os"
 	"time"
 
@@ -58,6 +59,8 @@ type DB struct {
 
 	slabData    []byte
 	slabOffsets []Key
+	slabHeaders []byte
+	slabBuffers net.Buffers
 
 	slabFiles       map[uint16]*os.File
 	activeSegmentID uint16
@@ -86,7 +89,8 @@ type DB struct {
 	rehashOldControls    []byte
 	rehashIdx            uint64
 
-	resizeThreshold uint64
+	resizeThreshold            uint64
+	maxProbeGroupsBeforeResize uint64
 }
 
 // Hashmap is kept as a compatibility alias for older code.

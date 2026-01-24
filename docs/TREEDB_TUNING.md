@@ -6,11 +6,11 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 ## TL;DR Defaults
 
 - `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
-- `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/WAL rotation threshold)
+- `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/journal rotation threshold)
 - `KeepRecent`:
   - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
   - backend mode (`treedb.OpenBackend`): defaults to `10,000`
-- Inline values: values up to 256 bytes are stored inline; larger values go to slabs (`data-*.slab`)
+- Inline values: values up to 256 bytes are stored inline; larger values go to the value log in cached mode (or backend slabs in backend-only mode).
 - Background index vacuum: defaults to 30s interval (auto-on) with span ratio threshold `1_200_000`
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
@@ -25,7 +25,7 @@ DB directory containing:
 
 - `index.db` (backend index)
 - slab/value files (backend)
-- `wal/` directory (cached mode WAL segments)
+- `wal/` directory (cached mode journal + value-log segments)
 - `LOCK` file (exclusive open)
 
 ### `Options.Mode`
@@ -45,14 +45,14 @@ Larger chunks:
 
 ### `Options.FlushThreshold` (cached mode)
 
-Controls when cached mode rotates the active memtable/WAL and triggers background flush work.
+Controls when cached mode rotates the active memtable/journal and triggers background flush work.
 
 Higher threshold:
 - more batching and better throughput on random small writes,
-- but higher peak memory/WAL footprint and potentially longer recovery (more WAL to replay).
+- but higher peak memory/journal footprint and potentially longer recovery (more journal to replay).
 
 Lower threshold:
-- less memory/WAL footprint,
+- less memory/journal footprint,
 - but potentially lower write throughput due to more frequent flush work.
 
 ### `Options.MaxQueuedMemtables` (cached mode)
@@ -114,21 +114,21 @@ How to evaluate safely:
 ### Write concurrency (current limits)
 
 TreeDB currently serializes write commits per DB handle (a single writer at a
-time). This keeps WAL ordering and B+Tree root updates simple and safe, but it
+time). This keeps journal ordering and B+Tree root updates simple and safe, but it
 means multi-core write throughput is gated by one writer lock.
 
 Mitigations:
 - Batch writes (`db.NewBatch`, `batch.Set`, `batch.Write`) to amortize lock hold
   time and reduce per-write overhead.
-- Use cached mode (memtables + WAL) to absorb bursts and keep read latency
+- Use cached mode (memtables + journal) to absorb bursts and keep read latency
   stable under write-heavy workloads.
 
 ### Cached-mode auto checkpointing (cached wrapper)
 
-TreeDB cached mode uses a WAL for crash recovery, but (like many engines) the default
+TreeDB cached mode uses a journal for crash recovery, but (like many engines) the default
 `Set`/`Batch.Write` path does not force an `fsync` per operation.
 
-To keep `wal/` from growing without bound in long-running workloads, TreeDB enables a
+To keep `wal/` (journal + value log) from growing without bound in long-running workloads, TreeDB enables a
 periodic cached-mode checkpoint by default:
 
 - `Options.BackgroundCheckpointInterval` (default 30s): periodic checkpoint cadence
@@ -137,9 +137,9 @@ periodic cached-mode checkpoint by default:
 
 A checkpoint:
 - blocks writers briefly,
-- rotates to a fresh WAL segment,
+- rotates to a fresh journal segment,
 - flushes queued memtables to the backend with `WriteSync`,
-- trims old WAL segments.
+- trims old journal segments.
 
 Tuning/disable:
 - Set `BackgroundCheckpointInterval < 0` to disable periodic checkpoints.

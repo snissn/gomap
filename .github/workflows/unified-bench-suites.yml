@@ -26,13 +26,13 @@ jobs:
       - name: Build unified-bench
         run: make unified-bench
 
-      - name: Suite: flushthrash
+      - name: "Suite: flushthrash"
         run: ./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false
 
-      - name: Suite: longmix
+      - name: "Suite: longmix"
         run: ./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false
 
-      - name: Suite: bigkeys_guard
+      - name: "Suite: bigkeys_guard"
         run: ./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 15m -max-rss-mb 4096
 
   profiles:
@@ -57,5 +57,5 @@ jobs:
       - name: Build unified-bench
         run: make unified-bench
 
-      - name: Smoke: ${{ matrix.profile }}
+      - name: "Smoke: ${{ matrix.profile }}"
         run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests

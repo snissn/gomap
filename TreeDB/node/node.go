@@ -27,7 +27,8 @@ const (
 	smallSearchThreshold = 16
 
 	leafPrefixCompressedFlag uint16 = 0x8000
-	pageTypeMask                    = ^leafPrefixCompressedFlag
+	leafColumnarFlag         uint16 = 0x4000
+	pageTypeMask                    = ^(leafPrefixCompressedFlag | leafColumnarFlag)
 
 	leafPrefixRestartInterval = 16
 )
@@ -104,7 +105,7 @@ func (n *Node) Type() page.PageType {
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
 	flags := getUint16(n.data[12:14])
-	flags = (flags & leafPrefixCompressedFlag) | uint16(t)
+	flags = (flags & (leafPrefixCompressedFlag | leafColumnarFlag)) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
@@ -124,12 +125,29 @@ func (n *Node) leafPrefixCompressed() bool {
 	return n.rawFlags()&leafPrefixCompressedFlag != 0
 }
 
+func (n *Node) leafColumnar() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafColumnarFlag != 0
+}
+
 func (n *Node) setLeafPrefixCompressed(enabled bool) {
 	flags := n.rawFlags()
 	if enabled {
 		flags |= leafPrefixCompressedFlag
 	} else {
 		flags &^= leafPrefixCompressedFlag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafColumnar(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafColumnarFlag
+	} else {
+		flags &^= leafColumnarFlag
 	}
 	n.setRawFlags(flags)
 }

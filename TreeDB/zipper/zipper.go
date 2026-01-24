@@ -21,10 +21,12 @@ type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
 
-	leafReserveBytes      int
-	internalReserveBytes  int
-	piggybackCompaction   bool
-	leafPrefixCompression bool
+	leafReserveBytes       int
+	internalReserveBytes   int
+	piggybackCompaction    bool
+	leafPrefixCompression  bool
+	indexColumnarLeaves    bool
+	indexInternalBaseDelta bool
 }
 
 type Split struct {
@@ -119,12 +121,14 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 // the provided allocator.
 func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 	return &Zipper{
-		pager:                 z.pager,
-		allocator:             a,
-		leafReserveBytes:      z.leafReserveBytes,
-		internalReserveBytes:  z.internalReserveBytes,
-		piggybackCompaction:   z.piggybackCompaction,
-		leafPrefixCompression: z.leafPrefixCompression,
+		pager:                  z.pager,
+		allocator:              a,
+		leafReserveBytes:       z.leafReserveBytes,
+		internalReserveBytes:   z.internalReserveBytes,
+		piggybackCompaction:    z.piggybackCompaction,
+		leafPrefixCompression:  z.leafPrefixCompression,
+		indexColumnarLeaves:    z.indexColumnarLeaves,
+		indexInternalBaseDelta: z.indexInternalBaseDelta,
 	}
 }
 
@@ -143,9 +147,21 @@ func (z *Zipper) SetLeafPrefixCompression(enabled bool) {
 	z.leafPrefixCompression = enabled
 }
 
+func (z *Zipper) SetIndexColumnarLeaves(enabled bool) {
+	z.indexColumnarLeaves = enabled
+}
+
+func (z *Zipper) SetIndexInternalBaseDelta(enabled bool) {
+	z.indexInternalBaseDelta = enabled
+}
+
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
-	if z != nil && z.leafPrefixCompression {
-		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
+	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves || z.indexInternalBaseDelta) {
+		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
+			LeafPrefixCompression: z.leafPrefixCompression,
+			LeafColumnar:          z.indexColumnarLeaves,
+			InternalBaseDelta:     z.indexInternalBaseDelta,
+		})
 	}
 	return node.NewBuilder(data, page.PageTypeLeaf)
 }
@@ -153,6 +169,11 @@ func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
 func (z *Zipper) newBuilderForType(data []byte, typ page.PageType) *node.Builder {
 	if typ == page.PageTypeLeaf {
 		return z.newLeafBuilder(data)
+	}
+	if z != nil && z.indexInternalBaseDelta {
+		return node.NewBuilderWithOptions(data, typ, node.BuilderOptions{
+			InternalBaseDelta: z.indexInternalBaseDelta,
+		})
 	}
 	return node.NewBuilder(data, typ)
 }

@@ -12,9 +12,9 @@ import (
 )
 
 type hashEntry struct {
-	key     []byte
-	value   []byte
-	deleted bool
+	key   []byte
+	value []byte
+	flags byte
 }
 
 type hashArena struct {
@@ -164,11 +164,15 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Lock()
 	for _, op := range entries {
 		if op.Type == batchpkg.OpDelete {
-			if chunk, seq := m.deleteStealLocked(op.Key); seq != 0 {
+			if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		} else if op.IsPtr {
+			if chunk, seq := m.setEntryLocked(op.Key, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		} else {
-			if chunk, seq := m.setStealLocked(op.Key, op.Value); seq != 0 {
+			if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		}
@@ -188,12 +192,25 @@ func (m *HashSorted) indexApplySortedChunk(seq uint64, keys []string) {
 }
 
 func (m *HashSorted) Set(key, value []byte) {
-	_ = m.PutWithCallback(key, value, nil)
+	m.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 }
 
 func (m *HashSorted) SetSteal(key, value []byte) {
+	m.SetEntrySteal(key, value, page.ValuePtr{}, node.FlagInline)
+}
+
+func (m *HashSorted) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	chunk, seq := m.setStealLocked(key, value)
+	chunk, seq := m.setEntryLocked(key, value, ptr, flags, false)
+	m.mu.Unlock()
+	if seq != 0 {
+		m.indexer.enqueue(m, seq, chunk)
+	}
+}
+
+func (m *HashSorted) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.mu.Lock()
+	chunk, seq := m.setEntryLocked(key, value, ptr, flags, true)
 	m.mu.Unlock()
 	if seq != 0 {
 		m.indexer.enqueue(m, seq, chunk)
@@ -212,7 +229,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
 		storedKey := bytesToStringNoCopy(ent.key)
-		valCopy := m.arena.copyBytes(value)
+		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
 			if err := cb(ent.key, valCopy); err != nil {
 				m.mu.Unlock()
@@ -221,7 +238,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 		oldLen := len(ent.value)
 		ent.value = valCopy
-		ent.deleted = false
+		ent.flags = node.FlagInline
 		m.sizeBytes += int64(len(valCopy) - oldLen)
 		m.items[storedKey] = ent
 		m.mu.Unlock()
@@ -229,7 +246,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	}
 
 	keyCopy := m.arena.copyBytes(key)
-	valCopy := m.arena.copyBytes(value)
+	valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 	if cb != nil {
 		if err := cb(keyCopy, valCopy); err != nil {
 			m.mu.Unlock()
@@ -237,7 +254,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy}
+	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy, flags: node.FlagInline}
 	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -249,16 +266,11 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 }
 
 func (m *HashSorted) Delete(key []byte) {
-	_ = m.DeleteWithCallback(key, nil)
+	m.SetEntry(key, nil, page.ValuePtr{}, node.FlagTombstone)
 }
 
 func (m *HashSorted) DeleteSteal(key []byte) {
-	m.mu.Lock()
-	chunk, seq := m.deleteStealLocked(key)
-	m.mu.Unlock()
-	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
-	}
+	m.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 }
 
 func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
@@ -280,10 +292,10 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 				return err
 			}
 		}
-		if !ent.deleted {
+		if ent.flags&node.FlagTombstone == 0 {
 			m.sizeBytes -= int64(len(ent.value))
 			ent.value = nil
-			ent.deleted = true
+			ent.flags = node.FlagTombstone
 		}
 		m.items[storedKey] = ent
 		m.mu.Unlock()
@@ -298,7 +310,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{key: keyCopy, deleted: true}
+	m.items[keyStored] = hashEntry{key: keyCopy, flags: node.FlagTombstone}
 	m.sizeBytes += int64(len(keyCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -315,7 +327,33 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 	if !ok {
 		return nil, false, false
 	}
-	return ent.value, ent.deleted, true
+	if ent.flags&node.FlagPointer != 0 {
+		if len(ent.value) > page.ValuePtrSize {
+			return ent.value[page.ValuePtrSize:], ent.flags&node.FlagTombstone != 0, true
+		}
+		return nil, ent.flags&node.FlagTombstone != 0, true
+	}
+	return ent.value, ent.flags&node.FlagTombstone != 0, true
+}
+
+func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ent, ok := m.items[bytesToStringNoCopy(key)]
+	if !ok {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	if ent.flags&node.FlagPointer != 0 {
+		if len(ent.value) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(ent.value) > page.ValuePtrSize {
+				inline = ent.value[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(ent.value[:page.ValuePtrSize]), ent.flags, true
+		}
+		return nil, page.ValuePtr{}, ent.flags, true
+	}
+	return ent.value, page.ValuePtr{}, ent.flags, true
 }
 
 func (m *HashSorted) Size() int64 {
@@ -493,7 +531,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 			if !ok {
 				continue
 			}
-			del[i] = ent.deleted
+			del[i] = ent.flags&node.FlagTombstone != 0
 		}
 		m.mu.RUnlock()
 	}
@@ -524,7 +562,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 				if !ok {
 					continue
 				}
-				del[i] = ent.deleted
+				del[i] = ent.flags&node.FlagTombstone != 0
 			}
 			m.mu.RUnlock()
 		} else {
@@ -596,7 +634,7 @@ func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	return chunk, m.nextSeq
 }
 
-func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
+func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
 	if key == nil {
 		return nil, 0
 	}
@@ -604,38 +642,57 @@ func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
 	if ent, ok := m.items[keyLookup]; ok {
 		storedKey := bytesToStringNoCopy(ent.key)
 		oldLen := len(ent.value)
-		ent.value = value
-		ent.deleted = false
-		m.sizeBytes += int64(len(value) - oldLen)
-		m.items[storedKey] = ent
-		return nil, 0
-	}
-	keyStored := bytesToStringNoCopy(key)
-	m.items[keyStored] = hashEntry{key: key, value: value}
-	m.sizeBytes += int64(len(key) + len(value))
-	return m.noteNewKeyLocked(keyStored)
-}
-
-func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
-	if key == nil {
-		return nil, 0
-	}
-	m.hasDeletes = true
-	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := bytesToStringNoCopy(ent.key)
-		if !ent.deleted {
-			m.sizeBytes -= int64(len(ent.value))
-			ent.value = nil
-			ent.deleted = true
+		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
+		ent.flags = flags
+		m.sizeBytes += int64(len(ent.value) - oldLen)
+		if flags&node.FlagTombstone != 0 {
+			m.hasDeletes = true
 		}
 		m.items[storedKey] = ent
 		return nil, 0
 	}
-	keyStored := bytesToStringNoCopy(key)
-	m.items[keyStored] = hashEntry{key: key, deleted: true}
-	m.sizeBytes += int64(len(key))
+
+	var keyCopy []byte
+	if steal {
+		keyCopy = key
+	} else {
+		keyCopy = m.arena.copyBytes(key)
+	}
+	keyStored := bytesToStringNoCopy(keyCopy)
+	valCopy := m.encodeEntryValueLocked(value, ptr, flags, steal)
+	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy, flags: flags}
+	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+	if flags&node.FlagTombstone != 0 {
+		m.hasDeletes = true
+	}
 	return m.noteNewKeyLocked(keyStored)
+}
+
+func (m *HashSorted) encodeEntryValueLocked(value []byte, ptr page.ValuePtr, flags byte, steal bool) []byte {
+	if flags&node.FlagPointer != 0 {
+		size := page.ValuePtrSize + len(value)
+		dst := m.arena.alloc(size)
+		ptr.Encode(dst[:page.ValuePtrSize])
+		if len(value) > 0 {
+			copy(dst[page.ValuePtrSize:], value)
+		}
+		return dst[:size]
+	}
+	if flags&node.FlagTombstone != 0 {
+		return nil
+	}
+	if steal {
+		return value
+	}
+	return m.arena.copyBytes(value)
+}
+
+func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
+	return m.setEntryLocked(key, value, page.ValuePtr{}, node.FlagInline, true)
+}
+
+func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
+	return m.setEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, true)
 }
 
 func (idx *hashSortedIndex) reset() {
@@ -876,6 +933,12 @@ func (it *hashIterator) UnsafeValue() []byte {
 		return nil
 	}
 	it.ensureLoaded()
+	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) > page.ValuePtrSize {
+			return it.cur.value[page.ValuePtrSize:]
+		}
+		return nil
+	}
 	return it.cur.value
 }
 
@@ -884,8 +947,18 @@ func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
 	it.ensureLoaded()
-	if it.cur.deleted {
+	if it.cur.flags&node.FlagTombstone != 0 {
 		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(it.cur.value) > page.ValuePtrSize {
+				inline = it.cur.value[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
+		}
+		return nil, page.ValuePtr{}, it.cur.flags
 	}
 	return it.cur.value, page.ValuePtr{}, node.FlagInline
 }
@@ -927,7 +1000,7 @@ func (it *hashIterator) IsDeleted() bool {
 		}
 	}
 	it.ensureLoaded()
-	return it.cur.deleted
+	return it.cur.flags&node.FlagTombstone != 0
 }
 
 func (it *hashIterator) Error() error {
