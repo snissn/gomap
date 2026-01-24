@@ -70,9 +70,6 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
-	if db.valueLogDictPaused() {
-		return
-	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
 		stride = 1
@@ -91,13 +88,22 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 		if stride > 1 && (base+uint64(i)+1)%stride != 0 {
 			continue
 		}
+		if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
+			continue
+		}
 		v := records[i].Value
 		if !likelyCompressibleSample(v) {
+			if db.valueLogDictPaused() {
+				continue
+			}
 			pause := db.valueLogDictMetricsPauseBytes
 			if pause <= 0 {
 				pause = 64 << 20
 			}
 			db.valueLogDictPauseRemaining.Store(uint64(pause))
+			if db.valueLogDictProbeBytes > 0 {
+				db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+			}
 			return
 		}
 		tr.Collect(v)
@@ -112,9 +118,6 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
-	if db.valueLogDictPaused() {
-		return
-	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
 		stride = 1
@@ -122,12 +125,21 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if stride > 1 && db.valueLogDictSampleStrideCount.Add(1)%stride != 0 {
 		return
 	}
+	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
+		return
+	}
 	if !likelyCompressibleSample(value) {
+		if db.valueLogDictPaused() {
+			return
+		}
 		pause := db.valueLogDictMetricsPauseBytes
 		if pause <= 0 {
 			pause = 64 << 20
 		}
 		db.valueLogDictPauseRemaining.Store(uint64(pause))
+		if db.valueLogDictProbeBytes > 0 {
+			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+		}
 		return
 	}
 	tr.Collect(value)
@@ -267,25 +279,54 @@ func (db *DB) valueLogDictPaused() bool {
 	return db.valueLogDictPauseRemaining.Load() > 0
 }
 
-func (db *DB) valueLogDictConsumePause(rawPayloadBytes uint64) {
-	if db == nil || rawPayloadBytes == 0 {
-		return
+func (db *DB) valueLogDictShouldCollectPaused() bool {
+	if db == nil {
+		return false
 	}
-	for {
-		cur := db.valueLogDictPauseRemaining.Load()
-		if cur == 0 {
-			return
-		}
-		var next uint64
-		if rawPayloadBytes >= cur {
-			next = 0
-		} else {
-			next = cur - rawPayloadBytes
-		}
-		if db.valueLogDictPauseRemaining.CompareAndSwap(cur, next) {
-			return
-		}
+	if db.valueLogDictPausedSampleStride <= 1 {
+		return true
 	}
+	return db.valueLogDictPausedSampleCounter.Add(1)%db.valueLogDictPausedSampleStride == 0
+}
+
+// valueLogDictShouldAttemptCompression consumes pause bytes (when set) and returns
+// whether dictionary compression should be attempted, including periodic probes
+// while paused.
+//
+// Returns:
+//   - attemptCompression: true if the caller should attempt dict compression.
+//   - probeCompression: true if this attempt is a paused-state probe.
+//   - paused: true if pauseRemaining was non-zero when called (even if it reaches
+//     zero due to consumption during this call).
+func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool) {
+	if db == nil || rawLen <= 0 {
+		return true, false, false
+	}
+	remaining := db.valueLogDictPauseRemaining.Load()
+	for remaining > 0 {
+		next := uint64(0)
+		if uint64(rawLen) < remaining {
+			next = remaining - uint64(rawLen)
+		}
+		if db.valueLogDictPauseRemaining.CompareAndSwap(remaining, next) {
+			if db.valueLogDictProbeBytes == 0 {
+				return false, false, true
+			}
+			probeRemaining := db.valueLogDictProbeRemaining.Load()
+			for {
+				if probeRemaining <= uint64(rawLen) {
+					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, db.valueLogDictProbeBytes) {
+						return true, true, true
+					}
+				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-uint64(rawLen)) {
+					return false, false, true
+				}
+				probeRemaining = db.valueLogDictProbeRemaining.Load()
+			}
+		}
+		remaining = db.valueLogDictPauseRemaining.Load()
+	}
+	return true, false, false
 }
 
 func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uint64, records int) {
@@ -316,6 +357,12 @@ func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uin
 	// dominate CPU even while compression is paused. A future optimization can
 	// re-enable retraining with backoff / probe budgets.
 	db.valueLogDictPauseRemaining.Store(pause)
+	if db.valueLogDictProbeBytes > 0 {
+		db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+	}
+	if tr := db.valueLogDictTrainer; tr != nil {
+		tr.SignalDegraded(1)
+	}
 }
 
 func (db *DB) valueLogDictK(dictID uint64) int {
