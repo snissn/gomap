@@ -1891,15 +1891,18 @@ func (db *DB) flushWALRequests(requests []walWriteRequest) error {
 	return nil
 }
 
-type walDurability uint8
+// journalDurability represents the durability boundary for journal writes.
+// When SplitValueLog is enabled, payload durability must complete before the
+// commit-intent durability for sync writes.
+type journalDurability uint8
 
 const (
-	walDurabilityNone walDurability = iota
-	walDurabilityFlush
-	walDurabilitySync
+	journalDurabilityNone journalDurability = iota
+	journalDurabilityFlush
+	journalDurabilitySync
 )
 
-func (db *DB) appendWAL(records []logRecord, durability walDurability) ([]page.ValuePtr, error) {
+func (db *DB) appendWAL(records []logRecord, durability journalDurability) ([]page.ValuePtr, error) {
 	if db.disableWAL {
 		return nil, nil
 	}
@@ -1920,16 +1923,16 @@ func (db *DB) appendWAL(records []logRecord, durability walDurability) ([]page.V
 	db.walAckMu.Unlock()
 
 	switch durability {
-	case walDurabilitySync:
+	case journalDurabilitySync:
 		return db.appendWALDirect(records, true)
-	case walDurabilityFlush:
+	case journalDurabilityFlush:
 		return db.appendWALInline(records, true)
 	default:
 		return db.appendWALInline(records, false)
 	}
 }
 
-func (db *DB) appendValueLog(records []logRecord, durability walDurability) ([]page.ValuePtr, error) {
+func (db *DB) appendValueLog(records []logRecord, durability journalDurability) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
@@ -1968,9 +1971,9 @@ func (db *DB) appendValueLog(records []logRecord, durability walDurability) ([]p
 	}
 	if err == nil {
 		switch durability {
-		case walDurabilityFlush:
+		case journalDurabilityFlush:
 			err = w.Flush()
-		case walDurabilitySync:
+		case journalDurabilitySync:
 			err = w.Sync()
 		}
 	}
@@ -2674,7 +2677,7 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 		return nil
 	}
 	if !db.disableWAL {
-		// WAL durability is handled by appendWAL:
+		// Journal durability is handled by appendValueLog + appendWAL:
 		// - strict: fsync
 		// - relaxed: flush-to-kernel (no fsync)
 		return nil
@@ -2706,12 +2709,12 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	shard.mu.Unlock()
 
 	if !db.disableWAL {
-		durability := walDurabilityNone
+		durability := journalDurabilityNone
 		if sync {
 			if db.relaxedSync {
-				durability = walDurabilityFlush
+				durability = journalDurabilityFlush
 			} else {
-				durability = walDurabilitySync
+				durability = journalDurabilitySync
 			}
 		}
 		eligible := len(value) > db.valueLogThreshold
@@ -2988,7 +2991,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if err := preRotate(key); err != nil {
 				return err
 			}
-			if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, walDurabilityNone); err != nil {
+			if _, err := db.appendWAL([]logRecord{{Op: logOpDelete, Key: key}}, journalDurabilityNone); err != nil {
 				return err
 			}
 			if err := applyDelete(key); err != nil {
@@ -3459,12 +3462,12 @@ func (db *DB) delete(key []byte, sync bool) error {
 	shard.mu.Unlock()
 
 	if !db.disableWAL {
-		durability := walDurabilityNone
+		durability := journalDurabilityNone
 		if sync {
 			if db.relaxedSync {
-				durability = walDurabilityFlush
+				durability = journalDurabilityFlush
 			} else {
-				durability = walDurabilitySync
+				durability = journalDurabilitySync
 			}
 		}
 		rec := logRecord{Op: logOpDelete, Key: key}
@@ -5576,12 +5579,12 @@ func (b *Batch) writeRegular(sync bool) error {
 
 	// 2. WAL Append loop
 	if !b.db.disableWAL {
-		durability := walDurabilityNone
+		durability := journalDurabilityNone
 		if sync {
 			if b.db.relaxedSync {
-				durability = walDurabilityFlush
+				durability = journalDurabilityFlush
 			} else {
-				durability = walDurabilitySync
+				durability = journalDurabilitySync
 			}
 		}
 		debugPtr := b.db.debugFlushPointers

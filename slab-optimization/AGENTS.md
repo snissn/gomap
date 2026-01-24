@@ -16,6 +16,7 @@ Operational rules:
 - MUST write a PR description at `.pr/PR<N>_description.md` and create the PR via `gh` (see “GitHub CLI policy”).
 - MUST open a PR via the GitHub CLI for every PR stage (no web UI/manual PR creation).
 - MUST include unified_bench output samples in every PR body (include the relevant suite(s) for that stage).
+- MUST base each PR branch on the previous PR branch and work sequentially (no skipping ahead).
 - MUST NOT merge PRs.
 - MUST fail-closed: all new parsers MUST cap lengths before allocation; on invalid data MUST return errors (no panic/OOM).
 
@@ -681,3 +682,35 @@ Authoritative spec: `slab-optimization/spec.md`
 - Commit: `PR0: add unified bench lanes probe suite`.
 - Pushed branch to origin.
 - PR created via `gh`: https://github.com/snissn/gomap/pull/59
+
+`2026-01-17 19:14:16 HST`
+- Updated PR sequencing requirement in `slab-optimization/AGENTS.md`.
+
+`2026-01-17 19:26:55 HST`
+- Created branch `sprint/slabopt-pr1-journal-abstraction` (based on PR0 branch).
+- Updated journal durability naming/semantics in `TreeDB/caching/db.go`.
+- Added WAL replay payload validation in `TreeDB/db/wal_recovery.go`.
+- Added split value-log crash durability case in `TreeDB/recovery_spec_test.go`.
+- Added missing-commit/missing-payload recovery tests in `TreeDB/caching/unified_wal_comprehensive_test.go`.
+
+`2026-01-17 19:32:26 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery_DurabilityTiers -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+- Bench: `go run ./cmd/unified_bench -suite lanes_probe -dbs treedb -keys 100000 -valsize 128 -batchsize 1000 -treedb-journal-lanes 2`
+
+`2026-01-17 19:33:04 HST`
+- Created `.pr/PR1_description.md` with unified_bench outputs.
+
+`2026-01-17 19:34:12 HST`
+- Commit: `PR1: journal durability + crash tests`.
+- Pushed branch `sprint/slabopt-pr1-journal-abstraction` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr0-bench-lanes-probe`): https://github.com/snissn/gomap/pull/60
+
+`2026-01-18 08:58:31 HST`
+- PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
+
+`2026-01-18 08:59:33 HST`
+- Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS

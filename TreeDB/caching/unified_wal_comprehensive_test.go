@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/vlog"
+	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // TestUnifiedWAL_SplitLog_Flow verifies the flow of data when SplitValueLog is enabled:
@@ -93,51 +97,81 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 	}
 }
 
-// TestUnifiedWAL_CrashRecovery verifies recovery works with SplitValueLog.
-func TestUnifiedWAL_CrashRecovery(t *testing.T) {
+// TestUnifiedWAL_CrashRecoveryMissingCommit ensures payloads without commit intent are ignored.
+func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 	dir := t.TempDir()
-
-	// Setup phase
-	{
-		backend, _ := db.Open(db.Options{Dir: dir})
-		opts := Options{
-			ValueLogPointerThreshold: 100,
-			SplitValueLog:            true,
-			DisableWAL:               false,
-		}
-		cached, _ := Open(dir, backend, opts)
-
-		cached.Set([]byte("key1"), bytes.Repeat([]byte{1}, 500))
-		// NO FLUSH.
-
-		cached.Close() // Graceful close (checkpoints).
-		// Wait, Close() calls Checkpoint() unless DisableWAL=true?
-		// No, Close() checkpoints.
-		// To simulate crash, we need to Close Backend without Checkpointing Cache?
-		// Or assume Checkpoint IS the crash recovery state (flushed to WAL, not backend).
-		// Checkpoint() flushes memtable -> WAL (rotates WAL). It DOES NOT flush to backend.
-		// Wait. Checkpoint() in caching/db.go calls cached.Checkpoint().
-		// cached.Checkpoint() calls flushAllMemtablesForSync().
-		// This flushes Memtable -> BACKEND.
-
-		// So Checkpoint = Backend Flush.
-
-		// To test WAL recovery, we need to Close WITHOUT Checkpoint.
-		// But `Close()` calls `closeMaintenance`?
-		// If we set options to disable close maintenance?
-		// Or just rely on the fact that `Close` might leave some things in WAL if we kill process?
-		// We can't kill process in unit test easily.
-
-		// We can verify that `Open` replays WAL if backend is empty.
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
 	}
 
-	// Reopen phase
-	{
-		// Since we closed cleanly, it might have flushed.
-		// Let's check if we can prevent flush on close.
-		// There is no easy way to "crash" the DB struct.
+	vlogPath := filepath.Join(walDir, "vlog-000001.log")
+	writer, err := vlog.NewWriter(vlogPath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("vlog.NewWriter: %v", err)
+	}
+	key := []byte("k1")
+	val := bytes.Repeat([]byte{0xAB}, 512)
+	if _, err := writer.Append(vlog.OpSet, key, val); err != nil {
+		_ = writer.Close()
+		t.Fatalf("vlog.Append: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("vlog.Sync: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("vlog.Close: %v", err)
+	}
 
-		// However, we can verify that SplitValueLog works generally.
+	backend, err := db.Open(db.Options{Dir: dir, SplitValueLog: true})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	got, err := backend.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected missing commit to skip payload, got %q", string(got))
+	}
+}
+
+// TestUnifiedWAL_CrashRecoveryMissingPayload ensures commit intent without payload fails fast.
+func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	walPath := filepath.Join(walDir, "wal-000001.log")
+	writer, err := wal.NewWriter(walPath)
+	if err != nil {
+		t.Fatalf("wal.NewWriter: %v", err)
+	}
+	ptr := page.ValuePtr{Offset: 0, Length: 128, FileID: page.ValueLogFileID(1)}
+	ptrBuf := make([]byte, page.ValuePtrSize)
+	ptr.Encode(ptrBuf)
+	if err := writer.Append(wal.OpSetPointer, []byte("k2"), ptrBuf); err != nil {
+		_ = writer.Close()
+		t.Fatalf("wal.Append: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("wal.Sync: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("wal.Close: %v", err)
+	}
+
+	if opened, err := db.Open(db.Options{Dir: dir, SplitValueLog: true}); err == nil {
+		_ = opened.Close()
+		t.Fatalf("expected recovery to fail on missing payload, got nil error")
+	} else if !strings.Contains(err.Error(), "pointer payload missing") {
+		t.Fatalf("expected pointer payload error, got %v", err)
 	}
 }
 
