@@ -21,6 +21,13 @@ type hashManyGetter interface {
 	getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []error)
 }
 
+type cachePutMode uint8
+
+const (
+	cachePutCopyKey cachePutMode = 1 << iota
+	cachePutCopyValue
+)
+
 // cacheEntry stores a pending write or delete.
 type cacheEntry struct {
 	key   []byte
@@ -253,72 +260,24 @@ func (c *CacheKV) getManyWithHashes(keys [][]byte, hashes []Hash) ([][]byte, []e
 	return values, errs
 }
 
-// Put inserts or updates a key in the write-back cache.
-func (c *CacheKV) Put(key, value []byte) error {
-	keyCopy := append([]byte(nil), key...)
-	k := bytesToString(keyCopy)
-	valCopy := append([]byte(nil), value...)
-
-	c.walMu.Lock()
-	if c.wal != nil {
-		if err := c.wal.appendPut(keyCopy, valCopy); err != nil {
-			c.walMu.Unlock()
-			return err
-		}
+func (c *CacheKV) put(key, value []byte, mode cachePutMode) error {
+	if mode&cachePutCopyKey != 0 {
+		key = append([]byte(nil), key...)
+	} else {
+		// Prevent accidental in-place growth when callers append() to borrowed slices.
+		// This does not protect against mutating existing bytes.
+		key = key[:len(key):len(key)]
 	}
-	c.mu.Lock()
-	c.pending[k] = cacheEntry{key: keyCopy, value: valCopy}
-	c.pendingLen += len(keyCopy) + len(valCopy)
-	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
-	c.mu.Unlock()
-	c.walMu.Unlock()
-	if shouldFlush {
-		return c.Flush()
-	}
-	return nil
-}
 
-// PutNoCopy inserts or updates a key without copying the value.
-// Caller must not mutate value after calling (it may be retained until flushed).
-func (c *CacheKV) PutNoCopy(key, value []byte) error {
-	keyCopy := append([]byte(nil), key...)
-	k := bytesToString(keyCopy)
-	// Prevent accidental in-place growth when callers append() to values
-	// returned from Get(). This matches the cap=len behavior of Put() without
-	// forcing an extra allocation here.
-	value = value[:len(value):len(value)]
-
-	c.walMu.Lock()
-	if c.wal != nil {
-		if err := c.wal.appendPut(keyCopy, value); err != nil {
-			c.walMu.Unlock()
-			return err
-		}
+	if mode&cachePutCopyValue != 0 {
+		value = append([]byte(nil), value...)
+	} else {
+		// Prevent accidental in-place growth when callers append() to values returned from Get().
+		// This matches the cap=len behavior of Put() without forcing an extra allocation here.
+		value = value[:len(value):len(value)]
 	}
-	c.mu.Lock()
-	c.pending[k] = cacheEntry{key: keyCopy, value: value}
-	c.pendingLen += len(keyCopy) + len(value)
-	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
-	c.mu.Unlock()
-	c.walMu.Unlock()
-	if shouldFlush {
-		return c.Flush()
-	}
-	return nil
-}
 
-// PutNoCopyUnsafe inserts or updates a key without copying the key or value.
-// Caller must not mutate key or value after calling (they may be retained until flushed).
-//
-// This is unsafe because the cache uses an unsafe bytes->string conversion for map keys.
-// If the key bytes are modified or reused (e.g. from a pooled network buffer), it can
-// corrupt the cache map.
-func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
 	k := bytesToString(key)
-	// Prevent accidental in-place growth when callers append() to slices that were
-	// handed to PutNoCopyUnsafe. This does not protect against mutating existing bytes.
-	key = key[:len(key):len(key)]
-	value = value[:len(value):len(value)]
 
 	c.walMu.Lock()
 	if c.wal != nil {
@@ -337,6 +296,27 @@ func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
 		return c.Flush()
 	}
 	return nil
+}
+
+// Put inserts or updates a key in the write-back cache.
+func (c *CacheKV) Put(key, value []byte) error {
+	return c.put(key, value, cachePutCopyKey|cachePutCopyValue)
+}
+
+// PutNoCopy inserts or updates a key without copying the value.
+// Caller must not mutate value after calling (it may be retained until flushed).
+func (c *CacheKV) PutNoCopy(key, value []byte) error {
+	return c.put(key, value, cachePutCopyKey)
+}
+
+// PutNoCopyUnsafe inserts or updates a key without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+//
+// This is unsafe because the cache uses an unsafe bytes->string conversion for map keys.
+// If the key bytes are modified or reused (e.g. from a pooled network buffer), it can
+// corrupt the cache map.
+func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
+	return c.put(key, value, 0)
 }
 
 // Delete removes a key via the write-back cache.
