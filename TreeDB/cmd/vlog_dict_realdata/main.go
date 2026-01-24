@@ -491,6 +491,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	cfg.Compression = strings.ToLower(strings.TrimSpace(cfg.Compression))
 	cfg.Template = strings.ToLower(strings.TrimSpace(cfg.Template))
 	cfg.KeyMode = strings.ToLower(strings.TrimSpace(cfg.KeyMode))
+	if cfg.Template == "" {
+		cfg.Template = "off"
+	}
 
 	if cfg.Mode == "" {
 		return nil, fmt.Errorf("bench mode is required")
