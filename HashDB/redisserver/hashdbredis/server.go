@@ -102,18 +102,18 @@ func (s *RedisServer) Serve(addr string) error {
 					batch := state.pending
 					state.pending = state.pending[:0]
 
-					err := s.store.PutMany(batch)
-					if err != nil {
-						conn.WriteError(err.Error())
-						return
+					for i := range batch {
+						if err := s.store.PutNoCopyKeyValueUnsafe(batch[i].Key, batch[i].Value); err != nil {
+							conn.WriteError(err.Error())
+							return
+						}
 					}
 					for range batch {
 						conn.WriteString("OK")
 					}
 				}
 			} else {
-				err := s.store.Put(key, val)
-				if err != nil {
+				if err := s.store.PutNoCopyKeyValueUnsafe(key, val); err != nil {
 					conn.WriteError(err.Error())
 					return
 				}
@@ -172,18 +172,11 @@ func (s *RedisServer) Serve(addr string) error {
 				return
 			}
 
-			items := make([]hashdb.Item, 0, (len(cmd.Args)-1)/2)
 			for i := 1; i < len(cmd.Args); i += 2 {
-				items = append(items, hashdb.Item{
-					Key:   cmd.Args[i],
-					Value: cmd.Args[i+1],
-				})
-			}
-
-			err := s.store.PutMany(items)
-			if err != nil {
-				conn.WriteError(err.Error())
-				return
+				if err := s.store.PutNoCopyKeyValueUnsafe(cmd.Args[i], cmd.Args[i+1]); err != nil {
+					conn.WriteError(err.Error())
+					return
+				}
 			}
 			conn.WriteString("OK")
 
