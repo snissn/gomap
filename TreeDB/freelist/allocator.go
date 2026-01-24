@@ -3,6 +3,7 @@ package freelist
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -23,6 +24,23 @@ type Allocator struct {
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
 	preferAppend bool
+}
+
+// TestHookFreeBeforeChecksum is a test-only hook that fires after a freelist
+// entry is written but before the page checksum is updated. It should remain
+// nil in production.
+var TestHookFreeBeforeChecksum func()
+
+// Stats reports freelist metadata under the allocator lock.
+type Stats struct {
+	Head    uint64
+	Pages   uint64
+	FreeIDs uint64
+}
+
+// ReclaimablePages returns the total number of reclaimable pages tracked in the freelist.
+func (s Stats) ReclaimablePages() uint64 {
+	return s.Pages + s.FreeIDs
 }
 
 func New(p *pager.Pager, head uint64) *Allocator {
@@ -287,6 +305,9 @@ func (a *Allocator) Free(id uint64) error {
 		slotOff := page.PageHeaderSize + 8 + int(count)*8
 		binary.LittleEndian.PutUint64(data[slotOff:slotOff+8], id)
 		n.SetCount(count + 1)
+		if TestHookFreeBeforeChecksum != nil {
+			TestHookFreeBeforeChecksum()
+		}
 		n.UpdateChecksum()
 		return nil
 	}
@@ -317,4 +338,50 @@ func (a *Allocator) initHead(id, next uint64) error {
 
 	a.head = id
 	return nil
+}
+
+// Stats returns freelist page counts while holding the allocator lock to avoid
+// concurrent freelist mutations.
+func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return readStatsLocked(a.pager, a.head, pageLimit)
+}
+
+func readStatsLocked(p *pager.Pager, head uint64, pageLimit uint64) (Stats, error) {
+	out := Stats{Head: head}
+	if head == 0 || pageLimit == 0 {
+		return out, nil
+	}
+
+	remaining := pageLimit
+	cur := head
+	for cur != 0 && remaining > 0 {
+		remaining--
+
+		data, err := p.ReadPage(cur)
+		if err != nil {
+			return out, err
+		}
+
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return out, fmt.Errorf("freelist checksum mismatch on page %d", cur)
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return out, fmt.Errorf("invalid freelist page type %d on page %d", n.Type(), cur)
+		}
+
+		out.Pages++
+		out.FreeIDs += uint64(n.Count())
+
+		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], n.Count())
+		cur = body.NextPageID
+	}
+
+	if remaining == 0 && cur != 0 {
+		return out, fmt.Errorf("freelist walk exceeded page limit (%d)", pageLimit)
+	}
+
+	return out, nil
 }

@@ -6,7 +6,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 // FragmentationReport returns best-effort structural stats about the user index
@@ -24,7 +23,6 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	idx := snap.idx
 	tr := snap.tree
 
-	freelistHead := idx.allocator.Head()
 	totalPages := idx.pager.PageCount()
 
 	var pages uint64
@@ -106,16 +104,16 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		out["treedb.user.internal_fill_ppm_max"] = fmt.Sprintf("%d", p.max)
 	}
 
-	out["treedb.freelist.head"] = fmt.Sprintf("%d", freelistHead)
-	if freelistHead != 0 && totalPages > 0 {
-		fs, err := readFreelistStats(idx.pager, freelistHead, totalPages)
+	fs, err := idx.allocator.Stats(totalPages)
+	out["treedb.freelist.head"] = fmt.Sprintf("%d", fs.Head)
+	if fs.Head != 0 && totalPages > 0 {
 		if err != nil {
 			out["treedb.freelist.error"] = err.Error()
 		} else {
-			out["treedb.freelist.pages"] = fmt.Sprintf("%d", fs.pages)
-			out["treedb.freelist.free_ids"] = fmt.Sprintf("%d", fs.freeIDs)
-			out["treedb.freelist.reclaimable_pages"] = fmt.Sprintf("%d", fs.reclaimablePages())
-			out["treedb.freelist.reclaimable_ratio_ppm"] = fmt.Sprintf("%d", (fs.reclaimablePages()*1_000_000)/totalPages)
+			out["treedb.freelist.pages"] = fmt.Sprintf("%d", fs.Pages)
+			out["treedb.freelist.free_ids"] = fmt.Sprintf("%d", fs.FreeIDs)
+			out["treedb.freelist.reclaimable_pages"] = fmt.Sprintf("%d", fs.ReclaimablePages())
+			out["treedb.freelist.reclaimable_ratio_ppm"] = fmt.Sprintf("%d", (fs.ReclaimablePages()*1_000_000)/totalPages)
 		}
 	}
 
@@ -157,50 +155,4 @@ func fillPercentiles(ppm []uint32) fillStats {
 		p99:   at(99),
 		max:   ppm[n-1],
 	}
-}
-
-type freelistStats struct {
-	pages   uint64
-	freeIDs uint64
-}
-
-func (s freelistStats) reclaimablePages() uint64 {
-	return s.pages + s.freeIDs
-}
-
-func readFreelistStats(p *pager.Pager, head uint64, pageLimit uint64) (freelistStats, error) {
-	var out freelistStats
-
-	// Guard against cycles/corruption: never walk more pages than exist.
-	remaining := pageLimit
-	cur := head
-
-	for cur != 0 && remaining > 0 {
-		remaining--
-
-		data, err := p.ReadPage(cur)
-		if err != nil {
-			return freelistStats{}, err
-		}
-
-		n := node.NewNode(data)
-		if !n.VerifyChecksum() {
-			return freelistStats{}, fmt.Errorf("freelist checksum mismatch on page %d", cur)
-		}
-		if n.Type() != page.PageTypeFreelist {
-			return freelistStats{}, fmt.Errorf("invalid freelist page type %d on page %d", n.Type(), cur)
-		}
-
-		out.pages++
-		out.freeIDs += uint64(n.Count())
-
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], n.Count())
-		cur = body.NextPageID
-	}
-
-	if remaining == 0 && cur != 0 {
-		return freelistStats{}, fmt.Errorf("freelist walk exceeded page limit (%d)", pageLimit)
-	}
-
-	return out, nil
 }

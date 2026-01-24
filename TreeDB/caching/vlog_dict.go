@@ -84,6 +84,8 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 		// record index, then sample records where (index % stride) == 0.
 		base = db.valueLogDictSampleStrideCount.Add(n) - n
 	}
+	// Avoid long pause windows before the first dict is active.
+	allowPause := db.valueLogDictLastAppliedDictID.Load() != 0
 	for i := range records {
 		if stride > 1 && (base+uint64(i)+1)%stride != 0 {
 			continue
@@ -92,7 +94,7 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 			continue
 		}
 		v := records[i].Value
-		if !likelyCompressibleSample(v) {
+		if !likelyCompressibleSample(v) && allowPause {
 			if db.valueLogDictPaused() {
 				continue
 			}
@@ -128,7 +130,7 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
 		return
 	}
-	if !likelyCompressibleSample(value) {
+	if !likelyCompressibleSample(value) && db.valueLogDictLastAppliedDictID.Load() != 0 {
 		if db.valueLogDictPaused() {
 			return
 		}

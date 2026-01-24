@@ -33,6 +33,11 @@ const (
 	ModeBackend = db.ModeBackend
 )
 
+const (
+	defaultChunkSize     = 4 * 1024 * 1024
+	defaultDictChunkSize = 1 * 1024 * 1024
+)
+
 // Iterator is the public iterator contract returned by TreeDB.
 //
 // Semantics (performance-first; callers must treat slices as read-only):
@@ -160,8 +165,9 @@ func Open(opts Options) (*DB, error) {
 	// can therefore delay page reuse for a very long time (and cause index.db to
 	// balloon under update-heavy workloads). Default to aggressive reuse in cached
 	// mode unless the caller specifies otherwise.
-	if opts.ChunkSize == 0 {
-		opts.ChunkSize = 64 * 1024 * 1024
+	chunkSizeDefaulted := opts.ChunkSize == 0
+	if chunkSizeDefaulted {
+		opts.ChunkSize = defaultChunkSize
 	}
 	if opts.KeepRecent == 0 && opts.Mode != ModeBackend {
 		opts.KeepRecent = 1
@@ -213,6 +219,9 @@ func Open(opts Options) (*DB, error) {
 	dictOpts.DisableBackgroundPrune = true
 	dictOpts.SlabCompression = slab.CompressionOptions{Kind: slab.CompressionNone}
 	dictOpts.DictLookup = nil
+	if chunkSizeDefaulted {
+		dictOpts.ChunkSize = defaultDictChunkSize
+	}
 	dictBackend, err := db.Open(dictOpts)
 	if err != nil {
 		return nil, err

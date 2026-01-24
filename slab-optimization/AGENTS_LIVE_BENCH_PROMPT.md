@@ -10,6 +10,11 @@ Your task is to **execute the runbook** in:
 
 …and carry it through to completion in **one long autonomous work session**: implement missing code, run tests/validation, run the runbook’s example commands (when feasible), and open PR(s) for review.
 
+
+base PRs on sprint/autotuner_7 and have as many PRs as appropriate and use branches named sprint/live_bench_1 and increment _1
+
+use the github cli for opening PRs and ensure that the github CLI confirms the ci passes for each PR
+
 ## 0) First: resume / detect if already done
 
 This work may be resumed mid-stream.

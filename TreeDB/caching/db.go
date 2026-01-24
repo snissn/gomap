@@ -1977,23 +1977,21 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Value-log dictionary compression is a core performance feature of the
 	// value-store path. For unsafe/bench workloads (AllowUnsafe=true), enable
 	// background dict training by default when the value log is active unless
-	// the caller explicitly configured it.
+	// the caller explicitly configured it. Favor early dict availability by
+	// using a smaller initial sample target.
 	if opts.AllowUnsafe && splitValueLog && !disableValueLog && valueLogDictTrain.TrainBytes == 0 {
+		trainBytes := compression.DefaultTrainBytes
 		if valueLogAutotune.Mode != valuelog.AutotuneOff && valueLogAutotune.MaxSampleBytes > 0 {
-			valueLogDictTrain.TrainBytes = int(valueLogAutotune.MaxSampleBytes)
-		} else {
-			valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
+			if valueLogAutotune.MaxSampleBytes < uint64(trainBytes) {
+				trainBytes = int(valueLogAutotune.MaxSampleBytes)
+			}
 		}
+		valueLogDictTrain.TrainBytes = trainBytes
 	}
-	// Keep dict training overhead bounded by default. The trainer already applies
-	// its own backpressure (queue limits), but sampling less aggressively further
-	// reduces CPU+GC impact on write-heavy workloads.
+	// Favor aggressive sampling so the first dict arrives quickly. The trainer
+	// still caps total work via TrainBytes and queue backpressure.
 	if valueLogDictTrain.TrainBytes > 0 && valueLogDictTrain.SampleStride == 0 {
-		if valueLogAutotune.SampleStride > 0 {
-			valueLogDictTrain.SampleStride = int(valueLogAutotune.SampleStride)
-		} else {
-			valueLogDictTrain.SampleStride = 4
-		}
+		valueLogDictTrain.SampleStride = 1
 	}
 
 	// If dict training is enabled but no adaptive ratio is specified, default to
@@ -2037,7 +2035,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if probeBytes < 64<<10 {
 		probeBytes = 64 << 10
 	}
-	pausedSampleStride := uint64(256)
+	pausedSampleStride := uint64(32)
 
 	lanes := make([]lane, laneCount)
 	for i := range lanes {
