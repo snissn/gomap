@@ -23,6 +23,11 @@ type ActiveProfile struct {
 	Timestamp        time.Time
 }
 
+type ChooseKOptions struct {
+	CandidateK        []int
+	IoNsPerStoredByte float64
+}
+
 type kScore struct {
 	K            int
 	payload      int
@@ -37,6 +42,10 @@ type kScore struct {
 }
 
 func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
+	return ChooseKForDictOptions(dict, samples, ChooseKOptions{})
+}
+
+func ChooseKForDictOptions(dict []byte, samples [][]byte, opts ChooseKOptions) (profile *ActiveProfile) {
 	defer func() {
 		if r := recover(); r != nil {
 			profile = nil
@@ -59,7 +68,11 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	}
 
 	nsPerByte := decodeCostEstimate(dict, eval)
-	ks := []int{1, 2, 4, 8, 16, 32}
+	ks := opts.CandidateK
+	if len(ks) == 0 {
+		ks = []int{1, 2, 4, 8, 16, 32}
+	}
+	ks = normalizeCandidateK(ks)
 	scores := make([]kScore, 0, len(ks))
 	var baseline kScore
 	for _, k := range ks {
@@ -103,16 +116,26 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 		if kr.raw == 0 {
 			continue
 		}
-		bytesSaved := (float64(baseline.totalBytes)/float64(baseline.raw) - float64(kr.totalBytes)/float64(kr.raw)) * avgRaw
-		if bytesSaved < 0 {
-			bytesSaved = 0
+		if opts.IoNsPerStoredByte > 0 {
+			ioCost := float64(kr.totalBytes) * opts.IoNsPerStoredByte
+			encCost := float64(kr.encodeNs)
+			totalCost := ioCost + encCost
+			if totalCost <= 0 {
+				continue
+			}
+			kr.score = float64(kr.raw) / totalCost
+		} else {
+			bytesSaved := (float64(baseline.totalBytes)/float64(baseline.raw) - float64(kr.totalBytes)/float64(kr.raw)) * avgRaw
+			if bytesSaved < 0 {
+				bytesSaved = 0
+			}
+			decCost := nsPerByte*float64(kr.K)*avgRaw + 1.0
+			if decCost <= 0 {
+				decCost = 1
+			}
+			encCost := float64(kr.encodeNs)/float64(kr.records) + 1.0
+			kr.score = bytesSaved / (decCost + encCost)
 		}
-		decCost := nsPerByte*float64(kr.K)*avgRaw + 1.0
-		if decCost <= 0 {
-			decCost = 1
-		}
-		encCost := float64(kr.encodeNs)/float64(kr.records) + 1.0
-		kr.score = bytesSaved / (decCost + encCost)
 		if best.score < 0 || kr.score > best.score*1.02 || (math.Abs(kr.score-best.score) <= best.score*0.02 && kr.K < best.K) {
 			best = kr
 		}
@@ -137,6 +160,29 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 		Samples:          len(eval),
 		Timestamp:        time.Now(),
 	}
+}
+
+func normalizeCandidateK(values []int) []int {
+	if len(values) == 0 {
+		return values
+	}
+	out := make([]int, 0, len(values)+1)
+	seen := make(map[int]struct{}, len(values)+1)
+	add := func(v int) {
+		if v <= 0 {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	add(1)
+	for _, v := range values {
+		add(v)
+	}
+	return out
 }
 
 func batchTotals(dict []byte, samples [][]byte, k int) (payload int, meta int, raw int, encodeNs int64) {

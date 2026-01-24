@@ -1,0 +1,88 @@
+package valuelog
+
+type AutotuneMode uint8
+
+const (
+	AutotuneOff AutotuneMode = iota
+	AutotuneMedium
+	AutotuneAggressive
+)
+
+type AutotuneOptions struct {
+	Mode AutotuneMode
+
+	CandidateK            []int
+	CandidateHistoryBytes []int
+	CandidateDictBytes    []int
+
+	MinGainToSwitch float64
+	MinDwellFrames  uint64
+
+	SampleStride     uint64
+	MaxSampleBytes   uint64
+	TrainCPUFraction float64
+
+	ProbeBytes uint64
+	PauseBytes uint64
+
+	DisableBelowValueBytes int
+}
+
+func (opts AutotuneOptions) isZero() bool {
+	return opts.Mode == AutotuneOff &&
+		len(opts.CandidateK) == 0 &&
+		len(opts.CandidateHistoryBytes) == 0 &&
+		len(opts.CandidateDictBytes) == 0 &&
+		opts.MinGainToSwitch == 0 &&
+		opts.MinDwellFrames == 0 &&
+		opts.SampleStride == 0 &&
+		opts.MaxSampleBytes == 0 &&
+		opts.TrainCPUFraction == 0 &&
+		opts.ProbeBytes == 0 &&
+		opts.PauseBytes == 0 &&
+		opts.DisableBelowValueBytes == 0
+}
+
+func NormalizeAutotuneOptions(opts AutotuneOptions, splitValueLog bool) AutotuneOptions {
+	if splitValueLog && opts.isZero() {
+		opts.Mode = AutotuneMedium
+	}
+	if opts.Mode == AutotuneOff {
+		return opts
+	}
+	if len(opts.CandidateK) == 0 {
+		opts.CandidateK = []int{1, 2, 4, 8, 16, 32}
+	}
+	if len(opts.CandidateHistoryBytes) == 0 {
+		opts.CandidateHistoryBytes = []int{16 << 10, 32 << 10, 40 << 10}
+	}
+	if len(opts.CandidateDictBytes) == 0 {
+		opts.CandidateDictBytes = []int{40 << 10}
+	}
+	if opts.MinGainToSwitch <= 0 {
+		opts.MinGainToSwitch = 0.05
+	}
+	if opts.MinDwellFrames == 0 {
+		opts.MinDwellFrames = 1 << 16
+	}
+	if opts.SampleStride == 0 {
+		opts.SampleStride = 4
+	}
+	if opts.MaxSampleBytes == 0 {
+		if opts.Mode == AutotuneAggressive {
+			opts.MaxSampleBytes = 32 << 20
+		} else {
+			opts.MaxSampleBytes = 8 << 20
+		}
+	}
+	if opts.TrainCPUFraction == 0 {
+		opts.TrainCPUFraction = 0.02
+	}
+	if opts.ProbeBytes == 0 {
+		opts.ProbeBytes = 16 << 20
+	}
+	if opts.PauseBytes == 0 {
+		opts.PauseBytes = 64 << 20
+	}
+	return opts
+}

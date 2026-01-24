@@ -279,6 +279,10 @@ type Options struct {
 	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
 	ValueLogDictMinPayloadSavingsRatio float64
 
+	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
+	// Cached mode only (SplitValueLog must be enabled).
+	ValueLogCompressionAutotune valuelog.AutotuneOptions
+
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only
 	// crash consistency (OS buffer cache), not true durability.

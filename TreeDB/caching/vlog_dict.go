@@ -172,6 +172,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if tr == nil {
 		return
 	}
+	tr.SetAutotuneCandidates(db.valueLogAutotuneOptions.CandidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
 	db.valueLogDictTrainer = tr
 	db.valueLogDictMetrics = compression.NewMetrics(compression.MetricsOptions{
 		AdaptiveRatio:  db.valueLogDictAdaptiveRatio,
@@ -219,7 +220,16 @@ func (db *DB) applyValueLogDictProfile() {
 	if !ok || profile == nil || len(profile.Dict) == 0 {
 		return
 	}
+	ioNsPerStoredByte := 0.0
+	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
+		ioNsPerStoredByte = db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte
+		tr.SetAutotuneIOCost(ioNsPerStoredByte)
+	}
 	profileK := db.clampValueLogDictK(profile.K)
+	candidate := db.valueLogAutotuneCandidate(profile, profileK)
+	if candidate == nil {
+		return
+	}
 	prevHash := db.valueLogDictLastAppliedDictHash.Load()
 	if prevHash == profile.DictHash {
 		// Dict bytes unchanged; allow updating K for the current dict.
@@ -227,6 +237,9 @@ func (db *DB) applyValueLogDictProfile() {
 			return
 		}
 		if curK := int(db.valueLogDictCurrentK.Load()); curK == profileK {
+			return
+		}
+		if !db.valueLogAutotuneShouldSwitch(candidate, ioNsPerStoredByte) {
 			return
 		}
 		if ks, ok := store.(dictStoreK); ok {
@@ -252,6 +265,7 @@ func (db *DB) applyValueLogDictProfile() {
 			db.valueLogDictKMu.Unlock()
 			log.Printf("treedb: value-log dict updated k dict_id=%d k=%d", dictID, profileK)
 		}
+		db.valueLogAutotuneRecordSwitch(candidate)
 		return
 	}
 	minSavings := db.valueLogDictMinPayloadSavings
@@ -261,6 +275,9 @@ func (db *DB) applyValueLogDictProfile() {
 	if profile.PayloadRatio >= 1.0-minSavings {
 		// Do not publish no-op dictionaries (common for incompressible payloads).
 		db.valueLogDictLastAppliedDictHash.Store(profile.DictHash)
+		return
+	}
+	if !db.valueLogAutotuneShouldSwitch(candidate, ioNsPerStoredByte) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -294,6 +311,7 @@ func (db *DB) applyValueLogDictProfile() {
 
 	log.Printf("treedb: value-log dict published dict_id=%d k=%d payload_ratio=%.3f total_ratio=%.3f",
 		dictID, profileK, profile.PayloadRatio, profile.TotalRatio)
+	db.valueLogAutotuneRecordSwitch(candidate)
 }
 
 func (db *DB) valueLogDictPaused() bool {
