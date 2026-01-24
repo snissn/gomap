@@ -51,13 +51,6 @@ func main() {
 }
 ```
 
-### TreeDB (backend-only mode)
-
-```go
-opts := treedb.Options{Dir: "./db", Mode: treedb.ModeBackend}
-db, err := treedb.Open(opts)
-```
-
 ### HashDB (sharded; recommended)
 
 ```go

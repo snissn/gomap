@@ -8,7 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
+func TestBatch_WALOffStreamBypass_WritesDirectToBackend(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -18,8 +18,7 @@ func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
 
 	cached, err := Open(dir, backend, Options{
 		AllowUnsafe:    true,
-		DisableJournal: true,
-		SplitValueLog:  true,
+		DisableWAL:     true,
 		FlushThreshold: 1 << 30,
 		MemtableMode:   "skiplist",
 		MemtableShards: 1,
@@ -67,7 +66,7 @@ func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
 	}
 }
 
-func TestBatch_Mode4StreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
+func TestBatch_WALOffStreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -77,8 +76,7 @@ func TestBatch_Mode4StreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
 
 	cached, err := Open(dir, backend, Options{
 		AllowUnsafe:    true,
-		DisableJournal: true,
-		SplitValueLog:  true,
+		DisableWAL:     true,
 		FlushThreshold: 1 << 30,
 		MemtableMode:   "skiplist",
 		MemtableShards: 1,

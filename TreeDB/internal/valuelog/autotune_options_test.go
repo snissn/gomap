@@ -4,22 +4,22 @@ import "testing"
 
 func TestNormalizeAutotuneOptions_ExplicitOffStaysOff(t *testing.T) {
 	in := AutotuneOptions{Mode: AutotuneOff}
-	out := NormalizeAutotuneOptions(in, true /* splitValueLog */)
+	out := NormalizeAutotuneOptions(in, true /* valueLogEnabled */)
 	if out.Mode != AutotuneOff {
 		t.Fatalf("expected explicit AutotuneOff to remain off, got %v", out.Mode)
 	}
 }
 
-func TestNormalizeAutotuneOptions_UnsetDefaultsToMediumWhenSplitValueLog(t *testing.T) {
-	out := NormalizeAutotuneOptions(AutotuneOptions{}, true /* splitValueLog */)
+func TestNormalizeAutotuneOptions_UnsetDefaultsToMediumWhenValueLogEnabled(t *testing.T) {
+	out := NormalizeAutotuneOptions(AutotuneOptions{}, true /* valueLogEnabled */)
 	if out.Mode != AutotuneMedium {
-		t.Fatalf("expected unset to default to AutotuneMedium when splitValueLog=true, got %v", out.Mode)
+		t.Fatalf("expected unset to default to AutotuneMedium when valueLogEnabled=true, got %v", out.Mode)
 	}
 }
 
-func TestNormalizeAutotuneOptions_UnsetDefaultsToOffWhenNotSplitValueLog(t *testing.T) {
-	out := NormalizeAutotuneOptions(AutotuneOptions{}, false /* splitValueLog */)
+func TestNormalizeAutotuneOptions_UnsetDefaultsToOffWhenValueLogDisabled(t *testing.T) {
+	out := NormalizeAutotuneOptions(AutotuneOptions{}, false /* valueLogEnabled */)
 	if out.Mode != AutotuneOff {
-		t.Fatalf("expected unset to default to AutotuneOff when splitValueLog=false, got %v", out.Mode)
+		t.Fatalf("expected unset to default to AutotuneOff when valueLogEnabled=false, got %v", out.Mode)
 	}
 }

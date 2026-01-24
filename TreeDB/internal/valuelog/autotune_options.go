@@ -5,7 +5,7 @@ type AutotuneMode uint8
 const (
 	// AutotuneUnset indicates the caller did not explicitly configure the
 	// autotuner mode. NormalizeAutotuneOptions maps this to a sensible default
-	// based on whether SplitValueLog is enabled.
+	// based on whether the value log is enabled.
 	AutotuneUnset AutotuneMode = iota
 	AutotuneOff
 	AutotuneMedium
@@ -47,12 +47,12 @@ func (opts AutotuneOptions) isZero() bool {
 		opts.DisableBelowValueBytes == 0
 }
 
-func NormalizeAutotuneOptions(opts AutotuneOptions, splitValueLog bool) AutotuneOptions {
+func NormalizeAutotuneOptions(opts AutotuneOptions, valueLogEnabled bool) AutotuneOptions {
 	if opts.Mode == AutotuneUnset {
 		// Default behavior:
-		// - Split value log enabled: enable autotune by default.
+		// - Value log enabled: enable autotune by default.
 		// - Otherwise: leave compression/autotune off.
-		if splitValueLog {
+		if valueLogEnabled {
 			opts.Mode = AutotuneMedium
 		} else {
 			opts.Mode = AutotuneOff

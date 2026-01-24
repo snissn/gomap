@@ -33,17 +33,17 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
             │ Zipper Merge (Copy-on-Write)
             ▼
 ┌───────────────────────────────────────┐
-│ TreeDB (Backend)                      │
+│ TreeDB                                │
 │                                       │
 │  ┌─────────────┐   ┌──────────────┐   │
-│  │  index.db   │   │ data-*.slab  │   │
+│  │  index.db   │   │  wal/value   │   │
 │  │ (B+Tree)    │   │ (Large Vals) │   │
 │  └─────────────┘   └──────────────┘   │
 └───────────────────────────────────────┘
 ```
 
 - **Write Path**: `Set` -> Memtable + Journal.
-- **Read Path**: `Get` checks Memtable -> Backend (merged view).
+- **Read Path**: `Get` checks Memtable -> Index/Value log (merged view).
 - **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
 
 ### 2. HashDB (Sharded)
@@ -94,9 +94,8 @@ Key directories and their purpose.
 │   ├── db/                     # Backend B+Tree implementation (Pages, Nodes)
 │   ├── internal/
 │   │   ├── memtable/           # Arena-backed SkipList
-│   │   ├── wal/                # Journal format (legacy WAL name)
+│   │   ├── valuelog/           # Value log format + reader/writer
 │   │   └── zipper/             # Copy-on-Write merge logic
-│   ├── slab/                   # Backend slab manager
 │   └── public.go               # Main public API (Open, Set, Get)
 │
 ├── cmd/

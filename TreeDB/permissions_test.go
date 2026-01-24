@@ -15,11 +15,19 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	db, err := treedb.Open(treedb.Options{Dir: dir})
+	db, err := treedb.Open(treedb.Options{
+		Dir:                      dir,
+		ValueLogPointerThreshold: 1,
+	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
+
+	value := make([]byte, 1024)
+	if err := db.Set([]byte("perm_check"), value); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 
 	checkFilePerms := func(path string) {
 		info, err := os.Stat(path)
@@ -60,11 +68,19 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 
 	checkFilePerms(filepath.Join(dir, "maindb", "index.db"))
 	checkFilePerms(filepath.Join(dir, "maindb", "LOCK"))
-	checkFilePerms(filepath.Join(dir, "maindb", "data-0000.slab"))
 	checkDirPerms(filepath.Join(dir, "maindb", "wal"))
+	valueFiles, err := filepath.Glob(filepath.Join(dir, "maindb", "wal", "value-*.log"))
+	if err != nil {
+		t.Fatalf("Glob wal value logs: %v", err)
+	}
+	if len(valueFiles) == 0 {
+		t.Fatalf("expected value-log segment in wal dir")
+	}
+	for _, path := range valueFiles {
+		checkFilePerms(path)
+	}
 
 	checkFilePerms(filepath.Join(dir, "dictdb", "index.db"))
 	checkFilePerms(filepath.Join(dir, "dictdb", "LOCK"))
-	checkFilePerms(filepath.Join(dir, "dictdb", "data-0000.slab"))
 	checkDirPermsIfExists(filepath.Join(dir, "dictdb", "wal"))
 }

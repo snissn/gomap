@@ -15,8 +15,6 @@ var (
 	ErrUnsafeOptions = db.ErrUnsafeOptions
 	// ErrMemtableFull indicates the cached memtable has reached its hard cap.
 	ErrMemtableFull = caching.ErrMemtableFull
-	// ErrMemtableValueLogPointers indicates memtable value-log pointers require WAL/value-log enabled.
-	ErrMemtableValueLogPointers = caching.ErrMemtableValueLogPointers
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = errors.New("treedb: db is closed")

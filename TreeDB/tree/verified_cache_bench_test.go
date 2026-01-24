@@ -9,10 +9,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
-func setupTwoLevelTree(b *testing.B) (*Tree, *pager.Pager, *slab.SlabManager) {
+func setupTwoLevelTree(b *testing.B) (*Tree, *pager.Pager) {
 	b.Helper()
 
 	dir := b.TempDir()
@@ -21,12 +20,6 @@ func setupTwoLevelTree(b *testing.B) (*Tree, *pager.Pager, *slab.SlabManager) {
 		b.Fatalf("Pager open failed: %v", err)
 	}
 	b.Cleanup(func() { _ = p.Close() })
-
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		b.Fatalf("SlabManager open failed: %v", err)
-	}
-	b.Cleanup(func() { _ = sm.Close() })
 
 	// Pages:
 	// 0: Internal (root)
@@ -62,7 +55,7 @@ func setupTwoLevelTree(b *testing.B) (*Tree, *pager.Pager, *slab.SlabManager) {
 	n0.AddInternalChild([]byte("50"), 2)
 	n0.UpdateChecksum()
 
-	return New(p, sm, 0), p, sm
+	return New(p, panicValueReader{}, 0), p
 }
 
 func getNoCache(p *pager.Pager, sr SlabReader, root uint64, key []byte) ([]byte, error) {
@@ -123,7 +116,7 @@ func getNoCache(p *pager.Pager, sr SlabReader, root uint64, key []byte) ([]byte,
 }
 
 func BenchmarkTreeGet_VerifiedCache(b *testing.B) {
-	tr, p, sm := setupTwoLevelTree(b)
+	tr, p := setupTwoLevelTree(b)
 	key := []byte("60")
 
 	b.Run("cache", func(b *testing.B) {
@@ -141,7 +134,7 @@ func BenchmarkTreeGet_VerifiedCache(b *testing.B) {
 	b.Run("verify_always", func(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, _ = getNoCache(p, sm, 0, key)
+			_, _ = getNoCache(p, panicValueReader{}, 0, key)
 		}
 	})
 

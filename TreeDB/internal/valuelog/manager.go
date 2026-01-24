@@ -12,8 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // File represents a value-log segment on disk.
@@ -215,7 +215,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {

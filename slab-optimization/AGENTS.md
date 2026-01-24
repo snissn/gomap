@@ -1,3 +1,6 @@
+> **Legacy note:** This runbook predates the WAL on/off simplification and may reference removed options.
+> Use the current merge-gate runbook + docs for up-to-date guidance.
+
 # Optimization Sprint Runbook (slab-optimization/spec.md)
 Repo: `/Users/michaelseiler/dev/snissn/gomap`
 Commit: `d23d871e1a17baaa23f20f5e023e9650c99116f2`
@@ -85,7 +88,7 @@ Authoritative spec: `slab-optimization/spec.md`
   - Location: add near other cached-mode knobs, e.g. after `treedbFlushThreshold` (line `17`)
   - Change:
     - MUST add `treedbJournalLanes = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")`
-    - MUST thread the value into `treedb.Options` in `NewTreeDB` (line `97`) and `NewTreeDBBackend` (line `138`) ONLY IF the option exists by then; otherwise leave a TODO comment in PR0 code (do not create the option in PR0).
+    - MUST thread the value into `treedb.Options` in `NewTreeDB` (line `97`) ONLY IF the option exists by then; otherwise leave a TODO comment in PR0 code (do not create the option in PR0).
 - MUST document “current benchmark entry points” in PR0 description.
   - File: `.pr/PR0_description.md` (new file)
   - Content MUST include:
@@ -455,7 +458,7 @@ Authoritative spec: `slab-optimization/spec.md`
   - Change:
     - MUST add matching `JournalLanes int` to `caching.Options`.
   - File: `cmd/unified_bench/adapter_treedb.go`
-  - Symbol/location: `NewTreeDB` (line `97`) and `NewTreeDBBackend` (line `138`)
+  - Symbol/location: `NewTreeDB` (line `97`)
   - Change:
     - MUST thread `-treedb-journal-lanes` into `treedb.Options.JournalLanes`.
 - MUST refactor cached-mode durability state from single WAL/vlog writers to per-lane writers.
@@ -954,7 +957,7 @@ Authoritative spec: `slab-optimization/spec.md`
 - PR35 CI: `gh pr checks 93 --watch` → all checks PASS.
 
 `2026-01-22 10:25:55 HST`
-- Added `slab-optimization/AGENTS_LIVE_BENCH.md` (live throughput bench runbook: mode1/mode3/mode4; compression on/off; public TreeDB KV API; no-fsync focus).
+- Added `slab-optimization/AGENTS_LIVE_BENCH.md` (live throughput bench runbook: wal_on/wal_off; compression on/off; public TreeDB KV API; no-fsync focus).
 
 `2026-01-22 10:44:03 HST`
 - Updated `slab-optimization/slab_optimization_merge_runbook.md` to assume the live KV throughput bench exists and to use the correct TreeDB-local bench runners (`TreeDB/cmd/vlog_dict_realdata -bench-kv`, `TreeDB/cmd/unified_bench -suite vlog_autotune -validate`).

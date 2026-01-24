@@ -1,4 +1,4 @@
-# TreeDB Mode3/Mode4 Merge Gate Runbook (Journal + ValueLog + Autotune + Live Bench)
+# TreeDB WAL on/WAL off Merge Gate Runbook (Journal + ValueLog + Autotune + Live Bench)
 
 Status: **Ready-to-execute runbook** (intended to be autonomously executable by a coding agent)  
 Updated: 2026-01-22
@@ -9,10 +9,10 @@ Updated: 2026-01-22
 
 This runbook gates a merge that:
 
-1. Deprecates the pre-sprint “slab + optional WAL” write path (“mode1”).
+1. Removes the pre-sprint “slab + optional WAL” write path (value-log-off).
 2. Makes the new journal + value-log architecture the default and preferred path:
-   - **Mode3 (durable):** journal ON + value log ON (no “write values twice”).
-   - **Mode4 (fast ingest / lower durability):** journal OFF + value log ON (unsafe).
+   - **WAL on (durable):** journal ON + value log ON (no “write values twice”).
+   - **WAL off (fast ingest / lower durability):** journal OFF + value log ON (unsafe).
 3. Consolidates documentation so there is exactly one recommended way to run cached-mode ingest, with deprecated knobs clearly labeled.
 4. Adds thorough test coverage plus a benchmark suite with validation marks, including a marquee benchmark that demonstrates the autotuner’s correctness and impact.
 5. Ensures index/key optimizations are correctness-gated and performance-characterized before being enabled by default.
@@ -42,8 +42,7 @@ If those flags do not exist yet, stop and execute `slab-optimization/AGENTS_LIVE
 
 ### 1.1 Canonical terms (use these in code comments + docs)
 
-- **Backend slab**: the historical append-only `data-*.slab` files used by the backend engine.
-- **Value log (vlog)**: the append-only large-value store used by cached mode when value-log is enabled.
+- **Value log (vlog)**: the append-only large-value store used by cached mode.
 - **Journal**: the unified redo log introduced in the sprint (metadata journal + value journal). When journal is enabled, cached-mode writes become durable without writing large values twice.
 - **WAL (legacy term)**: historically meant “redo log”. In the new architecture, treat “WAL” in public language as synonymous with journal and avoid introducing additional synonyms.
 
@@ -63,19 +62,12 @@ If those flags do not exist yet, stop and execute `slab-optimization/AGENTS_LIVE
 
 ### 1.3 Mode mapping (strict)
 
-The repo historically referenced “mode1/mode2/mode3/mode4”. Treat that numbering as internal only and remove it from user-facing docs.
+The repo historically referenced legacy mode names. Treat that numbering as internal only and remove it from user-facing docs.
 
-Use this mapping when validating regressions or deprecations:
+Use WAL terminology going forward:
 
-| Legacy label | Effective knobs (conceptual) | Status | Meaning |
-|---|---|---|---|
-| **mode1 + WAL on** | Value log OFF, redo log ON | DEPRECATED | Old WAL+slab path; large values can be written twice |
-| **mode1 + WAL off** | Value log OFF, redo log OFF | DEPRECATED | Old “fast but unsafe” path |
-| **mode2** | (varied / inconsistent) | DEPRECATED / N/A | Not supported going forward |
-| **mode3** | Value log ON, journal ON | PREFERRED DEFAULT | Durable cached ingest with reduced amplification |
-| **mode4** | Value log ON, journal OFF | UNSAFE (opt-in) | Fast ingest; writes since last checkpoint can be lost |
-
-Implementation note: “value log ON” typically implies split value-log segments (vlog separate from journal segments) so dict compression is possible.
+- **wal_on**: value log ON, journal ON (preferred default).
+- **wal_off**: value log ON, journal OFF (unsafe; opt-in).
 
 ---
 
@@ -83,27 +75,26 @@ Implementation note: “value log ON” typically implies split value-log segmen
 
 ### 2.1 Defaults (normative)
 
-1. Cached mode defaults to Mode3 (journal ON + value log ON).
-2. Mode4 is opt-in and requires `AllowUnsafe=true` (or equivalent) because it changes durability semantics.
-3. The value-log compression autotuner is enabled by default when the value log is enabled (Mode3/Mode4), using a conservative preset (e.g., `AutotuneMedium`).
+1. Cached mode defaults to WAL on (journal ON + value log ON).
+2. WAL off is opt-in and requires `AllowUnsafe=true` (or equivalent) because it changes durability semantics.
+3. The value-log compression autotuner is enabled by default when the value log is enabled (WAL on/WAL off), using a conservative preset (e.g., `AutotuneMedium`).
 4. All other experimental knobs (index encodings, key encodings) remain off by default until they pass the benchmark+correctness gates in this runbook.
 
 ### 2.2 Deprecations (normative)
 
 - All user-facing documentation must clearly label the following as deprecated:
-  - any “slab mode1” guidance
-  - any “mode2” guidance
+  - any legacy slab/value-log-off guidance
   - any guidance implying “WAL contains values and values are written twice”
 - The following must be the only recommended paths in docs:
-  - Durable ingest: Mode3
-  - Fast ingest (unsafe): Mode4
+  - Durable ingest: WAL on
+  - Fast ingest (unsafe): WAL off
 
 ### 2.3 Public API / developer experience (normative)
 
 - Public docs must not require users to understand internal flags to get a correct setup.
 - Provide high-level entry points (examples):
-  - `OptionsFor(ProfileDurable, dir)` → Mode3
-  - `OptionsFor(ProfileFastIngest, dir)` → Mode4 (+ requires unsafe)
+  - `OptionsFor(ProfileDurable, dir)` → WAL on
+  - `OptionsFor(ProfileFastIngest, dir)` → WAL off (+ requires unsafe)
 - Ensure `treedb.Open(...)` is bench-friendly:
   - no unconditional stderr prints that break `benchstat`
   - logs must be behind an explicit debug flag or logger injection
@@ -114,12 +105,10 @@ Document and present these as the only supported, forward-looking knobs (names m
 
 | Concern | Preferred knobs | Notes | Default after sprint |
 |---|---|---|---|
-| Mode selection | `DisableJournal` (Mode4), *absence* of it (Mode3) | Mode4 changes durability semantics; must require unsafe opt-in | Mode3 |
-| Value-store selection | Value log ON (default in cached mode), `DisableValueLog` | Treat “value log OFF” path as legacy mode1 | ON |
+| Mode selection | `DisableWAL` (WAL off), *absence* of it (WAL on) | WAL off changes durability semantics; must require unsafe opt-in | WAL on |
 | Journal compression | `JournalCompression` / `-treedb-journal-compress` | Performance-only; keep default off unless proven | OFF |
 | Value-log dict compression | dict compression enable + training/tuning knobs | Gate “on by default” behind benchmarks; require pause/probe guardrails | TBD (see Section 5) |
 | Autotuner | `ValueLogCompressionAutotune` | Default on (Medium) with bounded overhead | ON |
-| Mode4 pointer policy | `MemtableValueLogPointers` (eager vs deferred) | Benchmark both; prefer deferred unless eager wins consistently | TBD |
 | Index encodings | `IndexColumnarLeaves`, `IndexInternalBaseDelta` | Must pass reopen+scan test; default off until proven | OFF |
 | B-tree key optimizations | key encoding flags (if any) | Must pass correctness + scan/point lookup perf | OFF until gated |
 
@@ -167,19 +156,19 @@ go test ./... -race -count=1
 
 These are behavioral contracts you must enforce with tests and/or verification tools.
 
-**Mode3 (journal ON + value log ON):**
+**WAL on (journal ON + value log ON):**
 - After `WriteSync`/`Checkpoint`, a crash+reopen preserves all committed keys.
 - Reads (`Get`, iterators, scans) return correct values across reopen.
 - Large values stored in the value log are readable without requiring a secondary rewrite.
 
-**Mode4 (journal OFF + value log ON):**
+**WAL off (journal OFF + value log ON):**
 - Crash+reopen may lose recent writes (by design), but must never corrupt the DB:
   - no panics
   - no invariant violations
   - verify/scan completes
 
-**Deprecated mode1:**
-- Tests should continue to pass while the code path exists, but documentation must not recommend it.
+**Legacy value-log-off path:**
+- Removed; no additional coverage required beyond ensuring no references remain.
 
 ### 3.3 Correctness gate: index/key optimizations
 
@@ -208,7 +197,7 @@ Minimum required benchmark sets are defined in Section 5.
 
 Before flipping defaults or removing old docs, ensure:
 
-- one canonical doc explains Mode3/Mode4 and uses the terminology in Section 1
+- one canonical doc explains WAL on/WAL off and uses the terminology in Section 1
 - deprecated options are labeled DEPRECATED and moved to a dedicated section
 - benchmarks docs specify:
   - how to reproduce
@@ -234,9 +223,9 @@ Required matrix:
 
 | Test name | Mode | Durability action | Expectations |
 |---|---|---|---|
-| `TestReopenVerify_Mode3_Checkpoint` | Mode3 | `Checkpoint()` | all keys preserved; scan passes |
-| `TestReopenVerify_Mode3_WriteSync` | Mode3 | `SetSync`/`WriteSync` | all keys preserved; scan passes |
-| `TestReopenVerify_Mode4_NoJournal` | Mode4 | none | scan passes; values correct for keys that survived |
+| `TestReopenVerify_WAL on_Checkpoint` | WAL on | `Checkpoint()` | all keys preserved; scan passes |
+| `TestReopenVerify_WAL on_WriteSync` | WAL on | `SetSync`/`WriteSync` | all keys preserved; scan passes |
+| `TestReopenVerify_WAL off_NoJournal` | WAL off | none | scan passes; values correct for keys that survived |
 
 Implementation notes:
 - Use a temp dir and clean it per test.
@@ -251,11 +240,11 @@ TreeDB already has crash-recovery style tests; extend or add coverage so mode se
 
 Minimal required crash cases:
 
-- Mode3:
+- WAL on:
   - write N keys, `Checkpoint()`, simulate crash, reopen, verify all N keys
   - write N keys, `WriteSync()` boundary, crash, reopen, verify all keys up to the boundary
 
-- Mode4:
+- WAL off:
   - write N keys without checkpoint, crash, reopen, verify:
     - DB opens without repair loops/panics
     - full scan completes
@@ -328,7 +317,7 @@ Guiding principle:
 - Use deterministic validation marks for CI gating (autotune behavior, invariants).
 - Use wall-time benchmarks as a local merge gate (throughput/perf regressions), with outputs attached to PRs.
 
-### 5.2 Mode3/Mode4 vs deprecated mode1 (local merge gate)
+### 5.2 WAL on/WAL off (local merge gate)
 
 You must run the following comparisons on the same host.
 
@@ -340,13 +329,12 @@ Run the full matrix and save logs:
 
 ```bash
 # Compression OFF baseline set
-go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode1 -bench-compression off | tee out/live_mode1_off.log
-go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression off | tee out/live_mode3_off.log
-go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression off | tee out/live_mode4_off.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode wal_on -bench-compression off | tee out/live_wal_on_off.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode wal_off -bench-compression off | tee out/live_wal_off_off.log
 
 # Compression ON feature set
-go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode3 -bench-compression on  | tee out/live_mode3_on.log
-go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode mode4 -bench-compression on  | tee out/live_mode4_on.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode wal_on -bench-compression on  | tee out/live_wal_on_on.log
+go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv -bench-mode wal_off -bench-compression on  | tee out/live_wal_off_on.log
 ```
 
 Acceptance criteria (practical, not absolute):
@@ -354,9 +342,8 @@ Acceptance criteria (practical, not absolute):
 - `compression=off` runs show no dict activity (`dict_id==0` and `kept_frac≈0`).
 - For compressible datasets, `compression=on` runs show dict activity (`dict_id!=0`, `kept_frac>0`) and should not regress steady-state throughput versus `off` without an explanation.
 - Mode expectations should match:
-  - mode1 ⇒ `value_store=backend_flush`, `redo_log=on`
-  - mode3 ⇒ `value_store=value_log`, `redo_log=on`
-  - mode4 ⇒ `value_store=value_log_deferred`, `redo_log=off`
+  - wal_on ⇒ `value_store=value_log`, `redo_log=on`
+  - wal_off ⇒ `value_store=value_log`, `redo_log=off`
 
 Notes:
 - This bench is explicitly **no-fsync / relaxed durability** (uses `Batch.Write()` only). It is intended to answer “how fast can we ingest” under current development priorities.
@@ -371,22 +358,20 @@ go run ./cmd/unified_bench   -dbs treedb   -test random_write,dataset_write_rand
 ```
 
 Run it for:
-- Mode3 (default)
-- Mode4 (unsafe: disable journal)
-- Deprecated mode1 baselines (value log off, WAL on/off), only for comparison while code exists
+- WAL on (default)
+- WAL off (unsafe: disable journal)
 
 Acceptance criteria (normative, starting point):
-- Mode3 throughput must be >= deprecated mode1 + WAL on, within noise (or better).
-- Mode4 throughput must be >= deprecated mode1 + WAL off, within noise (or better).
+- WAL on throughput should be within noise of WAL off for ingest-focused workloads, unless a regression is explained.
 
 If any comparison fails:
 - identify regression root cause
 - either fix or explicitly document exception + keep default-off for the regressing path
 
-**Workload B: scan regressions + index/key flags (backend-only)**
+**Workload B: scan regressions + index/key flags**
 
 ```bash
-go run ./cmd/unified_bench   -dbs treedbbackend -exclude-dbs \"\"   -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1   -settle-before-scans   -format markdown -progress=false   > out/scan_compare.md
+go run ./cmd/unified_bench   -dbs treedb   -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1   -settle-before-scans   -format markdown -progress=false   > out/scan_compare.md
 ```
 
 Run baseline and with each index/key encoding flag under test.
@@ -400,18 +385,16 @@ Minimum required comparisons:
 
 1) **Live KV throughput (one compressible config + one incompressible config)**  
    - Run on **both** branches (`main` and `sprint/rc_1`) with identical flags:
-     - `mode3` + `compression=off`
-     - `mode3` + `compression=on`
+     - `wal_on` + `compression=off`
+     - `wal_on` + `compression=on`
    - Use the same dataset and `-bench-raw-mib/-bench-batch/-train/-eval` values.
    - If `main` does **not** have `-bench-kv` flags, record the absence and skip the
      live bench on `main` (do not backport just for this comparison).
 
 2) **Synthetic large-value comparisons**  
    Run the Workload A `cmd/unified_bench` matrix on **both** branches:
-   - mode3 (default)
-   - mode4 (disable journal + allow unsafe)
-   - mode1 WAL on (disable value log)
-   - mode1 WAL off (disable WAL + allow unsafe)
+   - wal_on (default)
+   - wal_off (DisableWAL + AllowUnsafe)
 
 Artifacts (store separately per branch):
 - `out/head_to_head_main/*`
@@ -444,8 +427,8 @@ valsizes="128 1024 16384"
 tests="random_write,dataset_write_random,random_read"
 
 # On main: avoid value-log pointer paths if they are known-unsafe on your main
-# branch (historic WAL-pointer corruption). Use a huge threshold so values land
-# in the backend slabs instead of pointers.
+# branch (historic WAL-pointer corruption). Use a huge threshold so values stay
+# inline in the index instead of using value-log pointers.
 main_flags="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum -treedb-value-log-threshold 1073741824"
 
 # On rc: run both "default threshold" (0=default inline threshold) and
@@ -453,11 +436,11 @@ main_flags="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-check
 rc_default_threshold="-treedb-value-log-threshold 0"
 rc_force_pointers="-treedb-value-log-threshold 1"
 
-# rc mode3 (journal ON + value log ON) knobs
-rc_mode3="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum"
+# rc wal_on (journal ON + value log ON) knobs
+rc_wal_on="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum"
 
-# rc mode4 (journal OFF + value log ON) knobs
-rc_mode4="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum -treedb-disable-journal -treedb-memtable-value-log-pointers=false"
+# rc wal_off (journal OFF + value log ON) knobs
+rc_wal_off="-treedb-allow-unsafe -treedb-relaxed-sync -treedb-disable-read-checksum -treedb-disable-wal"
 
 # rc compression toggles (dict compression)
 rc_comp_off="-treedb-vlog-dict-train-bytes -1"
@@ -468,19 +451,19 @@ for v in $valsizes; do
   go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $main_flags > out/head_main_wal_on_v${v}.md
   go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $main_flags -treedb-disable-wal > out/head_main_wal_off_v${v}.md
 
-  # rc mode3 (off/on)
-  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode3 $rc_default_threshold $rc_comp_off > out/head_rc_mode3_off_v${v}.md
-  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode3 $rc_default_threshold $rc_comp_on  > out/head_rc_mode3_on_v${v}.md
+  # rc wal_on (off/on)
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_wal_on $rc_default_threshold $rc_comp_off > out/head_rc_wal_on_off_v${v}.md
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_wal_on $rc_default_threshold $rc_comp_on  > out/head_rc_wal_on_on_v${v}.md
 
-  # rc mode4 (off/on)
-  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode4 $rc_default_threshold $rc_comp_off > out/head_rc_mode4_off_v${v}.md
-  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_mode4 $rc_default_threshold $rc_comp_on  > out/head_rc_mode4_on_v${v}.md
+  # rc wal_off (off/on)
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_wal_off $rc_default_threshold $rc_comp_off > out/head_rc_wal_off_off_v${v}.md
+  go run ./cmd/unified_bench -dbs treedb -test "$tests" -keys $keys -valsize $v -batchsize $batch -seed $seed -format markdown -progress=false -keep $rc_wal_off $rc_default_threshold $rc_comp_on  > out/head_rc_wal_off_on_v${v}.md
 done
 
 # Scan regressions (settled): run at least once per branch + config.
 go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $main_flags > out/head_main_scan.md
-go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_mode3 $rc_default_threshold $rc_comp_off > out/head_rc_mode3_scan.md
-go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_mode4 $rc_default_threshold $rc_comp_off > out/head_rc_mode4_scan.md
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_wal_on $rc_default_threshold $rc_comp_off > out/head_rc_wal_on_scan.md
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan -keys 100000 -valsize 128 -batchsize $batch -seed $seed -format markdown -progress=false -settle-before-scans -keep $rc_wal_off $rc_default_threshold $rc_comp_off > out/head_rc_wal_off_scan.md
 ```
 
 Interpretation guidance:
@@ -571,20 +554,19 @@ Goal: remove confusion and clearly mark deprecated options.
 
 Tasks:
 1. Create/upgrade a canonical doc (suggested path): `docs/TREEDB_WRITE_PATHS.md` that:
-   - defines Mode3/Mode4 using the terminology in Section 1
-   - includes a table mapping deprecated mode1/mode2 terms
+   - defines WAL on/WAL off using the terminology in Section 1
    - documents durability semantics
 2. Update other docs to:
    - link to the canonical doc
-   - add a `DEPRECATED:` banner at the top of old slabs/mode1 docs
+   - add a `DEPRECATED:` banner at the top of old slab-era docs
 3. Prune unused/irrelevant files:
-   - search for references to “mode1”, “mode2”, “old slab”, “slab WAL” and either:
+   - search for references to legacy slab-era guidance and either:
      - delete docs that are clearly obsolete and unreferenced, OR
      - move them to a `docs/deprecated/` folder with a banner
 
 Validation: `go test ./... -count=1` (docs-only PR should not change behavior).
 
-### PR1 — Correctness gates for Mode3/Mode4 + Index flags
+### PR1 — Correctness gates for WAL on/WAL off + Index flags
 
 Goal: add tests so the new defaults cannot regress silently.
 
@@ -617,18 +599,15 @@ go run ./TreeDB/cmd/unified_bench -suite vlog_autotune -validate
 
 ### PR3 — Defaults flip + feature flag cleanup
 
-Goal: make Mode3 the default and reduce surface area.
+Goal: make WAL on the default and reduce surface area.
 
 Tasks:
 1. Ensure default profiles map cleanly:
-   - `ProfileDurable` → Mode3
-   - `ProfileFastIngest` → Mode4 + requires unsafe
-2. Ensure deprecated mode1 configuration paths are:
-   - not referenced by default profiles
-   - not mentioned as recommended in docs
-   - still available behind explicit deprecated knobs (until PR4)
-3. Ensure the value-log autotuner default is “on” for value log enabled, but bounded (medium preset).
-4. Hide noisy logs:
+   - `ProfileDurable` → WAL on
+   - `ProfileFast` → WAL off + requires unsafe
+   - `ProfileFastIngest` → WAL on + relaxed sync (unsafe)
+2. Ensure the value-log autotuner default is “on” for value log enabled, but bounded (medium preset).
+3. Hide noisy logs:
    - remove unconditional `fmt.Fprintf(os.Stderr, ...)` in open paths
    - provide an opt-in debug mechanism (env var or injected logger)
 
@@ -636,17 +615,17 @@ Validation:
 - run local merge gate benchmarks from Section 5.2 and attach outputs
 - run microbench suite from Section 5.4 and attach outputs
 
-### PR4 — Remove deprecated paths (optional, only after confidence)
+### PR4 — Remove legacy paths (optional, only after confidence)
 
-Goal: delete legacy mode1/mode2 code and reduce maintenance burden.
+Goal: delete legacy slab-era code and reduce maintenance burden.
 
 Preconditions:
-- Mode3 and Mode4 are stable
+- WAL on and WAL off are stable
 - docs are consolidated
 - benchmarks show no regressions that require fallback
 
 Tasks:
-- delete mode1/mode2-only code paths
+- delete any remaining slab-era code paths
 - remove deprecated flags from CLI adapters
 - delete deprecated docs or move to archive
 
@@ -659,7 +638,7 @@ Tasks:
 After the sprint, docs should present a single, low-confusion surface:
 
 1. Write paths and durability: `docs/TREEDB_WRITE_PATHS.md`
-   - Mode3 (default) and Mode4 (unsafe)
+   - WAL on (default) and WAL off (unsafe)
    - explicit explanation that the old slab/WAL path is deprecated
    - examples using `OptionsFor(Profile...)`
 
@@ -696,7 +675,7 @@ find docs -type f -maxdepth 3 | sort > out/docs_files.txt
 2. Find duplicate/outdated content:
 
 ```bash
-grep -RIn --line-number "mode1\|mode2\|old slab\|slab WAL\|write twice" docs | tee out/docs_mode_mentions.txt
+grep -RIn --line-number "legacy slab\|old slab\|slab WAL\|write twice" docs | tee out/docs_mode_mentions.txt
 ```
 
 3. For each file flagged:
@@ -712,7 +691,7 @@ grep -RIn --line-number "mode1\|mode2\|old slab\|slab WAL\|write twice" docs | t
 
 - [ ] `go test ./...` passes
 - [ ] `go test ./... -race` passes
-- [ ] Crash recovery coverage covers Mode3 and Mode4 semantics
+- [ ] Crash recovery coverage covers WAL on and WAL off semantics
 - [ ] `IndexColumnarLeaves` and other new index/key flags pass integration reopen+scan tests
 - [ ] Autotuner validation marks suite (deterministic) passes in CI (if autotuner is present)
 - [ ] Local `unified_bench` mode comparisons are attached to PR and meet acceptance criteria
@@ -723,7 +702,7 @@ grep -RIn --line-number "mode1\|mode2\|old slab\|slab WAL\|write twice" docs | t
 
 Reject or require changes if:
 
-- defaults still reference deprecated mode1
+- defaults still reference legacy slab-era knobs
 - user-facing docs recommend enabling unsafe flags without requiring `AllowUnsafe`
 - any flag is promoted by default without passing the correctness gate in Section 3.3
 - benchmark artifacts are missing for performance-impacting changes
@@ -739,7 +718,7 @@ Keep these commands stable so results remain comparable across branches.
 go run ./cmd/unified_bench -dbs treedb -test random_write,dataset_write_random   -keys 20000 -valsize 16384 -batchsize 1000 -seed 1 -format markdown -progress=false
 
 # Backend scans
-go run ./cmd/unified_bench -dbs treedbbackend -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1 -settle-before-scans -format markdown -progress=false
+go run ./cmd/unified_bench -dbs treedb -test full_scan,prefix_scan   -keys 100000 -valsize 128 -seed 1 -settle-before-scans -format markdown -progress=false
 ```
 
 ## Appendix B: Benchmark artifact conventions

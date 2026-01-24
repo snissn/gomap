@@ -37,14 +37,14 @@ func waitForDictAppliedStrict(db kvstore.DB, timeout time.Duration) bool {
 	return parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") != 0
 }
 
-func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
+func TestProfileVlogDict_WALOff_DictOn_Ultra_1024(t *testing.T) {
 	// Steady-state CPU profile (post-warmup) for:
-	// - mode4 (DisableJournal=true)
+	// - wal_off (DisableWAL=true)
 	// - dict enabled
 	// - ultra_compressible_repeat, 1KiB values
 	//
 	// Run:
-	//   go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode4_DictOn_Ultra_1024 -count=1 -v
+	//   go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WALOff_DictOn_Ultra_1024 -count=1 -v
 	// Optional:
 	//   VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_cpu.pprof
 	const (
@@ -65,7 +65,7 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	dictOff := os.Getenv("VLOG_DICT_DISABLE") == "1"
 
 	tc := valueLogDictSuiteCase{
-		mode:     "mode4",
+		mode:     "wal_off",
 		dictOn:   !dictOff,
 		pattern:  "ultra_compressible_repeat",
 		valueSz:  1024,
@@ -142,7 +142,7 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 
 	profilePath := os.Getenv("VLOG_DICT_CPUPROFILE")
 	if profilePath == "" {
-		profilePath = "/tmp/vlog_dict_mode4_ultra_1024_cpu.pprof"
+		profilePath = "/tmp/vlog_dict_wal_off_ultra_1024_cpu.pprof"
 	}
 	f, err := os.Create(profilePath)
 	if err != nil {
@@ -206,14 +206,14 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	t.Logf("read elapsed=%s ops/s=%.0f MB/s=%.1f", readElapsed, readOps, readMB)
 }
 
-func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
+func TestProfileVlogDict_WALOn_DictOn_Ultra_1024(t *testing.T) {
 	// Steady-state CPU profile (post-warmup) for:
-	// - mode3 (DisableJournal=false)
+	// - wal_on (DisableWAL=false)
 	// - dict enabled
 	// - ultra_compressible_repeat, 1KiB values
 	//
 	// Run:
-	//   go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v
+	//   go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WALOn_DictOn_Ultra_1024 -count=1 -v
 	// Optional:
 	//   VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_cpu.pprof
 	const (
@@ -234,7 +234,7 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 	dictOff := os.Getenv("VLOG_DICT_DISABLE") == "1"
 
 	tc := valueLogDictSuiteCase{
-		mode:     "mode3",
+		mode:     "wal_on",
 		dictOn:   !dictOff,
 		pattern:  "ultra_compressible_repeat",
 		valueSz:  1024,
@@ -307,7 +307,7 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 
 	profilePath := os.Getenv("VLOG_DICT_CPUPROFILE")
 	if profilePath == "" {
-		profilePath = "/tmp/vlog_dict_mode3_ultra_1024_cpu.pprof"
+		profilePath = "/tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof"
 	}
 	f, err := os.Create(profilePath)
 	if err != nil {

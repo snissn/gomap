@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/slab"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 const valuelogFuzzMaxRecord = 1 << 20
@@ -51,9 +51,9 @@ func FuzzValueLogReader(f *testing.F) {
 		if len(data) > valuelogFuzzMaxRecord {
 			return
 		}
-		oldMax := slab.MaxRecordSize
-		slab.MaxRecordSize = valuelogFuzzMaxRecord
-		t.Cleanup(func() { slab.MaxRecordSize = oldMax })
+		oldMax := limits.MaxRecordSize
+		limits.MaxRecordSize = valuelogFuzzMaxRecord
+		t.Cleanup(func() { limits.MaxRecordSize = oldMax })
 
 		dir := t.TempDir()
 		path := filepath.Join(dir, "value-l0-000001.log")

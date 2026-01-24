@@ -27,7 +27,7 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	if size < 0 {
 		size = 0
 	}
-	internal := batch.New(db.slabManager, threshold)
+	internal := batch.New(db.valueLogManager, threshold)
 	internal.Reserve(size)
 	return &Batch{
 		db:    db,
@@ -128,17 +128,6 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
-	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
-	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
-		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
-		}
-	}
-
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
@@ -188,16 +177,6 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err != nil {
 		return err
 	}
-	metrics.SlabWriteBytes += b.batch.SlabWriteBytes()
-	if byFile := b.batch.SlabWriteBytesByFile(); len(byFile) > 0 {
-		if metrics.SlabWriteBytesByFile == nil {
-			metrics.SlabWriteBytesByFile = byFile
-		} else {
-			for id, n := range byFile {
-				metrics.SlabWriteBytesByFile[id] += n
-			}
-		}
-	}
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
@@ -243,21 +222,13 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 	for _, entry := range entries {
 		if entry.IsPtr && entry.Value == nil {
 			ptr := entry.ValuePtr
-			var (
-				val []byte
-				err error
-			)
-			if page.IsValueLogFileID(ptr.FileID) {
-				if b.db == nil || b.db.valueLogManager == nil {
-					return fmt.Errorf("missing value log manager")
-				}
-				val, err = b.db.valueLogManager.Read(ptr)
-			} else {
-				if b.db == nil || b.db.slabManager == nil {
-					return fmt.Errorf("missing slab manager")
-				}
-				val, err = b.db.slabManager.Read(ptr)
+			if !page.IsValueLogFileID(ptr.FileID) {
+				return fmt.Errorf("expected value-log pointer, got file=%d", ptr.FileID)
 			}
+			if b.db == nil || b.db.valueLogManager == nil {
+				return fmt.Errorf("missing value log manager")
+			}
+			val, err := b.db.valueLogManager.Read(ptr)
 			if err != nil {
 				return err
 			}

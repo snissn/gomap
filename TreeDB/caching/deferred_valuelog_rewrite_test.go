@@ -11,8 +11,7 @@ func TestDB_DeferValueLogOps_DoesNotDedupDuplicates(t *testing.T) {
 	backend := NewMockBackend()
 	db, err := Open(t.TempDir(), backend, Options{
 		AllowUnsafe:    true,
-		DisableJournal: true,
-		SplitValueLog:  true,
+		DisableWAL:     true,
 		FlushThreshold: 1 << 30,
 		MemtableMode:   "skiplist",
 		MemtableShards: 1,

@@ -66,13 +66,12 @@ const (
 	// for keeping the index compact and read-friendly.
 	ProfileFast Profile = "fast"
 
-	// ProfileFastIngest is a "fast ingest" profile that explicitly keeps the
-	// cached value-log path enabled.
+	// ProfileFastIngest is a "fast ingest" profile that keeps WAL on while
+	// relaxing sync/checksum policies for throughput.
 	//
 	// It is intended for write-heavy benchmarks and bulk ingest workloads where:
 	//   - cached mode should be used, and
-	//   - out-of-line values should flow through the value log (pointer-based),
-	//     rather than being forced through backend-only slab-direct writes.
+	//   - value-log pointers should remain enabled (default behavior).
 	//
 	// Note: This profile is unsafe (RelaxedSync + DisableReadChecksum) and
 	// requires `Options.AllowUnsafe = true` to open.
@@ -115,10 +114,6 @@ func ApplyProfile(opts *Options, profile Profile) {
 		return
 	}
 
-	// Always default to cached mode unless the caller explicitly chose otherwise.
-	// (This mirrors TreeDB's existing behavior but makes the profile intent clear.)
-	// Note: Options.Mode is an enum; zero value is ModeCached.
-
 	switch profile {
 	case ProfileDurable:
 		applyDurableProfile(opts)
@@ -139,7 +134,6 @@ func applyDurableProfile(opts *Options) {
 	//
 	// Leave background behaviors at their defaults (0), which currently means:
 	//   - cached-mode auto checkpoint ON
-	//   - background index vacuum ON
 	if !opts.DisableWAL {
 		// Keep as-is; explicit false is already safe.
 	}
@@ -172,13 +166,8 @@ func applyFastProfile(opts *Options) {
 }
 
 func applyFastIngestProfile(opts *Options) {
-	// Fast ingest keeps the value-log path enabled but disables the journal/redo
-	// log (a crash can lose writes since the last checkpoint).
+	// Fast ingest keeps WAL on, but relaxes sync/checksum policies.
 	opts.DisableWAL = false
-	opts.DisableJournal = true
-	opts.DisableValueLog = false
-	opts.SplitValueLog = true
-	opts.MemtableValueLogPointers = true
 
 	// Unsafe speed knobs.
 	opts.RelaxedSync = true
@@ -194,20 +183,6 @@ func applyBenchProfile(opts *Options) {
 	// Determinism: disable background workers that can inject large, unrelated
 	// work mid-benchmark.
 	//
-	// Vacuum: by default TreeDB enables background index vacuum (interval default
-	// is 30s). That can fire mid-run and dominate CPU/allocs, making write-heavy
-	// benchmarks noisy. Disable unless the caller explicitly set it.
-	if opts.BackgroundIndexVacuumInterval == 0 {
-		opts.BackgroundIndexVacuumInterval = -1
-	}
-
-	// Background slab compaction is opt-in (>0), so no need to disable, but we
-	// explicitly set it to "<0" when unset to signal "do not start" if future
-	// defaulting changes.
-	if opts.BackgroundCompactionInterval == 0 {
-		opts.BackgroundCompactionInterval = -1
-	}
-
 	// Auto-checkpointing only matters when WAL is enabled, but for bench-mode we
 	// also disable it explicitly to reduce background wakeups if the caller later
 	// enables WAL.

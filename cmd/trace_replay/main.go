@@ -48,10 +48,7 @@ func main() {
 	outDir := flag.String("dir", "", "DB directory (default: temp)")
 	seed := flag.Int64("seed", 1, "RNG seed")
 	scale := flag.Float64("scale", 1.0, "Scale factor for counts in summary")
-	mode := flag.String("mode", "cached", "TreeDB mode: cached or backend")
-	disableWAL := flag.Bool("disable-wal", false, "Disable journal+value log (legacy alias; deprecated)")
-	disableJournal := flag.Bool("disable-journal", false, "Disable journal/redo records while keeping value-log pointers (unsafe)")
-	disableVlog := flag.Bool("disable-vlog", false, "Disable value log")
+	disableWAL := flag.Bool("disable-wal", false, "Disable WAL/journal (unsafe)")
 	flushThreshold := flag.Int("flush-threshold", 32*1024*1024, "Flush threshold bytes")
 	memtableShards := flag.Int("memtable-shards", 0, "Memtable shards (0 = default)")
 	flag.Parse()
@@ -88,18 +85,9 @@ func main() {
 	}
 	fmt.Printf("trace_replay: dir=%s\n", dir)
 
-	modeVal := treedb.ModeCached
-	switch strings.ToLower(*mode) {
-	case "backend", "uncached", "raw":
-		modeVal = treedb.ModeBackend
-	}
-
 	opts := treedb.Options{
 		Dir:                 dir,
-		Mode:                modeVal,
 		DisableWAL:          *disableWAL,
-		DisableJournal:      *disableJournal,
-		DisableValueLog:     *disableVlog,
 		FlushThreshold:      int64(*flushThreshold),
 		MemtableShards:      *memtableShards,
 		AllowUnsafe:         true,

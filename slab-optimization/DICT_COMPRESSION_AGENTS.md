@@ -1,6 +1,9 @@
-# Dictionary Compression Sprint Runbook (ValueLog / mode3+mode4)
+> **Legacy note:** This runbook predates the WAL on/off simplification and may reference removed options.
+> Use the current merge-gate runbook + docs for up-to-date guidance.
 
-This file is an execution runbook for the next optimization sprint focused on **ValueLog dictionary compression** (TreeDB cached mode, mode3 + mode4). It is written to be followed by a coding agent (and reviewed by humans) and is intentionally explicit about benchmarking discipline and the optimization loop.
+# Dictionary Compression Sprint Runbook (ValueLog / wal_on+wal_off)
+
+This file is an execution runbook for the next optimization sprint focused on **ValueLog dictionary compression** (TreeDB cached mode, wal_on + wal_off). It is written to be followed by a coding agent (and reviewed by humans) and is intentionally explicit about benchmarking discipline and the optimization loop.
 
 ## Scope and Goals
 
@@ -41,7 +44,7 @@ Starting PR for this sprint:
   - Key benches live at: `TreeDB/internal/valuelog/dict_compressibility_bench_test.go`
 
 Related work (write-path baseline):
-- Mode1 vs mode4 parity work culminating in PR18 and PR17; mode4 is now competitive.
+- Mode1 vs wal_off parity work culminating in PR18 and PR17; wal_off is now competitive.
 
 ## Definitions (what we measure)
 
@@ -120,12 +123,12 @@ Deliverables:
 Acceptance:
 - Benches complete in reasonable time and are stable enough for median-of-5 runs.
 
-### PR22 — End-to-end unified-bench suite for dict compression (mode3 + mode4)
+### PR22 — End-to-end unified-bench suite for dict compression (wal_on + wal_off)
 Branch: `sprint/slabopt-pr22-unifiedbench-dict-suite`
-Title: `PR22: unified-bench suite for value-log dict compression (mode3/mode4)`
+Title: `PR22: unified-bench suite for value-log dict compression (wal_on/wal_off)`
 Deliverables:
 - Add a suite (or extend an existing suite) to test:
-  - mode3 and mode4
+  - wal_on and wal_off
   - compression enabled vs disabled
   - compressible vs incompressible patterns
   - **ultra-compressible** pattern to validate the “best case” ratio
@@ -150,7 +153,7 @@ Targets (in priority order):
    - If ratio is not “obviously great”, treat it as a correctness/benchmark bug first (before tuning).
 1) **Incompressible overhead at 1KiB**
    - Make “dict enabled” converge to `attempted_frac≈0` quickly.
-   - Confirm mode3/mode4 ops/sec is ~unchanged vs dict disabled.
+   - Confirm wal_on/wal_off ops/sec is ~unchanged vs dict disabled.
 2) **Compressible throughput + ratio**
    - For highly/medium compressible patterns, ensure we get strong `observed_ratio` while keeping throughput acceptable.
    - Avoid hard-coding `k=8`; K should be **chosen dynamically** from data (and may exceed 8). `k=8` is a temporary stopgap.
@@ -231,7 +234,7 @@ Examples:
 ### Loop step 1 — Establish baseline (RUNS=5, median-3)
 Run:
 - Microbench baseline (`go test ... -bench ... -benchmem`)
-- End-to-end baseline (unified-bench suite; mode3 and mode4)
+- End-to-end baseline (unified-bench suite; wal_on and wal_off)
 
 Record:
 - throughput
@@ -250,7 +253,7 @@ Commands (examples):
 - Go bench CPU profile:
   - `go test ./TreeDB/internal/valuelog -run ^$ -bench BenchmarkValueLogDictCompressibilityCPU_NoIO/... -cpuprofile /tmp/vlog_cpu.prof`
 - unified-bench CPU profile:
-  - `./bin/unified-bench ... -cpuprofile /tmp/ub_mode4_dict.cpu`
+  - `./bin/unified-bench ... -cpuprofile /tmp/ub_wal_off_dict.cpu`
 - Inspect:
   - `go tool pprof -http=:0 /tmp/vlog_cpu.prof`
 
@@ -272,7 +275,7 @@ Commit discipline:
 Re-run:
 - the target microbench case
 - a minimal “sanity sweep” (one compressible and one incompressible)
-- end-to-end suite (mode3 + mode4)
+- end-to-end suite (wal_on + wal_off)
 
 If you can’t see improvement:
 - revert the change (or keep it behind a flag) and move on.
@@ -304,11 +307,11 @@ Dict modes:
 
 K values:
 - fixed `k=1`, `k=4`, `k=8` (plus dynamic K selection in end-to-end)
-- TODO: extend dynamic K exploration to include `k=16` and `k=MaxFrameK` where it makes sense (especially for write-heavy mode4),
+- TODO: extend dynamic K exploration to include `k=16` and `k=MaxFrameK` where it makes sense (especially for write-heavy wal_off),
   while keeping read-path costs in mind.
 
 Workloads:
-- Write-heavy (mode4 and mode3)
+- Write-heavy (wal_off and wal_on)
 - Mixed write+read (later: add read phase after write)
 
 ## Implementation Hotspots to Watch (expected)
@@ -325,16 +328,16 @@ Read path:
 - Dictionary codec cache behavior (enc/dec pools, lock contention)
 - Reader buffering/mmap behavior (already have mmap read optimizations; verify they still win)
 
-## End-to-end Mode3/Mode4 knobs (reference)
+## End-to-end WAL on/WAL off knobs (reference)
 
 These are the knobs we use for controlled comparisons in unified-bench:
 
-Mode3 (journaled, split vlog):
-- `-treedb-split-value-log`
+WAL on (journaled):
+- default behavior (no special flags)
 - (optional perf toggles for experiments) `-treedb-relaxed-sync -treedb-disable-read-checksum` with `-treedb-allow-unsafe`
 
-Mode4 (deferred vlog, no redo log):
-- `-treedb-disable-journal -treedb-split-value-log`
+WAL off (no journal / redo log):
+- `-treedb-disable-wal` (requires `-treedb-allow-unsafe`)
 - same optional perf toggles as above for controlled comparisons
 
 Dict training controls:

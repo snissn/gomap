@@ -53,8 +53,6 @@ The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent wo
 
 - **TreeDB (Cached)**: `treedb`
   - Default mode. Memtable + journal -> Async Flush.
-- **TreeDB (Backend)**: `treedbbackend`
-  - Direct B+Tree writes. No memtable.
 - **HashDB**: `hashdb`
   - Mmap-based hash index. No ordered scans.
 - **BadgerDB**: `badger` (v4)

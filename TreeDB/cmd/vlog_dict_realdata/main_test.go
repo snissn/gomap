@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-func TestMode4CompressionActivatesDictBeforeSteady(t *testing.T) {
+func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 	// Regression coverage for #116:
-	// mode4 uses deferred value-log pointers, so small warmup phases can otherwise
+	// wal_off uses deferred value-log pointers, so small warmup phases can otherwise
 	// leave the dict inactive until after steady completes.
 
 	train := make([]kvSample, 20000)
@@ -42,7 +42,7 @@ func TestMode4CompressionActivatesDictBeforeSteady(t *testing.T) {
 	}
 
 	cfg := benchConfig{
-		Mode:             "mode4",
+		Mode:             "wal_off",
 		Compression:      "on",
 		RawMiB:           64,
 		Batch:            1024,

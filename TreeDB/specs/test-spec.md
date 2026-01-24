@@ -1,5 +1,9 @@
 # Addendum A: Testing Specification v2.7 (Updated for Spec v2.7)
 
+> **Legacy note:** This testing spec targets the pre-v0.2.0 slab-based storage
+> architecture. TreeDB now uses a unified value log with WAL on/off semantics.
+> Treat this document as historical guidance only.
+
 ## 1. Unit Testing Strategies
 
 Focus on isolating the complex low-level data structures before system integration.

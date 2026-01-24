@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 const writevMinAvgValueSize = 16 << 10
@@ -129,13 +129,13 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 			}
 			offsets[i+1] = uint32(framePayloadBytes)
 		}
-		if slab.MaxRecordSize > 0 && int64(framePayloadBytes) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(framePayloadBytes) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 
 		prefixLen := FrameHeaderSize + (kFrame * 8) + ((kFrame + 1) * 4)
 		bodyLen := prefixLen + framePayloadBytes
-		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 		if bodyLen > int(^uint32(0)) {

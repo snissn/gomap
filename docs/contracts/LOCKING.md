@@ -12,7 +12,7 @@
 
 ## TreeDB
 
-- API: `treedb.Open(...)`, `treedb.OpenBackend(...)`
+- API: `treedb.Open(...)`
 - Behavior:
   - Acquires an exclusive lock on `Options.Dir`.
   - If already locked: returns `treedb.ErrLocked`.

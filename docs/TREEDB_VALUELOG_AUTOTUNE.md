@@ -71,18 +71,14 @@ Compression is kept only when it improves predicted wall time with a safety marg
 
 Value log compression autotune is designed for:
 
-- **Cached mode** (TreeDB caching layer enabled)
-- **Split value log** enabled (`SplitValueLog = true`), since dictionary compression is applied to split value-log records
+- **Cached mode** (TreeDB caching layer enabled via `treedb.Open`).
+- **WAL on/off** both supported; WAL-off (`DisableWAL=true`) requires `AllowUnsafe=true`.
 
 ### Configuration prerequisites
 
 To benefit from vlog autotune:
 
-1. **Value log enabled**
-   - `DisableValueLog = false`
-2. **Split value log enabled**
-   - `SplitValueLog = true`
-3. **Large values routed to the value log**
+1. **Large values routed to the value log**
    - Set `ValueLogPointerThreshold` such that a meaningful fraction of payload bytes go to the value log.
    - If your workload has only tiny values, vlog autotune will have little/no effect.
 
@@ -116,9 +112,6 @@ func main() {
 	dir := "/var/lib/treedb"
 
 	opts := treedb.OptionsFor(treedb.ProfileFastIngest, dir)
-
-	// Required for dictionary-compressed value log frames.
-	opts.SplitValueLog = true
 
 	// Ensure a meaningful fraction of values are externalized.
 	opts.ValueLogPointerThreshold = 4 << 10 // 4 KiB
@@ -369,6 +362,7 @@ If you use the caching layer directly (instead of `treedb.Open`), you are respon
 - Create a dict store (e.g., `internal/dictdb` store) and attach it to the caching DB:
   - `cached.SetDictStore(store)`
 - Provide a `DictLookup` function to the value log reader/writer so compressed frames can resolve dict IDs to bytes.
-- Ensure `SplitValueLog` is enabled; dictionary compression is not used for non-split records.
+- Ensure a meaningful fraction of values are routed to the value log; dictionary
+  compression only applies to value-log frames.
 
 This path is intentionally “expert-only”; prefer `treedb.Open` unless you have a strong reason.

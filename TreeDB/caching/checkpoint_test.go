@@ -14,7 +14,7 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	}
 
 	backend := NewMockBackend()
-	db, err := Open(dir, backend, Options{FlushThreshold: 1, DisableValueLog: true})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

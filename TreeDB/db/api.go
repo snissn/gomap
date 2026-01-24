@@ -4,9 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // --- Public API ---
@@ -243,11 +241,6 @@ func (db *DB) Stats() map[string]string {
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
 
-	stats["treedb.slabs.active_id"] = fmt.Sprintf("%d", db.slabManager.ActiveSlabID())
-	stats["treedb.slabs.zombies"] = fmt.Sprintf("%d", db.slabManager.ZombieCount())
-	slabRemaps, slabDeadMappings := db.slabManager.RemapStats()
-	stats["treedb.slabs.mmap_remaps"] = fmt.Sprintf("%d", slabRemaps)
-	stats["treedb.slabs.mmap_dead_mappings"] = fmt.Sprintf("%d", slabDeadMappings)
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
@@ -255,32 +248,6 @@ func (db *DB) Stats() map[string]string {
 	}
 
 	pruneStatsInto(stats, &db.pruner)
-
-	// Best-effort slab fragmentation stats (derived from persisted System tree).
-	var total, dead uint64
-	sysTree := tree.New(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID)
-	it := sysTree.Iterator(slabStatsKeyPrefix, slabStatsPrefixEnd())
-	for it.Valid() {
-		_, vPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 {
-			// System keys should be inline; ignore if not.
-			_ = vPtr
-		} else {
-			val := it.UnsafeValue()
-			if d, t, err := decodeSlabStatsValue(val); err == nil {
-				dead += d
-				total += t
-			}
-		}
-		it.Next()
-	}
-	_ = it.Close()
-
-	stats["treedb.slabs.total_bytes"] = fmt.Sprintf("%d", total)
-	stats["treedb.slabs.dead_bytes"] = fmt.Sprintf("%d", dead)
-	if total > 0 {
-		stats["treedb.slabs.dead_ratio_ppm"] = fmt.Sprintf("%d", (dead*1_000_000)/total)
-	}
 
 	return stats
 }

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/compaction"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
@@ -40,7 +39,7 @@ var (
 	keysMin       = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax       = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg        = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
-	dbsExcludeArg = flag.String("exclude-dbs", "treedbbackend", "Comma-separated list of DBs to exclude")
+	dbsExcludeArg = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
 	testArg       = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg     = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg      = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
@@ -109,20 +108,9 @@ type BenchConfig struct {
 	TreeDBIterDebug      bool
 	TreeDBIterDebugLimit int
 
-	TreeDBCompactBeforeScans       bool
-	TreeDBCompactDeadRatio         float64
-	TreeDBCompactMinBytes          uint64
-	TreeDBCompactMaxSlabs          int
-	TreeDBCompactMicroBatch        int
-	TreeDBCompactRotateBeforeWrite bool
-	TreeDBCompactCopyBps           int64
-	TreeDBCompactCopyBurst         int64
-	TreeDBVacuumBeforeScans        bool
-
 	TreeDBDisableWAL                 bool
 	TreeDBRelaxedSync                bool
 	TreeDBDisableReadChecksum        bool
-	TreeDBBgCompactionInterval       time.Duration
 	TreeDBDisablePiggybackCompaction bool
 }
 
@@ -206,19 +194,9 @@ func main() {
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
-		TreeDBCompactBeforeScans:         *treedbCompactBeforeScans,
-		TreeDBCompactDeadRatio:           *treedbCompactDeadRatio,
-		TreeDBCompactMinBytes:            *treedbCompactMinBytes,
-		TreeDBCompactMaxSlabs:            *treedbCompactMaxSlabs,
-		TreeDBCompactMicroBatch:          *treedbCompactMicroBatch,
-		TreeDBCompactRotateBeforeWrite:   *treedbCompactRotateBeforeWrite,
-		TreeDBCompactCopyBps:             *treedbCompactCopyBps,
-		TreeDBCompactCopyBurst:           *treedbCompactCopyBurst,
-		TreeDBVacuumBeforeScans:          *treedbVacuumBeforeScans,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
 		TreeDBRelaxedSync:                *treedbRelaxedSync,
 		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
-		TreeDBBgCompactionInterval:       *treedbBgCompactionInterval,
 		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
 
@@ -241,12 +219,6 @@ func main() {
 			out, err := runChurnVacuumSuite(baseCfg)
 			if err != nil {
 				log.Fatalf("churnvacuum suite: %v", err)
-			}
-			fmt.Print(out)
-		case "churnmaint":
-			out, err := runChurnMaintSuite(baseCfg)
-			if err != nil {
-				log.Fatalf("churnmaint suite: %v", err)
 			}
 			fmt.Print(out)
 		case "flushthrash":
@@ -695,24 +667,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			if err := td.DB.CompactIndex(); err != nil {
 				return 0, fmt.Errorf("vacuum_index: %w", err)
-			}
-			return math.NaN(), nil
-		},
-		"compact_slabs": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
-			td, ok := db.(*treedbadapter.DB)
-			if !ok || td == nil || td.DB == nil {
-				return math.NaN(), nil
-			}
-			if err := td.DB.CompactCandidates(compaction.Options{
-				DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
-				MinTotalBytes:      cfg.TreeDBCompactMinBytes,
-				MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
-				MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
-				RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
-				CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
-				CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
-			}); err != nil {
-				return 0, fmt.Errorf("compact_slabs: %w", err)
 			}
 			return math.NaN(), nil
 		},
@@ -1493,7 +1447,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":               "VACUUM (Index)",
-		"compact_slabs":              "COMPACT (Slabs)",
 		"fragmentation_report_pre":   "Fragmentation Report (Pre-Settle)",
 		"fragmentation_report_post":  "Fragmentation Report (Post-Settle)",
 		"sequential_write":           "Sequential Write",
@@ -1576,16 +1529,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Settle before scans?
 	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read") {
-		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open/Compact)...\n")
+		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open)...\n")
 		for _, inst := range instances {
 			// Close
 			if err := inst.Wrapper.Close(); err != nil {
 				return BenchRun{}, fmt.Errorf("settle/close %s: %w", inst.Name, err)
 			}
-
-			// Compact (if applicable, best-effort)
-			// TODO: Add compaction logic here if adapters support explicit compact-on-open or similar.
-			// Currently most just reopen.
 
 			// Reopen
 			factory, err := GetDBFactory(inst.Name)
@@ -1599,33 +1548,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			inst.Wrapper = newWrapper
 
-			// Optional TreeDB compaction
-			if inst.Name == "treedb" && cfg.TreeDBCompactBeforeScans {
-				td, ok := inst.Wrapper.(*treedbadapter.DB)
-				if ok {
-					if err := td.DB.CompactCandidates(compaction.Options{
-						DeadRatioThreshold: cfg.TreeDBCompactDeadRatio,
-						MinTotalBytes:      cfg.TreeDBCompactMinBytes,
-						MaxSlabs:           cfg.TreeDBCompactMaxSlabs,
-						MicroBatchSize:     cfg.TreeDBCompactMicroBatch,
-						RotateBeforeWrite:  cfg.TreeDBCompactRotateBeforeWrite,
-						CopyBytesPerSec:    cfg.TreeDBCompactCopyBps,
-						CopyBurstBytes:     cfg.TreeDBCompactCopyBurst,
-					}); err != nil {
-						return BenchRun{}, fmt.Errorf("settle/compact %s: %w", inst.Name, err)
-					}
-				}
-			}
-
-			// Optional TreeDB Vacuum
-			if inst.Name == "treedb" && cfg.TreeDBVacuumBeforeScans {
-				td, ok := inst.Wrapper.(*treedbadapter.DB)
-				if ok {
-					if err := td.DB.CompactIndex(); err != nil {
-						return BenchRun{}, fmt.Errorf("settle/vacuum %s: %w", inst.Name, err)
-					}
-				}
-			}
+			// Optional TreeDB maintenance hooks can be added here if needed.
 		}
 	}
 
@@ -1927,36 +1850,15 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	pointCfg.Progress = false
 
 	scanCfg := baseCfg
-	scanCfg.DBsArg = "treedb,treedbbackend,badger,leveldb"
+	scanCfg.DBsArg = "treedb,badger,leveldb"
 	scanCfg.TestsArg = "batch_write,full_scan,prefix_scan"
 	scanCfg.Progress = false
-
-	// TreeDBBackend is a useful baseline for point ops, but too slow to include
-	// in larger sweeps. Run it once at a moderately sized keycount so the numbers
-	// are representative without dominating runtime.
-	backendBaselineKeys := 10_000
-	if len(keyCounts) > 0 && keyCounts[len(keyCounts)-1] < backendBaselineKeys {
-		backendBaselineKeys = keyCounts[len(keyCounts)-1]
-	}
-	if backendBaselineKeys <= 0 {
-		backendBaselineKeys = 1
-	}
-
-	backendBaselineCfg := baseCfg
-	backendBaselineCfg.Keys = backendBaselineKeys
-	backendBaselineCfg.DBsArg = "treedbbackend"
-	backendBaselineCfg.TestsArg = "sequential_write,random_write,random_read"
-	backendBaselineCfg.Progress = false
 
 	pointRuns, err := runSweep(pointCfg, keyCounts)
 	if err != nil {
 		return "", err
 	}
 	scanRuns, err := runSweep(scanCfg, keyCounts)
-	if err != nil {
-		return "", err
-	}
-	backendBaseline, err := runBenchmark(backendBaselineCfg)
 	if err != nil {
 		return "", err
 	}
@@ -1986,7 +1888,6 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 
 	sb.WriteString("Notes:\n")
 	sb.WriteString("- Results depend on hardware and OS.\n")
-	sb.WriteString(fmt.Sprintf("- `TreeDBBackend` (uncached) point ops are shown only at %s keys (baseline) and excluded from larger sweeps.\n", formatInt(backendBaseline.Config.Keys)))
 	sb.WriteString("- `HashDB` does not support ordered scans.\n\n")
 
 	if pointOpsPlotPath != "" && batchScanPlotPath != "" {
@@ -1998,16 +1899,12 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString("### Point Ops (writes + gets)\n\n")
 	sb.WriteString(renderMarkdownSuiteSection(pointRuns))
 
-	sb.WriteString("\n### TreeDBBackend baseline (point ops)\n\n")
-	sb.WriteString(renderMarkdownBaseline(backendBaseline))
-
 	sb.WriteString("\n### Batch + Scans\n\n")
 	sb.WriteString(renderMarkdownSuiteSection(scanRuns))
 
 	sb.WriteString("\n### Quick takeaways\n\n")
 	sb.WriteString("- `HashDB`: great for high-throughput point reads/writes; no ordered scan API yet.\n")
 	sb.WriteString("- `TreeDB` (cached): strong default for random-write-heavy workloads; scans include merge overhead.\n")
-	sb.WriteString("- `TreeDBBackend` (uncached): best when you batch writes yourself; slow for per-key writes.\n")
 	sb.WriteString("- `Badger`/`LevelDB`: useful baselines with different storage tradeoffs.\n")
 
 	return sb.String(), nil
@@ -2035,33 +1932,6 @@ func runChurnVacuumSuite(baseCfg BenchConfig) (string, error) {
 	cfg.DBsArg = "treedb,leveldb"
 	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,vacuum_index,full_scan2,prefix_scan2"
 	cfg.SettleBeforeScans = true
-
-	run, err := runBenchmark(cfg)
-	if err != nil {
-		return "", err
-	}
-	return renderMarkdownSingle(run), nil
-}
-
-func runChurnMaintSuite(baseCfg BenchConfig) (string, error) {
-	// Churn + settled scans, then value-log compaction + VACUUM and scan again.
-	cfg := baseCfg
-	cfg.Progress = false
-	cfg.DBsArg = "treedb,leveldb"
-	cfg.TestsArg = "random_write,random_delete,random_write,full_scan,prefix_scan,compact_slabs,vacuum_index,full_scan2,prefix_scan2"
-	cfg.SettleBeforeScans = true
-
-	// Ensure compaction has permissive defaults so the suite is effective even if
-	// the caller didn't pass compaction flags.
-	if cfg.TreeDBCompactDeadRatio == 0 {
-		cfg.TreeDBCompactDeadRatio = 0.10
-	}
-	if cfg.TreeDBCompactMinBytes == 0 {
-		cfg.TreeDBCompactMinBytes = 1
-	}
-	if cfg.TreeDBCompactMicroBatch == 0 {
-		cfg.TreeDBCompactMicroBatch = 256
-	}
 
 	run, err := runBenchmark(cfg)
 	if err != nil {
@@ -2209,7 +2079,7 @@ func runLongMixSuite(baseCfg BenchConfig) (string, error) {
 	if cfg.Keys == 100_000 {
 		cfg.Keys = 1_000_000
 	}
-	// Prefer pointer values so the workload is representative for compaction/vacuum.
+	// Prefer pointer values so the workload exercises the value-log path.
 	if cfg.ValueSize < 2048 {
 		cfg.ValueSize = 2048
 	}

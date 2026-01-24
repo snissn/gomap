@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) and coherent crash recovery across cached vs backend opens.
+- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) and coherent crash recovery with WAL on/off semantics.
 - HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
 
 ## Who Is This For?
@@ -12,22 +12,9 @@
 
 ## TreeDB
 
-TreeDB has two modes behind one API:
+TreeDB has one engine with WAL on/off semantics.
 
-- **Cached mode (default)**: a write-back layer (`memtable + journal + value log + background flush → backend`).
-- **Backend-only mode**: the base B+Tree engine without the cached write-back layer.
-
-### Backend-only mode (`opts.Mode = treedb.ModeBackend`)
-
-- `Set`: not guaranteed durable (no fsync).
-- `Batch.Write`: not guaranteed durable (no fsync).
-- `SetSync`: durable (fsync of slab + index at commit).
-- `Batch.WriteSync`: durable (fsync of slab + index at commit).
-
-Crash recovery:
-- On open, TreeDB validates redundant meta pages and truncates the active slab tail to avoid torn writes.
-
-### Cached mode (default)
+### WAL on (default)
 
 Cached mode writes to the journal (and the value log for large values), then
 eventually flushes to the backend.
@@ -38,8 +25,18 @@ eventually flushes to the backend.
 - `Batch.WriteSync`: appends the entire batch to the journal as a single checksummed segment and `fsync`s it; **atomic and durable**. On recovery, either the entire batch is applied or none of it is.
 
 Crash recovery:
-- On open (cached or backend), any journal segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
-- This makes recovery coherent: reopening as cached vs backend yields the same recovered state.
+- On open, any journal segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
+
+### WAL off (`DisableWAL=true`)
+
+WAL-off disables the journal/redo log while keeping the value log enabled. This
+improves write throughput but sacrifices durability for the most recent writes
+since the last checkpoint.
+
+- `Set` / `Batch.Write`: not guaranteed durable (no redo log).
+- `SetSync` / `Batch.WriteSync`: syncs the index/value log, but recovery can
+  still lose writes since the last checkpoint (no journal to replay).
+- Use `Checkpoint()` to establish a durable boundary.
 
 ### Operational notes
 

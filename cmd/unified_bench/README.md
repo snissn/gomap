@@ -1,6 +1,6 @@
 # unified_bench
 
-Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeDBBackend` (uncached), Badger, and LevelDB.
+Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger, and LevelDB.
 
 ## Run
 
@@ -28,7 +28,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 
 ## Common flags
 
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,treedbbackend,badger,leveldb`
+- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
@@ -63,10 +63,9 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), `TreeD
 - `-suite` named suite:
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)
-  - `churnvacuum` — churn + settled scans, then VACUUM and scan again
-  - `churnmaint` — churn + settled scans, then slab compaction + VACUUM and scan again
+  - `churnvacuum` — churn + settled scans, then index compaction and scan again
   - `flushthrash` — forces a small TreeDB flush threshold; catches flush thrash / runaway backlog regressions
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
-  - `sload_readheavy` — settled point reads with pointer values (exercises slab reads) + forkchoice-style batch commits
+  - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)

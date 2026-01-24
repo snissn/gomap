@@ -26,10 +26,8 @@ More docs:
 
 High-level guidance:
 
-- **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort, and sharded HashDB uses a write-back cache with no WAL).
 - **HashDB**: best for high-throughput random reads and perf experiments; use `PutSync`/`DeleteSync`/`ApplyBatchSync` for durable commits (non-`*Sync` writes are best-effort; sharded HashDB uses a write-back cache and can optionally enable a per-shard cache WAL via `OpenWithOptions`).
-- **TreeDB (cached, default)**: best for workloads dominated by many small random writes; use `*Sync` for durability.
-- **TreeDB (backend-only)**: best when you batch writes yourself or want the simplest engine path; scans can be faster.
+- **TreeDB (cached, default)**: best for workloads dominated by many small random writes; WAL on/off is configurable; use `*Sync` for durability.
 
 Contracts (durability/locking/concurrency/iteration):
 
@@ -59,7 +57,6 @@ _Key counts:_ 1…1,000,000 (valsize=128, batchsize=1000, range-queries=200, ran
 
 Notes:
 - Results depend on hardware and OS.
-- `TreeDBBackend` (uncached) point ops are shown only at 10,000 keys (baseline) and excluded from larger sweeps.
 - `HashDB` does not support ordered scans.
 
 ### Graphs
@@ -109,62 +106,51 @@ _Key counts:_ 1, 10, 100, 1,000, 10,000, 100,000, 1,000,000
 | 1,000,000 | 255,763 | **618,247** | 299,327 | 162,509 |
 
 
-### TreeDBBackend baseline (point ops)
-
-_Key count:_ 10,000
-
-| Test | TreeDBBackend |
-|---|---:|
-| Sequential Write | 102,302 |
-| Random Write | 50,552 |
-| Random Read | 1,769,233 |
-
 ### Batch + Scans
 
 _Key counts:_ 1, 10, 100, 1,000, 10,000, 100,000, 1,000,000
 
 #### Batch Write
 
-| keys | TreeDB | TreeDBBackend | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | **235,294** | 48,288 | 55,685 | 315 |
-| 10 | **1,283,368** | 898,876 | 516,129 | 23,552 |
-| 100 | **3,883,495** | 3,217,089 | 1,325,223 | 40,679 |
-| 1,000 | **8,645,583** | 6,261,427 | 2,230,694 | 1,268,633 |
-| 10,000 | 3,455,774 | **8,670,515** | 2,232,392 | 827,923 |
-| 100,000 | 2,688,922 | **6,451,596** | 1,991,356 | 485,423 |
-| 1,000,000 | **2,059,133** | 232,265 | 1,530,078 | 700,450 |
+| keys | TreeDB | Badger | LevelDB |
+|---:|---:|---:|---:|
+| 1 | **235,294** | 55,685 | 315 |
+| 10 | **1,283,368** | 516,129 | 23,552 |
+| 100 | **3,883,495** | 1,325,223 | 40,679 |
+| 1,000 | **8,645,583** | 2,230,694 | 1,268,633 |
+| 10,000 | 3,455,774 | 2,232,392 | 827,923 |
+| 100,000 | 2,688,922 | 1,991,356 | 485,423 |
+| 1,000,000 | **2,059,133** | 1,530,078 | 700,450 |
 
 #### Full Scan
 
-| keys | TreeDB | TreeDBBackend | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | 44,944 | **827,815** | 81,360 | 158,932 |
-| 10 | 53,214 | **8,278,146** | 186,047 | 2,329,916 |
-| 100 | 6,946 | 2,536,976 | 20,000 | **3,438,435** |
-| 1,000 | 49,793 | **32,000,000** | 163,265 | 20,184,894 |
-| 10,000 | 357,143 | **30,406,689** | 461,531 | 22,643,646 |
-| 100,000 | 200,988 | **30,164,775** | 1,331,842 | 6,679,896 |
-| 1,000,000 | 1,503,759 | 2,176,826 | 940,402 | **2,987,744** |
+| keys | TreeDB | Badger | LevelDB |
+|---:|---:|---:|---:|
+| 1 | 44,944 | 81,360 | 158,932 |
+| 10 | 53,214 | 186,047 | 2,329,916 |
+| 100 | 6,946 | 20,000 | **3,438,435** |
+| 1,000 | 49,793 | 163,265 | 20,184,894 |
+| 10,000 | 357,143 | 461,531 | 22,643,646 |
+| 100,000 | 200,988 | 1,331,842 | 6,679,896 |
+| 1,000,000 | 1,503,759 | 940,402 | **2,987,744** |
 
 #### Prefix Scan
 
-| keys | TreeDB | TreeDBBackend | Badger | LevelDB |
-|---:|---:|---:|---:|---:|
-| 1 | 2,313,262 | **3,338,007** | 360,009 | 1,503,759 |
-| 10 | 4,747,774 | **10,372,990** | 365,491 | 5,183,542 |
-| 100 | 5,155,835 | **48,829,516** | 362,455 | 15,768,899 |
-| 1,000 | 661,072 | **55,660,527** | 53,031 | 19,055,167 |
-| 10,000 | 495,519 | **25,982,439** | 18,224 | 14,127,553 |
-| 100,000 | 347,390 | **28,677,289** | 4,681 | 10,851,872 |
-| 1,000,000 | 223,210 | **20,038,414** | 1,858 | 2,303,174 |
+| keys | TreeDB | Badger | LevelDB |
+|---:|---:|---:|---:|
+| 1 | 2,313,262 | 360,009 | 1,503,759 |
+| 10 | 4,747,774 | 365,491 | 5,183,542 |
+| 100 | 5,155,835 | 362,455 | 15,768,899 |
+| 1,000 | 661,072 | 53,031 | 19,055,167 |
+| 10,000 | 495,519 | 18,224 | 14,127,553 |
+| 100,000 | 347,390 | 4,681 | 10,851,872 |
+| 1,000,000 | 223,210 | 1,858 | 2,303,174 |
 
 
 ### Quick takeaways
 
 - `HashDB`: great for high-throughput point reads/writes; no ordered scan API yet.
 - `TreeDB` (cached): strong default for random-write-heavy workloads; scans include merge overhead.
-- `TreeDBBackend` (uncached): best when you batch writes yourself; slow for per-key writes.
 - `Badger`/`LevelDB`: useful baselines with different storage tradeoffs.
 <!-- BENCHMARK_END -->
 

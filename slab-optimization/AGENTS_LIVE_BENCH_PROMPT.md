@@ -35,7 +35,7 @@ Follow the runbook exactly. Key constraints:
 
 - Use the **public TreeDB KV store** API for throughput measurement (open DB via `treedb.Open`, write via `Batch.Set` + `Batch.Write`).
 - Focus on **relaxed/no-fsync** behavior for now (do not prioritize `WriteSync`/fsync).
-- Compare write-path “modes” (mode1/mode3/mode4) and **compression on/off**, as spelled out in the runbook.
+- Compare write-path modes (wal_on/wal_off) and **compression on/off**, as spelled out in the runbook.
 - The benchmark must **force values through the value log** (dataset average values may otherwise be inlined).
 
 Do not expand scope beyond what is needed to:
@@ -102,4 +102,3 @@ You are done when:
 - At least one end-to-end run produces the expected headline metrics and stats.
 - Tests pass (or are explicitly scoped with justification).
 - PR(s) are opened and work log is updated.
-

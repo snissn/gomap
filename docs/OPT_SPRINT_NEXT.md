@@ -1,12 +1,16 @@
 # Optimization Sprint Next (2026-01): Compression + Storage Simplification
 
+> **Legacy notice:** This plan predates the removal of backend slabs and the
+> WAL on/off simplification. References to slabs are historical; current TreeDB
+> uses a value log as the only out-of-line store. See `docs/TREEDB_WRITE_PATHS.md`
+> for current behavior.
+
 This is the **full sprint execution spec** for the next TreeDB optimization sprint.
 It is written to be *actionable* and *mergeable*: every milestone below is a PR-sized unit with explicit deliverables, acceptance criteria, and test/bench requirements.
 
 Backwards compatibility is **not required** (pre-alpha), but **silent corruption is not acceptable**.
 
-**Terminology note (legacy):** some older docs use **WAL** as a synonym for the cached-mode **journal** (redo/commit log). The **value log** is distinct from backend slabs.
-This document also predates the final mode3/mode4 naming; references to “WAL off” or slab-direct paths should be treated as **legacy mode1** unless explicitly noted otherwise.
+**Terminology note:** **WAL** refers to the cached-mode **journal** (redo/commit log). The **value log** is distinct and always used for out-of-line values. Legacy mode naming is deprecated; interpret “WAL on/off” directly.
 
 ---
 
@@ -25,12 +29,12 @@ At the end of this sprint, `main` contains:
 
 3) **Dictionary epochs for values (no physical zones)**
    - Values can reference a `DictID` without introducing hard “2MB zones”.
-   - **Large-value handling is intentionally deferred**: new dict/K encodings must fall back to the existing K=1 record encoding when a record would exceed `slab.MaxRecordSize` (or any configured cap).
+   - **Large-value handling is intentionally deferred**: new dict/K encodings must fall back to the existing K=1 record encoding when a record would exceed the value-log record size cap.
 
 4) **Micro-batched value compression (bounded point reads)**
    - Optional micro-batching (`K`) for near-streaming ratios, while bounding point-read decode cost.
 
-5) **Combined WAL + slab write protocol (synchronous first cut)**
+5) **Combined journal + value-log write protocol (synchronous first cut)**
    - A clean write/durability ordering is enforced without async slab writer goroutines.
    - Clear “written vs durable” semantics with explicit watermarks.
    - A clean path to future double/triple buffering is defined.

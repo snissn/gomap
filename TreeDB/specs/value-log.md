@@ -1,5 +1,10 @@
 # Value Log (Journal + Value-Store) Plan
 
+> **Legacy note:** This plan predates the removal of backend-only slabs and
+> legacy mode names. TreeDB now uses a unified value log with WAL on/off
+> semantics (`DisableWAL` toggles the journal). See `docs/TREEDB_WRITE_PATHS.md`
+> for current behavior.
+
 Goal: eliminate cached-mode “double write” for large values (write to journal, then write again to slab during flush) by turning the cached-mode journal stream into a **random-access value log** whose records can be referenced directly by the backend index (`ValuePtr`), while preserving:
 
 - fast random writes (memtable-first),
@@ -14,15 +19,13 @@ Legacy note: this document uses “WAL” in places as a historical synonym for 
 
 ## Status (implemented)
 
-- Value-log segments live in `wal/vlog-*.log` and store v2 records (CRC + KeyLen + ValueLen + Op + key/value).
-- Cached mode uses the value log by default; use `Options.DisableValueLog` to revert to the legacy journal-only path.
-- `DisableWAL` disables both journal and value log (legacy mode1; deprecated).
-- Journal-off + value-log-on is supported via `DisableJournal=true` (Mode4; unsafe).
+- Value-log segments live in `wal/value-*.log` and store v2 records (CRC + KeyLen + ValueLen + Op + key/value).
+- Cached mode uses the value log by default.
+- `DisableWAL` disables the journal (WAL off) while keeping the value log enabled.
 - Backend reads dispatch by `ValuePtr.FileID` high bit via `ValueReader` (`page.IsValueLogFileID`).
 - Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
 - Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.
 - Optional guardrail: `MaxValueLogRetainedBytesHard` disables new value-log pointers once retained bytes exceed the threshold.
-- Optional split mode: `SplitValueLog` keeps journal records in `wal/commit-*.log` and writes large values to `wal/value-*.log`, with journal entries storing `ValuePtr` payloads for large values.
 
 ## Problem statement
 
@@ -50,16 +53,17 @@ Key property: the log is still a WAL (redo source), but it is also a *value stor
 
 ---
 
-## Split WAL/value-log mode
+## Journal/value-log layout
 
-When `SplitValueLog` is enabled, the WAL and value log are separate files:
+TreeDB stores journal (redo) and value-log segments under `wal/`:
 
-- **WAL**: `wal/wal-*.log` stores redo records; large values are represented as `OpSetPointer` with an encoded `ValuePtr`.
-- **Value log**: `wal/vlog-*.log` stores the actual value bytes for large values.
-- **Recovery**: WAL segments are replayed; value-log segments are not replayed (their records are referenced by pointers).
-- **Retention**: the caching layer tracks value-log paths per memtable and only prunes segments once they are no longer referenced.
-
-This mode avoids large value bytes inflating WAL size while preserving pointer semantics for large values.
+- **Journal/WAL**: stores redo records; large values are represented as `OpSetPointer`
+  with an encoded `ValuePtr`.
+- **Value log**: stores the actual value bytes for large values.
+- **Recovery**: journal segments are replayed; value-log segments are not replayed
+  (their records are referenced by pointers).
+- **Retention**: the caching layer tracks value-log segments and prunes them only
+  once they are no longer referenced.
 
 ---
 
@@ -260,7 +264,7 @@ Cons: invasive across all memtable modes; higher risk.
   - `Writer.RotateTo(path)` similar to WAL
   - `Reader` that can iterate records and also `Read(ptr)` to fetch value bytes by offset
   - record-size caps matching slab’s `MaxRecordSize` behavior
-- [ ] Keep the old WAL reader/writer for `ModeBackend` until recovery is updated.
+- [ ] Keep the old WAL reader/writer until recovery is updated (legacy note).
 - [ ] Tests:
   - encode/decode round trip; corruption/truncation handling.
 

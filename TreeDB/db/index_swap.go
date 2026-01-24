@@ -96,9 +96,6 @@ func recoverIndexSwap(dir string) error {
 				// replay WAL records into it.
 				continue
 			}
-			if strings.HasPrefix(name, "data-") && strings.HasSuffix(name, ".slab") {
-				return fmt.Errorf("recover index swap: %s missing but slab files exist", indexFileName)
-			}
 		}
 		// Directory looks empty (new DB); allow Open to create index.db.
 		return nil
