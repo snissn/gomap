@@ -79,6 +79,36 @@ redis-server --port 6380 --dir "$DBDIR" --save "" --appendonly no
 
 Then run the same `noreply_bench` command (just change the `-label`).
 
+### Baseline: redcon + Go map
+
+`hashdb-redis-wrapper` also includes a `map` mode that uses a sharded Go builtin
+map. This is useful as a rough "protocol + server wrapper ceiling" for this repo:
+
+```bash
+DBDIR=$(mktemp -d)
+./bin/hashdb-redis-wrapper map "$DBDIR" :6380
+```
+
+### Sample Results (Local)
+
+Env:
+
+- Apple M3, 8 cores
+- clients=16, keyspace=100000, value-size=128, test-time=10s
+- `-resp3` + `-reply-off=true`
+
+| Engine | Pipeline | RPS |
+|---|---:|---:|
+| map | 64 | 8,245,266.82 |
+| map | 256 | 8,843,145.41 |
+| map | 512 | 9,052,913.85 |
+| hashdb | 64 | 6,233,215.96 |
+| hashdb | 256 | 6,617,456.07 |
+| hashdb | 512 | 6,938,040.39 |
+| redis | 64 | 1,433,283.34 |
+| redis | 256 | 1,395,026.31 |
+| redis | 512 | 1,382,830.41 |
+
 ## Common Gotchas
 
 - `ENOBUFS` / "no buffer space available" on loopback:
@@ -86,4 +116,3 @@ Then run the same `noreply_bench` command (just change the `-label`).
   - increase OS socket buffer limits if you want to push harder
 - This benchmark is **SET-only** by design. Use `cmd/unified_bench` for mixed
   read/write workloads and engine-level comparisons.
-
