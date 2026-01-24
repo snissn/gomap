@@ -2757,6 +2757,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogMu.Unlock()
 		return nil, errWALUnavailable
 	}
+	if policySetter, ok := any(w).(interface {
+		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
+	}); ok {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		policySetter.SetKeepPolicy(snap.IoNsPerStoredByte, snap.EncodeNsPerRawByte, valuelog.DefaultKeepSafetyMargin)
+	}
 	startSize := w.Size()
 
 	rawPayloadBytes := 0
@@ -2996,6 +3002,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if w == nil {
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if policySetter, ok := any(w).(interface {
+		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
+	}); ok {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		policySetter.SetKeepPolicy(snap.IoNsPerStoredByte, snap.EncodeNsPerRawByte, valuelog.DefaultKeepSafetyMargin)
 	}
 	startSize := w.Size()
 

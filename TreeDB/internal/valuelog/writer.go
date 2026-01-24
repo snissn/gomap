@@ -31,26 +31,29 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
-	f                  *os.File
-	bw                 *bufio.Writer
-	size               int64
-	fileID             uint32
-	appendBuf          []byte
-	appendMax          int
-	scratch            []byte
-	prefixBuf          []byte
-	rawScratch         []byte
-	encScratch         []byte
-	encLimiter         limitedSliceWriter
-	skipDictID         uint64
-	codecsID           uint64
-	codecs             *dictCodecEntry
-	noBenefit          uint8
-	skipRemain         uint16
-	syncFn             func(*os.File) error
-	clock              Clock
-	encodeSampleStride uint64
-	encodeSampleCount  uint64
+	f                      *os.File
+	bw                     *bufio.Writer
+	size                   int64
+	fileID                 uint32
+	appendBuf              []byte
+	appendMax              int
+	scratch                []byte
+	prefixBuf              []byte
+	rawScratch             []byte
+	encScratch             []byte
+	encLimiter             limitedSliceWriter
+	skipDictID             uint64
+	codecsID               uint64
+	codecs                 *dictCodecEntry
+	noBenefit              uint8
+	skipRemain             uint16
+	syncFn                 func(*os.File) error
+	clock                  Clock
+	encodeSampleStride     uint64
+	encodeSampleCount      uint64
+	keepIoNsPerStoredByte  float64
+	keepEncodeNsPerRawByte float64
+	keepSafetyMargin       float64
 }
 
 var errEncodedTooLarge = errors.New("valuelog: encoded payload too large")
@@ -179,27 +182,29 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:         f,
-		bw:        bufio.NewWriterSize(f, defaultBufferSize),
-		size:      info.Size(),
-		fileID:    fileID,
-		appendMax: defaultBufferSize,
-		appendBuf: make([]byte, 0, defaultBufferSize),
-		scratch:   make([]byte, 0, defaultBufferSize),
-		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		syncFn:    func(file *os.File) error { return file.Sync() },
-		clock:     RealClock{},
+		f:                f,
+		bw:               bufio.NewWriterSize(f, defaultBufferSize),
+		size:             info.Size(),
+		fileID:           fileID,
+		appendMax:        defaultBufferSize,
+		appendBuf:        make([]byte, 0, defaultBufferSize),
+		scratch:          make([]byte, 0, defaultBufferSize),
+		prefixBuf:        make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		syncFn:           func(file *os.File) error { return file.Sync() },
+		clock:            RealClock{},
+		keepSafetyMargin: DefaultKeepSafetyMargin,
 	}, nil
 }
 
 func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	return &Writer{
-		bw:        bufio.NewWriterSize(sink, defaultBufferSize),
-		fileID:    fileID,
-		appendMax: 0,
-		scratch:   make([]byte, 0, defaultBufferSize),
-		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		clock:     RealClock{},
+		bw:               bufio.NewWriterSize(sink, defaultBufferSize),
+		fileID:           fileID,
+		appendMax:        0,
+		scratch:          make([]byte, 0, defaultBufferSize),
+		prefixBuf:        make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		clock:            RealClock{},
+		keepSafetyMargin: DefaultKeepSafetyMargin,
 	}
 }
 
@@ -219,6 +224,18 @@ func (w *Writer) SetEncodeSampleStride(stride uint64) {
 		return
 	}
 	w.encodeSampleStride = stride
+}
+
+func (w *Writer) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
+	if w == nil {
+		return
+	}
+	w.keepIoNsPerStoredByte = ioNsPerStoredByte
+	w.keepEncodeNsPerRawByte = encodeNsPerRawByte
+	if safetyMargin < 0 {
+		safetyMargin = 0
+	}
+	w.keepSafetyMargin = safetyMargin
 }
 
 func (w *Writer) sampleEncodeStart() time.Time {
@@ -247,6 +264,14 @@ func (w *Writer) sampleEncodeEnd(start time.Time) int64 {
 		w.clock = RealClock{}
 	}
 	return w.clock.Now().Sub(start).Nanoseconds()
+}
+
+func (w *Writer) shouldKeepCompressed(rawPayloadBytes, encodedLen int, encodeNs int64) bool {
+	encodeNsUsed := encodeNs
+	if encodeNsUsed <= 0 && w.keepEncodeNsPerRawByte > 0 && rawPayloadBytes > 0 {
+		encodeNsUsed = int64(w.keepEncodeNsPerRawByte * float64(rawPayloadBytes))
+	}
+	return ShouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNsUsed, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 }
 
 func (w *Writer) FileID() uint32 {
@@ -923,7 +948,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
-			if encodedLen >= rawPayloadBytes {
+			if !w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs) {
 				w.appendBuf = w.appendBuf[:recordStart]
 				if w.noBenefit < 0xff {
 					w.noBenefit++
@@ -1030,15 +1055,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
-		storedPayloadBytes := rawPayloadBytes
-		switch {
-		case encodeErr == nil && len(encoded) < rawPayloadBytes:
-			storedPayloadBytes = len(encoded)
-			w.noBenefit = 0
-			w.skipRemain = 0
-		case encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge):
+		keepCompressed := false
+		if encodeErr == nil {
+			keepCompressed = w.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+		}
+		if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
 			return nil, FrameStats{}, encodeErr
-		default:
+		}
+		if !keepCompressed {
 			// No benefit (or we aborted early because the output grew too large).
 			if w.noBenefit < 0xff {
 				w.noBenefit++
@@ -1046,6 +1070,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			w.skipRemain = dictSkipFrames(w.noBenefit)
 			return writeRaw(true, encodeNs)
 		}
+		storedPayloadBytes := len(encoded)
+		w.noBenefit = 0
+		w.skipRemain = 0
 
 		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
 		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
