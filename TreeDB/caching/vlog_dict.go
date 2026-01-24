@@ -219,7 +219,39 @@ func (db *DB) applyValueLogDictProfile() {
 	if !ok || profile == nil || len(profile.Dict) == 0 {
 		return
 	}
-	if prev := db.valueLogDictLastAppliedDictHash.Load(); prev == profile.DictHash {
+	profileK := db.clampValueLogDictK(profile.K)
+	prevHash := db.valueLogDictLastAppliedDictHash.Load()
+	if prevHash == profile.DictHash {
+		// Dict bytes unchanged; allow updating K for the current dict.
+		if profileK <= 1 {
+			return
+		}
+		if curK := int(db.valueLogDictCurrentK.Load()); curK == profileK {
+			return
+		}
+		if ks, ok := store.(dictStoreK); ok {
+			dictID := db.valueLogDictLastAppliedDictID.Load()
+			if dictID == 0 {
+				dictID = db.dictCurrentCached.Load()
+			}
+			if dictID == 0 {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := ks.SetK(ctx, dictID, profileK); err != nil {
+				db.reportError(err)
+				return
+			}
+			db.valueLogDictCurrentK.Store(uint32(profileK))
+			db.valueLogDictKMu.Lock()
+			if db.valueLogDictKCache == nil {
+				db.valueLogDictKCache = make(map[uint64]int)
+			}
+			db.valueLogDictKCache[dictID] = profileK
+			db.valueLogDictKMu.Unlock()
+			log.Printf("treedb: value-log dict updated k dict_id=%d k=%d", dictID, profileK)
+		}
 		return
 	}
 	minSavings := db.valueLogDictMinPayloadSavings
@@ -247,8 +279,6 @@ func (db *DB) applyValueLogDictProfile() {
 	// a background publish must also refresh the cached current ID.
 	db.dictCurrentCached.Store(dictID)
 	db.dictCurrentOps.Store(0)
-	profileK := db.clampValueLogDictK(profile.K)
-	profileK = db.clampValueLogDictK(profileK)
 	if ks, ok := store.(dictStoreK); ok {
 		if err := ks.SetK(ctx, dictID, profileK); err != nil {
 			db.reportError(err)

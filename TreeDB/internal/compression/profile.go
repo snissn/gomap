@@ -12,10 +12,12 @@ type ActiveProfile struct {
 	DictHash         uint64
 	DictBytes        int
 	Dict             []byte
+	HistoryBytes     int
 	K                int
 	PayloadRatio     float64
 	TotalRatio       float64
 	DecodeNsEstimate int64
+	EncodeNsEstimate int64
 	AvgSampleBytes   int
 	Samples          int
 	Timestamp        time.Time
@@ -118,6 +120,10 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 	if best.K == 1 {
 		best = baseline
 	}
+	encodeNsEstimate := int64(0)
+	if best.records > 0 {
+		encodeNsEstimate = best.encodeNs / int64(best.records)
+	}
 	return &ActiveProfile{
 		DictHash:         xxhash.Sum64(dict),
 		DictBytes:        len(dict),
@@ -126,6 +132,7 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 		PayloadRatio:     best.payloadRatio,
 		TotalRatio:       best.totalRatio,
 		DecodeNsEstimate: int64(nsPerByte * float64(best.K) * avgRaw),
+		EncodeNsEstimate: encodeNsEstimate,
 		AvgSampleBytes:   int(avgRaw),
 		Samples:          len(eval),
 		Timestamp:        time.Now(),
