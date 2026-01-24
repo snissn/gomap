@@ -54,6 +54,12 @@ func (d *DB) Stats() map[string]string {
 
 func (d *DB) Checkpoint() error { return d.DB.Sync() }
 
+// Compact triggers HashDB slab compaction.
+func (d *DB) Compact() error { return d.DB.Compact() }
+
+// Clear removes all keys from the database.
+func (d *DB) Clear() error { return d.DB.Clear() }
+
 func (d *DB) ForEach(fn func(key, value []byte) error) error { return d.DB.ForEach(fn) }
 
 func (d *DB) NewBatch() (kvstore.Batch, error) { return &batch{db: d.DB}, nil }

@@ -1,0 +1,45 @@
+name: "redisserver: protocol bench"
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Install redis-benchmark
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+
+      - name: Run redis protocol bench
+        env:
+          BENCH_KEYS: 20000
+          BENCH_VALSIZE: 128
+          BENCH_CONCURRENCY: 30
+          BENCH_PIPELINE: 8
+          BENCH_SERVERS: "hashdb,treedb,redis,valkey,dragonfly"
+          USE_DOCKER: "1"
+        run: ./scripts/redis_bench.sh
+
+      - name: Upload bench results
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis_bench_results
+          path: artifacts/redis_bench_results.*
