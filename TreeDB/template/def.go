@@ -176,13 +176,7 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 			return TemplateDef{}, ErrCorruptTemplateDef
 		}
 		base := buf[off : off+baseLen]
-		varPositions := make([]int, 0, baseLen)
-		for i := 0; i < baseLen; i++ {
-			if mask[i/8]&(1<<uint(i%8)) != 0 {
-				varPositions = append(varPositions, i)
-			}
-		}
-		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions}, nil
+		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base}, nil
 	default:
 		return TemplateDef{}, ErrCorruptTemplateDef
 	}

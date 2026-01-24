@@ -3,6 +3,7 @@ package template
 import (
 	"encoding/binary"
 	"errors"
+	"math/bits"
 )
 
 const (
@@ -59,8 +60,8 @@ func EncodePayload(templateID uint64, gaps [][]byte) ([]byte, error) {
 }
 
 // EncodeMaskPayload builds a TemplateValue payload for mask templates.
-func EncodeMaskPayload(templateID uint64, vars []byte) ([]byte, error) {
-	payloadLen := payloadHeader + uvarintLen(templateID) + uvarintLen(uint64(len(vars))) + len(vars)
+func EncodeMaskPayload(templateID uint64, mask []byte, vars []byte) ([]byte, error) {
+	payloadLen := payloadHeader + uvarintLen(templateID) + len(mask) + len(vars)
 	out := make([]byte, payloadLen)
 	out[0] = magic0
 	out[1] = magic1
@@ -68,7 +69,8 @@ func EncodeMaskPayload(templateID uint64, vars []byte) ([]byte, error) {
 	out[3] = flagEncoded | flagMask
 	off := payloadHeader
 	off += binary.PutUvarint(out[off:], templateID)
-	off += binary.PutUvarint(out[off:], uint64(len(vars)))
+	copy(out[off:], mask)
+	off += len(mask)
 	copy(out[off:], vars)
 	off += len(vars)
 	if off != payloadLen {
@@ -94,20 +96,6 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 	}
 	off += n
 	if isMask {
-		varLen64, n := binary.Uvarint(payload[off:])
-		if n <= 0 {
-			return nil, ErrCorrupt
-		}
-		off += n
-		if varLen64 > uint64(len(payload)-off) {
-			return nil, ErrCorrupt
-		}
-		varLen := int(varLen64)
-		varBytes := payload[off : off+varLen]
-		off += varLen
-		if off != len(payload) {
-			return nil, ErrCorrupt
-		}
 		defBytes, err := lookup(id)
 		if err != nil {
 			return nil, err
@@ -123,16 +111,34 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 		if opts.MaxDecodedBytes > 0 && decodedLen > opts.MaxDecodedBytes {
 			return nil, ErrCorrupt
 		}
-		if len(def.VarPositions) != varLen {
+		maskLen := len(def.Mask)
+		if maskLen == 0 {
+			maskLen = (decodedLen + 7) / 8
+		}
+		if off+maskLen > len(payload) {
+			return nil, ErrCorrupt
+		}
+		mask := payload[off : off+maskLen]
+		off += maskLen
+		varBytes := payload[off:]
+		diffCount := 0
+		for _, b := range mask {
+			diffCount += bits.OnesCount8(b)
+		}
+		if diffCount != len(varBytes) {
 			return nil, ErrCorrupt
 		}
 		out := make([]byte, decodedLen)
 		copy(out, def.Base)
-		for i, pos := range def.VarPositions {
-			if pos < 0 || pos >= decodedLen {
-				return nil, ErrCorrupt
+		idx := 0
+		for i := 0; i < decodedLen; i++ {
+			if mask[i/8]&(1<<uint(i%8)) != 0 {
+				out[i] = varBytes[idx]
+				idx++
 			}
-			out[pos] = varBytes[i]
+		}
+		if idx != len(varBytes) {
+			return nil, ErrCorrupt
 		}
 		return out, nil
 	}

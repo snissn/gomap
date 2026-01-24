@@ -41,11 +41,8 @@ func TestTemplateMaskRoundtrip(t *testing.T) {
 	if string(dec.Base) != string(base) {
 		t.Fatalf("base mismatch")
 	}
-	if len(dec.VarPositions) != 3 {
-		t.Fatalf("var positions mismatch")
-	}
 	vars := []byte{'X', 'Y', 'Z'}
-	payload, err := EncodeMaskPayload(1, vars)
+	payload, err := EncodeMaskPayload(1, mask, vars)
 	if err != nil {
 		t.Fatalf("encode payload: %v", err)
 	}

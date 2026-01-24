@@ -75,45 +75,43 @@ func matchTemplate(value []byte, anchors [][]byte, templateID uint64, cfg Config
 	return gaps, encLen, "", true
 }
 
-func maskMatches(base []byte, mask []byte, value []byte) bool {
-	if len(value) != len(base) {
-		return false
-	}
-	for i := 0; i < len(base); i++ {
-		if mask[i/8]&(1<<uint(i%8)) != 0 {
-			continue
-		}
-		if value[i] != base[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Config) (vars []byte, encLen int, reason string, matched bool) {
+func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Config) (mask []byte, vars []byte, encLen int, reason string, matched bool) {
 	if def.Kind != TemplateMask || len(def.Base) == 0 {
-		return nil, 0, reasonMatchMissingAnchor, false
+		return nil, nil, 0, reasonMatchMissingAnchor, false
 	}
 	if len(value) != len(def.Base) {
-		return nil, 0, reasonMatchMissingAnchor, false
+		return nil, nil, 0, reasonMatchMissingAnchor, false
 	}
 	if cfg.MaxDecodedBytes > 0 && len(value) > cfg.MaxDecodedBytes {
-		return nil, 0, reasonKeepBounds, false
+		return nil, nil, 0, reasonKeepBounds, false
 	}
-	if !maskMatches(def.Base, def.Mask, value) {
-		return nil, 0, reasonMatchMissingAnchor, false
+	maskLen := len(def.Mask)
+	if maskLen == 0 {
+		maskLen = (len(def.Base) + 7) / 8
 	}
-	varCount := len(def.VarPositions)
-	encLen = payloadHeader + uvarintLen(templateID) + uvarintLen(uint64(varCount)) + varCount
+	diffCount := 0
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] != def.Base[i] {
+			diffCount++
+		}
+	}
+	encLen = payloadHeader + uvarintLen(templateID) + maskLen + diffCount
 	if len(value)-encLen < cfg.MinSavingsBytes {
-		return nil, encLen, reasonMatchExpectedSavings, false
+		return nil, nil, encLen, reasonMatchExpectedSavings, false
 	}
-	vars = make([]byte, varCount)
-	for i, pos := range def.VarPositions {
-		vars[i] = value[pos]
+	mask = make([]byte, maskLen)
+	vars = make([]byte, diffCount)
+	idx := 0
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] == def.Base[i] {
+			continue
+		}
+		mask[i/8] |= 1 << uint(i%8)
+		vars[idx] = value[i]
+		idx++
 	}
 	if len(value)-encLen < cfg.MinSavingsBytes {
-		return vars, encLen, reasonKeepNoSavings, true
+		return mask, vars, encLen, reasonKeepNoSavings, true
 	}
-	return vars, encLen, "", true
+	return mask, vars, encLen, "", true
 }

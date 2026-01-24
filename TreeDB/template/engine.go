@@ -179,7 +179,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			bestSavings = savings
 			bestPayload = payload
 		case TemplateMask:
-			vars, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
+			mask, vars, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
 			if reason != "" {
 				e.stats.addReason(reason)
 			}
@@ -191,7 +191,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			if savings <= bestSavings {
 				continue
 			}
-			payload, err := EncodeMaskPayload(cand.id, vars)
+			payload, err := EncodeMaskPayload(cand.id, mask, vars)
 			if err != nil {
 				continue
 			}
@@ -527,7 +527,6 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 		return TemplateDef{}, nil, false, false
 	}
 	base := make([]byte, bestLen)
-	mask := make([]byte, (bestLen+7)/8)
 	constCount := 0
 	for pos := 0; pos < bestLen; pos++ {
 		maxCount := 0
@@ -538,13 +537,12 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 				maxByte = byte(b)
 			}
 		}
+		base[pos] = maxByte
 		if float64(maxCount)/float64(totalSamples) >= cfg.MaskMinPresenceRatio {
-			base[pos] = maxByte
 			constCount++
-			continue
 		}
-		mask[pos/8] |= 1 << uint(pos%8)
 	}
+	maskLen := (bestLen + 7) / 8
 	minConst := cfg.MaskMinConstBytes
 	if minConst < int(float64(bestLen)*cfg.MaskMinConstFrac) {
 		minConst = int(float64(bestLen) * cfg.MaskMinConstFrac)
@@ -552,15 +550,8 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 	if constCount < minConst {
 		return TemplateDef{}, nil, false, false
 	}
-	varPositions := make([]int, 0, bestLen-constCount)
-	for pos := 0; pos < bestLen; pos++ {
-		if mask[pos/8]&(1<<uint(pos%8)) != 0 {
-			varPositions = append(varPositions, pos)
-		}
-	}
-	varLen := len(varPositions)
-	encLen := payloadHeader + 1 + uvarintLen(uint64(varLen)) + varLen
-	hits, saved, meanRatio := simulateMaskEncoding(base, mask, samples, sampleLimit, encLen)
+	encHeader := payloadHeader + uvarintLen(1) + maskLen
+	hits, saved, meanRatio := simulateMaskEncoding(base, samples, sampleLimit, encHeader)
 	if hits == 0 {
 		return TemplateDef{}, nil, false, false
 	}
@@ -571,15 +562,15 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 	activated := hits >= cfg.MinActivateHits || saved >= cfg.MinActivateSavedBytes
 	refIdx := selectReferenceSample(samples, sampleLimit)
 	refValue := samples[refIdx].value
-	if len(refValue) != bestLen || !maskMatches(base, mask, refValue) {
+	if len(refValue) != bestLen {
 		for i := 0; i < sampleLimit; i++ {
-			if len(samples[i].value) == bestLen && maskMatches(base, mask, samples[i].value) {
+			if len(samples[i].value) == bestLen {
 				refValue = samples[i].value
 				break
 			}
 		}
 	}
-	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions}
+	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: make([]byte, maskLen)}
 	return def, refValue, activated, true
 }
 
@@ -710,7 +701,7 @@ func simulateEncoding(anchors [][]byte, samples []sample, limit int, cfg Config)
 	return hits, saved, meanRatio
 }
 
-func simulateMaskEncoding(base []byte, mask []byte, samples []sample, limit int, encLen int) (hits int, saved int, meanRatio float64) {
+func simulateMaskEncoding(base []byte, samples []sample, limit int, encHeader int) (hits int, saved int, meanRatio float64) {
 	if limit == 0 || len(base) == 0 {
 		return 0, 0, 1
 	}
@@ -720,9 +711,13 @@ func simulateMaskEncoding(base []byte, mask []byte, samples []sample, limit int,
 		if len(val) != len(base) {
 			continue
 		}
-		if !maskMatches(base, mask, val) {
-			continue
+		diffCount := 0
+		for j := 0; j < len(base); j++ {
+			if val[j] != base[j] {
+				diffCount++
+			}
 		}
+		encLen := encHeader + diffCount
 		if encLen >= len(val) {
 			continue
 		}
