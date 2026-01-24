@@ -19,11 +19,11 @@ const (
 	groupSize   = 8
 )
 
-func (h *DB) addKey(key []byte, slabOffset Key) error {
+func (h *DB) addKey(key []byte, slabOffset Key) (bool, uint64, error) {
 	myhash := slabOffset.hash
-	hkey, isnew, err := h.probeForAddWithHash(key, myhash)
+	hkey, isnew, groupsScanned, err := h.probeForAddWithHash(key, myhash)
 	if err != nil {
-		return err
+		return false, 0, err
 	}
 
 	// If rehash is in progress, ensure we mark any existing key in the old table
@@ -31,7 +31,7 @@ func (h *DB) addKey(key []byte, slabOffset Key) error {
 	if h.rehashInProgress && h.rehashOldCapacity > 0 && len(h.rehashOldKeys) > 0 {
 		idx, found, err := h.probeIndexWithHash(h.rehashOldKeys, h.rehashOldControls, h.rehashOldCapacity, key, myhash)
 		if err != nil {
-			return err
+			return false, 0, err
 		}
 		if found {
 			h.rehashOldKeys[idx].slabOffset = Tombstone
@@ -45,7 +45,7 @@ func (h *DB) addKey(key []byte, slabOffset Key) error {
 		h2 := byte(myhash&0x7f) | 0x80
 		h.controls[hkey] = h2
 	}
-	return nil
+	return isnew, groupsScanned, nil
 }
 
 func (h *DB) addBucket(key []byte, slabOffset Key) error {
@@ -55,7 +55,16 @@ func (h *DB) addBucket(key []byte, slabOffset Key) error {
 		}
 	}
 
-	return h.addKey(key, slabOffset)
+	isNew, groupsScanned, err := h.addKey(key, slabOffset)
+	if err != nil {
+		return err
+	}
+	if isNew && h.maxProbeGroupsBeforeResize > 0 && groupsScanned > h.maxProbeGroupsBeforeResize && !h.rehashInProgress {
+		if err := h.startRehash(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func hash(key []byte) Hash {
@@ -229,11 +238,11 @@ func (h *DB) probe(keys []Key, controls []byte, capacity uint64, key []byte) (ui
 
 // probeForAdd searches for a key or an insertion slot.
 // It returns the index to insert at, and whether the key is new.
-func (h *DB) probeForAdd(key []byte) (uint64, bool, error) {
+func (h *DB) probeForAdd(key []byte) (uint64, bool, uint64, error) {
 	return h.probeForAddWithHash(key, hash(key))
 }
 
-func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) {
+func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, uint64, error) {
 	h1 := uint64(myhash >> 7)
 	h2 := byte(myhash&0x7f) | 0x80
 
@@ -242,8 +251,10 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 	var firstDeletedIdx uint64
 	foundDeleted := false
 	probes := uint64(0)
+	groupsScanned := uint64(0)
 
 	for probes < h.capacity {
+		groupsScanned++
 		group := loadGroup(h.controls, idx, h.capacity)
 
 		// 1. Check if key already exists
@@ -260,10 +271,10 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 			if bucket.slabOffset != Tombstone && bucket.hash == myhash {
 				slabKey, err := h.unmarshalKeyFromSlab(bucket)
 				if err != nil {
-					return 0, false, err
+					return 0, false, 0, err
 				}
 				if bytes.Equal(slabKey, key) {
-					return candidateIdx, false, nil // Found existing
+					return candidateIdx, false, groupsScanned, nil // Found existing
 				}
 			}
 		}
@@ -287,9 +298,9 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 				if ctrl == ctrlEmpty {
 					// Found Empty. Stop search.
 					if foundDeleted {
-						return firstDeletedIdx, true, nil
+						return firstDeletedIdx, true, groupsScanned, nil
 					}
-					return candidateIdx, true, nil
+					return candidateIdx, true, groupsScanned, nil
 				} else if ctrl == ctrlDeleted {
 					if !foundDeleted {
 						firstDeletedIdx = candidateIdx
@@ -304,9 +315,9 @@ func (h *DB) probeForAddWithHash(key []byte, myhash Hash) (uint64, bool, error) 
 	}
 	// Map is full or probed entire capacity
 	if foundDeleted {
-		return firstDeletedIdx, true, nil
+		return firstDeletedIdx, true, groupsScanned, nil
 	}
-	return 0, false, fmt.Errorf("hashmap is full (probed %d slots)", probes)
+	return 0, false, groupsScanned, fmt.Errorf("hashmap is full (probed %d slots)", probes)
 }
 
 func (h *DB) addManyBuckets(items []Item, slabOffsets []Key) error {
@@ -321,7 +332,7 @@ func (h *DB) addManyKeys(items []Item, slabOffsets []Key) error {
 	totalNewKey := uint64(0)
 
 	for i, item := range items {
-		hkey, isnew, err := h.probeForAdd(item.Key)
+		hkey, isnew, _, err := h.probeForAdd(item.Key)
 		if err != nil {
 			return err
 		}
