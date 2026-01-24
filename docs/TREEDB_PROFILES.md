@@ -90,8 +90,8 @@ Notes:
   a different engine path.
 - `DisableWAL=true` implies the cached value log is also disabled (no value-log
   pointers, no value-log dictionary compression). To benchmark value-log
-  features, keep `DisableWAL=false` and use `RelaxedSync=true` (plus
-  `AllowUnsafe=true`) instead.
+  features, use `ProfileFastIngest` (or keep `DisableWAL=false` and use
+  `RelaxedSync=true` + `AllowUnsafe=true`) instead.
 
 Use when you want:
 
@@ -100,6 +100,29 @@ Use when you want:
   you are willing to trade durability/integrity for throughput
 
 Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
+
+### `ProfileFastIngest`
+
+Goal: maximize write throughput while explicitly keeping the cached **value-log**
+path enabled.
+
+Behavior:
+
+- Keeps WAL enabled (`DisableWAL=false`) so value-log pointers remain available.
+- Enables value-log path knobs:
+  - `SplitValueLog=true`
+  - `MemtableValueLogPointers=true`
+- Relaxes integrity/durability for throughput:
+  - `RelaxedSync=true`
+  - `DisableReadChecksum=true`
+- Prefers append allocation (`PreferAppendAlloc=true`)
+
+Use when you want:
+
+- a stable “fast ingest” default that exercises cached+value-log behavior
+- benchmarks aligned with the intended write-path architecture (avoid backend-only slab-direct writes)
+
+Note: `ProfileFastIngest` requires `Options.AllowUnsafe = true` to open.
 
 ### `ProfileBench`
 
