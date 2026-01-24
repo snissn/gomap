@@ -167,22 +167,41 @@ func syncDir(path string) (err error) {
 	return nil
 }
 
-func (w *Writer) Append(rid uint64, value []byte) (page.ValuePtr, error) {
+func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
 	if rid == 0 {
 		return page.ValuePtr{}, errors.New("valuelog: missing rid")
 	}
-	if len(value) > int(^uint32(0)) {
-		return page.ValuePtr{}, ErrRecordTooLarge
+	ptrs, err := w.AppendFrame(dictID, dict, []Record{{RID: rid, Value: value}})
+	if err != nil {
+		return page.ValuePtr{}, err
 	}
-	valueLen := uint32(len(value))
-	if recordSizeExceedsMax(valueLen) {
-		return page.ValuePtr{}, ErrRecordTooLarge
+	return ptrs[0], nil
+}
+
+func (w *Writer) AppendFrame(dictID uint64, dict []byte, records []Record) ([]page.ValuePtr, error) {
+	if w == nil {
+		return nil, errors.New("valuelog: nil writer")
+	}
+	if len(records) == 0 {
+		return nil, nil
 	}
 
-	recordLen := HeaderSize + len(value)
+	body, _, err := EncodeFrame(dictID, dict, records)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > int(^uint32(0)) {
+		return nil, ErrRecordTooLarge
+	}
+	bodyLen := uint32(len(body))
+	if recordSizeExceedsMax(bodyLen) {
+		return nil, ErrRecordTooLarge
+	}
+
+	recordLen := HeaderSize + len(body)
 	start := w.size
 	if cap(w.scratch) < recordLen {
 		w.scratch = make([]byte, recordLen)
@@ -190,82 +209,30 @@ func (w *Writer) Append(rid uint64, value []byte) (page.ValuePtr, error) {
 	buf := w.scratch[:recordLen]
 
 	buf[4] = Version
-	buf[5] = 0
+	buf[5] = recordFlagGrouped
 	buf[6] = 0
 	buf[7] = 0
-	binary.LittleEndian.PutUint64(buf[8:16], rid)
-	binary.LittleEndian.PutUint32(buf[16:20], valueLen)
-	copy(buf[HeaderSize:], value)
+	binary.LittleEndian.PutUint64(buf[8:16], 0)
+	binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
+	copy(buf[HeaderSize:], body)
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], value)
+	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
-
-	if _, err := w.bw.Write(buf); err != nil {
-		return page.ValuePtr{}, err
-	}
-	w.size += int64(recordLen)
-
-	return page.ValuePtr{
-		Offset: uint64(start + 4),
-		Length: uint32(headerWithoutCRC + len(value)),
-		FileID: w.fileID,
-	}, nil
-}
-
-func (w *Writer) AppendBatch(records []Record) ([]page.ValuePtr, error) {
-	if len(records) == 0 {
-		return nil, nil
-	}
-
-	ptrs := make([]page.ValuePtr, len(records))
-	total := 0
-	start := w.size
-	for i, r := range records {
-		if r.RID == 0 {
-			return nil, errors.New("valuelog: missing rid")
-		}
-		if len(r.Value) > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
-		}
-		valueLen := uint32(len(r.Value))
-		if recordSizeExceedsMax(valueLen) {
-			return nil, ErrRecordTooLarge
-		}
-		recordLen := HeaderSize + len(r.Value)
-		ptrs[i] = page.ValuePtr{
-			Offset: uint64(start + 4),
-			Length: uint32(headerWithoutCRC + len(r.Value)),
-			FileID: w.fileID,
-		}
-		start += int64(recordLen)
-		total += recordLen
-	}
-
-	if cap(w.scratch) < total {
-		w.scratch = make([]byte, total)
-	}
-	buf := w.scratch[:total]
-
-	off := 0
-	for _, r := range records {
-		valueLen := uint32(len(r.Value))
-		recordLen := HeaderSize + len(r.Value)
-		buf[off+4] = Version
-		buf[off+5] = 0
-		buf[off+6] = 0
-		buf[off+7] = 0
-		binary.LittleEndian.PutUint64(buf[off+8:off+16], r.RID)
-		binary.LittleEndian.PutUint32(buf[off+16:off+20], valueLen)
-		copy(buf[off+HeaderSize:off+recordLen], r.Value)
-		sum := crc.ChecksumParts(buf[off+4:off+HeaderSize], r.Value)
-		binary.LittleEndian.PutUint32(buf[off:off+4], sum)
-		off += recordLen
-	}
 
 	if _, err := w.bw.Write(buf); err != nil {
 		return nil, err
 	}
-	w.size += int64(total)
+	w.size += int64(recordLen)
+
+	ptrs := make([]page.ValuePtr, len(records))
+	recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+	for i := range records {
+		ptrs[i] = page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+			FileID: w.fileID,
+		}
+	}
 	return ptrs, nil
 }
 

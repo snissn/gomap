@@ -138,12 +138,16 @@ func Open(opts Options) (*DB, error) {
 	dictOpts.Mode = ModeBackend
 	dictOpts.DisableBackgroundPrune = true
 	dictOpts.SlabCompression = slab.CompressionOptions{Kind: slab.CompressionNone}
+	dictOpts.DictLookup = nil
 	dictBackend, err := db.Open(dictOpts)
 	if err != nil {
 		return nil, err
 	}
 	dictStore := dictdb.New(dictBackend)
 
+	opts.DictLookup = func(dictID uint64) ([]byte, error) {
+		return dictStore.GetDictBytes(context.Background(), dictID)
+	}
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {

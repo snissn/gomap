@@ -56,6 +56,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	vm.SetDictLookup(opts.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -142,6 +143,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	vm.SetDictLookup(opts.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)

@@ -752,18 +752,45 @@ Authoritative spec: `slab-optimization/spec.md`
 `2026-01-17 21:41:31 HST`
 - CI (post-log update): `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
 
-`2026-01-18 00:39:12 HST`
-- Updated read-only open handling for missing maindb/dictdb directories in `TreeDB/public.go`.
-- Clarified dictdb store errors, added collision handling/rehydration, and updated tests in `TreeDB/internal/dictdb/store.go` and `TreeDB/internal/dictdb/store_test.go`.
-- Tests: `go test ./TreeDB/internal/dictdb -count=1` → PASS
+`2026-01-17 22:40:59 HST`
+- Added `TreeDB/internal/compression` (ported package) and wired dynamic-K selection into value-log writes.
+- Extended valuelog grouped frame parsing/flags, dict lookup plumbing, and stricter grouped pointer validation.
+- Wired dict lookup through cached/backend opens and updated value-log writer/readers/tests for dict frames.
+- Added compressible dataset test `TreeDB/caching/dict_k_compression_test.go`.
+- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
 
-`2026-01-18 00:44:53 HST`
-- Commit: `fix: handle dictdb collisions and read-only open`.
-- Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
-- CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+`2026-01-17 22:42:22 HST`
+- Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 22:50:23 HST`
+- Commit: `PR4: dict + dynamic-K grouped ValueLog encoding`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr3-rid-join`): https://github.com/snissn/gomap/pull/63
+- CI: `gh pr checks 63 --watch` → FAIL (windows-latest: https://github.com/snissn/gomap/actions/runs/21108956317/job/60704603039; others PASS).
+
+`2026-01-17 23:06:28 HST`
+- Commit: `fix: make dict compression test use vlog size`.
+- Pushed branch `sprint/slabopt-pr4-dict-dynamick` to origin.
+- Tests: `go test ./TreeDB/caching -run "Dict|K|Grouped|UnifiedWAL" -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- CI: `gh pr checks 63 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
 
 `2026-01-18 08:58:31 HST`
 - PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
 
 `2026-01-18 08:59:33 HST`
 - Tests: `go test ./TreeDB/caching -run TestUnifiedWAL_CrashRecoveryMissingPayload -count=1` → PASS
+
+`2026-01-18 09:14:11 HST`
+- PR3: merged `sprint/slabopt-pr3-rid-join` into `sprint/slabopt-pr4-dict-dynamick` to resolve PR3 conflict in `slab-optimization/AGENTS.md`.
+
+`2026-01-18 09:22:54 HST`
+- PR4: handle zstd encoder/decoder creation errors in `TreeDB/internal/compression/profile.go`, remove dead baseline check, and pad reduced dictionaries in `TreeDB/internal/compression/trainer.go`.
+
+`2026-01-18 09:23:59 HST`
+- Tests: `go test ./TreeDB/internal/compression -count=1` → PASS

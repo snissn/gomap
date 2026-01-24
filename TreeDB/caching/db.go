@@ -17,6 +17,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -230,6 +231,11 @@ func (db *DB) SetDictStore(store DictStore) {
 		return
 	}
 	db.dictStore = store
+	if db.valueLogReader != nil && store != nil {
+		db.valueLogReader.SetDictLookup(func(dictID uint64) ([]byte, error) {
+			return store.GetDictBytes(context.Background(), dictID)
+		})
+	}
 }
 
 func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
@@ -237,6 +243,16 @@ func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 		return 0, nil
 	}
 	return db.dictStore.GetCurrent(ctx)
+}
+
+func (db *DB) dictBytes(ctx context.Context, dictID uint64) ([]byte, error) {
+	if dictID == 0 {
+		return nil, nil
+	}
+	if db == nil || db.dictStore == nil {
+		return nil, valuelog.ErrMissingDict
+	}
+	return db.dictStore.GetDictBytes(ctx, dictID)
 }
 
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
@@ -642,6 +658,7 @@ type Options struct {
 // DictStore provides access to the current dictionary ID for write freezing.
 type DictStore interface {
 	GetCurrent(ctx context.Context) (uint64, error)
+	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
 type DB struct {
@@ -1593,21 +1610,6 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 	return int64(total)
 }
 
-func (db *DB) valueLogRecordSize(value []byte) int64 {
-	return int64(valuelog.HeaderSize + len(value))
-}
-
-func (db *DB) valueLogBatchSize(records []valuelog.Record) int64 {
-	if len(records) == 0 {
-		return 0
-	}
-	total := 0
-	for _, r := range records {
-		total += valuelog.HeaderSize + len(r.Value)
-	}
-	return int64(total)
-}
-
 type walWriteRequest struct {
 	records []logRecord
 	sync    bool
@@ -1930,7 +1932,28 @@ func (db *DB) appendWAL(records []logRecord, durability journalDurability) error
 	}
 }
 
-func (db *DB) appendValueLog(records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+func chooseValueLogK(dict []byte, records []valuelog.Record) int {
+	if len(records) <= 1 {
+		return 1
+	}
+	if len(dict) == 0 {
+		return 1
+	}
+	samples := make([][]byte, 0, len(records))
+	for i := range records {
+		samples = append(samples, records[i].Value)
+	}
+	profile := compression.ChooseKForDict(dict, samples)
+	if profile == nil || profile.K <= 0 {
+		return 1
+	}
+	if profile.K > valuelog.MaxFrameK {
+		return valuelog.MaxFrameK
+	}
+	return profile.K
+}
+
+func (db *DB) appendValueLog(dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
@@ -1955,17 +1978,23 @@ func (db *DB) appendValueLog(records []valuelog.Record, durability journalDurabi
 		err        error
 	)
 	db.vlogMu.Lock()
-	if len(records) == 1 {
-		rec := records[0]
-		var ptr page.ValuePtr
-		ptr, err = w.Append(rec.RID, rec.Value)
-		if err == nil {
-			ptrs = []page.ValuePtr{ptr}
+	startSize := w.Size()
+	k := chooseValueLogK(dict, records)
+	if k <= 0 {
+		k = 1
+	}
+	ptrs = make([]page.ValuePtr, 0, len(records))
+	for i := 0; i < len(records); i += k {
+		end := i + k
+		if end > len(records) {
+			end = len(records)
 		}
-		totalBytes = db.valueLogRecordSize(rec.Value)
-	} else {
-		ptrs, err = w.AppendBatch(records)
-		totalBytes = db.valueLogBatchSize(records)
+		framePtrs, frameErr := w.AppendFrame(dictID, dict, records[i:end])
+		if frameErr != nil {
+			err = frameErr
+			break
+		}
+		ptrs = append(ptrs, framePtrs...)
 	}
 	if err == nil {
 		switch durability {
@@ -1974,6 +2003,9 @@ func (db *DB) appendValueLog(records []valuelog.Record, durability journalDurabi
 		case journalDurabilitySync:
 			err = w.Sync()
 		}
+	}
+	if err == nil {
+		totalBytes = w.Size() - startSize
 	}
 	db.vlogMu.Unlock()
 	if err != nil {
@@ -2672,7 +2704,8 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	if _, err := db.currentDictID(context.Background()); err != nil {
+	dictID, err := db.currentDictID(context.Background())
+	if err != nil {
 		return err
 	}
 	db.writeMu.RLock()
@@ -2710,7 +2743,12 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 		if eligible && allowPointers {
 			rid := db.nextRID.Add(1)
-			ptrs, err := db.appendValueLog([]valuelog.Record{{RID: rid, Value: value}}, durability)
+			dictBytes, err := db.dictBytes(context.Background(), dictID)
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
+			ptrs, err := db.appendValueLog(dictID, dictBytes, []valuelog.Record{{RID: rid, Value: value}}, durability)
 			if err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -5090,6 +5128,8 @@ type Batch struct {
 	batchRange     keyRange
 	dictID         uint64
 	dictIDValid    bool
+	dictBytes      []byte
+	dictBytesValid bool
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -5136,6 +5176,8 @@ func (b *Batch) Reset() {
 	b.batchRange = keyRange{}
 	b.dictID = 0
 	b.dictIDValid = false
+	b.dictBytes = nil
+	b.dictBytesValid = false
 }
 
 func (b *Batch) Set(key, value []byte) error {
@@ -5433,6 +5475,22 @@ func (b *Batch) freezeDictID(ctx context.Context) error {
 	return nil
 }
 
+func (b *Batch) ensureDictBytes(ctx context.Context) ([]byte, error) {
+	if b.dictBytesValid {
+		return b.dictBytes, nil
+	}
+	if b.db == nil {
+		return nil, nil
+	}
+	dictBytes, err := b.db.dictBytes(ctx, b.dictID)
+	if err != nil {
+		return nil, err
+	}
+	b.dictBytes = dictBytes
+	b.dictBytesValid = true
+	return dictBytes, nil
+}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -5587,7 +5645,12 @@ func (b *Batch) writeRegular(sync bool) error {
 				rids[idx] = rid
 				valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 			}
-			ptrs, err := b.db.appendValueLog(valueRecords, durability)
+			dictBytes, err := b.ensureDictBytes(context.Background())
+			if err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+			ptrs, err := b.db.appendValueLog(b.dictID, dictBytes, valueRecords, durability)
 			if err != nil {
 				b.db.writeMu.RUnlock()
 				return err

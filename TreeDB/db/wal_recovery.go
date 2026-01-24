@@ -135,6 +135,7 @@ func scanValueLogSegments(segments []logSegment) (map[uint64]page.ValuePtr, erro
 		if err != nil {
 			return nil, err
 		}
+		reader.DisableValueDecode()
 		for {
 			rid, _, ptr, err := reader.ReadNext()
 			if err == nil {
