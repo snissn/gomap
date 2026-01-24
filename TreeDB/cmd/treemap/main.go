@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -30,6 +31,7 @@ Commands:
   verify          Full scan verification (counts items)
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
+  vlog-gc         Delete unreferenced value-log segments (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -76,6 +78,8 @@ func main() {
 		runCompact(dir, args)
 	case "vacuum":
 		runVacuum(dir, args)
+	case "vlog-gc":
+		runVlogGC(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":
@@ -208,6 +212,43 @@ func runVacuum(dir string, args []string) {
 		fatalf("VacuumIndexOffline error: %v", err)
 	}
 	fmt.Println("Index vacuum complete.")
+}
+
+func runVlogGC(dir string, args []string) {
+	fs := flag.NewFlagSet("vlog-gc", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	dryRun := fs.Bool("dry-run", false, "Report deletions without removing segments")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("vlog-gc requires -rw")
+	}
+
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
+
+	stats, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{DryRun: *dryRun})
+	if err != nil {
+		fatalf("ValueLogGC error: %v", err)
+	}
+
+	mode := "applied"
+	if *dryRun {
+		mode = "dry-run"
+	}
+	fmt.Printf("vlog-gc (%s): segments total=%d referenced=%d active=%d eligible=%d deleted=%d bytes_total=%d bytes_referenced=%d bytes_active=%d bytes_eligible=%d bytes_deleted=%d\n",
+		mode,
+		stats.SegmentsTotal,
+		stats.SegmentsReferenced,
+		stats.SegmentsActive,
+		stats.SegmentsEligible,
+		stats.SegmentsDeleted,
+		stats.BytesTotal,
+		stats.BytesReferenced,
+		stats.BytesActive,
+		stats.BytesEligible,
+		stats.BytesDeleted,
+	)
 }
 
 func runGet(dir string, args []string) {
