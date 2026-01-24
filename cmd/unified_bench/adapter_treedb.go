@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -60,6 +61,7 @@ var (
 	treedbVlogDictMetricsMinRecords = flag.Int("treedb-vlog-dict-metrics-min-records", 0, "TreeDB: value-log dict metrics min records (0=default)")
 	treedbVlogDictMetricsPauseBytes = flag.Int("treedb-vlog-dict-metrics-pause-bytes", 0, "TreeDB: value-log dict pause bytes when degraded (0=default)")
 	treedbVlogDictMinSavingsRatio   = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
+	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
 	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
@@ -147,6 +149,40 @@ func setOptionalTrainConfig(opts *treedb.Options, name string, trainBytes, dictB
 	setInt("DedupWindow", dedupWindow)
 }
 
+func setOptionalAutotuneMode(opts *treedb.Options, fieldName string, mode uint64) {
+	v := reflect.ValueOf(opts).Elem()
+	field := v.FieldByName(fieldName)
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Struct {
+		return
+	}
+	modeField := field.FieldByName("Mode")
+	if !modeField.IsValid() || !modeField.CanSet() {
+		return
+	}
+	switch modeField.Kind() {
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
+		modeField.SetUint(mode)
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
+		modeField.SetInt(int64(mode))
+	}
+}
+
+func parseVlogCompressionAutotuneMode(s string) (uint64, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "unset", "auto":
+		// The actual default is decided by TreeDB depending on SplitValueLog.
+		return 0, nil
+	case "off", "false", "0":
+		return 1, nil
+	case "medium":
+		return 2, nil
+	case "aggressive":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("unsupported -treedb-vlog-compression-autotune=%q (expected off|medium|aggressive|default)", s)
+	}
+}
+
 func parseSlabCompression(name string, minBytes int, minSavings int) slab.CompressionOptions {
 	opts := slab.CompressionOptions{
 		Kind:            slab.CompressionNone,
@@ -218,6 +254,19 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	setOptionalFloat64Option(&opts, "ValueLogDictMinPayloadSavingsRatio", *treedbVlogDictMinSavingsRatio)
 	setOptionalBoolOption(&opts, "IndexColumnarLeaves", *treedbIndexColumnarLeaves)
 	setOptionalBoolOption(&opts, "IndexInternalBaseDelta", *treedbIndexInternalBaseDelta)
+
+	autotuneMode, err := parseVlogCompressionAutotuneMode(*treedbVlogCompressionAutotune)
+	if err != nil {
+		return nil, err
+	}
+	setOptionalAutotuneMode(&opts, "ValueLogCompressionAutotune", autotuneMode)
+	if autotuneMode == 1 {
+		// Compression off should also force dict training off, even if the caller
+		// specified training flags. TreeDB enforces the same invariant internally,
+		// but we keep unified_bench behavior explicit and deterministic.
+		setOptionalTrainConfig(&opts, "ValueLogDictTrain", -1, 0, 0, 0, 0, 0)
+	}
+
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err

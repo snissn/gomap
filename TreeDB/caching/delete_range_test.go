@@ -82,7 +82,6 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		shard.mem = &errMemtable{Table: shard.mem, deleteErr: failErr}
-		shard.largePtrs = &largePtrMap{}
 		shard.mu.Unlock()
 	}
 	db.mu.Unlock()

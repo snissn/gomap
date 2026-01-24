@@ -635,6 +635,19 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	steadyMBps := float64(steadyRaw) / steadySecs / 1e6
 	fmt.Printf("steady:   raw_bytes=%d records=%d elapsed=%.3fs raw_MBps=%.3f\n", steadyRaw, steadyRecords, steadySecs, steadyMBps)
 
+	if cfg.Mode == "mode4" {
+		// Mode4 uses deferred value-log pointers, so many writes may still be
+		// sitting in memtables until a flush boundary. Force a checkpoint after
+		// the steady timer so disk-usage reporting reflects the true on-disk
+		// value-log footprint for the workload.
+		ckStart := time.Now()
+		if err := db.Checkpoint(); err != nil {
+			return nil, fmt.Errorf("checkpoint after steady (mode4) failed: %w", err)
+		}
+		ckSecs := time.Since(ckStart).Seconds()
+		fmt.Printf("post_steady_checkpoint: elapsed=%.3fs\n", ckSecs)
+	}
+
 	statsEnd := db.Stats()
 	if err := validateWritePath(statsEnd, expect); err != nil {
 		return nil, err

@@ -46,7 +46,7 @@ Execute in this order unless the runbook says otherwise:
 2. **Live bench gate**: run the mode matrix and capture logs:
    - `go run ./TreeDB/cmd/vlog_dict_realdata -input <dataset.jsonl> -bench-kv ... | tee out/...`
 3. **Repo-root unified_bench**: run the synthetic mode comparisons and scan regressions:
-   - `go run ./cmd/unified_bench ...`
+   - `go run ./cmd/unified_bench ... > out/...` (unified_bench writes results to stdout)
 4. **Tests**: run `go test` (and `-race` where the runbook requires).
 5. **Docs + defaults**: apply the runbook’s doc/deprecation/defaults guidance.
 
@@ -58,7 +58,7 @@ For every performance-meaningful change (or for merge gate verification), captur
   - `go run ./TreeDB/cmd/unified_bench -suite vlog_autotune -validate -json > out/vlog_autotune.json`
 - Live KV throughput logs:
   - `out/live_mode*_*.log` (via `tee`)
-- Synthetic mode comparison markdown:
+- Synthetic mode comparison markdown (capture via stdout redirection):
   - `out/mode_compare_large_values.md`
   - `out/scan_compare.md`
 
@@ -83,4 +83,3 @@ If all runbook gates already pass:
 1. Re-run the deterministic suite and one live bench config to confirm nothing regressed.
 2. Summarize results (what passed, what commands, where logs are).
 3. Stop (no further changes).
-

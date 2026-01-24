@@ -5,6 +5,8 @@ It is written to be *actionable* and *mergeable*: every milestone below is a PR-
 
 Backwards compatibility is **not required** (pre-alpha), but **silent corruption is not acceptable**.
 
+**Terminology note (legacy):** some older docs use **WAL** as a synonym for the cached-mode **journal** (redo/commit log). The **value log** is distinct from backend slabs.
+
 ---
 
 ## 0) Sprint Outcome (End State)

@@ -19,8 +19,8 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 │ TreeDB (Cached Layer)                                                        │
 │                                                                              │
 │  ┌──────────────┐        ┌──────────────────┐                                │
-│  │   Memtable   │◄───────┤    Log (WAL)     │◄── Write-Ahead Log (Durability)│
-│  │ (SkipList)   │        │   Dir/wal/*.log  │                                │
+│  │   Memtable   │◄───────┤  Journal (Log)   │◄── Commit Journal (Durability) │
+│  │ (SkipList)   │        │  Dir/wal/*.log   │                                │
 │  └──────┬───────┘        └──────────────────┘                                │
 │         │                                                                    │
 │         │ Background Flush (Threshold / Time)                                │
@@ -42,7 +42,7 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 └───────────────────────────────────────┘
 ```
 
-- **Write Path**: `Set` -> Memtable + WAL.
+- **Write Path**: `Set` -> Memtable + Journal.
 - **Read Path**: `Get` checks Memtable -> Backend (merged view).
 - **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
 
@@ -90,11 +90,11 @@ Key directories and their purpose.
 │   └── sharded_db.go           # The main sharded engine entrypoint
 │
 ├── TreeDB/                     # TreeDB Engine (Public Package: treedb)
-│   ├── caching/                # Cached write-back layer (Memtable + WAL)
+│   ├── caching/                # Cached write-back layer (Memtable + journal)
 │   ├── db/                     # Backend B+Tree implementation (Pages, Nodes)
 │   ├── internal/
 │   │   ├── memtable/           # Arena-backed SkipList
-│   │   ├── wal/                # Write-Ahead Log format
+│   │   ├── wal/                # Journal format (legacy WAL name)
 │   │   └── zipper/             # Copy-on-Write merge logic
 │   ├── slab/                   # Backend slab manager
 │   └── public.go               # Main public API (Open, Set, Get)
@@ -118,7 +118,7 @@ Key directories and their purpose.
 | Component | Path | Description |
 |---|---|---|
 | **TreeDB Backend** | `TreeDB/db/` | The persistent B+Tree engine (pages, meta, freelist). |
-| **TreeDB Caching** | `TreeDB/caching/` | The write-back layer that handles WAL and memtables. |
+| **TreeDB Caching** | `TreeDB/caching/` | The write-back layer that handles the journal and memtables. |
 | **TreeDB Merge** | `TreeDB/zipper/` | The algorithm that merges a batch into the B+Tree (COW). |
 | **HashDB Index** | `HashDB/hashindex.go` | The memory-mapped Swiss Table implementation. |
 | **HashDB Sharding** | `HashDB/sharded_db.go` | Orchestrates multiple HashDB shards. |
