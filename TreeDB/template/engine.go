@@ -179,7 +179,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			bestSavings = savings
 			bestPayload = payload
 		case TemplateMask:
-			mask, vars, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
+			payload, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
 			if reason != "" {
 				e.stats.addReason(reason)
 			}
@@ -189,10 +189,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			matchedAny = true
 			savings := len(value) - encLen
 			if savings <= bestSavings {
-				continue
-			}
-			payload, err := EncodeMaskPayload(cand.id, mask, vars)
-			if err != nil {
 				continue
 			}
 			bestSavings = savings

@@ -1,6 +1,9 @@
 package template
 
-import "bytes"
+import (
+	"bytes"
+	"encoding/binary"
+)
 
 func minEncodedLen(rawLen int, gapCount int, anchorBytes int, templateID uint64) int {
 	// header + templateID + gapCount + per-gap length varints + raw minus anchors
@@ -75,43 +78,43 @@ func matchTemplate(value []byte, anchors [][]byte, templateID uint64, cfg Config
 	return gaps, encLen, "", true
 }
 
-func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Config) (mask []byte, vars []byte, encLen int, reason string, matched bool) {
+func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Config) (payload []byte, encLen int, reason string, matched bool) {
 	if def.Kind != TemplateMask || len(def.Base) == 0 {
-		return nil, nil, 0, reasonMatchMissingAnchor, false
+		return nil, 0, reasonMatchMissingAnchor, false
 	}
 	if len(value) != len(def.Base) {
-		return nil, nil, 0, reasonMatchMissingAnchor, false
+		return nil, 0, reasonMatchMissingAnchor, false
 	}
 	if cfg.MaxDecodedBytes > 0 && len(value) > cfg.MaxDecodedBytes {
-		return nil, nil, 0, reasonKeepBounds, false
+		return nil, 0, reasonKeepBounds, false
 	}
 	maskLen := len(def.Mask)
 	if maskLen == 0 {
 		maskLen = (len(def.Base) + 7) / 8
 	}
-	diffCount := 0
-	for i := 0; i < len(def.Base); i++ {
-		if value[i] != def.Base[i] {
-			diffCount++
-		}
-	}
-	encLen = payloadHeader + uvarintLen(templateID) + maskLen + diffCount
-	if len(value)-encLen < cfg.MinSavingsBytes {
-		return nil, nil, encLen, reasonMatchExpectedSavings, false
-	}
-	mask = make([]byte, maskLen)
-	vars = make([]byte, diffCount)
+	maxLen := payloadHeader + uvarintLen(templateID) + maskLen + len(value)
+	out := make([]byte, maxLen)
+	out[0] = magic0
+	out[1] = magic1
+	out[2] = payloadVer
+	out[3] = flagEncoded | flagMask
+	off := payloadHeader
+	off += binary.PutUvarint(out[off:], templateID)
+	maskOff := off
+	diffOff := maskOff + maskLen
 	idx := 0
 	for i := 0; i < len(def.Base); i++ {
 		if value[i] == def.Base[i] {
 			continue
 		}
-		mask[i/8] |= 1 << uint(i%8)
-		vars[idx] = value[i]
+		out[maskOff+i/8] |= 1 << uint(i%8)
+		out[diffOff+idx] = value[i]
 		idx++
 	}
+	encLen = diffOff + idx
 	if len(value)-encLen < cfg.MinSavingsBytes {
-		return mask, vars, encLen, reasonKeepNoSavings, true
+		return nil, encLen, reasonMatchExpectedSavings, false
 	}
-	return mask, vars, encLen, "", true
+	payload = out[:encLen]
+	return payload, encLen, "", true
 }
