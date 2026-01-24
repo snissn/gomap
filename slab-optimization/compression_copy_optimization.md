@@ -469,3 +469,13 @@ Suggested benchmark hook:
 - memmove focus (mode3 dict‑on): memmove shows heavy attribution to Memtable/SkipList plus AppendValueLog/Writer; zstd EncodeAll appears in memmove stacks (~12% cum). Commitlog path ~4–5% cum.
 - memmove focus (mode4 dict‑on): memmove dominated by Memtable/SkipList; AppendValueLog/Writer minimal (~2% cum).
 - Implication: further writer copy removal will help mode3 more than mode4; memtable copies remain the largest shared cost.
+
+### 2026‑01‑22
+- PR100 bumps `github.com/snissn/compress` to `7ad45194ecdc` (dict reset optimization) and fixes a vlogprof flake where
+  dict-on profiles could fail to apply a dict after warmup under higher throughput.
+  - mode3 dict-on (ultra, 1KiB) improved from median ~515k ops/s to ~571k ops/s in the vlogprof steady-state test.
+  - Root cause of flake: default `SampleStride=4` plus `TrainBytes=4MiB` and `warmup=16MiB` is “just enough” samples;
+    if the trainer drops samples due to queue pressure, training may not trigger. The vlogprof tests now extend warmup
+    until `last_applied_dict_id != 0` (bounded).
+- PR102 (reverted) attempted to speed up `largePtrMap.SetString` by switching from `sync.RWMutex` to `sync.Mutex` and
+  preallocating map capacity; pprof showed mapassign dominates and throughput did not improve reliably.

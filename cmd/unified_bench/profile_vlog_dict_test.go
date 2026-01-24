@@ -15,6 +15,28 @@ import (
 	"github.com/snissn/gomap/kvstore"
 )
 
+func waitForDictAppliedStrict(db kvstore.DB, timeout time.Duration) bool {
+	const interval = 50 * time.Millisecond
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		stats := getTreeDBStats(db)
+		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") != 0 {
+			return true
+		}
+		// If dict compression is paused before a dict is applied, return false so
+		// callers can decide whether to continue warming or fail.
+		if parseUint(stats, "treedb.cache.vlog_dict.pause_remaining_bytes") != 0 {
+			return false
+		}
+		time.Sleep(interval)
+	}
+	stats := getTreeDBStats(db)
+	return parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") != 0
+}
+
 func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	// Steady-state CPU profile (post-warmup) for:
 	// - mode4 (DisableJournal=true)
@@ -94,12 +116,27 @@ func TestProfileVlogDict_Mode4_DictOn_Ultra_1024(t *testing.T) {
 	keyBase += warmupKeys
 
 	if !dictOff {
-		if err := waitForDictPublish(db, 10*time.Second); err != nil {
-			t.Fatalf("waitForDictPublish: %v", err)
+		if ok := waitForDictAppliedStrict(db, 10*time.Second); !ok {
+			// Dict training is gated by sampling stride and queue limits; under
+			// high-throughput conditions it may not reach the training target during
+			// the first warmup window. Extend warmup in bounded chunks until the dict
+			// is applied.
+			const extraWarmupBytesMax = int64(256 << 20)
+			const extraWarmupChunk = int64(16 << 20)
+			extraBytes := int64(0)
+			for extraBytes < extraWarmupBytesMax && !waitForDictAppliedStrict(db, 250*time.Millisecond) {
+				chunkKeys := int((extraWarmupChunk + int64(tc.valueSz) - 1) / int64(tc.valueSz))
+				valPos, err = writeBatches(batcher, keyBase, chunkKeys, batchSize, values, valPos)
+				if err != nil {
+					t.Fatalf("extra warmup write: %v", err)
+				}
+				keyBase += chunkKeys
+				extraBytes += extraWarmupChunk
+			}
 		}
 		stats := getTreeDBStats(db)
 		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
-			t.Fatalf("expected dict to be applied after warmup")
+			t.Fatalf("expected dict to be applied after warmup stats=%v", stats)
 		}
 	}
 
@@ -248,12 +285,23 @@ func TestProfileVlogDict_Mode3_DictOn_Ultra_1024(t *testing.T) {
 	keyBase += warmupKeys
 
 	if !dictOff {
-		if err := waitForDictPublish(db, 10*time.Second); err != nil {
-			t.Fatalf("waitForDictPublish: %v", err)
+		if ok := waitForDictAppliedStrict(db, 10*time.Second); !ok {
+			const extraWarmupBytesMax = int64(256 << 20)
+			const extraWarmupChunk = int64(16 << 20)
+			extraBytes := int64(0)
+			for extraBytes < extraWarmupBytesMax && !waitForDictAppliedStrict(db, 250*time.Millisecond) {
+				chunkKeys := int((extraWarmupChunk + int64(tc.valueSz) - 1) / int64(tc.valueSz))
+				valPos, err = writeBatches(batcher, keyBase, chunkKeys, batchSize, values, valPos)
+				if err != nil {
+					t.Fatalf("extra warmup write: %v", err)
+				}
+				keyBase += chunkKeys
+				extraBytes += extraWarmupChunk
+			}
 		}
 		stats := getTreeDBStats(db)
 		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") == 0 {
-			t.Fatalf("expected dict to be applied after warmup")
+			t.Fatalf("expected dict to be applied after warmup stats=%v", stats)
 		}
 	}
 
