@@ -62,6 +62,9 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderConcurrency(1),
 		zstd.WithEncoderCRC(false),
+		// Trade ratio for throughput: dict-compressed payload streams tend to be
+		// match-heavy, so literal entropy coding can be an expensive marginal win.
+		zstd.WithNoEntropyCompression(true),
 	)
 	if err != nil {
 		return nil
@@ -78,6 +81,7 @@ func (c *dictCodecCache) getOrAdd(dictID uint64, dict []byte) *dictCodecEntry {
 				zstd.WithEncoderLevel(zstd.SpeedFastest),
 				zstd.WithEncoderConcurrency(1),
 				zstd.WithEncoderCRC(false),
+				zstd.WithNoEntropyCompression(true),
 			)
 			return enc
 		},
