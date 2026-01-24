@@ -15,10 +15,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/slab"
 )
 
-const (
-	defaultBufferSize = 8 << 20
-	headerWithoutCRC  = HeaderSize - 4
-)
+const headerWithoutCRC = HeaderSize - 4
+
+const defaultBufferSize = 16 << 20
 
 var syncDirFn = syncDir
 
@@ -35,6 +34,8 @@ type Writer struct {
 	bw         *bufio.Writer
 	size       int64
 	fileID     uint32
+	appendBuf  []byte
+	appendMax  int
 	scratch    []byte
 	prefixBuf  []byte
 	rawScratch []byte
@@ -43,6 +44,86 @@ type Writer struct {
 	noBenefit  uint8
 	skipRemain uint16
 	syncFn     func(*os.File) error
+}
+
+func (w *Writer) flushAppendBuf() error {
+	if w == nil {
+		return errors.New("valuelog: nil writer")
+	}
+	if len(w.appendBuf) == 0 {
+		return nil
+	}
+	if w.f == nil {
+		_, err := w.bw.Write(w.appendBuf)
+		w.appendBuf = w.appendBuf[:0]
+		return err
+	}
+	written := 0
+	for written < len(w.appendBuf) {
+		n, err := w.f.Write(w.appendBuf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("valuelog: short write")
+		}
+	}
+	w.appendBuf = w.appendBuf[:0]
+	return nil
+}
+
+func (w *Writer) writeBytes(buf []byte) error {
+	if w == nil {
+		return errors.New("valuelog: nil writer")
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	if w.f == nil {
+		_, err := w.bw.Write(buf)
+		return err
+	}
+
+	max := w.appendMax
+	if max <= 0 {
+		max = defaultBufferSize
+	}
+	if len(buf) >= max {
+		if err := w.flushAppendBuf(); err != nil {
+			return err
+		}
+		written := 0
+		for written < len(buf) {
+			n, err := w.f.Write(buf[written:])
+			if n > 0 {
+				written += n
+			}
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return errors.New("valuelog: short write")
+			}
+		}
+		return nil
+	}
+	if len(w.appendBuf)+len(buf) > max {
+		if err := w.flushAppendBuf(); err != nil {
+			return err
+		}
+	}
+	w.appendBuf = append(w.appendBuf, buf...)
+	if len(w.appendBuf) >= max {
+		return w.flushAppendBuf()
+	}
+	return nil
+}
+
+func (w *Writer) writeFrameBatch(buf []byte) error {
+	return w.writeBytes(buf)
 }
 
 func dictSkipFrames(noBenefit uint8) uint16 {
@@ -77,6 +158,8 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		bw:        bufio.NewWriterSize(f, defaultBufferSize),
 		size:      info.Size(),
 		fileID:    fileID,
+		appendMax: defaultBufferSize,
+		appendBuf: make([]byte, 0, defaultBufferSize),
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		syncFn:    func(file *os.File) error { return file.Sync() },
@@ -87,6 +170,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	return &Writer{
 		bw:        bufio.NewWriterSize(sink, defaultBufferSize),
 		fileID:    fileID,
+		appendMax: 0,
 		scratch:   make([]byte, 0, defaultBufferSize),
 		prefixBuf: make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 	}
@@ -107,10 +191,16 @@ func (w *Writer) Size() int64 {
 }
 
 func (w *Writer) Flush() error {
-	if w == nil || w.f == nil {
+	if w == nil {
 		return nil
 	}
-	return w.bw.Flush()
+	if err := w.flushAppendBuf(); err != nil {
+		return err
+	}
+	if w.f == nil {
+		return w.bw.Flush()
+	}
+	return nil
 }
 
 func (w *Writer) RotateTo(path string, fileID uint32) error {
@@ -136,11 +226,17 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		w.bw.Reset(f)
 		w.size = info.Size()
 		w.fileID = fileID
+		w.appendMax = defaultBufferSize
+		if cap(w.appendBuf) < defaultBufferSize {
+			w.appendBuf = make([]byte, 0, defaultBufferSize)
+		} else {
+			w.appendBuf = w.appendBuf[:0]
+		}
 		w.scratch = w.scratch[:0]
 		return nil
 	}
 
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
@@ -168,6 +264,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	w.bw.Reset(f)
 	w.size = info.Size()
 	w.fileID = fileID
+	w.appendBuf = w.appendBuf[:0]
 	w.scratch = w.scratch[:0]
 	if err := old.Close(); err != nil {
 		return err
@@ -248,7 +345,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-		if _, err := w.bw.Write(buf); err != nil {
+		if err := w.writeBytes(buf); err != nil {
 			return page.ValuePtr{}, err
 		}
 		w.size += int64(recordLen)
@@ -343,7 +440,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
 		binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-		if _, err := w.bw.Write(buf); err != nil {
+		if err := w.writeBytes(buf); err != nil {
 			return nil, FrameStats{}, err
 		}
 		w.size += int64(recordLen)
@@ -364,8 +461,8 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 	// Fast path: grouped frame with no dict/compression.
 	//
-	// We can write the frame prefix + raw values directly to the buffered writer
-	// without first concatenating the payload into a temporary buffer.
+	// We can write the frame prefix + raw values directly without first
+	// concatenating the payload into a temporary buffer.
 	//
 	// This matters for high-throughput append workloads (e.g. IAVL node storage)
 	// where dict compression is disabled or not yet available.
@@ -404,58 +501,128 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 
 		start := w.size
-		var header [HeaderSize]byte
-		header[4] = Version
-		header[5] = recordFlagGrouped
-		header[6] = 0
-		header[7] = 0
-		binary.LittleEndian.PutUint64(header[8:16], 0)
-		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
-
 		prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
-		if cap(w.prefixBuf) < prefixLen {
-			w.prefixBuf = make([]byte, 0, prefixLen)
+		totalLen := HeaderSize + prefixLen + rawPayloadBytes
+		max := w.appendMax
+		if max <= 0 {
+			max = defaultBufferSize
 		}
-		prefix := w.prefixBuf[:prefixLen]
-		prefixOff := 0
-		prefix[prefixOff] = FrameVersion
-		prefix[prefixOff+1] = 0
-		prefix[prefixOff+2] = byte(k)
-		prefix[prefixOff+3] = 0
-		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
-		prefixOff += FrameHeaderSize
 
-		for i := 0; i < k; i++ {
-			rid := records[i].RID
-			if rid == 0 {
-				return nil, FrameStats{}, errors.New("valuelog: missing rid")
+		// Hot path (mode4): write directly into the writer append buffer so we
+		// don't copy `frame` into `appendBuf` after building it.
+		if w.f != nil && totalLen <= max {
+			if len(w.appendBuf)+totalLen > max {
+				if err := w.flushAppendBuf(); err != nil {
+					return nil, FrameStats{}, err
+				}
 			}
-			binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
-			prefixOff += 8
-		}
-		for i := 0; i < k+1; i++ {
-			binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
-			prefixOff += 4
-		}
+			if cap(w.appendBuf) < max {
+				w.appendBuf = make([]byte, len(w.appendBuf), max)
+			}
+			base := len(w.appendBuf)
+			w.appendBuf = w.appendBuf[:base+totalLen]
+			frame := w.appendBuf[base : base+totalLen]
 
-		sum := crc.ChecksumParts(header[4:], prefix)
-		for i := 0; i < k; i++ {
-			sum = crc.Update(sum, records[i].Value)
-		}
-		binary.LittleEndian.PutUint32(header[0:4], sum)
+			frame[4] = Version
+			frame[5] = recordFlagGrouped
+			frame[6] = 0
+			frame[7] = 0
+			binary.LittleEndian.PutUint64(frame[8:16], 0)
+			binary.LittleEndian.PutUint32(frame[16:20], uint32(bodyLen))
 
-		if _, err := w.bw.Write(header[:]); err != nil {
-			return nil, FrameStats{}, err
-		}
-		if _, err := w.bw.Write(prefix); err != nil {
-			return nil, FrameStats{}, err
-		}
-		for i := 0; i < k; i++ {
-			if _, err := w.bw.Write(records[i].Value); err != nil {
+			off := HeaderSize
+			frame[off] = FrameVersion
+			frame[off+1] = 0
+			frame[off+2] = byte(k)
+			frame[off+3] = 0
+			binary.LittleEndian.PutUint64(frame[off+4:off+12], 0)
+			off += FrameHeaderSize
+
+			for i := 0; i < k; i++ {
+				rid := records[i].RID
+				if rid == 0 {
+					return nil, FrameStats{}, errors.New("valuelog: missing rid")
+				}
+				binary.LittleEndian.PutUint64(frame[off:off+8], rid)
+				off += 8
+			}
+			for i := 0; i < k+1; i++ {
+				binary.LittleEndian.PutUint32(frame[off:off+4], offsets[i])
+				off += 4
+			}
+
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
+			w.size += int64(HeaderSize + bodyLen)
+
+			if len(w.appendBuf) >= max {
+				if err := w.flushAppendBuf(); err != nil {
+					return nil, FrameStats{}, err
+				}
+			}
+		} else {
+			if cap(w.prefixBuf) < prefixLen {
+				w.prefixBuf = make([]byte, 0, prefixLen)
+			}
+			prefix := w.prefixBuf[:prefixLen]
+			prefixOff := 0
+			prefix[prefixOff] = FrameVersion
+			prefix[prefixOff+1] = 0
+			prefix[prefixOff+2] = byte(k)
+			prefix[prefixOff+3] = 0
+			binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
+			prefixOff += FrameHeaderSize
+
+			for i := 0; i < k; i++ {
+				rid := records[i].RID
+				if rid == 0 {
+					return nil, FrameStats{}, errors.New("valuelog: missing rid")
+				}
+				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+				prefixOff += 8
+			}
+			for i := 0; i < k+1; i++ {
+				binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+				prefixOff += 4
+			}
+
+			const maxKeepScratch = 16 << 20 // 16 MiB
+			var header [HeaderSize]byte
+			header[4] = Version
+			header[5] = recordFlagGrouped
+			header[6] = 0
+			header[7] = 0
+			binary.LittleEndian.PutUint64(header[8:16], 0)
+			binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+			var frame []byte
+			if totalLen <= maxKeepScratch {
+				if cap(w.rawScratch) < totalLen {
+					w.rawScratch = make([]byte, totalLen)
+				}
+				frame = w.rawScratch[:totalLen]
+			} else {
+				frame = make([]byte, totalLen)
+			}
+			copy(frame[0:HeaderSize], header[:])
+			copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
+			off := HeaderSize + prefixLen
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
+			if err := w.writeFrameBatch(frame); err != nil {
 				return nil, FrameStats{}, err
 			}
+			w.size += int64(HeaderSize + bodyLen)
 		}
-		w.size += int64(HeaderSize + bodyLen)
 
 		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
 		for i := range records {
@@ -556,22 +723,28 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
-			sum := crc.ChecksumParts(header[4:], prefix)
-			for i := 0; i < k; i++ {
-				sum = crc.Update(sum, records[i].Value)
-			}
-			binary.LittleEndian.PutUint32(header[0:4], sum)
-
-			if _, err := w.bw.Write(header[:]); err != nil {
-				return nil, FrameStats{}, err
-			}
-			if _, err := w.bw.Write(prefix); err != nil {
-				return nil, FrameStats{}, err
-			}
-			for i := 0; i < k; i++ {
-				if _, err := w.bw.Write(records[i].Value); err != nil {
-					return nil, FrameStats{}, err
+			const maxKeepScratch = 16 << 20 // 16 MiB
+			totalLen := HeaderSize + prefixLen + rawPayloadBytes
+			var frame []byte
+			if totalLen <= maxKeepScratch {
+				if cap(w.rawScratch) < totalLen {
+					w.rawScratch = make([]byte, totalLen)
 				}
+				frame = w.rawScratch[:totalLen]
+			} else {
+				frame = make([]byte, totalLen)
+			}
+			copy(frame[0:HeaderSize], header[:])
+			copy(frame[HeaderSize:HeaderSize+prefixLen], prefix)
+			off := HeaderSize + prefixLen
+			for i := 0; i < k; i++ {
+				copy(frame[off:], records[i].Value)
+				off += len(records[i].Value)
+			}
+			sum := crc.ChecksumParts(frame[4:HeaderSize], frame[HeaderSize:])
+			binary.LittleEndian.PutUint32(frame[0:4], sum)
+			if err := w.writeFrameBatch(frame); err != nil {
+				return nil, FrameStats{}, err
 			}
 			w.size += int64(HeaderSize + bodyLen)
 
@@ -679,13 +852,13 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		sum := crc.ChecksumParts(header[4:], prefix, encoded)
 		binary.LittleEndian.PutUint32(header[0:4], sum)
 
-		if _, err := w.bw.Write(header[:]); err != nil {
+		if err := w.writeBytes(header[:]); err != nil {
 			return nil, FrameStats{}, err
 		}
-		if _, err := w.bw.Write(prefix); err != nil {
+		if err := w.writeBytes(prefix); err != nil {
 			return nil, FrameStats{}, err
 		}
-		if _, err := w.bw.Write(encoded); err != nil {
+		if err := w.writeBytes(encoded); err != nil {
 			return nil, FrameStats{}, err
 		}
 		w.size += int64(HeaderSize + bodyLen)
@@ -737,7 +910,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
 	binary.LittleEndian.PutUint32(buf[0:4], sum)
 
-	if _, err := w.bw.Write(buf); err != nil {
+	if err := w.writeBytes(buf); err != nil {
 		return nil, FrameStats{}, err
 	}
 	w.size += int64(recordLen)
@@ -768,8 +941,11 @@ func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		return err
+	}
+	if w.syncFn != nil {
+		return w.syncFn(w.f)
 	}
 	return w.f.Sync()
 }
@@ -778,7 +954,7 @@ func (w *Writer) Close() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.bw.Flush(); err != nil {
+	if err := w.Flush(); err != nil {
 		_ = w.f.Close()
 		return err
 	}

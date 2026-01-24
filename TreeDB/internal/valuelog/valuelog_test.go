@@ -120,6 +120,61 @@ func TestValueLogAppendRead(t *testing.T) {
 	}
 }
 
+func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+		{RID: 3, Value: []byte("gamma")},
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if len(ptrs) != 3 {
+		t.Fatalf("expected 3 ptrs, got %d", len(ptrs))
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	expect := []string{"alpha", "beta", "gamma"}
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(f, ptr, false, nil)
+		if err != nil {
+			t.Fatalf("read at ptr%d: %v", i+1, err)
+		}
+		if string(got) != expect[i] {
+			t.Fatalf("ptr%d mismatch: got %q want %q", i+1, got, expect[i])
+		}
+
+		// Also cover legacy pointers where record length is unknown (0) but the
+		// grouped flag and sub-index are still set.
+		legacy := ptr
+		legacy.Length = page.ValuePtrMarkGrouped(0, page.ValuePtrSubIndex(ptr))
+		gotLegacy, err := ReadAtWithDict(f, legacy, false, nil)
+		if err != nil {
+			t.Fatalf("read at legacy ptr%d: %v", i+1, err)
+		}
+		if string(gotLegacy) != expect[i] {
+			t.Fatalf("legacy ptr%d mismatch: got %q want %q", i+1, gotLegacy, expect[i])
+		}
+	}
+}
+
 func TestValueLogCorruptCRC(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
