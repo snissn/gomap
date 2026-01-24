@@ -147,6 +147,28 @@ func buildVlogAutotuneCases() []vlogAutotuneCase {
 			}},
 		},
 		{
+			Name: "template_vs_dict_1k",
+			Kind: "template_vs_dict",
+			Segments: []vlogSegmentSpec{
+				{
+					Name:               "io_bound_compressible",
+					Workload:           "highly_compressible_tail64",
+					ValueSize:          1 << 10,
+					Records:            4096,
+					EncodeNsPerRawByte: 5,
+					IoNsPerStoredByte:  200,
+				},
+				{
+					Name:               "io_bound_template_friendly",
+					Workload:           "template_friendly_mid",
+					ValueSize:          1 << 10,
+					Records:            16384,
+					EncodeNsPerRawByte: 5,
+					IoNsPerStoredByte:  200,
+				},
+			},
+		},
+		{
 			Name: "marquee_regime_shift",
 			Kind: "marquee",
 			Segments: []vlogSegmentSpec{
@@ -184,6 +206,7 @@ func runVlogAutotuneCase(c vlogAutotuneCase) (vlogAutotuneCaseReport, error) {
 		caching.VlogAutotuneBenchOff,
 		caching.VlogAutotuneBenchNoDictFixed,
 		caching.VlogAutotuneBenchDictFixed,
+		caching.VlogAutotuneBenchTemplate,
 		caching.VlogAutotuneBenchAutotune,
 	}
 	caseReport := vlogAutotuneCaseReport{Name: c.Name, Kind: c.Kind}
