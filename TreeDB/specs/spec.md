@@ -701,28 +701,29 @@ func (b *Batch) GetByteSize() (int, error) {
 
 ## 7\. Write-Back Caching Layer & Read Optimizations
 
-To boost performance for write-heavy workloads and improve read throughput, TreeDB implements an LSM-style write-back caching layer (Memtable + WAL) and significant read path optimizations.
+To boost performance for write-heavy workloads and improve read throughput, TreeDB implements an LSM-style write-back caching layer (Memtable + journal/value-log) and significant read path optimizations.
 
 ### 7.1 Write-Back Caching (LSM-style Level 0)
 
-TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable and a queue of immutable Memtables, backed by a Write-Ahead Log (WAL).
+TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable and a queue of immutable Memtables, backed by a journal (legacy name: WAL) and a value log for large values.
 
 #### 7.1.1 Memtable (`internal/memtable`)
 - **Structure:** Uses a `google/btree` for efficient in-memory key-value storage.
 - **Operations:** Supports `Set`, `Delete` (using tombstones), and `Get`.
 - **Memory Tracking:** Tracks approximate memory usage for flush decisions.
 
-#### 7.1.2 Write-Ahead Log (WAL) (`internal/wal`)
+#### 7.1.2 Journal (legacy WAL) (`internal/wal`)
 - **Purpose:** Ensures durability of in-memory Memtable writes.
 - **Format:** Records operations as `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
 - **Durability:** Provides `Sync()` method to guarantee writes are flushed to disk.
+  - **Note:** In modern cached-mode paths, large values are stored in the value log and referenced by pointers (Mode3/Mode4). `DisableWAL` refers to a legacy mode that disables both journal and value-log pointers.
 
 #### 7.1.3 CachingDB (`caching` package)
 - **Architecture:** Wraps the core `treedb.DB` instance (referred to as `backend`).
 - **Write Path:**
-    1.  `Set`/`Delete`: Operation is first appended to the current WAL.
+    1.  `Set`/`Delete`: Operation is first appended to the current journal (legacy: WAL). Large values may be written to the value log and referenced by pointer.
     2.  Then, the operation is applied to the `mutable` Memtable.
-    3.  `SetSync`/`DeleteSync`: Additionally calls `WAL.Sync()` after appending to the WAL.
+    3.  `SetSync`/`DeleteSync`: Additionally calls `Journal.Sync()` after appending to the journal.
 - **Flush Mechanism:**
     1.  When `mutable.Size()` exceeds `FlushThreshold` (e.g., 4MB):
         - The `mutable` Memtable is moved to the `queue` of immutable Memtables.

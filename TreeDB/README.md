@@ -99,7 +99,8 @@ Profiles are intended to make intent explicit:
 - `ProfileBench`: deterministic benchmarking profile (not production).
 
 Note: `DisableWAL=true` disables both the journal/redo log and cached value-log
-pointers (legacy mode1; deprecated). To benchmark the value-log path with the
+pointers (legacy mode1; deprecated). Prefer `DisableJournal` / `DisableValueLog`
+to select Mode3/Mode4 explicitly. To benchmark the value-log path with the
 journal disabled, use `DisableJournal=true` (and keep `DisableValueLog=false`)
 with `AllowUnsafe=true`.
 
@@ -136,8 +137,8 @@ Details: `docs/TREEDB_PROFILES.md`.
 | `RelaxedSync` | on | flush-only | no | crash-consistent only |
 | `DisableJournal` | off | backend checkpoint | yes (if not relaxed) | no redo log; durable only after checkpoint |
 | `DisableJournal` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
-| `DisableWAL` | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
-| `DisableWAL` + `RelaxedSync` | off | flush-only | no | fastest, least safe |
+| `DisableWAL` (legacy) | off | backend checkpoint | yes (if not relaxed) | durable only after checkpoint |
+| `DisableWAL` + `RelaxedSync` (legacy) | off | flush-only | no | fastest, least safe |
 
 ## Tuning (Cached Mode)
 

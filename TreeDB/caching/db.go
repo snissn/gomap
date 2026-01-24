@@ -1212,7 +1212,8 @@ type Options struct {
 	// value-log pointers/value storage. A crash may lose writes since the last
 	// checkpoint because there is no redo log to replay.
 	DisableJournal bool
-	// DisableValueLog forces the cached WAL to remain in legacy mode (no value-log pointers).
+	// DisableValueLog forces the cached path to remain in legacy journal-only mode
+	// (no value-log pointers).
 	DisableValueLog bool
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
 	// segments, and WAL entries reference them via pointers.
