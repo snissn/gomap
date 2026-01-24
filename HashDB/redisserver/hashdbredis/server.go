@@ -12,7 +12,8 @@ import (
 )
 
 type connState struct {
-	pending []hashdb.Item
+	pending  []hashdb.Item
+	replyOff bool
 }
 
 const setBatchSize = 16
@@ -61,31 +62,77 @@ func NewRedisServer(dbdir string) *RedisServer {
 func (s *RedisServer) Serve(addr string) error {
 	return redcon.ListenAndServe(addr, func(conn redcon.Conn, cmd redcon.Command) {
 		if len(cmd.Args) == 0 {
+			// Never reply if replies are disabled for this connection.
+			if st, ok := conn.Context().(*connState); ok && st.replyOff {
+				return
+			}
 			conn.WriteError("empty command")
 			return
 		}
 
 		var state *connState
-		if s.batchSets {
-			if ctx := conn.Context(); ctx != nil {
-				if st, ok := ctx.(*connState); ok {
-					state = st
-				}
-			}
-			if state == nil {
-				state = &connState{
-					pending: make([]hashdb.Item, 0, setBatchSize),
-				}
-				conn.SetContext(state)
+		if ctx := conn.Context(); ctx != nil {
+			if st, ok := ctx.(*connState); ok {
+				state = st
 			}
 		}
 
 		switch string(cmd.Args[0]) {
 		case "PING":
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteString("PONG")
+
+		case "HELLO":
+			// Minimal support for RESP3 negotiation (used by noreply_bench).
+			// We don't currently switch response formatting; most of our benchmark traffic
+			// runs with CLIENT REPLY OFF where replies are suppressed anyway.
+			if state != nil && state.replyOff {
+				return
+			}
+			if len(cmd.Args) >= 2 && string(cmd.Args[1]) == "3" {
+				conn.WriteArray(2)
+				conn.WriteBulkString("proto")
+				conn.WriteInt(3)
+				return
+			}
+			conn.WriteString("OK")
+
+		case "CLIENT":
+			// Minimal support for CLIENT REPLY OFF (used by noreply_bench).
+			if len(cmd.Args) >= 3 && string(cmd.Args[1]) == "REPLY" {
+				if state == nil {
+					state = &connState{}
+					conn.SetContext(state)
+				}
+				switch string(cmd.Args[2]) {
+				case "OFF":
+					state.replyOff = true
+					// Redis-style behavior: suppress reply to CLIENT REPLY OFF itself.
+					return
+				case "ON":
+					state.replyOff = false
+					conn.WriteString("OK")
+					return
+				default:
+					if state.replyOff {
+						return
+					}
+					conn.WriteError("ERR unknown CLIENT REPLY mode")
+					return
+				}
+			}
+			if state != nil && state.replyOff {
+				return
+			}
+			conn.WriteError("unknown command")
 
 		case "SET":
 			if len(cmd.Args) < 3 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'SET'")
 				return
 			}
@@ -93,6 +140,15 @@ func (s *RedisServer) Serve(addr string) error {
 			val := cmd.Args[2]
 
 			if s.batchSets {
+				if state == nil {
+					state = &connState{
+						pending: make([]hashdb.Item, 0, setBatchSize),
+					}
+					conn.SetContext(state)
+				} else if state.pending == nil {
+					state.pending = make([]hashdb.Item, 0, setBatchSize)
+				}
+
 				item := hashdb.Item{Key: key, Value: val}
 				state.pending = append(state.pending, item)
 
@@ -104,17 +160,28 @@ func (s *RedisServer) Serve(addr string) error {
 
 					for i := range batch {
 						if err := s.store.PutNoCopyKeyValueUnsafe(batch[i].Key, batch[i].Value); err != nil {
+							if state.replyOff {
+								return
+							}
 							conn.WriteError(err.Error())
 							return
 						}
 					}
-					for range batch {
-						conn.WriteString("OK")
+					if !state.replyOff {
+						for range batch {
+							conn.WriteString("OK")
+						}
 					}
 				}
 			} else {
 				if err := s.store.PutNoCopyKeyValueUnsafe(key, val); err != nil {
+					if state != nil && state.replyOff {
+						return
+					}
 					conn.WriteError(err.Error())
+					return
+				}
+				if state != nil && state.replyOff {
 					return
 				}
 				conn.WriteString("OK")
@@ -122,12 +189,18 @@ func (s *RedisServer) Serve(addr string) error {
 
 		case "GET":
 			if len(cmd.Args) < 2 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'GET'")
 				return
 			}
 			key := cmd.Args[1]
 
 			val, err := s.store.Get(key)
+			if state != nil && state.replyOff {
+				return
+			}
 			if err != nil || val == nil {
 				conn.WriteNull()
 			} else {
@@ -136,6 +209,9 @@ func (s *RedisServer) Serve(addr string) error {
 
 		case "DEL":
 			if len(cmd.Args) < 2 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'DEL'")
 				return
 			}
@@ -164,24 +240,39 @@ func (s *RedisServer) Serve(addr string) error {
 					count++
 				}
 			}
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteInt(count)
 
 		case "MSET":
 			if len(cmd.Args) < 3 || len(cmd.Args)%2 != 1 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'MSET'")
 				return
 			}
 
 			for i := 1; i < len(cmd.Args); i += 2 {
 				if err := s.store.PutNoCopyKeyValueUnsafe(cmd.Args[i], cmd.Args[i+1]); err != nil {
+					if state != nil && state.replyOff {
+						return
+					}
 					conn.WriteError(err.Error())
 					return
 				}
+			}
+			if state != nil && state.replyOff {
+				return
 			}
 			conn.WriteString("OK")
 
 		case "MGET":
 			if len(cmd.Args) < 2 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'MGET'")
 				return
 			}
@@ -194,6 +285,9 @@ func (s *RedisServer) Serve(addr string) error {
 
 			values, errs := s.store.GetMany(keys)
 
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteArray(keyCount)
 			for i := 0; i < keyCount; i++ {
 				if errs[i] != nil || values[i] == nil {
@@ -205,6 +299,9 @@ func (s *RedisServer) Serve(addr string) error {
 
 		case "EXISTS":
 			if len(cmd.Args) < 2 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'EXISTS'")
 				return
 			}
@@ -216,10 +313,16 @@ func (s *RedisServer) Serve(addr string) error {
 					count++
 				}
 			}
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteInt(count)
 
 		case "INCR":
 			if len(cmd.Args) != 2 {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError("ERR wrong number of arguments for 'INCR'")
 				return
 			}
@@ -242,21 +345,39 @@ func (s *RedisServer) Serve(addr string) error {
 			})
 
 			if err != nil {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError(err.Error()) // e.g. not integer
+				return
+			}
+			if state != nil && state.replyOff {
 				return
 			}
 			conn.WriteInt64(newValInt)
 
 		case "FLUSHDB", "FLUSHALL":
 			if err := s.store.Clear(); err != nil {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError(err.Error())
+				return
+			}
+			if state != nil && state.replyOff {
 				return
 			}
 			conn.WriteString("OK")
 
 		case "SAVE":
 			if err := s.store.Flush(); err != nil {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError(err.Error())
+				return
+			}
+			if state != nil && state.replyOff {
 				return
 			}
 			conn.WriteString("OK")
@@ -269,6 +390,9 @@ func (s *RedisServer) Serve(addr string) error {
 					"# Stats\r\ntotal_capacity=%d\r\ntotal_segments=%d\r\n",
 				stats.KeyCount, stats.DataSize, stats.Capacity, stats.Segments,
 			)
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteBulkString(info)
 
 		case "BGREWRITEAOF":
@@ -277,16 +401,28 @@ func (s *RedisServer) Serve(addr string) error {
 					log.Printf("Compaction failed: %v", err)
 				}
 			}()
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteString("Background append only file rewriting started")
 
 		case "COMPACT":
 			if err := s.store.Compact(); err != nil {
+				if state != nil && state.replyOff {
+					return
+				}
 				conn.WriteError(err.Error())
+				return
+			}
+			if state != nil && state.replyOff {
 				return
 			}
 			conn.WriteString("OK")
 
 		default:
+			if state != nil && state.replyOff {
+				return
+			}
 			conn.WriteError("unknown command")
 		}
 	}, nil, nil)
