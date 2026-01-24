@@ -23,6 +23,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 type kvRecord struct {
@@ -62,6 +63,7 @@ type kvSample struct {
 type benchConfig struct {
 	Mode              string
 	Compression       string
+	Template          string
 	RawMiB            int
 	Batch             int
 	KeyMode           string
@@ -80,6 +82,7 @@ const (
 type benchReport struct {
 	Mode                string   `json:"mode"`
 	Compression         string   `json:"compression"`
+	Template            string   `json:"template"`
 	KeyMode             string   `json:"key_mode"`
 	RawMiB              int      `json:"raw_mib"`
 	Batch               int      `json:"batch"`
@@ -106,6 +109,11 @@ type benchReport struct {
 	FramesAttempted     *uint64  `json:"frames_attempted,omitempty"`
 	FramesKept          *uint64  `json:"frames_kept,omitempty"`
 	KeptOfAttemptedFrac *float64 `json:"kept_of_attempted_frac,omitempty"`
+	TemplateAttempted   *uint64  `json:"template_attempted,omitempty"`
+	TemplateMatched     *uint64  `json:"template_matched,omitempty"`
+	TemplateKept        *uint64  `json:"template_kept,omitempty"`
+	TemplateSavedBytes  *uint64  `json:"template_saved_bytes,omitempty"`
+	TemplatesPublished  *uint64  `json:"templates_published,omitempty"`
 	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
 	SlabBytes           int64    `json:"slab_bytes,omitempty"`
 	IndexBytes          int64    `json:"index_bytes,omitempty"`
@@ -145,6 +153,7 @@ func main() {
 	benchKV := flag.Bool("bench-kv", false, "Enable KV throughput bench (TreeDB public API)")
 	benchMode := flag.String("bench-mode", "mode3", "Bench write-path mode: mode1|mode3|mode4")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
+	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
@@ -181,6 +190,7 @@ func main() {
 		cfg := benchConfig{
 			Mode:              *benchMode,
 			Compression:       *benchCompression,
+			Template:          *benchTemplate,
 			RawMiB:            *benchRawMiB,
 			Batch:             *benchBatch,
 			KeyMode:           *benchKeyMode,
@@ -479,6 +489,7 @@ func decodeValue(value string, encoding string) ([]byte, error) {
 func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSample, stats datasetStats, loadDur time.Duration) (*benchReport, error) {
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
 	cfg.Compression = strings.ToLower(strings.TrimSpace(cfg.Compression))
+	cfg.Template = strings.ToLower(strings.TrimSpace(cfg.Template))
 	cfg.KeyMode = strings.ToLower(strings.TrimSpace(cfg.KeyMode))
 
 	if cfg.Mode == "" {
@@ -486,6 +497,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	}
 	if cfg.Compression != "on" && cfg.Compression != "off" {
 		return nil, fmt.Errorf("unsupported -bench-compression=%q (expected on|off)", cfg.Compression)
+	}
+	if cfg.Template != "on" && cfg.Template != "off" {
+		return nil, fmt.Errorf("unsupported -bench-template=%q (expected on|off)", cfg.Template)
 	}
 	if cfg.KeyMode != "random" && cfg.KeyMode != "sequential" && cfg.KeyMode != "dataset" {
 		return nil, fmt.Errorf("unsupported -bench-key-mode=%q (expected random|sequential|dataset)", cfg.KeyMode)
@@ -510,6 +524,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	}
 	if cfg.Compression == "on" && cfg.Mode == "mode1" {
 		return nil, fmt.Errorf("bench mode1 does not support compression=on")
+	}
+	if cfg.Template == "on" && cfg.Compression == "on" {
+		return nil, fmt.Errorf("template bench requires -bench-compression=off (template-only for now)")
 	}
 	if cfg.Compression != "on" {
 		cfg.DictTrainMiB = 0
@@ -548,6 +565,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	}
 	if cfg.Compression == "on" {
 		fmt.Printf("bench:    dict_train_mib=%d dict_sample_stride=%d\n", cfg.DictTrainMiB, cfg.DictSampleStride)
+	}
+	if cfg.Template == "on" {
+		fmt.Printf("bench:    template=on\n")
 	}
 	fmt.Printf("load:     %.3fs\n", loadDur.Seconds())
 	fmt.Println()
@@ -660,6 +680,11 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	framesTotal, framesTotalOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_total")
 	framesAttempted, framesAttemptedOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_attempted")
 	framesKept, framesKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_kept")
+	templateAttempted, templateAttemptedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.attempted")
+	templateMatched, templateMatchedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.matched")
+	templateKept, templateKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.kept")
+	templateSaved, templateSavedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.bytes_saved_total")
+	templatesPublished, templatesPublishedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.templates_published_total")
 	keptOfAttempted := 0.0
 	keptOfAttemptedOK := false
 	if framesAttemptedOK && framesKeptOK && framesAttempted > 0 {
@@ -683,6 +708,15 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatUint(framesKept, framesKeptOK),
 		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
 	)
+	if cfg.Template == "on" {
+		fmt.Printf("vlog_template: attempted=%s matched=%s kept=%s bytes_saved=%s templates_published=%s\n",
+			formatStatUint(templateAttempted, templateAttemptedOK),
+			formatStatUint(templateMatched, templateMatchedOK),
+			formatStatUint(templateKept, templateKeptOK),
+			formatStatUint(templateSaved, templateSavedOK),
+			formatStatUint(templatesPublished, templatesPublishedOK),
+		)
+	}
 	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) slab_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
 		diskUsage.valueLogBytes, bytesToMiB(diskUsage.valueLogBytes),
 		diskUsage.slabBytes, bytesToMiB(diskUsage.slabBytes),
@@ -753,6 +787,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	report := &benchReport{
 		Mode:                cfg.Mode,
 		Compression:         cfg.Compression,
+		Template:            cfg.Template,
 		KeyMode:             cfg.KeyMode,
 		RawMiB:              cfg.RawMiB,
 		Batch:               cfg.Batch,
@@ -779,6 +814,41 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		FramesAttempted:     framesAttemptedPtr,
 		FramesKept:          framesKeptPtr,
 		KeptOfAttemptedFrac: keptOfAttemptedPtr,
+		TemplateAttempted: func() *uint64 {
+			if templateAttemptedOK {
+				v := templateAttempted
+				return &v
+			}
+			return nil
+		}(),
+		TemplateMatched: func() *uint64 {
+			if templateMatchedOK {
+				v := templateMatched
+				return &v
+			}
+			return nil
+		}(),
+		TemplateKept: func() *uint64 {
+			if templateKeptOK {
+				v := templateKept
+				return &v
+			}
+			return nil
+		}(),
+		TemplateSavedBytes: func() *uint64 {
+			if templateSavedOK {
+				v := templateSaved
+				return &v
+			}
+			return nil
+		}(),
+		TemplatesPublished: func() *uint64 {
+			if templatesPublishedOK {
+				v := templatesPublished
+				return &v
+			}
+			return nil
+		}(),
 		ValueLogBytes:       diskUsage.valueLogBytes,
 		SlabBytes:           diskUsage.slabBytes,
 		IndexBytes:          diskUsage.indexBytes,
@@ -843,6 +913,10 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	} else {
 		opts.ValueLogDictTrain = compression.TrainConfig{TrainBytes: -1}
 		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
+	}
+	if cfg.Template == "on" {
+		opts.ValueLogTemplateMode = template.TemplateOnly
+		opts.ValueLogTemplateReadStrict = true
 	}
 
 	return opts, expect, nil
