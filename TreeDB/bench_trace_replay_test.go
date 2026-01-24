@@ -64,6 +64,10 @@ func BenchmarkTraceReplay(b *testing.B) {
 		modeVal = ModeBackend
 	}
 	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
+	disableJournal := false
+	if _, ok := os.LookupEnv("TREEDB_TRACE_DISABLE_JOURNAL"); ok {
+		disableJournal = parseBoolEnv("TREEDB_TRACE_DISABLE_JOURNAL", false)
+	}
 	disableVlog := parseBoolEnv("TREEDB_TRACE_DISABLE_VLOG", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
@@ -86,6 +90,7 @@ func BenchmarkTraceReplay(b *testing.B) {
 			Dir:                 dir,
 			Mode:                modeVal,
 			DisableWAL:          disableWAL,
+			DisableJournal:      disableJournal,
 			DisableValueLog:     disableVlog,
 			FlushThreshold:      int64(flushThreshold),
 			MemtableShards:      memtableShards,

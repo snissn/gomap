@@ -216,7 +216,8 @@ type Options struct {
 	// or slab tail repair.
 	AllowUnsafe bool
 
-	// DisableWAL disables the Write-Ahead Log in cached mode.
+	// DisableWAL disables the journal/value-log subsystem in cached mode
+	// (legacy mode1 alias; deprecated).
 	// This improves performance but sacrifices durability: a crash will revert
 	// the database to the last Checkpoint (backend flush).
 	DisableWAL bool

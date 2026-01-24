@@ -60,7 +60,7 @@ Goal: safest default for production use.
 
 Behavior:
 
-- Keeps cached-mode durability/integrity features enabled:
+- Keeps cached-mode durability/integrity features enabled (**Mode3**):
   - journal enabled (`DisableJournal=false`, `DisableWAL=false`)
   - fsync policy unchanged (`RelaxedSync=false`)
   - read checksums enabled (`DisableReadChecksum=false`)
@@ -91,7 +91,7 @@ Notes:
   a different engine path.
 - `DisableWAL=true` implies the cached value log is also disabled (no value-log
   pointers, no value-log dictionary compression). To benchmark the value-log
-  path with the journal disabled, use `ProfileFastIngest` (or set
+  path with the journal disabled, use `ProfileFastIngest` (**Mode4**) (or set
   `DisableJournal=true` with `DisableWAL=false` and `AllowUnsafe=true`).
   The value-log-disabled path is legacy and should not be recommended for new
   deployments.
@@ -107,7 +107,7 @@ Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
 ### `ProfileFastIngest`
 
 Goal: maximize write throughput while explicitly keeping the cached **value-log**
-path enabled (Mode4).
+path enabled (**Mode4**).
 
 Behavior:
 

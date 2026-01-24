@@ -123,7 +123,8 @@ Note that results can converge as timeline duration increases.
 These apply to trace replay benchmarks:
 
 - `TREEDB_TRACE_MODE`: `cached` (default) or `backend`
-- `TREEDB_TRACE_DISABLE_WAL`: `1/0` (legacy name; disables the journal)
+- `TREEDB_TRACE_DISABLE_JOURNAL`: `1/0` (preferred; disables the journal; takes precedence when set)
+- `TREEDB_TRACE_DISABLE_WAL`: `1/0` (legacy alias; disables journal + value log)
 - `TREEDB_TRACE_DISABLE_VLOG`: `1/0`
 - `TREEDB_TRACE_FLUSH_THRESHOLD`: bytes
 - `TREEDB_TRACE_MEMTABLE_SHARDS`: int

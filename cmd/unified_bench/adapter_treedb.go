@@ -65,9 +65,9 @@ var (
 	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
-	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable WAL (unsafe)")
+	treedbDisableWAL           = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal+value log (legacy mode1 alias; unsafe)")
 	treedbDisableJournal       = flag.Bool("treedb-disable-journal", false, "TreeDB: disable journal/redo records while keeping value-log pointers (unsafe)")
-	treedbDisableValueLog      = flag.Bool("treedb-disable-value-log", false, "TreeDB: disable value-log pointers (forces legacy WAL framing; also implied by -treedb-disable-wal)")
+	treedbDisableValueLog      = flag.Bool("treedb-disable-value-log", false, "TreeDB: disable value-log pointers (legacy path; also implied by -treedb-disable-wal)")
 	treedbRelaxedSync          = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
 	treedbDisableReadChecksum  = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
 	treedbAllowUnsafe          = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-disable-journal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")

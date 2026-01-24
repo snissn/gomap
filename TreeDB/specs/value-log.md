@@ -1,6 +1,6 @@
-# Value Log (WAL=Value-Store) Plan
+# Value Log (Journal + Value-Store) Plan
 
-Goal: eliminate cached-mode “double write” for large values (write to WAL, then write again to slab during flush) by turning the cached-mode WAL into a **random-access value log** whose records can be referenced directly by the backend index (`ValuePtr`), while preserving:
+Goal: eliminate cached-mode “double write” for large values (write to journal, then write again to slab during flush) by turning the cached-mode journal stream into a **random-access value log** whose records can be referenced directly by the backend index (`ValuePtr`), while preserving:
 
 - fast random writes (memtable-first),
 - snapshot isolation,
@@ -8,19 +8,21 @@ Goal: eliminate cached-mode “double write” for large values (write to WAL, t
 - the current durability contract (`SetSync`/`WriteSync` are durable; non-sync writes are best-effort).
 
 This doc is a *plan for review* and is intentionally explicit so future agents can execute without missing context.
+Legacy note: this document uses “WAL” in places as a historical synonym for the cached-mode **journal**.
 
 ---
 
 ## Status (implemented)
 
 - Value-log segments live in `wal/vlog-*.log` and store v2 records (CRC + KeyLen + ValueLen + Op + key/value).
-- Cached mode uses the value log by default; use `Options.DisableValueLog` (or `DisableWAL`) to revert to classic WAL.
-- Note: `DisableWAL` disables the WAL/value-log subsystem together; there is not currently a “journal off but value-log on” mode.
+- Cached mode uses the value log by default; use `Options.DisableValueLog` to revert to the legacy journal-only path.
+- `DisableWAL` disables both journal and value log (legacy mode1; deprecated).
+- Journal-off + value-log-on is supported via `DisableJournal=true` (Mode4; unsafe).
 - Backend reads dispatch by `ValuePtr.FileID` high bit via `ValueReader` (`page.IsValueLogFileID`).
 - Cached flush stores pointers for `len(value) > InlineThreshold` (no slab write).
 - Segment retention is conservative (retain any segment that might contain a live pointer); value-log GC/compaction remains a follow-up.
 - Optional guardrail: `MaxValueLogRetainedBytesHard` disables new value-log pointers once retained bytes exceed the threshold.
-- Optional split mode: `SplitValueLog` keeps WAL records in `wal/wal-*.log` and writes large values to `wal/vlog-*.log`, with WAL entries storing `ValuePtr` payloads for large values.
+- Optional split mode: `SplitValueLog` keeps journal records in `wal/commit-*.log` and writes large values to `wal/value-*.log`, with journal entries storing `ValuePtr` payloads for large values.
 
 ## Problem statement
 
@@ -31,7 +33,7 @@ Today in cached mode:
   - small values are written inline into `index.db`,
   - large values are written into `data-*.slab` and referenced by `ValuePtr`.
 
-This is correct and simple, but it doubles write bandwidth for large values (WAL + slab), which shows up as a material wall-time slowdown in write-heavy workloads (e.g. `iavl-bench` with WAL enabled).
+This is correct and simple, but it doubles write bandwidth for large values (journal + slab), which shows up as a material wall-time slowdown in write-heavy workloads (e.g. `iavl-bench` with journal enabled).
 
 ---
 

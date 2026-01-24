@@ -15,7 +15,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
   - `BackgroundCheckpointIdleDuration`: defaults to 2s
-  - `MaxWALBytes`: defaults to 2 GiB
+  - `MaxWALBytes`: defaults to 2 GiB (legacy name; journal/value-log bytes)
 
 ## Options
 
@@ -134,6 +134,7 @@ periodic cached-mode checkpoint by default:
 - `Options.BackgroundCheckpointInterval` (default 30s): periodic checkpoint cadence
 - `Options.BackgroundCheckpointIdleDuration` (default 2s): opportunistic checkpoint after write-idle
 - `Options.MaxWALBytes` (default 2 GiB): safety cap that can trigger checkpointing early
+  based on cached journal/value-log segment bytes (legacy name: WAL).
 
 A checkpoint:
 - blocks writers briefly,

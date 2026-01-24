@@ -25,7 +25,8 @@ semantics. All other docs should link here.
 - **Mode2**: historical/unsupported combinations.
 
 Do not recommend Mode1/Mode2 in user-facing docs; keep them only for legacy
-compatibility or migration testing.
+compatibility or migration testing. These legacy paths may be removed in a
+future release.
 
 ## Practical knobs (public API)
 

@@ -319,14 +319,14 @@ Additional criteria:
 - Error injection tests validate error propagation and no silent stalls.
 
 ## Open Questions
-- Should stress tests run against both `DisableWAL` true/false variants? (legacy name: disables journal + value log)
+- Should stress tests run against both `DisableJournal` true/false variants? (`DisableWAL` is legacy and disables both journal + value log)
 - Should we gate "heavy" tests on an env var or a build tag?
 - Which DB modes (cached/backend) must be covered in each stress test?
 
 ## Appendix: Config Matrix (Recommended)
 For each stress suite, consider these variants:
 - Mode: cached vs backend.
-- Journal: enabled vs disabled (`DisableWAL`).
+- Journal: enabled vs disabled (`DisableJournal`; `DisableWAL` is legacy).
 - Value log: enabled vs disabled (`DisableValueLog`).
 - Background tasks: enabled vs disabled (`TREEDB_BENCH_DISABLE_BG=1` parity).
 
