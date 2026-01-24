@@ -41,6 +41,7 @@ var iteratorDebugEnabled atomic.Bool
 
 var valueLogEligiblePool sync.Pool // stores []int
 var valueLogRecordPool sync.Pool   // stores []valuelog.Record
+var valueLogKeyPool sync.Pool      // stores [][]byte
 
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
@@ -93,6 +94,32 @@ func putValueLogRecords(s []valuelog.Record) {
 		return
 	}
 	valueLogRecordPool.Put(s[:0])
+}
+
+func getValueLogKeys(capacity int) [][]byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogKeyPool.Get(); v != nil {
+		if s, ok := v.([][]byte); ok {
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+		}
+	}
+	return make([][]byte, 0, capacity)
+}
+
+func putValueLogKeys(s [][]byte) {
+	if s == nil {
+		return
+	}
+	clear(s)
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogKeyPool.Put(s[:0])
 }
 
 const (
@@ -500,7 +527,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	recordsBuf := getValueLogRecords(memLen)
 	defer putValueLogRecords(recordsBuf)
 	records := recordsBuf[:0]
-	keys := make([][]byte, 0, memLen)
+	keys := getValueLogKeys(memLen)
+	defer func() { putValueLogKeys(keys) }()
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
@@ -1146,7 +1174,28 @@ func (db *DB) newLargePtrMap() *largePtrMap {
 	if !db.valueLogEnabled() {
 		return nil
 	}
+	// Deferred value-log mode never stores pointers in the memtable, so there is
+	// no need to maintain a per-shard pointer map on the write path.
+	if db.disableJournal && !db.memtableValueLogPointers {
+		return nil
+	}
 	return &largePtrMap{}
+}
+
+func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
+	if db == nil || db.backend == nil {
+		return nil
+	}
+	type batchSizer interface {
+		NewBatchWithSize(size int) batch.Interface
+	}
+	if size < 0 {
+		size = 0
+	}
+	if sizer, ok := db.backend.(batchSizer); ok {
+		return sizer.NewBatchWithSize(size)
+	}
+	return db.backend.NewBatch()
 }
 
 // BackendDB defines the subset of treedb.DB needed by CachingDB.
@@ -1885,7 +1934,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	if !disableValueLog {
+	useLargePtrs := !disableValueLog && (opts.MemtableValueLogPointers || !disableJournal)
+	if useLargePtrs {
 		for i := range mutableShards {
 			mutableShards[i].largePtrs = &largePtrMap{}
 		}
@@ -4990,7 +5040,7 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			}
 		}
 
-		backendBatch := db.backend.NewBatch()
+		backendBatch := db.newBackendBatchWithSize(totalLen)
 
 		if db.deferredValueLogEnabled() {
 			for _, unit := range units {
@@ -5427,7 +5477,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		}
 
 		// Flush 'mem' to backend
-		backendBatch := db.backend.NewBatch()
+		backendBatch := db.newBackendBatchWithSize(memLen)
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		ptrLookups := ptrs != nil && db.valueLogEnabled()

@@ -24,9 +24,14 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	if db.adaptive != nil {
 		threshold = db.adaptive.GetThreshold()
 	}
+	if size < 0 {
+		size = 0
+	}
+	internal := batch.New(db.slabManager, threshold)
+	internal.Reserve(size)
 	return &Batch{
 		db:    db,
-		batch: batch.New(db.slabManager, threshold),
+		batch: internal,
 	}
 }
 
