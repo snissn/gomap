@@ -75,14 +75,28 @@ func (c *CachedDB) Get(key []byte) ([]byte, error) { return c.cache.Get(key) }
 // Put inserts or updates a key in the write-back cache.
 func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key, value) }
 
-// PutNoCopy inserts or updates a key in the write-back cache without copying the value.
+// PutNoCopyValue inserts or updates a key in the write-back cache without copying the value.
 // Caller must not mutate value after calling (it may be retained until flushed).
-func (c *CachedDB) PutNoCopy(key []byte, value []byte) error { return c.cache.PutNoCopy(key, value) }
+func (c *CachedDB) PutNoCopyValue(key []byte, value []byte) error {
+	return c.cache.PutNoCopyValue(key, value)
+}
+
+// PutNoCopyKeyValueUnsafe inserts or updates a key in the write-back cache without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+func (c *CachedDB) PutNoCopyKeyValueUnsafe(key []byte, value []byte) error {
+	return c.cache.PutNoCopyKeyValueUnsafe(key, value)
+}
+
+// PutNoCopy inserts or updates a key in the write-back cache without copying the value.
+//
+// Deprecated: use PutNoCopyValue.
+func (c *CachedDB) PutNoCopy(key []byte, value []byte) error { return c.PutNoCopyValue(key, value) }
 
 // PutNoCopyUnsafe inserts or updates a key in the write-back cache without copying the key or value.
-// Caller must not mutate key or value after calling (they may be retained until flushed).
+//
+// Deprecated: use PutNoCopyKeyValueUnsafe.
 func (c *CachedDB) PutNoCopyUnsafe(key []byte, value []byte) error {
-	return c.cache.PutNoCopyUnsafe(key, value)
+	return c.PutNoCopyKeyValueUnsafe(key, value)
 }
 
 // Add is a compatibility alias for Put.

@@ -20,15 +20,15 @@ func (p *putManyRecorder) PutMany(keys, vals [][]byte) error {
 	return nil
 }
 
-func TestCacheKVPutNoCopy_StoresKeyAndFlushUsesEntryKey(t *testing.T) {
+func TestCacheKVPutNoCopyValue_StoresKeyAndFlushUsesEntryKey(t *testing.T) {
 	backend := &putManyRecorder{}
 	c := NewCacheKV(backend, 100, 1<<20, 0)
 
 	key := []byte("k1")
 	val := bytes.Repeat([]byte("v"), 16)
 
-	if err := c.PutNoCopy(key, val); err != nil {
-		t.Fatalf("PutNoCopy: %v", err)
+	if err := c.PutNoCopyValue(key, val); err != nil {
+		t.Fatalf("PutNoCopyValue: %v", err)
 	}
 
 	lookup := bytesToString(key)
@@ -76,15 +76,15 @@ func TestCacheKVPutNoCopy_StoresKeyAndFlushUsesEntryKey(t *testing.T) {
 	}
 }
 
-func TestCacheKVPutNoCopyUnsafe_DoesNotCopyKeyAndFlushUsesEntryKey(t *testing.T) {
+func TestCacheKVPutNoCopyKeyValueUnsafe_DoesNotCopyKeyAndFlushUsesEntryKey(t *testing.T) {
 	backend := &putManyRecorder{}
 	c := NewCacheKV(backend, 100, 1<<20, 0)
 
 	key := []byte("k1")
 	val := bytes.Repeat([]byte("v"), 16)
 
-	if err := c.PutNoCopyUnsafe(key, val); err != nil {
-		t.Fatalf("PutNoCopyUnsafe: %v", err)
+	if err := c.PutNoCopyKeyValueUnsafe(key, val); err != nil {
+		t.Fatalf("PutNoCopyKeyValueUnsafe: %v", err)
 	}
 
 	lookup := bytesToString(key)

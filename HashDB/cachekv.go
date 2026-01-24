@@ -302,26 +302,40 @@ func (c *CacheKV) put(key, value []byte, mode cachePutMode) error {
 //
 // Put variants:
 //   - Put: copies key and value (safe default).
-//   - PutNoCopy: copies key, borrows value (value must remain immutable until flushed).
-//   - PutNoCopyUnsafe: borrows key and value (key/value must remain immutable and not be reused until flushed).
+//   - PutNoCopyValue: copies key, borrows value (value must remain immutable until flushed).
+//   - PutNoCopyKeyValueUnsafe: borrows key and value (key/value must remain immutable and not be reused until flushed).
 func (c *CacheKV) Put(key, value []byte) error {
 	return c.put(key, value, cachePutCopyKey|cachePutCopyValue)
 }
 
-// PutNoCopy inserts or updates a key without copying the value.
+// PutNoCopyValue inserts or updates a key without copying the value.
 // Caller must not mutate value after calling (it may be retained until flushed).
-func (c *CacheKV) PutNoCopy(key, value []byte) error {
+func (c *CacheKV) PutNoCopyValue(key, value []byte) error {
 	return c.put(key, value, cachePutCopyKey)
 }
 
-// PutNoCopyUnsafe inserts or updates a key without copying the key or value.
+// PutNoCopyKeyValueUnsafe inserts or updates a key without copying the key or value.
 // Caller must not mutate key or value after calling (they may be retained until flushed).
 //
 // This is unsafe because the cache uses an unsafe bytes->string conversion for map keys.
 // If the key bytes are modified or reused (e.g. from a pooled network buffer), it can
 // corrupt the cache map.
-func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
+func (c *CacheKV) PutNoCopyKeyValueUnsafe(key, value []byte) error {
 	return c.put(key, value, 0)
+}
+
+// PutNoCopy inserts or updates a key without copying the value.
+//
+// Deprecated: use PutNoCopyValue.
+func (c *CacheKV) PutNoCopy(key, value []byte) error {
+	return c.PutNoCopyValue(key, value)
+}
+
+// PutNoCopyUnsafe inserts or updates a key without copying the key or value.
+//
+// Deprecated: use PutNoCopyKeyValueUnsafe.
+func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
+	return c.PutNoCopyKeyValueUnsafe(key, value)
 }
 
 // Delete removes a key via the write-back cache.
