@@ -40,6 +40,9 @@ func TestApplyProfile_FastIngestEnablesValueLogPath(t *testing.T) {
 	if opts.DisableWAL {
 		t.Fatalf("expected DisableWAL=false for fast_ingest profile")
 	}
+	if !opts.DisableJournal {
+		t.Fatalf("expected DisableJournal=true for fast_ingest profile")
+	}
 	if opts.DisableValueLog {
 		t.Fatalf("expected DisableValueLog=false for fast_ingest profile")
 	}

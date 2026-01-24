@@ -26,7 +26,7 @@ func (db *DB) valueLogDictTrainingEnabled() bool {
 	if db == nil || db.valueLogDictTrain.TrainBytes <= 0 {
 		return false
 	}
-	if db.disableWAL {
+	if !db.valueLogEnabled() {
 		return false
 	}
 	if db.dictStore == nil {

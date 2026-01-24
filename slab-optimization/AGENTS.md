@@ -911,3 +911,11 @@ Authoritative spec: `slab-optimization/spec.md`
 - Tests: `go test ./... -count=1` → PASS
 - Bench gate (RUNS=5 KEEP=3 SLEEP_S=5, keys=1,000,000 valsize=1024 batchsize=1000): `scripts/bench_compare_pr8_vs_main_trimmed.sh`
   - log: `artifacts/bench/compare_pr8_vs_main_trimmed_20260118204204.log`
+
+`2026-01-19 10:37:48 HST`
+- PR12: updated `slab-optimization/WRITE_PATH_UNIFICATION_RUNBOOK.md` with explicit unified_bench commands for the cached-mode write-path matrix (1/2/3).
+- PR12: commit `a18507a113` + pushed branch `sprint/slabopt-pr12-disable-journal-keep-valuelog`.
+- PR12 CI: `gh pr checks 71` → all checks PASS.
+
+`2026-01-19 10:38:41 HST`
+- PR12: posted a PR comment noting CI green + the runbook’s unified_bench matrix command recipes.

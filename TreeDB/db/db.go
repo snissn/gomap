@@ -218,6 +218,10 @@ type Options struct {
 	// This improves performance but sacrifices durability: a crash will revert
 	// the database to the last Checkpoint (backend flush).
 	DisableWAL bool
+	// DisableJournal disables writing commit-intent/redo log records while still
+	// allowing value-log pointers/value storage. A crash may lose writes since
+	// the last checkpoint because there is no redo log to replay.
+	DisableJournal bool
 	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
 	DisableValueLog bool
 	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
@@ -460,7 +464,7 @@ func validateUnsafeOptions(opts Options) error {
 	if opts.AllowUnsafe {
 		return nil
 	}
-	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
+	if opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
 		return ErrUnsafeOptions
 	}
 	return nil
@@ -562,7 +566,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes); err != nil {
+	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, includeValueLog, opts.DictLookup); err != nil {
 		db.Close()
 		return nil, err
 	}

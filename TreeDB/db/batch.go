@@ -226,7 +226,38 @@ func (b *Batch) Reset() {
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {
-	return b.batch.Replay(fn)
+	if b == nil || b.batch == nil {
+		return nil
+	}
+	entries := b.batch.SortedEntries()
+	for _, entry := range entries {
+		if entry.IsPtr && entry.Value == nil {
+			ptr := entry.ValuePtr
+			var (
+				val []byte
+				err error
+			)
+			if page.IsValueLogFileID(ptr.FileID) {
+				if b.db == nil || b.db.valueLogManager == nil {
+					return fmt.Errorf("missing value log manager")
+				}
+				val, err = b.db.valueLogManager.Read(ptr)
+			} else {
+				if b.db == nil || b.db.slabManager == nil {
+					return fmt.Errorf("missing slab manager")
+				}
+				val, err = b.db.slabManager.Read(ptr)
+			}
+			if err != nil {
+				return err
+			}
+			entry.Value = val
+		}
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Batch) GetByteSize() (int, error) {

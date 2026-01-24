@@ -172,10 +172,10 @@ func applyFastProfile(opts *Options) {
 }
 
 func applyFastIngestProfile(opts *Options) {
-	// Keep the value-log path available by default:
-	//   - value-log pointers are only possible when WAL is enabled, so we do not
-	//     set DisableWAL here.
+	// Fast ingest keeps the value-log path enabled but disables the journal/redo
+	// log (a crash can lose writes since the last checkpoint).
 	opts.DisableWAL = false
+	opts.DisableJournal = true
 	opts.DisableValueLog = false
 	opts.SplitValueLog = true
 	opts.MemtableValueLogPointers = true
