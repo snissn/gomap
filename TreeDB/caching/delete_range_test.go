@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type countingLogWriter struct {
@@ -13,21 +13,21 @@ type countingLogWriter struct {
 	batchCalls  int
 }
 
-func (w *countingLogWriter) Append(op byte, key, value []byte) (page.ValuePtr, error) {
+func (w *countingLogWriter) Append(record commitlog.Record) error {
 	w.appendCalls++
-	return page.ValuePtr{}, nil
+	return nil
 }
 
-func (w *countingLogWriter) AppendBatch(records []logRecord) ([]page.ValuePtr, error) {
+func (w *countingLogWriter) AppendBatch(records []commitlog.Record) error {
 	w.batchCalls++
-	return nil, errors.New("append batch not expected")
+	return errors.New("append batch not expected")
 }
 
-func (w *countingLogWriter) RotateTo(_ string, _ uint32) error { return nil }
-func (w *countingLogWriter) Size() int64                       { return 0 }
-func (w *countingLogWriter) Flush() error                      { return nil }
-func (w *countingLogWriter) Sync() error                       { return nil }
-func (w *countingLogWriter) Close() error                      { return nil }
+func (w *countingLogWriter) RotateTo(_ string) error { return nil }
+func (w *countingLogWriter) Size() int64             { return 0 }
+func (w *countingLogWriter) Flush() error            { return nil }
+func (w *countingLogWriter) Sync() error             { return nil }
+func (w *countingLogWriter) Close() error            { return nil }
 
 type errMemtable struct {
 	memtable.Table

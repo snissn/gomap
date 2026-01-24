@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/internal/wal"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestReadOnlyRejectsWrites(t *testing.T) {
@@ -39,7 +39,7 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 	}
 }
 
-func TestReadOnlyDoesNotReplayOrRemoveWAL(t *testing.T) {
+func TestReadOnlyDoesNotReplayOrRemoveCommitLog(t *testing.T) {
 	dir := t.TempDir()
 
 	w, err := Open(Options{Dir: dir})
@@ -58,22 +58,26 @@ func TestReadOnlyDoesNotReplayOrRemoveWAL(t *testing.T) {
 	if err := os.MkdirAll(walDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
-	walPath := filepath.Join(walDir, "wal-1.log")
+	commitPath := filepath.Join(walDir, "commit-000001.log")
 
-	ww, err := wal.NewWriter(walPath)
+	ww, err := commitlog.NewWriter(commitPath)
 	if err != nil {
-		t.Fatalf("wal.NewWriter: %v", err)
+		t.Fatalf("commitlog.NewWriter: %v", err)
 	}
-	if err := ww.Append(wal.OpSet, []byte("k"), []byte("v")); err != nil {
+	if err := ww.AppendBatch([]commitlog.Record{{
+		Op:    commitlog.OpSetInline,
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	}}); err != nil {
 		_ = ww.Close()
-		t.Fatalf("wal.Append: %v", err)
+		t.Fatalf("commitlog.AppendBatch: %v", err)
 	}
 	if err := ww.Close(); err != nil {
-		t.Fatalf("wal.Close: %v", err)
+		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	if _, err := os.Stat(walPath); err != nil {
-		t.Fatalf("expected WAL segment to exist: %v", err)
+	if _, err := os.Stat(commitPath); err != nil {
+		t.Fatalf("expected commitlog segment to exist: %v", err)
 	}
 
 	ro, err := Open(Options{Dir: dir, ReadOnly: true})
@@ -87,14 +91,14 @@ func TestReadOnlyDoesNotReplayOrRemoveWAL(t *testing.T) {
 	}
 	if val != nil {
 		_ = ro.Close()
-		t.Fatalf("expected WAL key to be absent in read-only view, got %q", val)
+		t.Fatalf("expected commitlog key to be absent in read-only view, got %q", val)
 	}
 	if err := ro.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if _, err := os.Stat(walPath); err != nil {
-		t.Fatalf("read-only open should not remove WAL segment: %v", err)
+	if _, err := os.Stat(commitPath); err != nil {
+		t.Fatalf("read-only open should not remove commitlog segment: %v", err)
 	}
 
 	rw, err := Open(Options{Dir: dir})
@@ -108,13 +112,13 @@ func TestReadOnlyDoesNotReplayOrRemoveWAL(t *testing.T) {
 	}
 	if !bytes.Equal(val, []byte("v")) {
 		_ = rw.Close()
-		t.Fatalf("expected WAL key to be replayed, got %q", val)
+		t.Fatalf("expected commitlog key to be replayed, got %q", val)
 	}
 	if err := rw.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if _, err := os.Stat(walPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected WAL segment to be removed after write-open replay, got %v", err)
+	if _, err := os.Stat(commitPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected commitlog segment to be removed after write-open replay, got %v", err)
 	}
 }

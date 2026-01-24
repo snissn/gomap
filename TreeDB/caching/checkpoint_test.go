@@ -323,7 +323,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 		t.Fatalf("MkdirAll(wal): %v", err)
 	}
 	preexisting := []string{
-		filepath.Join(walDir, "wal-000010.log"),
+		filepath.Join(walDir, "commit-000010.log"),
 	}
 	for _, path := range preexisting {
 		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 2<<20), 0o600); err != nil {

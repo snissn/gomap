@@ -14,8 +14,8 @@ Operational rules:
 - MUST use `rg -n` to re-confirm symbol line numbers before editing.
 - MUST create a branch per PR: `sprint/slabopt-pr<N>-<slug>`.
 - MUST write a PR description at `.pr/PR<N>_description.md` and create the PR via `gh` (see “GitHub CLI policy”).
-- MUST open a PR via the GitHub CLI for every PR stage (no web UI/manual PR creation).
-- MUST include unified_bench output samples in every PR body (include the relevant suite(s) for that stage).
+- MUST open a PR via the GitHub CLI (`gh pr create`) for every PR stage (no web UI/manual PR creation).
+- MUST include unified_bench output samples in every PR body on GitHub (include the relevant suite(s) for that stage).
 - MUST base each PR branch on the previous PR branch and work sequentially (no skipping ahead).
 - MUST NOT merge PRs.
 - MUST fail-closed: all new parsers MUST cap lengths before allocation; on invalid data MUST return errors (no panic/OOM).
@@ -727,6 +727,30 @@ Authoritative spec: `slab-optimization/spec.md`
 - Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
 - PR created via `gh` (base `sprint/slabopt-pr1-journal-abstraction`): https://github.com/snissn/gomap/pull/61
 - CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 20:12:24 HST`
+- Created branch `sprint/slabopt-pr3-rid-join` (based on `sprint/slabopt-pr2-dictdb`).
+
+`2026-01-17 21:29:15 HST`
+- Updated commit/value log recovery tests and log naming checks in `TreeDB/recovery_spec_test.go` and `TreeDB/db/readonly_open_test.go`.
+- Updated log naming docs in `TreeDB/caching/unified_wal_comprehensive_test.go` and `TreeDB/caching/checkpoint_test.go`.
+- Added forced value-log segment removal for recovery cleanup in `TreeDB/internal/valuelog/manager.go` + `TreeDB/db/wal_recovery.go` and delayed state initialization in `TreeDB/db/db.go`.
+- Updated PR process notes in `slab-optimization/spec.md` and `slab-optimization/AGENTS.md`; created `.pr/PR3_description.md`.
+- Tests: `go test ./TreeDB/internal/commitlog -count=1` → PASS
+- Tests: `go test ./TreeDB/internal/valuelog -count=1` → PASS
+- Tests: `go test ./TreeDB -run TestCrashRecovery -count=1` → PASS
+- Tests: `go test ./... -count=1` → PASS
+- Tests: `go test ./... -race -count=1` → PASS (macOS linker warning building `cmd/unified_bench.test`: malformed `LC_DYSYMTAB`)
+- Bench: `go run ./cmd/unified_bench -suite sload_readheavy -dbs treedb -keys 100000 -valsize 128 -batchsize 1000`
+
+`2026-01-17 21:35:34 HST`
+- Commit: `PR3: RID join for CommitLog/ValueLog + recovery v1`.
+- Pushed branch `sprint/slabopt-pr3-rid-join` to origin.
+- PR created via `gh` (base `sprint/slabopt-pr2-dictdb`): https://github.com/snissn/gomap/pull/62
+- CI: `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
+
+`2026-01-17 21:41:31 HST`
+- CI (post-log update): `gh pr checks 62 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
 
 `2026-01-18 00:39:12 HST`
 - Updated read-only open handling for missing maindb/dictdb directories in `TreeDB/public.go`.
