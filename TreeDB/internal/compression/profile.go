@@ -16,6 +16,7 @@ type ActiveProfile struct {
 	PayloadRatio     float64
 	TotalRatio       float64
 	DecodeNsEstimate int64
+	AvgSampleBytes   int
 	Samples          int
 	Timestamp        time.Time
 }
@@ -116,6 +117,7 @@ func ChooseKForDict(dict []byte, samples [][]byte) (profile *ActiveProfile) {
 		PayloadRatio:     best.payloadRatio,
 		TotalRatio:       best.totalRatio,
 		DecodeNsEstimate: int64(nsPerByte * float64(best.K) * avgRaw),
+		AvgSampleBytes:   int(avgRaw),
 		Samples:          len(eval),
 		Timestamp:        time.Now(),
 	}

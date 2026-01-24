@@ -236,6 +236,13 @@ func (db *DB) applyValueLogDictProfile() {
 	db.dictCurrentCached.Store(dictID)
 	db.dictCurrentOps.Store(0)
 	profileK := db.clampValueLogDictK(profile.K)
+	// Favor larger grouping on small/medium value sizes to reduce per-record
+	// framing + encode overhead and improve throughput. Larger K can be
+	// revisited if/when random point reads become the dominant cost.
+	if profile.AvgSampleBytes > 0 && profile.AvgSampleBytes <= 16<<10 && profileK < 8 {
+		profileK = 8
+	}
+	profileK = db.clampValueLogDictK(profileK)
 	if ks, ok := store.(dictStoreK); ok {
 		if err := ks.SetK(ctx, dictID, profileK); err != nil {
 			db.reportError(err)
