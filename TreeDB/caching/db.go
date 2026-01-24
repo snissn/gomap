@@ -3658,6 +3658,13 @@ func (db *DB) Close() error {
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
+	if db.dictStore != nil {
+		if closer, ok := db.dictStore.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
 	}
