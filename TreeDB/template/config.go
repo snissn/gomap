@@ -33,6 +33,7 @@ type Config struct {
 	SynthesizeEverySamples       int
 	MaxAnchorScanPerSynthesis    int
 	MaxValuesScannedPerSynthesis int
+	MaskMaxValuesScanned         int
 	MinAnchorFreq                int
 	MinPresenceRatio             float64
 	AmbiguityPct                 float64
@@ -123,6 +124,9 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.MaxValuesScannedPerSynthesis <= 0 {
 		cfg.MaxValuesScannedPerSynthesis = 64
+	}
+	if cfg.MaskMaxValuesScanned <= 0 {
+		cfg.MaskMaxValuesScanned = 256
 	}
 	if cfg.MinAnchorFreq <= 0 {
 		cfg.MinAnchorFreq = 16

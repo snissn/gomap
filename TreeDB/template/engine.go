@@ -483,8 +483,8 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 		}
 	}
 	sampleLimit := len(samples)
-	if cfg.MaxValuesScannedPerSynthesis > 0 && sampleLimit > cfg.MaxValuesScannedPerSynthesis {
-		sampleLimit = cfg.MaxValuesScannedPerSynthesis
+	if cfg.MaskMaxValuesScanned > 0 && sampleLimit > cfg.MaskMaxValuesScanned {
+		sampleLimit = cfg.MaskMaxValuesScanned
 	}
 	lengthCounts := make(map[int]int, sampleLimit)
 	bestLen := 0
