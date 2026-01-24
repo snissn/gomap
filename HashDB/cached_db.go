@@ -75,6 +75,30 @@ func (c *CachedDB) Get(key []byte) ([]byte, error) { return c.cache.Get(key) }
 // Put inserts or updates a key in the write-back cache.
 func (c *CachedDB) Put(key []byte, value []byte) error { return c.cache.Put(key, value) }
 
+// PutNoCopyValue inserts or updates a key in the write-back cache without copying the value.
+// Caller must not mutate value after calling (it may be retained until flushed).
+func (c *CachedDB) PutNoCopyValue(key []byte, value []byte) error {
+	return c.cache.PutNoCopyValue(key, value)
+}
+
+// PutNoCopyKeyValueUnsafe inserts or updates a key in the write-back cache without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+func (c *CachedDB) PutNoCopyKeyValueUnsafe(key []byte, value []byte) error {
+	return c.cache.PutNoCopyKeyValueUnsafe(key, value)
+}
+
+// PutNoCopy inserts or updates a key in the write-back cache without copying the value.
+//
+// Deprecated: use PutNoCopyValue.
+func (c *CachedDB) PutNoCopy(key []byte, value []byte) error { return c.PutNoCopyValue(key, value) }
+
+// PutNoCopyUnsafe inserts or updates a key in the write-back cache without copying the key or value.
+//
+// Deprecated: use PutNoCopyKeyValueUnsafe.
+func (c *CachedDB) PutNoCopyUnsafe(key []byte, value []byte) error {
+	return c.PutNoCopyKeyValueUnsafe(key, value)
+}
+
 // Add is a compatibility alias for Put.
 func (c *CachedDB) Add(key []byte, value []byte) error { return c.Put(key, value) }
 
@@ -191,6 +215,13 @@ func (c *CachedDB) SetCompression(enabled bool) {
 	c.backendMu.Lock()
 	defer c.backendMu.Unlock()
 	c.db.SetCompression(enabled)
+}
+
+// SetMaxProbeGroupsBeforeResize sets a probe-length guard on the backend DB.
+func (c *CachedDB) SetMaxProbeGroupsBeforeResize(groups uint64) {
+	c.backendMu.Lock()
+	defer c.backendMu.Unlock()
+	c.db.SetMaxProbeGroupsBeforeResize(groups)
 }
 
 // Update performs a read-modify-write against the backend with cache flush.

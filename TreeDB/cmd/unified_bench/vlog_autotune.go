@@ -284,6 +284,13 @@ func evalVlogAutotuneMarks(c vlogAutotuneCase, modes []vlogAutotuneModeReport) [
 		if len(auto.Result.Segments) > 0 {
 			autoKept := auto.Result.Segments[0].KeptFrac
 			autoAttempted := auto.Result.Segments[0].AttemptedFrac
+			allowedAttempted := 0.10
+			if frames := auto.Result.Segments[0].FramesTotal; frames > 0 {
+				minAttempt := 1.0 / float64(frames)
+				if minAttempt > allowedAttempted {
+					allowedAttempted = minAttempt
+				}
+			}
 			marks = append(marks, benchMark{
 				Name:   "io_incompressible_kept_frac",
 				Pass:   autoKept <= 0.02,
@@ -291,8 +298,8 @@ func evalVlogAutotuneMarks(c vlogAutotuneCase, modes []vlogAutotuneModeReport) [
 			})
 			marks = append(marks, benchMark{
 				Name:   "io_incompressible_attempted_frac",
-				Pass:   autoAttempted <= 0.10,
-				Detail: fmt.Sprintf("attempted=%.3f", autoAttempted),
+				Pass:   autoAttempted <= allowedAttempted,
+				Detail: fmt.Sprintf("attempted=%.3f allowed=%.3f frames=%d", autoAttempted, allowedAttempted, auto.Result.Segments[0].FramesTotal),
 			})
 		}
 	case "marquee":
