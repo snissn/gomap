@@ -60,12 +60,21 @@ func fingerprintsLimited(value []byte, cfg Config, limit int) []uint64 {
 	return Fingerprints(value, cfg)
 }
 
+func lengthFingerprint(length int) uint64 {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(length))
+	return xxh3.Hash(buf[:])
+}
+
 // BucketFingerprints returns fingerprints for bucketing (prefix-only by default).
 func BucketFingerprints(value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
 	k := cfg.FingerprintK
 	if k <= 0 || len(value) < k {
 		return nil
+	}
+	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
+		return []uint64{lengthFingerprint(len(value))}
 	}
 	prefixLen := cfg.RoutePrefixBytes
 	if prefixLen < k {
@@ -85,6 +94,17 @@ func RoutingFingerprints(value []byte, cfg Config) []uint64 {
 	if k <= 0 || len(value) < k {
 		return nil
 	}
+	limit := cfg.RouteFPCount
+	if limit <= 0 {
+		limit = cfg.MaxFingerprints
+	}
+	out := make([]uint64, 0, limit)
+	seen := make(map[uint64]struct{}, limit)
+	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
+		fp := lengthFingerprint(len(value))
+		out = append(out, fp)
+		seen[fp] = struct{}{}
+	}
 	prefixLen := cfg.RoutePrefixBytes
 	suffixLen := cfg.RouteSuffixBytes
 	if prefixLen < k {
@@ -101,12 +121,12 @@ func RoutingFingerprints(value []byte, cfg Config) []uint64 {
 	}
 	prefix := value[:prefixLen]
 	suffix := value[len(value)-suffixLen:]
-	prefixLimit := cfg.RouteFPCount / 2
+	prefixLimit := limit / 2
 	if prefixLimit < 1 {
-		prefixLimit = cfg.RouteFPCount
+		prefixLimit = limit
 	}
-	suffixLimit := cfg.RouteFPCount - prefixLimit
-	fps := make([]uint64, 0, cfg.RouteFPCount)
+	suffixLimit := limit - prefixLimit
+	fps := make([]uint64, 0, limit)
 	fps = append(fps, fingerprintsLimited(prefix, cfg, prefixLimit)...)
 	if suffixLimit > 0 && suffixLen >= k {
 		fps = append(fps, fingerprintsLimited(suffix, cfg, suffixLimit)...)
@@ -114,7 +134,17 @@ func RoutingFingerprints(value []byte, cfg Config) []uint64 {
 	if len(fps) == 0 {
 		return Fingerprints(value, cfg)
 	}
-	return fps
+	for _, fp := range fps {
+		if len(out) >= limit {
+			break
+		}
+		if _, ok := seen[fp]; ok {
+			continue
+		}
+		out = append(out, fp)
+		seen[fp] = struct{}{}
+	}
+	return out
 }
 
 // BucketKey computes a deterministic bucket key from fingerprints.

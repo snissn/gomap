@@ -157,29 +157,50 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			e.stats.addReason(reasonTemplateFetchErr)
 			continue
 		}
-		if def.Kind != 0 && def.Kind != TemplateAnchors {
+		e.stats.CandidateTemplatesConsidered.Add(1)
+		switch def.Kind {
+		case 0, TemplateAnchors:
+			gaps, encLen, reason, matched := matchTemplate(value, def.Anchors, cand.id, cfg)
+			if reason != "" {
+				e.stats.addReason(reason)
+			}
+			if !matched {
+				continue
+			}
+			matchedAny = true
+			savings := len(value) - encLen
+			if savings <= bestSavings {
+				continue
+			}
+			payload, err := EncodePayload(cand.id, gaps)
+			if err != nil {
+				continue
+			}
+			bestSavings = savings
+			bestPayload = payload
+		case TemplateMask:
+			vars, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
+			if reason != "" {
+				e.stats.addReason(reason)
+			}
+			if !matched {
+				continue
+			}
+			matchedAny = true
+			savings := len(value) - encLen
+			if savings <= bestSavings {
+				continue
+			}
+			payload, err := EncodeMaskPayload(cand.id, vars)
+			if err != nil {
+				continue
+			}
+			bestSavings = savings
+			bestPayload = payload
+		default:
 			e.stats.addReason(reasonTemplateFetchErr)
 			continue
 		}
-		e.stats.CandidateTemplatesConsidered.Add(1)
-		gaps, encLen, reason, matched := matchTemplate(value, def.Anchors, cand.id, cfg)
-		if reason != "" {
-			e.stats.addReason(reason)
-		}
-		if !matched {
-			continue
-		}
-		matchedAny = true
-		savings := len(value) - encLen
-		if savings <= bestSavings {
-			continue
-		}
-		payload, err := EncodePayload(cand.id, gaps)
-		if err != nil {
-			continue
-		}
-		bestSavings = savings
-		bestPayload = payload
 	}
 	if matchedAny {
 		e.stats.Matched.Add(1)
@@ -309,6 +330,11 @@ func synthesizeTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool
 	cfg = NormalizeConfig(cfg)
 	if len(samples) == 0 {
 		return TemplateDef{}, nil, false, false
+	}
+	if !cfg.DisableMaskTemplates {
+		if def, routeValue, activated, ok := synthesizeMaskTemplate(samples, cfg); ok {
+			return def, routeValue, activated, true
+		}
 	}
 	k := cfg.FingerprintK
 	if k <= 0 {
@@ -453,6 +479,110 @@ func synthesizeTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool
 	return def, samples[refIdx].value, activated, true
 }
 
+func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool, bool) {
+	cfg = NormalizeConfig(cfg)
+	if cfg.LengthBucketMinLen > 0 {
+		if len(samples) == 0 {
+			return TemplateDef{}, nil, false, false
+		}
+	}
+	sampleLimit := len(samples)
+	if cfg.MaxValuesScannedPerSynthesis > 0 && sampleLimit > cfg.MaxValuesScannedPerSynthesis {
+		sampleLimit = cfg.MaxValuesScannedPerSynthesis
+	}
+	lengthCounts := make(map[int]int, sampleLimit)
+	bestLen := 0
+	bestCount := 0
+	for i := 0; i < sampleLimit; i++ {
+		l := len(samples[i].value)
+		lengthCounts[l]++
+		if lengthCounts[l] > bestCount || (lengthCounts[l] == bestCount && l > bestLen) {
+			bestLen = l
+			bestCount = lengthCounts[l]
+		}
+	}
+	if bestLen == 0 || bestCount == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	if cfg.LengthBucketMinLen > 0 && bestLen < cfg.LengthBucketMinLen {
+		return TemplateDef{}, nil, false, false
+	}
+	if bestCount < cfg.MinAnchorFreq {
+		return TemplateDef{}, nil, false, false
+	}
+	// Build per-position byte counts.
+	counts := make([][256]int, bestLen)
+	totalSamples := 0
+	for i := 0; i < sampleLimit; i++ {
+		val := samples[i].value
+		if len(val) != bestLen {
+			continue
+		}
+		for pos := 0; pos < bestLen; pos++ {
+			counts[pos][val[pos]]++
+		}
+		totalSamples++
+	}
+	if totalSamples == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	base := make([]byte, bestLen)
+	mask := make([]byte, (bestLen+7)/8)
+	constCount := 0
+	for pos := 0; pos < bestLen; pos++ {
+		maxCount := 0
+		var maxByte byte
+		for b, c := range counts[pos] {
+			if c > maxCount {
+				maxCount = c
+				maxByte = byte(b)
+			}
+		}
+		if float64(maxCount)/float64(totalSamples) >= cfg.MaskMinPresenceRatio {
+			base[pos] = maxByte
+			constCount++
+			continue
+		}
+		mask[pos/8] |= 1 << uint(pos%8)
+	}
+	minConst := cfg.MaskMinConstBytes
+	if minConst < int(float64(bestLen)*cfg.MaskMinConstFrac) {
+		minConst = int(float64(bestLen) * cfg.MaskMinConstFrac)
+	}
+	if constCount < minConst {
+		return TemplateDef{}, nil, false, false
+	}
+	varPositions := make([]int, 0, bestLen-constCount)
+	for pos := 0; pos < bestLen; pos++ {
+		if mask[pos/8]&(1<<uint(pos%8)) != 0 {
+			varPositions = append(varPositions, pos)
+		}
+	}
+	varLen := len(varPositions)
+	encLen := payloadHeader + 1 + uvarintLen(uint64(varLen)) + varLen
+	hits, saved, meanRatio := simulateMaskEncoding(base, mask, samples, sampleLimit, encLen)
+	if hits == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	meanSavings := int(saved) / hits
+	if meanSavings < cfg.MinPublishSavingsBytes && meanRatio > cfg.MinPublishRatio {
+		return TemplateDef{}, nil, false, false
+	}
+	activated := hits >= cfg.MinActivateHits || saved >= cfg.MinActivateSavedBytes
+	refIdx := selectReferenceSample(samples, sampleLimit)
+	refValue := samples[refIdx].value
+	if len(refValue) != bestLen || !maskMatches(base, mask, refValue) {
+		for i := 0; i < sampleLimit; i++ {
+			if len(samples[i].value) == bestLen && maskMatches(base, mask, samples[i].value) {
+				refValue = samples[i].value
+				break
+			}
+		}
+	}
+	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions}
+	return def, refValue, activated, true
+}
+
 func isAmbiguous(anchor []byte, samples []sample, limit int, maxPct float64) bool {
 	if maxPct <= 0 {
 		return false
@@ -572,6 +702,33 @@ func simulateEncoding(anchors [][]byte, samples []sample, limit int, cfg Config)
 		hits++
 		saved += len(samples[i].value) - encLen
 		ratioSum += float64(encLen) / float64(len(samples[i].value))
+	}
+	if hits == 0 {
+		return 0, 0, 1
+	}
+	meanRatio = ratioSum / float64(hits)
+	return hits, saved, meanRatio
+}
+
+func simulateMaskEncoding(base []byte, mask []byte, samples []sample, limit int, encLen int) (hits int, saved int, meanRatio float64) {
+	if limit == 0 || len(base) == 0 {
+		return 0, 0, 1
+	}
+	ratioSum := 0.0
+	for i := 0; i < limit; i++ {
+		val := samples[i].value
+		if len(val) != len(base) {
+			continue
+		}
+		if !maskMatches(base, mask, val) {
+			continue
+		}
+		if encLen >= len(val) {
+			continue
+		}
+		hits++
+		saved += len(val) - encLen
+		ratioSum += float64(encLen) / float64(len(val))
 	}
 	if hits == 0 {
 		return 0, 0, 1

@@ -23,6 +23,7 @@ type Config struct {
 	MaxCandidateListBytes int
 	RoutePrefixBytes      int
 	RouteSuffixBytes      int
+	LengthBucketMinLen    int
 
 	// Training / publishing bounds.
 	MaxBuckets                   int
@@ -40,6 +41,10 @@ type Config struct {
 	MinActivateHits              int
 	MinActivateSavedBytes        int
 	RouteFPCount                 int
+	DisableMaskTemplates         bool
+	MaskMinPresenceRatio         float64
+	MaskMinConstBytes            int
+	MaskMinConstFrac             float64
 	CooldownValues               int
 	MaxTemplatesPerBucket        int
 	MaxTemplatesTotal            int
@@ -95,6 +100,9 @@ func NormalizeConfig(cfg Config) Config {
 	if cfg.RouteSuffixBytes <= 0 {
 		cfg.RouteSuffixBytes = 32
 	}
+	if cfg.LengthBucketMinLen <= 0 {
+		cfg.LengthBucketMinLen = 64
+	}
 	if cfg.MaxBuckets <= 0 {
 		cfg.MaxBuckets = 256
 	}
@@ -139,6 +147,15 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.RouteFPCount <= 0 {
 		cfg.RouteFPCount = 12
+	}
+	if cfg.MaskMinPresenceRatio <= 0 {
+		cfg.MaskMinPresenceRatio = 0.9
+	}
+	if cfg.MaskMinConstBytes <= 0 {
+		cfg.MaskMinConstBytes = 32
+	}
+	if cfg.MaskMinConstFrac <= 0 {
+		cfg.MaskMinConstFrac = 0.2
 	}
 	if cfg.CooldownValues <= 0 {
 		cfg.CooldownValues = 512

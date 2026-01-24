@@ -40,7 +40,7 @@ func TestEngineEncodeDecode(t *testing.T) {
 		MaxAnchorBytesTotal:   256,
 		MaxGaps:               16,
 	}
-	def := TemplateDef{Anchors: [][]byte{[]byte("prefix-"), []byte("-suffix")}}
+	def := TemplateDef{Kind: TemplateAnchors, Anchors: [][]byte{[]byte("prefix-"), []byte("-suffix")}}
 	defBytes, err := EncodeTemplateDef(def, cfg)
 	if err != nil {
 		t.Fatalf("encode template def: %v", err)
