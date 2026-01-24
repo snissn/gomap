@@ -14,17 +14,19 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/slab"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 // File represents a value-log segment on disk.
 type File struct {
-	ID             uint32
-	Path           string
-	File           *os.File
-	RefCount       atomic.Int64
-	IsZombie       atomic.Bool
-	dictLookup     DictLookup
-	templateLookup TemplateLookup
+	ID                 uint32
+	Path               string
+	File               *os.File
+	RefCount           atomic.Int64
+	IsZombie           atomic.Bool
+	dictLookup         DictLookup
+	templateLookup     TemplateLookup
+	templateDecodeOpts templ.DecodeOptions
 
 	cacheMu    sync.Mutex
 	cacheStart atomic.Int64
@@ -46,12 +48,12 @@ type File struct {
 	deadMappingsCount atomic.Uint64
 }
 
-func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup) (*File, error) {
+func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup}
+	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup, templateDecodeOpts: templateOpts}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
 	return vf, nil
@@ -86,7 +88,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -100,7 +102,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
@@ -177,7 +179,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
+			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err
 			}
@@ -247,7 +249,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	}
 
 	// Slow path: use existing decoder and append.
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup)
+	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +311,7 @@ type Manager struct {
 	disableReadChecksum bool
 	dictLookup          DictLookup
 	templateLookup      TemplateLookup
+	templateDecodeOpts  templ.DecodeOptions
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -337,12 +340,14 @@ func (m *Manager) SetDictLookup(lookup DictLookup) {
 	}
 }
 
-func (m *Manager) SetTemplateLookup(lookup TemplateLookup) {
+func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOptions) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.templateLookup = lookup
+	m.templateDecodeOpts = opts
 	for _, f := range m.files {
 		f.templateLookup = lookup
+		f.templateDecodeOpts = opts
 	}
 }
 func (m *Manager) Close() error {
@@ -376,7 +381,7 @@ func (m *Manager) Refresh() error {
 		if _, ok := m.files[seg.id]; ok {
 			continue
 		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup)
+		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts)
 		if err != nil {
 			return err
 		}

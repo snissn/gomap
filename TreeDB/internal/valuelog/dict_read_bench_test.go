@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 type dictReadWorkload struct {
@@ -153,7 +154,7 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 						}
 
 						// Warm up dict codec cache outside the timed loop.
-						if _, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil); err != nil {
+						if _, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, templ.DecodeOptions{}); err != nil {
 							b.Fatalf("decode warmup: %v", err)
 						}
 
@@ -163,7 +164,7 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 
 						sink := byte(0)
 						for i := 0; i < b.N; i++ {
-							v, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil)
+							v, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, templ.DecodeOptions{})
 							if err != nil {
 								b.Fatalf("decodeRecord: %v", err)
 							}

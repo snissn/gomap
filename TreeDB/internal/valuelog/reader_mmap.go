@@ -239,7 +239,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	// Compressed grouped record: decode (allocates).
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}
@@ -397,7 +397,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return dst, nil, true
 	}
 
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}

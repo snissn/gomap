@@ -1,115 +1,206 @@
 package templatedb
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
-	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 var errStoreUnavailable = errors.New("templatedb: store unavailable")
 
-// Store provides access to template storage backed by a TreeDB backend.
-type Store struct {
-	backend *db.DB
-	mu      sync.Mutex
+const (
+	schemaVer byte = 1
+)
+
+// Config controls templatedb storage behavior.
+type Config struct {
+	MaxCandidatesPerFP    int
+	MaxCandidateListBytes int
+	MaxIDAttempts         int
 }
 
-// Open opens a templatedb backend at path and returns a Store.
-func Open(path string, opts db.Options) (*Store, error) {
-	opts.Dir = path
-	backend, err := db.Open(opts)
+// NormalizeConfig applies defaults.
+func NormalizeConfig(cfg Config) Config {
+	if cfg.MaxCandidatesPerFP <= 0 {
+		cfg.MaxCandidatesPerFP = 32
+	}
+	if cfg.MaxCandidateListBytes <= 0 {
+		cfg.MaxCandidateListBytes = 4 << 10
+	}
+	if cfg.MaxIDAttempts <= 0 {
+		cfg.MaxIDAttempts = 4
+	}
+	return cfg
+}
+
+// KV is the minimal public DB interface used by templatedb.
+type KV interface {
+	Get(key []byte) ([]byte, error)
+	SetSync(key, value []byte) error
+	DeleteSync(key []byte) error
+	NewBatch() Batch
+}
+
+// Batch is the minimal batch interface used by templatedb.
+type Batch interface {
+	Set(key, value []byte) error
+	Delete(key []byte) error
+	WriteSync() error
+	Close() error
+}
+
+// Store provides access to template storage backed by a TreeDB public DB.
+type Store struct {
+	kv  KV
+	cfg Config
+	mu  sync.Mutex
+}
+
+// New wraps an existing public DB handle.
+func New(kv KV, cfg Config) *Store {
+	if kv == nil {
+		return &Store{kv: nil, cfg: NormalizeConfig(cfg)}
+	}
+	return &Store{kv: kv, cfg: NormalizeConfig(cfg)}
+}
+
+// Close closes the underlying store if it implements io.Closer.
+func (s *Store) Close() error {
+	if s == nil || s.kv == nil {
+		return nil
+	}
+	if c, ok := s.kv.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+// GetTemplateDef loads TemplateDefBytes for a template ID.
+func (s *Store) GetTemplateDef(_ context.Context, id uint64) ([]byte, error) {
+	if s == nil || s.kv == nil {
+		return nil, errStoreUnavailable
+	}
+	val, err := s.kv.Get(templateKey(id))
 	if err != nil {
 		return nil, err
 	}
-	return &Store{backend: backend}, nil
-}
-
-// New wraps an existing backend.
-func New(backend *db.DB) *Store {
-	return &Store{backend: backend}
-}
-
-// Close closes the underlying backend.
-func (s *Store) Close() error {
-	if s == nil || s.backend == nil {
-		return nil
+	if val == nil {
+		return nil, template.ErrMissingTemplate
 	}
-	return s.backend.Close()
+	return val, nil
 }
 
-// PutTemplate stores a template (prefix+suffix) and returns its template ID.
-// IDs are derived from a SHA256 hash, so repeated inserts are idempotent.
-func (s *Store) PutTemplate(ctx context.Context, prefix, suffix []byte) (uint64, error) {
-	if s == nil || s.backend == nil {
+// GetCandidates loads the candidate list for a fingerprint.
+func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template.Candidate, error) {
+	if s == nil || s.kv == nil {
+		return nil, errStoreUnavailable
+	}
+	val, err := s.kv.Get(fpKey(fp))
+	if err != nil {
+		return nil, err
+	}
+	if len(val) == 0 {
+		return nil, nil
+	}
+	cands, err := decodeCandidates(val)
+	if err != nil {
+		return nil, err
+	}
+	if max > 0 && len(cands) > max {
+		cands = cands[:max]
+	}
+	return cands, nil
+}
+
+// PutTemplateDef stores a template definition and updates routing indices.
+func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
+	if s == nil || s.kv == nil {
 		return 0, errStoreUnavailable
 	}
-	h := sha256.New()
-	_, _ = h.Write(prefix)
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(suffix)
-	sum := h.Sum(nil)
-	id := binary.BigEndian.Uint64(sum[:8])
-	if id == 0 {
-		return 0, errors.New("templatedb: invalid template id")
-	}
-
-	bytesKey := bytesKey(id)
-	hashKey := hashKey(sum)
-
+	cfg := s.cfg
+	cfg = NormalizeConfig(cfg)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	val, err := s.backend.Get(hashKey)
-	if err != nil {
-		return 0, err
-	}
-	if val != nil {
-		if len(val) != 8 {
-			return 0, fmt.Errorf("templatedb: invalid hash entry size %d", len(val))
+	// Dedup and sort route fingerprints deterministically.
+	if len(routeFPs) > 0 {
+		sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
+		j := 0
+		for i := 0; i < len(routeFPs); i++ {
+			if i == 0 || routeFPs[i] != routeFPs[i-1] {
+				routeFPs[j] = routeFPs[i]
+				j++
+			}
 		}
-		return binary.BigEndian.Uint64(val), nil
+		routeFPs = routeFPs[:j]
 	}
 
-	existing, err := s.backend.Get(bytesKey)
-	if err != nil {
-		return 0, err
-	}
-	if existing != nil {
-		p, sfx, err := decodeTemplate(existing)
+	id := uint64(0)
+	for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
+		id = template.TemplateID(defBytes, byte(attempt))
+		if id == 0 {
+			continue
+		}
+		key := templateKey(id)
+		existing, err := s.kv.Get(key)
 		if err != nil {
 			return 0, err
 		}
-		if equalBytes(p, prefix) && equalBytes(sfx, suffix) {
-			valBuf := make([]byte, 8)
-			binary.BigEndian.PutUint64(valBuf, id)
-			if err := s.backend.SetSync(hashKey, valBuf); err != nil {
-				return 0, err
-			}
-			return id, nil
+		if existing == nil {
+			break
 		}
-		return 0, fmt.Errorf("templatedb: template id collision for %d", id)
+		if bytes.Equal(existing, defBytes) {
+			// Idempotent publish; still refresh routing lists.
+			break
+		}
+		if attempt == cfg.MaxIDAttempts-1 {
+			return 0, fmt.Errorf("templatedb: template id collision for %d", id)
+		}
+		id = 0
+	}
+	if id == 0 {
+		return 0, fmt.Errorf("templatedb: unable to assign template id")
 	}
 
-	encoded, err := encodeTemplate(prefix, suffix)
-	if err != nil {
-		return 0, err
+	candidateSize := len(defBytes)
+	updates := make(map[uint64][]byte, len(routeFPs))
+	for _, fp := range routeFPs {
+		listBytes, err := s.kv.Get(fpKey(fp))
+		if err != nil {
+			return 0, err
+		}
+		cands, err := decodeCandidates(listBytes)
+		if err != nil {
+			return 0, err
+		}
+		cands = upsertCandidate(cands, template.Candidate{ID: id, Size: candidateSize})
+		if cfg.MaxCandidatesPerFP > 0 && len(cands) > cfg.MaxCandidatesPerFP {
+			cands = cands[:cfg.MaxCandidatesPerFP]
+		}
+		encoded := encodeCandidates(cands)
+		for cfg.MaxCandidateListBytes > 0 && len(encoded) > cfg.MaxCandidateListBytes && len(cands) > 1 {
+			cands = cands[:len(cands)-1]
+			encoded = encodeCandidates(cands)
+		}
+		updates[fp] = encoded
 	}
 
-	batch := s.backend.NewBatch()
-	if err := batch.Set(bytesKey, encoded); err != nil {
+	batch := s.kv.NewBatch()
+	if err := batch.Set(templateKey(id), defBytes); err != nil {
 		_ = batch.Close()
 		return 0, err
 	}
-	valBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(valBuf, id)
-	if err := batch.Set(hashKey, valBuf); err != nil {
-		_ = batch.Close()
-		return 0, err
+	for fp, enc := range updates {
+		if err := batch.Set(fpKey(fp), enc); err != nil {
+			_ = batch.Close()
+			return 0, err
+		}
 	}
 	if err := batch.WriteSync(); err != nil {
 		_ = batch.Close()
@@ -121,69 +212,108 @@ func (s *Store) PutTemplate(ctx context.Context, prefix, suffix []byte) (uint64,
 	return id, nil
 }
 
-// GetTemplate loads prefix/suffix for a template ID.
-func (s *Store) GetTemplate(_ context.Context, id uint64) ([]byte, []byte, error) {
-	if s == nil || s.backend == nil {
-		return nil, nil, errStoreUnavailable
-	}
-	val, err := s.backend.Get(bytesKey(id))
-	if err != nil {
-		return nil, nil, err
-	}
-	if val == nil {
-		return nil, nil, fmt.Errorf("templatedb: template %d not found", id)
-	}
-	return decodeTemplate(val)
-}
-
-func encodeTemplate(prefix, suffix []byte) ([]byte, error) {
-	if len(prefix) > int(^uint32(0)) || len(suffix) > int(^uint32(0)) {
-		return nil, fmt.Errorf("templatedb: template too large")
-	}
-	buf := make([]byte, 8+len(prefix)+len(suffix))
-	binary.BigEndian.PutUint32(buf[0:4], uint32(len(prefix)))
-	binary.BigEndian.PutUint32(buf[4:8], uint32(len(suffix)))
-	copy(buf[8:8+len(prefix)], prefix)
-	copy(buf[8+len(prefix):], suffix)
-	return buf, nil
-}
-
-func decodeTemplate(buf []byte) ([]byte, []byte, error) {
-	if len(buf) < 8 {
-		return nil, nil, fmt.Errorf("templatedb: corrupt template")
-	}
-	pLen := binary.BigEndian.Uint32(buf[0:4])
-	sLen := binary.BigEndian.Uint32(buf[4:8])
-	if int64(pLen)+int64(sLen) > int64(len(buf)-8) {
-		return nil, nil, fmt.Errorf("templatedb: corrupt template")
-	}
-	prefix := buf[8 : 8+int(pLen)]
-	suffix := buf[8+int(pLen) : 8+int(pLen)+int(sLen)]
-	return prefix, suffix, nil
-}
-
-func bytesKey(id uint64) []byte {
-	buf := make([]byte, 9)
-	buf[0] = 'b'
-	binary.BigEndian.PutUint64(buf[1:], id)
+func templateKey(id uint64) []byte {
+	buf := make([]byte, 2+8)
+	buf[0] = schemaVer
+	buf[1] = 't'
+	binary.BigEndian.PutUint64(buf[2:], id)
 	return buf
 }
 
-func hashKey(sum []byte) []byte {
-	out := make([]byte, 1+len(sum))
-	out[0] = 'h'
-	copy(out[1:], sum)
-	return out
+func fpKey(fp uint64) []byte {
+	buf := make([]byte, 2+8)
+	buf[0] = schemaVer
+	buf[1] = 'f'
+	binary.BigEndian.PutUint64(buf[2:], fp)
+	return buf
 }
 
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
+func decodeCandidates(buf []byte) ([]template.Candidate, error) {
+	if len(buf) == 0 {
+		return nil, nil
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+	out := make([]template.Candidate, 0, 8)
+	off := 0
+	for off < len(buf) {
+		id, n := binary.Uvarint(buf[off:])
+		if n <= 0 {
+			return nil, fmt.Errorf("templatedb: corrupt candidate list")
+		}
+		off += n
+		size, n := binary.Uvarint(buf[off:])
+		if n <= 0 {
+			return nil, fmt.Errorf("templatedb: corrupt candidate list")
+		}
+		off += n
+		out = append(out, template.Candidate{ID: id, Size: int(size)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Size != out[j].Size {
+			return out[i].Size < out[j].Size
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func encodeCandidates(cands []template.Candidate) []byte {
+	if len(cands) == 0 {
+		return nil
+	}
+	// Ensure deterministic order.
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].Size != cands[j].Size {
+			return cands[i].Size < cands[j].Size
+		}
+		return cands[i].ID < cands[j].ID
+	})
+	size := 0
+	for _, c := range cands {
+		size += uvarintLen(c.ID) + uvarintLen(uint64(c.Size))
+	}
+	buf := make([]byte, size)
+	off := 0
+	for _, c := range cands {
+		off += binary.PutUvarint(buf[off:], c.ID)
+		off += binary.PutUvarint(buf[off:], uint64(c.Size))
+	}
+	return buf
+}
+
+func upsertCandidate(cands []template.Candidate, cand template.Candidate) []template.Candidate {
+	for i := range cands {
+		if cands[i].ID == cand.ID {
+			if cand.Size > 0 && (cands[i].Size == 0 || cand.Size < cands[i].Size) {
+				cands[i].Size = cand.Size
+			}
+			return cands
 		}
 	}
-	return true
+	cands = append(cands, cand)
+	return cands
+}
+
+func uvarintLen(v uint64) int {
+	switch {
+	case v < 1<<7:
+		return 1
+	case v < 1<<14:
+		return 2
+	case v < 1<<21:
+		return 3
+	case v < 1<<28:
+		return 4
+	case v < 1<<35:
+		return 5
+	case v < 1<<42:
+		return 6
+	case v < 1<<49:
+		return 7
+	case v < 1<<56:
+		return 8
+	case v < 1<<63:
+		return 9
+	default:
+		return 10
+	}
 }

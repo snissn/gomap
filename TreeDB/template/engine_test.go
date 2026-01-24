@@ -1,35 +1,65 @@
 package template
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestTemplateEncodeDecode(t *testing.T) {
-	engine := NewEngine(Config{
-		MinPrefixBytes:  1,
-		MinSuffixBytes:  1,
-		MinTotalBytes:   2,
-		MinSavingsBytes: 1,
-		HistoryEntries:  2,
-	})
+type stubStore struct {
+	defBytes []byte
+	id       uint64
+}
 
-	v1 := []byte("prefix-AAA-suffix")
-	v2 := []byte("prefix-BBB-suffix")
-	v3 := []byte("prefix-CCC-suffix")
+func (s *stubStore) GetCandidates(_ context.Context, _ uint64, _ int) ([]Candidate, error) {
+	return []Candidate{{ID: s.id, Size: len(s.defBytes)}}, nil
+}
 
-	if enc, ok, _ := engine.Encode(v1); ok || string(enc) != string(v1) {
-		t.Fatalf("expected first value to stay raw")
+func (s *stubStore) GetTemplateDef(_ context.Context, id uint64) ([]byte, error) {
+	if id != s.id {
+		return nil, ErrMissingTemplate
 	}
-	if enc, ok, _ := engine.Encode(v2); ok || string(enc) != string(v2) {
-		t.Fatalf("expected second value to stay raw (template created after)")
+	return s.defBytes, nil
+}
+
+func (s *stubStore) PutTemplateDef(_ context.Context, _ []byte, _ []uint64) (uint64, error) {
+	return s.id, nil
+}
+
+func TestEngineEncodeDecode(t *testing.T) {
+	cfg := Config{
+		MinSavingsBytes:       1,
+		FingerprintK:          4,
+		FingerprintW:          4,
+		MaxFingerprints:       16,
+		MaxFPReads:            16,
+		MaxTemplateFetch:      8,
+		MaxCandidatesPerFP:    8,
+		MinAnchorLen:          4,
+		MaxAnchorLen:          64,
+		MaxAnchorsPerTemplate: 8,
+		MaxAnchorBytesTotal:   256,
+		MaxGaps:               16,
 	}
-	enc, ok, _ := engine.Encode(v3)
-	if !ok {
-		t.Fatalf("expected third value to be template-encoded")
-	}
-	decoded, err := engine.Decode(enc)
+	def := TemplateDef{Anchors: [][]byte{[]byte("prefix-"), []byte("-suffix")}}
+	defBytes, err := EncodeTemplateDef(def, cfg)
 	if err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatalf("encode template def: %v", err)
 	}
-	if string(decoded) != string(v3) {
-		t.Fatalf("decoded mismatch: %q != %q", decoded, v3)
+	store := &stubStore{defBytes: defBytes, id: 1}
+	engine := NewEngine(cfg)
+
+	value := []byte("prefix-ABC-suffix")
+	payload, ok := engine.Encode(context.Background(), value, store)
+	if !ok {
+		t.Fatalf("expected template encoding")
+	}
+	decoded, err := DecodePayload(payload, func(id uint64) ([]byte, error) {
+		return store.GetTemplateDef(context.Background(), id)
+	}, DecodeOptions{MaxDecodedBytes: 1 << 20, MaxGaps: 16})
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if string(decoded) != string(value) {
+		t.Fatalf("decoded mismatch: %q != %q", decoded, value)
 	}
 }

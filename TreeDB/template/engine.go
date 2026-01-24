@@ -1,372 +1,577 @@
 package template
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
-	"errors"
+	"bytes"
+	"context"
+	"sort"
 	"sync"
+	"sync/atomic"
+
+	"github.com/zeebo/xxh3"
 )
 
-// Format:
-// [0]=magic0, [1]=magic1, [2]=version, [3]=flags, [4:12]=tplID (uint64), [12:]=tail (mid section)
-const (
-	magic0              = 'T'
-	magic1              = 'M'
-	formatVersion       = 1
-	flagTemplateEncoded = 1 << 0
-	headerSize          = 12
-)
-
-var ErrCorrupt = errors.New("template: corrupt payload")
-
-type Template struct {
-	ID     uint64
-	Prefix []byte
-	Suffix []byte
+// Engine implements schema-blind template compression.
+type Engine struct {
+	cfg            Config
+	stats          TemplateStats
+	trainMu        sync.Mutex
+	buckets        map[uint64]*bucket
+	bucketSeq      uint64
+	totalTemplates int
+	trainSeq       atomic.Uint64
 }
 
-// Engine maintains templates and can encode/decode values.
-// It is workload-agnostic and uses byte-level similarity only.
-type Engine struct {
-	mu      sync.RWMutex
-	cfg     Config
-	history [][]byte
-	entries int
-	byID    map[uint64]*Template
-	list    []*Template
-	onNew   func(Template)
+type bucket struct {
+	key                uint64
+	samples            []sample
+	sampleBytes        int
+	samplesSeen        int
+	lastPublishSample  int
+	templatesPublished int
+	lastSeen           uint64
+}
+
+type sample struct {
+	value []byte
+}
+
+type anchorCand struct {
+	bytes     []byte
+	hash      uint64
+	positions []int
+	median    int
+	start     int
 }
 
 // NewEngine creates a template engine with normalized config.
 func NewEngine(cfg Config) *Engine {
 	cfg = NormalizeConfig(cfg)
 	return &Engine{
-		cfg:  cfg,
-		byID: make(map[uint64]*Template),
-		list: make([]*Template, 0, 16),
+		cfg:     cfg,
+		buckets: make(map[uint64]*bucket),
 	}
 }
 
-// SetOnNewTemplate sets a callback for newly created templates.
-func (e *Engine) SetOnNewTemplate(fn func(Template)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.onNew = fn
+// StatsSnapshot returns a copy of current stats.
+func (e *Engine) StatsSnapshot() map[string]string {
+	if e == nil {
+		return map[string]string{}
+	}
+	return e.stats.Snapshot()
 }
 
-// Encode returns the encoded payload, whether a template was used,
-// and the template ID (0 if not used).
-func (e *Engine) Encode(value []byte) ([]byte, bool, uint64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if len(value) == 0 {
-		return value, false, 0
+// Encode attempts to template-encode value using templatedb candidates.
+func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte, bool) {
+	if e == nil {
+		return value, false
 	}
-
-	// Try existing templates.
-	bestID := uint64(0)
-	bestTail := []byte(nil)
+	cfg := e.cfg
+	if cfg.FingerprintK <= 0 || len(value) < cfg.FingerprintK {
+		e.stats.addReason(reasonSkipSmall)
+		e.observeTraining(value, store)
+		return value, false
+	}
+	fps := RoutingFingerprints(value, cfg)
+	if len(fps) == 0 {
+		fps = Fingerprints(value, cfg)
+	}
+	if len(fps) == 0 {
+		e.stats.addReason(reasonSkipNoFPs)
+		e.observeTraining(value, store)
+		return value, false
+	}
+	if store == nil {
+		e.stats.addReason(reasonNoCandidates)
+		e.observeTraining(value, store)
+		return value, false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	e.stats.Attempted.Add(1)
+	maxFPReads := cfg.MaxFPReads
+	if maxFPReads <= 0 || maxFPReads > len(fps) {
+		maxFPReads = len(fps)
+	}
+	type candScore struct {
+		id    uint64
+		size  int
+		score int
+	}
+	candMap := make(map[uint64]*candScore)
+	for i := 0; i < maxFPReads; i++ {
+		fp := fps[i]
+		e.stats.CandidateFPReads.Add(1)
+		cands, err := store.GetCandidates(ctx, fp, cfg.MaxCandidatesPerFP)
+		if err != nil {
+			e.stats.addReason(reasonFPLookupErr)
+			continue
+		}
+		for _, c := range cands {
+			cs := candMap[c.ID]
+			if cs == nil {
+				cs = &candScore{id: c.ID, size: c.Size}
+				candMap[c.ID] = cs
+			}
+			cs.score++
+			if c.Size > 0 && (cs.size == 0 || c.Size < cs.size) {
+				cs.size = c.Size
+			}
+		}
+	}
+	if len(candMap) == 0 {
+		e.stats.addReason(reasonNoCandidates)
+		e.observeTraining(value, store)
+		return value, false
+	}
+	candidates := make([]*candScore, 0, len(candMap))
+	for _, c := range candMap {
+		candidates = append(candidates, c)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if candidates[i].size != candidates[j].size {
+			return candidates[i].size < candidates[j].size
+		}
+		return candidates[i].id < candidates[j].id
+	})
+	maxFetch := cfg.MaxTemplateFetch
+	if maxFetch <= 0 || maxFetch > len(candidates) {
+		maxFetch = len(candidates)
+	}
 	bestSavings := 0
-	for _, tpl := range e.list {
-		if tpl == nil {
+	var bestPayload []byte
+	matchedAny := false
+	for i := 0; i < maxFetch; i++ {
+		cand := candidates[i]
+		e.stats.TemplateFetches.Add(1)
+		defBytes, err := store.GetTemplateDef(ctx, cand.id)
+		if err != nil {
+			e.stats.addReason(reasonTemplateFetchErr)
 			continue
 		}
-		tail, ok := matchTemplate(tpl, value)
-		if !ok {
+		def, err := DecodeTemplateDef(defBytes)
+		if err != nil {
+			e.stats.addReason(reasonTemplateFetchErr)
 			continue
 		}
-		savings := len(value) - (headerSize + len(tail))
-		if savings > bestSavings {
-			bestSavings = savings
-			bestID = tpl.ID
-			bestTail = tail
+		e.stats.CandidateTemplatesConsidered.Add(1)
+		gaps, encLen, reason, matched := matchTemplate(value, def.Anchors, cand.id, cfg)
+		if reason != "" {
+			e.stats.addReason(reason)
 		}
-	}
-
-	if bestID != 0 && bestSavings >= e.cfg.MinSavingsBytes {
-		encoded := make([]byte, headerSize+len(bestTail))
-		encoded[0] = magic0
-		encoded[1] = magic1
-		encoded[2] = formatVersion
-		encoded[3] = flagTemplateEncoded
-		binary.LittleEndian.PutUint64(encoded[4:12], bestID)
-		copy(encoded[12:], bestTail)
-		e.addHistory(value)
-		return encoded, true, bestID
-	}
-
-	// No usable template; consider creating a new one from history.
-	e.maybeCreateTemplate(value)
-	e.addHistory(value)
-	return value, false, 0
-}
-
-// Decode decodes a template-encoded value if it was encoded.
-// If the value is raw, it is returned as-is.
-func (e *Engine) Decode(value []byte) ([]byte, error) {
-	if len(value) == 0 {
-		return value, nil
-	}
-	if len(value) < headerSize || value[0] != magic0 || value[1] != magic1 || value[2] != formatVersion || value[3]&flagTemplateEncoded == 0 {
-		return value, nil
-	}
-	id := binary.LittleEndian.Uint64(value[4:12])
-	tail := value[12:]
-	e.mu.RLock()
-	tpl := e.byID[id]
-	e.mu.RUnlock()
-	if tpl == nil {
-		return nil, ErrCorrupt
-	}
-	out := make([]byte, 0, len(tpl.Prefix)+len(tail)+len(tpl.Suffix))
-	out = append(out, tpl.Prefix...)
-	out = append(out, tail...)
-	out = append(out, tpl.Suffix...)
-	return out, nil
-}
-
-// ExportTemplates returns a snapshot of known templates.
-func (e *Engine) ExportTemplates() []Template {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	out := make([]Template, 0, len(e.list))
-	for _, tpl := range e.list {
-		if tpl == nil {
+		if !matched {
 			continue
 		}
-		cp := Template{ID: tpl.ID}
-		cp.Prefix = append([]byte(nil), tpl.Prefix...)
-		cp.Suffix = append([]byte(nil), tpl.Suffix...)
-		out = append(out, cp)
+		matchedAny = true
+		savings := len(value) - encLen
+		if savings <= bestSavings {
+			continue
+		}
+		payload, err := EncodePayload(cand.id, gaps)
+		if err != nil {
+			continue
+		}
+		bestSavings = savings
+		bestPayload = payload
 	}
-	return out
+	if matchedAny {
+		e.stats.Matched.Add(1)
+	}
+	if bestSavings >= cfg.MinSavingsBytes && len(bestPayload) > 0 {
+		e.stats.Kept.Add(1)
+		e.stats.BytesSaved.Add(uint64(bestSavings))
+		e.observeTraining(value, store)
+		return bestPayload, true
+	}
+	if matchedAny && bestSavings < cfg.MinSavingsBytes {
+		e.stats.addReason(reasonKeepNoSavings)
+	}
+	// Not kept.
+	e.observeTraining(value, store)
+	return value, false
 }
 
-func (e *Engine) addHistory(value []byte) {
-	if e.cfg.HistoryEntries <= 0 {
+func (e *Engine) observeTraining(value []byte, store Store) {
+	if store == nil || e == nil {
 		return
 	}
+	cfg := e.cfg
+	if cfg.FingerprintK <= 0 || len(value) < cfg.FingerprintK {
+		return
+	}
+	fps := BucketFingerprints(value, cfg)
+	if len(fps) == 0 {
+		fps = Fingerprints(value, cfg)
+	}
+	if len(fps) == 0 {
+		return
+	}
+	seq := e.trainSeq.Add(1)
+	if cfg.TrainSampleStride > 1 && seq%uint64(cfg.TrainSampleStride) != 0 {
+		return
+	}
+	bucketKey := BucketKey(fps)
+	if bucketKey == 0 {
+		return
+	}
+	e.trainMu.Lock()
+	defer e.trainMu.Unlock()
+	b := e.buckets[bucketKey]
+	if b == nil {
+		if len(e.buckets) >= cfg.MaxBuckets {
+			e.evictOldestBucket()
+		}
+		b = &bucket{key: bucketKey}
+		e.buckets[bucketKey] = b
+	}
+	e.bucketSeq++
+	b.lastSeen = e.bucketSeq
+	// Add sample (copy).
 	cp := append([]byte(nil), value...)
-	if e.entries < e.cfg.HistoryEntries {
-		e.history = append(e.history, cp)
-		e.entries++
+	b.samples = append(b.samples, sample{value: cp})
+	b.sampleBytes += len(cp)
+	b.samplesSeen++
+	for (cfg.MaxValuesPerBucket > 0 && len(b.samples) > cfg.MaxValuesPerBucket) || (cfg.MaxBytesPerBucket > 0 && b.sampleBytes > cfg.MaxBytesPerBucket) {
+		old := b.samples[0]
+		b.samples = b.samples[1:]
+		b.sampleBytes -= len(old.value)
+	}
+	if cfg.SynthesizeEverySamples <= 0 || b.samplesSeen%cfg.SynthesizeEverySamples != 0 {
 		return
 	}
-	idx := e.entries % e.cfg.HistoryEntries
-	if idx < len(e.history) {
-		e.history[idx] = cp
-	} else {
-		e.history = append(e.history, cp)
-	}
-	e.entries++
-}
-
-func (e *Engine) maybeCreateTemplate(value []byte) {
-	if len(e.history) == 0 {
+	if cfg.CooldownValues > 0 && b.samplesSeen-b.lastPublishSample < cfg.CooldownValues {
 		return
 	}
-	// Find best candidate from history.
-	var bestPrefix []byte
-	var bestSuffix []byte
-	bestTotal := 0
-	for _, prev := range e.history {
-		if len(prev) == 0 {
-			continue
-		}
-		p := commonPrefix(value, prev)
-		s := commonSuffix(value, prev)
-		if len(p) == 0 && len(s) == 0 {
-			continue
-		}
-		if len(p)+len(s) > bestTotal {
-			bestTotal = len(p) + len(s)
-			bestPrefix = p
-			bestSuffix = s
-		}
-	}
-	if bestTotal < e.cfg.MinTotalBytes {
+	if cfg.MaxTemplatesPerBucket > 0 && b.templatesPublished >= cfg.MaxTemplatesPerBucket {
 		return
 	}
-	if len(bestPrefix) < e.cfg.MinPrefixBytes || len(bestSuffix) < e.cfg.MinSuffixBytes {
+	if cfg.MaxTemplatesTotal > 0 && e.totalTemplates >= cfg.MaxTemplatesTotal {
 		return
 	}
-	if bestTotal > e.cfg.MaxTemplateBytes {
-		// Trim to max bytes; preserve prefix+suffix shape.
-		over := bestTotal - e.cfg.MaxTemplateBytes
-		for over > 0 && len(bestSuffix) > e.cfg.MinSuffixBytes {
-			bestSuffix = bestSuffix[:len(bestSuffix)-1]
-			over--
-		}
-		for over > 0 && len(bestPrefix) > e.cfg.MinPrefixBytes {
-			bestPrefix = bestPrefix[:len(bestPrefix)-1]
-			over--
-		}
-	}
-	if len(bestPrefix)+len(bestSuffix) < e.cfg.MinTotalBytes {
+	def, routeValue, activated, ok := synthesizeTemplate(b.samples, cfg)
+	if !ok {
 		return
 	}
-	e.addTemplate(bestPrefix, bestSuffix)
-}
-
-func (e *Engine) addTemplate(prefix, suffix []byte) {
-	id := templateID(prefix, suffix)
-	if id == 0 {
+	if !activated {
 		return
 	}
-	if existing := e.byID[id]; existing != nil {
-		if equalBytes(existing.Prefix, prefix) && equalBytes(existing.Suffix, suffix) {
-			return
-		}
-		// Hash collision; skip to avoid corrupting prior templates.
-		return
-	}
-	tpl := &Template{
-		ID:     id,
-		Prefix: append([]byte(nil), prefix...),
-		Suffix: append([]byte(nil), suffix...),
-	}
-	e.byID[id] = tpl
-	e.list = append(e.list, tpl)
-	if e.onNew != nil {
-		e.onNew(*tpl)
-	}
-}
-
-func matchTemplate(tpl *Template, value []byte) ([]byte, bool) {
-	if tpl == nil {
-		return nil, false
-	}
-	if len(value) < len(tpl.Prefix)+len(tpl.Suffix) {
-		return nil, false
-	}
-	if len(tpl.Prefix) > 0 && !hasPrefix(value, tpl.Prefix) {
-		return nil, false
-	}
-	if len(tpl.Suffix) > 0 && !hasSuffix(value, tpl.Suffix) {
-		return nil, false
-	}
-	tailStart := len(tpl.Prefix)
-	tailEnd := len(value) - len(tpl.Suffix)
-	if tailEnd < tailStart {
-		return nil, false
-	}
-	return value[tailStart:tailEnd], true
-}
-
-// IsEncodedPayload reports whether value looks like a template-encoded payload.
-func IsEncodedPayload(value []byte) bool {
-	return len(value) >= headerSize &&
-		value[0] == magic0 &&
-		value[1] == magic1 &&
-		value[2] == formatVersion &&
-		value[3]&flagTemplateEncoded != 0
-}
-
-// DecodePayload decodes a template-encoded payload using a lookup function.
-// If payload is not template-encoded, it is returned as-is.
-func DecodePayload(payload []byte, lookup func(id uint64) (prefix, suffix []byte, err error)) ([]byte, error) {
-	if len(payload) == 0 || !IsEncodedPayload(payload) {
-		return payload, nil
-	}
-	if lookup == nil {
-		return nil, ErrCorrupt
-	}
-	id := binary.LittleEndian.Uint64(payload[4:12])
-	tail := payload[12:]
-	prefix, suffix, err := lookup(id)
+	defBytes, err := EncodeTemplateDef(def, cfg)
 	if err != nil {
-		return nil, err
+		return
 	}
-	if len(prefix) == 0 && len(suffix) == 0 {
-		return nil, ErrCorrupt
+	routeFPs := RoutingFingerprints(routeValue, cfg)
+	if len(routeFPs) == 0 {
+		routeFPs = RouteFingerprints(def.Anchors, cfg)
 	}
-	out := make([]byte, 0, len(prefix)+len(tail)+len(suffix))
-	out = append(out, prefix...)
-	out = append(out, tail...)
-	out = append(out, suffix...)
-	return out, nil
+	if len(routeFPs) == 0 {
+		return
+	}
+	if _, err := store.PutTemplateDef(context.Background(), defBytes, routeFPs); err != nil {
+		return
+	}
+	b.lastPublishSample = b.samplesSeen
+	b.templatesPublished++
+	e.totalTemplates++
+	e.stats.TemplatesPublished.Add(1)
 }
 
-func templateID(prefix, suffix []byte) uint64 {
-	h := sha256.New()
-	_, _ = h.Write(prefix)
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(suffix)
-	sum := h.Sum(nil)
-	return binary.BigEndian.Uint64(sum[:8])
-}
-
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
+func (e *Engine) evictOldestBucket() {
+	var (
+		oldestKey  uint64
+		oldestSeen uint64
+		set        bool
+	)
+	for k, b := range e.buckets {
+		if b == nil {
+			continue
+		}
+		if !set || b.lastSeen < oldestSeen || (b.lastSeen == oldestSeen && k < oldestKey) {
+			oldestKey = k
+			oldestSeen = b.lastSeen
+			set = true
 		}
 	}
-	return true
+	if set {
+		delete(e.buckets, oldestKey)
+	}
 }
 
-func commonPrefix(a, b []byte) []byte {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
+// synthesizeTemplate builds a template from bucket samples.
+// Returns def, activated, ok.
+func synthesizeTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool, bool) {
+	cfg = NormalizeConfig(cfg)
+	if len(samples) == 0 {
+		return TemplateDef{}, nil, false, false
 	}
-	i := 0
-	for i < n && a[i] == b[i] {
-		i++
+	k := cfg.FingerprintK
+	if k <= 0 {
+		return TemplateDef{}, nil, false, false
 	}
-	if i == 0 {
-		return nil
+	sampleLimit := len(samples)
+	if cfg.MaxValuesScannedPerSynthesis > 0 && sampleLimit > cfg.MaxValuesScannedPerSynthesis {
+		sampleLimit = cfg.MaxValuesScannedPerSynthesis
 	}
-	return a[:i]
-}
-
-func commonSuffix(a, b []byte) []byte {
-	na := len(a)
-	nb := len(b)
-	if na == 0 || nb == 0 {
-		return nil
+	type cand struct {
+		hash  uint64
+		bytes []byte
+		count int
 	}
-	i := 0
-	for i < na && i < nb && a[na-1-i] == b[nb-1-i] {
-		i++
+	counts := make(map[uint64]*cand)
+	scanned := 0
+	perSample := cfg.MaxAnchorScanPerSynthesis / sampleLimit
+	if perSample < 1 {
+		perSample = 1
 	}
-	if i == 0 {
-		return nil
-	}
-	return a[na-i:]
-}
-
-func hasPrefix(b, prefix []byte) bool {
-	if len(prefix) == 0 {
-		return true
-	}
-	if len(prefix) > len(b) {
-		return false
-	}
-	for i := range prefix {
-		if b[i] != prefix[i] {
-			return false
+	for i := 0; i < sampleLimit && scanned < cfg.MaxAnchorScanPerSynthesis; i++ {
+		val := samples[i].value
+		if len(val) < k {
+			continue
+		}
+		n := len(val) - k + 1
+		if n <= 0 {
+			continue
+		}
+		scanLimit := perSample
+		if scanLimit > n {
+			scanLimit = n
+		}
+		for j := 0; j < scanLimit && scanned < cfg.MaxAnchorScanPerSynthesis; j++ {
+			off := 0
+			if scanLimit > 1 {
+				off = j * (n - 1) / (scanLimit - 1)
+			}
+			gram := val[off : off+k]
+			h := xxh3.Hash(gram)
+			c := counts[h]
+			if c == nil {
+				counts[h] = &cand{hash: h, bytes: append([]byte(nil), gram...), count: 1}
+			} else if bytes.Equal(c.bytes, gram) {
+				c.count++
+			}
+			scanned++
 		}
 	}
-	return true
+	if len(counts) == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	anchors := make([]*anchorCand, 0, len(counts))
+	for _, c := range counts {
+		if c.count < cfg.MinAnchorFreq {
+			continue
+		}
+		if len(c.bytes) != k {
+			continue
+		}
+		if isAmbiguous(c.bytes, samples, sampleLimit, cfg.AmbiguityPct) {
+			continue
+		}
+		positions := make([]int, sampleLimit)
+		present := 0
+		for i := 0; i < sampleLimit; i++ {
+			pos := bytes.Index(samples[i].value, c.bytes)
+			if pos < 0 {
+				positions[i] = -1
+				continue
+			}
+			if bytes.Index(samples[i].value[pos+1:], c.bytes) >= 0 {
+				positions[i] = -1
+				continue
+			}
+			positions[i] = pos
+			present++
+		}
+		if float64(present)/float64(sampleLimit) < cfg.MinPresenceRatio {
+			continue
+		}
+		posList := make([]int, 0, present)
+		for _, p := range positions {
+			if p >= 0 {
+				posList = append(posList, p)
+			}
+		}
+		sort.Ints(posList)
+		median := posList[len(posList)/2]
+		anchors = append(anchors, &anchorCand{bytes: c.bytes, hash: c.hash, positions: positions, median: median, start: median})
+	}
+	if len(anchors) == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	// Extend anchors and compute starts.
+	refIdx := selectReferenceSample(samples, sampleLimit)
+	for _, a := range anchors {
+		extendAnchor(a, samples, sampleLimit, refIdx, cfg)
+	}
+	// Order by start position.
+	sort.Slice(anchors, func(i, j int) bool {
+		if anchors[i].start != anchors[j].start {
+			return anchors[i].start < anchors[j].start
+		}
+		return anchors[i].hash < anchors[j].hash
+	})
+	// Drop overlaps + caps.
+	selected := make([][]byte, 0, len(anchors))
+	totalBytes := 0
+	prevEnd := -1
+	for _, a := range anchors {
+		if cfg.MaxAnchorsPerTemplate > 0 && len(selected) >= cfg.MaxAnchorsPerTemplate {
+			break
+		}
+		if a.start < prevEnd {
+			continue
+		}
+		if len(a.bytes) < cfg.MinAnchorLen || len(a.bytes) > cfg.MaxAnchorLen {
+			continue
+		}
+		if cfg.MaxAnchorBytesTotal > 0 && totalBytes+len(a.bytes) > cfg.MaxAnchorBytesTotal {
+			break
+		}
+		selected = append(selected, a.bytes)
+		totalBytes += len(a.bytes)
+		prevEnd = a.start + len(a.bytes)
+	}
+	if len(selected) == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	def := TemplateDef{Anchors: selected}
+	// Quality gate + activation.
+	hits, saved, meanRatio := simulateEncoding(def.Anchors, samples, sampleLimit, cfg)
+	if hits == 0 {
+		return TemplateDef{}, nil, false, false
+	}
+	meanSavings := int(saved) / hits
+	if meanSavings < cfg.MinPublishSavingsBytes && meanRatio > cfg.MinPublishRatio {
+		return TemplateDef{}, nil, false, false
+	}
+	activated := hits >= cfg.MinActivateHits || saved >= cfg.MinActivateSavedBytes
+	return def, samples[refIdx].value, activated, true
 }
 
-func hasSuffix(b, suffix []byte) bool {
-	if len(suffix) == 0 {
-		return true
-	}
-	if len(suffix) > len(b) {
+func isAmbiguous(anchor []byte, samples []sample, limit int, maxPct float64) bool {
+	if maxPct <= 0 {
 		return false
 	}
-	offset := len(b) - len(suffix)
-	for i := range suffix {
-		if b[offset+i] != suffix[i] {
-			return false
+	ambiguous := 0
+	for i := 0; i < limit; i++ {
+		if bytes.Count(samples[i].value, anchor) != 1 {
+			ambiguous++
 		}
 	}
-	return true
+	return float64(ambiguous)/float64(limit) > maxPct
+}
+
+func selectReferenceSample(samples []sample, limit int) int {
+	best := 0
+	bestHash := uint64(0)
+	for i := 0; i < limit; i++ {
+		h := xxh3.Hash(samples[i].value)
+		if i == 0 || h < bestHash {
+			best = i
+			bestHash = h
+		}
+	}
+	return best
+}
+
+func extendAnchor(a *anchorCand, samples []sample, limit int, refIdx int, cfg Config) {
+	ref := samples[refIdx].value
+	refPos := -1
+	if refIdx < len(a.positions) {
+		refPos = a.positions[refIdx]
+	}
+	if refPos < 0 {
+		for i := 0; i < limit; i++ {
+			if a.positions[i] >= 0 {
+				refIdx = i
+				ref = samples[i].value
+				refPos = a.positions[i]
+				break
+			}
+		}
+	}
+	if refPos < 0 {
+		return
+	}
+	start := refPos
+	end := refPos + len(a.bytes)
+	for start > 0 && (end-start) < cfg.MaxAnchorLen {
+		b := ref[start-1]
+		matches := 0
+		total := 0
+		for i := 0; i < limit; i++ {
+			pos := a.positions[i]
+			if pos < 0 {
+				continue
+			}
+			offset := refPos - start
+			if pos-offset <= 0 {
+				total++
+				continue
+			}
+			total++
+			if samples[i].value[pos-offset-1] == b {
+				matches++
+			}
+		}
+		if total == 0 || float64(matches)/float64(total) < cfg.MinPresenceRatio {
+			break
+		}
+		start--
+	}
+	for end < len(ref) && (end-start) < cfg.MaxAnchorLen {
+		b := ref[end]
+		matches := 0
+		total := 0
+		for i := 0; i < limit; i++ {
+			pos := a.positions[i]
+			if pos < 0 {
+				continue
+			}
+			off := pos + (end - refPos)
+			if off >= len(samples[i].value) {
+				total++
+				continue
+			}
+			total++
+			if samples[i].value[off] == b {
+				matches++
+			}
+		}
+		if total == 0 || float64(matches)/float64(total) < cfg.MinPresenceRatio {
+			break
+		}
+		end++
+	}
+	a.bytes = append([]byte(nil), ref[start:end]...)
+	leftExt := refPos - start
+	a.start = a.median - leftExt
+}
+
+func simulateEncoding(anchors [][]byte, samples []sample, limit int, cfg Config) (hits int, saved int, meanRatio float64) {
+	if limit == 0 {
+		return 0, 0, 1
+	}
+	ratioSum := 0.0
+	for i := 0; i < limit; i++ {
+		gaps, encLen, _, matched := matchTemplate(samples[i].value, anchors, 1, cfg)
+		if !matched {
+			continue
+		}
+		if len(gaps) == 0 {
+			continue
+		}
+		if encLen >= len(samples[i].value)-cfg.MinSavingsBytes {
+			continue
+		}
+		hits++
+		saved += len(samples[i].value) - encLen
+		ratioSum += float64(encLen) / float64(len(samples[i].value))
+	}
+	if hits == 0 {
+		return 0, 0, 1
+	}
+	meanRatio = ratioSum / float64(hits)
+	return hits, saved, meanRatio
 }

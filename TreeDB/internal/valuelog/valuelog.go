@@ -29,14 +29,14 @@ const (
 )
 
 var (
-	ErrCorrupt        = errors.New("valuelog: corrupt record")
-	ErrRecordTooLarge = errors.New("valuelog: record too large")
-	ErrMissingDict    = errors.New("valuelog: missing dict bytes")
+	ErrCorrupt         = errors.New("valuelog: corrupt record")
+	ErrRecordTooLarge  = errors.New("valuelog: record too large")
+	ErrMissingDict     = errors.New("valuelog: missing dict bytes")
 	ErrMissingTemplate = errors.New("valuelog: missing template bytes")
 )
 
 type DictLookup func(dictID uint64) ([]byte, error)
-type TemplateLookup func(templateID uint64) (prefix, suffix []byte, err error)
+type TemplateLookup func(templateID uint64) ([]byte, error)
 
 type Record struct {
 	RID   uint64

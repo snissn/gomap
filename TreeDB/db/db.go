@@ -287,10 +287,16 @@ type Options struct {
 	// Cached mode only (SplitValueLog must be enabled).
 	ValueLogCompressionAutotune valuelog.AutotuneOptions
 
-	// ValueLogTemplateCompression enables template-based compression for value-log values.
-	ValueLogTemplateCompression bool
+	// ValueLogTemplateMode controls template-based compression for value-log values.
+	ValueLogTemplateMode template.Mode
 	// ValueLogTemplateConfig controls template creation and encoding behavior.
 	ValueLogTemplateConfig template.Config
+	// ValueLogTemplateReadStrict controls strict template decode behavior.
+	ValueLogTemplateReadStrict bool
+	// ValueLogTemplateLookup provides template definitions for value-log decoding.
+	ValueLogTemplateLookup func(templateID uint64) ([]byte, error)
+	// ValueLogTemplateDecodeOptions controls decode caps for TemplateValue payloads.
+	ValueLogTemplateDecodeOptions template.DecodeOptions
 
 	// RelaxedSync disables fsync on CommitSync and SetSync operations.
 	// This improves performance for synchronous workloads but provides only
@@ -309,6 +315,9 @@ type Options struct {
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
+	// DisableSideStores skips opening dictdb/templatedb side stores.
+	// This is intended for internal side-store usage (e.g. templatedb itself).
+	DisableSideStores bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -519,6 +528,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
 	vm.SetDictLookup(opts.DictLookup)
+	vm.SetTemplateLookup(opts.ValueLogTemplateLookup, opts.ValueLogTemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
