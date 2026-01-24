@@ -55,6 +55,10 @@ func openTreeDB(cfg Config) (kvstore.DB, error) {
 		DisableWAL:               cfg.TreeDBDisableWAL,
 		DisableJournal:           cfg.TreeDBDisableJournal,
 		RelaxedSync:              cfg.TreeDBRelaxedSync,
+		AllowUnsafe:              cfg.TreeDBAllowUnsafe,
+		JournalLanes:             cfg.TreeDBJournalLanes,
+		MemtableShards:           cfg.TreeDBMemtableShards,
+		MemtableValueLogPointers: cfg.TreeDBMemtableVlogPtrs,
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.TreeDBMode)) {
 	case "", "cached":
