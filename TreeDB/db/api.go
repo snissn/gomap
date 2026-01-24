@@ -5,6 +5,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // --- Public API ---
@@ -28,6 +29,14 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // snapshot lifetime, use Snapshot.GetUnsafe.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	return db.Get(key)
+}
+
+// Dir returns the on-disk directory backing the DB.
+func (db *DB) Dir() string {
+	if db == nil {
+		return ""
+	}
+	return db.dir
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

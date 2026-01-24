@@ -1,5 +1,9 @@
 # TreeDB Vacuum v2: Online Rewrite + Generation Swap
 
+> **Legacy note:** The dedicated online/offline vacuum implementations have
+> been removed in favor of `CompactIndex` (in-place rebuild). The details below
+> describe the retired design.
+
 ## Problem (historical)
 
 Before Vacuum v2, TreeDB exposed two index “vacuum” operations:
@@ -11,7 +15,8 @@ For write-heavy workloads/benchmarks, the “online vacuum grows / offline vacuu
 
 ## Status
 
-`(*db.DB).VacuumIndexOnline` now implements the v2 behavior described below: rewrite the index into `index.db.new` and swap it in with a short exclusive window, while keeping old snapshots valid via index generations.
+Legacy design only. Current TreeDB uses `CompactIndex` for in-place index
+rebuilds and does not implement the v2 swap workflow described below.
 
 ## Goal
 

@@ -805,7 +805,7 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "on"}
 	case "wal_off":
 		opts.DisableWAL = true
-		expect = benchWritePath{mode: "cached", valueStore: "value_log_deferred", redoLog: "off"}
+		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "off"}
 	default:
 		return treedb.Options{}, benchWritePath{}, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)
 	}

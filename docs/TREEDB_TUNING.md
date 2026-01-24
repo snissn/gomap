@@ -181,7 +181,7 @@ without a separate offline tool. These hooks execute inline during shutdown.
 
 - `TREEDB_CLOSE_CHECKPOINT=1`: call `Checkpoint()` before closing
 - `TREEDB_CLOSE_COMPACT_INDEX=1`: call `CompactIndex()` before closing
-- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` before closing
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` (alias to `CompactIndex`) before closing
 - `TREEDB_CLOSE_VACUUM_TIMEOUT`: timeout for the online vacuum (duration string or seconds)
 - `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages
 - `TREEDB_CLOSE_SCOPE_CONTAINS`: substring match on `Options.Dir` that scopes which DBs run
@@ -216,7 +216,7 @@ in.
 TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
 `index.db` into a fresh file and swaps it in using a crash-safe protocol:
 
-- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
+- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})` (alias to `CompactIndex`)
 - Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
 - Crash safety: `treedb.Open` will automatically recover from a partial swap
   (e.g. if the process crashed mid-vacuum).

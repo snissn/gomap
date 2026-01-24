@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"

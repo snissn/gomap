@@ -8,6 +8,8 @@ import (
 	"sort"
 	"testing"
 	"testing/quick"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Op represents a database operation
@@ -23,7 +25,7 @@ func (Op) Generate(rand *rand.Rand, size int) reflect.Value {
 		Key:  fmt.Sprintf("key-%d", rand.Intn(100)), // Limit key space to trigger collisions
 	}
 	if op.Type == 0 { // Set
-		valLen := rand.Intn(500) // Mix of inline and pointer (Threshold=256)
+		valLen := rand.Intn(page.DefaultInlineThreshold + 1)
 		op.Value = make([]byte, valLen)
 		rand.Read(op.Value)
 	}

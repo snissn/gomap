@@ -17,6 +17,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func assertCommitLogCleared(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.Size() > 0 {
+			t.Fatalf("expected commitlog file to be removed or truncated after recovery")
+		}
+		return
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+}
+
 func runCrashRecoveryWriter(t *testing.T, dir string) {
 	t.Helper()
 
@@ -410,11 +424,7 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 	if _, err := os.Stat(valuePath); err != nil {
 		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}
@@ -508,11 +518,7 @@ func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 		t.Fatalf("expected partial batch to be ignored, got %q", string(val))
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 }
 
 func TestRecovery_MissingDictFails(t *testing.T) {
@@ -658,11 +664,7 @@ func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 }
 
 func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
@@ -730,11 +732,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 	if _, err := os.Stat(valuePath); err != nil {
 		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}

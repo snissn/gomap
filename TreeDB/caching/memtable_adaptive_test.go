@@ -14,11 +14,12 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	// threshold). This reproduces the historical case where adaptive mode needed
 	// two rotations to switch and therefore never took effect.
 	db, err := Open(dir, backend, Options{
-		AllowUnsafe:    true,
-		DisableWAL:     true,
-		FlushThreshold: 1 << 30,
-		MemtableMode:   "adaptive",
-		MemtableShards: 1,
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           1 << 30,
+		MemtableMode:             "adaptive",
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -67,11 +68,12 @@ func TestAdaptiveMemtableMode_SequentialWritesStaySkiplist(t *testing.T) {
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		AllowUnsafe:    true,
-		DisableWAL:     true,
-		FlushThreshold: 1 << 30,
-		MemtableMode:   "adaptive",
-		MemtableShards: 1,
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           1 << 30,
+		MemtableMode:             "adaptive",
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

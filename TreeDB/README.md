@@ -146,7 +146,7 @@ Details: `docs/TREEDB_PROFILES.md`.
 - Optional flush build parallelism: `FlushBuildConcurrency`
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `MaxValueLogRetainedBytes`, `MaxValueLogRetainedBytesHard`
-- Offline index vacuum (backend index): `treedb.VacuumIndexOffline(opts)` (requires the DB to be closed)
+- Index rebuild (in-place): `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` (currently an alias for CompactIndex)
 
 Details: `docs/TREEDB_TUNING.md`.
 
