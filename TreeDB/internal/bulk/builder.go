@@ -18,6 +18,8 @@ type levelBuilder struct {
 
 type BuildOptions struct {
 	LeafPrefixCompression bool
+	LeafColumnar          bool
+	InternalBaseDelta     bool
 }
 
 // Build creates a new B-Tree from a sorted iterator.
@@ -49,6 +51,11 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	newBuilder := func(buf []byte, typ page.PageType) *node.Builder {
 		if typ == page.PageTypeLeaf {
 			return newLeafBuilder(buf, opts)
+		}
+		if opts.InternalBaseDelta {
+			return node.NewBuilderWithOptions(buf, typ, node.BuilderOptions{
+				InternalBaseDelta: opts.InternalBaseDelta,
+			})
 		}
 		return node.NewBuilder(buf, typ)
 	}
@@ -234,8 +241,12 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 }
 
 func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
-	if opts.LeafPrefixCompression {
-		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true})
+	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta {
+		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
+			LeafPrefixCompression: opts.LeafPrefixCompression,
+			LeafColumnar:          opts.LeafColumnar,
+			InternalBaseDelta:     opts.InternalBaseDelta,
+		})
 	}
 	return node.NewBuilder(buf, page.PageTypeLeaf)
 }

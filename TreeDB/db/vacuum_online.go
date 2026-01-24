@@ -168,6 +168,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetFillTargets(db.leafFillTargetPPM, db.internalFillTargetPPM)
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
+	newZ.SetIndexColumnarLeaves(db.indexColumnarLeaves)
+	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -177,6 +179,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	baseIter := baseSnap.tree.Iterator(nil, nil)
 	newRoot, err := bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
 	})
 	_ = baseIter.Close()
 	_ = baseSnap.Close()
@@ -283,6 +287,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		_ = sysIter.Close()
 		if err != nil {

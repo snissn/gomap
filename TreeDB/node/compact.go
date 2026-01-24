@@ -72,17 +72,20 @@ func entryLength(n *Node, offset int) (int, error) {
 			return 0, err
 		}
 		flags := layout.flags
-		base := layout.headerSize + layout.suffixLen
+		valSize := layout.valLen
 		if flags&FlagPointer != 0 {
-			if offset+base+page.ValuePtrSize > len(n.data) {
-				return 0, ErrCorruptedNode
-			}
-			return base + page.ValuePtrSize, nil
+			valSize = page.ValuePtrSize
 		}
-		if offset+base+layout.valLen > len(n.data) {
+		keyEnd := layout.keyOff + layout.keyLen
+		valEnd := layout.valOff + valSize
+		entryLen := keyEnd
+		if valEnd > entryLen {
+			entryLen = valEnd
+		}
+		if offset+entryLen > len(n.data) {
 			return 0, ErrCorruptedNode
 		}
-		return base + layout.valLen, nil
+		return entryLen, nil
 
 	case page.PageTypeInternal:
 		if offset+2+8 > len(n.data) {

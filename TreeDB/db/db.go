@@ -64,12 +64,14 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent            uint64
-	policy                WritePolicy
-	leafFillTargetPPM     uint32
-	internalFillTargetPPM uint32
-	leafPrefixCompression bool
-	piggybackCompaction   bool
+	keepRecent             uint64
+	policy                 WritePolicy
+	leafFillTargetPPM      uint32
+	internalFillTargetPPM  uint32
+	leafPrefixCompression  bool
+	indexColumnarLeaves    bool
+	indexInternalBaseDelta bool
+	piggybackCompaction    bool
 	// repairSlabTailOnOpen enables tail-record repair during recovery. This
 	// protects against torn/partial slab record tails after crashes.
 	repairSlabTailOnOpen bool
@@ -171,6 +173,10 @@ type Options struct {
 	InternalFillTargetPPM uint32
 	// LeafPrefixCompression enables prefix-compressed leaf nodes for new pages.
 	LeafPrefixCompression bool
+	// IndexColumnarLeaves enables the experimental columnar leaf encoding for new pages.
+	IndexColumnarLeaves bool
+	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
+	IndexInternalBaseDelta bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -483,21 +489,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
-		slabManager:           sm,
-		valueLogManager:       vm,
-		lock:                  lock,
-		adaptive:              adaptiveCtrl,
-		keepRecent:            opts.KeepRecent,
-		leafFillTargetPPM:     opts.LeafFillTargetPPM,
-		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		leafPrefixCompression: opts.LeafPrefixCompression,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  !opts.DisableSlabTailRepairOnOpen,
-		dir:                   opts.Dir,
-		chunkSize:             opts.ChunkSize,
-		preferAppendAlloc:     opts.PreferAppendAlloc,
-		freelistRegionPages:   opts.FreelistRegionPages,
-		freelistRegionRadius:  opts.FreelistRegionRadius,
+		slabManager:            sm,
+		valueLogManager:        vm,
+		lock:                   lock,
+		adaptive:               adaptiveCtrl,
+		keepRecent:             opts.KeepRecent,
+		leafFillTargetPPM:      opts.LeafFillTargetPPM,
+		internalFillTargetPPM:  opts.InternalFillTargetPPM,
+		leafPrefixCompression:  opts.LeafPrefixCompression,
+		indexColumnarLeaves:    opts.IndexColumnarLeaves,
+		indexInternalBaseDelta: opts.IndexInternalBaseDelta,
+		piggybackCompaction:    !opts.DisablePiggybackCompaction,
+		repairSlabTailOnOpen:   !opts.DisableSlabTailRepairOnOpen,
+		dir:                    opts.Dir,
+		chunkSize:              opts.ChunkSize,
+		preferAppendAlloc:      opts.PreferAppendAlloc,
+		freelistRegionPages:    opts.FreelistRegionPages,
+		freelistRegionRadius:   opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -516,6 +524,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
+	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
+	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 
 	if err := db.recover(); err != nil {
 		db.Close()
@@ -639,7 +649,11 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
+		})
 		b.SetPageID(rootID)
 		b.Finish()
 
@@ -654,7 +668,11 @@ func (db *DB) recover() error {
 		if err != nil {
 			return err
 		}
-		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: db.leafPrefixCompression})
+		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
+		})
 		bSys.SetPageID(sysRootID)
 		bSys.Finish()
 
@@ -1336,6 +1354,8 @@ func (db *DB) CompactIndex() error {
 	alloc := &pagerAllocator{p: idx.pager}
 	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
 	})
 	if err != nil {
 		return err
