@@ -737,7 +737,6 @@ Authoritative spec: `slab-optimization/spec.md`
 - Commit: `fix: handle dictdb collisions and read-only open`.
 - Pushed branch `sprint/slabopt-pr2-dictdb` to origin.
 - CI: `gh pr checks 61 --watch` → PASS (gofmt, macOS, ubuntu, windows, race-check).
-
 `2026-01-18 08:58:31 HST`
 - PR1: ensure DB opened in `TestUnifiedWAL_CrashRecoveryMissingPayload` is closed on unexpected success.
 
