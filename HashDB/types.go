@@ -1,6 +1,7 @@
 package hashdb
 
 import (
+	"net"
 	"os"
 	"time"
 
@@ -56,7 +57,9 @@ type DB struct {
 	resizeTime time.Duration
 	slabTime   time.Duration
 
-	slabData []byte
+	slabData    []byte
+	slabHeaders []byte
+	slabBuffers net.Buffers
 
 	slabFiles       map[uint16]*os.File
 	activeSegmentID uint16
