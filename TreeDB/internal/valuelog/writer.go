@@ -936,6 +936,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			Records:            k,
 			RawPayloadBytes:    rawPayloadBytes,
 			StoredPayloadBytes: storedPayloadBytes,
+			Attempted:          true,
 			Compressed:         flags&FrameFlagCompressed != 0,
 		}, nil
 	}

@@ -126,6 +126,7 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 					totalRaw := uint64(0)
 					totalStored := uint64(0)
 					totalFrames := uint64(0)
+					attemptedFrames := uint64(0)
 					compressedFrames := uint64(0)
 					for i := 0; i < b.N; i++ {
 						for j := 0; j < k; j++ {
@@ -137,6 +138,9 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 							b.Fatalf("AppendFrameWithStats: %v", err)
 						}
 						totalFrames++
+						if stats.Attempted {
+							attemptedFrames++
+						}
 						if stats.Compressed {
 							compressedFrames++
 						}
@@ -149,7 +153,10 @@ func BenchmarkValueLogDictCompressibilityCPU_NoIO(b *testing.B) {
 						b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
 					}
 					if totalFrames > 0 {
-						b.ReportMetric(float64(compressedFrames)/float64(totalFrames), "compressed_frac")
+						compressedFrac := float64(compressedFrames) / float64(totalFrames)
+						b.ReportMetric(compressedFrac, "compressed_frac")
+						b.ReportMetric(compressedFrac, "kept_frac")
+						b.ReportMetric(float64(attemptedFrames)/float64(totalFrames), "attempted_frac")
 					}
 				})
 			}
@@ -299,6 +306,7 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 						totalRaw := uint64(0)
 						totalStored := uint64(0)
 						totalFrames := uint64(0)
+						attemptedFrames := uint64(0)
 						compressedFrames := uint64(0)
 						records := make([]Record, k)
 						ptrScratch := make([]page.ValuePtr, k)
@@ -312,6 +320,9 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 								b.Fatalf("AppendFrameWithStats: %v", err)
 							}
 							totalFrames++
+							if stats.Attempted {
+								attemptedFrames++
+							}
 							if stats.Compressed {
 								compressedFrames++
 							}
@@ -329,7 +340,10 @@ func BenchmarkValueLogDictCompressibilitySweep(b *testing.B) {
 							b.ReportMetric(float64(totalStored)/float64(totalRaw), "observed_ratio")
 						}
 						if totalFrames > 0 {
-							b.ReportMetric(float64(compressedFrames)/float64(totalFrames), "compressed_frac")
+							compressedFrac := float64(compressedFrames) / float64(totalFrames)
+							b.ReportMetric(compressedFrac, "compressed_frac")
+							b.ReportMetric(compressedFrac, "kept_frac")
+							b.ReportMetric(float64(attemptedFrames)/float64(totalFrames), "attempted_frac")
 						}
 					})
 				}
