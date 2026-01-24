@@ -180,8 +180,6 @@ func (h *DB) addManySlabs(items []Item) ([]Key, error) {
 // addManySlabsDirect attempts a no-copy batch write using writev (net.Buffers).
 // It only succeeds when the entire batch fits in the current slab segment.
 func (h *DB) addManySlabsDirect(items []Item) ([]Key, bool, error) {
-	slabOffsets := make([]Key, len(items))
-
 	f := h.slabFiles[h.activeSegmentID]
 	if f == nil {
 		return nil, false, fmt.Errorf("missing slab-%d", h.activeSegmentID)
@@ -192,6 +190,13 @@ func (h *DB) addManySlabsDirect(items []Item) ([]Key, bool, error) {
 	if available <= 0 {
 		return nil, false, nil
 	}
+
+	if cap(h.slabOffsets) < len(items) {
+		h.slabOffsets = make([]Key, len(items))
+	} else {
+		h.slabOffsets = h.slabOffsets[:len(items)]
+	}
+	slabOffsets := h.slabOffsets
 
 	currentOffset := *h.slabOffset
 	totalBytes := 0
@@ -245,7 +250,12 @@ func (h *DB) addManySlabsDirect(items []Item) ([]Key, bool, error) {
 }
 
 func (h *DB) addManySlabsBuffered(items []Item) ([]Key, error) {
-	slabOffsets := make([]Key, len(items))
+	if cap(h.slabOffsets) < len(items) {
+		h.slabOffsets = make([]Key, len(items))
+	} else {
+		h.slabOffsets = h.slabOffsets[:len(items)]
+	}
+	slabOffsets := h.slabOffsets
 	if cap(h.slabData) < 1<<20 {
 		h.slabData = make([]byte, 0, 1<<20) // 1MB starting point; grows as needed.
 	} else {

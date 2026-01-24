@@ -58,6 +58,7 @@ type DB struct {
 	slabTime   time.Duration
 
 	slabData    []byte
+	slabOffsets []Key
 	slabHeaders []byte
 	slabBuffers net.Buffers
 
