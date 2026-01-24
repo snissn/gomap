@@ -315,6 +315,66 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 
 		recordLen := HeaderSize + int(bodyLen)
 		start := w.size
+		max := w.appendMax
+		if max <= 0 {
+			max = defaultBufferSize
+		}
+
+		// Hot path: build directly into the writer append buffer to avoid copying
+		// through a scratch buffer.
+		if w.f != nil && recordLen <= max {
+			if len(w.appendBuf)+recordLen > max {
+				if err := w.flushAppendBuf(); err != nil {
+					return page.ValuePtr{}, err
+				}
+			}
+			if cap(w.appendBuf) < max {
+				w.appendBuf = make([]byte, len(w.appendBuf), max)
+			}
+			base := len(w.appendBuf)
+			w.appendBuf = w.appendBuf[:base+recordLen]
+			buf := w.appendBuf[base : base+recordLen]
+
+			buf[4] = Version
+			buf[5] = recordFlagGrouped
+			buf[6] = 0
+			buf[7] = 0
+			binary.LittleEndian.PutUint64(buf[8:16], 0)
+			binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
+
+			off := HeaderSize
+			buf[off] = FrameVersion
+			buf[off+1] = 0
+			buf[off+2] = 1
+			buf[off+3] = 0
+			binary.LittleEndian.PutUint64(buf[off+4:off+12], 0)
+			off += FrameHeaderSize
+
+			binary.LittleEndian.PutUint64(buf[off:off+8], rid)
+			off += 8
+			binary.LittleEndian.PutUint32(buf[off:off+4], 0)
+			binary.LittleEndian.PutUint32(buf[off+4:off+8], uint32(len(value)))
+			off += 8
+			copy(buf[off:], value)
+
+			sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+			binary.LittleEndian.PutUint32(buf[0:4], sum)
+			w.size += int64(recordLen)
+
+			if len(w.appendBuf) >= max {
+				if err := w.flushAppendBuf(); err != nil {
+					return page.ValuePtr{}, err
+				}
+			}
+
+			recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+			return page.ValuePtr{
+				Offset: uint64(start + 4),
+				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
+				FileID: w.fileID,
+			}, nil
+		}
+
 		if cap(w.scratch) < recordLen {
 			w.scratch = make([]byte, recordLen)
 		}

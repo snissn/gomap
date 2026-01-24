@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -117,6 +118,54 @@ func TestValueLogAppendRead(t *testing.T) {
 	}
 	if gotPtr3 != ptr3 {
 		t.Fatalf("ptr3 mismatch")
+	}
+}
+
+func TestValueLogManager_MmapReadAppend(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptr, err := writer.Append(0, nil, 1, []byte("hello"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	m.SetDisableReadChecksum(true)
+	defer func() { _ = m.Close() }()
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) == 0 {
+		t.Fatalf("expected mmap data to be present")
+	}
+
+	got, err := m.ReadAppend(ptr, nil)
+	if err != nil {
+		t.Fatalf("read append: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("mmap read mismatch: %q", string(got))
 	}
 }
 
