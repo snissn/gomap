@@ -73,6 +73,10 @@ Each milestone ends with a **posted PR8 comment** that includes: the exact comma
 **Exit criteria**
 - A PR8 comment with side‑by‑side results (random vs repeat) and the chosen recommended knobs.
 
+## Future Work (Not Part Of The Merge-Gate)
+
+- Background value-log recompression on rotation (keep foreground writes uncompressed; recompress sealed segments and rewrite pointers safely): tracked in issue #180.
+
 ### M4 — Resource / Footprint Validation (ops focused)
 **Goal:** We understand disk growth and memory usage for recommended configs.
 
