@@ -37,7 +37,8 @@ type valueLogDictSuiteResult struct {
 	opsPerSec float64
 	mbPerSec  float64
 
-	observedRatio float64
+	observedRatioTotal   float64
+	observedRatioMeasure float64
 
 	attemptedFrac float64
 	keptFrac      float64
@@ -48,6 +49,7 @@ type valueLogDictSuiteResult struct {
 	indexBytes  int64
 	dictdbBytes int64
 	walBytes    walDirBytes
+	walMeasure  walDirBytes
 }
 
 type walDirBytes struct {
@@ -74,20 +76,28 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 
 	cases := []valueLogDictSuiteCase{
 		// Mode 3: journal on.
+		{mode: "mode3", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode3", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode3", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode3", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode3", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 
 		// Mode 4: journal disabled (value-log pointers still enabled). Unsafe; requires AllowUnsafe.
+		{mode: "mode4", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode4", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode4", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "mode4", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "mode4", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
@@ -119,8 +129,8 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- warmup bytes: %s\n", formatFloat(float64(warmupBytes))))
 	sb.WriteString(fmt.Sprintf("- measure bytes: %s\n\n", formatFloat(float64(measureBytes))))
 
-	sb.WriteString("| mode | dict | pattern | valsize | ops/sec | MB/s | observed_ratio | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes | wal_value_bytes | wal_total_bytes | index_bytes | dictdb_bytes |\n")
-	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	sb.WriteString("| mode | dict | pattern | valsize | ops/sec | MB/s | observed_ratio_total | observed_ratio_measure | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes_total | wal_value_bytes_total | wal_value_bytes_measure | wal_total_bytes_total | index_bytes | dictdb_bytes |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, r := range results {
 		sb.WriteString("| ")
 		sb.WriteString(r.mode)
@@ -135,10 +145,16 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 		sb.WriteString(" | ")
 		sb.WriteString(formatFloat(r.mbPerSec))
 		sb.WriteString(" | ")
-		if math.IsNaN(r.observedRatio) {
+		if math.IsNaN(r.observedRatioTotal) {
 			sb.WriteString("-")
 		} else {
-			sb.WriteString(fmt.Sprintf("%.6f", r.observedRatio))
+			sb.WriteString(fmt.Sprintf("%.6f", r.observedRatioTotal))
+		}
+		sb.WriteString(" | ")
+		if math.IsNaN(r.observedRatioMeasure) {
+			sb.WriteString("-")
+		} else {
+			sb.WriteString(fmt.Sprintf("%.6f", r.observedRatioMeasure))
 		}
 		sb.WriteString(" | ")
 		if math.IsNaN(r.attemptedFrac) {
@@ -162,6 +178,8 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 		sb.WriteString(formatFloat(float64(r.walBytes.Commit)))
 		sb.WriteString(" | ")
 		sb.WriteString(formatFloat(float64(r.walBytes.Value)))
+		sb.WriteString(" | ")
+		sb.WriteString(formatFloat(float64(r.walMeasure.Value)))
 		sb.WriteString(" | ")
 		sb.WriteString(formatFloat(float64(r.walBytes.Total)))
 		sb.WriteString(" | ")
@@ -229,6 +247,11 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		}
 	}
 
+	walBefore, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
+	if err != nil {
+		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size (before): %w", err)
+	}
+
 	stats0 := getTreeDBStats(db)
 	c0 := parseDictCounters(stats0)
 
@@ -265,6 +288,11 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: close: %w", err)
 	}
 
+	walAfter, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
+	if err != nil {
+		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size (after): %w", err)
+	}
+
 	indexBytes, err := fileSize(filepath.Join(dir, "maindb", "index.db"))
 	if err != nil {
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: index.db size: %w", err)
@@ -273,35 +301,46 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 	if err != nil {
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: dictdb size: %w", err)
 	}
-	walBytes, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
-	if err != nil {
-		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size: %w", err)
-	}
 
-	rawBytesTotal := int64((keyBase + measureKeys) * tc.valueSz)
-	observedRatio := math.NaN()
-	if rawBytesTotal > 0 && walBytes.Value > 0 {
-		observedRatio = float64(walBytes.Value) / float64(rawBytesTotal)
+	rawBytesWarmup := int64(warmupKeys * tc.valueSz)
+	rawBytesMeasure := int64(measureKeys * tc.valueSz)
+	rawBytesTotal := rawBytesWarmup + rawBytesMeasure
+
+	observedRatioTotal := math.NaN()
+	if rawBytesTotal > 0 && walAfter.Value > 0 {
+		observedRatioTotal = float64(walAfter.Value) / float64(rawBytesTotal)
+	}
+	observedRatioMeasure := math.NaN()
+	if rawBytesMeasure > 0 && walAfter.Value > 0 && walAfter.Value >= walBefore.Value {
+		observedRatioMeasure = float64(walAfter.Value-walBefore.Value) / float64(rawBytesMeasure)
 	}
 
 	return valueLogDictSuiteResult{
-		mode:          tc.mode,
-		dict:          boolLabel(tc.dictOn, "on", "off"),
-		pattern:       tc.pattern,
-		valueSz:       tc.valueSz,
-		warmupKeys:    warmupKeys,
-		measureKeys:   measureKeys,
-		opsPerSec:     opsPerSec,
-		mbPerSec:      mbPerSec,
-		observedRatio: observedRatio,
-		attemptedFrac: attemptedFrac,
-		keptFrac:      keptFrac,
-		dictID:        dictID,
-		k:             k,
-		pauseBytes:    pauseBytes,
-		indexBytes:    indexBytes,
-		dictdbBytes:   dictdbBytes,
-		walBytes:      walBytes,
+		mode:                 tc.mode,
+		dict:                 boolLabel(tc.dictOn, "on", "off"),
+		pattern:              tc.pattern,
+		valueSz:              tc.valueSz,
+		warmupKeys:           warmupKeys,
+		measureKeys:          measureKeys,
+		opsPerSec:            opsPerSec,
+		mbPerSec:             mbPerSec,
+		observedRatioTotal:   observedRatioTotal,
+		observedRatioMeasure: observedRatioMeasure,
+		attemptedFrac:        attemptedFrac,
+		keptFrac:             keptFrac,
+		dictID:               dictID,
+		k:                    k,
+		pauseBytes:           pauseBytes,
+		indexBytes:           indexBytes,
+		dictdbBytes:          dictdbBytes,
+		walBytes:             walAfter,
+		walMeasure: walDirBytes{
+			Commit: walAfter.Commit - walBefore.Commit,
+			WAL:    walAfter.WAL - walBefore.WAL,
+			Value:  walAfter.Value - walBefore.Value,
+			Other:  walAfter.Other - walBefore.Other,
+			Total:  walAfter.Total - walBefore.Total,
+		},
 	}, nil
 }
 
@@ -315,6 +354,13 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 	for i := 0; i < poolSize; i++ {
 		buf := make([]byte, size)
 		switch mode {
+		case "ultra_compressible", "ultra_compressible_repeat":
+			// Keep values ultra-compressible but not identical so dict training triggers.
+			// A small random tail avoids degenerate "all samples identical" dictionaries
+			// and tends to produce more robust training across platforms.
+			fillRepeatTail(rng, buf, 32, []byte("{\"key\":\"value\",\"active\":true}"))
+		case "highly_compressible_notail":
+			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "", "repeat", "highly_compressible", "highly_compressible_tail64":
 			fillRepeatTail(rng, buf, 64, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "medium_compressible", "medium_compressible_sparse":
@@ -337,7 +383,10 @@ func fillRepeatTail(rng *rand.Rand, dst []byte, tail int, pattern []byte) {
 		n := copy(dst[i:], pattern)
 		i += n
 	}
-	if tail <= 0 || tail > len(dst) {
+	if tail <= 0 {
+		return
+	}
+	if tail > len(dst) {
 		tail = len(dst)
 	}
 	if tail > 0 {
