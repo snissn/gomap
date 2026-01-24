@@ -299,6 +299,11 @@ func (c *CacheKV) put(key, value []byte, mode cachePutMode) error {
 }
 
 // Put inserts or updates a key in the write-back cache.
+//
+// Put variants:
+//   - Put: copies key and value (safe default).
+//   - PutNoCopy: copies key, borrows value (value must remain immutable until flushed).
+//   - PutNoCopyUnsafe: borrows key and value (key/value must remain immutable and not be reused until flushed).
 func (c *CacheKV) Put(key, value []byte) error {
 	return c.put(key, value, cachePutCopyKey|cachePutCopyValue)
 }
