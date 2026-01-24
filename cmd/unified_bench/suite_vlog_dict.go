@@ -407,6 +407,11 @@ func waitForDictPublish(db kvstore.DB, timeout time.Duration) error {
 		if parseUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id") != 0 {
 			return nil
 		}
+		// If dict compression is paused before a dict is published (common on
+		// incompressible streams), don't burn the full timeout waiting.
+		if parseUint(stats, "treedb.cache.vlog_dict.pause_remaining_bytes") != 0 {
+			return nil
+		}
 		time.Sleep(interval)
 	}
 	// Some workloads may legitimately refuse to publish dicts (e.g. no-op dict,
