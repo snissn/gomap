@@ -307,6 +307,38 @@ func (c *CacheKV) PutNoCopy(key, value []byte) error {
 	return nil
 }
 
+// PutNoCopyUnsafe inserts or updates a key without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+//
+// This is unsafe because the cache uses an unsafe bytes->string conversion for map keys.
+// If the key bytes are modified or reused (e.g. from a pooled network buffer), it can
+// corrupt the cache map.
+func (c *CacheKV) PutNoCopyUnsafe(key, value []byte) error {
+	k := bytesToString(key)
+	// Prevent accidental in-place growth when callers append() to slices that were
+	// handed to PutNoCopyUnsafe. This does not protect against mutating existing bytes.
+	key = key[:len(key):len(key)]
+	value = value[:len(value):len(value)]
+
+	c.walMu.Lock()
+	if c.wal != nil {
+		if err := c.wal.appendPut(key, value); err != nil {
+			c.walMu.Unlock()
+			return err
+		}
+	}
+	c.mu.Lock()
+	c.pending[k] = cacheEntry{key: key, value: value}
+	c.pendingLen += len(key) + len(value)
+	shouldFlush := len(c.pending) >= c.maxEntries || c.pendingLen >= c.maxBytes
+	c.mu.Unlock()
+	c.walMu.Unlock()
+	if shouldFlush {
+		return c.Flush()
+	}
+	return nil
+}
+
 // Delete removes a key via the write-back cache.
 func (c *CacheKV) Delete(key []byte) error {
 	keyCopy := append([]byte(nil), key...)

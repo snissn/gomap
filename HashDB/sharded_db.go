@@ -152,6 +152,16 @@ func (h *HashDB) PutNoCopy(key []byte, value []byte) error {
 	return h.shards[shardIndex].PutNoCopy(key, value)
 }
 
+// PutNoCopyUnsafe inserts or updates a key-value pair without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+func (h *HashDB) PutNoCopyUnsafe(key []byte, value []byte) error {
+	hash := hash(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].PutNoCopyUnsafe(key, value)
+}
+
 // PutSync performs a durable write. See CachedDB.PutSync for details.
 func (h *HashDB) PutSync(key []byte, value []byte) error {
 	hash := hash(key)
