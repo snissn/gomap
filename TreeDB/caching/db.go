@@ -1241,6 +1241,11 @@ type Options struct {
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
 	// 0 uses the default limit.
 	WALMaxSegmentBytes int64
+	// JournalCompression enables best-effort zstd compression for journal/commitlog
+	// segments (metadata only). The writer only keeps compressed bytes when they
+	// are smaller than the raw payload, so compression never causes size
+	// amplification.
+	JournalCompression bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
 	// MemtableValueLogPointers avoids storing large values in the memtable and
@@ -1406,6 +1411,7 @@ type DB struct {
 	writerFlushMaxDuration    time.Duration
 	flushBuildConcurrency     int
 	walMaxSegmentBytes        int64
+	journalCompression        bool
 
 	disableJournal     bool
 	relaxedSync        bool
@@ -2034,6 +2040,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxDuration:         opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:          opts.FlushBuildConcurrency,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
 		disableValueLog:                disableValueLog,
 		splitValueLog:                  splitValueLog,
@@ -4889,7 +4896,7 @@ func (db *DB) rotateWALLocked(l *lane) error {
 			l.walClosedBytes.Add(oldSize - prev)
 		}
 	} else {
-		w, err := commitlog.NewWriterWithOptions(path, commitlog.Options{MaxSegmentSize: db.walMaxSegmentBytes})
+		w, err := commitlog.NewWriterWithOptions(path, commitlog.Options{MaxSegmentSize: db.walMaxSegmentBytes, Compress: db.journalCompression})
 		if err != nil {
 			return err
 		}

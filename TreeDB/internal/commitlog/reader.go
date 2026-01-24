@@ -5,12 +5,14 @@ import (
 	"io"
 	"os"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 type Reader struct {
 	f              *os.File
 	maxSegmentSize int64
+	dec            *zstd.Decoder
 }
 
 func NewReader(path string) (*Reader, error) {
@@ -35,8 +37,10 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 		return nil, err
 	}
 
-	length := binary.LittleEndian.Uint32(header[0:4])
+	lengthField := binary.LittleEndian.Uint32(header[0:4])
 	wantCRC := binary.LittleEndian.Uint32(header[4:8])
+	compressed := lengthField&segmentFlagCompressed != 0
+	length := lengthField & segmentLenMask
 	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
 		return nil, ErrCorrupt
 	}
@@ -47,6 +51,33 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 	}
 	if crc.Checksum(payload) != wantCRC {
 		return nil, ErrCorrupt
+	}
+
+	if compressed {
+		if len(payload) < 4 {
+			return nil, ErrCorrupt
+		}
+		rawLen := binary.LittleEndian.Uint32(payload[:4])
+		if r.maxSegmentSize > 0 && int64(rawLen) > r.maxSegmentSize {
+			return nil, ErrCorrupt
+		}
+		maxInt := uint64(^uint(0) >> 1)
+		if uint64(rawLen) > maxInt {
+			return nil, ErrCorrupt
+		}
+		if r.dec == nil {
+			dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+			if err != nil {
+				return nil, ErrCorrupt
+			}
+			r.dec = dec
+		}
+		dst := make([]byte, 0, int(rawLen))
+		decoded, err := r.dec.DecodeAll(payload[4:], dst)
+		if err != nil || uint32(len(decoded)) != rawLen {
+			return nil, ErrCorrupt
+		}
+		payload = decoded
 	}
 
 	return decodeBatch(payload)
@@ -120,6 +151,10 @@ func decodeBatch(payload []byte) ([]Record, error) {
 func (r *Reader) Close() error {
 	if r == nil || r.f == nil {
 		return nil
+	}
+	if r.dec != nil {
+		r.dec.Close()
+		r.dec = nil
 	}
 	return r.f.Close()
 }

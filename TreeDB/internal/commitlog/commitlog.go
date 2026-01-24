@@ -14,6 +14,11 @@ const (
 	recordHeaderSize  = 1 + 2 + 4 + 8 + 8
 )
 
+const (
+	segmentFlagCompressed uint32 = 1 << 31
+	segmentLenMask        uint32 = ^segmentFlagCompressed
+)
+
 var (
 	ErrCorrupt        = errors.New("commitlog: corrupt record")
 	ErrRecordTooLarge = errors.New("commitlog: record too large")
@@ -31,4 +36,11 @@ type Options struct {
 	// MaxSegmentSize bounds the total commitlog segment payload size (bytes).
 	// 0 uses the default limit; values < 0 disable the cap.
 	MaxSegmentSize int64
+
+	// Compress enables best-effort zstd compression for commitlog segments.
+	// Segments are only stored compressed when the compressed payload (plus a
+	// small header) is smaller than the raw payload, so compression never causes
+	// size amplification. Small segments are left uncompressed to avoid adding
+	// hot-path CPU overhead for minimal disk savings.
+	Compress bool
 }
