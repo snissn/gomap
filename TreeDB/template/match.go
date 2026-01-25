@@ -247,42 +247,12 @@ func encodeMaskTemplate(value []byte, def TemplateDef, templateID uint64, useSpa
 		return out
 	}
 	diffCount := 0
-	var maskSmall [256]byte
-	var maskBuf []byte
-	if maskLenFull <= len(maskSmall) {
-		maskBuf = maskSmall[:maskLenFull]
-	} else {
-		maskBuf = make([]byte, maskLenFull)
-	}
 	for i := 0; i < len(def.Base); i++ {
 		if value[i] != def.Base[i] {
 			diffCount++
-			maskBuf[i/8] |= 1 << uint(i%8)
 		}
 	}
 	fullLen := payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
-	if cap(value) >= fullLen {
-		out := value[:fullLen]
-		diffScratch := value[len(value)-diffCount:]
-		idx := diffCount - 1
-		for i := len(def.Base) - 1; i >= 0; i-- {
-			if value[i] == def.Base[i] {
-				continue
-			}
-			diffScratch[idx] = value[i]
-			idx--
-		}
-		diffOff := payloadHeader + uvarintLen(templateID) + maskLenFull
-		copy(out[diffOff:diffOff+diffCount], diffScratch)
-		out[0] = magic0
-		out[1] = magic1
-		out[2] = payloadVer
-		out[3] = flagEncoded | flagMask | flagMaskFull
-		off := payloadHeader
-		off += binary.PutUvarint(out[off:], templateID)
-		copy(out[off:off+maskLenFull], maskBuf)
-		return out
-	}
 	full := make([]byte, fullLen)
 	full[0] = magic0
 	full[1] = magic1
@@ -292,12 +262,12 @@ func encodeMaskTemplate(value []byte, def TemplateDef, templateID uint64, useSpa
 	off += binary.PutUvarint(full[off:], templateID)
 	maskOff := off
 	diffOff := maskOff + maskLenFull
-	copy(full[maskOff:maskOff+maskLenFull], maskBuf)
 	idx := 0
 	for i := 0; i < len(def.Base); i++ {
 		if value[i] == def.Base[i] {
 			continue
 		}
+		full[maskOff+i/8] |= 1 << uint(i%8)
 		full[diffOff+idx] = value[i]
 		idx++
 	}
