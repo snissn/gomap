@@ -140,9 +140,12 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 				break
 			}
 		}
+		varBytes := make([]byte, varCount)
 		diffCount := 0
-		for _, pos := range def.VarPositions {
-			if value[pos] != def.Base[pos] {
+		for i, pos := range def.VarPositions {
+			b := value[pos]
+			varBytes[i] = b
+			if b != def.Base[pos] {
 				diffCount++
 			}
 		}
@@ -165,11 +168,7 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 				out[3] = flagEncoded | flagMask
 				off := payloadHeader
 				off += binary.PutUvarint(out[off:], templateID)
-				pos := off
-				for _, p := range def.VarPositions {
-					out[pos] = value[p]
-					pos++
-				}
+				copy(out[off:], varBytes)
 				payload = out
 				encLen = sparseLen
 				return payload, encLen, "", true
