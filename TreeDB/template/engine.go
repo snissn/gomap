@@ -20,6 +20,7 @@ type Engine struct {
 	bucketSeq      uint64
 	totalTemplates int
 	trainSeq       atomic.Uint64
+	defCache       *defCache
 }
 
 type bucket struct {
@@ -44,12 +45,69 @@ type anchorCand struct {
 	start     int
 }
 
+type defCache struct {
+	mu   sync.Mutex
+	size int
+	ids  []uint64
+	next int
+	defs map[uint64]TemplateDef
+}
+
+func newDefCache(size int) *defCache {
+	if size <= 0 {
+		return nil
+	}
+	return &defCache{
+		size: size,
+		ids:  make([]uint64, 0, size),
+		defs: make(map[uint64]TemplateDef, size),
+	}
+}
+
+func (c *defCache) Get(id uint64) (TemplateDef, bool) {
+	if c == nil {
+		return TemplateDef{}, false
+	}
+	c.mu.Lock()
+	def, ok := c.defs[id]
+	c.mu.Unlock()
+	return def, ok
+}
+
+func (c *defCache) Add(id uint64, def TemplateDef) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.defs[id]; ok {
+		return
+	}
+	if len(c.ids) < c.size {
+		c.ids = append(c.ids, id)
+		c.defs[id] = def
+		return
+	}
+	if c.size == 0 {
+		return
+	}
+	evictID := c.ids[c.next]
+	delete(c.defs, evictID)
+	c.ids[c.next] = id
+	c.defs[id] = def
+	c.next++
+	if c.next >= c.size {
+		c.next = 0
+	}
+}
+
 // NewEngine creates a template engine with normalized config.
 func NewEngine(cfg Config) *Engine {
 	cfg = NormalizeConfig(cfg)
 	return &Engine{
-		cfg:     cfg,
-		buckets: make(map[uint64]*bucket),
+		cfg:      cfg,
+		buckets:  make(map[uint64]*bucket),
+		defCache: newDefCache(cfg.DefCacheSize),
 	}
 }
 
@@ -148,15 +206,36 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	for i := 0; i < maxFetch; i++ {
 		cand := candidates[i]
 		e.stats.TemplateFetches.Add(1)
-		defBytes, err := store.GetTemplateDef(ctx, cand.id)
-		if err != nil {
-			e.stats.addReason(reasonTemplateFetchErr)
-			continue
-		}
-		def, err := DecodeTemplateDef(defBytes)
-		if err != nil {
-			e.stats.addReason(reasonTemplateFetchErr)
-			continue
+		var def TemplateDef
+		if cache := e.defCache; cache != nil {
+			if cached, ok := cache.Get(cand.id); ok {
+				def = cached
+			} else {
+				defBytes, err := store.GetTemplateDef(ctx, cand.id)
+				if err != nil {
+					e.stats.addReason(reasonTemplateFetchErr)
+					continue
+				}
+				decoded, err := DecodeTemplateDef(defBytes)
+				if err != nil {
+					e.stats.addReason(reasonTemplateFetchErr)
+					continue
+				}
+				cache.Add(cand.id, decoded)
+				def = decoded
+			}
+		} else {
+			defBytes, err := store.GetTemplateDef(ctx, cand.id)
+			if err != nil {
+				e.stats.addReason(reasonTemplateFetchErr)
+				continue
+			}
+			decoded, err := DecodeTemplateDef(defBytes)
+			if err != nil {
+				e.stats.addReason(reasonTemplateFetchErr)
+				continue
+			}
+			def = decoded
 		}
 		e.stats.CandidateTemplatesConsidered.Add(1)
 		switch def.Kind {
