@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -114,6 +115,9 @@ type benchReport struct {
 	TemplateKept        *uint64  `json:"template_kept,omitempty"`
 	TemplateSavedBytes  *uint64  `json:"template_saved_bytes,omitempty"`
 	TemplatesPublished  *uint64  `json:"templates_published,omitempty"`
+	MaskSparseUsed      *uint64  `json:"mask_sparse_used,omitempty"`
+	MaskFullUsed        *uint64  `json:"mask_full_used,omitempty"`
+	MaskSparseFrac      *float64 `json:"mask_sparse_frac,omitempty"`
 	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
 	SlabBytes           int64    `json:"slab_bytes,omitempty"`
 	IndexBytes          int64    `json:"index_bytes,omitempty"`
@@ -154,6 +158,7 @@ func main() {
 	benchMode := flag.String("bench-mode", "mode3", "Bench write-path mode: mode1|mode3|mode4")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off")
+	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
@@ -186,6 +191,13 @@ func main() {
 		}
 		if *maxEval > 0 && len(evalPairs) > *maxEval {
 			evalPairs = evalPairs[:*maxEval]
+		}
+		if *cpuProfile != "" {
+			stop, err := startCPUProfile(*cpuProfile)
+			if err != nil {
+				fail(err)
+			}
+			defer stop()
 		}
 		cfg := benchConfig{
 			Mode:              *benchMode,
@@ -688,6 +700,17 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	templateKept, templateKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.kept")
 	templateSaved, templateSavedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.bytes_saved_total")
 	templatesPublished, templatesPublishedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.templates_published_total")
+	maskSparse, maskSparseOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.mask_sparse_used_total")
+	maskFull, maskFullOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.mask_full_used_total")
+	maskSparseFrac := 0.0
+	maskSparseFracOK := false
+	if maskSparseOK && maskFullOK {
+		total := maskSparse + maskFull
+		if total > 0 {
+			maskSparseFrac = float64(maskSparse) / float64(total)
+			maskSparseFracOK = true
+		}
+	}
 	keptOfAttempted := 0.0
 	keptOfAttemptedOK := false
 	if framesAttemptedOK && framesKeptOK && framesAttempted > 0 {
@@ -712,12 +735,15 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
 	)
 	if cfg.Template == "on" {
-		fmt.Printf("vlog_template: attempted=%s matched=%s kept=%s bytes_saved=%s templates_published=%s\n",
+		fmt.Printf("vlog_template: attempted=%s matched=%s kept=%s bytes_saved=%s templates_published=%s mask_sparse=%s mask_full=%s sparse_frac=%s\n",
 			formatStatUint(templateAttempted, templateAttemptedOK),
 			formatStatUint(templateMatched, templateMatchedOK),
 			formatStatUint(templateKept, templateKeptOK),
 			formatStatUint(templateSaved, templateSavedOK),
 			formatStatUint(templatesPublished, templatesPublishedOK),
+			formatStatUint(maskSparse, maskSparseOK),
+			formatStatUint(maskFull, maskFullOK),
+			formatStatFloat(maskSparseFrac, maskSparseFracOK),
 		)
 	}
 	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) slab_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
@@ -848,6 +874,27 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		TemplatesPublished: func() *uint64 {
 			if templatesPublishedOK {
 				v := templatesPublished
+				return &v
+			}
+			return nil
+		}(),
+		MaskSparseUsed: func() *uint64 {
+			if maskSparseOK {
+				v := maskSparse
+				return &v
+			}
+			return nil
+		}(),
+		MaskFullUsed: func() *uint64 {
+			if maskFullOK {
+				v := maskFull
+				return &v
+			}
+			return nil
+		}(),
+		MaskSparseFrac: func() *float64 {
+			if maskSparseFracOK {
+				v := maskSparseFrac
 				return &v
 			}
 			return nil
@@ -1427,6 +1474,22 @@ func parseIntList(s string) ([]int, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+func startCPUProfile(path string) (func(), error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("cpu profile: %w", err)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("cpu profile: %w", err)
+	}
+	stop := func() {
+		pprof.StopCPUProfile()
+		_ = f.Close()
+	}
+	return stop, nil
 }
 
 func fail(err error) {
