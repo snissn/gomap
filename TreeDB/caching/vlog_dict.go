@@ -156,9 +156,8 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if db.valueLogDictTrainer != nil {
 		return
 	}
-	// Trainer only needs an encoder level; use SpeedFastest to minimize CPU overhead
-	// for value-log dict compression (workloads are frequently CPU-bound).
-	cfg := compression.Config{Kind: compression.KindZSTD, Level: zstd.SpeedFastest}
+	// Trainer only needs an encoder level; use SpeedBestCompression for max ratio.
+	cfg := compression.Config{Kind: compression.KindZSTD, Level: zstd.SpeedBestCompression}
 	trainCfg := db.valueLogDictTrain
 	stride := trainCfg.SampleStride
 	if stride <= 1 {
