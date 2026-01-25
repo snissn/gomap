@@ -745,8 +745,10 @@ func (db *DB) valueLogTemplateEncodeRecords(records []valuelog.Record) ([]valuel
 	store := db.templateStore
 	encoded := records
 	used := false
+	var arena []byte
 	for i := range records {
-		payload, ok := engine.Encode(context.Background(), records[i].Value, store)
+		payload, nextArena, ok := engine.EncodeAppend(context.Background(), records[i].Value, store, arena)
+		arena = nextArena
 		if ok {
 			if !used {
 				encoded = make([]valuelog.Record, len(records))
