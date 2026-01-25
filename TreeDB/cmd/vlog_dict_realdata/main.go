@@ -72,6 +72,7 @@ type benchConfig struct {
 	FlushThresholdMiB int
 	DictTrainMiB      int
 	DictSampleStride  int
+	DictWaitSeconds   int
 	OutJSON           string
 	KeepDir           bool
 }
@@ -168,6 +169,7 @@ func main() {
 	benchFlushThresholdMiB := flag.Int("bench-flush-threshold-mib", 0, "Flush threshold for cached mode (MiB, 0=default)")
 	benchDictTrainMiB := flag.Int("bench-dict-train-mib", defaultBenchDictTrainMiB, "Dict training sample target (MiB, compression on; 0=auto)")
 	benchDictSampleStride := flag.Int("bench-dict-sample-stride", defaultBenchDictSampleStride, "Dict training sample stride (records; 0=auto)")
+	benchDictWaitSeconds := flag.Int("bench-dict-wait-seconds", 10, "Seconds to wait for dict activation before steady")
 	benchOutJSON := flag.String("bench-out-json", "", "Optional JSON output path (bench only)")
 	flag.Parse()
 
@@ -212,6 +214,7 @@ func main() {
 			FlushThresholdMiB: *benchFlushThresholdMiB,
 			DictTrainMiB:      *benchDictTrainMiB,
 			DictSampleStride:  *benchDictSampleStride,
+			DictWaitSeconds:   *benchDictWaitSeconds,
 			OutJSON:           *benchOutJSON,
 			KeepDir:           *benchKeepDir,
 		}
@@ -1174,7 +1177,11 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		}
 	}
 
-	active, snap := waitForDictActivation(db, 10*time.Second)
+	waitSecs := cfg.DictWaitSeconds
+	if waitSecs <= 0 {
+		waitSecs = 10
+	}
+	active, snap := waitForDictActivation(db, time.Duration(waitSecs)*time.Second)
 	if !active {
 		return false, snap, fmt.Errorf("value-log dict did not become active before steady (mode=%s). Try increasing -train/-bench-raw-mib or lowering -bench-flush-threshold-mib; if it persists, this is a bug", cfg.Mode)
 	}
