@@ -31,8 +31,6 @@ type TemplateDef struct {
 	Base           []byte
 	VarPositions   []uint16
 	ConstPositions []uint16
-	MaskLen        int
-	VarCount       int
 }
 
 // DecodeOptions control TemplateValue decoding limits.

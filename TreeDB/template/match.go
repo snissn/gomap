@@ -90,10 +90,7 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 		return nil, 0, reasonKeepBounds, false
 	}
 	rawLen := len(value)
-	maskLenFull := def.MaskLen
-	if maskLenFull <= 0 {
-		maskLenFull = (len(def.Base) + 7) / 8
-	}
+	maskLenFull := (len(def.Base) + 7) / 8
 	varMask := def.Mask
 	if len(varMask) != maskLenFull {
 		varMask = nil
@@ -127,14 +124,12 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 		return payload, encLen, "", true
 	}
 
-	varCount := def.VarCount
-	if varCount == 0 {
-		if len(def.VarPositions) > 0 {
-			varCount = len(def.VarPositions)
-		} else {
-			for _, b := range varMask {
-				varCount += bits.OnesCount8(b)
-			}
+	varCount := 0
+	if len(def.VarPositions) > 0 {
+		varCount = len(def.VarPositions)
+	} else {
+		for _, b := range varMask {
+			varCount += bits.OnesCount8(b)
 		}
 	}
 	if len(def.VarPositions) > 0 && len(def.ConstPositions) > 0 {

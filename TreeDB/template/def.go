@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
-	"math/bits"
 
 	"github.com/zeebo/xxh3"
 )
@@ -233,15 +232,7 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 			varPositions = buildVarPositions(mask, len(base))
 		}
 		constPositions := buildConstPositions(mask, len(base))
-		def := TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions, MaskLen: maskLen}
-		if len(varPositions) > 0 {
-			def.VarCount = len(varPositions)
-		} else {
-			for _, b := range mask {
-				def.VarCount += bits.OnesCount8(b)
-			}
-		}
-		return def, nil
+		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
 	case templateDefVerMaskV2:
 		if payloadLen < 2 {
 			return TemplateDef{}, ErrCorruptTemplateDef
@@ -280,15 +271,7 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 		base := buf[off : off+baseLen]
 		varPositions := buildVarPositions(mask, len(base))
 		constPositions := buildConstPositions(mask, len(base))
-		def := TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions, MaskLen: maskLen}
-		if len(varPositions) > 0 {
-			def.VarCount = len(varPositions)
-		} else {
-			for _, b := range mask {
-				def.VarCount += bits.OnesCount8(b)
-			}
-		}
-		return def, nil
+		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
 	default:
 		return TemplateDef{}, ErrCorruptTemplateDef
 	}
