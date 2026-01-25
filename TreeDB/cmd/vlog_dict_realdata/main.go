@@ -71,6 +71,7 @@ type benchConfig struct {
 	PointerThreshold  int
 	FlushThresholdMiB int
 	DictTrainMiB      int
+	DictBytes         int
 	DictSampleStride  int
 	DictWaitSeconds   int
 	OutJSON           string
@@ -168,6 +169,7 @@ func main() {
 	benchPointerThreshold := flag.Int("bench-pointer-threshold", 1, "Value-log pointer threshold (bytes)")
 	benchFlushThresholdMiB := flag.Int("bench-flush-threshold-mib", 0, "Flush threshold for cached mode (MiB, 0=default)")
 	benchDictTrainMiB := flag.Int("bench-dict-train-mib", defaultBenchDictTrainMiB, "Dict training sample target (MiB, compression on; 0=auto)")
+	benchDictBytes := flag.Int("bench-dict-bytes", 0, "Dict history size in bytes (compression on; 0=default)")
 	benchDictSampleStride := flag.Int("bench-dict-sample-stride", defaultBenchDictSampleStride, "Dict training sample stride (records; 0=auto)")
 	benchDictWaitSeconds := flag.Int("bench-dict-wait-seconds", 10, "Seconds to wait for dict activation before steady")
 	benchOutJSON := flag.String("bench-out-json", "", "Optional JSON output path (bench only)")
@@ -213,6 +215,7 @@ func main() {
 			PointerThreshold:  *benchPointerThreshold,
 			FlushThresholdMiB: *benchFlushThresholdMiB,
 			DictTrainMiB:      *benchDictTrainMiB,
+			DictBytes:         *benchDictBytes,
 			DictSampleStride:  *benchDictSampleStride,
 			DictWaitSeconds:   *benchDictWaitSeconds,
 			OutJSON:           *benchOutJSON,
@@ -959,15 +962,24 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		if trainMiB == 0 {
 			trainMiB = defaultBenchDictTrainMiB
 		}
+		dictBytes := cfg.DictBytes
+		if dictBytes < 0 {
+			return treedb.Options{}, benchWritePath{}, fmt.Errorf("invalid -bench-dict-bytes=%d (must be >= 0)", dictBytes)
+		}
 		sampleStride := cfg.DictSampleStride
 		if sampleStride == 0 {
 			sampleStride = defaultBenchDictSampleStride
 		}
 		opts.ValueLogDictTrain = compression.TrainConfig{
 			TrainBytes:   trainMiB << 20,
+			DictBytes:    dictBytes,
 			SampleStride: sampleStride,
 		}
-		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
+		autotune := valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
+		if dictBytes > 0 {
+			autotune.CandidateHistoryBytes = []int{dictBytes}
+		}
+		opts.ValueLogCompressionAutotune = autotune
 	} else {
 		opts.ValueLogDictTrain = compression.TrainConfig{TrainBytes: -1}
 		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
