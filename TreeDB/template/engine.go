@@ -203,6 +203,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	bestSavings := 0
 	var bestPayload []byte
 	matchedAny := false
+candidateLoop:
 	for i := 0; i < maxFetch; i++ {
 		cand := candidates[i]
 		e.stats.TemplateFetches.Add(1)
@@ -273,6 +274,9 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			}
 			bestSavings = savings
 			bestPayload = payload
+			if i == 0 && len(payload) >= payloadHeader && payload[3]&flagMaskFull == 0 {
+				break candidateLoop
+			}
 		default:
 			e.stats.addReason(reasonTemplateFetchErr)
 			continue
