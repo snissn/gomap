@@ -231,7 +231,8 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 		if len(varPositions) == 0 {
 			varPositions = buildVarPositions(mask, len(base))
 		}
-		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions}, nil
+		constPositions := buildConstPositions(mask, len(base))
+		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
 	case templateDefVerMaskV2:
 		if payloadLen < 2 {
 			return TemplateDef{}, ErrCorruptTemplateDef
@@ -269,7 +270,8 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 		}
 		base := buf[off : off+baseLen]
 		varPositions := buildVarPositions(mask, len(base))
-		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions}, nil
+		constPositions := buildConstPositions(mask, len(base))
+		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
 	default:
 		return TemplateDef{}, ErrCorruptTemplateDef
 	}
@@ -282,6 +284,19 @@ func buildVarPositions(mask []byte, total int) []uint16 {
 	out := make([]uint16, 0)
 	for i := 0; i < total; i++ {
 		if mask[i/8]&(1<<uint(i%8)) != 0 {
+			out = append(out, uint16(i))
+		}
+	}
+	return out
+}
+
+func buildConstPositions(mask []byte, total int) []uint16 {
+	if len(mask) == 0 || total <= 0 {
+		return nil
+	}
+	out := make([]uint16, 0)
+	for i := 0; i < total; i++ {
+		if mask[i/8]&(1<<uint(i%8)) == 0 {
 			out = append(out, uint16(i))
 		}
 	}
