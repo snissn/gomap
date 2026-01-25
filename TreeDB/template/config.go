@@ -25,6 +25,7 @@ type Config struct {
 	RouteSuffixBytes      int
 	LengthBucketMinLen    int
 	DefCacheSize          int
+	RecentTemplates       int
 
 	// Training / publishing bounds.
 	MaxBuckets                   int
@@ -107,6 +108,12 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.DefCacheSize == 0 {
 		cfg.DefCacheSize = 64
+	}
+	if cfg.RecentTemplates < 0 {
+		cfg.RecentTemplates = 0
+	}
+	if cfg.RecentTemplates == 0 {
+		cfg.RecentTemplates = 2
 	}
 	if cfg.MaxBuckets <= 0 {
 		cfg.MaxBuckets = 256

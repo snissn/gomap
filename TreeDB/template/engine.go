@@ -21,6 +21,7 @@ type Engine struct {
 	totalTemplates int
 	trainSeq       atomic.Uint64
 	defCache       *defCache
+	recent         []recentTemplate
 }
 
 type bucket struct {
@@ -43,6 +44,11 @@ type anchorCand struct {
 	positions []int
 	median    int
 	start     int
+}
+
+type recentTemplate struct {
+	id  uint64
+	def TemplateDef
 }
 
 type defCache struct {
@@ -148,6 +154,10 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		ctx = context.Background()
 	}
 	e.stats.Attempted.Add(1)
+	if payload, ok := e.tryRecentTemplates(value); ok {
+		e.observeTraining(value, store)
+		return payload, true
+	}
 	maxFPReads := cfg.MaxFPReads
 	if maxFPReads <= 0 || maxFPReads > len(fps) {
 		maxFPReads = len(fps)
@@ -206,6 +216,8 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	var bestMaskDef TemplateDef
 	var bestMaskID uint64
 	bestMaskSparse := false
+	var bestAnchorDef TemplateDef
+	var bestAnchorID uint64
 	matchedAny := false
 	for i := 0; i < maxFetch; i++ {
 		cand := candidates[i]
@@ -263,6 +275,8 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			bestSavings = savings
 			bestPayload = payload
 			bestMask = false
+			bestAnchorDef = def
+			bestAnchorID = cand.id
 		case TemplateMask:
 			encLen, sparse, reason, matched := matchMaskTemplateLen(value, def, cand.id, cfg)
 			if reason != "" {
@@ -313,11 +327,96 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			if len(payload) == 0 {
 				return value, false
 			}
+			e.recordRecent(bestMaskDef, bestMaskID)
 			return payload, true
 		}
+		e.recordRecent(bestAnchorDef, bestAnchorID)
 		return bestPayload, true
 	}
 	return value, false
+}
+
+func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
+	cfg := e.cfg
+	if cfg.RecentTemplates <= 0 || len(e.recent) == 0 {
+		return nil, false
+	}
+	max := cfg.RecentTemplates
+	if max > len(e.recent) {
+		max = len(e.recent)
+	}
+	for i := 0; i < max; i++ {
+		entry := e.recent[len(e.recent)-1-i]
+		def := entry.def
+		if def.Kind == TemplateMask {
+			encLen, sparse, _, matched := matchMaskTemplateLen(value, def, entry.id, cfg)
+			if !matched {
+				continue
+			}
+			savings := len(value) - encLen
+			if savings < cfg.MinSavingsBytes {
+				continue
+			}
+			payload := encodeMaskTemplate(value, def, entry.id, sparse)
+			if len(payload) == 0 {
+				continue
+			}
+			e.stats.Matched.Add(1)
+			e.stats.Kept.Add(1)
+			e.stats.BytesSaved.Add(uint64(savings))
+			if sparse {
+				e.stats.MaskSparseUsed.Add(1)
+			} else {
+				e.stats.MaskFullUsed.Add(1)
+			}
+			e.recordRecent(def, entry.id)
+			return payload, true
+		}
+		if def.Kind == 0 || def.Kind == TemplateAnchors {
+			gaps, encLen, _, matched := matchTemplate(value, def.Anchors, entry.id, cfg)
+			if !matched {
+				continue
+			}
+			savings := len(value) - encLen
+			if savings < cfg.MinSavingsBytes {
+				continue
+			}
+			payload, err := EncodePayload(entry.id, gaps)
+			if err != nil {
+				continue
+			}
+			e.stats.Matched.Add(1)
+			e.stats.Kept.Add(1)
+			e.stats.BytesSaved.Add(uint64(savings))
+			e.recordRecent(def, entry.id)
+			return payload, true
+		}
+	}
+	return nil, false
+}
+
+func (e *Engine) recordRecent(def TemplateDef, id uint64) {
+	cfg := e.cfg
+	if cfg.RecentTemplates <= 0 {
+		return
+	}
+	if id == 0 || (def.Kind != TemplateMask && def.Kind != TemplateAnchors && def.Kind != 0) {
+		return
+	}
+	for i := range e.recent {
+		if e.recent[i].id == id {
+			copy(e.recent[i:], e.recent[i+1:])
+			e.recent = e.recent[:len(e.recent)-1]
+			break
+		}
+	}
+	entry := recentTemplate{id: id, def: def}
+	if len(e.recent) < cfg.RecentTemplates {
+		e.recent = append(e.recent, entry)
+		return
+	}
+	copy(e.recent, e.recent[1:])
+	e.recent[len(e.recent)-1] = entry
 }
 
 func (e *Engine) observeTraining(value []byte, store Store) {
