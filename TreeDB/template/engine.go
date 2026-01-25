@@ -121,20 +121,14 @@ func (e *Engine) StatsSnapshot() map[string]string {
 
 // Encode attempts to template-encode value using templatedb candidates.
 func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte, bool) {
-	payload, _, ok := e.EncodeAppend(ctx, value, store, nil)
-	return payload, ok
-}
-
-// EncodeAppend encodes into a shared buffer when possible to reduce allocations.
-func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, buf []byte) ([]byte, []byte, bool) {
 	if e == nil {
-		return value, buf, false
+		return value, false
 	}
 	cfg := e.cfg
 	if cfg.FingerprintK <= 0 || len(value) < cfg.FingerprintK {
 		e.stats.addReason(reasonSkipSmall)
 		e.observeTraining(value, store)
-		return value, buf, false
+		return value, false
 	}
 	fps := RoutingFingerprints(value, cfg)
 	if len(fps) == 0 {
@@ -143,12 +137,12 @@ func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, bu
 	if len(fps) == 0 {
 		e.stats.addReason(reasonSkipNoFPs)
 		e.observeTraining(value, store)
-		return value, buf, false
+		return value, false
 	}
 	if store == nil {
 		e.stats.addReason(reasonNoCandidates)
 		e.observeTraining(value, store)
-		return value, buf, false
+		return value, false
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -187,7 +181,7 @@ func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, bu
 	if len(candMap) == 0 {
 		e.stats.addReason(reasonNoCandidates)
 		e.observeTraining(value, store)
-		return value, buf, false
+		return value, false
 	}
 	candidates := make([]*candScore, 0, len(candMap))
 	for _, c := range candMap {
@@ -209,7 +203,6 @@ func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, bu
 	bestSavings := 0
 	var bestPayload []byte
 	matchedAny := false
-	out := buf
 	for i := 0; i < maxFetch; i++ {
 		cand := candidates[i]
 		e.stats.TemplateFetches.Add(1)
@@ -266,14 +259,13 @@ func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, bu
 			bestSavings = savings
 			bestPayload = payload
 		case TemplateMask:
-			payload, encLen, reason, matched, nextBuf := matchMaskTemplateAppend(value, def, cand.id, cfg, out)
+			payload, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
 			if reason != "" {
 				e.stats.addReason(reason)
 			}
 			if !matched {
 				continue
 			}
-			out = nextBuf
 			matchedAny = true
 			savings := len(value) - encLen
 			if savings <= bestSavings {
@@ -302,14 +294,14 @@ func (e *Engine) EncodeAppend(ctx context.Context, value []byte, store Store, bu
 			}
 		}
 		e.observeTraining(value, store)
-		return bestPayload, out, true
+		return bestPayload, true
 	}
 	if matchedAny && bestSavings < cfg.MinSavingsBytes {
 		e.stats.addReason(reasonKeepNoSavings)
 	}
 	// Not kept.
 	e.observeTraining(value, store)
-	return value, out, false
+	return value, false
 }
 
 func (e *Engine) observeTraining(value []byte, store Store) {
