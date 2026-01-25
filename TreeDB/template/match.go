@@ -140,13 +140,7 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 				break
 			}
 		}
-		var stack [256]byte
-		varBytes := stack[:0]
-		if varCount <= len(stack) {
-			varBytes = stack[:varCount]
-		} else {
-			varBytes = make([]byte, varCount)
-		}
+		varBytes := make([]byte, varCount)
 		diffCount := 0
 		for i, pos := range def.VarPositions {
 			b := value[pos]
@@ -202,13 +196,7 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 			return payload, encLen, "", true
 		}
 	}
-	var stack [256]byte
-	varBytes := stack[:0]
-	if varCount <= len(stack) {
-		varBytes = stack[:varCount]
-	} else {
-		varBytes = make([]byte, varCount)
-	}
+	varBytes := make([]byte, varCount)
 	varIdx := 0
 	diffCount := 0
 	constMismatch := false
