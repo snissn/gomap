@@ -73,6 +73,7 @@ type benchConfig struct {
 	DictTrainMiB      int
 	DictSampleStride  int
 	OutJSON           string
+	KeepDir           bool
 }
 
 const (
@@ -158,6 +159,7 @@ func main() {
 	benchMode := flag.String("bench-mode", "mode3", "Bench write-path mode: mode1|mode3|mode4")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
+	benchKeepDir := flag.Bool("bench-keep-dir", false, "Keep bench directory after run")
 	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
@@ -211,6 +213,7 @@ func main() {
 			DictTrainMiB:      *benchDictTrainMiB,
 			DictSampleStride:  *benchDictSampleStride,
 			OutJSON:           *benchOutJSON,
+			KeepDir:           *benchKeepDir,
 		}
 		report, err := runKVBench(*input, *capBytes, cfg, trainPairs, evalPairs, stats, loadDur)
 		if err != nil {
@@ -596,7 +599,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(benchDir)
+	if !cfg.KeepDir {
+		defer os.RemoveAll(benchDir)
+	}
 
 	opts.Dir = benchDir
 	db, err := treedb.Open(opts)
