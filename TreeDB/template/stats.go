@@ -30,6 +30,8 @@ type TemplateStats struct {
 	CandidateTemplatesConsidered atomic.Uint64
 	TemplateFetches              atomic.Uint64
 	TemplatesPublished           atomic.Uint64
+	MaskSparseUsed               atomic.Uint64
+	MaskFullUsed                 atomic.Uint64
 
 	reasonsMu sync.Mutex
 	reasons   map[string]uint64
@@ -58,6 +60,8 @@ func (s *TemplateStats) Snapshot() map[string]string {
 		"candidate_templates_considered_total": fmt.Sprintf("%d", s.CandidateTemplatesConsidered.Load()),
 		"template_fetches_total":               fmt.Sprintf("%d", s.TemplateFetches.Load()),
 		"templates_published_total":            fmt.Sprintf("%d", s.TemplatesPublished.Load()),
+		"mask_sparse_used_total":               fmt.Sprintf("%d", s.MaskSparseUsed.Load()),
+		"mask_full_used_total":                 fmt.Sprintf("%d", s.MaskFullUsed.Load()),
 	}
 	s.reasonsMu.Lock()
 	for k, v := range s.reasons {

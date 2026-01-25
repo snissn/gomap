@@ -125,8 +125,12 @@ func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Con
 	}
 
 	varCount := 0
-	for _, b := range varMask {
-		varCount += bits.OnesCount8(b)
+	if len(def.VarPositions) > 0 {
+		varCount = len(def.VarPositions)
+	} else {
+		for _, b := range varMask {
+			varCount += bits.OnesCount8(b)
+		}
 	}
 	varBytes := make([]byte, varCount)
 	varIdx := 0

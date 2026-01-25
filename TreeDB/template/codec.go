@@ -145,9 +145,11 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 		if len(def.Mask) == 0 {
 			return nil, ErrCorrupt
 		}
-		varCount := 0
-		for _, b := range def.Mask {
-			varCount += bits.OnesCount8(b)
+		varCount := len(def.VarPositions)
+		if varCount == 0 {
+			for _, b := range def.Mask {
+				varCount += bits.OnesCount8(b)
+			}
 		}
 		if off+varCount != len(payload) {
 			return nil, ErrCorrupt
@@ -155,18 +157,30 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 		varBytes := payload[off:]
 		out := make([]byte, decodedLen)
 		copy(out, def.Base)
-		idx := 0
-		for i := 0; i < decodedLen; i++ {
-			if def.Mask[i/8]&(1<<uint(i%8)) != 0 {
-				if idx >= len(varBytes) {
+		if len(def.VarPositions) > 0 {
+			if len(def.VarPositions) != len(varBytes) {
+				return nil, ErrCorrupt
+			}
+			for i, pos := range def.VarPositions {
+				if int(pos) >= len(out) {
 					return nil, ErrCorrupt
 				}
-				out[i] = varBytes[idx]
-				idx++
+				out[pos] = varBytes[i]
 			}
-		}
-		if idx != len(varBytes) {
-			return nil, ErrCorrupt
+		} else {
+			idx := 0
+			for i := 0; i < decodedLen; i++ {
+				if def.Mask[i/8]&(1<<uint(i%8)) != 0 {
+					if idx >= len(varBytes) {
+						return nil, ErrCorrupt
+					}
+					out[i] = varBytes[idx]
+					idx++
+				}
+			}
+			if idx != len(varBytes) {
+				return nil, ErrCorrupt
+			}
 		}
 		return out, nil
 	}

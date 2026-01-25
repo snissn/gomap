@@ -94,6 +94,9 @@ func RoutingFingerprints(value []byte, cfg Config) []uint64 {
 	if k <= 0 || len(value) < k {
 		return nil
 	}
+	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
+		return []uint64{lengthFingerprint(len(value))}
+	}
 	limit := cfg.RouteFPCount
 	if limit <= 0 {
 		limit = cfg.MaxFingerprints

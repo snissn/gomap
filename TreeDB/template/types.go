@@ -25,10 +25,11 @@ type Store interface {
 
 // TemplateDef is an ordered list of anchors.
 type TemplateDef struct {
-	Kind    TemplateKind
-	Anchors [][]byte
-	Mask    []byte
-	Base    []byte
+	Kind         TemplateKind
+	Anchors      [][]byte
+	Mask         []byte
+	Base         []byte
+	VarPositions []uint16
 }
 
 // DecodeOptions control TemplateValue decoding limits.

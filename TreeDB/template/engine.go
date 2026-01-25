@@ -205,6 +205,15 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	if bestSavings >= cfg.MinSavingsBytes && len(bestPayload) > 0 {
 		e.stats.Kept.Add(1)
 		e.stats.BytesSaved.Add(uint64(bestSavings))
+		if IsEncodedPayload(bestPayload) && len(bestPayload) >= payloadHeader {
+			if bestPayload[3]&flagMask != 0 {
+				if bestPayload[3]&flagMaskFull != 0 {
+					e.stats.MaskFullUsed.Add(1)
+				} else {
+					e.stats.MaskSparseUsed.Add(1)
+				}
+			}
+		}
 		e.observeTraining(value, store)
 		return bestPayload, true
 	}
@@ -572,7 +581,8 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 			}
 		}
 	}
-	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask}
+	varPositions := buildVarPositions(mask, len(base))
+	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions}
 	return def, refValue, activated, true
 }
 
