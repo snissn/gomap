@@ -157,7 +157,7 @@ func main() {
 	benchKV := flag.Bool("bench-kv", false, "Enable KV throughput bench (TreeDB public API)")
 	benchMode := flag.String("bench-mode", "mode3", "Bench write-path mode: mode1|mode3|mode4")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
-	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off")
+	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
 	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
@@ -513,8 +513,8 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.Compression != "on" && cfg.Compression != "off" {
 		return nil, fmt.Errorf("unsupported -bench-compression=%q (expected on|off)", cfg.Compression)
 	}
-	if cfg.Template != "on" && cfg.Template != "off" {
-		return nil, fmt.Errorf("unsupported -bench-template=%q (expected on|off)", cfg.Template)
+	if cfg.Template != "on" && cfg.Template != "off" && cfg.Template != "prepass" {
+		return nil, fmt.Errorf("unsupported -bench-template=%q (expected on|off|prepass)", cfg.Template)
 	}
 	if cfg.KeyMode != "random" && cfg.KeyMode != "sequential" && cfg.KeyMode != "dataset" {
 		return nil, fmt.Errorf("unsupported -bench-key-mode=%q (expected random|sequential|dataset)", cfg.KeyMode)
@@ -734,7 +734,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatUint(framesKept, framesKeptOK),
 		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
 	)
-	if cfg.Template == "on" {
+	if cfg.Template != "off" {
 		fmt.Printf("vlog_template: attempted=%s matched=%s kept=%s bytes_saved=%s templates_published=%s mask_sparse=%s mask_full=%s sparse_frac=%s\n",
 			formatStatUint(templateAttempted, templateAttemptedOK),
 			formatStatUint(templateMatched, templateMatchedOK),
@@ -964,8 +964,12 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		opts.ValueLogDictTrain = compression.TrainConfig{TrainBytes: -1}
 		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
 	}
-	if cfg.Template == "on" {
+	switch cfg.Template {
+	case "on":
 		opts.ValueLogTemplateMode = template.TemplateOnly
+		opts.ValueLogTemplateReadStrict = true
+	case "prepass":
+		opts.ValueLogTemplateMode = template.TemplatePrepass
 		opts.ValueLogTemplateReadStrict = true
 	}
 

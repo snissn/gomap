@@ -2744,10 +2744,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
+	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
-		// Template-only mode (prepass not implemented yet) forces dict off.
-		dictID = 0
-		dict = nil
+		if db.valueLogTemplateMode == template.TemplateOnly {
+			dictID = 0
+			dict = nil
+		} else if db.valueLogTemplateMode == template.TemplatePrepass {
+			templatePrepass = true
+		}
 	}
 	attemptCompression, probeCompression, paused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
 	if dictID != 0 && !attemptCompression {
@@ -2770,12 +2774,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
-	db.valueLogDictCollectSamples(records)
-
-	templateEncoded := false
-	if dictID == 0 {
-		records, templateEncoded = db.valueLogTemplateEncodeRecords(records)
+	if dictID == 0 || templatePrepass {
+		records, _ = db.valueLogTemplateEncodeRecords(records)
 	}
+	db.valueLogDictCollectSamples(records)
 
 	if policySetter, ok := any(w).(interface {
 		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
@@ -2951,7 +2953,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			db.valueLogDictFrames.kept.Add(uint64(framesKept))
 		}
 	}
-	if dictID != 0 && len(dict) > 0 && !templateEncoded {
+	if dictID != 0 && len(dict) > 0 {
 		if rawFrameBytes == 0 {
 			rawFrameBytes = rawPayloadBytes
 		}
@@ -3011,10 +3013,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	startSize := w.Size()
 
 	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
+	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
-		// Template-only mode (prepass not implemented yet) forces dict off.
-		dictID = 0
-		dict = nil
+		if db.valueLogTemplateMode == template.TemplateOnly {
+			dictID = 0
+			dict = nil
+		} else if db.valueLogTemplateMode == template.TemplatePrepass {
+			templatePrepass = true
+		}
 	}
 	if dictID != 0 && !attemptCompression {
 		dictID = 0
@@ -3034,11 +3040,9 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 	db.valueLogDictCollectSample(value)
 
-	templateEncoded := false
-	if dictID == 0 && db.templateCompressionEnabled() {
+	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
 		if payload, ok := db.valueLogTemplateEngine.Encode(context.Background(), value, db.templateStore); ok {
 			value = payload
-			templateEncoded = true
 		}
 	}
 
@@ -3116,7 +3120,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if stats.Kept {
 		db.valueLogDictFrames.kept.Add(1)
 	}
-	if dictID != 0 && len(dict) > 0 && !templateEncoded {
+	if dictID != 0 && len(dict) > 0 {
 		db.valueLogDictObservePayload(uint64(stats.RawPayloadBytes), uint64(stats.StoredPayloadBytes), stats.Records)
 	}
 	if probeCompression && stats.Kept {
