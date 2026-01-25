@@ -21,6 +21,7 @@ type Engine struct {
 	totalTemplates int
 	trainSeq       atomic.Uint64
 	defCache       *defCache
+	recentMu       sync.Mutex
 	recent         []recentTemplate
 }
 
@@ -47,8 +48,11 @@ type anchorCand struct {
 }
 
 type recentTemplate struct {
-	id  uint64
-	def TemplateDef
+	id         uint64
+	def        TemplateDef
+	hits       uint32
+	misses     uint32
+	avgSavings int
 }
 
 type defCache struct {
@@ -338,15 +342,26 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 
 func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 	cfg := e.cfg
-	if cfg.RecentTemplates <= 0 || len(e.recent) == 0 {
+	if cfg.RecentTemplates <= 0 {
 		return nil, false
 	}
+	e.recentMu.Lock()
+	if len(e.recent) == 0 {
+		e.recentMu.Unlock()
+		return nil, false
+	}
+	snapshot := make([]recentTemplate, len(e.recent))
+	copy(snapshot, e.recent)
+	e.recentMu.Unlock()
 	max := cfg.RecentTemplates
-	if max > len(e.recent) {
-		max = len(e.recent)
+	if max > len(snapshot) {
+		max = len(snapshot)
+	}
+	if len(snapshot) > 0 && snapshot[len(snapshot)-1].hits < uint32(cfg.FastPathMinHits) {
+		max = 1
 	}
 	for i := 0; i < max; i++ {
-		entry := e.recent[len(e.recent)-1-i]
+		entry := snapshot[len(snapshot)-1-i]
 		def := entry.def
 		if def.Kind == TemplateMask {
 			encLen, sparse, _, matched := matchMaskTemplateLen(value, def, entry.id, cfg)
@@ -355,10 +370,16 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			}
 			savings := len(value) - encLen
 			if savings < cfg.MinSavingsBytes {
+				e.updateRecentMiss(entry.id)
+				continue
+			}
+			if !e.fastPathEligible(entry, savings) {
+				e.updateRecentHit(entry.id, savings)
 				continue
 			}
 			payload := encodeMaskTemplate(value, def, entry.id, sparse)
 			if len(payload) == 0 {
+				e.updateRecentMiss(entry.id)
 				continue
 			}
 			e.stats.Matched.Add(1)
@@ -369,6 +390,7 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			} else {
 				e.stats.MaskFullUsed.Add(1)
 			}
+			e.updateRecentHit(entry.id, savings)
 			e.recordRecent(def, entry.id)
 			return payload, true
 		}
@@ -379,20 +401,85 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			}
 			savings := len(value) - encLen
 			if savings < cfg.MinSavingsBytes {
+				e.updateRecentMiss(entry.id)
+				continue
+			}
+			if !e.fastPathEligible(entry, savings) {
+				e.updateRecentHit(entry.id, savings)
 				continue
 			}
 			payload, err := EncodePayload(entry.id, gaps)
 			if err != nil {
+				e.updateRecentMiss(entry.id)
 				continue
 			}
 			e.stats.Matched.Add(1)
 			e.stats.Kept.Add(1)
 			e.stats.BytesSaved.Add(uint64(savings))
+			e.updateRecentHit(entry.id, savings)
 			e.recordRecent(def, entry.id)
 			return payload, true
 		}
 	}
 	return nil, false
+}
+
+func (e *Engine) fastPathEligible(entry recentTemplate, savings int) bool {
+	cfg := e.cfg
+	minSavings := cfg.FastPathMinSavings
+	avg := entry.avgSavings
+	if avg > 0 {
+		threshold := avg - cfg.FastPathSavingsSlack
+		if threshold > minSavings {
+			minSavings = threshold
+		}
+	}
+	return savings >= minSavings
+}
+
+func (e *Engine) updateRecentHit(id uint64, savings int) {
+	cfg := e.cfg
+	if cfg.RecentTemplates <= 0 || id == 0 {
+		return
+	}
+	e.recentMu.Lock()
+	defer e.recentMu.Unlock()
+	for i := range e.recent {
+		if e.recent[i].id != id {
+			continue
+		}
+		e.recent[i].hits++
+		if e.recent[i].avgSavings == 0 {
+			e.recent[i].avgSavings = savings
+		} else {
+			e.recent[i].avgSavings = (e.recent[i].avgSavings*7 + savings) / 8
+		}
+		if e.recent[i].misses > 0 {
+			e.recent[i].misses--
+		}
+		return
+	}
+}
+
+func (e *Engine) updateRecentMiss(id uint64) {
+	cfg := e.cfg
+	if cfg.RecentTemplates <= 0 || id == 0 {
+		return
+	}
+	e.recentMu.Lock()
+	defer e.recentMu.Unlock()
+	for i := range e.recent {
+		if e.recent[i].id != id {
+			continue
+		}
+		e.recent[i].misses++
+		if int(e.recent[i].misses) < cfg.FastPathMaxMisses {
+			return
+		}
+		copy(e.recent[i:], e.recent[i+1:])
+		e.recent = e.recent[:len(e.recent)-1]
+		return
+	}
 }
 
 func (e *Engine) recordRecent(def TemplateDef, id uint64) {
@@ -403,20 +490,24 @@ func (e *Engine) recordRecent(def TemplateDef, id uint64) {
 	if id == 0 || (def.Kind != TemplateMask && def.Kind != TemplateAnchors && def.Kind != 0) {
 		return
 	}
+	e.recentMu.Lock()
+	defer e.recentMu.Unlock()
 	for i := range e.recent {
 		if e.recent[i].id == id {
+			entry := e.recent[i]
+			entry.def = def
 			copy(e.recent[i:], e.recent[i+1:])
 			e.recent = e.recent[:len(e.recent)-1]
+			e.recent = append(e.recent, entry)
 			break
 		}
 	}
-	entry := recentTemplate{id: id, def: def}
 	if len(e.recent) < cfg.RecentTemplates {
-		e.recent = append(e.recent, entry)
+		e.recent = append(e.recent, recentTemplate{id: id, def: def})
 		return
 	}
 	copy(e.recent, e.recent[1:])
-	e.recent[len(e.recent)-1] = entry
+	e.recent[len(e.recent)-1] = recentTemplate{id: id, def: def}
 }
 
 func (e *Engine) observeTraining(value []byte, store Store) {

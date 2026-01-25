@@ -26,6 +26,10 @@ type Config struct {
 	LengthBucketMinLen    int
 	DefCacheSize          int
 	RecentTemplates       int
+	FastPathMinSavings    int
+	FastPathMinHits       int
+	FastPathSavingsSlack  int
+	FastPathMaxMisses     int
 
 	// Training / publishing bounds.
 	MaxBuckets                   int
@@ -114,6 +118,24 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.RecentTemplates == 0 {
 		cfg.RecentTemplates = 2
+	}
+	if cfg.FastPathMinSavings <= 0 {
+		cfg.FastPathMinSavings = cfg.MinSavingsBytes * 4
+		if cfg.FastPathMinSavings < cfg.MinSavingsBytes {
+			cfg.FastPathMinSavings = cfg.MinSavingsBytes
+		}
+	}
+	if cfg.FastPathMinHits <= 0 {
+		cfg.FastPathMinHits = 2
+	}
+	if cfg.FastPathSavingsSlack < 0 {
+		cfg.FastPathSavingsSlack = 0
+	}
+	if cfg.FastPathSavingsSlack == 0 {
+		cfg.FastPathSavingsSlack = 8
+	}
+	if cfg.FastPathMaxMisses <= 0 {
+		cfg.FastPathMaxMisses = 2
 	}
 	if cfg.MaxBuckets <= 0 {
 		cfg.MaxBuckets = 256
