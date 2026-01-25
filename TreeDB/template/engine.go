@@ -661,7 +661,7 @@ func synthesizeMaskTemplate(samples []sample, cfg Config) (TemplateDef, []byte, 
 		}
 	}
 	varPositions := buildVarPositions(mask, len(base))
-	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions}
+	def := TemplateDef{Kind: TemplateMask, Base: base, Mask: mask, VarPositions: varPositions, MaskLen: maskLen, VarCount: len(varPositions)}
 	return def, refValue, activated, true
 }
 
