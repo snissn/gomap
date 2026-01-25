@@ -202,6 +202,10 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	}
 	bestSavings := 0
 	var bestPayload []byte
+	bestMask := false
+	var bestMaskDef TemplateDef
+	var bestMaskID uint64
+	bestMaskSparse := false
 	matchedAny := false
 	for i := 0; i < maxFetch; i++ {
 		cand := candidates[i]
@@ -258,8 +262,9 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			}
 			bestSavings = savings
 			bestPayload = payload
+			bestMask = false
 		case TemplateMask:
-			payload, encLen, reason, matched := matchMaskTemplate(value, def, cand.id, cfg)
+			encLen, sparse, reason, matched := matchMaskTemplateLen(value, def, cand.id, cfg)
 			if reason != "" {
 				e.stats.addReason(reason)
 			}
@@ -272,7 +277,11 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 				continue
 			}
 			bestSavings = savings
-			bestPayload = payload
+			bestPayload = nil
+			bestMask = true
+			bestMaskDef = def
+			bestMaskID = cand.id
+			bestMaskSparse = sparse
 		default:
 			e.stats.addReason(reasonTemplateFetchErr)
 			continue
@@ -281,26 +290,33 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	if matchedAny {
 		e.stats.Matched.Add(1)
 	}
-	if bestSavings >= cfg.MinSavingsBytes && len(bestPayload) > 0 {
+	keep := bestSavings >= cfg.MinSavingsBytes && (bestMask || len(bestPayload) > 0)
+	if keep {
 		e.stats.Kept.Add(1)
 		e.stats.BytesSaved.Add(uint64(bestSavings))
-		if IsEncodedPayload(bestPayload) && len(bestPayload) >= payloadHeader {
-			if bestPayload[3]&flagMask != 0 {
-				if bestPayload[3]&flagMaskFull != 0 {
-					e.stats.MaskFullUsed.Add(1)
-				} else {
-					e.stats.MaskSparseUsed.Add(1)
-				}
+		if bestMask {
+			if bestMaskSparse {
+				e.stats.MaskSparseUsed.Add(1)
+			} else {
+				e.stats.MaskFullUsed.Add(1)
 			}
 		}
-		e.observeTraining(value, store)
-		return bestPayload, true
 	}
 	if matchedAny && bestSavings < cfg.MinSavingsBytes {
 		e.stats.addReason(reasonKeepNoSavings)
 	}
 	// Not kept.
 	e.observeTraining(value, store)
+	if keep {
+		if bestMask {
+			payload := encodeMaskTemplate(value, bestMaskDef, bestMaskID, bestMaskSparse)
+			if len(payload) == 0 {
+				return value, false
+			}
+			return payload, true
+		}
+		return bestPayload, true
+	}
 	return value, false
 }
 

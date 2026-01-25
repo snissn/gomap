@@ -79,6 +79,201 @@ func matchTemplate(value []byte, anchors [][]byte, templateID uint64, cfg Config
 	return gaps, encLen, "", true
 }
 
+func matchMaskTemplateLen(value []byte, def TemplateDef, templateID uint64, cfg Config) (encLen int, sparse bool, reason string, matched bool) {
+	if def.Kind != TemplateMask || len(def.Base) == 0 {
+		return 0, false, reasonMatchMissingAnchor, false
+	}
+	if len(value) != len(def.Base) {
+		return 0, false, reasonMatchMissingAnchor, false
+	}
+	if cfg.MaxDecodedBytes > 0 && len(value) > cfg.MaxDecodedBytes {
+		return 0, false, reasonKeepBounds, false
+	}
+	rawLen := len(value)
+	maskLenFull := (len(def.Base) + 7) / 8
+	varMask := def.Mask
+	if len(varMask) != maskLenFull {
+		varMask = nil
+	}
+	if varMask == nil {
+		diffCount := 0
+		for i := 0; i < len(def.Base); i++ {
+			if value[i] != def.Base[i] {
+				diffCount++
+			}
+		}
+		encLen = payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
+		if rawLen-encLen < cfg.MinSavingsBytes {
+			return encLen, false, reasonMatchExpectedSavings, false
+		}
+		return encLen, false, "", true
+	}
+
+	varCount := 0
+	if len(def.VarPositions) > 0 {
+		varCount = len(def.VarPositions)
+	} else {
+		for _, b := range varMask {
+			varCount += bits.OnesCount8(b)
+		}
+	}
+	if len(def.VarPositions) > 0 && len(def.ConstPositions) > 0 {
+		constMismatch := false
+		for _, pos := range def.ConstPositions {
+			if value[pos] != def.Base[pos] {
+				constMismatch = true
+				break
+			}
+		}
+		diffCount := 0
+		for _, pos := range def.VarPositions {
+			if value[pos] != def.Base[pos] {
+				diffCount++
+			}
+		}
+		if !constMismatch {
+			sparseLen := payloadHeader + uvarintLen(templateID) + varCount
+			fullLen := payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
+			encLen = fullLen
+			sparse = false
+			if sparseLen <= fullLen {
+				encLen = sparseLen
+				sparse = true
+			}
+			if rawLen-encLen < cfg.MinSavingsBytes {
+				return encLen, sparse, reasonMatchExpectedSavings, false
+			}
+			return encLen, sparse, "", true
+		}
+	}
+
+	diffCount := 0
+	constMismatch := false
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] != def.Base[i] {
+			diffCount++
+			if varMask[i/8]&(1<<uint(i%8)) == 0 {
+				constMismatch = true
+			}
+		}
+	}
+	fullLen := payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
+	sparseLen := payloadHeader + uvarintLen(templateID) + varCount
+	useSparse := !constMismatch && sparseLen <= fullLen
+	encLen = fullLen
+	sparse = false
+	if useSparse {
+		encLen = sparseLen
+		sparse = true
+	}
+	if rawLen-encLen < cfg.MinSavingsBytes {
+		return encLen, sparse, reasonMatchExpectedSavings, false
+	}
+	return encLen, sparse, "", true
+}
+
+func encodeMaskTemplate(value []byte, def TemplateDef, templateID uint64, useSparse bool) []byte {
+	if def.Kind != TemplateMask || len(def.Base) == 0 {
+		return nil
+	}
+	if len(value) != len(def.Base) {
+		return nil
+	}
+	maskLenFull := (len(def.Base) + 7) / 8
+	varMask := def.Mask
+	if len(varMask) != maskLenFull {
+		varMask = nil
+	}
+	if useSparse && varMask != nil {
+		varCount := 0
+		if len(def.VarPositions) > 0 {
+			varCount = len(def.VarPositions)
+		} else {
+			for _, b := range varMask {
+				varCount += bits.OnesCount8(b)
+			}
+		}
+		payloadLen := payloadHeader + uvarintLen(templateID) + varCount
+		reuse := cap(value) >= payloadLen
+		if reuse {
+			out := value[:payloadLen]
+			scratchStart := len(value) - varCount
+			if len(def.VarPositions) > 0 {
+				for i := varCount - 1; i >= 0; i-- {
+					pos := def.VarPositions[i]
+					outIdx := scratchStart + i
+					value[outIdx] = value[pos]
+				}
+			} else {
+				idx := varCount - 1
+				for i := len(value) - 1; i >= 0; i-- {
+					if varMask[i/8]&(1<<uint(i%8)) == 0 {
+						continue
+					}
+					value[scratchStart+idx] = value[i]
+					idx--
+				}
+			}
+			out[0] = magic0
+			out[1] = magic1
+			out[2] = payloadVer
+			out[3] = flagEncoded | flagMask
+			off := payloadHeader
+			off += binary.PutUvarint(out[off:], templateID)
+			copy(out[off:], value[scratchStart:scratchStart+varCount])
+			return out
+		}
+		out := make([]byte, payloadLen)
+		out[0] = magic0
+		out[1] = magic1
+		out[2] = payloadVer
+		out[3] = flagEncoded | flagMask
+		off := payloadHeader
+		off += binary.PutUvarint(out[off:], templateID)
+		if len(def.VarPositions) > 0 {
+			for i, pos := range def.VarPositions {
+				out[off+i] = value[pos]
+			}
+		} else {
+			idx := 0
+			for i := 0; i < len(value); i++ {
+				if varMask[i/8]&(1<<uint(i%8)) == 0 {
+					continue
+				}
+				out[off+idx] = value[i]
+				idx++
+			}
+		}
+		return out
+	}
+	diffCount := 0
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] != def.Base[i] {
+			diffCount++
+		}
+	}
+	fullLen := payloadHeader + uvarintLen(templateID) + maskLenFull + diffCount
+	full := make([]byte, fullLen)
+	full[0] = magic0
+	full[1] = magic1
+	full[2] = payloadVer
+	full[3] = flagEncoded | flagMask | flagMaskFull
+	off := payloadHeader
+	off += binary.PutUvarint(full[off:], templateID)
+	maskOff := off
+	diffOff := maskOff + maskLenFull
+	idx := 0
+	for i := 0; i < len(def.Base); i++ {
+		if value[i] == def.Base[i] {
+			continue
+		}
+		full[maskOff+i/8] |= 1 << uint(i%8)
+		full[diffOff+idx] = value[i]
+		idx++
+	}
+	return full
+}
+
 func matchMaskTemplate(value []byte, def TemplateDef, templateID uint64, cfg Config) (payload []byte, encLen int, reason string, matched bool) {
 	if def.Kind != TemplateMask || len(def.Base) == 0 {
 		return nil, 0, reasonMatchMissingAnchor, false
