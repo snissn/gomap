@@ -37,8 +37,11 @@ func TestDB_DeferValueLogOps_DoesNotDedupDuplicates(t *testing.T) {
 		t.Fatalf("expected deferValueLogOps to preserve op count (no dedup); got %d want %d", got, want)
 	}
 	for i := range out {
-		if !out[i].IsPtr || out[i].Value != nil {
-			t.Fatalf("op %d expected pointer rewrite; is_ptr=%v value_nil=%v", i, out[i].IsPtr, out[i].Value == nil)
+		if out[i].IsPtr {
+			t.Fatalf("op %d expected inline value (copy-on-flush); got IsPtr=true", i)
+		}
+		if !bytes.Equal(out[i].Value, ops[i].Value) {
+			t.Fatalf("op %d value mismatch after deferValueLogOps", i)
 		}
 	}
 }
