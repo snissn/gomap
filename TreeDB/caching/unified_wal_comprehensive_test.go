@@ -97,6 +97,76 @@ func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
 	}
 }
 
+func TestUnifiedWAL_CopyOnFlushRemovesValueLogDependency(t *testing.T) {
+	scenarios := []struct {
+		name                     string
+		memtableValueLogPointers bool
+	}{
+		{"RAM_Value", false},
+		{"RAM_Ptr", true},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			backend, err := db.Open(db.Options{Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			opts := Options{
+				AllowUnsafe:              true,
+				FlushThreshold:           1,
+				ValueLogPointerThreshold: 1,
+				SplitValueLog:            true,
+				MemtableValueLogPointers: sc.memtableValueLogPointers,
+			}
+			cached, err := Open(dir, backend, opts)
+			if err != nil {
+				_ = backend.Close()
+				t.Fatal(err)
+			}
+
+			key := []byte("large-key")
+			val := bytes.Repeat([]byte{0xAA}, page.DefaultInlineThreshold+64)
+			if err := cached.Set(key, val); err != nil {
+				_ = cached.Close()
+				_ = backend.Close()
+				t.Fatal(err)
+			}
+			if err := cached.Checkpoint(); err != nil {
+				_ = cached.Close()
+				_ = backend.Close()
+				t.Fatal(err)
+			}
+
+			if err := cached.Close(); err != nil {
+				_ = backend.Close()
+				t.Fatalf("cache close: %v", err)
+			}
+			if err := backend.Close(); err != nil {
+				t.Fatalf("backend close: %v", err)
+			}
+
+			deleteValueLogs(t, dir)
+
+			backend, err = db.Open(db.Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("backend reopen: %v", err)
+			}
+			defer backend.Close()
+
+			got, err := backend.Get(key)
+			if err != nil {
+				t.Fatalf("backend get: %v", err)
+			}
+			if !bytes.Equal(got, val) {
+				t.Fatalf("value mismatch after value-log deletion")
+			}
+		})
+	}
+}
+
 // TestUnifiedWAL_CrashRecoveryMissingCommit ensures payloads without commit intent are ignored.
 func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 	dir := t.TempDir()

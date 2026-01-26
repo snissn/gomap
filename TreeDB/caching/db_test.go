@@ -793,7 +793,7 @@ func TestCachingDB_SetDoesNotBlockOnWriteMuRLock(t *testing.T) {
 	}
 }
 
-func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
+func TestCachingDB_FlushCopiesValueLogPointer(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
@@ -827,13 +827,9 @@ func TestCachingDB_FlushUsesValueLogPointer(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("GetEntry: %v", err)
 	}
-	if entry.Flags&node.FlagPointer == 0 {
+	if entry.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		_ = snap.Close()
-		t.Fatalf("expected pointer flag for large value")
-	}
-	if !page.IsValueLogFileID(entry.ValuePtr.FileID) {
-		_ = snap.Close()
-		t.Fatalf("expected backend to store value-log pointer, got %#x", entry.ValuePtr.FileID)
+		t.Fatalf("expected backend to copy value-log pointer, got value-log file id %#x", entry.ValuePtr.FileID)
 	}
 	_ = snap.Close()
 
@@ -926,13 +922,9 @@ func TestCachingDB_DeferredValueLogCoalescesOverwrites(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("GetEntry: %v", err)
 	}
-	if entry.Flags&node.FlagPointer == 0 {
+	if entry.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		_ = snap.Close()
-		t.Fatalf("expected pointer flag for large value")
-	}
-	if !page.IsValueLogFileID(entry.ValuePtr.FileID) {
-		_ = snap.Close()
-		t.Fatalf("expected backend to store value-log pointer, got %#x", entry.ValuePtr.FileID)
+		t.Fatalf("expected backend to copy value-log pointer, got value-log file id %#x", entry.ValuePtr.FileID)
 	}
 	_ = snap.Close()
 
