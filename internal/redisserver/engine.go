@@ -7,7 +7,6 @@ import (
 
 	hashdb "github.com/snissn/gomap/HashDB"
 	treedb "github.com/snissn/gomap/TreeDB"
-	"github.com/snissn/gomap/TreeDB/compaction"
 	"github.com/snissn/gomap/kvstore"
 	hashdbadapter "github.com/snissn/gomap/kvstore/adapters/hashdb"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
@@ -51,22 +50,11 @@ func openTreeDB(cfg Config) (kvstore.DB, error) {
 		Dir:                      cfg.Dir,
 		FlushThreshold:           cfg.TreeDBFlushThreshold,
 		ValueLogPointerThreshold: cfg.TreeDBValueLogThreshold,
-		DisableValueLog:          cfg.TreeDBDisableValueLog,
 		DisableWAL:               cfg.TreeDBDisableWAL,
-		DisableJournal:           cfg.TreeDBDisableJournal,
 		RelaxedSync:              cfg.TreeDBRelaxedSync,
 		AllowUnsafe:              cfg.TreeDBAllowUnsafe,
 		JournalLanes:             cfg.TreeDBJournalLanes,
 		MemtableShards:           cfg.TreeDBMemtableShards,
-		MemtableValueLogPointers: cfg.TreeDBMemtableVlogPtrs,
-	}
-	switch strings.ToLower(strings.TrimSpace(cfg.TreeDBMode)) {
-	case "", "cached":
-		opts.Mode = treedb.ModeCached
-	case "backend":
-		opts.Mode = treedb.ModeBackend
-	default:
-		return nil, fmt.Errorf("unknown treedb mode: %s", cfg.TreeDBMode)
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -82,19 +70,12 @@ type clearer interface{ Clear() error }
 
 // treeDBCompactor adapts TreeDB's compaction API to the compactor interface.
 type treeDBCompactor struct {
-	db  *treedb.DB
-	cfg Config
+	db *treedb.DB
 }
 
 func (c *treeDBCompactor) Compact() error {
-	opts := compaction.Options{
-		DeadRatioThreshold: c.cfg.CompactDeadRatio,
-		MinTotalBytes:      c.cfg.CompactMinBytes,
-		MaxSlabs:           c.cfg.CompactMaxSlabs,
-		MicroBatchSize:     c.cfg.CompactMicroBatch,
-		RotateBeforeWrite:  c.cfg.CompactRotateBeforeWrite,
-		CopyBytesPerSec:    c.cfg.CompactCopyBytesPerSec,
-		CopyBurstBytes:     c.cfg.CompactCopyBurstBytes,
+	if c == nil || c.db == nil {
+		return errors.New("treedb compactor unavailable")
 	}
-	return c.db.CompactCandidates(opts)
+	return c.db.CompactIndex()
 }

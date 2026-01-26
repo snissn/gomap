@@ -23,17 +23,13 @@ type Config struct {
 	HashDBCompression bool
 
 	// TreeDB options.
-	TreeDBMode              string // "cached" or "backend"
 	TreeDBFlushThreshold    int64
 	TreeDBValueLogThreshold int
-	TreeDBDisableValueLog   bool
 	TreeDBDisableWAL        bool
-	TreeDBDisableJournal    bool
 	TreeDBRelaxedSync       bool
 	TreeDBAllowUnsafe       bool
 	TreeDBJournalLanes      int
 	TreeDBMemtableShards    int
-	TreeDBMemtableVlogPtrs  bool
 
 	// TreeDB compaction defaults (used by COMPACT/BGREWRITEAOF).
 	CompactDeadRatio         float64
