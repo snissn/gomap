@@ -3861,11 +3861,19 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	shard.mu.Lock()
 	if usePointer {
-		memVal := []byte(nil)
-		if !db.memtableValueLogPointers {
-			memVal = value
+		// Journal mode: values may be written to the value-log so the WAL can store
+		// RID records instead of large inline payloads, but the backend must not
+		// persist pointers into the ephemeral WAL/value-log directory. Persist the
+		// value bytes via the normal backend flush path.
+		if !db.disableJournal && !db.memtableValueLogPointers {
+			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		} else {
+			memVal := []byte(nil)
+			if !db.memtableValueLogPointers {
+				memVal = value
+			}
+			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
 		}
-		shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
 	} else {
 		shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
 	}
@@ -5089,6 +5097,25 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						if flags&node.FlagPointer != 0 {
+							if !db.disableJournal && page.IsValueLogFileID(ptr.FileID) {
+								if val == nil {
+									if db.valueLogReader == nil {
+										_ = iter.Close()
+										putEntrySlice(ops)
+										return nil, fmt.Errorf("cachingdb: flush missing value-log bytes for key")
+									}
+									readVal, err := db.readValueLog(ptr)
+									if err != nil {
+										_ = iter.Close()
+										putEntrySlice(ops)
+										return nil, err
+									}
+									val = readVal
+								}
+								ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
+								iter.Next()
+								continue
+							}
 							ops = append(ops, batch.Entry{
 								Type:     batch.OpPut,
 								Key:      key,
@@ -5218,26 +5245,52 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					SetPointer(key []byte, ptr page.ValuePtr) error
 				})
 			}
-			for _, unit := range units {
-				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-				for iter.Valid() {
-					key := iter.UnsafeKey()
-					val, ptr, flags := iter.UnsafeEntry()
-					if flags&node.FlagTombstone != 0 {
-						if err := backendBatch.Delete(key); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						if flags&node.FlagPointer != 0 {
-							if ptrSetter != nil {
-								if err := ptrSetter.SetPointer(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
+				for _, unit := range units {
+					iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
+					for iter.Valid() {
+						key := iter.UnsafeKey()
+						val, ptr, flags := iter.UnsafeEntry()
+						if flags&node.FlagTombstone != 0 {
+							if err := backendBatch.Delete(key); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						} else {
+							if flags&node.FlagPointer != 0 {
+								if !db.disableJournal && page.IsValueLogFileID(ptr.FileID) {
+									if val == nil {
+										if db.valueLogReader == nil {
+											db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log bytes for key)"))
+											_ = iter.Close()
+											_ = backendBatch.Close()
+											return false
+										}
+										readVal, err := db.readValueLog(ptr)
+										if err != nil {
+											db.reportError(fmt.Errorf("cachingdb: flush failed (read value-log): %w", err))
+											_ = iter.Close()
+											_ = backendBatch.Close()
+											return false
+										}
+										val = readVal
+									}
+									if err := backendBatch.Set(key, val); err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
+									}
+									iter.Next()
+									continue
+								}
+								if ptrSetter != nil {
+									if err := ptrSetter.SetPointer(key, ptr); err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
 								}
 							} else if err := backendBatch.SetOps([]batch.Entry{{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}}); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
@@ -5471,6 +5524,27 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				} else {
 					key := iter.UnsafeKey()
 					if flags&node.FlagPointer != 0 {
+						if !db.disableJournal && page.IsValueLogFileID(ptr.FileID) {
+							if val == nil {
+								if db.valueLogReader == nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log bytes for key)"))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								readVal, err := db.readValueLog(ptr)
+								if err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (read value-log): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								val = readVal
+							}
+							ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
+							iter.Next()
+							continue
+						}
 						ops = append(ops, batch.Entry{
 							Type:     batch.OpPut,
 							Key:      key,
@@ -5517,6 +5591,32 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					key := iter.UnsafeKey()
 					val, ptr, flags := iter.UnsafeEntry()
 					if flags&node.FlagPointer != 0 {
+						if !db.disableJournal && page.IsValueLogFileID(ptr.FileID) {
+							if val == nil {
+								if db.valueLogReader == nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log bytes for key)"))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								readVal, err := db.readValueLog(ptr)
+								if err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (read value-log): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+								val = readVal
+							}
+							if err := backendBatch.Set(key, val); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+							iter.Next()
+							continue
+						}
 						if ptrSetter != nil {
 							if err := ptrSetter.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
@@ -6996,6 +7096,11 @@ func (b *Batch) writeRegular(sync bool) error {
 				op.IsPtr = true
 				if b.db.memtableValueLogPointers {
 					op.Value = nil
+				} else if !b.db.disableJournal {
+					// Journal mode: do not keep value-log pointers in the in-memory
+					// layers/backends. Use the value-log only to keep the WAL small.
+					op.IsPtr = false
+					op.ValuePtr = page.ValuePtr{}
 				}
 				if debugPtr {
 					b.db.debugPtrUsed.Add(1)
