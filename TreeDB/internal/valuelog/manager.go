@@ -496,6 +496,24 @@ func (m *Manager) MarkZombie(id uint32) error {
 	return nil
 }
 
+// EvictSegment closes and forgets a segment without deleting it from disk.
+// This is useful when another component owns lifecycle/deletion.
+func (m *Manager) EvictSegment(id uint32) error {
+	m.mu.Lock()
+	f, ok := m.files[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	if f.RefCount.Load() != 0 {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot evict valuelog file %d: still pinned", id)
+	}
+	delete(m.files, id)
+	m.mu.Unlock()
+	return f.Close()
+}
+
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

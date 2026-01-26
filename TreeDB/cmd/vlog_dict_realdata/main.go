@@ -988,14 +988,44 @@ func writeUntilRawBytes(db *treedb.DB, samples []kvSample, targetRawBytes int64,
 	return rawBytes, records, nil
 }
 
+func dictStatsActive(stats map[string]string) bool {
+	if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
+		return true
+	}
+	if kept, ok := parseStatUint(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
+		return true
+	}
+	return false
+}
+
+func nudgeDictApplication(db *treedb.DB) error {
+	if db == nil {
+		return fmt.Errorf("nil db")
+	}
+	batch := db.NewBatch()
+	if batch == nil {
+		return fmt.Errorf("failed to create batch")
+	}
+	val := bytes.Repeat([]byte("a"), 256)
+	for i := 0; i < 8; i++ {
+		key := []byte(fmt.Sprintf("dict_nudge_%d", i))
+		if err := batch.Set(key, val); err != nil {
+			_ = batch.Close()
+			return err
+		}
+	}
+	if err := batch.Write(); err != nil {
+		_ = batch.Close()
+		return err
+	}
+	return batch.Close()
+}
+
 func waitForDictActivation(db *treedb.DB, maxWait time.Duration) (bool, map[string]string) {
 	deadline := time.Now().Add(maxWait)
 	for {
 		stats := db.Stats()
-		if dictID, ok := parseStatUint(stats, "treedb.cache.vlog_dict.last_applied_dict_id"); ok && dictID > 0 {
-			return true, stats
-		}
-		if kept, ok := parseStatUint(stats, "treedb.cache.vlog_dict.frames_kept"); ok && kept > 0 {
+		if dictStatsActive(stats) {
 			return true, stats
 		}
 		if time.Now().After(deadline) {
@@ -1022,6 +1052,27 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		fmt.Printf("dict:     pre-steady not active; forcing Checkpoint() (wal_off deferred value log) to enable dict during steady\n")
 		if err := db.Checkpoint(); err != nil {
 			return false, db.Stats(), fmt.Errorf("checkpoint before steady (wal_off) failed: %w", err)
+		}
+	}
+
+	if cfg.Mode == "mode4" {
+		deadline := time.Now().Add(10 * time.Second)
+		nextNudge := time.Now()
+		for {
+			snap := db.Stats()
+			if dictStatsActive(snap) {
+				return true, snap, nil
+			}
+			if time.Now().After(deadline) {
+				return false, snap, fmt.Errorf("value-log dict did not become active before steady (mode=%s). Try increasing -train/-bench-raw-mib or lowering -bench-flush-threshold-mib; if it persists, this is a bug", cfg.Mode)
+			}
+			if time.Now().After(nextNudge) {
+				if err := nudgeDictApplication(db); err != nil {
+					return false, snap, fmt.Errorf("dict activation nudge failed: %w", err)
+				}
+				nextNudge = time.Now().Add(1 * time.Second)
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
 	}
 

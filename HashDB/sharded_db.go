@@ -123,6 +123,17 @@ func (h *HashDB) SetCompression(enabled bool) {
 	}
 }
 
+// SetMaxProbeGroupsBeforeResize sets a probe-length guard on all shards.
+// If a new insert scans more than this many probe groups, the shard will
+// trigger an incremental resize. Set to 0 to disable.
+func (h *HashDB) SetMaxProbeGroupsBeforeResize(groups uint64) {
+	for i := 0; i < len(h.shards); i++ {
+		h.locks[i].Lock()
+		h.shards[i].SetMaxProbeGroupsBeforeResize(groups)
+		h.locks[i].Unlock()
+	}
+}
+
 // Get retrieves the value for a given key.
 // It returns nil if the key does not exist.
 func (h *HashDB) Get(key []byte) ([]byte, error) {
@@ -140,6 +151,38 @@ func (h *HashDB) Put(key []byte, value []byte) error {
 	h.locks[shardIndex].Lock()
 	defer h.locks[shardIndex].Unlock()
 	return h.shards[shardIndex].Put(key, value)
+}
+
+// PutNoCopyValue inserts or updates a key-value pair without copying the value.
+// Caller must not mutate value after calling (it may be retained until flushed).
+func (h *HashDB) PutNoCopyValue(key []byte, value []byte) error {
+	hash := hash(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].PutNoCopyValue(key, value)
+}
+
+// PutNoCopyKeyValueUnsafe inserts or updates a key-value pair without copying the key or value.
+// Caller must not mutate key or value after calling (they may be retained until flushed).
+func (h *HashDB) PutNoCopyKeyValueUnsafe(key []byte, value []byte) error {
+	hash := hash(key)
+	shardIndex := hash % Hash(len(h.shards))
+	h.locks[shardIndex].Lock()
+	defer h.locks[shardIndex].Unlock()
+	return h.shards[shardIndex].PutNoCopyKeyValueUnsafe(key, value)
+}
+
+// PutNoCopy inserts or updates a key-value pair without copying the value.
+//
+// Deprecated: use PutNoCopyValue.
+func (h *HashDB) PutNoCopy(key []byte, value []byte) error { return h.PutNoCopyValue(key, value) }
+
+// PutNoCopyUnsafe inserts or updates a key-value pair without copying the key or value.
+//
+// Deprecated: use PutNoCopyKeyValueUnsafe.
+func (h *HashDB) PutNoCopyUnsafe(key []byte, value []byte) error {
+	return h.PutNoCopyKeyValueUnsafe(key, value)
 }
 
 // PutSync performs a durable write. See CachedDB.PutSync for details.

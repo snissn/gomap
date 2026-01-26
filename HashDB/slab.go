@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,7 +164,98 @@ func (h *DB) writeSlabAndRotate(buf []byte) (SlabOffset, error) {
 }
 
 func (h *DB) addManySlabs(items []Item) ([]Key, error) {
-	slabOffsets := make([]Key, len(items))
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	if offsets, ok, err := h.addManySlabsDirect(items); err != nil {
+		return nil, err
+	} else if ok {
+		return offsets, nil
+	}
+
+	return h.addManySlabsBuffered(items)
+}
+
+// addManySlabsDirect attempts a no-copy batch write using writev (net.Buffers).
+// It only succeeds when the entire batch fits in the current slab segment.
+func (h *DB) addManySlabsDirect(items []Item) ([]Key, bool, error) {
+	f := h.slabFiles[h.activeSegmentID]
+	if f == nil {
+		return nil, false, fmt.Errorf("missing slab-%d", h.activeSegmentID)
+	}
+
+	maxSegmentSize := atomic.LoadInt64(&MaxSegmentSize)
+	available := maxSegmentSize - h.activeSegmentSize
+	if available <= 0 {
+		return nil, false, nil
+	}
+
+	if cap(h.slabOffsets) < len(items) {
+		h.slabOffsets = make([]Key, len(items))
+	} else {
+		h.slabOffsets = h.slabOffsets[:len(items)]
+	}
+	slabOffsets := h.slabOffsets
+
+	currentOffset := *h.slabOffset
+	totalBytes := 0
+
+	headerBytes := len(items) * 16
+	if cap(h.slabHeaders) < headerBytes {
+		h.slabHeaders = make([]byte, headerBytes)
+	} else {
+		h.slabHeaders = h.slabHeaders[:headerBytes]
+	}
+
+	if cap(h.slabBuffers) < len(items)*3 {
+		h.slabBuffers = make(net.Buffers, 0, len(items)*3)
+	} else {
+		h.slabBuffers = h.slabBuffers[:0]
+	}
+
+	for i, item := range items {
+		keyBytes := item.Key
+		valueBytes := item.Value
+
+		var flags uint8
+		if compressed, ok := compressValueIfEnabled(h.compressionEnabled, valueBytes); ok {
+			valueBytes = compressed
+			flags |= FlagCompressed
+		}
+
+		recordLen := 16 + len(keyBytes) + len(valueBytes)
+		totalBytes += recordLen
+		if int64(totalBytes) > available {
+			return nil, false, nil
+		}
+
+		slabOffsets[i] = Key{slabOffset: currentOffset, hash: hash(keyBytes)}
+
+		hdrOff := i * 16
+		binary.LittleEndian.PutUint64(h.slabHeaders[hdrOff:hdrOff+8], uint64(len(keyBytes)))
+		binary.LittleEndian.PutUint64(h.slabHeaders[hdrOff+8:hdrOff+16], packLength(uint64(len(valueBytes)), flags))
+		h.slabBuffers = append(h.slabBuffers, h.slabHeaders[hdrOff:hdrOff+16], keyBytes, valueBytes)
+
+		currentOffset += SlabOffset(recordLen)
+	}
+
+	if _, err := h.slabBuffers.WriteTo(f); err != nil {
+		return nil, false, err
+	}
+	h.activeSegmentSize += int64(totalBytes)
+	*h.slabOffset = currentOffset
+
+	return slabOffsets, true, nil
+}
+
+func (h *DB) addManySlabsBuffered(items []Item) ([]Key, error) {
+	if cap(h.slabOffsets) < len(items) {
+		h.slabOffsets = make([]Key, len(items))
+	} else {
+		h.slabOffsets = h.slabOffsets[:len(items)]
+	}
+	slabOffsets := h.slabOffsets
 	if cap(h.slabData) < 1<<20 {
 		h.slabData = make([]byte, 0, 1<<20) // 1MB starting point; grows as needed.
 	} else {
