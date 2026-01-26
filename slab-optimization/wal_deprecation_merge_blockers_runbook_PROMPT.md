@@ -1,14 +1,13 @@
 # Prompt: Execute `wal_deprecation_merge_blockers_runbook.md`
 
-You are a Codex-style coding agent working in:
-- `/Users/michaelseiler/dev/snissn/gomap`
+You are a Codex-style coding agent working in the gomap repo checkout.
 
 Your task:
 - Execute the merge-blocker runbook:
   - `slab-optimization/wal_deprecation_merge_blockers_runbook.md`
 
 Hard requirements:
-- Follow the runbook’s scope strictly: only #177/#178/#179.
+- Follow the runbook’s scope strictly: only PRs #182/#183/#184.
 - Treat #179 as merge-blocking; do not declare success without it.
 - Use stacked PRs as described (one blocker per PR).
 - Use GitHub CLI (`gh`) for PR creation and to watch CI:
@@ -18,5 +17,4 @@ Hard requirements:
 - Run `GOWORK=off go test ./TreeDB/... -count=1` for each PR (or justify any narrower scope).
 
 When done:
-- Post a final comment on PR #176 summarizing what shipped and linking the blocker PRs.
-
+- Post a final comment on PR #176 summarizing what shipped and linking PRs #182/#183/#184.

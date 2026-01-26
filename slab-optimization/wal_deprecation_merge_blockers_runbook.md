@@ -4,10 +4,10 @@ This runbook is for finishing the **merge-blocking work** required to land PR #1
 
 ## Scope (hard)
 
-This runbook covers **only** the blockers:
-- #178 Restore swap-based index vacuum semantics (online/offline).
-- #177 Add value-log GC CLI (`treemap vlog-gc`) for deleting fully-unreferenced segments.
-- #179 Add value-log rewrite compaction (`treemap vlog-rewrite`) to reclaim **mixed** live/dead segments (merge-blocking).
+This runbook covers **only** the blockers (now implemented as PRs):
+- **PR #182** Restore swap-based index vacuum semantics (online/offline).
+- **PR #183** Add value-log GC CLI (`treemap vlog-gc`) for deleting fully-unreferenced segments.
+- **PR #184** Add value-log rewrite compaction (`treemap vlog-rewrite`) to reclaim **mixed** live/dead segments (merge-blocking).
 
 Explicitly out of scope:
 - Background value-log recompression on rotation (#180). Track only; do not implement here.
@@ -85,12 +85,7 @@ GOWORK=off go test ./TreeDB/... -count=1
 ```
 
 ### PR
-- Create description file `.pr/PR_vacuum_swap.md`
-- Open PR via:
-```bash
-gh pr create --title "treedb: restore swap-based vacuum semantics" --body-file .pr/PR_vacuum_swap.md --head fix/vacuum-swap --base refactor/wal-on-off-only
-gh pr checks --watch
-```
+- Already implemented as **PR #182** (branch `fix/vacuum-swap`).
 
 ## Step 2 — Blocker #177: Value-Log GC CLI (`vlog-gc`)
 
@@ -132,12 +127,7 @@ GOWORK=off go test ./TreeDB/... -count=1
 ```
 
 ### PR
-- Create description file `.pr/PR_vlog_gc.md`
-- Open PR stacked on the previous:
-```bash
-gh pr create --title "treemap: add vlog-gc (delete unreferenced value-log segments)" --body-file .pr/PR_vlog_gc.md --head feat/vlog-gc --base fix/vacuum-swap
-gh pr checks --watch
-```
+- Already implemented as **PR #183** (branch `feat/vlog-gc`).
 
 ## Step 3 — Blocker #179: Value-Log Rewrite Compaction (`vlog-rewrite`)
 
@@ -184,20 +174,11 @@ GOWORK=off go test ./TreeDB/... -count=1
 ```
 
 ### PR
-- Create description file `.pr/PR_vlog_rewrite.md`
-- Open PR stacked on the previous:
-```bash
-gh pr create --title "treemap: add vlog-rewrite (value-log rewrite compaction)" --body-file .pr/PR_vlog_rewrite.md --head feat/vlog-rewrite --base feat/vlog-gc
-gh pr checks --watch
-```
+- Already implemented as **PR #184** (branch `feat/vlog-rewrite`).
 
 ## Step 4 — Close The Loop
 
-- Update issues #177/#178/#179 with:
+- Update PRs **#182/#183/#184** with:
   - reproduction commands
-  - PR links
   - any remaining limitations (e.g., Windows online vacuum unsupported)
-- Comment on PR #176 summarizing:
-  - which blocker PRs landed
-  - and that value-log rewrite compaction now exists (no slab feature regression).
-
+- Comment on PR #176 summarizing that blocker PRs #182/#183/#184 landed.
