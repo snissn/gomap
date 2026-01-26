@@ -1137,16 +1137,19 @@ func (db *DB) pruneRetainedValueLogs() {
 		if err != nil {
 			continue
 		}
-		if _, ok := live[id]; ok {
-			continue
-		}
-
-		if marker, ok := db.backend.(valueLogZombieMarker); ok {
-			if err := marker.MarkValueLogZombie(id); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+			if _, ok := live[id]; ok {
 				continue
 			}
-			marked = true
+
+			if marker, ok := db.backend.(valueLogZombieMarker); ok {
+				if db.valueLogReader != nil {
+					_ = db.valueLogReader.EvictSegment(id)
+				}
+				if err := marker.MarkValueLogZombie(id); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
+					continue
+				}
+				marked = true
 		} else {
 			db.dropValueLogSegment(path)
 			_ = db.removeFileRetry(path)
