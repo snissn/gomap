@@ -34,8 +34,8 @@ This file is the sprint source of truth:
   - avoid large transient allocations by streaming ops directly into the backend batch (`SetView`/`DeleteView`/`SetPointerView`) instead of materializing `[]batch.Entry`
   - avoid per-flush heap allocations for combined flush snapshots (`mems`/`ranges`/`walPaths`/`units` on stack for up to 32 memtables)
   - keep combined-flush latency bounded under small flush thresholds (see flushthrash CI note below)
-- [ ] Evaluate multi-core flush building cost (existing `FlushBuildConcurrency`):
-  - if goroutine/scheduler overhead shows up, consider a small reusable worker pool
+- [x] Evaluate multi-core flush building cost (existing `FlushBuildConcurrency`):
+  - perf server `-suite flushdrain` shows backend write dominates checkpoint time; parallel build yields only minor improvements
 - [ ] If warranted by profiling: pipeline ops building and backend commit (without parallel backend commits).
 
 ### Acceptance gates
@@ -53,6 +53,7 @@ This file is the sprint source of truth:
 - 2026-01-27: Added regression test covering combined-flush bulk path (`totalLen > 2000`) to ensure queued memtables persist.
 - 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
 - 2026-01-27: (WIP) Added `cmd/unified_bench` flag `-treedb-flush-build-concurrency` and implemented an order-preserving parallel combined-flush build path (chunked) behind `Options.FlushBuildConcurrency > 1`.
+- 2026-01-27: Perf server: ran `-suite flushdrain` with `FlushBuildConcurrency={1,4,8}`; observed only small checkpoint-time improvements (backend write dominates). Captured `TREEDB_DEBUG_FLUSH_TIMING=1` stage breakdown.
 
 ## Results / follow-ups
 
@@ -115,6 +116,31 @@ Observed (Apple laptop; single-run sanity, noisy):
 
 Follow-up:
 - Rerun on the perf server with the same flags (and ideally multiple trials) to confirm whether the checkpoint/drain-time improvement is real and stable.
+
+### Perf server: `FlushBuildConcurrency` (flushdrain) (2026-01-27)
+
+Artifacts (perf server):
+- `artifacts/perf_flushbuild_20260127_073354/` (suite outputs)
+- `artifacts/perf_flushbuild_20260127_073425_timing/` (suite output + stderr timing)
+
+Command:
+
+```bash
+./bin/unified-bench -suite flushdrain -profile wal_on_fast -keys 900000 -progress=false -format markdown \
+  -treedb-flush-build-concurrency {1,4,8}
+```
+
+Observed (single run each; ops/sec):
+- `c=1`: random_write 1,232,527; random_read 1,909,138; checkpoint before reads 1.51s
+- `c=4`: random_write 1,211,869; random_read 1,932,999; checkpoint before reads 1.48s
+- `c=8`: random_write 1,199,070; random_read 1,901,429; checkpoint before reads 1.30s
+
+Flush stage breakdown (from `TREEDB_DEBUG_FLUSH_TIMING=1`, `c=1`):
+- Combined flush at checkpoint (67MB): build ~139ms, backend_write ~364ms, total ~504ms
+- Combined flush at checkpoint (37MB): build ~52ms, backend_write ~924ms, total ~977ms
+
+Interpretation:
+- Parallel build can reduce the CPU portion of the checkpoint, but end-to-end drain time is largely bound by `backend_write` on the perf server. If we need larger improvements in checkpoint time, focus should likely move to backend write/commit throughput or reducing the number of backend writes per checkpoint.
 
 ### Local checkpoint/drain sanity (historical note)
 
