@@ -332,6 +332,15 @@ func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+	closeOnce := sync.Once{}
+	fail := func(err error) {
+		select {
+		case errCh <- err:
+		default:
+		}
+		closeOnce.Do(func() { close(stop) })
+	}
 
 	writer := func(id byte) {
 		defer wg.Done()
@@ -343,13 +352,15 @@ func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
 			}
 			for i := 0; i < 50; i++ {
 				if err := db.Set([]byte(fmt.Sprintf("%c-stress-%04d", id, i)), []byte("stress")); err != nil {
-					t.Fatalf("Set: %v", err)
+					fail(fmt.Errorf("Set: %w", err))
+					return
 				}
 			}
 			db.mu.Lock()
 			if err := db.rotateMemtableLocked(true); err != nil {
 				db.mu.Unlock()
-				t.Fatalf("rotateMemtableLocked: %v", err)
+				fail(fmt.Errorf("rotateMemtableLocked: %w", err))
+				return
 			}
 			db.mu.Unlock()
 		}
@@ -388,6 +399,17 @@ func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
 	time.Sleep(700 * time.Millisecond)
 	close(stop)
 	wg.Wait()
+
+	if err := func() error {
+		select {
+		case err := <-errCh:
+			return err
+		default:
+			return nil
+		}
+	}(); err != nil {
+		t.Fatalf("stress test failure: %v", err)
+	}
 
 	db.flushAll(true)
 }
