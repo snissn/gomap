@@ -32,6 +32,7 @@ Commands:
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
+  vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
@@ -80,6 +81,8 @@ func main() {
 		runVacuum(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
+	case "vlog-rewrite":
+		runVlogRewrite(dir, args)
 	case "get":
 		runGet(dir, args)
 	case "keys":
@@ -248,6 +251,29 @@ func runVlogGC(dir string, args []string) {
 		stats.BytesActive,
 		stats.BytesEligible,
 		stats.BytesDeleted,
+	)
+}
+
+func runVlogRewrite(dir string, args []string) {
+	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("vlog-rewrite requires -rw")
+	}
+
+	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	if err != nil {
+		fatalf("ValueLogRewriteOffline error: %v", err)
+	}
+
+	fmt.Printf("vlog-rewrite: segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d\n",
+		stats.SegmentsBefore,
+		stats.SegmentsAfter,
+		stats.BytesBefore,
+		stats.BytesAfter,
+		stats.RecordsCopied,
 	)
 }
 
