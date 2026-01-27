@@ -48,6 +48,8 @@ type Pager struct {
 	growWake     chan struct{}
 	growDone     chan struct{}
 	growTarget   atomic.Int64 // byte capacity target (aligned to chunkSize by grower)
+
+	syncConcurrency atomic.Int32
 }
 
 // Open opens the pager at the given path.
@@ -87,6 +89,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		path:        path,
 		dirtyChunks: make(map[int]struct{}),
 	}
+	p.syncConcurrency.Store(1)
 
 	if size > 0 {
 		// Align size to chunk size if needed
@@ -477,6 +480,15 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
+// SetSyncConcurrency configures how many goroutines may msync dirty chunks
+// in parallel. Values <= 0 default to 1.
+func (p *Pager) SetSyncConcurrency(n int) {
+	if n <= 0 {
+		n = 1
+	}
+	p.syncConcurrency.Store(int32(n))
+}
+
 // ReadPage returns a copy of the page data.
 // Safe for concurrent use including checksum verification.
 func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
@@ -542,12 +554,50 @@ func (p *Pager) Sync() error {
 	// including file sync.
 
 	var syncErr error
-	for _, idx := range toSync {
-		if idx < len(p.chunks) {
-			if err := msyncFile(p.chunks[idx]); err != nil {
-				syncErr = err
-				break // Stop on first error
+	concurrency := int(p.syncConcurrency.Load())
+	if concurrency <= 1 || len(toSync) <= 1 {
+		for _, idx := range toSync {
+			if idx < len(p.chunks) {
+				if err := msyncFile(p.chunks[idx]); err != nil {
+					syncErr = err
+					break // Stop on first error
+				}
 			}
+		}
+	} else {
+		if concurrency > len(toSync) {
+			concurrency = len(toSync)
+		}
+		var (
+			wg    sync.WaitGroup
+			jobs  = make(chan int)
+			errCh = make(chan error, 1)
+		)
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range jobs {
+					if idx >= len(p.chunks) {
+						continue
+					}
+					if err := msyncFile(p.chunks[idx]); err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+					}
+				}
+			}()
+		}
+		for _, idx := range toSync {
+			jobs <- idx
+		}
+		close(jobs)
+		wg.Wait()
+		select {
+		case syncErr = <-errCh:
+		default:
 		}
 	}
 

@@ -162,6 +162,9 @@ type Options struct {
 	ReadOnly   bool
 	ChunkSize  int64  // Default 4MiB
 	KeepRecent uint64 // Default 10000
+	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
+	// in parallel during Sync. Values <= 0 use the default (1).
+	PagerSyncConcurrency int
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -467,6 +470,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p, err := pager.Open(idxPath, opts.ChunkSize)
 	if err != nil {
 		return nil, err
+	}
+	if opts.PagerSyncConcurrency > 0 {
+		p.SetSyncConcurrency(opts.PagerSyncConcurrency)
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
