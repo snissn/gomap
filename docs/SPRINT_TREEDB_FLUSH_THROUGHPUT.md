@@ -58,6 +58,9 @@ This file is the sprint source of truth:
 - 2026-01-27: Added `TREEDB_DEBUG_COMMIT_TIMING=1` to break down commit sync costs.
 - 2026-01-27: (WIP) Added adaptive flush-build chunk sizing (target 1–4MiB per chunk) and per-lane flush scaffolding; awaiting perf validation.
 - 2026-01-27: Ran `./bin/unified-bench -dbs treedb -profile fast -keys 200000 -progress=false -format markdown -test sequential_write,random_read` as a perf gate for `sprint/flush-lane-adaptive`; sequential write reached 7,670,354 ops/sec and random read 1,274,499 ops/sec.
+- 2026-01-27: Perf server (mikers@192.168.0.185) `-suite flushdrain` gating (5 seeds) comparing `origin/main` vs `origin/sprint/flush-lane-adaptive` on `keys=900000`. Trimmed mean results:
+  - Random Write: main 1,227,890 → cand 1,218,250 (−0.8%).
+  - Random Read: main 1,928,883 → cand 1,918,566 (−0.5%).
 
 ## Results / follow-ups
 
