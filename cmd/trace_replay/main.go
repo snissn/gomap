@@ -86,12 +86,18 @@ func main() {
 	fmt.Printf("trace_replay: dir=%s\n", dir)
 
 	opts := treedb.Options{
-		Dir:                 dir,
-		DisableWAL:          *disableWAL,
-		FlushThreshold:      int64(*flushThreshold),
-		MemtableShards:      *memtableShards,
-		AllowUnsafe:         true,
-		DisableReadChecksum: true,
+		Dir:            dir,
+		FlushThreshold: int64(*flushThreshold),
+		MemtableShards: *memtableShards,
+		Durability: func() treedb.DurabilityMode {
+			if *disableWAL {
+				return treedb.DurabilityWALOffRelaxed
+			}
+			return treedb.DurabilityWALOnRelaxed
+		}(),
+		ValueLog: treedb.ValueLogOptions{
+			ReadIntegrity: treedb.IntegritySkipChecksums,
+		},
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {

@@ -39,7 +39,7 @@ At a high level it can adapt:
 - **Value log**: append-only log containing large values stored out-of-line.
 - **Frame**: a batch of `k` value-log records written together as a unit.
 - **`k`**: number of records per frame. Larger `k` can improve ratio (more cross-record redundancy) but may cost more CPU and increase per-frame work.
-- **Pointer threshold**: values larger than `ValueLogPointerThreshold` are written to the value log and referenced by pointers elsewhere.
+- **Pointer threshold**: values larger than `Options.ValueLog.PointerThreshold` are written to the value log and referenced by pointers elsewhere.
 
 ### Attempted vs kept
 
@@ -72,14 +72,14 @@ Compression is kept only when it improves predicted wall time with a safety marg
 Value log compression autotune is designed for:
 
 - **Cached mode** (TreeDB caching layer enabled via `treedb.Open`).
-- **WAL on/off** both supported; WAL-off (`DisableWAL=true`) requires `AllowUnsafe=true`.
+- **WAL on/off** both supported; WAL off is selected via `Options.Durability = DurabilityWALOffRelaxed`.
 
 ### Configuration prerequisites
 
 To benefit from vlog autotune:
 
 1. **Large values routed to the value log**
-   - Set `ValueLogPointerThreshold` such that a meaningful fraction of payload bytes go to the value log.
+   - Set `Options.ValueLog.PointerThreshold` such that a meaningful fraction of payload bytes go to the value log.
    - If your workload has only tiny values, vlog autotune will have little/no effect.
 
 ### Dictionary storage
@@ -105,19 +105,19 @@ package main
 import (
 	"log"
 
-	"github.com/snissn/gomap/TreeDB/treedb"
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func main() {
 	dir := "/var/lib/treedb"
 
-	opts := treedb.OptionsFor(treedb.ProfileFastIngest, dir)
+	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
 
 	// Ensure a meaningful fraction of values are externalized.
-	opts.ValueLogPointerThreshold = 4 << 10 // 4 KiB
+	opts.ValueLog.PointerThreshold = 4 << 10 // 4 KiB
 
 	// Enable wall-time autotuning (recommended default for cached mode).
-	opts.ValueLogCompressionAutotune.Mode = treedb.AutotuneMedium
+	opts.ValueLog.CompressionAutotune.Mode = treedb.AutotuneMedium
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -149,7 +149,7 @@ For production rollouts (especially on latency-sensitive clusters):
 
 TreeDB exposes a small, production-safe configuration surface via:
 
-- `treedb.Options.ValueLogCompressionAutotune`
+- `treedb.Options.ValueLog.CompressionAutotune`
 
 The recommended approach is:
 - Pick a **Mode** (`Off`, `Medium`, `Aggressive`)
@@ -322,7 +322,7 @@ Avoid `Aggressive` if:
 
 Set:
 
-- `ValueLogCompressionAutotune.Mode = AutotuneOff`
+- `ValueLog.CompressionAutotune.Mode = AutotuneOff`
 
 This forces raw frame storage immediately for new frames. Existing on-disk data remains readable regardless of mode.
 

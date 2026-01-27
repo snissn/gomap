@@ -77,12 +77,18 @@ func BenchmarkTraceReplay(b *testing.B) {
 		}
 
 		opts := Options{
-			Dir:                 dir,
-			DisableWAL:          disableWAL,
-			FlushThreshold:      int64(flushThreshold),
-			MemtableShards:      memtableShards,
-			AllowUnsafe:         true,
-			DisableReadChecksum: true,
+			Dir:            dir,
+			FlushThreshold: int64(flushThreshold),
+			MemtableShards: memtableShards,
+			Durability: func() DurabilityMode {
+				if disableWAL {
+					return DurabilityWALOffRelaxed
+				}
+				return DurabilityWALOnRelaxed
+			}(),
+			ValueLog: ValueLogOptions{
+				ReadIntegrity: IntegritySkipChecksums,
+			},
 		}
 		db, err := Open(opts)
 		if err != nil {

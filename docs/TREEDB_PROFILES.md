@@ -38,7 +38,6 @@ override specific fields:
 opts := treedb.Options{Dir: "./db"}
 treedb.ApplyProfile(&opts, treedb.ProfileBench)
 opts.FlushThreshold = 64 << 20
-opts.AllowUnsafe = true // required for ProfileFast/ProfileBench
 ```
 
 ## What is a Profile?
@@ -60,10 +59,9 @@ Goal: safest default for production use.
 
 Behavior:
 
-- Keeps cached-mode durability/integrity features enabled (WAL on):
-  - journal enabled (`DisableWAL=false`)
-  - fsync policy unchanged (`RelaxedSync=false`)
-  - read checksums enabled (`DisableReadChecksum=false`)
+- Keeps cached-mode durability/integrity features enabled:
+  - `Durability = DurabilityDurable`
+  - `ValueLog.ReadIntegrity = IntegrityVerify`
 - Leaves background workers at their default settings.
 
 Use when you want:
@@ -78,9 +76,8 @@ Goal: maximize throughput by relaxing safety knobs.
 Behavior:
 
 - Disables or relaxes safety knobs:
-  - disables cached-mode journal via `DisableWAL=true` (WAL off)
-  - relaxes sync policy (`RelaxedSync=true`)
-  - skips read checksums (`DisableReadChecksum=true`)
+  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
+  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
 - Leaves background maintenance enabled by default.
 
@@ -88,7 +85,6 @@ Notes:
 
 - Profiles do not change the write path beyond WAL on/off; the value log remains
   enabled in cached mode.
-- WAL-off (`DisableWAL=true`) is unsafe for durability and requires `AllowUnsafe=true`.
 
 Use when you want:
 
@@ -96,26 +92,21 @@ Use when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
-Note: `ProfileFast` requires `Options.AllowUnsafe = true` to open.
+### `ProfileWALOnFast`
 
-### `ProfileFastIngest`
-
-Goal: maximize write throughput while keeping WAL on and the cached value-log
-path enabled.
+Goal: maximize write throughput while keeping WAL on.
 
 Behavior:
 
-- Keeps WAL on (`DisableWAL=false`) while relaxing durability checks:
-  - `RelaxedSync=true`
-  - `DisableReadChecksum=true`
+- Keeps WAL on while relaxing durability checks:
+  - `Durability = DurabilityWALOnRelaxed`
+  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation (`PreferAppendAlloc=true`)
 
 Use when you want:
 
 - a stable “fast ingest” default that keeps WAL on
 - benchmarks aligned with the intended cached value-log write path
-
-Note: `ProfileFastIngest` requires `Options.AllowUnsafe = true` to open.
 
 ### `ProfileBench`
 
@@ -136,8 +127,6 @@ Use when you want:
   where background work would otherwise add noise.
 
 Not recommended for production.
-
-Note: `ProfileBench` requires `Options.AllowUnsafe = true` to open.
 
 ## Important Notes
 

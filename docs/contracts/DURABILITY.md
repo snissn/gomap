@@ -12,9 +12,10 @@
 
 ## TreeDB
 
-TreeDB has one engine with WAL on/off semantics.
+TreeDB exposes a single cached-mode engine with selectable durability semantics
+via `Options.Durability`.
 
-### WAL on (default)
+### Durable (default) (`Durability = DurabilityDurable`)
 
 Cached mode writes to the journal (and the value log for large values), then
 eventually flushes to the backend.
@@ -27,15 +28,22 @@ eventually flushes to the backend.
 Crash recovery:
 - On open, any journal segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
 
-### WAL off (`DisableWAL=true`)
+### WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
+
+WAL stays enabled, but `*Sync` operations do not `fsync`. This is
+crash-consistent (process crash) but not guaranteed durable on power loss.
+
+- `Set` / `Batch.Write`: not guaranteed durable on power loss.
+- `SetSync` / `Batch.WriteSync`: crash-consistent only (no `fsync`).
+
+### WAL off (`Durability = DurabilityWALOffRelaxed`)
 
 WAL-off disables the journal/redo log while keeping the value log enabled. This
 improves write throughput but sacrifices durability for the most recent writes
 since the last checkpoint.
 
 - `Set` / `Batch.Write`: not guaranteed durable (no redo log).
-- `SetSync` / `Batch.WriteSync`: syncs the index/value log, but recovery can
-  still lose writes since the last checkpoint (no journal to replay).
+- `SetSync` / `Batch.WriteSync`: crash-consistent only (no redo log + no `fsync`).
 - Use `Checkpoint()` to establish a durable boundary.
 
 ### Operational notes

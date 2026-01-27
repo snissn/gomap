@@ -788,11 +788,14 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	opts := treedb.Options{
-		AllowUnsafe:                  true,
-		ValueLogPointerThreshold:     cfg.PointerThreshold,
-		MaxValueLogRetainedBytesHard: 0,
-		ValueLogCompressionAutotune:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
-		ValueLogDictTrain:            compression.TrainConfig{TrainBytes: -1},
+		Durability: treedb.DurabilityDurable,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:     cfg.PointerThreshold,
+			MaxRetainedBytesHard: 0,
+			ReadIntegrity:        treedb.IntegrityVerify,
+			CompressionAutotune:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+			DictTrain:            compression.TrainConfig{TrainBytes: -1},
+		},
 	}
 	if cfg.FlushThresholdMiB > 0 {
 		opts.FlushThreshold = int64(cfg.FlushThresholdMiB) * 1024 * 1024
@@ -801,10 +804,10 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	var expect benchWritePath
 	switch cfg.Mode {
 	case "wal_on":
-		opts.DisableWAL = false
+		opts.Durability = treedb.DurabilityDurable
 		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "on"}
 	case "wal_off":
-		opts.DisableWAL = true
+		opts.Durability = treedb.DurabilityWALOffRelaxed
 		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "off"}
 	default:
 		return treedb.Options{}, benchWritePath{}, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)
@@ -819,14 +822,14 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		if sampleStride == 0 {
 			sampleStride = defaultBenchDictSampleStride
 		}
-		opts.ValueLogDictTrain = compression.TrainConfig{
+		opts.ValueLog.DictTrain = compression.TrainConfig{
 			TrainBytes:   trainMiB << 20,
 			SampleStride: sampleStride,
 		}
-		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
+		opts.ValueLog.CompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
 	} else {
-		opts.ValueLogDictTrain = compression.TrainConfig{TrainBytes: -1}
-		opts.ValueLogCompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
+		opts.ValueLog.DictTrain = compression.TrainConfig{TrainBytes: -1}
+		opts.ValueLog.CompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
 	}
 
 	return opts, expect, nil

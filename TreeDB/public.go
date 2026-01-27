@@ -84,7 +84,7 @@ func writePathFromOptions(opts Options) writePathInfo {
 	if opts.ReadOnly {
 		info.mode = "readonly"
 	}
-	if opts.DisableWAL {
+	if opts.Durability == db.DurabilityWALOffRelaxed {
 		info.redoLog = "off"
 	}
 	return info
@@ -154,7 +154,7 @@ func Open(opts Options) (*DB, error) {
 	dictOpts := opts
 	dictOpts.Dir = dictdbDir
 	dictOpts.DisableBackgroundPrune = true
-	dictOpts.DictLookup = nil
+	dictOpts.ValueLog.DictLookup = nil
 	if chunkSizeDefaulted {
 		dictOpts.ChunkSize = defaultDictChunkSize
 	}
@@ -164,7 +164,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	dictStore := dictdb.New(dictBackend)
 
-	opts.DictLookup = func(dictID uint64) ([]byte, error) {
+	opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 		return dictStore.GetDictBytes(context.Background(), dictID)
 	}
 	opts.Dir = maindbDir
@@ -196,6 +196,11 @@ func Open(opts Options) (*DB, error) {
 		opts.MemtableMode = "adaptive"
 	}
 
+	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed
+	relaxedSync := opts.Durability != db.DurabilityDurable
+	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
+	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
+
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                     opts.FlushThreshold,
 		MemtableMode:                       opts.MemtableMode,
@@ -207,23 +212,23 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxMemtables:            opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:             opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:              opts.FlushBuildConcurrency,
-		DisableWAL:                         opts.DisableWAL,
+		DisableWAL:                         disableWAL,
 		JournalLanes:                       opts.JournalLanes,
 		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,
 		JournalCompression:                 opts.JournalCompression,
-		RelaxedSync:                        opts.RelaxedSync,
-		DisableReadChecksum:                opts.DisableReadChecksum,
-		ValueLogPointerThreshold:           opts.ValueLogPointerThreshold,
-		ValueLogDictTrain:                  opts.ValueLogDictTrain,
-		ValueLogDictAdaptiveRatio:          opts.ValueLogDictAdaptiveRatio,
-		ValueLogDictMetricsWindowBytes:     opts.ValueLogDictMetricsWindowBytes,
-		ValueLogDictMetricsMinRecords:      opts.ValueLogDictMetricsMinRecords,
-		ValueLogDictMetricsPauseBytes:      opts.ValueLogDictMetricsPauseBytes,
-		ValueLogDictMinPayloadSavingsRatio: opts.ValueLogDictMinPayloadSavingsRatio,
-		ValueLogCompressionAutotune:        opts.ValueLogCompressionAutotune,
-		AllowUnsafe:                        opts.AllowUnsafe,
-		MaxValueLogRetainedBytes:           opts.MaxValueLogRetainedBytes,
-		MaxValueLogRetainedBytesHard:       opts.MaxValueLogRetainedBytesHard,
+		RelaxedSync:                        relaxedSync,
+		DisableReadChecksum:                disableReadChecksum,
+		ValueLogPointerThreshold:           opts.ValueLog.PointerThreshold,
+		ValueLogDictTrain:                  opts.ValueLog.DictTrain,
+		ValueLogDictAdaptiveRatio:          opts.ValueLog.DictAdaptiveRatio,
+		ValueLogDictMetricsWindowBytes:     opts.ValueLog.DictMetricsWindowBytes,
+		ValueLogDictMetricsMinRecords:      opts.ValueLog.DictMetricsMinRecords,
+		ValueLogDictMetricsPauseBytes:      opts.ValueLog.DictMetricsPauseBytes,
+		ValueLogDictMinPayloadSavingsRatio: opts.ValueLog.DictMinPayloadSavingsRatio,
+		ValueLogCompressionAutotune:        opts.ValueLog.CompressionAutotune,
+		AllowUnsafe:                        allowUnsafe,
+		MaxValueLogRetainedBytes:           opts.ValueLog.MaxRetainedBytes,
+		MaxValueLogRetainedBytesHard:       opts.ValueLog.MaxRetainedBytesHard,
 		NotifyError:                        opts.NotifyError,
 	})
 	if err != nil {
@@ -261,7 +266,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	// Auto checkpointing only manages cached-mode journal segments. If WAL is
 	// disabled, skip starting the background loop to avoid unnecessary work.
-	if !opts.DisableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
+	if !disableWAL && (autoInterval > 0 || maxWALBytes > 0 || idleInterval > 0) {
 		cached.StartAutoCheckpoint(autoInterval, maxWALBytes, idleInterval)
 	}
 
@@ -288,16 +293,17 @@ func computeDurabilityMode(opts Options) string {
 		return "read_only"
 	}
 	mode := "wal_on_sync"
-	if opts.DisableWAL {
-		if opts.RelaxedSync {
-			mode = "wal_off_relaxed_sync"
-		} else {
-			mode = "wal_off_sync"
-		}
-	} else if opts.RelaxedSync {
+	switch opts.Durability {
+	case db.DurabilityDurable:
+		mode = "wal_on_sync"
+	case db.DurabilityWALOnRelaxed:
 		mode = "wal_on_relaxed_sync"
+	case db.DurabilityWALOffRelaxed:
+		mode = "wal_off_relaxed_sync"
+	default:
+		mode = fmt.Sprintf("durability_%d", opts.Durability)
 	}
-	if opts.DisableReadChecksum {
+	if opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums {
 		mode += "+no_read_checksum"
 	}
 	if opts.VerifyOnRead {
@@ -513,8 +519,8 @@ func (db *DB) Set(key, value []byte) error {
 }
 
 // SetSync writes a key/value pair and forces a durability boundary.
-// With Options.RelaxedSync enabled, Sync operations are crash-consistent
-// only (no fsync) and may not survive power loss.
+// With DurabilityWALOnRelaxed or DurabilityWALOffRelaxed enabled, Sync operations are
+// crash-consistent only (no fsync) and may not survive power loss.
 func (db *DB) SetSync(key, value []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err

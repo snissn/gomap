@@ -81,6 +81,39 @@ optionally build the `SetOps` batch in parallel:
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
 
+### Read latency under flush debt (cached mode)
+
+TreeDB cached mode absorbs bursts by buffering writes in memtables and flushing
+them asynchronously. If a workload does a heavy write phase and then immediately
+starts doing point reads, reads may run while there is still a backlog of queued
+immutable memtables (“flush debt”).
+
+How to diagnose:
+
+- Enable cache stats in your harness and watch:
+  - `treedb.cache.queue_len`
+  - `treedb.cache.queue_backlog_bytes`
+  - `treedb.cache.flush_bps_ewma`
+  - `treedb.cache.memtable_mode`
+- In `cmd/unified_bench`, use:
+  - mixed workload (demonstrates debt): default ordering, optionally `-treedb-cache-stats-before-reads`
+  - settled reads/scans: `-checkpoint-between-tests` or `-settle-before-scans`
+
+What to do about it:
+
+- If your workload has a clear phase boundary (ingest → query), call `Checkpoint()`
+  once before switching to read-heavy work.
+- If your workload is mixed and read-latency-sensitive, keep debt bounded by tuning:
+  - backpressure knobs (`SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`)
+  - `MaxQueuedMemtables` (queue-length policy)
+  - `FlushBuildConcurrency` (faster flush batch construction on multi-core)
+  - `FlushThreshold` (trade batching/throughput vs memory/debt footprint)
+
+Note on memtable sharding:
+
+- With `MemtableShards > 1`, `queue_len` counts per-shard immutables, so a queue
+  length of 40 may correspond to only ~5 rotations at 8 shards.
+
 ### `Options.IteratorMutableMaxBytes` (cached mode; opt-in)
 
 Allows iterators to read from mutable memtables without forcing a rotation when

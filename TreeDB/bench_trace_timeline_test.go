@@ -99,11 +99,17 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	}
 
 	opts := Options{
-		DisableWAL:          disableWAL,
-		FlushThreshold:      int64(flushThreshold),
-		MemtableShards:      memtableShards,
-		AllowUnsafe:         true,
-		DisableReadChecksum: true,
+		FlushThreshold: int64(flushThreshold),
+		MemtableShards: memtableShards,
+		Durability: func() DurabilityMode {
+			if disableWAL {
+				return DurabilityWALOffRelaxed
+			}
+			return DurabilityWALOnRelaxed
+		}(),
+		ValueLog: ValueLogOptions{
+			ReadIntegrity: IntegritySkipChecksums,
+		},
 	}
 
 	b.ResetTimer()

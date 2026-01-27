@@ -28,6 +28,11 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 
 ## Common flags
 
+- `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
+  - `balanced` (default)
+  - `durable` (strict durability)
+  - `fast` (max throughput; TreeDB WAL off; unsafe)
+  - `wal_on_fast` (TreeDB WAL on + relaxed durability; unsafe)
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
@@ -54,7 +59,10 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
 - `-progress` live table updates to stderr (default true)
 - `-format` output format: `table` or `markdown`
-- `-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
+- `-cpuprofile` write per-test CPU profiles to `<prefix>_<test>_<db>.pprof`
+- `-cpuprofile-tests` restrict CPU profiling to a CSV list of tests (e.g. `random_read,batch_random`)
+- `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
+- `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
 - `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`)
@@ -69,3 +77,30 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
+
+## Notes
+
+TreeDB is a cached engine (memtable + background flush). If you run long write-heavy phases and then measure `random_read`/scans immediately, the results can be dominated by background flush work (“flush debt”).
+
+Recommended:
+
+- For *settled read/scan performance*: use `-checkpoint-between-tests` or `-settle-before-scans`.
+- For *mixed workload under flush debt*: keep defaults and optionally enable `-treedb-cache-stats-before-reads` to see queue/backlog stats.
+
+### Repro: mixed vs settled reads (TreeDB)
+
+Mixed (reads under flush debt; intentionally stressful):
+
+```bash
+go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 \\
+  -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_delete,batch_small_seq,random_delete,random_read \\
+  -treedb-cache-stats-before-reads -progress=false
+```
+
+Settled (reads after a durability boundary):
+
+```bash
+go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 \\
+  -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_delete,batch_small_seq,random_delete,random_read \\
+  -checkpoint-between-tests -progress=false
+```

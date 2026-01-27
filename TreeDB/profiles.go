@@ -66,16 +66,11 @@ const (
 	// for keeping the index compact and read-friendly.
 	ProfileFast Profile = "fast"
 
-	// ProfileFastIngest is a "fast ingest" profile that keeps WAL on while
-	// relaxing sync/checksum policies for throughput.
+	// ProfileWALOnFast is a "WAL on + relaxed durability" profile intended for
+	// write-heavy benchmarks and ingest workloads.
 	//
-	// It is intended for write-heavy benchmarks and bulk ingest workloads where:
-	//   - cached mode should be used, and
-	//   - value-log pointers should remain enabled (default behavior).
-	//
-	// Note: This profile is unsafe (RelaxedSync + DisableReadChecksum) and
-	// requires `Options.AllowUnsafe = true` to open.
-	ProfileFastIngest Profile = "fast_ingest"
+	// It keeps WAL enabled but disables fsync and value-log read checksums.
+	ProfileWALOnFast Profile = "wal_on_fast"
 
 	// ProfileBench is a "fast + deterministic" profile intended specifically for
 	// benchmarking.
@@ -119,8 +114,8 @@ func ApplyProfile(opts *Options, profile Profile) {
 		applyDurableProfile(opts)
 	case ProfileFast:
 		applyFastProfile(opts)
-	case ProfileFastIngest:
-		applyFastIngestProfile(opts)
+	case ProfileWALOnFast:
+		applyWALOnFastProfile(opts)
 	case ProfileBench:
 		applyBenchProfile(opts)
 	default:
@@ -129,34 +124,13 @@ func ApplyProfile(opts *Options, profile Profile) {
 }
 
 func applyDurableProfile(opts *Options) {
-	// Durability/integrity: keep all safety features enabled unless the caller
-	// already chose otherwise.
-	//
-	// Leave background behaviors at their defaults (0), which currently means:
-	//   - cached-mode auto checkpoint ON
-	if !opts.DisableWAL {
-		// Keep as-is; explicit false is already safe.
-	}
-	if !opts.RelaxedSync {
-		// Keep as-is.
-	}
-	if !opts.DisableReadChecksum {
-		// Keep as-is.
-	}
+	opts.Durability = DurabilityDurable
+	opts.ValueLog.ReadIntegrity = IntegrityVerify
 }
 
 func applyFastProfile(opts *Options) {
-	// Fast profile relaxes safety knobs only if the caller has not explicitly set
-	// them already.
-	if opts.DisableWAL == false {
-		opts.DisableWAL = true
-	}
-	if opts.RelaxedSync == false {
-		opts.RelaxedSync = true
-	}
-	if opts.DisableReadChecksum == false {
-		opts.DisableReadChecksum = true
-	}
+	opts.Durability = DurabilityWALOffRelaxed
+	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 
 	// Prefer appending new pages for throughput under churn unless caller opted
 	// out. This can trade disk growth for write speed.
@@ -165,13 +139,9 @@ func applyFastProfile(opts *Options) {
 	}
 }
 
-func applyFastIngestProfile(opts *Options) {
-	// Fast ingest keeps WAL on, but relaxes sync/checksum policies.
-	opts.DisableWAL = false
-
-	// Unsafe speed knobs.
-	opts.RelaxedSync = true
-	opts.DisableReadChecksum = true
+func applyWALOnFastProfile(opts *Options) {
+	opts.Durability = DurabilityWALOnRelaxed
+	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true

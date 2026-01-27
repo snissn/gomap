@@ -153,8 +153,10 @@ func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	keys, values, hash := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		ValueLogPointerThreshold: 1,
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)
@@ -185,8 +187,10 @@ func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	keys, values, hash := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		ValueLogPointerThreshold: 1,
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)
@@ -214,10 +218,11 @@ func TestReopenVerify_WALOff_NoJournal(t *testing.T) {
 	keys, values, _ := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		DisableWAL:               true,
-		AllowUnsafe:              true,
-		ValueLogPointerThreshold: 1,
+		Dir:        dir,
+		Durability: treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)

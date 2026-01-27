@@ -27,7 +27,6 @@ type Config struct {
 	TreeDBValueLogThreshold int
 	TreeDBDisableWAL        bool
 	TreeDBRelaxedSync       bool
-	TreeDBAllowUnsafe       bool
 	TreeDBJournalLanes      int
 	TreeDBMemtableShards    int
 

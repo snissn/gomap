@@ -74,8 +74,8 @@ Current code note:
 - Cached mode always uses value-log pointers.
 - `-treedb-disable-wal` disables only the journal/redo log (value log remains on).
 
-So, “fast ingest” is now simply “journal off while value log stays on”, using
-`-treedb-disable-wal` (with `-treedb-allow-unsafe`).
+So, WAL-off is “journal off while value log stays on”, using `-treedb-disable-wal`
+(unsafe).
 
 #### Canonical knob (reduce sources of error)
 
@@ -85,14 +85,13 @@ harnesses use it by default.
 Preferred approach:
 
 1) **Explicit WAL toggle**:
-   - Use `-treedb-disable-wal` (with `-treedb-allow-unsafe`) for WAL off.
+   - Use `-treedb-disable-wal` for WAL off.
    - Value log pointers remain enabled; there is no separate “value log off” knob.
 
 Optional:
 
 2) **Profile name**:
-   - Add/keep a `ProfileFastIngest` that bundles `-treedb-disable-wal` plus any
-     relaxed durability toggles needed for benchmarking.
+   - Use `ProfileFast` for WAL off and `ProfileWALOnFast` for WAL on + relaxed durability.
 
 The core requirement is that **one knob** expresses “cached + value log”, and
 that toggling “journal off” does not change the value store.

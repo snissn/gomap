@@ -84,6 +84,76 @@ type DB struct {
 
 const defaultChunkSize = 4 * 1024 * 1024
 
+// DurabilityMode configures cached-mode durability semantics.
+//
+// These modes are explicit and intentionally replace the previous boolean
+// combination of DisableWAL + RelaxedSync + AllowUnsafe.
+type DurabilityMode uint8
+
+const (
+	// DurabilityDurable enables WAL (journal) and uses fsync for sync operations.
+	DurabilityDurable DurabilityMode = iota
+	// DurabilityWALOnRelaxed keeps WAL enabled but disables fsync (crash-consistent).
+	DurabilityWALOnRelaxed
+	// DurabilityWALOffRelaxed disables WAL and fsync (unsafe; recent writes may be lost).
+	DurabilityWALOffRelaxed
+)
+
+// IntegrityMode configures value-log read integrity checks.
+//
+// It intentionally replaces the previous DisableReadChecksum boolean.
+type IntegrityMode uint8
+
+const (
+	// IntegrityVerify enables checksum verification on value-log reads.
+	IntegrityVerify IntegrityMode = iota
+	// IntegritySkipChecksums disables checksum verification on value-log reads (unsafe).
+	IntegritySkipChecksums
+)
+
+// ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
+type ValueLogOptions struct {
+	// PointerThreshold controls when value-log pointers are used.
+	// Values <= 0 use the default inline threshold (256 bytes).
+	PointerThreshold int
+	// ForcePointers stores all values out-of-line in the value log (no inline values).
+	ForcePointers bool
+
+	// ReadIntegrity configures checksum verification on value-log reads.
+	ReadIntegrity IntegrityMode
+
+	// MaxRetainedBytes emits a warning when retained value-log bytes exceed this
+	// threshold (0 disables warnings). Cached mode only.
+	MaxRetainedBytes int64
+	// MaxRetainedBytesHard disables value-log pointers for new large values once
+	// retained bytes exceed this threshold (0 disables the cap).
+	MaxRetainedBytesHard int64
+
+	// DictLookup provides dictionary bytes for value-log decoding.
+	DictLookup valuelog.DictLookup
+
+	// DictTrain configures background dictionary training for value-log frame
+	// compression in cached mode.
+	DictTrain compression.TrainConfig
+	// DictAdaptiveRatio enables best-effort adaptive disable/pause of value-log
+	// dictionary compression when payload compression ratios degrade (0 disables).
+	DictAdaptiveRatio float64
+	// DictMetricsWindowBytes controls the rolling window size for ratio tracking (0=default).
+	DictMetricsWindowBytes int
+	// DictMetricsMinRecords controls how many records must be observed in a window
+	// before adaptive pause triggers (0=default).
+	DictMetricsMinRecords int
+	// DictMetricsPauseBytes controls how long to pause dict compression after a degraded
+	// window is detected (0=default).
+	DictMetricsPauseBytes int
+	// DictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
+	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
+	DictMinPayloadSavingsRatio float64
+
+	// CompressionAutotune configures the wall-time value-log compression autotuner.
+	CompressionAutotune valuelog.AutotuneOptions
+}
+
 type Options struct {
 	Dir string
 	// ReadOnly opens the database without acquiring an exclusive lock and without
@@ -92,6 +162,11 @@ type Options struct {
 	ReadOnly   bool
 	ChunkSize  int64  // Default 4MiB
 	KeepRecent uint64 // Default 10000
+
+	// Durability configures cached-mode durability semantics.
+	//
+	// The default (zero) is DurabilityDurable.
+	Durability DurabilityMode
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
 	// behavior). When false (default), a bounded background pruner frees pages
 	// asynchronously to reduce commit latency under churn.
@@ -165,14 +240,6 @@ type Options struct {
 	// Values <= 1 disable parallelism.
 	FlushBuildConcurrency int
 
-	// AllowUnsafe acknowledges unsafe durability/integrity options.
-	// When false, Open will reject options that disable WAL, fsync, or checksums.
-	AllowUnsafe bool
-
-	// DisableWAL disables the redo/journal log in cached mode while keeping the
-	// value log enabled. This improves performance but sacrifices durability:
-	// a crash will revert the database to the last Checkpoint (backend flush).
-	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
@@ -185,58 +252,13 @@ type Options struct {
 	// The redo log will only keep compressed bytes when they are smaller than the
 	// raw payload, so compression never causes size amplification.
 	JournalCompression bool
-	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
-	ValueLogPointerThreshold int
-	// ForceValuePointers stores all values out-of-line in the value log (no inline values).
-	ForceValuePointers bool
-	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
-	// this threshold (0 disables warnings). Cached mode only.
-	MaxValueLogRetainedBytes int64
-	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
-	// values once retained bytes exceed this threshold (0 disables the cap).
-	MaxValueLogRetainedBytesHard int64
-	// DictLookup provides dictionary bytes for value-log decoding.
-	DictLookup valuelog.DictLookup
 
-	// ValueLogDictTrain configures background dictionary training for value-log
-	// frame compression in cached mode.
-	//
-	// Semantics:
-	// - TrainBytes <= 0 disables training entirely (dictID remains 0 unless set externally).
-	// - TrainBytes > 0 enables training and uses TrainBytes as the raw sampling target.
-	// - DictBytes/MinRecords/MaxRecordBytes/SampleStride/DedupWindow mirror the value-log trainer.
-	ValueLogDictTrain compression.TrainConfig
-	// ValueLogDictAdaptiveRatio enables best-effort adaptive disable/pause of value-log
-	// dictionary compression when payload compression ratios degrade (0 disables).
-	ValueLogDictAdaptiveRatio float64
-	// ValueLogDictMetricsWindowBytes controls the rolling window size for ratio tracking (0=default).
-	ValueLogDictMetricsWindowBytes int
-	// ValueLogDictMetricsMinRecords controls how many records must be observed in a window
-	// before adaptive pause triggers (0=default).
-	ValueLogDictMetricsMinRecords int
-	// ValueLogDictMetricsPauseBytes controls how long to pause dict compression after a degraded
-	// window is detected (0=default).
-	ValueLogDictMetricsPauseBytes int
-	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
-	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
-	ValueLogDictMinPayloadSavingsRatio float64
-
-	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
-	ValueLogCompressionAutotune valuelog.AutotuneOptions
-
-	// RelaxedSync disables fsync on CommitSync and SetSync operations.
-	// This improves performance for synchronous workloads but provides only
-	// crash consistency (OS buffer cache), not true durability.
-	RelaxedSync bool
+	// ValueLog configures value-log pointer behavior and read integrity.
+	ValueLog ValueLogOptions
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
 
-	// DisableReadChecksum skips CRC verification on value-log reads.
-	// This improves read performance (especially for large values) but risks
-	// returning silent data corruption if the disk/memory is compromised.
-	DisableReadChecksum bool
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -384,7 +406,7 @@ func Open(opts Options) (*DB, error) {
 		opts.FreelistRegionRadius = 1
 	}
 
-	if err := validateUnsafeOptions(opts); err != nil {
+	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
@@ -405,17 +427,21 @@ func Open(opts Options) (*DB, error) {
 	return db, nil
 }
 
-func validateUnsafeOptions(opts Options) error {
+func validateOptions(opts Options) error {
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
 		// not apply.
 		return nil
 	}
-	if opts.AllowUnsafe {
-		return nil
+	switch opts.Durability {
+	case DurabilityDurable, DurabilityWALOnRelaxed, DurabilityWALOffRelaxed:
+	default:
+		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
 	}
-	if opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum {
-		return ErrUnsafeOptions
+	switch opts.ValueLog.ReadIntegrity {
+	case IntegrityVerify, IntegritySkipChecksums:
+	default:
+		return fmt.Errorf("treedb: invalid value-log integrity mode %d", opts.ValueLog.ReadIntegrity)
 	}
 	return nil
 }
@@ -438,8 +464,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		p.Close()
 		return nil, err
 	}
-	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
-	vm.SetDictLookup(opts.DictLookup)
+	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetDictLookup(opts.ValueLog.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -451,7 +477,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	adaptiveCtrl := adaptive.New()
 	inlineThreshold := page.DefaultInlineThreshold
-	if opts.ForceValuePointers {
+	if opts.ValueLog.ForcePointers {
 		inlineThreshold = 0
 		adaptiveCtrl = nil
 	}
@@ -498,13 +524,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
-	if !opts.DisableWAL {
+	if opts.Durability != DurabilityWALOffRelaxed {
 		segments, err := listWALSegments(opts.Dir)
 		if err != nil {
 			db.Close()
 			return nil, err
 		}
-		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.DictLookup); err != nil {
+		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 			db.Close()
 			return nil, err
 		}

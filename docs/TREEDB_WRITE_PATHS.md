@@ -14,7 +14,7 @@ It is the recommended reference for WAL on/off semantics.
 | Mode | Journal (WAL) | Value log | Durability | Status |
 | --- | --- | --- | --- | --- |
 | **WAL on** | ON | ON | Durable after `*Sync` or `Checkpoint()` | **Default** |
-| **WAL off** | OFF | ON | Unsafe (recent writes may be lost) | **Opt-in + AllowUnsafe** |
+| **WAL off** | OFF | ON | Unsafe (recent writes may be lost) | **Opt-in via `Options.Durability`** |
 
 Legacy modes (value-log off / backend-only slabs) have been removed.
 
@@ -24,14 +24,39 @@ Use profiles rather than raw flags when possible:
 
 ```go
 opts := treedb.OptionsFor(treedb.ProfileDurable, "./db") // WAL on
-opts := treedb.OptionsFor(treedb.ProfileFastIngest, "./db") // WAL off (unsafe)
-opts.AllowUnsafe = true
+opts := treedb.OptionsFor(treedb.ProfileFast, "./db") // WAL off (unsafe)
+opts := treedb.OptionsFor(treedb.ProfileWALOnFast, "./db") // WAL on (relaxed durability)
 ```
 
 Equivalent option-level knobs:
 
-- **WAL on (default)**: `DisableWAL=false`.
-- **WAL off (unsafe)**: `DisableWAL=true`, `AllowUnsafe=true`.
+- **WAL on (default)**: `Durability = DurabilityDurable`.
+- **WAL on (relaxed)**: `Durability = DurabilityWALOnRelaxed`.
+- **WAL off (unsafe)**: `Durability = DurabilityWALOffRelaxed`.
+
+## Migration (old → new)
+
+TreeDB’s public `Options` API was simplified to make “intent” explicit:
+durability/integrity are selected via `Options.Durability` and
+`Options.ValueLog.*` rather than a loose set of booleans.
+
+Common mappings:
+
+- `Options.DisableWAL=true` → `Options.Durability = DurabilityWALOffRelaxed`
+- `Options.RelaxedSync=true` (with WAL on) → `Options.Durability = DurabilityWALOnRelaxed`
+- `Options.DisableReadChecksum=true` → `Options.ValueLog.ReadIntegrity = IntegritySkipChecksums`
+- `Options.AllowUnsafe=true` → removed from public API (unsafe modes are now explicit via the fields above)
+
+Value-log configuration moved under `Options.ValueLog`:
+
+- `Options.ValueLogPointerThreshold` → `Options.ValueLog.PointerThreshold`
+- `Options.MaxValueLogRetainedBytes` → `Options.ValueLog.MaxRetainedBytes`
+- `Options.MaxValueLogRetainedBytesHard` → `Options.ValueLog.MaxRetainedBytesHard`
+- `Options.ValueLogCompressionAutotune` → `Options.ValueLog.CompressionAutotune`
+
+Note: internal tools (like `cmd/unified_bench`) may still require an explicit
+`-treedb-allow-unsafe` flag to reduce accidental use of relaxed durability
+settings.
 
 ## File layout (cached mode)
 

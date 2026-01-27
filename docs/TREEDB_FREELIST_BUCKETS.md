@@ -119,7 +119,7 @@ linked by `NextPageID`.
 **Workload**
 - `./bin/unified-bench`
 - `-exclude-dbs '' -dbs treedb`
-- `-profile fast -treedb-allow-unsafe`
+- `-profile fast`
 - `-test sequential_write,fragmentation_report_pre,batch_delete,batch_random,fragmentation_report_post`
 - `-keys 300000 -valsize 64 -batchsize 1000 -range-queries 0 -range-span 0`
 - Seed: 1 (default)
