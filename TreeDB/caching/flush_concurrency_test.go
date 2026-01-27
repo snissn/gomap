@@ -363,11 +363,11 @@ func TestAdaptiveChunkCapDefaultAllowsAdaptive(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 	db, err := Open(dir, backend, Options{
-		FlushThreshold:          1 << 20,
-		MemtableMode:            "hash_sorted",
-		MaxQueuedMemtables:      -1,
-		AllowUnsafe:             true,
-		FlushBuildChunkCap:      0,
+		FlushThreshold:             1 << 20,
+		MemtableMode:               "hash_sorted",
+		MaxQueuedMemtables:         -1,
+		AllowUnsafe:                true,
+		FlushBuildChunkCap:         0,
 		FlushBuildChunkTargetBytes: 16 << 20,
 	})
 	if err != nil {
