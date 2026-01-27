@@ -58,7 +58,7 @@ This file is the sprint source of truth:
 Command (baseline main):
 `go run ./cmd/unified_bench -dbs treedb -test random_write,random_read -keys 900000 -profile wal_on_fast -treedb-cache-stats-before-reads -checkpoint-between-tests -progress=false`
 
-Note: unified_bench currently labels the checkpoint table column as “After Test”, but the implementation checkpoints **before** each test; the `Random Read` row corresponds to the checkpoint taken after the write phase, before reads begin.
+Note: unified_bench checkpoints **before** each test; the `Random Read` row corresponds to the checkpoint taken after the write phase, before reads begin.
 
 Baseline (main @ cdb3efb):
 - Random Write: ~1.92M ops/sec
@@ -73,3 +73,16 @@ Candidate (sprint/flush-throughput):
 Follow-ups:
 - Run the same comparison on the perf server and include full `-test all` results + checkpoint durations.
 - Investigate the local random_read regression (possible CPU contention/background work overlap vs true steady-state regression).
+
+### Future design ideas (not implemented)
+
+- Pipeline flush: build next `SetOps` while the backend commits the previous batch (still serialized commit ordering).
+- Reduce scheduler overhead when `FlushBuildConcurrency > 1`: switch from per-flush goroutine spawns to a small reusable worker pool.
+- Raise combine target dynamically under heavy debt (fewer backend commits) while keeping a small default for latency-sensitive workloads.
+- Parallelize *safe* portions only:
+  - per-shard flush building is safe (ordering preserved by concatenation),
+  - parallel backend commits are **not** safe without sharding the durable keyspace.
+- Tie “buffer lanes” together:
+  - WAL/value-log already have lanes; consider mapping memtable shards → lanes to minimize cross-lane contention during flush/trim.
+- Linux-only I/O experiments (behind build tags / flags):
+  - `io_uring`/`readv`/`writev` for value-log-heavy flushes to reduce syscall overhead.

@@ -2368,7 +2368,7 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 		return ""
 	}
 
-	colNames := []string{"After Test"}
+	colNames := []string{"Before Test"}
 	for _, inst := range instances {
 		colNames = append(colNames, inst.Wrapper.Name())
 	}
@@ -2380,8 +2380,8 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 
 	for _, testName := range rows {
 		disp := displayNames[testName]
-		if len(disp) > colWidths["After Test"] {
-			colWidths["After Test"] = len(disp)
+		if len(disp) > colWidths["Before Test"] {
+			colWidths["Before Test"] = len(disp)
 		}
 	}
 
@@ -2403,7 +2403,7 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 
 	var sb strings.Builder
 
-	headerRow := fmt.Sprintf("%*s", colWidths["After Test"], "After Test")
+	headerRow := fmt.Sprintf("%*s", colWidths["Before Test"], "Before Test")
 	for _, inst := range instances {
 		dbName := inst.Wrapper.Name()
 		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName)
@@ -2411,7 +2411,7 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 	sb.WriteString(headerRow)
 	sb.WriteString("\n")
 
-	separatorRow := fmt.Sprintf("%*s", colWidths["After Test"], strings.Repeat("-", colWidths["After Test"]))
+	separatorRow := fmt.Sprintf("%*s", colWidths["Before Test"], strings.Repeat("-", colWidths["Before Test"]))
 	for _, inst := range instances {
 		dbName := inst.Wrapper.Name()
 		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
@@ -2420,7 +2420,7 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 	sb.WriteString("\n")
 
 	for _, testName := range rows {
-		dataRow := fmt.Sprintf("%*s", colWidths["After Test"], displayNames[testName])
+		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], displayNames[testName])
 		perDB := durs[testName]
 		for _, inst := range instances {
 			dbName := inst.Wrapper.Name()
