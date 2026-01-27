@@ -51,7 +51,7 @@ func TestCachingDB_FlushCombinedLargeMemtablesPersists(t *testing.T) {
 	}
 
 	// Create multiple queued memtables so flushCombinedLocked has to stitch
-	// together large bulk SetOps buffers (totalLen > 2000) across units.
+	// together a large combined flush (totalLen > 2000) across units.
 	writeMany('a', 3000)
 	writeMany('b', 4000)
 	writeMany('c', 2000)

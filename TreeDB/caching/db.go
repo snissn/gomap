@@ -5034,8 +5034,12 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	copy(walPaths, db.queueWALPaths[:max])
 	db.mu.Unlock()
 
+	// When the caller configures a small flush threshold (e.g. the unified_bench
+	// flushthrash suite), combining up to a fixed 64MiB can create long single-pass
+	// flush latencies and excessive stop-backpressure. Prefer a smaller target in
+	// that case; still allow combining for larger default thresholds.
 	targetBytes := flushCombineTargetBytes
-	if db.flushThreshold > targetBytes {
+	if db.flushThreshold > 0 && db.flushThreshold < targetBytes {
 		targetBytes = db.flushThreshold
 	}
 
@@ -5109,121 +5113,41 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				}
 			}
 			durBuildOps = time.Since(t0)
-		} else if totalLen > 2000 {
-			t0 := time.Now()
-			// Preserve "newest wins" semantics by building ops in queue order
-			// (oldest -> newest). Within a single memtable there are no duplicate keys.
-			var offsetsArr [flushCombineMaxMemtables + 1]int
-			offsets := offsetsArr[:len(units)+1]
-			for i := range units {
-				offsets[i+1] = offsets[i] + units[i].memLen
-			}
-			if offsets[len(units)] != totalLen {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (ops sizing): totalLen=%d sum=%d", totalLen, offsets[len(units)]))
-				_ = backendBatch.Close()
-				return false
-			}
-
-			ops := getEntrySlice(totalLen)
-			ops = ops[:totalLen]
-
-			buildConcurrency := db.flushBuildConcurrency
-			if buildConcurrency <= 1 || len(units) <= 1 {
-				for i := range units {
-					unit := units[i]
-					dst := ops[offsets[i]:offsets[i+1]]
-					n, err := collectOpsInto(unit.mem, dst)
-					if err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-						_ = backendBatch.Close()
-						putEntrySlice(ops)
-						return false
-					}
-					if n != len(dst) {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (iter count): expected=%d got=%d", len(dst), n))
-						_ = backendBatch.Close()
-						putEntrySlice(ops)
-						return false
-					}
-				}
-			} else {
-				sem := make(chan struct{}, buildConcurrency)
-				errCh := make(chan error, 1)
-				done := make(chan struct{}, len(units))
-
-				for i := range units {
-					i := i
-					unit := units[i]
-					dst := ops[offsets[i]:offsets[i+1]]
-					go func() {
-						sem <- struct{}{}
-						defer func() { <-sem }()
-						defer func() { done <- struct{}{} }()
-
-						n, err := collectOpsInto(unit.mem, dst)
-						if err != nil {
-							select {
-							case errCh <- err:
-							default:
-							}
-							return
-						}
-						if n != len(dst) {
-							select {
-							case errCh <- fmt.Errorf("iter count mismatch: expected=%d got=%d", len(dst), n):
-							default:
-							}
-						}
-					}()
-				}
-				for range units {
-					<-done
-				}
-
-				select {
-				case err := <-errCh:
-					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-					_ = backendBatch.Close()
-					putEntrySlice(ops)
-					return false
-				default:
-				}
-			}
-
-			durBuildOps = time.Since(t0)
-
-			ops, err := db.deferValueLogOps(ops, sync)
-			if err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
-				_ = backendBatch.Close()
-				putEntrySlice(ops)
-				return false
-			}
-			t1 := time.Now()
-			if err := backendBatch.SetOps(ops); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
-				_ = backendBatch.Close()
-				putEntrySlice(ops)
-				return false
-			}
-			durSetOps = time.Since(t1)
-			putEntrySlice(ops)
 		} else {
-			var ptrSetter interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			}
-			if db.valueLogEnabled() {
-				ptrSetter, _ = backendBatch.(interface {
+			t0 := time.Now()
+			type (
+				setViewer interface {
+					SetView(key, value []byte) error
+				}
+				deleteViewer interface {
+					DeleteView(key []byte) error
+				}
+				ptrSetter interface {
 					SetPointer(key []byte, ptr page.ValuePtr) error
-				})
-			}
+				}
+				ptrSetterView interface {
+					SetPointerView(key []byte, ptr page.ValuePtr) error
+				}
+			)
+			sv, _ := backendBatch.(setViewer)
+			dv, _ := backendBatch.(deleteViewer)
+			psv, _ := backendBatch.(ptrSetterView)
+			ps, _ := backendBatch.(ptrSetter)
+			var single [1]batch.Entry
+
 			for _, unit := range units {
 				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 				for iter.Valid() {
 					key := iter.UnsafeKey()
 					val, ptr, flags := iter.UnsafeEntry()
 					if flags&node.FlagTombstone != 0 {
-						if err := backendBatch.Delete(key); err != nil {
+						var err error
+						if dv != nil {
+							err = dv.DeleteView(key)
+						} else {
+							err = backendBatch.Delete(key)
+						}
+						if err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
@@ -5231,23 +5155,39 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						if flags&node.FlagPointer != 0 {
-							if ptrSetter != nil {
-								if err := ptrSetter.SetPointer(key, ptr); err != nil {
+							if psv != nil {
+								if err := psv.SetPointerView(key, ptr); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 									_ = iter.Close()
 									_ = backendBatch.Close()
 									return false
 								}
-							} else if err := backendBatch.SetOps([]batch.Entry{{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}}); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
+							} else if ps != nil {
+								if err := ps.SetPointer(key, ptr); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+							} else {
+								single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+								if err := backendBatch.SetOps(single[:]); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
 							}
 							iter.Next()
 							continue
 						}
-						if err := backendBatch.Set(key, val); err != nil {
+						var err error
+						if sv != nil {
+							err = sv.SetView(key, val)
+						} else {
+							err = backendBatch.Set(key, val)
+						}
+						if err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
@@ -5256,8 +5196,18 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					}
 					iter.Next()
 				}
-				_ = iter.Close()
+				err := iter.Error()
+				cerr := iter.Close()
+				if err == nil {
+					err = cerr
+				}
+				if err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+					_ = backendBatch.Close()
+					return false
+				}
 			}
+			durBuildOps = time.Since(t0)
 		}
 
 		// Commit to backend
@@ -5468,116 +5418,80 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return false
 			}
 			durBuildOps = time.Since(t0)
-		} else if mem.Len() > 2000 {
-			// For larger memtables, bulk-load ops into the backend batch to reduce per-op overhead.
+		} else {
 			t0 := time.Now()
-			ops := getEntrySlice(memLen)
-			ops = ops[:memLen]
-			n := 0
-			for iter.Valid() {
-				// Zero-copy: UnsafeKey/Value point to memtable nodes (heap).
-				// They are valid as long as memtable is reachable.
-				// flushOneLocked holds 'mem' reference.
-				// backendBatch.SetOps appends Entry structs (shallow copy of slices).
-				// backendBatch.Write consumes them.
-				// All within flushOneLocked (or until backendBatch.Write returns).
-				// So this is safe.
+			type (
+				setViewer interface {
+					SetView(key, value []byte) error
+				}
+				deleteViewer interface {
+					DeleteView(key []byte) error
+				}
+				ptrSetter interface {
+					SetPointer(key []byte, ptr page.ValuePtr) error
+				}
+				ptrSetterView interface {
+					SetPointerView(key []byte, ptr page.ValuePtr) error
+				}
+			)
+			sv, _ := backendBatch.(setViewer)
+			dv, _ := backendBatch.(deleteViewer)
+			psv, _ := backendBatch.(ptrSetterView)
+			ps, _ := backendBatch.(ptrSetter)
+			var single [1]batch.Entry
 
+			for iter.Valid() {
+				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
-					ops[n] = batch.Entry{
-						Type: batch.OpDelete,
-						Key:  iter.UnsafeKey(),
+					var err error
+					if dv != nil {
+						err = dv.DeleteView(key)
+					} else {
+						err = backendBatch.Delete(key)
 					}
-				} else {
-					key := iter.UnsafeKey()
-					if flags&node.FlagPointer != 0 {
-						ops[n] = batch.Entry{
-							Type:     batch.OpPut,
-							Key:      key,
-							ValuePtr: ptr,
-							IsPtr:    true,
-						}
-						n++
-						iter.Next()
-						continue
-					}
-					if val == nil && db.memtableValueLogPointers {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log ptr for key)"))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						putEntrySlice(ops)
-						return false
-					}
-					ops[n] = batch.Entry{Type: batch.OpPut, Key: key, Value: val}
-				}
-				n++
-				iter.Next()
-			}
-			if err := iter.Error(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-				_ = iter.Close()
-				_ = backendBatch.Close()
-				putEntrySlice(ops)
-				return false
-			}
-			if n != memLen {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (iter count): expected=%d got=%d", memLen, n))
-				_ = iter.Close()
-				_ = backendBatch.Close()
-				putEntrySlice(ops)
-				return false
-			}
-			durBuildOps = time.Since(t0)
-			t1 := time.Now()
-			if err := backendBatch.SetOps(ops[:n]); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (setops): %w", err))
-				_ = iter.Close()
-				_ = backendBatch.Close()
-				putEntrySlice(ops)
-				return false
-			}
-			durSetOps = time.Since(t1)
-			putEntrySlice(ops)
-		} else {
-			var ptrSetter interface {
-				SetPointer(key []byte, ptr page.ValuePtr) error
-			}
-			if db.valueLogEnabled() {
-				ptrSetter, _ = backendBatch.(interface {
-					SetPointer(key []byte, ptr page.ValuePtr) error
-				})
-			}
-			for iter.Valid() {
-				if iter.IsDeleted() {
-					if err := backendBatch.Delete(iter.UnsafeKey()); err != nil {
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
 					}
 				} else {
-					key := iter.UnsafeKey()
-					val, ptr, flags := iter.UnsafeEntry()
 					if flags&node.FlagPointer != 0 {
-						if ptrSetter != nil {
-							if err := ptrSetter.SetPointer(key, ptr); err != nil {
+						if psv != nil {
+							if err := psv.SetPointerView(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
-						} else if err := backendBatch.SetOps([]batch.Entry{{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}}); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
+						} else if ps != nil {
+							if err := ps.SetPointer(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						} else {
+							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							if err := backendBatch.SetOps(single[:]); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
 						}
 						iter.Next()
 						continue
 					}
 
-					if err := backendBatch.Set(key, val); err != nil {
+					var err error
+					if sv != nil {
+						err = sv.SetView(key, val)
+					} else {
+						err = backendBatch.Set(key, val)
+					}
+					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -5586,6 +5500,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				}
 				iter.Next()
 			}
+			if err := iter.Error(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+				_ = iter.Close()
+				_ = backendBatch.Close()
+				return false
+			}
+			durBuildOps = time.Since(t0)
 		}
 		_ = iter.Close()
 		// Commit to backend

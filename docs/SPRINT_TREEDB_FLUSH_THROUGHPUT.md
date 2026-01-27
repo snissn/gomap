@@ -31,10 +31,9 @@ This file is the sprint source of truth:
 ### Phase 2 — Improvements (caching flush pipeline)
 - [x] Add optional internal timing breakdown for flush stages (env-gated).
 - [x] Reduce flush build overhead:
-  - fill `[]batch.Entry` directly (avoid per-memtable slices + extra copies)
-  - avoid large transient allocations in `flushOneLocked`
-  - avoid per-flush heap allocations for combined flush snapshots (`mems`/`ranges`/`walPaths`/`units`/`offsets`)
-  - bulk-build ops directly into a single `SetOps` slice for combined flushes and large single-memtable flushes
+  - avoid large transient allocations by streaming ops directly into the backend batch (`SetView`/`DeleteView`/`SetPointerView`) instead of materializing `[]batch.Entry`
+  - avoid per-flush heap allocations for combined flush snapshots (`mems`/`ranges`/`walPaths`/`units` on stack for up to 32 memtables)
+  - keep combined-flush latency bounded under small flush thresholds (see flushthrash CI note below)
 - [ ] Evaluate multi-core flush building cost (existing `FlushBuildConcurrency`):
   - if goroutine/scheduler overhead shows up, consider a small reusable worker pool
 - [ ] If warranted by profiling: pipeline ops building and backend commit (without parallel backend commits).
@@ -48,7 +47,8 @@ This file is the sprint source of truth:
 - 2026-01-27: Created sprint tracker (`docs/SPRINT_TREEDB_FLUSH_THROUGHPUT.md`).
 - 2026-01-27: Added `cmd/unified_bench -suite flushdrain` (write burst → checkpoint → read) to make drain-time comparisons easier.
 - 2026-01-27: Added `TREEDB_DEBUG_FLUSH_TIMING=1` to print flush stage timing breakdowns from the caching layer.
-- 2026-01-27: Reduced flush build allocations/copies by filling bulk `SetOps` slices directly during flush.
+- 2026-01-27: Prototype: reduced flush build allocations via bulk `SetOps` slices (later replaced by streaming view ops due to flushthrash stall).
+- 2026-01-27: Fixed CI cancellation in `-suite flushthrash` by (a) lowering the combined-flush target when `FlushThreshold` is small and (b) streaming into backend batches via `SetView`/`DeleteView`/`SetPointerView` (no `[]batch.Entry` materialization).
 - 2026-01-27: Reduced per-flush heap allocations in the combined-flush snapshot path (stack arrays for up to 32 memtables).
 - 2026-01-27: Added regression test covering combined-flush bulk path (`totalLen > 2000`) to ensure queued memtables persist.
 - 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
@@ -109,7 +109,22 @@ Interpretation / follow-ups:
   - rerun on the perf server (once reachable) with default backpressure settings, and
   - confirm `-checkpoint-between-tests` is truly draining the relevant work under these settings (the very-low ms numbers may indicate “background kept up” *or* a premature return).
 
-### Hang note (candidate, local): `keys=900000` + backpressure
+### CI / hang note (resolved): `-suite flushthrash` stall/cancel
+
+CI symptom:
+- GitHub Actions `unified_bench: suites (linux)` canceled while running `./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false` (job hit wall-time).
+
+Local reproduction (pre-fix):
+- `./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false` could stall under stop-backpressure.
+
+Fix (current branch):
+- Combined flush target now respects small `FlushThreshold` to avoid long single-pass flush latency.
+- Combined flush + single-memtable flushes stream ops into backend batches (view methods) instead of building a giant `[]batch.Entry`.
+
+Post-fix sanity run:
+- `./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false` completes quickly (local: ~1–2s).
+
+### Historical hang note (candidate, local): `keys=900000` + backpressure
 
 Candidate run stalled locally with `keys=900000 -profile fast -test all` while committing a batch, blocked in:
 - `github.com/snissn/gomap/TreeDB/caching.(*DB).waitForStop` (`TreeDB/caching/db.go:3522`)
