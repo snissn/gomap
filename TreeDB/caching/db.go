@@ -3498,30 +3498,25 @@ func (db *DB) waitForStop() {
 		// without a flush trigger (e.g. iterator-driven rotations).
 		db.TriggerFlush()
 
-		// Ensure progress even if the background flusher isn't currently scheduled
-		// (e.g. backlog driven by iterator rotations). This still "blocks" the write
-		// in the sense that we don't accept new ops until backlog drops, but lets the
-		// caller contribute bounded flush work.
-		db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
-
-		db.bpMu.Lock()
+		// Stop backpressure means we are already blocking the caller. Actively
+		// flush until the backlog drops below the resume threshold (hysteresis).
+		// This avoids depending entirely on background flush scheduling to wake
+		// blocked writers and limits the amount of synchronous work we do.
+		target := resumeBytes
+		if target <= 0 {
+			target = stopBytes
+		}
+		db.flushMu.Lock()
 		for {
-			_, stopBytes, resumeBytes = db.thresholdsLocked()
-			if stopBytes <= 0 {
-				db.bpMu.Unlock()
-				return
-			}
-			backlog = db.queueBacklogBytes.Load()
-			if backlog < stopBytes {
-				db.bpMu.Unlock()
-				return
-			}
-			if backlog < resumeBytes {
+			curBacklog := db.queueBacklogBytes.Load()
+			if curBacklog < target {
 				break
 			}
-			db.bpCond.Wait()
+			if !db.flushCombinedLocked(false) {
+				break
+			}
 		}
-		db.bpMu.Unlock()
+		db.flushMu.Unlock()
 	}
 }
 
@@ -5093,17 +5088,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if totalLen > 0 {
 		flushStart = time.Now()
 
-		// Ensure value-log writes are flushed from user-space buffers before we
-		// commit backend pointers that may reference them.
-		if db.valueLogEnabled() && !db.deferredValueLogEnabled() {
-			t0 := time.Now()
-			if err := db.flushValueLog(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
-				return false
-			}
-			durPreVlogFlush = time.Since(t0)
-		}
-
 		backendBatch := db.newBackendBatchWithSize(totalLen)
 
 		if db.deferredValueLogEnabled() {
@@ -5470,18 +5454,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	flushed := false
 	if memLen > 0 {
 		flushStart = time.Now()
-
-		// Ensure value log is flushed to disk (or at least to OS) so that
-		// subsequent reads (via db.valueLogReader) can resolve pointers.
-		// This is critical for Copy-on-Flush where we read back what we just wrote.
-		if db.memtableValueLogPointers && db.valueLogReader != nil {
-			t0 := time.Now()
-			if err := db.flushValueLog(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (pre-flush vlog): %w", err))
-				return false
-			}
-			durPreVlogFlush = time.Since(t0)
-		}
 
 		// Flush 'mem' to backend
 		backendBatch := db.newBackendBatchWithSize(memLen)
