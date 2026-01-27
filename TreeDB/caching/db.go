@@ -3565,7 +3565,6 @@ func (db *DB) Checkpoint() error {
 	}()
 
 	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
@@ -3582,12 +3581,17 @@ func (db *DB) Checkpoint() error {
 	db.mu.Unlock()
 	for i := range db.lanes {
 		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
+			db.flushMu.Unlock()
 			return err
 		}
 	}
+	db.flushMu.Unlock()
 
 	// Flush all queued memtables with backend sync.
 	db.flushAll(true)
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
