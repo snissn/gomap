@@ -24,11 +24,6 @@ type verifiedBitset struct {
 	chunks [][]uint64
 }
 
-type dirtyRange struct {
-	min int
-	max int
-}
-
 const verifiedChunkPages = 1 << 16 // 65536 pages per chunk (8KiB bitset)
 const verifiedChunkWords = verifiedChunkPages / 64
 
@@ -39,7 +34,7 @@ type Pager struct {
 	atomicChunks atomic.Pointer[chunkList] // Lock-free view for Get
 	chunkSize    int64
 	numPages     atomic.Uint64 // The number of pages logically allocated
-	dirtyChunks  map[int]dirtyRange
+	dirtyChunks  map[int]struct{}
 	mu           sync.RWMutex
 	allocMu      sync.Mutex
 	path         string
@@ -92,7 +87,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		file:        f,
 		chunkSize:   chunkSize,
 		path:        path,
-		dirtyChunks: make(map[int]dirtyRange),
+		dirtyChunks: make(map[int]struct{}),
 	}
 	p.syncConcurrency.Store(1)
 
@@ -435,22 +430,7 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 		return nil, ErrPageOutOfBounds
 	}
 
-	min := int(offsetInChunk)
-	max := int(offsetInChunk + page.PageSize)
-	if max > int(p.chunkSize) {
-		max = int(p.chunkSize)
-	}
-	if existing, ok := p.dirtyChunks[chunkIdx]; ok {
-		if min < existing.min {
-			existing.min = min
-		}
-		if max > existing.max {
-			existing.max = max
-		}
-		p.dirtyChunks[chunkIdx] = existing
-	} else {
-		p.dirtyChunks[chunkIdx] = dirtyRange{min: min, max: max}
-	}
+	p.dirtyChunks[chunkIdx] = struct{}{}
 
 	chunk := p.chunks[chunkIdx]
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
@@ -545,22 +525,7 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	}
 
 	// Mark chunk as dirty
-	min := int(offsetInChunk)
-	max := int(offsetInChunk + page.PageSize)
-	if max > int(p.chunkSize) {
-		max = int(p.chunkSize)
-	}
-	if existing, ok := p.dirtyChunks[int(chunkIdx)]; ok {
-		if min < existing.min {
-			existing.min = min
-		}
-		if max > existing.max {
-			existing.max = max
-		}
-		p.dirtyChunks[int(chunkIdx)] = existing
-	} else {
-		p.dirtyChunks[int(chunkIdx)] = dirtyRange{min: min, max: max}
-	}
+	p.dirtyChunks[int(chunkIdx)] = struct{}{}
 
 	chunk := p.chunks[chunkIdx]
 	dst := chunk[offsetInChunk : offsetInChunk+page.PageSize]
@@ -574,26 +539,13 @@ func (p *Pager) Sync() error {
 		return ErrReadOnly
 	}
 	p.mu.Lock()
-	type syncChunk struct {
-		idx int
-		min int
-		max int
-	}
 	// Copy dirty list and clear
-	toSync := make([]syncChunk, 0, len(p.dirtyChunks))
-	for idx, r := range p.dirtyChunks {
-		min := r.min
-		max := r.max
-		if min < 0 {
-			min = 0
-		}
-		if max <= min {
-			max = int(p.chunkSize)
-		}
-		toSync = append(toSync, syncChunk{idx: idx, min: min, max: max})
+	toSync := make([]int, 0, len(p.dirtyChunks))
+	for idx := range p.dirtyChunks {
+		toSync = append(toSync, idx)
 	}
 	// We clear the map now. If Msync fails, we must restore these.
-	p.dirtyChunks = make(map[int]dirtyRange)
+	p.dirtyChunks = make(map[int]struct{})
 	p.mu.Unlock()
 
 	// Perform msync under read lock
@@ -604,19 +556,9 @@ func (p *Pager) Sync() error {
 	var syncErr error
 	concurrency := int(p.syncConcurrency.Load())
 	if concurrency <= 1 || len(toSync) <= 1 {
-		for _, chunk := range toSync {
-			if chunk.idx < len(p.chunks) {
-				data := p.chunks[chunk.idx]
-				if chunk.max > len(data) {
-					chunk.max = len(data)
-				}
-				if chunk.min < 0 {
-					chunk.min = 0
-				}
-				if chunk.max <= chunk.min {
-					continue
-				}
-				if err := msyncFile(data[chunk.min:chunk.max]); err != nil {
+		for _, idx := range toSync {
+			if idx < len(p.chunks) {
+				if err := msyncFile(p.chunks[idx]); err != nil {
 					syncErr = err
 					break // Stop on first error
 				}
@@ -628,28 +570,18 @@ func (p *Pager) Sync() error {
 		}
 		var (
 			wg    sync.WaitGroup
-			jobs  = make(chan syncChunk)
+			jobs  = make(chan int)
 			errCh = make(chan error, 1)
 		)
 		for i := 0; i < concurrency; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for chunk := range jobs {
-					if chunk.idx >= len(p.chunks) {
+				for idx := range jobs {
+					if idx >= len(p.chunks) {
 						continue
 					}
-					data := p.chunks[chunk.idx]
-					if chunk.max > len(data) {
-						chunk.max = len(data)
-					}
-					if chunk.min < 0 {
-						chunk.min = 0
-					}
-					if chunk.max <= chunk.min {
-						continue
-					}
-					if err := msyncFile(data[chunk.min:chunk.max]); err != nil {
+					if err := msyncFile(p.chunks[idx]); err != nil {
 						select {
 						case errCh <- err:
 						default:
@@ -658,8 +590,8 @@ func (p *Pager) Sync() error {
 				}
 			}()
 		}
-		for _, chunk := range toSync {
-			jobs <- chunk
+		for _, idx := range toSync {
+			jobs <- idx
 		}
 		close(jobs)
 		wg.Wait()
@@ -679,8 +611,8 @@ func (p *Pager) Sync() error {
 	// If error occurred, restore the dirty chunks
 	if syncErr != nil {
 		p.mu.Lock()
-		for _, chunk := range toSync {
-			p.dirtyChunks[chunk.idx] = dirtyRange{min: chunk.min, max: chunk.max}
+		for _, idx := range toSync {
+			p.dirtyChunks[idx] = struct{}{}
 		}
 		p.mu.Unlock()
 		return syncErr
