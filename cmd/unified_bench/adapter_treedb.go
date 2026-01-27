@@ -22,7 +22,7 @@ var (
 	treedbFlushBuildChunkCap        = flag.Int("treedb-flush-build-chunk-cap", 0, "TreeDB (cached): max entries per parallel build chunk (0=default)")
 	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
-	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 0, "TreeDB: pager chunk size in bytes (0=default)")
+	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
 	treedbKeepRecent                = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
@@ -172,7 +172,6 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 
 	opts := treedb.Options{
 		Dir:                   dir,
-		ChunkSize:             64 * 1024 * 1024,
 		KeepRecent:            *treedbKeepRecent,
 		Durability:            durability,
 		ChunkSize:             *treedbChunkSize,
