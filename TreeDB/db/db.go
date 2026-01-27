@@ -239,6 +239,18 @@ type Options struct {
 	// combined flush batch from multiple immutable memtables in cached mode.
 	// Values <= 1 disable parallelism.
 	FlushBuildConcurrency int
+	// FlushBuildMinEntries gates the parallel build path by total entries.
+	// Values <= 0 use a default of 16k.
+	FlushBuildMinEntries int
+	// FlushBuildMinUnits gates the parallel build path by number of queued units.
+	// Values <= 0 use a default of 2.
+	FlushBuildMinUnits int
+	// FlushBuildChunkCap controls the maximum entries per build chunk. Values <= 0
+	// use a default of 8192.
+	FlushBuildChunkCap int
+	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
+	// of the consumer. Values <= 0 use FlushBuildConcurrency.
+	FlushBuildPrefetchUnits int
 
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
@@ -829,11 +841,26 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if idx == nil {
 		return errors.New("missing index")
 	}
+	debugTiming := commitTimingEnabled()
+	var (
+		start    time.Time
+		durSync1 time.Duration
+		durMeta  time.Duration
+		durSync2 time.Duration
+		durPrune time.Duration
+	)
+	if debugTiming {
+		start = time.Now()
+	}
 
 	// 1. Sync Data (Index Pages) - No DB Lock
 	if sync {
+		t0 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
 			return err
+		}
+		if debugTiming {
+			durSync1 = time.Since(t0)
 		}
 	}
 
@@ -853,14 +880,22 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	db.mu.Unlock()
 
 	// 3. Write Meta - No DB Lock
+	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return err
+	}
+	if debugTiming {
+		durMeta = time.Since(t0)
 	}
 
 	// 4. Sync Meta - No DB Lock
 	if sync {
+		t1 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
 			return err
+		}
+		if debugTiming {
+			durSync2 = time.Since(t1)
 		}
 	}
 
@@ -879,7 +914,11 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if db.pruner.Enabled() {
 		db.pruner.Kick()
 	} else {
+		tp := time.Now()
 		db.Prune()
+		if debugTiming {
+			durPrune = time.Since(tp)
+		}
 	}
 
 	// Update State
@@ -898,6 +937,17 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 
 	if db.adaptive != nil {
 		db.adaptive.RecordCommit(metrics)
+	}
+	if debugTiming {
+		commitTimingPrintf(
+			"treedb: commit_timing sync=%t sync1=%s meta=%s sync2=%s prune=%s total=%s\n",
+			sync,
+			durSync1,
+			durMeta,
+			durSync2,
+			durPrune,
+			time.Since(start),
+		)
 	}
 
 	return nil

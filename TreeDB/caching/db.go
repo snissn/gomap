@@ -1206,6 +1206,18 @@ type Options struct {
 	// combined flush batch from multiple immutable memtables. Values <= 1 disable
 	// parallelism.
 	FlushBuildConcurrency int
+	// FlushBuildMinEntries gates the parallel build path by total entries.
+	// Values <= 0 use a default of 16k.
+	FlushBuildMinEntries int
+	// FlushBuildMinUnits gates the parallel build path by number of queued units.
+	// Values <= 0 use a default of 2.
+	FlushBuildMinUnits int
+	// FlushBuildChunkCap controls the maximum entries per build chunk. Values <= 0
+	// use a default of 8192.
+	FlushBuildChunkCap int
+	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
+	// of the consumer. Values <= 0 use FlushBuildConcurrency.
+	FlushBuildPrefetchUnits int
 
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
@@ -1389,6 +1401,10 @@ type DB struct {
 	writerFlushMaxMemtables int
 	writerFlushMaxDuration  time.Duration
 	flushBuildConcurrency   int
+	flushBuildMinEntries    int
+	flushBuildMinUnits      int
+	flushBuildChunkCap      int
+	flushBuildPrefetchUnits int
 	walMaxSegmentBytes      int64
 	journalCompression      bool
 
@@ -1757,6 +1773,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.FlushBuildConcurrency <= 0 {
 		opts.FlushBuildConcurrency = 1
 	}
+	if opts.FlushBuildMinEntries <= 0 {
+		opts.FlushBuildMinEntries = 16 * 1024
+	}
+	if opts.FlushBuildMinUnits <= 0 {
+		opts.FlushBuildMinUnits = 2
+	}
+	if opts.FlushBuildChunkCap <= 0 {
+		opts.FlushBuildChunkCap = 8192
+	}
+	if opts.FlushBuildPrefetchUnits <= 0 {
+		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
+	}
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
@@ -1919,6 +1947,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables:        opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:         opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:          opts.FlushBuildConcurrency,
+		flushBuildMinEntries:           opts.FlushBuildMinEntries,
+		flushBuildMinUnits:             opts.FlushBuildMinUnits,
+		flushBuildChunkCap:             opts.FlushBuildChunkCap,
+		flushBuildPrefetchUnits:        opts.FlushBuildPrefetchUnits,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
@@ -5221,7 +5253,15 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		} else {
 			t0 := time.Now()
 			buildConcurrency := db.flushBuildConcurrency
-			useBuildWorkers := buildConcurrency > 1 && len(units) > 1 && totalLen >= 16*1024
+			minUnits := db.flushBuildMinUnits
+			if minUnits < 1 {
+				minUnits = 1
+			}
+			minEntries := db.flushBuildMinEntries
+			if minEntries < 1 {
+				minEntries = 1
+			}
+			useBuildWorkers := buildConcurrency > 1 && len(units) >= minUnits && totalLen >= minEntries
 			type (
 				setViewer interface {
 					SetView(key, value []byte) error
@@ -5368,7 +5408,10 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			} else {
 				// Parallelize memtable iteration/build while preserving "newest wins"
 				// ordering by applying one immutable at a time in queue order.
-				const chunkCap = 8192
+				chunkCap := db.flushBuildChunkCap
+				if chunkCap <= 0 {
+					chunkCap = 8192
+				}
 				var opChArr [flushCombineMaxMemtables]chan []batch.Entry
 				var cancelArr [flushCombineMaxMemtables]chan struct{}
 				opChs := opChArr[:len(units)]
@@ -5400,7 +5443,10 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					go job.run(db.closeCh)
 				}
 
-				prefetch := buildConcurrency
+				prefetch := db.flushBuildPrefetchUnits
+				if prefetch <= 0 {
+					prefetch = buildConcurrency
+				}
 				if prefetch > len(units) {
 					prefetch = len(units)
 				}
