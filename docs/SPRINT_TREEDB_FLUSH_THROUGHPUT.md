@@ -21,6 +21,7 @@ This file is the sprint source of truth:
 - [ ] Baseline on perf server:
   - mixed: `go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 -test all -treedb-cache-stats-before-reads -progress=false`
   - settled: same + `-checkpoint-between-tests`
+- [x] Local baseline (scaled down): capture `keys=200000` mixed + settled results for `fast` and `wal_on_fast` while perf server access is unavailable.
 - [x] Add a dedicated flush-drain suite to `cmd/unified_bench` (`-suite flushdrain`) and document it.
 - [ ] Enable targeted profiling:
   - `-cpuprofile` + `-cpuprofile-tests=random_write,random_read` (and any flush-drain step)
@@ -50,10 +51,11 @@ This file is the sprint source of truth:
 - 2026-01-27: Reduced flush build allocations/copies by filling bulk `SetOps` slices directly during flush.
 - 2026-01-27: Reduced per-flush heap allocations in the combined-flush snapshot path (stack arrays for up to 32 memtables).
 - 2026-01-27: Added regression test covering combined-flush bulk path (`totalLen > 2000`) to ensure queued memtables persist.
+- 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
 
 ## Results / follow-ups
 
-### Local checkpoint/drain sanity (2026-01-27)
+### Local checkpoint/drain sanity (historical note)
 
 Command (baseline main):
 `go run ./cmd/unified_bench -dbs treedb -test random_write,random_read -keys 900000 -profile wal_on_fast -treedb-cache-stats-before-reads -checkpoint-between-tests -progress=false`
@@ -73,6 +75,47 @@ Candidate (sprint/flush-throughput):
 Follow-ups:
 - Run the same comparison on the perf server and include full `-test all` results + checkpoint durations.
 - Investigate the local random_read regression (possible CPU contention/background work overlap vs true steady-state regression).
+
+### Local full-table results (scaled): `keys=200000` (2026-01-26)
+
+Perf server benchmarking was not available from this environment (SSH timeout). Running `keys=900000 -test all` locally on the candidate also stalled under backpressure (see hang note below), so we captured a smaller run.
+
+Commands (both main + candidate; adjust `git checkout` / commit as needed):
+
+```bash
+NOBP='-treedb-slowdown-backlog-seconds=0 -treedb-stop-backlog-seconds=0 -treedb-max-backlog-bytes=0 -treedb-max-queued-memtables=-1'
+
+# mixed
+go run ./cmd/unified_bench -dbs treedb -profile fast       -keys 200000 -valsize 128 -batchsize 1000 -test all -progress=false -format markdown $NOBP
+go run ./cmd/unified_bench -dbs treedb -profile wal_on_fast -keys 200000 -valsize 128 -batchsize 1000 -test all -progress=false -format markdown $NOBP
+
+# settled (checkpoint between tests)
+go run ./cmd/unified_bench -dbs treedb -profile fast       -keys 200000 -valsize 128 -batchsize 1000 -test all -checkpoint-between-tests -progress=false -format markdown $NOBP
+go run ./cmd/unified_bench -dbs treedb -profile wal_on_fast -keys 200000 -valsize 128 -batchsize 1000 -test all -checkpoint-between-tests -progress=false -format markdown $NOBP
+```
+
+Raw logs captured locally under:
+- `artifacts/bench/flush_throughput_keys200k_20260126222229/`
+
+Key deltas (main @ `cdb3efb` → candidate @ `c5cc81a`):
+
+- `fast` (mixed): `Random Read +43%`, `Sequential Write +14%`, **`Prefix Scan -26%`**
+- `fast` (settled): **checkpoint before `Random Read`: `126.43ms → 1.38ms`**, but `Random Read -25%` and **scans regressed** (`Full Scan -73%`, `Prefix Scan -96%`)
+- `wal_on_fast` (mixed): `Random Read ~flat`, **scans regressed** (`Full Scan -33%`, `Prefix Scan -68%`)
+- `wal_on_fast` (settled): checkpoint before `Random Read`: `160.84ms → 39.43ms`, but `Random Read -28%` and **scans regressed** (`Full Scan -73%`, `Prefix Scan -95%`)
+
+Interpretation / follow-ups:
+- The checkpoint/drain-time improvements look promising, but the scan deltas are large enough that we should:
+  - rerun on the perf server (once reachable) with default backpressure settings, and
+  - confirm `-checkpoint-between-tests` is truly draining the relevant work under these settings (the very-low ms numbers may indicate “background kept up” *or* a premature return).
+
+### Hang note (candidate, local): `keys=900000` + backpressure
+
+Candidate run stalled locally with `keys=900000 -profile fast -test all` while committing a batch, blocked in:
+- `github.com/snissn/gomap/TreeDB/caching.(*DB).waitForStop` (`TreeDB/caching/db.go:3522`)
+
+Captured stack dump:
+- `artifacts/bench/flush_throughput_20260126215335/cand_fast_mixed.log`
 
 ### Future design ideas (not implemented)
 
