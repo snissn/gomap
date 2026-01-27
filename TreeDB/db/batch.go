@@ -149,6 +149,9 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
+	}
 	b.db.writeMu.RUnlock()
 	return true, nil
 }
@@ -186,6 +189,9 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics); err != nil {
 		return err
+	}
+	if b.db.vacuum.Active() {
+		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
 	return nil
 }

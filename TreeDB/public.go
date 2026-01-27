@@ -720,27 +720,36 @@ func (db *DB) CompactIndex() error {
 	return db.backend.CompactIndex()
 }
 
-// VacuumIndexOnline rebuilds the user index in-place. It is currently an alias
-// for CompactIndex and does not perform a separate file swap.
+// VacuumIndexOnline rebuilds the user index into a new file and swaps it in with
+// a short writer pause. Disk space from the old index is reclaimed once any old
+// snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+
+	// In cached mode, ensure the backend reflects all buffered writes before
+	// rebuilding/switching the index file. This avoids exposing a backend state
+	// that temporarily "forgets" keys that only existed in memtables/WAL, which
+	// can break higher layers that assume a stable durable boundary.
+	if db.cached != nil {
+		if err := db.cached.Checkpoint(); err != nil {
 			return err
 		}
 	}
-	return db.CompactIndex()
+
+	return db.backend.VacuumIndexOnline(ctx)
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.
 // This is intended to reclaim space and restore locality after long churn.
-// It currently opens the DB and runs CompactIndex in-place.
+//
+// It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
-	d, err := Open(opts)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.CompactIndex()
+	return db.VacuumIndexOffline(opts)
 }
 
 // FragmentationReport returns best-effort structural stats about the on-disk user
