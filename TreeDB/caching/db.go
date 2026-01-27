@@ -465,20 +465,16 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(eligible))
 	}
 
-	if !db.copyOnFlushValueLogPointers() {
-		for i, idx := range eligible {
-			op := &ops[idx]
-			op.ValuePtr = ptrs[i]
-			op.IsPtr = true
-			op.Value = nil
-		}
+	for i, idx := range eligible {
+		op := &ops[idx]
+		op.ValuePtr = ptrs[i]
+		op.IsPtr = true
+		op.Value = nil
 	}
 
-	if !db.copyOnFlushValueLogPointers() {
-		retainPath := db.currentValueLogPath(lane)
-		if retainPath != "" {
-			db.markValueLogRetain(retainPath)
-		}
+	retainPath := db.currentValueLogPath(lane)
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
 	}
 	return ops, nil
 }
@@ -557,21 +553,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		}
 
 		if allowPointers && len(val) > db.valueLogThreshold {
-			if !db.copyOnFlushValueLogPointers() {
-				keys = append(keys, key)
-			}
+			keys = append(keys, key)
 			records = append(records, valuelog.Record{Value: val})
-			if db.copyOnFlushValueLogPointers() {
-				var err error
-				if sv != nil {
-					err = sv.SetView(key, val)
-				} else {
-					err = backendBatch.Set(key, val)
-				}
-				if err != nil {
-					return err
-				}
-			}
 		} else {
 			var err error
 			if sv != nil {
@@ -592,7 +575,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if !allowPointers {
 		return nil
 	}
-	if !db.copyOnFlushValueLogPointers() && len(records) != len(keys) {
+	if len(records) != len(keys) {
 		return errors.New("cachingdb: internal deferred value-log mismatch")
 	}
 
@@ -622,33 +605,29 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if err != nil {
 		return err
 	}
-	if !db.copyOnFlushValueLogPointers() && len(vlogPtrs) != len(keys) {
+	if len(vlogPtrs) != len(keys) {
 		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(keys))
 	}
 
-	if !db.copyOnFlushValueLogPointers() {
-		for i := range keys {
-			key := keys[i]
-			ptr := vlogPtrs[i]
-			if psv != nil {
-				if err := psv.SetPointerView(key, ptr); err != nil {
-					return err
-				}
-			} else if ps != nil {
-				if err := ps.SetPointer(key, ptr); err != nil {
-					return err
-				}
-			} else {
-				return errors.New("cachingdb: backend batch missing SetPointer")
+	for i := range keys {
+		key := keys[i]
+		ptr := vlogPtrs[i]
+		if psv != nil {
+			if err := psv.SetPointerView(key, ptr); err != nil {
+				return err
 			}
+		} else if ps != nil {
+			if err := ps.SetPointer(key, ptr); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("cachingdb: backend batch missing SetPointer")
 		}
 	}
 
-	if !db.copyOnFlushValueLogPointers() {
-		retainPath := db.currentValueLogPath(lane)
-		if retainPath != "" {
-			db.markValueLogRetain(retainPath)
-		}
+	retainPath := db.currentValueLogPath(lane)
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
 	}
 	return nil
 }
@@ -751,12 +730,6 @@ func (db *DB) readValueLogAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) 
 		}
 	}
 	return db.valueLogReader.ReadAppend(ptr, dst)
-}
-
-func (db *DB) copyOnFlushValueLogPointers() bool {
-	// One-write rule: when values land in the value log, persist pointers into the
-	// backend and let value-log GC/rewrite handle long-term cleanup.
-	return false
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
