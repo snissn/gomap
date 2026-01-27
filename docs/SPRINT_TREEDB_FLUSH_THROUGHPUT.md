@@ -54,6 +54,8 @@ This file is the sprint source of truth:
 - 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
 - 2026-01-27: (WIP) Added `cmd/unified_bench` flag `-treedb-flush-build-concurrency` and implemented an order-preserving parallel combined-flush build path (chunked) behind `Options.FlushBuildConcurrency > 1`.
 - 2026-01-27: Perf server: ran `-suite flushdrain` with `FlushBuildConcurrency={1,4,8}`; observed only small checkpoint-time improvements (backend write dominates). Captured `TREEDB_DEBUG_FLUSH_TIMING=1` stage breakdown.
+- 2026-01-27: Added flush-build tuning knobs (`FlushBuildMinEntries`, `FlushBuildMinUnits`, `FlushBuildChunkCap`, `FlushBuildPrefetchUnits`) and pager tuning knobs (`PagerSyncConcurrency`, `ChunkSize`) with unified-bench flags.
+- 2026-01-27: Added `TREEDB_DEBUG_COMMIT_TIMING=1` to break down commit sync costs.
 
 ## Results / follow-ups
 
@@ -141,6 +143,24 @@ Flush stage breakdown (from `TREEDB_DEBUG_FLUSH_TIMING=1`, `c=1`):
 
 Interpretation:
 - Parallel build can reduce the CPU portion of the checkpoint, but end-to-end drain time is largely bound by `backend_write` on the perf server. If we need larger improvements in checkpoint time, focus should likely move to backend write/commit throughput or reducing the number of backend writes per checkpoint.
+
+### Perf server: backend-write candidates (2026-01-27)
+
+Baseline (main, 5 trials, trimmed mean):
+- `checkpoint-before-reads`: **1.497s** (`artifacts/perf_flushdrain_20260127_074857/`)
+
+Candidate (PR, build c=8, 5 trials, trimmed mean):
+- `checkpoint-before-reads`: **1.460s** (`artifacts/perf_flushdrain_20260127_074857/`)
+
+Candidates (PR, 5 trials unless noted):
+- `PagerSyncConcurrency=4` (msync parallelism): **1.433s** (`artifacts/perf_flushdrain_syncconc_20260127_080334/`) — small win (~4.3%).
+- Dirty-range msync (reverted): **1.460s** (`artifacts/perf_flushdrain_dirtyrange_20260127_080621/`) — no win.
+- Data-sync without file.Sync (reverted): **1.427s** (`artifacts/perf_flushdrain_data_nofsync_20260127_080927/`) — tiny win (<1%), but reverted due to semantics risk.
+- Chunk-size probe (1 trial each): 4MiB **1.74s**, 16MiB **1.46s**, 64MiB **1.43s** (`artifacts/perf_flushdrain_chunksize_probe_20260127_081032/`) — default 64MiB best.
+- Leaf prefix compression (1 trial): **1.45s** checkpoint, **Random Read ~0.87M ops/s** (`artifacts/perf_flushdrain_prefix_probe_20260127_081112/`) — read regression; rejected.
+
+Follow-up:
+- If we need ≥20% checkpoint improvement, the biggest lever appears to be reducing `pager.Sync` time (msync + fsync) rather than flush build overhead.
 
 ### Local checkpoint/drain sanity (historical note)
 
