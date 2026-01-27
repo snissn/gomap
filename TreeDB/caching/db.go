@@ -5211,10 +5211,10 @@ func (db *DB) pickFlushLane() (int, bool) {
 	return bestLane, true
 }
 
-func (db *DB) flushAll(sync bool) {
-	origSync := sync
-	sync = db.flushSyncRequested(sync)
-	if !origSync && sync && db.disableJournal && !db.relaxedSync {
+func (db *DB) flushAll(reqSync bool) {
+	origSync := reqSync
+	syncFlag := db.flushSyncRequested(reqSync)
+	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
 		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
 	}
 	lanes := len(db.lanes)
@@ -5230,7 +5230,7 @@ func (db *DB) flushAll(sync bool) {
 				db.flushLaneMu[laneID].Lock()
 				defer db.flushLaneMu[laneID].Unlock()
 			}
-			for db.flushCombinedLane(sync, laneID) {
+			for db.flushCombinedLane(syncFlag, laneID) {
 			}
 			wg.Done()
 		}()
