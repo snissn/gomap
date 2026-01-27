@@ -52,6 +52,7 @@ This file is the sprint source of truth:
 - 2026-01-27: Reduced per-flush heap allocations in the combined-flush snapshot path (stack arrays for up to 32 memtables).
 - 2026-01-27: Added regression test covering combined-flush bulk path (`totalLen > 2000`) to ensure queued memtables persist.
 - 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
+- 2026-01-27: (WIP) Added `cmd/unified_bench` flag `-treedb-flush-build-concurrency` and implemented an order-preserving parallel combined-flush build path (chunked) behind `Options.FlushBuildConcurrency > 1`.
 
 ## Results / follow-ups
 
@@ -90,6 +91,30 @@ Summary deltas (cand vs main):
 
 Notes:
 - In the *mixed* `wal_on_fast` run (no checkpoints), candidate showed a large `Prefix Scan` drop that did **not** reproduce in the checkpointed run; `pre-prefix_scan` cache stats also showed candidate had queued immutables at that point. Treat the mixed-prefix-scan delta as suspicious/noisy until it reproduces under `-checkpoint-between-tests` or a smaller “read-only” suite.
+
+### Local exploratory results: `FlushBuildConcurrency` (2026-01-27)
+
+Goal:
+- See whether parallel building of combined flush batches can reduce the “checkpoint before reads” latency in `-suite flushdrain`, and whether it affects ops/sec.
+
+Commands:
+
+```bash
+make unified-bench
+
+./bin/unified-bench -suite flushdrain -dbs treedb -profile wal_on_fast -keys 200000 -progress=false \
+  -treedb-flush-build-concurrency 1
+
+./bin/unified-bench -suite flushdrain -dbs treedb -profile wal_on_fast -keys 200000 -progress=false \
+  -treedb-flush-build-concurrency 4
+```
+
+Observed (Apple laptop; single-run sanity, noisy):
+- `FlushBuildConcurrency=1`: checkpoint before `Random Read` ~353ms, Random Read ~2.62M ops/s
+- `FlushBuildConcurrency=4`: checkpoint before `Random Read` ~177ms, Random Read ~3.98M ops/s
+
+Follow-up:
+- Rerun on the perf server with the same flags (and ideally multiple trials) to confirm whether the checkpoint/drain-time improvement is real and stable.
 
 ### Local checkpoint/drain sanity (historical note)
 

@@ -16,6 +16,7 @@ import (
 
 var (
 	treedbFlushThreshold            = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbFlushBuildConcurrency     = flag.Int("treedb-flush-build-concurrency", 0, "TreeDB (cached): flush build concurrency (0=default)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
 	treedbKeepRecent                = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
@@ -184,6 +185,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		StopBacklogSeconds:      *treedbStopBacklogSeconds,
 		MaxBacklogBytes:         *treedbMaxBacklogBytes,
 		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+		FlushBuildConcurrency:   *treedbFlushBuildConcurrency,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

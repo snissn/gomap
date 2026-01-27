@@ -2049,6 +2049,111 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	return db, nil
 }
 
+type flushBuildJob struct {
+	mem      memtable.Table
+	out      chan<- []batch.Entry
+	cancel   <-chan struct{}
+	chunkCap int
+	errCh    chan<- error
+}
+
+func (job flushBuildJob) report(err error) {
+	if err == nil || job.errCh == nil {
+		return
+	}
+	select {
+	case job.errCh <- err:
+	default:
+	}
+}
+
+func (job flushBuildJob) run(closeCh <-chan struct{}) {
+	if job.mem == nil || job.out == nil {
+		if job.out != nil {
+			close(job.out)
+		}
+		job.report(errors.New("cachingdb: flush build job missing memtable/out"))
+		return
+	}
+	chunkCap := job.chunkCap
+	if chunkCap <= 0 {
+		chunkCap = 8192
+	}
+
+	iter := job.mem.NewIterator(nil, nil)
+
+	send := func(ops []batch.Entry) bool {
+		for {
+			select {
+			case job.out <- ops:
+				return true
+			case <-job.cancel:
+				return false
+			case <-closeCh:
+				return false
+			}
+		}
+	}
+
+	ops := getEntrySlice(chunkCap)
+	ops = ops[:0]
+	for iter.Valid() {
+		val, ptr, flags := iter.UnsafeEntry()
+		if flags&node.FlagTombstone != 0 {
+			ops = append(ops, batch.Entry{
+				Type: batch.OpDelete,
+				Key:  iter.UnsafeKey(),
+			})
+		} else if flags&node.FlagPointer != 0 {
+			ops = append(ops, batch.Entry{
+				Type:     batch.OpPut,
+				Key:      iter.UnsafeKey(),
+				ValuePtr: ptr,
+				IsPtr:    true,
+			})
+		} else {
+			ops = append(ops, batch.Entry{
+				Type:  batch.OpPut,
+				Key:   iter.UnsafeKey(),
+				Value: val,
+			})
+		}
+		iter.Next()
+
+		if len(ops) >= cap(ops) {
+			if !send(ops) {
+				putEntrySlice(ops)
+				close(job.out)
+				return
+			}
+			ops = getEntrySlice(chunkCap)
+			ops = ops[:0]
+		}
+	}
+
+	err := iter.Error()
+	cerr := iter.Close()
+	if err == nil {
+		err = cerr
+	}
+	if err != nil {
+		putEntrySlice(ops)
+		close(job.out)
+		job.report(err)
+		return
+	}
+	if len(ops) > 0 {
+		if !send(ops) {
+			putEntrySlice(ops)
+			close(job.out)
+			return
+		}
+	} else {
+		putEntrySlice(ops)
+	}
+	close(job.out)
+}
+
 func (db *DB) reportError(err error) {
 	if err == nil {
 		return
@@ -5115,6 +5220,8 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			durBuildOps = time.Since(t0)
 		} else {
 			t0 := time.Now()
+			buildConcurrency := db.flushBuildConcurrency
+			useBuildWorkers := buildConcurrency > 1 && len(units) > 1 && totalLen >= 16*1024
 			type (
 				setViewer interface {
 					SetView(key, value []byte) error
@@ -5135,76 +5242,204 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
 
-			for _, unit := range units {
-				iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-				for iter.Valid() {
-					key := iter.UnsafeKey()
-					val, ptr, flags := iter.UnsafeEntry()
-					if flags&node.FlagTombstone != 0 {
-						var err error
+			applyOps := func(ops []batch.Entry) error {
+				for i := range ops {
+					op := &ops[i]
+					switch op.Type {
+					case batch.OpDelete:
 						if dv != nil {
-							err = dv.DeleteView(key)
-						} else {
-							err = backendBatch.Delete(key)
-						}
-						if err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						if flags&node.FlagPointer != 0 {
-							if psv != nil {
-								if err := psv.SetPointerView(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-							} else if ps != nil {
-								if err := ps.SetPointer(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-							} else {
-								single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-								if err := backendBatch.SetOps(single[:]); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
+							if err := dv.DeleteView(op.Key); err != nil {
+								return err
 							}
-							iter.Next()
 							continue
 						}
-						var err error
-						if sv != nil {
-							err = sv.SetView(key, val)
-						} else {
-							err = backendBatch.Set(key, val)
+						if err := backendBatch.Delete(op.Key); err != nil {
+							return err
 						}
-						if err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-							_ = iter.Close()
+					case batch.OpPut:
+						if op.IsPtr {
+							if psv != nil {
+								if err := psv.SetPointerView(op.Key, op.ValuePtr); err != nil {
+									return err
+								}
+								continue
+							}
+							if ps != nil {
+								if err := ps.SetPointer(op.Key, op.ValuePtr); err != nil {
+									return err
+								}
+								continue
+							}
+							single[0] = batch.Entry{Type: batch.OpPut, Key: op.Key, ValuePtr: op.ValuePtr, IsPtr: true}
+							if err := backendBatch.SetOps(single[:]); err != nil {
+								return err
+							}
+							continue
+						}
+						if sv != nil {
+							if err := sv.SetView(op.Key, op.Value); err != nil {
+								return err
+							}
+							continue
+						}
+						if err := backendBatch.Set(op.Key, op.Value); err != nil {
+							return err
+						}
+					default:
+						return fmt.Errorf("unsupported op type %d", op.Type)
+					}
+				}
+				return nil
+			}
+
+			if !useBuildWorkers {
+				for _, unit := range units {
+					iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
+					for iter.Valid() {
+						key := iter.UnsafeKey()
+						val, ptr, flags := iter.UnsafeEntry()
+						if flags&node.FlagTombstone != 0 {
+							var err error
+							if dv != nil {
+								err = dv.DeleteView(key)
+							} else {
+								err = backendBatch.Delete(key)
+							}
+							if err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						} else {
+							if flags&node.FlagPointer != 0 {
+								if psv != nil {
+									if err := psv.SetPointerView(key, ptr); err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
+									}
+								} else if ps != nil {
+									if err := ps.SetPointer(key, ptr); err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
+									}
+								} else {
+									single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+									if err := backendBatch.SetOps(single[:]); err != nil {
+										db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+										_ = iter.Close()
+										_ = backendBatch.Close()
+										return false
+									}
+								}
+								iter.Next()
+								continue
+							}
+							var err error
+							if sv != nil {
+								err = sv.SetView(key, val)
+							} else {
+								err = backendBatch.Set(key, val)
+							}
+							if err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						}
+						iter.Next()
+					}
+					err := iter.Error()
+					cerr := iter.Close()
+					if err == nil {
+						err = cerr
+					}
+					if err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+						_ = backendBatch.Close()
+						return false
+					}
+				}
+			} else {
+				// Parallelize memtable iteration/build while preserving "newest wins"
+				// ordering by applying one immutable at a time in queue order.
+				const chunkCap = 8192
+				var opChArr [flushCombineMaxMemtables]chan []batch.Entry
+				var cancelArr [flushCombineMaxMemtables]chan struct{}
+				opChs := opChArr[:len(units)]
+				cancels := cancelArr[:len(units)]
+
+				errCh := make(chan error, 1)
+				abort := false
+				defer func() {
+					if !abort {
+						return
+					}
+					for i := range cancels {
+						if cancels[i] != nil {
+							close(cancels[i])
+						}
+					}
+				}()
+
+				startUnit := func(i int) {
+					opChs[i] = make(chan []batch.Entry)
+					cancels[i] = make(chan struct{})
+					job := flushBuildJob{
+						mem:      units[i].mem,
+						out:      opChs[i],
+						cancel:   cancels[i],
+						chunkCap: chunkCap,
+						errCh:    errCh,
+					}
+					go job.run(db.closeCh)
+				}
+
+				prefetch := buildConcurrency
+				if prefetch > len(units) {
+					prefetch = len(units)
+				}
+				for i := 0; i < prefetch; i++ {
+					startUnit(i)
+				}
+
+				for i := 0; i < len(units); i++ {
+					for ops := range opChs[i] {
+						if err := applyOps(ops); err != nil {
+							putEntrySlice(ops)
+							abort = true
+							db.reportError(fmt.Errorf("cachingdb: flush failed (apply): %w", err))
 							_ = backendBatch.Close()
 							return false
 						}
+						putEntrySlice(ops)
+						select {
+						case err := <-errCh:
+							abort = true
+							db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+							_ = backendBatch.Close()
+							return false
+						default:
+						}
 					}
-					iter.Next()
-				}
-				err := iter.Error()
-				cerr := iter.Close()
-				if err == nil {
-					err = cerr
-				}
-				if err != nil {
-					db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-					_ = backendBatch.Close()
-					return false
+					select {
+					case err := <-errCh:
+						abort = true
+						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+						_ = backendBatch.Close()
+						return false
+					default:
+					}
+
+					next := i + prefetch
+					if next < len(units) {
+						startUnit(next)
+					}
 				}
 			}
 			durBuildOps = time.Since(t0)
