@@ -190,3 +190,96 @@ func TestCachingDB_FlushLaneOnlyMatchingMemtables(t *testing.T) {
 		t.Fatalf("flushLaneOnce should return false when no memtables remain")
 	}
 }
+
+func TestCachingDB_FlushAllHandlesConcurrentCalls(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:     1 << 16,
+		MemtableMode:       "hash_sorted",
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	fillQueue := func(id byte) {
+		for i := 0; i < 500; i++ {
+			if err := db.Set([]byte(fmt.Sprintf("%c%04d", id, i)), []byte("value")); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked: %v", err)
+		}
+		db.mu.Unlock()
+	}
+
+	fillQueue('X')
+	fillQueue('Y')
+	fillQueue('Z')
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db.flushAll(false)
+		}()
+	}
+	wg.Wait()
+
+	db.mu.RLock()
+	if len(db.queue) != 0 {
+		db.mu.RUnlock()
+		t.Fatalf("expected queue drained after concurrent flushAll, got %d", len(db.queue))
+	}
+	db.mu.RUnlock()
+}
+
+func TestCachingDB_TriggerFlushWakesLoop(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:     1 << 16,
+		MemtableMode:       "hash_sorted",
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < 1000; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("trigger-%04d", i)), []byte("val")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(true); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.TriggerFlush()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		db.mu.RLock()
+		queueLen := len(db.queue)
+		db.mu.RUnlock()
+		if queueLen == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queue did not drain after TriggerFlush, len=%d", queueLen)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
