@@ -247,6 +247,12 @@ func main() {
 				log.Fatalf("flushthrash suite: %v", err)
 			}
 			fmt.Print(out)
+		case "flushdrain", "flush-drain":
+			out, err := runFlushDrainSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("flushdrain suite: %v", err)
+			}
+			fmt.Print(out)
 		case "bigkeys_guard":
 			out, err := runBigKeysGuardSuite(baseCfg)
 			if err != nil {
