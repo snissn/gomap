@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -14,7 +13,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -357,8 +355,8 @@ func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
 	if writeCalls == 0 {
 		t.Fatalf("expected backend writes")
 	}
-	if writeSyncs == 0 {
-		t.Fatalf("expected WriteSync when WAL is disabled")
+	if writeSyncs != 0 {
+		t.Fatalf("expected WAL-off flush to use non-sync backend writes; got %d syncs", writeSyncs)
 	}
 }
 
@@ -793,7 +791,7 @@ func TestCachingDB_SetDoesNotBlockOnWriteMuRLock(t *testing.T) {
 	}
 }
 
-func TestCachingDB_FlushCopiesValueLogPointer(t *testing.T) {
+func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
@@ -802,7 +800,6 @@ func TestCachingDB_FlushCopiesValueLogPointer(t *testing.T) {
 
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
-		SplitValueLog:            true,
 		ValueLogPointerThreshold: 1,
 	})
 	if err != nil {
@@ -827,9 +824,9 @@ func TestCachingDB_FlushCopiesValueLogPointer(t *testing.T) {
 		_ = snap.Close()
 		t.Fatalf("GetEntry: %v", err)
 	}
-	if entry.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry.ValuePtr.FileID) {
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		_ = snap.Close()
-		t.Fatalf("expected backend to copy value-log pointer, got value-log file id %#x", entry.ValuePtr.FileID)
+		t.Fatalf("expected backend to persist value-log pointer, got flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
 	}
 	_ = snap.Close()
 
@@ -839,120 +836,6 @@ func TestCachingDB_FlushCopiesValueLogPointer(t *testing.T) {
 	}
 	if !bytes.Equal(got, val) {
 		t.Fatalf("backend Get mismatch")
-	}
-}
-
-func TestCachingDB_DeferredValueLogCoalescesOverwrites(t *testing.T) {
-	dir := t.TempDir()
-	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
-	if err != nil {
-		t.Fatalf("backend open: %v", err)
-	}
-	t.Cleanup(func() { _ = backend.Close() })
-
-	cache, err := Open(dir, backend, Options{
-		AllowUnsafe:              true,
-		FlushThreshold:           1 << 60,
-		SplitValueLog:            true,
-		ValueLogPointerThreshold: 1,
-		DisableJournal:           true,
-		MemtableValueLogPointers: false,
-	})
-	if err != nil {
-		_ = backend.Close()
-		t.Fatalf("cache open: %v", err)
-	}
-	defer cache.Close()
-
-	key := []byte("k1")
-	// Large enough to clearly show write amplification if we append eagerly.
-	valSize := 1 << 20
-	val1 := bytes.Repeat([]byte("a"), valSize)
-	val2 := bytes.Repeat([]byte("b"), valSize)
-	val3 := bytes.Repeat([]byte("c"), valSize)
-	val4 := bytes.Repeat([]byte("d"), valSize)
-	if err := cache.Set(key, val1); err != nil {
-		t.Fatalf("Set(val1): %v", err)
-	}
-	if err := cache.Set(key, val2); err != nil {
-		t.Fatalf("Set(val2): %v", err)
-	}
-	if err := cache.Set(key, val3); err != nil {
-		t.Fatalf("Set(val3): %v", err)
-	}
-	if err := cache.Set(key, val4); err != nil {
-		t.Fatalf("Set(val4): %v", err)
-	}
-
-	cache.mu.Lock()
-	if err := cache.rotateMutableShardsLocked(-1, false); err != nil {
-		cache.mu.Unlock()
-		t.Fatalf("rotateMutableShardsLocked: %v", err)
-	}
-	queueLen := len(cache.queue)
-	cache.mu.Unlock()
-	if queueLen == 0 {
-		t.Fatalf("expected queue after rotation")
-	}
-	// Sanity-check the queued memtables: overwrites should not change the logical key.
-	// (We allow internal memtable duplication, but keys should still compare equal.)
-	keyCounts := make(map[string]int)
-	cache.mu.Lock()
-	queue := append([]memtable.Table(nil), cache.queue...)
-	cache.mu.Unlock()
-	for _, mem := range queue {
-		it := mem.NewIterator(nil, nil)
-		for it.Valid() {
-			keyCounts[string(it.UnsafeKey())]++
-			it.Next()
-		}
-		_ = it.Close()
-	}
-	if len(keyCounts) != 1 {
-		t.Fatalf("unexpected queued keys: %v", keyCounts)
-	}
-	cache.flushAll(true)
-
-	snap := backend.AcquireSnapshot()
-	if snap == nil {
-		t.Fatalf("snapshot nil")
-	}
-	entry, err := snap.GetEntry(key)
-	if err != nil {
-		_ = snap.Close()
-		t.Fatalf("GetEntry: %v", err)
-	}
-	if entry.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry.ValuePtr.FileID) {
-		_ = snap.Close()
-		t.Fatalf("expected backend to copy value-log pointer, got value-log file id %#x", entry.ValuePtr.FileID)
-	}
-	_ = snap.Close()
-
-	got, err := backend.Get(key)
-	if err != nil {
-		t.Fatalf("backend Get: %v", err)
-	}
-	if !bytes.Equal(got, val4) {
-		t.Fatalf("backend Get mismatch")
-	}
-
-	// There should be only ~one large payload appended to the active value-log segment
-	// (plus small framing overhead).
-	paths := cache.currentValueLogPaths()
-	if len(paths) == 0 {
-		t.Fatalf("expected value-log path to exist")
-	}
-
-	var total int64
-	for _, p := range paths {
-		info, err := os.Stat(p)
-		if err != nil {
-			t.Fatalf("stat %s: %v", p, err)
-		}
-		total += info.Size()
-	}
-	if total > int64(2*valSize) {
-		t.Fatalf("expected deferred value-log bytes <= %d, got %d", 2*valSize, total)
 	}
 }
 
@@ -966,10 +849,8 @@ func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
 	cache, err := Open(dir, backend, Options{
 		AllowUnsafe:              true,
 		FlushThreshold:           1 << 60,
-		SplitValueLog:            true,
 		ValueLogPointerThreshold: 1,
-		DisableJournal:           true,
-		MemtableValueLogPointers: false,
+		DisableWAL:               true,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -991,62 +872,6 @@ func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
 	}
 }
 
-func TestCachingDB_MemtableValueLogPointers(t *testing.T) {
-	dir := t.TempDir()
-	backend := NewMockBackend()
-	cache, err := Open(dir, backend, Options{
-		AllowUnsafe:              true,
-		FlushThreshold:           1 << 30,
-		MemtableValueLogPointers: true,
-	})
-	if err != nil {
-		t.Fatalf("cache open: %v", err)
-	}
-	defer cache.Close()
-
-	key := []byte("k1")
-	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
-	if err := cache.Set(key, val); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	got, err := cache.Get(key)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if !bytes.Equal(got, val) {
-		t.Fatalf("Get mismatch")
-	}
-
-	it, err := cache.Iterator(nil, nil)
-	if err != nil {
-		t.Fatalf("Iterator: %v", err)
-	}
-	defer it.Close()
-	if !it.Valid() {
-		t.Fatalf("Iterator invalid")
-	}
-	if !bytes.Equal(it.Value(), val) {
-		t.Fatalf("Iterator value mismatch")
-	}
-	if err := it.Error(); err != nil {
-		t.Fatalf("Iterator error: %v", err)
-	}
-}
-
-func TestCachingDB_MemtableValueLogPointersRequiresWAL(t *testing.T) {
-	dir := t.TempDir()
-	backend := NewMockBackend()
-	_, err := Open(dir, backend, Options{
-		DisableWAL:               true,
-		AllowUnsafe:              true,
-		MemtableValueLogPointers: true,
-	})
-	if !errors.Is(err, ErrMemtableValueLogPointers) {
-		t.Fatalf("expected ErrMemtableValueLogPointers, got %v", err)
-	}
-}
-
 func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
@@ -1057,7 +882,6 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	cache, err := Open(dir, backend, Options{
 		AllowUnsafe:                  true,
 		FlushThreshold:               1 << 30,
-		SplitValueLog:                true,
 		ValueLogPointerThreshold:     1,
 		MaxValueLogRetainedBytesHard: 1,
 	})
@@ -1091,8 +915,7 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	_, bytes2 := cache.valueLogRetainedStats()
 
 	// Hard cap should disable *new* value-log pointers once retained bytes exceed
-	// the cap. With SplitValueLog enabled, that means the vlog should not grow
-	// further on subsequent large values.
+	// the cap; retained bytes should stop growing after the cap trips.
 	if bytes2 != bytes1 {
 		t.Fatalf("expected retained value-log bytes to stop growing after hard cap (before=%d after=%d)", bytes1, bytes2)
 	}
@@ -1107,7 +930,6 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
-		SplitValueLog:            true,
 		ValueLogPointerThreshold: 1,
 	})
 	if err != nil {

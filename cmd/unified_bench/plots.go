@@ -49,13 +49,13 @@ func writeReadmePlots(outDir string, pointRuns, scanRuns []BenchRun) (pointOpsPa
 
 	if err := writePlotGridPNG(batchScanFile, [][]plotSpec{
 		{
-			{Title: "Batch Write", TestName: "batch_write", Engines: []string{"TreeDB", "TreeDBBackend", "Badger", "LevelDB"}, ShowLegend: true},
+			{Title: "Batch Write", TestName: "batch_write", Engines: []string{"TreeDB", "Badger", "LevelDB"}, ShowLegend: true},
 		},
 		{
-			{Title: "Full Scan", TestName: "full_scan", Engines: []string{"TreeDB", "TreeDBBackend", "Badger", "LevelDB"}},
+			{Title: "Full Scan", TestName: "full_scan", Engines: []string{"TreeDB", "Badger", "LevelDB"}},
 		},
 		{
-			{Title: "Prefix Scan", TestName: "prefix_scan", Engines: []string{"TreeDB", "TreeDBBackend", "Badger", "LevelDB"}},
+			{Title: "Prefix Scan", TestName: "prefix_scan", Engines: []string{"TreeDB", "Badger", "LevelDB"}},
 		},
 	}, scanRuns); err != nil {
 		return "", "", err
@@ -188,8 +188,6 @@ func engineColor(engine string) color.RGBA {
 		return color.RGBA{R: 31, G: 119, B: 180, A: 255} // blue
 	case "treedb":
 		return color.RGBA{R: 255, G: 127, B: 14, A: 255} // orange
-	case "treedbbackend":
-		return color.RGBA{R: 44, G: 160, B: 44, A: 255} // green
 	case "badger":
 		return color.RGBA{R: 214, G: 39, B: 40, A: 255} // red
 	case "leveldb":

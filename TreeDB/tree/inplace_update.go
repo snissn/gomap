@@ -11,7 +11,7 @@ import (
 // UpdateValuePtrInPlace rewrites a pointer value in-place inside the current
 // tree by updating the leaf page that contains key.
 //
-// This is intended for maintenance operations (e.g. slab compaction) that want
+// This is intended for maintenance operations (e.g. value-log compaction) that want
 // to avoid full copy-on-write path rewrites. Callers must ensure snapshot safety
 // (i.e. no readers are pinned to the current index generation) before using it.
 //

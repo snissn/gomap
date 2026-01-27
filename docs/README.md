@@ -10,11 +10,11 @@ Welcome to the `gomap` documentation.
 
 ## 🌳 TreeDB
 
-TreeDB is a persistent B+Tree with an optional high-throughput cached layer.
+TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 
-- **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Slabs, COW Merge).
-- **[Write Paths](TREEDB_WRITE_PATHS.md)**: Mode3/Mode4 semantics and deprecated paths.
-- **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: How to choose the right mode for your workload.
+- **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Value Log, COW Merge).
+- **[Write Paths](TREEDB_WRITE_PATHS.md)**: WAL on/off semantics.
+- **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: Legacy note (backend-only removed).
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and journal replay details.
 - **[Profiles](TREEDB_PROFILES.md)**: High-level `durable` / `fast` / `bench` option presets.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.

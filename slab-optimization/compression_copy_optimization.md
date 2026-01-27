@@ -1,7 +1,10 @@
+> **Legacy note:** This runbook predates the WAL on/off simplification and may reference removed options.
+> Use the current merge-gate runbook + docs for up-to-date guidance.
+
 # Compression Copy Optimization Plan
 
 Goal: reduce user‑space copy amplification in the value‑log dict compression write path, without changing
-memtable vs direct write semantics unless explicitly approved. Focus: mode4/mode3 dict‑on write throughput.
+memtable vs direct write semantics unless explicitly approved. Focus: wal_off/wal_on dict‑on write throughput.
 
 ## Current Status (2026-01-22)
 - Memtable-compression experiments (e.g., storing compressed bytes in memtables) are **out of scope** for now.
@@ -27,14 +30,14 @@ memtable vs direct write semantics unless explicitly approved. Focus: mode4/mode
    - caching.DB.appendValueLog -> valuelog.Writer.AppendFrameWithStatsInto
    - dict‑on path: header+prefix build, compress, write header/prefix/payload.
 
-4) **Journal / commitlog (mode3)**
+4) **Journal / commitlog (wal_on)**
    - appendWAL* / commitlog writes (secondary for dict copy work).
 
 ## Breadth‑First Profiling Matrix (must complete before depth‑first)
 For each branch, capture a steady‑state CPU profile (after warmup) and identify copy hotspots.
 
 A) **Below cutoff (memtable path)**
-- **Must** run mode4 + dict‑on with ultra/highly compressible values (valsize=1KiB).
+- **Must** run wal_off + dict‑on with ultra/highly compressible values (valsize=1KiB).
 - **Must** profile via vlogprof harness (steady‑state) and tag memmove/memclr call stacks.
 - **Must** categorize copy cost into:
   - memtable/skiplist arena copies
@@ -45,7 +48,7 @@ B) **Above cutoff (streaming path)**
 - **Must** force streaming via batch size or payload size.
 - **Must** profile and tag the same copy categories as in A.
 
-C) **Mode3 (journal on)**
+C) **WAL on (journal on)**
 - **Must** repeat A/B with journal enabled, dict‑on.
 - **Must** annotate additional journal/commitlog copy costs.
 
@@ -87,11 +90,11 @@ C) **Mode3 (journal on)**
 
 ---
 
-## Branch 1 (Memtable Path) – Unabridged Plan (mode3 + mode4)
+## Branch 1 (Memtable Path) – Unabridged Plan (wal_on + wal_off)
 
 ### Goal
-Compare copy hotspots for the **memtable path** in both **mode3** (journal on, eager durability) and
-**mode4** (journal off, value‑log eager/unsafe). They differ in timing of disk writes and can shift
+Compare copy hotspots for the **memtable path** in both **wal_on** (journal on, eager durability) and
+**wal_off** (journal off, value‑log eager/unsafe). They differ in timing of disk writes and can shift
 where copies and stalls occur.
 
 ### Step 1: Confirm “below cutoff” (memtable path) in each mode
@@ -100,14 +103,14 @@ where copies and stalls occur.
 - **Must** confirm no streaming/direct‑write counters or “fast path” logs are triggered.
 - **Must** keep dict‑on enabled with a compressible pattern (ultra + highly).
 
-### Step 2: Profile mode4 (memtable path, dict‑on)
+### Step 2: Profile wal_off (memtable path, dict‑on)
 - **Must** use vlogprof harness (steady‑state after warmup).
 - **Must** tag copy sites:
   - memtable arena copies (skiplist)
   - value‑log writer copies (payload concat, appendBuf copy, header/prefix construction)
   - zstd internal buffers
 
-### Step 3: Profile mode3 (memtable path, dict‑on)
+### Step 3: Profile wal_on (memtable path, dict‑on)
 - **Must** run same workload with journal enabled.
 - **Must** compare additional copy/alloc costs from journal/commitlog.
 
@@ -118,15 +121,15 @@ where copies and stalls occur.
 
 ### Step 5: Prioritize copy reductions in value‑log writer
 - **Must** implement direct‑to‑appendBuf compression (no raw concat copy, no encoded→appendBuf copy).
-- **Must** re‑profile mode4 + mode3 to confirm the value‑log component shrinks.
+- **Must** re‑profile wal_off + wal_on to confirm the value‑log component shrinks.
 
 ### Step 6: Decide whether memtable path is now the dominant copy cost
 - If memtable copies still dominate, **must** decide whether to:
   - accept baseline (no behavior change), or
   - propose “compress‑before‑memtable” (behavioral change, explicit approval required).
 
-### Mode4 “compress earlier” option (behavioral; includes duplicate‑key guard)
-If we pursue early compression in mode4, we **must** guard against overwrite‑heavy batches
+### WAL off “compress earlier” option (behavioral; includes duplicate‑key guard)
+If we pursue early compression in wal_off, we **must** guard against overwrite‑heavy batches
 so we don’t waste value‑log writes.
 
 Approach:
@@ -143,24 +146,24 @@ Required perf case (pathological overwrite):
 
 ---
 
-## Branch 2 (Streaming Path) – Unabridged Plan (mode3 + mode4)
+## Branch 2 (Streaming Path) – Unabridged Plan (wal_on + wal_off)
 
 ### Goal
 Analyze copy/IO hotspots when **streaming/direct‑write** is triggered (memtable is skipped), for both
-mode3 (journal on) and mode4 (journal off).
+wal_on (journal on) and wal_off (journal off).
 
 ### Step 1: Force streaming path in each mode
 - **Must** choose input sizes that exceed the streaming cutoff.
 - **Must** validate streaming path via logs/counters and by absence of `Memtable.SetSteal` in profile.
 
-### Step 2: Profile mode4 streaming (dict‑on)
+### Step 2: Profile wal_off streaming (dict‑on)
 - **Must** capture steady‑state CPU profile.
 - **Must** tag copy sites:
   - value‑log writer (payload concat, appendBuf copy, header/prefix construction)
   - backend batch writes
   - zstd internal buffers
 
-### Step 3: Profile mode3 streaming (dict‑on)
+### Step 3: Profile wal_on streaming (dict‑on)
 - **Must** run same workload with journal enabled.
 - **Must** compare additional copy/IO overhead from commitlog/journal writes.
 
@@ -170,8 +173,8 @@ mode3 (journal on) and mode4 (journal off).
   1) **Early compression path (behavioral, requires approval)**
      - **Must** attempt a design where compression happens *before* any intermediate copy, so only
        compressed bytes flow into the writer buffer.
-     - **Mode4:** if approved, implement M4‑B (pointer‑only memtable) for streaming workloads.
-     - **Mode3:** only consider M3‑B if durability ordering is unchanged and correctness tests pass.
+     - **WAL off:** if approved, implement M4‑B (pointer‑only memtable) for streaming workloads.
+     - **WAL on:** only consider M3‑B if durability ordering is unchanged and correctness tests pass.
      - **Must produce** a before/after copy‑count estimate and throughput delta from profiles.
   2) **Direct‑to‑appendBuf compression (safe)**
      - **Must** eliminate raw payload concatenation and encoded→appendBuf copies in the streaming path.
@@ -204,7 +207,7 @@ streaming path, for both dict‑on and dict‑off modes.
 This section is written so an agent can execute Branch 3 with minimal interpretation.
 
 #### Baseline inputs (must keep constant when comparing)
-- mode: **mode3** and **mode4**
+- mode: **wal_on** and **wal_off**
 - dict: **on** (primary) and **off** (secondary)
 - pattern: `ultra_compressible_repeat`
 - value size: `1024`
@@ -213,21 +216,21 @@ This section is written so an agent can execute Branch 3 with minimal interpreta
 
 #### Profile commands (copy/paste)
 Write CPU profiles:
-- mode4 dict-on:
-  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode4_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode4_DictOn_Ultra_1024 -count=1 -v`
-- mode3 dict-on:
-  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+- wal_off dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_wal_off_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WAL off_DictOn_Ultra_1024 -count=1 -v`
+- wal_on dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WAL on_DictOn_Ultra_1024 -count=1 -v`
 
 Optional “control” profiles:
-- mode4 dict-off:
-  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode4_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode4_DictOn_Ultra_1024 -count=1 -v`
-- mode3 dict-off:
-  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+- wal_off dict-off:
+  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_wal_off_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WAL off_DictOn_Ultra_1024 -count=1 -v`
+- wal_on dict-off:
+  - `VLOG_DICT_DISABLE=1 VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_wal_on_ultra_1024_dictoff_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WAL on_DictOn_Ultra_1024 -count=1 -v`
 
 #### pprof “what to check” (must)
 For each profile, capture both a normal top and a memmove-focused top:
-- `go tool pprof -top -nodecount=40 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
-- `go tool pprof -top -focus=memmove -nodecount=40 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+- `go tool pprof -top -nodecount=40 /tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=memmove -nodecount=40 /tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof`
 
 Success is measured as:
 - writer-stack `memmove` attribution drops materially (target: ≥30% *relative* drop in writer-related memmove)
@@ -239,7 +242,7 @@ Edit: `TreeDB/internal/valuelog/writer.go`
 - Block: dict-on (`dictID != 0`)
 
 Must implement (safe, semantics-preserving):
-1) **Direct-to-appendBuf dict-on encode** (mode4 hot path, and small frames generally)
+1) **Direct-to-appendBuf dict-on encode** (wal_off hot path, and small frames generally)
    - Write header+prefix into the writer `appendBuf`.
    - Stream zstd output directly into `appendBuf` (no `encoded → appendBuf` copy).
    - Enforce **no-benefit cap**: abort if compressed bytes would be `>= rawPayloadBytes`.
@@ -304,7 +307,7 @@ Rollback invariants (must):
 
 ---
 
-## Branch 4 (Journal / Commitlog) – Unabridged Plan (mode3)
+## Branch 4 (Journal / Commitlog) – Unabridged Plan (wal_on)
 
 ### Goal
 Ensure journal/commitlog writes do not add unnecessary copy amplification on dict‑on write workloads.
@@ -313,7 +316,7 @@ Ensure journal/commitlog writes do not add unnecessary copy amplification on dic
 This section is written so an agent can execute Branch 4 with minimal interpretation.
 
 #### Baseline inputs (must keep constant when comparing)
-- mode: **mode3** (journal on)
+- mode: **wal_on** (journal on)
 - dict: **on**
 - pattern: `ultra_compressible_repeat`
 - value size: `1024`
@@ -321,14 +324,14 @@ This section is written so an agent can execute Branch 4 with minimal interpreta
 - measure window: `512MiB` of writes (steady-state)
 
 #### Profile commands (copy/paste)
-- mode3 dict-on:
-  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_mode3_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_Mode3_DictOn_Ultra_1024 -count=1 -v`
+- wal_on dict-on:
+  - `VLOG_DICT_CPUPROFILE=/tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof go test -tags vlogprof ./cmd/unified_bench -run TestProfileVlogDict_WAL on_DictOn_Ultra_1024 -count=1 -v`
 
 #### pprof “what to check” (must)
 Focus the journal/commitlog area and then confirm copy hot spots:
-- `go tool pprof -top -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
-- `go tool pprof -top -focus=commitlog -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
-- `go tool pprof -top -focus=memmove -nodecount=50 /tmp/vlog_dict_mode3_ultra_1024_cpu.pprof`
+- `go tool pprof -top -nodecount=50 /tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=commitlog -nodecount=50 /tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof`
+- `go tool pprof -top -focus=memmove -nodecount=50 /tmp/vlog_dict_wal_on_ultra_1024_cpu.pprof`
 
 Record for the PR:
 - commitlog cumulative time and where it comes from (formatting vs write buffering)
@@ -355,11 +358,11 @@ Constraints (must):
 - `go test ./... -count=1`
 
 ### Success Criteria (must hit)
-- **Must** show journal‑on (mode3) throughput improvements or clear parity vs baseline after copy fixes.
+- **Must** show journal‑on (wal_on) throughput improvements or clear parity vs baseline after copy fixes.
 - **Must** not regress recovery correctness; crash/replay tests must pass.
 
-### Step 1: Profile mode3 with dict‑on
-- **Must** profile mode3 (journal on) with compressible data and compare against mode4.
+### Step 1: Profile wal_on with dict‑on
+- **Must** profile wal_on (journal on) with compressible data and compare against wal_off.
 - **Must** identify any copy/alloc hotspots in commitlog/WAL write path.
 - **Must** attribute any copy cost to specific log record formatting or buffering steps.
 
@@ -371,17 +374,17 @@ Constraints (must):
 ### Step 3: Validate correctness + measure deltas
 - **Must** re‑run crash/recovery tests if journal path changes are made.
 - **Must** report before/after throughput and allocation deltas.
-- **Must** include a journal‑on bench slice (mode3) in the PR report.
+- **Must** include a journal‑on bench slice (wal_on) in the PR report.
 
 ### Anti‑monkey‑paw guardrails
-- **Not acceptable**: “fixing” mode3 by disabling journaling or reducing durability.
-- **Not acceptable**: reducing test scope to hide regressions; mode3 benches must be included.
+- **Not acceptable**: “fixing” wal_on by disabling journaling or reducing durability.
+- **Not acceptable**: reducing test scope to hide regressions; wal_on benches must be included.
 
 ---
 
-## “Compress Earlier” Options — Mode3 vs Mode4
+## “Compress Earlier” Options — WAL on vs WAL off
 
-### Mode3 (journal on)
+### WAL on (journal on)
 Constraints: durability order matters; journal + value‑log must remain consistent.
 
 **Option M3‑A (safe, semantics‑preserving)**
@@ -403,8 +406,8 @@ Constraints: durability order matters; journal + value‑log must remain consist
 **Option M3‑C (not advised yet)**
 - Compress before journal entry or store compressed value in journal (changes durability content).
 
-### Mode4 (journal off)
-Constraints: no durability guarantees beyond value‑log + backend flush; mode4 already unsafe.
+### WAL off (journal off)
+Constraints: no durability guarantees beyond value‑log + backend flush; wal_off already unsafe.
 
 **Option M4‑A (safe, semantics‑preserving)**
 - Same as M3‑A: direct‑to‑appendBuf compression in writer.
@@ -419,8 +422,8 @@ Constraints: no durability guarantees beyond value‑log + backend flush; mode4 
 - For large batches below cutoff, allow “micro‑streaming” into value‑log with pointer‑only memtable insert.
 
 ## Recommended order (if behavior changes approved)
-1) Implement M4‑B first (mode4 is unsafe anyway, so this gives fastest path quickly).
-2) Validate correctness with read‑back + recovery tests (within mode4’s safety envelope).
+1) Implement M4‑B first (wal_off is unsafe anyway, so this gives fastest path quickly).
+2) Validate correctness with read‑back + recovery tests (within wal_off’s safety envelope).
 3) If stable, consider M3‑B (needs more caution due to journal ordering).
 
 ---
@@ -452,28 +455,28 @@ Suggested benchmark hook:
 ## Work Log (append‑only)
 
 ### 2026‑01‑21
-- Branch1 start (memtable path, below cutoff). Added mode3 vlogprof harness.
+- Branch1 start (memtable path, below cutoff). Added wal_on vlogprof harness.
 - Profiles captured (batchSize=1000, valsize=1024; below streaming cutoff 1MiB):
-  - mode4 dict‑on ultra: ops/s ~863k, MB/s ~843; memmove ~41% flat; memtable/skiplist ~54% cum; appendValueLog ~8% cum.
-  - mode3 dict‑on ultra: ops/s ~519k, MB/s ~507; memmove ~41% flat; appendValueLog ~34% cum; zstd EncodeAll ~27% cum; memtable/skiplist ~31% cum; commitlog/write ~5% cum.
-- Next: annotate memmove stack attribution and identify writer vs memtable copy deltas for mode3 vs mode4.
+  - wal_off dict‑on ultra: ops/s ~863k, MB/s ~843; memmove ~41% flat; memtable/skiplist ~54% cum; appendValueLog ~8% cum.
+  - wal_on dict‑on ultra: ops/s ~519k, MB/s ~507; memmove ~41% flat; appendValueLog ~34% cum; zstd EncodeAll ~27% cum; memtable/skiplist ~31% cum; commitlog/write ~5% cum.
+- Next: annotate memmove stack attribution and identify writer vs memtable copy deltas for wal_on vs wal_off.
 
 ### 2026‑01‑21 (Branch1 Step 4 – Deltas)
-- Common hotspots (mode3 + mode4, below cutoff): memtable/skiplist copies dominate (Memtable.SetSteal → SkipList.put).
-- Mode3‑specific deltas: value‑log writer + zstd EncodeAll ~27% cum; commitlog/WAL ~5% cum; higher overall wall time.
-- Mode4‑specific deltas: writer share smaller (~8% cum); memtable share larger (~54% cum).
+- Common hotspots (wal_on + wal_off, below cutoff): memtable/skiplist copies dominate (Memtable.SetSteal → SkipList.put).
+- WAL on‑specific deltas: value‑log writer + zstd EncodeAll ~27% cum; commitlog/WAL ~5% cum; higher overall wall time.
+- WAL off‑specific deltas: writer share smaller (~8% cum); memtable share larger (~54% cum).
 - Interpretation: to move needle, we must remove writer‑side copies (dict‑on) **and** consider behavioral
   options for memtable copy elimination if safe/approved.
 
 ### 2026‑01‑21 (Branch1 Step 5 – memmove attribution)
-- memmove focus (mode3 dict‑on): memmove shows heavy attribution to Memtable/SkipList plus AppendValueLog/Writer; zstd EncodeAll appears in memmove stacks (~12% cum). Commitlog path ~4–5% cum.
-- memmove focus (mode4 dict‑on): memmove dominated by Memtable/SkipList; AppendValueLog/Writer minimal (~2% cum).
-- Implication: further writer copy removal will help mode3 more than mode4; memtable copies remain the largest shared cost.
+- memmove focus (wal_on dict‑on): memmove shows heavy attribution to Memtable/SkipList plus AppendValueLog/Writer; zstd EncodeAll appears in memmove stacks (~12% cum). Commitlog path ~4–5% cum.
+- memmove focus (wal_off dict‑on): memmove dominated by Memtable/SkipList; AppendValueLog/Writer minimal (~2% cum).
+- Implication: further writer copy removal will help wal_on more than wal_off; memtable copies remain the largest shared cost.
 
 ### 2026‑01‑22
 - PR100 bumps `github.com/snissn/compress` to `7ad45194ecdc` (dict reset optimization) and fixes a vlogprof flake where
   dict-on profiles could fail to apply a dict after warmup under higher throughput.
-  - mode3 dict-on (ultra, 1KiB) improved from median ~515k ops/s to ~571k ops/s in the vlogprof steady-state test.
+  - wal_on dict-on (ultra, 1KiB) improved from median ~515k ops/s to ~571k ops/s in the vlogprof steady-state test.
   - Root cause of flake: default `SampleStride=4` plus `TrainBytes=4MiB` and `warmup=16MiB` is “just enough” samples;
     if the trainer drops samples due to queue pressure, training may not trigger. The vlogprof tests now extend warmup
     until `last_applied_dict_id != 0` (bounded).

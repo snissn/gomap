@@ -1,3 +1,6 @@
+> **Legacy note:** This runbook predates the WAL on/off simplification and may reference removed options.
+> Use the current merge-gate runbook + docs for up-to-date guidance.
+
 # Follow‑Up Performance / Profiling Runbook (Post PR0–PR8)
 
 This document captures the **follow‑up work** after PR0–PR8 to (a) cement wins, (b) eliminate any remaining regressions, and (c) validate that all new features are performant under realistic and adversarial workloads.
@@ -226,7 +229,6 @@ Example (dict training ON; tune as needed):
 go run ./cmd/unified_bench \
   -dbs treedb -test batch_write -keys 1000000 -valsize 1024 -batchsize 1000 \
   -dataset-val-pattern repeat \
-  -treedb-split-value-log \
   -treedb-vlog-dict-train-bytes $((16<<20)) \
   -treedb-vlog-dict-dict-bytes $((40<<10)) \
   -treedb-vlog-dict-min-records 2048 \
@@ -244,22 +246,12 @@ Repeat the same matrix with `-dataset-val-pattern random` to ensure:
 - dictionary publication path (dictdb writes, SetCurrent frequency),
 - pause/adaptive logic overhead (avoid per‑op expensive time calls).
 
-### 3) Split value‑log vs unified WAL/vlog behavior
-We need explicit evidence about:
-- when split value‑log helps (reduced contention / better IO pattern),
-- when it hurts (extra writes / extra metadata / extra syscalls).
-
-Matrix:
-- `-treedb-split-value-log` OFF/ON
-- `-treedb-value-log-threshold`: 256 (default) and a larger value for sensitivity exploration (but apply to both branches).
-- `random_write` and `batch_write` at `valsize=1024`.
-
-### 4) Read path hot spots (RID indirection + checksum)
+### 3) Read path hot spots (RID indirection + checksum)
 Focus: `random_read` improvements/regressions.
 
 Matrix:
 - `-treedb-disable-read-checksum` OFF/ON (unsafe; used only to isolate CRC cost)
-- With/without value‑log pointers (implicit via threshold and SplitValueLog)
+- With/without value‑log pointers (via `-treedb-value-log-threshold`)
 
 Profile targets:
 - CRC verification cost (syscall + CPU),

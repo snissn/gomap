@@ -5,8 +5,8 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 // MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
@@ -209,7 +209,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge, true
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {
@@ -368,7 +368,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge, true
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {

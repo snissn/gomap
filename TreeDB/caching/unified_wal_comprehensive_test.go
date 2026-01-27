@@ -14,156 +14,48 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// TestUnifiedWAL_SplitLog_Flow verifies the flow of data when SplitValueLog is enabled:
-// 1. Data lands in ValueLog (not CommitLog).
-// 2. RAM holds value (or pointer).
-// 3. Flush copies to Backend (Slab).
-// 4. ValueLog deletion is safe after flush.
-func TestUnifiedWAL_SplitLog_Flow(t *testing.T) {
-	scenarios := []struct {
-		name                     string
-		memtableValueLogPointers bool
-	}{
-		{"RAM_Value", false},
-		{"RAM_Ptr", true},
+// TestUnifiedWAL_ValueLogFlow verifies that large values land in the value log
+// and remain readable after a checkpoint.
+func TestUnifiedWAL_ValueLogFlow(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	opts := Options{
+		FlushThreshold:           4 * 1024 * 1024,
+		ValueLogPointerThreshold: 100,
+		DisableWAL:               false,
+		AllowUnsafe:              true,
 	}
 
-	for _, sc := range scenarios {
-		t.Run(sc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			backend, err := db.Open(db.Options{Dir: dir})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer backend.Close()
-
-			opts := Options{
-				FlushThreshold:           4 * 1024 * 1024,
-				ValueLogPointerThreshold: 100,
-				SplitValueLog:            true, // Crucial for efficiency
-				MemtableValueLogPointers: sc.memtableValueLogPointers,
-				DisableWAL:               false,
-				AllowUnsafe:              true,
-			}
-
-			cached, err := Open(dir, backend, opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer cached.Close()
-
-			// 1. Write Large Value
-			valSize := 1000
-			key := []byte("large-key")
-			val := bytes.Repeat([]byte{0xAA}, valSize)
-			if err := cached.Set(key, val); err != nil {
-				t.Fatal(err)
-			}
-
-			// 3. Flush (Checkpoint)
-			// This flushes buffers to disk and flushes Memtable to Backend.
-			if err := cached.Checkpoint(); err != nil {
-				t.Fatal(err)
-			}
-
-			// 2. Verify CommitLog vs ValueLog sizes (Check AFTER flush)
-			commitSize, valueSize := getLogSizes(t, dir)
-			t.Logf("CommitLog Size: %d, ValueLog Size: %d", commitSize, valueSize)
-
-			// Size checks are intentionally informational only:
-			// - Copy-on-Flush can make value-log segments immediately deletable after Checkpoint.
-			// - CommitLog segments may rotate/truncate, leaving a 0-byte "current" segment.
-			// Correctness is asserted by verifying backend reads still succeed after deleting value logs.
-
-			// 4. Verify Backend Storage
-			stats := backend.Stats()
-			t.Logf("Backend Stats: %+v", stats)
-			// Check ActiveSlabID. If > 0, slabs exist.
-			// Or check if Get works after deleting value logs.
-
-			// 5. Destructive: Delete ValueLog
-			deleteValueLogs(t, dir)
-
-			// 6. Read
-			got, err := backend.Get(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got, val) {
-				t.Fatal("Data mismatch after value-log deletion")
-			}
-			t.Log("Data verified from backend after value-log deletion")
-		})
+	cached, err := Open(dir, backend, opts)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	defer cached.Close()
 
-func TestUnifiedWAL_CopyOnFlushRemovesValueLogDependency(t *testing.T) {
-	scenarios := []struct {
-		name                     string
-		memtableValueLogPointers bool
-	}{
-		{"RAM_Value", false},
-		{"RAM_Ptr", true},
+	valSize := 1000
+	key := []byte("large-key")
+	val := bytes.Repeat([]byte{0xAA}, valSize)
+	if err := cached.Set(key, val); err != nil {
+		t.Fatal(err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, sc := range scenarios {
-		t.Run(sc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			backend, err := db.Open(db.Options{Dir: dir})
-			if err != nil {
-				t.Fatal(err)
-			}
+	commitSize, valueSize := getLogSizes(t, dir)
+	t.Logf("CommitLog Size: %d, ValueLog Size: %d", commitSize, valueSize)
 
-			opts := Options{
-				AllowUnsafe:              true,
-				FlushThreshold:           1,
-				ValueLogPointerThreshold: 1,
-				SplitValueLog:            true,
-				MemtableValueLogPointers: sc.memtableValueLogPointers,
-			}
-			cached, err := Open(dir, backend, opts)
-			if err != nil {
-				_ = backend.Close()
-				t.Fatal(err)
-			}
-
-			key := []byte("large-key")
-			val := bytes.Repeat([]byte{0xAA}, page.DefaultInlineThreshold+64)
-			if err := cached.Set(key, val); err != nil {
-				_ = cached.Close()
-				_ = backend.Close()
-				t.Fatal(err)
-			}
-			if err := cached.Checkpoint(); err != nil {
-				_ = cached.Close()
-				_ = backend.Close()
-				t.Fatal(err)
-			}
-
-			if err := cached.Close(); err != nil {
-				_ = backend.Close()
-				t.Fatalf("cache close: %v", err)
-			}
-			if err := backend.Close(); err != nil {
-				t.Fatalf("backend close: %v", err)
-			}
-
-			deleteValueLogs(t, dir)
-
-			backend, err = db.Open(db.Options{Dir: dir})
-			if err != nil {
-				t.Fatalf("backend reopen: %v", err)
-			}
-			defer backend.Close()
-
-			got, err := backend.Get(key)
-			if err != nil {
-				t.Fatalf("backend get: %v", err)
-			}
-			if !bytes.Equal(got, val) {
-				t.Fatalf("value mismatch after value-log deletion")
-			}
-		})
+	got, err := backend.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatal("data mismatch after checkpoint")
 	}
 }
 
@@ -194,7 +86,7 @@ func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 		t.Fatalf("valuelog.Close: %v", err)
 	}
 
-	backend, err := db.Open(db.Options{Dir: dir, SplitValueLog: true})
+	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -235,7 +127,7 @@ func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	if opened, err := db.Open(db.Options{Dir: dir, SplitValueLog: true}); err == nil {
+	if opened, err := db.Open(db.Options{Dir: dir}); err == nil {
 		_ = opened.Close()
 		t.Fatalf("expected recovery to fail on missing payload, got nil error")
 	} else if !strings.Contains(err.Error(), "missing rid") {
@@ -251,7 +143,6 @@ func TestUnifiedWAL_LargeBatch(t *testing.T) {
 	opts := Options{
 		FlushThreshold:           4 * 1024 * 1024,
 		ValueLogPointerThreshold: 100,
-		SplitValueLog:            true,
 		// Small commitlog segment to force multiple files
 		WALMaxSegmentBytes: 1024 * 1024,
 		AllowUnsafe:        true,
@@ -275,7 +166,6 @@ func TestUnifiedWAL_LargeBatch(t *testing.T) {
 	}
 
 	// Verify Backend
-	deleteValueLogs(t, dir)
 	for i := 0; i < count; i++ {
 		key := []byte(fmt.Sprintf("k-%d", i))
 		val, err := backend.Get(key)
@@ -344,14 +234,4 @@ func getLogSizes(t *testing.T, dir string) (commitSize, valueSize int64) {
 		}
 	}
 	return
-}
-
-func deleteValueLogs(t *testing.T, dir string) {
-	walDir := filepath.Join(dir, "wal")
-	entries, _ := os.ReadDir(walDir)
-	for _, e := range entries {
-		if len(e.Name()) > 6 && e.Name()[:6] == "value-" {
-			os.Remove(filepath.Join(walDir, e.Name()))
-		}
-	}
 }

@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/snissn/compress/zstd"
-	"github.com/snissn/gomap/TreeDB/slab"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 const (
@@ -91,7 +91,7 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 		}
 		offsets[i+1] = uint32(rawTotal)
 	}
-	if slab.MaxRecordSize > 0 && int64(rawTotal) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawTotal) > limits.MaxRecordSize {
 		return nil, FrameHeader{}, ErrRecordTooLarge
 	}
 
@@ -123,7 +123,7 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 	ridBytes := k * 8
 	offsetBytes := (k + 1) * 4
 	bodyLen := FrameHeaderSize + ridBytes + offsetBytes + len(encoded)
-	if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 		return nil, FrameHeader{}, ErrRecordTooLarge
 	}
 

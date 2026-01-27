@@ -18,7 +18,6 @@ func main() {
 	opts := treedb.Options{
 		Dir:        dir,
 		ReadOnly:   true,
-		Mode:       treedb.ModeBackend, // Analyze backend structure
 		KeepRecent: 1,
 	}
 
@@ -41,7 +40,7 @@ func main() {
 	)
 
 	// Since we are using public API, we can't easily distinguish inline vs pointer
-	// unless we check if value came from slab. But public API hides this.
+	// unless we check if value came from the value log. But public API hides this.
 	// However, we can infer from size if we know the threshold.
 	// OR we can use UnsafeValue? No, public API.
 

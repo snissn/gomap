@@ -89,30 +89,6 @@ func TestGetAppend_EmptyValue(t *testing.T) {
 	}
 }
 
-func TestGetAppend_BackendMode(t *testing.T) {
-	dir := t.TempDir()
-	db, err := treedb.Open(treedb.Options{Dir: dir, Mode: treedb.ModeBackend})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	key := []byte("k")
-	val := []byte("backend_value")
-	if err := db.SetSync(key, val); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := make([]byte, 0, 10)
-	res, err := db.GetAppend(key, buf)
-	if err != nil {
-		t.Fatalf("GetAppend: %v", err)
-	}
-	if !bytes.Equal(res, val) {
-		t.Fatalf("expected %q, got %q", val, res)
-	}
-}
-
 func TestGetAppend_Grow(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
@@ -143,8 +119,7 @@ func TestGetAppend_Grow(t *testing.T) {
 
 func TestGet_SafeCopy(t *testing.T) {
 	dir := t.TempDir()
-	// Use backend mode to ensure we test the copy behavior even on disk paths
-	db, err := treedb.Open(treedb.Options{Dir: dir, Mode: treedb.ModeBackend})
+	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,9 +150,9 @@ func TestGet_SafeCopy(t *testing.T) {
 	}
 }
 
-func TestGetUnsafe_BackendReturnsValue(t *testing.T) {
+func TestGetUnsafe_ReturnsValue(t *testing.T) {
 	dir := t.TempDir()
-	db, err := treedb.Open(treedb.Options{Dir: dir, Mode: treedb.ModeBackend})
+	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

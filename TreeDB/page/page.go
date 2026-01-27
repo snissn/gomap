@@ -13,7 +13,7 @@ const (
 	// PageSize is the fixed size of a page in bytes.
 	PageSize = 4096
 
-	// DefaultInlineThreshold determines when a value is stored in the slab.
+	// DefaultInlineThreshold determines when a value is stored in the value log.
 	DefaultInlineThreshold = 256
 
 	// PageHeaderSize is the size of the PageHeader struct.
@@ -50,7 +50,7 @@ type PageHeader struct {
 	Count    uint16
 }
 
-// ValuePtr points to data stored in the Slabs.
+// ValuePtr points to data stored in the value log.
 // | Offset   (8 bytes)      |  // 8-byte aligned
 // | Length   (4 bytes)      |
 // | FileID   (4 bytes)      |

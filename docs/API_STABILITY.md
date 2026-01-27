@@ -18,7 +18,6 @@
 
 - `TreeDB` / package `treedb`
   - Primary entrypoint: `treedb.Open(opts)` (cached write-back mode by default).
-  - Backend-only mode: `opts.Mode = treedb.ModeBackend` or `treedb.OpenBackend(opts)`.
   - Errors: `treedb.ErrLocked` is part of the contract.
 - `HashDB` / package `hashdb`
   - Primary entrypoint: `hashdb.Open(dir)` / `hashdb.OpenWithShards(dir, n)`.

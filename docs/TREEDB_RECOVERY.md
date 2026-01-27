@@ -48,8 +48,7 @@ Additionally, cached mode’s background flusher removes journal segments after 
 ## Safety Notes
 
 - Two processes must not open the same directory concurrently. The lock enforces this.
-- Opening backend-only immediately after cached mode is safe: backend open replays cached journal segments first.
-- Opening cached mode immediately after backend-only is safe: there are no cached journal segments unless cached mode previously ran.
+- WAL off (journal disabled) still uses the value log; there is no backend-only mode.
 
 ## Where To Look in Code
 

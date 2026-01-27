@@ -1,5 +1,10 @@
 # TreeDB Design Specification v2.7 (Final Polish)
 
+> **Legacy notice:** This spec describes the pre-v0.2.0 backend-slab architecture.
+> TreeDB now uses a unified value log with WAL on/off semantics; backend-only
+> slabs and legacy mode names have been removed. See `docs/TREEDB_WRITE_PATHS.md`
+> and `docs/contracts/` for current behavior.
+
 ## 1\. System Overview
 
 **TreeDB** is an embedded, persistent key-value store tailored for the Cosmos SDK workload (IAVL+ Tree). It prioritizes high write throughput, efficient range scans, and low memory overhead during block commits.
@@ -716,7 +721,7 @@ TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable a
 - **Purpose:** Ensures durability of in-memory Memtable writes.
 - **Format:** Records operations as `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
 - **Durability:** Provides `Sync()` method to guarantee writes are flushed to disk.
-  - **Note:** In modern cached-mode paths, large values are stored in the value log and referenced by pointers (Mode3/Mode4). `DisableWAL` refers to a legacy mode that disables both journal and value-log pointers.
+  - **Note:** In the current cached-mode path, large values are stored in the value log and referenced by pointers. `DisableWAL` disables the journal (WAL off) but keeps value-log pointers enabled.
 
 #### 7.1.3 CachingDB (`caching` package)
 - **Architecture:** Wraps the core `treedb.DB` instance (referred to as `backend`).

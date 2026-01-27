@@ -51,12 +51,9 @@ func init() {
 		// TreeDB: keep cached+value-log–centric write path enabled, but relax durability.
 		//
 		// Notes:
-		// - We keep WAL enabled to avoid implicitly disabling value-log pointers.
+		// - We keep WAL enabled so the journal/redo log stays active.
 		// - We still set unsafe knobs for throughput (RelaxedSync + DisableReadChecksum).
 		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
-		setBoolIfUnset("treedb-disable-value-log", false, isSet, treedbDisableValueLog)
-		setBoolIfUnset("treedb-split-value-log", true, isSet, treedbSplitValueLog)
-		setBoolIfUnset("treedb-memtable-value-log-pointers", true, isSet, treedbMemtableValueLogPointers)
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
@@ -73,7 +70,7 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (and value-log pointers). UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (journal). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"fast_ingest": {

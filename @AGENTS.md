@@ -1,3 +1,6 @@
+> **Legacy note:** This log contains historical references to removed APIs.
+> Current guidance lives in `docs/`.
+
 # Repo Agent Log (Go Cleanup)
 
 ## Goals
@@ -82,8 +85,8 @@
   - `go test ./...` (root): PASS
 - 2025-12-14: Public API polish (TreeDB)
   - Added root `treedb.Open(...)` / `treedb.OpenCached(...)` returning the cached wrapper (`TreeDB/public.go`)
-  - Kept the uncached engine available via `treedb.OpenBackend(...)` and `TreeDB/db.Open(...)`
-  - Updated `cmd/unified_bench` so `treedb` uses the cached DB by default (added `treedbbackend` for uncached comparisons)
+  - Legacy uncached engine entrypoints were later removed as part of the WAL on/off simplification
+  - Updated `cmd/unified_bench` so `treedb` uses the cached DB by default
   - `go test ./...` (root): PASS
 - 2025-12-14: TreeDB scan iterator perf
   - Switched disk iterator to zero-copy pages (`pager.Get`) + verified-checksum cache

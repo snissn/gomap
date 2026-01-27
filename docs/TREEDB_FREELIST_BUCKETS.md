@@ -91,7 +91,7 @@ linked by `NextPageID`.
 
 **Workload**
 - `./bin/unified-bench`
-- `-exclude-dbs '' -dbs treedbbackend`
+- `-exclude-dbs '' -dbs treedb`
 - `-test sequential_write,fragmentation_report_pre,random_write,random_delete,fragmentation_report_post`
 - `-keys 30000 -valsize 64 -batchsize 500 -range-queries 0 -range-span 0`
 - `-checkpoint-between-tests`
@@ -118,7 +118,7 @@ linked by `NextPageID`.
 
 **Workload**
 - `./bin/unified-bench`
-- `-exclude-dbs '' -dbs treedbbackend`
+- `-exclude-dbs '' -dbs treedb`
 - `-profile fast -treedb-allow-unsafe`
 - `-test sequential_write,fragmentation_report_pre,batch_delete,batch_random,fragmentation_report_post`
 - `-keys 300000 -valsize 64 -batchsize 1000 -range-queries 0 -range-span 0`

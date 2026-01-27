@@ -17,7 +17,6 @@ func TestWaitForStopSchedulesFlush(t *testing.T) {
 
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:          flushThreshold,
-		DisableValueLog:         true,
 		MemtableShards:          1,
 		MaxBacklogBytes:         maxBacklog,
 		SlowdownBacklogSeconds:  0,

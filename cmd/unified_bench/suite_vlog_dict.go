@@ -15,7 +15,7 @@ import (
 )
 
 type valueLogDictSuiteCase struct {
-	mode     string // mode3 (journal on) or mode4 (DisableJournal)
+	mode     string // wal_on (journal enabled) or wal_off (DisableWAL)
 	dictOn   bool
 	pattern  string
 	valueSz  int
@@ -75,33 +75,33 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 	)
 
 	cases := []valueLogDictSuiteCase{
-		// Mode 3: journal on.
-		{mode: "mode3", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode3", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		// WAL on: journal enabled.
+		{mode: "wal_on", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 
-		// Mode 4: journal disabled (value-log pointers still enabled). Unsafe; requires AllowUnsafe.
-		{mode: "mode4", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "mode4", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		// WAL off: journal disabled (value-log pointers still enabled). Unsafe; requires AllowUnsafe.
+		{mode: "wal_off", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 	}
 
 	results := make([]valueLogDictSuiteResult, 0, len(cases))
@@ -129,7 +129,7 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- warmup bytes: %s\n", formatFloat(float64(warmupBytes))))
 	sb.WriteString(fmt.Sprintf("- measure bytes: %s\n\n", formatFloat(float64(measureBytes))))
 
-	sb.WriteString("| mode | dict | pattern | valsize | ops/sec | MB/s | observed_ratio_total | observed_ratio_measure | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes_total | wal_value_bytes_total | wal_value_bytes_measure | wal_total_bytes_total | index_bytes | dictdb_bytes |\n")
+	sb.WriteString("| wal | dict | pattern | valsize | ops/sec | MB/s | observed_ratio_total | observed_ratio_measure | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes_total | wal_value_bytes_total | wal_value_bytes_measure | wal_total_bytes_total | index_bytes | dictdb_bytes |\n")
 	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, r := range results {
 		sb.WriteString("| ")
@@ -515,10 +515,6 @@ func boolLabel(v bool, t, f string) string {
 
 type treedbFlagSnapshot struct {
 	disableWAL                 bool
-	disableJournal             bool
-	disableValueLog            bool
-	splitValueLog              bool
-	memtableValueLogPointers   bool
 	relaxedSync                bool
 	disableReadChecksum        bool
 	allowUnsafe                bool
@@ -536,10 +532,6 @@ type treedbFlagSnapshot struct {
 func snapshotTreeDBFlags() treedbFlagSnapshot {
 	return treedbFlagSnapshot{
 		disableWAL:                 *treedbDisableWAL,
-		disableJournal:             *treedbDisableJournal,
-		disableValueLog:            *treedbDisableValueLog,
-		splitValueLog:              *treedbSplitValueLog,
-		memtableValueLogPointers:   *treedbMemtableValueLogPointers,
 		relaxedSync:                *treedbRelaxedSync,
 		disableReadChecksum:        *treedbDisableReadChecksum,
 		allowUnsafe:                *treedbAllowUnsafe,
@@ -557,10 +549,6 @@ func snapshotTreeDBFlags() treedbFlagSnapshot {
 
 func (s treedbFlagSnapshot) restore() {
 	*treedbDisableWAL = s.disableWAL
-	*treedbDisableJournal = s.disableJournal
-	*treedbDisableValueLog = s.disableValueLog
-	*treedbSplitValueLog = s.splitValueLog
-	*treedbMemtableValueLogPointers = s.memtableValueLogPointers
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableReadChecksum
 	*treedbAllowUnsafe = s.allowUnsafe
@@ -578,9 +566,6 @@ func (s treedbFlagSnapshot) restore() {
 func applyValueLogDictSuiteFlags(tc valueLogDictSuiteCase) {
 	// Keep the value-log path enabled.
 	*treedbDisableWAL = false
-	*treedbDisableValueLog = false
-	*treedbSplitValueLog = true
-	*treedbMemtableValueLogPointers = true
 	*treedbValueLogThreshold = 1
 
 	// Favor throughput to isolate compression overhead.
@@ -594,12 +579,12 @@ func applyValueLogDictSuiteFlags(tc valueLogDictSuiteCase) {
 	}
 
 	switch tc.mode {
-	case "mode3":
-		*treedbDisableJournal = false
-	case "mode4":
-		*treedbDisableJournal = true
+	case "wal_off":
+		*treedbDisableWAL = true
+	case "wal_on":
+		*treedbDisableWAL = false
 	default:
-		*treedbDisableJournal = false
+		*treedbDisableWAL = false
 	}
 
 	*treedbVlogDictTrainBytes = tc.trainB

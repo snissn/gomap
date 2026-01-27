@@ -1,3 +1,6 @@
+> **Legacy note:** Portions of this agent doc predate the WAL on/off simplification and may reference removed options.
+> Prefer the current docs under `docs/` for up-to-date behavior.
+
 # TreeDB Wall-Time ValueLog Compression Autotuner — Spec + Autonomous Implementation Runbook
 Status: **Design spec + run sheet** (intended to be fully implementable by an autonomous coding agent)
 Updated: `2026-01-22`
@@ -115,7 +118,7 @@ Add a new option group:
 
 ```go
 // ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
-// Cached mode only (SplitValueLog must be enabled).
+// Cached mode only.
 ValueLogCompressionAutotune valuelog.AutotuneOptions
 ````
 
@@ -161,7 +164,7 @@ type AutotuneOptions struct {
 
 ### 3.3 Default behavior (normative)
 
-* Default `Mode = AutotuneMedium` when `SplitValueLog` is enabled (cached mode).
+* Default `Mode = AutotuneMedium` in cached mode.
 * Default sampling/training MUST be bounded (no surprise CPU spikes).
 * User can explicitly set `Mode = AutotuneOff`.
 

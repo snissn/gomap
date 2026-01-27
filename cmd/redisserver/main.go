@@ -29,17 +29,13 @@ func main() {
 	flag.IntVar(&cfg.HashDBShards, "hashdb-shards", 0, "HashDB shard count (0=default)")
 	flag.BoolVar(&cfg.HashDBCompression, "hashdb-compression", false, "HashDB value compression")
 
-	flag.StringVar(&cfg.TreeDBMode, "treedb-mode", "cached", "TreeDB mode: cached|backend")
 	flag.Int64Var(&cfg.TreeDBFlushThreshold, "treedb-flush-threshold", 64*1024*1024, "TreeDB flush threshold in bytes")
 	flag.IntVar(&cfg.TreeDBValueLogThreshold, "treedb-value-log-threshold", 0, "TreeDB value-log pointer threshold")
-	flag.BoolVar(&cfg.TreeDBDisableValueLog, "treedb-disable-value-log", false, "TreeDB: disable value-log pointers (legacy mode)")
 	flag.BoolVar(&cfg.TreeDBDisableWAL, "treedb-disable-wal", false, "TreeDB: disable WAL")
-	flag.BoolVar(&cfg.TreeDBDisableJournal, "treedb-disable-journal", false, "TreeDB: disable journal")
 	flag.BoolVar(&cfg.TreeDBRelaxedSync, "treedb-relaxed-sync", false, "TreeDB: relaxed sync")
-	flag.BoolVar(&cfg.TreeDBAllowUnsafe, "treedb-allow-unsafe", false, "TreeDB: allow unsafe options (required for journal/WAL disable, relaxed sync, and memtable vlog pointers)")
+	flag.BoolVar(&cfg.TreeDBAllowUnsafe, "treedb-allow-unsafe", false, "TreeDB: allow unsafe options (required for WAL disable and relaxed sync)")
 	flag.IntVar(&cfg.TreeDBJournalLanes, "treedb-journal-lanes", 0, "TreeDB: journal/value-log lanes (0=default)")
 	flag.IntVar(&cfg.TreeDBMemtableShards, "treedb-memtable-shards", 0, "TreeDB: memtable shard count (0=default)")
-	flag.BoolVar(&cfg.TreeDBMemtableVlogPtrs, "treedb-memtable-vlog-pointers", false, "TreeDB: store large values as pointers in memtable (unsafe; requires -treedb-allow-unsafe and value-log)")
 
 	flag.Float64Var(&cfg.CompactDeadRatio, "compact-dead-ratio", 0.50, "compaction dead ratio threshold")
 	flag.Uint64Var(&cfg.CompactMinBytes, "compact-min-bytes", 1*1024*1024, "compaction minimum slab bytes")
@@ -65,9 +61,6 @@ func main() {
 
 	engine := strings.ToLower(strings.TrimSpace(cfg.Engine))
 	log.Printf("redisserver: engine=%s addr=%s dir=%s", engine, cfg.Addr, cfg.Dir)
-	if cfg.TreeDBDisableValueLog && engine == "treedb" {
-		log.Printf("redisserver: treedb value-log disabled (legacy mode)")
-	}
 
 	server, err := redisserver.New(cfg)
 	if err != nil {

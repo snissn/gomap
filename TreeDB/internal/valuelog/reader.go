@@ -10,8 +10,8 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 const maxDecodeScratchKeep = 256 << 10 // 256KiB
@@ -150,7 +150,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		return 0, nil, page.ValuePtr{}, err
 	}
 	rawLen := offsets[len(offsets)-1]
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return 0, nil, page.ValuePtr{}, ErrRecordTooLarge
 	}
 
@@ -220,7 +220,7 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 }
 
 func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32, dst []byte) ([]byte, error) {
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
 
@@ -374,7 +374,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			}
 
 			rawLen := offsets[k]
-			if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, ErrRecordTooLarge
 			}
 			if prefixLen+int(rawLen) != int(valueLen) {
@@ -461,7 +461,7 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		return nil, ErrCorrupt
 	}
 	rawLen := offsets[len(offsets)-1]
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
 	start := offsets[subIndex]

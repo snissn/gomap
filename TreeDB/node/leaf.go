@@ -272,7 +272,7 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 // entry is a pointer and currently matches oldPtr. It updates the page checksum
 // on success.
 //
-// This is intended for maintenance operations (e.g. slab compaction) that need
+// This is intended for maintenance operations (e.g. value-log compaction) that need
 // to swap pointers without rewriting the B+Tree structure.
 func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (bool, error) {
 	if n.Type() != page.PageTypeLeaf {

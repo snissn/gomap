@@ -13,7 +13,7 @@ import (
 
 func TestApplyValueLogDictProfileUpdatesKForSameDict(t *testing.T) {
 	dir := t.TempDir()
-	backend, err := db.Open(db.Options{Dir: dir, Mode: db.ModeBackend, DisableBackgroundPrune: true})
+	backend, err := db.Open(db.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("open dictdb: %v", err)
 	}

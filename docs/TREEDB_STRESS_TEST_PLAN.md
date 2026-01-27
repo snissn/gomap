@@ -319,25 +319,23 @@ Additional criteria:
 - Error injection tests validate error propagation and no silent stalls.
 
 ## Open Questions
-- Should stress tests run against both `DisableJournal` true/false variants? (`DisableWAL` is legacy and disables both journal + value log)
+- Should stress tests run against both WAL on/off variants (`DisableWAL` true/false)?
 - Should we gate "heavy" tests on an env var or a build tag?
-- Which DB modes (cached/backend) must be covered in each stress test?
+- Which WAL modes must be covered in each stress test?
 
 ## Appendix: Config Matrix (Recommended)
 For each stress suite, consider these variants:
-- Mode: cached vs backend.
-- Journal: enabled vs disabled (`DisableJournal`; `DisableWAL` is legacy).
-- Value log: enabled vs disabled (`DisableValueLog`).
+- WAL: on vs off (`DisableWAL`).
 - Background tasks: enabled vs disabled (`TREEDB_BENCH_DISABLE_BG=1` parity).
 
 Example matrix for `TestConcurrentMixedOpsProgress`:
-- cached + journal + value log + BG on
-- cached + journal + value log + BG off
-- cached + no journal + no vlog + BG off (unsafe mode)
+- WAL on + BG on
+- WAL on + BG off
+- WAL off + BG off (unsafe mode)
 
 Tier selection rule (recommended):
 - `pr`: minimal critical path
-  - cached + journal + value log + BG on
+  - WAL on + BG on
   - cached + journal + value log + BG off
 - `daily`: expanded coverage
   - cached + journal + value log + BG on

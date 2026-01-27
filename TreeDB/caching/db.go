@@ -32,8 +32,6 @@ var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
 var ErrUnsafeOptions = fmt.Errorf("unsafe options require AllowUnsafe")
 var ErrMemtableFull = fmt.Errorf("memtable full")
-var ErrMemtableValueLogPointers = errors.New("memtable value-log pointers require WAL/value-log enabled")
-var ErrSplitValueLog = errors.New("split value log requires WAL/value-log enabled")
 var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
@@ -282,15 +280,15 @@ func shardCapacity(totalCap, shards int) int {
 }
 
 func (db *DB) valueLogEnabled() bool {
-	return !db.disableValueLog
+	return true
 }
 
 func (db *DB) splitValueLogEnabled() bool {
-	return db.splitValueLog && db.valueLogEnabled()
+	return true
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	return db != nil && db.disableJournal && db.splitValueLogEnabled() && !db.memtableValueLogPointers
+	return false
 }
 
 func (db *DB) walUsesValueLog() bool {
@@ -540,23 +538,6 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
-			if page.IsValueLogFileID(ptr.FileID) {
-				resolved, err := db.resolveValueLogPointerForFlush(val, ptr)
-				if err != nil {
-					return err
-				}
-				var setErr error
-				if sv != nil {
-					setErr = sv.SetView(key, resolved)
-				} else {
-					setErr = backendBatch.Set(key, resolved)
-				}
-				if setErr != nil {
-					return setErr
-				}
-				iter.Next()
-				continue
-			}
 			if psv != nil {
 				if err := psv.SetPointerView(key, ptr); err != nil {
 					return err
@@ -773,14 +754,9 @@ func (db *DB) readValueLogAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) 
 }
 
 func (db *DB) copyOnFlushValueLogPointers() bool {
-	return db != nil && db.valueLogEnabled()
-}
-
-func (db *DB) resolveValueLogPointerForFlush(val []byte, ptr page.ValuePtr) ([]byte, error) {
-	if val != nil {
-		return val, nil
-	}
-	return db.readValueLog(ptr)
+	// One-write rule: when values land in the value log, persist pointers into the
+	// backend and let value-log GC/rewrite handle long-term cleanup.
+	return false
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
@@ -1081,7 +1057,7 @@ type valueLogZombieMarker interface {
 }
 
 type valueLogSetRefresher interface {
-	RefreshSlabSet() error
+	RefreshValueLogSet() error
 }
 
 func (db *DB) pruneRetainedValueLogs() {
@@ -1163,7 +1139,7 @@ func (db *DB) pruneRetainedValueLogs() {
 
 	if marked {
 		if refresher, ok := db.backend.(valueLogSetRefresher); ok {
-			if err := refresher.RefreshSlabSet(); err != nil {
+			if err := refresher.RefreshValueLogSet(); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
 			}
 		}
@@ -1257,19 +1233,8 @@ type Options struct {
 	// parallelism.
 	FlushBuildConcurrency int
 
-	// DisableWAL disables the Write-Ahead Log entirely (legacy alias for disabling
-	// both the journal/redo log and value-log pointers).
+	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
-	// DisableJournal disables the redo/journal records while still allowing
-	// value-log pointers/value storage. A crash may lose writes since the last
-	// checkpoint because there is no redo log to replay.
-	DisableJournal bool
-	// DisableValueLog forces the cached path to remain in legacy journal-only mode
-	// (no value-log pointers).
-	DisableValueLog bool
-	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
-	// segments, and WAL entries reference them via pointers.
-	SplitValueLog bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
@@ -1283,9 +1248,6 @@ type Options struct {
 	JournalCompression bool
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
-	// MemtableValueLogPointers avoids storing large values in the memtable and
-	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
-	MemtableValueLogPointers bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
 	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
@@ -1318,7 +1280,7 @@ type Options struct {
 	ValueLogDictMinPayloadSavingsRatio float64
 
 	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
-	// Cached mode only (SplitValueLog must be enabled).
+	// Cached mode only (value log enabled by default).
 	ValueLogCompressionAutotune valuelog.AutotuneOptions
 
 	// NotifyError is an optional hook for background maintenance failures.
@@ -1372,11 +1334,13 @@ type DB struct {
 	walErr        error
 	nextRID       atomic.Uint64
 
-	disableValueLog              bool
-	splitValueLog                bool
+	// Legacy flags removed from public options; retained internally for code paths.
+	disableValueLog          bool
+	splitValueLog            bool
+	memtableValueLogPointers bool
+
 	inlineThreshold              int
 	valueLogThreshold            int
-	memtableValueLogPointers     bool
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
@@ -1768,7 +1732,7 @@ func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
-	if !opts.AllowUnsafe && (opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.MemtableValueLogPointers) {
+	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
@@ -1852,17 +1816,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogThreshold <= 0 {
 		valueLogThreshold = page.DefaultInlineThreshold
 	}
-	disableJournal := opts.DisableJournal || opts.DisableWAL
-	disableValueLog := opts.DisableValueLog || opts.DisableWAL
-	if opts.SplitValueLog && disableValueLog {
-		return nil, ErrSplitValueLog
-	}
-	if opts.MemtableValueLogPointers && disableValueLog {
-		return nil, ErrMemtableValueLogPointers
-	}
+	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
-		if !seg.valueLog || disableValueLog {
+		if !seg.valueLog {
 			continue
 		}
 		if retained == nil {
@@ -1886,15 +1843,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 		mutableShards[i] = memShard{mem: mt}
 	}
-	var valueLogReader *valuelog.Manager
-	if opts.MemtableValueLogPointers {
-		reader, err := valuelog.NewManager(walDir)
-		if err != nil {
-			return nil, err
-		}
-		reader.SetDisableReadChecksum(opts.DisableReadChecksum)
-		valueLogReader = reader
+	reader, err := valuelog.NewManager(walDir)
+	if err != nil {
+		return nil, err
 	}
+	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
+	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 
 	valueLogDictTrain := opts.ValueLogDictTrain
@@ -1909,11 +1863,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		minPayloadSavings = 0.005
 	}
 
-	splitValueLog := opts.SplitValueLog
-	if !disableValueLog {
-		splitValueLog = true
-	}
-	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, splitValueLog)
+	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
 
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
@@ -1924,7 +1874,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// If dict training is enabled but no adaptive ratio is specified, default to
 	// a conservative pause threshold to avoid wasting CPU on incompressible
 	// payload streams.
-	if valueLogDictTrain.TrainBytes > 0 && splitValueLog && valueLogDictAdaptiveRatio == 0 {
+	if valueLogDictTrain.TrainBytes > 0 && valueLogDictAdaptiveRatio == 0 {
 		// Require meaningful savings before staying in "dict mode". Payload ratios
 		// close to 1.0 can be slower than raw frames due to additional framing and
 		// encode/decode overhead, especially for small values and write-heavy batch
@@ -1989,13 +1939,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
-		disableValueLog:                disableValueLog,
-		splitValueLog:                  splitValueLog,
+		disableValueLog:                false,
+		splitValueLog:                  true,
 		relaxedSync:                    opts.RelaxedSync,
 		notifyError:                    opts.NotifyError,
 		inlineThreshold:                inlineThreshold,
 		valueLogThreshold:              valueLogThreshold,
-		memtableValueLogPointers:       opts.MemtableValueLogPointers,
+		memtableValueLogPointers:       true,
 		valueLogReader:                 valueLogReader,
 		valueLogRetain:                 retained,
 		debugFlushPointers:             debugFlushPointers,
@@ -2061,7 +2011,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				continue
 			}
 			l := &db.lanes[seg.lane]
-			if db.splitValueLog && !disableValueLog {
+			if db.splitValueLog {
 				if seg.valueLog {
 					if seg.path == l.vlogPath {
 						continue
@@ -2631,7 +2581,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 }
 
 // journalDurability represents the durability boundary for journal writes.
-// When SplitValueLog is enabled, payload durability must complete before the
+// When WAL is enabled, payload durability must complete before the
 // commit-intent durability for sync writes.
 type journalDurability uint8
 
@@ -3738,6 +3688,13 @@ func (db *DB) Close() error {
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
+	if db.dictStore != nil {
+		if closer, ok := db.dictStore.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
 	}
@@ -3835,7 +3792,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
-		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
+		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false
 	}
@@ -4995,17 +4952,7 @@ func (db *DB) flushLoop() {
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
-	if sync {
-		return true
-	}
-	// Only force a synced flush when operating in the legacy "everything off"
-	// mode (DisableWAL semantics), where we have neither a redo/journal nor a
-	// value-log durability mechanism. Disabling the journal alone must not
-	// implicitly force fsync-heavy flush behavior.
-	if db.disableJournal && db.disableValueLog && !db.relaxedSync {
-		return true
-	}
-	return false
+	return sync
 }
 
 func (db *DB) flushAll(sync bool) {
@@ -5141,17 +5088,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 					} else {
 						key := iter.UnsafeKey()
 						if flags&node.FlagPointer != 0 {
-							if page.IsValueLogFileID(ptr.FileID) {
-								resolved, err := db.resolveValueLogPointerForFlush(val, ptr)
-								if err != nil {
-									_ = iter.Close()
-									putEntrySlice(ops)
-									return nil, err
-								}
-								ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: resolved})
-								iter.Next()
-								continue
-							}
 							ops = append(ops, batch.Entry{
 								Type:     batch.OpPut,
 								Key:      key,
@@ -5160,11 +5096,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 							})
 							iter.Next()
 							continue
-						}
-						if val == nil && db.memtableValueLogPointers {
-							_ = iter.Close()
-							putEntrySlice(ops)
-							return nil, fmt.Errorf("cachingdb: flush missing value-log ptr for key")
 						}
 						ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
 					}
@@ -5295,23 +5226,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 						}
 					} else {
 						if flags&node.FlagPointer != 0 {
-							if page.IsValueLogFileID(ptr.FileID) {
-								resolved, err := db.resolveValueLogPointerForFlush(val, ptr)
-								if err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-								if err := backendBatch.Set(key, resolved); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-								iter.Next()
-								continue
-							}
 							if ptrSetter != nil {
 								if err := ptrSetter.SetPointer(key, ptr); err != nil {
 									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
@@ -5327,12 +5241,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 							}
 							iter.Next()
 							continue
-						}
-						if val == nil && db.memtableValueLogPointers {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log ptr for key)"))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
 						}
 						if err := backendBatch.Set(key, val); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
@@ -5551,18 +5459,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				} else {
 					key := iter.UnsafeKey()
 					if flags&node.FlagPointer != 0 {
-						if page.IsValueLogFileID(ptr.FileID) {
-							resolved, err := db.resolveValueLogPointerForFlush(val, ptr)
-							if err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-							ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: resolved})
-							iter.Next()
-							continue
-						}
 						ops = append(ops, batch.Entry{
 							Type:     batch.OpPut,
 							Key:      key,
@@ -5609,23 +5505,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					key := iter.UnsafeKey()
 					val, ptr, flags := iter.UnsafeEntry()
 					if flags&node.FlagPointer != 0 {
-						if page.IsValueLogFileID(ptr.FileID) {
-							resolved, err := db.resolveValueLogPointerForFlush(val, ptr)
-							if err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (read vlog): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-							if err := backendBatch.Set(key, resolved); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-							iter.Next()
-							continue
-						}
 						if ptrSetter != nil {
 							if err := ptrSetter.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
@@ -5643,12 +5522,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						continue
 					}
 
-					if val == nil && db.memtableValueLogPointers {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (missing value-log ptr for key)"))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
 					if err := backendBatch.Set(key, val); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
@@ -6100,7 +5973,7 @@ func (db *DB) QueueBacklogBytes() int64 {
 }
 
 // CompactionAssist performs bounded flush work when backpressure triggers. It is
-// intended to be called by background maintenance (e.g. slab compaction) so that
+// intended to be called by background maintenance (e.g. index compaction) so that
 // flush debt does not grow unbounded in the absence of foreground writes.
 func (db *DB) CompactionAssist() {
 	// Ensure the background flusher is scheduled even if this call ends up doing
@@ -6536,9 +6409,9 @@ func (b *Batch) Set(key, value []byte) error {
 			b.lastKey = keyCopy
 		}
 	}
-	// We don't know about slabs/thresholds here, so we just store inline.
-	// Backend will handle promotion to slab if needed during writeBypass,
-	// or standard write will handle it via WAL/Memtable (which don't use slabs yet).
+	// We don't know about value-log thresholds here, so we just store inline.
+	// The backend will handle promotion to the value log if needed during
+	// writeBypass, or standard write will handle it via the journal/memtable.
 	b.entries = append(b.entries, batch.Entry{
 		Type:  batch.OpPut,
 		Key:   keyCopy,
@@ -6852,7 +6725,7 @@ func (b *Batch) write(sync bool) error {
 		return err
 	}
 
-	if ok, err := b.tryWriteMode4StreamBypass(sync); err != nil {
+	if ok, err := b.tryWriteWALOffStreamBypass(sync); err != nil {
 		return err
 	} else if ok {
 		return nil
@@ -6868,7 +6741,7 @@ func (b *Batch) write(sync bool) error {
 	return b.writeRegular(sync)
 }
 
-func (b *Batch) tryWriteMode4StreamBypass(sync bool) (bool, error) {
+func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if b == nil || b.db == nil {
 		return false, nil
 	}
@@ -6913,7 +6786,7 @@ func (b *Batch) tryWriteMode4StreamBypass(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	// Mode4 streaming bypass: append large values to the value log and commit
+	// WAL-off streaming bypass: append large values to the value log and commit
 	// backend pointers directly, avoiding memtable ingestion costs for append-only
 	// workloads.
 	ops := getEntrySlice(len(b.entries))
@@ -7019,9 +6892,9 @@ func (b *Batch) writeRegular(sync bool) error {
 	// 2. Optional value-log + journal append loop.
 	//
 	// The value log (value store) and journal (redo log) are decoupled:
-	// - When DisableJournal=true, we still append large values to the value log
+	// - When DisableWAL=true, we still append large values to the value log
 	//   and store pointers in memory; there is simply no redo log for crash replay.
-	// - When DisableJournal=false, we also append commit-intent records that can
+	// - When DisableWAL=false, we also append commit-intent records that can
 	//   be replayed to recover unflushed writes.
 	durability := journalDurabilityNone
 	if sync {
@@ -7047,7 +6920,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	eligibleCount := len(eligibleIdxs)
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 	if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
-		// Mode4: When journal is disabled, defer value-log appends to the flush boundary
+		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false
 	}
@@ -7460,7 +7333,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	// Write directly to backend
 	backendBatch := b.db.backend.NewBatch()
 
-	// Use SetOps for bulk transfer (checking slabs internally in backend)
+	// Use SetOps for bulk transfer (backend will resolve value-log pointers).
 	if err := backendBatch.SetOps(b.entries); err != nil {
 		return err
 	}

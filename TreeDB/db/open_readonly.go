@@ -11,7 +11,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
@@ -37,21 +36,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	sm, err := slab.NewSlabManagerReadOnly(opts.Dir, slab.Options{
-		Compression: opts.SlabCompression,
-	})
-	if err != nil {
-		_ = p.Close()
-		_ = lock.Close()
-		return nil, err
-	}
-	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
-
 	valueLogDir := filepath.Join(opts.Dir, "wal")
 	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		_ = p.Close()
-		_ = sm.Close()
 		_ = lock.Close()
 		return nil, err
 	}
@@ -67,15 +55,12 @@ func openReadOnly(opts Options) (*DB, error) {
 
 	db := &DB{
 		readOnly:              true,
-		slabManager:           sm,
 		valueLogManager:       vm,
 		lock:                  lock,
 		adaptive:              adaptive.New(),
 		keepRecent:            opts.KeepRecent,
 		leafFillTargetPPM:     opts.LeafFillTargetPPM,
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  false,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -105,7 +90,6 @@ func openReadOnly(opts Options) (*DB, error) {
 		CommitSeq:        db.meta.CommitSeq,
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
-		SlabSet:          sm.CurrentSlabSet(),
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
@@ -126,20 +110,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	p.SetVerifyOnRead(opts.VerifyOnRead)
 
-	sm, err := slab.NewSlabManagerReadOnly(opts.Dir, slab.Options{
-		Compression: opts.SlabCompression,
-	})
-	if err != nil {
-		_ = p.Close()
-		return nil, err
-	}
-	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
-
 	valueLogDir := filepath.Join(opts.Dir, "wal")
 	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		_ = p.Close()
-		_ = sm.Close()
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
@@ -154,14 +128,11 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 
 	db := &DB{
 		readOnly:              true,
-		slabManager:           sm,
 		valueLogManager:       vm,
 		adaptive:              adaptive.New(),
 		keepRecent:            opts.KeepRecent,
 		leafFillTargetPPM:     opts.LeafFillTargetPPM,
 		internalFillTargetPPM: opts.InternalFillTargetPPM,
-		piggybackCompaction:   !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:  false,
 		dir:                   opts.Dir,
 		chunkSize:             opts.ChunkSize,
 		preferAppendAlloc:     opts.PreferAppendAlloc,
@@ -191,7 +162,6 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		CommitSeq:        db.meta.CommitSeq,
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
-		SlabSet:          sm.CurrentSlabSet(),
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)

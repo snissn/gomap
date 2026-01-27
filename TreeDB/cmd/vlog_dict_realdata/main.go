@@ -107,7 +107,6 @@ type benchReport struct {
 	FramesKept          *uint64  `json:"frames_kept,omitempty"`
 	KeptOfAttemptedFrac *float64 `json:"kept_of_attempted_frac,omitempty"`
 	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
-	SlabBytes           int64    `json:"slab_bytes,omitempty"`
 	IndexBytes          int64    `json:"index_bytes,omitempty"`
 	WritePathMode       string   `json:"write_path_mode"`
 	WritePathValueStore string   `json:"write_path_value_store"`
@@ -128,7 +127,6 @@ type benchWritePath struct {
 
 type benchDiskUsage struct {
 	valueLogBytes int64
-	slabBytes     int64
 	indexBytes    int64
 }
 
@@ -143,7 +141,7 @@ func main() {
 	levelName := flag.String("level", "fastest", "zstd encoder level (fastest|default)")
 	maxEval := flag.Int("max-eval", 25_000, "Max eval values used per sweep (0 disables)")
 	benchKV := flag.Bool("bench-kv", false, "Enable KV throughput bench (TreeDB public API)")
-	benchMode := flag.String("bench-mode", "mode3", "Bench write-path mode: mode1|mode3|mode4")
+	benchMode := flag.String("bench-mode", "wal_on", "Bench write-path: wal_on|wal_off")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
@@ -482,7 +480,10 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	cfg.KeyMode = strings.ToLower(strings.TrimSpace(cfg.KeyMode))
 
 	if cfg.Mode == "" {
-		return nil, fmt.Errorf("bench mode is required")
+		cfg.Mode = "wal_on"
+	}
+	if cfg.Mode != "wal_on" && cfg.Mode != "wal_off" {
+		return nil, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)
 	}
 	if cfg.Compression != "on" && cfg.Compression != "off" {
 		return nil, fmt.Errorf("unsupported -bench-compression=%q (expected on|off)", cfg.Compression)
@@ -508,9 +509,6 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.DictSampleStride < 0 {
 		return nil, fmt.Errorf("invalid -bench-dict-sample-stride=%d (must be >= 0)", cfg.DictSampleStride)
 	}
-	if cfg.Compression == "on" && cfg.Mode == "mode1" {
-		return nil, fmt.Errorf("bench mode1 does not support compression=on")
-	}
 	if cfg.Compression != "on" {
 		cfg.DictTrainMiB = 0
 		cfg.DictSampleStride = 0
@@ -522,8 +520,8 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 			cfg.DictSampleStride = defaultBenchDictSampleStride
 		}
 	}
-	if (cfg.Mode == "mode3" || cfg.Mode == "mode4") && cfg.PointerThreshold <= 0 {
-		return nil, fmt.Errorf("bench modes %s require -bench-pointer-threshold > 0 to force value-log pointers", cfg.Mode)
+	if cfg.PointerThreshold <= 0 {
+		return nil, fmt.Errorf("bench requires -bench-pointer-threshold > 0 to force value-log pointers")
 	}
 	if cfg.KeyMode == "dataset" {
 		if err := ensureDatasetKeys(train, "train"); err != nil {
@@ -635,14 +633,14 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	steadyMBps := float64(steadyRaw) / steadySecs / 1e6
 	fmt.Printf("steady:   raw_bytes=%d records=%d elapsed=%.3fs raw_MBps=%.3f\n", steadyRaw, steadyRecords, steadySecs, steadyMBps)
 
-	if cfg.Mode == "mode4" {
-		// Mode4 uses deferred value-log pointers, so many writes may still be
+	if cfg.Mode == "wal_off" {
+		// WAL-off uses deferred value-log pointers, so many writes may still be
 		// sitting in memtables until a flush boundary. Force a checkpoint after
 		// the steady timer so disk-usage reporting reflects the true on-disk
 		// value-log footprint for the workload.
 		ckStart := time.Now()
 		if err := db.Checkpoint(); err != nil {
-			return nil, fmt.Errorf("checkpoint after steady (mode4) failed: %w", err)
+			return nil, fmt.Errorf("checkpoint after steady (wal_off) failed: %w", err)
 		}
 		ckSecs := time.Since(ckStart).Seconds()
 		fmt.Printf("post_steady_checkpoint: elapsed=%.3fs\n", ckSecs)
@@ -683,9 +681,8 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatUint(framesKept, framesKeptOK),
 		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
 	)
-	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) slab_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
+	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
 		diskUsage.valueLogBytes, bytesToMiB(diskUsage.valueLogBytes),
-		diskUsage.slabBytes, bytesToMiB(diskUsage.slabBytes),
 		diskUsage.indexBytes, bytesToMiB(diskUsage.indexBytes),
 	)
 
@@ -780,7 +777,6 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		FramesKept:          framesKeptPtr,
 		KeptOfAttemptedFrac: keptOfAttemptedPtr,
 		ValueLogBytes:       diskUsage.valueLogBytes,
-		SlabBytes:           diskUsage.slabBytes,
 		IndexBytes:          diskUsage.indexBytes,
 		WritePathMode:       writePathMode,
 		WritePathValueStore: writePathValueStore,
@@ -792,14 +788,11 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 	opts := treedb.Options{
-		Mode:                          treedb.ModeCached,
-		AllowUnsafe:                   true,
-		ValueLogPointerThreshold:      cfg.PointerThreshold,
-		MaxValueLogRetainedBytesHard:  0,
-		ValueLogCompressionAutotune:   valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
-		ValueLogDictTrain:             compression.TrainConfig{TrainBytes: -1},
-		BackgroundCompactionInterval:  0,
-		BackgroundIndexVacuumInterval: 0,
+		AllowUnsafe:                  true,
+		ValueLogPointerThreshold:     cfg.PointerThreshold,
+		MaxValueLogRetainedBytesHard: 0,
+		ValueLogCompressionAutotune:  valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+		ValueLogDictTrain:            compression.TrainConfig{TrainBytes: -1},
 	}
 	if cfg.FlushThresholdMiB > 0 {
 		opts.FlushThreshold = int64(cfg.FlushThresholdMiB) * 1024 * 1024
@@ -807,23 +800,14 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 
 	var expect benchWritePath
 	switch cfg.Mode {
-	case "mode1":
-		opts.DisableValueLog = true
-		opts.DisableJournal = false
-		expect = benchWritePath{mode: "cached", valueStore: "backend_flush", redoLog: "on"}
-	case "mode3":
-		opts.DisableValueLog = false
-		opts.DisableJournal = false
-		opts.SplitValueLog = true
+	case "wal_on":
+		opts.DisableWAL = false
 		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "on"}
-	case "mode4":
-		opts.DisableValueLog = false
-		opts.DisableJournal = true
-		opts.MemtableValueLogPointers = false
-		opts.SplitValueLog = true
-		expect = benchWritePath{mode: "cached", valueStore: "value_log_deferred", redoLog: "off"}
+	case "wal_off":
+		opts.DisableWAL = true
+		expect = benchWritePath{mode: "cached", valueStore: "value_log", redoLog: "off"}
 	default:
-		return treedb.Options{}, benchWritePath{}, fmt.Errorf("unsupported -bench-mode=%q (expected mode1|mode3|mode4)", cfg.Mode)
+		return treedb.Options{}, benchWritePath{}, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)
 	}
 
 	if cfg.Compression == "on" {
@@ -1052,7 +1036,7 @@ func waitForDictActivation(db *treedb.DB, maxWait time.Duration) (bool, map[stri
 }
 
 func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[string]string, error) {
-	// Mode4 uses deferred value-log pointers, so warmup writes may not hit the
+	// WAL-off uses deferred value-log pointers, so warmup writes may not hit the
 	// value log until a flush/checkpoint happens. If we start steady-state before
 	// the dict is applied, stats will misleadingly show dict_id=0/attempted_frac=0
 	// and the dict publish log may appear after steady completes (issue #116).
@@ -1062,12 +1046,12 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		return true, snap, nil
 	}
 
-	if cfg.Mode == "mode4" {
+	if cfg.Mode == "wal_off" {
 		// Force a flush boundary so deferred values reach the value log and dict
 		// training/publish can complete before we start the steady timer.
-		fmt.Printf("dict:     pre-steady not active; forcing Checkpoint() (mode4 deferred value log) to enable dict during steady\n")
+		fmt.Printf("dict:     pre-steady not active; forcing Checkpoint() (wal_off deferred value log) to enable dict during steady\n")
 		if err := db.Checkpoint(); err != nil {
-			return false, db.Stats(), fmt.Errorf("checkpoint before steady (mode4) failed: %w", err)
+			return false, db.Stats(), fmt.Errorf("checkpoint before steady (wal_off) failed: %w", err)
 		}
 	}
 
@@ -1186,16 +1170,11 @@ func measureBenchDiskUsage(dir string) (benchDiskUsage, error) {
 	if err != nil {
 		return usage, err
 	}
-	slabBytes, err := sumDirFiles(root, "data", "", ".slab")
-	if err != nil {
-		return usage, err
-	}
 	indexBytes, err := statFileSize(filepath.Join(root, "index.db"))
 	if err != nil {
 		return usage, err
 	}
 	usage.valueLogBytes = valueBytes
-	usage.slabBytes = slabBytes
 	usage.indexBytes = indexBytes
 	return usage, nil
 }

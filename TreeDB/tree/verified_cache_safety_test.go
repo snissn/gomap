@@ -9,7 +9,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestVerifiedPageCache_SafetyTradeoff(t *testing.T) {
@@ -19,12 +18,6 @@ func TestVerifiedPageCache_SafetyTradeoff(t *testing.T) {
 		t.Fatalf("Pager open failed: %v", err)
 	}
 	defer p.Close()
-
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		t.Fatalf("SlabManager open failed: %v", err)
-	}
-	defer sm.Close()
 
 	if _, err := p.Alloc(1); err != nil {
 		t.Fatalf("Alloc: %v", err)
@@ -37,7 +30,7 @@ func TestVerifiedPageCache_SafetyTradeoff(t *testing.T) {
 	n.AddLeafEntry([]byte("k"), []byte("value"), node.FlagInline, page.ValuePtr{})
 	n.UpdateChecksum()
 
-	tr := New(p, sm, 0)
+	tr := New(p, panicValueReader{}, 0)
 
 	// First read verifies checksum and caches the page as "verified".
 	orig, err := tr.Get([]byte("k"))

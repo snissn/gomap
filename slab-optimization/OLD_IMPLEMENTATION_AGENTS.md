@@ -1,3 +1,6 @@
+> **Legacy note:** This runbook predates the WAL on/off simplification and may reference removed options.
+> Use the current merge-gate runbook + docs for up-to-date guidance.
+
 # Old Compression Implementation Review (PR50 / `feature/slab-optimizations`)
 
 This doc is a **planning and extraction runbook**: it reviews the discarded historical compression work from:
@@ -85,7 +88,7 @@ Already reimplemented (or surpassed) from PR50:
 - “Free on incompressible” behavior:
   - dict pause gating (attempted_frac ~ 0 in steady-state)
   - writer-level “no benefit” backoff (skip frames)
-- Mode4 ingest throughput improvements:
+- WAL off ingest throughput improvements:
   - larger frame grouping (PR31: `MaxFrameK=32`)
 - Read-path allocation reduction for grouped+compressed random access:
   - pooled decode scratch + copy-out only requested value (PR30)
@@ -114,7 +117,7 @@ Our current `ChooseKForDict`:
 
 Now that `MaxFrameK=32`, we should upgrade K-selection to:
 - consider K>8
-- incorporate (approximate) encode cost and the expected read regime (mode3 vs mode4)
+- incorporate (approximate) encode cost and the expected read regime (wal_on vs wal_off)
 
 ### Gap 3 — CI “perf gate” for ValueLog dict is still missing
 PR50 had a concrete baseline+checker.
@@ -136,7 +139,7 @@ This gives us confidence our tuning is not overfitting to “repeat tail” patt
 
 ### Gap 5 — Optional: journal/commitlog compression (metadata)
 PR50 had `WALCompression` (zstd) for metadata WAL.
-For mode3, we could consider compressing commit records (metadata) if it reduces IO without hurting throughput.
+For wal_on, we could consider compressing commit records (metadata) if it reduces IO without hurting throughput.
 This should be a later PR once dict compression is stable.
 
 ---
@@ -168,19 +171,19 @@ Acceptance:
   - compressible after incompressible: we recover quickly (no long “stuck paused”)
 
 ### PR33 — Upgrade `ChooseKForDict`: evaluate K>8 and include encode-cost term
-Goal: fix the K-selection model so mode3 picks a reasonable K automatically, and mode4 can keep using MaxFrameK.
+Goal: fix the K-selection model so wal_on picks a reasonable K automatically, and wal_off can keep using MaxFrameK.
 
 Deliverables:
 - Update `TreeDB/internal/compression/profile.go`:
   - evaluate candidate Ks up to `valuelog.MaxFrameK` (or a capped subset like {1,2,4,8,16,32})
   - incorporate an encode-cost estimate (even a coarse one) so we don’t pick K that is “ratio good” but “encode too slow”
 - Update `applyValueLogDictProfile` policy:
-  - mode3 should prefer smaller K when random reads dominate
-  - mode4 (disableJournal ingest) can keep using MaxFrameK for throughput
+  - wal_on should prefer smaller K when random reads dominate
+  - wal_off (disableJournal ingest) can keep using MaxFrameK for throughput
 
 Acceptance:
 - microbench: `BenchmarkValueLogDictCompressibilitySweep` improves MB/s at larger K while keeping ratios sane
-- microbench: `BenchmarkValueLogDictReadCPU_NoIO` shows the expected read penalty for K=32, and mode3 selection should avoid that if needed
+- microbench: `BenchmarkValueLogDictReadCPU_NoIO` shows the expected read penalty for K=32, and wal_on selection should avoid that if needed
 
 ### PR34 — Add an explicit “K cost model” bench command (optional, dev-only)
 Goal: codify PR50’s `kv_dict_batch_bench` idea in our current repo but aligned to ValueLog.
@@ -221,14 +224,14 @@ Acceptance:
 - gives us a repeatable, human-run harness for “real data tuning”
 
 ### PR37 (optional, later) — Journal/commitlog compression
-Goal: evaluate metadata compression for mode3 durability writes.
+Goal: evaluate metadata compression for wal_on durability writes.
 
 Deliverables:
 - Add a flag/options knob for commitlog/journal compression
 - Bench: confirm wall-time and MB/s impact is acceptable
 
 Acceptance:
-- only land if it does not regress mode3 throughput materially
+- only land if it does not regress wal_on throughput materially
 
 ### Not planned (yet): multi-dict routing / template transforms
 PR50 explored multi-dict routing and template XOR transforms.
