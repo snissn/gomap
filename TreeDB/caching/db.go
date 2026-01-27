@@ -1299,11 +1299,12 @@ type DictStore interface {
 }
 
 type DB struct {
-	mu      sync.RWMutex
-	flushMu sync.Mutex
-	writeMu sync.RWMutex
-	bpMu    sync.Mutex
-	bpCond  *sync.Cond
+	mu       sync.RWMutex
+	flushMu  sync.Mutex
+	commitMu sync.Mutex
+	writeMu  sync.RWMutex
+	bpMu     sync.Mutex
+	bpCond   *sync.Cond
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -5221,6 +5222,9 @@ func (db *DB) flushAll(reqSync bool) {
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
 		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
 	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
 	lanes := len(db.lanes)
 	if lanes == 0 {
 		lanes = 1
@@ -5785,13 +5789,13 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 		}
 		var err error
 		t0 := time.Now()
-		db.flushMu.Lock()
+		db.commitMu.Lock()
 		if sync {
 			err = backendBatch.WriteSync()
 		} else {
 			err = backendBatch.Write()
 		}
-		db.flushMu.Unlock()
+		db.commitMu.Unlock()
 		durBackendWrite = time.Since(t0)
 		if err != nil {
 			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
