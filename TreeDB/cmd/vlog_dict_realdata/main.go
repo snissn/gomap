@@ -1056,6 +1056,9 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		if err := db.Checkpoint(); err != nil {
 			return false, db.Stats(), fmt.Errorf("checkpoint before steady (wal_off) failed: %w", err)
 		}
+		if err := nudgeDictApplication(db); err != nil {
+			return false, db.Stats(), fmt.Errorf("dict activation nudge failed: %w", err)
+		}
 	}
 
 	if cfg.Mode == "mode4" {

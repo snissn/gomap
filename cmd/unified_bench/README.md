@@ -72,7 +72,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `readme` — generates the README graphs + sweep tables
   - `churn` — churn + settled scans (`treedb,leveldb`)
   - `churnvacuum` — churn + settled scans, then index compaction and scan again
-  - `flushdrain` — write burst → checkpoint boundary → read; prints checkpoint timing (TreeDB-focused)
+  - `flushdrain` — write burst → checkpoint boundary → read; prints checkpoint timing (TreeDB-focused). Use `-flushdrain-checkpoint-max=<duration>` to fail the suite if the checkpoint before `random_read` exceeds your latency target.
   - `flushthrash` — forces a small TreeDB flush threshold; catches flush thrash / runaway backlog regressions
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports

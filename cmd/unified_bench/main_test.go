@@ -195,3 +195,21 @@ func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 		t.Fatalf("expected random_write > 0, got %v", randWrite)
 	}
 }
+
+func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
+	cfg := BenchConfig{
+		Keys:                   1,
+		ValueSize:              128,
+		BatchSize:              1000,
+		DBsArg:                 "treedb",
+		TestsArg:               "all",
+		KeepDir:                false,
+		Progress:               false,
+		SeedUsed:               1,
+		CheckpointBetweenTests: true,
+		MaxWall:                10 * time.Second,
+	}
+	if _, err := runFlushDrainSuite(cfg); err != nil {
+		t.Fatalf("runFlushDrainSuite failed: %v", err)
+	}
+}

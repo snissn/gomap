@@ -248,9 +248,19 @@ type Options struct {
 	// FlushBuildMinUnits gates the parallel build path by number of queued units.
 	// Values <= 0 use a default of 2.
 	FlushBuildMinUnits int
-	// FlushBuildChunkCap controls the maximum entries per build chunk. Values <= 0
-	// use a default of 8192.
+	// FlushBuildChunkCap controls the maximum entries per build chunk.
+	// A value of 0 enables adaptive chunk sizing, values < 0 use the fixed default of 8192,
+	// and values > 0 set an explicit cap.
 	FlushBuildChunkCap int
+	// FlushBuildChunkTargetBytes controls adaptive chunk sizing (bytes per chunk).
+	// Values <= 0 use a default of 2MiB.
+	FlushBuildChunkTargetBytes int
+	// FlushBuildChunkMinBytes clamps adaptive chunk sizes (minimum bytes).
+	// Values <= 0 use a default of 1MiB.
+	FlushBuildChunkMinBytes int
+	// FlushBuildChunkMaxBytes clamps adaptive chunk sizes (maximum bytes).
+	// Values <= 0 use a default of 4MiB.
+	FlushBuildChunkMaxBytes int
 	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
