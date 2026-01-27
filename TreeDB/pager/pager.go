@@ -533,18 +533,8 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	return nil
 }
 
-// Sync msyncs the memory maps to disk and fsyncs the underlying file.
+// Sync msyncs the memory maps to disk.
 func (p *Pager) Sync() error {
-	return p.syncDirty(true)
-}
-
-// SyncData msyncs the memory maps to disk without fsyncing the file.
-// Callers should issue a final Sync() after metadata updates to ensure durability.
-func (p *Pager) SyncData() error {
-	return p.syncDirty(false)
-}
-
-func (p *Pager) syncDirty(syncFile bool) error {
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -611,7 +601,7 @@ func (p *Pager) syncDirty(syncFile bool) error {
 		}
 	}
 
-	if syncErr == nil && syncFile {
+	if syncErr == nil {
 		if err := p.file.Sync(); err != nil {
 			syncErr = err
 		}
