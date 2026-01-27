@@ -1222,8 +1222,9 @@ type Options struct {
 	// FlushBuildMinUnits gates the parallel build path by number of queued units.
 	// Values <= 0 use a default of 2.
 	FlushBuildMinUnits int
-	// FlushBuildChunkCap controls the maximum entries per build chunk. Values <= 0
-	// use a default of 8192.
+	// FlushBuildChunkCap controls the maximum entries per build chunk.
+	// Values < 0 use the fixed default of 8192, 0 enables adaptive chunk sizing,
+	// and values > 0 set a fixed cap.
 	FlushBuildChunkCap int
 	// FlushBuildChunkTargetBytes controls adaptive chunk sizing (bytes per chunk).
 	// Values <= 0 use a default of 2MiB.
@@ -1806,7 +1807,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.FlushBuildMinUnits <= 0 {
 		opts.FlushBuildMinUnits = 2
 	}
-	if opts.FlushBuildChunkCap <= 0 {
+	if opts.FlushBuildChunkCap < 0 {
 		opts.FlushBuildChunkCap = 8192
 	}
 	if opts.FlushBuildChunkTargetBytes <= 0 {
@@ -3566,8 +3567,9 @@ func (db *DB) Checkpoint() error {
 	}()
 
 	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
@@ -3575,6 +3577,7 @@ func (db *DB) Checkpoint() error {
 	if db.mutableBytes.Load() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
@@ -3582,17 +3585,14 @@ func (db *DB) Checkpoint() error {
 	db.mu.Unlock()
 	for i := range db.lanes {
 		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
-			db.flushMu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
-	db.flushMu.Unlock()
+	db.writeMu.Unlock()
 
 	// Flush all queued memtables with backend sync.
-	db.flushAll(true)
-
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
+	db.flushAllLocked(true)
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
@@ -3734,6 +3734,8 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return
 	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
@@ -3931,18 +3933,22 @@ func (db *DB) SetSync(key, value []byte) error {
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
+			db.writeMu.Unlock()
 			return err
 		}
 	}
 	db.mu.Unlock()
 
-	db.flushAll(sync)
+	db.writeMu.Unlock()
+
+	db.flushMu.Lock()
+	db.flushAllLocked(sync)
+	db.flushMu.Unlock()
 	return db.backgroundError()
 }
 
@@ -5196,11 +5202,18 @@ func (db *DB) pickFlushLane() (int, bool) {
 		db.mu.RUnlock()
 		return 0, false
 	}
-	counts := make(map[int]int)
+	laneCount := len(db.lanes)
+	if laneCount == 0 {
+		laneCount = 1
+	}
+	counts := make([]int, laneCount)
 	for i := range db.queue {
 		laneID := 0
 		if i < len(db.queueLaneIDs) {
 			laneID = int(db.queueLaneIDs[i])
+		}
+		if laneID < 0 || laneID >= laneCount {
+			laneID = 0
 		}
 		counts[laneID]++
 	}
@@ -5217,14 +5230,17 @@ func (db *DB) pickFlushLane() (int, bool) {
 }
 
 func (db *DB) flushAll(reqSync bool) {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	db.flushAllLocked(reqSync)
+}
+
+func (db *DB) flushAllLocked(reqSync bool) {
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
 		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
 	}
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
-
 	lanes := len(db.lanes)
 	if lanes == 0 {
 		lanes = 1
@@ -5247,6 +5263,9 @@ func (db *DB) flushAll(reqSync bool) {
 }
 
 func (db *DB) flushOne() bool {
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
 	laneID, ok := db.pickFlushLane()
 	if !ok {
 		return false
