@@ -13,7 +13,12 @@ import (
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir, ForceValuePointers: true})
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

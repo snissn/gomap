@@ -10,7 +10,7 @@ treedb.prof
 treedb_opt_node.prof
 *.prof
 *.pprof
-unified_bench
+/unified_bench
 TreeDB/db/test-*
 .worktrees/
 artifacts/
