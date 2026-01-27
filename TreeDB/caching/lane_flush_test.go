@@ -123,12 +123,15 @@ func TestLaneAwareFlushAll(t *testing.T) {
 	// Write data to all lanes
 	for laneID := 0; laneID < 4; laneID++ {
 		var key []byte
-		for i := 0; ; i++ {
+		for i := 0; i < 10000; i++ {
 			k := []byte(fmt.Sprintf("lane%d-key%d", laneID, i))
 			if db.laneForShardIndex(db.shardIndex(k)) == laneID {
 				key = k
 				break
 			}
+		}
+		if key == nil {
+			t.Fatalf("failed to find key for lane %d within iteration limit", laneID)
 		}
 		if err := db.Set(key, []byte("value")); err != nil {
 			t.Fatalf("Set: %v", err)
@@ -137,7 +140,10 @@ func TestLaneAwareFlushAll(t *testing.T) {
 
 	// Rotate
 	db.mu.Lock()
-	db.rotateMemtableLocked(false)
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
 	db.mu.Unlock()
 
 	// Flush all
