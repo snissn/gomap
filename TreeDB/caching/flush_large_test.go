@@ -83,3 +83,70 @@ func TestCachingDB_FlushCombinedLargeMemtablesPersists(t *testing.T) {
 		}
 	}
 }
+
+func TestCachingDB_FlushCombinedLargeMemtablesParallelBuildPreservesLastWrite(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	// Enable parallel build so the combined flush uses the worker path.
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:          1 << 20, // 1MiB
+		MemtableShards:          1,
+		MemtableMode:            "hash_sorted",
+		MaxQueuedMemtables:      -1,
+		AllowUnsafe:             true,
+		FlushBuildConcurrency:   4,
+		WriterFlushMaxMemtables: 0,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Block background flush while building up multiple queued memtables.
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+
+	writeAndRotate := func(prefix byte, n int, overlapKey string, overlapVal string) {
+		for i := 0; i < n; i++ {
+			k := fmt.Sprintf("%c%08d", prefix, i)
+			v := fmt.Sprintf("v-%c-%08d", prefix, i)
+			if err := db.Set([]byte(k), []byte(v)); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+		}
+		if overlapKey != "" {
+			if err := db.Set([]byte(overlapKey), []byte(overlapVal)); err != nil {
+				t.Fatalf("Set overlap: %v", err)
+			}
+		}
+		db.mu.Lock()
+		if err := db.rotateMemtableLocked(true); err != nil {
+			db.mu.Unlock()
+			t.Fatalf("rotateMemtableLocked: %v", err)
+		}
+		db.mu.Unlock()
+	}
+
+	overlapKey := "zzzz-overlap"
+	writeAndRotate('a', 3000, overlapKey, "old")
+	writeAndRotate('b', 3000, overlapKey, "new")
+
+	db.mu.RLock()
+	queued := len(db.queue)
+	db.mu.RUnlock()
+	if queued < 2 {
+		t.Fatalf("expected multiple queued memtables, got %d", queued)
+	}
+
+	for db.flushCombinedLocked(false) {
+	}
+
+	got, err := backend.Get([]byte(overlapKey))
+	if err != nil {
+		t.Fatalf("backend.Get overlap: %v", err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("overlap value mismatch: got %q want %q", got, "new")
+	}
+}

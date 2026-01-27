@@ -34,8 +34,8 @@ This file is the sprint source of truth:
   - avoid large transient allocations by streaming ops directly into the backend batch (`SetView`/`DeleteView`/`SetPointerView`) instead of materializing `[]batch.Entry`
   - avoid per-flush heap allocations for combined flush snapshots (`mems`/`ranges`/`walPaths`/`units` on stack for up to 32 memtables)
   - keep combined-flush latency bounded under small flush thresholds (see flushthrash CI note below)
-- [ ] Evaluate multi-core flush building cost (existing `FlushBuildConcurrency`):
-  - if goroutine/scheduler overhead shows up, consider a small reusable worker pool
+- [x] Evaluate multi-core flush building cost (existing `FlushBuildConcurrency`):
+  - perf server `-suite flushdrain` shows backend write dominates checkpoint time; parallel build yields only minor improvements
 - [ ] If warranted by profiling: pipeline ops building and backend commit (without parallel backend commits).
 
 ### Acceptance gates
@@ -52,6 +52,10 @@ This file is the sprint source of truth:
 - 2026-01-27: Reduced per-flush heap allocations in the combined-flush snapshot path (stack arrays for up to 32 memtables).
 - 2026-01-27: Added regression test covering combined-flush bulk path (`totalLen > 2000`) to ensure queued memtables persist.
 - 2026-01-27: Ran local `keys=200000` mixed + settled unified_bench comparisons (perf server SSH timed out); captured a candidate hang at `keys=900000` (see below) and recorded results for PR review.
+- 2026-01-27: (WIP) Added `cmd/unified_bench` flag `-treedb-flush-build-concurrency` and implemented an order-preserving parallel combined-flush build path (chunked) behind `Options.FlushBuildConcurrency > 1`.
+- 2026-01-27: Perf server: ran `-suite flushdrain` with `FlushBuildConcurrency={1,4,8}`; observed only small checkpoint-time improvements (backend write dominates). Captured `TREEDB_DEBUG_FLUSH_TIMING=1` stage breakdown.
+- 2026-01-27: Added flush-build tuning knobs (`FlushBuildMinEntries`, `FlushBuildMinUnits`, `FlushBuildChunkCap`, `FlushBuildPrefetchUnits`) and pager tuning knobs (`PagerSyncConcurrency`, `ChunkSize`) with unified-bench flags.
+- 2026-01-27: Added `TREEDB_DEBUG_COMMIT_TIMING=1` to break down commit sync costs.
 
 ## Results / follow-ups
 
@@ -90,6 +94,73 @@ Summary deltas (cand vs main):
 
 Notes:
 - In the *mixed* `wal_on_fast` run (no checkpoints), candidate showed a large `Prefix Scan` drop that did **not** reproduce in the checkpointed run; `pre-prefix_scan` cache stats also showed candidate had queued immutables at that point. Treat the mixed-prefix-scan delta as suspicious/noisy until it reproduces under `-checkpoint-between-tests` or a smaller “read-only” suite.
+
+### Local exploratory results: `FlushBuildConcurrency` (2026-01-27)
+
+Goal:
+- See whether parallel building of combined flush batches can reduce the “checkpoint before reads” latency in `-suite flushdrain`, and whether it affects ops/sec.
+
+Commands:
+
+```bash
+make unified-bench
+
+./bin/unified-bench -suite flushdrain -dbs treedb -profile wal_on_fast -keys 200000 -progress=false \
+  -treedb-flush-build-concurrency 1
+
+./bin/unified-bench -suite flushdrain -dbs treedb -profile wal_on_fast -keys 200000 -progress=false \
+  -treedb-flush-build-concurrency 4
+```
+
+Observed (Apple laptop; single-run sanity, noisy):
+- `FlushBuildConcurrency=1`: checkpoint before `Random Read` ~353ms, Random Read ~2.62M ops/s
+- `FlushBuildConcurrency=4`: checkpoint before `Random Read` ~177ms, Random Read ~3.98M ops/s
+
+Follow-up:
+- Rerun on the perf server with the same flags (and ideally multiple trials) to confirm whether the checkpoint/drain-time improvement is real and stable.
+
+### Perf server: `FlushBuildConcurrency` (flushdrain) (2026-01-27)
+
+Artifacts (perf server):
+- `artifacts/perf_flushbuild_20260127_073354/` (suite outputs)
+- `artifacts/perf_flushbuild_20260127_073425_timing/` (suite output + stderr timing)
+
+Command:
+
+```bash
+./bin/unified-bench -suite flushdrain -profile wal_on_fast -keys 900000 -progress=false -format markdown \
+  -treedb-flush-build-concurrency {1,4,8}
+```
+
+Observed (single run each; ops/sec):
+- `c=1`: random_write 1,232,527; random_read 1,909,138; checkpoint before reads 1.51s
+- `c=4`: random_write 1,211,869; random_read 1,932,999; checkpoint before reads 1.48s
+- `c=8`: random_write 1,199,070; random_read 1,901,429; checkpoint before reads 1.30s
+
+Flush stage breakdown (from `TREEDB_DEBUG_FLUSH_TIMING=1`, `c=1`):
+- Combined flush at checkpoint (67MB): build ~139ms, backend_write ~364ms, total ~504ms
+- Combined flush at checkpoint (37MB): build ~52ms, backend_write ~924ms, total ~977ms
+
+Interpretation:
+- Parallel build can reduce the CPU portion of the checkpoint, but end-to-end drain time is largely bound by `backend_write` on the perf server. If we need larger improvements in checkpoint time, focus should likely move to backend write/commit throughput or reducing the number of backend writes per checkpoint.
+
+### Perf server: backend-write candidates (2026-01-27)
+
+Baseline (main, 5 trials, trimmed mean):
+- `checkpoint-before-reads`: **1.497s** (`artifacts/perf_flushdrain_20260127_074857/`)
+
+Candidate (PR, build c=8, 5 trials, trimmed mean):
+- `checkpoint-before-reads`: **1.460s** (`artifacts/perf_flushdrain_20260127_074857/`)
+
+Candidates (PR, 5 trials unless noted):
+- `PagerSyncConcurrency=4` (msync parallelism): **1.433s** (`artifacts/perf_flushdrain_syncconc_20260127_080334/`) — small win (~4.3%).
+- Dirty-range msync (reverted): **1.460s** (`artifacts/perf_flushdrain_dirtyrange_20260127_080621/`) — no win.
+- Data-sync without file.Sync (reverted): **1.427s** (`artifacts/perf_flushdrain_data_nofsync_20260127_080927/`) — tiny win (<1%), but reverted due to semantics risk.
+- Chunk-size probe (1 trial each): 4MiB **1.74s**, 16MiB **1.46s**, 64MiB **1.43s** (`artifacts/perf_flushdrain_chunksize_probe_20260127_081032/`) — default 64MiB best.
+- Leaf prefix compression (1 trial): **1.45s** checkpoint, **Random Read ~0.87M ops/s** (`artifacts/perf_flushdrain_prefix_probe_20260127_081112/`) — read regression; rejected.
+
+Follow-up:
+- If we need ≥20% checkpoint improvement, the biggest lever appears to be reducing `pager.Sync` time (msync + fsync) rather than flush build overhead.
 
 ### Local checkpoint/drain sanity (historical note)
 
