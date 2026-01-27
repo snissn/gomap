@@ -283,3 +283,99 @@ func TestCachingDB_TriggerFlushWakesLoop(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestFlushAllBlocksWhileFlushMuHeld(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:     1 << 16,
+		MemtableMode:       "hash_sorted",
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.flushMu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		db.flushAll(false)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("flushAll finished while flushMu held")
+	default:
+	}
+
+	db.flushMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("flushAll did not finish after releasing flushMu")
+	}
+}
+
+func TestFlushOneBlocksWhileFlushMuHeld(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:     1 << 20,
+		MemtableMode:       "hash_sorted",
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+		JournalLanes:       2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.flushMu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		db.flushOne()
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("flushOne finished while flushMu held")
+	default:
+	}
+
+	db.flushMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("flushOne did not finish after releasing flushMu")
+	}
+}
+
+func TestAdaptiveChunkCapDefaultAllowsAdaptive(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:          1 << 20,
+		MemtableMode:            "hash_sorted",
+		MaxQueuedMemtables:      -1,
+		AllowUnsafe:             true,
+		FlushBuildChunkCap:      0,
+		FlushBuildChunkTargetBytes: 16 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if db.flushBuildChunkCap != 0 {
+		t.Fatalf("expected chunk cap 0 to enable adaptive sizing, got %d", db.flushBuildChunkCap)
+	}
+}
