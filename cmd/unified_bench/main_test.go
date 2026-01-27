@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"math"
 	"testing"
 	"time"
@@ -198,33 +197,19 @@ func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 }
 
 func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := runFlushDrainSuite(BenchConfig{
-			Keys:                   1,
-			ValueSize:              128,
-			BatchSize:              1000,
-			DBsArg:                 "treedb",
-			TestsArg:               "all",
-			KeepDir:                false,
-			Progress:               false,
-			SeedUsed:               1,
-			CheckpointBetweenTests: true,
-		})
-		done <- err
-	}()
-
-	select {
-	case <-ctx.Done():
-		t.Fatalf("flushdrain suite timed out: %v", ctx.Err())
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("runFlushDrainSuite failed: %v", err)
-		}
+	cfg := BenchConfig{
+		Keys:                   1,
+		ValueSize:              128,
+		BatchSize:              1000,
+		DBsArg:                 "treedb",
+		TestsArg:               "all",
+		KeepDir:                false,
+		Progress:               false,
+		SeedUsed:               1,
+		CheckpointBetweenTests: true,
+		MaxWall:                10 * time.Second,
+	}
+	if _, err := runFlushDrainSuite(cfg); err != nil {
+		t.Fatalf("runFlushDrainSuite failed: %v", err)
 	}
 }
