@@ -55,6 +55,42 @@ This file is the sprint source of truth:
 
 ## Results / follow-ups
 
+### Perf server results (B560 / i5-11400F, 2026-01-27)
+
+Hardware:
+- Ubuntu 22.04, Linux 6.8
+- 11th Gen Intel i5-11400F (6c/12t)
+
+Raw artifacts (copied from server run):
+- `artifacts/perf_flushthr_20260127_014139/`
+
+Commands (both `origin/main@cdb3efb` and candidate `origin/sprint/flush-throughput@9bd211f`):
+
+```bash
+./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false -format markdown
+
+./bin/unified-bench -dbs treedb -profile wal_on_fast -keys 900000 -valsize 128 -batchsize 1000 \
+  -test all -progress=false -format markdown -settle-before-scans -treedb-cache-stats-before-reads
+
+./bin/unified-bench -dbs treedb -profile wal_on_fast -keys 900000 -valsize 128 -batchsize 1000 \
+  -test all -progress=false -format markdown -settle-before-scans -treedb-cache-stats-before-reads \
+  -checkpoint-between-tests
+```
+
+Summary deltas (cand vs main):
+- `flushthrash`:
+  - Random Write: 1,350,434 → 1,339,768 (-0.79%)
+  - Batch Write: 1,824,422 → 1,918,448 (+5.15%)
+- `wal_on_fast` + `-checkpoint-between-tests` (ops/sec):
+  - Sequential Write: 2,250,412 → 2,128,881 (-5.40%)
+  - Random Write: 1,000,194 → 979,633 (-2.06%)
+  - Dataset Write (Random): 1,283,827 → 1,358,932 (+5.85%)
+  - Random Read: 1,480,651 → 1,466,736 (-0.94%)
+  - Prefix Scan: 8,154,654 → 7,939,674 (-2.64%)
+
+Notes:
+- In the *mixed* `wal_on_fast` run (no checkpoints), candidate showed a large `Prefix Scan` drop that did **not** reproduce in the checkpointed run; `pre-prefix_scan` cache stats also showed candidate had queued immutables at that point. Treat the mixed-prefix-scan delta as suspicious/noisy until it reproduces under `-checkpoint-between-tests` or a smaller “read-only” suite.
+
 ### Local checkpoint/drain sanity (historical note)
 
 Command (baseline main):
