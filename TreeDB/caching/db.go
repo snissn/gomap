@@ -1311,6 +1311,7 @@ type DB struct {
 	mutableThreshold atomic.Int64
 	rotatePending    atomic.Bool
 	queue            []memtable.Table
+	queueShardIDs    []uint16
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -1475,9 +1476,10 @@ type memShard struct {
 // memtableView is an immutable snapshot of the in-memory layers.
 // It is published via atomic.Pointer and treated as read-only by readers.
 type memtableView struct {
-	mutables    []memtable.Table
-	queue       []memtable.Table
-	queueRanges []keyRange
+	mutables      []memtable.Table
+	queue         []memtable.Table
+	queueShardIDs []uint16
+	queueRanges   []keyRange
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -1495,6 +1497,11 @@ func (db *DB) publishMemtablesLocked() {
 		q := make([]memtable.Table, len(db.queue))
 		copy(q, db.queue)
 		view.queue = q
+	}
+	if len(db.queueShardIDs) > 0 {
+		qs := make([]uint16, len(db.queueShardIDs))
+		copy(qs, db.queueShardIDs)
+		view.queueShardIDs = qs
 	}
 	if len(db.queueRanges) > 0 {
 		qr := make([]keyRange, len(db.queueRanges))
@@ -4171,6 +4178,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 
 			db.queue = nil
+			db.queueShardIDs = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
@@ -4227,6 +4235,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 
 			db.queue = nil
+			db.queueShardIDs = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
@@ -4291,6 +4300,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// Drop fully-covered queued memtables without enumerating their keys.
 		if len(db.queue) > 0 {
 			dstQueue := db.queue[:0]
+			dstShardIDs := db.queueShardIDs[:0]
 			dstRanges := db.queueRanges[:0]
 			dstWALPaths := db.queueWALPaths[:0]
 			dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -4304,6 +4314,11 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					continue
 				}
 				dstQueue = append(dstQueue, mem)
+				if i < len(db.queueShardIDs) {
+					dstShardIDs = append(dstShardIDs, db.queueShardIDs[i])
+				} else {
+					dstShardIDs = append(dstShardIDs, 0)
+				}
 				dstRanges = append(dstRanges, r)
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
@@ -4317,6 +4332,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				}
 			}
 			db.queue = dstQueue
+			db.queueShardIDs = dstShardIDs
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
@@ -4598,6 +4614,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		db.queue = append(db.queue, shard.mem)
+		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -4733,6 +4750,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		db.queue = append(db.queue, shard.mem)
+		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -5311,6 +5329,9 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if len(db.queue) >= len(units) {
 		db.queue = db.queue[len(units):]
 	}
+	if len(db.queueShardIDs) >= len(units) {
+		db.queueShardIDs = db.queueShardIDs[len(units):]
+	}
 	if len(db.queueRanges) >= len(units) {
 		db.queueRanges = db.queueRanges[len(units):]
 	}
@@ -5576,6 +5597,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queue) > 0 {
 		db.queue = db.queue[1:]
 	}
+	if len(db.queueShardIDs) > 0 {
+		db.queueShardIDs = db.queueShardIDs[1:]
+	}
 	if len(db.queueRanges) > 0 {
 		db.queueRanges = db.queueRanges[1:]
 	}
@@ -5654,12 +5678,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
-		mutables []memtable.Table
-		queue    []memtable.Table
+		mutables      []memtable.Table
+		queue         []memtable.Table
+		queueShardIDs []uint16
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
+		queueShardIDs = view.queueShardIDs
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
@@ -5671,6 +5697,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			}
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
+		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
 	}
 
@@ -5699,7 +5726,14 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	}
 
 	// check queue backwards (newest first)
+	shardIdx := 0
+	if len(mutables) > 0 {
+		shardIdx = db.shardIndex(key)
+	}
 	for i := len(queue) - 1; i >= 0; i-- {
+		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
 		val, ptr, flags, found := queue[i].GetEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
@@ -5724,12 +5758,14 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
-		mutables []memtable.Table
-		queue    []memtable.Table
+		mutables      []memtable.Table
+		queue         []memtable.Table
+		queueShardIDs []uint16
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
+		queueShardIDs = view.queueShardIDs
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
@@ -5739,6 +5775,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			}
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
+		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
 	}
 
@@ -5767,7 +5804,14 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	}
 
 	// check queue backwards (newest first)
+	shardIdx := 0
+	if len(mutables) > 0 {
+		shardIdx = db.shardIndex(key)
+	}
 	for i := len(queue) - 1; i >= 0; i-- {
+		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
 		val, ptr, flags, found := queue[i].GetEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
@@ -5830,12 +5874,14 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 func (db *DB) Has(key []byte) (bool, error) {
 	view := db.memtables.Load()
 	var (
-		mutables []memtable.Table
-		queue    []memtable.Table
+		mutables      []memtable.Table
+		queue         []memtable.Table
+		queueShardIDs []uint16
 	)
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
+		queueShardIDs = view.queueShardIDs
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
@@ -5845,6 +5891,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 			}
 		}
 		queue = append([]memtable.Table(nil), db.queue...)
+		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
 	}
 
@@ -5858,7 +5905,14 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 	}
 
+	idx := 0
+	if len(mutables) > 0 {
+		idx = db.shardIndex(key)
+	}
 	for i := len(queue) - 1; i >= 0; i-- {
+		if len(queueShardIDs) > i && int(queueShardIDs[i]) != idx {
+			continue
+		}
 		_, deleted, found := queue[i].Get(key)
 		if found {
 			return !deleted, nil
@@ -7266,10 +7320,11 @@ func (b *Batch) writeBypass(sync bool) error {
 	mutableRange := b.db.snapshotMutableRange()
 
 	var (
-		mutables    []memtable.Table
-		queue       []memtable.Table
-		queueRanges []keyRange
-		overlaps    bool
+		mutables      []memtable.Table
+		queue         []memtable.Table
+		queueShardIDs []uint16
+		queueRanges   []keyRange
+		overlaps      bool
 	)
 
 	b.db.mu.RLock()
@@ -7278,6 +7333,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	if view != nil {
 		mutables = view.mutables
 		queue = view.queue
+		queueShardIDs = view.queueShardIDs
 		queueRanges = view.queueRanges
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
@@ -7290,6 +7346,9 @@ func (b *Batch) writeBypass(sync bool) error {
 		}
 		if len(b.db.queue) > 0 {
 			queue = append([]memtable.Table(nil), b.db.queue...)
+		}
+		if len(b.db.queueShardIDs) > 0 {
+			queueShardIDs = append([]uint16(nil), b.db.queueShardIDs...)
 		}
 		if len(b.db.queueRanges) > 0 {
 			queueRanges = append([]keyRange(nil), b.db.queueRanges...)
@@ -7323,6 +7382,12 @@ func (b *Batch) writeBypass(sync bool) error {
 				}
 			}
 			for i := len(queue) - 1; i >= 0; i-- {
+				if len(queueShardIDs) > i && len(mutables) > 0 {
+					idx := b.db.shardIndex(key)
+					if int(queueShardIDs[i]) != idx {
+						continue
+					}
+				}
 				if _, _, found := queue[i].Get(key); found {
 					return b.writeRegular(sync)
 				}
