@@ -25,6 +25,7 @@ var (
 	treedbMaxBacklogBytes           = flag.Int64("treedb-max-backlog-bytes", 2<<30, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
 	treedbWriterFlushMaxMems        = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
 	treedbWriterFlushMaxMs          = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
+	treedbImmutableBloom            = flag.Bool("treedb-immutable-bloom", false, "TreeDB (cached): enable per-immutable Bloom filters as a point-read fast-path under flush debt")
 	treedbPreferAppendAlloc         = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
 	treedbFreelistRegionPages       = flag.Uint64("treedb-freelist-region-pages", 0, "TreeDB: freelist reuse region size in pages (0=default)")
 	treedbFreelistRegionRadius      = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
@@ -184,6 +185,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		StopBacklogSeconds:      *treedbStopBacklogSeconds,
 		MaxBacklogBytes:         *treedbMaxBacklogBytes,
 		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+		ImmutableBloomFilter:    *treedbImmutableBloom,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

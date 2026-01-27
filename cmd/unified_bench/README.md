@@ -49,6 +49,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-max-backlog-bytes` TreeDB (cached) absolute cap on queued backlog bytes
 - `-treedb-writer-flush-max-memtables` TreeDB (cached) max memtables a writer will help flush per op
 - `-treedb-writer-flush-max-ms` TreeDB (cached) max time (ms) a writer will help flush per op
+- `-treedb-immutable-bloom` TreeDB (cached): enable per-immutable Bloom filters as a point-read fast-path under flush debt
 - `-treedb-iter-debug` print prefix scan iterator timing + debug stats
 - `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)

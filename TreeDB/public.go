@@ -212,6 +212,7 @@ func Open(opts Options) (*DB, error) {
 		WriterFlushMaxMemtables:            opts.WriterFlushMaxMemtables,
 		WriterFlushMaxDuration:             opts.WriterFlushMaxDuration,
 		FlushBuildConcurrency:              opts.FlushBuildConcurrency,
+		ImmutableBloomFilter:               opts.ImmutableBloomFilter,
 		DisableWAL:                         disableWAL,
 		JournalLanes:                       opts.JournalLanes,
 		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,

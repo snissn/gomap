@@ -240,6 +240,12 @@ type Options struct {
 	// Values <= 1 disable parallelism.
 	FlushBuildConcurrency int
 
+	// ImmutableBloomFilter enables per-immutable Bloom filters in the cached
+	// layer (TreeDB/caching) as a read-side fast-path under flush debt.
+	//
+	// Trade-off: building filters adds work during rotation.
+	ImmutableBloomFilter bool
+
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int

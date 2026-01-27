@@ -1233,6 +1233,14 @@ type Options struct {
 	// parallelism.
 	FlushBuildConcurrency int
 
+	// ImmutableBloomFilter enables a per-immutable Bloom filter used as a
+	// read-side fast-path to skip checking immutables that cannot contain the
+	// key. This primarily reduces point-read overhead when there is significant
+	// flush debt (deep immutable queue) with MemtableShards > 1.
+	//
+	// Trade-off: building filters adds work during rotation.
+	ImmutableBloomFilter bool
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
@@ -1312,6 +1320,7 @@ type DB struct {
 	rotatePending    atomic.Bool
 	queue            []memtable.Table
 	queueShardIDs    []uint16
+	immutableBloom   bool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -1970,6 +1979,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutableShards:                  mutableShards,
 		mutableShardMask:               uint64(shardCount - 1),
 		hashSortedIndexer:              indexer,
+		immutableBloom:                 opts.ImmutableBloomFilter,
 		closeCh:                        make(chan struct{}),
 		flushCh:                        make(chan struct{}, 1),
 		autoCheckpointOnceCh:           make(chan struct{}, 1),
@@ -4748,8 +4758,22 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 
 		// Freeze and enqueue the old mutable shard.
 		shard.mem.Freeze()
+		oldImmutable := shard.mem
+		if db.immutableBloom {
+			// HashSorted lookups are relatively expensive under deep flush debt due
+			// to hash/map access and per-immutable overhead. Skiplist-based
+			// memtables already have very fast point lookups, so the filter tends
+			// to be pure overhead there.
+			if _, ok := oldImmutable.(*memtable.HashSorted); ok {
+				withBloom, err := newImmutableBloomMemtable(oldImmutable)
+				if err != nil {
+					return err
+				}
+				oldImmutable = withBloom
+			}
+		}
 		memBytes := shard.mem.Size()
-		db.queue = append(db.queue, shard.mem)
+		db.queue = append(db.queue, oldImmutable)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
@@ -5676,6 +5700,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
+	keyHash := hashKey(key)
 	view := db.memtables.Load()
 	var (
 		mutables      []memtable.Table
@@ -5703,7 +5728,10 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 
 	// check mutable
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
+		idx := 0
+		if len(mutables) > 1 {
+			idx = int(keyHash & db.mutableShardMask)
+		}
 		if idx < len(mutables) && mutables[idx] != nil {
 			val, ptr, flags, found := mutables[idx].GetEntry(key)
 			if found {
@@ -5727,11 +5755,14 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 
 	// check queue backwards (newest first)
 	shardIdx := 0
-	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
+	if len(mutables) > 1 {
+		shardIdx = int(keyHash & db.mutableShardMask)
 	}
 	for i := len(queue) - 1; i >= 0; i-- {
 		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
+		if chk, ok := queue[i].(immutableBloomChecker); ok && !chk.MightContainHash(keyHash) {
 			continue
 		}
 		val, ptr, flags, found := queue[i].GetEntry(key)
@@ -5756,6 +5787,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
+	keyHash := hashKey(key)
 	view := db.memtables.Load()
 	var (
 		mutables      []memtable.Table
@@ -5781,7 +5813,10 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 
 	// check mutable
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
+		idx := 0
+		if len(mutables) > 1 {
+			idx = int(keyHash & db.mutableShardMask)
+		}
 		if idx < len(mutables) && mutables[idx] != nil {
 			val, ptr, flags, found := mutables[idx].GetEntry(key)
 			if found {
@@ -5805,11 +5840,14 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 
 	// check queue backwards (newest first)
 	shardIdx := 0
-	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
+	if len(mutables) > 1 {
+		shardIdx = int(keyHash & db.mutableShardMask)
 	}
 	for i := len(queue) - 1; i >= 0; i-- {
 		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
+		if chk, ok := queue[i].(immutableBloomChecker); ok && !chk.MightContainHash(keyHash) {
 			continue
 		}
 		val, ptr, flags, found := queue[i].GetEntry(key)
@@ -5872,6 +5910,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	keyHash := hashKey(key)
 	view := db.memtables.Load()
 	var (
 		mutables      []memtable.Table
@@ -5896,7 +5935,10 @@ func (db *DB) Has(key []byte) (bool, error) {
 	}
 
 	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
+		idx := 0
+		if len(mutables) > 1 {
+			idx = int(keyHash & db.mutableShardMask)
+		}
 		if idx < len(mutables) && mutables[idx] != nil {
 			_, deleted, found := mutables[idx].Get(key)
 			if found {
@@ -5906,11 +5948,14 @@ func (db *DB) Has(key []byte) (bool, error) {
 	}
 
 	idx := 0
-	if len(mutables) > 0 {
-		idx = db.shardIndex(key)
+	if len(mutables) > 1 {
+		idx = int(keyHash & db.mutableShardMask)
 	}
 	for i := len(queue) - 1; i >= 0; i-- {
 		if len(queueShardIDs) > i && int(queueShardIDs[i]) != idx {
+			continue
+		}
+		if chk, ok := queue[i].(immutableBloomChecker); ok && !chk.MightContainHash(keyHash) {
 			continue
 		}
 		_, deleted, found := queue[i].Get(key)
