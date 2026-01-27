@@ -28,26 +28,27 @@ import (
 // --- Benchmark Runner ---
 
 var (
-	numKeys       = flag.Int("keys", 100000, "Number of keys")
-	valSize       = flag.Int("valsize", 128, "Value size in bytes")
-	datasetValPat = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat)")
-	batchSize     = flag.Int("batchsize", 1000, "Size of batches")
-	rangeQueries  = flag.Int("range-queries", 200, "number of range queries")
-	rangeSpan     = flag.Int("range-span", 100, "number of keys per range")
-	keyCountsArg  = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
-	keyScaleArg   = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
-	keysMin       = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
-	keysMax       = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg        = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
-	dbsExcludeArg = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg       = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
-	formatArg     = flag.String("format", "table", "Output format: table or markdown")
-	suiteArg      = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
-	outDirArg     = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
-	keepDir       = flag.Bool("keep", false, "Keep data directories after run")
-	progress      = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
-	seed          = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
-	cpuProfile    = flag.String("cpuprofile", "", "write cpu profile to file")
+	numKeys            = flag.Int("keys", 100000, "Number of keys")
+	valSize            = flag.Int("valsize", 128, "Value size in bytes")
+	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat)")
+	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
+	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
+	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
+	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
+	keyScaleArg        = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
+	keysMin            = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
+	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
+	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
+	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	formatArg          = flag.String("format", "table", "Output format: table or markdown")
+	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
+	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
+	keepDir            = flag.Bool("keep", false, "Keep data directories after run")
+	progress           = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed               = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
+	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
+	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 
 	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -62,7 +63,8 @@ var (
 	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
-	settleBeforeScans = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+	settleBeforeScans           = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
+	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 )
 
 type DBInstance struct {
@@ -88,6 +90,9 @@ type BenchConfig struct {
 	DatasetValuePattern string
 
 	CPUProfile string
+	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
+	// listed benchmark tests (lowercased).
+	CPUProfileTests map[string]struct{}
 
 	BlockProfile         string
 	BlockProfileRate     int
@@ -112,6 +117,8 @@ type BenchConfig struct {
 	TreeDBRelaxedSync                bool
 	TreeDBDisableReadChecksum        bool
 	TreeDBDisablePiggybackCompaction bool
+
+	TreeDBCacheStatsBeforeReads bool
 }
 
 type BenchRun struct {
@@ -192,12 +199,25 @@ func main() {
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		SettleBeforeScans:                *settleBeforeScans,
+		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
 		TreeDBRelaxedSync:                *treedbRelaxedSync,
 		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
 		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
+	}
+	if baseCfg.CPUProfile != "" {
+		tests := parseList(*cpuProfileTestsArg)
+		if len(tests) > 0 && tests[0] != "" {
+			baseCfg.CPUProfileTests = make(map[string]struct{}, len(tests))
+			for _, t := range tests {
+				if t == "" {
+					continue
+				}
+				baseCfg.CPUProfileTests[t] = struct{}{}
+			}
+		}
 	}
 
 	suite := strings.ToLower(strings.TrimSpace(*suiteArg))
@@ -322,6 +342,55 @@ func main() {
 	default:
 		log.Fatalf("unknown -format: %q", format)
 	}
+}
+
+func shouldCPUProfile(cfg BenchConfig, testName string) bool {
+	if cfg.CPUProfile == "" {
+		return false
+	}
+	if len(cfg.CPUProfileTests) == 0 {
+		return true
+	}
+	_, ok := cfg.CPUProfileTests[strings.ToLower(testName)]
+	return ok
+}
+
+func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
+	if inst == nil || inst.Name != "treedb" || inst.Wrapper == nil {
+		return
+	}
+	sp, ok := inst.Wrapper.(kvstore.StatsProvider)
+	if !ok {
+		return
+	}
+	stats := sp.Stats()
+	if len(stats) == 0 {
+		return
+	}
+
+	// Keep this intentionally small and stable; full dumps are available via
+	// suiteTreeDBCacheStats().
+	keys := []string{
+		"treedb.cache.memtable_mode",
+		"treedb.cache.memtable_mode_config",
+		"treedb.cache.queue_len",
+		"treedb.cache.queue_backlog_bytes",
+		"treedb.cache.flush_threshold_bytes",
+		"treedb.cache.max_queued_memtables",
+		"treedb.cache.flush_bps_ewma",
+		"treedb.cache.wal_bytes_estimate",
+		"treedb.cache.vlog_retained_bytes_estimate",
+	}
+
+	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
+	for _, k := range keys {
+		v, ok := stats[k]
+		if !ok || v == "" {
+			continue
+		}
+		fmt.Fprintf(w, " %s=%s", k, v)
+	}
+	fmt.Fprintln(w)
 }
 
 func resolveKeyCounts(keys int, keyCountsArg, keyScaleArg string, keysMin, keysMax int) ([]int, error) {
@@ -1619,6 +1688,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		fn := testFuncs[testName]
 		seed := testSeed(cfg.SeedUsed, testName)
 
+		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
+			for _, inst := range instances {
+				printTreeDBCacheStats(os.Stderr, inst, "pre-"+testName+" treedb.cache")
+			}
+		}
+
 		if cfg.CheckpointBetweenTests {
 			// Checkpoint before starting the new test across all DBs
 			// to reduce interference from background flushes of the previous test.
@@ -1631,7 +1706,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					if err := cp.Checkpoint(); err != nil {
 						return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, err)
 					}
-					chkMap[inst.Name] = time.Since(start)
+					chkMap[inst.Wrapper.Name()] = time.Since(start)
 				}
 			}
 			checkpointDurations[testName] = chkMap
@@ -1651,18 +1726,25 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			// Run
 			// CPU profile if enabled (only for single key count)
-			if cfg.CPUProfile != "" {
-				f, err := os.Create(cfg.CPUProfile + "_" + testName + "_" + inst.Name)
+			var cpuFile *os.File
+			if shouldCPUProfile(cfg, testName) {
+				path := cfg.CPUProfile + "_" + testName + "_" + inst.Name + ".pprof"
+				f, err := os.Create(path)
 				if err != nil {
-					return BenchRun{}, err
+					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", path, err)
 				}
-				pprof.StartCPUProfile(f)
+				cpuFile = f
+				if err := pprof.StartCPUProfile(cpuFile); err != nil {
+					_ = cpuFile.Close()
+					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", path, err)
+				}
 			}
 
 			opsPerSec, err := fn(inst.Wrapper, rng)
 
-			if cfg.CPUProfile != "" {
+			if cpuFile != nil {
 				pprof.StopCPUProfile()
+				_ = cpuFile.Close()
 			}
 
 			if err != nil {

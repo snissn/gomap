@@ -43,8 +43,8 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = lock.Close()
 		return nil, err
 	}
-	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
-	vm.SetDictLookup(opts.DictLookup)
+	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetDictLookup(opts.ValueLog.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -116,8 +116,8 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = p.Close()
 		return nil, err
 	}
-	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
-	vm.SetDictLookup(opts.DictLookup)
+	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetDictLookup(opts.ValueLog.DictLookup)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)

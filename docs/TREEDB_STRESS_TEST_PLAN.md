@@ -319,13 +319,13 @@ Additional criteria:
 - Error injection tests validate error propagation and no silent stalls.
 
 ## Open Questions
-- Should stress tests run against both WAL on/off variants (`DisableWAL` true/false)?
+- Should stress tests run against both WAL on/off variants (`DurabilityDurable` vs `DurabilityWALOffRelaxed`)?
 - Should we gate "heavy" tests on an env var or a build tag?
 - Which WAL modes must be covered in each stress test?
 
 ## Appendix: Config Matrix (Recommended)
 For each stress suite, consider these variants:
-- WAL: on vs off (`DisableWAL`).
+- WAL: on vs off (`Options.Durability`).
 - Background tasks: enabled vs disabled (`TREEDB_BENCH_DISABLE_BG=1` parity).
 
 Example matrix for `TestConcurrentMixedOpsProgress`:

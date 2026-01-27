@@ -126,12 +126,17 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
 
+	durability := treedb.DurabilityDurable
+	if disableWAL {
+		durability = treedb.DurabilityWALOffRelaxed
+	} else if relaxedSync {
+		durability = treedb.DurabilityWALOnRelaxed
+	}
+
 	opts := treedb.Options{
-		Dir:         dir,
-		ChunkSize:   64 * 1024,
-		DisableWAL:  disableWAL,
-		RelaxedSync: relaxedSync,
-		AllowUnsafe: disableWAL || relaxedSync,
+		Dir:        dir,
+		ChunkSize:  64 * 1024,
+		Durability: durability,
 	}
 
 	db, err := treedb.Open(opts)

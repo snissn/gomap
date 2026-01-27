@@ -79,36 +79,20 @@ func clampUint32(v uint64) uint32 {
 	return uint32(v)
 }
 
-func setOptionalBoolOption(opts *treedb.Options, name string, value bool) {
-	v := reflect.ValueOf(opts).Elem()
-	field := v.FieldByName(name)
-	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Bool {
-		return
+func fieldByPath(root reflect.Value, path ...string) reflect.Value {
+	v := root
+	for _, name := range path {
+		if !v.IsValid() {
+			return reflect.Value{}
+		}
+		v = v.FieldByName(name)
 	}
-	field.SetBool(value)
+	return v
 }
 
-func setOptionalIntOption(opts *treedb.Options, name string, value int) {
-	v := reflect.ValueOf(opts).Elem()
-	field := v.FieldByName(name)
-	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Int {
-		return
-	}
-	field.SetInt(int64(value))
-}
-
-func setOptionalFloat64Option(opts *treedb.Options, name string, value float64) {
-	v := reflect.ValueOf(opts).Elem()
-	field := v.FieldByName(name)
-	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Float64 {
-		return
-	}
-	field.SetFloat(value)
-}
-
-func setOptionalTrainConfig(opts *treedb.Options, name string, trainBytes, dictBytes, minRecords, maxRecordBytes, sampleStride, dedupWindow int) {
-	v := reflect.ValueOf(opts).Elem()
-	field := v.FieldByName(name)
+func setOptionalVlogTrainConfig(opts *treedb.Options, trainBytes, dictBytes, minRecords, maxRecordBytes, sampleStride, dedupWindow int) {
+	root := reflect.ValueOf(opts).Elem()
+	field := fieldByPath(root, "ValueLog", "DictTrain")
 	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Struct {
 		return
 	}
@@ -127,9 +111,9 @@ func setOptionalTrainConfig(opts *treedb.Options, name string, trainBytes, dictB
 	setInt("DedupWindow", dedupWindow)
 }
 
-func setOptionalAutotuneMode(opts *treedb.Options, fieldName string, mode uint64) {
-	v := reflect.ValueOf(opts).Elem()
-	field := v.FieldByName(fieldName)
+func setOptionalVlogAutotuneMode(opts *treedb.Options, mode uint64) {
+	root := reflect.ValueOf(opts).Elem()
+	field := fieldByPath(root, "ValueLog", "CompressionAutotune")
 	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Struct {
 		return
 	}
@@ -163,37 +147,64 @@ func parseVlogCompressionAutotuneMode(s string) (uint64, error) {
 
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
+
+	if !*treedbAllowUnsafe && (*treedbDisableWAL || *treedbRelaxedSync || *treedbDisableReadChecksum) {
+		return nil, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
+	}
+
+	durability := treedb.DurabilityDurable
+	if *treedbDisableWAL {
+		durability = treedb.DurabilityWALOffRelaxed
+	} else if *treedbRelaxedSync {
+		durability = treedb.DurabilityWALOnRelaxed
+	}
+	readIntegrity := treedb.IntegrityVerify
+	if *treedbDisableReadChecksum {
+		readIntegrity = treedb.IntegritySkipChecksums
+	}
+
 	opts := treedb.Options{
-		Dir:                        dir,
-		ChunkSize:                  64 * 1024 * 1024,
-		KeepRecent:                 *treedbKeepRecent,
-		PreferAppendAlloc:          *treedbPreferAppendAlloc,
-		FreelistRegionPages:        *treedbFreelistRegionPages,
-		FreelistRegionRadius:       *treedbFreelistRegionRadius,
-		LeafFillTargetPPM:          uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM:      uint32(clampPPM(*treedbInternalFillPPM)),
-		LeafPrefixCompression:      *treedbLeafPrefixCompression,
-		FlushThreshold:             *treedbFlushThreshold,
-		MaxQueuedMemtables:         *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:     *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:         *treedbStopBacklogSeconds,
-		MaxBacklogBytes:            *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables:    *treedbWriterFlushMaxMems,
-		ForceValuePointers:         *treedbForceValuePointers,
-		ValueLogPointerThreshold:   *treedbValueLogThreshold,
-		DisableWAL:                 *treedbDisableWAL,
-		RelaxedSync:                *treedbRelaxedSync,
-		DisableReadChecksum:        *treedbDisableReadChecksum,
-		AllowUnsafe:                *treedbAllowUnsafe,
+		Dir:                   dir,
+		ChunkSize:             64 * 1024 * 1024,
+		KeepRecent:            *treedbKeepRecent,
+		Durability:            durability,
+		PreferAppendAlloc:     *treedbPreferAppendAlloc,
+		FreelistRegionPages:   *treedbFreelistRegionPages,
+		FreelistRegionRadius:  *treedbFreelistRegionRadius,
+		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
+
+		LeafPrefixCompression:  *treedbLeafPrefixCompression,
+		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,
+		IndexInternalBaseDelta: *treedbIndexInternalBaseDelta,
+
+		FlushThreshold:          *treedbFlushThreshold,
+		MaxQueuedMemtables:      *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:      *treedbStopBacklogSeconds,
+		MaxBacklogBytes:         *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
+
 		JournalLanes:               *treedbJournalLanes,
+		JournalCompression:         *treedbJournalCompress,
 		DisablePiggybackCompaction: *treedbDisablePiggyback,
+
+		ValueLog: treedb.ValueLogOptions{
+			ForcePointers:              *treedbForceValuePointers,
+			PointerThreshold:           *treedbValueLogThreshold,
+			ReadIntegrity:              readIntegrity,
+			DictAdaptiveRatio:          *treedbVlogDictAdaptiveRatio,
+			DictMetricsWindowBytes:     *treedbVlogDictMetricsWindow,
+			DictMetricsMinRecords:      *treedbVlogDictMetricsMinRecords,
+			DictMetricsPauseBytes:      *treedbVlogDictMetricsPauseBytes,
+			DictMinPayloadSavingsRatio: *treedbVlogDictMinSavingsRatio,
+		},
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
 	}
-	setOptionalIntOption(&opts, "JournalLanes", *treedbJournalLanes)
-	setOptionalBoolOption(&opts, "JournalCompression", *treedbJournalCompress)
-	setOptionalTrainConfig(&opts, "ValueLogDictTrain",
+
+	setOptionalVlogTrainConfig(&opts,
 		*treedbVlogDictTrainBytes,
 		*treedbVlogDictDictBytes,
 		*treedbVlogDictMinRecords,
@@ -201,24 +212,17 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		*treedbVlogDictSampleStride,
 		*treedbVlogDictDedupWindow,
 	)
-	setOptionalFloat64Option(&opts, "ValueLogDictAdaptiveRatio", *treedbVlogDictAdaptiveRatio)
-	setOptionalIntOption(&opts, "ValueLogDictMetricsWindowBytes", *treedbVlogDictMetricsWindow)
-	setOptionalIntOption(&opts, "ValueLogDictMetricsMinRecords", *treedbVlogDictMetricsMinRecords)
-	setOptionalIntOption(&opts, "ValueLogDictMetricsPauseBytes", *treedbVlogDictMetricsPauseBytes)
-	setOptionalFloat64Option(&opts, "ValueLogDictMinPayloadSavingsRatio", *treedbVlogDictMinSavingsRatio)
-	setOptionalBoolOption(&opts, "IndexColumnarLeaves", *treedbIndexColumnarLeaves)
-	setOptionalBoolOption(&opts, "IndexInternalBaseDelta", *treedbIndexInternalBaseDelta)
 
 	autotuneMode, err := parseVlogCompressionAutotuneMode(*treedbVlogCompressionAutotune)
 	if err != nil {
 		return nil, err
 	}
-	setOptionalAutotuneMode(&opts, "ValueLogCompressionAutotune", autotuneMode)
+	setOptionalVlogAutotuneMode(&opts, autotuneMode)
 	if autotuneMode == 1 {
 		// Compression off should also force dict training off, even if the caller
 		// specified training flags. TreeDB enforces the same invariant internally,
 		// but we keep unified_bench behavior explicit and deterministic.
-		setOptionalTrainConfig(&opts, "ValueLogDictTrain", -1, 0, 0, 0, 0, 0)
+		setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
 	}
 
 	db, err := treedb.Open(opts)

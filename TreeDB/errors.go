@@ -11,8 +11,6 @@ import (
 var (
 	// ErrLocked indicates the database directory is already opened by another process.
 	ErrLocked = db.ErrLocked
-	// ErrUnsafeOptions indicates unsafe durability/integrity options were set without acknowledgement.
-	ErrUnsafeOptions = db.ErrUnsafeOptions
 	// ErrMemtableFull indicates the cached memtable has reached its hard cap.
 	ErrMemtableFull = caching.ErrMemtableFull
 

@@ -5,9 +5,9 @@ This document tracks the architectural evolution to unify the Write-Ahead Log (W
 ## Context / Problem
 
 - Currently, `TreeDB` has two distinct value storage paths:
-  1. **WAL (`vlog`):** Managed by the `caching` layer. Ephemeral, circular buffer (truncated by `MaxValueLogRetainedBytes`), optimized for append speed.
+  1. **WAL (`vlog`):** Managed by the `caching` layer. Ephemeral, circular buffer (truncated by `Options.ValueLog.MaxRetainedBytes`), optimized for append speed.
   2. **Slabs (`data/*.slab`):** Managed by the `backend`. Permanent, refcounted/GC'd, optimized for long-term storage and delta-compaction.
-- We attempted to use `ValueLogPointerThreshold` to write small values (32-64 bytes) to the WAL and store pointers in the Index.
+- We attempted to use `Options.ValueLog.PointerThreshold` to write small values (32-64 bytes) to the WAL and store pointers in the Index.
 - **Critical Bug:** The `caching` layer truncates old `vlog` files (treating them as ephemeral WAL), but the Index permanently references them. This causes `vlog file not found` corruption.
 - **Goal:** Allow large/medium values to land in the WAL initially (fast write), but ensure they are safely transitioned to permanent storage (Slabs) or the WAL segment is promoted to permanent status, without data loss or corruption.
 
@@ -17,7 +17,7 @@ We aim to implement a lifecycle where values land in the WAL and are "compacted 
 
 ### 1. Safety First (Immediate)
 - **Status:** Done (in operation).
-- **Action:** Disable `ValueLogPointerThreshold` (set to 0) in production/benchmarks until the architecture is fixed. This forces all values to be copied into the Index (or Slabs via `backend` logic) during flush, preventing dependencies on ephemeral logs.
+- **Action:** Disable `Options.ValueLog.PointerThreshold` (set to 0) in production/benchmarks until the architecture is fixed. This forces all values to be copied into the Index (or Slabs via `backend` logic) during flush, preventing dependencies on ephemeral logs.
 
 ### 2. Copy-on-Flush (The "Compaction" Approach)
 - **Concept:** The `caching` layer writes values to `vlog`. The Memtable stores pointers.
@@ -45,7 +45,7 @@ We aim to implement a lifecycle where values land in the WAL and are "compacted 
 We need rigorous testing to validate the fix (likely **Copy-on-Flush** is the robust starting point).
 
 ### Test Case: `TestFlushMovesValuesToSlab`
-- **Setup:** `ValueLogPointerThreshold=1`. Write data. Verify it lands in `vlog`.
+- **Setup:** `Options.ValueLog.PointerThreshold=1`. Write data. Verify it lands in `vlog`.
 - **Action:** Flush Memtable.
 - **Assert:**
   - `vlog` file can be deleted/truncated without data loss.
@@ -53,18 +53,18 @@ We need rigorous testing to validate the fix (likely **Copy-on-Flush** is the ro
   - Backend storage shows values are now in `slab` (or inline), NOT pointing to the deleted `vlog`.
 
 ### Test Case: `TestVlogTruncationSafety`
-- **Setup:** Small `MaxValueLogRetainedBytes`.
+- **Setup:** Small `Options.ValueLog.MaxRetainedBytes`.
 - **Action:** Write continuous stream of data. Ensure `Flush` keeps up.
 - **Assert:** Old `vlog` files are deleted, but data remains readable (because it was moved).
 
 ## Implementation Plan
 
-1.  **Reproduce:** Create a test case that demonstrates the `vlog file not found` corruption when `ValueLogPointerThreshold > 0` and `Flush` occurs but `vlog` is truncated.
+1.  **Reproduce:** Create a test case that demonstrates the `vlog file not found` corruption when `Options.ValueLog.PointerThreshold > 0` and `Flush` occurs but `vlog` is truncated.
 2.  **Implement Copy-on-Flush:** Modify `caching/flush.go` (or `memtable` iterator) to resolve pointers during flush iteration.
 3.  **Verify:** Run the reproduction test and confirm it passes.
 4.  **Optimize:** Consider "Vlog Promotion" only if Copy-on-Flush proves too slow (IO heavy).
 
 ## Current Status
 
-- **Blocked:** `ValueLogPointerThreshold` usage is disabled.
+- **Blocked:** `Options.ValueLog.PointerThreshold` usage is disabled.
 - **Next:** Implement reproduction test for `Copy-on-Flush` validation.

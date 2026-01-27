@@ -47,14 +47,22 @@ func openTreeDB(cfg Config) (kvstore.DB, error) {
 		return nil, errors.New("db dir required")
 	}
 	opts := treedb.Options{
-		Dir:                      cfg.Dir,
-		FlushThreshold:           cfg.TreeDBFlushThreshold,
-		ValueLogPointerThreshold: cfg.TreeDBValueLogThreshold,
-		DisableWAL:               cfg.TreeDBDisableWAL,
-		RelaxedSync:              cfg.TreeDBRelaxedSync,
-		AllowUnsafe:              cfg.TreeDBAllowUnsafe,
-		JournalLanes:             cfg.TreeDBJournalLanes,
-		MemtableShards:           cfg.TreeDBMemtableShards,
+		Dir:            cfg.Dir,
+		FlushThreshold: cfg.TreeDBFlushThreshold,
+		Durability: func() treedb.DurabilityMode {
+			if cfg.TreeDBDisableWAL {
+				return treedb.DurabilityWALOffRelaxed
+			}
+			if cfg.TreeDBRelaxedSync {
+				return treedb.DurabilityWALOnRelaxed
+			}
+			return treedb.DurabilityDurable
+		}(),
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: cfg.TreeDBValueLogThreshold,
+		},
+		JournalLanes:   cfg.TreeDBJournalLanes,
+		MemtableShards: cfg.TreeDBMemtableShards,
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {

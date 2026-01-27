@@ -33,7 +33,6 @@ func main() {
 	flag.IntVar(&cfg.TreeDBValueLogThreshold, "treedb-value-log-threshold", 0, "TreeDB value-log pointer threshold")
 	flag.BoolVar(&cfg.TreeDBDisableWAL, "treedb-disable-wal", false, "TreeDB: disable WAL")
 	flag.BoolVar(&cfg.TreeDBRelaxedSync, "treedb-relaxed-sync", false, "TreeDB: relaxed sync")
-	flag.BoolVar(&cfg.TreeDBAllowUnsafe, "treedb-allow-unsafe", false, "TreeDB: allow unsafe options (required for WAL disable and relaxed sync)")
 	flag.IntVar(&cfg.TreeDBJournalLanes, "treedb-journal-lanes", 0, "TreeDB: journal/value-log lanes (0=default)")
 	flag.IntVar(&cfg.TreeDBMemtableShards, "treedb-memtable-shards", 0, "TreeDB: memtable shard count (0=default)")
 

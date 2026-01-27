@@ -16,8 +16,10 @@ func TestDefaultPermissions_AreNotWorldReadable(t *testing.T) {
 
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{
-		Dir:                      dir,
-		ValueLogPointerThreshold: 1,
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

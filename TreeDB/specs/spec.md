@@ -721,7 +721,7 @@ TreeDB implements a two-tiered caching mechanism: a mutable in-memory Memtable a
 - **Purpose:** Ensures durability of in-memory Memtable writes.
 - **Format:** Records operations as `[CRC][OpType][KeyLen][ValLen][Key][Value]`.
 - **Durability:** Provides `Sync()` method to guarantee writes are flushed to disk.
-  - **Note:** In the current cached-mode path, large values are stored in the value log and referenced by pointers. `DisableWAL` disables the journal (WAL off) but keeps value-log pointers enabled.
+  - **Note:** In the current cached-mode path, large values are stored in the value log and referenced by pointers. `DurabilityWALOffRelaxed` disables the journal (WAL off) but keeps value-log pointers enabled.
 
 #### 7.1.3 CachingDB (`caching` package)
 - **Architecture:** Wraps the core `treedb.DB` instance (referred to as `backend`).

@@ -16,35 +16,29 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileFast)
 
-	if !opts.DisableWAL {
-		t.Fatalf("expected DisableWAL=true for fast profile")
+	if opts.Durability != DurabilityWALOffRelaxed {
+		t.Fatalf("expected DurabilityWALOffRelaxed for fast profile, got %v", opts.Durability)
 	}
-	if !opts.RelaxedSync {
-		t.Fatalf("expected RelaxedSync=true for fast profile")
-	}
-	if !opts.DisableReadChecksum {
-		t.Fatalf("expected DisableReadChecksum=true for fast profile")
+	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
+		t.Fatalf("expected IntegritySkipChecksums for fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
 }
 
-func TestApplyProfile_FastIngestKeepsWALOn(t *testing.T) {
+func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	var opts Options
-	ApplyProfile(&opts, ProfileFastIngest)
+	ApplyProfile(&opts, ProfileWALOnFast)
 
-	if opts.DisableWAL {
-		t.Fatalf("expected DisableWAL=false for fast_ingest profile")
+	if opts.Durability != DurabilityWALOnRelaxed {
+		t.Fatalf("expected DurabilityWALOnRelaxed for wal_on_fast profile, got %v", opts.Durability)
 	}
-	if !opts.RelaxedSync {
-		t.Fatalf("expected RelaxedSync=true for fast_ingest profile")
-	}
-	if !opts.DisableReadChecksum {
-		t.Fatalf("expected DisableReadChecksum=true for fast_ingest profile")
+	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
+		t.Fatalf("expected IntegritySkipChecksums for wal_on_fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
 	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for fast_ingest profile")
+		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
 	}
 }
 

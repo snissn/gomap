@@ -5,8 +5,9 @@
 //
 // Durability:
 // Use SetSync / Batch.WriteSync if the write must survive process crashes.
-// When Options.RelaxedSync is enabled, Sync operations are crash-consistent
-// only (kernel buffer flush) and may not survive power loss.
+// In relaxed durability modes (Options.Durability = DurabilityWALOnRelaxed or
+// DurabilityWALOffRelaxed), Sync operations are crash-consistent only (no
+// fsync) and may not survive power loss.
 //
 // Iteration:
 // Iterators are point-in-time views of the DB and must be closed.

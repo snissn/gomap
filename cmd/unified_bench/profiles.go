@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, fast_ingest, durable, balanced). Overrides default flags unless explicitly set.")
+	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, wal_on_fast, durable, balanced). Overrides default flags unless explicitly set.")
 )
 
 type Profile struct {
@@ -47,12 +47,8 @@ func init() {
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
 	}
 
-	applyFastIngest := func(isSet map[string]bool) {
-		// TreeDB: keep cached+value-log–centric write path enabled, but relax durability.
-		//
-		// Notes:
-		// - We keep WAL enabled so the journal/redo log stays active.
-		// - We still set unsafe knobs for throughput (RelaxedSync + DisableReadChecksum).
+	applyWALOnFast := func(isSet map[string]bool) {
+		// TreeDB: keep WAL enabled, but relax durability and read integrity.
 		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
@@ -73,9 +69,9 @@ func init() {
 			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (journal). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
-		"fast_ingest": {
-			Description: "TreeDB ingest profile: cached+value-log enabled + relaxed durability (WAL on, fsync/checksums off).",
-			Apply:       applyFastIngest,
+		"wal_on_fast": {
+			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off).",
+			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast
 			Description: "Alias for 'fast'",

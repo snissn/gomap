@@ -76,7 +76,7 @@ Use WAL terminology going forward:
 ### 2.1 Defaults (normative)
 
 1. Cached mode defaults to WAL on (journal ON + value log ON).
-2. WAL off is opt-in and requires `AllowUnsafe=true` (or equivalent) because it changes durability semantics.
+2. WAL off is opt-in because it changes durability semantics (select via `Options.Durability = DurabilityWALOffRelaxed`).
 3. The value-log compression autotuner is enabled by default when the value log is enabled (WAL on/WAL off), using a conservative preset (e.g., `AutotuneMedium`).
 4. All other experimental knobs (index encodings, key encodings) remain off by default until they pass the benchmark+correctness gates in this runbook.
 
@@ -94,7 +94,7 @@ Use WAL terminology going forward:
 - Public docs must not require users to understand internal flags to get a correct setup.
 - Provide high-level entry points (examples):
   - `OptionsFor(ProfileDurable, dir)` → WAL on
-  - `OptionsFor(ProfileFastIngest, dir)` → WAL off (+ requires unsafe)
+  - `OptionsFor(ProfileFast, dir)` → WAL off (unsafe)
 - Ensure `treedb.Open(...)` is bench-friendly:
   - no unconditional stderr prints that break `benchstat`
   - logs must be behind an explicit debug flag or logger injection
@@ -105,10 +105,10 @@ Document and present these as the only supported, forward-looking knobs (names m
 
 | Concern | Preferred knobs | Notes | Default after sprint |
 |---|---|---|---|
-| Mode selection | `DisableWAL` (WAL off), *absence* of it (WAL on) | WAL off changes durability semantics; must require unsafe opt-in | WAL on |
+| Mode selection | `Options.Durability` | WAL off changes durability semantics; make it explicit | WAL on |
 | Journal compression | `JournalCompression` / `-treedb-journal-compress` | Performance-only; keep default off unless proven | OFF |
 | Value-log dict compression | dict compression enable + training/tuning knobs | Gate “on by default” behind benchmarks; require pause/probe guardrails | TBD (see Section 5) |
-| Autotuner | `ValueLogCompressionAutotune` | Default on (Medium) with bounded overhead | ON |
+| Autotuner | `Options.ValueLog.CompressionAutotune` | Default on (Medium) with bounded overhead | ON |
 | Index encodings | `IndexColumnarLeaves`, `IndexInternalBaseDelta` | Must pass reopen+scan test; default off until proven | OFF |
 | B-tree key optimizations | key encoding flags (if any) | Must pass correctness + scan/point lookup perf | OFF until gated |
 
@@ -394,7 +394,7 @@ Minimum required comparisons:
 2) **Synthetic large-value comparisons**  
    Run the Workload A `cmd/unified_bench` matrix on **both** branches:
    - wal_on (default)
-   - wal_off (DisableWAL + AllowUnsafe)
+   - wal_off (`DurabilityWALOffRelaxed`)
 
 Artifacts (store separately per branch):
 - `out/head_to_head_main/*`
@@ -574,7 +574,7 @@ Tasks:
 1. Add integration tests from Section 4.1.
 2. Add/extend crash tests from Section 4.2.
 3. Add the `IndexColumnarLeaves` integration regression test from Section 4.3.
-4. Fix known test hygiene issues: any benchmark/test that opens TreeDB with unsafe flags must set `AllowUnsafe=true` (or explicitly avoid unsafe flags).
+4. Fix known test hygiene issues: any benchmark/test that selects an unsafe durability/integrity mode should do so explicitly and document why.
 
 Validation:
 ```bash
@@ -604,8 +604,8 @@ Goal: make WAL on the default and reduce surface area.
 Tasks:
 1. Ensure default profiles map cleanly:
    - `ProfileDurable` → WAL on
-   - `ProfileFast` → WAL off + requires unsafe
-   - `ProfileFastIngest` → WAL on + relaxed sync (unsafe)
+   - `ProfileFast` → WAL off (unsafe)
+   - `ProfileWALOnFast` → WAL on + relaxed durability (unsafe)
 2. Ensure the value-log autotuner default is “on” for value log enabled, but bounded (medium preset).
 3. Hide noisy logs:
    - remove unconditional `fmt.Fprintf(os.Stderr, ...)` in open paths
@@ -703,7 +703,7 @@ grep -RIn --line-number "legacy slab\|old slab\|slab WAL\|write twice" docs | te
 Reject or require changes if:
 
 - defaults still reference legacy slab-era knobs
-- user-facing docs recommend enabling unsafe flags without requiring `AllowUnsafe`
+- user-facing docs recommend unsafe durability/integrity without making it explicit
 - any flag is promoted by default without passing the correctness gate in Section 3.3
 - benchmark artifacts are missing for performance-impacting changes
 
