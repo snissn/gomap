@@ -22,6 +22,7 @@ var (
 	treedbFlushBuildChunkCap        = flag.Int("treedb-flush-build-chunk-cap", 0, "TreeDB (cached): max entries per parallel build chunk (0=default)")
 	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
+	treedbPagerSyncDataNoFileSync   = flag.Bool("treedb-pager-sync-data-no-fsync", false, "TreeDB: skip file.Sync on initial data sync during commit (sync still fsyncs after meta)")
 	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -171,16 +172,17 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	}
 
 	opts := treedb.Options{
-		Dir:                   dir,
-		KeepRecent:            *treedbKeepRecent,
-		Durability:            durability,
-		ChunkSize:             *treedbChunkSize,
-		PagerSyncConcurrency:  *treedbPagerSyncConcurrency,
-		PreferAppendAlloc:     *treedbPreferAppendAlloc,
-		FreelistRegionPages:   *treedbFreelistRegionPages,
-		FreelistRegionRadius:  *treedbFreelistRegionRadius,
-		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
+		Dir:                     dir,
+		KeepRecent:              *treedbKeepRecent,
+		Durability:              durability,
+		ChunkSize:               *treedbChunkSize,
+		PagerSyncConcurrency:    *treedbPagerSyncConcurrency,
+		PagerSyncDataNoFileSync: *treedbPagerSyncDataNoFileSync,
+		PreferAppendAlloc:       *treedbPreferAppendAlloc,
+		FreelistRegionPages:     *treedbFreelistRegionPages,
+		FreelistRegionRadius:    *treedbFreelistRegionRadius,
+		LeafFillTargetPPM:       uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:   uint32(clampPPM(*treedbInternalFillPPM)),
 
 		LeafPrefixCompression:  *treedbLeafPrefixCompression,
 		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,

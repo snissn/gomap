@@ -50,11 +50,12 @@ type DB struct {
 	snapPool     *SnapshotPool
 	ghostManager *indexGhostManager
 
-	dir                  string
-	chunkSize            int64
-	preferAppendAlloc    bool
-	freelistRegionPages  uint64
-	freelistRegionRadius int
+	dir                     string
+	chunkSize               int64
+	preferAppendAlloc       bool
+	freelistRegionPages     uint64
+	freelistRegionRadius    int
+	pagerSyncDataNoFileSync bool
 
 	readOnly bool
 
@@ -165,6 +166,9 @@ type Options struct {
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
 	PagerSyncConcurrency int
+	// PagerSyncDataNoFileSync skips file.Sync during the initial data sync in
+	// commit when Sync is requested. The final meta sync still fsyncs.
+	PagerSyncDataNoFileSync bool
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -501,21 +505,22 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
-		valueLogManager:        vm,
-		lock:                   lock,
-		adaptive:               adaptiveCtrl,
-		keepRecent:             opts.KeepRecent,
-		leafFillTargetPPM:      opts.LeafFillTargetPPM,
-		internalFillTargetPPM:  opts.InternalFillTargetPPM,
-		leafPrefixCompression:  opts.LeafPrefixCompression,
-		indexColumnarLeaves:    opts.IndexColumnarLeaves,
-		indexInternalBaseDelta: opts.IndexInternalBaseDelta,
-		piggybackCompaction:    !opts.DisablePiggybackCompaction,
-		dir:                    opts.Dir,
-		chunkSize:              opts.ChunkSize,
-		preferAppendAlloc:      opts.PreferAppendAlloc,
-		freelistRegionPages:    opts.FreelistRegionPages,
-		freelistRegionRadius:   opts.FreelistRegionRadius,
+		valueLogManager:         vm,
+		lock:                    lock,
+		adaptive:                adaptiveCtrl,
+		keepRecent:              opts.KeepRecent,
+		leafFillTargetPPM:       opts.LeafFillTargetPPM,
+		internalFillTargetPPM:   opts.InternalFillTargetPPM,
+		leafPrefixCompression:   opts.LeafPrefixCompression,
+		indexColumnarLeaves:     opts.IndexColumnarLeaves,
+		indexInternalBaseDelta:  opts.IndexInternalBaseDelta,
+		piggybackCompaction:     !opts.DisablePiggybackCompaction,
+		dir:                     opts.Dir,
+		chunkSize:               opts.ChunkSize,
+		preferAppendAlloc:       opts.PreferAppendAlloc,
+		freelistRegionPages:     opts.FreelistRegionPages,
+		freelistRegionRadius:    opts.FreelistRegionRadius,
+		pagerSyncDataNoFileSync: opts.PagerSyncDataNoFileSync,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -862,7 +867,13 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	// 1. Sync Data (Index Pages) - No DB Lock
 	if sync {
 		t0 := time.Now()
-		if err := idx.pager.Sync(); err != nil {
+		var err error
+		if db.pagerSyncDataNoFileSync {
+			err = idx.pager.SyncData()
+		} else {
+			err = idx.pager.Sync()
+		}
+		if err != nil {
 			return err
 		}
 		if debugTiming {
