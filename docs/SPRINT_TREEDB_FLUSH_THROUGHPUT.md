@@ -56,6 +56,7 @@ This file is the sprint source of truth:
 - 2026-01-27: Perf server: ran `-suite flushdrain` with `FlushBuildConcurrency={1,4,8}`; observed only small checkpoint-time improvements (backend write dominates). Captured `TREEDB_DEBUG_FLUSH_TIMING=1` stage breakdown.
 - 2026-01-27: Added flush-build tuning knobs (`FlushBuildMinEntries`, `FlushBuildMinUnits`, `FlushBuildChunkCap`, `FlushBuildPrefetchUnits`) and pager tuning knobs (`PagerSyncConcurrency`, `ChunkSize`) with unified-bench flags.
 - 2026-01-27: Added `TREEDB_DEBUG_COMMIT_TIMING=1` to break down commit sync costs.
+- 2026-01-27: (WIP) Added adaptive flush-build chunk sizing (target 1–4MiB per chunk) and per-lane flush scaffolding; awaiting perf validation.
 
 ## Results / follow-ups
 

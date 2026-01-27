@@ -20,6 +20,9 @@ var (
 	treedbFlushBuildMinEntries      = flag.Int("treedb-flush-build-min-entries", 0, "TreeDB (cached): minimum entries to enable parallel flush build (0=default)")
 	treedbFlushBuildMinUnits        = flag.Int("treedb-flush-build-min-units", 0, "TreeDB (cached): minimum queued memtables to enable parallel flush build (0=default)")
 	treedbFlushBuildChunkCap        = flag.Int("treedb-flush-build-chunk-cap", 0, "TreeDB (cached): max entries per parallel build chunk (0=default)")
+	treedbFlushBuildChunkTarget     = flag.Int("treedb-flush-build-chunk-target-bytes", 0, "TreeDB (cached): adaptive chunk target bytes (0=default)")
+	treedbFlushBuildChunkMinBytes   = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
+	treedbFlushBuildChunkMaxBytes   = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
@@ -186,17 +189,20 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,
 		IndexInternalBaseDelta: *treedbIndexInternalBaseDelta,
 
-		FlushThreshold:          *treedbFlushThreshold,
-		MaxQueuedMemtables:      *treedbMaxQueuedMems,
-		SlowdownBacklogSeconds:  *treedbSlowdownBacklogSeconds,
-		StopBacklogSeconds:      *treedbStopBacklogSeconds,
-		MaxBacklogBytes:         *treedbMaxBacklogBytes,
-		WriterFlushMaxMemtables: *treedbWriterFlushMaxMems,
-		FlushBuildConcurrency:   *treedbFlushBuildConcurrency,
-		FlushBuildMinEntries:    *treedbFlushBuildMinEntries,
-		FlushBuildMinUnits:      *treedbFlushBuildMinUnits,
-		FlushBuildChunkCap:      *treedbFlushBuildChunkCap,
-		FlushBuildPrefetchUnits: *treedbFlushBuildPrefetchUnits,
+		FlushThreshold:             *treedbFlushThreshold,
+		MaxQueuedMemtables:         *treedbMaxQueuedMems,
+		SlowdownBacklogSeconds:     *treedbSlowdownBacklogSeconds,
+		StopBacklogSeconds:         *treedbStopBacklogSeconds,
+		MaxBacklogBytes:            *treedbMaxBacklogBytes,
+		WriterFlushMaxMemtables:    *treedbWriterFlushMaxMems,
+		FlushBuildConcurrency:      *treedbFlushBuildConcurrency,
+		FlushBuildMinEntries:       *treedbFlushBuildMinEntries,
+		FlushBuildMinUnits:         *treedbFlushBuildMinUnits,
+		FlushBuildChunkCap:         *treedbFlushBuildChunkCap,
+		FlushBuildChunkTargetBytes: *treedbFlushBuildChunkTarget,
+		FlushBuildChunkMinBytes:    *treedbFlushBuildChunkMinBytes,
+		FlushBuildChunkMaxBytes:    *treedbFlushBuildChunkMaxBytes,
+		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

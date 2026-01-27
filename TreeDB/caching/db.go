@@ -1138,6 +1138,16 @@ func (db *DB) shardForKey(key []byte) *memShard {
 	return &db.mutableShards[db.shardIndex(key)]
 }
 
+func (db *DB) laneForShardIndex(shardID int) int {
+	if len(db.lanes) == 0 {
+		return 0
+	}
+	if shardID < 0 {
+		shardID = 0
+	}
+	return shardID % len(db.lanes)
+}
+
 func (db *DB) shardExceedsLimit(shard *memShard, addBytes int64) bool {
 	if maxMemtableBytesPerShard <= 0 {
 		return false
@@ -1215,6 +1225,15 @@ type Options struct {
 	// FlushBuildChunkCap controls the maximum entries per build chunk. Values <= 0
 	// use a default of 8192.
 	FlushBuildChunkCap int
+	// FlushBuildChunkTargetBytes controls adaptive chunk sizing (bytes per chunk).
+	// Values <= 0 use a default of 2MiB.
+	FlushBuildChunkTargetBytes int
+	// FlushBuildChunkMinBytes clamps adaptive chunk sizes (minimum bytes).
+	// Values <= 0 use a default of 1MiB.
+	FlushBuildChunkMinBytes int
+	// FlushBuildChunkMaxBytes clamps adaptive chunk sizes (maximum bytes).
+	// Values <= 0 use a default of 4MiB.
+	FlushBuildChunkMaxBytes int
 	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
@@ -1298,6 +1317,9 @@ type DB struct {
 	rotatePending    atomic.Bool
 	queue            []memtable.Table
 	queueShardIDs    []uint16
+	queueLaneIDs     []uint16
+	queueIDs         []uint64
+	nextQueueID      atomic.Uint64
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -1316,6 +1338,7 @@ type DB struct {
 	laneMu        sync.Mutex
 	laneCond      *sync.Cond
 	nextLane      int
+	flushLaneMu   []sync.Mutex
 	nextCommitSeq atomic.Uint64
 	walAckMu      sync.Mutex
 	walErr        error
@@ -1404,6 +1427,9 @@ type DB struct {
 	flushBuildMinEntries    int
 	flushBuildMinUnits      int
 	flushBuildChunkCap      int
+	flushBuildChunkTarget   int
+	flushBuildChunkMinBytes int
+	flushBuildChunkMaxBytes int
 	flushBuildPrefetchUnits int
 	walMaxSegmentBytes      int64
 	journalCompression      bool
@@ -1782,6 +1808,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.FlushBuildChunkCap <= 0 {
 		opts.FlushBuildChunkCap = 8192
 	}
+	if opts.FlushBuildChunkTargetBytes <= 0 {
+		opts.FlushBuildChunkTargetBytes = 2 << 20
+	}
+	if opts.FlushBuildChunkMinBytes <= 0 {
+		opts.FlushBuildChunkMinBytes = 1 << 20
+	}
+	if opts.FlushBuildChunkMaxBytes <= 0 {
+		opts.FlushBuildChunkMaxBytes = 4 << 20
+	}
 	if opts.FlushBuildPrefetchUnits <= 0 {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
 	}
@@ -1950,6 +1985,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildMinEntries:           opts.FlushBuildMinEntries,
 		flushBuildMinUnits:             opts.FlushBuildMinUnits,
 		flushBuildChunkCap:             opts.FlushBuildChunkCap,
+		flushBuildChunkTarget:          opts.FlushBuildChunkTargetBytes,
+		flushBuildChunkMinBytes:        opts.FlushBuildChunkMinBytes,
+		flushBuildChunkMaxBytes:        opts.FlushBuildChunkMaxBytes,
 		flushBuildPrefetchUnits:        opts.FlushBuildPrefetchUnits,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
@@ -1984,6 +2022,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointOnceCh:           make(chan struct{}, 1),
 		autoCheckpointWriteCh:          make(chan struct{}, 1),
 		lanes:                          lanes,
+		flushLaneMu:                    make([]sync.Mutex, len(lanes)),
 	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
@@ -3548,8 +3587,7 @@ func (db *DB) Checkpoint() error {
 	}
 
 	// Flush all queued memtables with backend sync.
-	for db.flushCombinedLocked(true) {
-	}
+	db.flushAll(true)
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
@@ -3643,17 +3681,14 @@ func (db *DB) waitForStop() {
 		if target <= 0 {
 			target = stopBytes
 		}
-		db.flushMu.Lock()
 		for {
 			curBacklog := db.queueBacklogBytes.Load()
 			if curBacklog < target {
 				break
 			}
-			if !db.flushCombinedLocked(false) {
-				break
-			}
+			db.flushAll(false)
+			break
 		}
-		db.flushMu.Unlock()
 	}
 }
 
@@ -3697,11 +3732,6 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
-	if !db.flushMu.TryLock() {
-		return
-	}
-	defer db.flushMu.Unlock()
-
 	flushed := 0
 	for {
 		if maxMemtables > 0 && flushed >= maxMemtables {
@@ -3710,7 +3740,20 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 		if maxDuration > 0 && time.Since(start) >= maxDuration {
 			return
 		}
-		if !db.flushOneLocked(sync) {
+		laneID, ok := db.pickFlushLane()
+		if !ok {
+			return
+		}
+		if laneID < len(db.flushLaneMu) {
+			if !db.flushLaneMu[laneID].TryLock() {
+				return
+			}
+		}
+		okFlush := db.flushLaneOnce(sync, laneID)
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Unlock()
+		}
+		if !okFlush {
 			return
 		}
 		flushed++
@@ -3882,8 +3925,6 @@ func (db *DB) SetSync(key, value []byte) error {
 }
 
 func (db *DB) flushAllMemtablesForSync(sync bool) error {
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
@@ -3896,8 +3937,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	}
 	db.mu.Unlock()
 
-	for db.flushCombinedLocked(sync) {
-	}
+	db.flushAll(sync)
 	return db.backgroundError()
 }
 
@@ -4329,6 +4369,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 			db.queue = nil
 			db.queueShardIDs = nil
+			db.queueLaneIDs = nil
+			db.queueIDs = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
@@ -4386,6 +4428,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 			db.queue = nil
 			db.queueShardIDs = nil
+			db.queueLaneIDs = nil
+			db.queueIDs = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
@@ -4451,6 +4495,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		if len(db.queue) > 0 {
 			dstQueue := db.queue[:0]
 			dstShardIDs := db.queueShardIDs[:0]
+			dstLaneIDs := db.queueLaneIDs[:0]
+			dstIDs := db.queueIDs[:0]
 			dstRanges := db.queueRanges[:0]
 			dstWALPaths := db.queueWALPaths[:0]
 			dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -4469,6 +4515,16 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				} else {
 					dstShardIDs = append(dstShardIDs, 0)
 				}
+				if i < len(db.queueLaneIDs) {
+					dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
+				} else {
+					dstLaneIDs = append(dstLaneIDs, 0)
+				}
+				if i < len(db.queueIDs) {
+					dstIDs = append(dstIDs, db.queueIDs[i])
+				} else {
+					dstIDs = append(dstIDs, 0)
+				}
 				dstRanges = append(dstRanges, r)
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
@@ -4483,6 +4539,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			}
 			db.queue = dstQueue
 			db.queueShardIDs = dstShardIDs
+			db.queueLaneIDs = dstLaneIDs
+			db.queueIDs = dstIDs
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
@@ -4765,6 +4823,8 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		memBytes := shard.mem.Size()
 		db.queue = append(db.queue, shard.mem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
+		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -4901,6 +4961,8 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		memBytes := shard.mem.Size()
 		db.queue = append(db.queue, shard.mem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
+		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -5123,29 +5185,193 @@ func (db *DB) flushSyncRequested(sync bool) bool {
 	return sync
 }
 
+func (db *DB) pickFlushLane() (int, bool) {
+	db.mu.RLock()
+	if len(db.queue) == 0 {
+		db.mu.RUnlock()
+		return 0, false
+	}
+	counts := make(map[int]int)
+	for i := range db.queue {
+		laneID := 0
+		if i < len(db.queueLaneIDs) {
+			laneID = int(db.queueLaneIDs[i])
+		}
+		counts[laneID]++
+	}
+	bestLane := 0
+	bestCount := 0
+	for laneID, count := range counts {
+		if count > bestCount {
+			bestCount = count
+			bestLane = laneID
+		}
+	}
+	db.mu.RUnlock()
+	return bestLane, true
+}
+
 func (db *DB) flushAll(sync bool) {
 	origSync := sync
 	sync = db.flushSyncRequested(sync)
 	if !origSync && sync && db.disableJournal && !db.relaxedSync {
 		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
 	}
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
-
-	for db.flushCombinedLocked(sync) {
+	lanes := len(db.lanes)
+	if lanes == 0 {
+		lanes = 1
 	}
+	var wg sync.WaitGroup
+	wg.Add(lanes)
+	for i := 0; i < lanes; i++ {
+		laneID := i
+		go func() {
+			if laneID < len(db.flushLaneMu) {
+				db.flushLaneMu[laneID].Lock()
+				defer db.flushLaneMu[laneID].Unlock()
+			}
+			for db.flushCombinedLane(sync, laneID) {
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }
 
 func (db *DB) flushOne() bool {
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
-	return db.flushOneLocked(true)
+	laneID, ok := db.pickFlushLane()
+	if !ok {
+		return false
+	}
+	if laneID < len(db.flushLaneMu) {
+		db.flushLaneMu[laneID].Lock()
+		defer db.flushLaneMu[laneID].Unlock()
+	}
+	return db.flushLaneOnce(true, laneID)
 }
 
 const (
 	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
 	flushCombineMaxMemtables       = 32
 )
+
+type flushUnit struct {
+	mem      memtable.Table
+	memBytes int64
+	memLen   int
+	memRange keyRange
+	walPaths []string
+	id       uint64
+}
+
+func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes int64) ([]flushUnit, []uint64, int64, int) {
+	queueLen := len(db.queue)
+	if queueLen == 0 {
+		return nil, nil, 0, 0
+	}
+	if maxMemtables <= 0 || maxMemtables > flushCombineMaxMemtables {
+		maxMemtables = flushCombineMaxMemtables
+	}
+	units := make([]flushUnit, 0, maxMemtables)
+	ids := make([]uint64, 0, maxMemtables)
+	var totalBytes int64
+	var totalLen int
+	for i := 0; i < queueLen && len(units) < maxMemtables; i++ {
+		if laneID >= 0 {
+			if i >= len(db.queueLaneIDs) || int(db.queueLaneIDs[i]) != laneID {
+				continue
+			}
+		} else if i >= maxMemtables {
+			break
+		}
+		mem := db.queue[i]
+		memBytes := mem.Size()
+		memLen := mem.Len()
+		if len(units) > 0 && targetBytes > 0 && totalBytes >= targetBytes {
+			break
+		}
+		var walPaths []string
+		if i < len(db.queueWALPaths) {
+			walPaths = db.queueWALPaths[i]
+		}
+		var rng keyRange
+		if i < len(db.queueRanges) {
+			rng = db.queueRanges[i]
+		}
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		units = append(units, flushUnit{
+			mem:      mem,
+			memBytes: memBytes,
+			memLen:   memLen,
+			memRange: rng,
+			walPaths: walPaths,
+			id:       id,
+		})
+		ids = append(ids, id)
+		totalBytes += memBytes
+		totalLen += memLen
+	}
+	return units, ids, totalBytes, totalLen
+}
+
+func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
+	for _, unit := range units {
+		if unit.memRange.valid {
+			db.backendRange.add(unit.memRange.min)
+			db.backendRange.add(unit.memRange.max)
+		}
+	}
+
+	dstQueue := db.queue[:0]
+	dstShardIDs := db.queueShardIDs[:0]
+	dstLaneIDs := db.queueLaneIDs[:0]
+	dstIDs := db.queueIDs[:0]
+	dstRanges := db.queueRanges[:0]
+	dstWALPaths := db.queueWALPaths[:0]
+	dstValueLogPaths := db.queueValueLogPaths[:0]
+
+	for i, mem := range db.queue {
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		if _, ok := removeIDs[id]; ok {
+			continue
+		}
+		dstQueue = append(dstQueue, mem)
+		if i < len(db.queueShardIDs) {
+			dstShardIDs = append(dstShardIDs, db.queueShardIDs[i])
+		}
+		if i < len(db.queueLaneIDs) {
+			dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
+		}
+		if i < len(db.queueIDs) {
+			dstIDs = append(dstIDs, db.queueIDs[i])
+		}
+		if i < len(db.queueRanges) {
+			dstRanges = append(dstRanges, db.queueRanges[i])
+		}
+		if i < len(db.queueWALPaths) {
+			dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
+		}
+		if i < len(db.queueValueLogPaths) {
+			dstValueLogPaths = append(dstValueLogPaths, db.queueValueLogPaths[i])
+		}
+	}
+
+	db.queue = dstQueue
+	db.queueShardIDs = dstShardIDs
+	db.queueLaneIDs = dstLaneIDs
+	db.queueIDs = dstIDs
+	db.queueRanges = dstRanges
+	db.queueWALPaths = dstWALPaths
+	db.queueValueLogPaths = dstValueLogPaths
+	db.queueBacklogBytes.Add(-totalBytes)
+	db.publishMemtablesLocked()
+}
 
 func (db *DB) flushCombinedLocked(sync bool) bool {
 	db.mu.Lock()
@@ -5160,17 +5386,6 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		max = flushCombineMaxMemtables
 	}
 
-	var memsArr [flushCombineMaxMemtables]memtable.Table
-	var rangesArr [flushCombineMaxMemtables]keyRange
-	var walPathsArr [flushCombineMaxMemtables][]string
-	mems := memsArr[:max]
-	ranges := rangesArr[:max]
-	walPaths := walPathsArr[:max]
-	copy(mems, db.queue[:max])
-	copy(ranges, db.queueRanges[:max])
-	copy(walPaths, db.queueWALPaths[:max])
-	db.mu.Unlock()
-
 	// When the caller configures a small flush threshold (e.g. the unified_bench
 	// flushthrash suite), combining up to a fixed 64MiB can create long single-pass
 	// flush latencies and excessive stop-backpressure. Prefer a smaller target in
@@ -5179,38 +5394,53 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 	if db.flushThreshold > 0 && db.flushThreshold < targetBytes {
 		targetBytes = db.flushThreshold
 	}
-
-	type flushUnit struct {
-		mem      memtable.Table
-		memBytes int64
-		memLen   int
-		memRange keyRange
-		walPaths []string
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(-1, max, targetBytes)
+	db.mu.Unlock()
+	if len(units) == 0 {
+		return false
 	}
+	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
+}
 
-	var unitsArr [flushCombineMaxMemtables]flushUnit
-	units := unitsArr[:0]
-	var totalBytes int64
-	var totalLen int
-	for i := 0; i < max; i++ {
-		mem := mems[i]
-		memBytes := mem.Size()
-		memLen := mem.Len()
-
-		if len(units) > 0 && totalBytes >= targetBytes {
-			break
-		}
-		units = append(units, flushUnit{
-			mem:      mem,
-			memBytes: memBytes,
-			memLen:   memLen,
-			memRange: ranges[i],
-			walPaths: walPaths[i],
-		})
-		totalBytes += memBytes
-		totalLen += memLen
+func (db *DB) flushCombinedLane(sync bool, laneID int) bool {
+	db.mu.Lock()
+	queueLen := len(db.queue)
+	if queueLen == 0 {
+		db.mu.Unlock()
+		return false
 	}
+	max := queueLen
+	if max > flushCombineMaxMemtables {
+		max = flushCombineMaxMemtables
+	}
+	targetBytes := flushCombineTargetBytes
+	if db.flushThreshold > 0 && db.flushThreshold < targetBytes {
+		targetBytes = db.flushThreshold
+	}
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, max, targetBytes)
+	db.mu.Unlock()
+	if len(units) == 0 {
+		return false
+	}
+	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
+}
 
+func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
+	db.mu.Lock()
+	queueLen := len(db.queue)
+	if queueLen == 0 {
+		db.mu.Unlock()
+		return false
+	}
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, 1, 0)
+	db.mu.Unlock()
+	if len(units) == 0 {
+		return false
+	}
+	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
+}
+
+func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes int64, totalLen int) bool {
 	debugPtr := db.debugFlushPointers
 	debugTiming := db.debugFlushTiming
 
@@ -5410,7 +5640,46 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 				// ordering by applying one immutable at a time in queue order.
 				chunkCap := db.flushBuildChunkCap
 				if chunkCap <= 0 {
-					chunkCap = 8192
+					avgBytes := 1
+					if totalLen > 0 {
+						avgBytes = int(totalBytes / int64(totalLen))
+						if avgBytes <= 0 {
+							avgBytes = 1
+						}
+					}
+					minBytes := db.flushBuildChunkMinBytes
+					maxBytes := db.flushBuildChunkMaxBytes
+					targetBytes := db.flushBuildChunkTarget
+					if minBytes <= 0 {
+						minBytes = 1 << 20
+					}
+					if maxBytes <= 0 {
+						maxBytes = 4 << 20
+					}
+					if targetBytes <= 0 {
+						targetBytes = 2 << 20
+					}
+					if targetBytes < minBytes {
+						targetBytes = minBytes
+					}
+					if targetBytes > maxBytes {
+						targetBytes = maxBytes
+					}
+					minEntries := minBytes / avgBytes
+					if minEntries < 1 {
+						minEntries = 1
+					}
+					maxEntries := maxBytes / avgBytes
+					if maxEntries < minEntries {
+						maxEntries = minEntries
+					}
+					chunkCap = targetBytes / avgBytes
+					if chunkCap < minEntries {
+						chunkCap = minEntries
+					}
+					if chunkCap > maxEntries {
+						chunkCap = maxEntries
+					}
 				}
 				var opChArr [flushCombineMaxMemtables]chan []batch.Entry
 				var cancelArr [flushCombineMaxMemtables]chan struct{}
@@ -5512,11 +5781,13 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 		}
 		var err error
 		t0 := time.Now()
+		db.flushMu.Lock()
 		if sync {
 			err = backendBatch.WriteSync()
 		} else {
 			err = backendBatch.Write()
 		}
+		db.flushMu.Unlock()
 		durBackendWrite = time.Since(t0)
 		if err != nil {
 			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -5557,30 +5828,11 @@ func (db *DB) flushCombinedLocked(sync bool) bool {
 
 	// Remove from queue and delete old WAL segments.
 	db.mu.Lock()
-	for _, unit := range units {
-		if unit.memRange.valid {
-			db.backendRange.add(unit.memRange.min)
-			db.backendRange.add(unit.memRange.max)
-		}
+	removeIDs := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		removeIDs[id] = struct{}{}
 	}
-
-	if len(db.queue) >= len(units) {
-		db.queue = db.queue[len(units):]
-	}
-	if len(db.queueShardIDs) >= len(units) {
-		db.queueShardIDs = db.queueShardIDs[len(units):]
-	}
-	if len(db.queueRanges) >= len(units) {
-		db.queueRanges = db.queueRanges[len(units):]
-	}
-	if len(db.queueWALPaths) >= len(units) {
-		db.queueWALPaths = db.queueWALPaths[len(units):]
-	}
-	if len(db.queueValueLogPaths) >= len(units) {
-		db.queueValueLogPaths = db.queueValueLogPaths[len(units):]
-	}
-	db.queueBacklogBytes.Add(-totalBytes)
-	db.publishMemtablesLocked()
+	db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 
 	deletable := make([]string, 0, len(units))
 	if sync {
@@ -5854,6 +6106,12 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	}
 	if len(db.queueShardIDs) > 0 {
 		db.queueShardIDs = db.queueShardIDs[1:]
+	}
+	if len(db.queueLaneIDs) > 0 {
+		db.queueLaneIDs = db.queueLaneIDs[1:]
+	}
+	if len(db.queueIDs) > 0 {
+		db.queueIDs = db.queueIDs[1:]
 	}
 	if len(db.queueRanges) > 0 {
 		db.queueRanges = db.queueRanges[1:]
