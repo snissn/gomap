@@ -413,3 +413,38 @@ func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
 
 	db.flushAll(true)
 }
+
+func TestFlushAllMemtablesForSyncCompletesWithConcurrentCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 16, AllowUnsafe: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < 100; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("sync-%04d", i)), []byte("v")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.flushAllMemtablesForSync(true)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatalf("flushAllMemtablesForSync hung alongside Checkpoint")
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flushAllMemtablesForSync error: %v", err)
+		}
+	}
+}
