@@ -379,3 +379,81 @@ func TestAdaptiveChunkCapDefaultAllowsAdaptive(t *testing.T) {
 		t.Fatalf("expected chunk cap 0 to enable adaptive sizing, got %d", db.flushBuildChunkCap)
 	}
 }
+
+func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:     1 << 16,
+		MemtableShards:     2,
+		MemtableMode:       "hash_sorted",
+		MaxQueuedMemtables: -1,
+		AllowUnsafe:        true,
+		JournalLanes:       2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	writer := func(id byte) {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for i := 0; i < 50; i++ {
+				if err := db.Set([]byte(fmt.Sprintf("%c-stress-%04d", id, i)), []byte("stress")); err != nil {
+					t.Fatalf("Set: %v", err)
+				}
+			}
+			db.mu.Lock()
+			if err := db.rotateMemtableLocked(true); err != nil {
+				db.mu.Unlock()
+				t.Fatalf("rotateMemtableLocked: %v", err)
+			}
+			db.mu.Unlock()
+		}
+	}
+
+	flushAllLoop := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			db.flushAll(false)
+		}
+	}
+
+	flushSomeLoop := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			db.flushSome(false, 2, 50*time.Millisecond)
+		}
+	}
+
+	wg.Add(4)
+	go writer('A')
+	go writer('B')
+	go flushAllLoop()
+	go flushSomeLoop()
+
+	time.Sleep(700 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	db.flushAll(true)
+}

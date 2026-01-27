@@ -51,5 +51,15 @@ func runFlushDrainSuite(baseCfg BenchConfig) (string, error) {
 		sb.WriteString(diag)
 		sb.WriteString("```\n")
 	}
+
+	if *flushdrainCheckpointMax > 0 {
+		if chk, ok := run.CheckpointDurations["random_read"]; ok {
+			for dbName, dur := range chk {
+				if dur > *flushdrainCheckpointMax {
+					return "", fmt.Errorf("flushdrain checkpoint before random_read (%s) = %s > %s", dbName, dur, *flushdrainCheckpointMax)
+				}
+			}
+		}
+	}
 	return sb.String(), nil
 }
