@@ -1,3 +1,5 @@
+# codex resume 019c00be-d055-7923-9519-53e8eff550e0
+
 • # Plan: TreeDB Keyspace Sharding via Automatic Range Partitions
 
   ## Goals / Success Criteria
