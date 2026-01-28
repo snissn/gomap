@@ -922,25 +922,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
-			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
-			var k [8]byte
 
-			keys := make([][]byte, total)
+			const keySize = 8
+			allKeys := make([]byte, total*keySize)
 			for i := 0; i < total; i++ {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
-				keys[i] = append([]byte(nil), k[:]...)
+				offset := i * keySize
+				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 			}
-
 			// Reset timer to exclude setup
-			start = time.Now()
+			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8 + len(val))
 
@@ -960,7 +958,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					if err := batch.Set(keys[j], val); err != nil {
+					offset := j * keySize
+					key := allKeys[offset : offset+keySize]
+					if err := batch.Set(key, val); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_random: set: %w", err)
 					}
@@ -983,24 +983,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
-			start := time.Now()
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
-			var k [8]byte
 
-			keys := make([][]byte, total)
+			const keySize = 8
+			allKeys := make([]byte, total*keySize)
 			for i := 0; i < total; i++ {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total)))
-				keys[i] = append([]byte(nil), k[:]...)
+				offset := i * keySize
+				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total)))
 			}
-
 			// Reset timer to exclude setup
-			start = time.Now()
+			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8)
 
@@ -1020,7 +1018,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					if err := batch.Delete(keys[j]); err != nil {
+					offset := j * keySize
+					key := allKeys[offset : offset+keySize]
+					if err := batch.Delete(key); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_delete: delete: %w", err)
 					}
