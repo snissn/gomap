@@ -40,7 +40,9 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 	cmd.Stderr = &stderr
 
 	timer := time.AfterFunc(timeout, func() {
-		cmd.Process.Kill()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		t.Errorf("benchmark process timed out externally after %v", timeout)
 	})
 	defer timer.Stop()

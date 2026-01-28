@@ -88,7 +88,11 @@ func getValueLogRecordsCap(capacity int) []valuelog.Record {
 	}
 	if v := valueLogRecordPool.Get(); v != nil {
 		if s, ok := v.([]valuelog.Record); ok {
-			if cap(s) >= capacity {
+			maxCap := capacity * 2
+			if maxCap < 256 {
+				maxCap = 256
+			}
+			if cap(s) >= capacity && cap(s) <= maxCap {
 				return s[:0]
 			}
 		}
@@ -1629,6 +1633,19 @@ func (db *DB) publishMemtablesLocked() {
 		view.queueRanges = qr
 	}
 	db.memtables.Store(view)
+}
+
+// ensureQueueLaneIDsLocked keeps queueLaneIDs aligned with queue length.
+// Caller must hold db.mu.
+func (db *DB) ensureQueueLaneIDsLocked() {
+	if len(db.queueLaneIDs) >= len(db.queue) {
+		return
+	}
+	missing := len(db.queue) - len(db.queueLaneIDs)
+	if missing <= 0 {
+		return
+	}
+	db.queueLaneIDs = append(db.queueLaneIDs, make([]uint16, missing)...)
 }
 
 type memtableStats struct {
@@ -3691,7 +3708,9 @@ func (db *DB) waitForCheckpoint() {
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	db.flushMu.Lock()         // Acquire flushMu FIRST
+	// Note: Any code path that takes both flushMu and checkpointMu must acquire
+	// flushMu first to avoid deadlocks.
+	db.flushMu.Lock()
 	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.checkpointMu.Lock()
@@ -3845,7 +3864,8 @@ func (db *DB) waitForStop() {
 		if resumeBytes > 0 {
 			target = resumeBytes
 		}
-		if db.queueBacklogBytes.Load() >= target {
+		stalls := 0
+		for db.queueBacklogBytes.Load() >= target {
 			maxMemtables := db.writerFlushMaxMemtables
 			if maxMemtables <= 0 {
 				maxMemtables = 1
@@ -3857,7 +3877,21 @@ func (db *DB) waitForStop() {
 			if maxMemtables > flushCombineMaxMemtables {
 				maxMemtables = flushCombineMaxMemtables
 			}
+
+			before := db.queueBacklogBytes.Load()
 			db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
+			after := db.queueBacklogBytes.Load()
+			if after < target {
+				break
+			}
+			if after >= before {
+				stalls++
+				if stalls >= stopBackpressureStallLimit {
+					break
+				}
+			} else {
+				stalls = 0
+			}
 		}
 		return
 	}
@@ -4710,6 +4744,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		// Drop fully-covered queued memtables without enumerating their keys.
 		if len(db.queue) > 0 {
+			db.ensureQueueLaneIDsLocked()
 			dstQueue := db.queue[:0]
 			dstShardIDs := db.queueShardIDs[:0]
 			dstLaneIDs := db.queueLaneIDs[:0]
@@ -5620,6 +5655,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	dstWALPaths := db.queueWALPaths[:0]
 	dstValueLogPaths := db.queueValueLogPaths[:0]
 
+	db.ensureQueueLaneIDsLocked()
 	for i, mem := range db.queue {
 		var id uint64
 		if i < len(db.queueIDs) {
