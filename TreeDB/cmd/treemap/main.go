@@ -206,7 +206,7 @@ func runCheckpointBench(dir string, args []string) {
 
 	pauseBeforeCheckpoint := fs.Duration("pause-before-checkpoint", 0, "Sleep this long after writes and before checkpoint (lets you attach perf)")
 	waitForSignal := fs.Bool("wait-for-signal", false, "Wait for SIGUSR1 after writes before starting checkpoint (for perf attach)")
-	prepareOnly := fs.Bool("prepare-only", false, "Exit after write workload (no checkpoint); use with `perf stat ... treemap checkpoint ...`")
+	prepareOnly := fs.Bool("prepare-only", false, "Exit after write workload (no checkpoint); note: DB close may do work")
 	cpuprofile := fs.String("checkpoint-cpuprofile", "", "Write CPU profile during checkpoint to this file")
 	_ = fs.Parse(args)
 
@@ -325,6 +325,9 @@ func runCheckpointBench(dir string, args []string) {
 		return
 	}
 
+	var before syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &before)
+
 	var profFile *os.File
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -339,6 +342,9 @@ func runCheckpointBench(dir string, args []string) {
 	err = db.Checkpoint()
 	dur := time.Since(start)
 
+	var after syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &after)
+
 	if profFile != nil {
 		runtimepprof.StopCPUProfile()
 		_ = profFile.Close()
@@ -346,7 +352,14 @@ func runCheckpointBench(dir string, args []string) {
 	if err != nil {
 		fatalf("Checkpoint error: %v", err)
 	}
-	fmt.Printf("checkpoint %s\n", dur)
+	fmt.Printf(
+		"checkpoint %s (minflt +%d majflt +%d nvcsw +%d nivcsw +%d)\n",
+		dur,
+		after.Minflt-before.Minflt,
+		after.Majflt-before.Majflt,
+		after.Nvcsw-before.Nvcsw,
+		after.Nivcsw-before.Nivcsw,
+	)
 }
 
 func runStats(dir string, args []string) {
