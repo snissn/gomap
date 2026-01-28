@@ -5310,10 +5310,42 @@ func (db *DB) flushAllLocked(reqSync bool) {
 	if lanes == 0 {
 		lanes = 1
 	}
+
+	// Only spawn flush workers for lanes that actually have queued memtables.
+	// Otherwise each lane does an O(queueLen) scan in collectFlushUnitsLocked to
+	// discover there's nothing to do, which can be extremely expensive when the
+	// queue is large and lanes > 1.
+	active := make([]bool, lanes)
+	db.mu.RLock()
+	queueLen := len(db.queue)
+	for i := 0; i < queueLen; i++ {
+		laneID := 0
+		if i < len(db.queueLaneIDs) {
+			laneID = int(db.queueLaneIDs[i])
+		}
+		if laneID < 0 || laneID >= lanes {
+			laneID = 0
+		}
+		active[laneID] = true
+	}
+	db.mu.RUnlock()
+
+	activeCount := 0
+	for i := range active {
+		if active[i] {
+			activeCount++
+		}
+	}
+	if activeCount == 0 {
+		return
+	}
 	var wg sync.WaitGroup
-	wg.Add(lanes)
+	wg.Add(activeCount)
 	for i := 0; i < lanes; i++ {
 		laneID := i
+		if !active[laneID] {
+			continue
+		}
 		go func() {
 			if laneID < len(db.flushLaneMu) {
 				db.flushLaneMu[laneID].Lock()
