@@ -3598,6 +3598,7 @@ func (db *DB) computeBackendRange() (keyRange, bool, error) {
 }
 
 const stopResumeFraction = 0.70
+const stopBackpressureStallLimit = 16
 
 func (db *DB) adaptiveBackpressureEnabled() bool {
 	return db.slowdownBacklogSeconds > 0 || db.stopBacklogSeconds > 0 || db.maxBacklogBytes > 0
@@ -3748,6 +3749,7 @@ func (db *DB) waitForStop() {
 		return
 	}
 
+	failedFlushAttempts := 0
 	for {
 		db.bpMu.Lock()
 		_, stopBytes, resumeBytes := db.thresholdsLocked()
@@ -3798,9 +3800,15 @@ func (db *DB) waitForStop() {
 			db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
 			after := db.queueBacklogBytes.Load()
 			if after >= before {
+				failedFlushAttempts++
+				if failedFlushAttempts >= stopBackpressureStallLimit {
+					return
+				}
 				// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
 				time.Sleep(5 * time.Millisecond)
+				continue
 			}
+			failedFlushAttempts = 0
 		}
 	}
 }
