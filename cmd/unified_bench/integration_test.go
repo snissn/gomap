@@ -30,7 +30,7 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 		"-format", "text", // Use text format for easier parsing if needed, markdown is fine too
 		"-checkpoint-between-tests",
 		"-treedb-force-value-pointers",
-        "-max-wall", "120s", // Set max wall time to detect hangs
+		"-max-wall", "120s", // Set max wall time to detect hangs
 	)
 
 	// Set a generous timeout for this test

@@ -118,4 +118,3 @@ func TestWaitForStopSelfHealsStaleBacklogBytes(t *testing.T) {
 		t.Fatalf("QueueBacklogBytes=%d want 0", got)
 	}
 }
-

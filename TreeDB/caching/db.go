@@ -2118,12 +2118,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutableShardMask:               uint64(shardCount - 1),
 		hashSortedIndexer:              indexer,
 		closeCh:                        make(chan struct{}),
+		commitCh:                       make(chan commitRequest, 1024), // Buffered channel for commit requests
 		flushCh:                        make(chan struct{}, 1),
 		autoCheckpointOnceCh:           make(chan struct{}, 1),
 		autoCheckpointWriteCh:          make(chan struct{}, 1),
 		lanes:                          lanes,
 		flushLaneMu:                    make([]sync.Mutex, len(lanes)),
 	}
+	// Start the commit worker goroutine
+	db.commitWorkerWg.Add(1)
+	go db.commitWorkerLoop()
+
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
@@ -2771,6 +2776,32 @@ func (db *DB) walFastLoop(l *lane) {
 			ack := batch[i].ack
 			ack.err = err
 			ack.wg.Done()
+		}
+	}
+}
+
+// commitWorkerLoop receives commit requests, acquires commitMu, performs the commit, and signals completion.
+func (db *DB) commitWorkerLoop() {
+	defer db.commitWorkerWg.Done()
+
+	for req := range db.commitCh {
+		db.commitMu.Lock()
+		var err error
+		if req.sync {
+			err = req.batch.WriteSync()
+		} else {
+			err = req.batch.Write()
+		}
+		cerr := req.batch.Close()
+		if err == nil {
+			err = cerr
+		}
+		db.commitMu.Unlock()
+
+		// Signal completion back to the caller
+		if req.result != nil {
+			req.result <- err
+			close(req.result)
 		}
 	}
 }
@@ -3651,7 +3682,7 @@ func (db *DB) waitForCheckpoint() {
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	db.flushMu.Lock() // Acquire flushMu FIRST
+	db.flushMu.Lock()         // Acquire flushMu FIRST
 	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.checkpointMu.Lock()
@@ -6442,6 +6473,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				t1 := time.Now()
 				if err := db.syncValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+					_ = iter.Close()
 					_ = backendBatch.Close()
 					return false
 				}
