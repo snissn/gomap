@@ -126,7 +126,7 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	newChunks := make([][]byte, 0, chunksNeeded)
 	for i := int64(0); i < chunksNeeded; i++ {
 		offset := currentCapacity + (i * p.chunkSize)
-		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize))
+		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize), p.mmapPopulate)
 		if err != nil {
 			for _, c := range newChunks {
 				_ = munmapFile(c)

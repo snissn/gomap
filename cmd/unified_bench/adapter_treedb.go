@@ -25,6 +25,7 @@ var (
 	treedbFlushBuildChunkMaxBytes   = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
+	treedbPagerMmapPopulate         = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -180,6 +181,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		Durability:                durability,
 		ChunkSize:                 *treedbChunkSize,
 		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
+		PagerMmapPopulate:         *treedbPagerMmapPopulate,
 		PreferAppendAlloc:         *treedbPreferAppendAlloc,
 		FreelistRegionPages:       *treedbFreelistRegionPages,
 		FreelistRegionRadius:      *treedbFreelistRegionRadius,
