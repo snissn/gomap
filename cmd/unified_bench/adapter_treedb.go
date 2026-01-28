@@ -37,6 +37,7 @@ var (
 	treedbFreelistRegionRadius      = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
 	treedbLeafFillPPM               = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
 	treedbInternalFillPPM           = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
+	treedbMaintenanceOpsPerCoalesce = flag.Int("treedb-maintenance-ops-per-coalesce", 0, "TreeDB: ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
 	treedbIterDebug                 = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit            = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	treedbForceValuePointers        = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
@@ -171,16 +172,17 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	}
 
 	opts := treedb.Options{
-		Dir:                   dir,
-		KeepRecent:            *treedbKeepRecent,
-		Durability:            durability,
-		ChunkSize:             *treedbChunkSize,
-		PagerSyncConcurrency:  *treedbPagerSyncConcurrency,
-		PreferAppendAlloc:     *treedbPreferAppendAlloc,
-		FreelistRegionPages:   *treedbFreelistRegionPages,
-		FreelistRegionRadius:  *treedbFreelistRegionRadius,
-		LeafFillTargetPPM:     uint32(clampPPM(*treedbLeafFillPPM)),
-		InternalFillTargetPPM: uint32(clampPPM(*treedbInternalFillPPM)),
+		Dir:                       dir,
+		KeepRecent:                *treedbKeepRecent,
+		Durability:                durability,
+		ChunkSize:                 *treedbChunkSize,
+		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
+		PreferAppendAlloc:         *treedbPreferAppendAlloc,
+		FreelistRegionPages:       *treedbFreelistRegionPages,
+		FreelistRegionRadius:      *treedbFreelistRegionRadius,
+		LeafFillTargetPPM:         uint32(clampPPM(*treedbLeafFillPPM)),
+		InternalFillTargetPPM:     uint32(clampPPM(*treedbInternalFillPPM)),
+		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
 
 		LeafPrefixCompression:  *treedbLeafPrefixCompression,
 		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,

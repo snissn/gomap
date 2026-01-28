@@ -170,6 +170,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
 	newZ.SetIndexColumnarLeaves(db.indexColumnarLeaves)
 	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
+	newZ.SetMaintenanceOpsPerCoalesce(db.maintenanceOpsPerCoalesce)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()

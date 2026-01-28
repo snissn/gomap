@@ -283,6 +283,12 @@ func main() {
 				log.Fatalf("vlog_dict suite: %v", err)
 			}
 			fmt.Print(out)
+		case "maintenance_budget", "maintenance-budget":
+			out, err := runMaintenanceBudgetSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("maintenance_budget suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
