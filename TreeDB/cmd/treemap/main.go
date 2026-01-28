@@ -205,6 +205,7 @@ func runCheckpointBench(dir string, args []string) {
 
 	pauseBeforeCheckpoint := fs.Duration("pause-before-checkpoint", 0, "Sleep this long after writes and before checkpoint (lets you attach perf)")
 	waitForSignal := fs.Bool("wait-for-signal", false, "Wait for SIGUSR1 after writes before starting checkpoint (for perf attach)")
+	prepareOnly := fs.Bool("prepare-only", false, "Exit after write workload (no checkpoint); use with `perf stat ... treemap checkpoint ...`")
 	cpuprofile := fs.String("checkpoint-cpuprofile", "", "Write CPU profile during checkpoint to this file")
 	_ = fs.Parse(args)
 
@@ -313,6 +314,10 @@ func runCheckpointBench(dir string, args []string) {
 		signal.Notify(ch, syscall.SIGUSR1)
 		<-ch
 		signal.Stop(ch)
+	}
+	if *prepareOnly {
+		fmt.Printf("prepared %s\n", dir)
+		return
 	}
 
 	var profFile *os.File
