@@ -3778,19 +3778,22 @@ func (db *DB) waitForStop() {
 		db.TriggerFlush()
 
 		// Stop backpressure means we are already blocking the caller. Actively do a
-		// small amount of synchronous flush work to ensure forward progress, even
-		// when WriterFlushMaxMemtables/Duration are not configured.
+		// synchronous flush to ensure forward progress.
+		//
+		// Rationale: in stop mode, we are already stalling the writer. Doing only a
+		// tiny amount of work (e.g. 1 memtable) can still leave the system wedged if
+		// background flushing isn't keeping up or if lane locks are contended.
 		target := stopBytes
 		if resumeBytes > 0 {
 			target = resumeBytes
 		}
 		if db.queueBacklogBytes.Load() >= target {
 			before := db.queueBacklogBytes.Load()
-			db.flushSome(false, 1, 0)
+			db.flushAll(false)
 			after := db.queueBacklogBytes.Load()
 			if after >= before {
 				// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
-				time.Sleep(2 * time.Millisecond)
+				time.Sleep(5 * time.Millisecond)
 			}
 		}
 	}
