@@ -928,11 +928,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			const keySize = 8
 			allKeys := make([]byte, total*keySize)
-			fmt.Fprintf(os.Stderr, "Generating %d random keys for writing...\n", total)
 			for i := 0; i < total; i++ {
-				if i > 0 && i%100000 == 0 {
-					fmt.Fprintf(os.Stderr, "  ... generated %d keys\n", i)
-				}
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
@@ -941,18 +937,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				offset := i * keySize
 				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 			}
-			fmt.Fprintf(os.Stderr, "Key generation for writing complete.\n")
-
 			// Reset timer to exclude setup
 			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8 + len(val))
 
-			fmt.Fprintf(os.Stderr, "Writing %d keys in batches of %d...\n", total, batchSize)
 			for i := 0; i < total; i += batchSize {
-				if i > 0 && i%(100*batchSize) == 0 { // log every 100 batches
-					fmt.Fprintf(os.Stderr, "  ... wrote up to key %d\n", i)
-				}
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
@@ -986,7 +976,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("batch_random checkpoint: %w", err)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "Writing complete.\n")
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
 		"batch_delete": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
@@ -999,11 +988,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			const keySize = 8
 			allKeys := make([]byte, total*keySize)
-			fmt.Fprintf(os.Stderr, "Generating %d keys for deletion...\n", total)
 			for i := 0; i < total; i++ {
-				if i > 0 && i%100000 == 0 {
-					fmt.Fprintf(os.Stderr, "  ... generated %d keys\n", i)
-				}
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
@@ -1012,18 +997,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				offset := i * keySize
 				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total)))
 			}
-			fmt.Fprintf(os.Stderr, "Key generation for deletion complete.\n")
-
 			// Reset timer to exclude setup
 			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8)
 
-			fmt.Fprintf(os.Stderr, "Deleting %d keys in batches of %d...\n", total, batchSize)
 			for i := 0; i < total; i += batchSize {
-				if i > 0 && i%(100*batchSize) == 0 { // log every 100 batches
-					fmt.Fprintf(os.Stderr, "  ... deleted up to key %d\n", i)
-				}
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
@@ -1057,7 +1036,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return 0, fmt.Errorf("batch_delete checkpoint: %w", err)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "Deletion complete.\n")
 			return float64(total) / time.Since(start).Seconds(), nil
 		},
 		"batch_small_seq": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
