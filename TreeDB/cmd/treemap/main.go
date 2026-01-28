@@ -201,6 +201,7 @@ func runCheckpointBench(dir string, args []string) {
 	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
 
 	pauseBeforeCheckpoint := fs.Duration("pause-before-checkpoint", 0, "Sleep this long after writes and before checkpoint (lets you attach perf)")
+	waitForSignal := fs.Bool("wait-for-signal", false, "Wait for SIGUSR1 after writes before starting checkpoint (for perf attach)")
 	cpuprofile := fs.String("checkpoint-cpuprofile", "", "Write CPU profile during checkpoint to this file")
 	_ = fs.Parse(args)
 
@@ -299,6 +300,13 @@ func runCheckpointBench(dir string, args []string) {
 	if *pauseBeforeCheckpoint > 0 {
 		fmt.Fprintf(os.Stderr, "pause-before-checkpoint=%s\n", (*pauseBeforeCheckpoint).String())
 		time.Sleep(*pauseBeforeCheckpoint)
+	}
+	if *waitForSignal {
+		fmt.Fprintf(os.Stderr, "ready-for-checkpoint (send SIGUSR1 to pid=%d)\n", os.Getpid())
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGUSR1)
+		<-ch
+		signal.Stop(ch)
 	}
 
 	var profFile *os.File
