@@ -5432,7 +5432,11 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 	var totalLen int
 	for i := 0; i < queueLen && len(units) < maxMemtables; i++ {
 		if laneID >= 0 {
-			if i >= len(db.queueLaneIDs) || int(db.queueLaneIDs[i]) != laneID {
+			unitLaneID := 0
+			if i < len(db.queueLaneIDs) {
+				unitLaneID = int(db.queueLaneIDs[i])
+			}
+			if unitLaneID != laneID {
 				continue
 			}
 		} else if i >= maxMemtables {
@@ -5506,6 +5510,8 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		}
 		if i < len(db.queueLaneIDs) {
 			dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
+		} else {
+			dstLaneIDs = append(dstLaneIDs, 0)
 		}
 		if i < len(db.queueIDs) {
 			dstIDs = append(dstIDs, db.queueIDs[i])
