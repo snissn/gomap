@@ -1383,6 +1383,12 @@ type DictStore interface {
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
+type commitRequest struct {
+	batch  batch.Interface
+	sync   bool
+	result chan error // To signal back the result
+}
+
 type DB struct {
 	mu       sync.RWMutex
 	flushMu  sync.Mutex
@@ -1390,6 +1396,10 @@ type DB struct {
 	writeMu  sync.RWMutex
 	bpMu     sync.Mutex
 	bpCond   *sync.Cond
+
+	// Commit worker
+	commitCh       chan commitRequest
+	commitWorkerWg sync.WaitGroup
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -3641,22 +3651,22 @@ func (db *DB) waitForCheckpoint() {
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
+	db.flushMu.Lock() // Acquire flushMu FIRST
+	defer db.flushMu.Unlock() // Ensure it's released
+
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
 		db.checkpointCond.Wait()
 	}
-	db.checkpointing.Store(true)
+	db.checkpointing.Store(true) // Set flag only after acquiring flushMu
 	db.checkpointMu.Unlock()
 
-	defer func() {
+	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
 	}()
-
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
 
 	db.writeMu.Lock()
 
@@ -3698,15 +3708,23 @@ func (db *DB) Checkpoint() error {
 		}
 		segments = filtered
 	}
+	// New logic: perform sync write only if not relaxedSync
+	var commitErr error
 	if nonEmptyBytes > 0 {
 		backendBatch := db.backend.NewBatch()
-		err := backendBatch.WriteSync()
-		cerr := backendBatch.Close()
-		if err == nil {
-			err = cerr
+		if db.relaxedSync {
+			// If relaxed sync, just write the batch without forcing sync
+			commitErr = backendBatch.Write()
+		} else {
+			// Otherwise, force sync
+			commitErr = backendBatch.WriteSync()
 		}
-		if err != nil {
-			return err
+		cerr := backendBatch.Close()
+		if commitErr == nil {
+			commitErr = cerr
+		}
+		if commitErr != nil {
+			return commitErr
 		}
 	}
 
@@ -5309,7 +5327,7 @@ func (db *DB) flushLoop() {
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
-	return sync
+	return sync && !db.relaxedSync
 }
 
 func (db *DB) pickFlushLane() (int, bool) {
