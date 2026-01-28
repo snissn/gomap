@@ -111,6 +111,7 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 				p.Close()
 				return nil, err
 			}
+			madviseChunk(data)
 			p.chunks[i] = data
 		}
 
@@ -189,6 +190,7 @@ func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
 				p.Close()
 				return nil, err
 			}
+			madviseChunk(data)
 			p.chunks[i] = data
 		}
 

@@ -133,6 +133,7 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 			}
 			return err
 		}
+		madviseChunk(data)
 		newChunks = append(newChunks, data)
 	}
 
