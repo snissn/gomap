@@ -296,7 +296,7 @@ func (db *DB) walUsesValueLog() bool {
 	return false
 }
 
-func (db *DB) pickLane(sync bool) (*lane, error) {
+func (db *DB) pickLane(sync bool, preferred int) (*lane, error) {
 	if db == nil || len(db.lanes) == 0 {
 		return nil, errWALUnavailable
 	}
@@ -308,6 +308,21 @@ func (db *DB) pickLane(sync bool) (*lane, error) {
 			return nil, errWALClosed
 		default:
 		}
+
+		if preferred >= 0 && preferred < len(db.lanes) {
+			l := &db.lanes[preferred]
+			if !l.syncing.Load() {
+				if sync {
+					l.syncing.Store(true)
+				}
+				return l, nil
+			}
+			// If preferred lane is busy, we could wait or fallback.
+			// To maintain strict lane-affinity, we wait.
+			db.laneCond.Wait()
+			continue
+		}
+
 		start := db.nextLane
 		for i := 0; i < len(db.lanes); i++ {
 			idx := (start + i) % len(db.lanes)
@@ -433,7 +448,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return ops, nil
 	}
 
-	lane, err := db.pickLane(false)
+	lane, err := db.pickLane(false, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +495,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	return ops, nil
 }
 
-func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool) error {
+func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int) error {
 	if db == nil {
 		return nil
 	}
@@ -580,7 +595,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		return errors.New("cachingdb: internal deferred value-log mismatch")
 	}
 
-	lane, err := db.pickLane(false)
+	lane, err := db.pickLane(false, laneID)
 	if err != nil {
 		return err
 	}
@@ -749,24 +764,58 @@ func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
 	return nil
 }
 
-func (db *DB) flushValueLog() error {
+func (db *DB) flushValueLog(laneIDs ...int) error {
 	if !db.valueLogEnabled() {
 		return nil
 	}
-	for i := range db.lanes {
-		if err := db.flushValueLogLane(&db.lanes[i]); err != nil {
+	if len(laneIDs) == 0 {
+		for i := range db.lanes {
+			if err := db.flushValueLogLane(&db.lanes[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	seen := make(map[int]struct{}, len(laneIDs))
+	for _, id := range laneIDs {
+		if id < 0 || id >= len(db.lanes) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if err := db.flushValueLogLane(&db.lanes[id]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (db *DB) syncValueLog() error {
+func (db *DB) syncValueLog(laneIDs ...int) error {
 	if !db.valueLogEnabled() {
 		return nil
 	}
-	for i := range db.lanes {
-		if err := db.syncValueLogLane(&db.lanes[i]); err != nil {
+	if len(laneIDs) == 0 {
+		for i := range db.lanes {
+			if err := db.syncValueLogLane(&db.lanes[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	seen := make(map[int]struct{}, len(laneIDs))
+	for _, id := range laneIDs {
+		if id < 0 || id >= len(db.lanes) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if err := db.syncValueLogLane(&db.lanes[id]); err != nil {
 			return err
 		}
 	}
@@ -788,6 +837,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		}
 		start := time.Now()
 		err := w.Flush()
+		if db.testOnVlogFlush != nil {
+			db.testOnVlogFlush(int(l.id))
+		}
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
 		return err
@@ -802,6 +854,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 	}
 	start := time.Now()
 	err := w.Flush()
+	if db.testOnVlogFlush != nil {
+		db.testOnVlogFlush(int(l.id))
+	}
 	db.debugVlogTiming("wal_flush", int(l.id), "walMu", waited, time.Since(start))
 	l.walMu.Unlock()
 	return err
@@ -822,6 +877,9 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		}
 		start := time.Now()
 		err := w.Sync()
+		if db.testOnVlogSync != nil {
+			db.testOnVlogSync(int(l.id))
+		}
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
 		return err
@@ -836,6 +894,9 @@ func (db *DB) syncValueLogLane(l *lane) error {
 	}
 	start := time.Now()
 	err := w.Sync()
+	if db.testOnVlogSync != nil {
+		db.testOnVlogSync(int(l.id))
+	}
 	db.debugVlogTiming("wal_sync", int(l.id), "walMu", waited, time.Since(start))
 	l.walMu.Unlock()
 	return err
@@ -1477,6 +1538,10 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
+
+	// testing hooks
+	testOnVlogFlush func(laneID int)
+	testOnVlogSync  func(laneID int)
 }
 
 type keyRange struct {
@@ -4010,7 +4075,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 	var lane *lane
 	if allowPointers || !db.disableJournal {
-		l, err := db.pickLane(durability == journalDurabilitySync)
+		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -4245,7 +4310,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			return nil
 		}
 
-		lane, err := db.pickLane(false)
+		lane, err := db.pickLane(false, -1)
 		if err != nil {
 			return err
 		}
@@ -4741,7 +4806,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
-		lane, err := db.pickLane(durability == journalDurabilitySync)
+		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -5289,6 +5354,7 @@ type flushUnit struct {
 	memRange keyRange
 	walPaths []string
 	id       uint64
+	laneID   int
 }
 
 func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes int64) ([]flushUnit, []uint64, int64, int) {
@@ -5329,6 +5395,10 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if i < len(db.queueIDs) {
 			id = db.queueIDs[i]
 		}
+		unitLaneID := 0
+		if i < len(db.queueLaneIDs) {
+			unitLaneID = int(db.queueLaneIDs[i])
+		}
 		units = append(units, flushUnit{
 			mem:      mem,
 			memBytes: memBytes,
@@ -5336,6 +5406,7 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 			memRange: rng,
 			walPaths: walPaths,
 			id:       id,
+			laneID:   unitLaneID,
 		})
 		ids = append(ids, id)
 		totalBytes += memBytes
@@ -5492,7 +5563,7 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 			t0 := time.Now()
 			for _, unit := range units {
 				iter := unit.mem.NewIterator(nil, nil)
-				err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync)
+				err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, unit.laneID)
 				cerr := iter.Close()
 				if err == nil {
 					err = cerr
@@ -5790,7 +5861,11 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 		// Commit to backend
 		if db.valueLogEnabled() {
 			t0 := time.Now()
-			if err := db.flushValueLog(); err != nil {
+			laneIDs := make([]int, 0, len(units))
+			for _, u := range units {
+				laneIDs = append(laneIDs, u.laneID)
+			}
+			if err := db.flushValueLog(laneIDs...); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog flush): %w", err))
 				_ = backendBatch.Close()
 				return false
@@ -5798,7 +5873,7 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 			durPostVlog = time.Since(t0)
 			if sync && !db.relaxedSync {
 				t1 := time.Now()
-				if err := db.syncValueLog(); err != nil {
+				if err := db.syncValueLog(laneIDs...); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 					_ = backendBatch.Close()
 					return false
@@ -5947,6 +6022,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueWALPaths) > 0 {
 		walPaths = db.queueWALPaths[0]
 	}
+	laneID := 0
+	if len(db.queueLaneIDs) > 0 {
+		laneID = int(db.queueLaneIDs[0])
+	}
 	db.mu.Unlock()
 
 	debugTiming := db.debugFlushTiming
@@ -5971,7 +6050,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
-			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync); err != nil {
+			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
@@ -6072,7 +6151,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		// Commit to backend
 		if db.valueLogEnabled() {
 			t0 := time.Now()
-			if err := db.flushValueLog(); err != nil {
+			if err := db.flushValueLog(laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog flush): %w", err))
 				_ = backendBatch.Close()
 				return false
@@ -6080,7 +6159,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			durPostVlog = time.Since(t0)
 			if sync && !db.relaxedSync {
 				t1 := time.Now()
-				if err := db.syncValueLog(); err != nil {
+				if err := db.syncValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 					_ = backendBatch.Close()
 					return false
@@ -7532,7 +7611,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		rids []uint64
 	)
 	if allowPointers || !b.db.disableJournal {
-		l, err := b.db.pickLane(durability == journalDurabilitySync)
+		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
 		if err != nil {
 			b.db.writeMu.RUnlock()
 			return err
