@@ -194,6 +194,9 @@ func runCheckpointBench(dir string, args []string) {
 	batchSize := fs.Int("batchsize", 1000, "Batch size")
 	seed := fs.Int64("seed", 1, "PRNG seed")
 	flushThreshold := fs.Int64("flush-threshold", 0, "Cached-mode flush threshold bytes (0=default). Set high to accumulate flush debt for checkpoint.")
+	preferAppendAlloc := fs.Bool("prefer-append-alloc", false, "Prefer append allocation for index pages (reduces reuse; can improve locality under churn)")
+	freelistRegionPages := fs.Uint64("freelist-region-pages", 0, "Freelist reuse region size in pages (0=default)")
+	freelistRegionRadius := fs.Int("freelist-region-radius", 0, "Freelist reuse region radius (0=default, <0=disable bias)")
 
 	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
 	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Enable best-effort mmap prefetch per chunk on first read (madvise WILLNEED)")
@@ -228,6 +231,9 @@ func runCheckpointBench(dir string, args []string) {
 		PagerMmapPopulate:         *pagerPopulate,
 		PagerPrefetchOnRead:       *pagerPrefetch,
 		MaintenanceOpsPerCoalesce: *maintenanceK,
+		PreferAppendAlloc:         *preferAppendAlloc,
+		FreelistRegionPages:       *freelistRegionPages,
+		FreelistRegionRadius:      *freelistRegionRadius,
 	}
 	if *chunkSize > 0 {
 		opts.ChunkSize = *chunkSize
