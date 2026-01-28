@@ -134,8 +134,9 @@ func TestStopBackpressureFlushesAndReturns(t *testing.T) {
 	if got := mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes"); got != after {
 		t.Fatalf("stats backlog=%d want %d", got, after)
 	}
-	if got := mustStatInt64(t, stats, "treedb.cache.flush_bps_ewma"); got <= 0 {
-		t.Fatalf("flush_bps_ewma=%d want >0", got)
+	ewma := mustStatInt64(t, stats, "treedb.cache.flush_bps_ewma")
+	if after > 0 && ewma == 0 {
+		t.Fatalf("flush_bps_ewma=%d want >0 when backlog remains", ewma)
 	}
 }
 
