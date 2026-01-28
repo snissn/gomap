@@ -3784,7 +3784,16 @@ func (db *DB) waitForStop() {
 
 		db.bpMu.Lock()
 		for db.queueBacklogBytes.Load() >= target {
+			// Avoid waiting forever if a flush pass makes no progress (or if a flush
+			// signal was dropped due to best-effort scheduling). The timer ensures we
+			// periodically wake and retry scheduling/assisting.
+			t := time.AfterFunc(200*time.Millisecond, func() {
+				db.bpMu.Lock()
+				db.bpCond.Broadcast()
+				db.bpMu.Unlock()
+			})
 			db.bpCond.Wait()
+			t.Stop()
 		}
 		db.bpMu.Unlock()
 	}
