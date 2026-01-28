@@ -17,7 +17,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -314,9 +313,13 @@ func runCheckpointBench(dir string, args []string) {
 		time.Sleep(*pauseBeforeCheckpoint)
 	}
 	if *waitForSignal {
+		sig, ok := checkpointBenchSignal()
+		if !ok {
+			fatalf("wait-for-signal is not supported on this platform")
+		}
 		fmt.Fprintf(os.Stderr, "ready-for-checkpoint (send SIGUSR1 to pid=%d)\n", os.Getpid())
 		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGUSR1)
+		signal.Notify(ch, sig)
 		<-ch
 		signal.Stop(ch)
 	}
@@ -325,8 +328,7 @@ func runCheckpointBench(dir string, args []string) {
 		return
 	}
 
-	var before syscall.Rusage
-	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &before)
+	before := getRusageSnapshot()
 
 	var profFile *os.File
 	if *cpuprofile != "" {
@@ -342,8 +344,7 @@ func runCheckpointBench(dir string, args []string) {
 	err = db.Checkpoint()
 	dur := time.Since(start)
 
-	var after syscall.Rusage
-	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &after)
+	after := getRusageSnapshot()
 
 	if profFile != nil {
 		runtimepprof.StopCPUProfile()
@@ -352,14 +353,11 @@ func runCheckpointBench(dir string, args []string) {
 	if err != nil {
 		fatalf("Checkpoint error: %v", err)
 	}
-	fmt.Printf(
-		"checkpoint %s (minflt +%d majflt +%d nvcsw +%d nivcsw +%d)\n",
-		dur,
-		after.Minflt-before.Minflt,
-		after.Majflt-before.Majflt,
-		after.Nvcsw-before.Nvcsw,
-		after.Nivcsw-before.Nivcsw,
-	)
+	if extra := formatRusageDelta(before, after); extra != "" {
+		fmt.Printf("checkpoint %s (%s)\n", dur, extra)
+	} else {
+		fmt.Printf("checkpoint %s\n", dur)
+	}
 }
 
 func runStats(dir string, args []string) {
@@ -893,7 +891,7 @@ func registerSignalCloser(fn func()) {
 
 	signalOnce.Do(func() {
 		ch := make(chan os.Signal, 2)
-		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+		signal.Notify(ch, shutdownSignals()...)
 		go func() {
 			<-ch
 			signalCloseMu.Lock()
