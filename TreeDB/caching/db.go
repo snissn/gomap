@@ -2134,6 +2134,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
+	// Start the commit worker goroutine
+	db.commitWorkerWg.Add(1)
+	go db.commitWorkerLoop()
+
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled: the value log
 	// may be active even when the journal is disabled.
@@ -3808,9 +3812,11 @@ func (db *DB) waitForStop() {
 		}
 		// Self-heal: backlog bytes should never remain positive when the queue is empty.
 		// If this happens, stop backpressure would block forever.
-		db.mu.RLock()
-		queueLen := len(db.queue)
-		db.mu.RUnlock()
+		// Use the lock-free memtable view to avoid deadlock with db.mu.
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
 		if queueLen == 0 {
 			db.queueBacklogBytes.Store(0)
 			db.bpMu.Unlock()
@@ -3886,10 +3892,11 @@ func (db *DB) maybeAssistFlush() {
 
 	// Legacy policy: thresholds based on queue length.
 	if db.maxQueuedMemtables >= 0 {
-		db.mu.RLock()
-		needs := len(db.queue) > db.maxQueuedMemtables
-		db.mu.RUnlock()
-		if needs {
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
+		if queueLen > db.maxQueuedMemtables {
 			db.TriggerFlush()
 		}
 	}
@@ -5802,20 +5809,26 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 				if !chunkBackend || backendPendingOps < flushBackendBatchMaxEntries {
 					return nil
 				}
-				var err error
 				tw := time.Now()
-				db.commitMu.Lock()
-				if sync {
-					err = backendBatch.WriteSync()
-				} else {
-					err = backendBatch.Write()
+				req := commitRequest{
+					batch:  backendBatch,
+					sync:   sync,
+					result: make(chan error, 1),
 				}
-				db.commitMu.Unlock()
+				select {
+				case db.commitCh <- req:
+				case <-db.closeCh: // If DB is closing, we can't commit.
+					db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
+					_ = backendBatch.Close() // Close the batch since it's not sent to worker
+					return fmt.Errorf("DB closing")
+				}
+				var err = <-req.result // Wait for the commit to complete
 				durBackendWrite += time.Since(tw)
 				if err != nil {
 					return err
 				}
-				_ = backendBatch.Close()
+				backendBatch = nil // Batch is now owned by the commit worker.
+
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
 				sv, _ = backendBatch.(setViewer)
 				dv, _ = backendBatch.(deleteViewer)
@@ -6108,23 +6121,29 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 			}
 		}
 		if backendPendingOps > 0 {
-			var err error
 			t0 := time.Now()
-			db.commitMu.Lock()
-			if sync {
-				err = backendBatch.WriteSync()
-			} else {
-				err = backendBatch.Write()
+			req := commitRequest{
+				batch:  backendBatch,
+				sync:   sync,
+				result: make(chan error, 1),
 			}
-			db.commitMu.Unlock()
+			select {
+			case db.commitCh <- req:
+			case <-db.closeCh: // If DB is closing, we can't commit.
+				db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
+				_ = backendBatch.Close() // Close the batch since it's not sent to worker
+				return false
+			}
+			err := <-req.result // Wait for the commit to complete
 			durBackendWrite += time.Since(t0)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-				_ = backendBatch.Close()
-				return false
+				return false // The batch is already closed by commit worker.
 			}
-		}
-		_ = backendBatch.Close()
+			backendBatch = nil // Batch is now owned by the commit worker.
+		} else {
+            _ = backendBatch.Close() // Close the batch if nothing was written
+        }
 		flushed = true
 	}
 	flushDur := time.Duration(0)
@@ -6347,20 +6366,26 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				if !chunkBackend || backendPendingOps < flushBackendBatchMaxEntries {
 					return nil
 				}
-				var err error
 				tw := time.Now()
-				db.commitMu.Lock()
-				if sync {
-					err = backendBatch.WriteSync()
-				} else {
-					err = backendBatch.Write()
+				req := commitRequest{
+					batch:  backendBatch,
+					sync:   sync,
+					result: make(chan error, 1),
 				}
-				db.commitMu.Unlock()
+				select {
+				case db.commitCh <- req:
+				case <-db.closeCh: // If DB is closing, we can't commit.
+					db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
+					_ = backendBatch.Close() // Close the batch since it's not sent to worker
+					return fmt.Errorf("DB closing")
+				}
+				var err = <-req.result // Wait for the commit to complete
 				durBackendWrite += time.Since(tw)
 				if err != nil {
 					return err
 				}
-				_ = backendBatch.Close()
+				backendBatch = nil // Batch is now owned by the commit worker.
+
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
 				sv, _ = backendBatch.(setViewer)
 				dv, _ = backendBatch.(deleteViewer)
@@ -6473,7 +6498,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				t1 := time.Now()
 				if err := db.syncValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
-					_ = iter.Close()
 					_ = backendBatch.Close()
 					return false
 				}
@@ -6481,23 +6505,29 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 		}
 		if backendPendingOps > 0 {
-			var err error
 			t0 := time.Now()
-			db.commitMu.Lock()
-			if sync {
-				err = backendBatch.WriteSync()
-			} else {
-				err = backendBatch.Write()
+			req := commitRequest{
+				batch:  backendBatch,
+				sync:   sync,
+				result: make(chan error, 1),
 			}
-			db.commitMu.Unlock()
+			select {
+			case db.commitCh <- req:
+			case <-db.closeCh: // If DB is closing, we can't commit.
+				db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
+				_ = backendBatch.Close() // Close the batch since it's not sent to worker
+				return false
+			}
+			err := <-req.result // Wait for the commit to complete
 			durBackendWrite += time.Since(t0)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-				_ = backendBatch.Close()
-				return false
+				return false // The batch is already closed by commit worker.
 			}
+			backendBatch = nil // Batch is now owned by the commit worker.
+		} else {
+			_ = backendBatch.Close() // Close the batch if nothing was written
 		}
-		_ = backendBatch.Close()
 		flushed = true
 	}
 	flushDur := time.Duration(0)
