@@ -3798,7 +3798,6 @@ func (db *DB) waitForStop() {
 		return
 	}
 
-	failedFlushAttempts := 0
 	for {
 		db.bpMu.Lock()
 		_, stopBytes, resumeBytes := db.thresholdsLocked()
@@ -3831,36 +3830,27 @@ func (db *DB) waitForStop() {
 		db.TriggerFlush()
 
 		// Stop backpressure means we are already blocking the caller. Actively
-		// flush a bounded amount of work until the backlog drops below the resume
-		// threshold (hysteresis). Flushing a single memtable per iteration avoids
-		// building an enormous backend batch, which can be prohibitively slow when
-		// the queue is deeply backlogged.
+		// flush a bounded amount of work, then return. We avoid looping/sleeping
+		// here to prevent per-write stalls when flush progress is slow.
 		target := stopBytes
 		if resumeBytes > 0 {
 			target = resumeBytes
 		}
 		if db.queueBacklogBytes.Load() >= target {
-			before := db.queueBacklogBytes.Load()
 			maxMemtables := db.writerFlushMaxMemtables
 			if maxMemtables <= 0 {
 				maxMemtables = 1
 			}
+			// Under stop-backpressure, flush more aggressively to avoid repeated stalls.
+			if maxMemtables < 8 {
+				maxMemtables = 8
+			}
 			if maxMemtables > flushCombineMaxMemtables {
 				maxMemtables = flushCombineMaxMemtables
 			}
-			db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
-			after := db.queueBacklogBytes.Load()
-			if after >= before {
-				failedFlushAttempts++
-				if failedFlushAttempts >= stopBackpressureStallLimit {
-					return
-				}
-				// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
-				time.Sleep(5 * time.Millisecond)
-				continue
-			}
-			failedFlushAttempts = 0
+			db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
 		}
+		return
 	}
 }
 
@@ -3923,6 +3913,43 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 			if !db.flushLaneMu[laneID].TryLock() {
 				return
 			}
+		}
+		okFlush := db.flushLaneOnce(sync, laneID)
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Unlock()
+		}
+		if !okFlush {
+			return
+		}
+		flushed++
+	}
+}
+
+// flushSomeBlocking is like flushSome, but it blocks on lane locks. This is used
+// by stop-backpressure to guarantee forward progress instead of spinning.
+func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Duration) {
+	if maxMemtables <= 0 && maxDuration <= 0 {
+		return
+	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	sync = db.flushSyncRequested(sync)
+	start := time.Now()
+
+	flushed := 0
+	for {
+		if maxMemtables > 0 && flushed >= maxMemtables {
+			return
+		}
+		if maxDuration > 0 && time.Since(start) >= maxDuration {
+			return
+		}
+		laneID, ok := db.pickFlushLane()
+		if !ok {
+			return
+		}
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Lock()
 		}
 		okFlush := db.flushLaneOnce(sync, laneID)
 		if laneID < len(db.flushLaneMu) {
@@ -5707,6 +5734,16 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 	// Optimization: Skip flush if the selected memtables have no entries.
 	flushStart := time.Time{}
 	flushed := false
+	if totalLen == 0 {
+		db.mu.Lock()
+		removeIDs := make(map[uint64]struct{}, len(ids))
+		for _, id := range ids {
+			removeIDs[id] = struct{}{}
+		}
+		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+		db.mu.Unlock()
+		return true
+	}
 	if totalLen > 0 {
 		flushStart = time.Now()
 
