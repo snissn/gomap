@@ -1552,6 +1552,7 @@ type DB struct {
 	// Backpressure state
 	queueBacklogBytes atomic.Int64
 	flushBpsEWMA      float64
+	queueLaneIDMisses atomic.Int64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -1645,6 +1646,7 @@ func (db *DB) ensureQueueLaneIDsLocked() {
 	if missing <= 0 {
 		return
 	}
+	db.queueLaneIDMisses.Add(int64(missing))
 	db.queueLaneIDs = append(db.queueLaneIDs, make([]uint16, missing)...)
 }
 
@@ -7009,6 +7011,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.backpressure_mode"] = "queue_len"
 	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
+	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
