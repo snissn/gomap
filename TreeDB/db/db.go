@@ -58,14 +58,15 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent             uint64
-	policy                 WritePolicy
-	leafFillTargetPPM      uint32
-	internalFillTargetPPM  uint32
-	leafPrefixCompression  bool
-	indexColumnarLeaves    bool
-	indexInternalBaseDelta bool
-	piggybackCompaction    bool
+	keepRecent                uint64
+	policy                    WritePolicy
+	leafFillTargetPPM         uint32
+	internalFillTargetPPM     uint32
+	leafPrefixCompression     bool
+	indexColumnarLeaves       bool
+	indexInternalBaseDelta    bool
+	piggybackCompaction       bool
+	maintenanceOpsPerCoalesce int
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
@@ -82,7 +83,10 @@ type DB struct {
 	bgErr       error
 }
 
-const defaultChunkSize = 4 * 1024 * 1024
+const (
+	defaultChunkSize                 = 4 * 1024 * 1024
+	defaultMaintenanceOpsPerCoalesce = 400_000
+)
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -211,6 +215,10 @@ type Options struct {
 	// (current behavior). Zero uses the default (1_000_000).
 	LeafFillTargetPPM     uint32
 	InternalFillTargetPPM uint32
+	// MaintenanceOpsPerCoalesce controls the maintenance budget during zipper
+	// merge. It bounds coalesce work to roughly len(ops)/K operations per batch.
+	// 0 uses the default; negative disables the budget (full maintenance).
+	MaintenanceOpsPerCoalesce int
 	// LeafPrefixCompression enables prefix-compressed leaf nodes for new pages.
 	LeafPrefixCompression bool
 	// IndexColumnarLeaves enables the experimental columnar leaf encoding for new pages.
@@ -407,6 +415,11 @@ func Open(opts Options) (*DB, error) {
 	if opts.InternalFillTargetPPM == 0 {
 		opts.InternalFillTargetPPM = 1_000_000
 	}
+	if opts.MaintenanceOpsPerCoalesce == 0 {
+		opts.MaintenanceOpsPerCoalesce = defaultMaintenanceOpsPerCoalesce
+	} else if opts.MaintenanceOpsPerCoalesce < 0 {
+		opts.MaintenanceOpsPerCoalesce = 0
+	}
 	if opts.PruneInterval == 0 {
 		opts.PruneInterval = 250 * time.Millisecond
 	}
@@ -511,21 +524,22 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
-		valueLogManager:        vm,
-		lock:                   lock,
-		adaptive:               adaptiveCtrl,
-		keepRecent:             opts.KeepRecent,
-		leafFillTargetPPM:      opts.LeafFillTargetPPM,
-		internalFillTargetPPM:  opts.InternalFillTargetPPM,
-		leafPrefixCompression:  opts.LeafPrefixCompression,
-		indexColumnarLeaves:    opts.IndexColumnarLeaves,
-		indexInternalBaseDelta: opts.IndexInternalBaseDelta,
-		piggybackCompaction:    !opts.DisablePiggybackCompaction,
-		dir:                    opts.Dir,
-		chunkSize:              opts.ChunkSize,
-		preferAppendAlloc:      opts.PreferAppendAlloc,
-		freelistRegionPages:    opts.FreelistRegionPages,
-		freelistRegionRadius:   opts.FreelistRegionRadius,
+		valueLogManager:           vm,
+		lock:                      lock,
+		adaptive:                  adaptiveCtrl,
+		keepRecent:                opts.KeepRecent,
+		leafFillTargetPPM:         opts.LeafFillTargetPPM,
+		internalFillTargetPPM:     opts.InternalFillTargetPPM,
+		leafPrefixCompression:     opts.LeafPrefixCompression,
+		indexColumnarLeaves:       opts.IndexColumnarLeaves,
+		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		piggybackCompaction:       !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
+		dir:                       opts.Dir,
+		chunkSize:                 opts.ChunkSize,
+		preferAppendAlloc:         opts.PreferAppendAlloc,
+		freelistRegionPages:       opts.FreelistRegionPages,
+		freelistRegionRadius:      opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -546,6 +560,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
 		db.Close()

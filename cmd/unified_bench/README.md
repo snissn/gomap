@@ -51,6 +51,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-writer-flush-max-ms` TreeDB (cached) max time (ms) a writer will help flush per op
 - `-treedb-iter-debug` print prefix scan iterator timing + debug stats
 - `-treedb-iter-debug-limit` max per-query debug lines to print (default 20)
+- `-treedb-maintenance-ops-per-coalesce` TreeDB: ops-per-coalesce maintenance budget (`0`=default, `<0`=disable budget)
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
@@ -77,6 +78,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
+  - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
 ## Notes

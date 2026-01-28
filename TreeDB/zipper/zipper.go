@@ -5,6 +5,7 @@ import (
 	"errors"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -21,12 +22,13 @@ type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
 
-	leafReserveBytes       int
-	internalReserveBytes   int
-	piggybackCompaction    bool
-	leafPrefixCompression  bool
-	indexColumnarLeaves    bool
-	indexInternalBaseDelta bool
+	leafReserveBytes          int
+	internalReserveBytes      int
+	piggybackCompaction       bool
+	leafPrefixCompression     bool
+	indexColumnarLeaves       bool
+	indexInternalBaseDelta    bool
+	maintenanceOpsPerCoalesce int
 }
 
 type Split struct {
@@ -84,6 +86,53 @@ const maxChildWorkCap = 1 << 14
 
 var childWorkPool sync.Pool
 
+type maintenanceBudget struct {
+	remaining int64
+}
+
+func newMaintenanceBudget(ops, deletes, opsPerCoalesce int) *maintenanceBudget {
+	if opsPerCoalesce <= 0 || ops <= 0 {
+		return nil
+	}
+	allowed := ops / opsPerCoalesce
+	if deletes > 0 {
+		deleteK := opsPerCoalesce / 256
+		if deleteK < 1 {
+			deleteK = 1
+		}
+		deleteAllowed := deletes / deleteK
+		if deleteAllowed > allowed {
+			allowed = deleteAllowed
+		}
+	}
+	if allowed < 1 {
+		allowed = 1
+	}
+	return &maintenanceBudget{remaining: int64(allowed)}
+}
+
+func (b *maintenanceBudget) allow() bool {
+	if b == nil {
+		return true
+	}
+	return atomic.LoadInt64(&b.remaining) > 0
+}
+
+func (b *maintenanceBudget) take(n int64) bool {
+	if b == nil {
+		return true
+	}
+	for {
+		cur := atomic.LoadInt64(&b.remaining)
+		if cur < n {
+			return false
+		}
+		if atomic.CompareAndSwapInt64(&b.remaining, cur, cur-n) {
+			return true
+		}
+	}
+}
+
 func getChildWorkSlice(capacity int) []childWork {
 	if capacity < 0 {
 		capacity = 0
@@ -121,14 +170,15 @@ func New(p *pager.Pager, a PageAllocator) *Zipper {
 // the provided allocator.
 func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 	return &Zipper{
-		pager:                  z.pager,
-		allocator:              a,
-		leafReserveBytes:       z.leafReserveBytes,
-		internalReserveBytes:   z.internalReserveBytes,
-		piggybackCompaction:    z.piggybackCompaction,
-		leafPrefixCompression:  z.leafPrefixCompression,
-		indexColumnarLeaves:    z.indexColumnarLeaves,
-		indexInternalBaseDelta: z.indexInternalBaseDelta,
+		pager:                     z.pager,
+		allocator:                 a,
+		leafReserveBytes:          z.leafReserveBytes,
+		internalReserveBytes:      z.internalReserveBytes,
+		piggybackCompaction:       z.piggybackCompaction,
+		leafPrefixCompression:     z.leafPrefixCompression,
+		indexColumnarLeaves:       z.indexColumnarLeaves,
+		indexInternalBaseDelta:    z.indexInternalBaseDelta,
+		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 	}
 }
 
@@ -153,6 +203,12 @@ func (z *Zipper) SetIndexColumnarLeaves(enabled bool) {
 
 func (z *Zipper) SetIndexInternalBaseDelta(enabled bool) {
 	z.indexInternalBaseDelta = enabled
+}
+
+// SetMaintenanceOpsPerCoalesce sets the approximate ops-per-maintenance ratio.
+// Values <= 0 disable maintenance budgeting (full coalesce behavior).
+func (z *Zipper) SetMaintenanceOpsPerCoalesce(opsPerCoalesce int) {
+	z.maintenanceOpsPerCoalesce = opsPerCoalesce
 }
 
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
@@ -218,15 +274,20 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	//   - the caller configured soft-full targets (reserve bytes), which implies
 	//     a preference for more balanced/less churny pages even on updates.
 	hasDeletes := false
+	deleteCount := 0
 	for _, op := range ops {
 		if op.Type == batch.OpDelete {
 			hasDeletes = true
-			break
+			deleteCount++
 		}
 	}
 	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	var budget *maintenanceBudget
+	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
+		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
+	}
 
-	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, &metrics)
+	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, budget, &metrics)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -325,7 +386,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, retiredPages, error.
-func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
+func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
 	// 1. Allocate New Page (COW)
 	// Hint: Try to stay near the old page to preserve general tree locality structure
 	newPageID, err := z.allocator.Alloc(pageID)
@@ -367,7 +428,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, metrics)
+		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, budget, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -567,7 +628,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics) (uint64, []Split, []uint64, error) {
 	count := oldNode.Count()
 
 	var splits []Split
@@ -645,7 +706,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			defer wg.Done()
 			for i := range jobs {
 				var childMetrics adaptive.Metrics
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, &childMetrics)
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, &childMetrics)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
@@ -676,7 +737,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, metrics)
+				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, metrics)
 				if err != nil {
 					return 0, nil, nil, err
 				}
@@ -710,7 +771,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	coalesced := entries
 	if maintenance {
 		var extraRetired []uint64
-		coalesced, extraRetired, err = z.coalesceLeafChildren(entries, metrics)
+		coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -718,7 +779,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			retired = append(retired, extraRetired...)
 		}
 
-		coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, metrics)
+		coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -787,8 +848,11 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	}
 }
 
-func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
 	if len(entries) < 2 {
+		return entries, nil, nil
+	}
+	if budget != nil && !budget.allow() {
 		return entries, nil, nil
 	}
 
@@ -807,6 +871,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	}
 
 	// First pass: prune empty leaf children (except keep the first slot).
+	if budget != nil && !budget.take(1) {
+		return entries, nil, nil
+	}
 	out := entries[:0]
 	for i, e := range entries {
 		if i == 0 {
@@ -1088,6 +1155,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	// Second pass: attempt sibling merge/rebalance for underfull adjacent leaves.
 	i := 0
 	for i < len(entries)-1 {
+		if budget != nil && !budget.take(1) {
+			break
+		}
 		leftID := entries[i].child
 		rightID := entries[i+1].child
 
@@ -1189,8 +1259,11 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, metrics *adaptive
 	return entries, retired, nil
 }
 
-func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
 	if len(entries) < 2 {
+		return entries, nil, nil
+	}
+	if budget != nil && !budget.allow() {
 		return entries, nil, nil
 	}
 
@@ -1437,8 +1510,15 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, metrics *adap
 
 	const underfullPPM = 350_000
 
+	if budget != nil && !budget.take(1) {
+		return entries, retired, nil
+	}
+
 	i := 0
 	for i < len(entries)-1 {
+		if budget != nil && !budget.take(1) {
+			break
+		}
 		leftID := entries[i].child
 		rightID := entries[i+1].child
 
