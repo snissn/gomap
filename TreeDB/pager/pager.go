@@ -31,6 +31,13 @@ type OpenOptions struct {
 	// MmapPopulate enables MAP_POPULATE on Linux to pre-fault page tables for
 	// mmapped index chunks (best-effort; ignored on non-Linux).
 	MmapPopulate bool
+	// PrefetchOnRead enables best-effort read-side prefetch (madvise WILLNEED)
+	// per chunk the first time it is accessed.
+	PrefetchOnRead bool
+}
+
+type prefetchBitset struct {
+	words []uint64
 }
 
 // Pager manages the index.db file using chunked mmap.
@@ -57,7 +64,9 @@ type Pager struct {
 
 	syncConcurrency atomic.Int32
 
-	mmapPopulate bool
+	mmapPopulate   bool
+	prefetchOnRead bool
+	prefetched     atomic.Pointer[prefetchBitset]
 }
 
 // Open opens the pager at the given path.
@@ -98,11 +107,12 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 	size := info.Size()
 
 	p := &Pager{
-		file:         f,
-		chunkSize:    chunkSize,
-		path:         path,
-		dirtyChunks:  make(map[int]struct{}),
-		mmapPopulate: opts.MmapPopulate,
+		file:           f,
+		chunkSize:      chunkSize,
+		path:           path,
+		dirtyChunks:    make(map[int]struct{}),
+		mmapPopulate:   opts.MmapPopulate,
+		prefetchOnRead: opts.PrefetchOnRead,
 	}
 	p.syncConcurrency.Store(1)
 
@@ -119,6 +129,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 
 		numChunks := size / chunkSize
 		p.chunks = make([][]byte, numChunks)
+		p.ensurePrefetchCapacityLocked(int(numChunks))
 
 		for i := int64(0); i < numChunks; i++ {
 			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
@@ -139,6 +150,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		p.ensureVerifiedCapacityLocked(p.numPages.Load())
 	} else {
 		// Initialize verified bitset (empty)
+		p.ensurePrefetchCapacityLocked(0)
 		p.ensureVerifiedCapacityLocked(0)
 		p.atomicChunks.Store(&chunkList{data: nil})
 	}
@@ -187,16 +199,18 @@ func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*P
 	}
 
 	p := &Pager{
-		file:         f,
-		chunkSize:    chunkSize,
-		path:         path,
-		readOnly:     true,
-		mmapPopulate: opts.MmapPopulate,
+		file:           f,
+		chunkSize:      chunkSize,
+		path:           path,
+		readOnly:       true,
+		mmapPopulate:   opts.MmapPopulate,
+		prefetchOnRead: opts.PrefetchOnRead,
 	}
 
 	if size > 0 {
 		numChunks := int64((size + chunkSize - 1) / chunkSize)
 		p.chunks = make([][]byte, numChunks)
+		p.ensurePrefetchCapacityLocked(int(numChunks))
 
 		for i := int64(0); i < numChunks; i++ {
 			offset := i * chunkSize
@@ -218,6 +232,7 @@ func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*P
 		p.numPages.Store(uint64(size / int64(page.PageSize)))
 		p.ensureVerifiedCapacityLocked(p.numPages.Load())
 	} else {
+		p.ensurePrefetchCapacityLocked(0)
 		p.ensureVerifiedCapacityLocked(0)
 		p.atomicChunks.Store(&chunkList{data: nil})
 	}
@@ -250,6 +265,27 @@ func (p *Pager) ensureVerifiedCapacityLocked(numPages uint64) {
 		newChunks[i] = make([]uint64, verifiedChunkWords)
 	}
 	p.verified.Store(&verifiedBitset{chunks: newChunks})
+}
+
+func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
+	if numChunks <= 0 {
+		if p.prefetched.Load() == nil {
+			p.prefetched.Store(&prefetchBitset{words: nil})
+		}
+		return
+	}
+	needWords := (numChunks + 63) / 64
+	cur := p.prefetched.Load()
+	if cur != nil && len(cur.words) >= needWords {
+		return
+	}
+	var oldWords []uint64
+	if cur != nil {
+		oldWords = cur.words
+	}
+	next := make([]uint64, needWords)
+	copy(next, oldWords)
+	p.prefetched.Store(&prefetchBitset{words: next})
 }
 
 // IsVerified returns true if the page has passed CRC verification.
@@ -499,7 +535,33 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	}
 
 	chunk := chunks[chunkIdx]
+	p.prefetchChunk(chunkIdx, chunk)
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
+}
+
+func (p *Pager) prefetchChunk(chunkIdx int, data []byte) {
+	if !p.prefetchOnRead || chunkIdx < 0 {
+		return
+	}
+	bits := p.prefetched.Load()
+	if bits == nil || len(bits.words) == 0 {
+		return
+	}
+	wordIdx := chunkIdx / 64
+	bit := uint64(1) << uint(chunkIdx%64)
+	if wordIdx >= len(bits.words) {
+		return
+	}
+	for {
+		cur := atomic.LoadUint64(&bits.words[wordIdx])
+		if cur&bit != 0 {
+			return
+		}
+		if atomic.CompareAndSwapUint64(&bits.words[wordIdx], cur, cur|bit) {
+			madviseWillNeedChunk(data)
+			return
+		}
+	}
 }
 
 // SetSyncConcurrency configures how many goroutines may msync dirty chunks

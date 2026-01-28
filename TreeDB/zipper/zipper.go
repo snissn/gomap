@@ -581,7 +581,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// 2. Allocate NEW split node
-			sid, err := z.allocator.Alloc(builder.PageID())
+			sid, err := z.allocator.Alloc(target.PageID())
 			if err != nil {
 				return 0, nil, err
 			}

@@ -29,7 +29,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{MmapPopulate: opts.PagerMmapPopulate})
+	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
+		MmapPopulate:   opts.PagerMmapPopulate,
+		PrefetchOnRead: opts.PagerPrefetchOnRead,
+	})
 	if err != nil {
 		_ = lock.Close()
 		return nil, err
@@ -106,7 +109,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{MmapPopulate: opts.PagerMmapPopulate})
+	p, err := pager.OpenReadOnlyWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
+		MmapPopulate:   opts.PagerMmapPopulate,
+		PrefetchOnRead: opts.PagerPrefetchOnRead,
+	})
 	if err != nil {
 		return nil, err
 	}

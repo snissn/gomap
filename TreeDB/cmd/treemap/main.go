@@ -12,10 +12,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	runtimepprof "runtime/pprof"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -29,6 +31,7 @@ Commands:
   stats           Print stats
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
+  checkpoint       Force a durable checkpoint (requires -rw)
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
@@ -75,6 +78,8 @@ func main() {
 		runFrag(dir, args)
 	case "verify":
 		runVerify(dir, args)
+	case "checkpoint":
+		runCheckpoint(dir, args)
 	case "compact":
 		runCompact(dir, args)
 	case "vacuum":
@@ -116,6 +121,62 @@ func runInfo(dir string, args []string) {
 		fatalf("FragmentationReport invalid: %v", err)
 	}
 	printFragmentation(rep)
+}
+
+func runCheckpoint(dir string, args []string) {
+	fs := flag.NewFlagSet("checkpoint", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required)")
+	cpuprofile := fs.String("cpuprofile", "", "write cpu profile to file while checkpointing")
+	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
+	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Enable best-effort mmap prefetch per chunk on first read (madvise WILLNEED)")
+	maintenanceK := fs.Int("maintenance-ops-per-coalesce", 0, "Ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
+	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("checkpoint requires -rw")
+	}
+
+	opts := treedb.Options{
+		Dir:                       dir,
+		ReadOnly:                  false,
+		PagerMmapPopulate:         *pagerPopulate,
+		PagerPrefetchOnRead:       *pagerPrefetch,
+		MaintenanceOpsPerCoalesce: *maintenanceK,
+	}
+	if *chunkSize > 0 {
+		opts.ChunkSize = *chunkSize
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		fatalf("Failed to open DB: %v", err)
+	}
+	registerSignalCloser(func() { _ = db.Close() })
+	defer closeTreeDB(db)
+
+	var profFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("cpuprofile: %v", err)
+		}
+		profFile = f
+		runtimepprof.StartCPUProfile(profFile)
+	}
+
+	start := time.Now()
+	err = db.Checkpoint()
+	dur := time.Since(start)
+
+	if profFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = profFile.Close()
+	}
+	if err != nil {
+		fatalf("Checkpoint error: %v", err)
+	}
+	fmt.Printf("checkpoint %s\n", dur)
 }
 
 func runStats(dir string, args []string) {

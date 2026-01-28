@@ -142,6 +142,7 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	updated := make([][]byte, len(p.chunks))
 	copy(updated, p.chunks)
 	p.atomicChunks.Store(&chunkList{data: updated})
+	p.ensurePrefetchCapacityLocked(len(p.chunks))
 	p.mu.Unlock()
 	return nil
 }

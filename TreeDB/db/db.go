@@ -173,6 +173,9 @@ type Options struct {
 	// chunks. This can reduce minor-fault overhead under random access patterns
 	// at the cost of increased work at map/grow time.
 	PagerMmapPopulate bool
+	// PagerPrefetchOnRead enables best-effort prefetch (madvise WILLNEED) for
+	// each index.db mmap chunk the first time it is accessed.
+	PagerPrefetchOnRead bool
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -494,7 +497,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	idxPath := filepath.Join(opts.Dir, "index.db")
-	p, err := pager.OpenWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{MmapPopulate: opts.PagerMmapPopulate})
+	p, err := pager.OpenWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
+		MmapPopulate:   opts.PagerMmapPopulate,
+		PrefetchOnRead: opts.PagerPrefetchOnRead,
+	})
 	if err != nil {
 		return nil, err
 	}
