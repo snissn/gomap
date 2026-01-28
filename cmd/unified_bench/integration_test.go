@@ -55,10 +55,11 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 		}
 	}
 
+	combined := stdout.String() + "\n" + stderr.String()
 	// Check if results are reported, indicating successful completion
-	if !strings.Contains(stdout.String(), "Batch Write / TreeDB") ||
-		!strings.Contains(stdout.String(), "Random Write / TreeDB") ||
-		!strings.Contains(stdout.String(), "Batch Delete / TreeDB") {
+	if !strings.Contains(combined, "Batch Write / TreeDB") ||
+		!strings.Contains(combined, "Random Write / TreeDB") ||
+		!strings.Contains(combined, "Batch Delete / TreeDB") {
 		t.Errorf("benchmark did not report expected results, or completed too quickly without full results. Output:\n%s\n%s", stdout.String(), stderr.String())
 	}
 

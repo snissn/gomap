@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -208,32 +209,49 @@ func compareDBs(dirA, dirB string) (bool, error) {
 		return false, err
 	}
 	defer func() { _ = itA.Close() }()
+
+	entriesA := make(map[string][]byte)
+	for ; itA.Valid(); itA.Next() {
+		key := append([]byte(nil), itA.Key()...)
+		val := append([]byte(nil), itA.Value()...)
+		entriesA[string(key)] = val
+	}
+	if err := itA.Error(); err != nil {
+		return false, err
+	}
+
 	itB, err := dbB.Iterator(nil, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = itB.Close() }()
 
-	for {
-		validA := itA.Valid()
-		validB := itB.Valid()
-		if !validA || !validB {
-			break
-		}
-		if !bytes.Equal(itA.Key(), itB.Key()) || !bytes.Equal(itA.Value(), itB.Value()) {
-			return false, nil
-		}
-		itA.Next()
-		itB.Next()
-	}
-	if err := itA.Error(); err != nil {
-		return false, err
+	entriesB := make(map[string][]byte)
+	for ; itB.Valid(); itB.Next() {
+		key := append([]byte(nil), itB.Key()...)
+		val := append([]byte(nil), itB.Value()...)
+		entriesB[string(key)] = val
 	}
 	if err := itB.Error(); err != nil {
 		return false, err
 	}
-	if itA.Valid() != itB.Valid() {
-		return false, nil
+
+	if len(entriesA) != len(entriesB) {
+		return false, fmt.Errorf("entry count mismatch: %d != %d", len(entriesA), len(entriesB))
+	}
+	for k, vA := range entriesA {
+		vB, ok := entriesB[k]
+		if !ok {
+			return false, fmt.Errorf("missing key in B: %x", []byte(k))
+		}
+		if !bytes.Equal(vA, vB) {
+			return false, fmt.Errorf("value mismatch for key %x: %x != %x", []byte(k), vA, vB)
+		}
+	}
+	for k := range entriesB {
+		if _, ok := entriesA[k]; !ok {
+			return false, fmt.Errorf("extra key in B: %x", []byte(k))
+		}
 	}
 	return true, nil
 }
