@@ -6175,8 +6175,8 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 			}
 			backendBatch = nil // Batch is now owned by the commit worker.
 		} else {
-            _ = backendBatch.Close() // Close the batch if nothing was written
-        }
+			_ = backendBatch.Close() // Close the batch if nothing was written
+		}
 		flushed = true
 	}
 	flushDur := time.Duration(0)
