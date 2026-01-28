@@ -80,6 +80,20 @@ func getValueLogRecords(n int) []valuelog.Record {
 	return make([]valuelog.Record, n)
 }
 
+func getValueLogRecordsCap(capacity int) []valuelog.Record {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogRecordPool.Get(); v != nil {
+		if s, ok := v.([]valuelog.Record); ok {
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+		}
+	}
+	return make([]valuelog.Record, 0, capacity)
+}
+
 func putValueLogRecords(s []valuelog.Record) {
 	if s == nil {
 		return
@@ -526,11 +540,12 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 
-	recordsBuf := getValueLogRecords(memLen)
-	defer putValueLogRecords(recordsBuf)
-	records := recordsBuf[:0]
-	keys := getValueLogKeys(memLen)
-	defer func() { putValueLogKeys(keys) }()
+	var records []valuelog.Record
+	var keys [][]byte
+	defer func() {
+		putValueLogRecords(records)
+		putValueLogKeys(keys)
+	}()
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
@@ -569,6 +584,14 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		}
 
 		if allowPointers && len(val) > db.valueLogThreshold {
+			if records == nil {
+				hint := memLen
+				if hint > flushBackendBatchMaxEntries {
+					hint = flushBackendBatchMaxEntries
+				}
+				records = getValueLogRecordsCap(hint)
+				keys = getValueLogKeys(hint)
+			}
 			keys = append(keys, key)
 			records = append(records, valuelog.Record{Value: val})
 		} else {
