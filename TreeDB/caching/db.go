@@ -5351,7 +5351,12 @@ const (
 	// This avoids large one-shot allocations (and their GC / page-fault overhead)
 	// when flushing very large immutable memtables (e.g. when value-log pointers
 	// are forced).
-	flushBackendBatchMaxEntries = 128 * 1024
+	flushBackendBatchMaxEntries = 32 * 1024
+
+	// flushBackendBatchInitEntries is a small "reserve hint" used for backend batch
+	// creation. It intentionally stays below flushBackendBatchMaxEntries to avoid
+	// spending large CPU time zeroing an oversized []batch.Entry on batch creation.
+	flushBackendBatchInitEntries = 8 * 1024
 )
 
 type flushUnit struct {
@@ -5565,8 +5570,8 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 		flushStart = time.Now()
 
 		sizeHint := totalLen
-		if sizeHint > flushBackendBatchMaxEntries {
-			sizeHint = flushBackendBatchMaxEntries
+		if sizeHint > flushBackendBatchInitEntries {
+			sizeHint = flushBackendBatchInitEntries
 		}
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		vlogFlushed := false
@@ -6131,8 +6136,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		// Flush 'mem' to backend
 		sizeHint := memLen
-		if sizeHint > flushBackendBatchMaxEntries {
-			sizeHint = flushBackendBatchMaxEntries
+		if sizeHint > flushBackendBatchInitEntries {
+			sizeHint = flushBackendBatchInitEntries
 		}
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		vlogFlushed := false
