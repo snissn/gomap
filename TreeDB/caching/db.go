@@ -1390,10 +1390,6 @@ type DB struct {
 	writeMu  sync.RWMutex
 	bpMu     sync.Mutex
 	bpCond   *sync.Cond
-	// stopAssistFlush ensures only one writer at a time performs synchronous flush
-	// work during stop-backpressure. Without this, many writers can contend on
-	// flushMu and waste CPU spinning while a background flush is already running.
-	stopAssistFlush atomic.Bool
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -3754,7 +3750,7 @@ func (db *DB) waitForStop() {
 
 	for {
 		db.bpMu.Lock()
-		_, stopBytes, resumeBytes := db.thresholdsLocked()
+		_, stopBytes, _ := db.thresholdsLocked()
 		if stopBytes <= 0 {
 			db.bpMu.Unlock()
 			return
@@ -3764,28 +3760,21 @@ func (db *DB) waitForStop() {
 			db.bpMu.Unlock()
 			return
 		}
-		target := resumeBytes
-		if target <= 0 {
-			target = stopBytes
-		}
 		db.bpMu.Unlock()
 
 		// Ensure a background flush pass is scheduled in case backlog was created
 		// without a flush trigger (e.g. iterator-driven rotations).
 		db.TriggerFlush()
 
-		// Stop backpressure means we are already blocking the caller. To reduce
-		// latency, allow a single writer to assist flushing; other writers wait on
-		// the backpressure condition rather than contending on flushMu.
-		if db.stopAssistFlush.CompareAndSwap(false, true) {
-			db.flushAll(false)
-			db.stopAssistFlush.Store(false)
-		}
-
-		// If we're still above the resume threshold, back off briefly so we don't
-		// busy-spin while background flushing catches up.
-		if db.queueBacklogBytes.Load() >= target {
-			time.Sleep(20 * time.Millisecond)
+		// Stop backpressure means we are already blocking the caller. Actively do a
+		// small amount of synchronous flush work to ensure forward progress, even
+		// when WriterFlushMaxMemtables/Duration are not configured.
+		before := db.queueBacklogBytes.Load()
+		db.flushSome(false, 1, 0)
+		after := db.queueBacklogBytes.Load()
+		if after >= before {
+			// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
+			time.Sleep(2 * time.Millisecond)
 		}
 	}
 }
