@@ -31,8 +31,8 @@ type OpenOptions struct {
 	// MmapPopulate enables MAP_POPULATE on Linux to pre-fault page tables for
 	// mmapped index chunks (best-effort; ignored on non-Linux).
 	MmapPopulate bool
-	// PrefetchOnRead enables best-effort read-side prefetch (madvise WILLNEED)
-	// per chunk the first time it is accessed.
+	// PrefetchOnRead enables best-effort read-side prefetch support (madvise
+	// WILLNEED). Callers can trigger prefetch explicitly via PrefetchPage.
 	PrefetchOnRead bool
 }
 
@@ -535,11 +535,38 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	}
 
 	chunk := chunks[chunkIdx]
-	p.prefetchChunk(chunkIdx, chunk)
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
-func (p *Pager) prefetchChunk(chunkIdx int, data []byte) {
+// PrefetchPage issues a best-effort prefetch hint for the chunk containing
+// pageID. It is safe for concurrent use.
+func (p *Pager) PrefetchPage(pageID uint64) {
+	if !p.prefetchOnRead {
+		return
+	}
+	limit := p.numPages.Load()
+	if pageID >= limit {
+		return
+	}
+
+	byteOffset := int64(pageID) * int64(page.PageSize)
+	chunkIdx := int(byteOffset / p.chunkSize)
+	if chunkIdx < 0 {
+		return
+	}
+
+	cl := p.atomicChunks.Load()
+	if cl == nil {
+		return
+	}
+	chunks := cl.data
+	if chunkIdx >= len(chunks) {
+		return
+	}
+	p.prefetchChunkOnce(chunkIdx, chunks[chunkIdx])
+}
+
+func (p *Pager) prefetchChunkOnce(chunkIdx int, data []byte) {
 	if !p.prefetchOnRead || chunkIdx < 0 {
 		return
 	}
