@@ -18,8 +18,13 @@ With `madvise(MADV_HUGEPAGE)` only:
 - checkpoint after random_write: 3.55s
 - page-faults: 923,779
 
+With `madvise(MADV_HUGEPAGE)` + `-treedb-pager-mmap-populate`:
+- checkpoint after random_write: 3.63s
+- page-faults: 882,432
+
 Command:
 - `perf stat -e cycles,instructions,cache-misses,LLC-load-misses,dTLB-load-misses,page-faults -- ./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb -profile fast -keys 2000000 -format markdown -checkpoint-between-tests`
+- `perf stat ... -- ./bin/unified-bench ... -treedb-pager-mmap-populate`
 
 ## Notes
 - MAP_POPULATE is exposed as `Options.PagerMmapPopulate` and unified-bench flag `-treedb-pager-mmap-populate`.
