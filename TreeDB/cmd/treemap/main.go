@@ -193,6 +193,7 @@ func runCheckpointBench(dir string, args []string) {
 	valSize := fs.Int("valsize", 128, "Value size in bytes")
 	batchSize := fs.Int("batchsize", 1000, "Batch size")
 	seed := fs.Int64("seed", 1, "PRNG seed")
+	randomWriteKeyRange := fs.Int("random-write-key-range", 0, "Key range for random write phase (0=keys; use <=keys to force update churn)")
 	flushThreshold := fs.Int64("flush-threshold", 0, "Cached-mode flush threshold bytes (0=default). Set high to accumulate flush debt for checkpoint.")
 	preferAppendAlloc := fs.Bool("prefer-append-alloc", false, "Prefer append allocation for index pages (reduces reuse; can improve locality under churn)")
 	freelistRegionPages := fs.Uint64("freelist-region-pages", 0, "Freelist reuse region size in pages (0=default)")
@@ -296,12 +297,16 @@ func runCheckpointBench(dir string, args []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "phase=random_write keys=%d batch=%d\n", *keys, *batchSize)
+	keyRange := *randomWriteKeyRange
+	if keyRange <= 0 {
+		keyRange = *keys
+	}
 	for base := 0; base < *keys; base += *batchSize {
 		limit := base + *batchSize
 		if limit > *keys {
 			limit = *keys
 		}
-		writeBatch(base, limit, func(int) uint64 { return uint64(rng.Int63()) })
+		writeBatch(base, limit, func(int) uint64 { return uint64(rng.Intn(keyRange)) })
 	}
 
 	if *pauseBeforeCheckpoint > 0 {
