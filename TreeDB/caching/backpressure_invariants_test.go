@@ -137,6 +137,7 @@ func TestBackpressureInvariantsAcrossWorkloads(t *testing.T) {
 				case <-time.After(2 * time.Second):
 					t.Fatalf("waitForStop timeout")
 				}
+				db.flushAll(false)
 			},
 		},
 		{
@@ -177,6 +178,67 @@ func TestBackpressureInvariantsAcrossWorkloads(t *testing.T) {
 			fn: func(t *testing.T, stats map[string]string) {
 				if got := mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes"); got < 0 {
 					t.Fatalf("queue_backlog_bytes=%d want >=0", got)
+				}
+			},
+		},
+		{
+			name: "backlog_zero_when_queue_empty",
+			fn: func(t *testing.T, stats map[string]string) {
+				queueLen := mustStatInt64(t, stats, "treedb.cache.queue_len")
+				backlog := mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes")
+				if queueLen == 0 && backlog != 0 {
+					t.Fatalf("queue_len=0 but backlog=%d", backlog)
+				}
+			},
+		},
+		{
+			name: "flush_bps_ewma_nonnegative",
+			fn: func(t *testing.T, stats map[string]string) {
+				if got := mustStatInt64(t, stats, "treedb.cache.flush_bps_ewma"); got < 0 {
+					t.Fatalf("flush_bps_ewma=%d want >=0", got)
+				}
+			},
+		},
+		{
+			name: "flush_bps_ewma_when_backlog_remains",
+			fn: func(t *testing.T, stats map[string]string) {
+				backlog := mustStatInt64(t, stats, "treedb.cache.queue_backlog_bytes")
+				ewma := mustStatInt64(t, stats, "treedb.cache.flush_bps_ewma")
+				if backlog > 0 && ewma == 0 {
+					t.Fatalf("backlog=%d but flush_bps_ewma=0", backlog)
+				}
+			},
+		},
+		{
+			name: "wal_estimates_nonnegative",
+			fn: func(t *testing.T, stats map[string]string) {
+				if got := mustStatInt64(t, stats, "treedb.cache.wal_bytes_estimate"); got < 0 {
+					t.Fatalf("wal_bytes_estimate=%d want >=0", got)
+				}
+				if got := mustStatInt64(t, stats, "treedb.cache.wal_closed_bytes_estimate"); got < 0 {
+					t.Fatalf("wal_closed_bytes_estimate=%d want >=0", got)
+				}
+				if got := mustStatInt64(t, stats, "treedb.cache.wal_current_bytes_estimate"); got < 0 {
+					t.Fatalf("wal_current_bytes_estimate=%d want >=0", got)
+				}
+			},
+		},
+		{
+			name: "vlog_estimates_nonnegative",
+			fn: func(t *testing.T, stats map[string]string) {
+				if got := mustStatInt64(t, stats, "treedb.cache.vlog_retained_segments"); got < 0 {
+					t.Fatalf("vlog_retained_segments=%d want >=0", got)
+				}
+				if got := mustStatInt64(t, stats, "treedb.cache.vlog_retained_bytes_estimate"); got < 0 {
+					t.Fatalf("vlog_retained_bytes_estimate=%d want >=0", got)
+				}
+			},
+		},
+		{
+			name: "backpressure_mode_matches_config",
+			fn: func(t *testing.T, stats map[string]string) {
+				if got := mustStatString(t, stats, "treedb.cache.backpressure_mode"); got != "adaptive" {
+					t.Fatalf("backpressure_mode=%q want adaptive", got)
 				}
 			},
 		},
