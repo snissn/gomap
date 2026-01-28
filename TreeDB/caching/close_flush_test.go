@@ -246,3 +246,115 @@ func TestCachingDB_CloseFlushesPendingMemtables_ValuePointers(t *testing.T) {
 		})
 	}
 }
+
+func TestCachingDB_CloseFlushesDeletesAndOverwrites(t *testing.T) {
+	type testCase struct {
+		name string
+		opts Options
+	}
+
+	cases := []testCase{
+		{
+			name: "wal_on",
+			opts: Options{
+				FlushThreshold: 1 << 30,
+			},
+		},
+		{
+			name: "wal_off",
+			opts: Options{
+				FlushThreshold: 1 << 30,
+				DisableWAL:     true,
+				AllowUnsafe:    true,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			backend := NewMockBackend()
+			db, err := Open(dir, backend, tc.opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+
+			if err := db.Set([]byte("keep"), []byte("v1")); err != nil {
+				_ = db.Close()
+				t.Fatalf("Set keep: %v", err)
+			}
+			if err := db.Set([]byte("delete"), []byte("gone")); err != nil {
+				_ = db.Close()
+				t.Fatalf("Set delete: %v", err)
+			}
+			if err := db.Set([]byte("overwrite"), []byte("old")); err != nil {
+				_ = db.Close()
+				t.Fatalf("Set overwrite: %v", err)
+			}
+			if err := db.Delete([]byte("delete")); err != nil {
+				_ = db.Close()
+				t.Fatalf("Delete: %v", err)
+			}
+			if err := db.Set([]byte("overwrite"), []byte("new")); err != nil {
+				_ = db.Close()
+				t.Fatalf("Set overwrite new: %v", err)
+			}
+
+			if err := db.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+
+			backend.mu.RLock()
+			defer backend.mu.RUnlock()
+			if got := backend.data["keep"]; !bytes.Equal(got, []byte("v1")) {
+				t.Fatalf("keep mismatch: %q", got)
+			}
+			if _, ok := backend.data["delete"]; ok {
+				t.Fatalf("expected delete to be absent")
+			}
+			if got := backend.data["overwrite"]; !bytes.Equal(got, []byte("new")) {
+				t.Fatalf("overwrite mismatch: %q", got)
+			}
+		})
+	}
+}
+
+func TestCachingDB_CloseFlushesQueuedMemtable(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set: %v", err)
+	}
+
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		_ = db.Close()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	backend.mu.RLock()
+	defer backend.mu.RUnlock()
+	if !bytes.Equal(backend.data["k1"], []byte("v1")) {
+		t.Fatalf("k1 missing or wrong")
+	}
+	if !bytes.Equal(backend.data["k2"], []byte("v2")) {
+		t.Fatalf("k2 missing or wrong")
+	}
+}
