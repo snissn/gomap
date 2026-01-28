@@ -1390,6 +1390,10 @@ type DB struct {
 	writeMu  sync.RWMutex
 	bpMu     sync.Mutex
 	bpCond   *sync.Cond
+	// stopAssistFlush ensures only one writer at a time performs synchronous flush
+	// work during stop-backpressure. Without this, many writers can contend on
+	// flushMu and waste CPU spinning while a background flush is already running.
+	stopAssistFlush atomic.Bool
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -3760,28 +3764,29 @@ func (db *DB) waitForStop() {
 			db.bpMu.Unlock()
 			return
 		}
+		target := resumeBytes
+		if target <= 0 {
+			target = stopBytes
+		}
 		db.bpMu.Unlock()
 
 		// Ensure a background flush pass is scheduled in case backlog was created
 		// without a flush trigger (e.g. iterator-driven rotations).
 		db.TriggerFlush()
 
-		// Stop backpressure means we are already blocking the caller. Actively
-		// flush until the backlog drops below the resume threshold (hysteresis).
-		// This avoids depending entirely on background flush scheduling to wake
-		// blocked writers and limits the amount of synchronous work we do.
-		target := resumeBytes
-		if target <= 0 {
-			target = stopBytes
-		}
-		for {
-			curBacklog := db.queueBacklogBytes.Load()
-			if curBacklog < target {
-				break
-			}
+		// Stop backpressure means we are already blocking the caller. To reduce
+		// latency, allow a single writer to assist flushing; other writers wait on
+		// the backpressure condition rather than contending on flushMu.
+		if db.stopAssistFlush.CompareAndSwap(false, true) {
 			db.flushAll(false)
-			break
+			db.stopAssistFlush.Store(false)
 		}
+
+		db.bpMu.Lock()
+		for db.queueBacklogBytes.Load() >= target {
+			db.bpCond.Wait()
+		}
+		db.bpMu.Unlock()
 	}
 }
 
