@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
@@ -50,11 +51,13 @@ var (
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 
-	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
-	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
-	mutexProfile = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
-	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
-	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
+	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
+	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
+	mutexProfile              = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
+	mutexFrac                 = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
+	traceProfile              = flag.String("trace", "", "write runtime execution trace to file")
+	checkpointCPUProfile      = flag.String("checkpoint-cpuprofile", "", "write cpu profile for checkpoints to this path prefix")
+	checkpointCPUProfileTests = flag.String("checkpoint-cpuprofile-tests", "", "comma-separated list of tests to profile for checkpoints")
 
 	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
@@ -93,6 +96,9 @@ type BenchConfig struct {
 	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
 	// listed benchmark tests (lowercased).
 	CPUProfileTests map[string]struct{}
+
+	CheckpointCPUProfile      string
+	CheckpointCPUProfileTests map[string]struct{}
 
 	BlockProfile         string
 	BlockProfileRate     int
@@ -193,6 +199,7 @@ func main() {
 		MutexProfile:                     *mutexProfile,
 		MutexProfileFraction:             *mutexFrac,
 		TraceProfile:                     *traceProfile,
+		CheckpointCPUProfile:             *checkpointCPUProfile,
 		MaxWall:                          *maxWall,
 		MaxRSSMB:                         *maxRSSMB,
 		CheckpointBetweenTests:           *checkpointBetweenTests,
@@ -216,6 +223,18 @@ func main() {
 					continue
 				}
 				baseCfg.CPUProfileTests[t] = struct{}{}
+			}
+		}
+	}
+	if baseCfg.CheckpointCPUProfile != "" {
+		tests := parseList(*checkpointCPUProfileTests)
+		if len(tests) > 0 && tests[0] != "" {
+			baseCfg.CheckpointCPUProfileTests = make(map[string]struct{}, len(tests))
+			for _, t := range tests {
+				if t == "" {
+					continue
+				}
+				baseCfg.CheckpointCPUProfileTests[t] = struct{}{}
 			}
 		}
 	}
@@ -359,6 +378,44 @@ func shouldCPUProfile(cfg BenchConfig, testName string) bool {
 	}
 	_, ok := cfg.CPUProfileTests[strings.ToLower(testName)]
 	return ok
+}
+
+func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
+	if cfg.CheckpointCPUProfile == "" {
+		return false
+	}
+	if len(cfg.CheckpointCPUProfileTests) == 0 {
+		return true
+	}
+	_, ok := cfg.CheckpointCPUProfileTests[strings.ToLower(testName)]
+	return ok
+}
+
+func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.File, error) {
+	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
+	}
+	return f, nil
+}
+
+func sanitizeProfileSegment(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			return r
+		case r == '_' || r == '-' || r == '.':
+			return '_'
+		default:
+			return '_'
+		}
+	}, s)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
@@ -1707,13 +1764,33 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			chkMap := make(map[string]time.Duration)
 			for _, inst := range instances {
 				cp, ok := inst.Wrapper.(checkpointer)
-				if ok {
-					start := time.Now()
-					if err := cp.Checkpoint(); err != nil {
-						return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, err)
-					}
-					chkMap[inst.Wrapper.Name()] = time.Since(start)
+				if !ok {
+					continue
 				}
+
+				var (
+					checkpointCPUFile *os.File
+					err               error
+				)
+				if shouldCheckpointCPUProfile(cfg, testName) {
+					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, testName, inst.Wrapper.Name())
+					if err != nil {
+						return BenchRun{}, fmt.Errorf("checkpoint %s before %s profiling: %w", inst.Name, testName, err)
+					}
+				}
+
+				start := time.Now()
+				checkpointErr := cp.Checkpoint()
+
+				if checkpointCPUFile != nil {
+					pprof.StopCPUProfile()
+					_ = checkpointCPUFile.Close()
+				}
+
+				if checkpointErr != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, checkpointErr)
+				}
+				chkMap[inst.Wrapper.Name()] = time.Since(start)
 			}
 			checkpointDurations[testName] = chkMap
 		}
