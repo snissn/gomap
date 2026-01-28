@@ -27,6 +27,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+var errDBClosing = errors.New("cachingdb: db closing")
+
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
@@ -1549,6 +1551,7 @@ type DB struct {
 
 	// Lifecycle
 	closeCh chan struct{}
+	closing atomic.Bool
 	flushCh chan struct{}
 	wg      sync.WaitGroup
 
@@ -2332,6 +2335,12 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 
 func (db *DB) reportError(err error) {
 	if err == nil {
+		return
+	}
+	if errors.Is(err, errDBClosing) {
+		return
+	}
+	if db != nil && db.closing.Load() {
 		return
 	}
 	if db.notifyError != nil {
@@ -3965,6 +3974,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
+	db.closing.Store(true)
 	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
@@ -3995,6 +4005,8 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
+	close(db.commitCh)
+	db.commitWorkerWg.Wait()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
@@ -5851,9 +5863,8 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 				select {
 				case db.commitCh <- req:
 				case <-db.closeCh: // If DB is closing, we can't commit.
-					db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
 					_ = backendBatch.Close() // Close the batch since it's not sent to worker
-					return fmt.Errorf("DB closing")
+					return errDBClosing
 				}
 				var err = <-req.result // Wait for the commit to complete
 				durBackendWrite += time.Since(tw)
@@ -6163,7 +6174,6 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 			select {
 			case db.commitCh <- req:
 			case <-db.closeCh: // If DB is closing, we can't commit.
-				db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
 				_ = backendBatch.Close() // Close the batch since it's not sent to worker
 				return false
 			}
@@ -6408,9 +6418,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				select {
 				case db.commitCh <- req:
 				case <-db.closeCh: // If DB is closing, we can't commit.
-					db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
 					_ = backendBatch.Close() // Close the batch since it's not sent to worker
-					return fmt.Errorf("DB closing")
+					return errDBClosing
 				}
 				var err = <-req.result // Wait for the commit to complete
 				durBackendWrite += time.Since(tw)
@@ -6547,7 +6556,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			select {
 			case db.commitCh <- req:
 			case <-db.closeCh: // If DB is closing, we can't commit.
-				db.reportError(fmt.Errorf("cachingdb: flush failed: DB closing"))
 				_ = backendBatch.Close() // Close the batch since it's not sent to worker
 				return false
 			}
