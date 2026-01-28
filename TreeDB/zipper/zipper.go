@@ -90,11 +90,21 @@ type maintenanceBudget struct {
 	remaining int64
 }
 
-func newMaintenanceBudget(ops, opsPerCoalesce int) *maintenanceBudget {
+func newMaintenanceBudget(ops, deletes, opsPerCoalesce int) *maintenanceBudget {
 	if opsPerCoalesce <= 0 || ops <= 0 {
 		return nil
 	}
 	allowed := ops / opsPerCoalesce
+	if deletes > 0 {
+		deleteK := opsPerCoalesce / 256
+		if deleteK < 1 {
+			deleteK = 1
+		}
+		deleteAllowed := deletes / deleteK
+		if deleteAllowed > allowed {
+			allowed = deleteAllowed
+		}
+	}
 	if allowed < 1 {
 		allowed = 1
 	}
@@ -264,16 +274,17 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	//   - the caller configured soft-full targets (reserve bytes), which implies
 	//     a preference for more balanced/less churny pages even on updates.
 	hasDeletes := false
+	deleteCount := 0
 	for _, op := range ops {
 		if op.Type == batch.OpDelete {
 			hasDeletes = true
-			break
+			deleteCount++
 		}
 	}
 	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
 	var budget *maintenanceBudget
 	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
-		budget = newMaintenanceBudget(len(ops), z.maintenanceOpsPerCoalesce)
+		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
 	}
 
 	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, budget, &metrics)
