@@ -3750,7 +3750,7 @@ func (db *DB) waitForStop() {
 
 	for {
 		db.bpMu.Lock()
-		_, stopBytes, _ := db.thresholdsLocked()
+		_, stopBytes, resumeBytes := db.thresholdsLocked()
 		if stopBytes <= 0 {
 			db.bpMu.Unlock()
 			return
@@ -3780,12 +3780,18 @@ func (db *DB) waitForStop() {
 		// Stop backpressure means we are already blocking the caller. Actively do a
 		// small amount of synchronous flush work to ensure forward progress, even
 		// when WriterFlushMaxMemtables/Duration are not configured.
-		before := db.queueBacklogBytes.Load()
-		db.flushSome(false, 1, 0)
-		after := db.queueBacklogBytes.Load()
-		if after >= before {
-			// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
-			time.Sleep(2 * time.Millisecond)
+		target := stopBytes
+		if resumeBytes > 0 {
+			target = resumeBytes
+		}
+		if db.queueBacklogBytes.Load() >= target {
+			before := db.queueBacklogBytes.Load()
+			db.flushSome(false, 1, 0)
+			after := db.queueBacklogBytes.Load()
+			if after >= before {
+				// Avoid busy-spinning if we couldn't flush (e.g. lane lock contention).
+				time.Sleep(2 * time.Millisecond)
+			}
 		}
 	}
 }
