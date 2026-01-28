@@ -3995,10 +3995,9 @@ func (db *DB) Close() error {
 		l.walFastMu.Unlock()
 	}
 
-	// In deferred value-log mode, flush requires new value-log appends. The flushLoop
-	// runs on closeCh and would otherwise trip the appendValueLog closeCh guard.
-	// Flush once here while closeCh is still open and writers are blocked.
-	if hadMemtables && db.deferredValueLogEnabled() {
+	// Flush while closeCh is still open so commit/append paths remain available.
+	// This avoids dropping pending memtables on close.
+	if hadMemtables {
 		db.flushAll(true)
 	}
 

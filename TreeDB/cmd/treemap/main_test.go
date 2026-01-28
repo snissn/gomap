@@ -75,6 +75,10 @@ func TestJSONLRoundTripEncodings(t *testing.T) {
 				t.Fatalf("compare error: %v", err)
 			}
 			if !eq {
+				_, derr := compareDBsDetailed(dirA, dirB)
+				if derr != nil {
+					t.Fatalf("databases not equivalent for %s encoding: %v", tc.encoding, derr)
+				}
 				t.Fatalf("databases not equivalent for %s encoding", tc.encoding)
 			}
 
@@ -193,6 +197,14 @@ func importJSONLFile(t *testing.T, dir, path, inputEncoding string) {
 }
 
 func compareDBs(dirA, dirB string) (bool, error) {
+	return compareDBsInternal(dirA, dirB, false)
+}
+
+func compareDBsDetailed(dirA, dirB string) (bool, error) {
+	return compareDBsInternal(dirA, dirB, true)
+}
+
+func compareDBsInternal(dirA, dirB string, detailed bool) (bool, error) {
 	dbA, err := treedb.Open(treedb.Options{Dir: dirA, ReadOnly: true})
 	if err != nil {
 		return false, err
@@ -236,22 +248,34 @@ func compareDBs(dirA, dirB string) (bool, error) {
 		return false, err
 	}
 
-	if len(entriesA) != len(entriesB) {
-		return false, fmt.Errorf("entry count mismatch: %d != %d", len(entriesA), len(entriesB))
-	}
 	for k, vA := range entriesA {
 		vB, ok := entriesB[k]
 		if !ok {
-			return false, fmt.Errorf("missing key in B: %x", []byte(k))
+			if detailed {
+				return false, fmt.Errorf("missing key in B: %x", []byte(k))
+			}
+			return false, nil
 		}
 		if !bytes.Equal(vA, vB) {
-			return false, fmt.Errorf("value mismatch for key %x: %x != %x", []byte(k), vA, vB)
+			if detailed {
+				return false, fmt.Errorf("value mismatch for key %x: %x != %x", []byte(k), vA, vB)
+			}
+			return false, nil
 		}
 	}
 	for k := range entriesB {
 		if _, ok := entriesA[k]; !ok {
-			return false, fmt.Errorf("extra key in B: %x", []byte(k))
+			if detailed {
+				return false, fmt.Errorf("extra key in B: %x", []byte(k))
+			}
+			return false, nil
 		}
+	}
+	if len(entriesA) != len(entriesB) {
+		if detailed {
+			return false, fmt.Errorf("entry count mismatch after compare: %d != %d", len(entriesA), len(entriesB))
+		}
+		return false, nil
 	}
 	return true, nil
 }
