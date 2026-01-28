@@ -3755,6 +3755,17 @@ func (db *DB) waitForStop() {
 			db.bpMu.Unlock()
 			return
 		}
+		// Self-heal: backlog bytes should never remain positive when the queue is empty.
+		// If this happens, stop backpressure would block forever.
+		db.mu.RLock()
+		queueLen := len(db.queue)
+		db.mu.RUnlock()
+		if queueLen == 0 {
+			db.queueBacklogBytes.Store(0)
+			db.bpMu.Unlock()
+			return
+		}
+
 		backlog := db.queueBacklogBytes.Load()
 		if backlog < stopBytes {
 			db.bpMu.Unlock()
