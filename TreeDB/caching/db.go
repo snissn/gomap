@@ -2125,10 +2125,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                          lanes,
 		flushLaneMu:                    make([]sync.Mutex, len(lanes)),
 	}
-	// Start the commit worker goroutine
-	db.commitWorkerWg.Add(1)
-	go db.commitWorkerLoop()
-
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
