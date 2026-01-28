@@ -85,7 +85,7 @@ type DB struct {
 
 const (
 	defaultChunkSize                 = 4 * 1024 * 1024
-	defaultMaintenanceOpsPerCoalesce = 200_000
+	defaultMaintenanceOpsPerCoalesce = 400_000
 )
 
 // DurabilityMode configures cached-mode durability semantics.
