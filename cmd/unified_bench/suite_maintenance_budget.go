@@ -103,10 +103,11 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 			}
 			checkpoint = dur
 
-			info, err := os.Stat(filepath.Join(inst.Dir, "index.db"))
+			indexPath, info, err := findIndexDB(inst.Dir)
 			if err != nil {
-				return "", fmt.Errorf("maintenance_budget: stat index.db: %w", err)
+				return "", err
 			}
+			_ = indexPath
 			indexBytes = info.Size()
 
 			if !baseCfg.KeepDir {
@@ -183,4 +184,18 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+func findIndexDB(dir string) (string, os.FileInfo, error) {
+	candidates := []string{
+		filepath.Join(dir, "index.db"),
+		filepath.Join(dir, "maindb", "index.db"),
+	}
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil {
+			return path, info, nil
+		}
+	}
+	return "", nil, fmt.Errorf("maintenance_budget: stat index.db: no index.db in %s", dir)
 }
