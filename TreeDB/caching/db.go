@@ -3782,20 +3782,11 @@ func (db *DB) waitForStop() {
 			db.stopAssistFlush.Store(false)
 		}
 
-		db.bpMu.Lock()
-		for db.queueBacklogBytes.Load() >= target {
-			// Avoid waiting forever if a flush pass makes no progress (or if a flush
-			// signal was dropped due to best-effort scheduling). The timer ensures we
-			// periodically wake and retry scheduling/assisting.
-			t := time.AfterFunc(200*time.Millisecond, func() {
-				db.bpMu.Lock()
-				db.bpCond.Broadcast()
-				db.bpMu.Unlock()
-			})
-			db.bpCond.Wait()
-			t.Stop()
+		// If we're still above the resume threshold, back off briefly so we don't
+		// busy-spin while background flushing catches up.
+		if db.queueBacklogBytes.Load() >= target {
+			time.Sleep(20 * time.Millisecond)
 		}
-		db.bpMu.Unlock()
 	}
 }
 
