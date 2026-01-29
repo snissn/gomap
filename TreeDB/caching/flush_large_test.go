@@ -262,3 +262,61 @@ func TestCachingDB_FlushAllParallelBuildDeletesNewestWins(t *testing.T) {
 		t.Fatalf("expected k deleted, got %q", got)
 	}
 }
+
+func TestCachingDB_FlushAllParallelBuildChunkedRuns(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:        1 << 60,
+		MemtableShards:        1,
+		MemtableMode:          "hash_sorted",
+		MaxQueuedMemtables:    -1,
+		AllowUnsafe:           true,
+		FlushBuildConcurrency: 4,
+		FlushBuildMinEntries:  1,
+		FlushBuildMinUnits:    2,
+		FlushBuildChunkCap:    2,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.mu.Lock()
+	for i := 0; i < 5; i++ {
+		setMutable(db, []byte(fmt.Sprintf("a%02d", i)), []byte("old"))
+	}
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		setMutable(db, []byte(fmt.Sprintf("a%02d", i)), []byte("new"))
+	}
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	db.flushAll(false)
+
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	backend.mu.RUnlock()
+	if writeCalls != 1 {
+		t.Fatalf("expected 1 backend batch commit (combined flush), got %d", writeCalls)
+	}
+
+	for i := 0; i < 5; i++ {
+		k := []byte(fmt.Sprintf("a%02d", i))
+		got, err := db.backend.Get(k)
+		if err != nil {
+			t.Fatalf("backend.Get: %v", err)
+		}
+		if string(got) != "new" {
+			t.Fatalf("backend.Get(%s): got %q want %q", k, got, "new")
+		}
+	}
+}
