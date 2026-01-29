@@ -2254,7 +2254,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	// Start commit workers
 	db.flushingIDs = make(map[uint64]struct{})
-	db.commitCh = make(chan commitJob, 64)
+	commitCap := len(db.lanes)
+	if commitCap <= 0 {
+		commitCap = 1
+	}
+	db.commitCh = make(chan commitJob, commitCap*commitQueueDepthPerLane)
 	numWorkers := 4
 	for i := 0; i < numWorkers; i++ {
 		db.wg.Add(1)
@@ -5701,6 +5705,7 @@ func (db *DB) flushOne() bool {
 const (
 	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
 	flushCombineMaxMemtables       = 32
+	commitQueueDepthPerLane        = 2
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
