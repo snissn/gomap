@@ -1406,7 +1406,9 @@ type DB struct {
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
-	// Commit workers removed; backend commits are synchronous.
+	// Commit pipeline
+	commitCh chan commitJob
+	commitWg sync.WaitGroup
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -1421,8 +1423,10 @@ type DB struct {
 	queue            []memtable.Table
 	queueShardIDs    []uint16
 	queueLaneIDs     []uint16
-	queueIDs         []uint64
-	nextQueueID      atomic.Uint64
+	queueIDs    []uint64
+	nextQueueID atomic.Uint64
+
+	flushingIDs map[uint64]struct{}
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -2095,6 +2099,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].id = i
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
+		lanes[i].commitCond = sync.NewCond(&lanes[i].commitMu)
 	}
 	db := &DB{
 		dir:                            walDir,
@@ -2246,6 +2251,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
+
+	// Start commit workers
+	db.flushingIDs = make(map[uint64]struct{})
+	db.commitCh = make(chan commitJob, 64)
+	numWorkers := 4
+	for i := 0; i < numWorkers; i++ {
+		db.wg.Add(1)
+		go db.commitWorker()
+	}
 
 	return db, nil
 }
@@ -2808,6 +2822,155 @@ func (db *DB) walFastLoop(l *lane) {
 			ack.err = err
 			ack.wg.Done()
 		}
+	}
+}
+
+func (db *DB) commitWorker() {
+	defer db.wg.Done()
+	for {
+		select {
+		case <-db.closeCh:
+			db.drainCommitQueue()
+			return
+		case job, ok := <-db.commitCh:
+			if !ok {
+				return
+			}
+			db.processCommitJob(job)
+		}
+	}
+}
+
+func (db *DB) drainCommitQueue() {
+	for {
+		select {
+		case job, ok := <-db.commitCh:
+			if !ok {
+				return
+			}
+			db.processCommitJob(job)
+		default:
+			return
+		}
+	}
+}
+
+func (db *DB) processCommitJob(job commitJob) {
+	defer db.commitWg.Done()
+	defer func() {
+		if job.laneID >= 0 && job.laneID < len(db.lanes) {
+			l := &db.lanes[job.laneID]
+			l.commitsInFlight.Add(-1)
+			l.commitMu.Lock()
+			l.commitCond.Broadcast()
+			l.commitMu.Unlock()
+		}
+		db.mu.Lock()
+		for _, id := range job.ids {
+			delete(db.flushingIDs, id)
+		}
+		db.mu.Unlock()
+	}()
+
+	// If there's already a fatal background error, abort this commit.
+	// This ensures we don't keep writing to a potentially corrupted backend.
+	if err := db.backgroundError(); err != nil {
+		if job.done != nil {
+			job.done <- err
+		}
+		_ = job.backendBatch.Close()
+		return
+	}
+
+	var err error
+	if job.syncFlag {
+		err = job.backendBatch.WriteSync()
+	} else {
+		err = job.backendBatch.Write()
+	}
+	cerr := job.backendBatch.Close()
+	if err == nil {
+		err = cerr
+	}
+
+	if err != nil {
+		db.reportError(err)
+		if job.done != nil {
+			job.done <- err
+		}
+		return
+	}
+
+	// Successful backend commit. Remove units from the memory queue.
+	db.mu.Lock()
+	removeIDs := make(map[uint64]struct{}, len(job.ids))
+	for _, id := range job.ids {
+		removeIDs[id] = struct{}{}
+	}
+	db.removeQueuedUnitsLocked(removeIDs, job.units, job.totalBytes)
+
+	deletable := make([]string, 0, len(job.units))
+	if job.syncFlag {
+		inUse := make(map[string]struct{})
+		for _, path := range db.currentWALPaths() {
+			inUse[path] = struct{}{}
+		}
+		for _, paths := range db.queueWALPaths {
+			for _, path := range paths {
+				inUse[path] = struct{}{}
+			}
+		}
+		seen := make(map[string]struct{})
+		for _, unit := range job.units {
+			for _, walPath := range unit.walPaths {
+				if walPath == "" {
+					continue
+				}
+				if _, ok := inUse[walPath]; ok {
+					continue
+				}
+				if _, ok := seen[walPath]; ok {
+					continue
+				}
+				if db.valueLogRetained(walPath) {
+					continue
+				}
+				seen[walPath] = struct{}{}
+				deletable = append(deletable, walPath)
+			}
+		}
+	}
+	db.mu.Unlock()
+
+	removed := false
+	for _, walPath := range deletable {
+		db.dropValueLogSegment(walPath)
+		if err := db.removeFileRetry(walPath); err != nil {
+			// Best effort cleanup
+			continue
+		}
+		removed = true
+		db.mu.Lock()
+		db.untrackWALSegmentLocked(walPath)
+		db.mu.Unlock()
+		db.forgetValueLogRetain(walPath)
+	}
+	if removed {
+		db.syncDirBestEffort(db.dir)
+		db.TriggerAutoCheckpoint()
+	}
+	db.checkValueLogRetention()
+
+	if job.laneID >= 0 && job.laneID < len(db.lanes) {
+		l := &db.lanes[job.laneID]
+		l.commitsInFlight.Add(-1)
+		l.commitMu.Lock()
+		l.commitCond.Broadcast()
+		l.commitMu.Unlock()
+	}
+
+	if job.done != nil {
+		job.done <- nil
 	}
 }
 
@@ -3744,6 +3907,9 @@ func (db *DB) Checkpoint() error {
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
 
+	// Wait for all pending commits to finish.
+	db.commitWg.Wait()
+
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
@@ -4024,6 +4190,7 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
+	close(db.commitCh)
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
@@ -4195,6 +4362,9 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
+	if err := db.backgroundError(); err != nil {
+		return err
+	}
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -4369,6 +4539,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 	}
 	db.waitForCheckpoint()
 	db.waitForStop()
+	db.commitWg.Wait()
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -4942,6 +5113,9 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
+	if err := db.backgroundError(); err != nil {
+		return err
+	}
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -5450,6 +5624,9 @@ func (db *DB) flushAll(reqSync bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 	db.flushAllLocked(reqSync)
+	if reqSync {
+		db.commitWg.Wait()
+	}
 }
 
 func (db *DB) flushAllLocked(reqSync bool) {
@@ -5553,6 +5730,17 @@ type flushUnit struct {
 	laneID   int
 }
 
+type commitJob struct {
+	backendBatch batch.Interface
+	units        []flushUnit
+	ids          []uint64
+	totalBytes   int64
+	totalLen     int
+	laneID       int
+	syncFlag     bool
+	done         chan error
+}
+
 func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes int64) ([]flushUnit, []uint64, int64, int) {
 	queueLen := len(db.queue)
 	if queueLen == 0 {
@@ -5595,6 +5783,9 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 		if i < len(db.queueIDs) {
 			id = db.queueIDs[i]
 		}
+		if _, ok := db.flushingIDs[id]; ok {
+			continue
+		}
 		unitLaneID := 0
 		if i < len(db.queueLaneIDs) {
 			unitLaneID = int(db.queueLaneIDs[i])
@@ -5614,6 +5805,7 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 	}
 	return units, ids, totalBytes, totalLen
 }
+
 
 func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
 	for _, unit := range units {
@@ -5663,6 +5855,92 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		}
 	}
 
+	// Nil out tail to assist GC
+	for i := len(dstQueue); i < len(db.queue); i++ {
+		db.queue[i] = nil
+	}
+	for i := len(dstRanges); i < len(db.queueRanges); i++ {
+		db.queueRanges[i] = keyRange{}
+	}
+	for i := len(dstWALPaths); i < len(db.queueWALPaths); i++ {
+		db.queueWALPaths[i] = nil
+	}
+	for i := len(dstValueLogPaths); i < len(db.queueValueLogPaths); i++ {
+		db.queueValueLogPaths[i] = nil
+	}
+
+	db.queue = dstQueue
+	db.queueShardIDs = dstShardIDs
+	db.queueLaneIDs = dstLaneIDs
+	db.queueIDs = dstIDs
+	db.queueRanges = dstRanges
+	db.queueWALPaths = dstWALPaths
+	db.queueValueLogPaths = dstValueLogPaths
+	db.queueBacklogBytes.Add(-totalBytes)
+	db.publishMemtablesLocked()
+}
+
+func (db *DB) dropUnitsFromQueueLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
+	for _, unit := range units {
+		if unit.memRange.valid {
+			db.backendRange.add(unit.memRange.min)
+			db.backendRange.add(unit.memRange.max)
+		}
+	}
+	dstQueue := db.queue[:0]
+	dstShardIDs := db.queueShardIDs[:0]
+	dstLaneIDs := db.queueLaneIDs[:0]
+	dstIDs := db.queueIDs[:0]
+	dstRanges := db.queueRanges[:0]
+	dstWALPaths := db.queueWALPaths[:0]
+	dstValueLogPaths := db.queueValueLogPaths[:0]
+
+	db.ensureQueueLaneIDsLocked()
+	for i, mem := range db.queue {
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		if _, ok := removeIDs[id]; ok {
+			continue
+		}
+		dstQueue = append(dstQueue, mem)
+		if i < len(db.queueShardIDs) {
+			dstShardIDs = append(dstShardIDs, db.queueShardIDs[i])
+		}
+		if i < len(db.queueLaneIDs) {
+			dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
+		} else {
+			dstLaneIDs = append(dstLaneIDs, 0)
+		}
+		if i < len(db.queueIDs) {
+			dstIDs = append(dstIDs, db.queueIDs[i])
+		}
+		if i < len(db.queueRanges) {
+			dstRanges = append(dstRanges, db.queueRanges[i])
+		}
+		if i < len(db.queueWALPaths) {
+			dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
+		}
+		if i < len(db.queueValueLogPaths) {
+			dstValueLogPaths = append(dstValueLogPaths, db.queueValueLogPaths[i])
+		}
+	}
+
+	// Nil out tail to assist GC
+	for i := len(dstQueue); i < len(db.queue); i++ {
+		db.queue[i] = nil
+	}
+	for i := len(dstRanges); i < len(db.queueRanges); i++ {
+		db.queueRanges[i] = keyRange{}
+	}
+	for i := len(dstWALPaths); i < len(db.queueWALPaths); i++ {
+		db.queueWALPaths[i] = nil
+	}
+	for i := len(dstValueLogPaths); i < len(db.queueValueLogPaths); i++ {
+		db.queueValueLogPaths[i] = nil
+	}
+
 	db.queue = dstQueue
 	db.queueShardIDs = dstShardIDs
 	db.queueLaneIDs = dstLaneIDs
@@ -5675,28 +5953,38 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 }
 
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
-	db.mu.Lock()
-	queueLen := len(db.queue)
-	if queueLen == 0 {
-		db.mu.Unlock()
-		return false
+	if laneID >= 0 && laneID < len(db.lanes) {
+		l := &db.lanes[laneID]
+		l.commitMu.Lock()
+		for l.commitsInFlight.Load() >= 1 {
+			l.commitCond.Wait()
+		}
+		l.commitMu.Unlock()
 	}
+
+	db.mu.Lock()
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, 1, 0)
-	db.mu.Unlock()
 	if len(units) == 0 {
+		db.mu.Unlock()
 		return false
 	}
 
+	removeIDs := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		removeIDs[id] = struct{}{}
+	}
+
 	if totalLen == 0 {
-		db.mu.Lock()
-		removeIDs := make(map[uint64]struct{}, len(ids))
-		for _, id := range ids {
-			removeIDs[id] = struct{}{}
-		}
-		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+		db.dropUnitsFromQueueLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
 		return true
 	}
+
+	for _, id := range ids {
+		db.flushingIDs[id] = struct{}{}
+	}
+	db.mu.Unlock()
+
 	sizeHint := totalLen
 	if sizeHint > flushBackendBatchInitEntries {
 		sizeHint = flushBackendBatchInitEntries
@@ -5704,7 +5992,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	flushStart := time.Now()
 
-	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
@@ -5806,80 +6093,40 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 	}
 
-	var err error
+	job := commitJob{
+		backendBatch: backendBatch,
+		units:        units,
+		ids:          ids,
+		totalBytes:   totalBytes,
+		totalLen:     totalLen,
+		laneID:       laneID,
+		syncFlag:     sync,
+	}
 	if sync {
-		err = backendBatch.WriteSync()
-	} else {
-		err = backendBatch.Write()
-	}
-	cerr := backendBatch.Close()
-	if err == nil {
-		err = cerr
-	}
-	if err != nil {
-		db.reportError(err)
-		return false
+		job.done = make(chan error, 1)
 	}
 
-	// Remove from queue and delete old WAL segments.
-	db.mu.Lock()
-	removeIDs := make(map[uint64]struct{}, len(ids))
-	for _, id := range ids {
-		removeIDs[id] = struct{}{}
+	if laneID >= 0 && laneID < len(db.lanes) {
+		db.lanes[laneID].commitsInFlight.Add(1)
 	}
-	db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+	db.commitWg.Add(1)
+	db.commitCh <- job
 
-	deletable := make([]string, 0, len(units))
 	if sync {
-		inUse := make(map[string]struct{})
-		for _, path := range db.currentWALPaths() {
-			inUse[path] = struct{}{}
+		err := <-job.done
+		if db.debugFlushTiming {
+			fmt.Fprintf(os.Stderr, "cachingdb: lane=%d flush_duration=%s total_bytes=%d total_len=%d sync=true\n", laneID, time.Since(flushStart), totalBytes, totalLen)
 		}
-		for _, paths := range db.queueWALPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
-		seen := make(map[string]struct{})
-		for _, unit := range units {
-			for _, walPath := range unit.walPaths {
-				if walPath == "" {
-					continue
-				}
-				if _, ok := inUse[walPath]; ok {
-					continue
-				}
-				if _, ok := seen[walPath]; ok {
-					continue
-				}
-				if db.valueLogRetained(walPath) {
-					continue
-				}
-				seen[walPath] = struct{}{}
-				deletable = append(deletable, walPath)
-			}
-		}
+		return err == nil
 	}
-	db.mu.Unlock()
 
-	removed := false
-	for _, walPath := range deletable {
-		db.dropValueLogSegment(walPath)
-		if err := db.removeFileRetry(walPath); err != nil {
-			// Best effort cleanup
-			continue
-		}
-		removed = true
-		db.mu.Lock()
-		db.untrackWALSegmentLocked(walPath)
-		db.mu.Unlock()
-		db.forgetValueLogRetain(walPath)
+	if db.debugFlushTiming {
+		fmt.Fprintf(os.Stderr, "cachingdb: lane=%d flush_queued total_bytes=%d total_len=%d\n", laneID, totalBytes, totalLen)
 	}
-	if removed {
-		db.syncDirBestEffort(db.dir)
-	}
-	db.checkValueLogRetention()
 
+	// Update EWMA bps estimates based on building + ValueLog flush time.
+	// This is not perfectly accurate since backend commit happens in background,
+	// but it keeps the backpressure logic moving.
 	flushDur := time.Since(flushStart)
 	if flushDur > 0 && totalBytes > 0 {
 		sample := float64(totalBytes) / flushDur.Seconds()
@@ -5892,6 +6139,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.bpCond.Broadcast()
 		db.bpMu.Unlock()
 	}
+
 	return true
 }
 
@@ -6366,6 +6614,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			return val, true, nil
 		}
 	}
+
 	return nil, false, nil
 }
 
@@ -6444,6 +6693,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			return append(dst, val...), true, nil
 		}
 	}
+
 	return dst, false, nil
 }
 
@@ -6703,7 +6953,8 @@ func (db *DB) Drain() error {
 	db.writeMu.Unlock()
 
 	db.flushAll(false)
-	return nil
+	db.commitWg.Wait()
+	return db.backgroundError()
 }
 
 // Iterator implements DB.Iterator
@@ -6966,6 +7217,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Unlock()
 	db.writeMu.Unlock()
 	db.flushAll(false)
+	db.commitWg.Wait()
 
 	return db.backend.ReverseIterator(start, end)
 }
@@ -7362,6 +7614,9 @@ func (b *Batch) ensureDictBytes(ctx context.Context) ([]byte, error) {
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
+	}
+	if err := b.db.backgroundError(); err != nil {
+		return err
 	}
 	b.db.waitForCheckpoint()
 	b.db.waitForStop()

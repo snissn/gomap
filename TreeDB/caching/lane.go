@@ -32,7 +32,10 @@ type lane struct {
 	vlogClosedBytes  atomic.Int64
 	vlogClosedSizes  map[string]int64
 
-	syncing atomic.Bool
+	syncing         atomic.Bool
+	commitsInFlight atomic.Int32
+	commitMu        sync.Mutex
+	commitCond      *sync.Cond
 }
 
 func commitLogName(laneID, seq int) string {
