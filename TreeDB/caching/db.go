@@ -5890,9 +5890,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 	if useParallel && !db.deferredValueLogEnabled() {
 		chunkCap := db.flushBuildChunkCap
-		if chunkCap == 0 {
-			chunkCap = 0
-		} else if chunkCap < 0 {
+		if chunkCap < 0 {
 			chunkCap = 8192
 		}
 
