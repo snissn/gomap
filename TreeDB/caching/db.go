@@ -5918,9 +5918,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if workers > len(units) {
 			workers = len(units)
 		}
-		if workers < 1 {
-			workers = 1
-		}
 
 		done := make(chan struct{}, workers)
 		for w := 0; w < workers; w++ {
