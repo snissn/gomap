@@ -1386,10 +1386,6 @@ type Options struct {
 	// Cached mode only (value log enabled by default).
 	ValueLogCompressionAutotune valuelog.AutotuneOptions
 
-	// MaxCommitWorkers controls how many background goroutines are used to
-	// perform backend B-Tree commits. 0 uses a default (4).
-	MaxCommitWorkers int
-
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
 }
@@ -1866,7 +1862,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	rangeIters := db.memtableStats.rangeIters.Load()
 
 	// Default to configured mode if not enough data
-	if writes < 1000 {
+	if writes < adaptiveMinWrites {
 		return db.memtableMode
 	}
 
@@ -1986,9 +1982,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		laneCount = 1
 	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
-	// if maxLaneID+1 > laneCount {
-	// 	laneCount = maxLaneID + 1
-	// }
+	if maxLaneID+1 > laneCount {
+		laneCount = maxLaneID + 1
+	}
 
 	inlineThreshold := page.DefaultInlineThreshold
 	if provider, ok := backend.(interface{ InlineThreshold() int }); ok {
@@ -2157,7 +2153,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		mutableShardMask:               uint64(shardCount - 1),
 		hashSortedIndexer:              indexer,
 		closeCh:                        make(chan struct{}),
-		commitCh:                       make(chan commitRequest, 1024), // Buffered channel for commit requests
 		flushCh:                        make(chan struct{}, 1),
 		autoCheckpointOnceCh:           make(chan struct{}, 1),
 		autoCheckpointWriteCh:          make(chan struct{}, 1),
@@ -2170,16 +2165,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Start the commit worker goroutines
-	/*
-		commitWorkers := opts.MaxCommitWorkers
-		if commitWorkers <= 0 {
-			commitWorkers = 1
-		}
-		db.commitWorkerWg.Add(commitWorkers)
-		for i := 0; i < commitWorkers; i++ {
-			go db.commitWorkerLoop()
-		}
-	*/
 
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled: the value log
@@ -5789,7 +5774,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
 							_ = psl.SetPointer(key, ptr)
 						} else {
+							// Unsupported backend: fail unsafe pointer write.
 							_ = backendBatch.Set(key, nil) // Fallback or error
+							db.reportError(fmt.Errorf("cachingdb: flush failed (ptr not supported): %s", key))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
 						}
 					}
 				} else {
@@ -5797,14 +5787,32 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 				iter.Next()
 			}
-			iter.Close()
+			if err := iter.Error(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+				_ = iter.Close()
+				_ = backendBatch.Close()
+				return false
+			}
+			if err := iter.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+				_ = backendBatch.Close()
+				return false
+			}
 		}
 	}
 
 	if db.valueLogEnabled() {
-		_ = db.flushValueLog(laneID)
+		if err := db.flushValueLog(laneID); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
+			_ = backendBatch.Close()
+			return false
+		}
 		if sync && !db.relaxedSync {
-			_ = db.syncValueLog(laneID)
+			if err := db.syncValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+				_ = backendBatch.Close()
+				return false
+			}
 		}
 	}
 

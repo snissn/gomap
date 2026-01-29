@@ -250,10 +250,6 @@ type Options struct {
 	// combined flush batch from multiple immutable memtables in cached mode.
 	// Values <= 1 disable parallelism.
 	FlushBuildConcurrency int
-	// MaxCommitWorkers controls how many background goroutines are used to
-	// perform backend B-Tree commits in cached mode. Values <= 0 use a
-	// runtime-dependent default (e.g. 4).
-	MaxCommitWorkers int
 	// FlushBuildMinEntries gates the parallel build path by total entries.
 	// Values <= 0 use a default of 16k.
 	FlushBuildMinEntries int

@@ -236,7 +236,6 @@ func Open(opts Options) (*DB, error) {
 		AllowUnsafe:                        allowUnsafe,
 		MaxValueLogRetainedBytes:           opts.ValueLog.MaxRetainedBytes,
 		MaxValueLogRetainedBytesHard:       opts.ValueLog.MaxRetainedBytesHard,
-		MaxCommitWorkers:                   opts.MaxCommitWorkers,
 		NotifyError:                        opts.NotifyError,
 	})
 	if err != nil {
