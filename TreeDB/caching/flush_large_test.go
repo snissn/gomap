@@ -63,7 +63,7 @@ func TestCachingDB_FlushCombinedLargeMemtablesPersists(t *testing.T) {
 		t.Fatalf("expected multiple queued memtables, got %d", queued)
 	}
 
-	for db.flushCombinedLocked(false) {
+	for db.flushOneLocked(false) {
 	}
 
 	db.mu.RLock()
@@ -139,7 +139,7 @@ func TestCachingDB_FlushCombinedLargeMemtablesParallelBuildPreservesLastWrite(t 
 		t.Fatalf("expected multiple queued memtables, got %d", queued)
 	}
 
-	for db.flushCombinedLocked(false) {
+	for db.flushOneLocked(false) {
 	}
 
 	got, err := backend.Get([]byte(overlapKey))
