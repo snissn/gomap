@@ -4057,8 +4057,10 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
-	close(db.commitCh)
-	db.commitWorkerWg.Wait()
+	if db.commitCh != nil {
+		close(db.commitCh)
+		db.commitWorkerWg.Wait()
+	}
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
