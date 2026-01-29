@@ -110,3 +110,14 @@ echo "=============================="
 echo " End of report"
 echo "=============================="
 
+
+
+
+
+go tool pprof -list 'github.com/snissn/gomap/TreeDB/freelist.\(\*Allocator\).Alloc' ./bin/unified-bench /tmp/review_cpu_batch_write_treedb.pprof
+
+go tool pprof -list 'github.com/snissn/gomap/TreeDB/node.putUint16' ./bin/unified-bench /tmp/review_cpu_batch_write_treedb.pprof
+
+go tool pprof -list 'github.com/snissn/gomap/TreeDB/freelist.\(\*Allocator\).Alloc' ./bin/unified-bench /tmp/review_block
+
+
