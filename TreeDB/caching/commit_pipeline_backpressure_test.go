@@ -4,6 +4,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // TestCommitPipelineBackpressure verifies that per-lane backpressure blocks
@@ -13,7 +16,7 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	backend := NewMockBackend()
 
 	opts := Options{
-		FlushThreshold: 1 << 30,
+		FlushThreshold: 1,
 		AllowUnsafe:    true,
 		JournalLanes:   1,
 	}
@@ -24,12 +27,24 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
-		t.Fatalf("Set: %v", err)
-	}
-
-	// Rotate mutable to queue.
+	// Populate the current mutable memtable without triggering background flush.
 	db.mu.Lock()
+	if len(db.mutableShards) == 0 {
+		db.mu.Unlock()
+		t.Fatalf("no mutable shards")
+	}
+	shard := &db.mutableShards[0]
+	shard.mu.Lock()
+	before := shard.mem.Size()
+	shard.mem.SetEntry([]byte("k1"), []byte("v1"), page.ValuePtr{}, node.FlagInline)
+	shard.rng.add([]byte("k1"))
+	after := shard.mem.Size()
+	delta := after - before
+	shard.bytes = after
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+
+	// Rotate mutable to queue (without triggering background flush).
 	if err := db.rotateMemtableLocked(false); err != nil {
 		db.mu.Unlock()
 		t.Fatalf("rotateMemtableLocked: %v", err)
