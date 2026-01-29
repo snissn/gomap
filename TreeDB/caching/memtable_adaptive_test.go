@@ -63,7 +63,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	}
 }
 
-func TestAdaptiveMemtableMode_SequentialWritesStaySkiplist(t *testing.T) {
+func TestAdaptiveMemtableMode_SequentialWritesSwitchToHashSorted(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -103,7 +103,7 @@ func TestAdaptiveMemtableMode_SequentialWritesStaySkiplist(t *testing.T) {
 	if got := stats["treedb.cache.memtable_warmup_active"]; got != "false" {
 		t.Fatalf("expected warmup to be finished after rotation, got %q", got)
 	}
-	if got := stats["treedb.cache.memtable_mode"]; got != "skiplist" {
-		t.Fatalf("expected sequential workload to keep skiplist mode, got %q", got)
+	if got := stats["treedb.cache.memtable_mode"]; got != "hash_sorted" {
+		t.Fatalf("expected sequential workload to switch to hash_sorted, got %q", got)
 	}
 }
