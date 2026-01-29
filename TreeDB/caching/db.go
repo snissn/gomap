@@ -2877,6 +2877,7 @@ func (db *DB) processCommitJob(job commitJob) {
 	if err := db.backgroundError(); err != nil {
 		if job.done != nil {
 			job.done <- err
+			close(job.done)
 		}
 		_ = job.backendBatch.Close()
 		return
@@ -2897,6 +2898,7 @@ func (db *DB) processCommitJob(job commitJob) {
 		db.reportError(err)
 		if job.done != nil {
 			job.done <- err
+			close(job.done)
 		}
 		return
 	}
@@ -2963,6 +2965,7 @@ func (db *DB) processCommitJob(job commitJob) {
 
 	if job.done != nil {
 		job.done <- nil
+		close(job.done)
 	}
 }
 
