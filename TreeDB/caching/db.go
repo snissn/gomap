@@ -2824,12 +2824,14 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
 	ops = ops[:0]
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
+		key := append([]byte(nil), iter.UnsafeKey()...)
 		if flags&node.FlagTombstone != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: iter.UnsafeKey()})
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
 		} else if flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), ValuePtr: ptr, IsPtr: true})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 		} else {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), Value: val})
+			value := append([]byte(nil), val...)
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 		}
 		iter.Next()
 		if len(ops) >= cap(ops) {
@@ -5942,17 +5944,33 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}()
 
 		unitRuns := make([][][]batch.Entry, len(units))
+		failed := false
 		for res := range results {
 			if res.err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
-					}
+				if !failed {
+					db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
 				}
-				return false
+				failed = true
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
+			}
+			if failed {
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
 			}
 			unitRuns[res.idx] = res.runs
+		}
+		if failed {
+			for _, runs := range unitRuns {
+				for _, run := range runs {
+					putEntrySlice(run)
+				}
+			}
+			return false
 		}
 
 		sizeHint := totalLen
