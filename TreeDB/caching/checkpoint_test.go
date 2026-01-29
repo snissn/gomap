@@ -315,7 +315,18 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	}
 	walFiles := countCommitLogFiles(ents)
 	if walFiles != 1 {
-		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+		deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+		for walFiles != 1 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			ents, err = os.ReadDir(walDir)
+			if err != nil {
+				t.Fatalf("ReadDir(wal): %v", err)
+			}
+			walFiles = countCommitLogFiles(ents)
+		}
+		if walFiles != 1 {
+			t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+		}
 	}
 }
 

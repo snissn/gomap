@@ -1082,7 +1082,11 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		}
 	}
 
-	active, snap := waitForDictActivation(db, 10*time.Second)
+	maxWait := 10 * time.Second
+	if cfg.Mode == "wal_off" {
+		maxWait = 20 * time.Second
+	}
+	active, snap := waitForDictActivation(db, maxWait)
 	if !active {
 		return false, snap, fmt.Errorf("value-log dict did not become active before steady (mode=%s). Try increasing -train/-bench-raw-mib or lowering -bench-flush-threshold-mib; if it persists, this is a bug", cfg.Mode)
 	}
