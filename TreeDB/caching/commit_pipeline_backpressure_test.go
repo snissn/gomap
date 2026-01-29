@@ -13,7 +13,7 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	backend := NewMockBackend()
 
 	opts := Options{
-		FlushThreshold: 1,
+		FlushThreshold: 1 << 30,
 		AllowUnsafe:    true,
 		JournalLanes:   1,
 	}
@@ -38,7 +38,9 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 
 	// Simulate an in-flight commit for lane 0 to force backpressure.
 	lane := &db.lanes[0]
+	lane.commitMu.Lock()
 	lane.commitsInFlight.Store(1)
+	lane.commitMu.Unlock()
 
 	// Kick off a flush in another goroutine; it should block until we release the lane.
 	done := make(chan bool, 1)
@@ -50,8 +52,10 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	// Ensure the flush is blocked while the commit is "in flight".
 	select {
 	case <-done:
+		lane.commitMu.Lock()
 		lane.commitsInFlight.Store(0)
 		lane.commitCond.Broadcast()
+		lane.commitMu.Unlock()
 		t.Fatalf("flushLaneOnce returned while commit was in flight")
 	case <-time.After(50 * time.Millisecond):
 		// Expected: still blocked.
