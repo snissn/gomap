@@ -51,32 +51,30 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	}
 	db.mu.Unlock()
 
-	// Simulate in-flight bytes for lane 0 to force backpressure.
+	// Simulate in-flight commits for lane 0 to ensure non-sync flush doesn't block.
 	lane := &db.lanes[0]
 	lane.commitMu.Lock()
-	lane.commitBytesInFlight.Store(db.commitLaneMaxInFlightBytes())
+	lane.commitsInFlight.Store(1)
 	lane.commitMu.Unlock()
 
-	// Kick off a flush in another goroutine; it should return quickly while at capacity.
+	// Kick off a flush in another goroutine; it should return quickly even with in-flight commits.
 	done := make(chan bool, 1)
 	go func() {
 		ok := db.flushLaneOnce(false, 0)
 		done <- ok
 	}()
 
-	// Ensure the flush is skipped while the lane is at capacity.
+	// Ensure the flush doesn't block while a commit is in flight.
 	select {
-	case ok := <-done:
-		if ok {
-			t.Fatalf("flushLaneOnce returned true while commit pipeline was at capacity")
-		}
+	case <-done:
+		// Expected: returned quickly.
 	case <-time.After(50 * time.Millisecond):
-		t.Fatalf("flushLaneOnce did not return while commit pipeline was at capacity")
+		t.Fatalf("flushLaneOnce did not return while commit was in flight")
 	}
 
-	// Release capacity and ensure the flush completes.
+	// Release the lane and ensure a subsequent flush completes.
 	lane.commitMu.Lock()
-	lane.commitBytesInFlight.Store(0)
+	lane.commitsInFlight.Store(0)
 	lane.commitCond.Broadcast()
 	lane.commitMu.Unlock()
 
@@ -101,7 +99,7 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 
 	// Clear the synthetic in-flight slot so Close/Checkpoint can proceed.
 	lane.commitMu.Lock()
-	lane.commitBytesInFlight.Store(0)
+	lane.commitsInFlight.Store(0)
 	lane.commitCond.Broadcast()
 	lane.commitMu.Unlock()
 

@@ -2845,6 +2845,10 @@ func (db *DB) commitWorker() {
 
 func (db *DB) processCommitJob(job commitJob) {
 	defer db.commitWg.Done()
+	start := time.Time{}
+	if db.debugFlushTiming {
+		start = time.Now()
+	}
 	defer func() {
 		if job.laneID >= 0 && job.laneID < len(db.lanes) {
 			l := &db.lanes[job.laneID]
@@ -2892,6 +2896,11 @@ func (db *DB) processCommitJob(job commitJob) {
 			close(job.done)
 		}
 		return
+	}
+
+	if db.debugFlushTiming {
+		dur := time.Since(start)
+		fmt.Fprintf(os.Stderr, "cachingdb: lane=%d commit_done total_bytes=%d total_len=%d dur=%s\n", job.laneID, job.totalBytes, job.totalLen, dur)
 	}
 
 	// Successful backend commit. Remove units from the memory queue.
@@ -6136,6 +6145,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	db.commitWg.Add(1)
 	select {
 	case db.commitCh <- job:
+		if db.debugFlushTiming {
+			fmt.Fprintf(os.Stderr, "cachingdb: lane=%d commit_enqueued total_bytes=%d total_len=%d queue=%d\n",
+				laneID, totalBytes, totalLen, len(db.commitCh))
+		}
 		// enqueued
 	case <-db.closeCh:
 		db.commitWg.Done()
