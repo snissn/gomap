@@ -5975,6 +5975,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.flushingIDs[id] = struct{}{}
 	}
 	db.mu.Unlock()
+	clearFlushing := func() {
+		db.mu.Lock()
+		for _, id := range ids {
+			delete(db.flushingIDs, id)
+		}
+		db.mu.Unlock()
+	}
 
 	sizeHint := totalLen
 	if sizeHint > flushBackendBatchInitEntries {
@@ -5994,6 +6001,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if err != nil {
 				db.reportError(err)
 				_ = backendBatch.Close()
+				clearFlushing()
 				return false
 			}
 		}
@@ -6014,6 +6022,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
+						clearFlushing()
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
@@ -6022,6 +6031,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
 							_ = backendBatch.Close()
+							clearFlushing()
 							return false
 						}
 					} else {
@@ -6033,6 +6043,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
+								clearFlushing()
 								return false
 							}
 						} else {
@@ -6041,6 +6052,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
+								clearFlushing()
 								return false
 							}
 						}
@@ -6050,6 +6062,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
+						clearFlushing()
 						return false
 					}
 				}
@@ -6059,11 +6072,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
+				clearFlushing()
 				return false
 			}
 			if err := iter.Close(); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
 				_ = backendBatch.Close()
+				clearFlushing()
 				return false
 			}
 		}
@@ -6073,12 +6088,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if err := db.flushValueLog(laneID); err != nil {
 			db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 			_ = backendBatch.Close()
+			clearFlushing()
 			return false
 		}
 		if sync && !db.relaxedSync {
 			if err := db.syncValueLog(laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 				_ = backendBatch.Close()
+				clearFlushing()
 				return false
 			}
 		}
