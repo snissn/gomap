@@ -1402,7 +1402,6 @@ type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
 	writeMu sync.RWMutex
-	statsMu sync.Mutex // Re-introduce global statsMu for isolation
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
@@ -1518,7 +1517,6 @@ type DB struct {
 	memtableMode            memtable.Mode
 	memtableStats           memtableStats
 	memtableAdaptive        bool
-	adaptiveShardedStats    bool
 	memtableWarmupActive    bool
 	memtableWarmupThreshold int64
 	maxQueuedMemtables      int
@@ -1598,7 +1596,6 @@ type memShard struct {
 	mem   memtable.Table
 	rng   keyRange
 	bytes int64
-	stats memtableStats
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -1850,7 +1847,7 @@ func (db *DB) mutableFlushThreshold() int64 {
 }
 
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
-	// Read stats atomially (no global lock needed for counts)
+	// Read stats atomically (no global lock needed for counts)
 	writes := db.memtableStats.writes.Load()
 	seqWrites := db.memtableStats.seqWrites.Load()
 	iters := db.memtableStats.iterators.Load()
@@ -1976,7 +1973,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCount <= 0 {
 		laneCount = 1
 	}
-	// Temporarily remove the logic that increases laneCount based on maxLaneID
+	// Ensure laneCount is at least maxLaneID+1 based on existing WAL segments.
 	if maxLaneID+1 > laneCount {
 		laneCount = maxLaneID + 1
 	}
@@ -3111,8 +3108,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					l.vlogMu.Unlock()
 					return nil, errWALUnavailable
 				}
-				statsWriter, _ = w.(frameStatsWriter)
-				statsWriterInto, _ = w.(frameStatsWriterInto)
+				statsWriter, hasStats = w.(frameStatsWriter)
+				statsWriterInto, hasInto = w.(frameStatsWriterInto)
 			}
 
 			end := i + k
@@ -5704,7 +5701,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	flushStart := time.Now()
 
-	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
@@ -5893,10 +5889,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.bpMu.Unlock()
 	}
 	return true
-}
-
-func (db *DB) finalizeFlushStats(totalLen int, totalBytes int64, flushDur, durPreVlog, durBuild, durSet, durPostVlog, durPostVlogSync, durBackendWrite time.Duration) error {
-	return nil
 }
 
 func (db *DB) flushOneLocked(sync bool) bool {
