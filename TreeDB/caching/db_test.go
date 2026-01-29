@@ -392,8 +392,8 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	backend.mu.RLock()
 	writeCalls := backend.writeCalls
 	backend.mu.RUnlock()
-	if writeCalls != 3 {
-		t.Fatalf("expected 3 backend batch commits (sequential flush), got %d", writeCalls)
+	if writeCalls != 1 {
+		t.Fatalf("expected 1 backend batch commit, got %d", writeCalls)
 	}
 
 	got, err := db.backend.Get([]byte("k"))
