@@ -148,7 +148,7 @@ const (
 	maxMemtablePrealloc        = 256 << 20
 	adaptiveMinWrites          = 1024
 	adaptiveSequentialWritePct = 0.85
-	adaptiveWarmupBytes        = 16 * 1024 * 1024
+	adaptiveWarmupBytes        = 64 * 1024 * 1024
 	maxMemtableBytesPerShard   = int64(3 << 30)
 )
 
@@ -2260,7 +2260,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		commitCap = 1
 	}
 	db.commitCh = make(chan commitJob, commitCap*commitQueueDepthPerLane)
-	numWorkers := 4
+	numWorkers := 1
 	for i := 0; i < numWorkers; i++ {
 		db.commitWorkerWg.Add(1)
 		go db.commitWorker()
