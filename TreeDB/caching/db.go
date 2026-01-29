@@ -1926,7 +1926,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.WriterFlushMaxMemtables = 1
 	}
 	if opts.FlushBuildConcurrency <= 0 {
-		opts.FlushBuildConcurrency = 1
+		opts.FlushBuildConcurrency = runtime.GOMAXPROCS(0)
+		if opts.FlushBuildConcurrency < 1 {
+			opts.FlushBuildConcurrency = 1
+		}
 	}
 	if opts.FlushBuildMinEntries <= 0 {
 		opts.FlushBuildMinEntries = 16 * 1024
@@ -2677,6 +2680,184 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		return 0, err
 	}
 	return i, nil
+}
+
+type opRunIter struct {
+	runs   [][]batch.Entry
+	runIdx int
+	idx    int
+	valid  bool
+}
+
+func newOpRunIter(runs [][]batch.Entry) *opRunIter {
+	it := &opRunIter{runs: runs}
+	it.advanceToValid()
+	return it
+}
+
+func (it *opRunIter) advanceToValid() {
+	for it.runIdx < len(it.runs) {
+		if it.idx < len(it.runs[it.runIdx]) {
+			it.valid = true
+			return
+		}
+		it.runIdx++
+		it.idx = 0
+	}
+	it.valid = false
+}
+
+func (it *opRunIter) Valid() bool {
+	return it.valid
+}
+
+func (it *opRunIter) Next() {
+	if !it.valid {
+		return
+	}
+	it.idx++
+	it.advanceToValid()
+}
+
+func (it *opRunIter) Entry() batch.Entry {
+	if !it.valid {
+		return batch.Entry{}
+	}
+	return it.runs[it.runIdx][it.idx]
+}
+
+func (it *opRunIter) Key() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.runs[it.runIdx][it.idx].Key
+}
+
+type opMergeItem struct {
+	iter     *opRunIter
+	priority int
+	key      []byte
+}
+
+type opMergeHeap []opMergeItem
+
+func (h opMergeHeap) Len() int { return len(h) }
+
+func (h opMergeHeap) Less(i, j int) bool {
+	cmp := bytes.Compare(h[i].key, h[j].key)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+
+func (h opMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *opMergeHeap) push(x opMergeItem) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+func (h *opMergeHeap) pop() opMergeItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return opMergeItem{}
+	}
+	old.Swap(0, n-1)
+	h.down(0, n-1)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+func (h opMergeHeap) peek() *opMergeItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+func (h *opMergeHeap) up(j int) {
+	for {
+		i := (j - 1) / 2
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *opMergeHeap) down(i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
+	if mem == nil {
+		return nil, errors.New("cachingdb: nil memtable")
+	}
+	if chunkCap <= 0 {
+		chunkCap = 8192
+	}
+	iter := mem.NewIterator(nil, nil)
+	var runs [][]batch.Entry
+	ops := getEntrySlice(chunkCap)
+	ops = ops[:0]
+	for iter.Valid() {
+		val, ptr, flags := iter.UnsafeEntry()
+		key := append([]byte(nil), iter.UnsafeKey()...)
+		if flags&node.FlagTombstone != 0 {
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
+		} else if flags&node.FlagPointer != 0 {
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+		} else {
+			value := append([]byte(nil), val...)
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+		}
+		iter.Next()
+		if len(ops) >= cap(ops) {
+			runs = append(runs, ops)
+			ops = getEntrySlice(chunkCap)
+			ops = ops[:0]
+		}
+	}
+	err := iter.Error()
+	cerr := iter.Close()
+	if err == nil {
+		err = cerr
+	}
+	if err != nil {
+		putEntrySlice(ops)
+		for _, run := range runs {
+			putEntrySlice(run)
+		}
+		return nil, err
+	}
+	if len(ops) > 0 {
+		runs = append(runs, ops)
+	} else {
+		putEntrySlice(ops)
+	}
+	return runs, nil
 }
 
 type walFastItem struct {
@@ -5681,7 +5862,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.mu.Unlock()
 		return false
 	}
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, 1, 0)
+	maxMemtables := 1
+	targetBytes := int64(0)
+	if db.flushBuildConcurrency > 1 {
+		maxMemtables = flushCombineMaxMemtables
+		targetBytes = flushCombineTargetBytes
+	}
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
 	if len(units) == 0 {
 		return false
@@ -5697,6 +5884,297 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.mu.Unlock()
 		return true
 	}
+
+	useParallel := db.flushBuildConcurrency > 1 &&
+		totalLen >= db.flushBuildMinEntries &&
+		len(units) >= db.flushBuildMinUnits &&
+		runtime.GOMAXPROCS(0) > 1
+
+	if useParallel && !db.deferredValueLogEnabled() {
+		chunkCap := db.flushBuildChunkCap
+		if chunkCap < 0 {
+			chunkCap = 8192
+		}
+
+		type buildResult struct {
+			idx  int
+			runs [][]batch.Entry
+			err  error
+		}
+
+		jobs := make(chan int, len(units))
+		results := make(chan buildResult, len(units))
+		closeCh := db.closeCh
+
+		for i := range units {
+			jobs <- i
+		}
+		close(jobs)
+
+		workers := db.flushBuildConcurrency
+		if workers <= 0 {
+			workers = 1
+		}
+		if workers > len(units) {
+			workers = len(units)
+		}
+
+		done := make(chan struct{}, workers)
+		for w := 0; w < workers; w++ {
+			go func() {
+				defer func() { done <- struct{}{} }()
+				for idx := range jobs {
+					select {
+					case <-closeCh:
+						results <- buildResult{idx: idx, err: errDBClosing}
+						continue
+					default:
+					}
+					runs, err := buildOpRuns(units[idx].mem, chunkCap)
+					results <- buildResult{idx: idx, runs: runs, err: err}
+				}
+			}()
+		}
+
+		go func() {
+			for i := 0; i < workers; i++ {
+				<-done
+			}
+			close(results)
+		}()
+
+		unitRuns := make([][][]batch.Entry, len(units))
+		failed := false
+		for res := range results {
+			if res.err != nil {
+				if !failed {
+					db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
+				}
+				failed = true
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
+			}
+			if failed {
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
+			}
+			unitRuns[res.idx] = res.runs
+		}
+		if failed {
+			for _, runs := range unitRuns {
+				for _, run := range runs {
+					putEntrySlice(run)
+				}
+			}
+			return false
+		}
+
+		sizeHint := totalLen
+		if sizeHint > flushBackendBatchInitEntries {
+			sizeHint = flushBackendBatchInitEntries
+		}
+		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		flushStart := time.Now()
+
+		type ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
+		ps, _ := backendBatch.(ptrSetter)
+		var single [1]batch.Entry
+
+		var heap opMergeHeap
+		heap = heap[:0]
+		for i := range unitRuns {
+			if len(unitRuns[i]) == 0 {
+				continue
+			}
+			it := newOpRunIter(unitRuns[i])
+			if it.Valid() {
+				priority := len(unitRuns) - 1 - i
+				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+			}
+		}
+		for i := len(heap)/2 - 1; i >= 0; i-- {
+			(&heap).down(i, len(heap))
+		}
+
+		for len(heap) > 0 {
+			top := heap.pop()
+			currentKey := top.key
+
+			for len(heap) > 0 {
+				next := heap.peek()
+				if next != nil && bytes.Equal(next.key, currentKey) {
+					shadowed := heap.pop()
+					shadowed.iter.Next()
+					if shadowed.iter.Valid() {
+						shadowed.key = shadowed.iter.Key()
+						heap.push(shadowed)
+					}
+					continue
+				}
+				break
+			}
+
+			entry := top.iter.Entry()
+			var err error
+			if entry.Type == batch.OpDelete {
+				err = backendBatch.Delete(entry.Key)
+			} else if entry.IsPtr {
+				if ps != nil {
+					err = ps.SetPointer(entry.Key, entry.ValuePtr)
+				} else {
+					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
+					err = backendBatch.SetOps(single[:])
+				}
+			} else {
+				err = backendBatch.Set(entry.Key, entry.Value)
+			}
+			if err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+				_ = backendBatch.Close()
+				for _, runs := range unitRuns {
+					for _, run := range runs {
+						putEntrySlice(run)
+					}
+				}
+				return false
+			}
+
+			top.iter.Next()
+			if top.iter.Valid() {
+				top.key = top.iter.Key()
+				heap.push(top)
+			}
+		}
+
+		if db.valueLogEnabled() {
+			if err := db.flushValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
+				_ = backendBatch.Close()
+				for _, runs := range unitRuns {
+					for _, run := range runs {
+						putEntrySlice(run)
+					}
+				}
+				return false
+			}
+			if sync && !db.relaxedSync {
+				if err := db.syncValueLog(laneID); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+					_ = backendBatch.Close()
+					for _, runs := range unitRuns {
+						for _, run := range runs {
+							putEntrySlice(run)
+						}
+					}
+					return false
+				}
+			}
+		}
+
+		var err error
+		if sync {
+			err = backendBatch.WriteSync()
+		} else {
+			err = backendBatch.Write()
+		}
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			db.reportError(err)
+			for _, runs := range unitRuns {
+				for _, run := range runs {
+					putEntrySlice(run)
+				}
+			}
+			return false
+		}
+
+		for _, runs := range unitRuns {
+			for _, run := range runs {
+				putEntrySlice(run)
+			}
+		}
+
+		db.mu.Lock()
+		removeIDs := make(map[uint64]struct{}, len(ids))
+		for _, id := range ids {
+			removeIDs[id] = struct{}{}
+		}
+		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+
+		deletable := make([]string, 0, len(units))
+		if sync {
+			inUse := make(map[string]struct{})
+			for _, path := range db.currentWALPaths() {
+				inUse[path] = struct{}{}
+			}
+			for _, paths := range db.queueWALPaths {
+				for _, path := range paths {
+					inUse[path] = struct{}{}
+				}
+			}
+			seen := make(map[string]struct{})
+			for _, unit := range units {
+				for _, walPath := range unit.walPaths {
+					if walPath == "" {
+						continue
+					}
+					if _, ok := inUse[walPath]; ok {
+						continue
+					}
+					if _, ok := seen[walPath]; ok {
+						continue
+					}
+					if db.valueLogRetained(walPath) {
+						continue
+					}
+					seen[walPath] = struct{}{}
+					deletable = append(deletable, walPath)
+				}
+			}
+		}
+		db.mu.Unlock()
+
+		removed := false
+		for _, walPath := range deletable {
+			db.dropValueLogSegment(walPath)
+			if err := db.removeFileRetry(walPath); err != nil {
+				continue
+			}
+			removed = true
+			db.mu.Lock()
+			db.untrackWALSegmentLocked(walPath)
+			db.mu.Unlock()
+			db.forgetValueLogRetain(walPath)
+		}
+		if removed {
+			db.syncDirBestEffort(db.dir)
+		}
+		db.checkValueLogRetention()
+
+		flushDur := time.Since(flushStart)
+		if flushDur > 0 && totalBytes > 0 {
+			sample := float64(totalBytes) / flushDur.Seconds()
+			db.bpMu.Lock()
+			if db.flushBpsEWMA <= 0 {
+				db.flushBpsEWMA = sample
+			} else {
+				db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+			}
+			db.bpCond.Broadcast()
+			db.bpMu.Unlock()
+		}
+		return true
+	}
+
 	sizeHint := totalLen
 	if sizeHint > flushBackendBatchInitEntries {
 		sizeHint = flushBackendBatchInitEntries
