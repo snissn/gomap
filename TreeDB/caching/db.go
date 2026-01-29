@@ -1396,12 +1396,6 @@ type DictStore interface {
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
-type commitRequest struct {
-	batch  batch.Interface
-	sync   bool
-	result chan error // To signal back the result
-}
-
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
@@ -1410,9 +1404,7 @@ type DB struct {
 	bpMu    sync.Mutex
 	bpCond  *sync.Cond
 
-	// Commit worker
-	commitCh       chan commitRequest
-	commitWorkerWg sync.WaitGroup
+	// Commit workers removed; backend commits are synchronous.
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -2164,8 +2156,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
-	// Start the commit worker goroutines
-
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled: the value log
 	// may be active even when the journal is disabled.
@@ -2814,32 +2804,6 @@ func (db *DB) walFastLoop(l *lane) {
 			ack := batch[i].ack
 			ack.err = err
 			ack.wg.Done()
-		}
-	}
-}
-
-// commitWorkerLoop receives commit requests and performs the commit in the backend.
-// Multiple workers can run in parallel since the backend supports optimistic
-// parallel B-Tree updates and has its own internal serialization for the final swap.
-func (db *DB) commitWorkerLoop() {
-	defer db.commitWorkerWg.Done()
-
-	for req := range db.commitCh {
-		var err error
-		if req.sync {
-			err = req.batch.WriteSync()
-		} else {
-			err = req.batch.Write()
-		}
-		cerr := req.batch.Close()
-		if err == nil {
-			err = cerr
-		}
-
-		// Signal completion back to the caller
-		if req.result != nil {
-			req.result <- err
-			close(req.result)
 		}
 	}
 }
@@ -4057,10 +4021,6 @@ func (db *DB) Close() error {
 	close(db.closeCh)
 	db.writeMu.Unlock()
 	db.wg.Wait()
-	if db.commitCh != nil {
-		close(db.commitCh)
-		db.commitWorkerWg.Wait()
-	}
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
@@ -5746,7 +5706,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
 			err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, laneID)
-			iter.Close()
+			cerr := iter.Close()
+			if err == nil {
+				err = cerr
+			}
 			if err != nil {
 				db.reportError(err)
 				_ = backendBatch.Close()
@@ -5765,19 +5728,33 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
 				if flags&node.FlagTombstone != 0 {
-					_ = backendBatch.Delete(key)
+					if err := backendBatch.Delete(key); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
 				} else if flags&node.FlagPointer != 0 {
 					if ps != nil {
-						_ = ps.SetPointer(key, ptr)
+						if err := ps.SetPointer(key, ptr); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
 					} else {
 						type ptrSetterLegacy interface {
 							SetPointer(key []byte, ptr page.ValuePtr) error
 						}
 						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
-							_ = psl.SetPointer(key, ptr)
+							if err := psl.SetPointer(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
 						} else {
 							// Unsupported backend: fail unsafe pointer write.
-							_ = backendBatch.Set(key, nil) // Fallback or error
 							db.reportError(fmt.Errorf("cachingdb: flush failed (ptr not supported): %s", key))
 							_ = iter.Close()
 							_ = backendBatch.Close()
@@ -5785,7 +5762,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						}
 					}
 				} else {
-					_ = backendBatch.Set(key, val)
+					if err := backendBatch.Set(key, val); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
 				}
 				iter.Next()
 			}
@@ -6140,7 +6122,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 			durBuildOps = time.Since(t0)
 		}
-		_ = iter.Close()
+		if err := iter.Close(); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+			_ = backendBatch.Close()
+			return false
+		}
 		// Commit to backend
 		if db.valueLogEnabled() && !vlogFlushed {
 			t0 := time.Now()
@@ -6175,10 +6161,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			durBackendWrite += time.Since(tw)
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+				return false
 			}
-			backendBatch = nil // Batch is now owned by the commit worker.
+			backendBatch = nil
 		} else {
-			_ = backendBatch.Close() // Close the batch if nothing was written
+			if err := backendBatch.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (close): %w", err))
+				return false
+			}
 		}
 		flushed = true
 	}
