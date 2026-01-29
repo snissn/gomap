@@ -2391,6 +2391,12 @@ func (db *DB) reportError(err error) {
 		db.bgErr = err
 	}
 	db.bgErrMu.Unlock()
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.commitMu.Lock()
+		l.commitCond.Broadcast()
+		l.commitMu.Unlock()
+	}
 }
 
 func (db *DB) backgroundError() error {
@@ -5956,6 +5962,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		l := &db.lanes[laneID]
 		l.commitMu.Lock()
 		for l.commitsInFlight.Load() >= 1 {
+			if err := db.backgroundError(); err != nil {
+				l.commitMu.Unlock()
+				return false
+			}
 			l.commitCond.Wait()
 		}
 		l.commitMu.Unlock()
@@ -6126,7 +6136,25 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.lanes[laneID].commitsInFlight.Add(1)
 	}
 	db.commitWg.Add(1)
-	db.commitCh <- job
+	select {
+	case db.commitCh <- job:
+		// enqueued
+	case <-db.closeCh:
+		db.commitWg.Done()
+		if laneID >= 0 && laneID < len(db.lanes) {
+			l := &db.lanes[laneID]
+			l.commitsInFlight.Add(-1)
+			l.commitMu.Lock()
+			l.commitCond.Broadcast()
+			l.commitMu.Unlock()
+		}
+		if job.done != nil {
+			close(job.done)
+		}
+		_ = backendBatch.Close()
+		clearFlushing()
+		return false
+	}
 
 	if sync {
 		err := <-job.done
