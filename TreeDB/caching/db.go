@@ -2849,6 +2849,9 @@ func (db *DB) processCommitJob(job commitJob) {
 		if job.laneID >= 0 && job.laneID < len(db.lanes) {
 			l := &db.lanes[job.laneID]
 			l.commitsInFlight.Add(-1)
+			if job.totalBytes > 0 {
+				l.commitBytesInFlight.Add(-job.totalBytes)
+			}
 			l.commitMu.Lock()
 			l.commitCond.Broadcast()
 			l.commitMu.Unlock()
@@ -5571,6 +5574,17 @@ func (db *DB) flushSyncRequested(sync bool) bool {
 	return sync && !db.relaxedSync
 }
 
+func (db *DB) commitLaneMaxInFlightBytes() int64 {
+	if db == nil {
+		return 0
+	}
+	capBytes := db.flushThreshold
+	if capBytes <= 0 {
+		capBytes = 64 << 20
+	}
+	return capBytes * commitLaneMaxInFlightBytesMul
+}
+
 func (db *DB) pickFlushLane() (int, bool) {
 	db.mu.RLock()
 	if len(db.queue) == 0 {
@@ -5688,10 +5702,10 @@ func (db *DB) flushOne() bool {
 }
 
 const (
-	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
-	flushCombineMaxMemtables       = 32
-	commitQueueDepthPerLane        = 2
-	commitLaneMaxInFlight          = 2
+	flushCombineTargetBytes       int64 = 64 * 1024 * 1024 // 64MiB
+	flushCombineMaxMemtables            = 32
+	commitQueueDepthPerLane             = 2
+	commitLaneMaxInFlightBytesMul       = 2
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -5940,8 +5954,11 @@ func (db *DB) dropUnitsFromQueueLocked(removeIDs map[uint64]struct{}, units []fl
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if laneID >= 0 && laneID < len(db.lanes) {
 		l := &db.lanes[laneID]
-		if !sync && l.commitsInFlight.Load() >= commitLaneMaxInFlight {
-			return false
+		if !sync {
+			maxBytes := db.commitLaneMaxInFlightBytes()
+			if maxBytes > 0 && l.commitBytesInFlight.Load() >= maxBytes {
+				return false
+			}
 		}
 		l.commitMu.Lock()
 		for sync && l.commitsInFlight.Load() >= 1 {
@@ -6116,7 +6133,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	}
 
 	if laneID >= 0 && laneID < len(db.lanes) {
-		db.lanes[laneID].commitsInFlight.Add(1)
+		l := &db.lanes[laneID]
+		l.commitsInFlight.Add(1)
+		if totalBytes > 0 {
+			l.commitBytesInFlight.Add(totalBytes)
+		}
 	}
 	db.commitWg.Add(1)
 	select {
@@ -6127,6 +6148,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if laneID >= 0 && laneID < len(db.lanes) {
 			l := &db.lanes[laneID]
 			l.commitsInFlight.Add(-1)
+			if totalBytes > 0 {
+				l.commitBytesInFlight.Add(-totalBytes)
+			}
 			l.commitMu.Lock()
 			l.commitCond.Broadcast()
 			l.commitMu.Unlock()

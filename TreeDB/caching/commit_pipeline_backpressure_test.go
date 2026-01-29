@@ -51,10 +51,10 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	}
 	db.mu.Unlock()
 
-	// Simulate in-flight commits for lane 0 to force backpressure.
+	// Simulate in-flight bytes for lane 0 to force backpressure.
 	lane := &db.lanes[0]
 	lane.commitMu.Lock()
-	lane.commitsInFlight.Store(2)
+	lane.commitBytesInFlight.Store(db.commitLaneMaxInFlightBytes())
 	lane.commitMu.Unlock()
 
 	// Kick off a flush in another goroutine; it should return quickly while at capacity.
@@ -76,7 +76,7 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 
 	// Release capacity and ensure the flush completes.
 	lane.commitMu.Lock()
-	lane.commitsInFlight.Store(1)
+	lane.commitBytesInFlight.Store(0)
 	lane.commitCond.Broadcast()
 	lane.commitMu.Unlock()
 
@@ -101,7 +101,7 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 
 	// Clear the synthetic in-flight slot so Close/Checkpoint can proceed.
 	lane.commitMu.Lock()
-	lane.commitsInFlight.Store(0)
+	lane.commitBytesInFlight.Store(0)
 	lane.commitCond.Broadcast()
 	lane.commitMu.Unlock()
 
