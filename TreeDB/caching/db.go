@@ -1926,7 +1926,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.WriterFlushMaxMemtables = 1
 	}
 	if opts.FlushBuildConcurrency <= 0 {
-		opts.FlushBuildConcurrency = 1
+		opts.FlushBuildConcurrency = runtime.GOMAXPROCS(0)
+		if opts.FlushBuildConcurrency < 1 {
+			opts.FlushBuildConcurrency = 1
+		}
 	}
 	if opts.FlushBuildMinEntries <= 0 {
 		opts.FlushBuildMinEntries = 16 * 1024
