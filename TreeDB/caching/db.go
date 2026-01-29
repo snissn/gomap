@@ -5954,12 +5954,6 @@ func (db *DB) dropUnitsFromQueueLocked(removeIDs map[uint64]struct{}, units []fl
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if laneID >= 0 && laneID < len(db.lanes) {
 		l := &db.lanes[laneID]
-		if !sync {
-			maxBytes := db.commitLaneMaxInFlightBytes()
-			if maxBytes > 0 && l.commitBytesInFlight.Load() >= maxBytes {
-				return false
-			}
-		}
 		l.commitMu.Lock()
 		for sync && l.commitsInFlight.Load() >= 1 {
 			if err := db.backgroundError(); err != nil {
