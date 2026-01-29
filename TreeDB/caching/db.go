@@ -466,7 +466,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		if op.Type != batch.OpPut || op.IsPtr {
 			continue
 		}
-		if len(op.Value) <= db.valueLogThreshold {
+		if !db.forceValueLogPointers && len(op.Value) <= db.valueLogThreshold {
 			continue
 		}
 		eligible = append(eligible, i)
@@ -596,7 +596,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			return errors.New("cachingdb: flush missing value-log ptr for key")
 		}
 
-		if allowPointers && len(val) > db.valueLogThreshold {
+		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThreshold) {
 			if records == nil {
 				hint := memLen
 				if hint > flushBackendBatchMaxEntries {
@@ -1354,6 +1354,8 @@ type Options struct {
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
 	// Values <= 0 use the default inline threshold (256 bytes).
 	ValueLogPointerThreshold int
+	// ForceValueLogPointers stores all values out-of-line in the value log.
+	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
 	// AllowUnsafe acknowledges unsafe durability options.
@@ -1452,6 +1454,7 @@ type DB struct {
 
 	inlineThreshold              int
 	valueLogThreshold            int
+	forceValueLogPointers        bool
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
@@ -2125,6 +2128,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		notifyError:                    opts.NotifyError,
 		inlineThreshold:                inlineThreshold,
 		valueLogThreshold:              valueLogThreshold,
+		forceValueLogPointers:          opts.ForceValueLogPointers,
 		memtableValueLogPointers:       true,
 		valueLogReader:                 valueLogReader,
 		valueLogRetain:                 retained,
@@ -4216,7 +4220,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			durability = journalDurabilitySync
 		}
 	}
-	eligible := len(value) > db.valueLogThreshold
+	eligible := db.forceValueLogPointers || len(value) > db.valueLogThreshold
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
@@ -7576,7 +7580,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
-			if op.Type != batch.OpPut || len(op.Value) <= b.db.valueLogThreshold {
+			if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThreshold) {
 				continue
 			}
 			eligibleIdxs = append(eligibleIdxs, i)

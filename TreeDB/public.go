@@ -226,6 +226,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                        relaxedSync,
 		DisableReadChecksum:                disableReadChecksum,
 		ValueLogPointerThreshold:           opts.ValueLog.PointerThreshold,
+		ForceValueLogPointers:              opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                  opts.ValueLog.DictTrain,
 		ValueLogDictAdaptiveRatio:          opts.ValueLog.DictAdaptiveRatio,
 		ValueLogDictMetricsWindowBytes:     opts.ValueLog.DictMetricsWindowBytes,
