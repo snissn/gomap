@@ -364,7 +364,7 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 60})
+	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 60, FlushBuildConcurrency: 1})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
