@@ -1407,8 +1407,9 @@ type DB struct {
 	bpCond  *sync.Cond
 
 	// Commit pipeline
-	commitCh chan commitJob
-	commitWg sync.WaitGroup
+	commitCh       chan commitJob
+	commitWg       sync.WaitGroup
+	commitWorkerWg sync.WaitGroup
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -2261,7 +2262,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.commitCh = make(chan commitJob, commitCap*commitQueueDepthPerLane)
 	numWorkers := 4
 	for i := 0; i < numWorkers; i++ {
-		db.wg.Add(1)
+		db.commitWorkerWg.Add(1)
 		go db.commitWorker()
 	}
 
@@ -2836,32 +2837,9 @@ func (db *DB) walFastLoop(l *lane) {
 }
 
 func (db *DB) commitWorker() {
-	defer db.wg.Done()
-	for {
-		select {
-		case <-db.closeCh:
-			db.drainCommitQueue()
-			return
-		case job, ok := <-db.commitCh:
-			if !ok {
-				return
-			}
-			db.processCommitJob(job)
-		}
-	}
-}
-
-func (db *DB) drainCommitQueue() {
-	for {
-		select {
-		case job, ok := <-db.commitCh:
-			if !ok {
-				return
-			}
-			db.processCommitJob(job)
-		default:
-			return
-		}
+	defer db.commitWorkerWg.Done()
+	for job := range db.commitCh {
+		db.processCommitJob(job)
 	}
 }
 
@@ -4196,6 +4174,7 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.wg.Wait()
 	close(db.commitCh)
+	db.commitWorkerWg.Wait()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
