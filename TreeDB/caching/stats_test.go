@@ -111,17 +111,17 @@ func TestChooseAdaptiveMode(t *testing.T) {
 	}
 
 	// 2. High sequential -> HashSorted
-	// 1000 writes, 900 sequential
-	db.memtableStats.writes.Store(1000)
-	db.memtableStats.seqWrites.Store(900)
+	// adaptiveMinWrites writes, 90% sequential
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites * 9 / 10)
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
 		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeHashSorted)
 	}
 
 	// 3. High range scans -> BTree
 	// Reset
-	db.memtableStats.writes.Store(1000)
-	db.memtableStats.seqWrites.Store(100) // Low seq
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
 	db.memtableStats.iterators.Store(100)
 	db.memtableStats.rangeIters.Store(80) // 80% range
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {

@@ -2157,9 +2157,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial value-log segments (if enabled) and journal/commit log
-	// segments (if enabled). Journal and value log are decoupled: the value log
-	// may be active even when the journal is disabled.
-	if db.valueLogEnabled() && db.disableJournal {
+	// segments (if enabled). Journal and value log are decoupled.
+	if db.valueLogEnabled() {
 		for i := range db.lanes {
 			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
 				if db.valueLogReader != nil {
@@ -5721,6 +5720,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			SetPointer(key []byte, ptr page.ValuePtr) error
 		}
 		ps, _ := backendBatch.(ptrSetter)
+		var single [1]batch.Entry
 
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
@@ -5754,11 +5754,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 								return false
 							}
 						} else {
-							// Unsupported backend: fail unsafe pointer write.
-							db.reportError(fmt.Errorf("cachingdb: flush failed (ptr not supported): %s", key))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
+							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							if err := backendBatch.SetOps(single[:]); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
 						}
 					}
 				} else {
