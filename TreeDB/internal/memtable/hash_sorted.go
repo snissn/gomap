@@ -645,7 +645,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
 		oldLen := len(ent.value)
-		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
+		ent.value = m.encodeEntryValueLockedReuse(value, ptr, flags, steal, ent.value)
 		ent.flags = flags
 		m.sizeBytes += int64(len(ent.value) - oldLen)
 		if flags&node.FlagTombstone != 0 {
@@ -688,6 +688,21 @@ func (m *HashSorted) encodeEntryValueLocked(value []byte, ptr page.ValuePtr, fla
 		return value
 	}
 	return m.arena.copyBytes(value)
+}
+
+func (m *HashSorted) encodeEntryValueLockedReuse(value []byte, ptr page.ValuePtr, flags byte, steal bool, reuse []byte) []byte {
+	if flags&node.FlagPointer != 0 {
+		size := page.ValuePtrSize + len(value)
+		if cap(reuse) >= size && len(reuse) >= page.ValuePtrSize {
+			dst := reuse[:size]
+			ptr.Encode(dst[:page.ValuePtrSize])
+			if len(value) > 0 {
+				copy(dst[page.ValuePtrSize:], value)
+			}
+			return dst
+		}
+	}
+	return m.encodeEntryValueLocked(value, ptr, flags, steal)
 }
 
 func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
