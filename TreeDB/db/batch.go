@@ -117,7 +117,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	defer idx.registry.Unregister(regID)
 
-	tracker := newAllocTracker(idx.allocator)
+	tracker := newAllocTracker(idx.allocCache)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
 	if err != nil {
@@ -173,8 +173,13 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	defer idx.registry.Unregister(regID)
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	tracker := newAllocTracker(idx.allocCache)
+	z := idx.zipper.CloneWithAllocator(tracker)
+	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
 	if err != nil {
+		if freeErr := tracker.FreeAll(); freeErr != nil {
+			return freeErr
+		}
 		return err
 	}
 

@@ -18,9 +18,10 @@ import (
 type indexGen struct {
 	id uint64
 
-	pager     *pager.Pager
-	allocator *freelist.Allocator
-	zipper    *zipper.Zipper
+	pager      *pager.Pager
+	allocator  *freelist.Allocator
+	allocCache *sharedAllocCache
+	zipper     *zipper.Zipper
 
 	registry  *lifecycle.ReaderRegistry
 	graveyard *lifecycle.Graveyard
@@ -33,12 +34,13 @@ type indexGen struct {
 
 func newIndexGen(id uint64, p *pager.Pager, alloc *freelist.Allocator, z *zipper.Zipper) *indexGen {
 	g := &indexGen{
-		id:        id,
-		pager:     p,
-		allocator: alloc,
-		zipper:    z,
-		registry:  lifecycle.NewReaderRegistry(),
-		graveyard: lifecycle.NewGraveyard(),
+		id:         id,
+		pager:      p,
+		allocator:  alloc,
+		allocCache: newSharedAllocCache(alloc, 32),
+		zipper:     z,
+		registry:   lifecycle.NewReaderRegistry(),
+		graveyard:  lifecycle.NewGraveyard(),
 	}
 	g.refs.Store(1) // DB holds one ref while generation is live.
 	return g

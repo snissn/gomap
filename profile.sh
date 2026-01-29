@@ -37,6 +37,10 @@ echo "Block pprof: $BLOCK_PPROF"
 echo "Trace:       $TRACE_FILE"
 echo
 
+
+make unified-bench
+time $BIN -test batch_write -dbs treedb -profile fast -keys 2000000 -format markdown -blockprofile /tmp/review_block -cpuprofile /tmp/review_cpu -mutexprofile /tmp/mutex -trace /tmp/trace
+
 echo "---- System context (best-effort) ----"
 if command -v sysctl >/dev/null 2>&1; then
   sysctl -n hw.ncpu 2>/dev/null | awk '{print "hw.ncpu:     " $0}'

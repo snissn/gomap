@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/binary"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -34,7 +35,7 @@ func NewBuilder(data []byte, pType page.PageType) *Builder {
 }
 
 func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions) *Builder {
-	leafPrefix := opts.LeafPrefixCompression
+	leafPrefix := true
 	if opts.LeafColumnar {
 		leafPrefix = false
 	}
@@ -333,7 +334,6 @@ func sharedPrefixLen(a, b []byte) int {
 }
 
 func putUint16(dst []byte, v uint16) {
-	_ = dst[1]
-	dst[0] = byte(v)
-	dst[1] = byte(v >> 8)
+	*(*uint16)(unsafe.Pointer(&dst[0])) = v
+
 }

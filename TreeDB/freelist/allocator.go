@@ -272,11 +272,32 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	return a.allocLocked(hint)
 }
 
+// FreeMany adds many pages to the freelist under a single allocator lock.
+// It stops on the first error.
+func (a *Allocator) FreeMany(ids []uint64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, id := range ids {
+		if err := a.freeLocked(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Free adds a page to the freelist.
 func (a *Allocator) Free(id uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.freeLocked(id)
+}
 
+// freeLocked is Free's implementation that assumes a.mu is held.
+func (a *Allocator) freeLocked(id uint64) error {
 	if id == 0 {
 		return errors.New("cannot free page 0")
 	}
