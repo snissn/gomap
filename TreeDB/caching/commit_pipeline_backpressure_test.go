@@ -51,36 +51,39 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 	}
 	db.mu.Unlock()
 
-	// Simulate an in-flight commit for lane 0 to force backpressure.
+	// Simulate in-flight commits for lane 0 to force backpressure.
 	lane := &db.lanes[0]
 	lane.commitMu.Lock()
-	lane.commitsInFlight.Store(1)
+	lane.commitsInFlight.Store(2)
 	lane.commitMu.Unlock()
 
-	// Kick off a flush in another goroutine; it should block until we release the lane.
+	// Kick off a flush in another goroutine; it should return quickly while at capacity.
 	done := make(chan bool, 1)
 	go func() {
 		ok := db.flushLaneOnce(false, 0)
 		done <- ok
 	}()
 
-	// Ensure the flush is blocked while the commit is "in flight".
+	// Ensure the flush is skipped while the lane is at capacity.
 	select {
-	case <-done:
-		lane.commitMu.Lock()
-		lane.commitsInFlight.Store(0)
-		lane.commitCond.Broadcast()
-		lane.commitMu.Unlock()
-		t.Fatalf("flushLaneOnce returned while commit was in flight")
+	case ok := <-done:
+		if ok {
+			t.Fatalf("flushLaneOnce returned true while commit pipeline was at capacity")
+		}
 	case <-time.After(50 * time.Millisecond):
-		// Expected: still blocked.
+		t.Fatalf("flushLaneOnce did not return while commit pipeline was at capacity")
 	}
 
-	// Release the lane and ensure the flush completes.
+	// Release capacity and ensure the flush completes.
 	lane.commitMu.Lock()
-	lane.commitsInFlight.Store(0)
+	lane.commitsInFlight.Store(1)
 	lane.commitCond.Broadcast()
 	lane.commitMu.Unlock()
+
+	go func() {
+		ok := db.flushLaneOnce(false, 0)
+		done <- ok
+	}()
 
 	select {
 	case ok := <-done:
@@ -95,6 +98,12 @@ func TestCommitPipelineBackpressure(t *testing.T) {
 		lane.commitMu.Unlock()
 		t.Fatalf("flushLaneOnce did not return after releasing commit")
 	}
+
+	// Clear the synthetic in-flight slot so Close/Checkpoint can proceed.
+	lane.commitMu.Lock()
+	lane.commitsInFlight.Store(0)
+	lane.commitCond.Broadcast()
+	lane.commitMu.Unlock()
 
 	// Ensure queue was drained (commit job should have been enqueued and processed).
 	// Wait for any background commits to finish.

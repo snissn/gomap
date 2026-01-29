@@ -5691,6 +5691,7 @@ const (
 	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
 	flushCombineMaxMemtables       = 32
 	commitQueueDepthPerLane        = 2
+	commitLaneMaxInFlight          = 2
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -5939,7 +5940,7 @@ func (db *DB) dropUnitsFromQueueLocked(removeIDs map[uint64]struct{}, units []fl
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if laneID >= 0 && laneID < len(db.lanes) {
 		l := &db.lanes[laneID]
-		if !sync && l.commitsInFlight.Load() >= 1 {
+		if !sync && l.commitsInFlight.Load() >= commitLaneMaxInFlight {
 			return false
 		}
 		l.commitMu.Lock()
