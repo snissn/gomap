@@ -1423,8 +1423,8 @@ type DB struct {
 	queue            []memtable.Table
 	queueShardIDs    []uint16
 	queueLaneIDs     []uint16
-	queueIDs    []uint64
-	nextQueueID atomic.Uint64
+	queueIDs         []uint64
+	nextQueueID      atomic.Uint64
 
 	flushingIDs map[uint64]struct{}
 
@@ -2960,14 +2960,6 @@ func (db *DB) processCommitJob(job commitJob) {
 		db.TriggerAutoCheckpoint()
 	}
 	db.checkValueLogRetention()
-
-	if job.laneID >= 0 && job.laneID < len(db.lanes) {
-		l := &db.lanes[job.laneID]
-		l.commitsInFlight.Add(-1)
-		l.commitMu.Lock()
-		l.commitCond.Broadcast()
-		l.commitMu.Unlock()
-	}
 
 	if job.done != nil {
 		job.done <- nil
@@ -5805,7 +5797,6 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 	}
 	return units, ids, totalBytes, totalLen
 }
-
 
 func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flushUnit, totalBytes int64) {
 	for _, unit := range units {
