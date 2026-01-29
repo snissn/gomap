@@ -160,6 +160,10 @@ func (m *HashSorted) Reset() {
 
 func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
 	var chunks []hashSortedIndexWork
+	if len(entries) >= hashSortedPendingKeysInitCap {
+		est := len(entries)/hashSortedSealKeysThreshold + 1
+		chunks = make([]hashSortedIndexWork, 0, est)
+	}
 
 	m.mu.Lock()
 	for _, op := range entries {
@@ -640,7 +644,6 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := bytesToStringNoCopy(ent.key)
 		oldLen := len(ent.value)
 		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
 		ent.flags = flags
@@ -648,7 +651,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
 		}
-		m.items[storedKey] = ent
+		m.items[keyLookup] = ent
 		return nil, 0
 	}
 
