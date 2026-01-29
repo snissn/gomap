@@ -15,6 +15,7 @@ type hashEntry struct {
 	key   []byte
 	value []byte
 	flags byte
+	ptr   page.ValuePtr
 }
 
 type hashArena struct {
@@ -232,7 +233,6 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	m.mu.Lock()
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := bytesToStringNoCopy(ent.key)
 		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
 			if err := cb(ent.key, valCopy); err != nil {
@@ -240,11 +240,13 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 				return err
 			}
 		}
-		oldLen := len(ent.value)
+		oldSize := entryValueSize(ent.value, ent.flags)
 		ent.value = valCopy
 		ent.flags = node.FlagInline
-		m.sizeBytes += int64(len(valCopy) - oldLen)
-		m.items[storedKey] = ent
+		ent.ptr = page.ValuePtr{}
+		newSize := entryValueSize(ent.value, ent.flags)
+		m.sizeBytes += int64(newSize - oldSize)
+		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -289,7 +291,6 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := bytesToStringNoCopy(ent.key)
 		if cb != nil {
 			if err := cb(ent.key, nil); err != nil {
 				m.mu.Unlock()
@@ -297,11 +298,12 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			}
 		}
 		if ent.flags&node.FlagTombstone == 0 {
-			m.sizeBytes -= int64(len(ent.value))
+			m.sizeBytes -= int64(entryValueSize(ent.value, ent.flags))
 			ent.value = nil
 			ent.flags = node.FlagTombstone
+			ent.ptr = page.ValuePtr{}
 		}
-		m.items[storedKey] = ent
+		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -332,10 +334,7 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 		return nil, false, false
 	}
 	if ent.flags&node.FlagPointer != 0 {
-		if len(ent.value) > page.ValuePtrSize {
-			return ent.value[page.ValuePtrSize:], ent.flags&node.FlagTombstone != 0, true
-		}
-		return nil, ent.flags&node.FlagTombstone != 0, true
+		return ent.value, ent.flags&node.FlagTombstone != 0, true
 	}
 	return ent.value, ent.flags&node.FlagTombstone != 0, true
 }
@@ -348,14 +347,7 @@ func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	if ent.flags&node.FlagPointer != 0 {
-		if len(ent.value) >= page.ValuePtrSize {
-			inline := []byte(nil)
-			if len(ent.value) > page.ValuePtrSize {
-				inline = ent.value[page.ValuePtrSize:]
-			}
-			return inline, page.DecodeValuePtr(ent.value[:page.ValuePtrSize]), ent.flags, true
-		}
-		return nil, page.ValuePtr{}, ent.flags, true
+		return ent.value, ent.ptr, ent.flags, true
 	}
 	return ent.value, page.ValuePtr{}, ent.flags, true
 }
@@ -644,10 +636,20 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		oldLen := len(ent.value)
-		ent.value = m.encodeEntryValueLockedReuse(value, ptr, flags, steal, ent.value)
+		oldSize := entryValueSize(ent.value, ent.flags)
+		if flags&node.FlagPointer != 0 {
+			ent.value = value
+			if !steal && len(value) > 0 {
+				ent.value = m.arena.copyBytes(value)
+			}
+			ent.ptr = ptr
+		} else {
+			ent.ptr = page.ValuePtr{}
+			ent.value = m.encodeEntryValueLockedReuse(value, ptr, flags, steal, ent.value)
+		}
 		ent.flags = flags
-		m.sizeBytes += int64(len(ent.value) - oldLen)
+		newSize := entryValueSize(ent.value, ent.flags)
+		m.sizeBytes += int64(newSize - oldSize)
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
 		}
@@ -662,9 +664,23 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		keyCopy = m.arena.copyBytes(key)
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	valCopy := m.encodeEntryValueLocked(value, ptr, flags, steal)
-	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy, flags: flags}
-	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+	var valCopy []byte
+	var valSize int
+	var valPtr page.ValuePtr
+	if flags&node.FlagPointer != 0 {
+		valCopy = value
+		if !steal && len(value) > 0 {
+			valCopy = m.arena.copyBytes(value)
+		}
+		valPtr = ptr
+		valSize = entryValueSize(valCopy, flags)
+	} else {
+		valCopy = m.encodeEntryValueLocked(value, ptr, flags, steal)
+		valPtr = page.ValuePtr{}
+		valSize = entryValueSize(valCopy, flags)
+	}
+	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy, flags: flags, ptr: valPtr}
+	m.sizeBytes += int64(len(keyCopy) + valSize)
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
 	}
@@ -703,6 +719,16 @@ func (m *HashSorted) encodeEntryValueLockedReuse(value []byte, ptr page.ValuePtr
 		}
 	}
 	return m.encodeEntryValueLocked(value, ptr, flags, steal)
+}
+
+func entryValueSize(value []byte, flags byte) int {
+	if flags&node.FlagPointer != 0 {
+		return page.ValuePtrSize + len(value)
+	}
+	if flags&node.FlagTombstone != 0 {
+		return 0
+	}
+	return len(value)
 }
 
 func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
@@ -952,10 +978,7 @@ func (it *hashIterator) UnsafeValue() []byte {
 	}
 	it.ensureLoaded()
 	if it.cur.flags&node.FlagPointer != 0 {
-		if len(it.cur.value) > page.ValuePtrSize {
-			return it.cur.value[page.ValuePtrSize:]
-		}
-		return nil
+		return it.cur.value
 	}
 	return it.cur.value
 }
@@ -969,14 +992,7 @@ func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		if len(it.cur.value) >= page.ValuePtrSize {
-			inline := []byte(nil)
-			if len(it.cur.value) > page.ValuePtrSize {
-				inline = it.cur.value[page.ValuePtrSize:]
-			}
-			return inline, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
-		}
-		return nil, page.ValuePtr{}, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags
 	}
 	return it.cur.value, page.ValuePtr{}, node.FlagInline
 }
