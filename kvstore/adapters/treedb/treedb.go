@@ -86,6 +86,12 @@ func (d *DB) Print() error { return d.DB.Print() }
 
 func (d *DB) Checkpoint() error { return d.DB.Checkpoint() }
 
+func (d *DB) CompactIndex() error { return d.DB.CompactIndex() }
+
+func (d *DB) FragmentationReport() (map[string]string, error) {
+	return d.DB.FragmentationReport()
+}
+
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	return d.DB.Iterator(start, end)
 }

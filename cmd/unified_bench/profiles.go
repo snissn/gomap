@@ -218,7 +218,7 @@ func customUsage() {
 func isWorkloadFlag(name string) bool {
 	switch name {
 	case "keys", "valsize", "batchsize", "range-queries", "range-span",
-		"keycounts", "keyscale", "keys-min", "keys-max", "dbs", "test",
+		"batch-shards", "keycounts", "keyscale", "keys-min", "keys-max", "dbs", "test",
 		"suite", "outdir", "keep", "progress", "seed", "settle-before-scans":
 		return true
 	}
