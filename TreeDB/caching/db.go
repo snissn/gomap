@@ -2683,13 +2683,13 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 }
 
 type opRunIter struct {
-	runs   [][]batch.Entry
+	runs   []flushOpRun
 	runIdx int
 	idx    int
 	valid  bool
 }
 
-func newOpRunIter(runs [][]batch.Entry) *opRunIter {
+func newOpRunIter(runs []flushOpRun) *opRunIter {
 	it := &opRunIter{runs: runs}
 	it.advanceToValid()
 	return it
@@ -2697,7 +2697,7 @@ func newOpRunIter(runs [][]batch.Entry) *opRunIter {
 
 func (it *opRunIter) advanceToValid() {
 	for it.runIdx < len(it.runs) {
-		if it.idx < len(it.runs[it.runIdx]) {
+		if it.idx < len(it.runs[it.runIdx].ops) {
 			it.valid = true
 			return
 		}
@@ -2723,14 +2723,14 @@ func (it *opRunIter) Entry() batch.Entry {
 	if !it.valid {
 		return batch.Entry{}
 	}
-	return it.runs[it.runIdx][it.idx]
+	return it.runs[it.runIdx].ops[it.idx]
 }
 
 func (it *opRunIter) Key() []byte {
 	if !it.valid {
 		return nil
 	}
-	return it.runs[it.runIdx][it.idx].Key
+	return it.runs[it.runIdx].ops[it.idx].Key
 }
 
 type opMergeItem struct {
@@ -2811,7 +2811,39 @@ func (h *opMergeHeap) down(i0, n int) bool {
 	return i > i0
 }
 
-func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
+type flushOpRun struct {
+	ops []batch.Entry
+	buf []byte
+}
+
+const maxOpBufCap = 1 << 20
+
+var opBufPool sync.Pool
+
+func getOpBuf(capacity int) []byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxOpBufCap {
+		return make([]byte, 0, capacity)
+	}
+	if v := opBufPool.Get(); v != nil {
+		b := v.([]byte)
+		if cap(b) >= capacity {
+			return b[:0]
+		}
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putOpBuf(buf []byte) {
+	if cap(buf) > maxOpBufCap {
+		return
+	}
+	opBufPool.Put(buf[:0])
+}
+
+func buildOpRunsWithBuf(mem memtable.Table, chunkCap int) ([]flushOpRun, error) {
 	if mem == nil {
 		return nil, errors.New("cachingdb: nil memtable")
 	}
@@ -2819,25 +2851,32 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
 		chunkCap = 8192
 	}
 	iter := mem.NewIterator(nil, nil)
-	var runs [][]batch.Entry
+	var runs []flushOpRun
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
+	buf := getOpBuf(0)
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
-		key := append([]byte(nil), iter.UnsafeKey()...)
+		keyBytes := iter.UnsafeKey()
+		keyOff := len(buf)
+		buf = append(buf, keyBytes...)
+		key := buf[keyOff:len(buf)]
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 		} else {
-			value := append([]byte(nil), val...)
+			valOff := len(buf)
+			buf = append(buf, val...)
+			value := buf[valOff:len(buf)]
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 		}
 		iter.Next()
 		if len(ops) >= cap(ops) {
-			runs = append(runs, ops)
+			runs = append(runs, flushOpRun{ops: ops, buf: buf})
 			ops = getEntrySlice(chunkCap)
 			ops = ops[:0]
+			buf = getOpBuf(0)
 		}
 	}
 	err := iter.Error()
@@ -2847,17 +2886,24 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
 	}
 	if err != nil {
 		putEntrySlice(ops)
+		putOpBuf(buf)
 		for _, run := range runs {
-			putEntrySlice(run)
+			putEntrySlice(run.ops)
+			putOpBuf(run.buf)
 		}
 		return nil, err
 	}
 	if len(ops) > 0 {
-		runs = append(runs, ops)
+		runs = append(runs, flushOpRun{ops: ops, buf: buf})
 	} else {
 		putEntrySlice(ops)
+		putOpBuf(buf)
 	}
 	return runs, nil
+}
+
+func buildOpRuns(mem memtable.Table, chunkCap int) ([]flushOpRun, error) {
+	return buildOpRunsWithBuf(mem, chunkCap)
 }
 
 type walFastItem struct {
@@ -5898,7 +5944,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 		type buildResult struct {
 			idx  int
-			runs [][]batch.Entry
+			runs []flushOpRun
 			err  error
 		}
 
@@ -5943,7 +5989,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			close(results)
 		}()
 
-		unitRuns := make([][][]batch.Entry, len(units))
+		unitRuns := make([][]flushOpRun, len(units))
 		failed := false
 		for res := range results {
 			if res.err != nil {
@@ -5952,13 +5998,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 				failed = true
 				for _, run := range res.runs {
-					putEntrySlice(run)
+					putEntrySlice(run.ops)
+					putOpBuf(run.buf)
 				}
 				continue
 			}
 			if failed {
 				for _, run := range res.runs {
-					putEntrySlice(run)
+					putEntrySlice(run.ops)
+					putOpBuf(run.buf)
 				}
 				continue
 			}
@@ -5967,7 +6015,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if failed {
 			for _, runs := range unitRuns {
 				for _, run := range runs {
-					putEntrySlice(run)
+					putEntrySlice(run.ops)
+					putOpBuf(run.buf)
 				}
 			}
 			return false
@@ -6039,7 +6088,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				_ = backendBatch.Close()
 				for _, runs := range unitRuns {
 					for _, run := range runs {
-						putEntrySlice(run)
+						putEntrySlice(run.ops)
+						putOpBuf(run.buf)
 					}
 				}
 				return false
@@ -6058,7 +6108,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				_ = backendBatch.Close()
 				for _, runs := range unitRuns {
 					for _, run := range runs {
-						putEntrySlice(run)
+						putEntrySlice(run.ops)
+						putOpBuf(run.buf)
 					}
 				}
 				return false
@@ -6069,7 +6120,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 					_ = backendBatch.Close()
 					for _, runs := range unitRuns {
 						for _, run := range runs {
-							putEntrySlice(run)
+							putEntrySlice(run.ops)
+							putOpBuf(run.buf)
 						}
 					}
 					return false
@@ -6091,7 +6143,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			db.reportError(err)
 			for _, runs := range unitRuns {
 				for _, run := range runs {
-					putEntrySlice(run)
+					putEntrySlice(run.ops)
+					putOpBuf(run.buf)
 				}
 			}
 			return false
@@ -6099,7 +6152,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 		for _, runs := range unitRuns {
 			for _, run := range runs {
-				putEntrySlice(run)
+				putEntrySlice(run.ops)
+				putOpBuf(run.buf)
 			}
 		}
 
