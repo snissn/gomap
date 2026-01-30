@@ -2851,24 +2851,38 @@ func buildOpRunsWithBuf(mem memtable.Table, chunkCap int) ([]flushOpRun, error) 
 		chunkCap = 8192
 	}
 	iter := mem.NewIterator(nil, nil)
+	type stableEntryIter interface {
+		StableEntry() (key []byte, val []byte, ptr page.ValuePtr, flags byte)
+	}
+	stableIter, hasStable := iter.(stableEntryIter)
 	var runs []flushOpRun
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
 	buf := getOpBuf(0)
 	for iter.Valid() {
-		val, ptr, flags := iter.UnsafeEntry()
-		keyBytes := iter.UnsafeKey()
-		keyOff := len(buf)
-		buf = append(buf, keyBytes...)
-		key := buf[keyOff:len(buf)]
+		var key, val []byte
+		var ptr page.ValuePtr
+		var flags byte
+		if hasStable {
+			key, val, ptr, flags = stableIter.StableEntry()
+		} else {
+			val, ptr, flags = iter.UnsafeEntry()
+			keyBytes := iter.UnsafeKey()
+			keyOff := len(buf)
+			buf = append(buf, keyBytes...)
+			key = buf[keyOff:len(buf)]
+		}
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 		} else {
-			valOff := len(buf)
-			buf = append(buf, val...)
-			value := buf[valOff:len(buf)]
+			value := val
+			if !hasStable {
+				valOff := len(buf)
+				buf = append(buf, val...)
+				value = buf[valOff:len(buf)]
+			}
 			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 		}
 		iter.Next()

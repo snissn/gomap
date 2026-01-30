@@ -1015,6 +1015,22 @@ func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.cur.value, page.ValuePtr{}, node.FlagInline
 }
 
+// StableEntry returns key/value views that remain valid until Close.
+// This is safe for HashSorted because entries live in the memtable arena.
+func (it *hashIterator) StableEntry() (key []byte, val []byte, ptr page.ValuePtr, flags byte) {
+	if !it.valid {
+		return nil, nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	it.ensureLoaded()
+	if it.cur.flags&node.FlagTombstone != 0 {
+		return it.cur.key, nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		return it.cur.key, it.cur.value, it.cur.ptr, it.cur.flags
+	}
+	return it.cur.key, it.cur.value, page.ValuePtr{}, node.FlagInline
+}
+
 func (it *hashIterator) Key() []byte {
 	return it.UnsafeKey()
 }
