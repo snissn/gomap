@@ -168,16 +168,17 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 
 	m.mu.Lock()
 	for _, op := range entries {
+		keyLookup := bytesToStringNoCopy(op.Key)
 		if op.Type == batchpkg.OpDelete {
-			if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		} else if op.IsPtr {
-			if chunk, seq := m.setEntryLocked(op.Key, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		} else {
-			if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		}
@@ -635,6 +636,10 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		return nil, 0
 	}
 	keyLookup := bytesToStringNoCopy(key)
+	return m.setEntryLockedWithLookup(key, keyLookup, value, ptr, flags, steal)
+}
+
+func (m *HashSorted) setEntryLockedWithLookup(key []byte, keyLookup string, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
 	if ent, ok := m.items[keyLookup]; ok {
 		oldSize := entryValueSize(ent.value, ent.flags)
 		if flags&node.FlagPointer != 0 {
@@ -663,7 +668,10 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	} else {
 		keyCopy = m.arena.copyBytes(key)
 	}
-	keyStored := bytesToStringNoCopy(keyCopy)
+	keyStored := keyLookup
+	if !steal {
+		keyStored = bytesToStringNoCopy(keyCopy)
+	}
 	var valCopy []byte
 	var valSize int
 	var valPtr page.ValuePtr
