@@ -612,6 +612,9 @@ func (db *DB) Close() error {
 	db.mu.Unlock()
 
 	var errs []error
+	if err := db.persistFreelistHeadOnClose(); err != nil {
+		errs = append(errs, err)
+	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
@@ -860,6 +863,41 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	n.SetType(page.PageTypeMeta)
 	n.SetCount(0)
 	n.UpdateChecksum()
+	return nil
+}
+
+func (db *DB) persistFreelistHeadOnClose() error {
+	if db.readOnly {
+		return nil
+	}
+	idx := db.idx.Load()
+	if idx == nil || idx.pager == nil || idx.allocator == nil {
+		return nil
+	}
+	head := idx.allocator.Head()
+	totalPages := idx.pager.PageCount()
+
+	db.mu.Lock()
+	nextMeta := db.meta
+	if nextMeta.FreelistHeadID == head && nextMeta.TotalPages == totalPages {
+		db.mu.Unlock()
+		return nil
+	}
+	nextMeta.FreelistHeadID = head
+	nextMeta.TotalPages = totalPages
+	db.mu.Unlock()
+
+	// Write both meta pages to avoid commit sequence tie-break ambiguity.
+	if err := db.writeMeta(MetaPage0ID, nextMeta); err != nil {
+		return err
+	}
+	if err := db.writeMeta(MetaPage1ID, nextMeta); err != nil {
+		return err
+	}
+
+	db.mu.Lock()
+	db.meta = nextMeta
+	db.mu.Unlock()
 	return nil
 }
 

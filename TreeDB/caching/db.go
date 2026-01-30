@@ -3810,6 +3810,10 @@ func (db *DB) Checkpoint() error {
 	db.checkValueLogRetention()
 	db.pruneRetainedValueLogs()
 
+	if pruner, ok := db.backend.(interface{ Prune() }); ok {
+		pruner.Prune()
+	}
+
 	return nil
 }
 
