@@ -71,6 +71,25 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 		t.Fatalf("checkpoint after delete: %v", err)
 	}
 
+	// Phase 4: rewrite (reinsert) so the final on-disk size should roughly
+	// correspond to a "full" working set again. If the file is still vastly
+	// larger than vacuum, that suggests we are not reclaiming/reusing as expected.
+	seedBatches(t, cached, keys, val)
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after rewrite: %v", err)
+	}
+
+	// Capture diagnostics before closing/vacuuming.
+	diagStats := backend.Stats()
+	var diagHead uint64
+	var diagReclaimable uint64
+	if fl, ferr := backend.FreelistStats(); ferr == nil {
+		diagHead = fl.Head
+		diagReclaimable = fl.ReclaimablePages()
+	} else {
+		t.Logf("diag: freelist stats error before close: %v", ferr)
+	}
+
 	_ = cached.Close()
 	_ = backend.Close()
 
@@ -99,6 +118,16 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 
 	// Flag bloat if the vacuum shrinks by more than 2x.
 	if sizeBefore > sizeAfter*2 {
+		t.Logf("diag(before close): freelist.head=%d reclaimable=%d alloc.freelist=%s alloc.append=%s prune.enabled=%s prune.pages_freed=%s pages.total=%s",
+			diagHead,
+			diagReclaimable,
+			diagStats["treedb.alloc.freelist"],
+			diagStats["treedb.alloc.append"],
+			diagStats["treedb.prune.enabled"],
+			diagStats["treedb.prune.pages_freed"],
+			diagStats["treedb.pages.total"],
+		)
+
 		t.Fatalf("index bloat detected: before=%d after=%d ratio=%.2f", sizeBefore, sizeAfter, float64(sizeBefore)/float64(sizeAfter))
 	}
 }
