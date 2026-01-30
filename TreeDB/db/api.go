@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -264,6 +265,19 @@ func (db *DB) Stats() map[string]string {
 	pruneStatsInto(stats, &db.pruner)
 
 	return stats
+}
+
+// FreelistStats returns allocator stats for diagnostics.
+// It is best-effort and never mutates on-disk state.
+func (db *DB) FreelistStats() (freelist.Stats, error) {
+	if db == nil {
+		return freelist.Stats{}, nil
+	}
+	idx := db.idx.Load()
+	if idx == nil || idx.allocator == nil || idx.pager == nil {
+		return freelist.Stats{}, nil
+	}
+	return idx.allocator.Stats(idx.pager.PageCount())
 }
 
 // Print debugs the tree (simple dump).

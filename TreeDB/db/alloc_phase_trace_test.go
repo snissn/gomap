@@ -25,16 +25,21 @@ func TestBackendPhaseAllocTimeline(t *testing.T) {
 	valB := bytes.Repeat([]byte("b"), 128)
 
 	record := func(phase string) {
-		stats, err := d.FragmentationReport()
-		if err != nil {
-			t.Fatalf("FragmentationReport: %v", err)
+		idx := d.idx.Load()
+		if idx == nil || idx.allocator == nil {
+			t.Fatalf("missing allocator")
 		}
-		reclaimable := parseReportUintReuseDB(t, stats, "treedb.freelist.reclaimable_pages")
+		fl, err := idx.allocator.Stats(d.Pager().PageCount())
+		if err != nil {
+			t.Fatalf("freelist stats: %v", err)
+		}
+		reclaimable := fl.ReclaimablePages()
 		statMap := d.Stats()
 		freelist := parseReportUintReuseDB(t, statMap, "treedb.alloc.freelist")
 		appendAlloc := parseReportUintReuseDB(t, statMap, "treedb.alloc.append")
 		pages := d.Pager().PageCount()
-		t.Logf("phase=%s pages=%d reclaimable=%d alloc.freelist=%d alloc.append=%d", phase, pages, reclaimable, freelist, appendAlloc)
+		t.Logf("phase=%s pages=%d freelist.head=%d reclaimable=%d alloc.freelist=%d alloc.append=%d",
+			phase, pages, fl.Head, reclaimable, freelist, appendAlloc)
 	}
 
 	// Phase 1: batch write

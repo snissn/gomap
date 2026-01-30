@@ -7,7 +7,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestCachedPhaseAllocTimeline(t *testing.T) {
+// Regression: after churn + checkpoints, we expect the backend to eventually
+// allocate from the freelist (not append-only forever). This is a stronger and
+// more direct signal than file size bloat.
+func TestCheckpointPruneEnablesFreelistReuse(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := db.Open(db.Options{
@@ -31,51 +34,16 @@ func TestCachedPhaseAllocTimeline(t *testing.T) {
 	valA := bytes.Repeat([]byte("a"), 128)
 	valB := bytes.Repeat([]byte("b"), 128)
 
-	type snap struct {
-		phase       string
-		pages       uint64
-		reclaimable uint64
-		freelist    uint64
-		appendAlloc uint64
-	}
-
-	var snaps []snap
-
-	record := func(phase string) {
-		fl, err := backend.FreelistStats()
-		if err != nil {
-			t.Fatalf("FreelistStats: %v", err)
-		}
-		reclaimable := fl.ReclaimablePages()
-		statMap := backend.Stats()
-		freelist := parseReportUintReuse(t, statMap, "treedb.alloc.freelist")
-		appendAlloc := parseReportUintReuse(t, statMap, "treedb.alloc.append")
-		pages := backend.Pager().PageCount()
-		snaps = append(snaps, snap{
-			phase:       phase,
-			pages:       pages,
-			reclaimable: reclaimable,
-			freelist:    freelist,
-			appendAlloc: appendAlloc,
-		})
-		t.Logf("phase=%s pages=%d reclaimable=%d alloc.freelist=%d alloc.append=%d", phase, pages, reclaimable, freelist, appendAlloc)
-	}
-
-	// Phase 1: batch write
 	seedBatchesReuse(t, cached, keys, valA)
 	if err := cached.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint batch write: %v", err)
+		t.Fatalf("checkpoint write: %v", err)
 	}
-	record("batch_write")
 
-	// Phase 2: random write
 	applyRandomUpdatesReuse(t, cached, keys, valB, 1)
 	if err := cached.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint random write: %v", err)
+		t.Fatalf("checkpoint overwrite: %v", err)
 	}
-	record("random_write")
 
-	// Phase 3: batch delete
 	{
 		b := cached.NewBatch()
 		for i := 0; i < keys; i++ {
@@ -92,16 +60,16 @@ func TestCachedPhaseAllocTimeline(t *testing.T) {
 	if err := cached.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint delete: %v", err)
 	}
-	record("batch_delete")
 
-	// Phase 4: rewrite
+	// Rewrite should trigger reuse if pruning is working.
 	seedBatchesReuse(t, cached, keys, valA)
 	if err := cached.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint rewrite: %v", err)
 	}
-	record("rewrite")
 
-	if len(snaps) < 4 {
-		t.Fatalf("expected 4 phases, got %d", len(snaps))
+	stats := backend.Stats()
+	reused := parseReportUintReuse(t, stats, "treedb.alloc.freelist")
+	if reused == 0 {
+		t.Fatalf("expected some freelist allocations after churn, got 0 (alloc.append=%s)", stats["treedb.alloc.append"])
 	}
 }
