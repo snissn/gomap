@@ -76,7 +76,8 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 	valA := bytes.Repeat([]byte("a"), 32)
 	valB := bytes.Repeat([]byte("b"), 32)
 
-	// Seed and overwrite to create retired pages.
+	// Seed and overwrite+delete to create retired pages, then prune to populate
+	// the freelist.
 	{
 		b := d.NewBatch().(*Batch)
 		for i := 0; i < keys; i++ {
@@ -90,7 +91,7 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 		}
 		_ = b.Close()
 	}
-	{
+	for round := 0; round < 5; round++ {
 		b := d.NewBatch().(*Batch)
 		for i := 0; i < keys; i++ {
 			k := []byte{byte(i >> 8), byte(i)}
@@ -102,9 +103,8 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 			t.Fatalf("overwrite write: %v", err)
 		}
 		_ = b.Close()
-	}
-	{
-		b := d.NewBatch().(*Batch)
+
+		b = d.NewBatch().(*Batch)
 		for i := 0; i < keys; i++ {
 			k := []byte{byte(i >> 8), byte(i)}
 			if err := b.Delete(k); err != nil {
@@ -115,9 +115,10 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 			t.Fatalf("delete write: %v", err)
 		}
 		_ = b.Close()
-		d.Prune()
+
 		d.Prune()
 	}
+	d.Prune()
 
 	idx := d.idx.Load()
 	if idx == nil || idx.allocator == nil {
@@ -132,7 +133,9 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 	}
 	t.Logf("before reuse: commit=%d head=%d reclaimable=%d pages=%d", d.State().CommitSeq, statsBefore.Head, statsBefore.ReclaimablePages(), d.Pager().PageCount())
 
-	fb, _ := idx.allocator.AllocCounters()
+	fbFreelist, fbAppend := idx.allocator.AllocCounters()
+	pagesBefore := d.Pager().PageCount()
+
 	// Rewrite to consume freelist.
 	{
 		b := d.NewBatch().(*Batch)
@@ -146,17 +149,31 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 			t.Fatalf("rewrite write: %v", err)
 		}
 		_ = b.Close()
-		d.Prune()
 	}
-	fa, _ := idx.allocator.AllocCounters()
+	faFreelist, faAppend := idx.allocator.AllocCounters()
+	pagesAfter := d.Pager().PageCount()
 
 	statsAfter, err := idx.allocator.Stats(d.Pager().PageCount())
 	if err != nil {
 		t.Fatalf("freelist stats after: %v", err)
 	}
-	t.Logf("after reuse: commit=%d head=%d reclaimable=%d pages=%d alloc.freelist=%d->%d",
-		d.State().CommitSeq, statsAfter.Head, statsAfter.ReclaimablePages(), d.Pager().PageCount(), fb, fa)
-	if statsAfter.ReclaimablePages() >= statsBefore.ReclaimablePages() {
-		t.Fatalf("expected reclaimable pages to decrease after reuse (before=%d after=%d)", statsBefore.ReclaimablePages(), statsAfter.ReclaimablePages())
+	freelistDelta := faFreelist - fbFreelist
+	appendDelta := faAppend - fbAppend
+	t.Logf("after rewrite: commit=%d head=%d reclaimable=%d pages=%d->%d alloc.freelist=%d->%d alloc.append=%d->%d",
+		d.State().CommitSeq,
+		statsAfter.Head,
+		statsAfter.ReclaimablePages(),
+		pagesBefore, pagesAfter,
+		fbFreelist, faFreelist,
+		fbAppend, faAppend,
+	)
+
+	// If we have reclaimables and PreferAppendAlloc=false, the rewrite should
+	// primarily reuse the freelist rather than extend the file.
+	//
+	// This assertion is expected to FAIL until the bloat/reuse bug is fixed.
+	if appendDelta > freelistDelta/4 {
+		t.Fatalf("expected rewrite to prefer freelist reuse over append (reclaimable=%d freelist_delta=%d append_delta=%d)",
+			statsBefore.ReclaimablePages(), freelistDelta, appendDelta)
 	}
 }
