@@ -1,7 +1,6 @@
 package memtable
 
 import (
-	"bytes"
 	"sort"
 	"strings"
 	"sync"
@@ -61,8 +60,6 @@ type HashSorted struct {
 	mu          sync.RWMutex
 	items       map[string]hashEntry
 	sizeBytes   int64
-	maxKey      string
-	maxKeyValid bool
 	sortedKeys  []string
 	sortedDel   []bool
 	sortedValid bool
@@ -170,50 +167,19 @@ func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	}
 
 	m.mu.Lock()
-	fastAppend := false
-	if len(entries) > 0 {
-		firstKey := bytesToStringNoCopy(entries[0].Key)
-		if len(m.items) == 0 || (!m.maxKeyValid || firstKey > m.maxKey) {
-			fastAppend = true
-		}
-	}
-	var prevKey []byte
-	for i, op := range entries {
-		if fastAppend {
-			if i > 0 && bytes.Compare(op.Key, prevKey) <= 0 {
-				fastAppend = false
-			}
-			prevKey = op.Key
-		}
-
+	for _, op := range entries {
 		keyLookup := bytesToStringNoCopy(op.Key)
-		if fastAppend {
-			if op.Type == batchpkg.OpDelete {
-				if chunk, seq := m.setEntryNewLockedWithLookup(op.Key, keyLookup, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
-			} else if op.IsPtr {
-				if chunk, seq := m.setEntryNewLockedWithLookup(op.Key, keyLookup, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
-			} else {
-				if chunk, seq := m.setEntryNewLockedWithLookup(op.Key, keyLookup, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
+		if op.Type == batchpkg.OpDelete {
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			}
+		} else if op.IsPtr {
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		} else {
-			if op.Type == batchpkg.OpDelete {
-				if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
-			} else if op.IsPtr {
-				if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
-			} else {
-				if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
-					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
-				}
+			if chunk, seq := m.setEntryLockedWithLookup(op.Key, keyLookup, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
+				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 		}
 		if onKey != nil {
@@ -726,42 +692,6 @@ func (m *HashSorted) setEntryLockedWithLookup(key []byte, keyLookup string, valu
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
 	}
-	m.updateMaxKeyLocked(keyStored)
-	return m.noteNewKeyLocked(keyStored)
-}
-
-func (m *HashSorted) setEntryNewLockedWithLookup(key []byte, keyLookup string, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
-	var keyCopy []byte
-	if steal {
-		keyCopy = key
-	} else {
-		keyCopy = m.arena.copyBytes(key)
-	}
-	keyStored := keyLookup
-	if !steal {
-		keyStored = bytesToStringNoCopy(keyCopy)
-	}
-	var valCopy []byte
-	var valSize int
-	var valPtr page.ValuePtr
-	if flags&node.FlagPointer != 0 {
-		valCopy = value
-		if !steal && len(value) > 0 {
-			valCopy = m.arena.copyBytes(value)
-		}
-		valPtr = ptr
-		valSize = entryValueSize(valCopy, flags)
-	} else {
-		valCopy = m.encodeEntryValueLocked(value, ptr, flags, steal)
-		valPtr = page.ValuePtr{}
-		valSize = entryValueSize(valCopy, flags)
-	}
-	m.items[keyStored] = hashEntry{key: keyCopy, value: valCopy, flags: flags, ptr: valPtr}
-	m.sizeBytes += int64(len(keyCopy) + valSize)
-	if flags&node.FlagTombstone != 0 {
-		m.hasDeletes = true
-	}
-	m.updateMaxKeyLocked(keyStored)
 	return m.noteNewKeyLocked(keyStored)
 }
 
@@ -807,13 +737,6 @@ func entryValueSize(value []byte, flags byte) int {
 		return 0
 	}
 	return len(value)
-}
-
-func (m *HashSorted) updateMaxKeyLocked(key string) {
-	if !m.maxKeyValid || key > m.maxKey {
-		m.maxKey = key
-		m.maxKeyValid = true
-	}
 }
 
 func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
