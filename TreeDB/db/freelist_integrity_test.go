@@ -130,8 +130,6 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 	if statsBefore.ReclaimablePages() == 0 {
 		t.Fatalf("expected reclaimable pages before reuse")
 	}
-	freelistBefore, _ := idx.allocator.AllocCounters()
-
 	// Rewrite to consume freelist.
 	{
 		b := d.NewBatch().(*Batch)
@@ -152,9 +150,7 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("freelist stats after: %v", err)
 	}
-	_ = statsAfter
-	freelistAfter, _ := idx.allocator.AllocCounters()
-	if freelistAfter <= freelistBefore {
-		t.Fatalf("expected freelist reuse to increase after rewrite (before=%d after=%d)", freelistBefore, freelistAfter)
+	if statsAfter.ReclaimablePages() >= statsBefore.ReclaimablePages() {
+		t.Fatalf("expected reclaimable pages to decrease after reuse (before=%d after=%d)", statsBefore.ReclaimablePages(), statsAfter.ReclaimablePages())
 	}
 }
