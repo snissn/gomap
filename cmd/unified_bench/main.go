@@ -4,6 +4,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -33,6 +34,7 @@ var (
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat)")
 	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
+	batchShards        = flag.Int("batch-shards", 1, "Shard each DB into N hash-partitioned shards (1 disables sharding)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -76,12 +78,14 @@ type DBInstance struct {
 	Name    string
 	Wrapper kvstore.DB
 	Dir     string
+	Reopen  func() (kvstore.DB, error)
 }
 
 type BenchConfig struct {
 	Keys         int
 	ValueSize    int
 	BatchSize    int
+	BatchShards  int
 	RangeQueries int
 	RangeSpan    int
 
@@ -173,6 +177,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
 	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d\n", *numKeys, *valSize, *batchSize)
+	fmt.Fprintf(os.Stderr, "             batch_shards=%d\n", *batchShards)
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
 	}
@@ -186,6 +191,7 @@ func main() {
 		Keys:                             *numKeys,
 		ValueSize:                        *valSize,
 		BatchSize:                        *batchSize,
+		BatchShards:                      *batchShards,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
 		DBsArg:                           *dbsArg,
@@ -362,8 +368,8 @@ func main() {
 	switch format {
 	case "table":
 		for _, run := range runs {
-			fmt.Printf("\nkeys=%s valsize=%d batchsize=%d range-queries=%d range-span=%d\n\n",
-				formatInt(run.Config.Keys), run.Config.ValueSize, run.Config.BatchSize, run.Config.RangeQueries, run.Config.RangeSpan)
+			fmt.Printf("\nkeys=%s valsize=%d batchsize=%d batch-shards=%d range-queries=%d range-span=%d\n\n",
+				formatInt(run.Config.Keys), run.Config.ValueSize, run.Config.BatchSize, run.Config.BatchShards, run.Config.RangeQueries, run.Config.RangeSpan)
 			printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 			if len(run.CheckpointDurations) > 0 {
 				fmt.Println()
@@ -456,6 +462,15 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
 	for _, k := range keys {
 		v, ok := stats[k]
+		if !ok {
+			for sk, sv := range stats {
+				if strings.HasSuffix(sk, "."+k) {
+					v = sv
+					ok = true
+					break
+				}
+			}
+		}
 		if !ok || v == "" {
 			continue
 		}
@@ -665,7 +680,13 @@ func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) 
 	if !ok {
 		return nil
 	}
-	return cp.Checkpoint()
+	if err := cp.Checkpoint(); err != nil {
+		if isUnsupported(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func runBenchmark(cfg BenchConfig) (BenchRun, error) {
@@ -677,6 +698,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid batchsize: %d", cfg.BatchSize)
+	}
+	if cfg.BatchShards <= 0 {
+		return BenchRun{}, fmt.Errorf("invalid batch-shards: %d", cfg.BatchShards)
 	}
 	if cfg.RangeQueries < 0 || cfg.RangeSpan < 0 {
 		return BenchRun{}, fmt.Errorf("invalid range settings: queries=%d span=%d", cfg.RangeQueries, cfg.RangeSpan)
@@ -699,13 +723,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return BenchRun{}, fmt.Errorf("temp dir: %w", err)
 		}
 
-		db, err := factory(dir)
+		db, reopen, err := openBenchDB(factory, name, dir, cfg.BatchShards)
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
 
-		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
+		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, Reopen: reopen})
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -947,6 +971,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("batch_write: new batch: %w", err)
 				}
 
@@ -1007,6 +1034,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("batch_random: new batch: %w", err)
 				}
 
@@ -1067,6 +1097,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("batch_delete: new batch: %w", err)
 				}
 
@@ -1116,6 +1149,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				batch, err := batcher.NewBatch()
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("batch_small_seq: new batch: %w", err)
 				}
 
@@ -1170,6 +1206,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if batcher, ok := db.(kvstore.Batcher); ok {
 					batch, err := batcher.NewBatch()
 					if err != nil {
+						if isUnsupported(err) {
+							return math.NaN(), nil
+						}
 						return 0, fmt.Errorf("update_fork_choice: new batch: %w", err)
 					}
 					for j := i; j < end; j++ {
@@ -1190,6 +1229,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					for j := i; j < end; j++ {
 						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
 						if err := syncer.SetSync(k[:], val); err != nil {
+							if isUnsupported(err) {
+								return math.NaN(), nil
+							}
 							return 0, fmt.Errorf("update_fork_choice: set sync: %w", err)
 						}
 					}
@@ -1241,6 +1283,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if batcher, ok := db.(kvstore.Batcher); ok {
 					batch, err := batcher.NewBatch()
 					if err != nil {
+						if isUnsupported(err) {
+							return math.NaN(), nil
+						}
 						return 0, fmt.Errorf("dataset_update_fork_choice: new batch: %w", err)
 					}
 					for j := i; j < end; j++ {
@@ -1261,6 +1306,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					for j := i; j < end; j++ {
 						key := datasetRandomKeys[rng.Intn(len(datasetRandomKeys))]
 						if err := syncer.SetSync(key, val); err != nil {
+							if isUnsupported(err) {
+								return math.NaN(), nil
+							}
 							return 0, fmt.Errorf("dataset_update_fork_choice: set sync: %w", err)
 						}
 					}
@@ -1335,6 +1383,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if rs, ok := db.(kvstore.RangeScanner); ok {
 				iter, err := rs.Iterator(nil, nil)
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("full_scan: iterator: %w", err)
 				}
 				defer func() { _ = iter.Close() }()
@@ -1371,6 +1422,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					return nil
 				}); err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("full_scan: foreach: %w", err)
 				}
 				return float64(count) / time.Since(start).Seconds(), nil
@@ -1383,6 +1437,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if rs, ok := db.(kvstore.RangeScanner); ok {
 				iter, err := rs.Iterator(nil, nil)
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("full_scan2: iterator: %w", err)
 				}
 				defer func() { _ = iter.Close() }()
@@ -1416,6 +1473,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					return nil
 				}); err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("full_scan2: foreach: %w", err)
 				}
 				return float64(count) / time.Since(start).Seconds(), nil
@@ -1459,6 +1519,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				buildStart := time.Now()
 				iter, err := rs.Iterator(startKey, endKey)
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("prefix_scan: iterator: %w", err)
 				}
 				buildDur := time.Since(buildStart)
@@ -1554,6 +1617,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 				iter, err := rs.Iterator(startKey, endKey)
 				if err != nil {
+					if isUnsupported(err) {
+						return math.NaN(), nil
+					}
 					return 0, fmt.Errorf("prefix_scan2: iterator: %w", err)
 				}
 
@@ -1677,12 +1743,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 
 			// Reopen
-			factory, err := GetDBFactory(inst.Name)
-			if err != nil {
-				return BenchRun{}, err
+			reopen := inst.Reopen
+			if reopen == nil {
+				factory, err := GetDBFactory(inst.Name)
+				if err != nil {
+					return BenchRun{}, err
+				}
+				reopen = func() (kvstore.DB, error) {
+					return factory(inst.Dir)
+				}
 			}
-			// Reopen
-			newWrapper, err := factory(inst.Dir)
+			newWrapper, err := reopen()
 			if err != nil {
 				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
 			}
@@ -1796,6 +1867,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				if checkpointErr != nil {
+					if isUnsupported(checkpointErr) {
+						continue
+					}
 					return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, checkpointErr)
 				}
 				chkMap[inst.Wrapper.Name()] = time.Since(start)
@@ -1890,6 +1964,7 @@ func renderMarkdownSingle(run BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- batch-shards: %d\n", run.Config.BatchShards))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
 	sb.WriteString("\n")
@@ -1924,6 +1999,7 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatKeyCounts(runs)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", runs[0].Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- batch-shards: %d\n", runs[0].Config.BatchShards))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
 	sb.WriteString("\n")
@@ -2055,9 +2131,9 @@ func runReadmeSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("_Generated at:_ %s\n", generatedAt.Format(time.RFC3339)))
 	sb.WriteString(fmt.Sprintf("_Environment:_ %s\n", env.MarkdownSummary()))
 	sb.WriteString(fmt.Sprintf("_Seed:_ %d\n\n", baseCfg.SeedUsed))
-	sb.WriteString(fmt.Sprintf("_Key counts:_ %s (valsize=%d, batchsize=%d, range-queries=%d, range-span=%d)\n\n",
+	sb.WriteString(fmt.Sprintf("_Key counts:_ %s (valsize=%d, batchsize=%d, batch-shards=%d, range-queries=%d, range-span=%d)\n\n",
 		formatInt(keyCounts[0])+"…"+formatInt(keyCounts[len(keyCounts)-1]),
-		baseCfg.ValueSize, baseCfg.BatchSize, baseCfg.RangeQueries, baseCfg.RangeSpan))
+		baseCfg.ValueSize, baseCfg.BatchSize, baseCfg.BatchShards, baseCfg.RangeQueries, baseCfg.RangeSpan))
 
 	sb.WriteString("Notes:\n")
 	sb.WriteString("- Results depend on hardware and OS.\n")
@@ -2153,6 +2229,7 @@ func runFlushThrashSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- batch-shards: %d\n", run.Config.BatchShards))
 	sb.WriteString(fmt.Sprintf("- treedb-flush-threshold: %d\n", thrashFlushThresholdBytes))
 	sb.WriteString("\n")
 
@@ -2215,6 +2292,7 @@ func runBigKeysGuardSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- batch-shards: %d\n", run.Config.BatchShards))
 	sb.WriteString(fmt.Sprintf("- treedb-flush-threshold: %d\n", guardFlushThresholdBytes))
 	if run.Config.MaxWall > 0 {
 		sb.WriteString(fmt.Sprintf("- max-wall: %s\n", run.Config.MaxWall))
@@ -2291,30 +2369,57 @@ func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
 		if inst == nil || inst.Name != "treedb" {
 			continue
 		}
-		db, err := NewTreeDB(inst.Dir)
+		stats, err := treedbCacheStats(inst)
 		if err != nil {
-			return "", fmt.Errorf("suite: reopen treedb for stats: %w", err)
+			return "", err
 		}
-		sp, ok := db.(kvstore.StatsProvider)
-		if ok {
-			stats := sp.Stats()
-			keys := make([]string, 0, len(stats))
-			for k := range stats {
-				if strings.HasPrefix(k, "treedb.cache.") {
-					keys = append(keys, k)
-				}
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				sb.WriteString(k)
-				sb.WriteString("=")
-				sb.WriteString(stats[k])
-				sb.WriteString("\n")
-			}
+		for _, line := range stats {
+			sb.WriteString(line)
+			sb.WriteString("\n")
 		}
-		_ = db.Close()
 	}
 	return sb.String(), nil
+}
+
+func treedbCacheStats(inst *DBInstance) ([]string, error) {
+	var (
+		stats map[string]string
+		db    kvstore.DB
+	)
+
+	if inst.Wrapper != nil {
+		if sp, ok := inst.Wrapper.(kvstore.StatsProvider); ok {
+			stats = sp.Stats()
+		}
+	}
+
+	if stats == nil {
+		var err error
+		db, err = NewTreeDB(inst.Dir)
+		if err != nil {
+			return nil, fmt.Errorf("suite: reopen treedb for stats: %w", err)
+		}
+		defer func() { _ = db.Close() }()
+		sp, ok := db.(kvstore.StatsProvider)
+		if !ok {
+			return nil, nil
+		}
+		stats = sp.Stats()
+	}
+
+	keys := make([]string, 0, len(stats))
+	for k := range stats {
+		if strings.Contains(k, "treedb.cache.") {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	lines := make([]string, 0, len(keys))
+	for _, k := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", k, stats[k]))
+	}
+	return lines, nil
 }
 
 func suiteCleanupDirs(instances []*DBInstance) error {
@@ -2378,6 +2483,10 @@ func testSeed(seed int64, testName string) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(testName))
 	return seed ^ int64(h.Sum64())
+}
+
+func isUnsupported(err error) bool {
+	return errors.Is(err, kvstore.ErrUnsupported)
 }
 
 func printResultsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, results map[string]map[string]float64) {

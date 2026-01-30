@@ -40,6 +40,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
 - `-valsize` value size in bytes (default 128)
 - `-batchsize` batch size (default 1000)
+- `-batch-shards` shard each DB into N hash partitions for key-based routing (default 1)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
