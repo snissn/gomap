@@ -1069,9 +1069,11 @@ func (db *DB) Prune() {
 	if st := db.state.Load(); st != nil {
 		current = st.CommitSeq
 	} else {
-		db.mu.RLock()
+		// Do not take db.mu here: Prune() is called from finalizeCommit while
+		// holding db.mu exclusively, including during WAL replay before state is
+		// initialized. Reading meta without the lock is best-effort and avoids a
+		// self-deadlock.
 		current = db.meta.CommitSeq
-		db.mu.RUnlock()
 	}
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
