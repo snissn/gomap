@@ -1062,7 +1062,17 @@ func (db *DB) Prune() {
 	defer db.releaseIndex(idx)
 
 	min := idx.registry.MinPinnedSeq()
-	current := db.meta.CommitSeq
+	// Prefer the published DBState commit sequence because it is updated on every
+	// successful commit and accessed lock-free elsewhere (e.g. prune worker).
+	// Falling back to meta avoids a nil panic during early open/recover.
+	current := uint64(0)
+	if st := db.state.Load(); st != nil {
+		current = st.CommitSeq
+	} else {
+		db.mu.RLock()
+		current = db.meta.CommitSeq
+		db.mu.RUnlock()
+	}
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 
