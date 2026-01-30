@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -99,5 +100,45 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 	// Flag bloat if the vacuum shrinks by more than 2x.
 	if sizeBefore > sizeAfter*2 {
 		t.Fatalf("index bloat detected: before=%d after=%d ratio=%.2f", sizeBefore, sizeAfter, float64(sizeBefore)/float64(sizeAfter))
+	}
+}
+
+func seedBatches(t *testing.T, cached *DB, keys int, value []byte) {
+	t.Helper()
+	const batchSize = 256
+	for base := 0; base < keys; base += batchSize {
+		b := cached.NewBatch()
+		limit := base + batchSize
+		if limit > keys {
+			limit = keys
+		}
+		for i := base; i < limit; i++ {
+			k := []byte{byte(i >> 8), byte(i)}
+			if err := b.Set(k, value); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_ = b.Close()
+	}
+}
+
+func applyRandomUpdates(t *testing.T, cached *DB, keys int, value []byte, rounds int) {
+	t.Helper()
+	rng := rand.New(rand.NewSource(1))
+	for round := 0; round < rounds; round++ {
+		b := cached.NewBatch()
+		for i := 0; i < keys; i++ {
+			k := []byte{byte(rng.Intn(keys) >> 8), byte(rng.Intn(keys))}
+			if err := b.Set(k, value); err != nil {
+				t.Fatalf("random set: %v", err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("random write: %v", err)
+		}
+		_ = b.Close()
 	}
 }
