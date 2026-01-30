@@ -726,6 +726,16 @@ func (m *HashSorted) encodeEntryValueLockedReuse(value []byte, ptr page.ValuePtr
 			return dst
 		}
 	}
+	if flags&node.FlagTombstone != 0 {
+		return nil
+	}
+	if cap(reuse) >= len(value) {
+		dst := reuse[:len(value)]
+		if len(value) > 0 {
+			copy(dst, value)
+		}
+		return dst
+	}
 	return m.encodeEntryValueLocked(value, ptr, flags, steal)
 }
 
