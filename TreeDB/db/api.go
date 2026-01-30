@@ -249,6 +249,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
+	if idx.allocator != nil {
+		freelist, appendAlloc := idx.allocator.AllocCounters()
+		stats["treedb.alloc.freelist"] = fmt.Sprintf("%d", freelist)
+		stats["treedb.alloc.append"] = fmt.Sprintf("%d", appendAlloc)
+	}
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

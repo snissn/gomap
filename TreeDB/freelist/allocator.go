@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -24,6 +25,9 @@ type Allocator struct {
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
 	preferAppend bool
+
+	allocFromFreelist uint64
+	allocFromAppend   uint64
 }
 
 // TestHookFreeBeforeChecksum is a test-only hook that fires after a freelist
@@ -112,6 +116,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			if err != nil {
 				return ids, err
 			}
+			atomic.AddUint64(&a.allocFromAppend, uint64(count-len(ids)))
 			for i := 0; i < count-len(ids); i++ {
 				ids = append(ids, id+uint64(i))
 			}
@@ -141,6 +146,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			a.pager.MarkUnverified(recycled)
 			a.lastAlloc = recycled
 			ids = append(ids, recycled)
+			atomic.AddUint64(&a.allocFromFreelist, 1)
 			continue
 		}
 
@@ -153,6 +159,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			a.pager.MarkUnverified(id)
 			a.lastAlloc = id
 			ids = append(ids, id)
+		}
+		if len(ids) > 0 {
+			atomic.AddUint64(&a.allocFromFreelist, uint64(len(ids)))
 		}
 
 		body.FreeIDs = body.FreeIDs[:countFree]
@@ -168,6 +177,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
 			a.lastAlloc = id
+			atomic.AddUint64(&a.allocFromAppend, 1)
 		}
 		return id, err
 	}
@@ -176,6 +186,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
 			a.lastAlloc = id
+			atomic.AddUint64(&a.allocFromAppend, 1)
 		}
 		return id, err
 	}
@@ -234,6 +245,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 				a.pager.MarkUnverified(id)
 				a.lastAlloc = id
+				atomic.AddUint64(&a.allocFromFreelist, 1)
 				return id, nil
 			}
 		}
@@ -248,6 +260,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 		a.pager.MarkUnverified(id)
 		a.lastAlloc = id
+		atomic.AddUint64(&a.allocFromFreelist, 1)
 		return id, nil
 	}
 
@@ -259,6 +272,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 	a.pager.MarkUnverified(recycled)
 	a.lastAlloc = recycled
+	atomic.AddUint64(&a.allocFromFreelist, 1)
 	return recycled, nil
 }
 
@@ -346,6 +360,11 @@ func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return readStatsLocked(a.pager, a.head, pageLimit)
+}
+
+// AllocCounters returns cumulative alloc counts for freelist reuse vs append.
+func (a *Allocator) AllocCounters() (freelist uint64, appendAlloc uint64) {
+	return atomic.LoadUint64(&a.allocFromFreelist), atomic.LoadUint64(&a.allocFromAppend)
 }
 
 func readStatsLocked(p *pager.Pager, head uint64, pageLimit uint64) (Stats, error) {
