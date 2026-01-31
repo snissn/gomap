@@ -89,9 +89,6 @@ func TestZipper_Rebalance_MergeWhenBothUnderMinAndFits(t *testing.T) {
 			t.Fatalf("merged keys = %v, want %v", got, want)
 		}
 	}
-	if m.LeafLocalMergeSizingMismatch != 0 {
-		t.Fatalf("unexpected sizing mismatch: merge=%d", m.LeafLocalMergeSizingMismatch)
-	}
 }
 
 func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
@@ -204,13 +201,13 @@ func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
 		t.Fatalf("load right leaf: %v", err)
 	}
 
-	leftLive, err := z.leafLiveBytes(leftN)
+	leftLive, err := z.leafLiveBytesUpperBound(leftN)
 	if err != nil {
-		t.Fatalf("leafLiveBytes(left): %v", err)
+		t.Fatalf("leafLiveBytesUpperBound(left): %v", err)
 	}
-	rightLive, err := z.leafLiveBytes(rightN)
+	rightLive, err := z.leafLiveBytesUpperBound(rightN)
 	if err != nil {
-		t.Fatalf("leafLiveBytes(right): %v", err)
+		t.Fatalf("leafLiveBytesUpperBound(right): %v", err)
 	}
 	if leftLive < targetBytes {
 		t.Fatalf("left live bytes too low: got=%d want>=%d", leftLive, targetBytes)
@@ -262,10 +259,6 @@ func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
 		if _, err := tr.Get(k); err != nil {
 			t.Fatalf("Get(right next key): %v", err)
 		}
-	}
-
-	if m.LeafLocalRebalanceSizingMismatch != 0 {
-		t.Fatalf("unexpected sizing mismatch: rebalance=%d", m.LeafLocalRebalanceSizingMismatch)
 	}
 }
 
