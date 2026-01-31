@@ -992,21 +992,7 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	// IMPORTANT: kick/Prune only after publishing the new state so the pruner sees
 	// the updated commit sequence and can reclaim pages promptly.
 	if db.pruner.Enabled() {
-		// When KeepRecent is extremely small (used in churn/bloat tests),
-		// opportunistically prune on-commit so freed pages become available for
-		// reuse immediately. This helps avoid file growth under rapid churn.
-		if db.keepRecent <= 1 && !db.preferAppendAlloc {
-			tp := time.Now()
-			_, err := db.pruneSome(make(chan struct{}), db.pruner.maxPages, db.pruner.maxDuration*4)
-			if err != nil {
-				db.reportError(err)
-			}
-			if debugTiming {
-				durPrune = time.Since(tp)
-			}
-		} else {
-			db.pruner.Kick()
-		}
+		db.pruner.Kick()
 	} else {
 		tp := time.Now()
 		db.Prune()
