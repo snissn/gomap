@@ -110,10 +110,26 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	baseSeq := b.db.meta.CommitSeq
+	b.db.mu.RUnlock()
+
+	// If the freelist is empty, proactively prune (bounded) before Apply starts
+	// allocating pages. This avoids needless file growth and improves throughput
+	// under churn, while still respecting KeepRecent and pinned readers.
+	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		// When the freelist is empty, we need to catch up quickly or we'll be
+		// forced to grow the file. Use a larger bounded budget than the steady-
+		// state pruner tick.
+		maxPages *= 8
+		maxDuration *= 8
+		// Use the *next* commit sequence so pages retired at baseSeq become
+		// eligible (subject to KeepRecent) before Apply allocates new pages.
+		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+	}
+
 	// Register this writer as a "reader" of the base state to prevent the
 	// pruner from reclaiming pages we are about to read during z.Apply.
 	regID := idx.registry.Register(baseSeq)
-	b.db.mu.RUnlock()
 
 	// We only need to pin the base sequence while Apply is reading old pages.
 	// Unpin as soon as Apply returns so pruning can reclaim pages promptly.
@@ -124,15 +140,6 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 	}
 	defer unregister()
-
-	// If the freelist is empty, proactively prune (bounded) before Apply starts
-	// allocating pages. This avoids needless file growth and improves throughput
-	// under churn, while still respecting KeepRecent and pinned readers.
-	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
-		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
-		// Use the configured prune budget; cancellation isn't needed here.
-		_, _ = b.db.pruneSome(nil, maxPages, maxDuration)
-	}
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
@@ -189,9 +196,16 @@ func (b *Batch) writeSerialized(sync bool) error {
 	b.db.mu.RLock()
 	rootID := b.db.meta.UserRootPageID
 	baseSeq := b.db.meta.CommitSeq
-	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 
+	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		maxPages *= 8
+		maxDuration *= 8
+		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+	}
+
+	regID := idx.registry.Register(baseSeq)
 	unregister := func() {
 		if regID != 0 {
 			idx.registry.Unregister(regID)
@@ -199,11 +213,6 @@ func (b *Batch) writeSerialized(sync bool) error {
 		}
 	}
 	defer unregister()
-
-	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
-		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
-		_, _ = b.db.pruneSome(nil, maxPages, maxDuration)
-	}
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {

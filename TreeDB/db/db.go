@@ -941,6 +941,8 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	// would otherwise be forced to append due to an empty freelist.
 	if db.pruner.Enabled() && db.keepRecent > 0 && !db.preferAppendAlloc && idx.allocator.Head() == 0 {
 		_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+		maxPages *= 8
+		maxDuration *= 8
 		db.mu.RLock()
 		nextSeq := db.meta.CommitSeq + 1
 		db.mu.RUnlock()
@@ -1022,6 +1024,8 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		// growth under churn while keeping the work bounded by existing budgets.
 		if keepRecent > 0 && !preferAppend && freelistHead == 0 {
 			_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+			maxPages *= 8
+			maxDuration *= 8
 			tp := time.Now()
 			_, _ = db.pruneSome(nil, maxPages, maxDuration)
 			if debugTiming {
