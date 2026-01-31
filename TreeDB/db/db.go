@@ -978,18 +978,6 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	// Add retired pages to Graveyard
 	idx.graveyard.Add(nextMeta.CommitSeq, retired)
 
-	// Prune asynchronously to keep commit latency stable under churn.
-	// If background pruning is disabled, fall back to legacy on-commit pruning.
-	if db.pruner.Enabled() {
-		db.pruner.Kick()
-	} else {
-		tp := time.Now()
-		db.Prune()
-		if debugTiming {
-			durPrune = time.Since(tp)
-		}
-	}
-
 	// Update State
 	oldState := db.state.Load()
 	newState := &DBState{
@@ -999,6 +987,33 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
+
+	// Prune asynchronously to keep commit latency stable under churn.
+	// IMPORTANT: kick/Prune only after publishing the new state so the pruner sees
+	// the updated commit sequence and can reclaim pages promptly.
+	if db.pruner.Enabled() {
+		// When KeepRecent is extremely small (used in churn/bloat tests),
+		// opportunistically prune on-commit so freed pages become available for
+		// reuse immediately. This helps avoid file growth under rapid churn.
+		if db.keepRecent <= 1 && !db.preferAppendAlloc {
+			tp := time.Now()
+			_, err := db.pruneSome(make(chan struct{}), db.pruner.maxPages, db.pruner.maxDuration*4)
+			if err != nil {
+				db.reportError(err)
+			}
+			if debugTiming {
+				durPrune = time.Since(tp)
+			}
+		} else {
+			db.pruner.Kick()
+		}
+	} else {
+		tp := time.Now()
+		db.Prune()
+		if debugTiming {
+			durPrune = time.Since(tp)
+		}
+	}
 
 	if oldState != nil {
 		_ = db.valueLogManager.Release(oldState.ValueLogSet)
