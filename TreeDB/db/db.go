@@ -933,6 +933,24 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		}
 	}
 
+	// Opportunistically reclaim pages from the graveyard before writing meta so
+	// the updated freelist head is persisted. This is especially important under
+	// KeepRecent, where pages often become eligible at commit N+1 (after Apply).
+	//
+	// This pass is bounded by the existing prune budget and only runs when we
+	// would otherwise be forced to append due to an empty freelist.
+	if db.pruner.Enabled() && db.keepRecent > 0 && !db.preferAppendAlloc && idx.allocator.Head() == 0 {
+		_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+		db.mu.RLock()
+		nextSeq := db.meta.CommitSeq + 1
+		db.mu.RUnlock()
+		tp := time.Now()
+		_, _ = db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, nextSeq)
+		if debugTiming {
+			durPrune += time.Since(tp)
+		}
+	}
+
 	// 2. Prepare Meta - Short Lock
 	db.mu.Lock()
 	nextMeta := db.meta
@@ -1007,14 +1025,14 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 			tp := time.Now()
 			_, _ = db.pruneSome(nil, maxPages, maxDuration)
 			if debugTiming {
-				durPrune = time.Since(tp)
+				durPrune += time.Since(tp)
 			}
 		}
 	} else {
 		tp := time.Now()
 		db.Prune()
 		if debugTiming {
-			durPrune = time.Since(tp)
+			durPrune += time.Since(tp)
 		}
 	}
 
