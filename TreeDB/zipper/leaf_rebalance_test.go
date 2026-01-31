@@ -262,6 +262,175 @@ func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
 	}
 }
 
+func TestZipper_Rebalance_RebalanceCanFillRightLeafUsingLeftSibling(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+
+	capBytes := z.leafCapBytes()
+	if capBytes == 0 {
+		t.Fatalf("unexpected capBytes=0")
+	}
+	targetBytes := (capBytes * 7) / 8 // must match zipper hysteresis ratio
+	minBytes := (capBytes * 3) / 4    // must match zipper hysteresis ratio
+
+	val := bytes.Repeat([]byte("v"), 64)
+	entryBytes := z.leafEntryBytesUpperBound([]byte{0, 0, 0}, val, page.ValuePtr{}, node.FlagInline)
+
+	// Build a pair that cannot merge (sum > cap) but can rebalance:
+	// - left is near cap
+	// - right is just under min
+	leftCount := (capBytes / entryBytes) - 1
+	if leftCount < 2 {
+		leftCount = 2
+	}
+	rightCount := (minBytes / entryBytes) - 1
+	if rightCount < 1 {
+		rightCount = 1
+	}
+
+	buildLeaf := func(prefix byte, start, count int) (uint64, []string) {
+		id, err := p.Alloc(1)
+		if err != nil {
+			t.Fatalf("alloc leaf: %v", err)
+		}
+		data, err := p.GetForWrite(id)
+		if err != nil {
+			t.Fatalf("get leaf: %v", err)
+		}
+		b := z.newLeafBuilder(data)
+		b.SetPageID(id)
+		var keys []string
+		for i := 0; i < count; i++ {
+			k := []byte{prefix, byte((start + i) >> 8), byte(start + i)}
+			keys = append(keys, string(k))
+			if err := b.AddLeafEntry(k, val, node.FlagInline, page.ValuePtr{}); err != nil {
+				t.Fatalf("add leaf entry: %v", err)
+			}
+		}
+		b.Finish()
+		return id, keys
+	}
+
+	leftID, leftKeys := buildLeaf('a', 0, leftCount)
+	rightID, rightKeys := buildLeaf('b', 0, rightCount)
+
+	entries := []internalEntry{
+		{key: []byte{}, child: leftID},
+		{key: []byte(rightKeys[0]), child: rightID},
+	}
+	updated := []bool{false, true} // right leaf is the updated/underfilled one
+
+	var m adaptive.Metrics
+	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	if err != nil {
+		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("expected 2 entries after rebalance, got %d", len(out))
+	}
+	if len(retired) != 2 {
+		t.Fatalf("expected 2 retired pages (old leaves), got %d (%v)", len(retired), retired)
+	}
+
+	leftN, _, err := func() (*node.Node, []byte, error) {
+		data, err := p.Get(out[0].child)
+		if err != nil {
+			return nil, nil, err
+		}
+		n := node.NewNode(data)
+		k, _, _, _, err := n.GetLeafEntryView(0)
+		if err != nil {
+			return nil, nil, err
+		}
+		return n, k, nil
+	}()
+	if err != nil {
+		t.Fatalf("load left leaf: %v", err)
+	}
+	rightN, rightFirstKey, err := func() (*node.Node, []byte, error) {
+		data, err := p.Get(out[1].child)
+		if err != nil {
+			return nil, nil, err
+		}
+		n := node.NewNode(data)
+		k, _, _, _, err := n.GetLeafEntryView(0)
+		if err != nil {
+			return nil, nil, err
+		}
+		return n, k, nil
+	}()
+	if err != nil {
+		t.Fatalf("load right leaf: %v", err)
+	}
+
+	leftLive, err := z.leafLiveBytesUpperBound(leftN)
+	if err != nil {
+		t.Fatalf("leafLiveBytesUpperBound(left): %v", err)
+	}
+	rightLive, err := z.leafLiveBytesUpperBound(rightN)
+	if err != nil {
+		t.Fatalf("leafLiveBytesUpperBound(right): %v", err)
+	}
+	if rightLive < targetBytes {
+		t.Fatalf("right live bytes too low: got=%d want>=%d", rightLive, targetBytes)
+	}
+	if leftLive < minBytes {
+		t.Fatalf("left live bytes too low: got=%d want>=%d", leftLive, minBytes)
+	}
+
+	// Parent separator must be the min key of the right child.
+	if !bytes.Equal(out[1].key, rightFirstKey) {
+		t.Fatalf("separator key mismatch: got=%q want=%q", out[1].key, rightFirstKey)
+	}
+
+	// Build a tiny internal root and query around the boundary.
+	rootID, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("alloc root: %v", err)
+	}
+	rootData, err := p.GetForWrite(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	ib := node.NewBuilder(rootData, page.PageTypeInternal)
+	ib.SetPageID(rootID)
+	if err := ib.AddInternalChild(out[0].key, out[0].child); err != nil {
+		t.Fatalf("add internal child 0: %v", err)
+	}
+	if err := ib.AddInternalChild(out[1].key, out[1].child); err != nil {
+		t.Fatalf("add internal child 1: %v", err)
+	}
+	ib.Finish()
+
+	tr := tree.New(p, panicValueReader{}, rootID)
+
+	// Key that should be in left.
+	if _, err := tr.Get([]byte(leftKeys[0])); err != nil {
+		t.Fatalf("Get(left key): %v", err)
+	}
+	// First key of right.
+	if _, err := tr.Get(rightFirstKey); err != nil {
+		t.Fatalf("Get(right first key): %v", err)
+	}
+	// A later key in right (if present).
+	if rightN.Count() > 1 {
+		k, _, _, _, err := rightN.GetLeafEntryView(1)
+		if err != nil {
+			t.Fatalf("right leaf view: %v", err)
+		}
+		if _, err := tr.Get(k); err != nil {
+			t.Fatalf("Get(right next key): %v", err)
+		}
+	}
+}
+
 func TestZipper_Rebalance_NoOpWhenLeftAtOrAboveMin(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
