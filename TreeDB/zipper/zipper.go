@@ -852,9 +852,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	if len(entries) < 2 {
 		return entries, nil, nil
 	}
-	if budget != nil && !budget.allow() {
-		return entries, nil, nil
-	}
 
 	var retired []uint64
 
@@ -871,9 +868,6 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	}
 
 	// First pass: prune empty leaf children (except keep the first slot).
-	if budget != nil && !budget.take(1) {
-		return entries, nil, nil
-	}
 	out := entries[:0]
 	for i, e := range entries {
 		if i == 0 {
@@ -892,6 +886,14 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	}
 	entries = out
 	if len(entries) < 2 {
+		return entries, retired, nil
+	}
+
+	// Empty-leaf pruning above is cheap and important for delete-heavy batches
+	// (otherwise we can keep thousands of empty leaves referenced). If the
+	// maintenance budget is exhausted, skip the more expensive sibling merge /
+	// rebalance pass below, but keep the pruning result.
+	if budget != nil && !budget.allow() {
 		return entries, retired, nil
 	}
 
