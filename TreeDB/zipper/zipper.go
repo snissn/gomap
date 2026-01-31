@@ -752,12 +752,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	entries := make([]internalEntry, 0, len(children)+4)
+	updatedEntries := make([]bool, 0, len(children)+4)
 	for i := range children {
 		child := children[i]
 		if child.newChild >= z.pager.PageCount() {
 			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
 		}
 		entries = append(entries, internalEntry{key: append([]byte(nil), child.key...), child: child.newChild})
+		updatedEntries = append(updatedEntries, len(child.ops) > 0)
 
 		// Add sibling splits
 		for _, s := range child.splits {
@@ -765,6 +767,20 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
 			}
 			entries = append(entries, internalEntry{key: append([]byte(nil), s.Key...), child: s.NodeID})
+			updatedEntries = append(updatedEntries, true)
+		}
+	}
+
+	// Local leaf packing: bounded rebalance/merge with right sibling for updated
+	// leaf children only. This is applied even when maintenance is disabled.
+	if len(entries) >= 2 {
+		rebuilt, extraRetired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updatedEntries, metrics)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		entries = rebuilt
+		if len(extraRetired) > 0 {
+			retired = append(retired, extraRetired...)
 		}
 	}
 
@@ -829,6 +845,8 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.IndexWriteBytes += src.IndexWriteBytes
 	dst.SlabWriteBytes += src.SlabWriteBytes
 	dst.SlabDeadBytes += src.SlabDeadBytes
+	dst.LeafLocalMergeSizingMismatch += src.LeafLocalMergeSizingMismatch
+	dst.LeafLocalRebalanceSizingMismatch += src.LeafLocalRebalanceSizingMismatch
 
 	if src.SlabWriteBytesByFile != nil {
 		if dst.SlabWriteBytesByFile == nil {
@@ -846,6 +864,396 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 			dst.SlabDeadBytesByFile[id] += n
 		}
 	}
+}
+
+func (z *Zipper) leafEntryBytesUpperBound(key, val []byte, ptr page.ValuePtr, flags byte) int {
+	// This is intentionally an upper bound to prevent choosing a split that later
+	// fails with ErrNodeFull. Slight overcount reduces merge/rebalance frequency
+	// but avoids silent no-ops due to undercounting.
+	//
+	// Use the header size for the active leaf encoding mode. We still treat the
+	// key length as an upper bound (prefix compression can store shorter suffixes).
+	headerSize := 7
+	if z != nil && z.leafPrefixCompression {
+		headerSize = 9
+	}
+	if z != nil && z.indexColumnarLeaves {
+		headerSize = 11
+	}
+
+	n := headerSize + len(key)
+	if flags&node.FlagPointer != 0 {
+		n += page.ValuePtrSize
+	} else {
+		n += len(val)
+	}
+	return n + node.DirectoryEntrySize
+}
+
+func (z *Zipper) leafLiveBytes(n *node.Node) (int, error) {
+	// This is an upper-bound approximation of bytes occupied by "live" entries
+	// (tombstones excluded). It is intentionally pessimistic because rebuilds can
+	// change prefix compression, and used-bytes via FreeSpace() is not stable
+	// under rewrite.
+	sum := 0
+	for i := uint16(0); i < n.Count(); i++ {
+		k, v, ptr, flags, err := n.GetLeafEntryView(i)
+		if err != nil {
+			return 0, err
+		}
+		if flags&node.FlagTombstone != 0 {
+			continue
+		}
+		sum += z.leafEntryBytesUpperBound(k, v, ptr, flags)
+	}
+	return sum, nil
+}
+
+func (z *Zipper) leafCapBytes() int {
+	cap := page.PageSize - node.NodeHeaderSize
+	if z.leafReserveBytes > 0 {
+		cap -= z.leafReserveBytes
+	}
+	if cap < 0 {
+		return 0
+	}
+	return cap
+}
+
+func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry, updated []bool, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+	if len(entries) < 2 || len(updated) != len(entries) {
+		return entries, nil, nil
+	}
+
+	pageCap := z.leafCapBytes()
+	// Nothing meaningful we can do if cap is tiny.
+	if pageCap <= 0 {
+		return entries, nil, nil
+	}
+
+	// Hysteresis thresholds. We only act when the updated leaf drops below
+	// minBytes, and we try to push it up towards targetBytes.
+	//
+	// These are expressed as fixed ratios of effective capacity (which already
+	// incorporates leafReserveBytes) to avoid config-specific "ppm" constants.
+	targetBytes := (pageCap * 4) / 5 // 80%
+	minBytes := (pageCap * 7) / 10   // 70%
+	if targetBytes < minBytes {
+		targetBytes = minBytes
+	}
+
+	var retired []uint64
+
+	loadLeaf := func(id uint64) (*node.Node, bool, error) {
+		data, err := z.pager.Get(id)
+		if err != nil {
+			return nil, false, err
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeLeaf {
+			return nil, false, nil
+		}
+		return n, true, nil
+	}
+
+	// Attempt at most one merge/rebalance per updated leaf entry. Each attempt
+	// targets the updated leaf and its right sibling (only).
+	for leftIdx := 0; leftIdx < len(entries)-1; leftIdx++ {
+		if !updated[leftIdx] {
+			continue
+		}
+		updated[leftIdx] = false // 1 attempt per updated leaf entry
+
+		leftID := entries[leftIdx].child
+		rightID := entries[leftIdx+1].child
+
+		left, okL, err := loadLeaf(leftID)
+		if err != nil {
+			return nil, nil, err
+		}
+		right, okR, err := loadLeaf(rightID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !okL || !okR {
+			continue
+		}
+
+		leftLive, err := z.leafLiveBytes(left)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Hysteresis trigger: act only if the updated leaf is under min.
+		if leftLive >= minBytes {
+			continue
+		}
+		leftUsed := page.PageSize - left.FreeSpace() - node.NodeHeaderSize
+		if leftUsed < 0 {
+			leftUsed = 0
+		}
+		rightUsed := page.PageSize - right.FreeSpace() - node.NodeHeaderSize
+		if rightUsed < 0 {
+			rightUsed = 0
+		}
+
+		merged := false
+		rebalanced := false
+
+		// Attempt merge when the updated (left) side is underfull and the combined
+		// live bytes fit in one page. This is the only operation here that can
+		// reduce page count (and therefore improve average fill).
+		if leftUsed+rightUsed <= pageCap {
+			pid, err := z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return nil, nil, err
+			}
+			data, err := z.pager.GetForWrite(pid)
+			if err != nil {
+				retired = append(retired, pid)
+				return nil, nil, err
+			}
+			b := z.newLeafBuilder(data)
+			b.SetPageID(pid)
+
+			addAll := func(n *node.Node) error {
+				for j := uint16(0); j < n.Count(); j++ {
+					k, v, ptr, flags, err := n.GetLeafEntryView(j)
+					if err != nil {
+						return err
+					}
+					// NOTE: tombstones are intentionally dropped during local
+					// merge/rebalance; this must match zipper semantics elsewhere.
+					if flags&node.FlagTombstone != 0 {
+						continue
+					}
+					if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+
+			err = addAll(left)
+			if err == nil {
+				err = addAll(right)
+			}
+			if err == node.ErrNodeFull {
+				// Sizing said it should fit; record a mismatch and no-op.
+				metrics.LeafLocalMergeSizingMismatch++
+				retired = append(retired, pid)
+			} else if err != nil {
+				retired = append(retired, pid)
+				return nil, nil, err
+			} else {
+				n := b.Finish()
+				metrics.IndexWriteBytes += page.PageSize
+				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+
+				retired = append(retired, leftID, rightID)
+				entries[leftIdx].child = pid
+				copy(entries[leftIdx+1:], entries[leftIdx+2:])
+				entries = entries[:len(entries)-1]
+				// Keep updated slice aligned for future iterations.
+				copy(updated[leftIdx+1:], updated[leftIdx+2:])
+				updated = updated[:len(updated)-1]
+
+				merged = true
+				// If the right sibling was also updated, consume it as part of this
+				// successful modification.
+				if leftIdx < len(updated) {
+					updated[leftIdx] = false
+				}
+			}
+		}
+
+		if merged {
+			continue
+		}
+
+		// Merge isn't possible; attempt rebalance if we can push an underfull side
+		// up to target while keeping the other side above min.
+		type ev struct {
+			k     []byte
+			v     []byte
+			ptr   page.ValuePtr
+			flags byte
+			size  int
+		}
+		combined := make([]ev, 0, int(left.Count()+right.Count()))
+		for _, src := range []*node.Node{left, right} {
+			for j := uint16(0); j < src.Count(); j++ {
+				k, v, ptr, flags, err := src.GetLeafEntryView(j)
+				if err != nil {
+					return nil, nil, err
+				}
+				if flags&node.FlagTombstone != 0 {
+					continue
+				}
+				combined = append(combined, ev{
+					k:     k,
+					v:     v,
+					ptr:   ptr,
+					flags: flags,
+					size:  z.leafEntryBytesUpperBound(k, v, ptr, flags),
+				})
+			}
+		}
+		if len(combined) < 2 {
+			continue
+		}
+
+		prefixBytes := make([]int, len(combined)+1)
+		for j, e := range combined {
+			prefixBytes[j+1] = prefixBytes[j] + e.size
+		}
+		totalBytes := prefixBytes[len(combined)]
+
+		bestSplitAt := -1
+		bestOvershoot := int(^uint(0) >> 1) // MaxInt
+
+		// Prefer: push the updated (left) child to targetBytes while keeping the
+		// right child above minBytes.
+		for splitAt := 1; splitAt < len(combined); splitAt++ {
+			lb := prefixBytes[splitAt]
+			rb := totalBytes - lb
+			if lb > pageCap || rb > pageCap {
+				continue
+			}
+			if lb < targetBytes || rb < minBytes {
+				continue
+			}
+			overshoot := lb - targetBytes
+			if overshoot < bestOvershoot {
+				bestOvershoot = overshoot
+				bestSplitAt = splitAt
+			}
+		}
+
+		// Fallback: we couldn't reach targetBytes, but we may still be able to
+		// ensure both sides meet minBytes. This is important for split-heavy
+		// incremental workloads where totalBytes may be insufficient for a strict
+		// target+min distribution.
+		if bestSplitAt <= 0 || bestSplitAt >= len(combined) {
+			bestSplitAt = -1
+			bestBalance := int(^uint(0) >> 1)
+			for splitAt := 1; splitAt < len(combined); splitAt++ {
+				lb := prefixBytes[splitAt]
+				rb := totalBytes - lb
+				if lb > pageCap || rb > pageCap {
+					continue
+				}
+				if lb < minBytes || rb < minBytes {
+					continue
+				}
+				diff := lb - rb
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff < bestBalance {
+					bestBalance = diff
+					bestSplitAt = splitAt
+				}
+			}
+			if bestSplitAt <= 0 || bestSplitAt >= len(combined) {
+				continue
+			}
+		}
+
+		// Allocate two new leaves.
+		var lid, rid uint64
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return nil, nil, err
+			}
+			if len(ids) < 2 {
+				retired = append(retired, ids...)
+				return nil, nil, errors.New("zipper: AllocMany returned insufficient IDs")
+			}
+			lid, rid = ids[0], ids[1]
+		} else {
+			var err error
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return nil, nil, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return nil, nil, err
+			}
+		}
+
+		ldata, err := z.pager.GetForWrite(lid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return nil, nil, err
+		}
+		rdata, err := z.pager.GetForWrite(rid)
+		if err != nil {
+			retired = append(retired, lid, rid)
+			return nil, nil, err
+		}
+
+		lb := z.newLeafBuilder(ldata)
+		lb.SetPageID(lid)
+		rbld := z.newLeafBuilder(rdata)
+		rbld.SetPageID(rid)
+
+		rightStart := append([]byte(nil), combined[bestSplitAt].k...)
+		buildErr := func() error {
+			for j := 0; j < bestSplitAt; j++ {
+				e := combined[j]
+				if err := lb.AddLeafEntry(e.k, e.v, e.flags, e.ptr); err != nil {
+					return err
+				}
+			}
+			for j := bestSplitAt; j < len(combined); j++ {
+				e := combined[j]
+				if err := rbld.AddLeafEntry(e.k, e.v, e.flags, e.ptr); err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+
+		if buildErr == node.ErrNodeFull {
+			metrics.LeafLocalRebalanceSizingMismatch++
+			retired = append(retired, lid, rid)
+			continue
+		}
+		if buildErr != nil {
+			retired = append(retired, lid, rid)
+			return nil, nil, buildErr
+		}
+
+		ln := lb.Finish()
+		rn := rbld.Finish()
+		metrics.IndexWriteBytes += 2 * page.PageSize
+		metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
+
+		retired = append(retired, leftID, rightID)
+		entries[leftIdx].child = lid
+		entries[leftIdx+1].child = rid
+		entries[leftIdx+1].key = rightStart
+		rebalanced = true
+
+		if rebalanced {
+			// If the right sibling was also updated, avoid a second attempt that
+			// would re-touch the same pair in this parent.
+			if leftIdx+1 < len(updated) {
+				updated[leftIdx+1] = false
+			}
+		}
+	}
+
+	return entries, retired, nil
 }
 
 func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
