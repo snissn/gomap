@@ -915,6 +915,274 @@ func (z *Zipper) leafCapBytes() int {
 	return cap
 }
 
+func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []bool, metrics *adaptive.Metrics) ([]internalEntry, []bool, []uint64, error) {
+	// Bounded zipper-local packing: when small commits create many underfilled
+	// leaves, pairwise sibling rebalance can plateau. Packing a short run of leaf
+	// children within the same parent can materially increase density without
+	// range scans or background compaction.
+	//
+	// Hard bounds:
+	// - operates only within a single internal-node rebuild (mergeInternal)
+	// - touches at most packWindow leaf children per attempt
+	// - at most maxPacksPerParent attempts
+	// - never crosses parent boundaries
+	if len(entries) < 2 || len(updated) != len(entries) {
+		return entries, updated, nil, nil
+	}
+
+	const (
+		packWindow        = 4
+		maxPacksPerParent = 2
+	)
+
+	pageCap := z.leafCapBytes()
+	if pageCap <= 0 {
+		return entries, updated, nil, nil
+	}
+
+	targetBytes := (pageCap * 7) / 8
+	minBytes := (pageCap * 3) / 4
+	if targetBytes < minBytes {
+		targetBytes = minBytes
+	}
+
+	loadLeaf := func(id uint64) (*node.Node, bool, error) {
+		data, err := z.pager.Get(id)
+		if err != nil {
+			return nil, false, err
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeLeaf {
+			return nil, false, nil
+		}
+		return n, true, nil
+	}
+
+	// Collect a max-size slice of existing nodes for the window and their IDs.
+	collectWindow := func(start, end int) ([]uint64, []*node.Node, bool, error) {
+		ids := make([]uint64, 0, end-start)
+		nodes := make([]*node.Node, 0, end-start)
+		for i := start; i < end; i++ {
+			id := entries[i].child
+			n, ok, err := loadLeaf(id)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if !ok {
+				return nil, nil, false, nil
+			}
+			ids = append(ids, id)
+			nodes = append(nodes, n)
+		}
+		return ids, nodes, true, nil
+	}
+
+	// Append all live entries from leaf nodes in-order, without copying.
+	type ev struct {
+		k     []byte
+		v     []byte
+		ptr   page.ValuePtr
+		flags byte
+	}
+	collectEntries := func(nodes []*node.Node) ([]ev, error) {
+		out := make([]ev, 0, 64)
+		for _, n := range nodes {
+			for i := uint16(0); i < n.Count(); i++ {
+				k, v, ptr, flags, err := n.GetLeafEntryView(i)
+				if err != nil {
+					return nil, err
+				}
+				if flags&node.FlagTombstone != 0 {
+					continue
+				}
+				out = append(out, ev{k: k, v: v, ptr: ptr, flags: flags})
+			}
+		}
+		return out, nil
+	}
+
+	packedRetired := make([]uint64, 0, packWindow*maxPacksPerParent)
+	packs := 0
+
+	for idx := 0; idx < len(entries) && packs < maxPacksPerParent; idx++ {
+		n, ok, err := loadLeaf(entries[idx].child)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if !ok {
+			continue
+		}
+		live, err := z.leafLiveBytesUpperBound(n)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		// Trigger packing when the leaf is materially underfilled (below target),
+		// and either it (or a neighbor) was updated, or it's below min.
+		if live >= targetBytes {
+			continue
+		}
+		if !(updated[idx] || (idx+1 < len(updated) && updated[idx+1]) || (idx > 0 && updated[idx-1]) || live < minBytes) {
+			continue
+		}
+
+		// Choose a window around idx (include both sides when possible).
+		start := idx - (packWindow / 2)
+		if start < 0 {
+			start = 0
+		}
+		end := start + packWindow
+		if end > len(entries) {
+			end = len(entries)
+			start = end - packWindow
+			if start < 0 {
+				start = 0
+			}
+		}
+		if end-start < 2 {
+			continue
+		}
+
+		oldIDs, nodes, ok, err := collectWindow(start, end)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if !ok {
+			continue
+		}
+
+		combined, err := collectEntries(nodes)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(combined) < 2 {
+			continue
+		}
+
+		// Allocate and build packed leaves using the leaf builder's natural split
+		// behavior. This gives dense pages with correct prefix-compression sizing.
+		newEntries := make([]internalEntry, 0, len(oldIDs))
+		newUpdated := make([]bool, 0, len(oldIDs))
+		newIDs := make([]uint64, 0, len(oldIDs))
+
+		var b *node.Builder
+		var lastMax []byte
+
+		startKey := entries[start].key
+		if start == 0 && startKey == nil {
+			startKey = []byte{}
+		}
+
+		startNewLeaf := func(hint uint64, sepKey []byte) error {
+			pid, err := z.allocator.Alloc(hint)
+			if err != nil {
+				return err
+			}
+			newIDs = append(newIDs, pid)
+
+			data, err := z.pager.GetForWrite(pid)
+			if err != nil {
+				return err
+			}
+			b = z.newLeafBuilder(data)
+			b.SetPageID(pid)
+
+			k := sepKey
+			if len(newEntries) == 0 {
+				k = startKey
+			}
+			newEntries = append(newEntries, internalEntry{key: append([]byte(nil), k...), child: pid})
+			newUpdated = append(newUpdated, true)
+			return nil
+		}
+
+		if err := startNewLeaf(oldIDs[0], startKey); err != nil {
+			packedRetired = append(packedRetired, newIDs...)
+			return entries, updated, packedRetired, nil
+		}
+
+		finishLeaf := func() {
+			if b == nil {
+				return
+			}
+			n := b.Finish()
+			if metrics != nil {
+				metrics.IndexWriteBytes += page.PageSize
+				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+			}
+			// Capture last max key for separator generation.
+			if b != nil && b.Count() > 0 {
+				// Prefer the builder-tracked last key when prefix compression is enabled.
+				if k := b.LeafPrevKey(); len(k) > 0 {
+					lastMax = append(lastMax[:0], k...)
+				}
+			}
+			b = nil
+		}
+
+		for _, e := range combined {
+			key := e.k
+			val := e.v
+			flags := e.flags
+
+			entrySize, prefixLen, suffixLen := b.LeafEntrySizeWithPrefix(key, val, flags)
+			var err error
+			if z.leafSoftFull(b, entrySize) {
+				err = node.ErrNodeFull
+			} else {
+				err = b.AddLeafEntryWithPrefix(key, val, flags, e.ptr, entrySize, prefixLen, suffixLen)
+			}
+			if err == node.ErrNodeFull {
+				// Finish and start a new leaf for this entry.
+				// Compute separator key consistent with leaf split logic.
+				finishLeaf()
+
+				sepKey := append([]byte(nil), key...)
+				if len(lastMax) > 0 {
+					sepKey = shortestSeparator(lastMax, key)
+				}
+				if err := startNewLeaf(newEntries[len(newEntries)-1].child, sepKey); err != nil {
+					packedRetired = append(packedRetired, newIDs...)
+					return entries, updated, packedRetired, nil
+				}
+
+				// Retry insert (must fit in empty leaf).
+				entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
+				if err := b.AddLeafEntryWithPrefix(key, val, flags, e.ptr, entrySize, prefixLen, suffixLen); err != nil {
+					packedRetired = append(packedRetired, newIDs...)
+					return entries, updated, packedRetired, nil
+				}
+			} else if err != nil {
+				packedRetired = append(packedRetired, newIDs...)
+				return nil, nil, nil, err
+			}
+		}
+		finishLeaf()
+
+		// Only apply if we actually reduce the number of leaves.
+		if len(newEntries) >= (end - start) {
+			packedRetired = append(packedRetired, newIDs...)
+			continue
+		}
+
+		// Replace the window with the packed leaves.
+		packedRetired = append(packedRetired, oldIDs...)
+
+		entries = append(entries[:start], append(newEntries, entries[end:]...)...)
+		updated = append(updated[:start], append(newUpdated, updated[end:]...)...)
+
+		packs++
+		// Continue scanning from just before start to allow further local merges.
+		if start > 0 {
+			idx = start - 1
+		} else {
+			idx = -1
+		}
+	}
+
+	return entries, updated, packedRetired, nil
+}
+
 func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry, updated []bool, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
 	if len(entries) < 2 || len(updated) != len(entries) {
 		return entries, nil, nil
