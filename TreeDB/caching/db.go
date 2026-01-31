@@ -1556,6 +1556,13 @@ type DB struct {
 	flushBpsEWMA      float64
 	queueLaneIDMisses atomic.Int64
 
+	// Counters (diagnostics; no behavior change).
+	memtableRotationsTotal   atomic.Uint64
+	flushLaneOnceTotal       atomic.Uint64
+	backendWriteBatchesTotal atomic.Uint64
+	flushUnitsFlushedTotal   atomic.Uint64
+	flushEntriesFlushedTotal atomic.Uint64
+
 	// Lifecycle
 	closeCh chan struct{}
 	closing atomic.Bool
@@ -3765,9 +3772,11 @@ func (db *DB) Checkpoint() error {
 		backendBatch := db.backend.NewBatch()
 		if db.relaxedSync {
 			// If relaxed sync, just write the batch without forcing sync
+			db.backendWriteBatchesTotal.Add(1)
 			commitErr = backendBatch.Write()
 		} else {
 			// Otherwise, force sync
+			db.backendWriteBatchesTotal.Add(1)
 			commitErr = backendBatch.WriteSync()
 		}
 		cerr := backendBatch.Close()
@@ -4081,6 +4090,7 @@ func (db *DB) Close() error {
 	if walBytes > 0 && !hadMemtables {
 		backendBatch := db.backend.NewBatch()
 		db.flushMu.Lock()
+		db.backendWriteBatchesTotal.Add(1)
 		err := backendBatch.WriteSync()
 		db.flushMu.Unlock()
 		if cerr := backendBatch.Close(); cerr != nil && err == nil {
@@ -5080,6 +5090,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	db.memtableRotationsTotal.Add(1)
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
@@ -5214,6 +5225,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	db.memtableRotationsTotal.Add(1)
 
 	if triggerFlush {
 		select {
@@ -5679,6 +5691,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 }
 
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
+	db.flushLaneOnceTotal.Add(1)
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {
@@ -5812,8 +5825,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 	var err error
 	if sync {
+		db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.WriteSync()
 	} else {
+		db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.Write()
 	}
 	cerr := backendBatch.Close()
@@ -5824,6 +5839,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.reportError(err)
 		return false
 	}
+
+	db.flushUnitsFlushedTotal.Add(uint64(len(units)))
+	db.flushEntriesFlushedTotal.Add(uint64(totalLen))
 
 	// Remove from queue and delete old WAL segments.
 	db.mu.Lock()
@@ -6020,8 +6038,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				tw := time.Now()
 				var err error
 				if sync {
+					db.backendWriteBatchesTotal.Add(1)
 					err = backendBatch.WriteSync()
 				} else {
+					db.backendWriteBatchesTotal.Add(1)
 					err = backendBatch.Write()
 				}
 				cerr := backendBatch.Close()
@@ -6160,8 +6180,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			tw := time.Now()
 			var err error
 			if sync {
+				db.backendWriteBatchesTotal.Add(1)
 				err = backendBatch.WriteSync()
 			} else {
+				db.backendWriteBatchesTotal.Add(1)
 				err = backendBatch.Write()
 			}
 			cerr := backendBatch.Close()
@@ -6589,6 +6611,12 @@ func (db *DB) Stats() map[string]string {
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
+
+	stats["treedb.cache.stats.memtable_rotations_total"] = fmt.Sprintf("%d", db.memtableRotationsTotal.Load())
+	stats["treedb.cache.stats.flush_lane_once_total"] = fmt.Sprintf("%d", db.flushLaneOnceTotal.Load())
+	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
+	stats["treedb.cache.stats.flush_units_flushed_total"] = fmt.Sprintf("%d", db.flushUnitsFlushedTotal.Load())
+	stats["treedb.cache.stats.flush_entries_flushed_total"] = fmt.Sprintf("%d", db.flushEntriesFlushedTotal.Load())
 
 	stats["treedb.cache.auto_checkpoint.count"] = fmt.Sprintf("%d", db.autoCheckpointCount.Load())
 	stats["treedb.cache.auto_checkpoint.last_reason"] = autoCheckpointReasonString(db.autoCheckpointLastReason.Load())
@@ -7479,10 +7507,12 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 
 	if sync && !b.db.relaxedSync {
 		b.db.flushMu.Lock()
+		b.db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.WriteSync()
 		b.db.flushMu.Unlock()
 	} else {
 		b.db.flushMu.Lock()
+		b.db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.Write()
 		b.db.flushMu.Unlock()
 	}
@@ -8025,10 +8055,12 @@ func (b *Batch) writeBypass(sync bool) error {
 	var err error
 	if sync && !b.db.relaxedSync {
 		b.db.flushMu.Lock()
+		b.db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.WriteSync()
 		b.db.flushMu.Unlock()
 	} else {
 		b.db.flushMu.Lock()
+		b.db.backendWriteBatchesTotal.Add(1)
 		err = backendBatch.Write()
 		b.db.flushMu.Unlock()
 	}
