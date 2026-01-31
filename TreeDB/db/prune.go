@@ -168,45 +168,122 @@ func (db *DB) pruneSome(stopCh <-chan struct{}, maxPages int, maxDuration time.D
 			}
 		}
 
-		// Extract a bounded amount so a single tick can't grab unbounded memory.
-		batches := idx.graveyard.ExtractBatchesUpTo(minPinned, currentSeq, db.keepRecent, remaining)
-		if len(batches) == 0 {
+		n, err := db.pruneSomeAt(stopCh, idx, minPinned, currentSeq, maxPages, &freedPages, deadline)
+		if err != nil {
+			return freedPages, err
+		}
+		if !n {
+			return freedPages, nil
+		}
+	}
+}
+
+// pruneSomeAt performs a single bounded extract+free pass against the given
+// (minPinnedSeq, currentSeq) point-in-time view. It returns true if it freed
+// anything and another pass might make progress.
+func (db *DB) pruneSomeAt(
+	stopCh <-chan struct{},
+	idx *indexGen,
+	minPinned uint64,
+	currentSeq uint64,
+	maxPages int,
+	freedPages *int,
+	deadline time.Time,
+) (bool, error) {
+	remaining := maxPages
+	if maxPages > 0 {
+		remaining = maxPages - *freedPages
+		if remaining <= 0 {
+			return false, nil
+		}
+	}
+
+	// Extract a bounded amount so a single tick can't grab unbounded memory.
+	batches := idx.graveyard.ExtractBatchesUpTo(minPinned, currentSeq, db.keepRecent, remaining)
+	if len(batches) == 0 {
+		return false, nil
+	}
+
+	for bi := range batches {
+		b := batches[bi]
+		for i, id := range b.IDs {
+			select {
+			case <-stopCh:
+				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				for _, rest := range batches[bi+1:] {
+					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
+				}
+				return false, nil
+			default:
+			}
+
+			if !deadline.IsZero() && time.Now().After(deadline) {
+				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				for _, rest := range batches[bi+1:] {
+					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
+				}
+				return false, nil
+			}
+
+			if err := idx.allocator.Free(id); err != nil {
+				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				for _, rest := range batches[bi+1:] {
+					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
+				}
+				return false, err
+			}
+			*freedPages = *freedPages + 1
+			if maxPages > 0 && *freedPages >= maxPages {
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
+}
+
+// pruneSomeWithCurrentSeq is like pruneSome, but evaluates KeepRecent eligibility
+// against an explicit currentSeq rather than db.state.Load().CommitSeq.
+//
+// This is used by commit-time reclaim: when finalizing commit N+1 we can reclaim
+// pages retired at N (subject to KeepRecent and pinned readers) even before the
+// new state is published.
+func (db *DB) pruneSomeWithCurrentSeq(stopCh <-chan struct{}, maxPages int, maxDuration time.Duration, currentSeq uint64) (int, error) {
+	if maxPages == 0 {
+		return 0, nil
+	}
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return 0, nil
+	}
+	idx.acquire()
+	defer db.releaseIndex(idx)
+
+	var deadline time.Time
+	if maxDuration > 0 {
+		deadline = time.Now().Add(maxDuration)
+	}
+
+	freedPages := 0
+	for {
+		select {
+		case <-stopCh:
+			return freedPages, nil
+		default:
+		}
+
+		if !deadline.IsZero() && time.Now().After(deadline) {
 			return freedPages, nil
 		}
 
-		for bi := range batches {
-			b := batches[bi]
-			for i, id := range b.IDs {
-				select {
-				case <-stopCh:
-					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
-					for _, rest := range batches[bi+1:] {
-						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
-					}
-					return freedPages, nil
-				default:
-				}
-
-				if !deadline.IsZero() && time.Now().After(deadline) {
-					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
-					for _, rest := range batches[bi+1:] {
-						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
-					}
-					return freedPages, nil
-				}
-
-				if err := idx.allocator.Free(id); err != nil {
-					idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
-					for _, rest := range batches[bi+1:] {
-						idx.graveyard.Reinsert(rest.Seq, rest.IDs)
-					}
-					return freedPages, err
-				}
-				freedPages++
-				if maxPages > 0 && freedPages >= maxPages {
-					return freedPages, nil
-				}
-			}
+		minPinned := idx.registry.MinPinnedSeq()
+		n, err := db.pruneSomeAt(stopCh, idx, minPinned, currentSeq, maxPages, &freedPages, deadline)
+		if err != nil {
+			return freedPages, err
+		}
+		if !n {
+			return freedPages, nil
 		}
 	}
 }
