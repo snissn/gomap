@@ -109,8 +109,8 @@ func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
 	if capBytes == 0 {
 		t.Fatalf("unexpected capBytes=0")
 	}
-	targetBytes := (capBytes * 4) / 5 // must match zipper hysteresis ratio
-	minBytes := (capBytes * 7) / 10   // must match zipper hysteresis ratio
+	targetBytes := (capBytes * 7) / 8 // must match zipper hysteresis ratio
+	minBytes := (capBytes * 3) / 4    // must match zipper hysteresis ratio
 
 	// Choose a value size that gives us decent control over per-entry bytes.
 	val := bytes.Repeat([]byte("v"), 64)
@@ -281,7 +281,7 @@ func TestZipper_Rebalance_NoOpWhenLeftAtOrAboveMin(t *testing.T) {
 	z := New(p, alloc)
 
 	capBytes := z.leafCapBytes()
-	minBytes := (capBytes * 7) / 10 // must match zipper hysteresis ratio
+	minBytes := (capBytes * 3) / 4 // must match zipper hysteresis ratio
 
 	val := bytes.Repeat([]byte("v"), 64)
 	entryBytes := z.leafEntryBytesUpperBound([]byte{0, 0, 0}, val, page.ValuePtr{}, node.FlagInline)

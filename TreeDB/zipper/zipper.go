@@ -934,10 +934,11 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 	// Hysteresis thresholds. We only act when the updated leaf drops below
 	// minBytes, and we try to push it up towards targetBytes.
 	//
-	// These are expressed as fixed ratios of effective capacity (which already
-	// incorporates leafReserveBytes) to avoid config-specific "ppm" constants.
-	targetBytes := (pageCap * 4) / 5 // 80%
-	minBytes := (pageCap * 7) / 10   // 70%
+	// These ratios are intentionally fixed and derived from effective capacity
+	// (which already incorporates leafReserveBytes) so the behavior stays
+	// deterministic across configs.
+	targetBytes := (pageCap * 7) / 8
+	minBytes := (pageCap * 3) / 4
 	if targetBytes < minBytes {
 		targetBytes = minBytes
 	}
@@ -987,22 +988,17 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 		if leftLive >= minBytes {
 			continue
 		}
-		leftUsed := page.PageSize - left.FreeSpace() - node.NodeHeaderSize
-		if leftUsed < 0 {
-			leftUsed = 0
+		rightLive, err := z.leafLiveBytes(right)
+		if err != nil {
+			return nil, nil, err
 		}
-		rightUsed := page.PageSize - right.FreeSpace() - node.NodeHeaderSize
-		if rightUsed < 0 {
-			rightUsed = 0
-		}
-
 		merged := false
 		rebalanced := false
 
 		// Attempt merge when the updated (left) side is underfull and the combined
-		// live bytes fit in one page. This is the only operation here that can
-		// reduce page count (and therefore improve average fill).
-		if leftUsed+rightUsed <= pageCap {
+		// *live-bytes upper bound* fits in one page. Feasibility must use the same
+		// sizing model as the rebuild to avoid silent no-ops from ErrNodeFull.
+		if leftLive+rightLive <= pageCap {
 			pid, err := z.allocator.Alloc(left.PageID())
 			if err != nil {
 				return nil, nil, err
