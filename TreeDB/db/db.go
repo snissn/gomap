@@ -970,7 +970,6 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 
 	// 5. Update State (Visible) - Short Lock
 	db.mu.Lock()
-	defer db.mu.Unlock()
 
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
@@ -988,11 +987,29 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	}
 	db.state.Store(newState)
 
+	prunerEnabled := db.pruner.Enabled()
+	keepRecent := db.keepRecent
+	preferAppend := db.preferAppendAlloc
+	freelistHead := idx.allocator.Head()
+	db.mu.Unlock()
+
 	// Prune asynchronously to keep commit latency stable under churn.
 	// IMPORTANT: kick/Prune only after publishing the new state so the pruner sees
 	// the updated commit sequence and can reclaim pages promptly.
-	if db.pruner.Enabled() {
+	if prunerEnabled {
 		db.pruner.Kick()
+
+		// If KeepRecent is enabled and we've run out of free pages, do a bounded
+		// synchronous prune pass right after commit. This helps avoid runaway file
+		// growth under churn while keeping the work bounded by existing budgets.
+		if keepRecent > 0 && !preferAppend && freelistHead == 0 {
+			_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+			tp := time.Now()
+			_, _ = db.pruneSome(nil, maxPages, maxDuration)
+			if debugTiming {
+				durPrune = time.Since(tp)
+			}
+		}
 	} else {
 		tp := time.Now()
 		db.Prune()
