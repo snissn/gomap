@@ -775,6 +775,15 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	// can end up with underfilled leaves that persist indefinitely. Do a single,
 	// bounded sibling rebalance/merge pass to repair underfill without range scans.
 	if len(entries) >= 2 {
+		var packRetired []uint64
+		entries, updatedEntries, packRetired, err = z.packUnderfilledLeafChildren(entries, updatedEntries, metrics)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		if len(packRetired) > 0 {
+			retired = append(retired, packRetired...)
+		}
+
 		var extraRetired []uint64
 		entries, extraRetired, err = z.rebalanceUpdatedLeavesWithRightSibling(entries, updatedEntries, metrics)
 		if err != nil {
@@ -931,8 +940,8 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 	}
 
 	const (
-		packWindow        = 4
-		maxPacksPerParent = 2
+		packWindow        = 8
+		maxPacksPerParent = 64
 	)
 
 	pageCap := z.leafCapBytes()
@@ -984,21 +993,23 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 		ptr   page.ValuePtr
 		flags byte
 	}
-	collectEntries := func(nodes []*node.Node) ([]ev, error) {
+	collectEntries := func(nodes []*node.Node) ([]ev, int, error) {
 		out := make([]ev, 0, 64)
+		totalBytes := 0
 		for _, n := range nodes {
 			for i := uint16(0); i < n.Count(); i++ {
 				k, v, ptr, flags, err := n.GetLeafEntryView(i)
 				if err != nil {
-					return nil, err
+					return nil, 0, err
 				}
 				if flags&node.FlagTombstone != 0 {
 					continue
 				}
+				totalBytes += z.leafEntryBytesUpperBound(k, v, ptr, flags)
 				out = append(out, ev{k: k, v: v, ptr: ptr, flags: flags})
 			}
 		}
-		return out, nil
+		return out, totalBytes, nil
 	}
 
 	packedRetired := make([]uint64, 0, packWindow*maxPacksPerParent)
@@ -1051,11 +1062,20 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 			continue
 		}
 
-		combined, err := collectEntries(nodes)
+		combined, combinedBytes, err := collectEntries(nodes)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		if len(combined) < 2 {
+			continue
+		}
+		// Fast feasibility: if the combined live-bytes can't reduce leaf count
+		// under the current cap, skip rebuilding.
+		if combinedBytes <= 0 {
+			continue
+		}
+		minLeaves := (combinedBytes + pageCap - 1) / pageCap
+		if minLeaves >= (end - start) {
 			continue
 		}
 
