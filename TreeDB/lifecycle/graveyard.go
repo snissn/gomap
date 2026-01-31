@@ -47,32 +47,35 @@ func (g *Graveyard) Add(seq uint64, pages []uint64) {
 }
 
 // Extract returns pages that are safe to free.
-// Condition: seq < minPinnedSeq AND seq < (currentSeq - keepRecent).
+// Condition: seq < minPinnedSeq AND seq <= (currentSeq - keepRecent).
 func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	var freed []uint64
 
-	safeHistory := currentSeq - keepRecent
-	if currentSeq < keepRecent {
-		safeHistory = 0
-	}
-
-	limit := minPinnedSeq
-	if safeHistory < limit {
-		limit = safeHistory
+	safeHistory := uint64(0)
+	if currentSeq >= keepRecent {
+		safeHistory = currentSeq - keepRecent
 	}
 
 	cutIdx := 0
 	for i := range g.retiredPages {
 		b := &g.retiredPages[i]
-		if b.seq < limit {
-			freed = append(freed, b.ids...)
-			cutIdx = i + 1
-		} else {
+		// Two independent constraints:
+		// - Readers: a retired batch is only safe to free if it's strictly older
+		//   than the oldest pinned reader sequence.
+		// - History: KeepRecent retains exactly `keepRecent` most recent commit
+		//   versions. A batch at seq==current-keepRecent is eligible.
+		if b.seq >= minPinnedSeq {
 			break
 		}
+		if b.seq <= safeHistory {
+			freed = append(freed, b.ids...)
+			cutIdx = i + 1
+			continue
+		}
+		break
 	}
 
 	if cutIdx > 0 {
@@ -87,7 +90,7 @@ func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint6
 //
 // Safe-to-free condition is the same as Extract:
 //   - retiredAtSeq < minPinnedSeq
-//   - retiredAtSeq < (currentSeq - keepRecent)
+//   - retiredAtSeq <= (currentSeq - keepRecent)
 //
 // If maxIDs <= 0, all safe pages are returned.
 func (g *Graveyard) ExtractBatchesUpTo(minPinnedSeq, currentSeq, keepRecent uint64, maxIDs int) []RetiredBatch {
@@ -98,14 +101,9 @@ func (g *Graveyard) ExtractBatchesUpTo(minPinnedSeq, currentSeq, keepRecent uint
 		maxIDs = int(^uint(0) >> 1)
 	}
 
-	safeHistory := currentSeq - keepRecent
-	if currentSeq < keepRecent {
-		safeHistory = 0
-	}
-
-	limit := minPinnedSeq
-	if safeHistory < limit {
-		limit = safeHistory
+	safeHistory := uint64(0)
+	if currentSeq >= keepRecent {
+		safeHistory = currentSeq - keepRecent
 	}
 
 	var out []RetiredBatch
@@ -117,7 +115,10 @@ func (g *Graveyard) ExtractBatchesUpTo(minPinnedSeq, currentSeq, keepRecent uint
 			break
 		}
 		b := &g.retiredPages[i]
-		if b.seq >= limit {
+		if b.seq >= minPinnedSeq {
+			break
+		}
+		if b.seq > safeHistory {
 			break
 		}
 
