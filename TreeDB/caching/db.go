@@ -5418,11 +5418,60 @@ func (db *DB) flushLoop() {
 			db.flushAll(true)
 			return
 		case <-db.flushCh:
+			emptyish, err := db.backendIsEmptyish()
+			if err != nil {
+				db.reportError(fmt.Errorf("cachingdb: empty-ish backend check failed: %w", err))
+			}
+			if emptyish && db.canDeferBackgroundFlushEmptyish() {
+				continue
+			}
 			// Background flush is async when WAL is enabled. Without a WAL, we
 			// upgrade to a synced flush unless RelaxedSync is set.
 			db.flushAll(false)
 		}
 	}
+}
+
+func (db *DB) backendIsEmptyish() (bool, error) {
+	if db == nil || db.backend == nil {
+		return false, nil
+	}
+	type emptyishChecker interface {
+		IsEmptyish() (bool, error)
+	}
+	if c, ok := db.backend.(emptyishChecker); ok {
+		return c.IsEmptyish()
+	}
+	return false, nil
+}
+
+func (db *DB) canDeferBackgroundFlushEmptyish() bool {
+	// Never bypass safety caps when backpressure is disabled.
+	if !db.adaptiveBackpressureEnabled() {
+		maxQueued := db.maxQueuedMemtables
+		if maxQueued <= 0 {
+			return false
+		}
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		} else {
+			db.mu.RLock()
+			queueLen = len(db.queue)
+			db.mu.RUnlock()
+		}
+		return queueLen < maxQueued
+	}
+
+	// Adaptive policy: only defer while below the stop threshold.
+	backlog := db.queueBacklogBytes.Load()
+	db.bpMu.Lock()
+	_, stopBytes, _ := db.thresholdsLocked()
+	db.bpMu.Unlock()
+	if stopBytes <= 0 {
+		return false
+	}
+	return backlog < stopBytes
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
@@ -5692,13 +5741,24 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	db.flushLaneOnceTotal.Add(1)
+
+	maxMemtables := 1
+	var targetBytes int64
+	if emptyish, err := db.backendIsEmptyish(); err == nil && emptyish {
+		// While the backend is empty-ish, prefer combining multiple immutable
+		// memtables into a single backend batch commit. This keeps the initial
+		// tree build denser without changing steady-state behavior.
+		maxMemtables = flushCombineMaxMemtables
+		targetBytes = flushCombineTargetBytes
+	}
+
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
 		return false
 	}
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, 1, 0)
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
 	if len(units) == 0 {
 		return false
