@@ -926,7 +926,7 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 	}
 
 	// Hysteresis thresholds. Trigger only when the left leaf drops below min,
-	// and try to push it up towards target while keeping the right leaf >= min.
+	// and try to push it up towards target while keeping the sibling >= min.
 	targetBytes := (pageCap * 7) / 8
 	minBytes := (pageCap * 3) / 4
 	if targetBytes < minBytes {
@@ -934,11 +934,19 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 	}
 	hardLowBytes := pageCap / 2
 
-	// Bound worst-case work per internal-node rebuild. This is limited to a
-	// single linear pass over child pairs (no cascades), but still large enough
-	// to make progress for large fanout nodes (e.g. sequential seeding).
-	maxAttemptsPerParent := len(entries)
-	attempts := 0
+	// Upper-bound sizing can be pessimistic and suppress merges. Allow a small
+	// fixed slack window where we still try building the merged leaf and rely on
+	// ErrNodeFull to reject it.
+	mergeTrySlackBytes := page.PageSize / 64
+	// Merges are allowed to ignore leafReserveBytes (which is a split-churn
+	// control for newly written pages). Dense merges reduce leaf count and tend
+	// to improve long-run fill without affecting correctness.
+	mergeCapBytes := page.PageSize - node.NodeHeaderSize
+
+	// Bound modifications per internal-node rebuild (touches at most 2 leaves +
+	// parent per modification). We cap to a single linear pass worth of work.
+	maxModsPerParent := len(entries)
+	mods := 0
 
 	var retired []uint64
 
@@ -954,10 +962,8 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 		return n, true, nil
 	}
 
-	// Iterate from right-to-left so we prioritize the "hot" end of the keyspace
-	// for append-heavy workloads (e.g. sequential inserts).
-	for leftIdx := len(entries) - 2; leftIdx >= 0; leftIdx-- {
-		if attempts >= maxAttemptsPerParent {
+	for leftIdx := 0; leftIdx < len(entries)-1; leftIdx++ {
+		if mods >= maxModsPerParent {
 			break
 		}
 
@@ -980,27 +986,40 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 		if err != nil {
 			return nil, nil, err
 		}
-		if leftLive >= minBytes {
-			continue
-		}
-
-		// Widen coverage: attempt repair for severely underfilled leaves even if
-		// they weren't updated (orphan underfill from historical splits), and also
-		// attempt when the right sibling was updated.
-		if !(updated[leftIdx] || updated[leftIdx+1] || leftLive < hardLowBytes) {
-			continue
-		}
-
-		attempts++
-		updated[leftIdx] = false // 1 attempt per (left) updated leaf
-
 		rightLive, err := z.leafLiveBytesUpperBound(right)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		// Attempt merge if both leaves fit (live bytes upper bound).
-		if leftLive+rightLive <= pageCap {
+		leftUnderMin := leftLive < minBytes
+		rightUnderMin := rightLive < minBytes
+		if !leftUnderMin && !rightUnderMin {
+			continue
+		}
+
+		// Widen coverage:
+		// - Attempt if either leaf was updated (consume that leaf's single attempt),
+		// - or if either leaf is severely underfilled (repair historical underfill).
+		consumeIdx := -1
+		if updated[leftIdx] {
+			consumeIdx = leftIdx
+		} else if updated[leftIdx+1] {
+			consumeIdx = leftIdx + 1
+		} else if leftLive < hardLowBytes || rightLive < hardLowBytes {
+			consumeIdx = -1
+		} else {
+			continue
+		}
+		if consumeIdx >= 0 {
+			updated[consumeIdx] = false // 1 attempt per updated leaf
+		}
+
+		// Attempt merge when the combined live-bytes sizing (with a small slack)
+		// suggests it may fit, and at least one side is underfilled.
+		//
+		// NOTE: tombstones are intentionally dropped during local merge/rebalance;
+		// this must match zipper semantics elsewhere.
+		if leftLive+rightLive <= mergeCapBytes+mergeTrySlackBytes {
 			pid, err := z.allocator.Alloc(left.PageID())
 			if err != nil {
 				return nil, nil, err
@@ -1053,6 +1072,7 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 				updated = updated[:len(updated)-1]
 
 				// LeftIdx now points at the merged leaf; continue scanning.
+				mods++
 				continue
 			}
 		}
@@ -1095,20 +1115,46 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 		totalBytes := prefixBytes[len(combined)]
 
 		bestSplitAt := -1
-		bestOvershoot := int(^uint(0) >> 1)
+		fillRight := false
+		if rightUnderMin && !leftUnderMin {
+			fillRight = true
+		} else if rightUnderMin && leftUnderMin && rightLive < leftLive {
+			fillRight = true
+		}
+
+		bestScore := int(^uint(0) >> 1)
 		for splitAt := 1; splitAt < len(combined); splitAt++ {
 			lb := prefixBytes[splitAt]
 			rb := totalBytes - lb
 			if lb > pageCap || rb > pageCap {
 				continue
 			}
-			if lb < targetBytes || rb < minBytes {
-				continue
-			}
-			overshoot := lb - targetBytes
-			if overshoot < bestOvershoot {
-				bestOvershoot = overshoot
-				bestSplitAt = splitAt
+			if fillRight {
+				// Push right towards target, keep left above min.
+				if rb < targetBytes || lb < minBytes {
+					continue
+				}
+				score := rb - targetBytes
+				if score < 0 {
+					score = -score
+				}
+				if score < bestScore {
+					bestScore = score
+					bestSplitAt = splitAt
+				}
+			} else {
+				// Push left towards target, keep right above min.
+				if lb < targetBytes || rb < minBytes {
+					continue
+				}
+				score := lb - targetBytes
+				if score < 0 {
+					score = -score
+				}
+				if score < bestScore {
+					bestScore = score
+					bestSplitAt = splitAt
+				}
 			}
 		}
 
@@ -1201,7 +1247,9 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 		entries[leftIdx].child = lid
 		entries[leftIdx+1].child = rid
 		entries[leftIdx+1].key = rightStart
-		updated[leftIdx+1] = false // only clear on actual modification
+		// Only clear the right sibling's updated bit on actual modification.
+		updated[leftIdx+1] = false
+		mods++
 	}
 
 	return entries, retired, nil

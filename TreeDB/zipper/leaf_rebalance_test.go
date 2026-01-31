@@ -279,6 +279,7 @@ func TestZipper_Rebalance_NoOpWhenLeftAtOrAboveMin(t *testing.T) {
 	val := bytes.Repeat([]byte("v"), 64)
 	entryBytes := z.leafEntryBytesUpperBound([]byte{0, 0, 0}, val, page.ValuePtr{}, node.FlagInline)
 	leftCount := (minBytes / entryBytes) + 2 // ensure >= min (by our sizing function)
+	rightCount := (minBytes / entryBytes) + 2
 
 	buildLeaf := func(prefix byte, count int) uint64 {
 		id, err := p.Alloc(1)
@@ -302,7 +303,7 @@ func TestZipper_Rebalance_NoOpWhenLeftAtOrAboveMin(t *testing.T) {
 	}
 
 	leftID := buildLeaf('a', leftCount)
-	rightID := buildLeaf('b', 2)
+	rightID := buildLeaf('b', rightCount)
 
 	entries := []internalEntry{
 		{key: []byte{}, child: leftID},
