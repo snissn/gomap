@@ -1085,62 +1085,6 @@ func (db *DB) Prune() {
 	}
 }
 
-// IsEmptyish reports whether the user index is "empty-ish" under a strict,
-// non-heuristic definition:
-//   - CommitSeq == 0, OR
-//   - the current user root is an empty leaf AND the reachable user page count is 1.
-func (db *DB) IsEmptyish() (bool, error) {
-	if db == nil {
-		return false, nil
-	}
-	if st := db.state.Load(); st != nil && st.CommitSeq == 0 {
-		return true, nil
-	}
-
-	st := db.state.Load()
-	if st == nil {
-		return false, nil
-	}
-	rootID := st.RootPageID
-	if rootID == 0 {
-		return false, nil
-	}
-
-	idx := db.idx.Load()
-	if idx == nil {
-		return false, nil
-	}
-	idx.acquire()
-	defer db.releaseIndex(idx)
-
-	data, err := idx.pager.Get(rootID)
-	if err != nil {
-		return false, err
-	}
-	n := node.NewNode(data)
-	verifyAlways := idx.pager.VerifyOnRead()
-	if verifyAlways || !idx.pager.IsVerified(rootID) {
-		if !n.VerifyChecksum() {
-			return false, fmt.Errorf("checksum mismatch on page %d", rootID)
-		}
-		if !verifyAlways {
-			idx.pager.MarkVerified(rootID)
-		}
-	}
-	if n.Type() != page.PageTypeLeaf {
-		return false, nil
-	}
-	if n.Count() != 0 {
-		return false, nil
-	}
-
-	rep, err := db.FragmentationReport()
-	if err != nil {
-		return false, err
-	}
-	return rep["treedb.user.pages"] == "1", nil
-}
-
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
