@@ -117,6 +117,15 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	defer idx.registry.Unregister(regID)
 
+	// If the freelist is empty, proactively prune (bounded) before Apply starts
+	// allocating pages. This avoids needless file growth and improves throughput
+	// under churn, while still respecting KeepRecent and pinned readers.
+	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		// Use the configured prune budget; cancellation isn't needed here.
+		_, _ = b.db.pruneSome(nil, maxPages, maxDuration)
+	}
+
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
@@ -172,6 +181,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 	b.db.mu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
+
+	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		_, _ = b.db.pruneSome(nil, maxPages, maxDuration)
+	}
 
 	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
 	if err != nil {
