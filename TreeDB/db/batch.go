@@ -115,7 +115,15 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 
-	defer idx.registry.Unregister(regID)
+	// We only need to pin the base sequence while Apply is reading old pages.
+	// Unpin as soon as Apply returns so pruning can reclaim pages promptly.
+	unregister := func() {
+		if regID != 0 {
+			idx.registry.Unregister(regID)
+			regID = 0
+		}
+	}
+	defer unregister()
 
 	// If the freelist is empty, proactively prune (bounded) before Apply starts
 	// allocating pages. This avoids needless file growth and improves throughput
@@ -137,6 +145,10 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
+
+	// Apply is done reading the old tree; allow pruning while we finalize commit.
+	unregister()
+
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
@@ -180,7 +192,13 @@ func (b *Batch) writeSerialized(sync bool) error {
 	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 
-	defer idx.registry.Unregister(regID)
+	unregister := func() {
+		if regID != 0 {
+			idx.registry.Unregister(regID)
+			regID = 0
+		}
+	}
+	defer unregister()
 
 	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
 		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
@@ -191,6 +209,9 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err != nil {
 		return err
 	}
+
+	// Apply is done reading the old tree; allow pruning while we finalize commit.
+	unregister()
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
