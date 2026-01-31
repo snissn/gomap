@@ -55,30 +55,14 @@ func (w *pruneWorker) Start(db *DB, opts pruneWorkerOptions) {
 		defer ticker.Stop()
 
 		for {
-			kicked := false
 			select {
 			case <-w.stopCh:
 				return
 			case <-w.kickCh:
-				kicked = true
 			case <-ticker.C:
 			}
 
-			maxPages := w.maxPages
-			maxDuration := w.maxDuration
-			// When pruning is explicitly kicked (e.g. after a commit), do a bit
-			// more work so freed pages become available quickly and we avoid
-			// unnecessary file growth under churn.
-			if kicked {
-				if maxPages > 0 {
-					maxPages *= 4
-				}
-				if maxDuration > 0 {
-					maxDuration *= 4
-				}
-			}
-
-			pages, err := db.pruneSome(w.stopCh, maxPages, maxDuration)
+			pages, err := db.pruneSome(w.stopCh, w.maxPages, w.maxDuration)
 
 			w.runs.Add(1)
 			if pages > 0 {
