@@ -30,6 +30,8 @@ type Allocator struct {
 	allocFromAppend   uint64
 }
 
+const freeManyChunkIDs = 2048
+
 // TestHookFreeBeforeChecksum is a test-only hook that fires after a freelist
 // entry is written but before the page checksum is updated. It should remain
 // nil in production.
@@ -284,6 +286,119 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	defer a.mu.Unlock()
 
 	return a.allocLocked(hint)
+}
+
+// FreeMany adds multiple pages to the freelist.
+//
+// This is a batching optimization used by pruning paths. It preserves the same
+// semantics as calling Free in a loop, but holds the allocator mutex for a
+// bounded chunk at a time so writers are not stalled for long periods under
+// large prune batches.
+//
+// It returns the number of IDs successfully freed before any error.
+func (a *Allocator) FreeMany(ids []uint64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	freed := 0
+	for freed < len(ids) {
+		end := freed + freeManyChunkIDs
+		if end > len(ids) {
+			end = len(ids)
+		}
+
+		a.mu.Lock()
+		n, err := a.freeManyLocked(ids[freed:end])
+		a.mu.Unlock()
+
+		freed += n
+		if err != nil {
+			return freed, err
+		}
+		if n == 0 {
+			// Defensive: avoid an infinite loop if a future change causes the
+			// locked helper to make no progress without returning an error.
+			return freed, errors.New("FreeMany made no progress")
+		}
+	}
+	return freed, nil
+}
+
+func (a *Allocator) freeManyLocked(ids []uint64) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	freed := 0
+	for len(ids) > 0 {
+		id := ids[0]
+		if id == 0 {
+			return freed, errors.New("cannot free page 0")
+		}
+
+		if a.head == 0 {
+			// Start new list with this page.
+			if err := a.initHead(id, 0); err != nil {
+				return freed, err
+			}
+			freed++
+			ids = ids[1:]
+			continue
+		}
+
+		// Load Head once per iteration and fill as many slots as possible.
+		data, err := a.pager.GetForWrite(a.head)
+		if err != nil {
+			return freed, err
+		}
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return freed, errors.New("freelist head corrupted (FreeMany)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return freed, errors.New("invalid freelist page type")
+		}
+
+		count := int(n.Count())
+		if count >= int(page.MaxFreeIDs) {
+			// Head is full: use this id as NEW head.
+			if err := a.initHead(id, a.head); err != nil {
+				return freed, err
+			}
+			freed++
+			ids = ids[1:]
+			continue
+		}
+
+		capacity := int(page.MaxFreeIDs) - count
+		if capacity <= 0 {
+			capacity = 1
+		}
+		take := capacity
+		if take > len(ids) {
+			take = len(ids)
+		}
+
+		for i := 0; i < take; i++ {
+			id := ids[i]
+			if id == 0 {
+				return freed, errors.New("cannot free page 0")
+			}
+			slotOff := page.PageHeaderSize + 8 + (count+i)*8
+			binary.LittleEndian.PutUint64(data[slotOff:slotOff+8], id)
+			if TestHookFreeBeforeChecksum != nil {
+				TestHookFreeBeforeChecksum()
+			}
+		}
+		n.SetCount(uint16(count + take))
+		n.UpdateChecksum()
+
+		freed += take
+		ids = ids[take:]
+	}
+
+	return freed, nil
 }
 
 // Free adds a page to the freelist.
