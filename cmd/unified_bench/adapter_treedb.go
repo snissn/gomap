@@ -24,6 +24,7 @@ var (
 	treedbFlushBuildChunkMinBytes   = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes   = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
+	treedbFlushBackendMaxEntries    = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
@@ -207,6 +208,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		FlushBuildChunkMinBytes:    *treedbFlushBuildChunkMinBytes,
 		FlushBuildChunkMaxBytes:    *treedbFlushBuildChunkMaxBytes,
 		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
+		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,
