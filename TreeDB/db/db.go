@@ -421,13 +421,29 @@ func Open(opts Options) (*DB, error) {
 		opts.MaintenanceOpsPerCoalesce = 0
 	}
 	if opts.PruneInterval == 0 {
-		opts.PruneInterval = 250 * time.Millisecond
+		// Under very small KeepRecent windows we need to move pages from the
+		// graveyard to the freelist quickly to avoid allocator starvation (which
+		// otherwise forces file growth via pager.Alloc).
+		if opts.KeepRecent <= 1 && !opts.PreferAppendAlloc {
+			opts.PruneInterval = 25 * time.Millisecond
+		} else {
+			opts.PruneInterval = 250 * time.Millisecond
+		}
 	}
 	if opts.PruneMaxPages == 0 {
-		opts.PruneMaxPages = 4096
+		if opts.KeepRecent <= 1 && !opts.PreferAppendAlloc {
+			// Keep this bounded to avoid extracting unbounded graveyard batches.
+			opts.PruneMaxPages = 262144
+		} else {
+			opts.PruneMaxPages = 4096
+		}
 	}
 	if opts.PruneMaxDuration == 0 {
-		opts.PruneMaxDuration = 25 * time.Millisecond
+		if opts.KeepRecent <= 1 && !opts.PreferAppendAlloc {
+			opts.PruneMaxDuration = 50 * time.Millisecond
+		} else {
+			opts.PruneMaxDuration = 25 * time.Millisecond
+		}
 	}
 	if opts.FreelistRegionRadius < 0 {
 		opts.FreelistRegionPages = 0
