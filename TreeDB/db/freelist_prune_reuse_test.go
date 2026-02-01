@@ -70,6 +70,20 @@ func TestFreelistReuseAfterPrune(t *testing.T) {
 		d.Prune()
 	}
 
+	// Advance the commit sequence so pages retired during the delete phase become
+	// eligible under KeepRecent=1, then prune again to populate the freelist.
+	{
+		b := d.NewBatch().(*Batch)
+		if err := b.Set([]byte{0, 0}, valA); err != nil {
+			t.Fatalf("advance set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("advance write: %v", err)
+		}
+		_ = b.Close()
+		d.Prune()
+	}
+
 	idx := d.idx.Load()
 	if idx == nil || idx.allocator == nil {
 		t.Fatalf("missing allocator")

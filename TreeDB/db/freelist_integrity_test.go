@@ -120,6 +120,21 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 	}
 	d.Prune()
 
+	// Advance the commit sequence so pages retired during the last delete become
+	// eligible under KeepRecent=1, then prune again to ensure the freelist is
+	// populated before we measure reuse.
+	{
+		b := d.NewBatch().(*Batch)
+		if err := b.Set([]byte{0, 0}, valA); err != nil {
+			t.Fatalf("advance set: %v", err)
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("advance write: %v", err)
+		}
+		_ = b.Close()
+		d.Prune()
+	}
+
 	idx := d.idx.Load()
 	if idx == nil || idx.allocator == nil {
 		t.Fatalf("missing allocator")
@@ -170,8 +185,6 @@ func TestFreelistCountsDecreaseAfterReuse(t *testing.T) {
 
 	// If we have reclaimables and PreferAppendAlloc=false, the rewrite should
 	// primarily reuse the freelist rather than extend the file.
-	//
-	// This assertion is expected to FAIL until the bloat/reuse bug is fixed.
 	if appendDelta > freelistDelta/4 {
 		t.Fatalf("expected rewrite to prefer freelist reuse over append (reclaimable=%d freelist_delta=%d append_delta=%d)",
 			statsBefore.ReclaimablePages(), freelistDelta, appendDelta)
