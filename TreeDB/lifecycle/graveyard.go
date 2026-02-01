@@ -47,7 +47,13 @@ func (g *Graveyard) Add(seq uint64, pages []uint64) {
 }
 
 // Extract returns pages that are safe to free.
-// Condition: seq < minPinnedSeq AND seq <= (currentSeq - keepRecent).
+//
+// Safe-to-free conditions:
+//   - Readers: a batch retired at seq is safe to free if seq <= minPinnedSeq.
+//     A reader pinned at commit seq S observes state S, which by definition no
+//     longer references pages retired at S (they were removed while producing S).
+//     Only readers pinned to an earlier seq (<S) can still reference them.
+//   - History: seq <= (currentSeq - keepRecent)
 func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -67,7 +73,7 @@ func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint6
 		//   than the oldest pinned reader sequence.
 		// - History: KeepRecent retains exactly `keepRecent` most recent commit
 		//   versions. A batch at seq==current-keepRecent is eligible.
-		if b.seq >= minPinnedSeq {
+		if b.seq > minPinnedSeq {
 			break
 		}
 		if b.seq <= safeHistory {
@@ -89,7 +95,7 @@ func (g *Graveyard) Extract(minPinnedSeq, currentSeq, keepRecent uint64) []uint6
 // by retirement sequence so callers can reinsert on error.
 //
 // Safe-to-free condition is the same as Extract:
-//   - retiredAtSeq < minPinnedSeq
+//   - retiredAtSeq <= minPinnedSeq
 //   - retiredAtSeq <= (currentSeq - keepRecent)
 //
 // If maxIDs <= 0, all safe pages are returned.
@@ -115,7 +121,7 @@ func (g *Graveyard) ExtractBatchesUpTo(minPinnedSeq, currentSeq, keepRecent uint
 			break
 		}
 		b := &g.retiredPages[i]
-		if b.seq >= minPinnedSeq {
+		if b.seq > minPinnedSeq {
 			break
 		}
 		if b.seq > safeHistory {
