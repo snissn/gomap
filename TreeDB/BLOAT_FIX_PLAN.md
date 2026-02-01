@@ -169,3 +169,54 @@ If bloat persists even with low `alloc.append`, the remaining issue is likely
 structural (maintenance/merge policy), not reclamation timing; tackle those as a
 separate follow-up once reuse is demonstrably working.
 
+## Follow-Up: Cached Flush Burst Size (High-Watermark Growth)
+
+Even with aggressive pruning, cached mode can still grow `index.db` to a large
+high-watermark when *individual backend commits* (flushes) are very large.
+
+Key mechanism:
+- A single backend commit must allocate all new pages needed for that apply
+  before any of the pages retired by that same commit can become eligible for
+  reuse (KeepRecent gating uses commit sequence).
+- In cached mode, `commit_seq` advances slowly (per flush), so each commit may
+  touch/retire a very large number of pages.
+- If "pages needed for this apply" exceeds "pages eligible from the previous
+  commit", the allocator will append and raise the file high-watermark.
+
+This is fundamentally different from "pruner is too slow": even a perfect
+pruner cannot recycle pages retired in the same commit.
+
+### Phase 6: Bound Backend Apply Burst Size (Micro-Batch Flush Apply)
+
+Goal: keep each backend commit small enough that:
+- eligible pages from the previous commit can cover most allocations, and
+- the file high-watermark stays closer to the steady-state live page count.
+
+Approach options (in increasing complexity):
+
+1) Lower cached `FlushThreshold` (simple, but can change throughput/latency).
+2) Micro-batch backend apply inside a single cached flush:
+   - Consume the merged op stream in fixed-size chunks.
+   - For each chunk:
+     - write chunk ops into a backend batch
+     - commit (advances commit_seq)
+     - continue with next chunk
+   - Correctness constraint: the merged stream must produce at most one op per
+     key ("newest wins" already collapsed) so chunking is deterministic.
+
+Option (2) preserves the larger cached flush threshold (64MiB) while improving
+page reuse by increasing commit_seq cadence during heavy flushes.
+
+Concrete deliverables for Phase 6:
+- Add a cached option `FlushBackendMaxEntries` (0=disabled).
+- In `TreeDB/caching/db.go` flush apply path, if `FlushBackendMaxEntries > 0`,
+  commit the backend batch every N entries while draining the merged op stream.
+- Add a regression test under `TreeDB/caching/` that:
+  - runs a churn workload that previously produced multi-GB `index.db`
+  - asserts `alloc.append` stays below a reasonable bound when micro-batching is enabled
+  - asserts final `pages.total / user.pages` ratio improves versus disabled.
+
+Notes on locking/allocator concerns:
+- Micro-batching reduces the "burst" pages needed in any single backend commit,
+  which directly reduces the need for append allocations (and therefore reduces
+  expensive `pager.Alloc()` growth syscalls on APFS).
