@@ -1607,7 +1607,7 @@ type DB struct {
 	testOnVlogSync  func(laneID int)
 }
 
-func (db *DB) flushBackendEntriesCap(totalOps int) int {
+func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 	capEntries := db.flushBackendMaxEntries
 	if capEntries < 1 {
 		capEntries = 1
@@ -1615,6 +1615,12 @@ func (db *DB) flushBackendEntriesCap(totalOps int) int {
 	maxBatches := db.flushBackendMaxBatches
 	if maxBatches == 0 {
 		maxBatches = 16
+	}
+	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
+	// of intermediate commits in that path even if the steady-state micro-batch
+	// policy is aggressive.
+	if sync && maxBatches > 8 {
+		maxBatches = 8
 	}
 	if maxBatches > 0 && totalOps > capEntries*maxBatches {
 		// Increase the chunk size so we emit at most maxBatches intermediate
@@ -1994,14 +2000,30 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
 	}
 	if opts.FlushBackendMaxEntries == 0 {
-		opts.FlushBackendMaxEntries = flushBackendBatchMaxEntries
+		// In relaxed durability modes, additional commit boundaries are cheap and
+		// can reduce index.db high-watermark growth under small KeepRecent windows
+		// by making retired pages eligible for reuse sooner. Default to a smaller
+		// chunk size in that case.
+		if opts.DisableWAL || opts.RelaxedSync {
+			opts.FlushBackendMaxEntries = 2 * flushBackendBatchInitEntries
+		} else {
+			opts.FlushBackendMaxEntries = flushBackendBatchMaxEntries
+		}
 	} else if opts.FlushBackendMaxEntries < 0 {
 		// Negative disables chunking; use a very large cap so the hot path
 		// never triggers intermediate commits.
 		opts.FlushBackendMaxEntries = int(^uint(0) >> 1)
 	}
 	if opts.FlushBackendMaxBatches == 0 {
-		opts.FlushBackendMaxBatches = 16
+		// In relaxed durability modes, additional commit boundaries are much
+		// cheaper and can substantially reduce index.db high-watermark growth
+		// under small KeepRecent windows by making retired pages eligible for
+		// reuse sooner. Use a slightly higher default budget in that case.
+		if opts.DisableWAL || opts.RelaxedSync {
+			opts.FlushBackendMaxBatches = 32
+		} else {
+			opts.FlushBackendMaxBatches = 16
+		}
 	}
 	flushBackendInitEntries := flushBackendBatchInitEntries
 	if flushBackendInitEntries > opts.FlushBackendMaxEntries {
@@ -5946,7 +5968,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		return true
 	}
 
-	backendEntriesCap := db.flushBackendEntriesCap(totalLen)
+	backendEntriesCap := db.flushBackendEntriesCap(totalLen, sync)
 
 	useParallel := db.flushBuildConcurrency > 1 &&
 		totalLen >= db.flushBuildMinEntries &&
@@ -6563,7 +6585,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		flushStart = time.Now()
 
 		// Flush 'mem' to backend
-		backendEntriesCap := db.flushBackendEntriesCap(memLen)
+		backendEntriesCap := db.flushBackendEntriesCap(memLen, sync)
 		sizeHint := memLen
 		if sizeHint > db.flushBackendInitEntries {
 			sizeHint = db.flushBackendInitEntries
