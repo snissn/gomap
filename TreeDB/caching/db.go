@@ -6180,14 +6180,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					return nil
 				}
 				tw := time.Now()
-				var err error
-				if sync {
-					db.backendWriteBatchesTotal.Add(1)
-					err = backendBatch.WriteSync()
-				} else {
-					db.backendWriteBatchesTotal.Add(1)
-					err = backendBatch.Write()
-				}
+				// If sync==true, we only need a single durability boundary at the end
+				// of the flush. Write intermediate chunks without fsync to avoid
+				// repeated pager sync work.
+				db.backendWriteBatchesTotal.Add(1)
+				err := backendBatch.Write()
 				cerr := backendBatch.Close()
 				if err == nil {
 					err = cerr
