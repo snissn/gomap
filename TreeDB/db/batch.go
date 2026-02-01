@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -112,10 +113,25 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	baseSeq := b.db.meta.CommitSeq
 	b.db.mu.RUnlock()
 
+	// Track whether Apply was forced to append new pages due to freelist starvation.
+	// We use this to trigger a bounded catch-up prune right after Apply returns,
+	// so subsequent commits can reuse freed pages instead of growing the file.
+	_, appendBefore := idx.allocator.AllocCounters()
+
+	// Opportunistic, bounded prune pass to convert eligible retired pages into
+	// freelist entries before Apply starts allocating new pages. This is most
+	// important under very small KeepRecent windows where pages become eligible
+	// at N+1 and reuse lag forces file growth.
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
+		const maxPages = 8192
+		const maxDuration = 2 * time.Millisecond
+		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+	}
+
 	// If the freelist is empty, proactively prune (bounded) before Apply starts
 	// allocating pages. This avoids needless file growth and improves throughput
 	// under churn, while still respecting KeepRecent and pinned readers.
-	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 && idx.allocator.Head() == 0 {
 		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
 		// When the freelist is empty, we need to catch up quickly or we'll be
 		// forced to grow the file. Use a larger bounded budget than the steady-
@@ -155,6 +171,23 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	// Apply is done reading the old tree; allow pruning while we finalize commit.
 	unregister()
+
+	// If Apply was forced to append pages (freelist starvation), proactively
+	// reclaim eligible retired pages *before* committing the new state. We use
+	// baseSeq+1 so pages retired at baseSeq become eligible (KeepRecent) as soon
+	// as possible.
+	//
+	// This is bounded and only runs when we observed append allocations during
+	// Apply, so steady-state overwrite workloads do not pay extra cost.
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
+		_, appendAfter := idx.allocator.AllocCounters()
+		if appendAfter > appendBefore {
+			_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+			maxPages *= 8
+			maxDuration *= 8
+			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		}
+	}
 
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
@@ -198,7 +231,15 @@ func (b *Batch) writeSerialized(sync bool) error {
 	baseSeq := b.db.meta.CommitSeq
 	b.db.mu.RUnlock()
 
-	if !b.db.preferAppendAlloc && b.db.pruner.Enabled() && idx.allocator.Head() == 0 {
+	_, appendBefore := idx.allocator.AllocCounters()
+
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
+		const maxPages = 8192
+		const maxDuration = 2 * time.Millisecond
+		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+	}
+
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 && idx.allocator.Head() == 0 {
 		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
 		maxPages *= 8
 		maxDuration *= 8
@@ -221,6 +262,16 @@ func (b *Batch) writeSerialized(sync bool) error {
 
 	// Apply is done reading the old tree; allow pruning while we finalize commit.
 	unregister()
+
+	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
+		_, appendAfter := idx.allocator.AllocCounters()
+		if appendAfter > appendBefore {
+			_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+			maxPages *= 8
+			maxDuration *= 8
+			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		}
+	}
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
