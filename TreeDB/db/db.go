@@ -283,6 +283,9 @@ type Options struct {
 	// 0 uses the internal default. Negative disables chunking (single backend
 	// commit per flush).
 	FlushBackendMaxEntries int
+	// FlushBackendMaxBatches caps how many intermediate backend commits a single
+	// flush may emit (0=default, <0=disable cap).
+	FlushBackendMaxBatches int
 
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
