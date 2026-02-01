@@ -129,6 +129,11 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
 		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
 		if maxPages > 0 && maxDuration > 0 {
+			// Cached flush commits can retire huge batches; give prune a bit more
+			// budget than a single background tick so we don't hit freelist
+			// starvation mid-Apply.
+			maxPages *= 4
+			maxDuration *= 4
 			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
 		}
 	}
@@ -241,6 +246,8 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
 		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
 		if maxPages > 0 && maxDuration > 0 {
+			maxPages *= 4
+			maxDuration *= 4
 			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
 		}
 	}
