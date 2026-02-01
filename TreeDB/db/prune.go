@@ -206,35 +206,55 @@ func (db *DB) pruneSomeAt(
 
 	for bi := range batches {
 		b := batches[bi]
-		for i, id := range b.IDs {
+		// Free in chunks and remain responsive to stop/deadline. FreeMany itself
+		// also chunks internally to keep allocator lock holds bounded.
+		const pruneFreeChunk = 8192
+		offset := 0
+		for offset < len(b.IDs) {
 			select {
 			case <-stopCh:
-				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				idx.graveyard.Reinsert(b.Seq, b.IDs[offset:])
 				for _, rest := range batches[bi+1:] {
 					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 				}
 				return false, nil
 			default:
 			}
-
 			if !deadline.IsZero() && time.Now().After(deadline) {
-				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+				idx.graveyard.Reinsert(b.Seq, b.IDs[offset:])
 				for _, rest := range batches[bi+1:] {
 					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 				}
 				return false, nil
 			}
 
-			if err := idx.allocator.Free(id); err != nil {
-				idx.graveyard.Reinsert(b.Seq, b.IDs[i:])
+			end := offset + pruneFreeChunk
+			if end > len(b.IDs) {
+				end = len(b.IDs)
+			}
+			n, err := idx.allocator.FreeMany(b.IDs[offset:end])
+			if n > 0 {
+				*freedPages = *freedPages + n
+				offset += n
+				if maxPages > 0 && *freedPages >= maxPages {
+					return false, nil
+				}
+			}
+			if err != nil {
+				// Reinsert the remainder of this batch and all subsequent batches.
+				idx.graveyard.Reinsert(b.Seq, b.IDs[offset:])
 				for _, rest := range batches[bi+1:] {
 					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
 				}
 				return false, err
 			}
-			*freedPages = *freedPages + 1
-			if maxPages > 0 && *freedPages >= maxPages {
-				return false, nil
+			if n == 0 {
+				// Defensive: avoid infinite loops on unexpected allocator behavior.
+				idx.graveyard.Reinsert(b.Seq, b.IDs[offset:])
+				for _, rest := range batches[bi+1:] {
+					idx.graveyard.Reinsert(rest.Seq, rest.IDs)
+				}
+				return false, fmt.Errorf("prune: FreeMany made no progress")
 			}
 		}
 	}
