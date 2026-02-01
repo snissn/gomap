@@ -2,7 +2,6 @@ package db
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -118,14 +117,20 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	// so subsequent commits can reuse freed pages instead of growing the file.
 	_, appendBefore := idx.allocator.AllocCounters()
 
-	// Opportunistic, bounded prune pass to convert eligible retired pages into
-	// freelist entries before Apply starts allocating new pages. This is most
-	// important under very small KeepRecent windows where pages become eligible
-	// at N+1 and reuse lag forces file growth.
+	// Opportunistic prune pass to convert eligible retired pages into freelist
+	// entries before Apply starts allocating new pages.
+	//
+	// In cached mode, each backend commit can retire tens of thousands of pages.
+	// If we only prune a small fixed amount here, the allocator can still starve
+	// mid-Apply and force file growth via pager.Alloc, even though there are
+	// plenty of eligible pages in the graveyard. Use the same bounded budgets as
+	// the (possibly disabled) background pruner, so large batches can replenish
+	// the freelist fast enough.
 	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
-		const maxPages = 8192
-		const maxDuration = 2 * time.Millisecond
-		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		if maxPages > 0 && maxDuration > 0 {
+			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		}
 	}
 
 	// If the freelist is empty, proactively prune (bounded) before Apply starts
@@ -234,9 +239,10 @@ func (b *Batch) writeSerialized(sync bool) error {
 	_, appendBefore := idx.allocator.AllocCounters()
 
 	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 {
-		const maxPages = 8192
-		const maxDuration = 2 * time.Millisecond
-		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
+		if maxPages > 0 && maxDuration > 0 {
+			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+		}
 	}
 
 	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 && idx.allocator.Head() == 0 {
