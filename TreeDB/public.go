@@ -219,6 +219,7 @@ func Open(opts Options) (*DB, error) {
 		FlushBuildChunkMinBytes:            opts.FlushBuildChunkMinBytes,
 		FlushBuildChunkMaxBytes:            opts.FlushBuildChunkMaxBytes,
 		FlushBuildPrefetchUnits:            opts.FlushBuildPrefetchUnits,
+		FlushBackendMaxEntries:             opts.FlushBackendMaxEntries,
 		DisableWAL:                         disableWAL,
 		JournalLanes:                       opts.JournalLanes,
 		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,
