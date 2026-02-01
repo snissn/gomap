@@ -599,8 +599,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThreshold) {
 			if records == nil {
 				hint := memLen
-				if hint > flushBackendBatchMaxEntries {
-					hint = flushBackendBatchMaxEntries
+				if hint > db.flushBackendInitEntries {
+					hint = db.flushBackendInitEntries
 				}
 				records = getValueLogRecordsCap(hint)
 				keys = getValueLogKeys(hint)
@@ -1336,6 +1336,17 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushBackendMaxEntries caps how many operations are buffered into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This increases backend commit cadence during very large flushes, which can
+	// reduce index.db high-watermark growth under small KeepRecent windows by
+	// making retired pages eligible for reuse sooner.
+	//
+	// 0 uses the internal default. Negative disables chunking (single backend
+	// commit per flush).
+	FlushBackendMaxEntries int
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
@@ -1535,6 +1546,8 @@ type DB struct {
 	flushBuildChunkMinBytes int
 	flushBuildChunkMaxBytes int
 	flushBuildPrefetchUnits int
+	flushBackendMaxEntries  int
+	flushBackendInitEntries int
 	walMaxSegmentBytes      int64
 	journalCompression      bool
 
@@ -1956,6 +1969,28 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.FlushBuildPrefetchUnits <= 0 {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
 	}
+	if opts.FlushBackendMaxEntries == 0 {
+		// Prefer smaller backend batches when durability is relaxed, since the
+		// additional commit overhead is much lower and smaller batches reduce
+		// high-watermark growth under small KeepRecent windows by making retired
+		// pages eligible for reuse sooner.
+		if opts.DisableWAL || opts.RelaxedSync {
+			opts.FlushBackendMaxEntries = flushBackendBatchInitEntries
+		} else {
+			opts.FlushBackendMaxEntries = flushBackendBatchMaxEntries
+		}
+	} else if opts.FlushBackendMaxEntries < 0 {
+		// Negative disables chunking; use a very large cap so the hot path
+		// never triggers intermediate commits.
+		opts.FlushBackendMaxEntries = int(^uint(0) >> 1)
+	}
+	flushBackendInitEntries := flushBackendBatchInitEntries
+	if flushBackendInitEntries > opts.FlushBackendMaxEntries {
+		flushBackendInitEntries = opts.FlushBackendMaxEntries
+	}
+	if flushBackendInitEntries < 1 {
+		flushBackendInitEntries = 1
+	}
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
@@ -2126,6 +2161,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildChunkMinBytes:        opts.FlushBuildChunkMinBytes,
 		flushBuildChunkMaxBytes:        opts.FlushBuildChunkMaxBytes,
 		flushBuildPrefetchUnits:        opts.FlushBuildPrefetchUnits,
+		flushBackendMaxEntries:         opts.FlushBackendMaxEntries,
+		flushBackendInitEntries:        flushBackendInitEntries,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
@@ -5715,8 +5752,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		return true
 	}
 	sizeHint := totalLen
-	if sizeHint > flushBackendBatchInitEntries {
-		sizeHint = flushBackendBatchInitEntries
+	if sizeHint > db.flushBackendInitEntries {
+		sizeHint = db.flushBackendInitEntries
 	}
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	flushStart := time.Now()
@@ -5962,8 +5999,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		// Flush 'mem' to backend
 		sizeHint := memLen
-		if sizeHint > flushBackendBatchInitEntries {
-			sizeHint = flushBackendBatchInitEntries
+		if sizeHint > db.flushBackendInitEntries {
+			sizeHint = db.flushBackendInitEntries
 		}
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		vlogFlushed := false
@@ -5983,7 +6020,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		} else {
 			// When flushing very large memtables, avoid building an unbounded backend batch
 			// (which can allocate / zero very large buffers and appear "hung").
-			chunkBackend := memLen > flushBackendBatchMaxEntries
+			chunkBackend := memLen > db.flushBackendMaxEntries
 
 			// Best-effort: ensure value-log data is durable before committing pointers
 			// to the backend. This keeps the relative durability ordering intact when
@@ -6032,7 +6069,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			var single [1]batch.Entry
 
 			flushBackendChunk := func() error {
-				if !chunkBackend || backendPendingOps < flushBackendBatchMaxEntries {
+				if !chunkBackend || backendPendingOps < db.flushBackendMaxEntries {
 					return nil
 				}
 				tw := time.Now()
