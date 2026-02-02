@@ -344,6 +344,27 @@ func (p *Pager) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Trim trailing unused capacity before unmapping/close. The pager grows the
+	// underlying file in chunkSize increments, which can leave slack pages at the
+	// tail (e.g. after recovery corrects numPages). Trimming reduces on-disk bloat
+	// without affecting page IDs because no logical pages exist beyond numPages.
+	if !p.readOnly && p.file != nil && p.chunkSize > 0 {
+		currentCap := int64(len(p.chunks)) * p.chunkSize
+		required := int64(p.numPages.Load()) * int64(page.PageSize)
+		if required < 0 {
+			required = 0
+		}
+		targetCap := required
+		if targetCap > 0 {
+			targetCap = ((targetCap + p.chunkSize - 1) / p.chunkSize) * p.chunkSize
+		}
+		if targetCap >= 0 && targetCap < currentCap {
+			if err := p.file.Truncate(targetCap); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, chunk := range p.chunks {
 		if err := munmapFile(chunk); err != nil {
 			return err

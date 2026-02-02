@@ -199,3 +199,36 @@ func TestPagerTruncate(t *testing.T) {
 	}
 
 }
+
+func TestPagerCloseTrimsUnusedTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.db")
+
+	const chunkSize = 4 * 1024 * 1024 // match TreeDB default
+
+	p, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Grow to >1 chunk, then simulate recovery correcting the logical page count
+	// to a smaller value. Close should trim the trailing unused capacity down to
+	// the minimal chunk-aligned size needed for numPages.
+	if _, err := p.Alloc(2000); err != nil {
+		_ = p.Close()
+		t.Fatalf("Alloc: %v", err)
+	}
+	p.SetPageCount(1000)
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	want := int64(chunkSize) // 1000 pages (~4MiB) rounds up to 1 chunk
+	if st.Size() != want {
+		t.Fatalf("unexpected size after Close trim: got=%d want=%d", st.Size(), want)
+	}
+}
