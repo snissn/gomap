@@ -146,22 +146,30 @@ func (b *Batch) writeOptimistic(sync bool, forceMaintenance bool) (bool, error) 
 			maxPages *= 4
 			maxDuration *= 4
 			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
-		}
-	}
 
-	// If the freelist is empty, proactively prune (bounded) before Apply starts
-	// allocating pages. This avoids needless file growth and improves throughput
-	// under churn, while still respecting KeepRecent and pinned readers.
-	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 && idx.allocator.Head() == 0 {
-		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
-		// When the freelist is empty, we need to catch up quickly or we'll be
-		// forced to grow the file. Use a larger bounded budget than the steady-
-		// state pruner tick.
-		maxPages *= 8
-		maxDuration *= 8
-		// Use the *next* commit sequence so pages retired at baseSeq become
-		// eligible (subject to KeepRecent) before Apply allocates new pages.
-		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+			// If the freelist head is still empty or nearly empty, do a second
+			// bounded catch-up pass so Apply doesn't have to append pages (which
+			// can trigger costly file growth syscalls under APFS).
+			low := uint64(page.MaxFreeIDs / 4)
+			if low == 0 {
+				low = 1
+			}
+			head := idx.allocator.Head()
+			headCount := uint64(0)
+			if head != 0 {
+				if c, err := idx.allocator.HeadCount(); err == nil {
+					headCount = c
+				}
+			}
+			if head == 0 || headCount < low {
+				_, maxPages2, maxDuration2, _, _, _, _ := b.db.pruner.Stats()
+				if maxPages2 > 0 && maxDuration2 > 0 {
+					maxPages2 *= 16
+					maxDuration2 *= 16
+					_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages2, maxDuration2, baseSeq+1)
+				}
+			}
+		}
 	}
 
 	// Register this writer as a "reader" of the base state to prevent the
@@ -260,14 +268,27 @@ func (b *Batch) writeSerialized(sync bool, forceMaintenance bool) error {
 			maxPages *= 4
 			maxDuration *= 4
 			_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
-		}
-	}
 
-	if !b.db.preferAppendAlloc && b.db.keepRecent > 0 && b.db.keepRecent <= 1 && idx.allocator.Head() == 0 {
-		_, maxPages, maxDuration, _, _, _, _ := b.db.pruner.Stats()
-		maxPages *= 8
-		maxDuration *= 8
-		_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, baseSeq+1)
+			low := uint64(page.MaxFreeIDs / 4)
+			if low == 0 {
+				low = 1
+			}
+			head := idx.allocator.Head()
+			headCount := uint64(0)
+			if head != 0 {
+				if c, err := idx.allocator.HeadCount(); err == nil {
+					headCount = c
+				}
+			}
+			if head == 0 || headCount < low {
+				_, maxPages2, maxDuration2, _, _, _, _ := b.db.pruner.Stats()
+				if maxPages2 > 0 && maxDuration2 > 0 {
+					maxPages2 *= 16
+					maxDuration2 *= 16
+					_, _ = b.db.pruneSomeWithCurrentSeq(nil, maxPages2, maxDuration2, baseSeq+1)
+				}
+			}
+		}
 	}
 
 	regID := idx.registry.Register(baseSeq)
