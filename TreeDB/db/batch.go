@@ -77,7 +77,10 @@ func (b *Batch) Write() error {
 }
 
 func (b *Batch) WriteSync() error {
-	return b.writeWithMaintenance(true, false)
+	// Explicit durability boundaries are a good time to do zipper-local
+	// maintenance (bounded packing/rebalance/coalesce) to keep the on-disk tree
+	// dense and reduce long-run bloat.
+	return b.writeWithMaintenance(true, true)
 }
 
 // WriteMaintenance forces zipper-local maintenance without forcing a pager sync.
