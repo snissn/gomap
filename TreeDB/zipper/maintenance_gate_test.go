@@ -31,8 +31,20 @@ func TestZipper_ShouldRunMaintenance_HasDeletesTrue(t *testing.T) {
 }
 
 func TestZipper_ShouldRunMaintenance_PurePutsNoForce_NoDeletes_DoesNotTrigger(t *testing.T) {
-	// Pre-fix, reserve bytes force maintenance even for pure put workloads.
-	// We intentionally skip the assertion here until the gate is changed in the
-	// follow-up commit.
-	t.Skip("flip to assert desired behavior after maintenance gate fix")
+	z := &Zipper{
+		leafReserveBytes:     123, // pretend fill targets are configured
+		internalReserveBytes: 456,
+	}
+	ops := []batch.Entry{
+		{Type: batch.OpPut, Key: []byte("k1"), Value: []byte("v1")},
+		{Type: batch.OpPut, Key: []byte("k2"), Value: []byte("v2")},
+	}
+
+	got, delCount := z.shouldRunMaintenance(false, ops)
+	if delCount != 0 {
+		t.Fatalf("expected deleteCount=0, got %d", delCount)
+	}
+	if got {
+		t.Fatalf("expected maintenance=false for pure puts when not forced (reserve bytes alone should not trigger maintenance)")
+	}
 }

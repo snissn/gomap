@@ -268,13 +268,15 @@ func (z *Zipper) shouldRunMaintenance(forceMaintenance bool, ops []batch.Entry) 
 			deleteCount++
 		}
 	}
-	// NOTE: This intentionally mirrors the pre-fix behavior so unit tests can lock
-	// down the current gate before we change it in a follow-up commit.
-	maintenance = forceMaintenance ||
-		hasDeletes ||
-		z.leafReserveBytes > 0 ||
-		z.internalReserveBytes > 0 ||
-		z.piggybackCompaction
+	// Maintenance is intentionally limited to:
+	//   - explicit sync points (forceMaintenance), and
+	//   - delete-containing batches (can create empty/underfull pages), and
+	//   - piggyback compaction (when enabled).
+	//
+	// Soft-full targets (reserve bytes) should not, by themselves, force full
+	// coalesce/packing work on pure-put workloads; that would add high overhead to
+	// the steady-state write path.
+	maintenance = forceMaintenance || hasDeletes || z.piggybackCompaction
 	return maintenance, deleteCount
 }
 
@@ -295,7 +297,6 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch, forceMaintenance bool) (ui
 
 	// Maintenance is only beneficial when:
 	//   - the batch includes deletes (can create empty/underfull pages), or
-	//   - the caller configured soft-full targets (reserve bytes), or
 	//   - the caller explicitly forces maintenance at a sync boundary.
 	maintenance, deleteCount := z.shouldRunMaintenance(forceMaintenance, ops)
 	var budget *maintenanceBudget
