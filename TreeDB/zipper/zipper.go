@@ -260,6 +260,20 @@ func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
 	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.internalReserveBytes
 }
 
+func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, deleteCount int) {
+	hasDeletes := false
+	for _, op := range ops {
+		if op.Type == batch.OpDelete {
+			hasDeletes = true
+			deleteCount++
+		}
+	}
+	// NOTE: This intentionally mirrors the current behavior so unit tests can lock
+	// down the gate before we adjust it in a follow-up commit.
+	maintenance = hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	return maintenance, deleteCount
+}
+
 // Apply applies the batch to the tree rooted at rootID.
 // Returns the new root page ID, list of retired pages, and commit metrics.
 func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
@@ -273,15 +287,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	//   - the batch includes deletes (can create empty/underfull pages), or
 	//   - the caller configured soft-full targets (reserve bytes), which implies
 	//     a preference for more balanced/less churny pages even on updates.
-	hasDeletes := false
-	deleteCount := 0
-	for _, op := range ops {
-		if op.Type == batch.OpDelete {
-			hasDeletes = true
-			deleteCount++
-		}
-	}
-	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	maintenance, deleteCount := z.shouldRunMaintenance(ops)
 	var budget *maintenanceBudget
 	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
 		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
