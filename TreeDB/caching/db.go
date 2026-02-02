@@ -5558,11 +5558,11 @@ func (db *DB) flushAll(reqSync bool) {
 }
 
 func (db *DB) flushAllLocked(reqSync bool) {
-	origSync := reqSync
-	syncFlag := db.flushSyncRequested(reqSync)
-	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
-		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
-	}
+	// reqSync means "flush at a checkpoint/close boundary" (i.e. force zipper-local
+	// maintenance). Even in relaxed sync mode we still want the maintenance
+	// semantics; durability (fsync/msync) is handled separately by the backend
+	// batch type (WriteMaintenance vs WriteSync).
+	syncFlag := reqSync
 	lanes := len(db.lanes)
 	if lanes == 0 {
 		lanes = 1
