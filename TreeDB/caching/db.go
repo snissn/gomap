@@ -3854,9 +3854,15 @@ func (db *DB) Checkpoint() error {
 	if nonEmptyBytes > 0 {
 		backendBatch := db.backend.NewBatch()
 		if db.relaxedSync {
-			// If relaxed sync, just write the batch without forcing sync
+			// In relaxed sync mode, still force zipper maintenance so the checkpoint
+			// produces a dense on-disk tree. This avoids the "dense only after random
+			// writes" cliff without paying fsync/msync costs.
 			db.backendWriteBatchesTotal.Add(1)
-			commitErr = backendBatch.Write()
+			if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+				commitErr = wm.WriteMaintenance()
+			} else {
+				commitErr = backendBatch.Write()
+			}
 		} else {
 			// Otherwise, force sync
 			db.backendWriteBatchesTotal.Add(1)
