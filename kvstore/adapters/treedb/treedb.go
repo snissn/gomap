@@ -1,6 +1,7 @@
 package treedbadapter
 
 import (
+	"context"
 	"errors"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -85,6 +86,8 @@ func (d *DB) Stats() map[string]string { return d.DB.Stats() }
 func (d *DB) Print() error { return d.DB.Print() }
 
 func (d *DB) Checkpoint() error { return d.DB.Checkpoint() }
+
+func (d *DB) VacuumIndexOnline(ctx context.Context) error { return d.DB.VacuumIndexOnline(ctx) }
 
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
 	return d.DB.Iterator(start, end)

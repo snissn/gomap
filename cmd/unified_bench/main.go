@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
@@ -63,6 +65,7 @@ var (
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
 	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
+	vacuumBetweenTests     = flag.Bool("vacuum-between-tests", false, "Vacuum supported DBs between each benchmark test (implies -checkpoint-between-tests; TreeDB: VacuumIndexOnline)")
 	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
@@ -112,6 +115,7 @@ type BenchConfig struct {
 	MaxRSSMB int
 
 	CheckpointBetweenTests bool
+	VacuumBetweenTests     bool
 	CheckpointEveryOps     int
 	CheckpointEveryBytes   int64
 
@@ -136,6 +140,8 @@ type BenchRun struct {
 	DisplayNames        map[string]string
 	Results             map[string]map[string]float64
 	CheckpointDurations map[string]map[string]time.Duration
+	VacuumDurations     map[string]map[string]time.Duration
+	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 }
 
 type scanDiag struct {
@@ -204,7 +210,8 @@ func main() {
 		CheckpointCPUProfile:             *checkpointCPUProfile,
 		MaxWall:                          *maxWall,
 		MaxRSSMB:                         *maxRSSMB,
-		CheckpointBetweenTests:           *checkpointBetweenTests,
+		CheckpointBetweenTests:           *checkpointBetweenTests || *vacuumBetweenTests,
+		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		SettleBeforeScans:                *settleBeforeScans,
@@ -349,6 +356,14 @@ func main() {
 			fmt.Println()
 			printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
 		}
+		if len(run.VacuumDurations) > 0 {
+			fmt.Println()
+			printVacuumDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations)
+			if len(run.VacuumIndexBytes) > 0 {
+				fmt.Println()
+				printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
+			}
+		}
 		return
 	}
 
@@ -368,6 +383,14 @@ func main() {
 			if len(run.CheckpointDurations) > 0 {
 				fmt.Println()
 				printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
+			}
+			if len(run.VacuumDurations) > 0 {
+				fmt.Println()
+				printVacuumDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations)
+				if len(run.VacuumIndexBytes) > 0 {
+					fmt.Println()
+					printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
+				}
 			}
 		}
 	case "markdown":
@@ -624,6 +647,10 @@ type checkpointer interface {
 	Checkpoint() error
 }
 
+type vacuumIndexOnline interface {
+	VacuumIndexOnline(ctx context.Context) error
+}
+
 type periodicCheckpoint struct {
 	everyOps   int
 	everyBytes int64
@@ -716,6 +743,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	guard := newBenchGuard(cfg)
 	checkpointDurations := make(map[string]map[string]time.Duration)
+	vacuumDurations := make(map[string]map[string]time.Duration)
+	vacuumIndexBytes := make(map[string]map[string][2]uint64)
 
 	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
 	datasetKeySize := 32
@@ -1801,6 +1830,44 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				chkMap[inst.Wrapper.Name()] = time.Since(start)
 			}
 			checkpointDurations[testName] = chkMap
+
+			if cfg.VacuumBetweenTests {
+				vacMap := make(map[string]time.Duration)
+				bytesMap := make(map[string][2]uint64)
+				for _, inst := range instances {
+					vac, ok := inst.Wrapper.(vacuumIndexOnline)
+					if !ok {
+						continue
+					}
+
+					// Best-effort index.db size reporting (primarily for TreeDB).
+					var before uint64
+					indexPath := filepath.Join(inst.Dir, "index.db")
+					if st, err := os.Stat(indexPath); err == nil {
+						before = uint64(st.Size())
+					}
+
+					start := time.Now()
+					if err := vac.VacuumIndexOnline(context.Background()); err != nil {
+						return BenchRun{}, fmt.Errorf("vacuum %s before %s: %w", inst.Name, testName, err)
+					}
+					vacMap[inst.Wrapper.Name()] = time.Since(start)
+
+					var after uint64
+					if st, err := os.Stat(indexPath); err == nil {
+						after = uint64(st.Size())
+					}
+					if before != 0 || after != 0 {
+						bytesMap[inst.Wrapper.Name()] = [2]uint64{before, after}
+					}
+				}
+				if len(vacMap) > 0 {
+					vacuumDurations[testName] = vacMap
+				}
+				if len(bytesMap) > 0 {
+					vacuumIndexBytes[testName] = bytesMap
+				}
+			}
 		}
 
 		if err := liveTbl.Render(results); err != nil {
@@ -1867,6 +1934,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		DisplayNames:        displayNames,
 		Results:             results,
 		CheckpointDurations: checkpointDurations,
+		VacuumDurations:     vacuumDurations,
+		VacuumIndexBytes:    vacuumIndexBytes,
 	}, nil
 }
 
@@ -1905,6 +1974,20 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString("```text\n")
 		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
 		sb.WriteString("```\n")
+	}
+	if len(run.VacuumDurations) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Vacuum Time (Between Tests)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderVacuumDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations))
+		sb.WriteString("```\n")
+		if len(run.VacuumIndexBytes) > 0 {
+			sb.WriteString("\n")
+			sb.WriteString("## Vacuum Index Bytes (Between Tests)\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(renderVacuumIndexBytesTableString(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes))
+			sb.WriteString("```\n")
+		}
 	}
 	return sb.String()
 }
@@ -2530,6 +2613,116 @@ func printCheckpointDurationsTable(instances []*DBInstance, finalTestOrder []str
 		return
 	}
 	fmt.Println("Checkpoint Time (Between Tests)")
+	fmt.Print(table)
+}
+
+func renderVacuumDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
+	// Same shape/meaning as checkpoint durations: a per-test row, per-DB duration.
+	return renderCheckpointDurationsTableString(instances, finalTestOrder, displayNames, durs)
+}
+
+func printVacuumDurationsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) {
+	table := renderVacuumDurationsTableString(instances, finalTestOrder, displayNames, durs)
+	if table == "" {
+		return
+	}
+	fmt.Println("Vacuum Time (Between Tests)")
+	fmt.Print(table)
+}
+
+func renderVacuumIndexBytesTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, bytes map[string]map[string][2]uint64) string {
+	rows := make([]string, 0, len(finalTestOrder))
+	for _, testName := range finalTestOrder {
+		if _, ok := bytes[testName]; ok {
+			rows = append(rows, testName)
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+
+	colNames := []string{"Before Test"}
+	for _, inst := range instances {
+		colNames = append(colNames, inst.Wrapper.Name())
+	}
+
+	colWidths := make(map[string]int, len(colNames))
+	for _, colName := range colNames {
+		colWidths[colName] = len(colName)
+	}
+
+	for _, testName := range rows {
+		disp := displayNames[testName]
+		if len(disp) > colWidths["Before Test"] {
+			colWidths["Before Test"] = len(disp)
+		}
+	}
+
+	for _, testName := range rows {
+		perDB := bytes[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if pair, ok := perDB[dbName]; ok {
+					before, after := pair[0], pair[1]
+					if before != 0 || after != 0 {
+						cell = fmt.Sprintf("%s -> %s", formatBytes(before), formatBytes(after))
+					}
+				}
+			}
+			if len(cell) > colWidths[dbName] {
+				colWidths[dbName] = len(cell)
+			}
+		}
+	}
+
+	var sb strings.Builder
+	headerRow := fmt.Sprintf("%*s", colWidths["Before Test"], "Before Test")
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName)
+	}
+	sb.WriteString(headerRow)
+	sb.WriteString("\n")
+
+	separatorRow := fmt.Sprintf("%*s", colWidths["Before Test"], strings.Repeat("-", colWidths["Before Test"]))
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
+	}
+	sb.WriteString(separatorRow)
+	sb.WriteString("\n")
+
+	for _, testName := range rows {
+		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], displayNames[testName])
+		perDB := bytes[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if pair, ok := perDB[dbName]; ok {
+					before, after := pair[0], pair[1]
+					if before != 0 || after != 0 {
+						cell = fmt.Sprintf("%s -> %s", formatBytes(before), formatBytes(after))
+					}
+				}
+			}
+			dataRow += fmt.Sprintf("  %*s", colWidths[dbName], cell)
+		}
+		sb.WriteString(dataRow)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func printVacuumIndexBytesTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, bytes map[string]map[string][2]uint64) {
+	table := renderVacuumIndexBytesTableString(instances, finalTestOrder, displayNames, bytes)
+	if table == "" {
+		return
+	}
+	fmt.Println("Vacuum Index Bytes (Between Tests)")
 	fmt.Print(table)
 }
 
