@@ -77,10 +77,7 @@ func (b *Batch) Write() error {
 }
 
 func (b *Batch) WriteSync() error {
-	// Sync points should also perform zipper-local maintenance to keep the tree
-	// dense (leaf packing/coalesce). This increases work at explicit durability
-	// boundaries but keeps the steady-state write path fast.
-	return b.writeWithMaintenance(true, true)
+	return b.writeWithMaintenance(true, false)
 }
 
 // WriteMaintenance forces zipper-local maintenance without forcing a pager sync.
