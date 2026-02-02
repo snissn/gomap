@@ -1049,6 +1049,23 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if prunerEnabled {
 		db.pruner.Kick()
 
+		// KeepRecent workloads depend on timely recycling of retired pages to
+		// prevent runaway file growth under churn. The background pruner runs
+		// periodically; additionally do a bounded synchronous prune pass when the
+		// graveyard already contains eligible pages.
+		if keepRecent > 0 && !preferAppend {
+			minPinned := idx.registry.MinPinnedSeq()
+			currentSeq := nextMeta.CommitSeq
+			if idx.graveyard.HasEligible(minPinned, currentSeq, keepRecent) {
+				_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+				tp := time.Now()
+				_, _ = db.pruneSome(nil, maxPages, maxDuration)
+				if debugTiming {
+					durPrune += time.Since(tp)
+				}
+			}
+		}
+
 		// If KeepRecent is enabled and we've run out of free pages, do a bounded
 		// synchronous prune pass right after commit. This helps avoid runaway file
 		// growth under churn while keeping the work bounded by existing budgets.
