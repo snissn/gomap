@@ -260,6 +260,24 @@ func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
 	return b.FreeSpace() < entrySize+node.DirectoryEntrySize+z.internalReserveBytes
 }
 
+func (z *Zipper) shouldRunMaintenance(forceMaintenance bool, ops []batch.Entry) (maintenance bool, deleteCount int) {
+	hasDeletes := false
+	for _, op := range ops {
+		if op.Type == batch.OpDelete {
+			hasDeletes = true
+			deleteCount++
+		}
+	}
+	// NOTE: This intentionally mirrors the pre-fix behavior so unit tests can lock
+	// down the current gate before we change it in a follow-up commit.
+	maintenance = forceMaintenance ||
+		hasDeletes ||
+		z.leafReserveBytes > 0 ||
+		z.internalReserveBytes > 0 ||
+		z.piggybackCompaction
+	return maintenance, deleteCount
+}
+
 // Apply applies the batch to the tree rooted at rootID.
 //
 // forceMaintenance enables zipper-local maintenance work (bounded leaf packing /
@@ -279,15 +297,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch, forceMaintenance bool) (ui
 	//   - the batch includes deletes (can create empty/underfull pages), or
 	//   - the caller configured soft-full targets (reserve bytes), or
 	//   - the caller explicitly forces maintenance at a sync boundary.
-	hasDeletes := false
-	deleteCount := 0
-	for _, op := range ops {
-		if op.Type == batch.OpDelete {
-			hasDeletes = true
-			deleteCount++
-		}
-	}
-	maintenance := forceMaintenance || hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	maintenance, deleteCount := z.shouldRunMaintenance(forceMaintenance, ops)
 	var budget *maintenanceBudget
 	// Sync points should favor correctness/density over per-op overhead; allow
 	// full maintenance by disabling the budget when forced.
