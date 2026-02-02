@@ -270,13 +270,12 @@ func (z *Zipper) shouldRunMaintenance(forceMaintenance bool, ops []batch.Entry) 
 	}
 	// Maintenance is intentionally limited to:
 	//   - explicit sync points (forceMaintenance), and
-	//   - delete-containing batches (can create empty/underfull pages), and
-	//   - piggyback compaction (when enabled).
+	//   - delete-containing batches (can create empty/underfull pages).
 	//
-	// Soft-full targets (reserve bytes) should not, by themselves, force full
-	// coalesce/packing work on pure-put workloads; that would add high overhead to
-	// the steady-state write path.
-	maintenance = forceMaintenance || hasDeletes || z.piggybackCompaction
+	// Soft-full targets (reserve bytes) and piggyback compaction should not, by
+	// themselves, force full coalesce/packing work on pure-put workloads; that
+	// would add high overhead to the steady-state write path.
+	maintenance = forceMaintenance || hasDeletes
 	return maintenance, deleteCount
 }
 

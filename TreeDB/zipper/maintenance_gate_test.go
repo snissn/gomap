@@ -34,6 +34,7 @@ func TestZipper_ShouldRunMaintenance_PurePutsNoForce_NoDeletes_DoesNotTrigger(t 
 	z := &Zipper{
 		leafReserveBytes:     123, // pretend fill targets are configured
 		internalReserveBytes: 456,
+		piggybackCompaction:  true, // enabled by default in DB options
 	}
 	ops := []batch.Entry{
 		{Type: batch.OpPut, Key: []byte("k1"), Value: []byte("v1")},
