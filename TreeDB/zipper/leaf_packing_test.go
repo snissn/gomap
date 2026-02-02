@@ -57,7 +57,7 @@ func TestZipper_PackUnderfilledLeafChildren_ReducesLeafCountAndPreservesOrder(t 
 	}
 	updated := []bool{true, false, false, false}
 
-	out, outUpdated, retired, err := z.packUnderfilledLeafChildren(entries, updated, &adaptive.Metrics{})
+	out, outUpdated, retired, err := z.packUnderfilledLeafChildren(entries, updated, nil, &adaptive.Metrics{})
 	if err != nil {
 		t.Fatalf("packUnderfilledLeafChildren: %v", err)
 	}

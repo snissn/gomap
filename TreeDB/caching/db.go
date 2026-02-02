@@ -5859,9 +5859,19 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 			db.backendWriteBatchesTotal.Add(1)
 			// If sync==true, we only need a single durability boundary at the end of
-			// the flush. Write the intermediate chunks without fsync to avoid
-			// repeated pager sync work.
-			err := backendBatch.Write()
+			// the flush. For intermediate chunks, avoid pager sync work but still
+			// allow zipper-local maintenance at checkpoint boundaries so density can
+			// improve even when we split the apply into multiple commits.
+			var err error
+			if sync {
+				if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+					err = wm.WriteMaintenance()
+				} else {
+					err = backendBatch.Write()
+				}
+			} else {
+				err = backendBatch.Write()
+			}
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -5983,7 +5993,18 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if backendPendingOps > 0 {
 		db.backendWriteBatchesTotal.Add(1)
 		if sync {
-			err = backendBatch.WriteSync()
+			if db.relaxedSync {
+				// Even in relaxed durability, a checkpoint boundary should perform
+				// zipper-local maintenance to keep the tree dense. Use WriteMaintenance
+				// when supported to force maintenance without paying pager msync.
+				if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+					err = wm.WriteMaintenance()
+				} else {
+					err = backendBatch.Write()
+				}
+			} else {
+				err = backendBatch.WriteSync()
+			}
 		} else {
 			err = backendBatch.Write()
 		}
@@ -6204,9 +6225,20 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				tw := time.Now()
 				// If sync==true, we only need a single durability boundary at the end
 				// of the flush. Write intermediate chunks without fsync to avoid
-				// repeated pager sync work.
+				// repeated pager sync work. Still allow zipper-local maintenance at
+				// checkpoint boundaries so splitting the flush doesn't permanently
+				// lower density.
 				db.backendWriteBatchesTotal.Add(1)
-				err := backendBatch.Write()
+				var err error
+				if sync {
+					if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+						err = wm.WriteMaintenance()
+					} else {
+						err = backendBatch.Write()
+					}
+				} else {
+					err = backendBatch.Write()
+				}
 				cerr := backendBatch.Close()
 				if err == nil {
 					err = cerr
@@ -6344,7 +6376,15 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			var err error
 			if sync {
 				db.backendWriteBatchesTotal.Add(1)
-				err = backendBatch.WriteSync()
+				if db.relaxedSync {
+					if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+						err = wm.WriteMaintenance()
+					} else {
+						err = backendBatch.Write()
+					}
+				} else {
+					err = backendBatch.WriteSync()
+				}
 			} else {
 				db.backendWriteBatchesTotal.Add(1)
 				err = backendBatch.Write()

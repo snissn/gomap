@@ -53,7 +53,7 @@ func TestZipper_Rebalance_MergeWhenBothUnderMinAndFits(t *testing.T) {
 	updated := []bool{true, false}
 
 	var m adaptive.Metrics
-	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, nil, &m)
 	if err != nil {
 		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestZipper_Rebalance_RebalanceToTargetAndKeepRightAboveMin(t *testing.T) {
 	updated := []bool{true, false}
 
 	var m adaptive.Metrics
-	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, nil, &m)
 	if err != nil {
 		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestZipper_Rebalance_RebalanceCanFillRightLeafUsingLeftSibling(t *testing.T
 	updated := []bool{false, true} // right leaf is the updated/underfilled one
 
 	var m adaptive.Metrics
-	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, nil, &m)
 	if err != nil {
 		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestZipper_Rebalance_NoOpWhenLeftAtOrAboveMin(t *testing.T) {
 	updated := []bool{true, false}
 
 	var m adaptive.Metrics
-	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	out, retired, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, nil, &m)
 	if err != nil {
 		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestZipper_Rebalance_DropsTombstonesButPreservesDeleteSemantics(t *testing.
 	updated := []bool{true, false}
 
 	var m adaptive.Metrics
-	out, _, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, &m)
+	out, _, err := z.rebalanceUpdatedLeavesWithRightSibling(entries, updated, nil, &m)
 	if err != nil {
 		t.Fatalf("rebalanceUpdatedLeavesWithRightSibling: %v", err)
 	}

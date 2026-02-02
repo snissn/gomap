@@ -416,7 +416,7 @@ func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zi
 		if err := b.SetOps(ops); err != nil {
 			return err
 		}
-		newRoot, newRetired, _, err := z.Apply(root, b)
+		newRoot, newRetired, _, err := z.Apply(root, b, true)
 		if err != nil {
 			return err
 		}

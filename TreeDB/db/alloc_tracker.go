@@ -29,6 +29,18 @@ func (t *allocTracker) Alloc(hint uint64) (uint64, error) {
 	return id, nil
 }
 
+// AllocMany allocates up to count pages in one pass. It tracks all allocated
+// pages so they can be returned if the write attempt is abandoned.
+func (t *allocTracker) AllocMany(count int, hint uint64) ([]uint64, error) {
+	ids, err := t.alloc.AllocMany(count, hint)
+	if len(ids) > 0 {
+		t.mu.Lock()
+		t.pages = append(t.pages, ids...)
+		t.mu.Unlock()
+	}
+	return ids, err
+}
+
 func (t *allocTracker) FreeAll() error {
 	if t == nil {
 		return nil

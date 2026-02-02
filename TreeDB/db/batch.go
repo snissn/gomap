@@ -73,14 +73,25 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 }
 
 func (b *Batch) Write() error {
-	return b.write(false)
+	return b.writeWithMaintenance(false, false)
 }
 
 func (b *Batch) WriteSync() error {
-	return b.write(true)
+	// Sync points should also perform zipper-local maintenance to keep the tree
+	// dense (leaf packing/coalesce). This increases work at explicit durability
+	// boundaries but keeps the steady-state write path fast.
+	return b.writeWithMaintenance(true, true)
 }
 
-func (b *Batch) write(sync bool) error {
+// WriteMaintenance forces zipper-local maintenance without forcing a pager sync.
+// This is intended for cached-mode checkpoint boundaries when Durability is
+// relaxed (WAL off or no-fsync), where we still want dense pages but don't want
+// to pay msync costs.
+func (b *Batch) WriteMaintenance() error {
+	return b.writeWithMaintenance(false, true)
+}
+
+func (b *Batch) writeWithMaintenance(sync bool, forceMaintenance bool) error {
 	if b == nil || b.db == nil {
 		return fmt.Errorf("missing db")
 	}
@@ -88,7 +99,7 @@ func (b *Batch) write(sync bool) error {
 		return ErrReadOnly
 	}
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
-		committed, err := b.writeOptimistic(sync)
+		committed, err := b.writeOptimistic(sync, forceMaintenance)
 		if err != nil {
 			return err
 		}
@@ -96,10 +107,10 @@ func (b *Batch) write(sync bool) error {
 			return nil
 		}
 	}
-	return b.writeSerialized(sync)
+	return b.writeSerialized(sync, forceMaintenance)
 }
 
-func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+func (b *Batch) writeOptimistic(sync bool, forceMaintenance bool) (bool, error) {
 	b.db.writeMu.RLock()
 	idx := b.db.idx.Load()
 	if idx == nil {
@@ -169,7 +180,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
-	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := z.Apply(rootID, b.batch, forceMaintenance)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -227,7 +238,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeSerialized(sync bool) error {
+func (b *Batch) writeSerialized(sync bool, forceMaintenance bool) error {
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
@@ -268,7 +279,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	}
 	defer unregister()
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch, forceMaintenance)
 	if err != nil {
 		return err
 	}

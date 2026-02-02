@@ -261,18 +261,24 @@ func (z *Zipper) internalSoftFull(b *node.Builder, entrySize int) bool {
 }
 
 // Apply applies the batch to the tree rooted at rootID.
+//
+// forceMaintenance enables zipper-local maintenance work (bounded leaf packing /
+// rebalance + coalesce passes) even for pure-puts workloads. This is intended for
+// explicit sync points (e.g. checkpoint/close) where higher write amplification
+// is acceptable to keep the on-disk tree dense.
+//
 // Returns the new root page ID, list of retired pages, and commit metrics.
-func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptive.Metrics, error) {
+func (z *Zipper) Apply(rootID uint64, b *batch.Batch, forceMaintenance bool) (uint64, []uint64, adaptive.Metrics, error) {
 	var metrics adaptive.Metrics
 	ops := b.SortedEntries()
 	if len(ops) == 0 {
 		return rootID, nil, metrics, nil
 	}
 
-	// Underfull merge/rebalance maintenance is only beneficial when:
+	// Maintenance is only beneficial when:
 	//   - the batch includes deletes (can create empty/underfull pages), or
-	//   - the caller configured soft-full targets (reserve bytes), which implies
-	//     a preference for more balanced/less churny pages even on updates.
+	//   - the caller configured soft-full targets (reserve bytes), or
+	//   - the caller explicitly forces maintenance at a sync boundary.
 	hasDeletes := false
 	deleteCount := 0
 	for _, op := range ops {
@@ -281,9 +287,11 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 			deleteCount++
 		}
 	}
-	maintenance := hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	maintenance := forceMaintenance || hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
 	var budget *maintenanceBudget
-	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
+	// Sync points should favor correctness/density over per-op overhead; allow
+	// full maintenance by disabling the budget when forced.
+	if maintenance && !forceMaintenance && z.maintenanceOpsPerCoalesce > 0 {
 		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
 	}
 
@@ -771,12 +779,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 	}
 
-	// Zipper-local bounded leaf packing: after applying updates, an internal node
-	// can end up with underfilled leaves that persist indefinitely. Do a single,
-	// bounded sibling rebalance/merge pass to repair underfill without range scans.
-	if len(entries) >= 2 {
+	// Zipper-local bounded leaf packing / rebalance: after applying updates, an
+	// internal node can end up with underfilled leaves that persist indefinitely.
+	// This work is intentionally skipped on non-maintenance passes to keep the
+	// steady-state write hot path fast; explicit sync points (checkpoint/close)
+	// and delete-heavy batches force maintenance.
+	if maintenance && len(entries) >= 2 {
 		var packRetired []uint64
-		entries, updatedEntries, packRetired, err = z.packUnderfilledLeafChildren(entries, updatedEntries, metrics)
+		entries, updatedEntries, packRetired, err = z.packUnderfilledLeafChildren(entries, updatedEntries, budget, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -785,7 +795,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 
 		var extraRetired []uint64
-		entries, extraRetired, err = z.rebalanceUpdatedLeavesWithRightSibling(entries, updatedEntries, metrics)
+		entries, extraRetired, err = z.rebalanceUpdatedLeavesWithRightSibling(entries, updatedEntries, budget, metrics)
 		if err != nil {
 			return 0, nil, nil, err
 		}
@@ -924,7 +934,8 @@ func (z *Zipper) leafCapBytes() int {
 	return cap
 }
 
-func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []bool, metrics *adaptive.Metrics) ([]internalEntry, []bool, []uint64, error) {
+func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []bool, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []bool, []uint64, error) {
+	_ = budget // bounded locally; avoid global-budget starvation during apply
 	// Bounded zipper-local packing: when small commits create many underfilled
 	// leaves, pairwise sibling rebalance can plateau. Packing a short run of leaf
 	// children within the same parent can materially increase density without
@@ -940,8 +951,11 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 	}
 
 	const (
-		packWindow        = 8
-		maxPacksPerParent = 64
+		packWindow = 8
+		// Keep this small: packing is expensive and should not dominate the write
+		// hot path. The coalesce budget bounds how often this can run across the
+		// whole Apply; this bounds how much it can do in a single parent rebuild.
+		maxPacksPerParent = 2
 	)
 
 	pageCap := z.leafCapBytes()
@@ -1203,7 +1217,8 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 	return entries, updated, packedRetired, nil
 }
 
-func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry, updated []bool, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry, updated []bool, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []uint64, error) {
+	_ = budget // bounded locally; avoid global-budget starvation during apply
 	if len(entries) < 2 || len(updated) != len(entries) {
 		return entries, nil, nil
 	}
@@ -1232,8 +1247,8 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 	mergeCapBytes := page.PageSize - node.NodeHeaderSize
 
 	// Bound modifications per internal-node rebuild (touches at most 2 leaves +
-	// parent per modification). We cap to a single linear pass worth of work.
-	maxModsPerParent := len(entries)
+	// parent per modification).
+	maxModsPerParent := 2
 	mods := 0
 
 	var retired []uint64
@@ -1472,14 +1487,54 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 			}
 		}
 
-		lid, err := z.allocator.Alloc(left.PageID())
-		if err != nil {
-			return nil, nil, err
+		var (
+			lid uint64
+			rid uint64
+		)
+		if allocMany, ok := z.allocator.(interface {
+			AllocMany(count int, hint uint64) ([]uint64, error)
+		}); ok {
+			ids, err := allocMany.AllocMany(2, left.PageID())
+			if err != nil {
+				// Best-effort: if we got partial IDs, ensure they are retired on error.
+				if len(ids) > 0 {
+					retired = append(retired, ids...)
+				}
+				return nil, nil, err
+			}
+			switch len(ids) {
+			case 0:
+				// Fall back to single-page allocation below.
+			case 1:
+				lid = ids[0]
+			default:
+				lid, rid = ids[0], ids[1]
+			}
+		} else {
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return nil, nil, err
+			}
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return nil, nil, err
+			}
 		}
-		rid, err := z.allocator.Alloc(lid)
-		if err != nil {
-			retired = append(retired, lid)
-			return nil, nil, err
+		if lid == 0 {
+			var err error
+			lid, err = z.allocator.Alloc(left.PageID())
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if rid == 0 {
+			var err error
+			rid, err = z.allocator.Alloc(lid)
+			if err != nil {
+				retired = append(retired, lid)
+				return nil, nil, err
+			}
 		}
 
 		ldata, err := z.pager.GetForWrite(lid)
