@@ -59,7 +59,7 @@ Rules:
   * **Filename:** `index.db`
         *   **Access Pattern:** **Chunked Memory Map**.
             * The file is logically a contiguous array of Pages.
-            * Physically, the Go runtime maps it in **Configurable Chunks** (default: 4MiB).
+            * Physically, the Go runtime maps it in **Configurable Chunks** (default: 16MiB).
             * **Alignment Invariant:** `ChunkSize` MUST be an exact multiple of the **Page Size** (4KB). The Pager MUST ensure that no Page physically crosses a chunk boundary.
             * **Growth:** To expand, we strictly **pre-allocate disk space** (via `fallocate`) *before* extending the Mmap.
             * **Safety Protocol:**
