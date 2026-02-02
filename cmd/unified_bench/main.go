@@ -1842,7 +1842,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 					// Best-effort index.db size reporting (primarily for TreeDB).
 					var before uint64
-					indexPath := filepath.Join(inst.Dir, "index.db")
+					// TreeDB stores its main index under "maindb/index.db" within the
+					// per-DB temp root directory.
+					indexPath := filepath.Join(inst.Dir, "maindb", "index.db")
 					if st, err := os.Stat(indexPath); err == nil {
 						before = uint64(st.Size())
 					}
