@@ -22,7 +22,7 @@ import (
 type Options = db.Options
 
 const (
-	defaultChunkSize     = 4 * 1024 * 1024
+	defaultChunkSize     = 16 * 1024 * 1024
 	defaultDictChunkSize = 1 * 1024 * 1024
 )
 

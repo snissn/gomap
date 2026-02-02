@@ -84,7 +84,7 @@ type DB struct {
 }
 
 const (
-	defaultChunkSize                 = 4 * 1024 * 1024
+	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
 
@@ -164,7 +164,7 @@ type Options struct {
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
 	ReadOnly   bool
-	ChunkSize  int64  // Default 4MiB
+	ChunkSize  int64  // Default 16MiB
 	KeepRecent uint64 // Default 10000
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
