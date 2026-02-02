@@ -268,9 +268,12 @@ func (z *Zipper) shouldRunMaintenance(ops []batch.Entry) (maintenance bool, dele
 			deleteCount++
 		}
 	}
-	// NOTE: This intentionally mirrors the current behavior so unit tests can lock
-	// down the gate before we adjust it in a follow-up commit.
-	maintenance = hasDeletes || z.leafReserveBytes > 0 || z.internalReserveBytes > 0 || z.piggybackCompaction
+	// Maintenance is intentionally limited to delete-containing batches, which can
+	// create empty/underfull pages. Soft-full targets (reserve bytes) and
+	// piggyback compaction should not, by themselves, force coalesce/packing work
+	// on pure-put workloads; that would add high overhead to the steady-state
+	// write path.
+	maintenance = hasDeletes
 	return maintenance, deleteCount
 }
 
@@ -283,10 +286,8 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		return rootID, nil, metrics, nil
 	}
 
-	// Underfull merge/rebalance maintenance is only beneficial when:
-	//   - the batch includes deletes (can create empty/underfull pages), or
-	//   - the caller configured soft-full targets (reserve bytes), which implies
-	//     a preference for more balanced/less churny pages even on updates.
+	// Underfull merge/rebalance maintenance is only beneficial when the batch
+	// includes deletes (can create empty/underfull pages).
 	maintenance, deleteCount := z.shouldRunMaintenance(ops)
 	var budget *maintenanceBudget
 	if maintenance && z.maintenanceOpsPerCoalesce > 0 {

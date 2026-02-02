@@ -18,27 +18,27 @@ func TestZipper_ShouldRunMaintenance_HasDeletesTrue(t *testing.T) {
 	}
 }
 
-func TestZipper_ShouldRunMaintenance_PiggybackTrue(t *testing.T) {
+func TestZipper_ShouldRunMaintenance_PiggybackDoesNotTrigger(t *testing.T) {
 	z := &Zipper{piggybackCompaction: true}
 	ops := []batch.Entry{{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}}
 	got, delCount := z.shouldRunMaintenance(ops)
 	if delCount != 0 {
 		t.Fatalf("expected deleteCount=0, got %d", delCount)
 	}
-	if !got {
-		t.Fatalf("expected maintenance=true when piggyback compaction is enabled")
+	if got {
+		t.Fatalf("expected maintenance=false for pure puts (piggyback should not force maintenance)")
 	}
 }
 
-func TestZipper_ShouldRunMaintenance_ReserveBytesTrue(t *testing.T) {
+func TestZipper_ShouldRunMaintenance_ReserveBytesDoesNotTrigger(t *testing.T) {
 	z := &Zipper{leafReserveBytes: 1}
 	ops := []batch.Entry{{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}}
 	got, delCount := z.shouldRunMaintenance(ops)
 	if delCount != 0 {
 		t.Fatalf("expected deleteCount=0, got %d", delCount)
 	}
-	if !got {
-		t.Fatalf("expected maintenance=true when reserve bytes are configured")
+	if got {
+		t.Fatalf("expected maintenance=false for pure puts (reserve bytes should not force maintenance)")
 	}
 }
 
