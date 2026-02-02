@@ -46,6 +46,38 @@ func (g *Graveyard) Add(seq uint64, pages []uint64) {
 	g.retiredPages = append(g.retiredPages, batch{seq: seq, ids: pages})
 }
 
+// HasEligible reports whether there is at least one retired batch that is safe
+// to free under the same rules as Extract/ExtractBatchesUpTo, without removing
+// anything.
+//
+// This is used to decide whether a bounded synchronous prune pass is likely to
+// do work (and therefore help page reuse) without needing to always pay the
+// cost of an Extract call.
+func (g *Graveyard) HasEligible(minPinnedSeq, currentSeq, keepRecent uint64) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if len(g.retiredPages) == 0 {
+		return false
+	}
+
+	safeHistory := uint64(0)
+	if currentSeq >= keepRecent {
+		safeHistory = currentSeq - keepRecent
+	}
+
+	// Retired batches are ordered by seq, so only the first batch can be
+	// eligible without a preceding eligible batch.
+	b := &g.retiredPages[0]
+	if b.seq > minPinnedSeq {
+		return false
+	}
+	if b.seq > safeHistory {
+		return false
+	}
+	return true
+}
+
 // Extract returns pages that are safe to free.
 //
 // Safe-to-free conditions:
