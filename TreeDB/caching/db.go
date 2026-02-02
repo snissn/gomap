@@ -5818,7 +5818,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	// When flushing a large combined batch, commit intermediate backend batches
 	// to reduce peak allocator demand (and thus index.db high-watermark growth)
 	// under small KeepRecent windows.
-	chunkBackend := totalLen > backendEntriesCap
+	//
+	// IMPORTANT: only chunk background flushes. Checkpoint/WriteSync boundaries
+	// rely on a single maintenance pass to rebuild dense leaves across the whole
+	// commit; splitting that work into multiple commits can leave the tree sparse.
+	chunkBackend := !sync && totalLen > backendEntriesCap
 
 	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
@@ -5864,17 +5868,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 
 			db.backendWriteBatchesTotal.Add(1)
-			// If sync==true, we only need a single durability boundary at the end of
-			// the flush. For intermediate chunks, avoid pager sync work but still
-			// allow zipper-local maintenance at checkpoint boundaries so density can
-			// improve even when we split the apply into multiple commits.
+			// Intermediate chunks are purely a peak-memory/high-watermark control.
+			// Still, they must preserve the "dense leaves" invariant: a checkpoint
+			// later will not rewrite already-committed pages. Use WriteMaintenance
+			// when available (no fsync/msync) so chunked background flush does not
+			// permanently create sparse leaves.
 			var err error
-			if sync {
-				if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
-					err = wm.WriteMaintenance()
-				} else {
-					err = backendBatch.Write()
-				}
+			if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+				err = wm.WriteMaintenance()
 			} else {
 				err = backendBatch.Write()
 			}
@@ -6176,7 +6177,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		} else {
 			// When flushing very large memtables, avoid building an unbounded backend batch
 			// (which can allocate / zero very large buffers and appear "hung").
-			chunkBackend := memLen > backendEntriesCap
+			//
+			// IMPORTANT: only chunk background flushes. Checkpoint/WriteSync boundaries
+			// rely on a single maintenance pass to rebuild dense leaves across the whole
+			// commit; splitting that work into multiple commits can leave the tree sparse.
+			chunkBackend := !sync && memLen > backendEntriesCap
 
 			// Best-effort: ensure value-log data is durable before committing pointers
 			// to the backend. This keeps the relative durability ordering intact when
@@ -6229,19 +6234,15 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					return nil
 				}
 				tw := time.Now()
-				// If sync==true, we only need a single durability boundary at the end
-				// of the flush. Write intermediate chunks without fsync to avoid
-				// repeated pager sync work. Still allow zipper-local maintenance at
-				// checkpoint boundaries so splitting the flush doesn't permanently
-				// lower density.
 				db.backendWriteBatchesTotal.Add(1)
+				// Intermediate chunks are purely a peak-memory/high-watermark control.
+				// Still, they must preserve the "dense leaves" invariant: a checkpoint
+				// later will not rewrite already-committed pages. Use WriteMaintenance
+				// when available (no fsync/msync) so chunked background flush does not
+				// permanently create sparse leaves.
 				var err error
-				if sync {
-					if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
-						err = wm.WriteMaintenance()
-					} else {
-						err = backendBatch.Write()
-					}
+				if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
+					err = wm.WriteMaintenance()
 				} else {
 					err = backendBatch.Write()
 				}
