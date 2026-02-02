@@ -1572,9 +1572,10 @@ type DB struct {
 	bgErr              error
 
 	// Backpressure state
-	queueBacklogBytes atomic.Int64
-	flushBpsEWMA      float64
-	queueLaneIDMisses atomic.Int64
+	queueBacklogBytes        atomic.Int64
+	flushBpsEWMA             float64
+	queueLaneIDMisses        atomic.Int64
+	backendWriteBatchesTotal atomic.Int64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -7231,6 +7232,7 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
+	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
