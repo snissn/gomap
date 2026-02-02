@@ -5869,16 +5869,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 			db.backendWriteBatchesTotal.Add(1)
 			// Intermediate chunks are purely a peak-memory/high-watermark control.
-			// Still, they must preserve the "dense leaves" invariant: a checkpoint
-			// later will not rewrite already-committed pages. Use WriteMaintenance
-			// when available (no fsync/msync) so chunked background flush does not
-			// permanently create sparse leaves.
-			var err error
-			if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
-				err = wm.WriteMaintenance()
-			} else {
-				err = backendBatch.Write()
-			}
+			// Do not force zipper-local maintenance here; that belongs at explicit
+			// checkpoint/close boundaries (reqSync=true).
+			err := backendBatch.Write()
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr
@@ -6236,16 +6229,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				tw := time.Now()
 				db.backendWriteBatchesTotal.Add(1)
 				// Intermediate chunks are purely a peak-memory/high-watermark control.
-				// Still, they must preserve the "dense leaves" invariant: a checkpoint
-				// later will not rewrite already-committed pages. Use WriteMaintenance
-				// when available (no fsync/msync) so chunked background flush does not
-				// permanently create sparse leaves.
-				var err error
-				if wm, ok := backendBatch.(interface{ WriteMaintenance() error }); ok {
-					err = wm.WriteMaintenance()
-				} else {
-					err = backendBatch.Write()
-				}
+				// Do not force zipper-local maintenance here; that belongs at explicit
+				// checkpoint/close boundaries (reqSync=true).
+				err := backendBatch.Write()
 				cerr := backendBatch.Close()
 				if err == nil {
 					err = cerr
