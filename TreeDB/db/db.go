@@ -1141,34 +1141,27 @@ func (db *DB) Prune() {
 	if db.readOnly {
 		return
 	}
-	idx := db.idx.Load()
-	if idx == nil {
-		return
-	}
-	idx.acquire()
-	defer db.releaseIndex(idx)
 
-	min := idx.registry.MinPinnedSeq()
-	// Prefer the published DBState commit sequence because it is updated on every
-	// successful commit and accessed lock-free elsewhere (e.g. prune worker).
-	// Falling back to meta avoids a nil panic during early open/recover.
+	// Use the same bounded batching path as the background pruner so explicit
+	// checkpoints/maintenance calls can quickly move eligible pages from the
+	// graveyard into the freelist without per-ID lock thrash.
+	//
+	// IMPORTANT: Prune does not force a meta write. The updated freelist head is
+	// persisted on the next commit or Close().
 	current := uint64(0)
 	if st := db.state.Load(); st != nil {
 		current = st.CommitSeq
 	} else {
-		// Do not take db.mu here: Prune() is called from finalizeCommit while
-		// holding db.mu exclusively, including during WAL replay before state is
-		// initialized. Reading meta without the lock is best-effort and avoids a
-		// self-deadlock.
+		// Best-effort fallback (avoid db.mu; see comment in finalizeCommit).
 		current = db.meta.CommitSeq
 	}
 
-	freed := idx.graveyard.Extract(min, current, db.keepRecent)
-
-	if len(freed) > 0 {
-		for _, id := range freed {
-			_ = idx.allocator.Free(id) // Ignore error?
-		}
+	_, maxPages, maxDuration, _, _, _, _ := db.pruner.Stats()
+	if maxPages <= 0 {
+		return
+	}
+	if _, err := db.pruneSomeWithCurrentSeq(nil, maxPages, maxDuration, current); err != nil {
+		db.reportError(err)
 	}
 }
 
