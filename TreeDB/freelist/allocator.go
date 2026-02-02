@@ -62,6 +62,32 @@ func (a *Allocator) Head() uint64 {
 	return a.head
 }
 
+// HeadCount returns the number of free IDs currently stored in the freelist head
+// page. This is a cheap "near-term availability" signal: allocations consume
+// IDs from the head page before walking to the next freelist page.
+//
+// It holds the allocator mutex to avoid observing a partially updated head.
+func (a *Allocator) HeadCount() (uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.head == 0 {
+		return 0, nil
+	}
+	data, err := a.pager.ReadPage(a.head)
+	if err != nil {
+		return 0, err
+	}
+	n := node.NewNode(data)
+	if !n.VerifyChecksum() {
+		return 0, errors.New("freelist head corrupted (HeadCount)")
+	}
+	if n.Type() != page.PageTypeFreelist {
+		return 0, errors.New("invalid freelist page type")
+	}
+	return uint64(n.Count()), nil
+}
+
 func (a *Allocator) SetHead(h uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
