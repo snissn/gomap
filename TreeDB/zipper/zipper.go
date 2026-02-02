@@ -935,7 +935,9 @@ func (z *Zipper) leafCapBytes() int {
 }
 
 func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []bool, budget *maintenanceBudget, metrics *adaptive.Metrics) ([]internalEntry, []bool, []uint64, error) {
-	_ = budget // bounded locally; avoid global-budget starvation during apply
+	// NOTE: This pass is zipper-local and bounded per parent. We still accept a
+	// budget parameter so callers can distinguish "forced maintenance" (nil
+	// budget in Apply()) from normal background maintenance.
 	// Bounded zipper-local packing: when small commits create many underfilled
 	// leaves, pairwise sibling rebalance can plateau. Packing a short run of leaf
 	// children within the same parent can materially increase density without
@@ -952,11 +954,18 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 
 	const (
 		packWindow = 8
-		// Keep this small: packing is expensive and should not dominate the write
-		// hot path. The coalesce budget bounds how often this can run across the
-		// whole Apply; this bounds how much it can do in a single parent rebuild.
-		maxPacksPerParent = 2
 	)
+	// Keep this small: packing is expensive and should not dominate the write hot
+	// path. However, at forced maintenance points (budget == nil, e.g. explicit
+	// checkpoint), we allow more work so the tree can converge to a dense
+	// on-disk representation.
+	maxPacksPerParent := 2
+	if budget == nil {
+		// In forced maintenance, keep packing until we stop making progress in
+		// this parent rebuild. This is still zipper-local and bounded by the
+		// number of children in the parent.
+		maxPacksPerParent = len(entries)
+	}
 
 	pageCap := z.leafCapBytes()
 	if pageCap <= 0 {
@@ -1026,7 +1035,13 @@ func (z *Zipper) packUnderfilledLeafChildren(entries []internalEntry, updated []
 		return out, totalBytes, nil
 	}
 
-	packedRetired := make([]uint64, 0, packWindow*maxPacksPerParent)
+	// Avoid huge prealloc when forced maintenance allows many packs; this slice
+	// typically stays small because we only retire IDs on successful packing.
+	preCap := packWindow * maxPacksPerParent
+	if preCap > 1024 {
+		preCap = 1024
+	}
+	packedRetired := make([]uint64, 0, preCap)
 	packs := 0
 
 	for idx := 0; idx < len(entries) && packs < maxPacksPerParent; idx++ {
@@ -1249,6 +1264,11 @@ func (z *Zipper) rebalanceUpdatedLeavesWithRightSibling(entries []internalEntry,
 	// Bound modifications per internal-node rebuild (touches at most 2 leaves +
 	// parent per modification).
 	maxModsPerParent := 2
+	if budget == nil {
+		// Forced maintenance can do more work, but remains bounded by the number
+		// of children in this parent rebuild.
+		maxModsPerParent = len(entries)
+	}
 	mods := 0
 
 	var retired []uint64
