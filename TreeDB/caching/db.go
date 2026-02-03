@@ -1639,6 +1639,47 @@ func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 	return capEntries
 }
 
+func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync bool) int {
+	capEntries := db.flushBackendMaxEntries
+	if capEntries < 1 {
+		capEntries = 1
+	}
+	maxBatches := db.flushBackendMaxBatches
+	if maxBatches == 0 {
+		maxBatches = 16
+	}
+	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
+	// of intermediate commits in that path even if the steady-state micro-batch
+	// policy is aggressive.
+	if sync && maxBatches > 8 {
+		maxBatches = 8
+	}
+	// Delete-heavy flushes are expensive to apply in many intermediate commits.
+	// Each commit re-writes leaf pages (copying surviving values), so repeated
+	// commits amplify work dramatically when deletes touch a large fraction of the
+	// keyspace. Favor fewer commits in that case.
+	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
+		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
+		if deleteOps*4 >= totalOps && maxBatches > 4 {
+			maxBatches = 4
+		}
+	}
+	if maxBatches > 0 {
+		// Avoid overflow when capEntries is very large (e.g., chunking disabled).
+		maxInt := int(^uint(0) >> 1)
+		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
+			// Increase the chunk size so we emit at most maxBatches intermediate
+			// commits. This preserves the high-watermark benefits of micro-batching
+			// while bounding zipper/apply overhead.
+			capEntries = (totalOps + maxBatches - 1) / maxBatches
+			if capEntries < 1 {
+				capEntries = 1
+			}
+		}
+	}
+	return capEntries
+}
+
 type keyRange struct {
 	valid bool
 	min   []byte
@@ -5813,8 +5854,9 @@ func (db *DB) flushOne() bool {
 }
 
 const (
-	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
-	flushCombineMaxMemtables       = 32
+	flushCombineTargetBytes    int64 = 64 * 1024 * 1024  // 64MiB
+	flushCombineTargetBytesMax       = 256 * 1024 * 1024 // 256MiB
+	flushCombineMaxMemtables         = 32
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -5972,6 +6014,17 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if db.flushBuildConcurrency > 1 {
 		maxMemtables = flushCombineMaxMemtables
 		targetBytes = flushCombineTargetBytes
+		// When FlushThreshold ~= flushCombineTargetBytes (the common default),
+		// combining is effectively disabled and large churny workloads are forced
+		// through multiple full apply passes. Allow combining several memtables per
+		// flush (bounded) to reduce repeated rewrite work.
+		desired := db.flushThreshold * 4
+		if desired > flushCombineTargetBytesMax {
+			desired = flushCombineTargetBytesMax
+		}
+		if desired > targetBytes {
+			targetBytes = desired
+		}
 	}
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
@@ -6079,6 +6132,21 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			return false
 		}
+
+		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
+		// many intermediate commits (each commit re-writes leaf pages, copying
+		// surviving values). Count deletes and tighten the commit cap in that case.
+		deleteOps := 0
+		for _, runs := range unitRuns {
+			for _, run := range runs {
+				for _, e := range run {
+					if e.Type == batch.OpDelete {
+						deleteOps++
+					}
+				}
+			}
+		}
+		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 
 		sizeHint := totalLen
 		if sizeHint > db.flushBackendInitEntries {
