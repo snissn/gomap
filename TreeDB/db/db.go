@@ -951,8 +951,17 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 
-	// Add retired pages to Graveyard
-	idx.graveyard.Add(nextMeta.CommitSeq, retired)
+	// Add retired pages to the graveyard.
+	//
+	// IMPORTANT: We tag pages with the *base* commit sequence they were last
+	// reachable from (the state we just applied against), not the new commit
+	// sequence. This keeps pruning semantics aligned with ReaderRegistry:
+	//   - readers pinned at baseSeq must continue to see those pages
+	//   - pages become eligible for reuse once MinPinnedSeq advances past baseSeq
+	//
+	// This also reduces index.db high-watermark growth under small KeepRecent
+	// windows by making pages eligible one commit earlier.
+	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
 
 	// Prune asynchronously to keep commit latency stable under churn.
 	// If background pruning is disabled, fall back to legacy on-commit pruning.
