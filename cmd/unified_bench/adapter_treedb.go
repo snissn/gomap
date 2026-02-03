@@ -387,6 +387,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Adapter/registry name: "treedb". Wrapper name: "TreeDB" (pretty display).
 	return treedbadapter.WrapNamed(db, "TreeDB"), nil
 }
 

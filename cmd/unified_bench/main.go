@@ -1968,7 +1968,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	treedbDisk := make(map[string]treeDBDiskUsage)
 	for _, inst := range instances {
 		_ = inst.Wrapper.Close()
-		if inst.Name == "treedb" {
+		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
 				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
 					treedbDisk[inst.Wrapper.Name()] = usage
@@ -2012,6 +2012,24 @@ func hasInstance(instances []*DBInstance, name string) bool {
 		if inst != nil && inst.Name == name {
 			return true
 		}
+	}
+	return false
+}
+
+const treedbAdapterName = "treedb"
+const treedbWrapperName = "TreeDB"
+
+func isTreeDBInstance(inst *DBInstance) bool {
+	if inst == nil {
+		return false
+	}
+	// The adapter/registry name is "treedb", while the display wrapper name is
+	// "TreeDB". Keep both checks so callers can key off either notion safely.
+	if inst.Name == treedbAdapterName {
+		return true
+	}
+	if inst.Wrapper != nil && inst.Wrapper.Name() == treedbWrapperName {
+		return true
 	}
 	return false
 }
