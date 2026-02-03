@@ -1984,7 +1984,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
-		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
+		opts.FlushThreshold = 256 * 1024 * 1024 // 256MB default
 	}
 	memCap := memtableCapacity(opts.FlushThreshold)
 	modeStr := opts.MemtableMode
