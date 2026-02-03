@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -368,9 +369,22 @@ func (t *Trainer) Collect(value []byte) {
 		}
 	}
 	if len(t.sampleCh) == cap(t.sampleCh) {
-		t.dropped.Add(1)
-		t.recordCollect(started)
-		return
+		// Best-effort backpressure: on single-core / constrained environments,
+		// a tight producer loop can fill the sample queue faster than the trainer
+		// goroutine can drain it, preventing the first dict from ever training.
+		//
+		// Yield a few times before dropping so we can bootstrap an initial profile
+		// without turning dict sampling into a blocking hot-path.
+		if !t.hasActiveProfile() {
+			for i := 0; i < 16 && len(t.sampleCh) == cap(t.sampleCh); i++ {
+				runtime.Gosched()
+			}
+		}
+		if len(t.sampleCh) == cap(t.sampleCh) {
+			t.dropped.Add(1)
+			t.recordCollect(started)
+			return
+		}
 	}
 	sample := value
 	if len(sample) > t.maxRecord {

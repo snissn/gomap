@@ -1045,7 +1045,14 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 	// and the dict publish log may appear after steady completes (issue #116).
 
 	// Fast-path: if the dict becomes active quickly, don't perturb mode behavior.
-	if active, snap := waitForDictActivation(db, 2*time.Second); active {
+	quickWait := 2 * time.Second
+	// WAL-off defers value-log writes until a flush boundary, so waiting a long
+	// time before forcing that boundary is wasted (and can be flaky on slow CI
+	// runners). Keep a short "maybe it's already active" check for reopens.
+	if cfg.Mode == "wal_off" {
+		quickWait = 200 * time.Millisecond
+	}
+	if active, snap := waitForDictActivation(db, quickWait); active {
 		return true, snap, nil
 	}
 
