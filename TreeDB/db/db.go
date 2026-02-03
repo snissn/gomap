@@ -118,7 +118,9 @@ const (
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
 	// PointerThreshold controls when value-log pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a default threshold. In cached mode, relaxed durability
+	// settings may choose a smaller default to avoid large-scale update cliffs by
+	// pushing moderate values into the value log.
 	PointerThreshold int
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool

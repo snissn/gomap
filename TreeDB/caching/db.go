@@ -1369,7 +1369,9 @@ type Options struct {
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a default threshold. In relaxed durability modes, the
+	// default is smaller to avoid catastrophic update-heavy cliffs at large key
+	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
@@ -2122,9 +2124,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
+	// In relaxed durability modes, storing moderate values out-of-line avoids a
+	// catastrophic random_write cliff at large key counts (perf gate II / #229).
+	//
+	// We pick a default threshold that still keeps small values inline, but
+	// pushes the unified-bench default 128B values into the value log.
+	const defaultRelaxedValueLogThreshold = 127
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
 		valueLogThreshold = page.DefaultInlineThreshold
+		if opts.DisableWAL || opts.RelaxedSync {
+			valueLogThreshold = defaultRelaxedValueLogThreshold
+		}
 	}
 	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
