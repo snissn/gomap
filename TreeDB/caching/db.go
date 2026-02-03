@@ -4270,6 +4270,15 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+
+	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
+	// with the auto-checkpoint goroutine:
+	// - Checkpoint takes flushMu, then writeMu.
+	// - Close historically took writeMu, then flushMu via flushAll().
+	// If auto-checkpoint is in progress (holding flushMu, waiting for writeMu)
+	// and Close starts (holding writeMu, waiting for flushMu), the process can
+	// deadlock and tests will time out.
+	db.flushMu.Lock()
 	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
@@ -4293,11 +4302,13 @@ func (db *DB) Close() error {
 	// Flush while closeCh is still open so commit/append paths remain available.
 	// This avoids dropping pending memtables on close.
 	if hadMemtables {
-		db.flushAll(true)
+		// flushMu is already held by Close.
+		db.flushAllLocked(true)
 	}
 
 	close(db.closeCh)
 	db.writeMu.Unlock()
+	db.flushMu.Unlock()
 	db.wg.Wait()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
