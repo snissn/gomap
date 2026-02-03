@@ -10,8 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
-// Expected status today: FAIL (when enabled).
-//
 // This is a regression test that encodes the expectation that seeding a dataset
 // should yield reasonably full leaves across *all* commit batch sizes, not only
 // a single huge commit. The current behavior (small batches produce ~0.43 avg

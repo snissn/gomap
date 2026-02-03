@@ -13,8 +13,6 @@ import (
 
 // Integration-style regression test that mirrors the unified-bench phases and
 // flags excessive bloat if vacuum shrinks the index by a large factor.
-//
-// Expected status today: FAIL (when enabled) until we fix the underlying bloat.
 func TestCachedBenchBloatVacuum(t *testing.T) {
 	requireTreeDBStress(t)
 

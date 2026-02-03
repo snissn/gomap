@@ -12,9 +12,6 @@ import (
 // This is a more structural form of the bloat regression: instead of comparing
 // on-disk file sizes, compare live-tree page counts before/after a vacuum
 // rebuild for the same logical dataset.
-//
-// Expected status today: FAIL (when enabled) until we eliminate the large number
-// of underfilled pages.
 func TestCachedBenchBloat_PageCountRatioVsVacuum(t *testing.T) {
 	requireTreeDBStress(t)
 
