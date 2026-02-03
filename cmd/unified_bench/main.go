@@ -91,6 +91,7 @@ type BenchConfig struct {
 	DBsArg        string
 	DBsExcludeArg string
 	TestsArg      string
+	Profile       string
 
 	KeepDir             bool
 	Progress            bool
@@ -142,6 +143,7 @@ type BenchRun struct {
 	CheckpointDurations map[string]map[string]time.Duration
 	VacuumDurations     map[string]map[string]time.Duration
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
+	TreeDBDiskUsage     map[string]treeDBDiskUsage
 }
 
 type scanDiag struct {
@@ -152,6 +154,34 @@ type scanDiag struct {
 	maxQueuedMemtables  string
 	backpressureMode    string
 	flushBpsEWMA        string
+}
+
+type walDiskUsage struct {
+	TotalBytes uint64
+	TotalFiles int
+
+	CommitBytes uint64
+	CommitFiles int
+
+	WALBytes uint64
+	WALFiles int
+
+	ValueBytes uint64
+	ValueFiles int
+
+	VlogBytes uint64
+	VlogFiles int
+
+	OtherBytes uint64
+	OtherFiles int
+}
+
+type treeDBDiskUsage struct {
+	MainIndexBytes uint64
+	MainWAL        walDiskUsage
+
+	DictIndexBytes uint64
+	DictWAL        walDiskUsage
 }
 
 func main() {
@@ -187,6 +217,8 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
 	fmt.Fprintf(os.Stderr, "\n")
 
+	logResolvedTreeDBOptions()
+
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
@@ -197,6 +229,7 @@ func main() {
 		DBsArg:                           *dbsArg,
 		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
+		Profile:                          *profileArg,
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
@@ -364,6 +397,11 @@ func main() {
 				printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 			}
 		}
+		if len(run.TreeDBDiskUsage) > 0 {
+			fmt.Println()
+			fmt.Println("Disk Usage (End of Run)")
+			fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+		}
 		return
 	}
 
@@ -391,6 +429,11 @@ func main() {
 					fmt.Println()
 					printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 				}
+			}
+			if len(run.TreeDBDiskUsage) > 0 {
+				fmt.Println()
+				fmt.Println("Disk Usage (End of Run)")
+				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
 			}
 		}
 	case "markdown":
@@ -1922,8 +1965,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	_ = liveTbl.Clear()
 
 	// Shutdown
+	treedbDisk := make(map[string]treeDBDiskUsage)
 	for _, inst := range instances {
 		_ = inst.Wrapper.Close()
+		if inst.Name == "treedb" {
+			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
+				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
+					treedbDisk[inst.Wrapper.Name()] = usage
+				}
+			}
+		}
 		if !cfg.KeepDir {
 			_ = os.RemoveAll(inst.Dir)
 		}
@@ -1938,6 +1989,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		CheckpointDurations: checkpointDurations,
 		VacuumDurations:     vacuumDurations,
 		VacuumIndexBytes:    vacuumIndexBytes,
+		TreeDBDiskUsage:     treedbDisk,
 	}, nil
 }
 
@@ -1955,6 +2007,151 @@ func printFragmentationReport(w io.Writer, phase, dbName string, rep map[string]
 	}
 }
 
+func hasInstance(instances []*DBInstance, name string) bool {
+	for _, inst := range instances {
+		if inst != nil && inst.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func computeWalDiskUsage(dir string) (walDiskUsage, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return walDiskUsage{}, err
+	}
+
+	var out walDiskUsage
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		size := info.Size()
+		if size < 0 {
+			continue
+		}
+
+		out.TotalFiles++
+		out.TotalBytes += uint64(size)
+
+		name := entry.Name()
+		switch {
+		case strings.HasPrefix(name, "commit-"):
+			out.CommitFiles++
+			out.CommitBytes += uint64(size)
+		case strings.HasPrefix(name, "wal-"):
+			out.WALFiles++
+			out.WALBytes += uint64(size)
+		case strings.HasPrefix(name, "value-"):
+			out.ValueFiles++
+			out.ValueBytes += uint64(size)
+		case strings.HasPrefix(name, "vlog-"):
+			out.VlogFiles++
+			out.VlogBytes += uint64(size)
+		default:
+			out.OtherFiles++
+			out.OtherBytes += uint64(size)
+		}
+	}
+	return out, nil
+}
+
+func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
+	var out treeDBDiskUsage
+	if strings.TrimSpace(rootDir) == "" {
+		return out, fmt.Errorf("disk usage: empty root dir")
+	}
+
+	mainIndex := filepath.Join(rootDir, "maindb", "index.db")
+	if st, err := os.Stat(mainIndex); err == nil {
+		if sz := st.Size(); sz > 0 {
+			out.MainIndexBytes = uint64(sz)
+		}
+	}
+	mainWAL := filepath.Join(rootDir, "maindb", "wal")
+	if u, err := computeWalDiskUsage(mainWAL); err == nil {
+		out.MainWAL = u
+	}
+
+	dictIndex := filepath.Join(rootDir, "dictdb", "index.db")
+	if st, err := os.Stat(dictIndex); err == nil {
+		if sz := st.Size(); sz > 0 {
+			out.DictIndexBytes = uint64(sz)
+		}
+	}
+	dictWAL := filepath.Join(rootDir, "dictdb", "wal")
+	if u, err := computeWalDiskUsage(dictWAL); err == nil {
+		out.DictWAL = u
+	}
+
+	return out, nil
+}
+
+func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
+	if len(usage) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(usage))
+	for name := range usage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	walLine := func(prefix string, u walDiskUsage) string {
+		parts := []string{
+			fmt.Sprintf("total=%s", formatBytes(u.TotalBytes)),
+			fmt.Sprintf("files=%d", u.TotalFiles),
+		}
+		if u.CommitBytes > 0 {
+			parts = append(parts, fmt.Sprintf("commit=%s", formatBytes(u.CommitBytes)))
+		}
+		if u.WALBytes > 0 {
+			parts = append(parts, fmt.Sprintf("wal=%s", formatBytes(u.WALBytes)))
+		}
+		if u.ValueBytes > 0 {
+			parts = append(parts, fmt.Sprintf("value=%s", formatBytes(u.ValueBytes)))
+		}
+		if u.VlogBytes > 0 {
+			parts = append(parts, fmt.Sprintf("vlog=%s", formatBytes(u.VlogBytes)))
+		}
+		if u.OtherBytes > 0 {
+			parts = append(parts, fmt.Sprintf("other=%s", formatBytes(u.OtherBytes)))
+		}
+		return prefix + strings.Join(parts, " ")
+	}
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		u := usage[name]
+		sb.WriteString(name)
+		sb.WriteString(":\n")
+		if u.MainIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s\n", formatBytes(u.MainIndexBytes)))
+		}
+		if u.MainWAL.TotalFiles > 0 || u.MainWAL.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/wal: ", u.MainWAL))
+			sb.WriteByte('\n')
+		}
+		if u.DictIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  dictdb/index.db: %s\n", formatBytes(u.DictIndexBytes)))
+		}
+		if u.DictWAL.TotalFiles > 0 || u.DictWAL.TotalBytes > 0 {
+			sb.WriteString(walLine("  dictdb/wal: ", u.DictWAL))
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
 func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
@@ -1963,7 +2160,28 @@ func renderMarkdownSingle(run BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
+	if strings.TrimSpace(run.Config.Profile) != "" {
+		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(run.Config.Profile)))
+	}
+	if strings.TrimSpace(run.Config.DBsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- dbs: %s\n", strings.TrimSpace(run.Config.DBsArg)))
+	}
+	if strings.TrimSpace(run.Config.TestsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- tests: %s\n", strings.TrimSpace(run.Config.TestsArg)))
+	}
+	if run.Config.SeedUsed != 0 {
+		sb.WriteString(fmt.Sprintf("- seed: %d\n", run.Config.SeedUsed))
+	}
 	sb.WriteString("\n")
+
+	if hasInstance(run.Instances, "treedb") {
+		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+			sb.WriteString("## Resolved TreeDB Options\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(text)
+			sb.WriteString("\n```\n\n")
+		}
+	}
 
 	sb.WriteString("```text\n")
 	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
@@ -1991,6 +2209,13 @@ func renderMarkdownSingle(run BenchRun) string {
 			sb.WriteString("```\n")
 		}
 	}
+	if len(run.TreeDBDiskUsage) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Disk Usage (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+		sb.WriteString("```\n")
+	}
 	return sb.String()
 }
 
@@ -2011,7 +2236,25 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
+	if strings.TrimSpace(runs[0].Config.Profile) != "" {
+		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(runs[0].Config.Profile)))
+	}
+	if strings.TrimSpace(runs[0].Config.DBsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- dbs: %s\n", strings.TrimSpace(runs[0].Config.DBsArg)))
+	}
+	if strings.TrimSpace(runs[0].Config.TestsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- tests: %s\n", strings.TrimSpace(runs[0].Config.TestsArg)))
+	}
 	sb.WriteString("\n")
+
+	if hasInstance(runs[0].Instances, "treedb") {
+		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+			sb.WriteString("## Resolved TreeDB Options\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(text)
+			sb.WriteString("\n```\n\n")
+		}
+	}
 
 	for _, testName := range runs[0].TestOrder {
 		sb.WriteString("## ")
@@ -2019,6 +2262,27 @@ func renderMarkdownSweep(runs []BenchRun) string {
 		sb.WriteString("\n\n")
 		sb.WriteString(renderMarkdownTestSweep(testName, runs, dbNames))
 		sb.WriteString("\n")
+	}
+
+	// Best-effort disk usage reporting (end-of-run sizes) for TreeDB only.
+	anyDisk := false
+	for _, run := range runs {
+		if len(run.TreeDBDiskUsage) > 0 {
+			anyDisk = true
+			break
+		}
+	}
+	if anyDisk {
+		sb.WriteString("## Disk Usage (End of Run)\n\n")
+		for _, run := range runs {
+			if len(run.TreeDBDiskUsage) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			sb.WriteString("```\n\n")
+		}
 	}
 
 	return sb.String()

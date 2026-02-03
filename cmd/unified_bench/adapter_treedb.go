@@ -4,12 +4,15 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
@@ -159,11 +162,97 @@ func parseVlogCompressionAutotuneMode(s string) (uint64, error) {
 	}
 }
 
-func NewTreeDB(dir string) (kvstore.DB, error) {
+type treeDBOptionsReport struct {
+	opts     treedb.Options
+	notes    []string
+	warnings []string
+}
+
+func (r treeDBOptionsReport) hasReport() bool {
+	if len(r.notes) > 0 || len(r.warnings) > 0 {
+		return true
+	}
+	return r.opts.Dir != ""
+}
+
+func (r treeDBOptionsReport) formatText(indent string) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
+	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
+	lines = append(lines, fmt.Sprintf("leaf_prefix_compression=%t", r.opts.LeafPrefixCompression))
+	lines = append(lines, fmt.Sprintf("index_columnar_leaves=%t", r.opts.IndexColumnarLeaves))
+	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
+	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
+
+	threshold := r.opts.ValueLog.PointerThreshold
+	if threshold <= 0 {
+		effective := page.DefaultInlineThreshold
+		if r.opts.Durability != treedb.DurabilityDurable {
+			// TreeDB cached mode uses a smaller default in relaxed durability modes.
+			// Keep this in sync with the cached-mode default (TreeDB/caching/db.go).
+			effective = 127
+		}
+		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=default (effective=%dB)", effective))
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=%dB", threshold))
+	}
+
+	// Keep output stable and readable for copy/paste.
+	if len(r.warnings) > 0 {
+		sort.Strings(r.warnings)
+		lines = append(lines, "warnings:")
+		for _, w := range r.warnings {
+			lines = append(lines, "  - "+w)
+		}
+	}
+	if len(r.notes) > 0 {
+		sort.Strings(r.notes)
+		lines = append(lines, "notes:")
+		for _, n := range r.notes {
+			lines = append(lines, "  - "+n)
+		}
+	}
+
+	var sb strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(indent)
+		sb.WriteString(line)
+	}
+	return sb.String()
+}
+
+func formatTreeDBDurability(mode treedb.DurabilityMode) string {
+	switch mode {
+	case treedb.DurabilityDurable:
+		return "durable"
+	case treedb.DurabilityWALOnRelaxed:
+		return "wal_on_relaxed"
+	case treedb.DurabilityWALOffRelaxed:
+		return "wal_off_relaxed"
+	default:
+		return fmt.Sprintf("durability_%d", mode)
+	}
+}
+
+func formatTreeDBIntegrity(mode treedb.IntegrityMode) string {
+	switch mode {
+	case treedb.IntegrityVerify:
+		return "verify"
+	case treedb.IntegritySkipChecksums:
+		return "skip_checksums"
+	default:
+		return fmt.Sprintf("integrity_%d", mode)
+	}
+}
+
+func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 
 	if !*treedbAllowUnsafe && (*treedbDisableWAL || *treedbRelaxedSync || *treedbDisableReadChecksum) {
-		return nil, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
+		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
 	}
 
 	durability := treedb.DurabilityDurable
@@ -175,6 +264,21 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	readIntegrity := treedb.IntegrityVerify
 	if *treedbDisableReadChecksum {
 		readIntegrity = treedb.IntegritySkipChecksums
+	}
+
+	leafPrefixRequested := *treedbLeafPrefixCompression
+	leafPrefixEffective := leafPrefixRequested
+	var notes []string
+	var warnings []string
+	if *treedbIndexColumnarLeaves {
+		if leafPrefixRequested {
+			notes = append(notes, "index_columnar_leaves enabled: disabling leaf_prefix_compression (columnar leaf encoding is incompatible)")
+		}
+		leafPrefixEffective = false
+	}
+	if *treedbDisableWAL && *treedbRelaxedSync {
+		// This is not an error, but it can be confusing. Document precedence.
+		notes = append(notes, "disable_wal takes precedence over relaxed_sync (durability=wal_off_relaxed)")
 	}
 
 	opts := treedb.Options{
@@ -190,7 +294,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		InternalFillTargetPPM:     uint32(clampPPM(*treedbInternalFillPPM)),
 		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
 
-		LeafPrefixCompression:  *treedbLeafPrefixCompression,
+		LeafPrefixCompression:  leafPrefixEffective,
 		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,
 		IndexInternalBaseDelta: *treedbIndexInternalBaseDelta,
 
@@ -242,14 +346,41 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 
 	autotuneMode, err := parseVlogCompressionAutotuneMode(*treedbVlogCompressionAutotune)
 	if err != nil {
-		return nil, err
+		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	setOptionalVlogAutotuneMode(&opts, autotuneMode)
 	if autotuneMode == 1 {
 		// Compression off should also force dict training off, even if the caller
 		// specified training flags. TreeDB enforces the same invariant internally,
 		// but we keep unified_bench behavior explicit and deterministic.
+		if *treedbVlogDictTrainBytes > 0 {
+			notes = append(notes, "vlog_compression_autotune=off: forcing vlog_dict_train_bytes=off")
+		}
 		setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	}
+	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
+		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
+	}
+
+	rep := treeDBOptionsReport{opts: opts, notes: notes, warnings: warnings}
+	return opts, rep, nil
+}
+
+func treeDBResolvedOptionsText(indent string) (string, error) {
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		return "", err
+	}
+	// Avoid printing a misleading dir in a banner/report.
+	opts.Dir = ""
+	rep.opts = opts
+	return rep.formatText(indent), nil
+}
+
+func NewTreeDB(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
 	}
 
 	db, err := treedb.Open(opts)
@@ -257,4 +388,17 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	return treedbadapter.WrapNamed(db, "TreeDB"), nil
+}
+
+func logResolvedTreeDBOptions() {
+	dbNames := resolveDBs(*dbsArg, *dbsExcludeArg)
+	if !contains(dbNames, "treedb") {
+		return
+	}
+	text, err := treeDBResolvedOptionsText("  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TreeDB options: (error: %v)\n\n", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "TreeDB options (resolved):\n%s\n\n", text)
 }
