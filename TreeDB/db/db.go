@@ -273,6 +273,20 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushBackendMaxEntries caps how many operations are buffered into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This increases backend commit cadence during very large flushes, which can
+	// reduce index.db high-watermark growth under small KeepRecent windows by
+	// making retired pages eligible for reuse sooner.
+	//
+	// 0 uses the internal default. Negative disables chunking (single backend
+	// commit per flush).
+	FlushBackendMaxEntries int
+	// FlushBackendMaxBatches caps how many intermediate backend commits a single
+	// flush may emit (0=default, <0=disable cap).
+	FlushBackendMaxBatches int
+
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
