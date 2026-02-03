@@ -133,8 +133,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 		countFree := int(n.Count())
 		if countFree == 0 {
-			body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
-			next := body.NextPageID
+			next := binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
 
 			recycled := a.head
 			a.head = next
@@ -144,19 +143,16 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			continue
 		}
 
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], uint16(countFree))
 		for countFree > 0 && len(ids) < count {
 			countFree--
-			id := body.FreeIDs[countFree]
 			slotOff := page.PageHeaderSize + 8 + countFree*8
+			id := binary.LittleEndian.Uint64(data[slotOff : slotOff+8])
 			clear(data[slotOff : slotOff+8])
 			a.pager.MarkUnverified(id)
 			a.lastAlloc = id
 			ids = append(ids, id)
 		}
 
-		body.FreeIDs = body.FreeIDs[:countFree]
-		body.Encode(data[page.PageHeaderSize:])
 		n.SetCount(uint16(countFree))
 		n.UpdateChecksum()
 	}
@@ -194,8 +190,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 
 	count := n.Count()
 	if count > 0 {
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
-		id := body.FreeIDs[count-1]
+		lastIdx := int(count) - 1
+		lastOff := page.PageHeaderSize + 8 + lastIdx*8
+		id := binary.LittleEndian.Uint64(data[lastOff : lastOff+8])
 
 		target := hint
 		if target == 0 {
@@ -206,7 +203,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 			targetRegion := target / a.regionPages
 			idx := -1
 			for i := int(count) - 1; i >= 0; i-- {
-				candidate := body.FreeIDs[i]
+				off := page.PageHeaderSize + 8 + i*8
+				candidate := binary.LittleEndian.Uint64(data[off : off+8])
 				candidateRegion := candidate / a.regionPages
 				var diff uint64
 				if candidateRegion >= targetRegion {
@@ -221,14 +219,11 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 				}
 			}
 			if idx >= 0 {
-				lastIdx := int(count) - 1
 				if idx != lastIdx {
-					body.FreeIDs[idx] = body.FreeIDs[lastIdx]
+					candidateOff := page.PageHeaderSize + 8 + idx*8
+					binary.LittleEndian.PutUint64(data[candidateOff:candidateOff+8], binary.LittleEndian.Uint64(data[lastOff:lastOff+8]))
 				}
-				body.FreeIDs = body.FreeIDs[:lastIdx]
-				body.Encode(data[page.PageHeaderSize:])
-				slotOff := page.PageHeaderSize + 8 + lastIdx*8
-				clear(data[slotOff : slotOff+8])
+				clear(data[lastOff : lastOff+8])
 				n.SetCount(count - 1)
 				n.UpdateChecksum()
 
@@ -238,11 +233,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 			}
 		}
 
-		lastIdx := int(count) - 1
-		body.FreeIDs = body.FreeIDs[:lastIdx]
-		body.Encode(data[page.PageHeaderSize:])
-		slotOff := page.PageHeaderSize + 8 + lastIdx*8
-		clear(data[slotOff : slotOff+8])
+		clear(data[lastOff : lastOff+8])
 		n.SetCount(count - 1)
 		n.UpdateChecksum()
 
@@ -251,8 +242,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		return id, nil
 	}
 
-	body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
-	next := body.NextPageID
+	next := binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
 
 	recycled := a.head
 	a.head = next
@@ -375,8 +365,7 @@ func readStatsLocked(p *pager.Pager, head uint64, pageLimit uint64) (Stats, erro
 		out.Pages++
 		out.FreeIDs += uint64(n.Count())
 
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], n.Count())
-		cur = body.NextPageID
+		cur = binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
 	}
 
 	if remaining == 0 && cur != 0 {
