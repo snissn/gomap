@@ -31,6 +31,13 @@ func TestBackgroundIndexVacuumRunsAndStops(t *testing.T) {
 			t.Fatalf("set: %v", err)
 		}
 	}
+	// Ensure the background vacuum worker sees a non-empty backend. Without a
+	// checkpoint, cached mode may keep writes in memory and the backend may
+	// remain at (or near) the empty-tree baseline, making the vacuum criteria
+	// vacuously false on some platforms.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	var vacuums uint64
