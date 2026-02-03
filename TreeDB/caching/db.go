@@ -5813,8 +5813,9 @@ func (db *DB) flushOne() bool {
 }
 
 const (
-	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
-	flushCombineMaxMemtables       = 32
+	flushCombineTargetBytes    int64 = 64 * 1024 * 1024  // 64MiB
+	flushCombineTargetBytesMax       = 256 * 1024 * 1024 // 256MiB
+	flushCombineMaxMemtables         = 32
 	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
 	// backend batch before committing it and continuing with a fresh batch.
 	//
@@ -5972,6 +5973,17 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	if db.flushBuildConcurrency > 1 {
 		maxMemtables = flushCombineMaxMemtables
 		targetBytes = flushCombineTargetBytes
+		// When FlushThreshold ~= flushCombineTargetBytes (the common default),
+		// combining is effectively disabled and large churny workloads are forced
+		// through multiple full apply passes. Allow combining several memtables per
+		// flush (bounded) to reduce repeated rewrite work.
+		desired := db.flushThreshold * 4
+		if desired > flushCombineTargetBytesMax {
+			desired = flushCombineTargetBytesMax
+		}
+		if desired > targetBytes {
+			targetBytes = desired
+		}
 	}
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
