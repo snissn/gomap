@@ -74,6 +74,7 @@ type benchConfig struct {
 	DictBytes         int
 	DictSampleStride  int
 	DictWaitSeconds   int
+	CPUProfileSteady  string
 	OutJSON           string
 	KeepDir           bool
 }
@@ -161,6 +162,7 @@ func main() {
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
 	benchKeepDir := flag.Bool("bench-keep-dir", false, "Keep bench directory after run")
 	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
+	benchCPUProfile := flag.String("bench-cpu-profile", "", "Write CPU profile for steady-state phase (bench only; optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
@@ -196,6 +198,9 @@ func main() {
 		if *maxEval > 0 && len(evalPairs) > *maxEval {
 			evalPairs = evalPairs[:*maxEval]
 		}
+		if *cpuProfile != "" && *benchCPUProfile != "" {
+			failf("cannot use -cpu-profile and -bench-cpu-profile together (use -bench-cpu-profile for steady-state-only profiling)")
+		}
 		if *cpuProfile != "" {
 			stop, err := startCPUProfile(*cpuProfile)
 			if err != nil {
@@ -216,6 +221,7 @@ func main() {
 			DictBytes:         *benchDictBytes,
 			DictSampleStride:  *benchDictSampleStride,
 			DictWaitSeconds:   *benchDictWaitSeconds,
+			CPUProfileSteady:  *benchCPUProfile,
 			OutJSON:           *benchOutJSON,
 			KeepDir:           *benchKeepDir,
 		}
@@ -663,8 +669,20 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	}
 
 	targetRawBytes := int64(cfg.RawMiB) * 1024 * 1024
+	var stopCPUProfile func()
+	if cfg.CPUProfileSteady != "" {
+		stop, err := startCPUProfile(cfg.CPUProfileSteady)
+		if err != nil {
+			return nil, err
+		}
+		stopCPUProfile = stop
+	}
 	steadyStart := time.Now()
 	steadyRaw, steadyRecords, err := writeUntilRawBytes(db, eval, targetRawBytes, cfg.Batch, cfg.KeyMode, keyState)
+	if stopCPUProfile != nil {
+		stopCPUProfile()
+		stopCPUProfile = nil
+	}
 	if err != nil {
 		return nil, err
 	}

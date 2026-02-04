@@ -49,6 +49,27 @@ KEYS=4000000 PROFILES=fast scripts/treedb_forceptr_matrix.sh
 KEYS=2000000 PROFILES=fast,balanced PPROF_TESTS=batch_write,random_write scripts/treedb_forceptr_matrix.sh
 ```
 
+### Template encode profiling (steady-only)
+
+For template-compression profiling, prefer the steady-state-only CPU profile
+capture in `TreeDB/cmd/vlog_dict_realdata`:
+
+```bash
+go run ./TreeDB/cmd/vlog_dict_realdata \
+  -input /tmp/treedb_template_smoke.jsonl -input-encoding string \
+  -train 10000 -eval 5000 -cap 0 \
+  -bench-kv -bench-mode wal_off -bench-pointer-threshold 1 \
+  -bench-compression off -bench-template on \
+  -bench-raw-mib 512 -bench-batch 1024 -bench-key-mode dataset \
+  -bench-cpu-profile /tmp/treedb_template_steady.pprof
+
+go tool pprof -http=:0 /tmp/treedb_template_steady.pprof
+```
+
+Notes:
+- `-bench-cpu-profile` focuses on the steady write loop (best for template encode hot paths).
+- `-cpu-profile` profiles the whole program (load + warmup + steady + reporting).
+
 ## 2) Trace Summary Replay (Counts Only)
 
 Uses the JSON summary from trace capture and replays batch sizes + op counts.

@@ -225,15 +225,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		e.observeTraining(value, store)
 		return value, false
 	}
-	fps := RoutingFingerprints(value, cfg)
-	if len(fps) == 0 {
-		fps = Fingerprints(value, cfg)
-	}
-	if len(fps) == 0 {
-		e.stats.addReason(reasonSkipNoFPs)
-		e.observeTraining(value, store)
-		return value, false
-	}
 	if store == nil {
 		e.stats.addReason(reasonNoCandidates)
 		e.observeTraining(value, store)
@@ -262,6 +253,16 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var fpBuf [16]uint64
+	fps := appendRoutingFingerprints(fpBuf[:0], value, cfg)
+	if len(fps) == 0 {
+		fps = Fingerprints(value, cfg)
+	}
+	if len(fps) == 0 {
+		e.stats.addReason(reasonSkipNoFPs)
+		e.observeTraining(value, store)
+		return value, false
+	}
 	maxFPReads := cfg.MaxFPReads
 	if maxFPReads <= 0 || maxFPReads > len(fps) {
 		maxFPReads = len(fps)
@@ -289,6 +290,35 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		}
 	}
 	if len(candMap) == 0 {
+		legacy := RoutingFingerprintsLegacy(value, cfg)
+		if len(legacy) > 0 {
+			maxReads := cfg.MaxFPReads
+			if maxReads <= 0 || maxReads > len(legacy) {
+				maxReads = len(legacy)
+			}
+			for i := 0; i < maxReads; i++ {
+				fp := legacy[i]
+				e.stats.CandidateFPReads.Add(1)
+				cands, err := store.GetCandidates(ctx, fp, cfg.MaxCandidatesPerFP)
+				if err != nil {
+					e.stats.addReason(reasonFPLookupErr)
+					continue
+				}
+				for _, c := range cands {
+					cs, ok := candMap[c.ID]
+					if !ok {
+						cs = candScore{id: c.ID, size: c.Size}
+					}
+					cs.score++
+					if c.Size > 0 && (cs.size == 0 || c.Size < cs.size) {
+						cs.size = c.Size
+					}
+					candMap[c.ID] = cs
+				}
+			}
+		}
+	}
+	if len(candMap) == 0 {
 		e.stats.addReason(reasonNoCandidates)
 		e.observeTraining(value, store)
 		return value, false
@@ -312,7 +342,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		maxFetch = len(candidates)
 	}
 	bestSavings := 0
-	var bestPayload []byte
 	bestMask := false
 	var bestMaskDef TemplateDef
 	var bestMaskID uint64
@@ -357,7 +386,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		e.stats.CandidateTemplatesConsidered.Add(1)
 		switch def.Kind {
 		case 0, TemplateAnchors:
-			gaps, encLen, reason, matched := matchTemplate(value, def.Anchors, cand.id, cfg)
+			encLen, reason, matched := matchTemplateLen(value, def.Anchors, cand.id, cfg)
 			if reason != "" {
 				e.stats.addReason(reason)
 			}
@@ -369,12 +398,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			if savings <= bestSavings {
 				continue
 			}
-			payload, err := EncodePayload(cand.id, gaps)
-			if err != nil {
-				continue
-			}
 			bestSavings = savings
-			bestPayload = payload
 			bestMask = false
 			bestAnchorDef = def
 			bestAnchorID = cand.id
@@ -392,7 +416,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 				continue
 			}
 			bestSavings = savings
-			bestPayload = nil
 			bestMask = true
 			bestMaskDef = def
 			bestMaskID = cand.id
@@ -405,7 +428,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	if matchedAny {
 		e.stats.Matched.Add(1)
 	}
-	keep := bestSavings >= cfg.MinSavingsBytes && (bestMask || len(bestPayload) > 0)
+	keep := bestSavings >= cfg.MinSavingsBytes && (bestMask || bestAnchorID != 0)
 	if keep {
 		e.stats.Kept.Add(1)
 		e.stats.BytesSaved.Add(uint64(bestSavings))
@@ -432,9 +455,17 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			e.recordRecent(bestMaskDef, bestMaskID)
 			return payload, true
 		}
+		gaps, _, _, matched := matchTemplate(value, bestAnchorDef.Anchors, bestAnchorID, cfg)
+		if !matched {
+			return value, false
+		}
+		payload, err := EncodePayload(bestAnchorID, gaps)
+		if err != nil || len(payload) == 0 {
+			return value, false
+		}
 		e.lastKeepSeq.Store(seq)
 		e.recordRecent(bestAnchorDef, bestAnchorID)
-		return bestPayload, true
+		return payload, true
 	}
 	return value, false
 }
@@ -497,7 +528,7 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			return payload, true
 		}
 		if def.Kind == 0 || def.Kind == TemplateAnchors {
-			gaps, encLen, _, matched := matchTemplate(value, def.Anchors, entry.id, cfg)
+			encLen, _, matched := matchTemplateLen(value, def.Anchors, entry.id, cfg)
 			if !matched {
 				continue
 			}
@@ -508,6 +539,11 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 			}
 			if !e.fastPathEligible(entry, savings) {
 				e.updateRecentHit(entry.id, savings)
+				continue
+			}
+			gaps, _, _, matched := matchTemplate(value, def.Anchors, entry.id, cfg)
+			if !matched {
+				e.updateRecentMiss(entry.id)
 				continue
 			}
 			payload, err := EncodePayload(entry.id, gaps)
@@ -620,15 +656,15 @@ func (e *Engine) observeTraining(value []byte, store Store) {
 	if cfg.FingerprintK <= 0 || len(value) < cfg.FingerprintK {
 		return
 	}
+	seq := e.trainSeq.Add(1)
+	if cfg.TrainSampleStride > 1 && seq%uint64(cfg.TrainSampleStride) != 0 {
+		return
+	}
 	fps := BucketFingerprints(value, cfg)
 	if len(fps) == 0 {
 		fps = Fingerprints(value, cfg)
 	}
 	if len(fps) == 0 {
-		return
-	}
-	seq := e.trainSeq.Add(1)
-	if cfg.TrainSampleStride > 1 && seq%uint64(cfg.TrainSampleStride) != 0 {
 		return
 	}
 	bucketKey := BucketKey(fps)
@@ -682,11 +718,9 @@ func (e *Engine) observeTraining(value []byte, store Store) {
 	}
 	routeFPs := RoutingFingerprints(routeValue, cfg)
 	if len(routeFPs) == 0 {
-		routeFPs = RouteFingerprints(def.Anchors, cfg)
-	}
-	if len(routeFPs) == 0 {
 		return
 	}
+	routeFPs = append(routeFPs, RoutingFingerprintsLegacy(routeValue, cfg)...)
 	if _, err := store.PutTemplateDef(context.Background(), defBytes, routeFPs); err != nil {
 		return
 	}

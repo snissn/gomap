@@ -31,6 +31,14 @@ type TemplateDef struct {
 	Base           []byte
 	VarPositions   []uint16
 	ConstPositions []uint16
+
+	maskVarSpans   []span
+	maskConstSpans []span
+}
+
+type span struct {
+	start int
+	end   int
 }
 
 // DecodeOptions control TemplateValue decoding limits.

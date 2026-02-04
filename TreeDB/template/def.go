@@ -232,7 +232,16 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 			varPositions = buildVarPositions(mask, len(base))
 		}
 		constPositions := buildConstPositions(mask, len(base))
-		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
+		varSpans, constSpans := buildMaskSpans(mask, len(base))
+		return TemplateDef{
+			Kind:           TemplateMask,
+			Mask:           mask,
+			Base:           base,
+			VarPositions:   varPositions,
+			ConstPositions: constPositions,
+			maskVarSpans:   varSpans,
+			maskConstSpans: constSpans,
+		}, nil
 	case templateDefVerMaskV2:
 		if payloadLen < 2 {
 			return TemplateDef{}, ErrCorruptTemplateDef
@@ -271,7 +280,16 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 		base := buf[off : off+baseLen]
 		varPositions := buildVarPositions(mask, len(base))
 		constPositions := buildConstPositions(mask, len(base))
-		return TemplateDef{Kind: TemplateMask, Mask: mask, Base: base, VarPositions: varPositions, ConstPositions: constPositions}, nil
+		varSpans, constSpans := buildMaskSpans(mask, len(base))
+		return TemplateDef{
+			Kind:           TemplateMask,
+			Mask:           mask,
+			Base:           base,
+			VarPositions:   varPositions,
+			ConstPositions: constPositions,
+			maskVarSpans:   varSpans,
+			maskConstSpans: constSpans,
+		}, nil
 	default:
 		return TemplateDef{}, ErrCorruptTemplateDef
 	}
