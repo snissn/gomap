@@ -240,7 +240,11 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	if ent, ok := m.items[keyLookup]; ok {
 		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
-			if err := cb(key, valCopy); err != nil {
+			keyView := key
+			if len(key) > 0 {
+				keyView = m.arena.copyBytes(key)
+			}
+			if err := cb(keyView, valCopy); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -296,7 +300,11 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
 		if cb != nil {
-			if err := cb(key, nil); err != nil {
+			keyView := key
+			if len(key) > 0 {
+				keyView = m.arena.copyBytes(key)
+			}
+			if err := cb(keyView, nil); err != nil {
 				m.mu.Unlock()
 				return err
 			}
