@@ -35,7 +35,7 @@ import (
 var (
 	numKeys            = flag.Int("keys", 100000, "Number of keys")
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|half_repeat_half_random|random)")
+	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random)")
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 1000, "Size of batches")

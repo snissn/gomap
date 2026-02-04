@@ -39,7 +39,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
 - `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
 - `-valsize` value size in bytes (default 128)
-- `-val-pattern` value pattern for non-dataset write tests (`zero|repeat|repeat_tail64|half_repeat_half_random|random`)
+- `-val-pattern` value pattern for non-dataset write tests (`zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random`)
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 1000)

@@ -37,6 +37,7 @@ type valueLogDictSuiteResult struct {
 	opsPerSec float64
 	mbPerSec  float64
 
+	observedRatioWarmup  float64
 	observedRatioTotal   float64
 	observedRatioMeasure float64
 
@@ -70,7 +71,11 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 	// Keep this suite quick and focused: small warmup to trigger dict training,
 	// then a steady-state write phase for throughput + metrics.
 	const (
-		warmupBytes  = int64(16 << 20) // 16MiB
+		// Warmup is written before a dict becomes active. For fast write paths,
+		// warmup can complete long before background training/publish finishes,
+		// so the warmup bytes are often effectively "uncompressed". Keep warmup
+		// small so overall ratios don't get dominated by this fixed window.
+		warmupBytes  = int64(4 << 20)  // 4MiB
 		measureBytes = int64(32 << 20) // 32MiB
 	)
 
@@ -129,8 +134,8 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- warmup bytes: %s\n", formatFloat(float64(warmupBytes))))
 	sb.WriteString(fmt.Sprintf("- measure bytes: %s\n\n", formatFloat(float64(measureBytes))))
 
-	sb.WriteString("| wal | dict | pattern | valsize | ops/sec | MB/s | observed_ratio_total | observed_ratio_measure | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes_total | wal_value_bytes_total | wal_value_bytes_measure | wal_total_bytes_total | index_bytes | dictdb_bytes |\n")
-	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	sb.WriteString("| wal | dict | pattern | valsize | ops/sec | MB/s | observed_ratio_warmup | observed_ratio_total | observed_ratio_measure | attempted_frac | kept_frac | dict_id | k | pause_bytes | wal_commit_bytes_total | wal_value_bytes_total | wal_value_bytes_measure | wal_total_bytes_total | index_bytes | dictdb_bytes |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, r := range results {
 		sb.WriteString("| ")
 		sb.WriteString(r.mode)
@@ -144,6 +149,12 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 		sb.WriteString(formatFloat(r.opsPerSec))
 		sb.WriteString(" | ")
 		sb.WriteString(formatFloat(r.mbPerSec))
+		sb.WriteString(" | ")
+		if math.IsNaN(r.observedRatioWarmup) {
+			sb.WriteString("-")
+		} else {
+			sb.WriteString(fmt.Sprintf("%.6f", r.observedRatioWarmup))
+		}
 		sb.WriteString(" | ")
 		if math.IsNaN(r.observedRatioTotal) {
 			sb.WriteString("-")
@@ -247,6 +258,16 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		}
 	}
 
+	// Ensure warmup bytes are flushed to disk before we snapshot "before" sizes.
+	// For small values the value-log writer can keep warmup in an in-memory
+	// append buffer until later, which makes observed_ratio_warmup/measure
+	// misleading.
+	if cp, ok := db.(interface{ Checkpoint() error }); ok {
+		if err := cp.Checkpoint(); err != nil {
+			return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: warmup checkpoint: %w", err)
+		}
+	}
+
 	walBefore, err := walDirBreakdown(filepath.Join(dir, "maindb", "wal"))
 	if err != nil {
 		return valueLogDictSuiteResult{}, fmt.Errorf("vlog_dict: wal size (before): %w", err)
@@ -306,6 +327,10 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 	rawBytesMeasure := int64(measureKeys * tc.valueSz)
 	rawBytesTotal := rawBytesWarmup + rawBytesMeasure
 
+	observedRatioWarmup := math.NaN()
+	if rawBytesWarmup > 0 && walBefore.Value > 0 {
+		observedRatioWarmup = float64(walBefore.Value) / float64(rawBytesWarmup)
+	}
 	observedRatioTotal := math.NaN()
 	if rawBytesTotal > 0 && walAfter.Value > 0 {
 		observedRatioTotal = float64(walAfter.Value) / float64(rawBytesTotal)
@@ -324,6 +349,7 @@ func runValueLogDictSuiteCase(tc valueLogDictSuiteCase, seed int64, batchSize in
 		measureKeys:          measureKeys,
 		opsPerSec:            opsPerSec,
 		mbPerSec:             mbPerSec,
+		observedRatioWarmup:  observedRatioWarmup,
 		observedRatioTotal:   observedRatioTotal,
 		observedRatioMeasure: observedRatioMeasure,
 		attemptedFrac:        attemptedFrac,
@@ -358,9 +384,9 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 			// Leave zeroed.
 		case "ultra_compressible", "ultra_compressible_repeat":
 			// Keep values ultra-compressible but not identical so dict training triggers.
-			// A small random tail avoids degenerate "all samples identical" dictionaries
-			// and tends to produce more robust training across platforms.
-			fillRepeatTail(rng, buf, 32, []byte("{\"key\":\"value\",\"active\":true}"))
+			// A tiny random tail avoids degenerate "all samples identical" dictionaries
+			// while keeping the stream near the best-case for compression ratios.
+			fillRepeatTail(rng, buf, 4, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "highly_compressible_notail":
 			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "", "repeat", "repeat_tail64", "highly_compressible", "highly_compressible_tail64":
