@@ -981,6 +981,12 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		canDirectEncodeAll := w.f != nil && (k == 1 || rawPayloadBytes <= (1<<20))
 		if canDirectEncodeAll {
 			recordMaxLen := HeaderSize + prefixLen + enc.MaxEncodedSize(rawPayloadBytes)
+			// EncodeAllParts can emit more blocks than EncodeAll (but still within a
+			// single frame). Block overhead is 3 bytes, so add a small margin that
+			// covers the worst-case extra blocks (k-1).
+			if k > 1 {
+				recordMaxLen += 3 * (k - 1)
+			}
 			if recordMaxLen > max {
 				canDirectEncodeAll = false
 			}
@@ -988,6 +994,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 		if canDirectEncodeAll {
 			recordMaxLen := HeaderSize + prefixLen + enc.MaxEncodedSize(rawPayloadBytes)
+			if k > 1 {
+				recordMaxLen += 3 * (k - 1)
+			}
 			if len(w.appendBuf)+recordMaxLen > max {
 				if err := w.flushAppendBuf(); err != nil {
 					codecs.encPool.Put(enc)
@@ -1031,10 +1040,16 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
+			const (
+				noCopyMinRawBytes = 64 << 10 // avoid overhead on tiny frames
+				noCopyMinAvgBytes = 8 << 10
+			)
+			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
 			var payload []byte
+			var parts [MaxFrameK][]byte
 			if k == 1 {
 				payload = records[0].Value
-			} else {
+			} else if !useNoCopyParts {
 				// For small/medium grouped frames, EncodeAll on a contiguous payload
 				// is typically faster than streaming many small writes.
 				if cap(w.rawScratch) < rawPayloadBytes {
@@ -1045,9 +1060,17 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				for i := 0; i < k; i++ {
 					off += copy(payload[off:], records[i].Value)
 				}
+			} else {
+				for i := 0; i < k; i++ {
+					parts[i] = records[i].Value
+				}
 			}
 			encodeStart := w.sampleEncodeStart()
-			w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
+			if useNoCopyParts {
+				w.appendBuf = enc.EncodeAllParts(parts[:k], w.appendBuf)
+			} else {
+				w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
+			}
 			encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 			codecs.encPool.Put(enc)
 
@@ -1131,15 +1154,28 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			// contiguous payload via EncodeAll than to stream many small writes.
 			//
 			// This also avoids per-call allocations in the streaming encoder path.
-			if cap(w.rawScratch) < rawPayloadBytes {
-				w.rawScratch = make([]byte, rawPayloadBytes)
+			const (
+				noCopyMinRawBytes = 64 << 10 // avoid overhead on tiny frames
+				noCopyMinAvgBytes = 8 << 10
+			)
+			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
+			if useNoCopyParts {
+				var parts [MaxFrameK][]byte
+				for i := 0; i < k; i++ {
+					parts[i] = records[i].Value
+				}
+				encoded = enc.EncodeAllParts(parts[:k], encDst)
+			} else {
+				if cap(w.rawScratch) < rawPayloadBytes {
+					w.rawScratch = make([]byte, rawPayloadBytes)
+				}
+				payload := w.rawScratch[:rawPayloadBytes]
+				off := 0
+				for i := 0; i < k; i++ {
+					off += copy(payload[off:], records[i].Value)
+				}
+				encoded = enc.EncodeAll(payload, encDst)
 			}
-			payload := w.rawScratch[:rawPayloadBytes]
-			off := 0
-			for i := 0; i < k; i++ {
-				off += copy(payload[off:], records[i].Value)
-			}
-			encoded = enc.EncodeAll(payload, encDst)
 		} else {
 			w.encLimiter.buf = encDst
 			w.encLimiter.limit = rawPayloadBytes - 1
