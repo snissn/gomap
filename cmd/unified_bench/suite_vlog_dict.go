@@ -354,6 +354,8 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 	for i := 0; i < poolSize; i++ {
 		buf := make([]byte, size)
 		switch mode {
+		case "zero", "zeros":
+			// Leave zeroed.
 		case "ultra_compressible", "ultra_compressible_repeat":
 			// Keep values ultra-compressible but not identical so dict training triggers.
 			// A small random tail avoids degenerate "all samples identical" dictionaries
@@ -361,8 +363,14 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 			fillRepeatTail(rng, buf, 32, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "highly_compressible_notail":
 			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
-		case "", "repeat", "highly_compressible", "highly_compressible_tail64":
+		case "", "repeat", "repeat_tail64", "highly_compressible", "highly_compressible_tail64":
 			fillRepeatTail(rng, buf, 64, []byte("{\"key\":\"value\",\"active\":true}"))
+		case "half_repeat_half_random":
+			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
+			if len(buf) > 0 {
+				half := len(buf) / 2
+				_, _ = rng.Read(buf[half:])
+			}
 		case "medium_compressible", "medium_compressible_sparse":
 			fillSparseNoise(rng, buf, 256, 16, []byte("abcd1234"))
 		case "incompressible", "random":
@@ -520,6 +528,7 @@ type treedbFlagSnapshot struct {
 	allowUnsafe                bool
 	valueLogThreshold          int
 	journalLanes               int
+	vlogCompressionAutotune    string
 	vlogDictTrainBytes         int
 	vlogDictDictBytes          int
 	vlogDictAdaptiveRatio      float64
@@ -537,6 +546,7 @@ func snapshotTreeDBFlags() treedbFlagSnapshot {
 		allowUnsafe:                *treedbAllowUnsafe,
 		valueLogThreshold:          *treedbValueLogThreshold,
 		journalLanes:               *treedbJournalLanes,
+		vlogCompressionAutotune:    *treedbVlogCompressionAutotune,
 		vlogDictTrainBytes:         *treedbVlogDictTrainBytes,
 		vlogDictDictBytes:          *treedbVlogDictDictBytes,
 		vlogDictAdaptiveRatio:      *treedbVlogDictAdaptiveRatio,
@@ -554,6 +564,7 @@ func (s treedbFlagSnapshot) restore() {
 	*treedbAllowUnsafe = s.allowUnsafe
 	*treedbValueLogThreshold = s.valueLogThreshold
 	*treedbJournalLanes = s.journalLanes
+	*treedbVlogCompressionAutotune = s.vlogCompressionAutotune
 	*treedbVlogDictTrainBytes = s.vlogDictTrainBytes
 	*treedbVlogDictDictBytes = s.vlogDictDictBytes
 	*treedbVlogDictAdaptiveRatio = s.vlogDictAdaptiveRatio
@@ -585,6 +596,15 @@ func applyValueLogDictSuiteFlags(tc valueLogDictSuiteCase) {
 		*treedbDisableWAL = false
 	default:
 		*treedbDisableWAL = false
+	}
+
+	// The suite expects to compare dict compression on/off. Ensure TreeDB's
+	// compression autotune is enabled when dict is on, and disabled when dict is
+	// off, regardless of global CLI defaults.
+	if tc.dictOn {
+		*treedbVlogCompressionAutotune = "medium"
+	} else {
+		*treedbVlogCompressionAutotune = "off"
 	}
 
 	*treedbVlogDictTrainBytes = tc.trainB
