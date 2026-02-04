@@ -28,6 +28,27 @@ Example:
 
 More details: `docs/BENCHMARK_SPEC.md`.
 
+### Force-pointers perf matrix (script)
+
+For repeatable perf work on the TreeDB "forced value pointers" mode (value log
+hot path), use:
+
+```bash
+scripts/treedb_forceptr_matrix.sh
+```
+
+Defaults:
+- `PROFILES=fast`
+- `TESTS=batch_write,random_write,batch_delete`
+- `VARIANTS=base,prefix,columnar,columnar_prefix`
+- writes artifacts under `artifacts/perf/treedb_forceptr_matrix_<timestamp>/`
+
+Common overrides:
+```bash
+KEYS=4000000 PROFILES=fast scripts/treedb_forceptr_matrix.sh
+KEYS=2000000 PROFILES=fast,balanced PPROF_TESTS=batch_write,random_write scripts/treedb_forceptr_matrix.sh
+```
+
 ## 2) Trace Summary Replay (Counts Only)
 
 Uses the JSON summary from trace capture and replays batch sizes + op counts.
