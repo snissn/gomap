@@ -262,7 +262,7 @@ func TestReadAtGroupedFastPathSubIndexRange(t *testing.T) {
 	t.Cleanup(func() { _ = f.Close() })
 
 	for i, ptr := range ptrs {
-		got, err := ReadAtWithDict(f, ptr, false, nil)
+		got, err := ReadAtWithDict(f, ptr, false, nil, nil, templ.DecodeOptions{})
 		if err != nil {
 			t.Fatalf("read at ptr%d: %v", i+1, err)
 		}
