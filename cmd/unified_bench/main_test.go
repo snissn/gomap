@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"math"
 	"testing"
 	"time"
@@ -218,6 +219,32 @@ func TestRunBenchmark_VacuumBetweenTests_Smoke(t *testing.T) {
 
 	if len(run.VacuumDurations) == 0 {
 		t.Fatalf("expected non-empty vacuum durations")
+	}
+}
+
+func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
+	values, err := makeWriteValuePool(1, "repeat", 128, 32)
+	if err != nil {
+		t.Fatalf("makeWriteValuePool: %v", err)
+	}
+	if len(values) < 2 {
+		t.Fatalf("expected pool size >= 2, got %d", len(values))
+	}
+	allSame := true
+	for i := 1; i < len(values); i++ {
+		if !bytes.Equal(values[0], values[i]) {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		t.Fatalf("expected repeat value pool to contain non-identical values")
+	}
+}
+
+func TestMakeWriteValuePool_UnknownPatternErrors(t *testing.T) {
+	if _, err := makeWriteValuePool(1, "not_a_real_pattern", 16, 0); err == nil {
+		t.Fatalf("expected error")
 	}
 }
 

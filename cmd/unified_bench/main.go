@@ -35,7 +35,9 @@ import (
 var (
 	numKeys            = flag.Int("keys", 100000, "Number of keys")
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat)")
+	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|half_repeat_half_random|random)")
+	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
+	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
@@ -85,12 +87,14 @@ type DBInstance struct {
 }
 
 type BenchConfig struct {
-	Keys         int
-	ValueSize    int
-	BatchSize    int
-	WriteWorkers int
-	RangeQueries int
-	RangeSpan    int
+	Keys          int
+	ValueSize     int
+	BatchSize     int
+	WriteWorkers  int
+	RangeQueries  int
+	RangeSpan     int
+	ValuePattern  string
+	ValuePoolSize int
 
 	DBsArg        string
 	DBsExcludeArg string
@@ -212,7 +216,7 @@ func main() {
 	} else {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
-	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d\n", *numKeys, *valSize, *batchSize)
+	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
 	}
@@ -231,6 +235,8 @@ func main() {
 		WriteWorkers:                     *writeWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
+		ValuePattern:                     *valPattern,
+		ValuePoolSize:                    *valPoolSize,
 		DBsArg:                           *dbsArg,
 		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
@@ -873,6 +879,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return datasetErr
 	}
 
+	var (
+		writeValuePool     [][]byte
+		writeValuePoolErr  error
+		writeValuePoolInit bool
+	)
+	getWriteValuePool := func() ([][]byte, error) {
+		if writeValuePoolInit {
+			return writeValuePool, writeValuePoolErr
+		}
+		writeValuePoolInit = true
+		writeValuePool, writeValuePoolErr = makeWriteValuePool(cfg.SeedUsed, cfg.ValuePattern, cfg.ValueSize, cfg.ValuePoolSize)
+		return writeValuePool, writeValuePoolErr
+	}
+
 	prefixScanBase := 0
 	expectedFullScanCount := -1
 	checkPrefixCounts := false
@@ -918,10 +938,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return math.NaN(), nil
 		},
 		"sequential_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("sequential_write values: %w", err)
+			}
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
@@ -930,7 +953,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				binary.BigEndian.PutUint64(k[:], uint64(i))
-				if err := db.Set(k[:], val); err != nil {
+				value := values[i%len(values)]
+				if err := db.Set(k[:], value); err != nil {
 					return 0, fmt.Errorf("sequential_write: %w", err)
 				}
 				if err := pc.Add(db, 1, perOpBytes); err != nil {
@@ -940,10 +964,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
 		"random_write": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("random_write values: %w", err)
+			}
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
 			var k [8]byte
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
@@ -952,7 +979,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
-				if err := db.Set(k[:], val); err != nil {
+				value := values[i%len(values)]
+				if err := db.Set(k[:], value); err != nil {
 					return 0, fmt.Errorf("random_write: %w", err)
 				}
 				if err := pc.Add(db, 1, perOpBytes); err != nil {
@@ -1100,12 +1128,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("batch_write values: %w", err)
+			}
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			var k [8]byte
+			valPos := 0
 			for i := 0; i < total; i += cfg.BatchSize {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
@@ -1123,7 +1155,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				for j := i; j < end; j++ {
 					binary.BigEndian.PutUint64(k[:], uint64(j+cfg.Keys))
-					if err := batch.Set(k[:], val); err != nil {
+					value := values[valPos%len(values)]
+					valPos++
+					if err := batch.Set(k[:], value); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_write: set: %w", err)
 					}
@@ -1146,7 +1180,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
-			val := make([]byte, cfg.ValueSize)
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("batch_random values: %w", err)
+			}
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
 
@@ -1164,7 +1201,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			// Reset timer to exclude setup
 			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
+			valPos := 0
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -1184,7 +1222,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := i; j < end; j++ {
 					offset := j * keySize
 					key := allKeys[offset : offset+keySize]
-					if err := batch.Set(key, val); err != nil {
+					value := values[valPos%len(values)]
+					valPos++
+					if err := batch.Set(key, value); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_random: set: %w", err)
 					}
@@ -1267,13 +1307,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("batch_small_seq values: %w", err)
+			}
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := 100 // Pathological: small enough to hurt if not buffered, sequential to trigger streaming
 			var k [8]byte
+			valPos := 0
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -1292,7 +1336,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				for j := i; j < end; j++ {
 					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
-					if err := batch.Set(k[:], val); err != nil {
+					value := values[valPos%len(values)]
+					valPos++
+					if err := batch.Set(k[:], value); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_small_seq: set: %w", err)
 					}
@@ -1312,15 +1358,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 		"update_fork_choice": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("update_fork_choice values: %w", err)
+			}
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + len(val))
+			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := cfg.BatchSize
 			if batchSize <= 0 {
 				batchSize = 1
 			}
 			var k [8]byte
+			valPos := 0
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -1341,7 +1391,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					for j := i; j < end; j++ {
 						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
-						if err := batch.Set(k[:], val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(k[:], value); err != nil {
 							_ = batch.Close()
 							return 0, fmt.Errorf("update_fork_choice: set: %w", err)
 						}
@@ -1356,14 +1408,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				} else if syncer, ok := db.(kvstore.Syncer); ok {
 					for j := i; j < end; j++ {
 						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
-						if err := syncer.SetSync(k[:], val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := syncer.SetSync(k[:], value); err != nil {
 							return 0, fmt.Errorf("update_fork_choice: set sync: %w", err)
 						}
 					}
 				} else {
 					for j := i; j < end; j++ {
 						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
-						if err := db.Set(k[:], val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := db.Set(k[:], value); err != nil {
 							return 0, fmt.Errorf("update_fork_choice: set: %w", err)
 						}
 					}
@@ -1384,14 +1440,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 
 			start := time.Now()
-			val := make([]byte, cfg.ValueSize)
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("dataset_update_fork_choice values: %w", err)
+			}
 			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(datasetKeySize + len(val))
+			perOpBytes := int64(datasetKeySize + cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := cfg.BatchSize
 			if batchSize <= 0 {
 				batchSize = 1
 			}
+			valPos := 0
 
 			for i := 0; i < total; i += batchSize {
 				if i&8191 == 0 {
@@ -1412,7 +1472,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					for j := i; j < end; j++ {
 						key := datasetRandomKeys[rng.Intn(len(datasetRandomKeys))]
-						if err := batch.Set(key, val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(key, value); err != nil {
 							_ = batch.Close()
 							return 0, fmt.Errorf("dataset_update_fork_choice: set: %w", err)
 						}
@@ -1427,14 +1489,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				} else if syncer, ok := db.(kvstore.Syncer); ok {
 					for j := i; j < end; j++ {
 						key := datasetRandomKeys[rng.Intn(len(datasetRandomKeys))]
-						if err := syncer.SetSync(key, val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := syncer.SetSync(key, value); err != nil {
 							return 0, fmt.Errorf("dataset_update_fork_choice: set sync: %w", err)
 						}
 					}
 				} else {
 					for j := i; j < end; j++ {
 						key := datasetRandomKeys[rng.Intn(len(datasetRandomKeys))]
-						if err := db.Set(key, val); err != nil {
+						value := values[valPos%len(values)]
+						valPos++
+						if err := db.Set(key, value); err != nil {
 							return 0, fmt.Errorf("dataset_update_fork_choice: set: %w", err)
 						}
 					}
@@ -1816,12 +1882,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	)
 	preloadedOnly := needsExistingData && !hasMeasuredWrites
 	if preloadedOnly {
-		val := make([]byte, cfg.ValueSize)
+		values, err := getWriteValuePool()
+		if err != nil {
+			return BenchRun{}, fmt.Errorf("preload values: %w", err)
+		}
 		var k [8]byte
 		for _, inst := range instances {
 			for i := 0; i < cfg.Keys; i++ {
 				binary.BigEndian.PutUint64(k[:], uint64(i))
-				if err := inst.Wrapper.Set(k[:], val); err != nil {
+				value := values[i%len(values)]
+				if err := inst.Wrapper.Set(k[:], value); err != nil {
 					return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
 				}
 			}
@@ -2275,6 +2345,13 @@ func renderMarkdownSingle(run BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
+	if strings.TrimSpace(run.Config.ValuePattern) != "" {
+		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(run.Config.ValuePattern)))
+		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", run.Config.ValuePoolSize))
+	}
+	if strings.TrimSpace(run.Config.DatasetValuePattern) != "" {
+		sb.WriteString(fmt.Sprintf("- dataset-val-pattern: %s\n", strings.TrimSpace(run.Config.DatasetValuePattern)))
+	}
 	if strings.TrimSpace(run.Config.Profile) != "" {
 		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(run.Config.Profile)))
 	}
@@ -2351,6 +2428,13 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
+	if strings.TrimSpace(runs[0].Config.ValuePattern) != "" {
+		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(runs[0].Config.ValuePattern)))
+		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", runs[0].Config.ValuePoolSize))
+	}
+	if strings.TrimSpace(runs[0].Config.DatasetValuePattern) != "" {
+		sb.WriteString(fmt.Sprintf("- dataset-val-pattern: %s\n", strings.TrimSpace(runs[0].Config.DatasetValuePattern)))
+	}
 	if strings.TrimSpace(runs[0].Config.Profile) != "" {
 		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(runs[0].Config.Profile)))
 	}
