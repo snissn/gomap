@@ -20,6 +20,8 @@ type Engine struct {
 	bucketSeq      uint64
 	totalTemplates int
 	trainSeq       atomic.Uint64
+	encodeSeq      atomic.Uint64
+	lastKeepSeq    atomic.Uint64
 	defCache       *defCache
 	recentMu       sync.Mutex
 	recent         []recentTemplate
@@ -47,6 +49,12 @@ type anchorCand struct {
 	start     int
 }
 
+type candScore struct {
+	id    uint64
+	size  int
+	score int
+}
+
 type recentTemplate struct {
 	id         uint64
 	def        TemplateDef
@@ -61,6 +69,83 @@ type defCache struct {
 	ids  []uint64
 	next int
 	defs map[uint64]TemplateDef
+}
+
+var (
+	candScoreMapPool   sync.Pool // map[uint64]candScore
+	candScoreSlicePool sync.Pool // []candScore
+	recentSlicePool    sync.Pool // []recentTemplate
+)
+
+func getCandScoreMap() map[uint64]candScore {
+	if v := candScoreMapPool.Get(); v != nil {
+		if m, ok := v.(map[uint64]candScore); ok {
+			return m
+		}
+	}
+	return make(map[uint64]candScore)
+}
+
+func putCandScoreMap(m map[uint64]candScore) {
+	if m == nil {
+		return
+	}
+	if len(m) > 4096 {
+		return
+	}
+	for k := range m {
+		delete(m, k)
+	}
+	candScoreMapPool.Put(m)
+}
+
+func getCandScores(capacity int) []candScore {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := candScoreSlicePool.Get(); v != nil {
+		if s, ok := v.([]candScore); ok {
+			if cap(s) >= capacity && cap(s) <= capacity*2+32 {
+				return s[:0]
+			}
+		}
+	}
+	return make([]candScore, 0, capacity)
+}
+
+func putCandScores(s []candScore) {
+	if s == nil {
+		return
+	}
+	if cap(s) > 4096 {
+		return
+	}
+	candScoreSlicePool.Put(s[:0])
+}
+
+func getRecentSnapshot(capacity int) []recentTemplate {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := recentSlicePool.Get(); v != nil {
+		if s, ok := v.([]recentTemplate); ok {
+			if cap(s) >= capacity && cap(s) <= capacity*2+32 {
+				return s[:0]
+			}
+		}
+	}
+	return make([]recentTemplate, 0, capacity)
+}
+
+func putRecentSnapshot(s []recentTemplate) {
+	if s == nil {
+		return
+	}
+	if cap(s) > 1024 {
+		return
+	}
+	clear(s)
+	recentSlicePool.Put(s[:0])
 }
 
 func newDefCache(size int) *defCache {
@@ -154,24 +239,35 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		e.observeTraining(value, store)
 		return value, false
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	seq := e.encodeSeq.Add(1)
 	e.stats.Attempted.Add(1)
 	if payload, ok := e.tryRecentTemplates(value); ok {
+		e.lastKeepSeq.Store(seq)
 		e.observeTraining(value, store)
 		return payload, true
+	}
+	lastKeepSeq := e.lastKeepSeq.Load()
+	missStreak := seq - lastKeepSeq
+	if missStreak > uint64(cfg.ColdSearchAfter) {
+		probeEvery := uint64(cfg.ColdSearchProbeEvery)
+		if probeEvery == 0 {
+			probeEvery = 1
+		}
+		if seq%probeEvery != 0 {
+			e.stats.addReason(reasonSkipCold)
+			e.observeTraining(value, store)
+			return value, false
+		}
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	maxFPReads := cfg.MaxFPReads
 	if maxFPReads <= 0 || maxFPReads > len(fps) {
 		maxFPReads = len(fps)
 	}
-	type candScore struct {
-		id    uint64
-		size  int
-		score int
-	}
-	candMap := make(map[uint64]*candScore)
+	candMap := getCandScoreMap()
+	defer putCandScoreMap(candMap)
 	for i := 0; i < maxFPReads; i++ {
 		fp := fps[i]
 		e.stats.CandidateFPReads.Add(1)
@@ -181,15 +277,15 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			continue
 		}
 		for _, c := range cands {
-			cs := candMap[c.ID]
-			if cs == nil {
-				cs = &candScore{id: c.ID, size: c.Size}
-				candMap[c.ID] = cs
+			cs, ok := candMap[c.ID]
+			if !ok {
+				cs = candScore{id: c.ID, size: c.Size}
 			}
 			cs.score++
 			if c.Size > 0 && (cs.size == 0 || c.Size < cs.size) {
 				cs.size = c.Size
 			}
+			candMap[c.ID] = cs
 		}
 	}
 	if len(candMap) == 0 {
@@ -197,7 +293,8 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		e.observeTraining(value, store)
 		return value, false
 	}
-	candidates := make([]*candScore, 0, len(candMap))
+	candidates := getCandScores(len(candMap))
+	defer putCandScores(candidates)
 	for _, c := range candMap {
 		candidates = append(candidates, c)
 	}
@@ -331,9 +428,11 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 			if len(payload) == 0 {
 				return value, false
 			}
+			e.lastKeepSeq.Store(seq)
 			e.recordRecent(bestMaskDef, bestMaskID)
 			return payload, true
 		}
+		e.lastKeepSeq.Store(seq)
 		e.recordRecent(bestAnchorDef, bestAnchorID)
 		return bestPayload, true
 	}
@@ -346,13 +445,16 @@ func (e *Engine) tryRecentTemplates(value []byte) ([]byte, bool) {
 		return nil, false
 	}
 	e.recentMu.Lock()
-	if len(e.recent) == 0 {
+	n := len(e.recent)
+	if n == 0 {
 		e.recentMu.Unlock()
 		return nil, false
 	}
-	snapshot := make([]recentTemplate, len(e.recent))
+	snapshot := getRecentSnapshot(n)
+	snapshot = snapshot[:n]
 	copy(snapshot, e.recent)
 	e.recentMu.Unlock()
+	defer putRecentSnapshot(snapshot)
 	max := cfg.RecentTemplates
 	if max > len(snapshot) {
 		max = len(snapshot)

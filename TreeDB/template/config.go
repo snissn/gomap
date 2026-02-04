@@ -30,6 +30,15 @@ type Config struct {
 	FastPathMinHits       int
 	FastPathSavingsSlack  int
 	FastPathMaxMisses     int
+	// ColdSearchAfter controls when Encode enters a "cold" mode after a long
+	// stretch of non-kept values. In cold mode, Encode skips expensive candidate
+	// lookup/matching for most values and only probes periodically.
+	//
+	// Values <= 0 use a default.
+	ColdSearchAfter int
+	// ColdSearchProbeEvery controls how often Encode probes candidates while in
+	// cold mode (every N values). Values <= 0 use a default.
+	ColdSearchProbeEvery int
 
 	// Training / publishing bounds.
 	MaxBuckets                   int
@@ -136,6 +145,12 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.FastPathMaxMisses <= 0 {
 		cfg.FastPathMaxMisses = 2
+	}
+	if cfg.ColdSearchAfter <= 0 {
+		cfg.ColdSearchAfter = 256
+	}
+	if cfg.ColdSearchProbeEvery <= 0 {
+		cfg.ColdSearchProbeEvery = 256
 	}
 	if cfg.MaxBuckets <= 0 {
 		cfg.MaxBuckets = 256
