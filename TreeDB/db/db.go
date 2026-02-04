@@ -173,8 +173,10 @@ type Options struct {
 	// chunks. This can reduce minor-fault overhead under random access patterns
 	// at the cost of increased work at map/grow time.
 	PagerMmapPopulate bool
-	// PagerPrefetchOnRead enables best-effort prefetch (madvise WILLNEED) for
-	// each index.db mmap chunk the first time it is accessed.
+	// PagerPrefetchOnRead enables best-effort prefetch hints (madvise WILLNEED)
+	// for mmapped index chunks (Linux only). When enabled, TreeDB may issue
+	// prefetch requests opportunistically (e.g. before rewriting child pages
+	// during checkpoint/merge). It is a no-op on unsupported platforms.
 	PagerPrefetchOnRead bool
 
 	// Durability configures cached-mode durability semantics.

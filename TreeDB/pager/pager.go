@@ -279,12 +279,18 @@ func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
 	if cur != nil && len(cur.words) >= needWords {
 		return
 	}
-	var oldWords []uint64
-	if cur != nil {
-		oldWords = cur.words
-	}
 	next := make([]uint64, needWords)
-	copy(next, oldWords)
+	if cur != nil {
+		// Prefetch bits are set via atomics; preserve them using atomic loads to
+		// avoid races under -race.
+		limit := len(cur.words)
+		if limit > len(next) {
+			limit = len(next)
+		}
+		for i := 0; i < limit; i++ {
+			next[i] = atomic.LoadUint64(&cur.words[i])
+		}
+	}
 	p.prefetched.Store(&prefetchBitset{words: next})
 }
 

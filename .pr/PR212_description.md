@@ -4,7 +4,7 @@ Checkpoint-focused perf harness + targeted mmapped prefetch + allocation localit
 ### Changes
 - Add `treemap checkpoint` command to run only the durable checkpoint boundary (with optional `-cpuprofile`).
 - Add `treemap checkpoint-bench` to run a deterministic write workload (batch_write + random_write) and then checkpoint, with optional `-pause-before-checkpoint` so you can attach `perf` to just the checkpoint window.
-- Add pager option `PagerPrefetchOnRead` (madvise WILLNEED once per chunk on first read) and unified-bench flag `-treedb-pager-prefetch-on-read`.
+- Add pager option `PagerPrefetchOnRead` (best-effort prefetch hints via `PrefetchPage`) and unified-bench flag `-treedb-pager-prefetch-on-read`.
 - Improve leaf split allocation locality by hinting from the current leaf page (`target.PageID()`), not the first leaf in the batch.
 
 ## How to use (server)

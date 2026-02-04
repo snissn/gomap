@@ -131,7 +131,7 @@ func runCheckpoint(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (required)")
 	cpuprofile := fs.String("cpuprofile", "", "write cpu profile to file while checkpointing")
 	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
-	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Enable best-effort mmap prefetch per chunk on first read (madvise WILLNEED)")
+	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Linux: enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	maintenanceK := fs.Int("maintenance-ops-per-coalesce", 0, "Ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
 	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
 	_ = fs.Parse(args)
@@ -199,7 +199,7 @@ func runCheckpointBench(dir string, args []string) {
 	freelistRegionRadius := fs.Int("freelist-region-radius", 0, "Freelist reuse region radius (0=default, <0=disable bias)")
 
 	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
-	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Enable best-effort mmap prefetch per chunk on first read (madvise WILLNEED)")
+	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Linux: enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	maintenanceK := fs.Int("maintenance-ops-per-coalesce", 0, "Ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
 	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
 
