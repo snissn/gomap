@@ -33,19 +33,21 @@ See: `docs/API_STABILITY.md`.
 
 At a conceptual level, the backend engine stores:
 
-- A memory-mapped index file (`Dir/index.db`) containing B+Tree pages and metadata.
-- A value log under `Dir/wal/` used to store larger values efficiently.
+- A memory-mapped index file (`Dir/maindb/index.db`) containing B+Tree pages and metadata.
+- A value log under `Dir/maindb/wal/` used to store larger values efficiently.
+- A dictionary store under `Dir/dictdb/` used to persist compression dictionaries (when enabled).
 
 Writes are “commit-like”: a batch updates pages + value-log pointers and then updates the active meta page.
 
 ### Files and directories
 
-- `Dir/index.db`: the pager file (chunked mmap) containing:
+- `Dir/maindb/index.db`: the pager file (chunked mmap) containing:
   - B+Tree pages (internal + leaf nodes)
   - freelist / lifecycle metadata
   - redundant meta (“superblock”) pages used for recovery
-- `Dir/wal/`: journal + value-log segments (internal naming may change).
-- `Dir/LOCK`: the cross-process exclusive-open lock file.
+- `Dir/maindb/wal/`: journal + value-log segments (internal naming may change).
+- `Dir/maindb/LOCK`: the cross-process exclusive-open lock file.
+- `Dir/dictdb/`: dictionary store DB used by value-log compression.
 
 ### Inline vs value-log values
 
@@ -79,7 +81,7 @@ Cached mode is not a read cache. It is a write-back layer used to batch work:
 
 - Incoming writes go to:
   - an in-memory memtable, and
-  - a journal segment under `Dir/wal/` (for durability / crash recovery), plus
+  - a journal segment under `Dir/maindb/wal/` (for durability / crash recovery), plus
   - the value log for large values when enabled.
 - A background flusher periodically writes memtables into the index using a backend batch.
 

@@ -5,13 +5,12 @@ Active roadmap is tracked in `TODO.md`.
 ## Major Unplanned Items
 
 ### Windows Support for TreeDB
-- **Current Status**: TreeDB is Unix-only (Linux/macOS) due to direct usage of `unix.Mmap` in `TreeDB/pager`.
-- **Goal**: Abstract the pager implementation to support `mmap` on Windows (via `CreateFileMapping`/`MapViewOfFile`).
-- **HashDB**: Already supports Windows (via `mmap-go` and fallback paths).
+- **Current Status**: TreeDB supports Windows (CI includes Windows test jobs) via platform-specific mmap helpers in `TreeDB/pager`.
+- **Goal**: Continue hardening Windows-specific file-locking and mmap edge cases (crash recovery, file rename semantics, and cleanup).
 
 ### TreeDB Compression
-- **Current Status**: TreeDB stores values raw (inline or slab).
-- **Goal**: Implement Snappy/Zstd compression for slab values (similar to HashDB).
+- **Current Status**: TreeDB stores values inline in the B+Tree or out-of-line in the persistent value log (`Dir/maindb/wal/`). The value log supports Zstandard compression and optional dictionary training/autotune.
+- **Goal**: Evaluate additional compression opportunities (e.g., page-level compression) and improve operator ergonomics (GC/rewrite tooling and observability).
 
 ### TreeDB Index Compaction (Online)
 - **Current Status**: `CompactIndex` is a "Stop-the-World" operation that rebuilds the B-Tree.

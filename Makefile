@@ -19,6 +19,7 @@ help:
 	@echo "  make vet            - run go vet in root + key dirs"
 	@echo "  make tidy           - go mod tidy (repo root)"
 	@echo "  make deps           - download deps (repo root)"
+	@echo "  make docs-check     - validate docs invariants"
 	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
 	@echo "  make bench          - run unified bench"
 	@echo "  make bench-readme   - regenerate README benchmark snapshot"
@@ -76,6 +77,10 @@ tidy:
 .PHONY: deps
 deps:
 	go mod download
+
+.PHONY: docs-check
+docs-check:
+	bash ./scripts/docs_check.sh
 
 .PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench
 build: build-hashdb build-treedb unified-bench

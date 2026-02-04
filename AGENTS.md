@@ -28,19 +28,20 @@ the index.
 
 Focus on pointer durability and GC correctness:
 
-### Test Case: `TestValueLogPointersPersist`
-- **Setup:** `Options.ValueLog.PointerThreshold=1`. Write large values.
-- **Action:** Flush + reopen.
+### Pointer durability after reopen
+- **Setup:** `Options.ValueLog.PointerThreshold=1` (force value-log pointers).
+- **Action:** Write values, `Checkpoint()` (or `WriteSync`), close, reopen.
 - **Assert:** Values remain readable and pointers resolve after reopen.
+- **Existing coverage:** `TreeDB/reopen_verify_test.go` (e.g. `TestReopenVerify_WALOn_Checkpoint`, `TestReopenVerify_WALOn_WriteSync`).
 
-### Test Case: `TestValueLogGCDeletesUnreferenced`
-- **Setup:** Write values to value log, delete keys, checkpoint.
-- **Action:** Run value-log GC.
-- **Assert:** Unreferenced segments are removed; referenced segments remain.
+### GC deletes unreferenced segments
+- **Setup:** Write values to the value log, delete keys, checkpoint.
+- **Action:** Run `DB.ValueLogGC`.
+- **Assert:** Fully-unreferenced segments are removed; referenced segments remain.
+- **Existing coverage:** `TreeDB/db/vlog_gc_test.go` (`TestValueLogGC_RemovesUnreferencedSegment`).
 
 ## Notes
 
-- Any documentation mentioning "slabs" as a storage path is legacy and should be
-  updated or removed.
+- Any documentation describing TreeDB values being stored in "slabs" is legacy and should be updated or removed (HashDB still uses slab segments).
 - If WAL is disabled, value-log writes can still be deferred to flush boundaries,
   but the value log remains persistent storage.
