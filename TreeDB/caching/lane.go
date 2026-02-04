@@ -27,6 +27,7 @@ type lane struct {
 	vlogPath         string
 	vlogSeq          int
 	vlogRetainedPath string
+	vlogCaps         vlogWriterCaps
 	vlogMu           sync.Mutex
 	vlogLiveBytes    atomic.Int64
 	vlogClosedBytes  atomic.Int64
