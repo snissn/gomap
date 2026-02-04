@@ -16,7 +16,7 @@ It is the recommended reference for WAL on/off semantics.
 | **WAL on** | ON | ON | Durable after `*Sync` or `Checkpoint()` | **Default** |
 | **WAL off** | OFF | ON | Unsafe (recent writes may be lost) | **Opt-in via `Options.Durability`** |
 
-Legacy modes (value-log off / backend-only slabs) have been removed.
+Legacy modes (value-log off / backend-only) have been removed.
 
 ## Practical knobs (public API)
 
@@ -60,8 +60,15 @@ settings.
 
 ## File layout (cached mode)
 
-- `Dir/index.db`: B+Tree pages + metadata.
-- `Dir/wal/`: journal + value-log segments (internal file naming may change).
+TreeDB `Options.Dir` is a *root* directory. `treedb.Open` manages:
+
+- `Dir/maindb/`: main DB (index + journal + value log)
+  - `Dir/maindb/index.db`: B+Tree pages + metadata.
+  - `Dir/maindb/wal/`: journal + value-log segments (internal file naming may change).
+  - `Dir/maindb/LOCK`: cross-process exclusive-open lock.
+- `Dir/dictdb/`: dictionary store (for value-log compression)
+  - `Dir/dictdb/index.db`: dictionary metadata (internal).
+  - `Dir/dictdb/LOCK`: cross-process lock for the dictionary store.
 
 Note: value-log dictionary compression applies to value-log records and does
 not require any split-log option.

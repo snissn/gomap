@@ -765,6 +765,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
+	maindbDir, err := resolveMainDBDir(opts.Dir)
+	if err != nil {
+		return err
+	}
+	opts.Dir = maindbDir
 	return db.VacuumIndexOffline(opts)
 }
 

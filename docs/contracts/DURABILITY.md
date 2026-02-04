@@ -26,7 +26,7 @@ eventually flushes to the backend.
 - `Batch.WriteSync`: appends the entire batch to the journal as a single checksummed segment and `fsync`s it; **atomic and durable**. On recovery, either the entire batch is applied or none of it is.
 
 Crash recovery:
-- On open, any journal segments in `Dir/wal/` are replayed into the backend with synced commits, then removed.
+- On open, any journal segments in `Dir/maindb/wal/` are replayed into the backend with synced commits, then removed.
 
 ### WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
 

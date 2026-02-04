@@ -249,10 +249,19 @@ in.
 TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
 `index.db` into a fresh file and swaps it in using a crash-safe protocol:
 
-- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})` (alias to `CompactIndex`)
-- Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
+- Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
+- Requires the database to be **closed** (it acquires the exclusive `LOCK` under `Dir/maindb/LOCK`)
 - Crash safety: `treedb.Open` will automatically recover from a partial swap
   (e.g. if the process crashed mid-vacuum).
+
+### Value-log maintenance (GC / rewrite)
+
+TreeDB’s value log is persistent storage. Disk space is reclaimed via:
+
+- **GC**: `db.ValueLogGC(...)` deletes fully-unreferenced value-log segments (after a checkpoint in cached mode).
+- **Rewrite**: `treedb.ValueLogRewriteOffline(treedb.Options{Dir: ...})` rewrites live pointers into fresh segments and swaps `Dir/maindb/index.db` to reference the new log (offline; requires a clean commitlog).
+
+Details: `docs/TREEDB_STORAGE_FORMAT.md`.
 
 ## Benchmark-Driven Tuning
 
