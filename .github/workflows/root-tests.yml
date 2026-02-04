@@ -26,6 +26,9 @@ jobs:
           cache-dependency-path: |
             go.sum
 
+      - name: Docs check
+        run: make docs-check
+
       - name: Vet
         run: go vet ./...
 

@@ -19,6 +19,7 @@ More docs:
 - `docs/GETTING_STARTED.md`
 - `docs/TREEDB_CACHED_VS_BACKEND.md`
 - `docs/TREEDB_CONCEPTS.md`
+- `docs/TREEDB_STORAGE_FORMAT.md`
 - `docs/TREEDB_RECOVERY.md`
 - `CONTRIBUTING.md`
 

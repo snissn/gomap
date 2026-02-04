@@ -13,6 +13,7 @@ Welcome to the `gomap` documentation.
 TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 
 - **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Value Log, COW Merge).
+- **[Storage Format](TREEDB_STORAGE_FORMAT.md)**: On-disk layout, `ValuePtr`, and value-log lifecycle (GC/rewrite).
 - **[Write Paths](TREEDB_WRITE_PATHS.md)**: WAL on/off semantics.
 - **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: Legacy note (backend-only removed).
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and journal replay details.
@@ -47,5 +48,5 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 
 ## 🏚️ Legacy & Planning
 
-- **[Legacy Docs](legacy/README.md)**: Older design notes and historical context.
 - **[Improvement Plan](IMPROVEMENT_PLAN.md)**: Roadmap pointers.
+- **[Agent Runbooks](agents/README.md)**: Implementation-focused notes (not normative contracts).

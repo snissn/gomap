@@ -1,6 +1,6 @@
 # TreeDB
 
-TreeDB is a high-performance, persistent key-value store optimized for the Cosmos SDK workload. It features a B+Tree index backed by a memory-mapped file (`index.db`) plus a value log under `wal/` for large values, with journal/redo records stored alongside the value log for crash recovery.
+TreeDB is a high-performance, persistent key-value store optimized for the Cosmos SDK workload. It features a B+Tree index backed by a memory-mapped file plus a persistent value log for large values, with a separate journal/redo log for crash recovery.
 
 ## Features
 
@@ -16,10 +16,11 @@ TreeDB is a high-performance, persistent key-value store optimized for the Cosmo
 ## Architecture
 
 ### Storage Layout
--   **Pages:** 4KB fixed-size blocks in `index.db`.
+-   **Root dir:** `Options.Dir` is a root directory with two sub-databases: `maindb/` (main data) and `dictdb/` (dictionary store).
+-   **Pages:** 4KB fixed-size blocks in `maindb/index.db`.
 -   **Nodes:** Slotted pages supporting variable-length keys.
--   **Value log:** Append-only segments under `wal/` storing large values with CRC checksums.
--   **Journal/redo log:** Commit metadata stored alongside the value log under `wal/`.
+-   **Value log:** Append-only segments under `maindb/wal/` storing large values with CRC checksums.
+-   **Journal/redo log:** Commit metadata stored alongside the value log under `maindb/wal/`.
 
 ### Write Path ("The Zipper")
 Writes are batched and applied using a recursive "Zipper" merge algorithm. This creates a new version of the tree path (COW) without modifying existing on-disk pages, ensuring crash safety and snapshot isolation.
@@ -111,7 +112,7 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 - CRC checksums detect accidental corruption, not malicious tampering; use filesystem encryption/HMAC if your threat model includes adversarial disk access.
 - `GetUnsafe` on a `Snapshot` and iterator `Key()`/`Value()` return short-lived views; use `Get`, `KeyCopy`, or `ValueCopy` for stable bytes.
 - TreeDB does not provide encryption-at-rest or secure deletion; deleted data may remain on disk until compacted. Use OS/disk encryption for confidentiality.
-- Value-log segments are retained conservatively; large values can keep `wal/` growth high until value-log GC is implemented.
+- Value-log segments are persistent; reclaim disk via `DB.ValueLogGC` (deletes fully-unreferenced segments) and `treedb.ValueLogRewriteOffline` (offline rewrite/compaction).
 - Optional guardrail: `Options.ValueLog.MaxRetainedBytes` emits a warning when retained value-log bytes exceed the threshold.
 - Optional hard cap: `Options.ValueLog.MaxRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
 - On-disk format is considered alpha and may change without backward-compatibility guarantees.

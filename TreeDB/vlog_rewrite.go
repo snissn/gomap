@@ -15,6 +15,12 @@ type ValueLogRewriteStats struct {
 // index.db to reference the new log. This is an offline operation that requires
 // an exclusive lock and a clean commitlog.
 func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
+	maindbDir, err := resolveMainDBDir(opts.Dir)
+	if err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	opts.Dir = maindbDir
+
 	stats, err := treedbdb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		return ValueLogRewriteStats{}, err

@@ -22,7 +22,7 @@ import (
 type Options = db.Options
 
 const (
-	defaultChunkSize     = 4 * 1024 * 1024
+	defaultChunkSize     = 16 * 1024 * 1024
 	defaultDictChunkSize = 1 * 1024 * 1024
 )
 
@@ -219,6 +219,8 @@ func Open(opts Options) (*DB, error) {
 		FlushBuildChunkMinBytes:            opts.FlushBuildChunkMinBytes,
 		FlushBuildChunkMaxBytes:            opts.FlushBuildChunkMaxBytes,
 		FlushBuildPrefetchUnits:            opts.FlushBuildPrefetchUnits,
+		FlushBackendMaxEntries:             opts.FlushBackendMaxEntries,
+		FlushBackendMaxBatches:             opts.FlushBackendMaxBatches,
 		DisableWAL:                         disableWAL,
 		JournalLanes:                       opts.JournalLanes,
 		WALMaxSegmentBytes:                 opts.WALMaxSegmentBytes,
@@ -226,6 +228,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                        relaxedSync,
 		DisableReadChecksum:                disableReadChecksum,
 		ValueLogPointerThreshold:           opts.ValueLog.PointerThreshold,
+		ForceValueLogPointers:              opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                  opts.ValueLog.DictTrain,
 		ValueLogDictAdaptiveRatio:          opts.ValueLog.DictAdaptiveRatio,
 		ValueLogDictMetricsWindowBytes:     opts.ValueLog.DictMetricsWindowBytes,
@@ -762,6 +765,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
+	maindbDir, err := resolveMainDBDir(opts.Dir)
+	if err != nil {
+		return err
+	}
+	opts.Dir = maindbDir
 	return db.VacuumIndexOffline(opts)
 }
 

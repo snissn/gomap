@@ -5,6 +5,9 @@ This document describes TreeDB’s *value log* (“vlog”) compression autotune
 For benchmark methodology, reproducibility guidance, and CI-grade validation “marks”, see:
 - `docs/benchmarks/VLOG_AUTOTUNE.md`
 
+For implementation details (agent-oriented, non-normative), see:
+- `docs/agents/TREEDB_VALUELOG_AUTOTUNE_RUNBOOK.md`
+
 ---
 
 ## Overview
@@ -145,7 +148,7 @@ For production rollouts (especially on latency-sensitive clusters):
 
 ## Public configuration
 
-### `ValueLogCompressionAutotune`
+### `Options.ValueLog.CompressionAutotune`
 
 TreeDB exposes a small, production-safe configuration surface via:
 

@@ -6,7 +6,7 @@ The normative contract is in `docs/contracts/DURABILITY.md`.
 ## TL;DR
 
 - TreeDB takes an **exclusive directory lock** on `Open` (one process at a time).
-- Cached mode persists writes to `Dir/wal/` (journal + value-log segments) and flushes them into the backend in the background.
+- Cached mode persists writes to `Dir/maindb/wal/` (journal + value-log segments) and flushes them into the backend in the background.
 - On open, TreeDB always performs a single coherent recovery path:
   1) backend recovery (meta validation + torn-tail handling)
   2) cached journal discovery + replay into the backend (synced commits)
@@ -18,8 +18,8 @@ This makes “last writer was cached vs backend” unambiguous: the next opener 
 
 Depending on timing, after an unclean shutdown the DB directory may contain:
 
-- A consistent backend state (pages + slabs), possibly missing the most recent cached writes that hadn’t flushed yet.
-- One or more journal/value-log segments in `Dir/wal/` representing cached writes that are not yet reflected in the backend.
+- A consistent backend state (index pages), possibly missing the most recent cached writes that hadn’t flushed yet.
+- One or more journal/value-log segments in `Dir/maindb/wal/` representing cached writes that are not yet reflected in the backend.
 - A torn/partial final journal record (e.g. crash mid-write).
 
 ## Recovery Pipeline
@@ -33,7 +33,7 @@ On open, the backend engine:
 
 ### 2) Cached journal discovery + replay (always)
 
-Regardless of the mode you open in, TreeDB scans `Dir/wal/` for journal segments (sorted by sequence).
+Regardless of the mode you open in, TreeDB scans `Dir/maindb/wal/` for journal segments (sorted by sequence).
 Each segment is replayed into the backend using `Batch.WriteSync`, so replay is durable. Large values
 already stored in the value log are referenced by the replayed records.
 

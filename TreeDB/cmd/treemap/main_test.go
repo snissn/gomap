@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,6 +75,10 @@ func TestJSONLRoundTripEncodings(t *testing.T) {
 				t.Fatalf("compare error: %v", err)
 			}
 			if !eq {
+				_, derr := compareDBsDetailed(dirA, dirB)
+				if derr != nil {
+					t.Fatalf("databases not equivalent for %s encoding: %v", tc.encoding, derr)
+				}
 				t.Fatalf("databases not equivalent for %s encoding", tc.encoding)
 			}
 
@@ -192,6 +197,14 @@ func importJSONLFile(t *testing.T, dir, path, inputEncoding string) {
 }
 
 func compareDBs(dirA, dirB string) (bool, error) {
+	return compareDBsInternal(dirA, dirB, false)
+}
+
+func compareDBsDetailed(dirA, dirB string) (bool, error) {
+	return compareDBsInternal(dirA, dirB, true)
+}
+
+func compareDBsInternal(dirA, dirB string, detailed bool) (bool, error) {
 	dbA, err := treedb.Open(treedb.Options{Dir: dirA, ReadOnly: true})
 	if err != nil {
 		return false, err
@@ -208,31 +221,60 @@ func compareDBs(dirA, dirB string) (bool, error) {
 		return false, err
 	}
 	defer func() { _ = itA.Close() }()
+
+	entriesA := make(map[string][]byte)
+	for ; itA.Valid(); itA.Next() {
+		key := append([]byte(nil), itA.Key()...)
+		val := append([]byte(nil), itA.Value()...)
+		entriesA[string(key)] = val
+	}
+	if err := itA.Error(); err != nil {
+		return false, err
+	}
+
 	itB, err := dbB.Iterator(nil, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = itB.Close() }()
 
-	for {
-		validA := itA.Valid()
-		validB := itB.Valid()
-		if !validA || !validB {
-			break
-		}
-		if !bytes.Equal(itA.Key(), itB.Key()) || !bytes.Equal(itA.Value(), itB.Value()) {
-			return false, nil
-		}
-		itA.Next()
-		itB.Next()
-	}
-	if err := itA.Error(); err != nil {
-		return false, err
+	entriesB := make(map[string][]byte)
+	for ; itB.Valid(); itB.Next() {
+		key := append([]byte(nil), itB.Key()...)
+		val := append([]byte(nil), itB.Value()...)
+		entriesB[string(key)] = val
 	}
 	if err := itB.Error(); err != nil {
 		return false, err
 	}
-	if itA.Valid() != itB.Valid() {
+
+	for k, vA := range entriesA {
+		vB, ok := entriesB[k]
+		if !ok {
+			if detailed {
+				return false, fmt.Errorf("missing key in B: %x", []byte(k))
+			}
+			return false, nil
+		}
+		if !bytes.Equal(vA, vB) {
+			if detailed {
+				return false, fmt.Errorf("value mismatch for key %x: %x != %x", []byte(k), vA, vB)
+			}
+			return false, nil
+		}
+	}
+	for k := range entriesB {
+		if _, ok := entriesA[k]; !ok {
+			if detailed {
+				return false, fmt.Errorf("extra key in B: %x", []byte(k))
+			}
+			return false, nil
+		}
+	}
+	if len(entriesA) != len(entriesB) {
+		if detailed {
+			return false, fmt.Errorf("entry count mismatch after compare: %d != %d", len(entriesA), len(entriesB))
+		}
 		return false, nil
 	}
 	return true, nil
