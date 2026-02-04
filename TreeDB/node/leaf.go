@@ -48,7 +48,11 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 	}
 
 	if n.leafColumnar() {
-		return parseLeafColumnarLayout(n.data, offset)
+		valPtrSize := page.ValuePtrSize
+		if n.leafPackedValuePtr() {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		return parseLeafColumnarLayout(n.data, offset, valPtrSize)
 	}
 
 	if n.leafPrefixCompressed() {
@@ -461,20 +465,46 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	return uint16(i), false, nil
 }
 
+func (n *Node) leafColumnarKeyViewAtIndex(idx int) ([]byte, error) {
+	data := n.data
+	dirOff := NodeHeaderSize + idx*2
+	if dirOff+2 > len(data) {
+		return nil, ErrCorruptedNode
+	}
+	offset := getUint16(data[dirOff : dirOff+2])
+	ptr := int(offset)
+	if ptr < NodeHeaderSize || ptr+leafColumnarHeaderSize > len(data) {
+		return nil, ErrCorruptedNode
+	}
+
+	keyLen := int(getUint16(data[ptr : ptr+2]))
+	keyOff := int(getUint16(data[ptr+7 : ptr+9]))
+	remaining := len(data) - ptr
+	if keyOff < leafColumnarHeaderSize || keyOff > remaining {
+		return nil, ErrCorruptedNode
+	}
+	keyStart := ptr + keyOff
+	if keyLen > len(data)-keyStart {
+		return nil, ErrCorruptedNode
+	}
+	return data[keyStart : keyStart+keyLen], nil
+}
+
 func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
 	count := n.Count()
 	if count == 0 {
 		return 0, false, nil
 	}
+
 	if count <= smallSearchThreshold {
-		for idx := uint16(0); idx < count; idx++ {
-			k, _, _, err := n.leafEntryKeyAt(idx)
+		for idx := 0; idx < int(count); idx++ {
+			k, err := n.leafColumnarKeyViewAtIndex(idx)
 			if err != nil {
 				return 0, false, err
 			}
 			cmp := bytes.Compare(k, key)
 			if cmp >= 0 {
-				return idx, cmp == 0, nil
+				return uint16(idx), cmp == 0, nil
 			}
 		}
 		return count, false, nil
@@ -483,7 +513,7 @@ func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
 	i, j := 0, int(count)
 	for i < j {
 		h := int(uint(i+j) >> 1) // avoid overflow
-		k, _, _, err := n.leafEntryKeyAt(uint16(h))
+		k, err := n.leafColumnarKeyViewAtIndex(h)
 		if err != nil {
 			return 0, false, err
 		}
@@ -496,7 +526,7 @@ func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
 	}
 
 	if i < int(count) {
-		k, _, _, err := n.leafEntryKeyAt(uint16(i))
+		k, err := n.leafColumnarKeyViewAtIndex(i)
 		if err != nil {
 			return 0, false, err
 		}
