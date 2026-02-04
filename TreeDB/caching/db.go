@@ -19,11 +19,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -768,6 +770,33 @@ func (db *DB) SetDictStore(store DictStore) {
 	db.ensureValueLogDictTrainer()
 }
 
+// SetTemplateStore installs the template store used for template compression.
+func (db *DB) SetTemplateStore(store template.Store) {
+	if db == nil {
+		return
+	}
+	db.templateStore = store
+	if db.valueLogReader != nil && store != nil {
+		db.valueLogReader.SetTemplateLookup(func(templateID uint64) ([]byte, error) {
+			return db.templateLookup(context.Background(), templateID)
+		}, db.valueLogTemplateDecodeOpts)
+	}
+}
+
+func (db *DB) templateLookup(ctx context.Context, templateID uint64) ([]byte, error) {
+	if templateID == 0 {
+		return nil, valuelog.ErrMissingTemplate
+	}
+	if db == nil || db.templateStore == nil {
+		return nil, valuelog.ErrMissingTemplate
+	}
+	defBytes, err := db.templateStore.GetTemplateDef(ctx, templateID)
+	if err != nil {
+		return nil, err
+	}
+	return defBytes, nil
+}
+
 func (db *DB) currentDictID(ctx context.Context) (uint64, error) {
 	if db == nil || db.dictStore == nil {
 		return 0, nil
@@ -811,6 +840,32 @@ func (db *DB) dictBytes(ctx context.Context, dictID uint64) ([]byte, error) {
 	db.valueLogDictBytes = out
 	db.valueLogDictBytesMu.Unlock()
 	return out, nil
+}
+
+func (db *DB) templateCompressionEnabled() bool {
+	return db != nil && db.valueLogTemplateEnabled && db.valueLogTemplateEngine != nil && db.templateStore != nil
+}
+
+func (db *DB) valueLogTemplateEncodeRecords(records []valuelog.Record) ([]valuelog.Record, bool) {
+	if !db.templateCompressionEnabled() || len(records) == 0 {
+		return records, false
+	}
+	engine := db.valueLogTemplateEngine
+	store := db.templateStore
+	encoded := records
+	used := false
+	for i := range records {
+		payload, ok := engine.Encode(context.Background(), records[i].Value, store)
+		if ok {
+			if !used {
+				encoded = make([]valuelog.Record, len(records))
+				copy(encoded, records)
+				used = true
+			}
+			encoded[i].Value = payload
+		}
+	}
+	return encoded, used
 }
 
 func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
@@ -1466,6 +1521,13 @@ type Options struct {
 	// Cached mode only (value log enabled by default).
 	ValueLogCompressionAutotune valuelog.AutotuneOptions
 
+	// ValueLogTemplateMode controls template-based compression for value-log values.
+	ValueLogTemplateMode template.Mode
+	// ValueLogTemplateConfig controls template creation and encoding behavior.
+	ValueLogTemplateConfig template.Config
+	// ValueLogTemplateReadStrict controls strict template decode behavior.
+	ValueLogTemplateReadStrict bool
+
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
 }
@@ -1543,8 +1605,9 @@ type DB struct {
 	maxValueLogRetainedBytesHard int64
 
 	// Level 1 (Disk)
-	backend   BackendDB
-	dictStore DictStore
+	backend       BackendDB
+	dictStore     DictStore
+	templateStore template.Store
 
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain             compression.TrainConfig
@@ -1582,6 +1645,13 @@ type DB struct {
 	valueLogDictBytesMu             sync.Mutex
 	valueLogDictBytesID             uint64
 	valueLogDictBytes               []byte
+
+	// Value-log template compression (cached mode).
+	valueLogTemplateEnabled    bool
+	valueLogTemplateMode       template.Mode
+	valueLogTemplateEngine     *template.Engine
+	valueLogTemplateReadStrict bool
+	valueLogTemplateDecodeOpts template.DecodeOptions
 
 	// Cached dictdb current pointer to avoid per-write lookups on the hot path.
 	// A stale dictID is safe (it always points to a durable dict); at worst we
@@ -2245,6 +2315,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
+	valueLogTemplateEnabled := opts.ValueLogTemplateMode != template.TemplateOff
+	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
+	valueLogTemplateDecodeOpts := template.DecodeOptions{MaxGaps: valueLogTemplateCfg.MaxGaps, MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes}
+	if valueLogTemplateDecodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
+		valueLogTemplateDecodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
+	}
 
 	// Favor aggressive sampling so the first dict arrives quickly. The trainer
 	// still caps total work via TrainBytes and queue backpressure.
@@ -2353,15 +2429,25 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictProbeBytes:         uint64(probeBytes),
 		valueLogDictPausedSampleStride: pausedSampleStride,
 		valueLogAutotuneOptions:        valueLogAutotune,
-		mutableShards:                  mutableShards,
-		mutableShardMask:               uint64(shardCount - 1),
-		hashSortedIndexer:              indexer,
-		closeCh:                        make(chan struct{}),
-		flushCh:                        make(chan struct{}, 1),
-		autoCheckpointOnceCh:           make(chan struct{}, 1),
-		autoCheckpointWriteCh:          make(chan struct{}, 1),
-		lanes:                          lanes,
-		flushLaneMu:                    make([]sync.Mutex, len(lanes)),
+		valueLogTemplateEnabled:        valueLogTemplateEnabled,
+		valueLogTemplateMode:           opts.ValueLogTemplateMode,
+		valueLogTemplateReadStrict:     opts.ValueLogTemplateReadStrict,
+		valueLogTemplateDecodeOpts:     valueLogTemplateDecodeOpts,
+		valueLogTemplateEngine: func() *template.Engine {
+			if !valueLogTemplateEnabled {
+				return nil
+			}
+			return template.NewEngine(valueLogTemplateCfg)
+		}(),
+		mutableShards:         mutableShards,
+		mutableShardMask:      uint64(shardCount - 1),
+		hashSortedIndexer:     indexer,
+		closeCh:               make(chan struct{}),
+		flushCh:               make(chan struct{}, 1),
+		autoCheckpointOnceCh:  make(chan struct{}, 1),
+		autoCheckpointWriteCh: make(chan struct{}, 1),
+		lanes:                 lanes,
+		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
@@ -3397,6 +3483,15 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
+	templatePrepass := false
+	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
+		if db.valueLogTemplateMode == template.TemplateOnly {
+			dictID = 0
+			dict = nil
+		} else if db.valueLogTemplateMode == template.TemplatePrepass {
+			templatePrepass = true
+		}
+	}
 	attemptCompression, probeCompression, paused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
 	if dictID != 0 && !attemptCompression {
 		dictID = 0
@@ -3418,6 +3513,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
+	if dictID == 0 || templatePrepass {
+		records, _ = db.valueLogTemplateEncodeRecords(records)
+	}
 	db.valueLogDictCollectSamples(records)
 
 	if policySetter != nil {
@@ -3675,6 +3773,15 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	startSize := w.Size()
 
 	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
+	templatePrepass := false
+	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
+		if db.valueLogTemplateMode == template.TemplateOnly {
+			dictID = 0
+			dict = nil
+		} else if db.valueLogTemplateMode == template.TemplatePrepass {
+			templatePrepass = true
+		}
+	}
 	if dictID != 0 && !attemptCompression {
 		dictID = 0
 		dict = nil
@@ -3692,6 +3799,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	db.valueLogDictCollectSample(value)
+
+	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
+		if payload, ok := db.valueLogTemplateEngine.Encode(context.Background(), value, db.templateStore); ok {
+			value = payload
+		}
+	}
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
@@ -7500,6 +7613,11 @@ func (db *DB) Stats() map[string]string {
 	if vlogFramesTotal > 0 {
 		stats["treedb.cache.vlog_dict.attempted_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesAttempted)/float64(vlogFramesTotal))
 		stats["treedb.cache.vlog_dict.kept_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesKept)/float64(vlogFramesTotal))
+	}
+	if db.valueLogTemplateEngine != nil {
+		for k, v := range db.valueLogTemplateEngine.StatsSnapshot() {
+			stats["treedb.cache.vlog_template."+k] = v
+		}
 	}
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.last_applied_dict_id"] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictID.Load())

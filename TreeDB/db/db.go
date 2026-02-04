@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
+	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -158,6 +159,17 @@ type ValueLogOptions struct {
 
 	// CompressionAutotune configures the wall-time value-log compression autotuner.
 	CompressionAutotune valuelog.AutotuneOptions
+
+	// TemplateMode controls template-based compression for value-log values.
+	TemplateMode template.Mode
+	// TemplateConfig controls template creation and encoding behavior.
+	TemplateConfig template.Config
+	// TemplateReadStrict controls strict template decode behavior.
+	TemplateReadStrict bool
+	// TemplateLookup provides template definition bytes for value-log decoding.
+	TemplateLookup valuelog.TemplateLookup
+	// TemplateDecodeOptions controls decode caps for template payloads.
+	TemplateDecodeOptions template.DecodeOptions
 }
 
 type Options struct {
@@ -320,6 +332,9 @@ type Options struct {
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
+	// DisableSideStores skips opening dictdb/templatedb side stores.
+	// This is intended for internal side-store usage (e.g. templatedb itself).
+	DisableSideStores bool
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -535,6 +550,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)

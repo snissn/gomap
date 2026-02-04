@@ -11,8 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 // VlogAutotuneBenchMode controls the deterministic bench mode.
@@ -23,6 +25,7 @@ const (
 	VlogAutotuneBenchNoDictFixed VlogAutotuneBenchMode = "no_dict_fixed"
 	VlogAutotuneBenchDictFixed   VlogAutotuneBenchMode = "dict_fixed"
 	VlogAutotuneBenchAutotune    VlogAutotuneBenchMode = "autotune"
+	VlogAutotuneBenchTemplate    VlogAutotuneBenchMode = "template_fixed"
 )
 
 type VlogAutotuneBenchSegment struct {
@@ -75,6 +78,39 @@ type VlogAutotuneBenchResult struct {
 	TrainerStats compression.TrainerStats
 }
 
+type templateBenchKV struct {
+	db *DB
+}
+
+func (kv templateBenchKV) Get(key []byte) ([]byte, error) {
+	return kv.db.Get(key)
+}
+
+func (kv templateBenchKV) SetSync(key, value []byte) error {
+	return kv.db.SetSync(key, value)
+}
+
+func (kv templateBenchKV) DeleteSync(key []byte) error {
+	return kv.db.DeleteSync(key)
+}
+
+func (kv templateBenchKV) NewBatch() templatedb.Batch {
+	b := kv.db.NewBatch()
+	if b == nil {
+		return nil
+	}
+	return templateBenchBatch{b: b}
+}
+
+type templateBenchBatch struct {
+	b *Batch
+}
+
+func (tb templateBenchBatch) Set(key, value []byte) error { return tb.b.Set(key, value) }
+func (tb templateBenchBatch) Delete(key []byte) error     { return tb.b.Delete(key) }
+func (tb templateBenchBatch) WriteSync() error            { return tb.b.WriteSync() }
+func (tb templateBenchBatch) Close() error                { return tb.b.Close() }
+
 func RunVlogAutotuneBench(req VlogAutotuneBenchRequest) (*VlogAutotuneBenchResult, error) {
 	if len(req.Segments) == 0 {
 		return nil, errors.New("no segments")
@@ -103,14 +139,44 @@ func RunVlogAutotuneBench(req VlogAutotuneBenchRequest) (*VlogAutotuneBenchResul
 	defer dictBackend.Close()
 
 	store := dictdb.New(dictBackend)
-
 	opts := benchOptionsForMode(req.Mode, req.FixedK)
+	var templateStore *templatedb.Store
+	if opts.ValueLogTemplateMode != template.TemplateOff {
+		templatedbDir := filepath.Join(root, "templatedb")
+		if err := os.MkdirAll(templatedbDir, 0755); err != nil {
+			return nil, err
+		}
+		templateBackend, err := db.Open(db.Options{Dir: templatedbDir, DisableBackgroundPrune: true})
+		if err != nil {
+			return nil, err
+		}
+		defer templateBackend.Close()
+		templateCached, err := Open(templatedbDir, templateBackend, Options{
+			FlushThreshold: 1 << 30,
+			DisableWAL:     true,
+			AllowUnsafe:    true,
+		})
+		if err != nil {
+			_ = templateBackend.Close()
+			return nil, err
+		}
+		defer templateCached.Close()
+		tcfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
+		templateStore = templatedb.New(templateBenchKV{db: templateCached}, templatedb.Config{
+			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
+			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
+		})
+	}
+
 	cached, err := Open(root, backend, opts)
 	if err != nil {
 		return nil, err
 	}
 	defer cached.Close()
 	cached.SetDictStore(store)
+	if templateStore != nil {
+		cached.SetTemplateStore(templateStore)
+	}
 
 	ioClock := valuelog.NewVirtualClock(time.Unix(0, 0))
 	cached.valueLogAutotuneMetrics.setClock(ioClock)
@@ -167,7 +233,7 @@ func benchOptionsForMode(mode VlogAutotuneBenchMode, fixedK int) Options {
 		autotuneMode = valuelog.AutotuneMedium
 	case VlogAutotuneBenchDictFixed:
 		autotuneMode = valuelog.AutotuneOff
-	case VlogAutotuneBenchNoDictFixed, VlogAutotuneBenchOff:
+	case VlogAutotuneBenchNoDictFixed, VlogAutotuneBenchOff, VlogAutotuneBenchTemplate:
 		autotuneMode = valuelog.AutotuneOff
 	}
 
@@ -200,6 +266,28 @@ func benchOptionsForMode(mode VlogAutotuneBenchMode, fixedK int) Options {
 		ValueLogDictMetricsWindowBytes: benchWindowBytes,
 		ValueLogDictMetricsMinRecords:  benchTrainMinRecord,
 		ValueLogDictMetricsPauseBytes:  benchPauseBytes,
+		ValueLogTemplateMode: func() template.Mode {
+			if mode == VlogAutotuneBenchTemplate {
+				return template.TemplateOnly
+			}
+			return template.TemplateOff
+		}(),
+		ValueLogTemplateReadStrict: true,
+		ValueLogTemplateConfig: template.Config{
+			MinSavingsBytes:        1,
+			MaxAnchorsPerTemplate:  16,
+			MinAnchorLen:           16,
+			MaxAnchorLen:           64,
+			MaxAnchorBytesTotal:    1024,
+			MaxGaps:                32,
+			MaxTemplateFetch:       16,
+			MaxCandidatesPerFP:     16,
+			TrainSampleStride:      2,
+			SynthesizeEverySamples: 64,
+			MinAnchorFreq:          16,
+			MinPresenceRatio:       0.9,
+			MinPublishSavingsBytes: 16,
+		},
 		ValueLogCompressionAutotune: valuelog.AutotuneOptions{
 			Mode:                   autotuneMode,
 			CandidateK:             candidateK,
@@ -433,6 +521,10 @@ func runBenchSegment(db *DB, writer *benchValueWriter, sink *valuelog.VirtualSin
 	ioStart := ioClock.Now()
 
 	values := valuelog.GenerateAutotuneValues(seg.Workload, seg.ValueSize, seg.Records, int64(1000+seed))
+	rawBytesOriginal := uint64(0)
+	for i := range values {
+		rawBytesOriginal += uint64(len(values[i]))
+	}
 	lane := &db.lanes[0]
 	rid := uint64(1)
 	batch := make([]valuelog.Record, 0, 256)
@@ -459,6 +551,9 @@ func runBenchSegment(db *DB, writer *benchValueWriter, sink *valuelog.VirtualSin
 	ioEnd := ioClock.Now()
 	ioNs := ioEnd.Sub(ioStart).Nanoseconds()
 	raw := writer.stats.rawBytes
+	if rawBytesOriginal > 0 {
+		raw = rawBytesOriginal
+	}
 	stored := writer.stats.storedBytes
 	if stored == 0 {
 		stored = raw

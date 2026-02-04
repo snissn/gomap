@@ -50,6 +50,34 @@ func AutotuneWorkloads() []AutotuneWorkload {
 			},
 		},
 		{
+			Name: "template_friendly_mid",
+			Make: func(rng *rand.Rand, size int) []byte {
+				const (
+					prefix = "templatedb:{\"type\":\"account\",\"data\":"
+					suffix = ",\"state\":\"active\"}"
+				)
+				p := []byte(prefix)
+				s := []byte(suffix)
+				if size <= len(p)+len(s) {
+					buf := make([]byte, size)
+					copy(buf, p)
+					if size > len(p) {
+						copy(buf[len(p):], s[:size-len(p)])
+					}
+					return buf
+				}
+				midLen := size - len(p) - len(s)
+				buf := make([]byte, size)
+				copy(buf, p)
+				// Deterministic variable middle.
+				for i := 0; i < midLen; i++ {
+					buf[len(p)+i] = byte('a' + rng.Intn(26))
+				}
+				copy(buf[len(p)+midLen:], s)
+				return buf
+			},
+		},
+		{
 			Name: "medium_compressible_sparse",
 			Make: func(rng *rand.Rand, size int) []byte {
 				return makeSparseNoise(rng, size, 256, 16, []byte("abcd1234"))

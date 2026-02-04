@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 // MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
@@ -239,7 +240,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 
 	// Compressed grouped record: decode (allocates).
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}
@@ -297,6 +298,15 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		oldLen := len(dst)
 		dst = grow(dst, len(payload))
 		copy(dst[oldLen:], payload)
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+				return f.templateLookup(id)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			dst = append(dst[:oldLen], decoded...)
+		}
 		return dst, nil, true
 	}
 	if !page.ValuePtrIsGrouped(ptr) {
@@ -349,6 +359,15 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 				srcStart := cPrefixLen + int(valStart)
 				srcEnd := srcStart + n
 				copy(dst[oldLen:], payload[srcStart:srcEnd])
+				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+					decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+						return f.templateLookup(id)
+					}, f.templateDecodeOpts)
+					if err != nil {
+						return nil, err, true
+					}
+					dst = append(dst[:oldLen], decoded...)
+				}
 				return dst, nil, true
 			}
 			f.cacheMu.Unlock()
@@ -394,10 +413,19 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		srcStart := prefixLen + int(valStart)
 		srcEnd := srcStart + n
 		copy(dst[oldLen:], payload[srcStart:srcEnd])
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+				return f.templateLookup(id)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			dst = append(dst[:oldLen], decoded...)
+		}
 		return dst, nil, true
 	}
 
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}

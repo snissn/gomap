@@ -14,6 +14,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 type kvRecord struct {
@@ -62,14 +64,18 @@ type kvSample struct {
 type benchConfig struct {
 	Mode              string
 	Compression       string
+	Template          string
 	RawMiB            int
 	Batch             int
 	KeyMode           string
 	PointerThreshold  int
 	FlushThresholdMiB int
 	DictTrainMiB      int
+	DictBytes         int
 	DictSampleStride  int
+	DictWaitSeconds   int
 	OutJSON           string
+	KeepDir           bool
 }
 
 const (
@@ -80,6 +86,7 @@ const (
 type benchReport struct {
 	Mode                string   `json:"mode"`
 	Compression         string   `json:"compression"`
+	Template            string   `json:"template"`
 	KeyMode             string   `json:"key_mode"`
 	RawMiB              int      `json:"raw_mib"`
 	Batch               int      `json:"batch"`
@@ -106,6 +113,14 @@ type benchReport struct {
 	FramesAttempted     *uint64  `json:"frames_attempted,omitempty"`
 	FramesKept          *uint64  `json:"frames_kept,omitempty"`
 	KeptOfAttemptedFrac *float64 `json:"kept_of_attempted_frac,omitempty"`
+	TemplateAttempted   *uint64  `json:"template_attempted,omitempty"`
+	TemplateMatched     *uint64  `json:"template_matched,omitempty"`
+	TemplateKept        *uint64  `json:"template_kept,omitempty"`
+	TemplateSavedBytes  *uint64  `json:"template_saved_bytes,omitempty"`
+	TemplatesPublished  *uint64  `json:"templates_published,omitempty"`
+	MaskSparseUsed      *uint64  `json:"mask_sparse_used,omitempty"`
+	MaskFullUsed        *uint64  `json:"mask_full_used,omitempty"`
+	MaskSparseFrac      *float64 `json:"mask_sparse_frac,omitempty"`
 	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
 	IndexBytes          int64    `json:"index_bytes,omitempty"`
 	WritePathMode       string   `json:"write_path_mode"`
@@ -143,13 +158,18 @@ func main() {
 	benchKV := flag.Bool("bench-kv", false, "Enable KV throughput bench (TreeDB public API)")
 	benchMode := flag.String("bench-mode", "wal_on", "Bench write-path: wal_on|wal_off")
 	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
+	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
+	benchKeepDir := flag.Bool("bench-keep-dir", false, "Keep bench directory after run")
+	cpuProfile := flag.String("cpu-profile", "", "Write CPU profile to this file (optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
 	benchPointerThreshold := flag.Int("bench-pointer-threshold", 1, "Value-log pointer threshold (bytes)")
 	benchFlushThresholdMiB := flag.Int("bench-flush-threshold-mib", 0, "Flush threshold for cached mode (MiB, 0=default)")
 	benchDictTrainMiB := flag.Int("bench-dict-train-mib", defaultBenchDictTrainMiB, "Dict training sample target (MiB, compression on; 0=auto)")
+	benchDictBytes := flag.Int("bench-dict-bytes", 0, "Dict history size in bytes (compression on; 0=default)")
 	benchDictSampleStride := flag.Int("bench-dict-sample-stride", defaultBenchDictSampleStride, "Dict training sample stride (records; 0=auto)")
+	benchDictWaitSeconds := flag.Int("bench-dict-wait-seconds", 10, "Seconds to wait for dict activation before steady")
 	benchOutJSON := flag.String("bench-out-json", "", "Optional JSON output path (bench only)")
 	flag.Parse()
 
@@ -176,17 +196,28 @@ func main() {
 		if *maxEval > 0 && len(evalPairs) > *maxEval {
 			evalPairs = evalPairs[:*maxEval]
 		}
+		if *cpuProfile != "" {
+			stop, err := startCPUProfile(*cpuProfile)
+			if err != nil {
+				fail(err)
+			}
+			defer stop()
+		}
 		cfg := benchConfig{
 			Mode:              *benchMode,
 			Compression:       *benchCompression,
+			Template:          *benchTemplate,
 			RawMiB:            *benchRawMiB,
 			Batch:             *benchBatch,
 			KeyMode:           *benchKeyMode,
 			PointerThreshold:  *benchPointerThreshold,
 			FlushThresholdMiB: *benchFlushThresholdMiB,
 			DictTrainMiB:      *benchDictTrainMiB,
+			DictBytes:         *benchDictBytes,
 			DictSampleStride:  *benchDictSampleStride,
+			DictWaitSeconds:   *benchDictWaitSeconds,
 			OutJSON:           *benchOutJSON,
+			KeepDir:           *benchKeepDir,
 		}
 		report, err := runKVBench(*input, *capBytes, cfg, trainPairs, evalPairs, stats, loadDur)
 		if err != nil {
@@ -477,7 +508,11 @@ func decodeValue(value string, encoding string) ([]byte, error) {
 func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSample, stats datasetStats, loadDur time.Duration) (*benchReport, error) {
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
 	cfg.Compression = strings.ToLower(strings.TrimSpace(cfg.Compression))
+	cfg.Template = strings.ToLower(strings.TrimSpace(cfg.Template))
 	cfg.KeyMode = strings.ToLower(strings.TrimSpace(cfg.KeyMode))
+	if cfg.Template == "" {
+		cfg.Template = "off"
+	}
 
 	if cfg.Mode == "" {
 		cfg.Mode = "wal_on"
@@ -487,6 +522,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	}
 	if cfg.Compression != "on" && cfg.Compression != "off" {
 		return nil, fmt.Errorf("unsupported -bench-compression=%q (expected on|off)", cfg.Compression)
+	}
+	if cfg.Template != "on" && cfg.Template != "off" && cfg.Template != "prepass" {
+		return nil, fmt.Errorf("unsupported -bench-template=%q (expected on|off|prepass)", cfg.Template)
 	}
 	if cfg.KeyMode != "random" && cfg.KeyMode != "sequential" && cfg.KeyMode != "dataset" {
 		return nil, fmt.Errorf("unsupported -bench-key-mode=%q (expected random|sequential|dataset)", cfg.KeyMode)
@@ -547,6 +585,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.Compression == "on" {
 		fmt.Printf("bench:    dict_train_mib=%d dict_sample_stride=%d\n", cfg.DictTrainMiB, cfg.DictSampleStride)
 	}
+	if cfg.Template == "on" {
+		fmt.Printf("bench:    template=on\n")
+	}
 	fmt.Printf("load:     %.3fs\n", loadDur.Seconds())
 	fmt.Println()
 
@@ -559,7 +600,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(benchDir)
+	if !cfg.KeepDir {
+		defer os.RemoveAll(benchDir)
+	}
 
 	opts.Dir = benchDir
 	db, err := treedb.Open(opts)
@@ -658,6 +701,22 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	framesTotal, framesTotalOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_total")
 	framesAttempted, framesAttemptedOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_attempted")
 	framesKept, framesKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_dict.frames_kept")
+	templateAttempted, templateAttemptedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.attempted")
+	templateMatched, templateMatchedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.matched")
+	templateKept, templateKeptOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.kept")
+	templateSaved, templateSavedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.bytes_saved_total")
+	templatesPublished, templatesPublishedOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.templates_published_total")
+	maskSparse, maskSparseOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.mask_sparse_used_total")
+	maskFull, maskFullOK := parseStatUint(statsEnd, "treedb.cache.vlog_template.mask_full_used_total")
+	maskSparseFrac := 0.0
+	maskSparseFracOK := false
+	if maskSparseOK && maskFullOK {
+		total := maskSparse + maskFull
+		if total > 0 {
+			maskSparseFrac = float64(maskSparse) / float64(total)
+			maskSparseFracOK = true
+		}
+	}
 	keptOfAttempted := 0.0
 	keptOfAttemptedOK := false
 	if framesAttemptedOK && framesKeptOK && framesAttempted > 0 {
@@ -681,6 +740,18 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		formatStatUint(framesKept, framesKeptOK),
 		formatStatFloat(keptOfAttempted, keptOfAttemptedOK),
 	)
+	if cfg.Template != "off" {
+		fmt.Printf("vlog_template: attempted=%s matched=%s kept=%s bytes_saved=%s templates_published=%s mask_sparse=%s mask_full=%s sparse_frac=%s\n",
+			formatStatUint(templateAttempted, templateAttemptedOK),
+			formatStatUint(templateMatched, templateMatchedOK),
+			formatStatUint(templateKept, templateKeptOK),
+			formatStatUint(templateSaved, templateSavedOK),
+			formatStatUint(templatesPublished, templatesPublishedOK),
+			formatStatUint(maskSparse, maskSparseOK),
+			formatStatUint(maskFull, maskFullOK),
+			formatStatFloat(maskSparseFrac, maskSparseFracOK),
+		)
+	}
 	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
 		diskUsage.valueLogBytes, bytesToMiB(diskUsage.valueLogBytes),
 		diskUsage.indexBytes, bytesToMiB(diskUsage.indexBytes),
@@ -750,6 +821,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	report := &benchReport{
 		Mode:                cfg.Mode,
 		Compression:         cfg.Compression,
+		Template:            cfg.Template,
 		KeyMode:             cfg.KeyMode,
 		RawMiB:              cfg.RawMiB,
 		Batch:               cfg.Batch,
@@ -776,6 +848,62 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		FramesAttempted:     framesAttemptedPtr,
 		FramesKept:          framesKeptPtr,
 		KeptOfAttemptedFrac: keptOfAttemptedPtr,
+		TemplateAttempted: func() *uint64 {
+			if templateAttemptedOK {
+				v := templateAttempted
+				return &v
+			}
+			return nil
+		}(),
+		TemplateMatched: func() *uint64 {
+			if templateMatchedOK {
+				v := templateMatched
+				return &v
+			}
+			return nil
+		}(),
+		TemplateKept: func() *uint64 {
+			if templateKeptOK {
+				v := templateKept
+				return &v
+			}
+			return nil
+		}(),
+		TemplateSavedBytes: func() *uint64 {
+			if templateSavedOK {
+				v := templateSaved
+				return &v
+			}
+			return nil
+		}(),
+		TemplatesPublished: func() *uint64 {
+			if templatesPublishedOK {
+				v := templatesPublished
+				return &v
+			}
+			return nil
+		}(),
+		MaskSparseUsed: func() *uint64 {
+			if maskSparseOK {
+				v := maskSparse
+				return &v
+			}
+			return nil
+		}(),
+		MaskFullUsed: func() *uint64 {
+			if maskFullOK {
+				v := maskFull
+				return &v
+			}
+			return nil
+		}(),
+		MaskSparseFrac: func() *float64 {
+			if maskSparseFracOK {
+				v := maskSparseFrac
+				return &v
+			}
+			return nil
+		}(),
 		ValueLogBytes:       diskUsage.valueLogBytes,
 		IndexBytes:          diskUsage.indexBytes,
 		WritePathMode:       writePathMode,
@@ -818,18 +946,35 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		if trainMiB == 0 {
 			trainMiB = defaultBenchDictTrainMiB
 		}
+		dictBytes := cfg.DictBytes
+		if dictBytes < 0 {
+			return treedb.Options{}, benchWritePath{}, fmt.Errorf("invalid -bench-dict-bytes=%d (must be >= 0)", dictBytes)
+		}
 		sampleStride := cfg.DictSampleStride
 		if sampleStride == 0 {
 			sampleStride = defaultBenchDictSampleStride
 		}
 		opts.ValueLog.DictTrain = compression.TrainConfig{
 			TrainBytes:   trainMiB << 20,
+			DictBytes:    dictBytes,
 			SampleStride: sampleStride,
 		}
-		opts.ValueLog.CompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
+		autotune := valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
+		if dictBytes > 0 {
+			autotune.CandidateHistoryBytes = []int{dictBytes}
+		}
+		opts.ValueLog.CompressionAutotune = autotune
 	} else {
 		opts.ValueLog.DictTrain = compression.TrainConfig{TrainBytes: -1}
 		opts.ValueLog.CompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
+	}
+	switch cfg.Template {
+	case "on":
+		opts.ValueLog.TemplateMode = template.TemplateOnly
+		opts.ValueLog.TemplateReadStrict = true
+	case "prepass":
+		opts.ValueLog.TemplateMode = template.TemplatePrepass
+		opts.ValueLog.TemplateReadStrict = true
 	}
 
 	return opts, expect, nil
@@ -1089,7 +1234,11 @@ func ensureDictActiveBeforeSteady(db *treedb.DB, cfg benchConfig) (bool, map[str
 		}
 	}
 
-	active, snap := waitForDictActivation(db, 10*time.Second)
+	waitSecs := cfg.DictWaitSeconds
+	if waitSecs <= 0 {
+		waitSecs = 10
+	}
+	active, snap := waitForDictActivation(db, time.Duration(waitSecs)*time.Second)
 	if !active {
 		return false, snap, fmt.Errorf("value-log dict did not become active before steady (mode=%s). Try increasing -train/-bench-raw-mib or lowering -bench-flush-threshold-mib; if it persists, this is a bug", cfg.Mode)
 	}
@@ -1393,6 +1542,22 @@ func parseIntList(s string) ([]int, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+func startCPUProfile(path string) (func(), error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("cpu profile: %w", err)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("cpu profile: %w", err)
+	}
+	stop := func() {
+		pprof.StopCPUProfile()
+		_ = f.Close()
+	}
+	return stop, nil
 }
 
 func fail(err error) {

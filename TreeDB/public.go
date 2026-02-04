@@ -16,6 +16,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
@@ -59,6 +62,7 @@ type DB struct {
 	cached         *caching.DB
 	backend        *db.DB
 	dictdb         *db.DB
+	templateDB     *DB
 	writePath      writePathInfo
 	bgVac          bgIndexVacuumWorker
 	notifyError    func(error)
@@ -129,6 +133,12 @@ func Open(opts Options) (*DB, error) {
 	rootDir := opts.Dir
 	maindbDir := filepath.Join(rootDir, "maindb")
 	dictdbDir := filepath.Join(rootDir, "dictdb")
+	templatedbDir := filepath.Join(rootDir, "templatedb")
+	if opts.DisableSideStores {
+		maindbDir = rootDir
+		dictdbDir = ""
+		templatedbDir = ""
+	}
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
 			if os.IsNotExist(err) {
@@ -136,46 +146,116 @@ func Open(opts Options) (*DB, error) {
 			}
 			return nil, err
 		}
-		if _, err := os.Stat(dictdbDir); err != nil {
-			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("treedb: dictdb directory missing for read-only open: %s", dictdbDir)
+		if !opts.DisableSideStores {
+			if _, err := os.Stat(dictdbDir); err != nil {
+				if os.IsNotExist(err) {
+					return nil, fmt.Errorf("treedb: dictdb directory missing for read-only open: %s", dictdbDir)
+				}
+				return nil, err
 			}
-			return nil, err
+			if opts.ValueLog.TemplateMode != template.TemplateOff {
+				if _, err := os.Stat(templatedbDir); err != nil {
+					if os.IsNotExist(err) {
+						return nil, fmt.Errorf("treedb: templatedb directory missing for read-only open: %s", templatedbDir)
+					}
+					return nil, err
+				}
+			}
 		}
 	} else {
 		if err := os.MkdirAll(maindbDir, 0755); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(dictdbDir, 0755); err != nil {
-			return nil, err
+		if !opts.DisableSideStores {
+			if err := os.MkdirAll(dictdbDir, 0755); err != nil {
+				return nil, err
+			}
+			if opts.ValueLog.TemplateMode != template.TemplateOff {
+				if err := os.MkdirAll(templatedbDir, 0755); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
-	dictOpts := opts
-	dictOpts.Dir = dictdbDir
-	dictOpts.DisableBackgroundPrune = true
-	dictOpts.ValueLog.DictLookup = nil
-	if chunkSizeDefaulted {
-		dictOpts.ChunkSize = defaultDictChunkSize
-	}
-	dictBackend, err := db.Open(dictOpts)
-	if err != nil {
-		return nil, err
-	}
-	dictStore := dictdb.New(dictBackend)
+	var dictBackend *db.DB
+	var dictStore *dictdb.Store
+	var templateDB *DB
+	var templateStore *templatedb.Store
+	if !opts.DisableSideStores {
+		dictOpts := opts
+		dictOpts.Dir = dictdbDir
+		dictOpts.DisableBackgroundPrune = true
+		dictOpts.ValueLog.DictLookup = nil
+		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
+		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
+		if chunkSizeDefaulted {
+			dictOpts.ChunkSize = defaultDictChunkSize
+		}
+		var err error
+		dictBackend, err = db.Open(dictOpts)
+		if err != nil {
+			return nil, err
+		}
+		dictStore = dictdb.New(dictBackend)
 
-	opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-		return dictStore.GetDictBytes(context.Background(), dictID)
+		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
+			return dictStore.GetDictBytes(context.Background(), dictID)
+		}
+	}
+
+	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
+		templateOpts := opts
+		templateOpts.Dir = templatedbDir
+		templateOpts.DisableSideStores = true
+		templateOpts.DisableBackgroundPrune = true
+		templateOpts.ValueLog.DictLookup = nil
+		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
+		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
+		templateOpts.ValueLog.TemplateMode = template.TemplateOff
+		templateOpts.ValueLog.TemplateLookup = nil
+		templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
+		if chunkSizeDefaulted {
+			templateOpts.ChunkSize = defaultDictChunkSize
+		}
+
+		var err error
+		templateDB, err = Open(templateOpts)
+		if err != nil {
+			if dictBackend != nil {
+				_ = dictBackend.Close()
+			}
+			return nil, err
+		}
+
+		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
+		templateStore = templatedb.New(templateKV{db: templateDB}, templatedb.Config{
+			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
+			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
+		})
+		decodeOpts := template.DecodeOptions{MaxGaps: tcfg.MaxGaps, MaxDecodedBytes: tcfg.MaxDecodedBytes}
+		if decodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
+			decodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
+		}
+		opts.ValueLog.TemplateLookup = func(templateID uint64) ([]byte, error) {
+			return templateStore.GetTemplateDef(context.Background(), templateID)
+		}
+		opts.ValueLog.TemplateDecodeOptions = decodeOpts
 	}
 	opts.Dir = maindbDir
 	backend, err := db.Open(opts)
 	if err != nil {
-		_ = dictBackend.Close()
+		if dictBackend != nil {
+			_ = dictBackend.Close()
+		}
+		if templateDB != nil {
+			_ = templateDB.Close()
+		}
 		return nil, err
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
+		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -236,6 +316,9 @@ func Open(opts Options) (*DB, error) {
 		ValueLogDictMetricsPauseBytes:      opts.ValueLog.DictMetricsPauseBytes,
 		ValueLogDictMinPayloadSavingsRatio: opts.ValueLog.DictMinPayloadSavingsRatio,
 		ValueLogCompressionAutotune:        opts.ValueLog.CompressionAutotune,
+		ValueLogTemplateMode:               opts.ValueLog.TemplateMode,
+		ValueLogTemplateConfig:             opts.ValueLog.TemplateConfig,
+		ValueLogTemplateReadStrict:         opts.ValueLog.TemplateReadStrict,
 		AllowUnsafe:                        allowUnsafe,
 		MaxValueLogRetainedBytes:           opts.ValueLog.MaxRetainedBytes,
 		MaxValueLogRetainedBytesHard:       opts.ValueLog.MaxRetainedBytesHard,
@@ -243,12 +326,18 @@ func Open(opts Options) (*DB, error) {
 	})
 	if err != nil {
 		_ = backend.Close()
-		_ = dictBackend.Close()
+		if dictBackend != nil {
+			_ = dictBackend.Close()
+		}
+		if templateDB != nil {
+			_ = templateDB.Close()
+		}
 		return nil, err
 	}
 
 	cached.SetDictStore(dictStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	cached.SetTemplateStore(templateStore)
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -447,6 +536,10 @@ func (db *DB) Close() error {
 	if db.dictdb != nil {
 		err = errors.Join(err, db.dictdb.Close())
 		db.dictdb = nil
+	}
+	if db.templateDB != nil {
+		err = errors.Join(err, db.templateDB.Close())
+		db.templateDB = nil
 	}
 
 	return errors.Join(err, db.backgroundError())
