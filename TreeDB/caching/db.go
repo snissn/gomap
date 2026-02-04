@@ -42,6 +42,7 @@ var iteratorDebugEnabled atomic.Bool
 var valueLogEligiblePool sync.Pool // stores []int
 var valueLogRecordPool sync.Pool   // stores []valuelog.Record
 var valueLogKeyPool sync.Pool      // stores [][]byte
+var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
 
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
@@ -112,6 +113,50 @@ func putValueLogRecords(s []valuelog.Record) {
 		return
 	}
 	valueLogRecordPool.Put(s[:0])
+}
+
+func getValueLogPtrs(n int) []page.ValuePtr {
+	if n < 0 {
+		n = 0
+	}
+	if v := valueLogPtrPool.Get(); v != nil {
+		if s, ok := v.([]page.ValuePtr); ok {
+			if cap(s) >= n {
+				return s[:n]
+			}
+		}
+	}
+	return make([]page.ValuePtr, n)
+}
+
+func getValueLogPtrsCap(capacity int) []page.ValuePtr {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogPtrPool.Get(); v != nil {
+		if s, ok := v.([]page.ValuePtr); ok {
+			maxCap := capacity * 2
+			if maxCap < 256 {
+				maxCap = 256
+			}
+			if cap(s) >= capacity && cap(s) <= maxCap {
+				return s[:0]
+			}
+		}
+	}
+	return make([]page.ValuePtr, 0, capacity)
+}
+
+func putValueLogPtrs(s []page.ValuePtr) {
+	if s == nil {
+		return
+	}
+	clear(s)
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogPtrPool.Put(s[:0])
 }
 
 func getValueLogKeys(capacity int) [][]byte {
@@ -515,6 +560,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return nil, err
 	}
 	if len(ptrs) != len(eligible) {
+		putValueLogPtrs(ptrs)
 		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(eligible))
 	}
 
@@ -524,6 +570,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		op.IsPtr = true
 		op.Value = nil
 	}
+	putValueLogPtrs(ptrs)
 
 	retainPath := db.currentValueLogPath(lane)
 	if retainPath != "" {
@@ -668,8 +715,10 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		return err
 	}
 	if len(vlogPtrs) != len(keys) {
+		putValueLogPtrs(vlogPtrs)
 		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(keys))
 	}
+	defer putValueLogPtrs(vlogPtrs)
 
 	for i := range keys {
 		key := keys[i]
@@ -3331,6 +3380,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogMu.Unlock()
 		return nil, errWALUnavailable
 	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	policySetter := caps.keep
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
+	rawWriterInto := caps.rawInto
+	hasStats := statsWriter != nil
+	hasInto := statsWriterInto != nil
+	hasRawInto := rawWriterInto != nil
 	startSize := w.Size()
 
 	rawPayloadBytes := 0
@@ -3360,9 +3420,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	db.valueLogDictCollectSamples(records)
 
-	if policySetter, ok := any(w).(interface {
-		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
-	}); ok {
+	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
@@ -3400,19 +3458,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		k = valuelog.MaxFrameK
 	}
 
-	type frameStatsWriter interface {
-		AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
-	}
-	type frameStatsWriterInto interface {
-		AppendFrameWithStatsInto(dictID uint64, dict []byte, records []valuelog.Record, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
-	}
-	type rawFrameBatchWriterInto interface {
-		AppendRawFramesWritevInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
-	}
-	statsWriter, hasStats := w.(frameStatsWriter)
-	statsWriterInto, hasInto := w.(frameStatsWriterInto)
-	rawWriterInto, hasRawInto := w.(rawFrameBatchWriterInto)
-
 	storedPayloadBytes := 0
 	rawFrameBytes := 0
 	frameRecords := 0
@@ -3423,10 +3468,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeRawBytes := 0
 	rawBatchUsed := false
 	if dictID == 0 && hasRawInto && len(records) > 1 {
-		ptrs = make([]page.ValuePtr, len(records))
+		ptrs = getValueLogPtrs(len(records))
 		_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
 		if batchErr != nil {
 			err = batchErr
+			putValueLogPtrs(ptrs)
+			ptrs = nil
 		} else {
 			rawFrameBytes = stats.RawPayloadBytes
 			storedPayloadBytes = stats.StoredPayloadBytes
@@ -3437,9 +3484,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			}
 		}
 	} else {
-		ptrs = make([]page.ValuePtr, 0, len(records))
+		ptrs = getValueLogPtrs(len(records))
 	}
-	var framePtrScratch [valuelog.MaxFrameK]page.ValuePtr
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
 			if i > 0 && i%4096 == 0 {
@@ -3449,10 +3495,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				w = l.vlog
 				if w == nil {
 					l.vlogMu.Unlock()
+					putValueLogPtrs(ptrs)
 					return nil, errWALUnavailable
 				}
-				statsWriter, _ = w.(frameStatsWriter)
-				statsWriterInto, _ = w.(frameStatsWriterInto)
+				if l.vlogCaps.writer != w {
+					l.vlogCaps = computeVlogWriterCaps(w)
+				}
+				caps = l.vlogCaps
+				statsWriter = caps.stats
+				statsWriterInto = caps.statsInto
+				hasStats = statsWriter != nil
+				hasInto = statsWriterInto != nil
 			}
 
 			end := i + k
@@ -3460,13 +3513,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				end = len(records)
 			}
 			if hasInto {
-				scratch := framePtrScratch[:end-i]
-				framePtrs, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], scratch)
+				dst := ptrs[i:end]
+				_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], dst)
 				if frameErr != nil {
 					err = frameErr
 					break
 				}
-				ptrs = append(ptrs, framePtrs...)
 				rawFrameBytes += stats.RawPayloadBytes
 				storedPayloadBytes += stats.StoredPayloadBytes
 				frameRecords += stats.Records
@@ -3489,7 +3541,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					err = frameErr
 					break
 				}
-				ptrs = append(ptrs, framePtrs...)
+				copy(ptrs[i:end], framePtrs)
 				rawFrameBytes += stats.RawPayloadBytes
 				storedPayloadBytes += stats.StoredPayloadBytes
 				frameRecords += stats.Records
@@ -3512,7 +3564,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				err = frameErr
 				break
 			}
-			ptrs = append(ptrs, framePtrs...)
+			copy(ptrs[i:end], framePtrs)
 			framesTotal++
 		}
 	}
@@ -3536,6 +3588,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	l.vlogMu.Unlock()
 	if err != nil {
+		putValueLogPtrs(ptrs)
 		return nil, err
 	}
 	if framesTotal > 0 {
@@ -3609,6 +3662,13 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	policySetter := caps.keep
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
 	startSize := w.Size()
 
 	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
@@ -3630,9 +3690,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 	db.valueLogDictCollectSample(value)
 
-	if policySetter, ok := any(w).(interface {
-		SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64)
-	}); ok {
+	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
 		ioNsPerStored := snap.IoNsPerStoredByte
 		encodeNsPerRaw := snap.EncodeNsPerRawByte
@@ -3654,14 +3712,10 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		rec[0] = valuelog.Record{RID: rid, Value: value}
 		var ptrs []page.ValuePtr
 		var frameErr error
-		if wStats, ok := any(w).(interface {
-			AppendFrameWithStatsInto(dictID uint64, dict []byte, records []valuelog.Record, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
-		}); ok {
-			ptrs, stats, frameErr = wStats.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
-		} else if wStats, ok := any(w).(interface {
-			AppendFrameWithStats(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, valuelog.FrameStats, error)
-		}); ok {
-			ptrs, stats, frameErr = wStats.AppendFrameWithStats(dictID, dict, rec[:])
+		if statsWriterInto != nil {
+			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
+		} else if statsWriter != nil {
+			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(dictID, dict, rec[:])
 		} else {
 			ptrs, frameErr = w.AppendFrame(dictID, dict, rec[:])
 		}
@@ -4427,6 +4481,7 @@ func (db *DB) Close() error {
 		if l.vlog != nil {
 			_ = l.vlog.Close()
 			l.vlog = nil
+			l.vlogCaps = vlogWriterCaps{}
 			l.vlogLiveBytes.Store(0)
 		}
 		l.vlogMu.Unlock()
@@ -5595,6 +5650,7 @@ func (db *DB) cleanupLaneWALWriters(l *lane) {
 	if l.vlog != nil {
 		_ = l.vlog.Close()
 		l.vlog = nil
+		l.vlogCaps = vlogWriterCaps{}
 	}
 	l.vlogMu.Unlock()
 }
@@ -8495,6 +8551,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		} else if debugPtr && eligibleCount > 0 {
 			b.db.debugPtrNoPtr.Add(int64(eligibleCount))
 		}
+		putValueLogPtrs(ptrs)
 	}
 
 	if !b.db.disableJournal {
