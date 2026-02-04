@@ -6,7 +6,7 @@ import (
 
 const leafColumnarHeaderSize = 11
 
-func parseLeafColumnarLayout(data []byte, offset int) (leafEntryLayout, error) {
+func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntryLayout, error) {
 	if offset+leafColumnarHeaderSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
@@ -29,7 +29,7 @@ func parseLeafColumnarLayout(data []byte, offset int) (leafEntryLayout, error) {
 
 	valSize := valLen
 	if flags&FlagPointer != 0 {
-		valSize = leafValuePtrSizeFromData(data)
+		valSize = valPtrSize
 	}
 	valStart := offset + valOff
 	if valStart+valSize > len(data) {
