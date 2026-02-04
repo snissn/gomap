@@ -27,6 +27,7 @@ type File struct {
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
+	templateDefCache   *templateDefCache
 
 	cacheMu    sync.Mutex
 	cacheStart atomic.Int64
@@ -48,12 +49,12 @@ type File struct {
 	deadMappingsCount atomic.Uint64
 }
 
-func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions) (*File, error) {
+func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup, templateDecodeOpts: templateOpts}
+	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup, templateDecodeOpts: templateOpts, templateDefCache: templateCache}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
 	return vf, nil
@@ -88,7 +89,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
 func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -102,7 +103,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 		return val, err
 	}
-	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
@@ -160,13 +161,17 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 					return nil, err
 				}
 				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-					decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
-						return f.templateLookup(id)
+					payload := dst[oldLen:]
+					decodedStart := len(dst)
+					dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 					}, f.templateDecodeOpts)
 					if err != nil {
 						return nil, err
 					}
-					dst = append(dst[:oldLen], decoded...)
+					decodedLen := len(dst) - decodedStart
+					copy(dst[oldLen:], dst[decodedStart:])
+					dst = dst[:oldLen+decodedLen]
 				}
 				return dst, nil
 			}
@@ -188,7 +193,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err
 			}
@@ -255,19 +260,23 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 			return nil, err
 		}
 		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
-				return f.templateLookup(id)
+			payload := dst[oldLen:]
+			decodedStart := len(dst)
+			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err
 			}
-			dst = append(dst[:oldLen], decoded...)
+			decodedLen := len(dst) - decodedStart
+			copy(dst[oldLen:], dst[decodedStart:])
+			dst = dst[:oldLen+decodedLen]
 		}
 		return dst, nil
 	}
 
 	// Slow path: use existing decoder and append.
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -330,6 +339,7 @@ type Manager struct {
 	dictLookup          DictLookup
 	templateLookup      TemplateLookup
 	templateDecodeOpts  templ.DecodeOptions
+	templateDefCache    *templateDefCache
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -363,9 +373,11 @@ func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOpti
 	defer m.mu.Unlock()
 	m.templateLookup = lookup
 	m.templateDecodeOpts = opts
+	m.templateDefCache = newTemplateDefCache(opts.DefCacheSize)
 	for _, f := range m.files {
 		f.templateLookup = lookup
 		f.templateDecodeOpts = opts
+		f.templateDefCache = m.templateDefCache
 	}
 }
 func (m *Manager) Close() error {
@@ -399,7 +411,7 @@ func (m *Manager) Refresh() error {
 		if _, ok := m.files[seg.id]; ok {
 			continue
 		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts)
+		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
 		if err != nil {
 			return err
 		}
@@ -556,6 +568,19 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
+}
+
+func (m *Manager) TemplateDefCacheStats() (hits, misses uint64, entries, capacity int) {
+	if m == nil {
+		return 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	cache := m.templateDefCache
+	m.mu.RUnlock()
+	if cache == nil {
+		return 0, 0, 0, 0
+	}
+	return cache.Stats()
 }
 
 func (m *Manager) RemoveSegment(id uint32) error {

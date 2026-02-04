@@ -2317,7 +2317,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
 	valueLogTemplateEnabled := opts.ValueLogTemplateMode != template.TemplateOff
 	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
-	valueLogTemplateDecodeOpts := template.DecodeOptions{MaxGaps: valueLogTemplateCfg.MaxGaps, MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes}
+	if opts.ValueLogTemplateMode == template.TemplatePrepass {
+		// TemplatePrepass can be CPU-heavy (template match + dict/zstd encode). If
+		// templates have not been kept recently, enter cold mode sooner so we don't
+		// pay candidate lookup/matching cost on every value.
+		if opts.ValueLogTemplateConfig.ColdSearchAfter <= 0 {
+			valueLogTemplateCfg.ColdSearchAfter = 64
+		}
+		if opts.ValueLogTemplateConfig.ColdSearchProbeEvery <= 0 {
+			valueLogTemplateCfg.ColdSearchProbeEvery = 64
+		}
+	}
+	valueLogTemplateDecodeOpts := template.DecodeOptions{MaxGaps: valueLogTemplateCfg.MaxGaps, MaxDecodedBytes: valueLogTemplateCfg.MaxDecodedBytes, DefCacheSize: valueLogTemplateCfg.DefCacheSize}
 	if valueLogTemplateDecodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
 		valueLogTemplateDecodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
 	}
@@ -3474,6 +3485,15 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			templatePrepass = true
 		}
 	}
+
+	if dictID == 0 || templatePrepass {
+		records, _ = db.valueLogTemplateEncodeRecords(records)
+		rawPayloadBytes = 0
+		for i := range records {
+			rawPayloadBytes += len(records[i].Value)
+		}
+	}
+
 	attemptCompression, probeCompression, paused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
 	if dictID != 0 && !attemptCompression {
 		dictID = 0
@@ -3493,10 +3513,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			dictID = 0
 			dict = nil
 		}
-	}
-
-	if dictID == 0 || templatePrepass {
-		records, _ = db.valueLogTemplateEncodeRecords(records)
 	}
 	db.valueLogDictCollectSamples(records)
 
@@ -3759,7 +3775,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		err        error
 	)
 
-	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
 	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
 		if db.valueLogTemplateMode == template.TemplateOnly {
@@ -3769,6 +3784,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			templatePrepass = true
 		}
 	}
+
+	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
+		if payload, ok := db.valueLogTemplateEngine.Encode(nil, value, db.templateStore); ok {
+			value = payload
+		}
+	}
+
+	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
 	if dictID != 0 && !attemptCompression {
 		dictID = 0
 		dict = nil
@@ -3786,12 +3809,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	db.valueLogDictCollectSample(value)
-
-	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
-		if payload, ok := db.valueLogTemplateEngine.Encode(nil, value, db.templateStore); ok {
-			value = payload
-		}
-	}
 
 	l.vlogMu.Lock()
 	w := l.vlog
@@ -7623,6 +7640,16 @@ func (db *DB) Stats() map[string]string {
 	if db.valueLogTemplateEngine != nil {
 		for k, v := range db.valueLogTemplateEngine.StatsSnapshot() {
 			stats["treedb.cache.vlog_template."+k] = v
+		}
+	}
+	if db.valueLogReader != nil {
+		hits, misses, entries, capacity := db.valueLogReader.TemplateDefCacheStats()
+		stats["treedb.cache.vlog_template_def_cache.hits"] = fmt.Sprintf("%d", hits)
+		stats["treedb.cache.vlog_template_def_cache.misses"] = fmt.Sprintf("%d", misses)
+		stats["treedb.cache.vlog_template_def_cache.entries"] = fmt.Sprintf("%d", entries)
+		stats["treedb.cache.vlog_template_def_cache.capacity"] = fmt.Sprintf("%d", capacity)
+		if total := hits + misses; total > 0 {
+			stats["treedb.cache.vlog_template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
 	}
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())

@@ -80,43 +80,85 @@ func EncodeMaskPayload(templateID uint64, mask []byte, vars []byte) ([]byte, err
 	return out, nil
 }
 
-// DecodePayload decodes a TemplateValue payload using the provided lookup.
-// If payload is not template-encoded, it is returned as-is.
-func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts DecodeOptions) ([]byte, error) {
-	if len(payload) == 0 || !IsEncodedPayload(payload) {
-		return payload, nil
+func grow(dst []byte, n int) []byte {
+	if n <= 0 {
+		return dst
+	}
+	oldLen := len(dst)
+	newLen := oldLen + n
+	if newLen < 0 {
+		return dst[:0]
+	}
+	if cap(dst) < newLen {
+		newCap := cap(dst) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		tmp := make([]byte, oldLen, newCap)
+		copy(tmp, dst)
+		dst = tmp
+	}
+	return dst[:newLen]
+}
+
+// DecodePayloadAppend decodes a TemplateValue payload and appends the decoded
+// bytes to dst.
+//
+// If payload is not template-encoded, it is appended as-is.
+func DecodePayloadAppend(dst, payload []byte, lookup func(id uint64) (TemplateDef, error), opts DecodeOptions) ([]byte, error) {
+	if len(payload) == 0 {
+		return dst, nil
+	}
+	if !IsEncodedPayload(payload) {
+		oldLen := len(dst)
+		dst = grow(dst, len(payload))
+		copy(dst[oldLen:], payload)
+		return dst, nil
 	}
 	if lookup == nil {
-		return nil, ErrMissingTemplate
+		return dst, ErrMissingTemplate
 	}
+
+	baseLen := len(dst)
+	fail := func(err error) ([]byte, error) {
+		if baseLen <= len(dst) {
+			dst = dst[:baseLen]
+		}
+		return dst, err
+	}
+
 	isMask := payload[3]&flagMask != 0
 	isFull := payload[3]&flagMaskFull != 0
+
 	off := payloadHeader
 	id, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
-		return nil, ErrCorrupt
+		return fail(ErrCorrupt)
 	}
 	off += n
+
+	def, err := lookup(id)
+	if err != nil {
+		return fail(err)
+	}
+
 	if isMask {
-		defBytes, err := lookup(id)
-		if err != nil {
-			return nil, err
-		}
-		def, err := DecodeTemplateDef(defBytes)
-		if err != nil {
-			return nil, err
-		}
 		if def.Kind != TemplateMask {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
 		decodedLen := len(def.Base)
 		if opts.MaxDecodedBytes > 0 && decodedLen > opts.MaxDecodedBytes {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
+		outStart := len(dst)
+		dst = grow(dst, decodedLen)
+		out := dst[outStart : outStart+decodedLen]
+		copy(out, def.Base)
+
 		if isFull {
 			maskLen := (decodedLen + 7) / 8
 			if off+maskLen > len(payload) {
-				return nil, ErrCorrupt
+				return fail(ErrCorrupt)
 			}
 			mask := payload[off : off+maskLen]
 			off += maskLen
@@ -126,10 +168,8 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 				diffCount += bits.OnesCount8(b)
 			}
 			if diffCount != len(varBytes) {
-				return nil, ErrCorrupt
+				return fail(ErrCorrupt)
 			}
-			out := make([]byte, decodedLen)
-			copy(out, def.Base)
 			idx := 0
 			for i := 0; i < decodedLen; i++ {
 				if mask[i/8]&(1<<uint(i%8)) != 0 {
@@ -138,12 +178,13 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 				}
 			}
 			if idx != len(varBytes) {
-				return nil, ErrCorrupt
+				return fail(ErrCorrupt)
 			}
-			return out, nil
+			return dst, nil
 		}
+
 		if len(def.Mask) == 0 {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
 		varCount := len(def.VarPositions)
 		if varCount == 0 {
@@ -152,100 +193,115 @@ func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts 
 			}
 		}
 		if off+varCount != len(payload) {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
 		varBytes := payload[off:]
-		out := make([]byte, decodedLen)
-		copy(out, def.Base)
 		if len(def.VarPositions) > 0 {
 			if len(def.VarPositions) != len(varBytes) {
-				return nil, ErrCorrupt
+				return fail(ErrCorrupt)
 			}
 			for i, pos := range def.VarPositions {
 				if int(pos) >= len(out) {
-					return nil, ErrCorrupt
+					return fail(ErrCorrupt)
 				}
 				out[pos] = varBytes[i]
 			}
-		} else {
-			idx := 0
-			for i := 0; i < decodedLen; i++ {
-				if def.Mask[i/8]&(1<<uint(i%8)) != 0 {
-					if idx >= len(varBytes) {
-						return nil, ErrCorrupt
-					}
-					out[i] = varBytes[idx]
-					idx++
+			return dst, nil
+		}
+
+		idx := 0
+		for i := 0; i < decodedLen; i++ {
+			if def.Mask[i/8]&(1<<uint(i%8)) != 0 {
+				if idx >= len(varBytes) {
+					return fail(ErrCorrupt)
 				}
-			}
-			if idx != len(varBytes) {
-				return nil, ErrCorrupt
+				out[i] = varBytes[idx]
+				idx++
 			}
 		}
-		return out, nil
+		if idx != len(varBytes) {
+			return fail(ErrCorrupt)
+		}
+		return dst, nil
 	}
+
+	anchors := def.Anchors
+	if def.Kind != TemplateAnchors && def.Kind != 0 {
+		return fail(ErrCorrupt)
+	}
+
 	gapCount64, n := binary.Uvarint(payload[off:])
 	if n <= 0 {
-		return nil, ErrCorrupt
+		return fail(ErrCorrupt)
 	}
 	off += n
 	if gapCount64 == 0 {
-		return nil, ErrCorrupt
+		return fail(ErrCorrupt)
 	}
 	if opts.MaxGaps > 0 && gapCount64 > uint64(opts.MaxGaps) {
-		return nil, ErrCorrupt
+		return fail(ErrCorrupt)
 	}
 	gapCount := int(gapCount64)
-	gaps := make([][]byte, gapCount)
-	totalGapBytes := 0
+	if len(anchors)+1 != gapCount {
+		return fail(ErrCorrupt)
+	}
+
+	decodedBytes := 0
+	maxDecoded := opts.MaxDecodedBytes
+	if maxDecoded < 0 {
+		maxDecoded = 0
+	}
 	for i := 0; i < gapCount; i++ {
 		gapLen64, n := binary.Uvarint(payload[off:])
 		if n <= 0 {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
 		off += n
 		if gapLen64 > uint64(len(payload)-off) {
-			return nil, ErrCorrupt
+			return fail(ErrCorrupt)
 		}
 		gapLen := int(gapLen64)
-		gaps[i] = payload[off : off+gapLen]
+		if maxDecoded > 0 && decodedBytes+gapLen > maxDecoded {
+			return fail(ErrCorrupt)
+		}
+		oldLen := len(dst)
+		dst = grow(dst, gapLen)
+		copy(dst[oldLen:], payload[off:off+gapLen])
 		off += gapLen
-		totalGapBytes += gapLen
-	}
-	if off != len(payload) {
-		return nil, ErrCorrupt
-	}
-	defBytes, err := lookup(id)
-	if err != nil {
-		return nil, err
-	}
-	def, err := DecodeTemplateDef(defBytes)
-	if err != nil {
-		return nil, err
-	}
-	if def.Kind != TemplateAnchors {
-		return nil, ErrCorrupt
-	}
-	if len(def.Anchors)+1 != gapCount {
-		return nil, ErrCorrupt
-	}
-	anchorBytes := 0
-	for _, a := range def.Anchors {
-		anchorBytes += len(a)
-	}
-	decodedLen64 := int64(totalGapBytes) + int64(anchorBytes)
-	if decodedLen64 < 0 {
-		return nil, ErrCorrupt
-	}
-	if opts.MaxDecodedBytes > 0 && decodedLen64 > int64(opts.MaxDecodedBytes) {
-		return nil, ErrCorrupt
-	}
-	out := make([]byte, 0, int(decodedLen64))
-	for i, g := range gaps {
-		out = append(out, g...)
-		if i < len(def.Anchors) {
-			out = append(out, def.Anchors[i]...)
+		decodedBytes += gapLen
+
+		if i < len(anchors) {
+			a := anchors[i]
+			if maxDecoded > 0 && decodedBytes+len(a) > maxDecoded {
+				return fail(ErrCorrupt)
+			}
+			oldLen = len(dst)
+			dst = grow(dst, len(a))
+			copy(dst[oldLen:], a)
+			decodedBytes += len(a)
 		}
 	}
-	return out, nil
+	if off != len(payload) {
+		return fail(ErrCorrupt)
+	}
+	return dst, nil
+}
+
+// DecodePayload decodes a TemplateValue payload using the provided lookup.
+// If payload is not template-encoded, it is returned as-is.
+func DecodePayload(payload []byte, lookup func(id uint64) ([]byte, error), opts DecodeOptions) ([]byte, error) {
+	if len(payload) == 0 || !IsEncodedPayload(payload) {
+		return payload, nil
+	}
+	if lookup == nil {
+		return nil, ErrMissingTemplate
+	}
+	dst, err := DecodePayloadAppend(nil, payload, func(id uint64) (TemplateDef, error) {
+		defBytes, err := lookup(id)
+		if err != nil {
+			return TemplateDef{}, err
+		}
+		return DecodeTemplateDef(defBytes)
+	}, opts)
+	return dst, err
 }

@@ -254,6 +254,15 @@ func (db *DB) Stats() map[string]string {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
+
+		hits, misses, entries, capacity := db.valueLogManager.TemplateDefCacheStats()
+		stats["treedb.vlog.template_def_cache.hits"] = fmt.Sprintf("%d", hits)
+		stats["treedb.vlog.template_def_cache.misses"] = fmt.Sprintf("%d", misses)
+		stats["treedb.vlog.template_def_cache.entries"] = fmt.Sprintf("%d", entries)
+		stats["treedb.vlog.template_def_cache.capacity"] = fmt.Sprintf("%d", capacity)
+		if total := hits + misses; total > 0 {
+			stats["treedb.vlog.template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
+		}
 	}
 
 	pruneStatsInto(stats, &db.pruner)

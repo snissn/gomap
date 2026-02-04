@@ -88,50 +88,55 @@ const (
 )
 
 type benchReport struct {
-	Mode                string   `json:"mode"`
-	Compression         string   `json:"compression"`
-	Template            string   `json:"template"`
-	KeyMode             string   `json:"key_mode"`
-	RawMiB              int      `json:"raw_mib"`
-	Batch               int      `json:"batch"`
-	Workers             int      `json:"workers,omitempty"`
-	PointerThreshold    int      `json:"pointer_threshold"`
-	FlushThresholdMiB   int      `json:"flush_threshold_mib,omitempty"`
-	DictTrainMiB        int      `json:"dict_train_mib,omitempty"`
-	DictSampleStride    int      `json:"dict_sample_stride,omitempty"`
-	LoadSeconds         float64  `json:"load_seconds"`
-	PreSteadyDictID     *uint64  `json:"pre_steady_dict_id,omitempty"`
-	PreSteadyFramesKept *uint64  `json:"pre_steady_frames_kept,omitempty"`
-	TrainSeconds        float64  `json:"train_seconds"`
-	TrainRawBytes       int64    `json:"train_raw_bytes"`
-	TrainRecords        int      `json:"train_records"`
-	SteadySeconds       float64  `json:"steady_seconds"`
-	SteadyRawBytes      int64    `json:"steady_raw_bytes"`
-	SteadyRecords       int      `json:"steady_records"`
-	SteadyRawMBps       float64  `json:"steady_raw_MBps"`
-	SpeedupVsOff        *float64 `json:"speedup_vs_off,omitempty"`
-	AttemptedFrac       *float64 `json:"attempted_frac,omitempty"`
-	KeptFrac            *float64 `json:"kept_frac,omitempty"`
-	CurrentK            *int     `json:"current_k,omitempty"`
-	DictID              *uint64  `json:"dict_id,omitempty"`
-	FramesTotal         *uint64  `json:"frames_total,omitempty"`
-	FramesAttempted     *uint64  `json:"frames_attempted,omitempty"`
-	FramesKept          *uint64  `json:"frames_kept,omitempty"`
-	KeptOfAttemptedFrac *float64 `json:"kept_of_attempted_frac,omitempty"`
-	TemplateAttempted   *uint64  `json:"template_attempted,omitempty"`
-	TemplateMatched     *uint64  `json:"template_matched,omitempty"`
-	TemplateKept        *uint64  `json:"template_kept,omitempty"`
-	TemplateSavedBytes  *uint64  `json:"template_saved_bytes,omitempty"`
-	TemplatesPublished  *uint64  `json:"templates_published,omitempty"`
-	MaskSparseUsed      *uint64  `json:"mask_sparse_used,omitempty"`
-	MaskFullUsed        *uint64  `json:"mask_full_used,omitempty"`
-	MaskSparseFrac      *float64 `json:"mask_sparse_frac,omitempty"`
-	ValueLogBytes       int64    `json:"value_log_bytes,omitempty"`
-	IndexBytes          int64    `json:"index_bytes,omitempty"`
-	WritePathMode       string   `json:"write_path_mode"`
-	WritePathValueStore string   `json:"write_path_value_store"`
-	WritePathRedoLog    string   `json:"write_path_redo_log"`
-	BenchDir            string   `json:"bench_dir"`
+	Mode                     string   `json:"mode"`
+	Compression              string   `json:"compression"`
+	Template                 string   `json:"template"`
+	KeyMode                  string   `json:"key_mode"`
+	RawMiB                   int      `json:"raw_mib"`
+	Batch                    int      `json:"batch"`
+	Workers                  int      `json:"workers,omitempty"`
+	PointerThreshold         int      `json:"pointer_threshold"`
+	FlushThresholdMiB        int      `json:"flush_threshold_mib,omitempty"`
+	DictTrainMiB             int      `json:"dict_train_mib,omitempty"`
+	DictSampleStride         int      `json:"dict_sample_stride,omitempty"`
+	LoadSeconds              float64  `json:"load_seconds"`
+	PreSteadyDictID          *uint64  `json:"pre_steady_dict_id,omitempty"`
+	PreSteadyFramesKept      *uint64  `json:"pre_steady_frames_kept,omitempty"`
+	TrainSeconds             float64  `json:"train_seconds"`
+	TrainRawBytes            int64    `json:"train_raw_bytes"`
+	TrainRecords             int      `json:"train_records"`
+	SteadySeconds            float64  `json:"steady_seconds"`
+	SteadyRawBytes           int64    `json:"steady_raw_bytes"`
+	SteadyRecords            int      `json:"steady_records"`
+	SteadyRawMBps            float64  `json:"steady_raw_MBps"`
+	SpeedupVsOff             *float64 `json:"speedup_vs_off,omitempty"`
+	AttemptedFrac            *float64 `json:"attempted_frac,omitempty"`
+	KeptFrac                 *float64 `json:"kept_frac,omitempty"`
+	CurrentK                 *int     `json:"current_k,omitempty"`
+	DictID                   *uint64  `json:"dict_id,omitempty"`
+	FramesTotal              *uint64  `json:"frames_total,omitempty"`
+	FramesAttempted          *uint64  `json:"frames_attempted,omitempty"`
+	FramesKept               *uint64  `json:"frames_kept,omitempty"`
+	KeptOfAttemptedFrac      *float64 `json:"kept_of_attempted_frac,omitempty"`
+	TemplateAttempted        *uint64  `json:"template_attempted,omitempty"`
+	TemplateMatched          *uint64  `json:"template_matched,omitempty"`
+	TemplateKept             *uint64  `json:"template_kept,omitempty"`
+	TemplateSavedBytes       *uint64  `json:"template_saved_bytes,omitempty"`
+	TemplatesPublished       *uint64  `json:"templates_published,omitempty"`
+	MaskSparseUsed           *uint64  `json:"mask_sparse_used,omitempty"`
+	MaskFullUsed             *uint64  `json:"mask_full_used,omitempty"`
+	MaskSparseFrac           *float64 `json:"mask_sparse_frac,omitempty"`
+	TemplateDefCacheHits     *uint64  `json:"template_def_cache_hits,omitempty"`
+	TemplateDefCacheMisses   *uint64  `json:"template_def_cache_misses,omitempty"`
+	TemplateDefCacheHitRatio *float64 `json:"template_def_cache_hit_ratio,omitempty"`
+	TemplateDefCacheEntries  *uint64  `json:"template_def_cache_entries,omitempty"`
+	TemplateDefCacheCapacity *uint64  `json:"template_def_cache_capacity,omitempty"`
+	ValueLogBytes            int64    `json:"value_log_bytes,omitempty"`
+	IndexBytes               int64    `json:"index_bytes,omitempty"`
+	WritePathMode            string   `json:"write_path_mode"`
+	WritePathValueStore      string   `json:"write_path_value_store"`
+	WritePathRedoLog         string   `json:"write_path_redo_log"`
+	BenchDir                 string   `json:"bench_dir"`
 }
 
 type benchKeyState struct {
@@ -753,6 +758,18 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 			maskSparseFracOK = true
 		}
 	}
+	templateDefCacheHits, templateDefCacheHitsOK := parseStatUint(statsEnd, "treedb.cache.vlog_template_def_cache.hits")
+	templateDefCacheMisses, templateDefCacheMissesOK := parseStatUint(statsEnd, "treedb.cache.vlog_template_def_cache.misses")
+	templateDefCacheEntries, templateDefCacheEntriesOK := parseStatUint(statsEnd, "treedb.cache.vlog_template_def_cache.entries")
+	templateDefCacheCapacity, templateDefCacheCapacityOK := parseStatUint(statsEnd, "treedb.cache.vlog_template_def_cache.capacity")
+	templateDefCacheHitRatio := 0.0
+	templateDefCacheHitRatioOK := false
+	if templateDefCacheHitsOK && templateDefCacheMissesOK {
+		if total := templateDefCacheHits + templateDefCacheMisses; total > 0 {
+			templateDefCacheHitRatio = float64(templateDefCacheHits) / float64(total)
+			templateDefCacheHitRatioOK = true
+		}
+	}
 	keptOfAttempted := 0.0
 	keptOfAttemptedOK := false
 	if framesAttemptedOK && framesKeptOK && framesAttempted > 0 {
@@ -786,6 +803,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 			formatStatUint(maskSparse, maskSparseOK),
 			formatStatUint(maskFull, maskFullOK),
 			formatStatFloat(maskSparseFrac, maskSparseFracOK),
+		)
+		fmt.Printf("vlog_template_def_cache: hits=%s misses=%s hit_ratio=%s entries=%s capacity=%s\n",
+			formatStatUint(templateDefCacheHits, templateDefCacheHitsOK),
+			formatStatUint(templateDefCacheMisses, templateDefCacheMissesOK),
+			formatStatFloat(templateDefCacheHitRatio, templateDefCacheHitRatioOK),
+			formatStatUint(templateDefCacheEntries, templateDefCacheEntriesOK),
+			formatStatUint(templateDefCacheCapacity, templateDefCacheCapacityOK),
 		)
 	}
 	fmt.Printf("disk:     value_log_bytes=%d (%.1f MiB) index_bytes=%d (%.1f MiB)\n",
@@ -937,6 +961,41 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		MaskSparseFrac: func() *float64 {
 			if maskSparseFracOK {
 				v := maskSparseFrac
+				return &v
+			}
+			return nil
+		}(),
+		TemplateDefCacheHits: func() *uint64 {
+			if templateDefCacheHitsOK {
+				v := templateDefCacheHits
+				return &v
+			}
+			return nil
+		}(),
+		TemplateDefCacheMisses: func() *uint64 {
+			if templateDefCacheMissesOK {
+				v := templateDefCacheMisses
+				return &v
+			}
+			return nil
+		}(),
+		TemplateDefCacheHitRatio: func() *float64 {
+			if templateDefCacheHitRatioOK {
+				v := templateDefCacheHitRatio
+				return &v
+			}
+			return nil
+		}(),
+		TemplateDefCacheEntries: func() *uint64 {
+			if templateDefCacheEntriesOK {
+				v := templateDefCacheEntries
+				return &v
+			}
+			return nil
+		}(),
+		TemplateDefCacheCapacity: func() *uint64 {
+			if templateDefCacheCapacityOK {
+				v := templateDefCacheCapacity
 				return &v
 			}
 			return nil

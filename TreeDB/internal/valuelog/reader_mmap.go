@@ -136,6 +136,15 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 
 	// Non-grouped record: the payload is the value.
 	if flags&recordFlagGrouped == 0 {
+		if f.templateLookup != nil && templ.IsEncodedPayload(payload) {
+			decoded, err := templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			return decoded, nil, true
+		}
 		return payload, nil, true
 	}
 
@@ -191,7 +200,17 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 				if srcStart < 0 || srcEnd < srcStart || srcEnd > len(payload) {
 					return nil, ErrCorrupt, true
 				}
-				return payload[srcStart:srcEnd], nil, true
+				val := payload[srcStart:srcEnd]
+				if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+					decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+					}, f.templateDecodeOpts)
+					if err != nil {
+						return nil, err, true
+					}
+					return decoded, nil, true
+				}
+				return val, nil, true
 			}
 			f.cacheMu.Unlock()
 		}
@@ -236,11 +255,21 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		if srcStart < 0 || srcEnd < srcStart || srcEnd > len(payload) {
 			return nil, ErrCorrupt, true
 		}
-		return payload[srcStart:srcEnd], nil, true
+		val := payload[srcStart:srcEnd]
+		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			return decoded, nil, true
+		}
+		return val, nil, true
 	}
 
 	// Compressed grouped record: decode (allocates).
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}
@@ -299,13 +328,17 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		dst = grow(dst, len(payload))
 		copy(dst[oldLen:], payload)
 		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
-				return f.templateLookup(id)
+			payload := dst[oldLen:]
+			decodedStart := len(dst)
+			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err, true
 			}
-			dst = append(dst[:oldLen], decoded...)
+			decodedLen := len(dst) - decodedStart
+			copy(dst[oldLen:], dst[decodedStart:])
+			dst = dst[:oldLen+decodedLen]
 		}
 		return dst, nil, true
 	}
@@ -325,7 +358,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	fFlags := frameHeader[1]
 
-	if !verifyCRC && fFlags&FrameFlagCompressed == 0 {
+	if fFlags&FrameFlagCompressed == 0 {
 		subIndex := int(page.ValuePtrSubIndex(ptr))
 		if subIndex < 0 || subIndex >= k {
 			return nil, ErrCorrupt, true
@@ -360,13 +393,17 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 				srcEnd := srcStart + n
 				copy(dst[oldLen:], payload[srcStart:srcEnd])
 				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-					decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
-						return f.templateLookup(id)
+					payload := dst[oldLen:]
+					decodedStart := len(dst)
+					dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 					}, f.templateDecodeOpts)
 					if err != nil {
 						return nil, err, true
 					}
-					dst = append(dst[:oldLen], decoded...)
+					decodedLen := len(dst) - decodedStart
+					copy(dst[oldLen:], dst[decodedStart:])
+					dst = dst[:oldLen+decodedLen]
 				}
 				return dst, nil, true
 			}
@@ -414,18 +451,22 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		srcEnd := srcStart + n
 		copy(dst[oldLen:], payload[srcStart:srcEnd])
 		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
-				return f.templateLookup(id)
+			payload := dst[oldLen:]
+			decodedStart := len(dst)
+			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err, true
 			}
-			dst = append(dst[:oldLen], decoded...)
+			decodedLen := len(dst) - decodedStart
+			copy(dst[oldLen:], dst[decodedStart:])
+			dst = dst[:oldLen+decodedLen]
 		}
 		return dst, nil, true
 	}
 
-	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDecodeOpts)
+	val, err := decodeRecord(header, payload, ptr, false, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
 	}
