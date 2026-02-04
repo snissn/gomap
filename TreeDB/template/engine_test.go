@@ -138,3 +138,51 @@ func TestEngineColdGateLimitsCandidateLookups(t *testing.T) {
 		t.Fatalf("candidate lookups too high: got=%d", got)
 	}
 }
+
+func TestEngineStartupColdGateLimitsCandidateLookups_DefaultConfig(t *testing.T) {
+	// Default (normalized) cold settings are 256/256. The engine should apply a
+	// startup guardrail before the first keep so we don't hit the store on every
+	// value when templates are enabled but nothing matches.
+	cfg := Config{
+		MinSavingsBytes:       1,
+		FingerprintK:          4,
+		FingerprintW:          4,
+		RouteFPCount:          1,
+		MaxFPReads:            1,
+		MaxTemplateFetch:      1,
+		MaxCandidatesPerFP:    1,
+		MinAnchorLen:          4,
+		MaxAnchorLen:          64,
+		MaxAnchorsPerTemplate: 8,
+		MaxAnchorBytesTotal:   256,
+		MaxGaps:               16,
+		// ColdSearchAfter / ColdSearchProbeEvery intentionally left at 0 to use
+		// defaults via NormalizeConfig.
+	}
+	def := TemplateDef{Kind: TemplateAnchors, Anchors: [][]byte{[]byte("never-match")}}
+	defBytes, err := EncodeTemplateDef(def, cfg)
+	if err != nil {
+		t.Fatalf("encode template def: %v", err)
+	}
+	store := &countingStore{
+		defBytes: defBytes,
+		id:       1,
+		cands:    []Candidate{{ID: 1, Size: len(defBytes)}},
+	}
+	engine := NewEngine(cfg)
+	value := []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+
+	const iters = 200
+	for i := 0; i < iters; i++ {
+		_, ok := engine.Encode(nil, value, store)
+		if ok {
+			t.Fatalf("unexpected keep at iter=%d", i)
+		}
+	}
+
+	// Expect store candidate lookups to be much less than iters due to the
+	// startup cold gate (probes only).
+	if got := store.getCandidates.Load(); got > 80 {
+		t.Fatalf("candidate lookups too high: got=%d", got)
+	}
+}

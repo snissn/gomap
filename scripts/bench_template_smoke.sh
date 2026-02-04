@@ -15,6 +15,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 DATASET="${DATASET:-/tmp/treedb_template_smoke.jsonl}"
 REGEN="${REGEN:-0}"
+DATASET_KIND="${DATASET_KIND:-templatable}" # templatable|random
 
 TRAIN_N="${TRAIN_N:-10000}"
 EVAL_N="${EVAL_N:-5000}"
@@ -53,8 +54,8 @@ maybe_gen_dataset() {
   fi
 
   if [[ "$REGEN" != "0" || ! -f "$DATASET" || "$have_lines" -lt "$want_lines" ]]; then
-    echo "generating dataset: $DATASET (train=$TRAIN_N eval=$EVAL_N valsize=$VALSIZE)" >&2
-    "$PYTHON_BIN" - "$DATASET" "$TRAIN_N" "$EVAL_N" "$VALSIZE" <<'PY'
+    echo "generating dataset: $DATASET (kind=$DATASET_KIND train=$TRAIN_N eval=$EVAL_N valsize=$VALSIZE)" >&2
+    "$PYTHON_BIN" - "$DATASET" "$TRAIN_N" "$EVAL_N" "$VALSIZE" "$DATASET_KIND" <<'PY'
 import json
 import os
 import random
@@ -64,6 +65,10 @@ path = sys.argv[1]
 train_n = int(sys.argv[2])
 eval_n = int(sys.argv[3])
 valsize = int(sys.argv[4])
+kind = sys.argv[5].strip().lower() if len(sys.argv) > 5 else "templatable"
+
+if kind not in ("templatable", "random"):
+    raise SystemExit(f"unsupported dataset kind: {kind!r} (expected templatable|random)")
 
 random.seed(1)
 total = train_n + eval_n
@@ -72,13 +77,17 @@ os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 with open(path, "w", encoding="utf-8") as f:
     for i in range(total):
         key = f"key-{i:08d}"
-        # Constant prefix/suffix + small variable middle encourages templates.
-        var = f"{random.getrandbits(64):016x}"
-        v = f"prefix|bucket={i%97:02d}|seq={i:08d}|var={var}|suffix"
-        if len(v) < valsize:
-            v = v + ("A" * (valsize - len(v)))
+        if kind == "random":
+            alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            v = "".join(random.choice(alphabet) for _ in range(valsize))
         else:
-            v = v[:valsize]
+            # Constant prefix/suffix + small variable middle encourages templates.
+            var = f"{random.getrandbits(64):016x}"
+            v = f"prefix|bucket={i%97:02d}|seq={i:08d}|var={var}|suffix"
+            if len(v) < valsize:
+                v = v + ("A" * (valsize - len(v)))
+            else:
+                v = v[:valsize]
         f.write(json.dumps({"key": key, "val": v}, separators=(",", ":")) + "\n")
 PY
   fi
@@ -148,7 +157,7 @@ maybe_gen_dataset
 build_bin
 
 echo "template smoke (mode=$MODE raw_mib=$RAW_MIB batch=$BATCH ptr_threshold=$POINTER_THRESHOLD)" >&2
-echo "dataset=$DATASET train=$TRAIN_N eval=$EVAL_N valsize=$VALSIZE" >&2
+echo "dataset=$DATASET kind=$DATASET_KIND train=$TRAIN_N eval=$EVAL_N valsize=$VALSIZE" >&2
 
 printf "| case | steady_raw_MBps | value_log_bytes | templates_published | template_kept |\n"
 printf "|---|---:|---:|---:|---:|\n"
