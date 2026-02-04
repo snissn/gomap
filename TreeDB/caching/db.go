@@ -3447,6 +3447,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			k = cur
 		} else {
 			k = 8
+			if db.disableJournal && db.forceValueLogPointers {
+				k = 16
+			}
 		}
 	}
 	k = db.clampValueLogDictK(k)
