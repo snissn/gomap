@@ -68,6 +68,7 @@ Leaf-encoding flags (current):
 - `0x8000`: leaf prefix-compressed
 - `0x4000`: leaf columnar
 - `0x2000`: leaf prefix v2 (only valid when prefix-compressed)
+- `0x1000`: leaf packed ValuePtr (pointer payload uses 12B packed encoding)
 
 `leaf columnar` and `leaf prefix-compressed` are mutually exclusive.
 
@@ -78,7 +79,7 @@ Leaf-encoding flags (current):
 [ u32 ValueLen ]  ignored for pointer entries
 [ u8  Flags ]
 [ Key bytes (KeyLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 #### Prefix-compressed leaf entries (v1)
@@ -91,7 +92,7 @@ When prefix compression is enabled and `leaf prefix v2` is **not** set:
 [ u32 ValueLen ]  ignored for pointer entries
 [ u8  Flags ]
 [ Key suffix bytes (SuffixLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 Keys are reconstructed within restart blocks: every Nth entry is a restart
@@ -109,7 +110,7 @@ When prefix compression is enabled and `leaf prefix v2` is set:
 [ optional: u16 SharedPrefixLen16 | u16 SuffixLen16 ]  if both 8-bit lengths are 0xFF
 [ optional: uvarint ValueLen ]  only for inline, non-tombstone entries
 [ Key suffix bytes (SuffixLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 Notes:
@@ -117,6 +118,10 @@ Notes:
 - Tombstone entries store no value bytes.
 - Restart points follow the same fixed interval as v1 (see `TreeDB/node` for the
   current restart interval).
+- When `leaf packed ValuePtr` is set, pointer entries use the packed encoding:
+  `Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE)`. This requires
+  value-log segment offsets stay within `u32` (cached mode enforces this when
+  `Options.IndexPackedValuePtr` is enabled).
 
 ## Value-log record format (`TreeDB/internal/valuelog`)
 

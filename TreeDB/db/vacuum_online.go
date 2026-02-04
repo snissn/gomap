@@ -169,6 +169,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetPiggybackCompaction(db.piggybackCompaction)
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
 	newZ.SetIndexColumnarLeaves(db.indexColumnarLeaves)
+	newZ.SetIndexPackedValuePtr(db.indexPackedValuePtr)
 	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
 	newZ.SetMaintenanceOpsPerCoalesce(db.maintenanceOpsPerCoalesce)
 
@@ -181,6 +182,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newRoot, err := bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
 		InternalBaseDelta:     db.indexInternalBaseDelta,
 	})
 	_ = baseIter.Close()
@@ -289,6 +291,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		_ = sysIter.Close()

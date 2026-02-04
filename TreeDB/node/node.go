@@ -29,7 +29,8 @@ const (
 	leafPrefixCompressedFlag uint16 = 0x8000
 	leafColumnarFlag         uint16 = 0x4000
 	leafPrefixV2Flag         uint16 = 0x2000
-	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag
+	leafPackedValuePtrFlag   uint16 = 0x1000
+	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag
 	pageTypeMask                    = ^leafNodeFlagMask
 
 	leafPrefixRestartInterval = 16
@@ -141,6 +142,13 @@ func (n *Node) leafColumnar() bool {
 	return n.rawFlags()&leafColumnarFlag != 0
 }
 
+func (n *Node) leafPackedValuePtr() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafPackedValuePtrFlag != 0
+}
+
 func (n *Node) setLeafPrefixCompressed(enabled bool) {
 	flags := n.rawFlags()
 	if enabled {
@@ -168,6 +176,16 @@ func (n *Node) setLeafColumnar(enabled bool) {
 		flags |= leafColumnarFlag
 	} else {
 		flags &^= leafColumnarFlag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafPackedValuePtr(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafPackedValuePtrFlag
+	} else {
+		flags &^= leafPackedValuePtrFlag
 	}
 	n.setRawFlags(flags)
 }

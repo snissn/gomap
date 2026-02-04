@@ -286,6 +286,10 @@ func Open(opts Options) (*DB, error) {
 	relaxedSync := opts.Durability != db.DurabilityDurable
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
+	valueLogMaxSegmentBytes := int64(0)
+	if opts.IndexPackedValuePtr {
+		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
+	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                     opts.FlushThreshold,
@@ -314,6 +318,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                        relaxedSync,
 		DisableReadChecksum:                disableReadChecksum,
 		ValueLogPointerThreshold:           opts.ValueLog.PointerThreshold,
+		ValueLogMaxSegmentBytes:            valueLogMaxSegmentBytes,
 		ForceValueLogPointers:              opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                  opts.ValueLog.DictTrain,
 		ValueLogDictAdaptiveRatio:          opts.ValueLog.DictAdaptiveRatio,

@@ -27,6 +27,7 @@ type Zipper struct {
 	piggybackCompaction       bool
 	leafPrefixCompression     bool
 	indexColumnarLeaves       bool
+	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
 	maintenanceOpsPerCoalesce int
 }
@@ -177,6 +178,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		piggybackCompaction:       z.piggybackCompaction,
 		leafPrefixCompression:     z.leafPrefixCompression,
 		indexColumnarLeaves:       z.indexColumnarLeaves,
+		indexPackedValuePtr:       z.indexPackedValuePtr,
 		indexInternalBaseDelta:    z.indexInternalBaseDelta,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 	}
@@ -201,6 +203,10 @@ func (z *Zipper) SetIndexColumnarLeaves(enabled bool) {
 	z.indexColumnarLeaves = enabled
 }
 
+func (z *Zipper) SetIndexPackedValuePtr(enabled bool) {
+	z.indexPackedValuePtr = enabled
+}
+
 func (z *Zipper) SetIndexInternalBaseDelta(enabled bool) {
 	z.indexInternalBaseDelta = enabled
 }
@@ -212,10 +218,11 @@ func (z *Zipper) SetMaintenanceOpsPerCoalesce(opsPerCoalesce int) {
 }
 
 func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
-	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves || z.indexInternalBaseDelta) {
+	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves || z.indexPackedValuePtr || z.indexInternalBaseDelta) {
 		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: z.leafPrefixCompression,
 			LeafColumnar:          z.indexColumnarLeaves,
+			PackedValuePtr:        z.indexPackedValuePtr,
 			InternalBaseDelta:     z.indexInternalBaseDelta,
 		})
 	}

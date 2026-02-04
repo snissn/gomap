@@ -18,6 +18,7 @@ type Builder struct {
 	leafPrefixCompression bool
 	leafPrefixV2          bool
 	leafColumnar          bool
+	leafPackedValuePtr    bool
 	internalBaseDelta     bool
 	leafPrevKeyBuf        [64]byte
 	leafPrevKey           []byte
@@ -28,6 +29,7 @@ type BuilderOptions struct {
 	LeafPrefixCompression bool
 	LeafColumnar          bool
 	InternalBaseDelta     bool
+	PackedValuePtr        bool
 }
 
 // NewBuilder initializes a builder for the given buffer.
@@ -48,6 +50,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 		leafPrefixCompression: leafPrefix,
 		leafPrefixV2:          leafPrefix,
 		leafColumnar:          opts.LeafColumnar,
+		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
 	}
 }
@@ -95,12 +98,16 @@ func (b *Builder) LeafEntrySizeWithPrefix(key, value []byte, flags byte) (entryS
 }
 
 func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, prefixLen int, suffixLen int) {
+	valPtrSize := page.ValuePtrSize
+	if b.leafPackedValuePtr {
+		valPtrSize = page.PackedValuePtrSize
+	}
 	if b.leafColumnar {
 		prefixLen = 0
 		suffixLen = len(key)
 		entrySize = leafColumnarHeaderSize + suffixLen
 		if flags&FlagPointer != 0 {
-			entrySize += page.ValuePtrSize
+			entrySize += valPtrSize
 		} else {
 			entrySize += len(value)
 		}
@@ -126,7 +133,7 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 
 	entrySize = headerSize + suffixLen
 	if flags&FlagPointer != 0 {
-		entrySize += page.ValuePtrSize
+		entrySize += valPtrSize
 	} else {
 		entrySize += len(value)
 	}
@@ -149,10 +156,14 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 }
 
 func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	valPtrSize := page.ValuePtrSize
+	if b.leafPackedValuePtr {
+		valPtrSize = page.PackedValuePtrSize
+	}
 	valLen := 0
 	entrySize := leafColumnarHeaderSize + len(key)
 	if flags&FlagPointer != 0 {
-		entrySize += page.ValuePtrSize
+		entrySize += valPtrSize
 	} else if flags&FlagTombstone == 0 {
 		valLen = len(value)
 		entrySize += valLen
@@ -175,7 +186,11 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 
 	valueStart := entryStart + valOff
 	if flags&FlagPointer != 0 {
-		valPtr.Encode(b.data[valueStart : valueStart+page.ValuePtrSize])
+		if b.leafPackedValuePtr {
+			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
+		} else {
+			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
+		}
 	} else if flags&FlagTombstone == 0 {
 		copy(b.data[valueStart:valueStart+valLen], value)
 	}
@@ -283,7 +298,13 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 
 	valueStart := keyStart + suffixLen
 	if flags&FlagPointer != 0 {
-		valPtr.Encode(b.data[valueStart : valueStart+page.ValuePtrSize])
+		valPtrSize := page.ValuePtrSize
+		if b.leafPackedValuePtr {
+			valPtrSize = page.PackedValuePtrSize
+			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
+		} else {
+			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
+		}
 	} else {
 		copy(b.data[valueStart:valueStart+len(value)], value)
 	}
@@ -362,6 +383,9 @@ func (b *Builder) Finish() *Node {
 		}
 		if b.leafColumnar {
 			flags |= leafColumnarFlag
+		}
+		if b.leafPackedValuePtr {
+			flags |= leafPackedValuePtrFlag
 		}
 	}
 	binary.LittleEndian.PutUint16(b.data[12:14], flags)

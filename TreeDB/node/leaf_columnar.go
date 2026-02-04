@@ -2,8 +2,6 @@ package node
 
 import (
 	"encoding/binary"
-
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const leafColumnarHeaderSize = 11
@@ -31,7 +29,7 @@ func parseLeafColumnarLayout(data []byte, offset int) (leafEntryLayout, error) {
 
 	valSize := valLen
 	if flags&FlagPointer != 0 {
-		valSize = page.ValuePtrSize
+		valSize = leafValuePtrSizeFromData(data)
 	}
 	valStart := offset + valOff
 	if valStart+valSize > len(data) {

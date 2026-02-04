@@ -48,6 +48,39 @@ func TestLeafPrefixCompression_IncreasesPageDensity_PointerEntries(t *testing.T)
 	}
 }
 
+func TestLeafPackedValuePtr_IncreasesPageDensity_PointerEntries(t *testing.T) {
+	unpacked := leafKeysPerPage(t, true, 16, FlagPointer, 0)
+
+	keys := makeBenchKeys(benchKeyCount, 16)
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		PackedValuePtr:        true,
+	})
+	b.SetPageID(1)
+	ptr := page.ValuePtr{Offset: 1, Length: 123, FileID: 1}
+
+	packed := 0
+	for i := 0; i < len(keys); i++ {
+		err := b.AddLeafEntry(keys[i], nil, FlagPointer, ptr)
+		if err == ErrNodeFull {
+			break
+		}
+		if err != nil {
+			t.Fatalf("AddLeafEntry: %v", err)
+		}
+		packed++
+	}
+
+	if packed <= unpacked {
+		t.Fatalf("expected packed ValuePtr to increase keys/page for pointer entries; unpacked=%d packed=%d", unpacked, packed)
+	}
+	min := unpacked + unpacked/20 // +5%
+	if packed < min {
+		t.Fatalf("expected >=5%% density improvement; unpacked=%d packed=%d min=%d", unpacked, packed, min)
+	}
+}
+
 func TestLeafPrefixCompression_IncreasesPageDensity_InlineEntries(t *testing.T) {
 	plain := leafKeysPerPage(t, false, 16, FlagInline, 128)
 	compressed := leafKeysPerPage(t, true, 16, FlagInline, 128)
@@ -65,6 +98,7 @@ func BenchmarkLeafPageDensity(b *testing.B) {
 	type variant struct {
 		name              string
 		prefixCompression bool
+		packedValuePtr    bool
 		prefixBytes       int
 		flags             byte
 		valueSize         int
@@ -72,6 +106,7 @@ func BenchmarkLeafPageDensity(b *testing.B) {
 	variants := []variant{
 		{name: "ptr/plain", prefixCompression: false, prefixBytes: 16, flags: FlagPointer},
 		{name: "ptr/prefix", prefixCompression: true, prefixBytes: 16, flags: FlagPointer},
+		{name: "ptr/prefix/packed", prefixCompression: true, packedValuePtr: true, prefixBytes: 16, flags: FlagPointer},
 		{name: "inline128/plain", prefixCompression: false, prefixBytes: 16, flags: FlagInline, valueSize: 128},
 		{name: "inline128/prefix", prefixCompression: true, prefixBytes: 16, flags: FlagInline, valueSize: 128},
 	}
@@ -88,7 +123,10 @@ func BenchmarkLeafPageDensity(b *testing.B) {
 
 			// Measure density once; report as a benchmark metric.
 			buildOnce := func() int {
-				builder := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{LeafPrefixCompression: v.prefixCompression})
+				builder := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+					LeafPrefixCompression: v.prefixCompression,
+					PackedValuePtr:        v.packedValuePtr,
+				})
 				builder.SetPageID(1)
 				inserted := 0
 				for i := 0; i < len(keys); i++ {
