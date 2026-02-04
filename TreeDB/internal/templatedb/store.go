@@ -212,6 +212,165 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	return id, nil
 }
 
+// PutTemplateDefs stores multiple template definitions and updates routing
+// indices in a single durable batch.
+//
+// This is an optional acceleration used by the template engine when publishing
+// bursts of templates; it is equivalent to calling PutTemplateDef for each
+// template, but coalesces WriteSync.
+func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) ([]uint64, error) {
+	if s == nil || s.kv == nil {
+		return nil, errStoreUnavailable
+	}
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	cfg := NormalizeConfig(s.cfg)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]uint64, len(defs))
+	reserved := make(map[uint64][]byte, len(defs))
+
+	type candAdd struct {
+		fp   uint64
+		cand template.Candidate
+	}
+	additions := make([]candAdd, 0, len(defs)*8)
+
+	// Assign IDs and collect candidate list additions.
+	for i := range defs {
+		defBytes := defs[i].DefBytes
+		routeFPs := defs[i].RouteFPs
+
+		// Dedup and sort route fingerprints deterministically.
+		if len(routeFPs) > 0 {
+			sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
+			j := 0
+			for k := 0; k < len(routeFPs); k++ {
+				if k == 0 || routeFPs[k] != routeFPs[k-1] {
+					routeFPs[j] = routeFPs[k]
+					j++
+				}
+			}
+			routeFPs = routeFPs[:j]
+		}
+		defs[i].RouteFPs = routeFPs
+
+		id := uint64(0)
+		for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
+			id = template.TemplateID(defBytes, byte(attempt))
+			if id == 0 {
+				continue
+			}
+			if existingDef, ok := reserved[id]; ok {
+				if bytes.Equal(existingDef, defBytes) {
+					// Duplicate within the batch; idempotent publish.
+					break
+				}
+				if attempt == cfg.MaxIDAttempts-1 {
+					return nil, fmt.Errorf("templatedb: template id collision for %d", id)
+				}
+				id = 0
+				continue
+			}
+			key := templateKey(id)
+			existing, err := s.kv.Get(key)
+			if err != nil {
+				return nil, err
+			}
+			if existing == nil || bytes.Equal(existing, defBytes) {
+				// Free ID, or idempotent publish.
+				break
+			}
+			if attempt == cfg.MaxIDAttempts-1 {
+				return nil, fmt.Errorf("templatedb: template id collision for %d", id)
+			}
+			id = 0
+		}
+		if id == 0 {
+			return nil, fmt.Errorf("templatedb: unable to assign template id")
+		}
+		ids[i] = id
+		reserved[id] = defBytes
+
+		if len(routeFPs) == 0 {
+			continue
+		}
+		candidateSize := len(defBytes)
+		for _, fp := range routeFPs {
+			additions = append(additions, candAdd{
+				fp:   fp,
+				cand: template.Candidate{ID: id, Size: candidateSize},
+			})
+		}
+	}
+
+	// Coalesce per-fingerprint updates.
+	type fpAdds struct {
+		fp    uint64
+		cands []template.Candidate
+	}
+	fpMap := make(map[uint64][]template.Candidate, len(additions))
+	for _, add := range additions {
+		fpMap[add.fp] = append(fpMap[add.fp], add.cand)
+	}
+
+	updates := make(map[uint64][]byte, len(fpMap))
+	for fp, adds := range fpMap {
+		listBytes, err := s.kv.Get(fpKey(fp))
+		if err != nil {
+			return nil, err
+		}
+		cands, err := decodeCandidates(listBytes)
+		if err != nil {
+			return nil, err
+		}
+		for _, cand := range adds {
+			cands = upsertCandidate(cands, cand)
+		}
+		// Deterministic trimming.
+		sort.Slice(cands, func(i, j int) bool {
+			if cands[i].Size != cands[j].Size {
+				return cands[i].Size < cands[j].Size
+			}
+			return cands[i].ID < cands[j].ID
+		})
+		if cfg.MaxCandidatesPerFP > 0 && len(cands) > cfg.MaxCandidatesPerFP {
+			cands = cands[:cfg.MaxCandidatesPerFP]
+		}
+		encoded := encodeCandidates(cands)
+		for cfg.MaxCandidateListBytes > 0 && len(encoded) > cfg.MaxCandidateListBytes && len(cands) > 1 {
+			cands = cands[:len(cands)-1]
+			encoded = encodeCandidates(cands)
+		}
+		updates[fp] = encoded
+	}
+
+	batch := s.kv.NewBatch()
+	for i := range defs {
+		if err := batch.Set(templateKey(ids[i]), defs[i].DefBytes); err != nil {
+			_ = batch.Close()
+			return nil, err
+		}
+	}
+	for fp, enc := range updates {
+		if err := batch.Set(fpKey(fp), enc); err != nil {
+			_ = batch.Close()
+			return nil, err
+		}
+	}
+	if err := batch.WriteSync(); err != nil {
+		_ = batch.Close()
+		return nil, err
+	}
+	if err := batch.Close(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func templateKey(id uint64) []byte {
 	buf := make([]byte, 2+8)
 	buf[0] = schemaVer

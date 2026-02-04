@@ -1,5 +1,10 @@
 package template
 
+import (
+	"runtime"
+	"time"
+)
+
 // Config controls template encoding, routing, and training behavior.
 // Zero values use defaults via NormalizeConfig.
 type Config struct {
@@ -64,6 +69,18 @@ type Config struct {
 	CooldownValues               int
 	MaxTemplatesPerBucket        int
 	MaxTemplatesTotal            int
+
+	// Async training / publishing.
+	//
+	// These settings control the background pipeline used to ingest samples,
+	// synthesize templates, and publish them without stalling writers.
+	TrainShards         int
+	TrainRouters        int
+	TrainQueueSize      int
+	TrainShardQueueSize int
+	TrainMaxValueBytes  int
+	PublishBatchSize    int
+	PublishFlushEvery   time.Duration
 }
 
 // NormalizeConfig applies defaults and bounds for a config.
@@ -217,6 +234,45 @@ func NormalizeConfig(cfg Config) Config {
 	}
 	if cfg.MaxTemplatesTotal <= 0 {
 		cfg.MaxTemplatesTotal = 1 << 20
+	}
+	if cfg.TrainShards <= 0 {
+		cfg.TrainShards = runtime.GOMAXPROCS(0)
+		if cfg.TrainShards > 8 {
+			cfg.TrainShards = 8
+		}
+		if cfg.TrainShards < 1 {
+			cfg.TrainShards = 1
+		}
+	}
+	if cfg.MaxBuckets > 0 && cfg.TrainShards > cfg.MaxBuckets {
+		cfg.TrainShards = cfg.MaxBuckets
+	}
+	if cfg.TrainRouters <= 0 {
+		cfg.TrainRouters = cfg.TrainShards
+		if cfg.TrainRouters > 4 {
+			cfg.TrainRouters = 4
+		}
+		if cfg.TrainRouters < 1 {
+			cfg.TrainRouters = 1
+		}
+	}
+	if cfg.TrainQueueSize <= 0 {
+		cfg.TrainQueueSize = 4096
+	}
+	if cfg.TrainShardQueueSize <= 0 {
+		cfg.TrainShardQueueSize = cfg.TrainQueueSize / cfg.TrainShards
+		if cfg.TrainShardQueueSize < 64 {
+			cfg.TrainShardQueueSize = 64
+		}
+	}
+	if cfg.TrainMaxValueBytes == 0 {
+		cfg.TrainMaxValueBytes = 64 << 10
+	}
+	if cfg.PublishBatchSize <= 0 {
+		cfg.PublishBatchSize = 8
+	}
+	if cfg.PublishFlushEvery <= 0 {
+		cfg.PublishFlushEvery = 50 * time.Millisecond
 	}
 	return cfg
 }
