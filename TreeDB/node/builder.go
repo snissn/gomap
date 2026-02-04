@@ -39,9 +39,6 @@ func NewBuilder(data []byte, pType page.PageType) *Builder {
 
 func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions) *Builder {
 	leafPrefix := opts.LeafPrefixCompression
-	if opts.LeafColumnar {
-		leafPrefix = false
-	}
 	return &Builder{
 		data:                  data,
 		pType:                 pType,
@@ -102,13 +99,13 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 	if b.leafPackedValuePtr {
 		valPtrSize = page.PackedValuePtrSize
 	}
-	if b.leafColumnar {
+	if b.leafColumnar && !b.leafPrefixCompression {
 		prefixLen = 0
 		suffixLen = len(key)
 		entrySize = leafColumnarHeaderSize + suffixLen
 		if flags&FlagPointer != 0 {
 			entrySize += valPtrSize
-		} else {
+		} else if flags&FlagTombstone == 0 {
 			entrySize += len(value)
 		}
 		return entrySize, prefixLen, suffixLen
@@ -131,12 +128,22 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 		}
 	}
 
-	entrySize = headerSize + suffixLen
+	valSize := 0
 	if flags&FlagPointer != 0 {
-		entrySize += valPtrSize
-	} else {
-		entrySize += len(value)
+		valSize = valPtrSize
+	} else if flags&FlagTombstone == 0 {
+		valSize = len(value)
 	}
+
+	if b.leafColumnar {
+		// Columnar+prefix mode uses the v2 prefix entry header plus explicit
+		// key/value offsets.
+		headerSize += 4 // keyOff + valOff
+		entrySize = headerSize + valSize + suffixLen
+		return entrySize, prefixLen, suffixLen
+	}
+
+	entrySize = headerSize + suffixLen + valSize
 	return entrySize, prefixLen, suffixLen
 }
 
@@ -145,7 +152,7 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
-	if b.leafColumnar {
+	if b.leafColumnar && !b.leafPrefixCompression {
 		return b.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
 
@@ -161,12 +168,15 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 		valPtrSize = page.PackedValuePtrSize
 	}
 	valLen := 0
+	valSize := 0
 	entrySize := leafColumnarHeaderSize + len(key)
 	if flags&FlagPointer != 0 {
-		entrySize += valPtrSize
+		valSize = valPtrSize
+		entrySize += valSize
 	} else if flags&FlagTombstone == 0 {
 		valLen = len(value)
-		entrySize += valLen
+		valSize = valLen
+		entrySize += valSize
 	}
 
 	required := entrySize + DirectoryEntrySize
@@ -176,13 +186,10 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 	}
 
 	entryStart := b.heapStart - entrySize
-	keyOff := leafColumnarHeaderSize
-	valOff := keyOff + len(key)
+	valOff := leafColumnarHeaderSize
+	keyOff := valOff + valSize
 
 	writeLeafColumnarHeader(b.data[entryStart:entryStart+leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
-
-	keyStart := entryStart + keyOff
-	copy(b.data[keyStart:keyStart+len(key)], key)
 
 	valueStart := entryStart + valOff
 	if flags&FlagPointer != 0 {
@@ -195,6 +202,9 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 		copy(b.data[valueStart:valueStart+valLen], value)
 	}
 
+	keyStart := entryStart + keyOff
+	copy(b.data[keyStart:keyStart+len(key)], key)
+
 	b.data[b.dirEnd] = byte(entryStart)
 	b.data[b.dirEnd+1] = byte(entryStart >> 8)
 
@@ -205,6 +215,97 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 	return nil
 }
 
+func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
+	valPtrSize := page.ValuePtrSize
+	if b.leafPackedValuePtr {
+		valPtrSize = page.PackedValuePtrSize
+	}
+
+	valLen := 0
+	valSize := 0
+	if flags&FlagPointer != 0 {
+		valSize = valPtrSize
+	} else if flags&FlagTombstone == 0 {
+		valLen = len(value)
+		valSize = valLen
+	}
+
+	headerSize := leafPrefixHeaderSizeV2(prefixLen, suffixLen, flags, valLen) + 4 // keyOff + valOff
+	valOff := headerSize
+	keyOff := valOff + valSize
+
+	required := entrySize + DirectoryEntrySize
+	freeSpace := b.heapStart - b.dirEnd
+	if freeSpace < required {
+		return ErrNodeFull
+	}
+
+	entryStart := b.heapStart - entrySize
+	ptr := entryStart
+
+	headerOff := ptr
+	extended := prefixLen > 254 || suffixLen > 254
+	if extended {
+		b.data[headerOff] = 0xFF
+		b.data[headerOff+1] = 0xFF
+	} else {
+		b.data[headerOff] = byte(prefixLen)
+		b.data[headerOff+1] = byte(suffixLen)
+	}
+	b.data[headerOff+2] = flags
+	headerOff += 3
+	if extended {
+		putUint16(b.data[headerOff:headerOff+2], uint16(prefixLen))
+		putUint16(b.data[headerOff+2:headerOff+4], uint16(suffixLen))
+		headerOff += 4
+	}
+	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+		var tmp [binary.MaxVarintLen64]byte
+		n := binary.PutUvarint(tmp[:], uint64(valLen))
+		copy(b.data[headerOff:headerOff+n], tmp[:n])
+		headerOff += n
+	}
+
+	putUint16(b.data[headerOff:headerOff+2], uint16(keyOff))
+	putUint16(b.data[headerOff+2:headerOff+4], uint16(valOff))
+	headerOff += 4
+
+	valueStart := ptr + valOff
+	if flags&FlagPointer != 0 {
+		if b.leafPackedValuePtr {
+			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
+		} else {
+			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
+		}
+	} else if flags&FlagTombstone == 0 {
+		copy(b.data[valueStart:valueStart+valLen], value)
+	}
+
+	keyStart := ptr + keyOff
+	copy(b.data[keyStart:keyStart+suffixLen], key[prefixLen:])
+
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
+
+	b.heapStart = entryStart
+	b.dirEnd += DirectoryEntrySize
+	b.count++
+	b.leafIndex++
+	if b.leafPrefixCompression {
+		if len(key) <= len(b.leafPrevKeyBuf) {
+			b.leafPrevKey = b.leafPrevKeyBuf[:len(key)]
+		} else {
+			if cap(b.leafPrevKey) < len(key) {
+				b.leafPrevKey = make([]byte, len(key))
+			}
+			b.leafPrevKey = b.leafPrevKey[:len(key)]
+		}
+		copy(b.leafPrevKey, key)
+	}
+
+	return nil
+}
+
 // AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
 // The caller must ensure prefixLen/suffixLen are computed for this builder state.
 func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
@@ -212,11 +313,10 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		return ErrInvalidType
 	}
 
-	// Columnar leaves do not use prefix lengths; they have their own header
-	// encoding with explicit key/value offsets. The zipper uses
-	// AddLeafEntryWithPrefix for all leaf modes, so route columnar pages through
-	// the columnar encoder.
 	if b.leafColumnar {
+		if b.leafPrefixCompression {
+			return b.addLeafEntryColumnarPrefixV2(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+		}
 		return b.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
 

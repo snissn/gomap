@@ -1,0 +1,79 @@
+package node
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+func TestLeafColumnarPrefixV2_RoundTrip(t *testing.T) {
+	keys := makeBenchKeys(64, 16)
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+	})
+	b.SetPageID(1)
+
+	ptrs := make([]page.ValuePtr, len(keys))
+	values := make([][]byte, len(keys))
+	flags := make([]byte, len(keys))
+	for i := range keys {
+		switch i % 3 {
+		case 0:
+			flags[i] = FlagInline
+			values[i] = []byte{byte(i), byte(i >> 8), byte(i >> 16)}
+		case 1:
+			flags[i] = FlagPointer
+			ptrs[i] = page.ValuePtr{Offset: uint64(i + 1), Length: 123, FileID: 7}
+		default:
+			flags[i] = FlagTombstone
+		}
+		if err := b.AddLeafEntry(keys[i], values[i], flags[i], ptrs[i]); err != nil {
+			t.Fatalf("AddLeafEntry: %v", err)
+		}
+	}
+
+	n := b.Finish()
+	if !n.leafColumnar() || !n.leafPrefixCompressed() || !n.leafPrefixV2() {
+		t.Fatalf("expected leaf flags set: columnar=%v prefix=%v v2=%v", n.leafColumnar(), n.leafPrefixCompressed(), n.leafPrefixV2())
+	}
+
+	for i := range keys {
+		idx, found, err := n.SearchLeaf(keys[i])
+		if err != nil {
+			t.Fatalf("SearchLeaf: %v", err)
+		}
+		if !found || idx != uint16(i) {
+			t.Fatalf("SearchLeaf mismatch i=%d idx=%d found=%v", i, idx, found)
+		}
+
+		k, v, vp, gotFlags, err := n.GetLeafEntryView(idx)
+		if err != nil {
+			t.Fatalf("GetLeafEntryView: %v", err)
+		}
+		if !bytes.Equal(k, keys[i]) {
+			t.Fatalf("key mismatch i=%d", i)
+		}
+		if gotFlags != flags[i] {
+			t.Fatalf("flags mismatch i=%d got=%d want=%d", i, gotFlags, flags[i])
+		}
+		switch gotFlags {
+		case FlagInline:
+			if !bytes.Equal(v, values[i]) || vp != (page.ValuePtr{}) {
+				t.Fatalf("inline mismatch i=%d val=%x want=%x ptr=%+v", i, v, values[i], vp)
+			}
+		case FlagPointer:
+			if v != nil || vp != ptrs[i] {
+				t.Fatalf("ptr mismatch i=%d val=%v ptr=%+v want=%+v", i, v, vp, ptrs[i])
+			}
+		case FlagTombstone:
+			if v != nil || vp != (page.ValuePtr{}) {
+				t.Fatalf("tombstone mismatch i=%d val=%v ptr=%+v", i, v, vp)
+			}
+		default:
+			t.Fatalf("unexpected flags i=%d flags=%d", i, gotFlags)
+		}
+	}
+}

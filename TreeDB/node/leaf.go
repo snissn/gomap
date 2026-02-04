@@ -47,17 +47,20 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
 
-	if n.leafColumnar() {
+	if n.leafPrefixCompressed() {
 		valPtrSize := page.ValuePtrSize
 		if n.leafPackedValuePtr() {
 			valPtrSize = page.PackedValuePtrSize
 		}
-		return parseLeafColumnarLayout(n.data, offset, valPtrSize)
-	}
 
-	if n.leafPrefixCompressed() {
 		if n.leafPrefixV2() {
+			if n.leafColumnar() {
+				return parseLeafColumnarPrefixV2Layout(n.data, offset, valPtrSize)
+			}
 			return parseLeafPrefixV2Layout(n.data, offset)
+		}
+		if n.leafColumnar() {
+			return leafEntryLayout{}, ErrCorruptedNode
 		}
 		if offset+9 > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
@@ -81,6 +84,14 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 			keyOff:     keyOff,
 			valOff:     keyOff + suffixLen,
 		}, nil
+	}
+
+	if n.leafColumnar() {
+		valPtrSize := page.ValuePtrSize
+		if n.leafPackedValuePtr() {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		return parseLeafColumnarLayout(n.data, offset, valPtrSize)
 	}
 
 	if offset+7 > len(n.data) {
@@ -115,7 +126,7 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 	}
 	entryStart = int(offset)
 
-	if n.leafColumnar() {
+	if n.leafColumnar() && !n.leafPrefixCompressed() {
 		layout, err = n.leafEntryLayoutAt(entryStart)
 		if err != nil {
 			return nil, leafEntryLayout{}, 0, err
@@ -377,11 +388,11 @@ func (n *Node) GetLeafEntry(index uint16) (LeafEntry, error) {
 // If key is found, found=true.
 // If key is greater than all entries, returns Count, false.
 func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
-	if n.leafColumnar() {
-		return n.searchLeafColumnar(key)
-	}
 	if n.leafPrefixCompressed() {
 		return n.searchLeafPrefixCompressed(key)
+	}
+	if n.leafColumnar() {
+		return n.searchLeafColumnar(key)
 	}
 
 	data := n.data
@@ -618,6 +629,9 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	if n.Type() != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	if n.leafColumnar() && n.leafPrefixCompressed() {
+		return n.addLeafEntryColumnarPrefixV2Rebuild(key, value, flags, valPtr)
+	}
 	if n.leafColumnar() {
 		return n.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
@@ -756,18 +770,71 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	return nil
 }
 
+func (n *Node) addLeafEntryColumnarPrefixV2Rebuild(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	idx, found, err := n.SearchLeaf(key)
+	if err != nil {
+		return err
+	}
+
+	count := n.Count()
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        n.leafPackedValuePtr(),
+	})
+	b.SetPageID(n.PageID())
+
+	inserted := false
+	for i := uint16(0); i < count; i++ {
+		if !inserted && i == idx {
+			if err := b.AddLeafEntry(key, value, flags, valPtr); err != nil {
+				return err
+			}
+			inserted = true
+			if found {
+				continue
+			}
+		}
+
+		k, v, ptr, f, err := n.GetLeafEntryView(i)
+		if err != nil {
+			return err
+		}
+		if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+			return err
+		}
+	}
+	if !inserted {
+		if err := b.AddLeafEntry(key, value, flags, valPtr); err != nil {
+			return err
+		}
+	}
+
+	newNode := b.Finish()
+	copy(n.data, newNode.data)
+	flags16 := getUint16(n.data[12:14])
+	n.ptype = page.PageType(flags16 & pageTypeMask)
+	n.count = getUint16(n.data[14:16])
+	n.leafValid = false
+	return nil
+}
+
 func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
 	valPtrSize := page.ValuePtrSize
 	if n.leafPackedValuePtr() {
 		valPtrSize = page.PackedValuePtrSize
 	}
 	valLen := 0
+	valSize := 0
 	entrySize := leafColumnarHeaderSize + len(key)
 	if flags&FlagPointer != 0 {
-		entrySize += valPtrSize
+		valSize = valPtrSize
+		entrySize += valSize
 	} else if flags&FlagTombstone == 0 {
 		valLen = len(value)
-		entrySize += valLen
+		valSize = valLen
+		entrySize += valSize
 	}
 
 	idx, found, err := n.SearchLeaf(key)
@@ -790,10 +857,9 @@ func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.V
 	}
 
 	buf := make([]byte, entrySize)
-	keyOff := leafColumnarHeaderSize
-	valOff := keyOff + len(key)
+	valOff := leafColumnarHeaderSize
+	keyOff := valOff + valSize
 	writeLeafColumnarHeader(buf[:leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
-	copy(buf[keyOff:keyOff+len(key)], key)
 
 	valueStart := valOff
 	if flags&FlagPointer != 0 {
@@ -805,6 +871,8 @@ func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.V
 	} else if flags&FlagTombstone == 0 {
 		copy(buf[valueStart:valueStart+valLen], value)
 	}
+
+	copy(buf[keyOff:keyOff+len(key)], key)
 
 	heapStart := int(page.PageSize)
 	count := n.Count()

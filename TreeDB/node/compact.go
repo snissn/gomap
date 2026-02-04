@@ -80,7 +80,7 @@ func entryLength(n *Node, offset int) (int, error) {
 				valSize = page.ValuePtrSize
 			}
 		}
-		keyEnd := layout.keyOff + layout.keyLen
+		keyEnd := layout.keyOff + layout.suffixLen
 		valEnd := layout.valOff + valSize
 		entryLen := keyEnd
 		if valEnd > entryLen {
