@@ -183,6 +183,15 @@ type Options struct {
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
 	PagerSyncConcurrency int
+	// PagerMmapPopulate enables MAP_POPULATE on Linux when mmapping index.db
+	// chunks. This can reduce minor-fault overhead under random access patterns
+	// at the cost of increased work at map/grow time.
+	PagerMmapPopulate bool
+	// PagerPrefetchOnRead enables best-effort prefetch hints (madvise WILLNEED)
+	// for mmapped index chunks (Linux only). When enabled, TreeDB may issue
+	// prefetch requests opportunistically (e.g. before rewriting child pages
+	// during checkpoint/merge). It is a no-op on unsupported platforms.
+	PagerPrefetchOnRead bool
 
 	// Durability configures cached-mode durability semantics.
 	//
@@ -521,7 +530,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	idxPath := filepath.Join(opts.Dir, "index.db")
-	p, err := pager.Open(idxPath, opts.ChunkSize)
+	p, err := pager.OpenWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
+		MmapPopulate:   opts.PagerMmapPopulate,
+		PrefetchOnRead: opts.PagerPrefetchOnRead,
+	})
 	if err != nil {
 		return nil, err
 	}

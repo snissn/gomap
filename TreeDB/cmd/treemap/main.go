@@ -10,12 +10,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"os/signal"
+	runtimepprof "runtime/pprof"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -29,6 +31,8 @@ Commands:
   stats           Print stats
   frag            Print fragmentation report
   verify          Full scan verification (counts items)
+  checkpoint       Force a durable checkpoint (requires -rw)
+  checkpoint-bench Write workload then checkpoint (requires -rw)
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
@@ -75,6 +79,10 @@ func main() {
 		runFrag(dir, args)
 	case "verify":
 		runVerify(dir, args)
+	case "checkpoint":
+		runCheckpoint(dir, args)
+	case "checkpoint-bench":
+		runCheckpointBench(dir, args)
 	case "compact":
 		runCompact(dir, args)
 	case "vacuum":
@@ -116,6 +124,240 @@ func runInfo(dir string, args []string) {
 		fatalf("FragmentationReport invalid: %v", err)
 	}
 	printFragmentation(rep)
+}
+
+func runCheckpoint(dir string, args []string) {
+	fs := flag.NewFlagSet("checkpoint", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required)")
+	cpuprofile := fs.String("cpuprofile", "", "write cpu profile to file while checkpointing")
+	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
+	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Linux: enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
+	maintenanceK := fs.Int("maintenance-ops-per-coalesce", 0, "Ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
+	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("checkpoint requires -rw")
+	}
+
+	opts := treedb.Options{
+		Dir:                       dir,
+		ReadOnly:                  false,
+		PagerMmapPopulate:         *pagerPopulate,
+		PagerPrefetchOnRead:       *pagerPrefetch,
+		MaintenanceOpsPerCoalesce: *maintenanceK,
+	}
+	if *chunkSize > 0 {
+		opts.ChunkSize = *chunkSize
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		fatalf("Failed to open DB: %v", err)
+	}
+	registerSignalCloser(func() { _ = db.Close() })
+	defer closeTreeDB(db)
+
+	var profFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("cpuprofile: %v", err)
+		}
+		profFile = f
+		runtimepprof.StartCPUProfile(profFile)
+	}
+
+	start := time.Now()
+	err = db.Checkpoint()
+	dur := time.Since(start)
+
+	if profFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = profFile.Close()
+	}
+	if err != nil {
+		fatalf("Checkpoint error: %v", err)
+	}
+	fmt.Printf("checkpoint %s\n", dur)
+}
+
+func runCheckpointBench(dir string, args []string) {
+	fs := flag.NewFlagSet("checkpoint-bench", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required)")
+	reset := fs.Bool("reset", false, "Delete existing DB dir before running")
+	fast := fs.Bool("fast", false, "Use TreeDB fast profile (WAL off + relaxed sync; unsafe)")
+
+	keys := fs.Int("keys", 2_000_000, "Number of keys")
+	valSize := fs.Int("valsize", 128, "Value size in bytes")
+	batchSize := fs.Int("batchsize", 1000, "Batch size")
+	seed := fs.Int64("seed", 1, "PRNG seed")
+	randomWriteKeyRange := fs.Int("random-write-key-range", 0, "Key range for random write phase (0=keys; use <=keys to force update churn)")
+	flushThreshold := fs.Int64("flush-threshold", 0, "Cached-mode flush threshold bytes (0=default). Set high to accumulate flush debt for checkpoint.")
+	preferAppendAlloc := fs.Bool("prefer-append-alloc", false, "Prefer append allocation for index pages (reduces reuse; can improve locality under churn)")
+	freelistRegionPages := fs.Uint64("freelist-region-pages", 0, "Freelist reuse region size in pages (0=default)")
+	freelistRegionRadius := fs.Int("freelist-region-radius", 0, "Freelist reuse region radius (0=default, <0=disable bias)")
+
+	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
+	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Linux: enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
+	maintenanceK := fs.Int("maintenance-ops-per-coalesce", 0, "Ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
+	chunkSize := fs.Int64("chunk-size", 0, "Pager chunk size in bytes (0=default)")
+
+	pauseBeforeCheckpoint := fs.Duration("pause-before-checkpoint", 0, "Sleep this long after writes and before checkpoint (lets you attach perf)")
+	waitForSignal := fs.Bool("wait-for-signal", false, "Wait for SIGUSR1 after writes before starting checkpoint (for perf attach)")
+	prepareOnly := fs.Bool("prepare-only", false, "Exit after write workload (no checkpoint); note: DB close may do work")
+	cpuprofile := fs.String("checkpoint-cpuprofile", "", "Write CPU profile during checkpoint to this file")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("checkpoint-bench requires -rw")
+	}
+	if *keys <= 0 {
+		fatalf("invalid -keys=%d", *keys)
+	}
+	if *valSize < 0 {
+		fatalf("invalid -valsize=%d", *valSize)
+	}
+	if *batchSize <= 0 {
+		fatalf("invalid -batchsize=%d", *batchSize)
+	}
+
+	if *reset {
+		_ = os.RemoveAll(dir)
+	}
+
+	opts := treedb.Options{
+		Dir:                       dir,
+		ReadOnly:                  false,
+		PagerMmapPopulate:         *pagerPopulate,
+		PagerPrefetchOnRead:       *pagerPrefetch,
+		MaintenanceOpsPerCoalesce: *maintenanceK,
+		PreferAppendAlloc:         *preferAppendAlloc,
+		FreelistRegionPages:       *freelistRegionPages,
+		FreelistRegionRadius:      *freelistRegionRadius,
+	}
+	if *chunkSize > 0 {
+		opts.ChunkSize = *chunkSize
+	}
+	if *flushThreshold > 0 {
+		opts.FlushThreshold = *flushThreshold
+	}
+	if *fast {
+		opts.Durability = treedb.DurabilityWALOffRelaxed
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		fatalf("Failed to open DB: %v", err)
+	}
+	registerSignalCloser(func() { _ = db.Close() })
+	defer closeTreeDB(db)
+
+	fmt.Fprintf(os.Stderr, "pid=%d\n", os.Getpid())
+
+	rng := rand.New(rand.NewSource(*seed))
+	val := make([]byte, *valSize)
+	var keyBuf [8]byte
+
+	writeBatch := func(start, limit int, keyFn func(i int) uint64) {
+		b := db.NewBatch()
+		for i := start; i < limit; i++ {
+			k := keyFn(i)
+			keyBuf[0] = byte(k >> 56)
+			keyBuf[1] = byte(k >> 48)
+			keyBuf[2] = byte(k >> 40)
+			keyBuf[3] = byte(k >> 32)
+			keyBuf[4] = byte(k >> 24)
+			keyBuf[5] = byte(k >> 16)
+			keyBuf[6] = byte(k >> 8)
+			keyBuf[7] = byte(k)
+			for j := range val {
+				val[j] = byte(rng.Intn(256))
+			}
+			if err := b.Set(keyBuf[:], val); err != nil {
+				_ = b.Close()
+				fatalf("set: %v", err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			fatalf("write: %v", err)
+		}
+		_ = b.Close()
+	}
+
+	fmt.Fprintf(os.Stderr, "phase=batch_write keys=%d batch=%d\n", *keys, *batchSize)
+	for base := 0; base < *keys; base += *batchSize {
+		limit := base + *batchSize
+		if limit > *keys {
+			limit = *keys
+		}
+		writeBatch(base, limit, func(i int) uint64 { return uint64(i) })
+	}
+
+	fmt.Fprintf(os.Stderr, "phase=random_write keys=%d batch=%d\n", *keys, *batchSize)
+	keyRange := *randomWriteKeyRange
+	if keyRange <= 0 {
+		keyRange = *keys
+	}
+	for base := 0; base < *keys; base += *batchSize {
+		limit := base + *batchSize
+		if limit > *keys {
+			limit = *keys
+		}
+		writeBatch(base, limit, func(int) uint64 { return uint64(rng.Intn(keyRange)) })
+	}
+
+	if *pauseBeforeCheckpoint > 0 {
+		fmt.Fprintf(os.Stderr, "pause-before-checkpoint=%s\n", (*pauseBeforeCheckpoint).String())
+		time.Sleep(*pauseBeforeCheckpoint)
+	}
+	if *waitForSignal {
+		sig, ok := checkpointBenchSignal()
+		if !ok {
+			fatalf("wait-for-signal is not supported on this platform")
+		}
+		fmt.Fprintf(os.Stderr, "ready-for-checkpoint (send SIGUSR1 to pid=%d)\n", os.Getpid())
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, sig)
+		<-ch
+		signal.Stop(ch)
+	}
+	if *prepareOnly {
+		fmt.Printf("prepared %s\n", dir)
+		return
+	}
+
+	before := getRusageSnapshot()
+
+	var profFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("checkpoint-cpuprofile: %v", err)
+		}
+		profFile = f
+		runtimepprof.StartCPUProfile(profFile)
+	}
+
+	start := time.Now()
+	err = db.Checkpoint()
+	dur := time.Since(start)
+
+	after := getRusageSnapshot()
+
+	if profFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = profFile.Close()
+	}
+	if err != nil {
+		fatalf("Checkpoint error: %v", err)
+	}
+	if extra := formatRusageDelta(before, after); extra != "" {
+		fmt.Printf("checkpoint %s (%s)\n", dur, extra)
+	} else {
+		fmt.Printf("checkpoint %s\n", dur)
+	}
 }
 
 func runStats(dir string, args []string) {
@@ -649,7 +891,7 @@ func registerSignalCloser(fn func()) {
 
 	signalOnce.Do(func() {
 		ch := make(chan os.Signal, 2)
-		signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+		signal.Notify(ch, shutdownSignals()...)
 		go func() {
 			<-ch
 			signalCloseMu.Lock()

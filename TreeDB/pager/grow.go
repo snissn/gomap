@@ -126,13 +126,14 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	newChunks := make([][]byte, 0, chunksNeeded)
 	for i := int64(0); i < chunksNeeded; i++ {
 		offset := currentCapacity + (i * p.chunkSize)
-		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize))
+		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize), p.mmapPopulate)
 		if err != nil {
 			for _, c := range newChunks {
 				_ = munmapFile(c)
 			}
 			return err
 		}
+		madviseChunk(data)
 		newChunks = append(newChunks, data)
 	}
 
@@ -141,6 +142,7 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	updated := make([][]byte, len(p.chunks))
 	copy(updated, p.chunks)
 	p.atomicChunks.Store(&chunkList{data: updated})
+	p.ensurePrefetchCapacityLocked(len(p.chunks))
 	p.mu.Unlock()
 	return nil
 }
