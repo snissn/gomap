@@ -99,6 +99,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
 		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
 		InternalBaseDelta:     opts.IndexInternalBaseDelta,
 	})
 	_ = sysIter.Close()
@@ -112,6 +113,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
 		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
 		InternalBaseDelta:     opts.IndexInternalBaseDelta,
 	})
 	_ = userIter.Close()

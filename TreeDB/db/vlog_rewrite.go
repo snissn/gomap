@@ -96,6 +96,14 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
+	if opts.IndexPackedValuePtr {
+		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
+		// rotate so newly written pointers remain representable.
+		const packedMax = int64(^uint32(0)) - 4
+		if maxBytes > packedMax {
+			maxBytes = packedMax
+		}
+	}
 	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
@@ -136,6 +144,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.IndexColumnarLeaves,
+			PackedValuePtr:        opts.IndexPackedValuePtr,
 			InternalBaseDelta:     opts.IndexInternalBaseDelta,
 		})
 		_ = rewriter.Close()

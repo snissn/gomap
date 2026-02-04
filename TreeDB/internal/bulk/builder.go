@@ -20,6 +20,7 @@ type BuildOptions struct {
 	LeafPrefixCompression bool
 	LeafColumnar          bool
 	InternalBaseDelta     bool
+	PackedValuePtr        bool
 }
 
 // Build creates a new B-Tree from a sorted iterator.
@@ -241,11 +242,12 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 }
 
 func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
-	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta {
+	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta || opts.PackedValuePtr {
 		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.LeafColumnar,
 			InternalBaseDelta:     opts.InternalBaseDelta,
+			PackedValuePtr:        opts.PackedValuePtr,
 		})
 	}
 	return node.NewBuilder(buf, page.PageTypeLeaf)

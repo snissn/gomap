@@ -74,7 +74,11 @@ func entryLength(n *Node, offset int) (int, error) {
 		flags := layout.flags
 		valSize := layout.valLen
 		if flags&FlagPointer != 0 {
-			valSize = page.ValuePtrSize
+			if n.leafPackedValuePtr() {
+				valSize = page.PackedValuePtrSize
+			} else {
+				valSize = page.ValuePtrSize
+			}
 		}
 		keyEnd := layout.keyOff + layout.keyLen
 		valEnd := layout.valOff + valSize

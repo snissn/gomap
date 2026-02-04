@@ -256,10 +256,18 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 
 	valueStart := entryStart + layout.valOff
 	if flags&FlagPointer != 0 {
-		if valueStart+page.ValuePtrSize > len(n.data) {
+		valPtrSize := page.ValuePtrSize
+		if n.leafPackedValuePtr() {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		if valueStart+valPtrSize > len(n.data) {
 			return nil, nil, page.ValuePtr{}, 0, ErrCorruptedNode
 		}
-		valPtr = page.DecodeValuePtr(n.data[valueStart : valueStart+page.ValuePtrSize])
+		if n.leafPackedValuePtr() {
+			valPtr = page.DecodePackedValuePtr(n.data[valueStart : valueStart+valPtrSize])
+		} else {
+			valPtr = page.DecodeValuePtr(n.data[valueStart : valueStart+valPtrSize])
+		}
 		return key, nil, valPtr, flags, nil
 	}
 
@@ -307,16 +315,30 @@ func (n *Node) UpdateLeafValuePtr(index uint16, oldPtr, newPtr page.ValuePtr) (b
 	}
 
 	ptr += layout.valOff
-	if ptr+page.ValuePtrSize > len(n.data) {
+	valPtrSize := page.ValuePtrSize
+	packed := n.leafPackedValuePtr()
+	if packed {
+		valPtrSize = page.PackedValuePtrSize
+	}
+	if ptr+valPtrSize > len(n.data) {
 		return false, ErrCorruptedNode
 	}
 
-	cur := page.DecodeValuePtr(n.data[ptr : ptr+page.ValuePtrSize])
+	var cur page.ValuePtr
+	if packed {
+		cur = page.DecodePackedValuePtr(n.data[ptr : ptr+valPtrSize])
+	} else {
+		cur = page.DecodeValuePtr(n.data[ptr : ptr+valPtrSize])
+	}
 	if cur != oldPtr {
 		return false, nil
 	}
 
-	newPtr.Encode(n.data[ptr : ptr+page.ValuePtrSize])
+	if packed {
+		page.EncodePackedValuePtr(n.data[ptr:ptr+valPtrSize], newPtr)
+	} else {
+		newPtr.Encode(n.data[ptr : ptr+valPtrSize])
+	}
 	n.UpdateChecksum()
 	return true, nil
 }
@@ -576,8 +598,12 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 	// Calculate size needed
 	// KeyLen(2) + ValLen(4) + Flags(1) + Key + Value
 	entrySize := 7 + len(key)
+	valPtrSize := page.ValuePtrSize
+	if n.leafPackedValuePtr() {
+		valPtrSize = page.PackedValuePtrSize
+	}
 	if flags&FlagPointer != 0 {
-		entrySize += page.ValuePtrSize
+		entrySize += valPtrSize
 	} else {
 		entrySize += len(value)
 	}
@@ -626,7 +652,11 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 		putUint32(buf[2:6], 0) // or logic length?
 		buf[6] = flags
 		copy(buf[7:], key)
-		valPtr.Encode(buf[7+len(key):])
+		if n.leafPackedValuePtr() {
+			page.EncodePackedValuePtr(buf[7+len(key):7+len(key)+valPtrSize], valPtr)
+		} else {
+			valPtr.Encode(buf[7+len(key) : 7+len(key)+valPtrSize])
+		}
 	} else {
 		putUint32(buf[2:6], uint32(len(value)))
 		buf[6] = flags
@@ -697,10 +727,14 @@ func (n *Node) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr)
 }
 
 func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	valPtrSize := page.ValuePtrSize
+	if n.leafPackedValuePtr() {
+		valPtrSize = page.PackedValuePtrSize
+	}
 	valLen := 0
 	entrySize := leafColumnarHeaderSize + len(key)
 	if flags&FlagPointer != 0 {
-		entrySize += page.ValuePtrSize
+		entrySize += valPtrSize
 	} else if flags&FlagTombstone == 0 {
 		valLen = len(value)
 		entrySize += valLen
@@ -733,7 +767,11 @@ func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.V
 
 	valueStart := valOff
 	if flags&FlagPointer != 0 {
-		valPtr.Encode(buf[valueStart : valueStart+page.ValuePtrSize])
+		if n.leafPackedValuePtr() {
+			page.EncodePackedValuePtr(buf[valueStart:valueStart+valPtrSize], valPtr)
+		} else {
+			valPtr.Encode(buf[valueStart : valueStart+valPtrSize])
+		}
 	} else if flags&FlagTombstone == 0 {
 		copy(buf[valueStart:valueStart+valLen], value)
 	}
@@ -821,7 +859,10 @@ func (n *Node) addLeafEntryPrefixCompressed(key, value []byte, flags byte, valPt
 		entries = append(entries, newEntry)
 	}
 
-	b := NewBuilderWithOptions(n.data, page.PageTypeLeaf, BuilderOptions{LeafPrefixCompression: true})
+	b := NewBuilderWithOptions(n.data, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		PackedValuePtr:        n.leafPackedValuePtr(),
+	})
 	b.SetPageID(n.PageID())
 	for _, entry := range entries {
 		if err := b.AddLeafEntry(entry.Key, entry.Value, entry.Flags, entry.ValuePtr); err != nil {

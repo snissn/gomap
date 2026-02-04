@@ -26,6 +26,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 	if n.Type() == page.PageTypeLeaf {
 		newNode.setLeafPrefixCompressed(n.leafPrefixCompressed())
 		newNode.setLeafColumnar(n.leafColumnar())
+		newNode.setLeafPackedValuePtr(n.leafPackedValuePtr())
 	}
 
 	// 2. Iterate from splitIndex to count-1 and move items
@@ -56,6 +57,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 				opts := BuilderOptions{
 					LeafPrefixCompression: n.leafPrefixCompressed(),
 					LeafColumnar:          n.leafColumnar(),
+					PackedValuePtr:        n.leafPackedValuePtr(),
 				}
 				leafBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
 				leafBuilder.SetPageID(newNode.PageID())
