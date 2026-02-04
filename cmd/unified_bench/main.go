@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -37,6 +39,7 @@ var (
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
+	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -45,7 +48,7 @@ var (
 	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg          = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -87,6 +90,7 @@ type BenchConfig struct {
 	Keys          int
 	ValueSize     int
 	BatchSize     int
+	WriteWorkers  int
 	RangeQueries  int
 	RangeSpan     int
 	ValuePattern  string
@@ -228,6 +232,7 @@ func main() {
 		Keys:                             *numKeys,
 		ValueSize:                        *valSize,
 		BatchSize:                        *batchSize,
+		WriteWorkers:                     *writeWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
 		ValuePattern:                     *valPattern,
@@ -984,6 +989,96 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
+		"random_write_parallel": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			workers := cfg.WriteWorkers
+			if workers <= 1 {
+				start := time.Now()
+				val := make([]byte, cfg.ValueSize)
+				rng := rand.New(rand.NewSource(cfg.SeedUsed))
+				pc := newPeriodicCheckpoint(cfg)
+				perOpBytes := int64(8 + len(val))
+				var k [8]byte
+				for i := 0; i < cfg.Keys; i++ {
+					if i&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return 0, err
+						}
+					}
+					binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
+					if err := db.Set(k[:], val); err != nil {
+						return 0, fmt.Errorf("random_write_parallel: %w", err)
+					}
+					if err := pc.Add(db, 1, perOpBytes); err != nil {
+						return 0, fmt.Errorf("random_write_parallel checkpoint: %w", err)
+					}
+				}
+				return float64(cfg.Keys) / time.Since(start).Seconds(), nil
+			}
+			if cfg.CheckpointEveryOps > 0 || cfg.CheckpointEveryBytes > 0 {
+				return 0, fmt.Errorf("random_write_parallel: periodic checkpoints are not supported (disable -checkpoint-every-ops/bytes)")
+			}
+			if cfg.Keys <= 0 {
+				return 0, nil
+			}
+
+			total := cfg.Keys
+			perWorker := total / workers
+			rem := total % workers
+
+			start := time.Now()
+			val := make([]byte, cfg.ValueSize)
+
+			var stop atomic.Bool
+			errCh := make(chan error, 1)
+			var wg sync.WaitGroup
+			for w := 0; w < workers; w++ {
+				n := perWorker
+				if w < rem {
+					n++
+				}
+				seedW := cfg.SeedUsed + int64(w)
+				rngW := rand.New(rand.NewSource(seedW))
+				wg.Add(1)
+				go func(n int, rng *rand.Rand) {
+					defer wg.Done()
+					var k [8]byte
+					for i := 0; i < n; i++ {
+						if stop.Load() {
+							return
+						}
+						if i&8191 == 0 {
+							if err := guard.Checkpoint(); err != nil {
+								if stop.CompareAndSwap(false, true) {
+									select {
+									case errCh <- err:
+									default:
+									}
+								}
+								return
+							}
+						}
+						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10)))
+						if err := db.Set(k[:], val); err != nil {
+							if stop.CompareAndSwap(false, true) {
+								select {
+								case errCh <- fmt.Errorf("random_write_parallel: %w", err):
+								default:
+								}
+							}
+							return
+						}
+					}
+				}(n, rngW)
+			}
+
+			wg.Wait()
+			select {
+			case err := <-errCh:
+				return 0, err
+			default:
+			}
+			return float64(total) / time.Since(start).Seconds(), nil
+		},
 		"dataset_write_random": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			if err := ensureWriteDatasets(); err != nil {
 				return 0, fmt.Errorf("dataset_write_random: %w", err)
@@ -1729,6 +1824,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"fragmentation_report_post":  "Fragmentation Report (Post-Settle)",
 		"sequential_write":           "Sequential Write",
 		"random_write":               "Random Write",
+		"random_write_parallel":      "Random Write (Parallel)",
 		"dataset_write_random":       "Dataset Write (Random)",
 		"dataset_write_sorted":       "Dataset Write (Sorted)",
 		"random_read":                "Random Read",
@@ -1770,6 +1866,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	hasMeasuredWrites := containsAny(finalTestOrder,
 		"sequential_write",
 		"random_write",
+		"random_write_parallel",
 		"dataset_write_random",
 		"dataset_write_sorted",
 		"batch_write",
