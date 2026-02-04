@@ -855,7 +855,7 @@ func (db *DB) valueLogTemplateEncodeRecords(records []valuelog.Record) ([]valuel
 	encoded := records
 	used := false
 	for i := range records {
-		payload, ok := engine.Encode(context.Background(), records[i].Value, store)
+		payload, ok := engine.Encode(nil, records[i].Value, store)
 		if ok {
 			if !used {
 				encoded = make([]valuelog.Record, len(records))
@@ -3460,24 +3460,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		ptrs       []page.ValuePtr
 		err        error
 	)
-	l.vlogMu.Lock()
-	w := l.vlog
-	if w == nil {
-		l.vlogMu.Unlock()
-		return nil, errWALUnavailable
-	}
-	if l.vlogCaps.writer != w {
-		l.vlogCaps = computeVlogWriterCaps(w)
-	}
-	caps := l.vlogCaps
-	policySetter := caps.keep
-	statsWriter := caps.stats
-	statsWriterInto := caps.statsInto
-	rawWriterInto := caps.rawInto
-	hasStats := statsWriter != nil
-	hasInto := statsWriterInto != nil
-	hasRawInto := rawWriterInto != nil
-	startSize := w.Size()
 
 	rawPayloadBytes := 0
 	for i := range records {
@@ -3517,6 +3499,25 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		records, _ = db.valueLogTemplateEncodeRecords(records)
 	}
 	db.valueLogDictCollectSamples(records)
+
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return nil, errWALUnavailable
+	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	policySetter := caps.keep
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
+	rawWriterInto := caps.rawInto
+	hasStats := statsWriter != nil
+	hasInto := statsWriterInto != nil
+	hasRawInto := rawWriterInto != nil
+	startSize := w.Size()
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
@@ -3757,20 +3758,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		ptr        page.ValuePtr
 		err        error
 	)
-	l.vlogMu.Lock()
-	w := l.vlog
-	if w == nil {
-		l.vlogMu.Unlock()
-		return page.ValuePtr{}, "", errWALUnavailable
-	}
-	if l.vlogCaps.writer != w {
-		l.vlogCaps = computeVlogWriterCaps(w)
-	}
-	caps := l.vlogCaps
-	policySetter := caps.keep
-	statsWriter := caps.stats
-	statsWriterInto := caps.statsInto
-	startSize := w.Size()
 
 	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
 	templatePrepass := false
@@ -3801,10 +3788,25 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	db.valueLogDictCollectSample(value)
 
 	if (dictID == 0 || templatePrepass) && db.templateCompressionEnabled() {
-		if payload, ok := db.valueLogTemplateEngine.Encode(context.Background(), value, db.templateStore); ok {
+		if payload, ok := db.valueLogTemplateEngine.Encode(nil, value, db.templateStore); ok {
 			value = payload
 		}
 	}
+
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	policySetter := caps.keep
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
+	startSize := w.Size()
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()

@@ -9,6 +9,7 @@ import (
 const (
 	reasonSkipSmall            = "tmpl_skip_small"
 	reasonSkipNoFPs            = "tmpl_skip_no_fps"
+	reasonSkipCold             = "tmpl_skip_cold"
 	reasonFPLookupErr          = "tmpl_fp_lookup_err"
 	reasonNoCandidates         = "tmpl_no_candidates"
 	reasonTemplateFetchErr     = "tmpl_template_fetch_err"
