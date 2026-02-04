@@ -50,6 +50,71 @@ to an out-of-line value-log record.
 Grouped records (frames with `k>1`) embed a sub-record index inside `Length`
 (see `page.ValuePtrMarkGrouped` / `page.ValuePtrIsGrouped`).
 
+### Leaf entry encoding (index leaf pages)
+
+TreeDB stores B+Tree pages in `Dir/maindb/index.db` using a fixed 4096-byte
+slotted-page layout:
+- a 16-byte header (`page.PageHeader`) at the start,
+- a directory of `Count` uint16 offsets growing up from byte 16,
+- entry payload bytes growing down from the end of the page.
+
+For `PageTypeLeaf`, the page-header `Flags` field stores the leaf encoding mode
+in high bits (in addition to the low-bit page type).
+
+Leaf-encoding flags (current):
+- `0x8000`: leaf prefix-compressed
+- `0x4000`: leaf columnar
+- `0x2000`: leaf prefix v2 (only valid when prefix-compressed)
+
+`leaf columnar` and `leaf prefix-compressed` are mutually exclusive.
+
+#### Plain leaf entries (no prefix compression, non-columnar)
+
+```text
+[ u16 KeyLen ]
+[ u32 ValueLen ]  ignored for pointer entries
+[ u8  Flags ]
+[ Key bytes (KeyLen) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+```
+
+#### Prefix-compressed leaf entries (v1)
+
+When prefix compression is enabled and `leaf prefix v2` is **not** set:
+
+```text
+[ u16 SharedPrefixLen ]
+[ u16 SuffixLen ]
+[ u32 ValueLen ]  ignored for pointer entries
+[ u8  Flags ]
+[ Key suffix bytes (SuffixLen) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+```
+
+Keys are reconstructed within restart blocks: every Nth entry is a restart
+(`SharedPrefixLen=0`), and non-restart keys copy `SharedPrefixLen` bytes from
+the previous key, then append the suffix bytes.
+
+#### Prefix-compressed leaf entries (v2 compact header)
+
+When prefix compression is enabled and `leaf prefix v2` is set:
+
+```text
+[ u8 SharedPrefixLen8 ]
+[ u8 SuffixLen8 ]
+[ u8 Flags ]
+[ optional: u16 SharedPrefixLen16 | u16 SuffixLen16 ]  if both 8-bit lengths are 0xFF
+[ optional: uvarint ValueLen ]  only for inline, non-tombstone entries
+[ Key suffix bytes (SuffixLen) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+```
+
+Notes:
+- For pointer/tombstone entries, `ValueLen` is omitted to reduce leaf payload.
+- Tombstone entries store no value bytes.
+- Restart points follow the same fixed interval as v1 (see `TreeDB/node` for the
+  current restart interval).
+
 ## Value-log record format (`TreeDB/internal/valuelog`)
 
 Value-log segments are append-only. Each record is:

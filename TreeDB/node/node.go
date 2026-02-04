@@ -28,7 +28,9 @@ const (
 
 	leafPrefixCompressedFlag uint16 = 0x8000
 	leafColumnarFlag         uint16 = 0x4000
-	pageTypeMask                    = ^(leafPrefixCompressedFlag | leafColumnarFlag)
+	leafPrefixV2Flag         uint16 = 0x2000
+	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag
+	pageTypeMask                    = ^leafNodeFlagMask
 
 	leafPrefixRestartInterval = 16
 )
@@ -105,7 +107,7 @@ func (n *Node) Type() page.PageType {
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
 	flags := getUint16(n.data[12:14])
-	flags = (flags & (leafPrefixCompressedFlag | leafColumnarFlag)) | uint16(t)
+	flags = (flags & leafNodeFlagMask) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
@@ -125,6 +127,13 @@ func (n *Node) leafPrefixCompressed() bool {
 	return n.rawFlags()&leafPrefixCompressedFlag != 0
 }
 
+func (n *Node) leafPrefixV2() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafPrefixV2Flag != 0
+}
+
 func (n *Node) leafColumnar() bool {
 	if n.ptype != page.PageTypeLeaf {
 		return false
@@ -138,6 +147,17 @@ func (n *Node) setLeafPrefixCompressed(enabled bool) {
 		flags |= leafPrefixCompressedFlag
 	} else {
 		flags &^= leafPrefixCompressedFlag
+		flags &^= leafPrefixV2Flag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafPrefixV2(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafPrefixV2Flag
+	} else {
+		flags &^= leafPrefixV2Flag
 	}
 	n.setRawFlags(flags)
 }

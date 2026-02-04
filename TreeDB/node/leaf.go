@@ -52,6 +52,9 @@ func (n *Node) leafEntryLayoutAt(offset int) (leafEntryLayout, error) {
 	}
 
 	if n.leafPrefixCompressed() {
+		if n.leafPrefixV2() {
+			return parseLeafPrefixV2Layout(n.data, offset)
+		}
 		if offset+9 > len(n.data) {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
@@ -437,10 +440,6 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 }
 
 func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
-	return n.searchLeafPrefixCompressed(key)
-}
-
-func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
 	count := n.Count()
 	if count == 0 {
 		return 0, false, nil
@@ -484,6 +483,77 @@ func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
 		}
 	}
 	return uint16(i), false, nil
+}
+
+func (n *Node) searchLeafPrefixCompressed(key []byte) (uint16, bool, error) {
+	count := n.Count()
+	if count == 0 {
+		return 0, false, nil
+	}
+	if count <= smallSearchThreshold {
+		for idx := uint16(0); idx < count; idx++ {
+			k, _, _, err := n.leafEntryKeyAt(idx)
+			if err != nil {
+				return 0, false, err
+			}
+			cmp := bytes.Compare(k, key)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
+		}
+		return count, false, nil
+	}
+
+	interval := leafPrefixRestartInterval
+	restarts := (int(count) + interval - 1) / interval
+	if restarts <= 0 {
+		restarts = 1
+	}
+
+	// Find the first restart key strictly greater than the target. The target
+	// can only be present in (or inserted into) the block starting at the
+	// previous restart.
+	lo := 0
+	hi := restarts
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		idx := uint16(mid * interval)
+		if idx >= count {
+			hi = mid
+			continue
+		}
+		k, _, _, err := n.leafEntryKeyAt(idx)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Compare(k, key) <= 0 {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	pos := lo
+
+	blockStart := uint16(0)
+	if pos > 0 {
+		blockStart = uint16((pos - 1) * interval)
+	}
+	blockEnd := blockStart + uint16(interval)
+	if blockEnd > count {
+		blockEnd = count
+	}
+
+	for idx := blockStart; idx < blockEnd; idx++ {
+		k, _, _, err := n.leafEntryKeyAt(idx)
+		if err != nil {
+			return 0, false, err
+		}
+		cmp := bytes.Compare(k, key)
+		if cmp >= 0 {
+			return idx, cmp == 0, nil
+		}
+	}
+	return blockEnd, false, nil
 }
 
 // AddLeafEntry inserts a new entry into the Leaf Node.

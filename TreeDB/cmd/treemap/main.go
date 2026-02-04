@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"path/filepath"
 	runtimepprof "runtime/pprof"
 	"sort"
 	"strings"
@@ -197,6 +198,7 @@ func runCheckpointBench(dir string, args []string) {
 	preferAppendAlloc := fs.Bool("prefer-append-alloc", false, "Prefer append allocation for index pages (reduces reuse; can improve locality under churn)")
 	freelistRegionPages := fs.Uint64("freelist-region-pages", 0, "Freelist reuse region size in pages (0=default)")
 	freelistRegionRadius := fs.Int("freelist-region-radius", 0, "Freelist reuse region radius (0=default, <0=disable bias)")
+	leafPrefixCompression := fs.Bool("leaf-prefix-compression", false, "Enable front-coded leaf key compression (restart points)")
 
 	pagerPopulate := fs.Bool("pager-mmap-populate", false, "Linux: enable MAP_POPULATE on index.db mmap")
 	pagerPrefetch := fs.Bool("pager-prefetch-on-read", false, "Linux: enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
@@ -235,6 +237,7 @@ func runCheckpointBench(dir string, args []string) {
 		PreferAppendAlloc:         *preferAppendAlloc,
 		FreelistRegionPages:       *freelistRegionPages,
 		FreelistRegionRadius:      *freelistRegionRadius,
+		LeafPrefixCompression:     *leafPrefixCompression,
 	}
 	if *chunkSize > 0 {
 		opts.ChunkSize = *chunkSize
@@ -244,6 +247,10 @@ func runCheckpointBench(dir string, args []string) {
 	}
 	if *fast {
 		opts.Durability = treedb.DurabilityWALOffRelaxed
+	}
+
+	if *leafPrefixCompression {
+		fmt.Fprintln(os.Stderr, "opts.leaf_prefix_compression=on")
 	}
 
 	db, err := treedb.Open(opts)
@@ -287,6 +294,7 @@ func runCheckpointBench(dir string, args []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "phase=batch_write keys=%d batch=%d\n", *keys, *batchSize)
+	phaseStart := time.Now()
 	for base := 0; base < *keys; base += *batchSize {
 		limit := base + *batchSize
 		if limit > *keys {
@@ -294,18 +302,27 @@ func runCheckpointBench(dir string, args []string) {
 		}
 		writeBatch(base, limit, func(i int) uint64 { return uint64(i) })
 	}
+	phaseDur := time.Since(phaseStart)
+	if phaseDur > 0 {
+		fmt.Fprintf(os.Stderr, "phase=batch_write done dur=%s ops=%d ops/s=%.0f\n", phaseDur, *keys, float64(*keys)/phaseDur.Seconds())
+	}
 
 	fmt.Fprintf(os.Stderr, "phase=random_write keys=%d batch=%d\n", *keys, *batchSize)
 	keyRange := *randomWriteKeyRange
 	if keyRange <= 0 {
 		keyRange = *keys
 	}
+	phaseStart = time.Now()
 	for base := 0; base < *keys; base += *batchSize {
 		limit := base + *batchSize
 		if limit > *keys {
 			limit = *keys
 		}
 		writeBatch(base, limit, func(int) uint64 { return uint64(rng.Intn(keyRange)) })
+	}
+	phaseDur = time.Since(phaseStart)
+	if phaseDur > 0 {
+		fmt.Fprintf(os.Stderr, "phase=random_write done dur=%s ops=%d ops/s=%.0f\n", phaseDur, *keys, float64(*keys)/phaseDur.Seconds())
 	}
 
 	if *pauseBeforeCheckpoint > 0 {
@@ -357,6 +374,11 @@ func runCheckpointBench(dir string, args []string) {
 		fmt.Printf("checkpoint %s (%s)\n", dur, extra)
 	} else {
 		fmt.Printf("checkpoint %s\n", dur)
+	}
+
+	mainIndex := filepath.Join(dir, "maindb", "index.db")
+	if st, err := os.Stat(mainIndex); err == nil {
+		fmt.Fprintf(os.Stderr, "disk index.db bytes=%d mib=%.1f\n", st.Size(), float64(st.Size())/(1024*1024))
 	}
 }
 

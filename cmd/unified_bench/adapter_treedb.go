@@ -51,7 +51,7 @@ var (
 	treedbIterDebug                 = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit            = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	treedbForceValuePointers        = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
-	treedbLeafPrefixCompression     = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable prefix-compressed leaf nodes")
+	treedbLeafPrefixCompression     = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold         = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbVlogDictTrainBytes        = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
 	treedbVlogDictDictBytes         = flag.Int("treedb-vlog-dict-dict-bytes", 0, "TreeDB: value-log dict size in bytes (0=default)")
@@ -277,6 +277,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			notes = append(notes, "index_columnar_leaves enabled: disabling leaf_prefix_compression (columnar leaf encoding is incompatible)")
 		}
 		leafPrefixEffective = false
+	}
+	if leafPrefixEffective {
+		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)")
 	}
 	if *treedbDisableWAL && *treedbRelaxedSync {
 		// This is not an error, but it can be confusing. Document precedence.
