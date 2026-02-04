@@ -31,6 +31,7 @@ var (
 	treedbFlushBackendMaxBatches    = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
 	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
 	treedbPagerMmapPopulate         = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
+	treedbPagerPrefetchOnRead       = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
 	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
 	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
@@ -289,6 +290,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		ChunkSize:                 *treedbChunkSize,
 		PagerSyncConcurrency:      *treedbPagerSyncConcurrency,
 		PagerMmapPopulate:         *treedbPagerMmapPopulate,
+		PagerPrefetchOnRead:       *treedbPagerPrefetchOnRead,
 		PreferAppendAlloc:         *treedbPreferAppendAlloc,
 		FreelistRegionPages:       *treedbFreelistRegionPages,
 		FreelistRegionRadius:      *treedbFreelistRegionRadius,
