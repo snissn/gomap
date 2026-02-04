@@ -233,7 +233,7 @@ func Open(opts Options) (*DB, error) {
 			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
 			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
 		})
-		decodeOpts := template.DecodeOptions{MaxGaps: tcfg.MaxGaps, MaxDecodedBytes: tcfg.MaxDecodedBytes}
+		decodeOpts := template.DecodeOptions{MaxGaps: tcfg.MaxGaps, MaxDecodedBytes: tcfg.MaxDecodedBytes, DefCacheSize: tcfg.DefCacheSize}
 		if decodeOpts.MaxDecodedBytes <= 0 && limits.MaxRecordSize > 0 {
 			decodeOpts.MaxDecodedBytes = int(limits.MaxRecordSize)
 		}

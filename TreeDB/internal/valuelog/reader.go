@@ -53,6 +53,7 @@ type Reader struct {
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
+	templateDefCache   *templateDefCache
 	pending            []frameEntry
 	pendingIndex       int
 }
@@ -99,6 +100,7 @@ func (r *Reader) SetDictLookup(lookup DictLookup) {
 func (r *Reader) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOptions) {
 	r.templateLookup = lookup
 	r.templateDecodeOpts = opts
+	r.templateDefCache = newTemplateDefCache(opts.DefCacheSize)
 }
 
 func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
@@ -200,8 +202,8 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 			}
 			val = raw[start:end]
 			if r.templateLookup != nil && templ.IsEncodedPayload(val) {
-				decoded, decErr := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-					return r.templateLookup(id)
+				decoded, decErr := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+					return resolveTemplateDef(id, r.templateLookup, r.templateDefCache)
 				}, r.templateDecodeOpts)
 				if decErr != nil {
 					return 0, nil, page.ValuePtr{}, decErr
@@ -293,10 +295,10 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 }
 
 func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
-	return ReadAtWithDict(f, ptr, verifyCRC, nil, nil, templ.DecodeOptions{})
+	return ReadAtWithDict(f, ptr, verifyCRC, nil, nil, nil, templ.DecodeOptions{})
 }
 
-func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions) ([]byte, error) {
+func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
 	if f == nil {
 		return nil, errors.New("valuelog: nil file")
 	}
@@ -410,8 +412,8 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				return nil, err
 			}
 			if templateLookup != nil && templ.IsEncodedPayload(val) {
-				decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-					return templateLookup(id)
+				decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+					return resolveTemplateDef(id, templateLookup, templateCache)
 				}, templateOpts)
 				if err != nil {
 					return nil, err
@@ -432,10 +434,10 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			return nil, ErrCorrupt
 		}
 	}
-	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateOpts)
+	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
 }
 
-func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions) ([]byte, error) {
+func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
 	if len(header) < HeaderSize {
 		return nil, ErrCorrupt
 	}
@@ -470,8 +472,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 			return nil, ErrCorrupt
 		}
 		if templateLookup != nil && templ.IsEncodedPayload(payload) {
-			decoded, err := templ.DecodePayload(payload, func(id uint64) ([]byte, error) {
-				return templateLookup(id)
+			decoded, err := templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, templateLookup, templateCache)
 			}, templateOpts)
 			if err != nil {
 				return nil, err
@@ -522,8 +524,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		copy(val, raw[start:end])
 		putDecodeScratch(raw)
 		if templateLookup != nil && templ.IsEncodedPayload(val) {
-			decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-				return templateLookup(id)
+			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, templateLookup, templateCache)
 			}, templateOpts)
 			if err != nil {
 				return nil, err
@@ -541,8 +543,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 	}
 	val := raw[start:end]
 	if templateLookup != nil && templ.IsEncodedPayload(val) {
-		decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-			return templateLookup(id)
+		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, templateLookup, templateCache)
 		}, templateOpts)
 		if err != nil {
 			return nil, err

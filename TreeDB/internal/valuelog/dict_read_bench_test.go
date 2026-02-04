@@ -154,7 +154,7 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 						}
 
 						// Warm up dict codec cache outside the timed loop.
-						if _, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, templ.DecodeOptions{}); err != nil {
+						if _, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, nil, templ.DecodeOptions{}); err != nil {
 							b.Fatalf("decode warmup: %v", err)
 						}
 
@@ -164,7 +164,7 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 
 						sink := byte(0)
 						for i := 0; i < b.N; i++ {
-							v, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, templ.DecodeOptions{})
+							v, err := decodeRecord(header[:], frame, ptr, false, dictLookup, nil, nil, templ.DecodeOptions{})
 							if err != nil {
 								b.Fatalf("decodeRecord: %v", err)
 							}

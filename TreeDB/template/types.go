@@ -57,6 +57,10 @@ type span struct {
 type DecodeOptions struct {
 	MaxDecodedBytes int
 	MaxGaps         int
+
+	// DefCacheSize controls the maximum number of decoded template definitions
+	// cached by value-log readers. Values <= 0 disable caching.
+	DefCacheSize int
 }
 
 func uvarintLen(v uint64) int {
