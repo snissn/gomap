@@ -2,8 +2,9 @@ package node
 
 import (
 	"encoding/binary"
-	"github.com/snissn/gomap/TreeDB/page"
 	"math"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
