@@ -29,6 +29,8 @@ type lane struct {
 	vlogRetainedPath string
 	vlogCaps         vlogWriterCaps
 	vlogMu           sync.Mutex
+	vlogCh           chan vlogWriteRequest
+	vlogQueueing     atomic.Bool
 	vlogLiveBytes    atomic.Int64
 	vlogClosedBytes  atomic.Int64
 	vlogClosedSizes  map[string]int64
