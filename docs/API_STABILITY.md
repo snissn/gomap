@@ -2,7 +2,8 @@
 
 ## TL;DR
 
-- The intended “stable surface” for downstream projects is:
+- **Project status: pre-alpha.** APIs and on-disk formats may change without backward-compatibility guarantees.
+- The intended “stable surface” for downstream projects (once we stabilize) is:
   - `github.com/snissn/gomap/TreeDB` (package `treedb`)
   - `github.com/snissn/gomap/HashDB` (package `hashdb`)
 - Everything else is either internal implementation detail or benchmark tooling and may change freely.
@@ -15,6 +16,9 @@
 ## Stability Levels
 
 ### Stable (intended for downstream use)
+
+Note: while these packages are the *intended* stable surface, the repo is still pre-alpha.
+Downstream users should pin a commit and expect breaking changes until we start tagging releases.
 
 - `TreeDB` / package `treedb`
   - Primary entrypoint: `treedb.Open(opts)` (cached write-back mode by default).
@@ -36,10 +40,11 @@
 
 ## On-Disk Format Compatibility
 
-This repo is a dev project; formats may evolve.
+This repo is a dev project; formats may evolve rapidly.
 
 Rules of thumb:
-- Do not expect on-disk format compatibility across large refactors unless explicitly stated.
+- Do not expect on-disk format compatibility across commits unless explicitly stated.
+- It is acceptable for new binaries to fail to open old DB directories (and vice versa).
 - Prefer rebuilding DB directories for benchmarks and experiments.
 - If/when we stabilize formats, we’ll add:
   - an explicit version marker in metadata, and

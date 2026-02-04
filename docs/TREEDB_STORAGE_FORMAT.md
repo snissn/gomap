@@ -3,6 +3,9 @@
 This document is the canonical reference for TreeDB’s on-disk layout and the
 **persistent value log** design (no slabs).
 
+TreeDB is **pre-alpha**: on-disk formats may change without backward-compatibility guarantees.
+It is acceptable for new binaries to fail to open old DB directories (and vice versa).
+
 Operator-facing behavior is covered by:
 - `docs/contracts/DURABILITY.md`
 - `docs/TREEDB_WRITE_PATHS.md`

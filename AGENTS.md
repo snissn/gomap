@@ -5,6 +5,12 @@ storage and is **not** an ephemeral WAL. The legacy "slab" storage path is
 removed; large values are stored in the value log and referenced by pointers in
 the index.
 
+## Project status (pre-alpha)
+
+- TreeDB is **pre-alpha**. On-disk formats and public APIs may change without backward-compatibility guarantees.
+- It is acceptable for new binaries to fail to open old DB directories (and vice versa). Prefer rebuilding DB dirs for benchmarks/experiments.
+- If you change on-disk formats, update docs and add/adjust relevant tests (but do not add complex migration scaffolding yet).
+
 ## Current Architecture
 
 - **WAL (journal):** Redo log for durability/recovery. Can be disabled in

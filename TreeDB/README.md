@@ -115,7 +115,7 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 - Value-log segments are persistent; reclaim disk via `DB.ValueLogGC` (deletes fully-unreferenced segments) and `treedb.ValueLogRewriteOffline` (offline rewrite/compaction).
 - Optional guardrail: `Options.ValueLog.MaxRetainedBytes` emits a warning when retained value-log bytes exceed the threshold.
 - Optional hard cap: `Options.ValueLog.MaxRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
-- On-disk format is considered alpha and may change without backward-compatibility guarantees.
+- TreeDB is pre-alpha; public APIs and on-disk format may change without backward-compatibility guarantees.
 
 ### Durability Matrix (Cached Mode)
 

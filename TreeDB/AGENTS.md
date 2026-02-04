@@ -3,6 +3,12 @@
 TreeDB stores large values in a **persistent value log** under `Options.Dir/maindb/wal/`.
 There is **no slab storage path** in TreeDB.
 
+## Project status (pre-alpha)
+
+- TreeDB is **pre-alpha**. On-disk formats and public APIs may change without backward-compatibility guarantees.
+- It is acceptable for new binaries to fail to open old DB directories (and vice versa).
+- When changing on-disk formats, update `docs/TREEDB_STORAGE_FORMAT.md` and add/adjust tests; avoid building migration infrastructure until we commit to stability.
+
 ## Canonical docs (trust these)
 
 - `docs/TREEDB_STORAGE_FORMAT.md` (on-disk layout + `ValuePtr` + value-log lifecycle)
