@@ -188,6 +188,9 @@ func Open(opts Options) (*DB, error) {
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
+		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
+		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
+		dictOpts.ValueLog.ForcePointers = false
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		if chunkSizeDefaulted {
 			dictOpts.ChunkSize = defaultDictChunkSize
@@ -211,6 +214,9 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.DisableBackgroundPrune = true
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
+		// templatedb uses batch.Set for small routing/index entries. Do not
+		// propagate ForcePointers from the main DB into this internal store.
+		templateOpts.ValueLog.ForcePointers = false
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
 		templateOpts.ValueLog.TemplateLookup = nil
