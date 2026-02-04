@@ -23,6 +23,7 @@ VALSIZE="${VALSIZE:-1024}"
 MODE="${MODE:-wal_off}"           # wal_off|wal_on
 RAW_MIB="${RAW_MIB:-64}"          # steady-state bytes written
 BATCH="${BATCH:-1024}"            # ops per batch
+WORKERS="${WORKERS:-1}"           # concurrent workers
 KEY_MODE="${KEY_MODE:-dataset}"   # random|sequential|dataset
 POINTER_THRESHOLD="${PTR_T:-1}"   # 1 forces value-log pointers
 
@@ -108,6 +109,7 @@ run_case() {
     -bench-template "$tmpl" \
     -bench-raw-mib "$RAW_MIB" \
     -bench-batch "$BATCH" \
+    -bench-workers "$WORKERS" \
     -bench-key-mode "$KEY_MODE" \
     -bench-pointer-threshold "$POINTER_THRESHOLD" \
     -bench-dict-train-mib "$DICT_TRAIN_MIB" \

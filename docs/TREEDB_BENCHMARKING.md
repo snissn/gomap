@@ -60,7 +60,7 @@ go run ./TreeDB/cmd/vlog_dict_realdata \
   -train 10000 -eval 5000 -cap 0 \
   -bench-kv -bench-mode wal_off -bench-pointer-threshold 1 \
   -bench-compression off -bench-template on \
-  -bench-raw-mib 512 -bench-batch 1024 -bench-key-mode dataset \
+  -bench-raw-mib 512 -bench-batch 1024 -bench-workers 8 -bench-key-mode dataset \
   -bench-cpu-profile /tmp/treedb_template_steady.pprof
 
 go tool pprof -http=:0 /tmp/treedb_template_steady.pprof

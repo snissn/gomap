@@ -23,6 +23,18 @@ type Store interface {
 	PutTemplateDef(ctx context.Context, defBytes []byte, routeFPs []uint64) (uint64, error)
 }
 
+// PublishSpec describes a template definition publish request.
+type PublishSpec struct {
+	DefBytes []byte
+	RouteFPs []uint64
+}
+
+// BatchPublisher is an optional extension to Store that allows publishing
+// multiple templates in a single durable batch.
+type BatchPublisher interface {
+	PutTemplateDefs(ctx context.Context, defs []PublishSpec) ([]uint64, error)
+}
+
 // TemplateDef is an ordered list of anchors.
 type TemplateDef struct {
 	Kind           TemplateKind

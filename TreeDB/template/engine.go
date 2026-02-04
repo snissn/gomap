@@ -15,14 +15,12 @@ import (
 type Engine struct {
 	cfg            Config
 	stats          TemplateStats
-	trainMu        sync.Mutex
-	buckets        map[uint64]*bucket
-	bucketSeq      uint64
-	totalTemplates int
 	trainSeq       atomic.Uint64
 	encodeSeq      atomic.Uint64
 	lastKeepSeq    atomic.Uint64
 	defCache       *defCache
+	trainer        *trainer
+	totalTemplates atomic.Uint64
 	recentMu       sync.Mutex
 	recent         []recentTemplate
 }
@@ -34,6 +32,7 @@ type bucket struct {
 	samplesSeen        int
 	lastPublishSample  int
 	templatesPublished int
+	publishPending     bool
 	lastSeen           uint64
 }
 
@@ -199,10 +198,21 @@ func (c *defCache) Add(id uint64, def TemplateDef) {
 // NewEngine creates a template engine with normalized config.
 func NewEngine(cfg Config) *Engine {
 	cfg = NormalizeConfig(cfg)
-	return &Engine{
+	e := &Engine{
 		cfg:      cfg,
-		buckets:  make(map[uint64]*bucket),
 		defCache: newDefCache(cfg.DefCacheSize),
+	}
+	e.trainer = newTrainer(e)
+	return e
+}
+
+// Close stops background training/publishing workers.
+func (e *Engine) Close() {
+	if e == nil {
+		return
+	}
+	if t := e.trainer; t != nil {
+		t.Close()
 	}
 }
 
@@ -660,94 +670,13 @@ func (e *Engine) observeTraining(value []byte, store Store) {
 	if cfg.TrainSampleStride > 1 && seq%uint64(cfg.TrainSampleStride) != 0 {
 		return
 	}
-	fps := BucketFingerprints(value, cfg)
-	if len(fps) == 0 {
-		fps = Fingerprints(value, cfg)
-	}
-	if len(fps) == 0 {
+	e.stats.TrainEnqueueAttempts.Add(1)
+	if cfg.TrainMaxValueBytes >= 0 && len(value) > cfg.TrainMaxValueBytes {
+		e.stats.TrainDroppedTooLarge.Add(1)
 		return
 	}
-	bucketKey := BucketKey(fps)
-	if bucketKey == 0 {
-		return
-	}
-	e.trainMu.Lock()
-	defer e.trainMu.Unlock()
-	b := e.buckets[bucketKey]
-	if b == nil {
-		if len(e.buckets) >= cfg.MaxBuckets {
-			e.evictOldestBucket()
-		}
-		b = &bucket{key: bucketKey}
-		e.buckets[bucketKey] = b
-	}
-	e.bucketSeq++
-	b.lastSeen = e.bucketSeq
-	// Add sample (copy).
-	cp := append([]byte(nil), value...)
-	b.samples = append(b.samples, sample{value: cp})
-	b.sampleBytes += len(cp)
-	b.samplesSeen++
-	for (cfg.MaxValuesPerBucket > 0 && len(b.samples) > cfg.MaxValuesPerBucket) || (cfg.MaxBytesPerBucket > 0 && b.sampleBytes > cfg.MaxBytesPerBucket) {
-		old := b.samples[0]
-		b.samples = b.samples[1:]
-		b.sampleBytes -= len(old.value)
-	}
-	if cfg.SynthesizeEverySamples <= 0 || b.samplesSeen%cfg.SynthesizeEverySamples != 0 {
-		return
-	}
-	if cfg.CooldownValues > 0 && b.samplesSeen-b.lastPublishSample < cfg.CooldownValues {
-		return
-	}
-	if cfg.MaxTemplatesPerBucket > 0 && b.templatesPublished >= cfg.MaxTemplatesPerBucket {
-		return
-	}
-	if cfg.MaxTemplatesTotal > 0 && e.totalTemplates >= cfg.MaxTemplatesTotal {
-		return
-	}
-	def, routeValue, activated, ok := synthesizeTemplate(b.samples, cfg)
-	if !ok {
-		return
-	}
-	if !activated {
-		return
-	}
-	defBytes, err := EncodeTemplateDef(def, cfg)
-	if err != nil {
-		return
-	}
-	routeFPs := RoutingFingerprints(routeValue, cfg)
-	if len(routeFPs) == 0 {
-		return
-	}
-	routeFPs = append(routeFPs, RoutingFingerprintsLegacy(routeValue, cfg)...)
-	if _, err := store.PutTemplateDef(context.Background(), defBytes, routeFPs); err != nil {
-		return
-	}
-	b.lastPublishSample = b.samplesSeen
-	b.templatesPublished++
-	e.totalTemplates++
-	e.stats.TemplatesPublished.Add(1)
-}
-
-func (e *Engine) evictOldestBucket() {
-	var (
-		oldestKey  uint64
-		oldestSeen uint64
-		set        bool
-	)
-	for k, b := range e.buckets {
-		if b == nil {
-			continue
-		}
-		if !set || b.lastSeen < oldestSeen || (b.lastSeen == oldestSeen && k < oldestKey) {
-			oldestKey = k
-			oldestSeen = b.lastSeen
-			set = true
-		}
-	}
-	if set {
-		delete(e.buckets, oldestKey)
+	if t := e.trainer; t != nil {
+		t.Enqueue(store, value)
 	}
 }
 

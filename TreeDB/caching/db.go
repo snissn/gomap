@@ -4561,6 +4561,10 @@ func (db *DB) Close() error {
 	if trainer != nil {
 		trainer.Close()
 	}
+	if db.valueLogTemplateEngine != nil {
+		db.valueLogTemplateEngine.Close()
+		db.valueLogTemplateEngine = nil
+	}
 	if db.hashSortedIndexer != nil {
 		db.hashSortedIndexer.Close()
 		db.hashSortedIndexer = nil

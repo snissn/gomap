@@ -17,6 +17,8 @@ import (
 	"runtime/pprof"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cespare/xxhash/v2"
@@ -67,6 +69,7 @@ type benchConfig struct {
 	Template          string
 	RawMiB            int
 	Batch             int
+	Workers           int
 	KeyMode           string
 	PointerThreshold  int
 	FlushThresholdMiB int
@@ -91,6 +94,7 @@ type benchReport struct {
 	KeyMode             string   `json:"key_mode"`
 	RawMiB              int      `json:"raw_mib"`
 	Batch               int      `json:"batch"`
+	Workers             int      `json:"workers,omitempty"`
 	PointerThreshold    int      `json:"pointer_threshold"`
 	FlushThresholdMiB   int      `json:"flush_threshold_mib,omitempty"`
 	DictTrainMiB        int      `json:"dict_train_mib,omitempty"`
@@ -165,6 +169,7 @@ func main() {
 	benchCPUProfile := flag.String("bench-cpu-profile", "", "Write CPU profile for steady-state phase (bench only; optional)")
 	benchRawMiB := flag.Int("bench-raw-mib", 512, "Raw MiB to write in steady-state phase")
 	benchBatch := flag.Int("bench-batch", 1024, "Number of ops per batch write")
+	benchWorkers := flag.Int("bench-workers", 1, "Number of concurrent workers (bench only)")
 	benchKeyMode := flag.String("bench-key-mode", "random", "Key mode: random|sequential|dataset")
 	benchPointerThreshold := flag.Int("bench-pointer-threshold", 1, "Value-log pointer threshold (bytes)")
 	benchFlushThresholdMiB := flag.Int("bench-flush-threshold-mib", 0, "Flush threshold for cached mode (MiB, 0=default)")
@@ -214,6 +219,7 @@ func main() {
 			Template:          *benchTemplate,
 			RawMiB:            *benchRawMiB,
 			Batch:             *benchBatch,
+			Workers:           *benchWorkers,
 			KeyMode:           *benchKeyMode,
 			PointerThreshold:  *benchPointerThreshold,
 			FlushThresholdMiB: *benchFlushThresholdMiB,
@@ -541,6 +547,9 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.Batch <= 0 {
 		return nil, fmt.Errorf("invalid -bench-batch=%d (must be > 0)", cfg.Batch)
 	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = 1
+	}
 	if cfg.FlushThresholdMiB < 0 {
 		return nil, fmt.Errorf("invalid -bench-flush-threshold-mib=%d (must be >= 0)", cfg.FlushThresholdMiB)
 	}
@@ -584,15 +593,12 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	fmt.Printf("input:    %s\n", input)
 	fmt.Printf("samples:  train=%d eval=%d cap=%d\n", len(train), len(eval), capBytes)
 	fmt.Printf("stats:    total_bytes=%d avg=%.2f min=%d max=%d\n", stats.total, stats.avg, stats.min, stats.max)
-	fmt.Printf("bench:    mode=%s compression=%s key_mode=%s raw_mib=%d batch=%d pointer_threshold=%d\n", cfg.Mode, cfg.Compression, cfg.KeyMode, cfg.RawMiB, cfg.Batch, cfg.PointerThreshold)
+	fmt.Printf("bench:    mode=%s compression=%s template=%s key_mode=%s raw_mib=%d batch=%d workers=%d pointer_threshold=%d\n", cfg.Mode, cfg.Compression, cfg.Template, cfg.KeyMode, cfg.RawMiB, cfg.Batch, cfg.Workers, cfg.PointerThreshold)
 	if cfg.FlushThresholdMiB > 0 {
 		fmt.Printf("bench:    flush_threshold_mib=%d\n", cfg.FlushThresholdMiB)
 	}
 	if cfg.Compression == "on" {
 		fmt.Printf("bench:    dict_train_mib=%d dict_sample_stride=%d\n", cfg.DictTrainMiB, cfg.DictSampleStride)
-	}
-	if cfg.Template == "on" {
-		fmt.Printf("bench:    template=on\n")
 	}
 	fmt.Printf("load:     %.3fs\n", loadDur.Seconds())
 	fmt.Println()
@@ -634,7 +640,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	var preSteadyKeptFramesPtr *uint64
 
 	warmStart := time.Now()
-	warmRaw, warmRecords, err := writeSamplesOnce(db, train, cfg.Batch, cfg.KeyMode, keyState)
+	var warmRaw int64
+	var warmRecords int
+	if cfg.Workers > 1 {
+		warmRaw, warmRecords, err = writeSamplesOnceConcurrent(db, train, cfg.Batch, cfg.KeyMode, cfg.Workers)
+	} else {
+		warmRaw, warmRecords, err = writeSamplesOnce(db, train, cfg.Batch, cfg.KeyMode, keyState)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +690,13 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		stopCPUProfile = stop
 	}
 	steadyStart := time.Now()
-	steadyRaw, steadyRecords, err := writeUntilRawBytes(db, eval, targetRawBytes, cfg.Batch, cfg.KeyMode, keyState)
+	var steadyRaw int64
+	var steadyRecords int
+	if cfg.Workers > 1 {
+		steadyRaw, steadyRecords, err = writeUntilRawBytesConcurrent(db, eval, targetRawBytes, cfg.Batch, cfg.KeyMode, cfg.Workers)
+	} else {
+		steadyRaw, steadyRecords, err = writeUntilRawBytes(db, eval, targetRawBytes, cfg.Batch, cfg.KeyMode, keyState)
+	}
 	if stopCPUProfile != nil {
 		stopCPUProfile()
 		stopCPUProfile = nil
@@ -843,6 +861,7 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 		KeyMode:             cfg.KeyMode,
 		RawMiB:              cfg.RawMiB,
 		Batch:               cfg.Batch,
+		Workers:             cfg.Workers,
 		PointerThreshold:    cfg.PointerThreshold,
 		FlushThresholdMiB:   cfg.FlushThresholdMiB,
 		DictTrainMiB:        cfg.DictTrainMiB,
@@ -1152,6 +1171,244 @@ func writeUntilRawBytes(db *treedb.DB, samples []kvSample, targetRawBytes int64,
 		}
 	}
 	return rawBytes, records, nil
+}
+
+func keyForSampleConcurrent(keyMode string, sample kvSample, seq *atomic.Uint64, rng *rand.Rand) ([]byte, error) {
+	switch keyMode {
+	case "dataset":
+		if len(sample.Key) == 0 {
+			return nil, fmt.Errorf("dataset key is empty")
+		}
+		return sample.Key, nil
+	case "sequential":
+		if seq == nil {
+			return nil, fmt.Errorf("nil sequential key generator")
+		}
+		buf := make([]byte, 16)
+		n := seq.Add(1) - 1
+		binary.BigEndian.PutUint64(buf[8:], n)
+		return buf, nil
+	case "random":
+		if rng == nil {
+			return nil, fmt.Errorf("random key generator not initialized")
+		}
+		buf := make([]byte, 16)
+		binary.BigEndian.PutUint64(buf[:8], rng.Uint64())
+		binary.BigEndian.PutUint64(buf[8:], rng.Uint64())
+		return buf, nil
+	default:
+		return nil, fmt.Errorf("unsupported bench key mode %q", keyMode)
+	}
+}
+
+func writeSamplesOnceConcurrent(db *treedb.DB, samples []kvSample, batchSize int, keyMode string, workers int) (int64, int, error) {
+	if db == nil {
+		return 0, 0, fmt.Errorf("nil db")
+	}
+	if len(samples) == 0 {
+		return 0, 0, fmt.Errorf("no samples available")
+	}
+	if batchSize <= 0 {
+		return 0, 0, fmt.Errorf("invalid batch size %d", batchSize)
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+
+	var seq atomic.Uint64
+	var rawTotal atomic.Int64
+	var recTotal atomic.Int64
+
+	done := make(chan struct{})
+	var errOnce sync.Once
+	var firstErr error
+
+	var wg sync.WaitGroup
+	for workerID := 0; workerID < workers; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			rng := rand.New(rand.NewSource(int64(1 + id)))
+			idx := id
+			for idx < len(samples) {
+				select {
+				case <-done:
+					return
+				default:
+				}
+
+				batch := db.NewBatch()
+				if batch == nil {
+					errOnce.Do(func() {
+						firstErr = fmt.Errorf("failed to create batch")
+						close(done)
+					})
+					return
+				}
+
+				ops := 0
+				batchRaw := int64(0)
+				batchRecords := 0
+				for ops < batchSize && idx < len(samples) {
+					sample := samples[idx]
+					idx += workers
+
+					key, err := keyForSampleConcurrent(keyMode, sample, &seq, rng)
+					if err != nil {
+						_ = batch.Close()
+						errOnce.Do(func() {
+							firstErr = err
+							close(done)
+						})
+						return
+					}
+					if err := batch.Set(key, sample.Val); err != nil {
+						_ = batch.Close()
+						errOnce.Do(func() {
+							firstErr = err
+							close(done)
+						})
+						return
+					}
+					batchRaw += int64(len(sample.Val))
+					batchRecords++
+					ops++
+				}
+				if err := batch.Write(); err != nil {
+					_ = batch.Close()
+					errOnce.Do(func() {
+						firstErr = err
+						close(done)
+					})
+					return
+				}
+				if err := batch.Close(); err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						close(done)
+					})
+					return
+				}
+				rawTotal.Add(batchRaw)
+				recTotal.Add(int64(batchRecords))
+			}
+		}(workerID)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return 0, 0, firstErr
+	}
+	return rawTotal.Load(), int(recTotal.Load()), nil
+}
+
+func writeUntilRawBytesConcurrent(db *treedb.DB, samples []kvSample, targetRawBytes int64, batchSize int, keyMode string, workers int) (int64, int, error) {
+	if db == nil {
+		return 0, 0, fmt.Errorf("nil db")
+	}
+	if len(samples) == 0 {
+		return 0, 0, fmt.Errorf("no samples available")
+	}
+	if targetRawBytes <= 0 {
+		return 0, 0, fmt.Errorf("invalid target raw bytes %d", targetRawBytes)
+	}
+	if batchSize <= 0 {
+		return 0, 0, fmt.Errorf("invalid batch size %d", batchSize)
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+
+	var seq atomic.Uint64
+	var rawTotal atomic.Int64
+	var recTotal atomic.Int64
+
+	done := make(chan struct{})
+	var errOnce sync.Once
+	var firstErr error
+
+	var wg sync.WaitGroup
+	for workerID := 0; workerID < workers; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			rng := rand.New(rand.NewSource(int64(1 + id)))
+			idx := id
+			for {
+				if rawTotal.Load() >= targetRawBytes {
+					return
+				}
+				select {
+				case <-done:
+					return
+				default:
+				}
+
+				batch := db.NewBatch()
+				if batch == nil {
+					errOnce.Do(func() {
+						firstErr = fmt.Errorf("failed to create batch")
+						close(done)
+					})
+					return
+				}
+
+				ops := 0
+				batchRaw := int64(0)
+				batchRecords := 0
+				for ops < batchSize && rawTotal.Load()+batchRaw < targetRawBytes {
+					sample := samples[idx]
+					idx += workers
+					if idx >= len(samples) {
+						idx = id
+					}
+					key, err := keyForSampleConcurrent(keyMode, sample, &seq, rng)
+					if err != nil {
+						_ = batch.Close()
+						errOnce.Do(func() {
+							firstErr = err
+							close(done)
+						})
+						return
+					}
+					if err := batch.Set(key, sample.Val); err != nil {
+						_ = batch.Close()
+						errOnce.Do(func() {
+							firstErr = err
+							close(done)
+						})
+						return
+					}
+					batchRaw += int64(len(sample.Val))
+					batchRecords++
+					ops++
+				}
+				if err := batch.Write(); err != nil {
+					_ = batch.Close()
+					errOnce.Do(func() {
+						firstErr = err
+						close(done)
+					})
+					return
+				}
+				if err := batch.Close(); err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						close(done)
+					})
+					return
+				}
+				rawTotal.Add(batchRaw)
+				recTotal.Add(int64(batchRecords))
+			}
+		}(workerID)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return 0, 0, firstErr
+	}
+	return rawTotal.Load(), int(recTotal.Load()), nil
 }
 
 func dictStatsActive(stats map[string]string) bool {
