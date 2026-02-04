@@ -249,11 +249,31 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 	}
 	lastKeepSeq := e.lastKeepSeq.Load()
 	missStreak := seq - lastKeepSeq
-	if missStreak > uint64(cfg.ColdSearchAfter) {
-		probeEvery := uint64(cfg.ColdSearchProbeEvery)
-		if probeEvery == 0 {
-			probeEvery = 1
+
+	coldAfter := uint64(cfg.ColdSearchAfter)
+	probeEvery := uint64(cfg.ColdSearchProbeEvery)
+	// Startup guardrail: before we've kept any template in this Engine instance,
+	// avoid hammering candidate lookups on every value. We still probe so we can
+	// discover templates that already exist in the store after reopen.
+	//
+	// This only affects the default cold settings to avoid surprising explicit
+	// user tuning.
+	if lastKeepSeq == 0 && cfg.ColdSearchAfter == 256 && cfg.ColdSearchProbeEvery == 256 {
+		if coldAfter > 64 {
+			coldAfter = 64
 		}
+		if probeEvery > 64 {
+			probeEvery = 64
+		}
+	}
+	if coldAfter == 0 {
+		coldAfter = 1
+	}
+	if probeEvery == 0 {
+		probeEvery = 1
+	}
+
+	if missStreak > coldAfter {
 		if seq%probeEvery != 0 {
 			e.stats.addReason(reasonSkipCold)
 			e.observeTraining(value, store)
