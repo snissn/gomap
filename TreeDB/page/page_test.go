@@ -41,12 +41,35 @@ func TestValuePtrEncoding(t *testing.T) {
 }
 
 func TestStructAlignment(t *testing.T) {
-	// Verify structs are 16 bytes and naturally aligned (no padding needed for these specific definitions)
+	// Verify structs are 16 bytes and have the expected in-memory layout for the
+	// on-disk wire format (used by fast-path Encode/Decode on little-endian).
 	if size := unsafe.Sizeof(PageHeader{}); size != 16 {
 		t.Errorf("PageHeader size is %d, expected 16", size)
 	}
+	if off := unsafe.Offsetof(PageHeader{}.PageID); off != 0 {
+		t.Errorf("PageHeader.PageID offset is %d, expected 0", off)
+	}
+	if off := unsafe.Offsetof(PageHeader{}.Checksum); off != 8 {
+		t.Errorf("PageHeader.Checksum offset is %d, expected 8", off)
+	}
+	if off := unsafe.Offsetof(PageHeader{}.Flags); off != 12 {
+		t.Errorf("PageHeader.Flags offset is %d, expected 12", off)
+	}
+	if off := unsafe.Offsetof(PageHeader{}.Count); off != 14 {
+		t.Errorf("PageHeader.Count offset is %d, expected 14", off)
+	}
+
 	if size := unsafe.Sizeof(ValuePtr{}); size != 16 {
 		t.Errorf("ValuePtr size is %d, expected 16", size)
+	}
+	if off := unsafe.Offsetof(ValuePtr{}.Offset); off != 0 {
+		t.Errorf("ValuePtr.Offset offset is %d, expected 0", off)
+	}
+	if off := unsafe.Offsetof(ValuePtr{}.Length); off != 8 {
+		t.Errorf("ValuePtr.Length offset is %d, expected 8", off)
+	}
+	if off := unsafe.Offsetof(ValuePtr{}.FileID); off != 12 {
+		t.Errorf("ValuePtr.FileID offset is %d, expected 12", off)
 	}
 }
 

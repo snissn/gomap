@@ -10,8 +10,8 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -158,7 +158,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		return 0, nil, page.ValuePtr{}, err
 	}
 	rawLen := offsets[len(offsets)-1]
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return 0, nil, page.ValuePtr{}, ErrRecordTooLarge
 	}
 
@@ -199,11 +199,8 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 				return 0, nil, page.ValuePtr{}, ErrCorrupt
 			}
 			val = raw[start:end]
-			if templ.IsEncodedPayload(val) {
+			if r.templateLookup != nil && templ.IsEncodedPayload(val) {
 				decoded, decErr := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-					if r.templateLookup == nil {
-						return nil, ErrMissingTemplate
-					}
 					return r.templateLookup(id)
 				}, r.templateDecodeOpts)
 				if decErr != nil {
@@ -240,7 +237,7 @@ func decodeFramePayload(header FrameHeader, payload []byte, dictLookup DictLooku
 }
 
 func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLookup, rawLen uint32, dst []byte) ([]byte, error) {
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
 
@@ -394,7 +391,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			}
 
 			rawLen := offsets[k]
-			if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, ErrRecordTooLarge
 			}
 			if prefixLen+int(rawLen) != int(valueLen) {
@@ -412,11 +409,8 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			if _, err := f.ReadAt(val, readOff); err != nil {
 				return nil, err
 			}
-			if templ.IsEncodedPayload(val) {
+			if templateLookup != nil && templ.IsEncodedPayload(val) {
 				decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-					if templateLookup == nil {
-						return nil, ErrMissingTemplate
-					}
 					return templateLookup(id)
 				}, templateOpts)
 				if err != nil {
@@ -475,11 +469,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		if page.ValuePtrIsGrouped(ptr) {
 			return nil, ErrCorrupt
 		}
-		if templ.IsEncodedPayload(payload) {
+		if templateLookup != nil && templ.IsEncodedPayload(payload) {
 			decoded, err := templ.DecodePayload(payload, func(id uint64) ([]byte, error) {
-				if templateLookup == nil {
-					return nil, ErrMissingTemplate
-				}
 				return templateLookup(id)
 			}, templateOpts)
 			if err != nil {
@@ -505,7 +496,7 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		return nil, ErrCorrupt
 	}
 	rawLen := offsets[len(offsets)-1]
-	if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
 	start := offsets[subIndex]
@@ -530,11 +521,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		val := make([]byte, int(end-start))
 		copy(val, raw[start:end])
 		putDecodeScratch(raw)
-		if templ.IsEncodedPayload(val) {
+		if templateLookup != nil && templ.IsEncodedPayload(val) {
 			decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-				if templateLookup == nil {
-					return nil, ErrMissingTemplate
-				}
 				return templateLookup(id)
 			}, templateOpts)
 			if err != nil {
@@ -552,11 +540,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		return nil, ErrCorrupt
 	}
 	val := raw[start:end]
-	if templ.IsEncodedPayload(val) {
+	if templateLookup != nil && templ.IsEncodedPayload(val) {
 		decoded, err := templ.DecodePayload(val, func(id uint64) ([]byte, error) {
-			if templateLookup == nil {
-				return nil, ErrMissingTemplate
-			}
 			return templateLookup(id)
 		}, templateOpts)
 		if err != nil {

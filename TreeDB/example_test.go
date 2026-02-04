@@ -33,33 +33,6 @@ func ExampleOpen() {
 	// Output: v
 }
 
-func ExampleOpen_backendMode() {
-	dir, err := os.MkdirTemp("", "treedb-backend-example-")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(dir)
-
-	opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024, Mode: treedb.ModeBackend}
-	db, err := treedb.Open(opts)
-	if err != nil {
-		panic(err)
-	}
-	defer db.Close()
-
-	if err := db.SetSync([]byte("k"), []byte("v")); err != nil {
-		panic(err)
-	}
-
-	val, err := db.Get([]byte("k"))
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(string(val))
-
-	// Output: v
-}
-
 func ExampleBatch() {
 	dir, err := os.MkdirTemp("", "treedb-batch-example-")
 	if err != nil {

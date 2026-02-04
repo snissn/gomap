@@ -5,8 +5,9 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 // MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
@@ -209,7 +210,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge, true
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {
@@ -297,6 +298,15 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		oldLen := len(dst)
 		dst = grow(dst, len(payload))
 		copy(dst[oldLen:], payload)
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+				return f.templateLookup(id)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			dst = append(dst[:oldLen], decoded...)
+		}
 		return dst, nil, true
 	}
 	if !page.ValuePtrIsGrouped(ptr) {
@@ -349,6 +359,15 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 				srcStart := cPrefixLen + int(valStart)
 				srcEnd := srcStart + n
 				copy(dst[oldLen:], payload[srcStart:srcEnd])
+				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+					decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+						return f.templateLookup(id)
+					}, f.templateDecodeOpts)
+					if err != nil {
+						return nil, err, true
+					}
+					dst = append(dst[:oldLen], decoded...)
+				}
 				return dst, nil, true
 			}
 			f.cacheMu.Unlock()
@@ -368,7 +387,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge, true
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {
@@ -394,6 +413,15 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		srcStart := prefixLen + int(valStart)
 		srcEnd := srcStart + n
 		copy(dst[oldLen:], payload[srcStart:srcEnd])
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+				return f.templateLookup(id)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			dst = append(dst[:oldLen], decoded...)
+		}
 		return dst, nil, true
 	}
 

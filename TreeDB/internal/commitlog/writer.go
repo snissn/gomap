@@ -11,7 +11,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
-	"github.com/snissn/gomap/TreeDB/slab"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 const (
@@ -33,11 +33,11 @@ func normalizeMaxSegmentSize(size int64) int64 {
 }
 
 func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
-	if slab.MaxRecordSize <= 0 {
+	if limits.MaxRecordSize <= 0 {
 		return false
 	}
 	recordLen := int64(recordHeaderSize) + int64(keyLen) + int64(valueLen)
-	return recordLen > slab.MaxRecordSize
+	return recordLen > limits.MaxRecordSize
 }
 
 type Writer struct {

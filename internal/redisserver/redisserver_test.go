@@ -182,7 +182,6 @@ func startTestServerWithBatchMode(t *testing.T, engine string, batch bool, flush
 		BatchSize:               4,
 		BatchFlushOnNonset:      flushOnNonset,
 		BatchFlushOnNonsetSet:   true,
-		TreeDBDisableValueLog:   true,
 		TreeDBFlushThreshold:    4 * 1024 * 1024,
 		TreeDBValueLogThreshold: 0,
 	}

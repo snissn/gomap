@@ -148,14 +148,15 @@ func scanAndCheck(t *testing.T, db *treedb.DB, values map[string][]byte, allowMi
 	}
 }
 
-func TestReopenVerify_Mode3_Checkpoint(t *testing.T) {
+func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		SplitValueLog:            true,
-		ValueLogPointerThreshold: 1,
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)
@@ -181,14 +182,15 @@ func TestReopenVerify_Mode3_Checkpoint(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
-func TestReopenVerify_Mode3_WriteSync(t *testing.T) {
+func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		SplitValueLog:            true,
-		ValueLogPointerThreshold: 1,
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)
@@ -211,16 +213,16 @@ func TestReopenVerify_Mode3_WriteSync(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
-func TestReopenVerify_Mode4_NoJournal(t *testing.T) {
+func TestReopenVerify_WALOff_NoJournal(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, _ := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
-		Dir:                      dir,
-		DisableJournal:           true,
-		AllowUnsafe:              true,
-		SplitValueLog:            true,
-		ValueLogPointerThreshold: 1,
+		Dir:        dir,
+		Durability: treedb.DurabilityWALOffRelaxed,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	}
 
 	db, err := treedb.Open(opts)
@@ -249,14 +251,13 @@ func TestReopenVerify_IndexColumnarLeaves(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                 dir,
-		Mode:                treedb.ModeBackend,
 		IndexColumnarLeaves: true,
 		ChunkSize:           64 * 1024,
 	}
 
-	db, err := treedb.OpenBackend(opts)
+	db, err := treedb.Open(opts)
 	if err != nil {
-		t.Fatalf("open backend: %v", err)
+		t.Fatalf("open: %v", err)
 	}
 
 	writeDataset(t, db, keys, values, true)
@@ -264,9 +265,9 @@ func TestReopenVerify_IndexColumnarLeaves(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reopen, err := treedb.OpenBackend(opts)
+	reopen, err := treedb.Open(opts)
 	if err != nil {
-		t.Fatalf("reopen backend: %v", err)
+		t.Fatalf("reopen: %v", err)
 	}
 	defer reopen.Close()
 

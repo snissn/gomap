@@ -23,7 +23,7 @@ type logSegment struct {
 	fileID   uint32
 }
 
-func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
+func listWALSegments(dir string) ([]logSegment, error) {
 	walDir := filepath.Join(dir, "wal")
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
@@ -44,10 +44,6 @@ func listWALSegments(dir string, includeValueLog bool) ([]logSegment, error) {
 		if !ok {
 			continue
 		}
-		if valueLog && !includeValueLog {
-			continue
-		}
-
 		seg := logSegment{
 			seq:      seq,
 			lane:     lane,
@@ -152,18 +148,12 @@ func isTruncatedLogError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, keepValueLogs bool, dictLookup valuelog.DictLookup) error {
+func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
 	ridMap, err := scanValueLogSegments(segments, dictLookup)
 	if err != nil {
 		return err
 	}
-	if err := replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes, keepValueLogs); err != nil {
-		return err
-	}
-	if keepValueLogs {
-		return nil
-	}
-	return removeValueLogSegments(db, segments)
+	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
 }
 
 func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {
@@ -202,7 +192,7 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 	return ridMap, nil
 }
 
-func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64, keepValueLogs bool) error {
+func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
 	type commitBatch struct {
 		seq     uint64
 		order   int
@@ -265,12 +255,12 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		})
 	}
 	for _, batch := range legacyBatches {
-		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
 			return err
 		}
 	}
 	for _, batch := range batches {
-		if err := applyCommitBatch(db, batch.records, ridMap, keepValueLogs); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
 			return err
 		}
 	}
@@ -282,7 +272,7 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	return nil
 }
 
-func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, keepValueLogs bool) error {
+func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -308,23 +298,10 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			if !ok {
 				return fmt.Errorf("commitlog: missing rid %d", rec.RID)
 			}
-			if keepValueLogs {
-				if !hasPtrBatch {
-					return fmt.Errorf("commitlog: pointer batch unavailable")
-				}
-				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
-					return err
-				}
-				continue
+			if !hasPtrBatch {
+				return fmt.Errorf("commitlog: pointer batch unavailable")
 			}
-			if db.valueLogManager == nil {
-				return fmt.Errorf("commitlog: value log manager unavailable")
-			}
-			val, err := db.valueLogManager.Read(ptr)
-			if err != nil {
-				return fmt.Errorf("commitlog: read rid %d: %w", rec.RID, err)
-			}
-			if err := batch.Set(rec.Key, val); err != nil {
+			if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
 				return err
 			}
 		default:
@@ -334,24 +311,6 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 
 	if err := batch.WriteSync(); err != nil {
 		return err
-	}
-	return nil
-}
-
-func removeValueLogSegments(db *DB, segments []logSegment) error {
-	for _, segment := range segments {
-		if !segment.valueLog {
-			continue
-		}
-		if db.valueLogManager != nil {
-			if err := db.valueLogManager.RemoveSegmentForce(segment.fileID); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			continue
-		}
-		if err := os.Remove(segment.path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
 	}
 	return nil
 }

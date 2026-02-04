@@ -17,6 +17,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func assertCommitLogCleared(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.Size() > 0 {
+			t.Fatalf("expected commitlog file to be removed or truncated after recovery")
+		}
+		return
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("stat commitlog file: %v", err)
+	}
+}
+
 func runCrashRecoveryWriter(t *testing.T, dir string) {
 	t.Helper()
 
@@ -109,21 +123,20 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	}
 
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
-	disableJournal := os.Getenv("TREEDB_CRASH_DISABLE_JOURNAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
-	disableValueLog := os.Getenv("TREEDB_CRASH_DISABLE_VALUE_LOG") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
-	splitValueLog := os.Getenv("TREEDB_CRASH_SPLIT_VALUE_LOG") == "1"
+
+	durability := treedb.DurabilityDurable
+	if disableWAL {
+		durability = treedb.DurabilityWALOffRelaxed
+	} else if relaxedSync {
+		durability = treedb.DurabilityWALOnRelaxed
+	}
 
 	opts := treedb.Options{
-		Dir:             dir,
-		ChunkSize:       64 * 1024,
-		DisableWAL:      disableWAL,
-		DisableJournal:  disableJournal,
-		RelaxedSync:     relaxedSync,
-		DisableValueLog: disableValueLog,
-		SplitValueLog:   splitValueLog,
-		AllowUnsafe:     disableWAL || disableJournal || relaxedSync,
+		Dir:        dir,
+		ChunkSize:  64 * 1024,
+		Durability: durability,
 	}
 
 	db, err := treedb.Open(opts)
@@ -170,37 +183,37 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeWriter(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestCrashRecovery_WALReplayIsCoherentAcrossModes(t *testing.T) {
+func TestCrashRecovery_WALReplayIsCoherent(t *testing.T) {
 	dir := t.TempDir()
 	runCrashRecoveryWriter(t, dir)
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
-		t.Fatalf("open backend: %v", err)
+		t.Fatalf("open: %v", err)
 	}
 
-	val, err := backend.Get([]byte("keep"))
+	val, err := db.Get([]byte("keep"))
 	if err != nil {
-		_ = backend.Close()
+		_ = db.Close()
 		t.Fatalf("get keep: %v", err)
 	}
 	if string(val) != "val1" {
-		_ = backend.Close()
+		_ = db.Close()
 		t.Fatalf("get keep: got %q, want %q", string(val), "val1")
 	}
 
-	val, err = backend.Get([]byte("delete"))
+	val, err = db.Get([]byte("delete"))
 	if err != nil {
-		_ = backend.Close()
+		_ = db.Close()
 		t.Fatalf("get delete: %v", err)
 	}
 	if val != nil {
-		_ = backend.Close()
+		_ = db.Close()
 		t.Fatalf("expected deleted key to be absent, got %q", string(val))
 	}
 
-	if err := backend.Close(); err != nil {
-		t.Fatalf("close backend: %v", err)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 
 	// Log segments should be retired after successful recovery.
@@ -234,13 +247,13 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 	dir := t.TempDir()
 	runCrashRecoveryDeleteRangeWriter(t, dir)
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
-		t.Fatalf("open backend: %v", err)
+		t.Fatalf("open: %v", err)
 	}
-	defer backend.Close()
+	defer db.Close()
 
-	val, err := backend.Get([]byte("a"))
+	val, err := db.Get([]byte("a"))
 	if err != nil {
 		t.Fatalf("get a: %v", err)
 	}
@@ -248,7 +261,7 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 		t.Fatalf("get a: got %q, want %q", string(val), "1")
 	}
 
-	val, err = backend.Get([]byte("b"))
+	val, err = db.Get([]byte("b"))
 	if err != nil {
 		t.Fatalf("get b: %v", err)
 	}
@@ -256,7 +269,7 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 		t.Fatalf("expected deleted key b to be absent, got %q", string(val))
 	}
 
-	val, err = backend.Get([]byte("c"))
+	val, err = db.Get([]byte("c"))
 	if err != nil {
 		t.Fatalf("get c: %v", err)
 	}
@@ -264,7 +277,7 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 		t.Fatalf("expected deleted key c to be absent, got %q", string(val))
 	}
 
-	val, err = backend.Get([]byte("z"))
+	val, err = db.Get([]byte("z"))
 	if err != nil {
 		t.Fatalf("get z: %v", err)
 	}
@@ -282,54 +295,28 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 
 	tiers := []tier{
 		{
-			name: "wal_disabled_strict_sync_forces_checkpoint",
+			name: "wal_off_strict_sync_large_value",
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=1",
 				"TREEDB_CRASH_RELAXED_SYNC=0",
-			},
-		},
-		{
-			name: "wal_enabled_relaxed_sync_flushes_wal",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-			},
-		},
-		{
-			name: "wal_enabled_strict_sync_fsyncs_wal",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-			},
-		},
-		{
-			name: "value_log_pointer_replays",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
 			expectLarge: true,
 		},
 		{
-			name: "split_value_log_write_sync_requires_commit_and_payload",
+			name: "wal_on_relaxed_sync_large_value",
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
 			expectLarge: true,
 		},
 		{
-			name: "mode4_disable_journal_value_log",
+			name: "wal_on_strict_sync_large_value",
 			env: []string{
 				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_DISABLE_JOURNAL=1",
 				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
-				"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
 				"TREEDB_CRASH_LARGE_VALUE=1",
 			},
 			expectLarge: true,
@@ -341,12 +328,12 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			dir := t.TempDir()
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
-			backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+			db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 			if err != nil {
-				t.Fatalf("open backend: %v", err)
+				t.Fatalf("open: %v", err)
 			}
 
-			val, err := backend.Get([]byte("k"))
+			val, err := db.Get([]byte("k"))
 			if err != nil {
 				t.Fatalf("get k: %v", err)
 			}
@@ -358,8 +345,8 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("get k: got %q, want %q", string(val), "small")
 			}
 
-			if err := backend.Close(); err != nil {
-				t.Fatalf("close backend: %v", err)
+			if err := db.Close(); err != nil {
+				t.Fatalf("close: %v", err)
 			}
 
 			entries, err := os.ReadDir(filepath.Join(dir, "maindb", "wal"))
@@ -382,65 +369,6 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("expected logs to be clean after recovery; found log segments")
 			}
 		})
-	}
-}
-
-func TestCrashRecovery_Mode4_DisableJournalValueLog(t *testing.T) {
-	// Mode4 semantics: disable journal (redo log), keep value log on, split value log.
-	dir := t.TempDir()
-	runCrashRecoveryDurabilityWriter(t, dir,
-		"TREEDB_CRASH_DISABLE_WAL=0",
-		"TREEDB_CRASH_DISABLE_JOURNAL=1",
-		"TREEDB_CRASH_RELAXED_SYNC=0",
-		"TREEDB_CRASH_DISABLE_VALUE_LOG=0",
-		"TREEDB_CRASH_SPLIT_VALUE_LOG=1",
-		"TREEDB_CRASH_LARGE_VALUE=1",
-	)
-
-	opts := treedb.Options{
-		Dir:             dir,
-		ChunkSize:       64 * 1024,
-		DisableJournal:  true,
-		DisableValueLog: false,
-		SplitValueLog:   true,
-		AllowUnsafe:     true,
-	}
-
-	db, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("reopen after crash: %v", err)
-	}
-	defer db.Close()
-
-	val, err := db.Get([]byte("k"))
-	if err != nil {
-		t.Fatalf("get k: %v", err)
-	}
-	if len(val) != 4096 {
-		t.Fatalf("get k: got len %d, want %d", len(val), 4096)
-	}
-
-	it, err := db.Iterator(nil, nil)
-	if err != nil {
-		t.Fatalf("create iterator: %v", err)
-	}
-	defer it.Close()
-
-	found := false
-	for it.Valid() {
-		if bytes.Equal(it.Key(), []byte("k")) {
-			found = true
-			if len(it.Value()) != 4096 {
-				t.Fatalf("iterator: k corrupted length %d", len(it.Value()))
-			}
-		}
-		it.Next()
-	}
-	if err := it.Error(); err != nil {
-		t.Fatalf("iterator error: %v", err)
-	}
-	if !found {
-		t.Fatalf("expected key k to be present after crash recovery")
 	}
 }
 
@@ -487,7 +415,7 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -501,11 +429,7 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 	if _, err := os.Stat(valuePath); err != nil {
 		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}
@@ -555,7 +479,7 @@ func TestRecovery_MultiLaneOrdering(t *testing.T) {
 		t.Fatalf("commitlog.Close lane1: %v", err)
 	}
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -585,7 +509,7 @@ func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 		t.Fatalf("write commit header: %v", err)
 	}
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -599,11 +523,7 @@ func TestRecovery_PartialCommitBatchIgnored(t *testing.T) {
 		t.Fatalf("expected partial batch to be ignored, got %q", string(val))
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 }
 
 func TestRecovery_MissingDictFails(t *testing.T) {
@@ -690,7 +610,7 @@ func TestRecovery_MissingDictFails(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	if _, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024}); err == nil {
+	if _, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024}); err == nil {
 		t.Fatalf("expected recovery error due to missing dict")
 	}
 	if _, err := os.Stat(commitPath); err != nil {
@@ -735,7 +655,7 @@ func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
 	_ = f.Close()
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -749,11 +669,7 @@ func TestRecovery_TruncatedCommitLogRecord(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 }
 
 func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
@@ -807,7 +723,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 	_, _ = f.Write([]byte{0x01, 0x02, 0x03})
 	_ = f.Close()
 
-	backend, err := treedb.OpenBackend(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	backend, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -821,11 +737,7 @@ func TestRecovery_TruncatedValueLogRecord(t *testing.T) {
 		t.Fatalf("get: got %q, want %q", string(val), "v1")
 	}
 
-	if _, err := os.Stat(commitPath); err == nil {
-		t.Fatalf("expected commitlog file to be removed after recovery")
-	} else if !os.IsNotExist(err) {
-		t.Fatalf("stat commitlog file: %v", err)
-	}
+	assertCommitLogCleared(t, commitPath)
 	if _, err := os.Stat(valuePath); err != nil {
 		t.Fatalf("expected valuelog file to remain after recovery: %v", err)
 	}

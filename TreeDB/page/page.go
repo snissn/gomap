@@ -13,7 +13,7 @@ const (
 	// PageSize is the fixed size of a page in bytes.
 	PageSize = 4096
 
-	// DefaultInlineThreshold determines when a value is stored in the slab.
+	// DefaultInlineThreshold determines when a value is stored in the value log.
 	DefaultInlineThreshold = 256
 
 	// PageHeaderSize is the size of the PageHeader struct.
@@ -50,7 +50,7 @@ type PageHeader struct {
 	Count    uint16
 }
 
-// ValuePtr points to data stored in the Slabs.
+// ValuePtr points to data stored in the value log.
 // | Offset   (8 bytes)      |  // 8-byte aligned
 // | Length   (4 bytes)      |
 // | FileID   (4 bytes)      |
@@ -100,6 +100,10 @@ func VerifyChecksumNonMutating(data []byte) bool {
 // The buffer must be at least PageHeaderSize bytes.
 func (h *PageHeader) Encode(buf []byte) {
 	_ = buf[PageHeaderSize-1] // Bounds check elimination
+	if nativeLittleEndian {
+		*(*[PageHeaderSize]byte)(unsafe.Pointer(&buf[0])) = *(*[PageHeaderSize]byte)(unsafe.Pointer(h))
+		return
+	}
 	binary.LittleEndian.PutUint64(buf[0:8], h.PageID)
 	binary.LittleEndian.PutUint32(buf[8:12], h.Checksum)
 	binary.LittleEndian.PutUint16(buf[12:14], h.Flags)
@@ -109,6 +113,11 @@ func (h *PageHeader) Encode(buf []byte) {
 // DecodeHeader decodes the PageHeader from the provided buffer.
 func DecodeHeader(buf []byte) PageHeader {
 	_ = buf[PageHeaderSize-1] // Bounds check elimination
+	if nativeLittleEndian {
+		var h PageHeader
+		*(*[PageHeaderSize]byte)(unsafe.Pointer(&h)) = *(*[PageHeaderSize]byte)(unsafe.Pointer(&buf[0]))
+		return h
+	}
 	return PageHeader{
 		PageID:   binary.LittleEndian.Uint64(buf[0:8]),
 		Checksum: binary.LittleEndian.Uint32(buf[8:12]),
@@ -121,6 +130,10 @@ func DecodeHeader(buf []byte) PageHeader {
 // The buffer must be at least ValuePtrSize bytes.
 func (v *ValuePtr) Encode(buf []byte) {
 	_ = buf[ValuePtrSize-1] // Bounds check elimination
+	if nativeLittleEndian {
+		*(*[ValuePtrSize]byte)(unsafe.Pointer(&buf[0])) = *(*[ValuePtrSize]byte)(unsafe.Pointer(v))
+		return
+	}
 	binary.LittleEndian.PutUint64(buf[0:8], v.Offset)
 	binary.LittleEndian.PutUint32(buf[8:12], v.Length)
 	binary.LittleEndian.PutUint32(buf[12:16], v.FileID)
@@ -129,6 +142,11 @@ func (v *ValuePtr) Encode(buf []byte) {
 // DecodeValuePtr decodes the ValuePtr from the provided buffer.
 func DecodeValuePtr(buf []byte) ValuePtr {
 	_ = buf[ValuePtrSize-1] // Bounds check elimination
+	if nativeLittleEndian {
+		var v ValuePtr
+		*(*[ValuePtrSize]byte)(unsafe.Pointer(&v)) = *(*[ValuePtrSize]byte)(unsafe.Pointer(&buf[0]))
+		return v
+	}
 	return ValuePtr{
 		Offset: binary.LittleEndian.Uint64(buf[0:8]),
 		Length: binary.LittleEndian.Uint32(buf[8:12]),

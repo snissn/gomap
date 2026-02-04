@@ -157,7 +157,7 @@ func openEngine(name, dir string) (kv, error) {
 		}
 		return hashdbSharded{db: db}, nil
 	case "treedb-cached":
-		db, err := treedb.Open(treedb.Options{Dir: dir, Mode: treedb.ModeCached})
+		db, err := treedb.Open(treedb.Options{Dir: dir})
 		if err != nil {
 			return nil, err
 		}

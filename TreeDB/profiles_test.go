@@ -16,50 +16,29 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileFast)
 
-	if !opts.DisableWAL {
-		t.Fatalf("expected DisableWAL=true for fast profile")
+	if opts.Durability != DurabilityWALOffRelaxed {
+		t.Fatalf("expected DurabilityWALOffRelaxed for fast profile, got %v", opts.Durability)
 	}
-	if !opts.RelaxedSync {
-		t.Fatalf("expected RelaxedSync=true for fast profile")
-	}
-	if !opts.DisableReadChecksum {
-		t.Fatalf("expected DisableReadChecksum=true for fast profile")
+	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
+		t.Fatalf("expected IntegritySkipChecksums for fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
 }
 
-func TestApplyProfile_FastIngestEnablesValueLogPath(t *testing.T) {
+func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	var opts Options
-	ApplyProfile(&opts, ProfileFastIngest)
+	ApplyProfile(&opts, ProfileWALOnFast)
 
-	if opts.Mode != ModeCached {
-		t.Fatalf("expected ModeCached (default), got %v", opts.Mode)
+	if opts.Durability != DurabilityWALOnRelaxed {
+		t.Fatalf("expected DurabilityWALOnRelaxed for wal_on_fast profile, got %v", opts.Durability)
 	}
-	if opts.DisableWAL {
-		t.Fatalf("expected DisableWAL=false for fast_ingest profile")
-	}
-	if !opts.DisableJournal {
-		t.Fatalf("expected DisableJournal=true for fast_ingest profile")
-	}
-	if opts.DisableValueLog {
-		t.Fatalf("expected DisableValueLog=false for fast_ingest profile")
-	}
-	if !opts.SplitValueLog {
-		t.Fatalf("expected SplitValueLog=true for fast_ingest profile")
-	}
-	if !opts.MemtableValueLogPointers {
-		t.Fatalf("expected MemtableValueLogPointers=true for fast_ingest profile")
-	}
-	if !opts.RelaxedSync {
-		t.Fatalf("expected RelaxedSync=true for fast_ingest profile")
-	}
-	if !opts.DisableReadChecksum {
-		t.Fatalf("expected DisableReadChecksum=true for fast_ingest profile")
+	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
+		t.Fatalf("expected IntegritySkipChecksums for wal_on_fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
 	if !opts.PreferAppendAlloc {
-		t.Fatalf("expected PreferAppendAlloc=true for fast_ingest profile")
+		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
 	}
 }
 
@@ -67,9 +46,6 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)
 
-	if opts.BackgroundIndexVacuumInterval >= 0 {
-		t.Fatalf("expected BackgroundIndexVacuumInterval < 0 for bench profile, got %v", opts.BackgroundIndexVacuumInterval)
-	}
 	if opts.BackgroundCheckpointInterval >= 0 {
 		t.Fatalf("expected BackgroundCheckpointInterval < 0 for bench profile, got %v", opts.BackgroundCheckpointInterval)
 	}
@@ -79,9 +55,6 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if opts.MaxWALBytes >= 0 {
 		t.Fatalf("expected MaxWALBytes < 0 for bench profile, got %d", opts.MaxWALBytes)
 	}
-	if opts.BackgroundCompactionInterval >= 0 {
-		t.Fatalf("expected BackgroundCompactionInterval < 0 for bench profile, got %v", opts.BackgroundCompactionInterval)
-	}
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
 	}
@@ -89,21 +62,12 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 
 func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 	opts := Options{
-		BackgroundIndexVacuumInterval:         5 * time.Second,
-		BackgroundCheckpointInterval:          7 * time.Second,
-		BackgroundCheckpointIdleDuration:      3 * time.Second,
-		MaxWALBytes:                           123,
-		BackgroundCompactionInterval:          9 * time.Second,
-		BackgroundIndexVacuumSpanRatioPPM:     999,
-		BackgroundCompactionMicroBatch:        777,
-		BackgroundCompactionDeadRatio:         0.33,
-		BackgroundCompactionRotateBeforeWrite: true,
+		BackgroundCheckpointInterval:     7 * time.Second,
+		BackgroundCheckpointIdleDuration: 3 * time.Second,
+		MaxWALBytes:                      123,
 	}
 	ApplyProfile(&opts, ProfileBench)
 
-	if opts.BackgroundIndexVacuumInterval != 5*time.Second {
-		t.Fatalf("BackgroundIndexVacuumInterval overridden: got %v", opts.BackgroundIndexVacuumInterval)
-	}
 	if opts.BackgroundCheckpointInterval != 7*time.Second {
 		t.Fatalf("BackgroundCheckpointInterval overridden: got %v", opts.BackgroundCheckpointInterval)
 	}
@@ -112,21 +76,5 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 	}
 	if opts.MaxWALBytes != 123 {
 		t.Fatalf("MaxWALBytes overridden: got %d", opts.MaxWALBytes)
-	}
-	if opts.BackgroundCompactionInterval != 9*time.Second {
-		t.Fatalf("BackgroundCompactionInterval overridden: got %v", opts.BackgroundCompactionInterval)
-	}
-	// Sanity: unrelated numeric fields should remain unchanged too.
-	if opts.BackgroundIndexVacuumSpanRatioPPM != 999 {
-		t.Fatalf("BackgroundIndexVacuumSpanRatioPPM changed: got %d", opts.BackgroundIndexVacuumSpanRatioPPM)
-	}
-	if opts.BackgroundCompactionMicroBatch != 777 {
-		t.Fatalf("BackgroundCompactionMicroBatch changed: got %d", opts.BackgroundCompactionMicroBatch)
-	}
-	if opts.BackgroundCompactionDeadRatio != 0.33 {
-		t.Fatalf("BackgroundCompactionDeadRatio changed: got %v", opts.BackgroundCompactionDeadRatio)
-	}
-	if !opts.BackgroundCompactionRotateBeforeWrite {
-		t.Fatalf("BackgroundCompactionRotateBeforeWrite changed: got false")
 	}
 }

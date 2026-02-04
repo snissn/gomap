@@ -170,6 +170,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetLeafPrefixCompression(db.leafPrefixCompression)
 	newZ.SetIndexColumnarLeaves(db.indexColumnarLeaves)
 	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
+	newZ.SetMaintenanceOpsPerCoalesce(db.maintenanceOpsPerCoalesce)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
@@ -284,7 +285,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
-		sysIter := tree.New(oldGen.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
+		sysIter := tree.New(oldGen.pager, valueReader{vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
@@ -308,17 +309,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		nextMeta.UserRootPageID = newRoot
 		nextMeta.SystemRootPageID = newSysRoot
 		nextMeta.FreelistHeadID = newAlloc.Head()
-		nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
-		nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 		nextMeta.TotalPages = newPager.PageCount()
-
-		// Ensure slab tail referenced by meta is durable before publishing the
-		// new index. Vacuum is treated as a durability boundary.
-		if err := db.slabManager.Sync(); err != nil {
-			db.writeMu.Unlock()
-			cleanupNewPager()
-			return err
-		}
 
 		// Write redundant Meta pages (0/1) to the new file and sync it.
 		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
@@ -386,7 +377,6 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			CommitSeq:        nextMeta.CommitSeq,
 			RootPageID:       nextMeta.UserRootPageID,
 			SystemRootPageID: nextMeta.SystemRootPageID,
-			SlabSet:          db.slabManager.CurrentSlabSet(),
 			ValueLogSet:      db.valueLogManager.CurrentSet(),
 		})
 		db.mu.Unlock()
@@ -394,7 +384,6 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		db.writeMu.Unlock()
 
 		if oldState != nil {
-			_ = db.slabManager.ReleaseSlabs(oldState.SlabSet)
 			_ = db.valueLogManager.Release(oldState.ValueLogSet)
 		}
 
@@ -422,7 +411,7 @@ func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zi
 		if len(ops) == 0 {
 			return nil
 		}
-		b := batch.New(db.slabManager, vacuumInlineThresholdMax)
+		b := batch.New(db.valueLogManager, vacuumInlineThresholdMax)
 		defer func() { _ = b.Close() }()
 		if err := b.SetOps(ops); err != nil {
 			return err

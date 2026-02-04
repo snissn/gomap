@@ -8,7 +8,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestIterator(t *testing.T) {
@@ -18,11 +17,6 @@ func TestIterator(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sm.Close()
 
 	// Build Tree
 	// Root (0) -> Internal
@@ -58,7 +52,7 @@ func TestIterator(t *testing.T) {
 	n0.AddInternalChild([]byte("D"), 2) // Split key
 	n0.UpdateChecksum()
 
-	tr := New(p, sm, 0)
+	tr := New(p, panicValueReader{}, 0)
 
 	// 1. Full Forward
 	t.Run("Forward", func(t *testing.T) {
@@ -178,11 +172,6 @@ func TestIterator_SkipsTombstones(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sm.Close()
 
 	p.Alloc(1) // 0
 
@@ -195,7 +184,7 @@ func TestIterator_SkipsTombstones(t *testing.T) {
 	n0.AddLeafEntry([]byte("C"), []byte("valC"), node.FlagInline, page.ValuePtr{})
 	n0.UpdateChecksum()
 
-	tr := New(p, sm, 0)
+	tr := New(p, panicValueReader{}, 0)
 
 	it := tr.Iterator(nil, nil)
 	got := make([]string, 0, 2)

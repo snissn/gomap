@@ -1,9 +1,13 @@
 package treedb
 
-import "github.com/snissn/gomap/TreeDB/internal/templatedb"
+import (
+	treedbbatch "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+)
 
 type templateKV struct {
-	db *DB
+	db *db.DB
 }
 
 func (kv templateKV) Get(key []byte) ([]byte, error) {
@@ -30,7 +34,7 @@ func (kv templateKV) NewBatch() templatedb.Batch {
 }
 
 type templateBatch struct {
-	b Batch
+	b treedbbatch.Interface
 }
 
 func (tb templateBatch) Set(key, value []byte) error { return tb.b.Set(key, value) }

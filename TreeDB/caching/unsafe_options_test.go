@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestDisableWAL_NoFilesCreated(t *testing.T) {
+func TestDisableWAL_NoCommitLogFilesCreated(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -53,15 +54,18 @@ func TestDisableWAL_NoFilesCreated(t *testing.T) {
 		t.Fatalf("rotateMemtableLocked: %v", err)
 	}
 
-	// Verify WAL dir is empty of .log files
+	// Verify WAL dir has no commit log files (value-log files are expected).
 	walDir := filepath.Join(dir, "wal")
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
 		t.Fatalf("readdir: %v", err)
 	}
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".log" {
-			t.Errorf("Found WAL file %q, expected none with DisableWAL=true", e.Name())
+		if filepath.Ext(e.Name()) != ".log" {
+			continue
+		}
+		if strings.HasPrefix(e.Name(), "commit-") || strings.HasPrefix(e.Name(), "wal-") {
+			t.Errorf("Found commit log file %q, expected none with DisableWAL=true", e.Name())
 		}
 	}
 

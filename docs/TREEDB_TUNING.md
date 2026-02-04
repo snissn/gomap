@@ -7,10 +7,8 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 
 - `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/journal rotation threshold)
-- `KeepRecent`:
-  - cached mode (`treedb.Open`): defaults to `1` (aggressive page reuse)
-  - backend mode (`treedb.OpenBackend`): defaults to `10,000`
-- Inline values: values up to 256 bytes are stored inline; larger values go to the value log in cached mode (or backend slabs in backend-only mode).
+- `KeepRecent`: defaults to `1` in `treedb.Open` (aggressive page reuse)
+- Inline values: values up to 256 bytes are stored inline; larger values go to the value log.
 - Background index vacuum: defaults to 30s interval (auto-on) with span ratio threshold `1_200_000`
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s
@@ -23,17 +21,9 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 
 DB directory containing:
 
-- `index.db` (backend index)
-- slab/value files (backend)
-- `wal/` directory (cached mode journal + value-log segments)
+- `index.db` (B+Tree index)
+- `wal/` directory (journal + value-log segments)
 - `LOCK` file (exclusive open)
-
-### `Options.Mode`
-
-- `treedb.ModeCached` (default): enable write-back layer.
-- `treedb.ModeBackend`: backend-only engine (no cached write-back layer).
-
-Decision guide: `docs/TREEDB_CACHED_VS_BACKEND.md`.
 
 ### `Options.ChunkSize`
 
@@ -84,12 +74,45 @@ Related bounds for writer-assisted flush work:
 
 ### `Options.FlushBuildConcurrency` (cached mode)
 
-When flushing a combined batch (multiple immutable memtables in one backend commit), TreeDB can
+When flushing a combined batch (multiple immutable memtables in one commit), TreeDB can
 optionally build the `SetOps` batch in parallel:
 
 - `<=1` disables parallelism (default).
 - `>1` uses up to that many goroutines to build per-memtable ops, then concatenates in queue order
   (oldest → newest) to preserve “newest wins” semantics.
+
+### Read latency under flush debt (cached mode)
+
+TreeDB cached mode absorbs bursts by buffering writes in memtables and flushing
+them asynchronously. If a workload does a heavy write phase and then immediately
+starts doing point reads, reads may run while there is still a backlog of queued
+immutable memtables (“flush debt”).
+
+How to diagnose:
+
+- Enable cache stats in your harness and watch:
+  - `treedb.cache.queue_len`
+  - `treedb.cache.queue_backlog_bytes`
+  - `treedb.cache.flush_bps_ewma`
+  - `treedb.cache.memtable_mode`
+- In `cmd/unified_bench`, use:
+  - mixed workload (demonstrates debt): default ordering, optionally `-treedb-cache-stats-before-reads`
+  - settled reads/scans: `-checkpoint-between-tests` or `-settle-before-scans`
+
+What to do about it:
+
+- If your workload has a clear phase boundary (ingest → query), call `Checkpoint()`
+  once before switching to read-heavy work.
+- If your workload is mixed and read-latency-sensitive, keep debt bounded by tuning:
+  - backpressure knobs (`SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`)
+  - `MaxQueuedMemtables` (queue-length policy)
+  - `FlushBuildConcurrency` (faster flush batch construction on multi-core)
+  - `FlushThreshold` (trade batching/throughput vs memory/debt footprint)
+
+Note on memtable sharding:
+
+- With `MemtableShards > 1`, `queue_len` counts per-shard immutables, so a queue
+  length of 40 may correspond to only ~5 rotations at 8 shards.
 
 ### `Options.IteratorMutableMaxBytes` (cached mode; opt-in)
 
@@ -139,7 +162,7 @@ periodic cached-mode checkpoint by default:
 A checkpoint:
 - blocks writers briefly,
 - rotates to a fresh journal segment,
-- flushes queued memtables to the backend with `WriteSync`,
+- flushes queued memtables to the index with `WriteSync`,
 - trims old journal segments.
 
 Tuning/disable:
@@ -148,12 +171,12 @@ Tuning/disable:
 - Set `MaxWALBytes < 0` to disable the size trigger.
 - To disable auto-checkpointing entirely, set all three to `< 0`.
 
-### `Options.KeepRecent` (backend engine)
+### `Options.KeepRecent`
 
 Backend knob used to influence internal lifecycle/retention behavior.
 If you’re changing this, you should validate it with `cmd/unified_bench` and TreeDB’s tests.
 
-### Background pruning (backend engine)
+### Background pruning
 
 TreeDB reclaims retired index pages asynchronously to keep commit latency stable under churn.
 
@@ -163,25 +186,7 @@ TreeDB reclaims retired index pages asynchronously to keep commit latency stable
 Stats keys:
 - `treedb.prune.*`
 
-### Background slab compaction (cached wrapper; optional)
-
-TreeDB can optionally run slab compaction in the background (off by default):
-
-- Enable: `Options.BackgroundCompactionInterval > 0`
-- Selection knobs:
-  - `Options.BackgroundCompactionMaxSlabs`
-  - `Options.BackgroundCompactionDeadRatio`
-  - `Options.BackgroundCompactionMinBytes`
-- Apply/copy knobs:
-  - `Options.BackgroundCompactionMicroBatch`
-  - `Options.BackgroundCompactionCopyBytesPerSec`
-  - `Options.BackgroundCompactionCopyBurstBytes`
-  - `Options.BackgroundCompactionRotateBeforeWrite`
-
-Stats keys:
-- `treedb.bg_compaction.*`
-
-### Background index vacuum (cached or backend; default on)
+### Background index vacuum (default on)
 
 TreeDB rebuilds the user index in the background when fragmentation
 gets high. This restores scan locality and uses a short writer pause for the
@@ -209,7 +214,7 @@ without a separate offline tool. These hooks execute inline during shutdown.
 
 - `TREEDB_CLOSE_CHECKPOINT=1`: call `Checkpoint()` before closing
 - `TREEDB_CLOSE_COMPACT_INDEX=1`: call `CompactIndex()` before closing
-- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` before closing
+- `TREEDB_CLOSE_VACUUM_INDEX_ONLINE=1`: call `VacuumIndexOnline()` (alias to `CompactIndex`) before closing
 - `TREEDB_CLOSE_VACUUM_TIMEOUT`: timeout for the online vacuum (duration string or seconds)
 - `TREEDB_CLOSE_LOG=1`: log close-maintenance start/stop messages
 - `TREEDB_CLOSE_SCOPE_CONTAINS`: substring match on `Options.Dir` that scopes which DBs run
@@ -235,7 +240,7 @@ fragmentation under churn:
 Use `db.FragmentationReport()` to observe index span ratio and fill percentiles,
 and let background index vacuum handle high-fragmentation recovery.
 
-### Offline index vacuum (backend index)
+### Offline index vacuum (index.db)
 
 TreeDB’s `index.db` grows in chunks and does not shrink in-place. Reclaiming
 index disk space requires rewriting the index into a fresh file and swapping it
@@ -245,9 +250,18 @@ TreeDB provides an **offline** rewrite operation (DB closed) that rebuilds
 `index.db` into a fresh file and swaps it in using a crash-safe protocol:
 
 - Call: `treedb.VacuumIndexOffline(treedb.Options{Dir: ..., ChunkSize: ...})`
-- Requires the database to be **closed** (it acquires the exclusive `LOCK` for `Options.Dir`)
-- Crash safety: `treedb.Open`/`treedb.OpenBackend` will automatically recover from a partial swap
+- Requires the database to be **closed** (it acquires the exclusive `LOCK` under `Dir/maindb/LOCK`)
+- Crash safety: `treedb.Open` will automatically recover from a partial swap
   (e.g. if the process crashed mid-vacuum).
+
+### Value-log maintenance (GC / rewrite)
+
+TreeDB’s value log is persistent storage. Disk space is reclaimed via:
+
+- **GC**: `db.ValueLogGC(...)` deletes fully-unreferenced value-log segments (after a checkpoint in cached mode).
+- **Rewrite**: `treedb.ValueLogRewriteOffline(treedb.Options{Dir: ...})` rewrites live pointers into fresh segments and swaps `Dir/maindb/index.db` to reference the new log (offline; requires a clean commitlog).
+
+Details: `docs/TREEDB_STORAGE_FORMAT.md`.
 
 ## Benchmark-Driven Tuning
 

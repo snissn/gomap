@@ -1,14 +1,11 @@
 package redisserver
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"testing"
-
-	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestOpenEngine_TreeDB_JournalLanesCreatesSegments(t *testing.T) {
@@ -48,29 +45,6 @@ func TestOpenEngine_TreeDB_JournalLanesCreatesSegments(t *testing.T) {
 			_ = db.Close()
 			t.Fatalf("expected commit log segment for lane %d; got lanes=%v", i, lanes)
 		}
-	}
-	_ = db.Close()
-}
-
-func TestOpenEngine_TreeDB_MemtableVlogPointersRequireAllowUnsafe(t *testing.T) {
-	dir := t.TempDir()
-	_, err := OpenEngine(Config{
-		Dir:                    dir,
-		Engine:                 "treedb",
-		TreeDBMemtableVlogPtrs: true,
-	})
-	if !errors.Is(err, treedb.ErrUnsafeOptions) {
-		t.Fatalf("expected ErrUnsafeOptions, got %v", err)
-	}
-
-	db, err := OpenEngine(Config{
-		Dir:                    t.TempDir(),
-		Engine:                 "treedb",
-		TreeDBAllowUnsafe:      true,
-		TreeDBMemtableVlogPtrs: true,
-	})
-	if err != nil {
-		t.Fatalf("OpenEngine with AllowUnsafe: %v", err)
 	}
 	_ = db.Close()
 }

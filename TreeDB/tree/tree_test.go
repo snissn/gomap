@@ -8,7 +8,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestTreeGet(t *testing.T) {
@@ -21,12 +20,7 @@ func TestTreeGet(t *testing.T) {
 	}
 	defer p.Close()
 
-	// Setup SlabManager
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		t.Fatalf("SlabManager open failed: %v", err)
-	}
-	defer sm.Close()
+	vr := newMapValueReader()
 
 	// Alloc Pages
 	// 0: Internal (Root)
@@ -58,10 +52,7 @@ func TestTreeGet(t *testing.T) {
 
 	// Add Huge Value
 	hugeVal := bytes.Repeat([]byte("A"), 1000)
-	ptr, err := sm.Append([]byte("huge"), hugeVal)
-	if err != nil {
-		t.Fatalf("Slab append failed: %v", err)
-	}
+	ptr := vr.Add(hugeVal)
 	n2.AddLeafEntry([]byte("huge"), nil, node.FlagPointer, ptr)
 	n2.UpdateChecksum()
 
@@ -95,7 +86,7 @@ func TestTreeGet(t *testing.T) {
 	n0.UpdateChecksum()
 
 	// Init Tree
-	tr := New(p, sm, 0)
+	tr := New(p, vr, 0)
 
 	// Tests
 	cases := []struct {

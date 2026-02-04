@@ -5,6 +5,9 @@ This document describes TreeDB’s *value log* (“vlog”) compression autotune
 For benchmark methodology, reproducibility guidance, and CI-grade validation “marks”, see:
 - `docs/benchmarks/VLOG_AUTOTUNE.md`
 
+For implementation details (agent-oriented, non-normative), see:
+- `docs/agents/TREEDB_VALUELOG_AUTOTUNE_RUNBOOK.md`
+
 ---
 
 ## Overview
@@ -39,7 +42,7 @@ At a high level it can adapt:
 - **Value log**: append-only log containing large values stored out-of-line.
 - **Frame**: a batch of `k` value-log records written together as a unit.
 - **`k`**: number of records per frame. Larger `k` can improve ratio (more cross-record redundancy) but may cost more CPU and increase per-frame work.
-- **Pointer threshold**: values larger than `ValueLogPointerThreshold` are written to the value log and referenced by pointers elsewhere.
+- **Pointer threshold**: values larger than `Options.ValueLog.PointerThreshold` are written to the value log and referenced by pointers elsewhere.
 
 ### Attempted vs kept
 
@@ -71,19 +74,15 @@ Compression is kept only when it improves predicted wall time with a safety marg
 
 Value log compression autotune is designed for:
 
-- **Cached mode** (TreeDB caching layer enabled)
-- **Split value log** enabled (`SplitValueLog = true`), since dictionary compression is applied to split value-log records
+- **Cached mode** (TreeDB caching layer enabled via `treedb.Open`).
+- **WAL on/off** both supported; WAL off is selected via `Options.Durability = DurabilityWALOffRelaxed`.
 
 ### Configuration prerequisites
 
 To benefit from vlog autotune:
 
-1. **Value log enabled**
-   - `DisableValueLog = false`
-2. **Split value log enabled**
-   - `SplitValueLog = true`
-3. **Large values routed to the value log**
-   - Set `ValueLogPointerThreshold` such that a meaningful fraction of payload bytes go to the value log.
+1. **Large values routed to the value log**
+   - Set `Options.ValueLog.PointerThreshold` such that a meaningful fraction of payload bytes go to the value log.
    - If your workload has only tiny values, vlog autotune will have little/no effect.
 
 ### Dictionary storage
@@ -109,22 +108,19 @@ package main
 import (
 	"log"
 
-	"github.com/snissn/gomap/TreeDB/treedb"
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func main() {
 	dir := "/var/lib/treedb"
 
-	opts := treedb.OptionsFor(treedb.ProfileFastIngest, dir)
-
-	// Required for dictionary-compressed value log frames.
-	opts.SplitValueLog = true
+	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
 
 	// Ensure a meaningful fraction of values are externalized.
-	opts.ValueLogPointerThreshold = 4 << 10 // 4 KiB
+	opts.ValueLog.PointerThreshold = 4 << 10 // 4 KiB
 
 	// Enable wall-time autotuning (recommended default for cached mode).
-	opts.ValueLogCompressionAutotune.Mode = treedb.AutotuneMedium
+	opts.ValueLog.CompressionAutotune.Mode = treedb.AutotuneMedium
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -152,11 +148,11 @@ For production rollouts (especially on latency-sensitive clusters):
 
 ## Public configuration
 
-### `ValueLogCompressionAutotune`
+### `Options.ValueLog.CompressionAutotune`
 
 TreeDB exposes a small, production-safe configuration surface via:
 
-- `treedb.Options.ValueLogCompressionAutotune`
+- `treedb.Options.ValueLog.CompressionAutotune`
 
 The recommended approach is:
 - Pick a **Mode** (`Off`, `Medium`, `Aggressive`)
@@ -329,7 +325,7 @@ Avoid `Aggressive` if:
 
 Set:
 
-- `ValueLogCompressionAutotune.Mode = AutotuneOff`
+- `ValueLog.CompressionAutotune.Mode = AutotuneOff`
 
 This forces raw frame storage immediately for new frames. Existing on-disk data remains readable regardless of mode.
 
@@ -369,6 +365,7 @@ If you use the caching layer directly (instead of `treedb.Open`), you are respon
 - Create a dict store (e.g., `internal/dictdb` store) and attach it to the caching DB:
   - `cached.SetDictStore(store)`
 - Provide a `DictLookup` function to the value log reader/writer so compressed frames can resolve dict IDs to bytes.
-- Ensure `SplitValueLog` is enabled; dictionary compression is not used for non-split records.
+- Ensure a meaningful fraction of values are routed to the value log; dictionary
+  compression only applies to value-log frames.
 
 This path is intentionally “expert-only”; prefer `treedb.Open` unless you have a strong reason.

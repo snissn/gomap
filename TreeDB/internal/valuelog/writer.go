@@ -12,8 +12,8 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 const headerWithoutCRC = HeaderSize - 4
@@ -23,11 +23,11 @@ const defaultBufferSize = 16 << 20
 var syncDirFn = syncDir
 
 func recordSizeExceedsMax(valueLen uint32) bool {
-	if slab.MaxRecordSize <= 0 {
+	if limits.MaxRecordSize <= 0 {
 		return false
 	}
 	recordLen := int64(HeaderSize) + int64(valueLen)
-	return recordLen > slab.MaxRecordSize
+	return recordLen > limits.MaxRecordSize
 }
 
 type Writer struct {
@@ -596,6 +596,34 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 	return ptrs[0], nil
 }
 
+// AppendRawRecord appends a raw value-log record (CRC + header + payload)
+// without re-encoding. The length argument should include any pointer flags.
+func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, error) {
+	if w == nil {
+		return page.ValuePtr{}, errors.New("valuelog: nil writer")
+	}
+	if len(raw) == 0 {
+		return page.ValuePtr{}, errors.New("valuelog: empty record")
+	}
+	recordLen := page.ValuePtrRecordLength(page.ValuePtr{Length: length})
+	if recordLen != 0 {
+		expected := int64(recordLen) + 4
+		if int64(len(raw)) != expected {
+			return page.ValuePtr{}, errors.New("valuelog: raw record size mismatch")
+		}
+	}
+	start := w.size
+	if err := w.writeBytes(raw); err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.size += int64(len(raw))
+	return page.ValuePtr{
+		Offset: uint64(start + 4),
+		Length: length,
+		FileID: w.fileID,
+	}, nil
+}
+
 func (w *Writer) AppendFrame(dictID uint64, dict []byte, records []Record) ([]page.ValuePtr, error) {
 	ptrs, _, err := w.AppendFrameWithStats(dictID, dict, records)
 	return ptrs, err
@@ -705,7 +733,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		if rawPayloadBytes > int(^uint32(0)) {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
-		if slab.MaxRecordSize > 0 && int64(rawPayloadBytes) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawPayloadBytes) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 
@@ -721,7 +749,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 
 		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + rawPayloadBytes
-		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 		if bodyLen > int(^uint32(0)) {
@@ -739,7 +767,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			max = defaultBufferSize
 		}
 
-		// Hot path (mode4): write directly into the writer append buffer so we
+		// Hot path (wal_off): write directly into the writer append buffer so we
 		// don't copy `frame` into `appendBuf` after building it.
 		if w.f != nil && totalLen <= max {
 			if len(w.appendBuf)+totalLen > max {
@@ -888,7 +916,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		if rawPayloadBytes > int(^uint32(0)) {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
-		if slab.MaxRecordSize > 0 && int64(rawPayloadBytes) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawPayloadBytes) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 
@@ -1034,7 +1062,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 
 			bodyLen := prefixLen + encodedLen
-			if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+			if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 				w.appendBuf = w.appendBuf[:recordStart]
 				return nil, FrameStats{}, ErrRecordTooLarge
 			}
@@ -1151,7 +1179,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		w.skipRemain = 0
 
 		bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
-		if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 			return nil, FrameStats{}, ErrRecordTooLarge
 		}
 		if bodyLen > int(^uint32(0)) {
@@ -1302,7 +1330,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 	dst = dst[:k]
 
 	bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + rawPayloadBytes
-	if slab.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > slab.MaxRecordSize {
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
 		return nil, FrameStats{}, ErrRecordTooLarge
 	}
 	if bodyLen > int(^uint32(0)) {
@@ -1320,7 +1348,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 		max = defaultBufferSize
 	}
 
-	// Fast path: build directly into the writer append buffer (mode4),
+	// Fast path: build directly into the writer append buffer (wal_off),
 	// avoiding an additional copy into appendBuf.
 	if w.f != nil && totalLen <= max {
 		if len(w.appendBuf)+totalLen > max {

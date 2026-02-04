@@ -32,10 +32,8 @@ func TestRaceFlushRotate(t *testing.T) {
 	// Small threshold to force frequent rotations
 	opts := Options{
 		FlushThreshold:           64 * 1024,
-		MemtableValueLogPointers: true,
 		ValueLogPointerThreshold: 128,
 		DisableWAL:               false,
-		SplitValueLog:            true,
 		AllowUnsafe:              true,
 	}
 

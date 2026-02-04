@@ -11,7 +11,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -23,6 +22,16 @@ func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 	return m.p.Alloc(1)
 }
 
+type panicValueReader struct{}
+
+func (panicValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	panic("unexpected value pointer read in zipper test")
+}
+
+func (panicValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	panic("unexpected value pointer read in zipper test")
+}
+
 func TestZipperInsertSplit(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
@@ -30,12 +39,6 @@ func TestZipperInsertSplit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-
-	sm, err := slab.NewSlabManager(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sm.Close()
 
 	alloc := &MockAllocator{p: p}
 	z := New(p, alloc)
@@ -53,7 +56,7 @@ func TestZipperInsertSplit(t *testing.T) {
 	// If key=10 bytes, val=10 bytes -> 30 bytes/entry.
 	// 4000 / 30 = ~133 entries.
 
-	b := batch.New(sm, page.DefaultInlineThreshold)
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = b.Close() }()
 	// Insert 200 items
 	for i := 0; i < 200; i++ {
@@ -72,7 +75,7 @@ func TestZipperInsertSplit(t *testing.T) {
 	}
 
 	// Verify Data using Tree
-	tr := tree.New(p, sm, newRootID)
+	tr := tree.New(p, panicValueReader{}, newRootID)
 
 	val, err := tr.Get([]byte("key-000"))
 	if err != nil {
@@ -99,8 +102,6 @@ func TestZipperUpdates(t *testing.T) {
 	dir := t.TempDir()
 	p, _ := pager.Open(filepath.Join(dir, "index.db"), 65536)
 	defer p.Close()
-	sm, _ := slab.NewSlabManager(dir)
-	defer sm.Close()
 	alloc := &MockAllocator{p: p}
 	z := New(p, alloc)
 
@@ -113,7 +114,7 @@ func TestZipperUpdates(t *testing.T) {
 	n.UpdateChecksum()
 
 	// Batch 1: Insert A, B
-	b1 := batch.New(sm, page.DefaultInlineThreshold)
+	b1 := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = b1.Close() }()
 	b1.Set([]byte("A"), []byte("valA"))
 	b1.Set([]byte("B"), []byte("valB"))
@@ -124,7 +125,7 @@ func TestZipperUpdates(t *testing.T) {
 	}
 
 	// Batch 2: Update A, Delete B, Insert C
-	b2 := batch.New(sm, page.DefaultInlineThreshold)
+	b2 := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
 	defer func() { _ = b2.Close() }()
 	b2.Set([]byte("A"), []byte("valA2"))
 	b2.Delete([]byte("B"))
@@ -135,7 +136,7 @@ func TestZipperUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tr := tree.New(p, sm, root3)
+	tr := tree.New(p, panicValueReader{}, root3)
 
 	// Check A updated
 	val, err := tr.Get([]byte("A"))
@@ -197,7 +198,7 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 		{key: []byte("b0"), child: rightID},
 	}
 
-	out, _, err := z.coalesceLeafChildren(entries, &adaptive.Metrics{})
+	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{})
 	if err != nil {
 		t.Fatalf("coalesceLeafChildren: %v", err)
 	}

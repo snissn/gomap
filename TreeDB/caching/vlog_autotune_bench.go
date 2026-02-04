@@ -153,8 +153,7 @@ func RunVlogAutotuneBench(req VlogAutotuneBenchRequest) (*VlogAutotuneBenchResul
 		defer templateBackend.Close()
 		templateCached, err := Open(templatedbDir, templateBackend, Options{
 			FlushThreshold: 1 << 30,
-			DisableJournal: true,
-			SplitValueLog:  true,
+			DisableWAL:     true,
 			AllowUnsafe:    true,
 		})
 		if err != nil {
@@ -259,8 +258,7 @@ func benchOptionsForMode(mode VlogAutotuneBenchMode, fixedK int) Options {
 
 	return Options{
 		FlushThreshold:                 1 << 30,
-		DisableJournal:                 true,
-		SplitValueLog:                  true,
+		DisableWAL:                     true,
 		AllowUnsafe:                    true,
 		ValueLogPointerThreshold:       1,
 		ValueLogDictTrain:              trainCfg,

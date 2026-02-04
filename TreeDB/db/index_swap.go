@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 const (
@@ -95,9 +94,6 @@ func recoverIndexSwap(dir string) error {
 				// WAL-only state is recoverable: Open will create a new index.db and
 				// replay WAL records into it.
 				continue
-			}
-			if strings.HasPrefix(name, "data-") && strings.HasSuffix(name, ".slab") {
-				return fmt.Errorf("recover index swap: %s missing but slab files exist", indexFileName)
 			}
 		}
 		// Directory looks empty (new DB); allow Open to create index.db.

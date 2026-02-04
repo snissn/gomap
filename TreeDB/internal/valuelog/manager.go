@@ -12,8 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -159,6 +159,15 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 				if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
 					return nil, err
 				}
+				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+					decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+						return f.templateLookup(id)
+					}, f.templateDecodeOpts)
+					if err != nil {
+						return nil, err
+					}
+					dst = append(dst[:oldLen], decoded...)
+				}
 				return dst, nil
 			}
 			f.cacheMu.Unlock()
@@ -218,7 +227,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 
 		rawLen := offsets[k]
-		if slab.MaxRecordSize > 0 && int64(rawLen) > slab.MaxRecordSize {
+		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 			return nil, ErrRecordTooLarge
 		}
 		if prefixLen+int(rawLen) != int(valueLen) {
@@ -244,6 +253,15 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		dst = grow(dst, n)
 		if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
 			return nil, err
+		}
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			decoded, err := templ.DecodePayload(dst[oldLen:], func(id uint64) ([]byte, error) {
+				return f.templateLookup(id)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err
+			}
+			dst = append(dst[:oldLen], decoded...)
 		}
 		return dst, nil
 	}
@@ -510,6 +528,24 @@ func (m *Manager) MarkZombie(id uint32) error {
 	}
 	f.IsZombie.Store(true)
 	return nil
+}
+
+// EvictSegment closes and forgets a segment without deleting it from disk.
+// This is useful when another component owns lifecycle/deletion.
+func (m *Manager) EvictSegment(id uint32) error {
+	m.mu.Lock()
+	f, ok := m.files[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil
+	}
+	if f.RefCount.Load() != 0 {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot evict valuelog file %d: still pinned", id)
+	}
+	delete(m.files, id)
+	m.mu.Unlock()
+	return f.Close()
 }
 
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {

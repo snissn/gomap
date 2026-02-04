@@ -3,13 +3,11 @@ package db
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
@@ -19,7 +17,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
-	"github.com/snissn/gomap/TreeDB/slab"
 	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -35,20 +32,16 @@ type DBState struct {
 	CommitSeq        uint64
 	RootPageID       uint64
 	SystemRootPageID uint64
-	SlabSet          *slab.SlabSet
 	ValueLogSet      *valuelog.Set
 }
 
 type DB struct {
-	slabManager     *slab.SlabManager
 	valueLogManager *valuelog.Manager
 	lock            *lockfile.Lock
 	adaptive        *adaptive.Controller
 	pruner          pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
-	// It may be swapped during online vacuum; old generations remain alive until
-	// pinned readers drain.
 	idx atomic.Pointer[indexGen]
 
 	idxMu   sync.Mutex
@@ -66,17 +59,15 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent             uint64
-	policy                 WritePolicy
-	leafFillTargetPPM      uint32
-	internalFillTargetPPM  uint32
-	leafPrefixCompression  bool
-	indexColumnarLeaves    bool
-	indexInternalBaseDelta bool
-	piggybackCompaction    bool
-	// repairSlabTailOnOpen enables tail-record repair during recovery. This
-	// protects against torn/partial slab record tails after crashes.
-	repairSlabTailOnOpen bool
+	keepRecent                uint64
+	policy                    WritePolicy
+	leafFillTargetPPM         uint32
+	internalFillTargetPPM     uint32
+	leafPrefixCompression     bool
+	indexColumnarLeaves       bool
+	indexInternalBaseDelta    bool
+	piggybackCompaction       bool
+	maintenanceOpsPerCoalesce int
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
@@ -93,14 +84,93 @@ type DB struct {
 	bgErr       error
 }
 
-type Mode uint8
-
 const (
-	ModeCached Mode = iota
-	ModeBackend
+	defaultChunkSize                 = 16 * 1024 * 1024
+	defaultMaintenanceOpsPerCoalesce = 400_000
 )
 
-const defaultChunkSize = 4 * 1024 * 1024
+// DurabilityMode configures cached-mode durability semantics.
+//
+// These modes are explicit and intentionally replace the previous boolean
+// combination of DisableWAL + RelaxedSync + AllowUnsafe.
+type DurabilityMode uint8
+
+const (
+	// DurabilityDurable enables WAL (journal) and uses fsync for sync operations.
+	DurabilityDurable DurabilityMode = iota
+	// DurabilityWALOnRelaxed keeps WAL enabled but disables fsync (crash-consistent).
+	DurabilityWALOnRelaxed
+	// DurabilityWALOffRelaxed disables WAL and fsync (unsafe; recent writes may be lost).
+	DurabilityWALOffRelaxed
+)
+
+// IntegrityMode configures value-log read integrity checks.
+//
+// It intentionally replaces the previous DisableReadChecksum boolean.
+type IntegrityMode uint8
+
+const (
+	// IntegrityVerify enables checksum verification on value-log reads.
+	IntegrityVerify IntegrityMode = iota
+	// IntegritySkipChecksums disables checksum verification on value-log reads (unsafe).
+	IntegritySkipChecksums
+)
+
+// ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
+type ValueLogOptions struct {
+	// PointerThreshold controls when value-log pointers are used.
+	// Values <= 0 use a default threshold. In cached mode, relaxed durability
+	// settings may choose a smaller default to avoid large-scale update cliffs by
+	// pushing moderate values into the value log.
+	PointerThreshold int
+	// ForcePointers stores all values out-of-line in the value log (no inline values).
+	ForcePointers bool
+
+	// ReadIntegrity configures checksum verification on value-log reads.
+	ReadIntegrity IntegrityMode
+
+	// MaxRetainedBytes emits a warning when retained value-log bytes exceed this
+	// threshold (0 disables warnings). Cached mode only.
+	MaxRetainedBytes int64
+	// MaxRetainedBytesHard disables value-log pointers for new large values once
+	// retained bytes exceed this threshold (0 disables the cap).
+	MaxRetainedBytesHard int64
+
+	// DictLookup provides dictionary bytes for value-log decoding.
+	DictLookup valuelog.DictLookup
+
+	// DictTrain configures background dictionary training for value-log frame
+	// compression in cached mode.
+	DictTrain compression.TrainConfig
+	// DictAdaptiveRatio enables best-effort adaptive disable/pause of value-log
+	// dictionary compression when payload compression ratios degrade (0 disables).
+	DictAdaptiveRatio float64
+	// DictMetricsWindowBytes controls the rolling window size for ratio tracking (0=default).
+	DictMetricsWindowBytes int
+	// DictMetricsMinRecords controls how many records must be observed in a window
+	// before adaptive pause triggers (0=default).
+	DictMetricsMinRecords int
+	// DictMetricsPauseBytes controls how long to pause dict compression after a degraded
+	// window is detected (0=default).
+	DictMetricsPauseBytes int
+	// DictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
+	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
+	DictMinPayloadSavingsRatio float64
+
+	// CompressionAutotune configures the wall-time value-log compression autotuner.
+	CompressionAutotune valuelog.AutotuneOptions
+
+	// TemplateMode controls template-based compression for value-log values.
+	TemplateMode template.Mode
+	// TemplateConfig controls template creation and encoding behavior.
+	TemplateConfig template.Config
+	// TemplateReadStrict controls strict template decode behavior.
+	TemplateReadStrict bool
+	// TemplateLookup provides template definition bytes for value-log decoding.
+	TemplateLookup valuelog.TemplateLookup
+	// TemplateDecodeOptions controls decode caps for template payloads.
+	TemplateDecodeOptions template.DecodeOptions
+}
 
 type Options struct {
 	Dir string
@@ -108,8 +178,16 @@ type Options struct {
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
 	ReadOnly   bool
-	ChunkSize  int64  // Default 4MiB
+	ChunkSize  int64  // Default 16MiB
 	KeepRecent uint64 // Default 10000
+	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
+	// in parallel during Sync. Values <= 0 use the default (1).
+	PagerSyncConcurrency int
+
+	// Durability configures cached-mode durability semantics.
+	//
+	// The default (zero) is DurabilityDurable.
+	Durability DurabilityMode
 	// DisableBackgroundPrune keeps pruning on the commit critical path (legacy
 	// behavior). When false (default), a bounded background pruner frees pages
 	// asynchronously to reduce commit latency under churn.
@@ -124,30 +202,6 @@ type Options struct {
 	// <0 means unlimited).
 	PruneMaxDuration time.Duration
 
-	// BackgroundCompactionInterval enables background slab compaction when > 0.
-	// Background compaction is managed by the public wrapper (TreeDB/Open) so it
-	// can coordinate with the caching layer.
-	BackgroundCompactionInterval          time.Duration
-	BackgroundCompactionMaxSlabs          int
-	BackgroundCompactionDeadRatio         float64
-	BackgroundCompactionMinBytes          uint64
-	BackgroundCompactionMicroBatch        int
-	BackgroundCompactionCopyBytesPerSec   int64
-	BackgroundCompactionCopyBurstBytes    int64
-	BackgroundCompactionRotateBeforeWrite bool
-	// BackgroundCompactionIndexSwap compacts slabs by rebuilding the index into a
-	// new file and swapping it in once per pass (two-index-file approach). This
-	// can drastically reduce index churn during large slab pointer rewrites.
-	BackgroundCompactionIndexSwap bool
-	// BackgroundIndexVacuumInterval enables background index vacuum when > 0.
-	// The worker uses FragmentationReport span ratio to decide if a rebuild is
-	// warranted; see BackgroundIndexVacuumSpanRatioPPM.
-	BackgroundIndexVacuumInterval time.Duration
-	// BackgroundIndexVacuumSpanRatioPPM is the span ratio threshold (ppm) that
-	// triggers a background index vacuum. Zero uses a default.
-	BackgroundIndexVacuumSpanRatioPPM uint32
-
-	Mode           Mode // Default ModeCached
 	FlushThreshold int64
 	// MemtableMode selects the cached-mode memtable implementation.
 	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
@@ -175,6 +229,10 @@ type Options struct {
 	// (current behavior). Zero uses the default (1_000_000).
 	LeafFillTargetPPM     uint32
 	InternalFillTargetPPM uint32
+	// MaintenanceOpsPerCoalesce controls the maintenance budget during zipper
+	// merge. It bounds coalesce work to roughly len(ops)/K operations per batch.
+	// 0 uses the default; negative disables the budget (full maintenance).
+	MaintenanceOpsPerCoalesce int
 	// LeafPrefixCompression enables prefix-compressed leaf nodes for new pages.
 	LeafPrefixCompression bool
 	// IndexColumnarLeaves enables the experimental columnar leaf encoding for new pages.
@@ -206,31 +264,43 @@ type Options struct {
 	// combined flush batch from multiple immutable memtables in cached mode.
 	// Values <= 1 disable parallelism.
 	FlushBuildConcurrency int
+	// FlushBuildMinEntries gates the parallel build path by total entries.
+	// Values <= 0 use a default of 16k.
+	FlushBuildMinEntries int
+	// FlushBuildMinUnits gates the parallel build path by number of queued units.
+	// Values <= 0 use a default of 2.
+	FlushBuildMinUnits int
+	// FlushBuildChunkCap controls the maximum entries per build chunk.
+	// A value of 0 enables adaptive chunk sizing, values < 0 use the fixed default of 8192,
+	// and values > 0 set an explicit cap.
+	FlushBuildChunkCap int
+	// FlushBuildChunkTargetBytes controls adaptive chunk sizing (bytes per chunk).
+	// Values <= 0 use a default of 2MiB.
+	FlushBuildChunkTargetBytes int
+	// FlushBuildChunkMinBytes clamps adaptive chunk sizes (minimum bytes).
+	// Values <= 0 use a default of 1MiB.
+	FlushBuildChunkMinBytes int
+	// FlushBuildChunkMaxBytes clamps adaptive chunk sizes (maximum bytes).
+	// Values <= 0 use a default of 4MiB.
+	FlushBuildChunkMaxBytes int
+	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
+	// of the consumer. Values <= 0 use FlushBuildConcurrency.
+	FlushBuildPrefetchUnits int
 
-	// DisableSlabTailRepairOnOpen disables best-effort recovery that truncates
-	// partial/corrupt tail records on the active slab. Disabling may reduce open
-	// latency for very large slabs but risks starting up with committed pointers
-	// that decode to checksum errors after a crash.
-	DisableSlabTailRepairOnOpen bool
-	// AllowUnsafe acknowledges unsafe durability/integrity options.
-	// When false, Open will reject options that disable WAL, fsync, checksums,
-	// or slab tail repair.
-	AllowUnsafe bool
+	// FlushBackendMaxEntries caps how many operations are buffered into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This increases backend commit cadence during very large flushes, which can
+	// reduce index.db high-watermark growth under small KeepRecent windows by
+	// making retired pages eligible for reuse sooner.
+	//
+	// 0 uses the internal default. Negative disables chunking (single backend
+	// commit per flush).
+	FlushBackendMaxEntries int
+	// FlushBackendMaxBatches caps how many intermediate backend commits a single
+	// flush may emit (0=default, <0=disable cap).
+	FlushBackendMaxBatches int
 
-	// DisableWAL disables the journal/value-log subsystem in cached mode
-	// (legacy mode1 alias; deprecated).
-	// This improves performance but sacrifices durability: a crash will revert
-	// the database to the last Checkpoint (backend flush).
-	DisableWAL bool
-	// DisableJournal disables writing commit-intent/redo log records while still
-	// allowing value-log pointers/value storage. A crash may lose writes since
-	// the last checkpoint because there is no redo log to replay.
-	DisableJournal bool
-	// DisableValueLog forces cached-mode WAL to remain in legacy mode (no value-log pointers).
-	DisableValueLog bool
-	// SplitValueLog stores WAL records in wal/ while large values go to vlog/
-	// segments, and WAL entries reference them via pointers.
-	SplitValueLog bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
@@ -243,75 +313,13 @@ type Options struct {
 	// The redo log will only keep compressed bytes when they are smaller than the
 	// raw payload, so compression never causes size amplification.
 	JournalCompression bool
-	// MemtableValueLogPointers avoids storing large values in the memtable and
-	// serves them by pointer from the value log (WAL/vlog). Requires WAL/value-log.
-	MemtableValueLogPointers bool
-	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
-	ValueLogPointerThreshold int
-	// ForceValuePointers stores all values out-of-line in slabs (no inline values).
-	ForceValuePointers bool
-	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
-	// this threshold (0 disables warnings). Cached mode only.
-	MaxValueLogRetainedBytes int64
-	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
-	// values once retained bytes exceed this threshold (0 disables the cap).
-	MaxValueLogRetainedBytesHard int64
-	// DictLookup provides dictionary bytes for value-log decoding.
-	DictLookup valuelog.DictLookup
 
-	// ValueLogDictTrain configures background dictionary training for value-log
-	// frame compression in cached mode.
-	//
-	// Semantics:
-	// - TrainBytes <= 0 disables training entirely (dictID remains 0 unless set externally).
-	// - TrainBytes > 0 enables training and uses TrainBytes as the raw sampling target.
-	// - DictBytes/MinRecords/MaxRecordBytes/SampleStride/DedupWindow mirror the slab trainer.
-	ValueLogDictTrain compression.TrainConfig
-	// ValueLogDictAdaptiveRatio enables best-effort adaptive disable/pause of value-log
-	// dictionary compression when payload compression ratios degrade (0 disables).
-	ValueLogDictAdaptiveRatio float64
-	// ValueLogDictMetricsWindowBytes controls the rolling window size for ratio tracking (0=default).
-	ValueLogDictMetricsWindowBytes int
-	// ValueLogDictMetricsMinRecords controls how many records must be observed in a window
-	// before adaptive pause triggers (0=default).
-	ValueLogDictMetricsMinRecords int
-	// ValueLogDictMetricsPauseBytes controls how long to pause dict compression after a degraded
-	// window is detected (0=default).
-	ValueLogDictMetricsPauseBytes int
-	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
-	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
-	ValueLogDictMinPayloadSavingsRatio float64
-
-	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
-	// Cached mode only (SplitValueLog must be enabled).
-	ValueLogCompressionAutotune valuelog.AutotuneOptions
-
-	// ValueLogTemplateMode controls template-based compression for value-log values.
-	ValueLogTemplateMode template.Mode
-	// ValueLogTemplateConfig controls template creation and encoding behavior.
-	ValueLogTemplateConfig template.Config
-	// ValueLogTemplateReadStrict controls strict template decode behavior.
-	ValueLogTemplateReadStrict bool
-	// ValueLogTemplateLookup provides template definitions for value-log decoding.
-	ValueLogTemplateLookup func(templateID uint64) ([]byte, error)
-	// ValueLogTemplateDecodeOptions controls decode caps for TemplateValue payloads.
-	ValueLogTemplateDecodeOptions template.DecodeOptions
-
-	// RelaxedSync disables fsync on CommitSync and SetSync operations.
-	// This improves performance for synchronous workloads but provides only
-	// crash consistency (OS buffer cache), not true durability.
-	RelaxedSync bool
+	// ValueLog configures value-log pointer behavior and read integrity.
+	ValueLog ValueLogOptions
 
 	// NotifyError is an optional hook for background maintenance failures.
 	NotifyError func(error)
 
-	// DisableReadChecksum skips CRC verification on slab reads.
-	// This improves read performance (especially for large values) but risks
-	// returning silent data corruption if the disk/memory is compromised.
-	DisableReadChecksum bool
-	// SlabCompression configures compression for slab-stored values.
-	SlabCompression slab.CompressionOptions
 	// VerifyOnRead forces checksum verification on every index page read,
 	// bypassing the verified-page cache.
 	VerifyOnRead bool
@@ -339,6 +347,12 @@ type Options struct {
 	// - `0` uses a default.
 	// - `<0` disables the idle trigger.
 	BackgroundCheckpointIdleDuration time.Duration
+	// BackgroundIndexVacuumInterval enables periodic online index vacuum passes.
+	// `0` uses a default; `<0` disables.
+	BackgroundIndexVacuumInterval time.Duration
+	// BackgroundIndexVacuumSpanRatioPPM sets the span ratio threshold that
+	// triggers a vacuum pass (0 uses a default).
+	BackgroundIndexVacuumSpanRatioPPM uint32
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each
@@ -375,9 +389,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 
 	idx := db.idx.Load()
 	state := db.state.Load()
-	if state.SlabSet != nil {
-		db.slabManager.AcquireSlabs(state.SlabSet) // This now pins the Set, not files
-	}
 	if state.ValueLogSet != nil {
 		db.valueLogManager.Acquire(state.ValueLogSet)
 	}
@@ -396,7 +407,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.idx = idx
 	snap.state = state
 	if idx != nil {
-		snap.tree.Reset(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID)
+		snap.tree.Reset(idx.pager, valueReader{vlogs: state.ValueLogSet}, state.RootPageID)
 	}
 	snap.registryID = id
 	return snap
@@ -405,9 +416,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	var err error
-	if s.state != nil && s.state.SlabSet != nil {
-		err = s.db.slabManager.ReleaseSlabs(s.state.SlabSet)
-	}
 	if s.state != nil && s.state.ValueLogSet != nil {
 		err = errors.Join(err, s.db.valueLogManager.Release(s.state.ValueLogSet))
 	}
@@ -438,6 +446,11 @@ func Open(opts Options) (*DB, error) {
 	if opts.InternalFillTargetPPM == 0 {
 		opts.InternalFillTargetPPM = 1_000_000
 	}
+	if opts.MaintenanceOpsPerCoalesce == 0 {
+		opts.MaintenanceOpsPerCoalesce = defaultMaintenanceOpsPerCoalesce
+	} else if opts.MaintenanceOpsPerCoalesce < 0 {
+		opts.MaintenanceOpsPerCoalesce = 0
+	}
 	if opts.PruneInterval == 0 {
 		opts.PruneInterval = 250 * time.Millisecond
 	}
@@ -462,7 +475,7 @@ func Open(opts Options) (*DB, error) {
 		opts.FreelistRegionRadius = 1
 	}
 
-	if err := validateUnsafeOptions(opts); err != nil {
+	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
@@ -483,17 +496,21 @@ func Open(opts Options) (*DB, error) {
 	return db, nil
 }
 
-func validateUnsafeOptions(opts Options) error {
+func validateOptions(opts Options) error {
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
 		// not apply.
 		return nil
 	}
-	if opts.AllowUnsafe {
-		return nil
+	switch opts.Durability {
+	case DurabilityDurable, DurabilityWALOnRelaxed, DurabilityWALOffRelaxed:
+	default:
+		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
 	}
-	if opts.DisableWAL || opts.DisableJournal || opts.RelaxedSync || opts.DisableReadChecksum || opts.DisableSlabTailRepairOnOpen || opts.MemtableValueLogPointers {
-		return ErrUnsafeOptions
+	switch opts.ValueLog.ReadIntegrity {
+	case IntegrityVerify, IntegritySkipChecksums:
+	default:
+		return fmt.Errorf("treedb: invalid value-log integrity mode %d", opts.ValueLog.ReadIntegrity)
 	}
 	return nil
 }
@@ -508,27 +525,20 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.SetVerifyOnRead(opts.VerifyOnRead)
-
-	sm, err := slab.NewSlabManagerWithOptions(opts.Dir, slab.Options{
-		Compression: opts.SlabCompression,
-	})
-	if err != nil {
-		p.Close()
-		return nil, err
+	if opts.PagerSyncConcurrency > 0 {
+		p.SetSyncConcurrency(opts.PagerSyncConcurrency)
 	}
-	sm.SetDisableReadChecksum(opts.DisableReadChecksum)
+	p.SetVerifyOnRead(opts.VerifyOnRead)
 
 	valueLogDir := filepath.Join(opts.Dir, "wal")
 	vm, err := valuelog.NewManager(valueLogDir)
 	if err != nil {
 		p.Close()
-		_ = sm.Close()
 		return nil, err
 	}
-	vm.SetDisableReadChecksum(opts.DisableReadChecksum)
-	vm.SetDictLookup(opts.DictLookup)
-	vm.SetTemplateLookup(opts.ValueLogTemplateLookup, opts.ValueLogTemplateDecodeOptions)
+	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
 	alloc := freelist.New(p, 0)
 	alloc.SetPreferAppend(opts.PreferAppendAlloc)
@@ -540,29 +550,28 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	adaptiveCtrl := adaptive.New()
 	inlineThreshold := page.DefaultInlineThreshold
-	if opts.ForceValuePointers {
+	if opts.ValueLog.ForcePointers {
 		inlineThreshold = 0
 		adaptiveCtrl = nil
 	}
 
 	db := &DB{
-		slabManager:            sm,
-		valueLogManager:        vm,
-		lock:                   lock,
-		adaptive:               adaptiveCtrl,
-		keepRecent:             opts.KeepRecent,
-		leafFillTargetPPM:      opts.LeafFillTargetPPM,
-		internalFillTargetPPM:  opts.InternalFillTargetPPM,
-		leafPrefixCompression:  opts.LeafPrefixCompression,
-		indexColumnarLeaves:    opts.IndexColumnarLeaves,
-		indexInternalBaseDelta: opts.IndexInternalBaseDelta,
-		piggybackCompaction:    !opts.DisablePiggybackCompaction,
-		repairSlabTailOnOpen:   !opts.DisableSlabTailRepairOnOpen,
-		dir:                    opts.Dir,
-		chunkSize:              opts.ChunkSize,
-		preferAppendAlloc:      opts.PreferAppendAlloc,
-		freelistRegionPages:    opts.FreelistRegionPages,
-		freelistRegionRadius:   opts.FreelistRegionRadius,
+		valueLogManager:           vm,
+		lock:                      lock,
+		adaptive:                  adaptiveCtrl,
+		keepRecent:                opts.KeepRecent,
+		leafFillTargetPPM:         opts.LeafFillTargetPPM,
+		internalFillTargetPPM:     opts.InternalFillTargetPPM,
+		leafPrefixCompression:     opts.LeafPrefixCompression,
+		indexColumnarLeaves:       opts.IndexColumnarLeaves,
+		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		piggybackCompaction:       !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
+		dir:                       opts.Dir,
+		chunkSize:                 opts.ChunkSize,
+		preferAppendAlloc:         opts.PreferAppendAlloc,
+		freelistRegionPages:       opts.FreelistRegionPages,
+		freelistRegionRadius:      opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -583,21 +592,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	includeValueLog := !opts.DisableWAL && !opts.DisableValueLog
-	segments, err := listWALSegments(opts.Dir, includeValueLog)
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, includeValueLog, opts.DictLookup); err != nil {
-		db.Close()
-		return nil, err
+	if opts.Durability != DurabilityWALOffRelaxed {
+		segments, err := listWALSegments(opts.Dir)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 
 	// Initialize State after recovery so log cleanup can proceed without pinning.
@@ -605,7 +616,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		CommitSeq:        db.meta.CommitSeq,
 		RootPageID:       db.meta.UserRootPageID,
 		SystemRootPageID: db.meta.SystemRootPageID,
-		SlabSet:          sm.CurrentSlabSet(),
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
@@ -627,9 +637,7 @@ func (db *DB) Close() error {
 	}
 
 	db.mu.Lock()
-	sm := db.slabManager
 	vm := db.valueLogManager
-	db.slabManager = nil
 	db.valueLogManager = nil
 	lock := db.lock
 	db.lock = nil
@@ -638,11 +646,6 @@ func (db *DB) Close() error {
 	var errs []error
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
-	}
-	if sm != nil {
-		if err := sm.Close(); err != nil {
-			errs = append(errs, err)
-		}
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {
@@ -749,13 +752,6 @@ func (db *DB) recover() error {
 	m0, valid0 := db.readMeta(MetaPage0ID)
 	m1, valid1 := db.readMeta(MetaPage1ID)
 
-	if valid0 && !db.metaSlabTailValid(m0) {
-		valid0 = false
-	}
-	if valid1 && !db.metaSlabTailValid(m1) {
-		valid1 = false
-	}
-
 	type metaCandidate struct {
 		id   uint64
 		meta page.MetaPageBody
@@ -770,8 +766,6 @@ func (db *DB) recover() error {
 	if len(candidates) == 0 {
 		return errors.New("both meta pages corrupted")
 	}
-	// Prefer the highest CommitSeq, but fall back if the active slab tail is not
-	// actually readable (e.g. torn last record).
 	if len(candidates) == 2 && candidates[0].meta.CommitSeq < candidates[1].meta.CommitSeq {
 		candidates[0], candidates[1] = candidates[1], candidates[0]
 	}
@@ -779,38 +773,6 @@ func (db *DB) recover() error {
 	var chosen *metaCandidate
 	for i := range candidates {
 		c := &candidates[i]
-
-		// Re-check slab tail against current size (note: prior iterations may have
-		// truncated the slab).
-		path := db.slabManager.GetSlabPath(c.meta.ActiveSlabID)
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if c.meta.ActiveSlabTail > uint64(info.Size()) {
-			continue
-		}
-
-		if err := db.slabManager.SetActiveSlab(c.meta.ActiveSlabID); err != nil {
-			continue
-		}
-		if !db.readOnly {
-			if err := db.slabManager.TruncateActiveSlab(c.meta.ActiveSlabTail); err != nil {
-				return err
-			}
-
-			if db.repairSlabTailOnOpen {
-				repairedTail, err := db.slabManager.RepairActiveSlabTail()
-				if err != nil {
-					return err
-				}
-				if repairedTail < c.meta.ActiveSlabTail {
-					// This commit's meta tail was beyond the last checksum-valid record;
-					// reject it and fall back to an older meta page.
-					continue
-				}
-			}
-		}
 
 		if !db.rootPageValid(p, c.meta.UserRootPageID) || !db.rootPageValid(p, c.meta.SystemRootPageID) {
 			continue
@@ -823,17 +785,11 @@ func (db *DB) recover() error {
 		break
 	}
 	if chosen == nil {
-		return errors.New("no meta page with durable slab tail")
+		return errors.New("no valid meta page")
 	}
 
 	db.meta = chosen.meta
 	db.metaPageID = chosen.id
-
-	if !db.readOnly {
-		if err := db.slabManager.PruneSlabs(chosen.meta.ActiveSlabID); err != nil {
-			return err
-		}
-	}
 
 	if chosen.meta.TotalPages > 0 {
 		p.SetPageCount(chosen.meta.TotalPages)
@@ -843,22 +799,6 @@ func (db *DB) recover() error {
 	idx.allocator.SetHead(chosen.meta.FreelistHeadID)
 
 	return nil
-}
-
-func (db *DB) metaSlabTailValid(m page.MetaPageBody) bool {
-	// ActiveSlabTail must not exceed the on-disk slab size; otherwise we'd end up
-	// pointing reads at bytes that were never durable (possible after a crash on
-	// async writes where index meta reached disk but slab didn't).
-	path := db.slabManager.GetSlabPath(m.ActiveSlabID)
-	info, err := os.Stat(path)
-	if err != nil {
-		// For empty/new DBs, active slab should exist; treat missing as invalid.
-		return false
-	}
-	if m.ActiveSlabTail > uint64(info.Size()) {
-		return false
-	}
-	return true
 }
 
 func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
@@ -964,46 +904,36 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if idx == nil {
 		return errors.New("missing index")
 	}
-
-	// 0. Update System metadata tree (slab stats, etc) before sync/meta.
-	//
-	// This mutates index pages, so it must run before any Sync() durability
-	// boundary.
-	if nextSysRoot, sysRetired, err := db.applySystemStatsUpdates(sysRootID, metrics); err != nil {
-		return err
-	} else if nextSysRoot != sysRootID || len(sysRetired) > 0 {
-		sysRootID = nextSysRoot
-		if len(sysRetired) > 0 {
-			retired = append(retired, sysRetired...)
-		}
+	debugTiming := commitTimingEnabled()
+	var (
+		start    time.Time
+		durSync1 time.Duration
+		durMeta  time.Duration
+		durSync2 time.Duration
+		durPrune time.Duration
+	)
+	if debugTiming {
+		start = time.Now()
 	}
 
-	// 1. Flush any buffered slab appends before we compute the meta tail and/or
-	// publish pointers. This is required even when sync=false so in-process reads
-	// cannot observe pointers beyond the on-disk slab size.
-	if err := db.slabManager.Flush(); err != nil {
-		return err
-	}
-
-	// 2. Sync Data (Slabs + Index Pages) - No DB Lock
+	// 1. Sync Data (Index Pages) - No DB Lock
 	if sync {
-		if err := db.slabManager.Sync(); err != nil {
-			return err
-		}
+		t0 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
 			return err
 		}
+		if debugTiming {
+			durSync1 = time.Since(t0)
+		}
 	}
 
-	// 3. Prepare Meta - Short Lock
+	// 2. Prepare Meta - Short Lock
 	db.mu.Lock()
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
 	nextMeta.SystemRootPageID = sysRootID
 	nextMeta.FreelistHeadID = idx.allocator.Head()
-	nextMeta.ActiveSlabID = db.slabManager.ActiveSlabID()
-	nextMeta.ActiveSlabTail = db.slabManager.ActiveSlabTail()
 	nextMeta.TotalPages = idx.pager.PageCount()
 
 	targetPageID := uint64(0)
@@ -1012,34 +942,55 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	}
 	db.mu.Unlock()
 
-	// 4. Write Meta - No DB Lock
+	// 3. Write Meta - No DB Lock
+	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
 		return err
 	}
+	if debugTiming {
+		durMeta = time.Since(t0)
+	}
 
-	// 5. Sync Meta - No DB Lock
+	// 4. Sync Meta - No DB Lock
 	if sync {
+		t1 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
 			return err
 		}
+		if debugTiming {
+			durSync2 = time.Since(t1)
+		}
 	}
 
-	// 6. Update State (Visible) - Short Lock
+	// 5. Update State (Visible) - Short Lock
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 
-	// Add retired pages to Graveyard
-	idx.graveyard.Add(nextMeta.CommitSeq, retired)
+	// Add retired pages to the graveyard.
+	//
+	// IMPORTANT: We tag pages with the *base* commit sequence they were last
+	// reachable from (the state we just applied against), not the new commit
+	// sequence. This keeps pruning semantics aligned with ReaderRegistry:
+	//   - readers pinned at baseSeq must continue to see those pages
+	//   - pages become eligible for reuse once MinPinnedSeq advances past baseSeq
+	//
+	// This also reduces index.db high-watermark growth under small KeepRecent
+	// windows by making pages eligible one commit earlier.
+	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
 
 	// Prune asynchronously to keep commit latency stable under churn.
 	// If background pruning is disabled, fall back to legacy on-commit pruning.
 	if db.pruner.Enabled() {
 		db.pruner.Kick()
 	} else {
+		tp := time.Now()
 		db.Prune()
+		if debugTiming {
+			durPrune = time.Since(tp)
+		}
 	}
 
 	// Update State
@@ -1048,18 +999,27 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
-		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
 
 	if oldState != nil {
-		db.slabManager.ReleaseSlabs(oldState.SlabSet)
 		_ = db.valueLogManager.Release(oldState.ValueLogSet)
 	}
 
 	if db.adaptive != nil {
 		db.adaptive.RecordCommit(metrics)
+	}
+	if debugTiming {
+		commitTimingPrintf(
+			"treedb: commit_timing sync=%t sync1=%s meta=%s sync2=%s prune=%s total=%s\n",
+			sync,
+			durSync1,
+			durMeta,
+			durSync2,
+			durPrune,
+			time.Since(start),
+		)
 	}
 
 	return nil
@@ -1157,9 +1117,6 @@ func (db *DB) Pager() *pager.Pager {
 	}
 	return idx.pager
 }
-func (db *DB) SlabManager() *slab.SlabManager {
-	return db.slabManager
-}
 func (db *DB) Zipper() *zipper.Zipper {
 	idx := db.idx.Load()
 	if idx == nil {
@@ -1183,13 +1140,15 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
-// RefreshSlabSet publishes a new DBState with the current SlabSet (excluding
-// zombies) without creating a new commit. This is used by background compaction
-// so that future snapshots stop pinning compacted slabs immediately.
-func (db *DB) RefreshSlabSet() error {
+// RefreshValueLogSet publishes a new DBState with the current value-log set
+// (excluding zombies) without creating a new commit.
+func (db *DB) RefreshValueLogSet() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	if db.valueLogManager == nil {
+		return nil
+	}
 	oldState := db.state.Load()
 	if oldState == nil {
 		return nil
@@ -1199,13 +1158,14 @@ func (db *DB) RefreshSlabSet() error {
 		CommitSeq:        oldState.CommitSeq,
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
-		SlabSet:          db.slabManager.CurrentSlabSet(),
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
 
-	err := db.slabManager.ReleaseSlabs(oldState.SlabSet)
-	return errors.Join(err, db.valueLogManager.Release(oldState.ValueLogSet))
+	if oldState.ValueLogSet != nil {
+		return db.valueLogManager.Release(oldState.ValueLogSet)
+	}
+	return nil
 }
 
 // MarkValueLogZombie marks a value-log segment as zombie so it can be removed
@@ -1215,173 +1175,6 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 		return fmt.Errorf("value log manager unavailable")
 	}
 	return db.valueLogManager.MarkZombie(id)
-}
-
-type CompactionOp struct {
-	Key    []byte
-	OldPtr page.ValuePtr
-	NewPtr page.ValuePtr
-}
-
-const defaultCompactionMicroBatchSize = 256
-
-// ApplyCompaction applies pointer updates to the current tree. It uses
-// micro-batching to bound time under the writer lock.
-func (db *DB) ApplyCompaction(ops []CompactionOp) error {
-	return db.ApplyCompactionMicroBatches(ops, defaultCompactionMicroBatchSize)
-}
-
-// ApplyCompactionMicroBatches applies compaction pointer updates in chunks of at
-// most maxOps per commit. This bounds writer pauses and keeps the system
-// responsive under large compactions.
-func (db *DB) ApplyCompactionMicroBatches(ops []CompactionOp, maxOps int) error {
-	if len(ops) == 0 {
-		return nil
-	}
-	if maxOps <= 0 {
-		maxOps = defaultCompactionMicroBatchSize
-	}
-
-	for start := 0; start < len(ops); start += maxOps {
-		end := start + maxOps
-		if end > len(ops) {
-			end = len(ops)
-		}
-		chunk := ops[start:end]
-
-		db.writeMu.Lock()
-		idx := db.idx.Load()
-		if idx == nil {
-			db.writeMu.Unlock()
-			return errors.New("missing index")
-		}
-
-		// Fast path: if no readers are pinned to the current index generation,
-		// update leaf pointer values in-place to avoid COW page churn.
-		db.mu.Lock()
-		rootID := db.meta.UserRootPageID
-		sysRoot := db.meta.SystemRootPageID
-		noPinnedReaders := idx.registry.MinPinnedSeq() == ^uint64(0)
-		if noPinnedReaders {
-			tr := tree.New(idx.pager, nil, rootID)
-			var (
-				metrics       adaptive.Metrics
-				modifiedPages map[uint64]struct{}
-			)
-			for _, op := range chunk {
-				updated, leafID, err := tr.UpdateValuePtrInPlace(op.Key, op.OldPtr, op.NewPtr)
-				if err != nil {
-					db.mu.Unlock()
-					db.writeMu.Unlock()
-					return err
-				}
-				if !updated {
-					continue
-				}
-				if modifiedPages == nil {
-					modifiedPages = make(map[uint64]struct{}, 8)
-				}
-				modifiedPages[leafID] = struct{}{}
-
-				if metrics.SlabWriteBytesByFile == nil {
-					metrics.SlabWriteBytesByFile = make(map[uint32]int64, 4)
-				}
-				metrics.SlabWriteBytesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
-
-				if metrics.SlabDeadBytesByFile == nil {
-					metrics.SlabDeadBytesByFile = make(map[uint32]int64, 4)
-				}
-				metrics.SlabDeadBytesByFile[op.OldPtr.FileID] += int64(page.ValuePtrRecordLength(op.OldPtr))
-				metrics.SlabDeadBytes += int(page.ValuePtrRecordLength(op.OldPtr))
-			}
-			if len(modifiedPages) > 0 {
-				metrics.IndexWriteBytes += len(modifiedPages) * page.PageSize
-			}
-			db.mu.Unlock()
-
-			if len(metrics.SlabWriteBytesByFile) == 0 && len(metrics.SlabDeadBytesByFile) == 0 {
-				db.writeMu.Unlock()
-				continue
-			}
-
-			// Commit without forcing Sync; compaction can be lazily durable.
-			if err := db.finalizeCommit(rootID, sysRoot, nil, false, metrics); err != nil {
-				db.writeMu.Unlock()
-				return err
-			}
-
-			db.writeMu.Unlock()
-			continue
-		}
-		db.mu.Unlock()
-
-		// Build a micro-batch of still-live pointer updates.
-		tr := tree.New(idx.pager, valueReader{slabs: db.slabManager, vlogs: db.valueLogManager}, rootID)
-		b := batch.New(db.slabManager, db.policy.InlineThreshold)
-		closeBatch := func() { _ = b.Close() }
-		var slabWritesByFile map[uint32]int64
-		var metrics adaptive.Metrics
-
-		for _, op := range chunk {
-			entry, err := tr.GetEntry(op.Key)
-			if err != nil {
-				continue
-			}
-			if entry.Flags&node.FlagPointer == 0 {
-				continue
-			}
-			if entry.ValuePtr != op.OldPtr {
-				continue
-			}
-			if err := b.SetPointer(op.Key, op.NewPtr); err != nil {
-				closeBatch()
-				db.writeMu.Unlock()
-				return err
-			}
-			if slabWritesByFile == nil {
-				slabWritesByFile = make(map[uint32]int64, 4)
-			}
-			slabWritesByFile[op.NewPtr.FileID] += int64(page.ValuePtrRecordLength(op.NewPtr))
-		}
-
-		opsMap := b.Ops()
-		if len(opsMap) == 0 {
-			closeBatch()
-			db.writeMu.Unlock()
-			continue
-		}
-
-		newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
-		if err != nil {
-			closeBatch()
-			db.writeMu.Unlock()
-			return err
-		}
-		if len(slabWritesByFile) > 0 {
-			if metrics.SlabWriteBytesByFile == nil {
-				metrics.SlabWriteBytesByFile = slabWritesByFile
-			} else {
-				for id, n := range slabWritesByFile {
-					metrics.SlabWriteBytesByFile[id] += n
-				}
-			}
-		}
-
-		// Commit without forcing Sync; compaction can be lazily durable.
-		if err := db.finalizeCommit(newRoot, sysRoot, retired, false, metrics); err != nil {
-			closeBatch()
-			db.writeMu.Unlock()
-			return err
-		}
-		if db.vacuum.Active() {
-			db.vacuum.RecordOps(opsMap)
-		}
-
-		db.writeMu.Unlock()
-		closeBatch()
-	}
-
-	return nil
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
@@ -1400,7 +1193,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{slabs: state.SlabSet, vlogs: state.ValueLogSet}, state.RootPageID)
+	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet}, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

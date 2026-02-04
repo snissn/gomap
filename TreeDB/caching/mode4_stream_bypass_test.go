@@ -8,7 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
+func TestBatch_WALOffStreamBypass_DisabledWithValueLog(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -18,8 +18,7 @@ func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
 
 	cached, err := Open(dir, backend, Options{
 		AllowUnsafe:    true,
-		DisableJournal: true,
-		SplitValueLog:  true,
+		DisableWAL:     true,
 		FlushThreshold: 1 << 30,
 		MemtableMode:   "skiplist",
 		MemtableShards: 1,
@@ -46,28 +45,27 @@ func TestBatch_Mode4StreamBypass_WritesDirectToBackend(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// Streaming bypass should avoid mutating memtables.
+	// Streaming bypass is disabled when the value log is enabled; writes should
+	// land in memtables until a flush/close.
+	total := 0
 	for i := range cached.mutableShards {
 		shard := &cached.mutableShards[i]
 		shard.mu.Lock()
-		n := shard.mem.Len()
+		total += shard.mem.Len()
 		shard.mu.Unlock()
-		if n != 0 {
-			t.Fatalf("expected empty memtable after bypass write; shard %d len=%d", i, n)
-		}
+	}
+	if total == 0 {
+		t.Fatalf("expected memtable entries after write with WAL-off/value-log")
 	}
 
-	// Values should be readable from the backend/value-log path.
-	got, err := cached.Get([]byte("k00000042"))
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if !bytes.Equal(got, val) {
-		t.Fatalf("unexpected value: got %d bytes", len(got))
+	if got, err := backend.Get([]byte("k00000042")); err != nil {
+		t.Fatalf("backend get: %v", err)
+	} else if got != nil {
+		t.Fatalf("expected backend to be empty before flush; got %d bytes", len(got))
 	}
 }
 
-func TestBatch_Mode4StreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
+func TestBatch_WALOffStreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -77,8 +75,7 @@ func TestBatch_Mode4StreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
 
 	cached, err := Open(dir, backend, Options{
 		AllowUnsafe:    true,
-		DisableJournal: true,
-		SplitValueLog:  true,
+		DisableWAL:     true,
 		FlushThreshold: 1 << 30,
 		MemtableMode:   "skiplist",
 		MemtableShards: 1,

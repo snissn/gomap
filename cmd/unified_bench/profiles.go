@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, fast_ingest, durable, balanced). Overrides default flags unless explicitly set.")
+	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, wal_on_fast, durable, balanced). Overrides default flags unless explicitly set.")
 )
 
 type Profile struct {
@@ -26,6 +26,10 @@ func init() {
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
+		// Large random-insert workloads are extremely sensitive to flush batching.
+		// Use a larger default in the "fast" profile unless the caller explicitly
+		// overrides it.
+		setInt64IfUnset("treedb-flush-threshold", 256*1024*1024, isSet, treedbFlushThreshold)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -47,16 +51,9 @@ func init() {
 		setIntIfUnset("buntdb-sync", 0, isSet, buntdbSyncPolicy)
 	}
 
-	applyFastIngest := func(isSet map[string]bool) {
-		// TreeDB: keep cached+value-log–centric write path enabled, but relax durability.
-		//
-		// Notes:
-		// - We keep WAL enabled to avoid implicitly disabling value-log pointers.
-		// - We still set unsafe knobs for throughput (RelaxedSync + DisableReadChecksum).
+	applyWALOnFast := func(isSet map[string]bool) {
+		// TreeDB: keep WAL enabled, but relax durability and read integrity.
 		setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
-		setBoolIfUnset("treedb-disable-value-log", false, isSet, treedbDisableValueLog)
-		setBoolIfUnset("treedb-split-value-log", true, isSet, treedbSplitValueLog)
-		setBoolIfUnset("treedb-memtable-value-log-pointers", true, isSet, treedbMemtableValueLogPointers)
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
@@ -73,12 +70,12 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (and value-log pointers). UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (journal). UNSAFE for production data.",
 			Apply:       applyFast,
 		},
-		"fast_ingest": {
-			Description: "TreeDB ingest profile: cached+value-log enabled + relaxed durability (WAL on, fsync/checksums off).",
-			Apply:       applyFastIngest,
+		"wal_on_fast": {
+			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off).",
+			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast
 			Description: "Alias for 'fast'",
@@ -128,6 +125,12 @@ func setBoolIfUnset(name string, val bool, isSet map[string]bool, target *bool) 
 }
 
 func setIntIfUnset(name string, val int, isSet map[string]bool, target *int) {
+	if !isSet[name] {
+		*target = val
+	}
+}
+
+func setInt64IfUnset(name string, val int64, isSet map[string]bool, target *int64) {
 	if !isSet[name] {
 		*target = val
 	}

@@ -173,7 +173,8 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 		copy(b.data[valueStart:valueStart+valLen], value)
 	}
 
-	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
 
 	b.heapStart = entryStart
 	b.dirEnd += DirectoryEntrySize
@@ -219,8 +220,10 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	ptr := entryStart
 	keyStart := ptr + headerSize
 	if b.leafPrefixCompression {
-		putUint16(b.data[ptr:ptr+2], uint16(prefixLen))
-		putUint16(b.data[ptr+2:ptr+4], uint16(suffixLen))
+		b.data[ptr] = byte(prefixLen)
+		b.data[ptr+1] = byte(prefixLen >> 8)
+		b.data[ptr+2] = byte(suffixLen)
+		b.data[ptr+3] = byte(suffixLen >> 8)
 		if flags&FlagPointer != 0 {
 			putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
 		} else {
@@ -229,7 +232,9 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		b.data[ptr+8] = flags
 		copy(b.data[keyStart:], key[prefixLen:])
 	} else {
-		putUint16(b.data[ptr:ptr+2], uint16(len(key)))
+		keyLen := len(key)
+		b.data[ptr] = byte(keyLen)
+		b.data[ptr+1] = byte(keyLen >> 8)
 		if flags&FlagPointer != 0 {
 			putUint32(b.data[ptr+2:ptr+6], 0) // ValueLen ignored for pointer
 		} else {
@@ -247,7 +252,8 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	}
 
 	// 5. Write Directory Offset (Grow Up)
-	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
 
 	// 6. Update State
 	b.heapStart = entryStart
@@ -283,11 +289,14 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	entryStart := b.heapStart - entrySize
 	ptr := entryStart
 
-	putUint16(b.data[ptr:ptr+2], uint16(len(key)))
-	binary.LittleEndian.PutUint64(b.data[ptr+2:ptr+10], childPageID)
+	keyLen := len(key)
+	b.data[ptr] = byte(keyLen)
+	b.data[ptr+1] = byte(keyLen >> 8)
+	putUint64(b.data[ptr+2:ptr+10], childPageID)
 	copy(b.data[ptr+10:], key)
 
-	putUint16(b.data[b.dirEnd:b.dirEnd+2], uint16(entryStart))
+	b.data[b.dirEnd] = byte(entryStart)
+	b.data[b.dirEnd+1] = byte(entryStart >> 8)
 
 	b.heapStart = entryStart
 	b.dirEnd += DirectoryEntrySize
@@ -300,7 +309,7 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 // Returns a Node wrapper for convenience.
 func (b *Builder) Finish() *Node {
 	// Write Header
-	binary.LittleEndian.PutUint64(b.data[0:8], b.pageID)
+	putUint64(b.data[0:8], b.pageID)
 	// Checksum at 8-12 (written by UpdateChecksum)
 	flags := uint16(b.pType)
 	if b.pType == page.PageTypeLeaf {
@@ -336,4 +345,15 @@ func putUint16(dst []byte, v uint16) {
 	_ = dst[1]
 	dst[0] = byte(v)
 	dst[1] = byte(v >> 8)
+}
+
+func putUint64(dst []byte, v uint64) {
+	dst[0] = byte(v)
+	dst[1] = byte(v >> 8)
+	dst[2] = byte(v >> 16)
+	dst[3] = byte(v >> 24)
+	dst[4] = byte(v >> 32)
+	dst[5] = byte(v >> 40)
+	dst[6] = byte(v >> 48)
+	dst[7] = byte(v >> 56)
 }

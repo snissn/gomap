@@ -14,7 +14,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestValueLogDictPauseAndProbeResume(t *testing.T) {
@@ -30,9 +29,7 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 
 	dictBackend, err := db.Open(db.Options{
 		Dir:                    dictdbDir,
-		Mode:                   db.ModeBackend,
 		DisableBackgroundPrune: true,
-		SlabCompression:        slab.CompressionOptions{Kind: slab.CompressionNone},
 	})
 	if err != nil {
 		t.Fatalf("open dictdb: %v", err)
@@ -90,7 +87,6 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		SplitValueLog:            true,
 		ValueLogDictTrain: compression.TrainConfig{
 			TrainBytes:     64 << 10,
 			DictBytes:      40 << 10,

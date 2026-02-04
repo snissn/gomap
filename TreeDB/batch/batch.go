@@ -7,12 +7,13 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 var (
-	ErrKeyEmpty    = errors.New("key cannot be empty")
-	ErrBatchClosed = errors.New("batch closed")
+	ErrKeyEmpty           = errors.New("key cannot be empty")
+	ErrBatchClosed        = errors.New("batch closed")
+	ErrValueTooLarge      = errors.New("value exceeds inline threshold; use SetPointer")
+	ErrMissingValueReader = errors.New("value reader unavailable")
 )
 
 // OpType represents the type of operation (Put or Delete).
@@ -32,6 +33,12 @@ type Entry struct {
 	IsPtr    bool          // True if ValuePtr is valid
 }
 
+// ValueReader resolves value pointers for Replay callers that require full values.
+type ValueReader interface {
+	Read(ptr page.ValuePtr) ([]byte, error)
+	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
+}
+
 // Interface defines the contract for a batch operation.
 type Interface interface {
 	Set(key, value []byte) error
@@ -47,17 +54,12 @@ type Interface interface {
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
 	entries         []Entry
-	slabManager     *slab.SlabManager
 	byteSize        int
-	slabWritten     int
-	slabWrittenByID map[uint32]int64
 	inlineThreshold int
 	sorted          bool
 	lastKey         []byte
 	closed          bool
-	largeIdxs       []int
-	largeKeys       [][]byte
-	largeVals       [][]byte
+	reader          ValueReader
 }
 
 const maxBatchPoolCap = 1 << 16
@@ -72,17 +74,17 @@ var batchPool = sync.Pool{
 }
 
 // New creates a new Batch.
-func New(sm *slab.SlabManager, threshold int) *Batch {
-	return Acquire(sm, threshold)
+func New(reader ValueReader, threshold int) *Batch {
+	return Acquire(reader, threshold)
 }
 
 // Acquire returns a reusable Batch from the pool.
-func Acquire(sm *slab.SlabManager, threshold int) *Batch {
+func Acquire(reader ValueReader, threshold int) *Batch {
 	if threshold < 0 {
 		threshold = page.DefaultInlineThreshold
 	}
 	b := batchPool.Get().(*Batch)
-	b.slabManager = sm
+	b.reader = reader
 	b.inlineThreshold = threshold
 	b.closed = false
 	b.resetLocked()
@@ -108,22 +110,7 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
-	if b.largeIdxs != nil {
-		b.largeIdxs = b.largeIdxs[:0]
-	}
-	if b.largeKeys != nil {
-		b.largeKeys = b.largeKeys[:0]
-	}
-	if b.largeVals != nil {
-		b.largeVals = b.largeVals[:0]
-	}
 	b.byteSize = 0
-	b.slabWritten = 0
-	if b.slabWrittenByID != nil {
-		for id := range b.slabWrittenByID {
-			delete(b.slabWrittenByID, id)
-		}
-	}
 	b.sorted = true
 	b.lastKey = nil
 }
@@ -137,36 +124,7 @@ func (b *Batch) resetForPool() {
 			b.entries = b.entries[:0]
 		}
 	}
-	if b.largeIdxs != nil {
-		if cap(b.largeIdxs) > maxBatchPoolCap {
-			b.largeIdxs = nil
-		} else {
-			b.largeIdxs = b.largeIdxs[:0]
-		}
-	}
-	if b.largeKeys != nil {
-		clear(b.largeKeys)
-		if cap(b.largeKeys) > maxBatchPoolCap {
-			b.largeKeys = nil
-		} else {
-			b.largeKeys = b.largeKeys[:0]
-		}
-	}
-	if b.largeVals != nil {
-		clear(b.largeVals)
-		if cap(b.largeVals) > maxBatchPoolCap {
-			b.largeVals = nil
-		} else {
-			b.largeVals = b.largeVals[:0]
-		}
-	}
 	b.byteSize = 0
-	b.slabWritten = 0
-	if b.slabWrittenByID != nil {
-		for id := range b.slabWrittenByID {
-			delete(b.slabWrittenByID, id)
-		}
-	}
 	b.sorted = true
 	b.lastKey = nil
 }
@@ -183,9 +141,8 @@ func Release(b *Batch) {
 		return
 	}
 	b.resetForPool()
-	b.slabManager = nil
+	b.reader = nil
 	b.inlineThreshold = 0
-	b.slabWrittenByID = nil
 	b.closed = true
 	batchPool.Put(b)
 }
@@ -230,20 +187,9 @@ func (b *Batch) SetView(key, value []byte) error {
 	}
 
 	if len(value) > b.inlineThreshold {
-		ptr, err := b.slabManager.Append(key, value)
-		if err != nil {
-			return err
-		}
-		entry.ValuePtr = ptr
-		entry.IsPtr = true
-		b.slabWritten += int(ptr.Length)
-		if b.slabWrittenByID == nil {
-			b.slabWrittenByID = make(map[uint32]int64, 4)
-		}
-		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
-	} else {
-		entry.Value = value
+		return ErrValueTooLarge
 	}
+	entry.Value = value
 
 	b.entries = append(b.entries, entry)
 	b.byteSize += len(key) + len(value)
@@ -271,24 +217,12 @@ func (b *Batch) Set(key, value []byte) error {
 
 	// Check threshold
 	if len(value) > b.inlineThreshold {
-		// Write to slab
-		ptr, err := b.slabManager.Append(k, value)
-		if err != nil {
-			return err
-		}
-		entry.ValuePtr = ptr
-		entry.IsPtr = true
-		b.slabWritten += int(ptr.Length)
-		if b.slabWrittenByID == nil {
-			b.slabWrittenByID = make(map[uint32]int64, 4)
-		}
-		b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
-	} else {
-		// Store inline
-		valCopy := make([]byte, len(value))
-		copy(valCopy, value)
-		entry.Value = valCopy
+		return ErrValueTooLarge
 	}
+	// Store inline
+	valCopy := make([]byte, len(value))
+	copy(valCopy, value)
+	entry.Value = valCopy
 
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
@@ -391,7 +325,10 @@ func (b *Batch) Delete(key []byte) error {
 func (b *Batch) Replay(fn func(Entry) error) error {
 	for _, entry := range b.entries {
 		if entry.IsPtr && entry.Value == nil {
-			val, err := b.slabManager.Read(entry.ValuePtr)
+			if b.reader == nil {
+				return ErrMissingValueReader
+			}
+			val, err := b.reader.Read(entry.ValuePtr)
 			if err != nil {
 				return err
 			}
@@ -410,73 +347,21 @@ func (b *Batch) SetOps(ops []Entry) error {
 		return err
 	}
 
-	// Convert large inline values to slab pointers in bulk to amortize syscalls.
-	largeIdx := b.largeIdxs[:0]
 	for i := range ops {
 		op := &ops[i]
 		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
 		if len(op.Value) > b.inlineThreshold {
-			largeIdx = append(largeIdx, i)
+			return ErrValueTooLarge
 		}
-	}
-	b.largeIdxs = largeIdx
-
-	if len(largeIdx) > 0 {
-		keys := b.largeKeys
-		if cap(keys) < len(largeIdx) {
-			keys = make([][]byte, len(largeIdx))
-		} else {
-			keys = keys[:len(largeIdx)]
-		}
-		values := b.largeVals
-		if cap(values) < len(largeIdx) {
-			values = make([][]byte, len(largeIdx))
-		} else {
-			values = values[:len(largeIdx)]
-		}
-		for i, idx := range largeIdx {
-			keys[i] = ops[idx].Key
-			values[i] = ops[idx].Value
-		}
-
-		ptrs, err := b.slabManager.AppendMany(keys, values)
-		if err != nil {
-			clear(keys)
-			clear(values)
-			b.largeKeys = keys[:0]
-			b.largeVals = values[:0]
-			b.largeIdxs = largeIdx[:0]
-			return err
-		}
-
-		for i, idx := range largeIdx {
-			ptr := ptrs[i]
-			op := &ops[idx]
-			op.ValuePtr = ptr
-			op.IsPtr = true
-			op.Value = nil
-
-			b.slabWritten += int(ptr.Length)
-			if b.slabWrittenByID == nil {
-				b.slabWrittenByID = make(map[uint32]int64, 4)
-			}
-			b.slabWrittenByID[ptr.FileID] += int64(ptr.Length)
-		}
-
-		clear(keys)
-		clear(values)
-		b.largeKeys = keys[:0]
-		b.largeVals = values[:0]
-		b.largeIdxs = largeIdx[:0]
 	}
 
 	// Just append them. Deduplication happens at Ops() time.
 	for _, op := range ops {
 		b.noteKeyOrder(op.Key)
 		b.entries = append(b.entries, op)
-		b.byteSize += len(op.Key) + len(op.Value) // Value is nil for slab pointers.
+		b.byteSize += len(op.Key) + len(op.Value) // Value is nil for pointers.
 	}
 	return nil
 }
@@ -525,15 +410,4 @@ func (b *Batch) Ops() map[string]Entry {
 // ByteSize returns the approximate size of the batch.
 func (b *Batch) ByteSize() int {
 	return b.byteSize
-}
-
-// SlabWriteBytes returns the number of bytes written to the slab file.
-func (b *Batch) SlabWriteBytes() int {
-	return b.slabWritten
-}
-
-// SlabWriteBytesByFile returns a per-slab breakdown of bytes appended during
-// this batch. The returned map must be treated as read-only by callers.
-func (b *Batch) SlabWriteBytesByFile() map[uint32]int64 {
-	return b.slabWrittenByID
 }

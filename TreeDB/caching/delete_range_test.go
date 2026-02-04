@@ -43,9 +43,8 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		FlushThreshold:  1 << 30,
-		DisableValueLog: true,
-		JournalLanes:    1,
+		FlushThreshold: 1 << 30,
+		JournalLanes:   1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

@@ -12,7 +12,6 @@ import (
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
-	"github.com/snissn/gomap/TreeDB/slab"
 )
 
 func TestValueLogDictCompressionReducesBytes(t *testing.T) {
@@ -28,9 +27,7 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 
 	dictBackend, err := db.Open(db.Options{
 		Dir:                    dictdbDir,
-		Mode:                   db.ModeBackend,
 		DisableBackgroundPrune: true,
-		SlabCompression:        slab.CompressionOptions{Kind: slab.CompressionNone},
 	})
 	if err != nil {
 		t.Fatalf("open dictdb: %v", err)
@@ -97,7 +94,6 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		SplitValueLog:            true,
 	})
 	if err != nil {
 		_ = backend.Close()

@@ -8,8 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const defaultBackgroundIndexVacuumSpanRatioPPM uint32 = 1_200_000
@@ -183,12 +181,6 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
-		if err == treedbdb.ErrVacuumInProgress || err == treedbdb.ErrVacuumUnsupported {
-			w.runs.Add(1)
-			w.lastRunUnix.Store(now.Unix())
-			w.lastErr.Store("")
-			return
-		}
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(err.Error())

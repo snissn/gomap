@@ -93,7 +93,7 @@ func (s *Server) attachExtras(db kvstore.DB) {
 		return
 	}
 	if td, ok := db.(*treedbadapter.DB); ok {
-		s.compactor = &treeDBCompactor{db: td.DB, cfg: s.cfg}
+		s.compactor = &treeDBCompactor{db: td.DB}
 		return
 	}
 	if hd, ok := db.(*hashdbadapter.DB); ok {
