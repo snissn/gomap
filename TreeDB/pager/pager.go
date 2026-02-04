@@ -27,6 +27,12 @@ type verifiedBitset struct {
 const verifiedChunkPages = 1 << 16 // 65536 pages per chunk (8KiB bitset)
 const verifiedChunkWords = verifiedChunkPages / 64
 
+type OpenOptions struct {
+	// MmapPopulate enables MAP_POPULATE on Linux to pre-fault page tables for
+	// mmapped index chunks (best-effort; ignored on non-Linux).
+	MmapPopulate bool
+}
+
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
 	file         *os.File
@@ -50,12 +56,20 @@ type Pager struct {
 	growTarget   atomic.Int64 // byte capacity target (aligned to chunkSize by grower)
 
 	syncConcurrency atomic.Int32
+
+	mmapPopulate bool
 }
 
 // Open opens the pager at the given path.
 // If the file doesn't exist, it creates it.
 // chunkSize determines the size of each mmap region.
 func Open(path string, chunkSize int64) (*Pager, error) {
+	return OpenWithOptions(path, chunkSize, OpenOptions{})
+}
+
+// OpenWithOptions opens the pager at the given path with optional mmap behavior
+// controls (Linux-only flags may be ignored on other platforms).
+func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, error) {
 	if chunkSize%page.PageSize != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
 	}
@@ -84,10 +98,11 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 	size := info.Size()
 
 	p := &Pager{
-		file:        f,
-		chunkSize:   chunkSize,
-		path:        path,
-		dirtyChunks: make(map[int]struct{}),
+		file:         f,
+		chunkSize:    chunkSize,
+		path:         path,
+		dirtyChunks:  make(map[int]struct{}),
+		mmapPopulate: opts.MmapPopulate,
 	}
 	p.syncConcurrency.Store(1)
 
@@ -106,11 +121,12 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 		p.chunks = make([][]byte, numChunks)
 
 		for i := int64(0); i < numChunks; i++ {
-			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize))
+			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
 			if err != nil {
 				p.Close()
 				return nil, err
 			}
+			madviseChunk(data)
 			p.chunks[i] = data
 		}
 
@@ -135,6 +151,10 @@ func Open(path string, chunkSize int64) (*Pager, error) {
 //
 // The returned pager does not support Alloc/GetForWrite/Write/Sync.
 func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
+	return OpenReadOnlyWithOptions(path, chunkSize, OpenOptions{})
+}
+
+func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, error) {
 	if chunkSize%page.PageSize != 0 {
 		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
 	}
@@ -167,10 +187,11 @@ func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
 	}
 
 	p := &Pager{
-		file:      f,
-		chunkSize: chunkSize,
-		path:      path,
-		readOnly:  true,
+		file:         f,
+		chunkSize:    chunkSize,
+		path:         path,
+		readOnly:     true,
+		mmapPopulate: opts.MmapPopulate,
 	}
 
 	if size > 0 {
@@ -184,11 +205,12 @@ func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
 			if remaining < int64(length) {
 				length = int(remaining)
 			}
-			data, err := mmapFileReadOnly(f.Fd(), offset, length)
+			data, err := mmapFileReadOnly(f.Fd(), offset, length, opts.MmapPopulate)
 			if err != nil {
 				p.Close()
 				return nil, err
 			}
+			madviseChunk(data)
 			p.chunks[i] = data
 		}
 

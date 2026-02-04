@@ -35,7 +35,7 @@ var allocationGranularity = func() int64 {
 	return int64(info.dwAllocationGranularity)
 }()
 
-func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
+func mmapFile(fd uintptr, offset int64, length int, _ bool) ([]byte, error) {
 	if length == 0 {
 		return nil, nil
 	}
@@ -59,7 +59,7 @@ func mmapFile(fd uintptr, offset int64, length int) ([]byte, error) {
 	return sliceFromAddr(addr, length), nil
 }
 
-func mmapFileReadOnly(fd uintptr, offset int64, length int) ([]byte, error) {
+func mmapFileReadOnly(fd uintptr, offset int64, length int, _ bool) ([]byte, error) {
 	if length == 0 {
 		return nil, nil
 	}
