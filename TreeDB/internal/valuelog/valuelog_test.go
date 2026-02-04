@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -220,6 +221,52 @@ func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 		}
 		if string(gotLegacy) != expect[i] {
 			t.Fatalf("legacy ptr%d mismatch: got %q want %q", i+1, gotLegacy, expect[i])
+		}
+	}
+}
+
+func TestReadAtGroupedFastPathSubIndexRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+
+	records := make([]Record, MaxFrameK)
+	expect := make([]string, len(records))
+	for i := range records {
+		expect[i] = fmt.Sprintf("val-%02d", i)
+		records[i] = Record{RID: uint64(i + 1), Value: []byte(expect[i])}
+	}
+
+	ptrs, err := writer.AppendFrame(0, nil, records)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if len(ptrs) != len(records) {
+		t.Fatalf("expected %d ptrs, got %d", len(records), len(ptrs))
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(f, ptr, false, nil)
+		if err != nil {
+			t.Fatalf("read at ptr%d: %v", i+1, err)
+		}
+		if string(got) != expect[i] {
+			t.Fatalf("ptr%d mismatch: got %q want %q", i+1, string(got), expect[i])
 		}
 	}
 }
