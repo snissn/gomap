@@ -26,6 +26,10 @@ func init() {
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
+		// Large random-insert workloads are extremely sensitive to flush batching.
+		// Use a larger default in the "fast" profile unless the caller explicitly
+		// overrides it.
+		setInt64IfUnset("treedb-flush-threshold", 256*1024*1024, isSet, treedbFlushThreshold)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -121,6 +125,12 @@ func setBoolIfUnset(name string, val bool, isSet map[string]bool, target *bool) 
 }
 
 func setIntIfUnset(name string, val int, isSet map[string]bool, target *int) {
+	if !isSet[name] {
+		*target = val
+	}
+}
+
+func setInt64IfUnset(name string, val int64, isSet map[string]bool, target *int64) {
 	if !isSet[name] {
 		*target = val
 	}

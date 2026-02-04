@@ -196,6 +196,31 @@ func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 	}
 }
 
+func TestRunBenchmark_VacuumBetweenTests_Smoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write,random_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		CheckpointBetweenTests: true,
+		VacuumBetweenTests:     true,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	if len(run.VacuumDurations) == 0 {
+		t.Fatalf("expected non-empty vacuum durations")
+	}
+}
+
 func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
 	cfg := BenchConfig{
 		Keys:                   1,

@@ -20,7 +20,7 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 │                                                                              │
 │  ┌──────────────┐        ┌──────────────────┐                                │
 │  │   Memtable   │◄───────┤  Journal (Log)   │◄── Commit Journal (Durability) │
-│  │ (SkipList)   │        │  Dir/wal/*.log   │                                │
+│  │ (SkipList)   │        │ Dir/maindb/wal/* │                                │
 │  └──────┬───────┘        └──────────────────┘                                │
 │         │                                                                    │
 │         │ Background Flush (Threshold / Time)                                │
@@ -45,6 +45,10 @@ The default `treedb.Open()` mode wraps a durable B+Tree backend with a high-thro
 - **Write Path**: `Set` -> Memtable + Journal.
 - **Read Path**: `Get` checks Memtable -> Index/Value log (merged view).
 - **Flush**: Memtables are converted to backend batches and merged into the B+Tree via the "Zipper" (COW merge).
+
+On disk, `Options.Dir` is a root directory containing:
+- `Dir/maindb/index.db` + `Dir/maindb/wal/*.log`
+- `Dir/dictdb/index.db` (dictionary store for value-log compression)
 
 ### 2. HashDB (Sharded)
 

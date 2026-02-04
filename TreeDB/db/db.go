@@ -84,7 +84,7 @@ type DB struct {
 }
 
 const (
-	defaultChunkSize                 = 4 * 1024 * 1024
+	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
 
@@ -118,7 +118,9 @@ const (
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
 	// PointerThreshold controls when value-log pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a default threshold. In cached mode, relaxed durability
+	// settings may choose a smaller default to avoid large-scale update cliffs by
+	// pushing moderate values into the value log.
 	PointerThreshold int
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool
@@ -164,7 +166,7 @@ type Options struct {
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
 	ReadOnly   bool
-	ChunkSize  int64  // Default 4MiB
+	ChunkSize  int64  // Default 16MiB
 	KeepRecent uint64 // Default 10000
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
@@ -281,6 +283,20 @@ type Options struct {
 	// FlushBuildPrefetchUnits controls how many memtables to start building ahead
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
+
+	// FlushBackendMaxEntries caps how many operations are buffered into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This increases backend commit cadence during very large flushes, which can
+	// reduce index.db high-watermark growth under small KeepRecent windows by
+	// making retired pages eligible for reuse sooner.
+	//
+	// 0 uses the internal default. Negative disables chunking (single backend
+	// commit per flush).
+	FlushBackendMaxEntries int
+	// FlushBackendMaxBatches caps how many intermediate backend commits a single
+	// flush may emit (0=default, <0=disable cap).
+	FlushBackendMaxBatches int
 
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
@@ -949,8 +965,17 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 
-	// Add retired pages to Graveyard
-	idx.graveyard.Add(nextMeta.CommitSeq, retired)
+	// Add retired pages to the graveyard.
+	//
+	// IMPORTANT: We tag pages with the *base* commit sequence they were last
+	// reachable from (the state we just applied against), not the new commit
+	// sequence. This keeps pruning semantics aligned with ReaderRegistry:
+	//   - readers pinned at baseSeq must continue to see those pages
+	//   - pages become eligible for reuse once MinPinnedSeq advances past baseSeq
+	//
+	// This also reduces index.db high-watermark growth under small KeepRecent
+	// windows by making pages eligible one commit earlier.
+	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
 
 	// Prune asynchronously to keep commit latency stable under churn.
 	// If background pruning is disabled, fall back to legacy on-commit pruning.

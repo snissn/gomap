@@ -27,7 +27,4 @@ This file is a running list of items that look generated, obsolete, or non-essen
 
 ## Potentially Obsolete Docs/Scripts (confirm before deleting)
 
-- `docs/legacy/gemini/run_phases.sh` (references external tooling; kept for archaeology)
-- `docs/legacy/gemini/run_perf.sh` (references external tooling; kept for archaeology)
-- `docs/legacy/gemini/VERIFIED_CACHE_PLAN.md` (historical planning doc)
-- `docs/legacy/gemini/ZIPPER_BUILDER_PLAN.md` (historical planning doc)
+- (none)

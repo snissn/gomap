@@ -27,6 +27,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+var errDBClosing = errors.New("cachingdb: db closing")
+
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
@@ -78,6 +80,24 @@ func getValueLogRecords(n int) []valuelog.Record {
 		}
 	}
 	return make([]valuelog.Record, n)
+}
+
+func getValueLogRecordsCap(capacity int) []valuelog.Record {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := valueLogRecordPool.Get(); v != nil {
+		if s, ok := v.([]valuelog.Record); ok {
+			maxCap := capacity * 2
+			if maxCap < 256 {
+				maxCap = 256
+			}
+			if cap(s) >= capacity && cap(s) <= maxCap {
+				return s[:0]
+			}
+		}
+	}
+	return make([]valuelog.Record, 0, capacity)
 }
 
 func putValueLogRecords(s []valuelog.Record) {
@@ -300,6 +320,13 @@ func (db *DB) pickLane(sync bool, preferred int) (*lane, error) {
 	if db == nil || len(db.lanes) == 0 {
 		return nil, errWALUnavailable
 	}
+	if !sync && preferred >= 0 && preferred < len(db.lanes) {
+		l := &db.lanes[preferred]
+		if !l.syncing.Load() {
+			return l, nil
+		}
+	}
+
 	db.laneMu.Lock()
 	defer db.laneMu.Unlock()
 	for {
@@ -439,7 +466,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		if op.Type != batch.OpPut || op.IsPtr {
 			continue
 		}
-		if len(op.Value) <= db.valueLogThreshold {
+		if !db.forceValueLogPointers && len(op.Value) <= db.valueLogThreshold {
 			continue
 		}
 		eligible = append(eligible, i)
@@ -526,11 +553,12 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 
-	recordsBuf := getValueLogRecords(memLen)
-	defer putValueLogRecords(recordsBuf)
-	records := recordsBuf[:0]
-	keys := getValueLogKeys(memLen)
-	defer func() { putValueLogKeys(keys) }()
+	var records []valuelog.Record
+	var keys [][]byte
+	defer func() {
+		putValueLogRecords(records)
+		putValueLogKeys(keys)
+	}()
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
@@ -568,7 +596,15 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			return errors.New("cachingdb: flush missing value-log ptr for key")
 		}
 
-		if allowPointers && len(val) > db.valueLogThreshold {
+		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThreshold) {
+			if records == nil {
+				hint := memLen
+				if hint > db.flushBackendInitEntries {
+					hint = db.flushBackendInitEntries
+				}
+				records = getValueLogRecordsCap(hint)
+				keys = getValueLogKeys(hint)
+			}
 			keys = append(keys, key)
 			records = append(records, valuelog.Record{Value: val})
 		} else {
@@ -1300,6 +1336,23 @@ type Options struct {
 	// of the consumer. Values <= 0 use FlushBuildConcurrency.
 	FlushBuildPrefetchUnits int
 
+	// FlushBackendMaxEntries caps how many operations are buffered into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This increases backend commit cadence during very large flushes, which can
+	// reduce index.db high-watermark growth under small KeepRecent windows by
+	// making retired pages eligible for reuse sooner.
+	//
+	// 0 uses the internal default. Negative disables chunking (single backend
+	// commit per flush).
+	FlushBackendMaxEntries int
+	// FlushBackendMaxBatches caps how many intermediate backend commits a single
+	// flush may emit. This bounds zipper/apply overhead when FlushBackendMaxEntries
+	// is very small relative to the flush size.
+	//
+	// 0 uses the internal default. Negative disables the cap.
+	FlushBackendMaxBatches int
+
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
 	// JournalLanes controls the number of active commit/value log lanes (0=default).
@@ -1316,8 +1369,12 @@ type Options struct {
 	// RelaxedSync disables fsync on Sync operations.
 	RelaxedSync bool
 	// ValueLogPointerThreshold controls when WAL/vlog pointers are used.
-	// Values <= 0 use the default inline threshold (256 bytes).
+	// Values <= 0 use a default threshold. In relaxed durability modes, the
+	// default is smaller to avoid catastrophic update-heavy cliffs at large key
+	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
+	// ForceValueLogPointers stores all values out-of-line in the value log.
+	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
 	// AllowUnsafe acknowledges unsafe durability options.
@@ -1361,12 +1418,14 @@ type DictStore interface {
 }
 
 type DB struct {
-	mu       sync.RWMutex
-	flushMu  sync.Mutex
-	commitMu sync.Mutex
-	writeMu  sync.RWMutex
-	bpMu     sync.Mutex
-	bpCond   *sync.Cond
+	mu      sync.RWMutex
+	flushMu sync.Mutex
+	writeMu sync.RWMutex
+	statsMu sync.Mutex // Re-introduce global statsMu for isolation
+	bpMu    sync.Mutex
+	bpCond  *sync.Cond
+
+	// Commit workers removed; backend commits are synchronous.
 
 	checkpointMu   sync.Mutex
 	checkpointCond *sync.Cond
@@ -1414,6 +1473,7 @@ type DB struct {
 
 	inlineThreshold              int
 	valueLogThreshold            int
+	forceValueLogPointers        bool
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
@@ -1475,11 +1535,11 @@ type DB struct {
 	flushThreshold          int64
 	memtableCap             int
 	memtableMode            memtable.Mode
+	memtableStats           memtableStats
 	memtableAdaptive        bool
+	adaptiveShardedStats    bool
 	memtableWarmupActive    bool
 	memtableWarmupThreshold int64
-	statsMu                 sync.Mutex
-	memtableStats           memtableStats
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
 	stopBacklogSeconds      float64
@@ -1494,6 +1554,9 @@ type DB struct {
 	flushBuildChunkMinBytes int
 	flushBuildChunkMaxBytes int
 	flushBuildPrefetchUnits int
+	flushBackendMaxEntries  int
+	flushBackendInitEntries int
+	flushBackendMaxBatches  int
 	walMaxSegmentBytes      int64
 	journalCompression      bool
 
@@ -1511,11 +1574,14 @@ type DB struct {
 	bgErr              error
 
 	// Backpressure state
-	queueBacklogBytes atomic.Int64
-	flushBpsEWMA      float64
+	queueBacklogBytes        atomic.Int64
+	flushBpsEWMA             float64
+	queueLaneIDMisses        atomic.Int64
+	backendWriteBatchesTotal atomic.Int64
 
 	// Lifecycle
 	closeCh chan struct{}
+	closing atomic.Bool
 	flushCh chan struct{}
 	wg      sync.WaitGroup
 
@@ -1544,6 +1610,78 @@ type DB struct {
 	testOnVlogSync  func(laneID int)
 }
 
+func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
+	capEntries := db.flushBackendMaxEntries
+	if capEntries < 1 {
+		capEntries = 1
+	}
+	maxBatches := db.flushBackendMaxBatches
+	if maxBatches == 0 {
+		maxBatches = 16
+	}
+	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
+	// of intermediate commits in that path even if the steady-state micro-batch
+	// policy is aggressive.
+	if sync && maxBatches > 8 {
+		maxBatches = 8
+	}
+	if maxBatches > 0 {
+		// Avoid overflow when capEntries is very large (e.g., chunking disabled).
+		maxInt := int(^uint(0) >> 1)
+		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
+			// Increase the chunk size so we emit at most maxBatches intermediate
+			// commits. This preserves the high-watermark benefits of micro-batching
+			// while bounding zipper/apply overhead.
+			capEntries = (totalOps + maxBatches - 1) / maxBatches
+			if capEntries < 1 {
+				capEntries = 1
+			}
+		}
+	}
+	return capEntries
+}
+
+func (db *DB) flushBackendEntriesCapForOps(totalOps int, deleteOps int, sync bool) int {
+	capEntries := db.flushBackendMaxEntries
+	if capEntries < 1 {
+		capEntries = 1
+	}
+	maxBatches := db.flushBackendMaxBatches
+	if maxBatches == 0 {
+		maxBatches = 16
+	}
+	// Sync-triggered flushes (checkpoint/close) should remain fast; cap the number
+	// of intermediate commits in that path even if the steady-state micro-batch
+	// policy is aggressive.
+	if sync && maxBatches > 8 {
+		maxBatches = 8
+	}
+	// Delete-heavy flushes are expensive to apply in many intermediate commits.
+	// Each commit re-writes leaf pages (copying surviving values), so repeated
+	// commits amplify work dramatically when deletes touch a large fraction of the
+	// keyspace. Favor fewer commits in that case.
+	if maxBatches > 0 && deleteOps > 0 && totalOps > 0 {
+		// Deterministic "delete-heavy" trigger: deletes are at least 25% of ops.
+		if deleteOps*4 >= totalOps && maxBatches > 4 {
+			maxBatches = 4
+		}
+	}
+	if maxBatches > 0 {
+		// Avoid overflow when capEntries is very large (e.g., chunking disabled).
+		maxInt := int(^uint(0) >> 1)
+		if capEntries <= maxInt/maxBatches && totalOps > capEntries*maxBatches {
+			// Increase the chunk size so we emit at most maxBatches intermediate
+			// commits. This preserves the high-watermark benefits of micro-batching
+			// while bounding zipper/apply overhead.
+			capEntries = (totalOps + maxBatches - 1) / maxBatches
+			if capEntries < 1 {
+				capEntries = 1
+			}
+		}
+	}
+	return capEntries
+}
+
 type keyRange struct {
 	valid bool
 	min   []byte
@@ -1555,6 +1693,7 @@ type memShard struct {
 	mem   memtable.Table
 	rng   keyRange
 	bytes int64
+	stats memtableStats
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -1595,11 +1734,26 @@ func (db *DB) publishMemtablesLocked() {
 	db.memtables.Store(view)
 }
 
+// ensureQueueLaneIDsLocked keeps queueLaneIDs aligned with queue length.
+// Caller must hold db.mu.
+func (db *DB) ensureQueueLaneIDsLocked() {
+	if len(db.queueLaneIDs) >= len(db.queue) {
+		return
+	}
+	missing := len(db.queue) - len(db.queueLaneIDs)
+	if missing <= 0 {
+		return
+	}
+	db.queueLaneIDMisses.Add(int64(missing))
+	db.queueLaneIDs = append(db.queueLaneIDs, make([]uint16, missing)...)
+}
+
 type memtableStats struct {
-	writes     uint64
-	seqWrites  uint64
-	iterators  uint64
-	rangeIters uint64
+	writes     atomic.Uint64
+	seqWrites  atomic.Uint64
+	iterators  atomic.Uint64
+	rangeIters atomic.Uint64
+	lastKeyMu  sync.Mutex
 	lastKey    []byte
 	hasLastKey bool
 }
@@ -1734,6 +1888,13 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		shard.bytes = 0
 		shard.mu.Unlock()
 	}
+	db.memtableStats.writes.Store(0)
+	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	db.memtableStats.lastKeyMu.Lock()
+	db.memtableStats.hasLastKey = false
+	db.memtableStats.lastKeyMu.Unlock()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	return nil
@@ -1743,16 +1904,18 @@ func (db *DB) noteWriteKey(key []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
-	db.statsMu.Lock()
-	defer db.statsMu.Unlock()
 	stats := &db.memtableStats
-	stats.writes++
+	stats.writes.Add(1)
 	if len(key) == 0 {
+		stats.lastKeyMu.Lock()
 		stats.hasLastKey = false
+		stats.lastKeyMu.Unlock()
 		return
 	}
+	stats.lastKeyMu.Lock()
+	defer stats.lastKeyMu.Unlock()
 	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
-		stats.seqWrites++
+		stats.seqWrites.Add(1)
 	}
 	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
@@ -1762,12 +1925,10 @@ func (db *DB) noteIterator(start, end []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
-	db.statsMu.Lock()
-	defer db.statsMu.Unlock()
 	stats := &db.memtableStats
-	stats.iterators++
+	stats.iterators.Add(1)
 	if start != nil || end != nil {
-		stats.rangeIters++
+		stats.rangeIters.Add(1)
 	}
 }
 
@@ -1783,36 +1944,32 @@ func (db *DB) mutableFlushThreshold() int64 {
 	return db.mutableThreshold.Load()
 }
 
-func (db *DB) resetMemtableStatsLocked() {
-	db.statsMu.Lock()
-	db.memtableStats = memtableStats{}
-	db.statsMu.Unlock()
-}
-
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
-	db.statsMu.Lock()
-	statsCopy := db.memtableStats
-	db.statsMu.Unlock()
-	stats := &statsCopy
-	if stats.writes < adaptiveMinWrites {
+	// Read stats atomially (no global lock needed for counts)
+	writes := db.memtableStats.writes.Load()
+	seqWrites := db.memtableStats.seqWrites.Load()
+	iters := db.memtableStats.iterators.Load()
+	rangeIters := db.memtableStats.rangeIters.Load()
+
+	// Default to configured mode if not enough data
+	if writes < adaptiveMinWrites {
 		return db.memtableMode
 	}
-	denom := stats.writes
-	if denom > 1 {
-		denom--
-	}
-	seqRatio := float64(stats.seqWrites) / float64(denom)
-	sequential := seqRatio >= adaptiveSequentialWritePct
 
-	if stats.rangeIters > 0 {
-		return memtable.ModeSkiplist
+	// Heuristics:
+	// 1. High sequential writes -> use HashSorted (append-only speed)
+	//    Threshold: > 80% sequential
+	if float64(seqWrites)/float64(writes) > 0.8 {
+		return memtable.ModeHashSorted
 	}
-	if stats.iterators > 0 {
-		return memtable.ModeSkiplist
+
+	// 2. High range iteration -> use BTree (better range scan performance)
+	//    Threshold: significant portion of ops are range scans
+	if iters > 0 && float64(rangeIters)/float64(iters) > 0.5 {
+		return memtable.ModeBTree
 	}
-	if sequential {
-		return memtable.ModeSkiplist
-	}
+
+	// 3. Random writes dominating -> use HashSorted
 	return memtable.ModeHashSorted
 }
 
@@ -1827,7 +1984,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, ErrUnsafeOptions
 	}
 	if opts.FlushThreshold <= 0 {
-		opts.FlushThreshold = 64 * 1024 * 1024 // 64MB default
+		opts.FlushThreshold = 256 * 1024 * 1024 // 256MB default
 	}
 	memCap := memtableCapacity(opts.FlushThreshold)
 	modeStr := opts.MemtableMode
@@ -1864,7 +2021,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		opts.WriterFlushMaxMemtables = 1
 	}
 	if opts.FlushBuildConcurrency <= 0 {
-		opts.FlushBuildConcurrency = 1
+		opts.FlushBuildConcurrency = runtime.GOMAXPROCS(0)
+		if opts.FlushBuildConcurrency < 1 {
+			opts.FlushBuildConcurrency = 1
+		}
 	}
 	if opts.FlushBuildMinEntries <= 0 {
 		opts.FlushBuildMinEntries = 16 * 1024
@@ -1886,6 +2046,45 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if opts.FlushBuildPrefetchUnits <= 0 {
 		opts.FlushBuildPrefetchUnits = opts.FlushBuildConcurrency
+	}
+	if opts.FlushBackendMaxEntries == 0 {
+		// In relaxed durability modes, additional commit boundaries are cheap and
+		// can reduce index.db high-watermark growth under small KeepRecent windows
+		// by making retired pages eligible for reuse sooner. Default to a smaller
+		// chunk size in that case.
+		if opts.DisableWAL || opts.RelaxedSync {
+			opts.FlushBackendMaxEntries = 2 * flushBackendBatchInitEntries
+		} else {
+			opts.FlushBackendMaxEntries = flushBackendBatchMaxEntries
+		}
+	} else if opts.FlushBackendMaxEntries < 0 {
+		// Negative disables chunking; use a very large cap so the hot path
+		// never triggers intermediate commits.
+		opts.FlushBackendMaxEntries = int(^uint(0) >> 1)
+		// Disable the max-batch cap when chunking is explicitly disabled.
+		// This preserves the documented "<0 disables chunking" behavior without
+		// accidentally re-enabling it via the cap adjustment logic.
+		if opts.FlushBackendMaxBatches == 0 {
+			opts.FlushBackendMaxBatches = -1
+		}
+	}
+	if opts.FlushBackendMaxBatches == 0 {
+		// In relaxed durability modes, additional commit boundaries are much
+		// cheaper and can substantially reduce index.db high-watermark growth
+		// under small KeepRecent windows by making retired pages eligible for
+		// reuse sooner. Use a slightly higher default budget in that case.
+		if opts.DisableWAL || opts.RelaxedSync {
+			opts.FlushBackendMaxBatches = 32
+		} else {
+			opts.FlushBackendMaxBatches = 16
+		}
+	}
+	flushBackendInitEntries := flushBackendBatchInitEntries
+	if flushBackendInitEntries > opts.FlushBackendMaxEntries {
+		flushBackendInitEntries = opts.FlushBackendMaxEntries
+	}
+	if flushBackendInitEntries < 1 {
+		flushBackendInitEntries = 1
 	}
 
 	// Ensure wal dir exists
@@ -1914,6 +2113,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCount <= 0 {
 		laneCount = 1
 	}
+	// Temporarily remove the logic that increases laneCount based on maxLaneID
 	if maxLaneID+1 > laneCount {
 		laneCount = maxLaneID + 1
 	}
@@ -1924,9 +2124,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
+	// In relaxed durability modes, storing moderate values out-of-line avoids a
+	// catastrophic random_write cliff at large key counts (perf gate II / #229).
+	//
+	// We pick a default threshold that still keeps small values inline, but
+	// pushes the unified-bench default 128B values into the value log.
+	const defaultRelaxedValueLogThreshold = 127
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
 		valueLogThreshold = page.DefaultInlineThreshold
+		if opts.DisableWAL || opts.RelaxedSync {
+			valueLogThreshold = defaultRelaxedValueLogThreshold
+		}
 	}
 	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
@@ -2056,6 +2265,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBuildChunkMinBytes:        opts.FlushBuildChunkMinBytes,
 		flushBuildChunkMaxBytes:        opts.FlushBuildChunkMaxBytes,
 		flushBuildPrefetchUnits:        opts.FlushBuildPrefetchUnits,
+		flushBackendMaxEntries:         opts.FlushBackendMaxEntries,
+		flushBackendInitEntries:        flushBackendInitEntries,
+		flushBackendMaxBatches:         opts.FlushBackendMaxBatches,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
@@ -2065,6 +2277,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		notifyError:                    opts.NotifyError,
 		inlineThreshold:                inlineThreshold,
 		valueLogThreshold:              valueLogThreshold,
+		forceValueLogPointers:          opts.ForceValueLogPointers,
 		memtableValueLogPointers:       true,
 		valueLogReader:                 valueLogReader,
 		valueLogRetain:                 retained,
@@ -2097,9 +2310,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
 
 	// Open initial value-log segments (if enabled) and journal/commit log
-	// segments (if enabled). Journal and value log are decoupled: the value log
-	// may be active even when the journal is disabled.
-	if db.valueLogEnabled() && db.disableJournal {
+	// segments (if enabled). Journal and value log are decoupled.
+	if db.valueLogEnabled() {
 		for i := range db.lanes {
 			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
 				if db.valueLogReader != nil {
@@ -2294,6 +2506,12 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 
 func (db *DB) reportError(err error) {
 	if err == nil {
+		return
+	}
+	if errors.Is(err, errDBClosing) {
+		return
+	}
+	if db != nil && db.closing.Load() {
 		return
 	}
 	if db.notifyError != nil {
@@ -2608,6 +2826,184 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		return 0, err
 	}
 	return i, nil
+}
+
+type opRunIter struct {
+	runs   [][]batch.Entry
+	runIdx int
+	idx    int
+	valid  bool
+}
+
+func newOpRunIter(runs [][]batch.Entry) *opRunIter {
+	it := &opRunIter{runs: runs}
+	it.advanceToValid()
+	return it
+}
+
+func (it *opRunIter) advanceToValid() {
+	for it.runIdx < len(it.runs) {
+		if it.idx < len(it.runs[it.runIdx]) {
+			it.valid = true
+			return
+		}
+		it.runIdx++
+		it.idx = 0
+	}
+	it.valid = false
+}
+
+func (it *opRunIter) Valid() bool {
+	return it.valid
+}
+
+func (it *opRunIter) Next() {
+	if !it.valid {
+		return
+	}
+	it.idx++
+	it.advanceToValid()
+}
+
+func (it *opRunIter) Entry() batch.Entry {
+	if !it.valid {
+		return batch.Entry{}
+	}
+	return it.runs[it.runIdx][it.idx]
+}
+
+func (it *opRunIter) Key() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.runs[it.runIdx][it.idx].Key
+}
+
+type opMergeItem struct {
+	iter     *opRunIter
+	priority int
+	key      []byte
+}
+
+type opMergeHeap []opMergeItem
+
+func (h opMergeHeap) Len() int { return len(h) }
+
+func (h opMergeHeap) Less(i, j int) bool {
+	cmp := bytes.Compare(h[i].key, h[j].key)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+
+func (h opMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *opMergeHeap) push(x opMergeItem) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+func (h *opMergeHeap) pop() opMergeItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return opMergeItem{}
+	}
+	old.Swap(0, n-1)
+	h.down(0, n-1)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+func (h opMergeHeap) peek() *opMergeItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+func (h *opMergeHeap) up(j int) {
+	for {
+		i := (j - 1) / 2
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *opMergeHeap) down(i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
+	if mem == nil {
+		return nil, errors.New("cachingdb: nil memtable")
+	}
+	if chunkCap <= 0 {
+		chunkCap = 8192
+	}
+	iter := mem.NewIterator(nil, nil)
+	var runs [][]batch.Entry
+	ops := getEntrySlice(chunkCap)
+	ops = ops[:0]
+	for iter.Valid() {
+		val, ptr, flags := iter.UnsafeEntry()
+		key := append([]byte(nil), iter.UnsafeKey()...)
+		if flags&node.FlagTombstone != 0 {
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
+		} else if flags&node.FlagPointer != 0 {
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+		} else {
+			value := append([]byte(nil), val...)
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+		}
+		iter.Next()
+		if len(ops) >= cap(ops) {
+			runs = append(runs, ops)
+			ops = getEntrySlice(chunkCap)
+			ops = ops[:0]
+		}
+	}
+	err := iter.Error()
+	cerr := iter.Close()
+	if err == nil {
+		err = cerr
+	}
+	if err != nil {
+		putEntrySlice(ops)
+		for _, run := range runs {
+			putEntrySlice(run)
+		}
+		return nil, err
+	}
+	if len(ops) > 0 {
+		runs = append(runs, ops)
+	} else {
+		putEntrySlice(ops)
+	}
+	return runs, nil
 }
 
 type walFastItem struct {
@@ -3033,6 +3429,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	var framePtrScratch [valuelog.MaxFrameK]page.ValuePtr
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
+			if i > 0 && i%4096 == 0 {
+				l.vlogMu.Unlock()
+				runtime.Gosched()
+				l.vlogMu.Lock()
+				w = l.vlog
+				if w == nil {
+					l.vlogMu.Unlock()
+					return nil, errWALUnavailable
+				}
+				statsWriter, _ = w.(frameStatsWriter)
+				statsWriterInto, _ = w.(frameStatsWriterInto)
+			}
+
 			end := i + k
 			if end > len(records) {
 				end = len(records)
@@ -3575,6 +3984,7 @@ func (db *DB) computeBackendRange() (keyRange, bool, error) {
 }
 
 const stopResumeFraction = 0.70
+const stopBackpressureStallLimit = 16
 
 func (db *DB) adaptiveBackpressureEnabled() bool {
 	return db.slowdownBacklogSeconds > 0 || db.stopBacklogSeconds > 0 || db.maxBacklogBytes > 0
@@ -3617,22 +4027,24 @@ func (db *DB) waitForCheckpoint() {
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
+	// Note: Any code path that takes both flushMu and checkpointMu must acquire
+	// flushMu first to avoid deadlocks.
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock() // Ensure it's released
+
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
 		db.checkpointCond.Wait()
 	}
-	db.checkpointing.Store(true)
+	db.checkpointing.Store(true) // Set flag only after acquiring flushMu
 	db.checkpointMu.Unlock()
 
-	defer func() {
+	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
 	}()
-
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
 
 	db.writeMu.Lock()
 
@@ -3674,15 +4086,23 @@ func (db *DB) Checkpoint() error {
 		}
 		segments = filtered
 	}
+	// New logic: perform sync write only if not relaxedSync
+	var commitErr error
 	if nonEmptyBytes > 0 {
 		backendBatch := db.backend.NewBatch()
-		err := backendBatch.WriteSync()
-		cerr := backendBatch.Close()
-		if err == nil {
-			err = cerr
+		if db.relaxedSync {
+			// If relaxed sync, just write the batch without forcing sync
+			commitErr = backendBatch.Write()
+		} else {
+			// Otherwise, force sync
+			commitErr = backendBatch.WriteSync()
 		}
-		if err != nil {
-			return err
+		cerr := backendBatch.Close()
+		if commitErr == nil {
+			commitErr = cerr
+		}
+		if commitErr != nil {
+			return commitErr
 		}
 	}
 
@@ -3732,6 +4152,19 @@ func (db *DB) waitForStop() {
 			db.bpMu.Unlock()
 			return
 		}
+		// Self-heal: backlog bytes should never remain positive when the queue is empty.
+		// If this happens, stop backpressure would block forever.
+		// Use the lock-free memtable view to avoid deadlock with db.mu.
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
+		if queueLen == 0 {
+			db.queueBacklogBytes.Store(0)
+			db.bpMu.Unlock()
+			return
+		}
+
 		backlog := db.queueBacklogBytes.Load()
 		if backlog < stopBytes {
 			db.bpMu.Unlock()
@@ -3744,21 +4177,42 @@ func (db *DB) waitForStop() {
 		db.TriggerFlush()
 
 		// Stop backpressure means we are already blocking the caller. Actively
-		// flush until the backlog drops below the resume threshold (hysteresis).
-		// This avoids depending entirely on background flush scheduling to wake
-		// blocked writers and limits the amount of synchronous work we do.
-		target := resumeBytes
-		if target <= 0 {
-			target = stopBytes
+		// flush a bounded amount of work, then return. We avoid looping/sleeping
+		// here to prevent per-write stalls when flush progress is slow.
+		target := stopBytes
+		if resumeBytes > 0 {
+			target = resumeBytes
 		}
-		for {
-			curBacklog := db.queueBacklogBytes.Load()
-			if curBacklog < target {
+		stalls := 0
+		for db.queueBacklogBytes.Load() >= target {
+			maxMemtables := db.writerFlushMaxMemtables
+			if maxMemtables <= 0 {
+				maxMemtables = 1
+			}
+			// Under stop-backpressure, flush more aggressively to avoid repeated stalls.
+			if maxMemtables < 8 {
+				maxMemtables = 8
+			}
+			if maxMemtables > flushCombineMaxMemtables {
+				maxMemtables = flushCombineMaxMemtables
+			}
+
+			before := db.queueBacklogBytes.Load()
+			db.flushSomeBlocking(false, maxMemtables, db.writerFlushMaxDuration)
+			after := db.queueBacklogBytes.Load()
+			if after < target {
 				break
 			}
-			db.flushAll(false)
-			break
+			if after >= before {
+				stalls++
+				if stalls >= stopBackpressureStallLimit {
+					break
+				}
+			} else {
+				stalls = 0
+			}
 		}
+		return
 	}
 }
 
@@ -3786,10 +4240,11 @@ func (db *DB) maybeAssistFlush() {
 
 	// Legacy policy: thresholds based on queue length.
 	if db.maxQueuedMemtables >= 0 {
-		db.mu.RLock()
-		needs := len(db.queue) > db.maxQueuedMemtables
-		db.mu.RUnlock()
-		if needs {
+		queueLen := 0
+		if view := db.memtables.Load(); view != nil {
+			queueLen = len(view.queue)
+		}
+		if queueLen > db.maxQueuedMemtables {
 			db.TriggerFlush()
 		}
 	}
@@ -3832,9 +4287,50 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	}
 }
 
+// flushSomeBlocking is like flushSome, but it blocks on lane locks. This is used
+// by stop-backpressure to guarantee forward progress instead of spinning.
+func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Duration) {
+	if maxMemtables <= 0 && maxDuration <= 0 {
+		return
+	}
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	sync = db.flushSyncRequested(sync)
+	start := time.Now()
+
+	flushed := 0
+	for {
+		if maxMemtables > 0 && flushed >= maxMemtables {
+			return
+		}
+		if maxDuration > 0 && time.Since(start) >= maxDuration {
+			return
+		}
+		laneID, ok := db.pickFlushLane()
+		if !ok {
+			return
+		}
+		okFlush := db.flushLaneOnce(sync, laneID)
+		if !okFlush {
+			return
+		}
+		flushed++
+	}
+}
+
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
+	db.closing.Store(true)
+
+	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
+	// with the auto-checkpoint goroutine:
+	// - Checkpoint takes flushMu, then writeMu.
+	// - Close historically took writeMu, then flushMu via flushAll().
+	// If auto-checkpoint is in progress (holding flushMu, waiting for writeMu)
+	// and Close starts (holding writeMu, waiting for flushMu), the process can
+	// deadlock and tests will time out.
+	db.flushMu.Lock()
 	db.writeMu.Lock()
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
@@ -3855,15 +4351,16 @@ func (db *DB) Close() error {
 		l.walFastMu.Unlock()
 	}
 
-	// In deferred value-log mode, flush requires new value-log appends. The flushLoop
-	// runs on closeCh and would otherwise trip the appendValueLog closeCh guard.
-	// Flush once here while closeCh is still open and writers are blocked.
-	if hadMemtables && db.deferredValueLogEnabled() {
-		db.flushAll(true)
+	// Flush while closeCh is still open so commit/append paths remain available.
+	// This avoids dropping pending memtables on close.
+	if hadMemtables {
+		// flushMu is already held by Close.
+		db.flushAllLocked(true)
 	}
 
 	close(db.closeCh)
 	db.writeMu.Unlock()
+	db.flushMu.Unlock()
 	db.wg.Wait()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
@@ -4061,7 +4558,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			durability = journalDurabilitySync
 		}
 	}
-	eligible := len(value) > db.valueLogThreshold
+	eligible := db.forceValueLogPointers || len(value) > db.valueLogThreshold
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
@@ -4440,7 +4937,6 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
-				db.resetMemtableStatsLocked()
 			}
 
 			db.queue = nil
@@ -4499,7 +4995,6 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
-				db.resetMemtableStatsLocked()
 			}
 
 			db.queue = nil
@@ -4569,6 +5064,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 
 		// Drop fully-covered queued memtables without enumerating their keys.
 		if len(db.queue) > 0 {
+			db.ensureQueueLaneIDsLocked()
 			dstQueue := db.queue[:0]
 			dstShardIDs := db.queueShardIDs[:0]
 			dstLaneIDs := db.queueLaneIDs[:0]
@@ -4916,9 +5412,6 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.bytes = 0
 		shard.mu.Unlock()
 	}
-	if db.memtableAdaptive {
-		db.resetMemtableStatsLocked()
-	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 
@@ -5053,9 +5546,6 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.bytes = 0
 	}
 
-	if db.memtableAdaptive {
-		db.resetMemtableStatsLocked()
-	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 
@@ -5258,7 +5748,7 @@ func (db *DB) flushLoop() {
 }
 
 func (db *DB) flushSyncRequested(sync bool) bool {
-	return sync
+	return sync && !db.relaxedSync
 }
 
 func (db *DB) pickFlushLane() (int, bool) {
@@ -5310,16 +5800,48 @@ func (db *DB) flushAllLocked(reqSync bool) {
 	if lanes == 0 {
 		lanes = 1
 	}
+
+	// Only spawn flush workers for lanes that actually have queued memtables.
+	// Otherwise each lane does an O(queueLen) scan in collectFlushUnitsLocked to
+	// discover there's nothing to do, which can be extremely expensive when the
+	// queue is large and lanes > 1.
+	active := make([]bool, lanes)
+	db.mu.RLock()
+	queueLen := len(db.queue)
+	for i := 0; i < queueLen; i++ {
+		laneID := 0
+		if i < len(db.queueLaneIDs) {
+			laneID = int(db.queueLaneIDs[i])
+		}
+		if laneID < 0 || laneID >= lanes {
+			laneID = 0
+		}
+		active[laneID] = true
+	}
+	db.mu.RUnlock()
+
+	activeCount := 0
+	for i := range active {
+		if active[i] {
+			activeCount++
+		}
+	}
+	if activeCount == 0 {
+		return
+	}
 	var wg sync.WaitGroup
-	wg.Add(lanes)
+	wg.Add(activeCount)
 	for i := 0; i < lanes; i++ {
 		laneID := i
+		if !active[laneID] {
+			continue
+		}
 		go func() {
 			if laneID < len(db.flushLaneMu) {
 				db.flushLaneMu[laneID].Lock()
 				defer db.flushLaneMu[laneID].Unlock()
 			}
-			for db.flushCombinedLane(syncFlag, laneID) {
+			for db.flushLaneOnce(syncFlag, laneID) {
 			}
 			wg.Done()
 		}()
@@ -5343,8 +5865,21 @@ func (db *DB) flushOne() bool {
 }
 
 const (
-	flushCombineTargetBytes  int64 = 64 * 1024 * 1024 // 64MiB
-	flushCombineMaxMemtables       = 32
+	flushCombineTargetBytes    int64 = 64 * 1024 * 1024  // 64MiB
+	flushCombineTargetBytesMax       = 256 * 1024 * 1024 // 256MiB
+	flushCombineMaxMemtables         = 32
+	// flushBackendBatchMaxEntries caps how many operations we buffer into a single
+	// backend batch before committing it and continuing with a fresh batch.
+	//
+	// This avoids large one-shot allocations (and their GC / page-fault overhead)
+	// when flushing very large immutable memtables (e.g. when value-log pointers
+	// are forced).
+	flushBackendBatchMaxEntries = 32 * 1024
+
+	// flushBackendBatchInitEntries is a small "reserve hint" used for backend batch
+	// creation. It intentionally stays below flushBackendBatchMaxEntries to avoid
+	// spending large CPU time zeroing an oversized []batch.Entry on batch creation.
+	flushBackendBatchInitEntries = 8 * 1024
 )
 
 type flushUnit struct {
@@ -5371,7 +5906,11 @@ func (db *DB) collectFlushUnitsLocked(laneID int, maxMemtables int, targetBytes 
 	var totalLen int
 	for i := 0; i < queueLen && len(units) < maxMemtables; i++ {
 		if laneID >= 0 {
-			if i >= len(db.queueLaneIDs) || int(db.queueLaneIDs[i]) != laneID {
+			unitLaneID := 0
+			if i < len(db.queueLaneIDs) {
+				unitLaneID = int(db.queueLaneIDs[i])
+			}
+			if unitLaneID != laneID {
 				continue
 			}
 		} else if i >= maxMemtables {
@@ -5431,6 +5970,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	dstWALPaths := db.queueWALPaths[:0]
 	dstValueLogPaths := db.queueValueLogPaths[:0]
 
+	db.ensureQueueLaneIDsLocked()
 	for i, mem := range db.queue {
 		var id uint64
 		if i < len(db.queueIDs) {
@@ -5445,6 +5985,8 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		}
 		if i < len(db.queueLaneIDs) {
 			dstLaneIDs = append(dstLaneIDs, db.queueLaneIDs[i])
+		} else {
+			dstLaneIDs = append(dstLaneIDs, 0)
 		}
 		if i < len(db.queueIDs) {
 			dstIDs = append(dstIDs, db.queueIDs[i])
@@ -5471,58 +6013,6 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.publishMemtablesLocked()
 }
 
-func (db *DB) flushCombinedLocked(sync bool) bool {
-	db.mu.Lock()
-	queueLen := len(db.queue)
-	if queueLen == 0 {
-		db.mu.Unlock()
-		return false
-	}
-
-	max := queueLen
-	if max > flushCombineMaxMemtables {
-		max = flushCombineMaxMemtables
-	}
-
-	// When the caller configures a small flush threshold (e.g. the unified_bench
-	// flushthrash suite), combining up to a fixed 64MiB can create long single-pass
-	// flush latencies and excessive stop-backpressure. Prefer a smaller target in
-	// that case; still allow combining for larger default thresholds.
-	targetBytes := flushCombineTargetBytes
-	if db.flushThreshold > 0 && db.flushThreshold < targetBytes {
-		targetBytes = db.flushThreshold
-	}
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(-1, max, targetBytes)
-	db.mu.Unlock()
-	if len(units) == 0 {
-		return false
-	}
-	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
-}
-
-func (db *DB) flushCombinedLane(sync bool, laneID int) bool {
-	db.mu.Lock()
-	queueLen := len(db.queue)
-	if queueLen == 0 {
-		db.mu.Unlock()
-		return false
-	}
-	max := queueLen
-	if max > flushCombineMaxMemtables {
-		max = flushCombineMaxMemtables
-	}
-	targetBytes := flushCombineTargetBytes
-	if db.flushThreshold > 0 && db.flushThreshold < targetBytes {
-		targetBytes = db.flushThreshold
-	}
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, max, targetBytes)
-	db.mu.Unlock()
-	if len(units) == 0 {
-		return false
-	}
-	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
-}
-
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	db.mu.Lock()
 	queueLen := len(db.queue)
@@ -5530,402 +6020,617 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.mu.Unlock()
 		return false
 	}
-	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, 1, 0)
+	maxMemtables := 1
+	targetBytes := int64(0)
+	if db.flushBuildConcurrency > 1 {
+		maxMemtables = flushCombineMaxMemtables
+		targetBytes = flushCombineTargetBytes
+		// When FlushThreshold ~= flushCombineTargetBytes (the common default),
+		// combining is effectively disabled and large churny workloads are forced
+		// through multiple full apply passes. Allow combining several memtables per
+		// flush (bounded) to reduce repeated rewrite work.
+		desired := db.flushThreshold * 4
+		if desired > flushCombineTargetBytesMax {
+			desired = flushCombineTargetBytesMax
+		}
+		if desired > targetBytes {
+			targetBytes = desired
+		}
+	}
+	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
 	if len(units) == 0 {
 		return false
 	}
-	return db.flushUnits(sync, units, ids, totalBytes, totalLen)
-}
 
-func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes int64, totalLen int) bool {
-	debugPtr := db.debugFlushPointers
-	debugTiming := db.debugFlushTiming
+	if totalLen == 0 {
+		db.mu.Lock()
+		removeIDs := make(map[uint64]struct{}, len(ids))
+		for _, id := range ids {
+			removeIDs[id] = struct{}{}
+		}
+		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+		db.mu.Unlock()
+		return true
+	}
 
-	var (
-		durPreVlogFlush time.Duration
-		durBuildOps     time.Duration
-		durSetOps       time.Duration
-		durPostVlog     time.Duration
-		durPostVlogSync time.Duration
-		durBackendWrite time.Duration
-	)
+	backendEntriesCap := db.flushBackendEntriesCap(totalLen, sync)
 
-	// Optimization: Skip flush if the selected memtables have no entries.
-	flushStart := time.Time{}
-	flushed := false
-	if totalLen > 0 {
-		flushStart = time.Now()
+	useParallel := db.flushBuildConcurrency > 1 &&
+		totalLen >= db.flushBuildMinEntries &&
+		len(units) >= db.flushBuildMinUnits &&
+		runtime.GOMAXPROCS(0) > 1
 
-		backendBatch := db.newBackendBatchWithSize(totalLen)
+	if useParallel && !db.deferredValueLogEnabled() {
+		chunkCap := db.flushBuildChunkCap
+		if chunkCap < 0 {
+			chunkCap = 8192
+		}
 
-		if db.deferredValueLogEnabled() {
-			t0 := time.Now()
-			for _, unit := range units {
-				iter := unit.mem.NewIterator(nil, nil)
-				err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, unit.laneID)
-				cerr := iter.Close()
-				if err == nil {
-					err = cerr
+		type buildResult struct {
+			idx  int
+			runs [][]batch.Entry
+			err  error
+		}
+
+		jobs := make(chan int, len(units))
+		results := make(chan buildResult, len(units))
+		closeCh := db.closeCh
+
+		for i := range units {
+			jobs <- i
+		}
+		close(jobs)
+
+		workers := db.flushBuildConcurrency
+		if workers <= 0 {
+			workers = 1
+		}
+		if workers > len(units) {
+			workers = len(units)
+		}
+
+		done := make(chan struct{}, workers)
+		for w := 0; w < workers; w++ {
+			go func() {
+				defer func() { done <- struct{}{} }()
+				for idx := range jobs {
+					select {
+					case <-closeCh:
+						results <- buildResult{idx: idx, err: errDBClosing}
+						continue
+					default:
+					}
+					runs, err := buildOpRuns(units[idx].mem, chunkCap)
+					results <- buildResult{idx: idx, runs: runs, err: err}
 				}
-				if err == nil {
-					err = iter.Error()
+			}()
+		}
+
+		go func() {
+			for i := 0; i < workers; i++ {
+				<-done
+			}
+			close(results)
+		}()
+
+		unitRuns := make([][][]batch.Entry, len(units))
+		failed := false
+		for res := range results {
+			if res.err != nil {
+				if !failed {
+					db.reportError(fmt.Errorf("cachingdb: flush build failed: %w", res.err))
 				}
-				if err != nil {
-					db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
+				failed = true
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
+			}
+			if failed {
+				for _, run := range res.runs {
+					putEntrySlice(run)
+				}
+				continue
+			}
+			unitRuns[res.idx] = res.runs
+		}
+		if failed {
+			for _, runs := range unitRuns {
+				for _, run := range runs {
+					putEntrySlice(run)
+				}
+			}
+			return false
+		}
+
+		// Adaptive micro-batching: delete-heavy flushes are expensive to apply in
+		// many intermediate commits (each commit re-writes leaf pages, copying
+		// surviving values). Count deletes and tighten the commit cap in that case.
+		deleteOps := 0
+		for _, runs := range unitRuns {
+			for _, run := range runs {
+				for _, e := range run {
+					if e.Type == batch.OpDelete {
+						deleteOps++
+					}
+				}
+			}
+		}
+		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
+
+		sizeHint := totalLen
+		if sizeHint > db.flushBackendInitEntries {
+			sizeHint = db.flushBackendInitEntries
+		}
+		if sizeHint > backendEntriesCap {
+			sizeHint = backendEntriesCap
+		}
+		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		flushStart := time.Now()
+		vlogFlushed := false
+		backendPendingOps := 0
+		chunkBackend := totalLen > backendEntriesCap
+		emittedChunk := false
+
+		type ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
+		ps, _ := backendBatch.(ptrSetter)
+		var single [1]batch.Entry
+
+		// Best-effort: ensure value-log bytes are flushed before we start committing
+		// pointers into the index when we expect to emit multiple backend commits.
+		if chunkBackend && db.valueLogEnabled() && !vlogFlushed {
+			if err := db.flushValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
+				_ = backendBatch.Close()
+				for _, runs := range unitRuns {
+					for _, run := range runs {
+						putEntrySlice(run)
+					}
+				}
+				return false
+			}
+			vlogFlushed = true
+		}
+
+		flushBackendChunk := func() error {
+			if !chunkBackend || backendPendingOps < backendEntriesCap {
+				return nil
+			}
+			emittedChunk = true
+			db.backendWriteBatchesTotal.Add(1)
+			// If sync==true, we only need a single durability boundary at the end of
+			// the flush. Write the intermediate chunks without fsync to avoid
+			// repeated pager sync work.
+			err := backendBatch.Write()
+			cerr := backendBatch.Close()
+			if err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return err
+			}
+			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			ps, _ = backendBatch.(ptrSetter)
+			backendPendingOps = 0
+			return nil
+		}
+
+		var heap opMergeHeap
+		heap = heap[:0]
+		for i := range unitRuns {
+			if len(unitRuns[i]) == 0 {
+				continue
+			}
+			it := newOpRunIter(unitRuns[i])
+			if it.Valid() {
+				priority := len(unitRuns) - 1 - i
+				heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+			}
+		}
+		for i := len(heap)/2 - 1; i >= 0; i-- {
+			(&heap).down(i, len(heap))
+		}
+
+		for len(heap) > 0 {
+			top := heap.pop()
+			currentKey := top.key
+
+			for len(heap) > 0 {
+				next := heap.peek()
+				if next != nil && bytes.Equal(next.key, currentKey) {
+					shadowed := heap.pop()
+					shadowed.iter.Next()
+					if shadowed.iter.Valid() {
+						shadowed.key = shadowed.iter.Key()
+						heap.push(shadowed)
+					}
+					continue
+				}
+				break
+			}
+
+			entry := top.iter.Entry()
+			var err error
+			if entry.Type == batch.OpDelete {
+				err = backendBatch.Delete(entry.Key)
+			} else if entry.IsPtr {
+				if ps != nil {
+					err = ps.SetPointer(entry.Key, entry.ValuePtr)
+				} else {
+					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
+					err = backendBatch.SetOps(single[:])
+				}
+			} else {
+				err = backendBatch.Set(entry.Key, entry.Value)
+			}
+			if err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+				_ = backendBatch.Close()
+				for _, runs := range unitRuns {
+					for _, run := range runs {
+						putEntrySlice(run)
+					}
+				}
+				return false
+			}
+			backendPendingOps++
+			if err := flushBackendChunk(); err != nil {
+				db.reportError(err)
+				_ = backendBatch.Close()
+				for _, runs := range unitRuns {
+					for _, run := range runs {
+						putEntrySlice(run)
+					}
+				}
+				return false
+			}
+
+			top.iter.Next()
+			if top.iter.Valid() {
+				top.key = top.iter.Key()
+				heap.push(top)
+			}
+		}
+
+		if db.valueLogEnabled() {
+			if !vlogFlushed {
+				if err := db.flushValueLog(laneID); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 					_ = backendBatch.Close()
+					for _, runs := range unitRuns {
+						for _, run := range runs {
+							putEntrySlice(run)
+						}
+					}
+					return false
+				}
+				vlogFlushed = true
+			}
+			if sync && !db.relaxedSync {
+				if err := db.syncValueLog(laneID); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+					_ = backendBatch.Close()
+					for _, runs := range unitRuns {
+						for _, run := range runs {
+							putEntrySlice(run)
+						}
+					}
 					return false
 				}
 			}
-			durBuildOps = time.Since(t0)
-		} else {
-			t0 := time.Now()
-			buildConcurrency := db.flushBuildConcurrency
-			minUnits := db.flushBuildMinUnits
-			if minUnits < 1 {
-				minUnits = 1
-			}
-			minEntries := db.flushBuildMinEntries
-			if minEntries < 1 {
-				minEntries = 1
-			}
-			useBuildWorkers := buildConcurrency > 1 && len(units) >= minUnits && totalLen >= minEntries
-			type (
-				setViewer interface {
-					SetView(key, value []byte) error
-				}
-				deleteViewer interface {
-					DeleteView(key []byte) error
-				}
-				ptrSetter interface {
-					SetPointer(key []byte, ptr page.ValuePtr) error
-				}
-				ptrSetterView interface {
-					SetPointerView(key []byte, ptr page.ValuePtr) error
-				}
-			)
-			sv, _ := backendBatch.(setViewer)
-			dv, _ := backendBatch.(deleteViewer)
-			psv, _ := backendBatch.(ptrSetterView)
-			ps, _ := backendBatch.(ptrSetter)
-			var single [1]batch.Entry
+		}
 
-			applyOps := func(ops []batch.Entry) error {
-				for i := range ops {
-					op := &ops[i]
-					switch op.Type {
-					case batch.OpDelete:
-						if dv != nil {
-							if err := dv.DeleteView(op.Key); err != nil {
-								return err
-							}
-							continue
-						}
-						if err := backendBatch.Delete(op.Key); err != nil {
-							return err
-						}
-					case batch.OpPut:
-						if op.IsPtr {
-							if psv != nil {
-								if err := psv.SetPointerView(op.Key, op.ValuePtr); err != nil {
-									return err
-								}
-								continue
-							}
-							if ps != nil {
-								if err := ps.SetPointer(op.Key, op.ValuePtr); err != nil {
-									return err
-								}
-								continue
-							}
-							single[0] = batch.Entry{Type: batch.OpPut, Key: op.Key, ValuePtr: op.ValuePtr, IsPtr: true}
-							if err := backendBatch.SetOps(single[:]); err != nil {
-								return err
-							}
-							continue
-						}
-						if sv != nil {
-							if err := sv.SetView(op.Key, op.Value); err != nil {
-								return err
-							}
-							continue
-						}
-						if err := backendBatch.Set(op.Key, op.Value); err != nil {
-							return err
-						}
-					default:
-						return fmt.Errorf("unsupported op type %d", op.Type)
-					}
+		var err error
+		if backendPendingOps > 0 {
+			db.backendWriteBatchesTotal.Add(1)
+			if sync {
+				err = backendBatch.WriteSync()
+			} else {
+				err = backendBatch.Write()
+			}
+		} else if sync && emittedChunk {
+			// If we emitted intermediate chunks and happened to land exactly on a
+			// chunk boundary, force a single durability boundary at the end.
+			db.backendWriteBatchesTotal.Add(1)
+			err = backendBatch.WriteSync()
+		}
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			db.reportError(err)
+			for _, runs := range unitRuns {
+				for _, run := range runs {
+					putEntrySlice(run)
 				}
+			}
+			return false
+		}
+
+		for _, runs := range unitRuns {
+			for _, run := range runs {
+				putEntrySlice(run)
+			}
+		}
+
+		db.mu.Lock()
+		removeIDs := make(map[uint64]struct{}, len(ids))
+		for _, id := range ids {
+			removeIDs[id] = struct{}{}
+		}
+		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
+
+		deletable := make([]string, 0, len(units))
+		if sync {
+			inUse := make(map[string]struct{})
+			for _, path := range db.currentWALPaths() {
+				inUse[path] = struct{}{}
+			}
+			for _, paths := range db.queueWALPaths {
+				for _, path := range paths {
+					inUse[path] = struct{}{}
+				}
+			}
+			seen := make(map[string]struct{})
+			for _, unit := range units {
+				for _, walPath := range unit.walPaths {
+					if walPath == "" {
+						continue
+					}
+					if _, ok := inUse[walPath]; ok {
+						continue
+					}
+					if _, ok := seen[walPath]; ok {
+						continue
+					}
+					if db.valueLogRetained(walPath) {
+						continue
+					}
+					seen[walPath] = struct{}{}
+					deletable = append(deletable, walPath)
+				}
+			}
+		}
+		db.mu.Unlock()
+
+		removed := false
+		for _, walPath := range deletable {
+			db.dropValueLogSegment(walPath)
+			if err := db.removeFileRetry(walPath); err != nil {
+				continue
+			}
+			removed = true
+			db.mu.Lock()
+			db.untrackWALSegmentLocked(walPath)
+			db.mu.Unlock()
+			db.forgetValueLogRetain(walPath)
+		}
+		if removed {
+			db.syncDirBestEffort(db.dir)
+		}
+		db.checkValueLogRetention()
+
+		flushDur := time.Since(flushStart)
+		if flushDur > 0 && totalBytes > 0 {
+			sample := float64(totalBytes) / flushDur.Seconds()
+			db.bpMu.Lock()
+			if db.flushBpsEWMA <= 0 {
+				db.flushBpsEWMA = sample
+			} else {
+				db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+			}
+			db.bpCond.Broadcast()
+			db.bpMu.Unlock()
+		}
+		return true
+	}
+
+	sizeHint := totalLen
+	if sizeHint > db.flushBackendInitEntries {
+		sizeHint = db.flushBackendInitEntries
+	}
+	if sizeHint > backendEntriesCap {
+		sizeHint = backendEntriesCap
+	}
+	backendBatch := db.newBackendBatchWithSize(sizeHint)
+	flushStart := time.Now()
+	vlogFlushed := false
+	backendPendingOps := 0
+	// When flushing a large combined batch, commit intermediate backend batches
+	// to reduce peak allocator demand (and thus index.db high-watermark growth)
+	// under small KeepRecent windows.
+	chunkBackend := totalLen > backendEntriesCap
+
+	// backendBatch := db.backend.NewBatch() // Original line, now replaced
+	if db.deferredValueLogEnabled() {
+		for _, unit := range units {
+			iter := unit.mem.NewIterator(nil, nil)
+			err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, laneID)
+			cerr := iter.Close()
+			if err == nil {
+				err = cerr
+			}
+			if err != nil {
+				db.reportError(err)
+				_ = backendBatch.Close()
+				return false
+			}
+		}
+		// Defer-vlog flushing writes all operations directly into backendBatch;
+		// ensure we commit it below.
+		backendPendingOps = totalLen
+	} else {
+		type ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
+		ps, _ := backendBatch.(ptrSetter)
+		var single [1]batch.Entry
+
+		// Best-effort: ensure value-log bytes are flushed before we start committing
+		// pointers into the index when we expect to emit multiple backend commits.
+		// This preserves the relative ordering while still allowing us to amortize
+		// the durability boundary to the final commit when sync==true.
+		if chunkBackend && db.valueLogEnabled() && !vlogFlushed {
+			if err := db.flushValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
+				_ = backendBatch.Close()
+				return false
+			}
+			vlogFlushed = true
+		}
+
+		flushBackendChunk := func() error {
+			if !chunkBackend || backendPendingOps < backendEntriesCap {
 				return nil
 			}
 
-			if !useBuildWorkers {
-				for _, unit := range units {
-					iter := unit.mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
-					for iter.Valid() {
-						key := iter.UnsafeKey()
-						val, ptr, flags := iter.UnsafeEntry()
-						if flags&node.FlagTombstone != 0 {
-							var err error
-							if dv != nil {
-								err = dv.DeleteView(key)
-							} else {
-								err = backendBatch.Delete(key)
-							}
-							if err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+			db.backendWriteBatchesTotal.Add(1)
+			// If sync==true, we only need a single durability boundary at the end of
+			// the flush. Write the intermediate chunks without fsync to avoid
+			// repeated pager sync work.
+			err := backendBatch.Write()
+			cerr := backendBatch.Close()
+			if err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return err
+			}
+			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			ps, _ = backendBatch.(ptrSetter)
+			backendPendingOps = 0
+			return nil
+		}
+
+		for _, unit := range units {
+			iter := unit.mem.NewIterator(nil, nil)
+			for iter.Valid() {
+				key := iter.UnsafeKey()
+				val, ptr, flags := iter.UnsafeEntry()
+				if flags&node.FlagTombstone != 0 {
+					if err := backendBatch.Delete(key); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+				} else if flags&node.FlagPointer != 0 {
+					if ps != nil {
+						if err := ps.SetPointer(key, ptr); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					} else {
+						type ptrSetterLegacy interface {
+							SetPointer(key []byte, ptr page.ValuePtr) error
+						}
+						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
+							if err := psl.SetPointer(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
 						} else {
-							if flags&node.FlagPointer != 0 {
-								if psv != nil {
-									if err := psv.SetPointerView(key, ptr); err != nil {
-										db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-										_ = iter.Close()
-										_ = backendBatch.Close()
-										return false
-									}
-								} else if ps != nil {
-									if err := ps.SetPointer(key, ptr); err != nil {
-										db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-										_ = iter.Close()
-										_ = backendBatch.Close()
-										return false
-									}
-								} else {
-									single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-									if err := backendBatch.SetOps(single[:]); err != nil {
-										db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-										_ = iter.Close()
-										_ = backendBatch.Close()
-										return false
-									}
-								}
-								iter.Next()
-								continue
-							}
-							var err error
-							if sv != nil {
-								err = sv.SetView(key, val)
-							} else {
-								err = backendBatch.Set(key, val)
-							}
-							if err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							if err := backendBatch.SetOps(single[:]); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
 						}
-						iter.Next()
 					}
-					err := iter.Error()
-					cerr := iter.Close()
-					if err == nil {
-						err = cerr
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
 					}
-					if err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+				} else {
+					if err := backendBatch.Set(key, val); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
 					}
 				}
-			} else {
-				// Parallelize memtable iteration/build while preserving "newest wins"
-				// ordering by applying one immutable at a time in queue order.
-				chunkCap := db.flushBuildChunkCap
-				if chunkCap <= 0 {
-					avgBytes := 1
-					if totalLen > 0 {
-						avgBytes = int(totalBytes / int64(totalLen))
-						if avgBytes <= 0 {
-							avgBytes = 1
-						}
-					}
-					minBytes := db.flushBuildChunkMinBytes
-					maxBytes := db.flushBuildChunkMaxBytes
-					targetBytes := db.flushBuildChunkTarget
-					if minBytes <= 0 {
-						minBytes = 1 << 20
-					}
-					if maxBytes <= 0 {
-						maxBytes = 4 << 20
-					}
-					if targetBytes <= 0 {
-						targetBytes = 2 << 20
-					}
-					if targetBytes < minBytes {
-						targetBytes = minBytes
-					}
-					if targetBytes > maxBytes {
-						targetBytes = maxBytes
-					}
-					minEntries := minBytes / avgBytes
-					if minEntries < 1 {
-						minEntries = 1
-					}
-					maxEntries := maxBytes / avgBytes
-					if maxEntries < minEntries {
-						maxEntries = minEntries
-					}
-					chunkCap = targetBytes / avgBytes
-					if chunkCap < minEntries {
-						chunkCap = minEntries
-					}
-					if chunkCap > maxEntries {
-						chunkCap = maxEntries
-					}
-				}
-				var opChArr [flushCombineMaxMemtables]chan []batch.Entry
-				var cancelArr [flushCombineMaxMemtables]chan struct{}
-				opChs := opChArr[:len(units)]
-				cancels := cancelArr[:len(units)]
-
-				errCh := make(chan error, 1)
-				abort := false
-				defer func() {
-					if !abort {
-						return
-					}
-					for i := range cancels {
-						if cancels[i] != nil {
-							close(cancels[i])
-						}
-					}
-				}()
-
-				startUnit := func(i int) {
-					opChs[i] = make(chan []batch.Entry)
-					cancels[i] = make(chan struct{})
-					job := flushBuildJob{
-						mem:      units[i].mem,
-						out:      opChs[i],
-						cancel:   cancels[i],
-						chunkCap: chunkCap,
-						errCh:    errCh,
-					}
-					go job.run(db.closeCh)
-				}
-
-				prefetch := db.flushBuildPrefetchUnits
-				if prefetch <= 0 {
-					prefetch = buildConcurrency
-				}
-				if prefetch > len(units) {
-					prefetch = len(units)
-				}
-				for i := 0; i < prefetch; i++ {
-					startUnit(i)
-				}
-
-				for i := 0; i < len(units); i++ {
-					for ops := range opChs[i] {
-						if err := applyOps(ops); err != nil {
-							putEntrySlice(ops)
-							abort = true
-							db.reportError(fmt.Errorf("cachingdb: flush failed (apply): %w", err))
-							_ = backendBatch.Close()
-							return false
-						}
-						putEntrySlice(ops)
-						select {
-						case err := <-errCh:
-							abort = true
-							db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-							_ = backendBatch.Close()
-							return false
-						default:
-						}
-					}
-					select {
-					case err := <-errCh:
-						abort = true
-						db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
-						_ = backendBatch.Close()
-						return false
-					default:
-					}
-
-					next := i + prefetch
-					if next < len(units) {
-						startUnit(next)
-					}
-				}
+				iter.Next()
 			}
-			durBuildOps = time.Since(t0)
-		}
-
-		// Commit to backend
-		if db.valueLogEnabled() {
-			t0 := time.Now()
-			laneIDs := make([]int, 0, len(units))
-			for _, u := range units {
-				laneIDs = append(laneIDs, u.laneID)
-			}
-			if err := db.flushValueLog(laneIDs...); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog flush): %w", err))
+			if err := iter.Error(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter): %w", err))
+				_ = iter.Close()
 				_ = backendBatch.Close()
 				return false
 			}
-			durPostVlog = time.Since(t0)
-			if sync && !db.relaxedSync {
-				t1 := time.Now()
-				if err := db.syncValueLog(laneIDs...); err != nil {
-					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
-					_ = backendBatch.Close()
-					return false
-				}
-				durPostVlogSync = time.Since(t1)
+			if err := iter.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+				_ = backendBatch.Close()
+				return false
 			}
 		}
-		var err error
-		t0 := time.Now()
-		db.commitMu.Lock()
+	}
+
+	if db.valueLogEnabled() {
+		if !vlogFlushed {
+			if err := db.flushValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
+				_ = backendBatch.Close()
+				return false
+			}
+			vlogFlushed = true
+		}
+		if sync && !db.relaxedSync {
+			if err := db.syncValueLog(laneID); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+				_ = backendBatch.Close()
+				return false
+			}
+		}
+	}
+
+	var err error
+	if backendPendingOps > 0 {
+		db.backendWriteBatchesTotal.Add(1)
 		if sync {
 			err = backendBatch.WriteSync()
 		} else {
 			err = backendBatch.Write()
 		}
-		db.commitMu.Unlock()
-		durBackendWrite = time.Since(t0)
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
 		if err != nil {
-			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-			_ = backendBatch.Close()
+			db.reportError(err)
 			return false
 		}
-		_ = backendBatch.Close()
-		flushed = true
-	}
-	flushDur := time.Duration(0)
-	if flushed {
-		flushDur = time.Since(flushStart)
-	}
-	if debugTiming && flushed {
-		fmt.Fprintf(os.Stderr, "treedb: flush_timing combined=1 units=%d entries=%d bytes=%d pre_vlog=%s build=%s setops=%s post_vlog=%s post_vlog_sync=%s backend_write=%s total=%s\n",
-			len(units),
-			totalLen,
-			totalBytes,
-			durPreVlogFlush,
-			durBuildOps,
-			durSetOps,
-			durPostVlog,
-			durPostVlogSync,
-			durBackendWrite,
-			flushDur,
-		)
-	}
-	if debugPtr && flushed {
-		fmt.Fprintf(os.Stderr, "treedb: flush ptrs entries=%d eligible=%d used=%d noptr=%d denied=%d disabled=%d\n",
-			totalLen,
-			db.debugPtrEligible.Load(),
-			db.debugPtrUsed.Load(),
-			db.debugPtrNoPtr.Load(),
-			db.debugPtrDenied.Load(),
-			db.debugPtrDisabled.Load(),
-		)
+	} else {
+		if err := backendBatch.Close(); err != nil {
+			db.reportError(err)
+			return false
+		}
 	}
 
 	// Remove from queue and delete old WAL segments.
@@ -5987,7 +6692,8 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 	}
 	db.checkValueLogRetention()
 
-	if flushed && flushDur > 0 && totalBytes > 0 {
+	flushDur := time.Since(flushStart)
+	if flushDur > 0 && totalBytes > 0 {
 		sample := float64(totalBytes) / flushDur.Seconds()
 		db.bpMu.Lock()
 		if db.flushBpsEWMA <= 0 {
@@ -5997,12 +6703,12 @@ func (db *DB) flushUnits(sync bool, units []flushUnit, ids []uint64, totalBytes 
 		}
 		db.bpCond.Broadcast()
 		db.bpMu.Unlock()
-	} else {
-		db.bpMu.Lock()
-		db.bpCond.Broadcast()
-		db.bpMu.Unlock()
 	}
 	return true
+}
+
+func (db *DB) finalizeFlushStats(totalLen int, totalBytes int64, flushDur, durPreVlog, durBuild, durSet, durPostVlog, durPostVlogSync, durBackendWrite time.Duration) error {
+	return nil
 }
 
 func (db *DB) flushOneLocked(sync bool) bool {
@@ -6045,7 +6751,17 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		flushStart = time.Now()
 
 		// Flush 'mem' to backend
-		backendBatch := db.newBackendBatchWithSize(memLen)
+		backendEntriesCap := db.flushBackendEntriesCap(memLen, sync)
+		sizeHint := memLen
+		if sizeHint > db.flushBackendInitEntries {
+			sizeHint = db.flushBackendInitEntries
+		}
+		if sizeHint > backendEntriesCap {
+			sizeHint = backendEntriesCap
+		}
+		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		vlogFlushed := false
+		backendPendingOps := 0
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
 
 		if db.deferredValueLogEnabled() {
@@ -6057,7 +6773,37 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return false
 			}
 			durBuildOps = time.Since(t0)
+			backendPendingOps = memLen
 		} else {
+			// When flushing very large memtables, avoid building an unbounded backend batch
+			// (which can allocate / zero very large buffers and appear "hung").
+			chunkBackend := memLen > backendEntriesCap
+
+			// Best-effort: ensure value-log data is durable before committing pointers
+			// to the backend. This keeps the relative durability ordering intact when
+			// we later commit the backend in chunks.
+			if chunkBackend && sync && db.valueLogEnabled() {
+				t0 := time.Now()
+				if err := db.flushValueLog(laneID); err != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog flush): %w", err))
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
+				}
+				durPostVlog = time.Since(t0)
+				vlogFlushed = true
+				if sync && !db.relaxedSync {
+					t1 := time.Now()
+					if err := db.syncValueLog(laneID); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+					durPostVlogSync = time.Since(t1)
+				}
+			}
+
 			t0 := time.Now()
 			type (
 				setViewer interface {
@@ -6079,6 +6825,35 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
 
+			flushBackendChunk := func() error {
+				if !chunkBackend || backendPendingOps < backendEntriesCap {
+					return nil
+				}
+				tw := time.Now()
+				// If sync==true, we only need a single durability boundary at the end
+				// of the flush. Write intermediate chunks without fsync to avoid
+				// repeated pager sync work.
+				db.backendWriteBatchesTotal.Add(1)
+				err := backendBatch.Write()
+				cerr := backendBatch.Close()
+				if err == nil {
+					err = cerr
+				}
+				durBackendWrite += time.Since(tw)
+				if err != nil {
+					return err
+				}
+				backendBatch = nil
+
+				backendBatch = db.newBackendBatchWithSize(sizeHint)
+				sv, _ = backendBatch.(setViewer)
+				dv, _ = backendBatch.(deleteViewer)
+				psv, _ = backendBatch.(ptrSetterView)
+				ps, _ = backendBatch.(ptrSetter)
+				backendPendingOps = 0
+				return nil
+			}
+
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
@@ -6091,6 +6866,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					}
 					if err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
@@ -6120,6 +6902,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 								return false
 							}
 						}
+						backendPendingOps++
+						if err := flushBackendChunk(); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
 						iter.Next()
 						continue
 					}
@@ -6136,6 +6925,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						_ = backendBatch.Close()
 						return false
 					}
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
 				}
 				iter.Next()
 			}
@@ -6147,9 +6943,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			}
 			durBuildOps = time.Since(t0)
 		}
-		_ = iter.Close()
+		if err := iter.Close(); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: flush failed (iter close): %w", err))
+			_ = backendBatch.Close()
+			return false
+		}
 		// Commit to backend
-		if db.valueLogEnabled() {
+		if db.valueLogEnabled() && !vlogFlushed {
 			t0 := time.Now()
 			if err := db.flushValueLog(laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog flush): %w", err))
@@ -6167,20 +6967,30 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				durPostVlogSync = time.Since(t1)
 			}
 		}
-		var err error
-		t0 := time.Now()
-		if sync {
-			err = backendBatch.WriteSync()
+		if backendPendingOps > 0 {
+			tw := time.Now()
+			var err error
+			if sync {
+				err = backendBatch.WriteSync()
+			} else {
+				err = backendBatch.Write()
+			}
+			cerr := backendBatch.Close()
+			if err == nil {
+				err = cerr
+			}
+			durBackendWrite += time.Since(tw)
+			if err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+				return false
+			}
+			backendBatch = nil
 		} else {
-			err = backendBatch.Write()
+			if err := backendBatch.Close(); err != nil {
+				db.reportError(fmt.Errorf("cachingdb: flush failed (close): %w", err))
+				return false
+			}
 		}
-		durBackendWrite = time.Since(t0)
-		if err != nil {
-			db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-			_ = backendBatch.Close()
-			return false
-		}
-		_ = backendBatch.Close()
 		flushed = true
 	}
 	flushDur := time.Duration(0)
@@ -6586,6 +7396,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.backpressure_mode"] = "queue_len"
 	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
+	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
+	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
@@ -7584,7 +8396,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
-			if op.Type != batch.OpPut || len(op.Value) <= b.db.valueLogThreshold {
+			if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThreshold) {
 				continue
 			}
 			eligibleIdxs = append(eligibleIdxs, i)

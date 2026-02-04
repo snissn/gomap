@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"runtime/trace"
@@ -19,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
@@ -50,16 +53,19 @@ var (
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 
-	blockProfile = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
-	blockRate    = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
-	mutexProfile = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
-	mutexFrac    = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
-	traceProfile = flag.String("trace", "", "write runtime execution trace to file")
+	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
+	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
+	mutexProfile              = flag.String("mutexprofile", "", "write mutex contention profile (pprof) to file")
+	mutexFrac                 = flag.Int("mutexprofilefraction", 1, "runtime.SetMutexProfileFraction sampling fraction (1 = sample all)")
+	traceProfile              = flag.String("trace", "", "write runtime execution trace to file")
+	checkpointCPUProfile      = flag.String("checkpoint-cpuprofile", "", "write cpu profile for checkpoints to this path prefix")
+	checkpointCPUProfileTests = flag.String("checkpoint-cpuprofile-tests", "", "comma-separated list of tests to profile for checkpoints")
 
 	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
 	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
+	vacuumBetweenTests     = flag.Bool("vacuum-between-tests", false, "Vacuum supported DBs between each benchmark test (implies -checkpoint-between-tests; TreeDB: VacuumIndexOnline)")
 	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 
@@ -85,6 +91,7 @@ type BenchConfig struct {
 	DBsArg        string
 	DBsExcludeArg string
 	TestsArg      string
+	Profile       string
 
 	KeepDir             bool
 	Progress            bool
@@ -96,6 +103,9 @@ type BenchConfig struct {
 	// listed benchmark tests (lowercased).
 	CPUProfileTests map[string]struct{}
 
+	CheckpointCPUProfile      string
+	CheckpointCPUProfileTests map[string]struct{}
+
 	BlockProfile         string
 	BlockProfileRate     int
 	MutexProfile         string
@@ -106,6 +116,7 @@ type BenchConfig struct {
 	MaxRSSMB int
 
 	CheckpointBetweenTests bool
+	VacuumBetweenTests     bool
 	CheckpointEveryOps     int
 	CheckpointEveryBytes   int64
 
@@ -130,6 +141,9 @@ type BenchRun struct {
 	DisplayNames        map[string]string
 	Results             map[string]map[string]float64
 	CheckpointDurations map[string]map[string]time.Duration
+	VacuumDurations     map[string]map[string]time.Duration
+	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
+	TreeDBDiskUsage     map[string]treeDBDiskUsage
 }
 
 type scanDiag struct {
@@ -140,6 +154,34 @@ type scanDiag struct {
 	maxQueuedMemtables  string
 	backpressureMode    string
 	flushBpsEWMA        string
+}
+
+type walDiskUsage struct {
+	TotalBytes uint64
+	TotalFiles int
+
+	CommitBytes uint64
+	CommitFiles int
+
+	WALBytes uint64
+	WALFiles int
+
+	ValueBytes uint64
+	ValueFiles int
+
+	VlogBytes uint64
+	VlogFiles int
+
+	OtherBytes uint64
+	OtherFiles int
+}
+
+type treeDBDiskUsage struct {
+	MainIndexBytes uint64
+	MainWAL        walDiskUsage
+
+	DictIndexBytes uint64
+	DictWAL        walDiskUsage
 }
 
 func main() {
@@ -175,6 +217,8 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
 	fmt.Fprintf(os.Stderr, "\n")
 
+	logResolvedTreeDBOptions()
+
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
@@ -185,6 +229,7 @@ func main() {
 		DBsArg:                           *dbsArg,
 		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
+		Profile:                          *profileArg,
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
@@ -195,9 +240,11 @@ func main() {
 		MutexProfile:                     *mutexProfile,
 		MutexProfileFraction:             *mutexFrac,
 		TraceProfile:                     *traceProfile,
+		CheckpointCPUProfile:             *checkpointCPUProfile,
 		MaxWall:                          *maxWall,
 		MaxRSSMB:                         *maxRSSMB,
-		CheckpointBetweenTests:           *checkpointBetweenTests,
+		CheckpointBetweenTests:           *checkpointBetweenTests || *vacuumBetweenTests,
+		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
 		SettleBeforeScans:                *settleBeforeScans,
@@ -218,6 +265,18 @@ func main() {
 					continue
 				}
 				baseCfg.CPUProfileTests[t] = struct{}{}
+			}
+		}
+	}
+	if baseCfg.CheckpointCPUProfile != "" {
+		tests := parseList(*checkpointCPUProfileTests)
+		if len(tests) > 0 && tests[0] != "" {
+			baseCfg.CheckpointCPUProfileTests = make(map[string]struct{}, len(tests))
+			for _, t := range tests {
+				if t == "" {
+					continue
+				}
+				baseCfg.CheckpointCPUProfileTests[t] = struct{}{}
 			}
 		}
 	}
@@ -330,6 +389,19 @@ func main() {
 			fmt.Println()
 			printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
 		}
+		if len(run.VacuumDurations) > 0 {
+			fmt.Println()
+			printVacuumDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations)
+			if len(run.VacuumIndexBytes) > 0 {
+				fmt.Println()
+				printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
+			}
+		}
+		if len(run.TreeDBDiskUsage) > 0 {
+			fmt.Println()
+			fmt.Println("Disk Usage (End of Run)")
+			fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+		}
 		return
 	}
 
@@ -350,6 +422,19 @@ func main() {
 				fmt.Println()
 				printCheckpointDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations)
 			}
+			if len(run.VacuumDurations) > 0 {
+				fmt.Println()
+				printVacuumDurationsTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations)
+				if len(run.VacuumIndexBytes) > 0 {
+					fmt.Println()
+					printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
+				}
+			}
+			if len(run.TreeDBDiskUsage) > 0 {
+				fmt.Println()
+				fmt.Println("Disk Usage (End of Run)")
+				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			}
 		}
 	case "markdown":
 		fmt.Print(renderMarkdownSweep(runs))
@@ -367,6 +452,44 @@ func shouldCPUProfile(cfg BenchConfig, testName string) bool {
 	}
 	_, ok := cfg.CPUProfileTests[strings.ToLower(testName)]
 	return ok
+}
+
+func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
+	if cfg.CheckpointCPUProfile == "" {
+		return false
+	}
+	if len(cfg.CheckpointCPUProfileTests) == 0 {
+		return true
+	}
+	_, ok := cfg.CheckpointCPUProfileTests[strings.ToLower(testName)]
+	return ok
+}
+
+func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.File, error) {
+	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
+	}
+	return f, nil
+}
+
+func sanitizeProfileSegment(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r):
+			return r
+		case r == '_' || r == '-' || r == '.':
+			return '_'
+		default:
+			return '_'
+		}
+	}, s)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
@@ -567,6 +690,10 @@ type checkpointer interface {
 	Checkpoint() error
 }
 
+type vacuumIndexOnline interface {
+	VacuumIndexOnline(ctx context.Context) error
+}
+
 type periodicCheckpoint struct {
 	everyOps   int
 	everyBytes int64
@@ -659,6 +786,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	guard := newBenchGuard(cfg)
 	checkpointDurations := make(map[string]map[string]time.Duration)
+	vacuumDurations := make(map[string]map[string]time.Duration)
+	vacuumIndexBytes := make(map[string]map[string][2]uint64)
 
 	// dataset_write_* mirrors op-geth's Write1M when -keys=1_000_000 and -valsize=32 (32B keys).
 	datasetKeySize := 32
@@ -922,25 +1051,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
-			start := time.Now()
 			val := make([]byte, cfg.ValueSize)
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
-			var k [8]byte
 
-			keys := make([][]byte, total)
+			const keySize = 8
+			allKeys := make([]byte, total*keySize)
 			for i := 0; i < total; i++ {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
-				keys[i] = append([]byte(nil), k[:]...)
+				offset := i * keySize
+				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 			}
-
 			// Reset timer to exclude setup
-			start = time.Now()
+			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8 + len(val))
 
@@ -960,7 +1087,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					if err := batch.Set(keys[j], val); err != nil {
+					offset := j * keySize
+					key := allKeys[offset : offset+keySize]
+					if err := batch.Set(key, val); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_random: set: %w", err)
 					}
@@ -983,24 +1112,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if !ok {
 				return math.NaN(), nil
 			}
-			start := time.Now()
 			total := cfg.Keys
 			batchSize := 1000 // Using typical batch size
-			var k [8]byte
 
-			keys := make([][]byte, total)
+			const keySize = 8
+			allKeys := make([]byte, total*keySize)
 			for i := 0; i < total; i++ {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total)))
-				keys[i] = append([]byte(nil), k[:]...)
+				offset := i * keySize
+				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total)))
 			}
-
 			// Reset timer to exclude setup
-			start = time.Now()
+			start := time.Now()
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8)
 
@@ -1020,7 +1147,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					if err := batch.Delete(keys[j]); err != nil {
+					offset := j * keySize
+					key := allKeys[offset : offset+keySize]
+					if err := batch.Delete(key); err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_delete: delete: %w", err)
 					}
@@ -1715,15 +1844,75 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			chkMap := make(map[string]time.Duration)
 			for _, inst := range instances {
 				cp, ok := inst.Wrapper.(checkpointer)
-				if ok {
-					start := time.Now()
-					if err := cp.Checkpoint(); err != nil {
-						return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, err)
-					}
-					chkMap[inst.Wrapper.Name()] = time.Since(start)
+				if !ok {
+					continue
 				}
+
+				var (
+					checkpointCPUFile *os.File
+					err               error
+				)
+				if shouldCheckpointCPUProfile(cfg, testName) {
+					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, testName, inst.Wrapper.Name())
+					if err != nil {
+						return BenchRun{}, fmt.Errorf("checkpoint %s before %s profiling: %w", inst.Name, testName, err)
+					}
+				}
+
+				start := time.Now()
+				checkpointErr := cp.Checkpoint()
+
+				if checkpointCPUFile != nil {
+					pprof.StopCPUProfile()
+					_ = checkpointCPUFile.Close()
+				}
+
+				if checkpointErr != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, checkpointErr)
+				}
+				chkMap[inst.Wrapper.Name()] = time.Since(start)
 			}
 			checkpointDurations[testName] = chkMap
+
+			if cfg.VacuumBetweenTests {
+				vacMap := make(map[string]time.Duration)
+				bytesMap := make(map[string][2]uint64)
+				for _, inst := range instances {
+					vac, ok := inst.Wrapper.(vacuumIndexOnline)
+					if !ok {
+						continue
+					}
+
+					// Best-effort index.db size reporting (primarily for TreeDB).
+					var before uint64
+					// TreeDB stores its main index under "maindb/index.db" within the
+					// per-DB temp root directory.
+					indexPath := filepath.Join(inst.Dir, "maindb", "index.db")
+					if st, err := os.Stat(indexPath); err == nil {
+						before = uint64(st.Size())
+					}
+
+					start := time.Now()
+					if err := vac.VacuumIndexOnline(context.Background()); err != nil {
+						return BenchRun{}, fmt.Errorf("vacuum %s before %s: %w", inst.Name, testName, err)
+					}
+					vacMap[inst.Wrapper.Name()] = time.Since(start)
+
+					var after uint64
+					if st, err := os.Stat(indexPath); err == nil {
+						after = uint64(st.Size())
+					}
+					if before != 0 || after != 0 {
+						bytesMap[inst.Wrapper.Name()] = [2]uint64{before, after}
+					}
+				}
+				if len(vacMap) > 0 {
+					vacuumDurations[testName] = vacMap
+				}
+				if len(bytesMap) > 0 {
+					vacuumIndexBytes[testName] = bytesMap
+				}
+			}
 		}
 
 		if err := liveTbl.Render(results); err != nil {
@@ -1776,8 +1965,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	_ = liveTbl.Clear()
 
 	// Shutdown
+	treedbDisk := make(map[string]treeDBDiskUsage)
 	for _, inst := range instances {
 		_ = inst.Wrapper.Close()
+		if isTreeDBInstance(inst) {
+			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
+				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
+					treedbDisk[inst.Wrapper.Name()] = usage
+				}
+			}
+		}
 		if !cfg.KeepDir {
 			_ = os.RemoveAll(inst.Dir)
 		}
@@ -1790,6 +1987,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		DisplayNames:        displayNames,
 		Results:             results,
 		CheckpointDurations: checkpointDurations,
+		VacuumDurations:     vacuumDurations,
+		VacuumIndexBytes:    vacuumIndexBytes,
+		TreeDBDiskUsage:     treedbDisk,
 	}, nil
 }
 
@@ -1807,6 +2007,169 @@ func printFragmentationReport(w io.Writer, phase, dbName string, rep map[string]
 	}
 }
 
+func hasInstance(instances []*DBInstance, name string) bool {
+	for _, inst := range instances {
+		if inst != nil && inst.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+const treedbAdapterName = "treedb"
+const treedbWrapperName = "TreeDB"
+
+func isTreeDBInstance(inst *DBInstance) bool {
+	if inst == nil {
+		return false
+	}
+	// The adapter/registry name is "treedb", while the display wrapper name is
+	// "TreeDB". Keep both checks so callers can key off either notion safely.
+	if inst.Name == treedbAdapterName {
+		return true
+	}
+	if inst.Wrapper != nil && inst.Wrapper.Name() == treedbWrapperName {
+		return true
+	}
+	return false
+}
+
+func computeWalDiskUsage(dir string) (walDiskUsage, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return walDiskUsage{}, err
+	}
+
+	var out walDiskUsage
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		size := info.Size()
+		if size < 0 {
+			continue
+		}
+
+		out.TotalFiles++
+		out.TotalBytes += uint64(size)
+
+		name := entry.Name()
+		switch {
+		case strings.HasPrefix(name, "commit-"):
+			out.CommitFiles++
+			out.CommitBytes += uint64(size)
+		case strings.HasPrefix(name, "wal-"):
+			out.WALFiles++
+			out.WALBytes += uint64(size)
+		case strings.HasPrefix(name, "value-"):
+			out.ValueFiles++
+			out.ValueBytes += uint64(size)
+		case strings.HasPrefix(name, "vlog-"):
+			out.VlogFiles++
+			out.VlogBytes += uint64(size)
+		default:
+			out.OtherFiles++
+			out.OtherBytes += uint64(size)
+		}
+	}
+	return out, nil
+}
+
+func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
+	var out treeDBDiskUsage
+	if strings.TrimSpace(rootDir) == "" {
+		return out, fmt.Errorf("disk usage: empty root dir")
+	}
+
+	mainIndex := filepath.Join(rootDir, "maindb", "index.db")
+	if st, err := os.Stat(mainIndex); err == nil {
+		if sz := st.Size(); sz > 0 {
+			out.MainIndexBytes = uint64(sz)
+		}
+	}
+	mainWAL := filepath.Join(rootDir, "maindb", "wal")
+	if u, err := computeWalDiskUsage(mainWAL); err == nil {
+		out.MainWAL = u
+	}
+
+	dictIndex := filepath.Join(rootDir, "dictdb", "index.db")
+	if st, err := os.Stat(dictIndex); err == nil {
+		if sz := st.Size(); sz > 0 {
+			out.DictIndexBytes = uint64(sz)
+		}
+	}
+	dictWAL := filepath.Join(rootDir, "dictdb", "wal")
+	if u, err := computeWalDiskUsage(dictWAL); err == nil {
+		out.DictWAL = u
+	}
+
+	return out, nil
+}
+
+func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
+	if len(usage) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(usage))
+	for name := range usage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	walLine := func(prefix string, u walDiskUsage) string {
+		parts := []string{
+			fmt.Sprintf("total=%s", formatBytes(u.TotalBytes)),
+			fmt.Sprintf("files=%d", u.TotalFiles),
+		}
+		if u.CommitBytes > 0 {
+			parts = append(parts, fmt.Sprintf("commit=%s", formatBytes(u.CommitBytes)))
+		}
+		if u.WALBytes > 0 {
+			parts = append(parts, fmt.Sprintf("wal=%s", formatBytes(u.WALBytes)))
+		}
+		if u.ValueBytes > 0 {
+			parts = append(parts, fmt.Sprintf("value=%s", formatBytes(u.ValueBytes)))
+		}
+		if u.VlogBytes > 0 {
+			parts = append(parts, fmt.Sprintf("vlog=%s", formatBytes(u.VlogBytes)))
+		}
+		if u.OtherBytes > 0 {
+			parts = append(parts, fmt.Sprintf("other=%s", formatBytes(u.OtherBytes)))
+		}
+		return prefix + strings.Join(parts, " ")
+	}
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		u := usage[name]
+		sb.WriteString(name)
+		sb.WriteString(":\n")
+		if u.MainIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s\n", formatBytes(u.MainIndexBytes)))
+		}
+		if u.MainWAL.TotalFiles > 0 || u.MainWAL.TotalBytes > 0 {
+			sb.WriteString(walLine("  maindb/wal: ", u.MainWAL))
+			sb.WriteByte('\n')
+		}
+		if u.DictIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  dictdb/index.db: %s\n", formatBytes(u.DictIndexBytes)))
+		}
+		if u.DictWAL.TotalFiles > 0 || u.DictWAL.TotalBytes > 0 {
+			sb.WriteString(walLine("  dictdb/wal: ", u.DictWAL))
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
+}
+
 func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
@@ -1815,7 +2178,28 @@ func renderMarkdownSingle(run BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", run.Config.RangeSpan))
+	if strings.TrimSpace(run.Config.Profile) != "" {
+		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(run.Config.Profile)))
+	}
+	if strings.TrimSpace(run.Config.DBsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- dbs: %s\n", strings.TrimSpace(run.Config.DBsArg)))
+	}
+	if strings.TrimSpace(run.Config.TestsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- tests: %s\n", strings.TrimSpace(run.Config.TestsArg)))
+	}
+	if run.Config.SeedUsed != 0 {
+		sb.WriteString(fmt.Sprintf("- seed: %d\n", run.Config.SeedUsed))
+	}
 	sb.WriteString("\n")
+
+	if hasInstance(run.Instances, "treedb") {
+		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+			sb.WriteString("## Resolved TreeDB Options\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(text)
+			sb.WriteString("\n```\n\n")
+		}
+	}
 
 	sb.WriteString("```text\n")
 	table, _, _, _ := renderResultsTableStringWithLayout(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
@@ -1827,6 +2211,27 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString("## Checkpoint Time (Between Tests)\n\n")
 		sb.WriteString("```text\n")
 		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
+		sb.WriteString("```\n")
+	}
+	if len(run.VacuumDurations) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Vacuum Time (Between Tests)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderVacuumDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumDurations))
+		sb.WriteString("```\n")
+		if len(run.VacuumIndexBytes) > 0 {
+			sb.WriteString("\n")
+			sb.WriteString("## Vacuum Index Bytes (Between Tests)\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(renderVacuumIndexBytesTableString(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes))
+			sb.WriteString("```\n")
+		}
+	}
+	if len(run.TreeDBDiskUsage) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Disk Usage (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
 		sb.WriteString("```\n")
 	}
 	return sb.String()
@@ -1849,7 +2254,25 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))
 	sb.WriteString(fmt.Sprintf("- range-span: %d\n", runs[0].Config.RangeSpan))
+	if strings.TrimSpace(runs[0].Config.Profile) != "" {
+		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(runs[0].Config.Profile)))
+	}
+	if strings.TrimSpace(runs[0].Config.DBsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- dbs: %s\n", strings.TrimSpace(runs[0].Config.DBsArg)))
+	}
+	if strings.TrimSpace(runs[0].Config.TestsArg) != "" {
+		sb.WriteString(fmt.Sprintf("- tests: %s\n", strings.TrimSpace(runs[0].Config.TestsArg)))
+	}
 	sb.WriteString("\n")
+
+	if hasInstance(runs[0].Instances, "treedb") {
+		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+			sb.WriteString("## Resolved TreeDB Options\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(text)
+			sb.WriteString("\n```\n\n")
+		}
+	}
 
 	for _, testName := range runs[0].TestOrder {
 		sb.WriteString("## ")
@@ -1857,6 +2280,27 @@ func renderMarkdownSweep(runs []BenchRun) string {
 		sb.WriteString("\n\n")
 		sb.WriteString(renderMarkdownTestSweep(testName, runs, dbNames))
 		sb.WriteString("\n")
+	}
+
+	// Best-effort disk usage reporting (end-of-run sizes) for TreeDB only.
+	anyDisk := false
+	for _, run := range runs {
+		if len(run.TreeDBDiskUsage) > 0 {
+			anyDisk = true
+			break
+		}
+	}
+	if anyDisk {
+		sb.WriteString("## Disk Usage (End of Run)\n\n")
+		for _, run := range runs {
+			if len(run.TreeDBDiskUsage) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			sb.WriteString("```\n\n")
+		}
 	}
 
 	return sb.String()
@@ -2453,6 +2897,116 @@ func printCheckpointDurationsTable(instances []*DBInstance, finalTestOrder []str
 		return
 	}
 	fmt.Println("Checkpoint Time (Between Tests)")
+	fmt.Print(table)
+}
+
+func renderVacuumDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
+	// Same shape/meaning as checkpoint durations: a per-test row, per-DB duration.
+	return renderCheckpointDurationsTableString(instances, finalTestOrder, displayNames, durs)
+}
+
+func printVacuumDurationsTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) {
+	table := renderVacuumDurationsTableString(instances, finalTestOrder, displayNames, durs)
+	if table == "" {
+		return
+	}
+	fmt.Println("Vacuum Time (Between Tests)")
+	fmt.Print(table)
+}
+
+func renderVacuumIndexBytesTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, bytes map[string]map[string][2]uint64) string {
+	rows := make([]string, 0, len(finalTestOrder))
+	for _, testName := range finalTestOrder {
+		if _, ok := bytes[testName]; ok {
+			rows = append(rows, testName)
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+
+	colNames := []string{"Before Test"}
+	for _, inst := range instances {
+		colNames = append(colNames, inst.Wrapper.Name())
+	}
+
+	colWidths := make(map[string]int, len(colNames))
+	for _, colName := range colNames {
+		colWidths[colName] = len(colName)
+	}
+
+	for _, testName := range rows {
+		disp := displayNames[testName]
+		if len(disp) > colWidths["Before Test"] {
+			colWidths["Before Test"] = len(disp)
+		}
+	}
+
+	for _, testName := range rows {
+		perDB := bytes[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if pair, ok := perDB[dbName]; ok {
+					before, after := pair[0], pair[1]
+					if before != 0 || after != 0 {
+						cell = fmt.Sprintf("%s -> %s", formatBytes(before), formatBytes(after))
+					}
+				}
+			}
+			if len(cell) > colWidths[dbName] {
+				colWidths[dbName] = len(cell)
+			}
+		}
+	}
+
+	var sb strings.Builder
+	headerRow := fmt.Sprintf("%*s", colWidths["Before Test"], "Before Test")
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		headerRow += fmt.Sprintf("  %*s", colWidths[dbName], dbName)
+	}
+	sb.WriteString(headerRow)
+	sb.WriteString("\n")
+
+	separatorRow := fmt.Sprintf("%*s", colWidths["Before Test"], strings.Repeat("-", colWidths["Before Test"]))
+	for _, inst := range instances {
+		dbName := inst.Wrapper.Name()
+		separatorRow += fmt.Sprintf("  %*s", colWidths[dbName], strings.Repeat("-", colWidths[dbName]))
+	}
+	sb.WriteString(separatorRow)
+	sb.WriteString("\n")
+
+	for _, testName := range rows {
+		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], displayNames[testName])
+		perDB := bytes[testName]
+		for _, inst := range instances {
+			dbName := inst.Wrapper.Name()
+			cell := "-"
+			if perDB != nil {
+				if pair, ok := perDB[dbName]; ok {
+					before, after := pair[0], pair[1]
+					if before != 0 || after != 0 {
+						cell = fmt.Sprintf("%s -> %s", formatBytes(before), formatBytes(after))
+					}
+				}
+			}
+			dataRow += fmt.Sprintf("  %*s", colWidths[dbName], cell)
+		}
+		sb.WriteString(dataRow)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func printVacuumIndexBytesTable(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, bytes map[string]map[string][2]uint64) {
+	table := renderVacuumIndexBytesTableString(instances, finalTestOrder, displayNames, bytes)
+	if table == "" {
+		return
+	}
+	fmt.Println("Vacuum Index Bytes (Between Tests)")
 	fmt.Print(table)
 }
 
