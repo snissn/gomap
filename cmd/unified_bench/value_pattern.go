@@ -45,6 +45,6 @@ func normalizeWriteValuePattern(pattern string) (string, error) {
 	case "medium_compressible", "medium_compressible_sparse":
 		return "medium_compressible_sparse", nil
 	default:
-		return "", fmt.Errorf("unsupported -val-pattern=%q (expected zero|repeat|repeat_tail64|half_repeat_half_random|random)", pattern)
+		return "", fmt.Errorf("unsupported -val-pattern=%q (expected zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random)", pattern)
 	}
 }
