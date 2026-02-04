@@ -2541,6 +2541,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			db.startWALWriter(&db.lanes[i])
 		}
 	}
+	if db.valueLogEnabled() {
+		for i := range db.lanes {
+			db.startVlogWriter(&db.lanes[i])
+		}
+	}
 
 	// Publish initial memtable snapshot for lock-free reads.
 	db.mu.Lock()
@@ -2913,6 +2918,24 @@ var walAckPool = sync.Pool{
 	New: func() any { return &walAck{} },
 }
 
+type vlogWriteRequest struct {
+	rid        uint64
+	value      []byte
+	durability journalDurability
+	ack        *vlogAck
+}
+
+type vlogAck struct {
+	wg         sync.WaitGroup
+	ptr        page.ValuePtr
+	retainPath string
+	err        error
+}
+
+var vlogAckPool = sync.Pool{
+	New: func() any { return &vlogAck{} },
+}
+
 const maxEntryPoolCap = 1 << 16
 
 var entrySlicePool sync.Pool
@@ -3174,6 +3197,15 @@ const (
 	walFastQueueMax  = 16384
 )
 
+const (
+	vlogWriteBuffer   = 4096
+	vlogWriteBatchMax = 512
+)
+
+// Match valuelog's writevMinAvgValueSize threshold so the queueing path is only
+// used when we expect writev batching to be competitive.
+const vlogQueueMinValueSize = 16 << 10
+
 func (db *DB) startWALWriter(l *lane) {
 	if l == nil {
 		return
@@ -3184,6 +3216,15 @@ func (db *DB) startWALWriter(l *lane) {
 	go db.walWriteLoop(l)
 	db.wg.Add(1)
 	go db.walFastLoop(l)
+}
+
+func (db *DB) startVlogWriter(l *lane) {
+	if l == nil {
+		return
+	}
+	l.vlogCh = make(chan vlogWriteRequest, vlogWriteBuffer)
+	db.wg.Add(1)
+	go db.vlogWriteLoop(l)
 }
 
 func (db *DB) walWriteLoop(l *lane) {
@@ -3233,6 +3274,39 @@ func (db *DB) walWriteLoop(l *lane) {
 		}
 
 		db.finishWALRequests(batch, nil)
+	}
+}
+
+func (db *DB) vlogWriteLoop(l *lane) {
+	defer db.wg.Done()
+
+	batch := make([]vlogWriteRequest, 0, vlogWriteBatchMax)
+	for {
+		batch = batch[:0]
+
+		var req vlogWriteRequest
+		select {
+		case <-db.closeCh:
+			db.drainVlogWriter(l, batch)
+			return
+		case req = <-l.vlogCh:
+		}
+		batch = append(batch, req)
+
+	drain:
+		for len(batch) < vlogWriteBatchMax {
+			select {
+			case req = <-l.vlogCh:
+				batch = append(batch, req)
+			default:
+				break drain
+			}
+		}
+
+		db.flushVlogRequests(l, batch)
+		if len(l.vlogCh) == 0 {
+			l.vlogQueueing.Store(false)
+		}
 	}
 }
 
@@ -3334,6 +3408,27 @@ func (db *DB) drainWALWriter(l *lane, batch []walWriteRequest) {
 	}
 }
 
+func (db *DB) drainVlogWriter(l *lane, batch []vlogWriteRequest) {
+	for {
+		select {
+		case req := <-l.vlogCh:
+			batch = append(batch[:0], req)
+		drain:
+			for len(batch) < vlogWriteBatchMax {
+				select {
+				case req = <-l.vlogCh:
+					batch = append(batch, req)
+				default:
+					break drain
+				}
+			}
+			db.flushVlogRequests(l, batch)
+		default:
+			return
+		}
+	}
+}
+
 func (db *DB) finishWALRequests(requests []walWriteRequest, err error) {
 	for i := range requests {
 		ack := requests[i].ack
@@ -3398,6 +3493,217 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 		l.walLiveBytes.Add(totalBytes)
 	}
 	return nil
+}
+
+func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
+	if len(requests) == 0 {
+		return
+	}
+	if l == nil {
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = errWALUnavailable
+			ack.wg.Done()
+		}
+		return
+	}
+
+	var (
+		needFlush bool
+		needSync  bool
+		maxValLen int
+	)
+	records := getValueLogRecords(len(requests))
+	for i := range requests {
+		req := &requests[i]
+		records[i] = valuelog.Record{RID: req.rid, Value: req.value}
+		if req.durability == journalDurabilitySync {
+			needSync = true
+		} else if req.durability == journalDurabilityFlush {
+			needFlush = true
+		}
+		if n := len(req.value); n > maxValLen {
+			maxValLen = n
+		}
+	}
+
+	k := 1
+	if len(records) > 1 {
+		paused := db.valueLogDictPauseRemaining.Load() > 0
+		if paused && db.disableJournal {
+			k = valuelog.MaxFrameK
+		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+			k = cur
+		} else {
+			k = 8
+			if db.disableJournal && db.forceValueLogPointers {
+				k = 16
+			}
+		}
+	}
+	if limits.MaxRecordSize > 0 && maxValLen > 0 {
+		maxKBySize := int(limits.MaxRecordSize) / maxValLen
+		if maxKBySize < 1 {
+			maxKBySize = 1
+		}
+		if k > maxKBySize {
+			k = maxKBySize
+		}
+	}
+	k = db.clampValueLogDictK(k)
+
+	var (
+		ptrs        []page.ValuePtr
+		stats       valuelog.FrameStats
+		startSize   int64
+		totalBytes  int64
+		framesTotal int
+		retainPath  string
+		err         error
+	)
+
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		putValueLogRecords(records)
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = errWALUnavailable
+			ack.wg.Done()
+		}
+		return
+	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	rawWriterInto := caps.rawInto
+	policySetter := caps.keep
+	startSize = w.Size()
+
+	if policySetter != nil {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		ioNsPerStored := snap.IoNsPerStoredByte
+		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	}
+
+	if len(records) == 1 {
+		stats = valuelog.FrameStats{Records: 1, RawPayloadBytes: len(records[0].Value), StoredPayloadBytes: len(records[0].Value)}
+		ptrs = getValueLogPtrs(1)
+		ptrs[0], err = w.Append(0, nil, records[0].RID, records[0].Value)
+		framesTotal = 1
+	} else {
+		ptrs = getValueLogPtrs(len(records))
+		if rawWriterInto != nil {
+			_, stats, err = rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
+			if err == nil && k > 0 {
+				framesTotal = (len(records) + k - 1) / k
+			}
+		} else {
+			rawBytes := 0
+			for i := range records {
+				rawBytes += len(records[i].Value)
+			}
+			stats = valuelog.FrameStats{Records: len(records), RawPayloadBytes: rawBytes, StoredPayloadBytes: rawBytes}
+			for i := 0; err == nil && i < len(records); i += k {
+				end := i + k
+				if end > len(records) {
+					end = len(records)
+				}
+				framePtrs, frameErr := w.AppendFrame(0, nil, records[i:end])
+				if frameErr != nil {
+					err = frameErr
+					break
+				}
+				copy(ptrs[i:end], framePtrs)
+				framesTotal++
+			}
+		}
+	}
+
+	if err == nil {
+		switch {
+		case needSync:
+			err = w.Sync()
+		case needFlush:
+			err = w.Flush()
+		default:
+			if db.deferredValueLogEnabled() {
+				err = w.Flush()
+			}
+		}
+	}
+	if err == nil {
+		totalBytes = w.Size() - startSize
+	}
+	if err == nil && totalBytes > 0 {
+		l.vlogLiveBytes.Add(totalBytes)
+	}
+	if err == nil && l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+		l.vlogRetainedPath = l.vlogPath
+		retainPath = l.vlogPath
+	}
+	l.vlogMu.Unlock()
+
+	if err == nil && framesTotal > 0 {
+		db.valueLogDictFrames.total.Add(uint64(framesTotal))
+		if stats.Attempted {
+			db.valueLogDictFrames.attempted.Add(uint64(framesTotal))
+		}
+		if stats.Kept {
+			db.valueLogDictFrames.kept.Add(uint64(framesTotal))
+		}
+	}
+
+	if ptrs != nil {
+		defer putValueLogPtrs(ptrs)
+	}
+	putValueLogRecords(records)
+
+	if err != nil {
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = err
+			ack.wg.Done()
+		}
+		return
+	}
+
+	for i := range requests {
+		ack := requests[i].ack
+		if ack == nil {
+			continue
+		}
+		ack.ptr = ptrs[i]
+		if i == 0 {
+			ack.retainPath = retainPath
+		} else {
+			ack.retainPath = ""
+		}
+		ack.err = nil
+		ack.wg.Done()
+	}
 }
 
 // journalDurability represents the durability boundary for journal writes.
@@ -3809,6 +4115,91 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	db.valueLogDictCollectSample(value)
+
+	if dictID == 0 && wallStart.IsZero() && durability != journalDurabilitySync && l.vlogCh != nil && len(value) >= vlogQueueMinValueSize {
+		if !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+			w := l.vlog
+			if w == nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", errWALUnavailable
+			}
+			if l.vlogCaps.writer != w {
+				l.vlogCaps = computeVlogWriterCaps(w)
+			}
+			caps := l.vlogCaps
+			policySetter := caps.keep
+			startSize := w.Size()
+
+			if policySetter != nil {
+				snap := db.valueLogAutotuneMetrics.snapshot()
+				ioNsPerStored := snap.IoNsPerStoredByte
+				encodeNsPerRaw := snap.EncodeNsPerRawByte
+				if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+					ioNsPerStored = 0
+					encodeNsPerRaw = 0
+				}
+				policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+			}
+
+			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
+			ptr, err = w.Append(0, nil, rid, value)
+			if err == nil {
+				switch durability {
+				case journalDurabilityFlush:
+					err = w.Flush()
+				default:
+					if db.deferredValueLogEnabled() {
+						err = w.Flush()
+					}
+				}
+			}
+			if err == nil {
+				totalBytes = w.Size() - startSize
+			}
+			retainPath := ""
+			if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+				l.vlogRetainedPath = l.vlogPath
+				retainPath = l.vlogPath
+			}
+			l.vlogMu.Unlock()
+			if err != nil {
+				return page.ValuePtr{}, "", err
+			}
+			db.valueLogDictFrames.total.Add(1)
+			if stats.Attempted {
+				db.valueLogDictFrames.attempted.Add(1)
+			}
+			if stats.Kept {
+				db.valueLogDictFrames.kept.Add(1)
+			}
+			if totalBytes > 0 {
+				l.vlogLiveBytes.Add(totalBytes)
+			}
+			return ptr, retainPath, nil
+		}
+
+		l.vlogQueueing.Store(true)
+		ack := vlogAckPool.Get().(*vlogAck)
+		ack.ptr = page.ValuePtr{}
+		ack.retainPath = ""
+		ack.err = nil
+		ack.wg.Add(1)
+
+		req := vlogWriteRequest{rid: rid, value: value, durability: durability, ack: ack}
+		select {
+		case l.vlogCh <- req:
+		case <-db.closeCh:
+			ack.err = errWALClosed
+			ack.wg.Done()
+		}
+
+		ack.wg.Wait()
+		ptr := ack.ptr
+		retainPath := ack.retainPath
+		err := ack.err
+		vlogAckPool.Put(ack)
+		return ptr, retainPath, err
+	}
 
 	l.vlogMu.Lock()
 	w := l.vlog
