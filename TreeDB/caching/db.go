@@ -2439,15 +2439,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			}
 			return template.NewEngine(valueLogTemplateCfg)
 		}(),
-		mutableShards:                  mutableShards,
-		mutableShardMask:               uint64(shardCount - 1),
-		hashSortedIndexer:              indexer,
-		closeCh:                        make(chan struct{}),
-		flushCh:                        make(chan struct{}, 1),
-		autoCheckpointOnceCh:           make(chan struct{}, 1),
-		autoCheckpointWriteCh:          make(chan struct{}, 1),
-		lanes:                          lanes,
-		flushLaneMu:                    make([]sync.Mutex, len(lanes)),
+		mutableShards:         mutableShards,
+		mutableShardMask:      uint64(shardCount - 1),
+		hashSortedIndexer:     indexer,
+		closeCh:               make(chan struct{}),
+		flushCh:               make(chan struct{}, 1),
+		autoCheckpointOnceCh:  make(chan struct{}, 1),
+		autoCheckpointWriteCh: make(chan struct{}, 1),
+		lanes:                 lanes,
+		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
