@@ -62,7 +62,7 @@ type DB struct {
 	cached         *caching.DB
 	backend        *db.DB
 	dictdb         *db.DB
-	templateDB     *db.DB
+	templateDB     *DB
 	writePath      writePathInfo
 	bgVac          bgIndexVacuumWorker
 	notifyError    func(error)
@@ -180,7 +180,7 @@ func Open(opts Options) (*DB, error) {
 
 	var dictBackend *db.DB
 	var dictStore *dictdb.Store
-	var templateBackend *db.DB
+	var templateDB *DB
 	var templateStore *templatedb.Store
 	if !opts.DisableSideStores {
 		dictOpts := opts
@@ -207,6 +207,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.Dir = templatedbDir
+		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
@@ -219,7 +220,7 @@ func Open(opts Options) (*DB, error) {
 		}
 
 		var err error
-		templateBackend, err = db.Open(templateOpts)
+		templateDB, err = Open(templateOpts)
 		if err != nil {
 			if dictBackend != nil {
 				_ = dictBackend.Close()
@@ -228,7 +229,7 @@ func Open(opts Options) (*DB, error) {
 		}
 
 		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
-		templateStore = templatedb.New(templateKV{db: templateBackend}, templatedb.Config{
+		templateStore = templatedb.New(templateKV{db: templateDB}, templatedb.Config{
 			MaxCandidatesPerFP:    tcfg.MaxCandidatesPerFP,
 			MaxCandidateListBytes: tcfg.MaxCandidateListBytes,
 		})
@@ -247,14 +248,14 @@ func Open(opts Options) (*DB, error) {
 		if dictBackend != nil {
 			_ = dictBackend.Close()
 		}
-		if templateBackend != nil {
-			_ = templateBackend.Close()
+		if templateDB != nil {
+			_ = templateDB.Close()
 		}
 		return nil, err
 	}
 
 	if opts.ReadOnly {
-		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
+		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
 	if opts.SlowdownBacklogSeconds < 0 {
@@ -328,15 +329,15 @@ func Open(opts Options) (*DB, error) {
 		if dictBackend != nil {
 			_ = dictBackend.Close()
 		}
-		if templateBackend != nil {
-			_ = templateBackend.Close()
+		if templateDB != nil {
+			_ = templateDB.Close()
 		}
 		return nil, err
 	}
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateBackend, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
