@@ -40,6 +40,9 @@ Focus on pointer durability and GC correctness:
 - **Assert:** Fully-unreferenced segments are removed; referenced segments remain.
 - **Existing coverage:** `TreeDB/db/vlog_gc_test.go` (`TestValueLogGC_RemovesUnreferencedSegment`).
 
+### Leaf key compression density
+- **Harness:** `TreeDB/node/leaf_density_test.go` (`BenchmarkLeafPageDensity`) measures keys/page with prefix compression on/off and enforces minimum effectiveness.
+
 ## Notes
 
 - Any documentation describing TreeDB values being stored in "slabs" is legacy and should be updated or removed (HashDB still uses slab segments).

@@ -27,3 +27,4 @@ There is **no slab storage path** in TreeDB.
 - Pointer persistence after reopen: `TreeDB/reopen_verify_test.go`
 - Value-log GC reachability: `TreeDB/db/vlog_gc_test.go`
 - Crash recovery tiers: `TreeDB/recovery_spec_test.go`
+- Leaf key compression density: `TreeDB/node/leaf_density_test.go` (`BenchmarkLeafPageDensity`)

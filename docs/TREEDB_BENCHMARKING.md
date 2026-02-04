@@ -49,6 +49,19 @@ KEYS=4000000 PROFILES=fast scripts/treedb_forceptr_matrix.sh
 KEYS=2000000 PROFILES=fast,balanced PPROF_TESTS=batch_write,random_write scripts/treedb_forceptr_matrix.sh
 ```
 
+### Leaf page density harness (prefix compression)
+
+When working on leaf key encodings, it’s useful to measure **keys per leaf page**
+directly (and the alloc/memory churn of the encoder) without running a full DB:
+
+```bash
+go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count=1
+```
+
+Regression guardrails:
+- `TreeDB/node/leaf_density_test.go` enforces a minimum density improvement for
+  prefix-heavy key workloads when leaf prefix compression is enabled.
+
 ### Template encode profiling (steady-only)
 
 For template-compression profiling, prefer the steady-state-only CPU profile

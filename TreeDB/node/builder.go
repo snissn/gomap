@@ -16,8 +16,10 @@ type Builder struct {
 	dirEnd                int // Offset where the next directory entry (offset) will be written
 	heapStart             int // Offset where the next heap entry will be written (grows down)
 	leafPrefixCompression bool
+	leafPrefixV2          bool
 	leafColumnar          bool
 	internalBaseDelta     bool
+	leafPrevKeyBuf        [64]byte
 	leafPrevKey           []byte
 	leafIndex             int
 }
@@ -44,6 +46,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 		dirEnd:                NodeHeaderSize,
 		heapStart:             len(data),
 		leafPrefixCompression: leafPrefix,
+		leafPrefixV2:          leafPrefix,
 		leafColumnar:          opts.LeafColumnar,
 		internalBaseDelta:     opts.InternalBaseDelta,
 	}
@@ -107,7 +110,6 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 	suffixLen = len(key)
 	headerSize := 7
 	if b.leafPrefixCompression {
-		headerSize = 9
 		if b.leafIndex%leafPrefixRestartInterval != 0 && len(b.leafPrevKey) > 0 {
 			prefixLen = sharedPrefixLen(key, b.leafPrevKey)
 			if prefixLen > len(key) {
@@ -115,6 +117,11 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 			}
 		}
 		suffixLen = len(key) - prefixLen
+		if b.leafPrefixV2 {
+			headerSize = leafPrefixHeaderSizeV2(prefixLen, suffixLen, flags, len(value))
+		} else {
+			headerSize = 9
+		}
 	}
 
 	entrySize = headerSize + suffixLen
@@ -200,7 +207,11 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 
 	headerSize := 7
 	if b.leafPrefixCompression {
-		headerSize = 9
+		if b.leafPrefixV2 {
+			headerSize = leafPrefixHeaderSizeV2(prefixLen, suffixLen, flags, len(value))
+		} else {
+			headerSize = 9
+		}
 	}
 
 	// 2. Check Space
@@ -220,17 +231,43 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	ptr := entryStart
 	keyStart := ptr + headerSize
 	if b.leafPrefixCompression {
-		b.data[ptr] = byte(prefixLen)
-		b.data[ptr+1] = byte(prefixLen >> 8)
-		b.data[ptr+2] = byte(suffixLen)
-		b.data[ptr+3] = byte(suffixLen >> 8)
-		if flags&FlagPointer != 0 {
-			putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
+		if b.leafPrefixV2 {
+			headerOff := ptr
+			extended := prefixLen > 254 || suffixLen > 254
+			if extended {
+				b.data[headerOff] = 0xFF
+				b.data[headerOff+1] = 0xFF
+			} else {
+				b.data[headerOff] = byte(prefixLen)
+				b.data[headerOff+1] = byte(suffixLen)
+			}
+			b.data[headerOff+2] = flags
+			headerOff += 3
+			if extended {
+				putUint16(b.data[headerOff:headerOff+2], uint16(prefixLen))
+				putUint16(b.data[headerOff+2:headerOff+4], uint16(suffixLen))
+				headerOff += 4
+			}
+			if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+				var tmp [binary.MaxVarintLen64]byte
+				n := binary.PutUvarint(tmp[:], uint64(len(value)))
+				copy(b.data[headerOff:headerOff+n], tmp[:n])
+				headerOff += n
+			}
+			copy(b.data[keyStart:], key[prefixLen:])
 		} else {
-			putUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
+			b.data[ptr] = byte(prefixLen)
+			b.data[ptr+1] = byte(prefixLen >> 8)
+			b.data[ptr+2] = byte(suffixLen)
+			b.data[ptr+3] = byte(suffixLen >> 8)
+			if flags&FlagPointer != 0 {
+				putUint32(b.data[ptr+4:ptr+8], 0) // ValueLen ignored for pointer
+			} else {
+				putUint32(b.data[ptr+4:ptr+8], uint32(len(value)))
+			}
+			b.data[ptr+8] = flags
+			copy(b.data[keyStart:], key[prefixLen:])
 		}
-		b.data[ptr+8] = flags
-		copy(b.data[keyStart:], key[prefixLen:])
 	} else {
 		keyLen := len(key)
 		b.data[ptr] = byte(keyLen)
@@ -261,10 +298,14 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	b.count++
 	b.leafIndex++
 	if b.leafPrefixCompression {
-		if cap(b.leafPrevKey) < len(key) {
-			b.leafPrevKey = make([]byte, len(key))
+		if len(key) <= len(b.leafPrevKeyBuf) {
+			b.leafPrevKey = b.leafPrevKeyBuf[:len(key)]
+		} else {
+			if cap(b.leafPrevKey) < len(key) {
+				b.leafPrevKey = make([]byte, len(key))
+			}
+			b.leafPrevKey = b.leafPrevKey[:len(key)]
 		}
-		b.leafPrevKey = b.leafPrevKey[:len(key)]
 		copy(b.leafPrevKey, key)
 	}
 
@@ -315,6 +356,9 @@ func (b *Builder) Finish() *Node {
 	if b.pType == page.PageTypeLeaf {
 		if b.leafPrefixCompression {
 			flags |= leafPrefixCompressedFlag
+			if b.leafPrefixV2 {
+				flags |= leafPrefixV2Flag
+			}
 		}
 		if b.leafColumnar {
 			flags |= leafColumnarFlag

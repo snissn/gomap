@@ -171,6 +171,28 @@ Tuning/disable:
 - Set `MaxWALBytes < 0` to disable the size trigger.
 - To disable auto-checkpointing entirely, set all three to `< 0`.
 
+### Leaf key compression (`Options.LeafPrefixCompression`)
+
+TreeDB can compress keys stored in **leaf pages** using a front-coding scheme
+with restart points. This reduces `index.db` size and can improve cache
+locality, which often helps write throughput (fewer splits / less rewrite work).
+
+Behavior:
+- Restart points are written at a fixed interval (every Nth key), so seeking can
+  binary-search restart entries and then scan within a small block.
+- Pointer/tombstone entries avoid storing inline value-length metadata in the
+  leaf payload.
+
+Tradeoffs:
+- Extra CPU to reconstruct keys during seeks/iteration (restart points bound the
+  work).
+- Incompatible with `Options.IndexColumnarLeaves` (columnar leaf encoding).
+
+How to evaluate:
+- Disk + throughput: `cmd/unified_bench` with `-treedb-leaf-prefix-compression`
+  on/off and compare `maindb/index.db` size + ops/sec.
+- Leaf density microbench: `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count=1`
+
 ### `Options.KeepRecent`
 
 Backend knob used to influence internal lifecycle/retention behavior.
