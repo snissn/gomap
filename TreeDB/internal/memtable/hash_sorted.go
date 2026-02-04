@@ -12,7 +12,6 @@ import (
 )
 
 type hashEntry struct {
-	key   string
 	value []byte // inline bytes (pointer bytes stored separately in ptr)
 	ptr   page.ValuePtr
 	flags byte
@@ -239,10 +238,9 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	m.mu.Lock()
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := ent.key
 		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
-			if err := cb(stringToBytesNoCopy(ent.key), valCopy); err != nil {
+			if err := cb(key, valCopy); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -252,7 +250,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		ent.ptr = page.ValuePtr{}
 		ent.flags = node.FlagInline
 		m.sizeBytes += int64(hashEntryValueSize(ent.flags, ent.value) - oldLen)
-		m.items[storedKey] = ent
+		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -266,7 +264,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{key: keyStored, value: valCopy, flags: node.FlagInline}
+	m.items[keyStored] = hashEntry{value: valCopy, flags: node.FlagInline}
 	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(node.FlagInline, valCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -297,9 +295,8 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := ent.key
 		if cb != nil {
-			if err := cb(stringToBytesNoCopy(ent.key), nil); err != nil {
+			if err := cb(key, nil); err != nil {
 				m.mu.Unlock()
 				return err
 			}
@@ -310,7 +307,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			ent.ptr = page.ValuePtr{}
 			ent.flags = node.FlagTombstone
 		}
-		m.items[storedKey] = ent
+		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -323,7 +320,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{key: keyStored, flags: node.FlagTombstone}
+	m.items[keyStored] = hashEntry{flags: node.FlagTombstone}
 	m.sizeBytes += int64(len(keyCopy))
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
@@ -643,7 +640,6 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	keyLookup := bytesToStringNoCopy(key)
 	if ent, ok := m.items[keyLookup]; ok {
-		storedKey := ent.key
 		oldLen := hashEntryValueSize(ent.flags, ent.value)
 		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
 		if flags&node.FlagPointer != 0 {
@@ -656,7 +652,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
 		}
-		m.items[storedKey] = ent
+		m.items[keyLookup] = ent
 		return nil, 0
 	}
 
@@ -668,7 +664,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
 	valCopy := m.encodeEntryValueLocked(value, ptr, flags, steal)
-	ent := hashEntry{key: keyStored, value: valCopy, flags: flags}
+	ent := hashEntry{value: valCopy, flags: flags}
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
@@ -930,9 +926,6 @@ func (it *hashIterator) Valid() bool {
 func (it *hashIterator) UnsafeKey() []byte {
 	if !it.valid {
 		return nil
-	}
-	if it.loaded {
-		return stringToBytesNoCopy(it.cur.key)
 	}
 	return stringToBytesNoCopy(it.curKey)
 }
