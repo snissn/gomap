@@ -316,6 +316,16 @@ func (db *DB) walUsesValueLog() bool {
 	return false
 }
 
+func (db *DB) needsVlogAutotuneTiming() bool {
+	if db == nil {
+		return false
+	}
+	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
+		return true
+	}
+	return vlogAutotuneMetricsEnabled.Load()
+}
+
 func (db *DB) pickLane(sync bool, preferred int) (*lane, error) {
 	if db == nil || len(db.lanes) == 0 {
 		return nil, errWALUnavailable
@@ -3305,7 +3315,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		return nil, errWALClosed
 	default:
 	}
-	wallStart := db.valueLogAutotuneMetrics.now()
+	wallStart := time.Time{}
+	if db.needsVlogAutotuneTiming() {
+		wallStart = db.valueLogAutotuneMetrics.now()
+	}
 
 	var (
 		totalBytes int64
@@ -3558,11 +3571,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
-	storedForMetrics := storedPayloadBytes
-	if storedForMetrics == 0 && totalBytes > 0 {
-		storedForMetrics = int(totalBytes)
+	if !wallStart.IsZero() {
+		storedForMetrics := storedPayloadBytes
+		if storedForMetrics == 0 && totalBytes > 0 {
+			storedForMetrics = int(totalBytes)
+		}
+		db.valueLogAutotuneMetrics.observe(wallStart, rawPayloadBytes, storedForMetrics, encodeNsTotal, encodeRawBytes)
 	}
-	db.valueLogAutotuneMetrics.observe(wallStart, rawPayloadBytes, storedForMetrics, encodeNsTotal, encodeRawBytes)
 	return ptrs, nil
 }
 
@@ -3578,7 +3593,10 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
-	wallStart := db.valueLogAutotuneMetrics.now()
+	wallStart := time.Time{}
+	if db.needsVlogAutotuneTiming() {
+		wallStart = db.valueLogAutotuneMetrics.now()
+	}
 
 	var (
 		totalBytes int64
@@ -3704,11 +3722,13 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		encodeNsTotal = stats.EncodeNs
 		encodeRawBytes = stats.RawPayloadBytes
 	}
-	storedForMetrics := stats.StoredPayloadBytes
-	if storedForMetrics == 0 && totalBytes > 0 {
-		storedForMetrics = int(totalBytes)
+	if !wallStart.IsZero() {
+		storedForMetrics := stats.StoredPayloadBytes
+		if storedForMetrics == 0 && totalBytes > 0 {
+			storedForMetrics = int(totalBytes)
+		}
+		db.valueLogAutotuneMetrics.observe(wallStart, len(value), storedForMetrics, encodeNsTotal, encodeRawBytes)
 	}
-	db.valueLogAutotuneMetrics.observe(wallStart, len(value), storedForMetrics, encodeNsTotal, encodeRawBytes)
 	return ptr, retainPath, nil
 }
 
