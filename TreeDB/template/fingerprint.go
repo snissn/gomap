@@ -66,6 +66,34 @@ func lengthFingerprint(length int) uint64 {
 	return xxh3.Hash(buf[:])
 }
 
+const (
+	routeTagLen    uint64 = 1
+	routeTagPrefix uint64 = 2
+	routeTagMid1   uint64 = 3
+	routeTagMid2   uint64 = 4
+	routeTagSuffix uint64 = 5
+)
+
+func mixRouteFP(tag uint64, h uint64) uint64 {
+	// Mix in a small tag so different segment roles don't trivially collide.
+	return h ^ (tag * 0x9e3779b97f4a7c15)
+}
+
+func appendUniqueFP(dst []uint64, fp uint64, limit int) []uint64 {
+	if fp == 0 {
+		return dst
+	}
+	for _, v := range dst {
+		if v == fp {
+			return dst
+		}
+	}
+	if limit > 0 && len(dst) >= limit {
+		return dst
+	}
+	return append(dst, fp)
+}
+
 // BucketFingerprints returns fingerprints for bucketing (prefix-only by default).
 func BucketFingerprints(value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
@@ -86,9 +114,102 @@ func BucketFingerprints(value []byte, cfg Config) []uint64 {
 	return fingerprintsLimited(value[:prefixLen], cfg, cfg.RouteFPCount)
 }
 
+// AppendRoutingFingerprints appends deterministic routing fingerprints into dst.
+// It avoids winnowing and favors a few fixed segment hashes (plus length).
+func AppendRoutingFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
+	cfg = NormalizeConfig(cfg)
+	return appendRoutingFingerprints(dst, value, cfg)
+}
+
+func appendRoutingFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
+	k := cfg.FingerprintK
+	if k <= 0 || len(value) < k {
+		return dst
+	}
+	limit := cfg.RouteFPCount
+	if limit <= 0 {
+		limit = cfg.MaxFingerprints
+	}
+	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
+		// Keep the legacy length fingerprint unmodified so templates published by
+		// older versions remain discoverable.
+		dst = appendUniqueFP(dst, lengthFingerprint(len(value)), limit)
+	}
+
+	prefixLen := cfg.RoutePrefixBytes
+	if prefixLen < k {
+		prefixLen = k
+	}
+	suffixLen := cfg.RouteSuffixBytes
+	if suffixLen < k {
+		suffixLen = k
+	}
+	segLen := prefixLen
+	if segLen > len(value) {
+		segLen = len(value)
+	}
+	if segLen < k {
+		segLen = k
+	}
+	if segLen > len(value) {
+		segLen = len(value)
+	}
+	dst = appendUniqueFP(dst, mixRouteFP(routeTagPrefix, xxh3.Hash(value[:segLen])), limit)
+
+	if len(value) >= suffixLen {
+		if suffixLen > len(value) {
+			suffixLen = len(value)
+		}
+		dst = appendUniqueFP(dst, mixRouteFP(routeTagSuffix, xxh3.Hash(value[len(value)-suffixLen:])), limit)
+	}
+
+	// Add one or two middle probes to reduce collision/candidate list size while
+	// keeping routing cost O(1) per value.
+	if len(dst) < limit && segLen < len(value) {
+		start := (len(value) - segLen) / 2
+		dst = appendUniqueFP(dst, mixRouteFP(routeTagMid1, xxh3.Hash(value[start:start+segLen])), limit)
+	}
+	if len(dst) < limit && segLen < len(value) {
+		start := (len(value) - segLen) / 4
+		if start > 0 && start+segLen <= len(value) {
+			dst = appendUniqueFP(dst, mixRouteFP(routeTagMid2, xxh3.Hash(value[start:start+segLen])), limit)
+		}
+	}
+
+	return dst
+}
+
+// BucketKey computes a deterministic bucket key from fingerprints.
+func BucketKey(fps []uint64) uint64 {
+	if len(fps) == 0 {
+		return 0
+	}
+	limit := 8
+	if len(fps) < limit {
+		limit = len(fps)
+	}
+	var buf [8 * 8]byte
+	for i := 0; i < limit; i++ {
+		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], fps[i])
+	}
+	return xxh3.Hash(buf[:limit*8])
+}
+
 // RoutingFingerprints returns fingerprints used for routing/bucketing.
-// It prefers prefix+suffix slices to avoid random middle bytes dominating.
+// Prefer AppendRoutingFingerprints to avoid allocations.
 func RoutingFingerprints(value []byte, cfg Config) []uint64 {
+	cfg = NormalizeConfig(cfg)
+	limit := cfg.RouteFPCount
+	if limit <= 0 {
+		limit = cfg.MaxFingerprints
+	}
+	out := make([]uint64, 0, limit)
+	return appendRoutingFingerprints(out, value, cfg)
+}
+
+// RoutingFingerprintsLegacy returns deterministic winnowed routing fingerprints.
+// It prefers prefix+suffix slices to avoid random middle bytes dominating.
+func RoutingFingerprintsLegacy(value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
 	k := cfg.FingerprintK
 	if k <= 0 || len(value) < k {
@@ -148,22 +269,6 @@ func RoutingFingerprints(value []byte, cfg Config) []uint64 {
 		seen[fp] = struct{}{}
 	}
 	return out
-}
-
-// BucketKey computes a deterministic bucket key from fingerprints.
-func BucketKey(fps []uint64) uint64 {
-	if len(fps) == 0 {
-		return 0
-	}
-	limit := 8
-	if len(fps) < limit {
-		limit = len(fps)
-	}
-	buf := make([]byte, limit*8)
-	for i := 0; i < limit; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], fps[i])
-	}
-	return xxh3.Hash(buf)
 }
 
 // RouteFingerprints returns deterministic routing fingerprints for template anchors.
