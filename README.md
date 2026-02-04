@@ -2,6 +2,8 @@
 
 This repo is a development playground for two storage engines plus benchmarking tools:
 
+- **Status: pre-alpha.** APIs and on-disk formats may change without backward-compatibility guarantees.
+
 - **HashDB** (`HashDB/`, package `hashdb`): mmap-backed hash index + slab value log.
 - **TreeDB** (`TreeDB/`, package `treedb`): persistent B+Tree with an optional cached write-back layer.
 - **BTreeOnHashDB** (`HashDB/BTreeOnHashDB/`): a B-Tree built on top of HashDB (benchmark/comparison).
