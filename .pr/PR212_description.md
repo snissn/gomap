@@ -22,3 +22,44 @@ Knobs:
 
 ## Testing
 - `go test ./... -count=1`
+
+## Benchmarks
+
+> Note: this PR branch was previously missing ~98 commits from `main`, including PR246 which changes the `fast` profile defaults (notably TreeDB `-flush-threshold`). That made local checkouts look like a huge regression due to very large checkpoint times. PR211 and PR212 have now been updated by merging `main` into the PR211 base branch (and PR211 into PR212).
+
+Command:
+- `make unified-bench && ./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb -profile fast -keys 5000000 -format markdown -checkpoint-between-tests`
+
+Results (macOS arm64, single runs):
+
+`main` @ `8d1c891eaa`:
+```text
+        Test         TreeDB
+------------  -------------
+ Batch Write      2,513,100
+Random Write      2,103,187
+Batch Delete      3,368,751
+```
+```text
+ Before Test    TreeDB
+------------  --------
+ Batch Write      58µs
+Random Write  981.06ms
+Batch Delete     1.30s
+```
+
+PR211+PR212 stack @ `55e113bc62`:
+```text
+        Test         TreeDB
+------------  -------------
+ Batch Write      2,528,934
+Random Write      2,121,660
+Batch Delete      3,375,150
+```
+```text
+ Before Test    TreeDB
+------------  --------
+ Batch Write      52µs
+Random Write  998.58ms
+Batch Delete     1.30s
+```
