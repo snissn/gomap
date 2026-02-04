@@ -1041,7 +1041,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 
 			const (
-				noCopyMinRawBytes = 64 << 10 // avoid overhead on tiny frames
+				noCopyMinRawBytes = 128 << 10 // avoid overhead on tiny frames
 				noCopyMinAvgBytes = 8 << 10
 			)
 			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
@@ -1155,7 +1155,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			//
 			// This also avoids per-call allocations in the streaming encoder path.
 			const (
-				noCopyMinRawBytes = 64 << 10 // avoid overhead on tiny frames
+				noCopyMinRawBytes = 128 << 10 // avoid overhead on tiny frames
 				noCopyMinAvgBytes = 8 << 10
 			)
 			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
