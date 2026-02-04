@@ -301,14 +301,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	leafPrefixEffective := leafPrefixRequested
 	var notes []string
 	var warnings []string
-	if *treedbIndexColumnarLeaves {
-		if leafPrefixRequested {
-			notes = append(notes, "index_columnar_leaves enabled: disabling leaf_prefix_compression (columnar leaf encoding is incompatible)")
-		}
-		leafPrefixEffective = false
-	}
 	if leafPrefixEffective {
 		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)")
+	}
+	if leafPrefixEffective && *treedbIndexColumnarLeaves {
+		notes = append(notes, "leaf_prefix_compression + index_columnar_leaves: enabling combined columnar+prefix leaf encoding for new pages")
 	}
 	if *treedbDisableWAL && *treedbRelaxedSync {
 		// This is not an error, but it can be confusing. Document precedence.

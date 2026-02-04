@@ -16,6 +16,7 @@ func TestLeafPackedValuePtr_RoundTripPointerEntries(t *testing.T) {
 		{name: "plain", opts: BuilderOptions{PackedValuePtr: true}},
 		{name: "prefix_v2", opts: BuilderOptions{LeafPrefixCompression: true, PackedValuePtr: true}},
 		{name: "columnar", opts: BuilderOptions{LeafColumnar: true, PackedValuePtr: true}},
+		{name: "columnar_prefix_v2", opts: BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, PackedValuePtr: true}},
 	}
 
 	keys := makeBenchKeys(128, 16)

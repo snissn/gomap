@@ -60,7 +60,8 @@ go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count
 
 Regression guardrails:
 - `TreeDB/node/leaf_density_test.go` enforces a minimum density improvement for
-  prefix-heavy key workloads when leaf prefix compression is enabled.
+  prefix-heavy key workloads when leaf prefix compression is enabled (and when
+  the combined columnar+prefix mode is enabled).
 
 ### Template encode profiling (steady-only)
 

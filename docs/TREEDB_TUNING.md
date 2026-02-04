@@ -220,7 +220,9 @@ Behavior:
 Tradeoffs:
 - Extra CPU to reconstruct keys during seeks/iteration (restart points bound the
   work).
-- Incompatible with `Options.IndexColumnarLeaves` (columnar leaf encoding).
+- Can be combined with `Options.IndexColumnarLeaves`; when both are enabled,
+  TreeDB uses a combined **columnar+prefix** leaf encoding (front-coded keys +
+  explicit key/value offsets).
 
 How to evaluate:
 - Disk + throughput: `cmd/unified_bench` with `-treedb-leaf-prefix-compression`
