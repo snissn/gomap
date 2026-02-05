@@ -32,6 +32,14 @@ func (n *Node) Compact() error {
 
 	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
 	heapStart := int(page.PageSize)
+	if n.Type() == page.PageTypeInternal && n.internalBaseDelta() {
+		_, _, footerStart, err := n.internalBaseDeltaFooter()
+		if err != nil {
+			return err
+		}
+		copy(newData[footerStart:], n.data[footerStart:])
+		heapStart = footerStart
+	}
 
 	for i := uint16(0); i < count; i++ {
 		off, err := n.getOffset(i)
@@ -92,6 +100,23 @@ func entryLength(n *Node, offset int) (int, error) {
 		return entryLen, nil
 
 	case page.PageTypeInternal:
+		if n.internalBaseDelta() {
+			_, _, footerStart, err := n.internalBaseDeltaFooter()
+			if err != nil {
+				return 0, err
+			}
+			if offset+6 > footerStart {
+				return 0, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16(n.data[offset : offset+2]))
+			if suffixLen < 0 {
+				return 0, ErrCorruptedNode
+			}
+			if offset+6+suffixLen > footerStart {
+				return 0, ErrCorruptedNode
+			}
+			return 2 + 4 + suffixLen, nil
+		}
 		if offset+2+8 > len(n.data) {
 			return 0, ErrCorruptedNode
 		}

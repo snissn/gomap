@@ -30,8 +30,11 @@ const (
 	leafColumnarFlag         uint16 = 0x4000
 	leafPrefixV2Flag         uint16 = 0x2000
 	leafPackedValuePtrFlag   uint16 = 0x1000
+	internalBaseDeltaFlag    uint16 = 0x0800
 	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag
-	pageTypeMask                    = ^leafNodeFlagMask
+	internalNodeFlagMask            = internalBaseDeltaFlag
+	nodeFlagMask                    = leafNodeFlagMask | internalNodeFlagMask
+	pageTypeMask                    = ^nodeFlagMask
 
 	leafPrefixRestartInterval = 16
 )
@@ -108,7 +111,7 @@ func (n *Node) Type() page.PageType {
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
 	flags := getUint16(n.data[12:14])
-	flags = (flags & leafNodeFlagMask) | uint16(t)
+	flags = (flags & nodeFlagMask) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
@@ -147,6 +150,23 @@ func (n *Node) leafPackedValuePtr() bool {
 		return false
 	}
 	return n.rawFlags()&leafPackedValuePtrFlag != 0
+}
+
+func (n *Node) internalBaseDelta() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	return n.rawFlags()&internalBaseDeltaFlag != 0
+}
+
+func (n *Node) setInternalBaseDelta(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= internalBaseDeltaFlag
+	} else {
+		flags &^= internalBaseDeltaFlag
+	}
+	n.setRawFlags(flags)
 }
 
 func (n *Node) setLeafPrefixCompressed(enabled bool) {

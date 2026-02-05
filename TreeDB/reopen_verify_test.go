@@ -182,6 +182,41 @@ func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                    dir,
+		IndexInternalBaseDelta: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
 func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
