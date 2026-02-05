@@ -101,7 +101,9 @@ func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
 //
 // For internal base-delta pages, the returned key slice is backed by a node
 // scratch buffer and is only valid until the next internal entry decode call
-// on the same node. Callers that need to retain the key must copy it.
+// on the same node (unless the page has an empty shared prefix, in which case
+// the returned key points into the node's backing page). Callers that need to
+// retain the key must copy it.
 func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, err error) {
 	if n.internalBaseDelta() {
 		prefix, baseChildID, footerStart, err := n.internalBaseDeltaFooterCached()
@@ -125,6 +127,10 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 			return nil, 0, ErrCorruptedNode
 		}
 		suffix := n.data[suffixStart:suffixEnd]
+
+		if len(prefix) == 0 {
+			return suffix, baseChildID + uint64(delta), nil
+		}
 
 		keyLen := len(prefix) + suffixLen
 		out := n.ensureKeyScratch(keyLen)
