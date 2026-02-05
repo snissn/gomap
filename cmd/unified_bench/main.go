@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"io/fs"
 	"log"
 	"math"
 	"math/rand"
@@ -142,6 +143,11 @@ type BenchConfig struct {
 	TreeDBCacheStatsBeforeReads bool
 }
 
+type dirDiskUsage struct {
+	TotalBytes uint64
+	TotalFiles int
+}
+
 type BenchRun struct {
 	Config              BenchConfig
 	Instances           []*DBInstance
@@ -152,6 +158,7 @@ type BenchRun struct {
 	VacuumDurations     map[string]map[string]time.Duration
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
+	DiskUsage           map[string]dirDiskUsage
 }
 
 type scanDiag struct {
@@ -408,10 +415,22 @@ func main() {
 				printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 			}
 		}
-		if len(run.TreeDBDiskUsage) > 0 {
+		if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 			fmt.Println()
 			fmt.Println("Disk Usage (End of Run)")
-			fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			if len(run.TreeDBDiskUsage) > 0 {
+				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			}
+			if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
+				fmt.Println()
+				fmt.Println("Other DBs:")
+				for _, line := range strings.Split(strings.TrimSpace(other), "\n") {
+					if strings.TrimSpace(line) == "" {
+						continue
+					}
+					fmt.Printf("  %s\n", line)
+				}
+			}
 		}
 		return
 	}
@@ -441,10 +460,22 @@ func main() {
 					printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 				}
 			}
-			if len(run.TreeDBDiskUsage) > 0 {
+			if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 				fmt.Println()
 				fmt.Println("Disk Usage (End of Run)")
-				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+				if len(run.TreeDBDiskUsage) > 0 {
+					fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+				}
+				if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
+					fmt.Println()
+					fmt.Println("Other DBs:")
+					for _, line := range strings.Split(strings.TrimSpace(other), "\n") {
+						if strings.TrimSpace(line) == "" {
+							continue
+						}
+						fmt.Printf("  %s\n", line)
+					}
+				}
 			}
 		}
 	case "markdown":
@@ -2138,8 +2169,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
+	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
 		_ = inst.Wrapper.Close()
+		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
+			if usage.TotalBytes > 0 || usage.TotalFiles > 0 {
+				diskUsage[inst.Wrapper.Name()] = usage
+			}
+		}
 		if isTreeDBInstance(inst) {
 			if usage, err := computeTreeDBDiskUsage(inst.Dir); err == nil {
 				if usage.MainIndexBytes > 0 || usage.MainWAL.TotalBytes > 0 || usage.DictIndexBytes > 0 || usage.DictWAL.TotalBytes > 0 {
@@ -2162,6 +2199,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumDurations:     vacuumDurations,
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
+		DiskUsage:           diskUsage,
 	}, nil
 }
 
@@ -2257,6 +2295,33 @@ func computeWalDiskUsage(dir string) (walDiskUsage, error) {
 	return out, nil
 }
 
+func computeDirDiskUsage(rootDir string) (dirDiskUsage, error) {
+	var out dirDiskUsage
+	if strings.TrimSpace(rootDir) == "" {
+		return out, fmt.Errorf("disk usage: empty root dir")
+	}
+	if err := filepath.WalkDir(rootDir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if sz := info.Size(); sz > 0 {
+			out.TotalBytes += uint64(sz)
+		}
+		out.TotalFiles++
+		return nil
+	}); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	var out treeDBDiskUsage
 	if strings.TrimSpace(rootDir) == "" {
@@ -2348,6 +2413,62 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 	return sb.String()
 }
 
+func renderDirDiskUsageString(usage map[string]dirDiskUsage) string {
+	if len(usage) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(usage))
+	for name := range usage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		u := usage[name]
+		sb.WriteString(fmt.Sprintf("%s: total=%s files=%d", name, formatBytes(u.TotalBytes), u.TotalFiles))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+func renderNonTreeDBDiskUsageString(usage map[string]dirDiskUsage, treedbUsage map[string]treeDBDiskUsage) string {
+	if len(usage) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(usage))
+	for name, u := range usage {
+		if treedbUsage != nil {
+			if _, ok := treedbUsage[name]; ok {
+				continue
+			}
+		}
+		if u.TotalBytes == 0 && u.TotalFiles == 0 {
+			continue
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		u := usage[name]
+		sb.WriteString(fmt.Sprintf("%s: total=%s files=%d", name, formatBytes(u.TotalBytes), u.TotalFiles))
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
@@ -2412,11 +2533,27 @@ func renderMarkdownSingle(run BenchRun) string {
 			sb.WriteString("```\n")
 		}
 	}
-	if len(run.TreeDBDiskUsage) > 0 {
+	if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 		sb.WriteString("\n")
 		sb.WriteString("## Disk Usage (End of Run)\n\n")
 		sb.WriteString("```text\n")
-		sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+		if len(run.TreeDBDiskUsage) > 0 {
+			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
+				sb.WriteByte('\n')
+				sb.WriteString("Other DBs:\n")
+				for _, line := range strings.Split(strings.TrimSpace(other), "\n") {
+					if strings.TrimSpace(line) == "" {
+						continue
+					}
+					sb.WriteString("  ")
+					sb.WriteString(line)
+					sb.WriteByte('\n')
+				}
+			}
+		} else {
+			sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
+		}
 		sb.WriteString("```\n")
 	}
 	return sb.String()
