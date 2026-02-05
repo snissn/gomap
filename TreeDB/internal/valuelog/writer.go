@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -191,6 +192,65 @@ func dictSkipFramesAggressive(noBenefit uint8, rawPayloadBytes, encodedLen int, 
 		}
 	}
 	return skip
+}
+
+func isUltraLowEntropySample(value []byte) bool {
+	// EncodeAllParts can be faster than concatenating into a contiguous payload
+	// for ultra-compressible workloads (where the zstd/dict encode itself is very
+	// fast and the memcpy dominates). However, EncodeAllParts can emit more
+	// (smaller) blocks for many small parts which can degrade ratio and
+	// throughput on higher-entropy payloads, so we gate the no-copy path on a
+	// cheap entropy proxy.
+	//
+	// We use a prefix+suffix unique byte count to detect highly repetitive
+	// values even when high-entropy bytes appear only in the tail.
+	if len(value) == 0 {
+		return false
+	}
+	const sampleBytes = 512
+	prefixLen := len(value)
+	suffixLen := 0
+	if prefixLen > sampleBytes {
+		prefixLen = sampleBytes / 2
+		suffixLen = sampleBytes - prefixLen
+	}
+
+	var seen [4]uint64
+	for i := 0; i < prefixLen; i++ {
+		b := value[i]
+		seen[b>>6] |= 1 << (b & 63)
+	}
+	if suffixLen > 0 {
+		start := len(value) - suffixLen
+		for i := start; i < len(value); i++ {
+			b := value[i]
+			seen[b>>6] |= 1 << (b & 63)
+		}
+	}
+	unique := bits.OnesCount64(seen[0]) + bits.OnesCount64(seen[1]) + bits.OnesCount64(seen[2]) + bits.OnesCount64(seen[3])
+	return unique <= 32
+}
+
+func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
+	k := len(records)
+	if k <= 1 || rawPayloadBytes <= 0 {
+		return false
+	}
+	const (
+		noCopyMinRawBytes = 128 << 10
+		noCopyMinAvgBytes = 8 << 10
+		// Allow a more aggressive no-copy path for ultra-compressible payloads
+		// where the memcpy becomes a measurable fraction of wall time.
+		noCopyUltraMinAvgBytes = 4 << 10
+	)
+	avg := rawPayloadBytes / k
+	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyMinAvgBytes {
+		return true
+	}
+	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyUltraMinAvgBytes {
+		return isUltraLowEntropySample(records[0].Value)
+	}
+	return false
 }
 
 func NewWriter(path string, fileID uint32) (*Writer, error) {
@@ -1079,11 +1139,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				prefixOff += 4
 			}
 
-			const (
-				noCopyMinRawBytes = 128 << 10 // avoid overhead on tiny frames
-				noCopyMinAvgBytes = 8 << 10
-			)
-			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
+			useNoCopyParts := shouldUseEncodeAllParts(records[:k], rawPayloadBytes)
 			var payload []byte
 			var parts [MaxFrameK][]byte
 			if k == 1 {
@@ -1196,11 +1252,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			// contiguous payload via EncodeAll than to stream many small writes.
 			//
 			// This also avoids per-call allocations in the streaming encoder path.
-			const (
-				noCopyMinRawBytes = 128 << 10 // avoid overhead on tiny frames
-				noCopyMinAvgBytes = 8 << 10
-			)
-			useNoCopyParts := k > 1 && rawPayloadBytes >= noCopyMinRawBytes && (rawPayloadBytes/k) >= noCopyMinAvgBytes
+			useNoCopyParts := shouldUseEncodeAllParts(records[:k], rawPayloadBytes)
 			if useNoCopyParts {
 				var parts [MaxFrameK][]byte
 				for i := 0; i < k; i++ {
