@@ -191,6 +191,8 @@ treedb.EnableValueLogDictCompression(&opts)
 db, err := treedb.Open(opts)
 ```
 
+Full guide: `docs/TREEDB_VALUELOG_DICT_COMPRESSION.md`.
+
 Advanced tuning is exposed via:
 - `Options.ValueLog.DictTrain` (training budget + sampling knobs)
 - `Options.ValueLog.CompressionAutotune` (when to switch dict/K candidates)
