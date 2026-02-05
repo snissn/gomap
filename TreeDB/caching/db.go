@@ -3580,6 +3580,12 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 	}
 
+	type preparedDictFrame struct {
+		start int
+		end   int
+		body  []byte
+		stats valuelog.FrameStats
+	}
 	type vlogBatchPlan struct {
 		start    int
 		end      int
@@ -3588,6 +3594,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		k        int
 		probe    bool
 		rawBytes int
+		frames   []preparedDictFrame
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
 	plans := make([]vlogBatchPlan, 0, len(requests))
@@ -3661,6 +3668,71 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		i = end
 	}
 
+	preparedErr := error(nil)
+	for pi := range plans {
+		plan := &plans[pi]
+		if plan.dictID == 0 || len(plan.dict) == 0 {
+			continue
+		}
+		for i := plan.start; i < plan.end; i += plan.k {
+			end := i + plan.k
+			if end > plan.end {
+				end = plan.end
+			}
+			frame := records[i:end]
+			rawPayloadBytes := 0
+			for j := range frame {
+				rawPayloadBytes += len(frame[j].Value)
+			}
+			body, header, encErr := valuelog.EncodeFrameWithOptions(
+				plan.dictID,
+				plan.dict,
+				frame,
+				db.valueLogDictFrameEncodeLevel,
+				db.valueLogDictFrameEnableEntropy,
+			)
+			if encErr != nil {
+				preparedErr = encErr
+				break
+			}
+			headerEnd := valuelog.FrameHeaderSize + (len(frame) * 8) + ((len(frame) + 1) * 4)
+			storedPayloadBytes := len(body) - headerEnd
+			if storedPayloadBytes < 0 {
+				storedPayloadBytes = 0
+			}
+			stats := valuelog.FrameStats{
+				Records:            len(frame),
+				RawPayloadBytes:    rawPayloadBytes,
+				StoredPayloadBytes: storedPayloadBytes,
+				Attempted:          plan.dictID != 0 && len(plan.dict) > 0 && rawPayloadBytes > 0,
+				Kept:               header.Flags&valuelog.FrameFlagCompressed != 0,
+			}
+			plan.frames = append(plan.frames, preparedDictFrame{
+				start: i,
+				end:   end,
+				body:  body,
+				stats: stats,
+			})
+		}
+		if preparedErr != nil {
+			break
+		}
+	}
+	if preparedErr != nil {
+		putValueLogRecords(records)
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = preparedErr
+			ack.wg.Done()
+		}
+		return
+	}
+
 	var (
 		ptrs        []page.ValuePtr
 		startSize   int64
@@ -3699,6 +3771,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	caps := l.vlogCaps
 	rawWriterInto := caps.rawInto
 	policySetter := caps.keep
+	preparedAppender := caps.prepared
 	startSize = w.Size()
 
 	if policySetter != nil {
@@ -3753,6 +3826,30 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 
 		dictRaw += plan.rawBytes
 		dictRecords += len(segment)
+		if preparedAppender != nil && len(plan.frames) > 0 {
+			for fi := range plan.frames {
+				pf := &plan.frames[fi]
+				dst := ptrs[pf.start:pf.end]
+				if _, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst); frameErr != nil {
+					err = frameErr
+					break
+				}
+				framesTotal++
+				if pf.stats.Attempted {
+					framesTried++
+				}
+				if pf.stats.Kept {
+					framesKept++
+					if plan.probe {
+						probeKept = true
+					}
+				}
+				if pf.stats.StoredPayloadBytes > 0 {
+					dictStored += pf.stats.StoredPayloadBytes
+				}
+			}
+			continue
+		}
 		for i := plan.start; i < plan.end; i += plan.k {
 			end := i + plan.k
 			if end > plan.end {

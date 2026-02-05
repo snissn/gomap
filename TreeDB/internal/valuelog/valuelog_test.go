@@ -359,6 +359,96 @@ func TestReadAtGroupedK128WithDict(t *testing.T) {
 	}
 }
 
+func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	records := make([]Record, 16)
+	expect := make([][]byte, len(records))
+	samples := make([][]byte, len(records))
+	for i := range records {
+		v := []byte(fmt.Sprintf("{\"kind\":\"evt\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("z"), 256)))
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		expect[i] = append([]byte(nil), v...)
+		samples[i] = v
+	}
+
+	const dictID = uint64(11)
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		s := samples[i]
+		if len(s) > need {
+			s = s[:need]
+		}
+		history = append(history, s...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	body, _, err := EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
+	if err != nil {
+		t.Fatalf("EncodeFrameWithOptions: %v", err)
+	}
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrScratch := make([]page.ValuePtr, len(records))
+	ptrs, err := writer.AppendEncodedFrameInto(body, len(records), ptrScratch)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendEncodedFrameInto: %v", err)
+	}
+	if len(ptrs) != len(records) {
+		_ = writer.Close()
+		t.Fatalf("unexpected ptr count: got=%d want=%d", len(ptrs), len(records))
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, ErrMissingDict
+		}
+		return dict, nil
+	}
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(f, ptr, true, dictLookup, nil, nil, templ.DecodeOptions{})
+		if err != nil {
+			t.Fatalf("read at ptr%d: %v", i+1, err)
+		}
+		if !bytes.Equal(got, expect[i]) {
+			t.Fatalf("ptr%d mismatch", i+1)
+		}
+	}
+}
+
 func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
