@@ -88,6 +88,7 @@ Leaf-encoding flags (current):
 - `0x4000`: leaf columnar
 - `0x2000`: leaf prefix v2 (only valid when prefix-compressed)
 - `0x1000`: leaf packed ValuePtr (pointer payload uses 12B packed encoding)
+- `0x0400`: leaf columnar v2 (dense key/value columns; see below)
 
 `leaf columnar` and `leaf prefix-compressed` can be combined. When both flags
 are set, leaf entries use a combined columnar+prefix encoding (see below).
@@ -139,24 +140,27 @@ Notes:
 - Restart points follow the same fixed interval as v1 (see `TreeDB/node` for the
   current restart interval).
 
-#### Columnar leaf entries (non-prefix)
+#### Columnar leaf entries (non-prefix, v2)
 
-When `leaf columnar` is enabled and `leaf prefix-compressed` is **not** set:
+When `leaf columnar` is enabled, `leaf prefix-compressed` is **not** set, and
+`leaf columnar v2` is set:
 
 ```text
-[ u16 KeyLen ]
-[ u32 ValueLen ]  ignored for pointer entries
-[ u8  Flags ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
-[ Key bytes (KeyLen) ]
+Directory (Count * u16): KeyOff[i]   offset from page start to key i
+ValOff column (Count * u16): ValOff[i]  offset from page start to value/pointer i
+Flags column (Count * u8): Flags[i]
+
+Value blob: concatenated values/pointers for entries in key order
+Key blob: concatenated keys for entries in key order
 ```
 
 Notes:
-- Key/value bytes are laid out with **implicit offsets**:
-  - `valOff = headerSize`
-  - `keyOff = valOff + valSize`
-- Current TreeDB encoder writes value bytes **before** key bytes to improve
-  cache locality for key-only seeks.
+- Key/value bytes are laid out as **separate blobs** so key-only seeks/searches
+  touch only the key column + key blob.
+- Key/value lengths are derived from adjacent offsets:
+  - `KeyLen[i] = KeyOff[i+1]-KeyOff[i]` (last key ends at page end)
+  - `ValLen[i] = ValOff[i+1]-ValOff[i]` (last value ends at `KeyOff[0]`)
+- Pointer entries store `ValuePtr` (16B) or `PackedValuePtr` (12B).
 
 #### Columnar + prefix-compressed leaf entries (v2)
 
