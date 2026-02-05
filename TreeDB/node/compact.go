@@ -21,6 +21,31 @@ func (n *Node) Compact() error {
 		return nil
 	}
 
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		buf := make([]byte, page.PageSize)
+		b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+			LeafColumnar:   true,
+			PackedValuePtr: n.leafPackedValuePtr(),
+		})
+		b.SetPageID(n.PageID())
+
+		for i := uint16(0); i < count; i++ {
+			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return err
+			}
+			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+				return err
+			}
+		}
+
+		newNode := b.Finish()
+		copy(n.data, newNode.data)
+		n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+		n.count = binary.LittleEndian.Uint16(n.data[14:16])
+		return nil
+	}
+
 	newData := make([]byte, page.PageSize)
 
 	// Preserve page ID/type/count; checksum is recomputed at the end.
