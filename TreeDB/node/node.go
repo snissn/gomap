@@ -31,10 +31,14 @@ const (
 	leafPrefixV2Flag         uint16 = 0x2000
 	leafPackedValuePtrFlag   uint16 = 0x1000
 	internalBaseDeltaFlag    uint16 = 0x0800
-	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag
-	internalNodeFlagMask            = internalBaseDeltaFlag
-	nodeFlagMask                    = leafNodeFlagMask | internalNodeFlagMask
-	pageTypeMask                    = ^nodeFlagMask
+	leafColumnarV2Flag       uint16 = 0x0400
+
+	// NOTE: TreeDB is currently pre-alpha; on-disk formats are not yet stable and
+	// backward compatibility is not guaranteed. Leaf/internal flags may change.
+	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag
+	internalNodeFlagMask = internalBaseDeltaFlag
+	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
+	pageTypeMask         = ^nodeFlagMask
 
 	leafPrefixRestartInterval = 16
 )
@@ -145,6 +149,13 @@ func (n *Node) leafColumnar() bool {
 	return n.rawFlags()&leafColumnarFlag != 0
 }
 
+func (n *Node) leafColumnarV2() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafColumnarV2Flag != 0
+}
+
 func (n *Node) leafPackedValuePtr() bool {
 	if n.ptype != page.PageTypeLeaf {
 		return false
@@ -196,6 +207,17 @@ func (n *Node) setLeafColumnar(enabled bool) {
 		flags |= leafColumnarFlag
 	} else {
 		flags &^= leafColumnarFlag
+		flags &^= leafColumnarV2Flag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafColumnarV2(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafColumnarV2Flag
+	} else {
+		flags &^= leafColumnarV2Flag
 	}
 	n.setRawFlags(flags)
 }
@@ -258,7 +280,14 @@ func (n *Node) setOffset(index uint16, offset uint16) {
 // Free space is the gap between the end of the Directory and the start of the Heap.
 func (n *Node) FreeSpace() int {
 	// Directory End = Header + Count * 2
-	dirEnd := NodeHeaderSize + int(n.Count())*DirectoryEntrySize
+	count := n.Count()
+	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
+	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		// Columnar v2 leaves store additional per-entry metadata immediately after
+		// the key directory: ValOff (u16) + Flags (u8).
+		dirEnd += int(count) * DirectoryEntrySize
+		dirEnd += int(count)
+	}
 
 	// Heap Start = Minimum offset of all items, or PageSize if empty.
 	// To find Heap Start efficiently without scanning all offsets:
@@ -281,8 +310,17 @@ func (n *Node) FreeSpace() int {
 	//    Actually, we can just find the min offset.
 
 	heapStart := int(page.PageSize)
-	count := n.Count()
 	if count > 0 {
+		if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+			// The lowest used offset is ValOff[0] (start of the value blob).
+			valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
+			if valDirStart+2 > len(n.data) {
+				return 0
+			}
+			heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+			return heapStart - dirEnd
+		}
+
 		// Scan offsets to find the lowest one.
 		// This is O(N). Is there a better way?
 		// Most implementations store "FreePtr" or "HeapOffset" in the header or special slot.

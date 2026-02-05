@@ -20,6 +20,13 @@ import (
 // is not required.)
 const leafColumnarHeaderSize = 7
 
+// leafColumnarV2MetaSize is the per-entry metadata stored outside of the key
+// directory for columnar v2 leaves.
+//
+// Layout: valOff(u16) | flags(u8).
+// (key offsets are stored in the page directory.)
+const leafColumnarV2MetaSize = 3
+
 func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntryLayout, error) {
 	if offset+leafColumnarHeaderSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode

@@ -26,6 +26,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 	if n.Type() == page.PageTypeLeaf {
 		newNode.setLeafPrefixCompressed(n.leafPrefixCompressed())
 		newNode.setLeafColumnar(n.leafColumnar())
+		newNode.setLeafColumnarV2(n.leafColumnarV2())
 		newNode.setLeafPackedValuePtr(n.leafPackedValuePtr())
 	}
 

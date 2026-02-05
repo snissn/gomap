@@ -19,12 +19,18 @@ type Builder struct {
 	leafPrefixCompression bool
 	leafPrefixV2          bool
 	leafColumnar          bool
+	leafColumnarV2        bool
 	leafPackedValuePtr    bool
 	internalBaseDelta     bool
 	internalBaseChildID   uint64
 	leafPrevKeyBuf        [64]byte
 	leafPrevKey           []byte
 	leafIndex             int
+
+	leafColumnarV2Entries  []leafColumnarV2Entry
+	leafColumnarV2Arena    []byte
+	leafColumnarV2KeyBytes int
+	leafColumnarV2ValBytes int
 }
 
 const internalBaseDeltaFooterSize = 10 // u16 prefixLen + u64 baseChildID
@@ -35,11 +41,25 @@ var internalBaseDeltaRewritePool = sync.Pool{
 	},
 }
 
+var leafColumnarV2ArenaPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, page.PageSize)
+		return buf[:0]
+	},
+}
+
 type BuilderOptions struct {
 	LeafPrefixCompression bool
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
+}
+
+type leafColumnarV2Entry struct {
+	key    []byte
+	value  []byte
+	valPtr page.ValuePtr
+	flags  byte
 }
 
 // NewBuilder initializes a builder for the given buffer.
@@ -49,6 +69,7 @@ func NewBuilder(data []byte, pType page.PageType) *Builder {
 
 func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions) *Builder {
 	leafPrefix := opts.LeafPrefixCompression
+	leafColumnarV2 := pType == page.PageTypeLeaf && opts.LeafColumnar && !leafPrefix
 	heapStart := len(data)
 	if pType == page.PageTypeInternal && opts.InternalBaseDelta {
 		// Reserve space for the internal base-delta footer:
@@ -66,6 +87,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 		leafPrefixCompression: leafPrefix,
 		leafPrefixV2:          leafPrefix,
 		leafColumnar:          opts.LeafColumnar,
+		leafColumnarV2:        leafColumnarV2,
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
 	}
@@ -121,12 +143,15 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 	if b.leafColumnar && !b.leafPrefixCompression {
 		prefixLen = 0
 		suffixLen = len(key)
-		entrySize = leafColumnarHeaderSize + suffixLen
+		valSize := 0
 		if flags&FlagPointer != 0 {
-			entrySize += valPtrSize
+			valSize = valPtrSize
 		} else if flags&FlagTombstone == 0 {
-			entrySize += len(value)
+			valSize = len(value)
 		}
+		// Columnar v2 stores key/value bytes in separate blobs and writes
+		// per-entry metadata (val offset + flags) in a columnar header region.
+		entrySize = suffixLen + valSize + leafColumnarV2MetaSize
 		return entrySize, prefixLen, suffixLen
 	}
 	prefixLen = 0
@@ -171,6 +196,9 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 		return ErrInvalidType
 	}
 	if b.leafColumnar && !b.leafPrefixCompression {
+		if b.leafColumnarV2 {
+			return b.addLeafEntryColumnarV2(key, value, flags, valPtr)
+		}
 		return b.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
 
@@ -225,6 +253,48 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 
 	b.heapStart = entryStart
 	b.dirEnd += DirectoryEntrySize
+	b.count++
+	b.leafIndex++
+	return nil
+}
+
+func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	valPtrSize := page.ValuePtrSize
+	if b.leafPackedValuePtr {
+		valPtrSize = page.PackedValuePtrSize
+	}
+
+	valSize := 0
+	if flags&FlagPointer != 0 {
+		valSize = valPtrSize
+	} else if flags&FlagTombstone == 0 {
+		valSize = len(value)
+	}
+
+	entrySize := leafColumnarV2MetaSize + len(key) + valSize
+	required := entrySize + DirectoryEntrySize // key offset slot
+	freeSpace := b.heapStart - b.dirEnd
+	if freeSpace < required {
+		return ErrNodeFull
+	}
+
+	keyCopy := b.leafColumnarV2CopyBytes(key)
+	var valueCopy []byte
+	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+		valueCopy = b.leafColumnarV2CopyBytes(value)
+	}
+
+	b.leafColumnarV2Entries = append(b.leafColumnarV2Entries, leafColumnarV2Entry{
+		key:    keyCopy,
+		value:  valueCopy,
+		valPtr: valPtr,
+		flags:  flags,
+	})
+	b.leafColumnarV2KeyBytes += len(key)
+	b.leafColumnarV2ValBytes += valSize
+
+	b.dirEnd += DirectoryEntrySize + leafColumnarV2MetaSize
+	b.heapStart -= len(key) + valSize
 	b.count++
 	b.leafIndex++
 	return nil
@@ -326,6 +396,9 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 	if b.leafColumnar {
 		if b.leafPrefixCompression {
 			return b.addLeafEntryColumnarPrefixV2(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+		}
+		if b.leafColumnarV2 {
+			return b.addLeafEntryColumnarV2(key, value, flags, valPtr)
 		}
 		return b.addLeafEntryColumnar(key, value, flags, valPtr)
 	}
@@ -488,6 +561,9 @@ func (b *Builder) Finish() *Node {
 	if b.pType == page.PageTypeInternal && b.internalBaseDelta {
 		internalBaseDeltaApplied = b.finishInternalBaseDelta()
 	}
+	if b.pType == page.PageTypeLeaf && b.leafColumnarV2 && !b.leafPrefixCompression {
+		b.finishLeafColumnarV2()
+	}
 
 	// Write Header
 	putUint64(b.data[0:8], b.pageID)
@@ -502,6 +578,9 @@ func (b *Builder) Finish() *Node {
 		}
 		if b.leafColumnar {
 			flags |= leafColumnarFlag
+			if b.leafColumnarV2 {
+				flags |= leafColumnarV2Flag
+			}
 		}
 		if b.leafPackedValuePtr {
 			flags |= leafPackedValuePtrFlag
@@ -517,6 +596,97 @@ func (b *Builder) Finish() *Node {
 	n := NewNode(b.data)
 	n.UpdateChecksum()
 	return n
+}
+
+func (b *Builder) finishLeafColumnarV2() {
+	clear(b.data)
+
+	count := int(b.count)
+	if count == 0 {
+		b.dirEnd = NodeHeaderSize
+		b.heapStart = len(b.data)
+		return
+	}
+
+	valPtrSize := page.ValuePtrSize
+	if b.leafPackedValuePtr {
+		valPtrSize = page.PackedValuePtrSize
+	}
+
+	keyDirStart := NodeHeaderSize
+	valDirStart := keyDirStart + count*DirectoryEntrySize
+	flagsStart := valDirStart + count*DirectoryEntrySize
+	metaEnd := flagsStart + count
+
+	keysStart := len(b.data) - b.leafColumnarV2KeyBytes
+	valuesStart := keysStart - b.leafColumnarV2ValBytes
+	if valuesStart < metaEnd {
+		panic("leaf columnar v2 packing overflow")
+	}
+
+	valOff := valuesStart
+	keyOff := keysStart
+
+	for i := 0; i < count; i++ {
+		e := b.leafColumnarV2Entries[i]
+
+		putUint16(b.data[keyDirStart+i*2:keyDirStart+i*2+2], uint16(keyOff))
+		putUint16(b.data[valDirStart+i*2:valDirStart+i*2+2], uint16(valOff))
+		b.data[flagsStart+i] = e.flags
+
+		if e.flags&FlagPointer != 0 {
+			if b.leafPackedValuePtr {
+				page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+			} else {
+				e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+			}
+			valOff += valPtrSize
+		} else if e.flags&FlagTombstone == 0 {
+			copy(b.data[valOff:valOff+len(e.value)], e.value)
+			valOff += len(e.value)
+		}
+
+		copy(b.data[keyOff:keyOff+len(e.key)], e.key)
+		keyOff += len(e.key)
+	}
+
+	if valOff != keysStart || keyOff != len(b.data) {
+		panic("leaf columnar v2 packing mismatch")
+	}
+
+	b.dirEnd = metaEnd
+	b.heapStart = valuesStart
+
+	b.leafColumnarV2Entries = nil
+	b.leafColumnarV2KeyBytes = 0
+	b.leafColumnarV2ValBytes = 0
+	if b.leafColumnarV2Arena != nil {
+		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
+		b.leafColumnarV2Arena = nil
+	}
+}
+
+func (b *Builder) leafColumnarV2CopyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	if b.leafColumnarV2Arena == nil {
+		arenaAny := leafColumnarV2ArenaPool.Get()
+		arena := arenaAny.([]byte)
+		b.leafColumnarV2Arena = arena[:0]
+	}
+
+	start := len(b.leafColumnarV2Arena)
+	end := start + len(src)
+	if end > cap(b.leafColumnarV2Arena) {
+		dst := make([]byte, len(src))
+		copy(dst, src)
+		return dst
+	}
+	b.leafColumnarV2Arena = b.leafColumnarV2Arena[:end]
+	dst := b.leafColumnarV2Arena[start:end]
+	copy(dst, src)
+	return dst
 }
 
 func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) error {
