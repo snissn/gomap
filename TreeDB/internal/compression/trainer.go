@@ -23,6 +23,13 @@ const (
 	DefaultTrainQueue          = 128
 	DefaultTrainDedupWindow    = 16
 
+	// Bootstrap defaults. These are intentionally smaller than the steady-state
+	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
+	// reducing sensitivity to TrainBytes tuning.
+	DefaultTrainBootstrapBytes      = 256 << 10
+	DefaultTrainBootstrapDictBytes  = 8 << 10
+	DefaultTrainBootstrapMinRecords = 32
+
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB
 	MinProfileRecords     = 250_000  // records
@@ -38,15 +45,20 @@ const (
 )
 
 type Trainer struct {
-	enabled     atomic.Bool
-	collecting  atomic.Bool
-	training    atomic.Bool
-	targetBytes uint64
-	minRecords  uint64
-	maxRecord   int
-	dictBytes   int
-	level       zstd.EncoderLevel
-	logged      atomic.Bool
+	enabled             atomic.Bool
+	collecting          atomic.Bool
+	training            atomic.Bool
+	targetBytes         uint64
+	minRecords          uint64
+	maxRecord           int
+	dictBytes           int
+	bootstrapBytes      uint64
+	bootstrapMinRecords uint64
+	bootstrapDictBytes  int
+	upgradePending      atomic.Bool
+	forceNextTrain      atomic.Bool
+	level               zstd.EncoderLevel
+	logged              atomic.Bool
 
 	mu            sync.Mutex
 	sampleBytes   uint64
@@ -220,18 +232,34 @@ func NewTrainer(opts TrainConfig, cfg Config, readOnly bool, metricsEnabled bool
 		dedupWindow = DefaultTrainDedupWindow
 	}
 
+	bootstrapBytes := uint64(target)
+	if bootstrapBytes > DefaultTrainBootstrapBytes {
+		bootstrapBytes = DefaultTrainBootstrapBytes
+	}
+	bootstrapMinRecords := uint64(minRecords)
+	if bootstrapMinRecords > DefaultTrainBootstrapMinRecords {
+		bootstrapMinRecords = DefaultTrainBootstrapMinRecords
+	}
+	bootstrapDictBytes := dictBytes
+	if bootstrapDictBytes > DefaultTrainBootstrapDictBytes {
+		bootstrapDictBytes = DefaultTrainBootstrapDictBytes
+	}
+
 	trainer := &Trainer{
-		targetBytes:        uint64(target),
-		minRecords:         uint64(minRecords),
-		maxRecord:          maxRecord,
-		dictBytes:          dictBytes,
-		level:              cfg.Level,
-		sampleStride:       uint64(sampleStride),
-		sampleCh:           make(chan trainerSample, DefaultTrainQueue),
-		measureCollect:     metricsEnabled,
-		dictDedupWindow:    dedupWindow,
-		encodeNsPerRawByte: opts.EncodeNsPerRawByte,
-		decodeNsPerRawByte: opts.DecodeNsPerRawByte,
+		targetBytes:         uint64(target),
+		minRecords:          uint64(minRecords),
+		maxRecord:           maxRecord,
+		dictBytes:           dictBytes,
+		bootstrapBytes:      bootstrapBytes,
+		bootstrapMinRecords: bootstrapMinRecords,
+		bootstrapDictBytes:  bootstrapDictBytes,
+		level:               cfg.Level,
+		sampleStride:        uint64(sampleStride),
+		sampleCh:            make(chan trainerSample, DefaultTrainQueue),
+		measureCollect:      metricsEnabled,
+		dictDedupWindow:     dedupWindow,
+		encodeNsPerRawByte:  opts.EncodeNsPerRawByte,
+		decodeNsPerRawByte:  opts.DecodeNsPerRawByte,
 	}
 	trainer.enabled.Store(true)
 	trainer.collecting.Store(true)
@@ -443,16 +471,35 @@ func (t *Trainer) appendSample(sample trainerSample) {
 	t.sampleBytes += uint64(len(sample.sample))
 	t.sampleRecords++
 
-	if t.sampleBytes < t.targetBytes || t.sampleRecords < t.minRecords {
+	hasProfile := t.hasActiveProfile()
+	targetBytes := t.targetBytes
+	minRecords := t.minRecords
+	dictBytes := t.dictBytes
+	if !hasProfile {
+		if t.bootstrapBytes > 0 && t.bootstrapBytes < targetBytes {
+			targetBytes = t.bootstrapBytes
+		}
+		if t.bootstrapMinRecords > 0 && t.bootstrapMinRecords < minRecords {
+			minRecords = t.bootstrapMinRecords
+		}
+		if t.bootstrapDictBytes > 0 && t.bootstrapDictBytes < dictBytes {
+			dictBytes = t.bootstrapDictBytes
+		}
+	}
+
+	if t.sampleBytes < targetBytes || t.sampleRecords < minRecords {
 		return
 	}
 	samples := t.samples
 	slabID := t.lastSlabID
-	dictBytes := t.dictBytes
 	level := t.level
 	t.samples = nil
+	force := hasProfile && t.upgradePending.CompareAndSwap(true, false)
 	t.collecting.Store(false)
 	t.training.Store(true)
+	if force {
+		t.forceNextTrain.Store(true)
+	}
 	go t.train(samples, dictBytes, level, slabID)
 }
 
@@ -481,7 +528,11 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	defer t.releaseSamples(samples)
 
 	now := time.Now()
-	if !t.allowRetrain(now) {
+	force := false
+	if t != nil {
+		force = t.forceNextTrain.Swap(false)
+	}
+	if !force && !t.allowRetrain(now) {
 		return
 	}
 
@@ -1041,6 +1092,7 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	if t == nil || profile == nil {
 		return
 	}
+	first := !t.hasActiveProfile()
 	t.lastProfile.Store(profile)
 	t.accepts.Add(1)
 	t.degraded.Store(false)
@@ -1050,6 +1102,9 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	t.rollingRatioBase.Store(math.Float64bits(profile.TotalRatio))
 	t.rollingRatioCur.Store(math.Float64bits(profile.TotalRatio))
 	t.lastRejectReason.Store("")
+	if first && (t.bootstrapBytes < t.targetBytes || t.bootstrapMinRecords < t.minRecords || t.bootstrapDictBytes < t.dictBytes) {
+		t.upgradePending.Store(true)
+	}
 	if v := t.onAccept.Load(); v != nil {
 		if fn, ok := v.(func(*ActiveProfile)); ok && fn != nil {
 			fn(profile)
