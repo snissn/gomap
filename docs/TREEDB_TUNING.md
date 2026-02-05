@@ -33,6 +33,13 @@ Larger chunks:
 - reduce remap churn for growing DBs,
 - but can increase address-space usage.
 
+Side stores:
+- `Options.DictDBChunkSize` controls the chunk size for `dictdb/` (default 1MiB).
+- `Options.TemplateDBChunkSize` controls the chunk size for `templatedb/` (default 1MiB).
+
+These are intentionally independent of `Options.ChunkSize` so you can tune the
+main index pager without inflating side-store disk usage.
+
 ### `Options.FlushThreshold` (cached mode)
 
 Controls when cached mode rotates the active memtable/journal and triggers background flush work.
