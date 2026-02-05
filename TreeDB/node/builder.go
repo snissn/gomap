@@ -155,9 +155,8 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 	}
 
 	if b.leafColumnar {
-		// Columnar+prefix mode uses the v2 prefix entry header plus explicit
-		// key/value offsets.
-		headerSize += 4 // keyOff + valOff
+		// Columnar+prefix mode uses the v2 prefix entry header with implicit
+		// offsets (value column first, then key suffix).
 		entrySize = headerSize + valSize + suffixLen
 		return entrySize, prefixLen, suffixLen
 	}
@@ -205,12 +204,9 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 	}
 
 	entryStart := b.heapStart - entrySize
-	valOff := leafColumnarHeaderSize
-	keyOff := valOff + valSize
+	writeLeafColumnarHeader(b.data[entryStart:entryStart+leafColumnarHeaderSize], len(key), valLen, flags)
 
-	writeLeafColumnarHeader(b.data[entryStart:entryStart+leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
-
-	valueStart := entryStart + valOff
+	valueStart := entryStart + leafColumnarHeaderSize
 	if flags&FlagPointer != 0 {
 		if b.leafPackedValuePtr {
 			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
@@ -221,7 +217,7 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 		copy(b.data[valueStart:valueStart+valLen], value)
 	}
 
-	keyStart := entryStart + keyOff
+	keyStart := valueStart + valSize
 	copy(b.data[keyStart:keyStart+len(key)], key)
 
 	b.data[b.dirEnd] = byte(entryStart)
@@ -249,9 +245,8 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		valSize = valLen
 	}
 
-	headerSize := leafPrefixHeaderSizeV2(prefixLen, suffixLen, flags, valLen) + 4 // keyOff + valOff
+	headerSize := leafPrefixHeaderSizeV2(prefixLen, suffixLen, flags, valLen)
 	valOff := headerSize
-	keyOff := valOff + valSize
 
 	required := entrySize + DirectoryEntrySize
 	freeSpace := b.heapStart - b.dirEnd
@@ -285,10 +280,6 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		headerOff += n
 	}
 
-	putUint16(b.data[headerOff:headerOff+2], uint16(keyOff))
-	putUint16(b.data[headerOff+2:headerOff+4], uint16(valOff))
-	headerOff += 4
-
 	valueStart := ptr + valOff
 	if flags&FlagPointer != 0 {
 		if b.leafPackedValuePtr {
@@ -300,7 +291,7 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		copy(b.data[valueStart:valueStart+valLen], value)
 	}
 
-	keyStart := ptr + keyOff
+	keyStart := valueStart + valSize
 	copy(b.data[keyStart:keyStart+suffixLen], key[prefixLen:])
 
 	b.data[b.dirEnd] = byte(entryStart)
