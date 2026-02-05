@@ -288,6 +288,9 @@ func Open(opts Options) (*DB, error) {
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
 	valueLogMaxSegmentBytes := int64(0)
 	if opts.IndexPackedValuePtr {
+		// Packed pointers store ValuePtr.Offset as u32 and that offset points at
+		// record payload start (current segment size + 4-byte CRC header).
+		// Use (max u32 - 4) so the largest possible start offset still fits.
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 

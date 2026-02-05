@@ -301,6 +301,8 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		valPtrSize := page.ValuePtrSize
 		if b.leafPackedValuePtr {
 			valPtrSize = page.PackedValuePtrSize
+			// Intentionally hard-fail on overflow: packed pointers require u32 offsets.
+			// The DB-level value-log segment cap maintains this invariant.
 			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
 		} else {
 			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
