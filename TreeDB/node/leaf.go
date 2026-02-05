@@ -484,7 +484,7 @@ func (n *Node) leafColumnarKeyViewAtIndex(idx int) ([]byte, error) {
 		return nil, ErrCorruptedNode
 	}
 	keyStart := ptr + keyOff
-	if keyLen > len(data)-keyStart {
+	if keyStart+keyLen > len(data) {
 		return nil, ErrCorruptedNode
 	}
 	return data[keyStart : keyStart+keyLen], nil
