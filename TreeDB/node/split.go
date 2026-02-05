@@ -59,7 +59,6 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 					LeafPrefixCompression: n.leafPrefixCompressed(),
 					LeafColumnar:          n.leafColumnar(),
 					PackedValuePtr:        n.leafPackedValuePtr(),
-					InternalBaseDelta:     n.internalBaseDelta(),
 				}
 				leafBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
 				leafBuilder.SetPageID(newNode.PageID())
