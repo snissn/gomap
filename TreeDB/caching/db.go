@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
@@ -1507,6 +1508,12 @@ type Options struct {
 	// ValueLogDictMaxK clamps the maximum group size (K) used for dict-compressed
 	// value-log frames. Values <= 0 use the default (32).
 	ValueLogDictMaxK int
+	// ValueLogDictFrameEncodeLevel controls the zstd encoder level used for
+	// dict-compressed value-log frames. Values <= 0 use SpeedFastest.
+	ValueLogDictFrameEncodeLevel zstd.EncoderLevel
+	// ValueLogDictFrameEnableEntropy enables entropy coding for dict-compressed
+	// frames (higher ratio, lower throughput).
+	ValueLogDictFrameEnableEntropy bool
 	// ValueLogDictAdaptiveRatio enables adaptive pause of dict compression when payload ratios degrade.
 	// 0 disables.
 	ValueLogDictAdaptiveRatio float64
@@ -1613,15 +1620,17 @@ type DB struct {
 	templateStore template.Store
 
 	// Value-log dictionary compression (cached mode).
-	valueLogDictTrain             compression.TrainConfig
-	valueLogDictMaxK              int
-	valueLogDictSampleStride      uint64
-	valueLogDictSampleStrideCount atomic.Uint64
-	valueLogDictAdaptiveRatio     float64
-	valueLogDictMinPayloadSavings float64
-	valueLogDictMetricsWindow     int
-	valueLogDictMetricsMinRecords int
-	valueLogDictMetricsPauseBytes int
+	valueLogDictTrain              compression.TrainConfig
+	valueLogDictMaxK               int
+	valueLogDictFrameEncodeLevel   zstd.EncoderLevel
+	valueLogDictFrameEnableEntropy bool
+	valueLogDictSampleStride       uint64
+	valueLogDictSampleStrideCount  atomic.Uint64
+	valueLogDictAdaptiveRatio      float64
+	valueLogDictMinPayloadSavings  float64
+	valueLogDictMetricsWindow      int
+	valueLogDictMetricsMinRecords  int
+	valueLogDictMetricsPauseBytes  int
 
 	valueLogDictTrainerMu sync.Mutex
 	valueLogDictTrainer   *compression.Trainer
@@ -2319,6 +2328,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictMaxK = valuelog.MaxFrameK
 	}
 
+	valueLogDictFrameEncodeLevel := opts.ValueLogDictFrameEncodeLevel
+	if valueLogDictFrameEncodeLevel <= 0 {
+		valueLogDictFrameEncodeLevel = zstd.SpeedFastest
+	}
+	if valueLogDictFrameEncodeLevel < zstd.SpeedFastest || valueLogDictFrameEncodeLevel > zstd.SpeedBestCompression {
+		valueLogDictFrameEncodeLevel = zstd.SpeedFastest
+	}
+	valueLogDictFrameEnableEntropy := opts.ValueLogDictFrameEnableEntropy
+
 	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
 	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
 	valueLogDictMetricsMinRecords := opts.ValueLogDictMetricsMinRecords
@@ -2448,6 +2466,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxValueLogRetainedBytesHard:   opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:              valueLogDictTrain,
 		valueLogDictMaxK:               valueLogDictMaxK,
+		valueLogDictFrameEncodeLevel:   valueLogDictFrameEncodeLevel,
+		valueLogDictFrameEnableEntropy: valueLogDictFrameEnableEntropy,
 		valueLogDictAdaptiveRatio:      valueLogDictAdaptiveRatio,
 		valueLogDictMinPayloadSavings:  minPayloadSavings,
 		valueLogDictMetricsWindow:      valueLogDictMetricsWindow,
@@ -6270,6 +6290,7 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
 		}
+		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		l.vlogLiveBytes.Store(0)
 		if oldPath != "" {
 			if l.vlogClosedSizes == nil {
@@ -6287,6 +6308,7 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 		if err != nil {
 			return err
 		}
+		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		l.vlog = w
 		l.vlogLiveBytes.Store(0)
 	}

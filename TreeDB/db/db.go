@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
@@ -165,6 +166,16 @@ type ValueLogOptions struct {
 	//
 	// Values <= 0 use the default (32). Values above the engine maximum are clamped.
 	DictMaxK int
+	// DictFrameEncodeLevel controls the zstd encoder level used for dict-compressed
+	// value-log frames.
+	//
+	// Values <= 0 use the default (SpeedFastest).
+	DictFrameEncodeLevel zstd.EncoderLevel
+	// DictFrameEnableEntropy enables entropy coding for dict-compressed value-log
+	// frames (higher ratio, lower throughput).
+	//
+	// Default is false (throughput-focused: no-entropy compression).
+	DictFrameEnableEntropy bool
 
 	// CompressionAutotune configures the wall-time value-log compression autotuner.
 	CompressionAutotune valuelog.AutotuneOptions

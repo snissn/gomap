@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -43,3 +44,13 @@ type AutotuneOptions = valuelog.AutotuneOptions
 // Dictionary training/lookup helpers for value-log compression.
 type TrainConfig = compression.TrainConfig
 type DictLookup = valuelog.DictLookup
+
+// Zstd encoder levels (for dict-compressed value-log frames).
+type ZSTDEncoderLevel = zstd.EncoderLevel
+
+const (
+	ZSTDLevelFastest = zstd.SpeedFastest
+	ZSTDLevelDefault = zstd.SpeedDefault
+	ZSTDLevelBetter  = zstd.SpeedBetterCompression
+	ZSTDLevelBest    = zstd.SpeedBestCompression
+)

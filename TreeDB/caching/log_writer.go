@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -27,6 +28,7 @@ type commitWriter interface {
 type valueWriter interface {
 	Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error)
 	AppendFrame(dictID uint64, dict []byte, records []valuelog.Record) ([]page.ValuePtr, error)
+	SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool)
 	RotateTo(path string, fileID uint32) error
 	Size() int64
 	Flush() error
