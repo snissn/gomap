@@ -312,6 +312,61 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 	return key, val, page.ValuePtr{}, flags, nil
 }
 
+// GetLeafValueView returns the value (inline or pointer) at the given index
+// without reconstructing the key. This is useful for point reads after SearchLeaf.
+func (n *Node) GetLeafValueView(index uint16) (val []byte, valPtr page.ValuePtr, flags byte, err error) {
+	if n.Type() != page.PageTypeLeaf {
+		return nil, page.ValuePtr{}, 0, ErrInvalidType
+	}
+
+	if n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		return n.getLeafValueViewColumnarV2(index)
+	}
+
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return nil, page.ValuePtr{}, 0, err
+	}
+	if int(offset) >= len(n.data) {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+	entryStart := int(offset)
+
+	layout, err := n.leafEntryLayoutAt(entryStart)
+	if err != nil {
+		return nil, page.ValuePtr{}, 0, err
+	}
+	flags = layout.flags
+
+	if flags&FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, flags, nil
+	}
+
+	valueStart := entryStart + layout.valOff
+	if flags&FlagPointer != 0 {
+		valPtrSize := page.ValuePtrSize
+		if n.leafPackedValuePtr() {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		if valueStart+valPtrSize > len(n.data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		if n.leafPackedValuePtr() {
+			valPtr = page.DecodePackedValuePtr(n.data[valueStart : valueStart+valPtrSize])
+		} else {
+			valPtr = page.DecodeValuePtr(n.data[valueStart : valueStart+valPtrSize])
+		}
+		return nil, valPtr, flags, nil
+	}
+
+	// Inline
+	if valueStart+layout.valLen > len(n.data) {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+	val = n.data[valueStart : valueStart+layout.valLen]
+	return val, page.ValuePtr{}, flags, nil
+}
+
 // UpdateLeafValuePtr updates the ValuePtr bytes for the entry at index if the
 // entry is a pointer and currently matches oldPtr. It updates the page checksum
 // on success.
@@ -711,6 +766,74 @@ func (n *Node) getLeafEntryViewColumnarV2(index uint16) (key []byte, val []byte,
 
 	val = data[valStart:valEnd]
 	return key, val, page.ValuePtr{}, flags, nil
+}
+
+func (n *Node) getLeafValueViewColumnarV2(index uint16) (val []byte, valPtr page.ValuePtr, flags byte, err error) {
+	count := n.Count()
+	if index >= count {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+
+	data := n.data
+	keyDirStart := NodeHeaderSize
+	keyDirEnd := keyDirStart + int(count)*DirectoryEntrySize
+	valDirStart := keyDirEnd
+	valDirEnd := valDirStart + int(count)*DirectoryEntrySize
+	flagsStart := valDirEnd
+	headerEnd := flagsStart + int(count)
+	if headerEnd > len(data) {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+
+	flags = data[flagsStart+int(index)]
+	if flags&FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, flags, nil
+	}
+
+	keysStart := int(getUint16(data[keyDirStart : keyDirStart+2]))
+	if keysStart < headerEnd || keysStart > len(data) {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+
+	valStartOff := valDirStart + int(index)*2
+	if valStartOff+2 > len(data) {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+	valStart := int(getUint16(data[valStartOff : valStartOff+2]))
+	valEnd := keysStart
+	if index+1 < count {
+		nextValOff := valStartOff + 2
+		if nextValOff+2 > len(data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		valEnd = int(getUint16(data[nextValOff : nextValOff+2]))
+	}
+	if valStart < headerEnd || valEnd < valStart || valEnd > keysStart {
+		return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+	}
+
+	if flags&FlagPointer != 0 {
+		valPtrSize := page.ValuePtrSize
+		packed := n.leafPackedValuePtr()
+		if packed {
+			valPtrSize = page.PackedValuePtrSize
+		}
+		if valEnd-valStart != valPtrSize {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		if valStart+valPtrSize > len(data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		if packed {
+			valPtr = page.DecodePackedValuePtr(data[valStart : valStart+valPtrSize])
+		} else {
+			valPtr = page.DecodeValuePtr(data[valStart : valStart+valPtrSize])
+		}
+		return nil, valPtr, flags, nil
+	}
+
+	val = data[valStart:valEnd]
+	return val, page.ValuePtr{}, flags, nil
 }
 
 func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
