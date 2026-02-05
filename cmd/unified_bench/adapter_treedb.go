@@ -65,6 +65,7 @@ var (
 	treedbVlogDictMetricsPauseBytes = flag.Int("treedb-vlog-dict-metrics-pause-bytes", 0, "TreeDB: value-log dict pause bytes when degraded (0=default)")
 	treedbVlogDictMinSavingsRatio   = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
 	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
+	treedbVlogDictMode              = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
 	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
@@ -79,6 +80,8 @@ var (
 func init() {
 	RegisterDB("treedb", NewTreeDB)
 	RegisterAlias("treedbcached", "treedb")
+	RegisterHiddenDB("treedb_vlog_dict_off", NewTreeDBVlogDictOff)
+	RegisterHiddenDB("treedb_vlog_dict_on", NewTreeDBVlogDictOn)
 }
 
 func clampPPM(v int) int {
@@ -396,6 +399,75 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 	}
 	// Adapter/registry name: "treedb". Wrapper name: "TreeDB" (pretty display).
 	return treedbadapter.WrapNamed(db, "TreeDB"), nil
+}
+
+func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {
+	mode, err := parseVlogCompressionAutotuneMode(*treedbVlogCompressionAutotune)
+	if err != nil {
+		return 0, err
+	}
+	// If the caller hasn't enabled compression, but requested dict variants,
+	// force a deterministic non-off mode so dict on/off comparisons are
+	// meaningful.
+	if mode == 0 || mode == 1 {
+		return 2, nil // medium
+	}
+	return mode, nil
+}
+
+func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	mode, err := resolvedTreeDBVlogCompressionModeForDictVariants()
+	if err != nil {
+		return nil, err
+	}
+	setOptionalVlogAutotuneMode(&opts, mode)
+	setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog_dict=off)"), nil
+}
+
+func NewTreeDBVlogDictOn(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	mode, err := resolvedTreeDBVlogCompressionModeForDictVariants()
+	if err != nil {
+		return nil, err
+	}
+	setOptionalVlogAutotuneMode(&opts, mode)
+
+	trainBytes := *treedbVlogDictTrainBytes
+	dictBytes := *treedbVlogDictDictBytes
+	if trainBytes <= 0 {
+		trainBytes = 4 << 20
+	}
+	if dictBytes <= 0 {
+		dictBytes = 40 << 10
+	}
+
+	setOptionalVlogTrainConfig(&opts,
+		trainBytes,
+		dictBytes,
+		*treedbVlogDictMinRecords,
+		*treedbVlogDictMaxRecordBytes,
+		*treedbVlogDictSampleStride,
+		*treedbVlogDictDedupWindow,
+	)
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog_dict=on)"), nil
 }
 
 func logResolvedTreeDBOptions() {

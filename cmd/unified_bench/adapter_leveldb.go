@@ -14,6 +14,8 @@ import (
 
 func init() {
 	RegisterDB("leveldb", NewLevelDB)
+	RegisterHiddenDB("leveldb_block_comp_on", NewLevelDBBlockCompressionOn)
+	RegisterHiddenDB("leveldb_block_comp_off", NewLevelDBBlockCompressionOff)
 }
 
 const (
@@ -22,8 +24,10 @@ const (
 )
 
 var (
-	leveldbCacheMB = flag.Int("leveldb-cache-mb", 1024, "LevelDB: total cache in MiB (matches geth semantics; used as BlockCache=cache/2 and WriteBuffer=cache/4)")
-	leveldbHandles = flag.Int("leveldb-handles", 1024, "LevelDB: open files cache capacity (matches geth semantics)")
+	leveldbCacheMB              = flag.Int("leveldb-cache-mb", 1024, "LevelDB: total cache in MiB (matches geth semantics; used as BlockCache=cache/2 and WriteBuffer=cache/4)")
+	leveldbHandles              = flag.Int("leveldb-handles", 1024, "LevelDB: open files cache capacity (matches geth semantics)")
+	leveldbBlockCompressionMode = flag.String("leveldb-block-compression", "default", "LevelDB: block compression mode for unified_bench (default|on|off|both)")
+	leveldbBlockSize            = flag.Int("leveldb-block-size", 4096, "LevelDB: table block size in bytes (opt.Options.BlockSize)")
 )
 
 type LevelDBBatch struct {
@@ -75,11 +79,13 @@ func (i *LevelDBIterator) Close() error { i.it.Release(); return nil }
 func (i *LevelDBIterator) Error() error { return i.it.Error() }
 
 type LevelDBWrapper struct {
-	db  *leveldb.DB
-	dir string
+	db          *leveldb.DB
+	dir         string
+	name        string
+	compression opt.Compression
 }
 
-func leveldbBenchOptions() *opt.Options {
+func leveldbBenchOptions(compression opt.Compression) *opt.Options {
 	cache := *leveldbCacheMB
 	handles := *leveldbHandles
 	if cache < leveldbMinCacheMB {
@@ -94,18 +100,38 @@ func leveldbBenchOptions() *opt.Options {
 		OpenFilesCacheCapacity: handles,
 		BlockCacheCapacity:     cache / 2 * opt.MiB,
 		WriteBuffer:            cache / 4 * opt.MiB, // two write buffers are used internally
+		Compression:            compression,
+		BlockSize:              *leveldbBlockSize,
 	}
 }
 
-func NewLevelDB(dir string) (kvstore.DB, error) {
-	db, err := leveldb.OpenFile(dir, leveldbBenchOptions())
+func openLevelDB(dir, name string, compression opt.Compression) (kvstore.DB, error) {
+	db, err := leveldb.OpenFile(dir, leveldbBenchOptions(compression))
 	if err != nil {
 		return nil, err
 	}
-	return &LevelDBWrapper{db: db, dir: dir}, nil
+	return &LevelDBWrapper{db: db, dir: dir, name: name, compression: compression}, nil
 }
 
-func (l *LevelDBWrapper) Name() string                 { return "LevelDB" }
+func NewLevelDB(dir string) (kvstore.DB, error) {
+	// Explicitly enable block compression to keep the benchmark deterministic.
+	return openLevelDB(dir, "LevelDB", opt.SnappyCompression)
+}
+
+func NewLevelDBBlockCompressionOn(dir string) (kvstore.DB, error) {
+	return openLevelDB(dir, "LevelDB (block=on)", opt.SnappyCompression)
+}
+
+func NewLevelDBBlockCompressionOff(dir string) (kvstore.DB, error) {
+	return openLevelDB(dir, "LevelDB (block=off)", opt.NoCompression)
+}
+
+func (l *LevelDBWrapper) Name() string {
+	if l.name != "" {
+		return l.name
+	}
+	return "LevelDB"
+}
 func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
 func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
@@ -117,7 +143,7 @@ func (l *LevelDBWrapper) Checkpoint() error {
 	if err := l.db.Close(); err != nil {
 		return err
 	}
-	db, err := leveldb.OpenFile(l.dir, leveldbBenchOptions())
+	db, err := leveldb.OpenFile(l.dir, leveldbBenchOptions(l.compression))
 	if err != nil {
 		return err
 	}

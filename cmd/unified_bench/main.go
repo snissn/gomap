@@ -504,7 +504,7 @@ func sanitizeProfileSegment(s string) string {
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
-	if inst == nil || inst.Name != "treedb" || inst.Wrapper == nil {
+	if inst == nil || inst.Wrapper == nil || !isTreeDBInstance(inst) {
 		return
 	}
 	sp, ok := inst.Wrapper.(kvstore.StatsProvider)
@@ -764,6 +764,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	dbNames := resolveDBs(cfg.DBsArg, cfg.DBsExcludeArg)
+	var err error
+	dbNames, err = applyCompressionVariants(dbNames, cfg.DBsExcludeArg)
+	if err != nil {
+		return BenchRun{}, err
+	}
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
 
 	// Initialize DBs
@@ -2190,12 +2195,18 @@ func isTreeDBInstance(inst *DBInstance) bool {
 	if inst == nil {
 		return false
 	}
-	// The adapter/registry name is "treedb", while the display wrapper name is
-	// "TreeDB". Keep both checks so callers can key off either notion safely.
-	if inst.Name == treedbAdapterName {
+	if inst.Wrapper == nil {
+		return false
+	}
+	if _, ok := inst.Wrapper.(*treedbadapter.DB); ok {
 		return true
 	}
-	if inst.Wrapper != nil && inst.Wrapper.Name() == treedbWrapperName {
+	// The adapter/registry name is "treedb", while the display wrapper name is
+	// typically "TreeDB". Keep name-based checks as a fallback.
+	if inst.Name == treedbAdapterName || strings.HasPrefix(inst.Name, treedbAdapterName+"_") {
+		return true
+	}
+	if inst.Wrapper.Name() == treedbWrapperName || strings.HasPrefix(inst.Wrapper.Name(), treedbWrapperName+" ") {
 		return true
 	}
 	return false
@@ -2836,12 +2847,16 @@ func runSloadReadHeavySuite(baseCfg BenchConfig) (string, error) {
 func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
 	var sb strings.Builder
 	for _, inst := range instances {
-		if inst == nil || inst.Name != "treedb" {
+		if inst == nil || inst.Dir == "" || !isTreeDBInstance(inst) {
 			continue
 		}
-		db, err := NewTreeDB(inst.Dir)
+		factory, err := GetDBFactory(inst.Name)
 		if err != nil {
-			return "", fmt.Errorf("suite: reopen treedb for stats: %w", err)
+			return "", fmt.Errorf("suite: reopen treedb for stats (%s): %w", inst.Name, err)
+		}
+		db, err := factory(inst.Dir)
+		if err != nil {
+			return "", fmt.Errorf("suite: reopen treedb for stats (%s): %w", inst.Name, err)
 		}
 		sp, ok := db.(kvstore.StatsProvider)
 		if ok {
