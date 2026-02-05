@@ -16,6 +16,13 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 		return nil, errors.New("cannot split node with fewer than 2 items")
 	}
 
+	// Columnar v2 leaves have count-dependent metadata regions (ValOff[]/Flags[])
+	// immediately after the key directory. Truncating Count in-place without
+	// rebuilding makes header-derived offsets inconsistent, so rebuild both sides.
+	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		return n.splitLeafColumnarV2Rebuild(newNode)
+	}
+
 	// We split at Count / 2
 	splitIndex := n.Count() / 2
 	count := n.Count()
@@ -150,6 +157,65 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 	} else {
 		newNode.UpdateChecksum() // Add* already updates, but safe to do.
 	}
+
+	return pivotKey, nil
+}
+
+func (n *Node) splitLeafColumnarV2Rebuild(newNode *Node) ([]byte, error) {
+	splitIndex := n.Count() / 2
+	count := n.Count()
+
+	newNode.SetType(page.PageTypeLeaf)
+	newNode.setLeafPrefixCompressed(n.leafPrefixCompressed())
+	newNode.setLeafColumnar(n.leafColumnar())
+	newNode.setLeafColumnarV2(n.leafColumnarV2())
+	newNode.setLeafPackedValuePtr(n.leafPackedValuePtr())
+
+	srcData := make([]byte, len(n.data))
+	copy(srcData, n.data)
+	src := NewNode(srcData)
+
+	opts := BuilderOptions{
+		LeafPrefixCompression: n.leafPrefixCompressed(),
+		LeafColumnar:          n.leafColumnar(),
+		PackedValuePtr:        n.leafPackedValuePtr(),
+	}
+	leftBuilder := NewBuilderWithOptions(n.data, page.PageTypeLeaf, opts)
+	leftBuilder.SetPageID(n.PageID())
+	rightBuilder := NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
+	rightBuilder.SetPageID(newNode.PageID())
+
+	for i := uint16(0); i < splitIndex; i++ {
+		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		if err != nil {
+			return nil, err
+		}
+		if err := leftBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+			return nil, err
+		}
+	}
+
+	var pivotKey []byte
+	for i := splitIndex; i < count; i++ {
+		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		if err != nil {
+			return nil, err
+		}
+		if i == splitIndex {
+			pivotKey = append([]byte(nil), key...)
+		}
+		if err := rightBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+			return nil, err
+		}
+	}
+
+	leftBuilder.Finish()
+	n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+	n.count = binary.LittleEndian.Uint16(n.data[14:16])
+
+	rightBuilder.Finish()
+	newNode.setRawFlags(binary.LittleEndian.Uint16(newNode.data[12:14]))
+	newNode.count = binary.LittleEndian.Uint16(newNode.data[14:16])
 
 	return pivotKey, nil
 }
