@@ -76,17 +76,26 @@ func parseTreeDBVlogDictFrameEntropyMode(flagName, s string) (engine bool, entro
 	}
 }
 
-func treeDBVlogDictOnVariantName(level string, enableEntropy bool) (string, error) {
+func treeDBVlogDictOnVariantName(level string, enableEntropy bool, pipeline bool) (string, error) {
 	switch level {
 	case "fastest":
 		if enableEntropy {
+			if pipeline {
+				return "treedb_vlog_dict_on_entropy_pipeline", nil
+			}
 			return "treedb_vlog_dict_on_entropy", nil
+		}
+		if pipeline {
+			return "treedb_vlog_dict_on_pipeline", nil
 		}
 		return "treedb_vlog_dict_on", nil
 	case "default", "better", "best":
 		name := "treedb_vlog_dict_on_level_" + level
 		if enableEntropy {
 			name += "_entropy"
+		}
+		if pipeline {
+			name += "_pipeline"
 		}
 		return name, nil
 	default:
@@ -109,18 +118,32 @@ func treeDBVlogDictOnVariantNames() ([]string, error) {
 	if entropyEngine {
 		entropies = []bool{false}
 	}
-	if levelEngine && entropyEngine {
-		return []string{"treedb_vlog_dict_on"}, nil
+	pipeMode, err := parseBenchVariantMode("treedb-vlog-dict-frame-pipeline", *treedbVlogDictFramePipelineMode)
+	if err != nil {
+		return nil, err
+	}
+	var pipelines []bool
+	switch pipeMode {
+	case benchVariantDefault:
+		pipelines = []bool{*treedbVlogDictFramePipelineW > 1}
+	case benchVariantOn:
+		pipelines = []bool{true}
+	case benchVariantOff:
+		pipelines = []bool{false}
+	case benchVariantBoth:
+		pipelines = []bool{false, true}
 	}
 
-	out := make([]string, 0, len(levels)*len(entropies))
+	out := make([]string, 0, len(levels)*len(entropies)*len(pipelines))
 	for _, level := range levels {
 		for _, enableEntropy := range entropies {
-			name, err := treeDBVlogDictOnVariantName(level, enableEntropy)
-			if err != nil {
-				return nil, err
+			for _, pipeline := range pipelines {
+				name, err := treeDBVlogDictOnVariantName(level, enableEntropy, pipeline)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, name)
 			}
-			out = append(out, name)
 		}
 	}
 	return out, nil

@@ -63,6 +63,9 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
+- `-treedb-vlog-dict-frame-pipeline` TreeDB: dict-frame parallel compression pipeline mode (`engine|on|off|both`)
+- `-treedb-vlog-dict-frame-pipeline-workers` TreeDB: dict-frame pipeline worker count when enabled (`0`=default)
+- `-treedb-vlog-dict-frame-pipeline-max-inflight-bytes` TreeDB: dict-frame pipeline max in-flight raw bytes (`0`=default)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
@@ -128,6 +131,16 @@ Run TreeDB twice (dict on/off) and LevelDB twice (block compression on/off) in o
   -treedb-force-value-pointers \\
   -treedb-vlog-dict both \\
   -leveldb-block-compression both
+```
+
+To compare TreeDB dict compression with the parallel dict-frame pipeline on vs off, add:
+
+```bash
+./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb -profile fast -keys 4000000 -format markdown \\
+  -treedb-force-value-pointers \\
+  -treedb-vlog-dict on \\
+  -treedb-vlog-dict-frame-pipeline both \\
+  -treedb-vlog-dict-frame-pipeline-workers 4
 ```
 
 To sweep dict-frame encoder knobs (zstd level × entropy coding), use:

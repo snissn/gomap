@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,9 @@ var (
 	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
 	treedbVlogDictFrameEncodeLevel  = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode  = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
+	treedbVlogDictFramePipelineMode = flag.String("treedb-vlog-dict-frame-pipeline", "engine", "TreeDB: dict-frame parallel compression pipeline mode (engine|on|off|both)")
+	treedbVlogDictFramePipelineW    = flag.Int("treedb-vlog-dict-frame-pipeline-workers", 0, "TreeDB: dict-frame pipeline worker count when enabled (0=default)")
+	treedbVlogDictFramePipelineMax  = flag.Int64("treedb-vlog-dict-frame-pipeline-max-inflight-bytes", 0, "TreeDB: dict-frame pipeline max in-flight raw bytes (0=default)")
 	treedbVlogDictMode              = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
 	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
@@ -84,26 +88,58 @@ func init() {
 	RegisterAlias("treedbcached", "treedb")
 	RegisterHiddenDB("treedb_vlog_dict_off", NewTreeDBVlogDictOff)
 	RegisterHiddenDB("treedb_vlog_dict_on", NewTreeDBVlogDictOn)
+	RegisterHiddenDB("treedb_vlog_dict_on_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, false, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=fastest, entropy=off, pipeline=%d)", workers))
+	})
 	RegisterHiddenDB("treedb_vlog_dict_on_entropy", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, true, "TreeDB (vlog_dict=on, level=fastest, entropy=on)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, true, 0, 0, "TreeDB (vlog_dict=on, level=fastest, entropy=on)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_entropy_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, true, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=fastest, entropy=on, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_default", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, false, "TreeDB (vlog_dict=on, level=default, entropy=off)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, false, 0, 0, "TreeDB (vlog_dict=on, level=default, entropy=off)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_default_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, false, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=default, entropy=off, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_default_entropy", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, true, "TreeDB (vlog_dict=on, level=default, entropy=on)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, true, 0, 0, "TreeDB (vlog_dict=on, level=default, entropy=on)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_default_entropy_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelDefault, true, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=default, entropy=on, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_better", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, false, "TreeDB (vlog_dict=on, level=better, entropy=off)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, false, 0, 0, "TreeDB (vlog_dict=on, level=better, entropy=off)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_better_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, false, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=better, entropy=off, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_better_entropy", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, true, "TreeDB (vlog_dict=on, level=better, entropy=on)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, true, 0, 0, "TreeDB (vlog_dict=on, level=better, entropy=on)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_better_entropy_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBetter, true, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=better, entropy=on, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_best", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, false, "TreeDB (vlog_dict=on, level=best, entropy=off)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, false, 0, 0, "TreeDB (vlog_dict=on, level=best, entropy=off)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_best_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, false, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=best, entropy=off, pipeline=%d)", workers))
 	})
 	RegisterHiddenDB("treedb_vlog_dict_on_level_best_entropy", func(dir string) (kvstore.DB, error) {
-		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, true, "TreeDB (vlog_dict=on, level=best, entropy=on)")
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, true, 0, 0, "TreeDB (vlog_dict=on, level=best, entropy=on)")
+	})
+	RegisterHiddenDB("treedb_vlog_dict_on_level_best_entropy_pipeline", func(dir string) (kvstore.DB, error) {
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelBest, true, workers, maxInFlight, fmt.Sprintf("TreeDB (vlog_dict=on, level=best, entropy=on, pipeline=%d)", workers))
 	})
 }
 
@@ -224,6 +260,15 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=%dB", threshold))
 	}
+
+	train := r.opts.ValueLog.DictTrain
+	lines = append(lines, fmt.Sprintf("vlog.dict_train_bytes=%d", train.TrainBytes))
+	lines = append(lines, fmt.Sprintf("vlog.dict_dict_bytes=%d", train.DictBytes))
+	lines = append(lines, fmt.Sprintf("vlog.dict_max_k=%d", r.opts.ValueLog.DictMaxK))
+	lines = append(lines, fmt.Sprintf("vlog.dict_frame_encode_level=%d", r.opts.ValueLog.DictFrameEncodeLevel))
+	lines = append(lines, fmt.Sprintf("vlog.dict_frame_entropy=%t", r.opts.ValueLog.DictFrameEnableEntropy))
+	lines = append(lines, fmt.Sprintf("vlog.dict_frame_pipeline_workers=%d", r.opts.ValueLog.DictFramePipelineWorkers))
+	lines = append(lines, fmt.Sprintf("vlog.dict_frame_pipeline_max_inflight_bytes=%d", r.opts.ValueLog.DictFramePipelineMaxInFlightBytes))
 
 	// Keep output stable and readable for copy/paste.
 	if len(r.warnings) > 0 {
@@ -410,6 +455,31 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		}
 	}
 
+	pipeMode, err := parseBenchVariantMode("treedb-vlog-dict-frame-pipeline", *treedbVlogDictFramePipelineMode)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	switch pipeMode {
+	case benchVariantDefault:
+		if *treedbVlogDictFramePipelineW > 0 {
+			opts.ValueLog.DictFramePipelineWorkers = *treedbVlogDictFramePipelineW
+		}
+		if *treedbVlogDictFramePipelineMax > 0 {
+			opts.ValueLog.DictFramePipelineMaxInFlightBytes = *treedbVlogDictFramePipelineMax
+		}
+	case benchVariantOn:
+		workers, maxInFlight := resolvedTreeDBVlogDictPipelineConfig()
+		opts.ValueLog.DictFramePipelineWorkers = workers
+		if maxInFlight > 0 {
+			opts.ValueLog.DictFramePipelineMaxInFlightBytes = maxInFlight
+		}
+	case benchVariantOff:
+		opts.ValueLog.DictFramePipelineWorkers = 0
+		opts.ValueLog.DictFramePipelineMaxInFlightBytes = 0
+	case benchVariantBoth:
+		warnings = append(warnings, "vlog_dict_frame_pipeline requests a matrix; use -treedb-vlog-dict=on/both to expand DB variants")
+	}
+
 	autotuneMode, err := parseVlogCompressionAutotuneMode(*treedbVlogCompressionAutotune)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
@@ -490,7 +560,20 @@ func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
 	return treedbadapter.WrapNamed(db, "TreeDB (vlog_dict=off)"), nil
 }
 
-func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enableEntropy bool, wrapperName string) (kvstore.DB, error) {
+func resolvedTreeDBVlogDictPipelineConfig() (workers int, maxInFlight int64) {
+	maxInFlight = *treedbVlogDictFramePipelineMax
+
+	workers = *treedbVlogDictFramePipelineW
+	if workers <= 1 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if workers <= 1 {
+		workers = 2
+	}
+	return workers, maxInFlight
+}
+
+func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enableEntropy bool, pipelineWorkers int, pipelineMaxInFlightBytes int64, wrapperName string) (kvstore.DB, error) {
 	opts, _, err := buildTreeDBOptions(dir)
 	if err != nil {
 		return nil, err
@@ -521,6 +604,8 @@ func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enabl
 
 	opts.ValueLog.DictFrameEncodeLevel = level
 	opts.ValueLog.DictFrameEnableEntropy = enableEntropy
+	opts.ValueLog.DictFramePipelineWorkers = pipelineWorkers
+	opts.ValueLog.DictFramePipelineMaxInFlightBytes = pipelineMaxInFlightBytes
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -530,7 +615,7 @@ func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enabl
 }
 
 func NewTreeDBVlogDictOn(dir string) (kvstore.DB, error) {
-	return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, false, "TreeDB (vlog_dict=on)")
+	return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, false, 0, 0, "TreeDB (vlog_dict=on)")
 }
 
 func logResolvedTreeDBOptions() {
