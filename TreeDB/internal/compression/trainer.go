@@ -453,7 +453,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		if r := recover(); r != nil {
 			// Suppress panic from zstd or internal logic, treat as failed training.
 			// Log as warning instead of PANIC.
-			log.Printf("treedb: slab compression training skipped slab=%d err=%v\n%s", slabID, r, debug.Stack())
+			log.Printf("treedb: dict training skipped stream=%d err=%v\n%s", slabID, r, debug.Stack())
 		}
 		// Continue collecting if we don't have a usable profile yet, or if the
 		// stream is degraded and we want to converge to a better dict/K.
@@ -731,7 +731,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 		t.lastTrainSamples.Store(uint64(len(validSamples)))
 		t.lastTrainDict.Store(uint64(len(bestProfile.Dict)))
 		if t.logOnce() {
-			log.Printf("treedb: slab compression dict dedup slab=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
+			log.Printf("treedb: dict training dedup stream=%d dict_bytes=%d samples=%d hash=%x mode=%s ref=%d",
 				slabID,
 				len(bestProfile.Dict),
 				len(validSamples),
@@ -744,7 +744,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 
 	enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level), zstd.WithEncoderCRC(false), zstd.WithEncoderDict(bestProfile.Dict))
 	if err != nil {
-		log.Printf("treedb: slab compression training encode setup failed slab=%d err=%v", slabID, err)
+		log.Printf("treedb: dict training encode setup failed stream=%d err=%v", slabID, err)
 		return
 	}
 	defer enc.Close()
@@ -761,7 +761,7 @@ func (t *Trainer) train(samples [][]byte, dictBytes int, level zstd.EncoderLevel
 	t.lastTrainSamples.Store(uint64(len(validSamples)))
 	t.lastTrainDict.Store(uint64(len(bestProfile.Dict)))
 	if t.logOnce() {
-		log.Printf("treedb: slab compression trained dict slab=%d dict_bytes=%d samples=%d raw=%d stored=%d ratio=%.3f",
+		log.Printf("treedb: dict training trained dict stream=%d dict_bytes=%d samples=%d raw=%d stored=%d ratio=%.3f",
 			slabID,
 			len(bestProfile.Dict),
 			len(validSamples),
@@ -794,30 +794,20 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 	})
 	if err != nil || len(dict) == 0 {
 		if err != nil {
-			log.Printf("treedb: slab compression training failed slab=%d err=%v", dictID-1, err)
+			log.Printf("treedb: dict training failed stream=%d err=%v", dictID-1, err)
 		}
 		return nil, err
 	}
-	// Strict cap for V2 compatibility (matching GlobalDictSize)
-	if len(dict) > 40960 {
-		dict = dict[:40960]
-	} else if len(dict) < 40960 {
-		// PAD to exactly GlobalDictSize
-		padded := make([]byte, 40960)
-		copy(padded, dict)
-		dict = padded
-	}
 	if err := validateDict(dict, level); err != nil {
 		// Retry with a smaller dict to avoid invalid offset failures.
-		reduced := dict[:len(dict)/2]
-		if err2 := validateDict(reduced, level); err2 == nil {
-			padded := make([]byte, 40960)
-			copy(padded, reduced)
-			if err3 := validateDict(padded, level); err3 == nil {
-				return padded, nil
+		reduced := dict
+		for i := 0; i < 3 && len(reduced) > 64; i++ {
+			reduced = reduced[:len(reduced)/2]
+			if err2 := validateDict(reduced, level); err2 == nil {
+				return reduced, nil
 			}
 		}
-		log.Printf("treedb: slab compression training dict rejected slab=%d err=%v", dictID-1, err)
+		log.Printf("treedb: dict training dict rejected stream=%d err=%v", dictID-1, err)
 		return nil, err
 	}
 	return dict, nil
