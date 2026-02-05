@@ -98,7 +98,8 @@ func BenchmarkValueLogDictFramePipelineThroughput_NoIO(b *testing.B) {
 		writer.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
 
 		db := &DB{
-			valueLogDictFramePipelineWorkers:          workers,
+			closeCh:                          make(chan struct{}),
+			valueLogDictFramePipelineWorkers: workers,
 			valueLogDictFramePipelineMaxInFlightBytes: int64(workers) * (16 << 20),
 			valueLogDictFrameEncodeLevel:              zstd.SpeedFastest,
 			valueLogDictFrameEnableEntropy:            false,
@@ -116,6 +117,9 @@ func BenchmarkValueLogDictFramePipelineThroughput_NoIO(b *testing.B) {
 				b.Fatalf("appendValueLogDictFramesPipeline: %v", err)
 			}
 		}
+		b.StopTimer()
+		close(db.closeCh)
+		db.wg.Wait()
 	}
 
 	b.Run("pipeline/w=4", func(b *testing.B) { benchPipeline(b, 4) })

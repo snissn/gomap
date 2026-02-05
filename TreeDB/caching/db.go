@@ -1632,6 +1632,8 @@ type DB struct {
 	valueLogDictFrameEnableEntropy            bool
 	valueLogDictFramePipelineWorkers          int
 	valueLogDictFramePipelineMaxInFlightBytes int64
+	valueLogDictFramePipelineMu               sync.Mutex
+	valueLogDictFramePipeline                 *vlogDictFramePipeline
 	valueLogDictSampleStride                  uint64
 	valueLogDictSampleStrideCount             atomic.Uint64
 	valueLogDictAdaptiveRatio                 float64
@@ -3976,7 +3978,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	pipelineUsed := false
 	if err == nil && !rawBatchUsed && dictID != 0 && len(dict) > 0 && hasPayloadInto {
 		frameCount := (len(records) + k - 1) / k
-		if frameCount > 1 && db.valueLogDictFramePipelineWorkers > 1 {
+		// Heuristic: the parallel pipeline has overhead (goroutines/channels and
+		// an extra copy of encoded bytes into the writer). It is only a win when
+		// frames are large enough that dict+zstd encode dominates.
+		//
+		// We gate on average raw bytes per frame rather than total bytes because
+		// small batch sizes can otherwise invoke the pipeline for many tiny frames
+		// and regress throughput.
+		const minAvgRawBytesPerFrame = 16 << 10
+		avgFrameBytes := 0
+		if frameCount > 0 {
+			avgFrameBytes = rawPayloadBytes / frameCount
+		}
+		if frameCount > 1 && db.valueLogDictFramePipelineWorkers > 1 && avgFrameBytes >= minAvgRawBytesPerFrame {
 			rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, framesKept, encodeNsTotal, encodeRawBytes, err =
 				db.appendValueLogDictFramesPipeline(payloadWriterInto, dictID, dict, records, k, ptrs)
 			pipelineUsed = err == nil

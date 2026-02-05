@@ -67,11 +67,16 @@ func TestValueLogDictFramePipeline_OrderAndPointers(t *testing.T) {
 		var sink bytes.Buffer
 		writer := valuelog.NewWriterWithSink(&sink, fileID)
 		db := &DB{
-			valueLogDictFramePipelineWorkers:          workers,
+			closeCh:                          make(chan struct{}),
+			valueLogDictFramePipelineWorkers: workers,
 			valueLogDictFramePipelineMaxInFlightBytes: maxInFlight,
 			valueLogDictFrameEncodeLevel:              zstd.SpeedFastest,
 			valueLogDictFrameEnableEntropy:            false,
 		}
+		t.Cleanup(func() {
+			close(db.closeCh)
+			db.wg.Wait()
+		})
 		for i := range ptrs {
 			ptrs[i] = page.ValuePtr{}
 		}
