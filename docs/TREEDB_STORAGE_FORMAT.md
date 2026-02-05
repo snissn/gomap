@@ -168,6 +168,47 @@ Notes:
   value-log segment offsets stay within `u32` (cached mode enforces this when
   `Options.IndexPackedValuePtr` is enabled).
 
+### Internal entry encoding (index internal pages)
+
+Internal pages use the same 4096-byte slotted-page layout as leaves (header +
+directory offsets + heap payload).
+
+For `PageTypeInternal`, the page-header `Flags` field stores the internal
+encoding mode in high bits (in addition to the low-bit page type).
+
+Internal-encoding flags (current):
+- `0x0800`: internal base-delta (child IDs as base+u32 delta; separator keys prefix-coded)
+
+#### Plain internal entries (no base-delta)
+
+```text
+[ u16 KeyLen ]
+[ u64 ChildPageID ]
+[ Key bytes (KeyLen) ]
+```
+
+#### Base-delta internal entries (with prefix coding)
+
+Each entry stores a key **suffix** and a child-ID **delta**:
+
+```text
+[ u16 SuffixLen ]
+[ u32 ChildDelta ]   childID = baseChildID + ChildDelta
+[ Key suffix bytes (SuffixLen) ]
+```
+
+The page stores a footer at the end containing the shared key prefix and the
+base child ID:
+
+```text
+[ prefix bytes (prefixLen) ]
+[ u16 prefixLen ]
+[ u64 baseChildID ]
+```
+
+The full separator key for an entry is `prefix || suffix`. `prefixLen` may be
+`0` (no prefix bytes stored).
+
 ## Value-log record format (`TreeDB/internal/valuelog`)
 
 Value-log segments are append-only. Each record is:

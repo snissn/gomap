@@ -32,6 +32,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 	// 2. Iterate from splitIndex to count-1 and move items
 	var pivotKey []byte
 	var leafBuilder *Builder
+	var internalBuilder *Builder
 
 	for i := uint16(0); i < moveCount; i++ {
 		srcIdx := splitIndex + i
@@ -58,19 +59,16 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 					LeafPrefixCompression: n.leafPrefixCompressed(),
 					LeafColumnar:          n.leafColumnar(),
 					PackedValuePtr:        n.leafPackedValuePtr(),
+					InternalBaseDelta:     n.internalBaseDelta(),
 				}
 				leafBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
 				leafBuilder.SetPageID(newNode.PageID())
 			}
-		} else {
-			// Internal
-			keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
-
-			if i == 0 {
-				key := make([]byte, keyLen)
-				copy(key, n.data[ptr+10:ptr+10+int(keyLen)])
-				pivotKey = key
-			}
+		} else if internalBuilder == nil {
+			internalBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeInternal, BuilderOptions{
+				InternalBaseDelta: n.internalBaseDelta(),
+			})
+			internalBuilder.SetPageID(newNode.PageID())
 		}
 
 		// Ensure space in newNode
@@ -103,7 +101,10 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			err = newNode.AddInternalChild(key, childID)
+			if i == 0 {
+				pivotKey = append([]byte(nil), key...)
+			}
+			err = internalBuilder.AddInternalChild(key, childID)
 			if err != nil {
 				return nil, err
 			}
@@ -140,6 +141,10 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 	n.UpdateChecksum()
 	if leafBuilder != nil {
 		leafBuilder.Finish()
+		newNode.setRawFlags(binary.LittleEndian.Uint16(newNode.data[12:14]))
+		newNode.count = binary.LittleEndian.Uint16(newNode.data[14:16])
+	} else if internalBuilder != nil {
+		internalBuilder.Finish()
 		newNode.setRawFlags(binary.LittleEndian.Uint16(newNode.data[12:14]))
 		newNode.count = binary.LittleEndian.Uint16(newNode.data[14:16])
 	} else {
