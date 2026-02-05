@@ -251,6 +251,8 @@ func (n *Node) GetInternalEntryPartsView(index uint16) (prefix, suffix []byte, c
 // Returns the index of the child that covers the range containing key.
 // Logic: Find largest index i such that Entry[i].Key <= key.
 // If key < Entry[0].Key, returns index 0 (Left-most child rule usually handles this).
+// The returned bool uses upper-bound semantics (there exists some Entry[i].Key <= key),
+// not exact key-match semantics.
 func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 	if n.internalBaseDelta() {
 		prefix, _, footerStart, err := n.internalBaseDeltaFooterCached()
