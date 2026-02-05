@@ -45,6 +45,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-batchsize` batch size (default 1000)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
+- `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
+- `-leveldb-block-size` LevelDB: table block size in bytes (default 4096)
 - `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
 - `-treedb-max-queued-memtables` TreeDB (cached) max queued immutable memtables before applying backpressure flush (`0`=default, `<0`=disable)
 - `-treedb-slowdown-backlog-seconds` TreeDB (cached) start backpressure when queued backlog exceeds this many seconds of flush work
@@ -58,6 +60,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
+- `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
@@ -112,4 +115,15 @@ Settled (reads after a durability boundary):
 go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 \\
   -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_delete,batch_small_seq,random_delete,random_read \\
   -checkpoint-between-tests -progress=false
+```
+
+### Repro: compression matrix (TreeDB dict + LevelDB block compression)
+
+Run TreeDB twice (dict on/off) and LevelDB twice (block compression on/off) in one invocation:
+
+```bash
+./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb,leveldb -profile fast -keys 4000000 -format markdown \\
+  -treedb-force-value-pointers \\
+  -treedb-vlog-dict both \\
+  -leveldb-block-compression both
 ```

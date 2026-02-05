@@ -22,6 +22,14 @@ func RegisterDB(name string, factory DBFactory) {
 	dbFactories[name] = factory
 }
 
+// RegisterHiddenDB registers a DB factory that can be selected explicitly via
+// -dbs, but is intentionally omitted from the "all" DB list and from usage
+// listings. This is useful for benchmark variants that should not run by
+// default.
+func RegisterHiddenDB(name string, factory DBFactory) {
+	dbFactories[name] = factory
+}
+
 func RegisterAlias(alias, target string) {
 	dbAliases[alias] = target
 }
@@ -69,6 +77,12 @@ func resolveDBs(arg, excludeArg string) []string {
 		}
 		if _, ok := dbFactories[name]; ok {
 			out = append(out, name)
+			continue
+		}
+		if target, isAlias := dbAliases[name]; isAlias {
+			if _, ok := dbFactories[target]; ok {
+				out = append(out, target)
+			}
 		}
 	}
 	return out

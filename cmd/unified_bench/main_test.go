@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"math"
+	"sort"
 	"testing"
 	"time"
 )
@@ -222,6 +223,49 @@ func TestRunBenchmark_VacuumBetweenTests_Smoke(t *testing.T) {
 	}
 }
 
+func TestRunBenchmark_CompressionVariantsMatrix_Smoke(t *testing.T) {
+	prevTreeDB := *treedbVlogDictMode
+	prevLevelDB := *leveldbBlockCompressionMode
+	defer func() {
+		*treedbVlogDictMode = prevTreeDB
+		*leveldbBlockCompressionMode = prevLevelDB
+	}()
+	*treedbVlogDictMode = "both"
+	*leveldbBlockCompressionMode = "both"
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    128,
+		BatchSize:    100,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb,leveldb",
+		TestsArg:     "batch_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if len(run.Instances) != 4 {
+		t.Fatalf("expected 4 instances, got %d", len(run.Instances))
+	}
+
+	got := run.Results["batch_write"]
+	wantCols := []string{
+		"TreeDB (vlog_dict=off)",
+		"TreeDB (vlog_dict=on)",
+		"LevelDB (block=off)",
+		"LevelDB (block=on)",
+	}
+	for _, col := range wantCols {
+		if _, ok := got[col]; !ok {
+			t.Fatalf("missing result column %q (have: %v)", col, mapsKeysSorted(got))
+		}
+	}
+}
+
 func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	values, err := makeWriteValuePool(1, "repeat", 128, 32)
 	if err != nil {
@@ -240,6 +284,15 @@ func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	if allSame {
 		t.Fatalf("expected repeat value pool to contain non-identical values")
 	}
+}
+
+func mapsKeysSorted(m map[string]float64) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestMakeWriteValuePool_UnknownPatternErrors(t *testing.T) {
