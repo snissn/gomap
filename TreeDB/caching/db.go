@@ -4108,36 +4108,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	db.valueLogDictCollectSamples(records)
 
-	l.vlogMu.Lock()
-	w := l.vlog
-	if w == nil {
-		l.vlogMu.Unlock()
-		return nil, errWALUnavailable
-	}
-	if l.vlogCaps.writer != w {
-		l.vlogCaps = computeVlogWriterCaps(w)
-	}
-	caps := l.vlogCaps
-	policySetter := caps.keep
-	statsWriter := caps.stats
-	statsWriterInto := caps.statsInto
-	rawWriterInto := caps.rawInto
-	hasStats := statsWriter != nil
-	hasInto := statsWriterInto != nil
-	hasRawInto := rawWriterInto != nil
-	startSize := w.Size()
-
-	if policySetter != nil {
-		snap := db.valueLogAutotuneMetrics.snapshot()
-		ioNsPerStored := snap.IoNsPerStoredByte
-		encodeNsPerRaw := snap.EncodeNsPerRawByte
-		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
-			ioNsPerStored = 0
-			encodeNsPerRaw = 0
-		}
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
-	}
-
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
@@ -4169,6 +4139,152 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	k = db.clampValueLogDictK(k)
 
+	type preparedDictFrame struct {
+		start int
+		end   int
+		body  []byte
+		stats valuelog.FrameStats
+	}
+	var preparedDictFrames []preparedDictFrame
+	if dictID != 0 && len(dict) > 0 && len(records) > 0 {
+		frameCount := (len(records) + k - 1) / k
+		preparedDictFrames = make([]preparedDictFrame, frameCount)
+		prepareFrame := func(fi int) error {
+			start := fi * k
+			end := start + k
+			if end > len(records) {
+				end = len(records)
+			}
+			frame := records[start:end]
+			frameRawBytes := 0
+			for i := range frame {
+				frameRawBytes += len(frame[i].Value)
+			}
+			encodeStart := time.Time{}
+			if !wallStart.IsZero() && frameRawBytes > 0 {
+				encodeStart = time.Now()
+			}
+			body, header, encErr := valuelog.EncodeFrameWithOptions(
+				dictID,
+				dict,
+				frame,
+				db.valueLogDictFrameEncodeLevel,
+				db.valueLogDictFrameEnableEntropy,
+			)
+			if encErr != nil {
+				return encErr
+			}
+			headerEnd := valuelog.FrameHeaderSize + (len(frame) * 8) + ((len(frame) + 1) * 4)
+			storedPayloadBytes := len(body) - headerEnd
+			if storedPayloadBytes < 0 {
+				storedPayloadBytes = 0
+			}
+			stats := valuelog.FrameStats{
+				Records:            len(frame),
+				RawPayloadBytes:    frameRawBytes,
+				StoredPayloadBytes: storedPayloadBytes,
+				Attempted:          frameRawBytes > 0,
+				Kept:               header.Flags&valuelog.FrameFlagCompressed != 0,
+			}
+			if !encodeStart.IsZero() {
+				stats.EncodeNs = time.Since(encodeStart).Nanoseconds()
+			}
+			preparedDictFrames[fi] = preparedDictFrame{
+				start: start,
+				end:   end,
+				body:  body,
+				stats: stats,
+			}
+			return nil
+		}
+
+		parallelWorkers := 1
+		if frameCount >= 4 && rawPayloadBytes >= 8<<10 {
+			parallelWorkers = runtime.GOMAXPROCS(0)
+			if parallelWorkers > frameCount {
+				parallelWorkers = frameCount
+			}
+			if parallelWorkers > 8 {
+				parallelWorkers = 8
+			}
+		}
+		if parallelWorkers <= 1 {
+			for fi := range preparedDictFrames {
+				if prepErr := prepareFrame(fi); prepErr != nil {
+					return nil, prepErr
+				}
+			}
+		} else {
+			var (
+				next    atomic.Int32
+				prepErr error
+				prepMu  sync.Mutex
+				failed  atomic.Bool
+				prepWg  sync.WaitGroup
+			)
+			for wi := 0; wi < parallelWorkers; wi++ {
+				prepWg.Add(1)
+				go func() {
+					defer prepWg.Done()
+					for {
+						if failed.Load() {
+							return
+						}
+						fi := int(next.Add(1)) - 1
+						if fi >= frameCount {
+							return
+						}
+						if err := prepareFrame(fi); err != nil {
+							prepMu.Lock()
+							if prepErr == nil {
+								prepErr = err
+								failed.Store(true)
+							}
+							prepMu.Unlock()
+							return
+						}
+					}
+				}()
+			}
+			prepWg.Wait()
+			if prepErr != nil {
+				return nil, prepErr
+			}
+		}
+	}
+
+	l.vlogMu.Lock()
+	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return nil, errWALUnavailable
+	}
+	if l.vlogCaps.writer != w {
+		l.vlogCaps = computeVlogWriterCaps(w)
+	}
+	caps := l.vlogCaps
+	policySetter := caps.keep
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
+	rawWriterInto := caps.rawInto
+	preparedAppender := caps.prepared
+	hasStats := statsWriter != nil
+	hasInto := statsWriterInto != nil
+	hasRawInto := rawWriterInto != nil
+	usePreparedDictFrames := dictID != 0 && len(dict) > 0 && preparedAppender != nil && len(preparedDictFrames) > 0
+	startSize := w.Size()
+
+	if policySetter != nil && !usePreparedDictFrames {
+		snap := db.valueLogAutotuneMetrics.snapshot()
+		ioNsPerStored := snap.IoNsPerStoredByte
+		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
+			ioNsPerStored = 0
+			encodeNsPerRaw = 0
+		}
+		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
+	}
+
 	storedPayloadBytes := 0
 	rawFrameBytes := 0
 	frameRecords := 0
@@ -4177,25 +4293,54 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	framesKept := 0
 	encodeNsTotal := int64(0)
 	encodeRawBytes := 0
-	rawBatchUsed := false
-	if dictID == 0 && hasRawInto && len(records) > 1 {
+	preparedUsed := false
+	if usePreparedDictFrames {
 		ptrs = getValueLogPtrs(len(records))
-		_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
-		if batchErr != nil {
-			err = batchErr
-			putValueLogPtrs(ptrs)
-			ptrs = nil
-		} else {
-			rawFrameBytes = stats.RawPayloadBytes
-			storedPayloadBytes = stats.StoredPayloadBytes
-			frameRecords = stats.Records
-			rawBatchUsed = true
-			if k > 0 {
-				framesTotal = (len(records) + k - 1) / k
+		preparedUsed = true
+		for fi := range preparedDictFrames {
+			pf := &preparedDictFrames[fi]
+			dst := ptrs[pf.start:pf.end]
+			if _, frameErr := preparedAppender.AppendEncodedFrameInto(pf.body, pf.stats.Records, dst); frameErr != nil {
+				err = frameErr
+				break
+			}
+			rawFrameBytes += pf.stats.RawPayloadBytes
+			storedPayloadBytes += pf.stats.StoredPayloadBytes
+			frameRecords += pf.stats.Records
+			framesTotal++
+			if pf.stats.Attempted {
+				framesAttempted++
+			}
+			if pf.stats.Kept {
+				framesKept++
+			}
+			if pf.stats.EncodeNs > 0 && pf.stats.RawPayloadBytes > 0 {
+				encodeNsTotal += pf.stats.EncodeNs
+				encodeRawBytes += pf.stats.RawPayloadBytes
 			}
 		}
-	} else {
-		ptrs = getValueLogPtrs(len(records))
+	}
+	rawBatchUsed := preparedUsed
+	if err == nil && !rawBatchUsed {
+		if dictID == 0 && hasRawInto && len(records) > 1 {
+			ptrs = getValueLogPtrs(len(records))
+			_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
+			if batchErr != nil {
+				err = batchErr
+				putValueLogPtrs(ptrs)
+				ptrs = nil
+			} else {
+				rawFrameBytes = stats.RawPayloadBytes
+				storedPayloadBytes = stats.StoredPayloadBytes
+				frameRecords = stats.Records
+				rawBatchUsed = true
+				if k > 0 {
+					framesTotal = (len(records) + k - 1) / k
+				}
+			}
+		} else {
+			ptrs = getValueLogPtrs(len(records))
+		}
 	}
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
