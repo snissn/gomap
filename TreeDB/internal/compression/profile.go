@@ -229,7 +229,16 @@ func batchTotals(dict []byte, samples [][]byte, k int, encodeNsPerRawByte float6
 		}
 		c := enc.EncodeAll(buf, nil)
 		payload += len(c)
-		meta += 4 * (k + 1)
+		// Account for the full on-disk framing overhead:
+		// - record header (CRC/version/flags/txn/bodyLen)
+		// - frame header + dict_id + RID table + offsets table
+		//
+		// NOTE: Keep these constants in sync with `TreeDB/internal/valuelog/valuelog.go`.
+		const (
+			valueLogRecordHeaderBytes = 20 // valuelog.HeaderSize
+			valueLogFrameHeaderBytes  = 12 // valuelog.FrameHeaderSize
+		)
+		meta += valueLogRecordHeaderBytes + valueLogFrameHeaderBytes + (k * 8) + ((k + 1) * 4)
 	}
 	if encodeNsPerRawByte > 0 {
 		encodeNs = int64(float64(raw) * encodeNsPerRawByte)

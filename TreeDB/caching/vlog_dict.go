@@ -70,6 +70,15 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if tr == nil || !tr.ShouldCollect() {
 		return
 	}
+	// Seed the trainer's IO cost model early so the initial dict/K selection can
+	// optimize for end-to-end throughput (encode + IO), rather than falling back
+	// to the decode-cost heuristic when no profile has been published yet.
+	//
+	// This avoids pathological small-K choices (e.g. k=2/4) that increase frame
+	// overhead and reduce write throughput for small values.
+	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
+		tr.SetAutotuneIOCost(db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte)
+	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
 		stride = 1
@@ -119,6 +128,9 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	tr := db.valueLogDictTrainer
 	if tr == nil || !tr.ShouldCollect() {
 		return
+	}
+	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
+		tr.SetAutotuneIOCost(db.valueLogAutotuneMetrics.snapshot().IoNsPerStoredByte)
 	}
 	stride := db.valueLogDictSampleStride
 	if stride <= 1 {
