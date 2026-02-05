@@ -273,15 +273,35 @@ If the workload is not suitable for dictionary compression (e.g., high-entropy d
 
 ### High-signal metrics to watch
 
-TreeDB should expose (via stats and/or debug logs) the following signals for the currently active lane (or aggregated across lanes):
+TreeDB exposes the following high-signal keys via `(*treedb.DB).Stats()` in cached mode (prefixed `treedb.cache.*`):
 
-- **state**: `OFF | WARMUP | ACTIVE | PAUSED`
-- **current config**: `k`, `history_bytes`, `dict_bytes`, `dict_id`
-- **attempted_frac**: fraction of frames where compression was attempted
-- **kept_frac**: fraction of frames where compressed bytes were kept
-- **encode_ns_per_raw_byte**: EWMA encoding cost
-- **io_ns_per_stored_byte**: EWMA IO cost
-- **pause_remaining**: remaining bytes before next probe (when PAUSED)
+- Autotune mode:
+  - `treedb.cache.vlog_compression_autotune.mode`: `off|medium|aggressive`
+- Cost model snapshot:
+  - `treedb.cache.vlog_autotune.encode_ns_per_raw_byte`
+  - `treedb.cache.vlog_autotune.io_ns_per_stored_byte`
+  - `treedb.cache.vlog_autotune.throughput_raw_MBps`
+  - `treedb.cache.vlog_autotune.observed_ratio`
+- Dict frame outcomes:
+  - `treedb.cache.vlog_dict.frames_total`
+  - `treedb.cache.vlog_dict.frames_attempted`, `treedb.cache.vlog_dict.attempted_frac`
+  - `treedb.cache.vlog_dict.frames_kept`, `treedb.cache.vlog_dict.kept_frac`
+- Current dict / config:
+  - `treedb.cache.vlog_dict.current_k`
+  - `treedb.cache.vlog_dict.last_applied_dict_id`
+  - `treedb.cache.vlog_dict.last_applied_dict_hash` (hex)
+  - `treedb.cache.vlog_dict.cached_dict_bytes` (dict byte length currently cached in-process)
+- Pause/probe:
+  - `treedb.cache.vlog_dict.pause_remaining_bytes`
+- Trainer outcome counters:
+  - `treedb.cache.vlog_dict.trainer.profile_attempts`
+  - `treedb.cache.vlog_dict.trainer.profile_accepts`
+  - `treedb.cache.vlog_dict.trainer.profile_rejects`
+  - `treedb.cache.vlog_dict.trainer.profile_reject_reason`
+- Timestamps (Unix nanos):
+  - `treedb.cache.vlog_dict.trainer.last_accept_unix_nano` (last accepted profile)
+  - `treedb.cache.vlog_dict.last_publish_unix_nano` (last dict publish to dictdb)
+  - `treedb.cache.vlog_dict.last_k_update_unix_nano` (last K update for current dict)
 
 ### Debug timing logs
 

@@ -297,6 +297,7 @@ func (db *DB) applyValueLogDictProfile() {
 			}
 			db.valueLogDictKCache[dictID] = profileK
 			db.valueLogDictKMu.Unlock()
+			db.valueLogDictLastKUpdateUnixNano.Store(time.Now().UnixNano())
 			log.Printf("treedb: value-log dict updated k dict_id=%d k=%d", dictID, profileK)
 		}
 		db.valueLogAutotuneRecordSwitch(candidate)
@@ -338,6 +339,7 @@ func (db *DB) applyValueLogDictProfile() {
 	db.valueLogDictLastAppliedDictHash.Store(profile.DictHash)
 	db.valueLogDictLastAppliedDictID.Store(dictID)
 	db.valueLogDictCurrentK.Store(uint32(profileK))
+	db.valueLogDictLastPublishUnixNano.Store(time.Now().UnixNano())
 
 	// Reset ratio tracking for the new dict.
 	db.valueLogDictMetrics.SetSlab(1)
