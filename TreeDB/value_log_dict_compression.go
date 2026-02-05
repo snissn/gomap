@@ -40,4 +40,3 @@ func DisableValueLogDictCompression(opts *Options) {
 	train.TrainBytes = -1
 	opts.ValueLog.DictTrain = train
 }
-
