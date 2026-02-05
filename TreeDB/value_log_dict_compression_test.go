@@ -51,4 +51,3 @@ func TestDisableValueLogDictCompression_PreservesOtherFields(t *testing.T) {
 		t.Fatalf("expected DictBytes preserved after disable, got=%d", got)
 	}
 }
-
