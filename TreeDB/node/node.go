@@ -207,6 +207,7 @@ func (n *Node) setLeafColumnar(enabled bool) {
 		flags |= leafColumnarFlag
 	} else {
 		flags &^= leafColumnarFlag
+		// Columnar v2 encoding is only valid for columnar leaves.
 		flags &^= leafColumnarV2Flag
 	}
 	n.setRawFlags(flags)
@@ -264,6 +265,8 @@ func (n *Node) getOffset(index uint16) (uint16, error) {
 	if index >= n.count {
 		return 0, errors.New("index out of bounds")
 	}
+	// For columnar v2 leaves this directory stores key offsets (not heap entry
+	// starts). For all other page layouts it stores entry starts.
 	// Directory starts at NodeHeaderSize
 	// Offset is at NodeHeaderSize + index*2
 	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
