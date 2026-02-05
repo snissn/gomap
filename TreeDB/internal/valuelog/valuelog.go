@@ -162,6 +162,28 @@ func EncodeFrameWithOptions(dictID uint64, dict []byte, records []Record, level 
 	}, nil
 }
 
+// CompressPayloadWithDictInto compresses a contiguous payload using the provided
+// dictionary and encoder options.
+//
+// Intended for higher-level pipelines that already concatenated record values.
+func CompressPayloadWithDictInto(dictID uint64, dict []byte, payload []byte, level zstd.EncoderLevel, enableEntropy bool, dst []byte) ([]byte, error) {
+	if dictID == 0 || len(dict) == 0 {
+		return nil, ErrMissingDict
+	}
+	if len(payload) == 0 {
+		return dst[:0], nil
+	}
+	noEntropy := !enableEntropy
+	codecs := getDictCodecsWithOpts(dictID, dict, level, noEntropy)
+	if codecs == nil || codecs.encPool == nil {
+		return nil, ErrMissingDict
+	}
+	enc := codecs.encPool.Get().(*zstd.Encoder)
+	encoded := enc.EncodeAll(payload, dst)
+	codecs.encPool.Put(enc)
+	return encoded, nil
+}
+
 func DecodeFrame(body []byte) (FrameHeader, []uint64, []uint32, []byte, error) {
 	if len(body) < FrameHeaderSize {
 		return FrameHeader{}, nil, nil, nil, ErrCorrupt

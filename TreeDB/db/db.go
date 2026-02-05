@@ -176,6 +176,20 @@ type ValueLogOptions struct {
 	//
 	// Default is false (throughput-focused: no-entropy compression).
 	DictFrameEnableEntropy bool
+	// DictFramePipelineWorkers enables a parallel compression pipeline for
+	// dict-compressed value-log frames during batch ingest.
+	//
+	// The pipeline builds raw frames on the writer goroutine, compresses payloads
+	// concurrently, and appends results in order. This can improve throughput on
+	// multi-core machines when dict compression is enabled.
+	//
+	// 0 disables the pipeline (default).
+	DictFramePipelineWorkers int
+	// DictFramePipelineMaxInFlightBytes bounds the total raw payload bytes that
+	// may be queued/in-flight for the dict-frame compression pipeline.
+	//
+	// 0 uses an internal default.
+	DictFramePipelineMaxInFlightBytes int64
 
 	// CompressionAutotune configures the wall-time value-log compression autotuner.
 	CompressionAutotune valuelog.AutotuneOptions

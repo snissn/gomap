@@ -1514,6 +1514,12 @@ type Options struct {
 	// ValueLogDictFrameEnableEntropy enables entropy coding for dict-compressed
 	// frames (higher ratio, lower throughput).
 	ValueLogDictFrameEnableEntropy bool
+	// ValueLogDictFramePipelineWorkers enables a parallel compression pipeline
+	// for dict-compressed value-log frames. Values <= 1 disable.
+	ValueLogDictFramePipelineWorkers int
+	// ValueLogDictFramePipelineMaxInFlightBytes bounds the total raw payload
+	// bytes that may be queued/in-flight for the pipeline (0=default).
+	ValueLogDictFramePipelineMaxInFlightBytes int64
 	// ValueLogDictAdaptiveRatio enables adaptive pause of dict compression when payload ratios degrade.
 	// 0 disables.
 	ValueLogDictAdaptiveRatio float64
@@ -1620,17 +1626,19 @@ type DB struct {
 	templateStore template.Store
 
 	// Value-log dictionary compression (cached mode).
-	valueLogDictTrain              compression.TrainConfig
-	valueLogDictMaxK               int
-	valueLogDictFrameEncodeLevel   zstd.EncoderLevel
-	valueLogDictFrameEnableEntropy bool
-	valueLogDictSampleStride       uint64
-	valueLogDictSampleStrideCount  atomic.Uint64
-	valueLogDictAdaptiveRatio      float64
-	valueLogDictMinPayloadSavings  float64
-	valueLogDictMetricsWindow      int
-	valueLogDictMetricsMinRecords  int
-	valueLogDictMetricsPauseBytes  int
+	valueLogDictTrain                         compression.TrainConfig
+	valueLogDictMaxK                          int
+	valueLogDictFrameEncodeLevel              zstd.EncoderLevel
+	valueLogDictFrameEnableEntropy            bool
+	valueLogDictFramePipelineWorkers          int
+	valueLogDictFramePipelineMaxInFlightBytes int64
+	valueLogDictSampleStride                  uint64
+	valueLogDictSampleStrideCount             atomic.Uint64
+	valueLogDictAdaptiveRatio                 float64
+	valueLogDictMinPayloadSavings             float64
+	valueLogDictMetricsWindow                 int
+	valueLogDictMetricsMinRecords             int
+	valueLogDictMetricsPauseBytes             int
 
 	valueLogDictTrainerMu sync.Mutex
 	valueLogDictTrainer   *compression.Trainer
@@ -2338,6 +2346,19 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictFrameEncodeLevel = zstd.SpeedFastest
 	}
 	valueLogDictFrameEnableEntropy := opts.ValueLogDictFrameEnableEntropy
+	valueLogDictFramePipelineWorkers := opts.ValueLogDictFramePipelineWorkers
+	if valueLogDictFramePipelineWorkers <= 1 {
+		valueLogDictFramePipelineWorkers = 0
+	}
+	valueLogDictFramePipelineMaxInFlightBytes := opts.ValueLogDictFramePipelineMaxInFlightBytes
+	if valueLogDictFramePipelineWorkers > 0 {
+		if valueLogDictFramePipelineMaxInFlightBytes <= 0 {
+			valueLogDictFramePipelineMaxInFlightBytes = int64(valueLogDictFramePipelineWorkers) * (16 << 20)
+		}
+		if valueLogDictFramePipelineMaxInFlightBytes < 1<<20 {
+			valueLogDictFramePipelineMaxInFlightBytes = 1 << 20
+		}
+	}
 
 	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
 	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
@@ -2424,64 +2445,66 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].vlogSeq = maxVlogSeq[i]
 	}
 	db := &DB{
-		dir:                            walDir,
-		backend:                        backend,
-		flushThreshold:                 opts.FlushThreshold,
-		memtableCap:                    memCap,
-		memtableMode:                   mode,
-		memtableAdaptive:               adaptive,
-		memtableWarmupActive:           adaptive && warmupThreshold < opts.FlushThreshold,
-		memtableWarmupThreshold:        warmupThreshold,
-		maxQueuedMemtables:             opts.MaxQueuedMemtables,
-		slowdownBacklogSeconds:         opts.SlowdownBacklogSeconds,
-		stopBacklogSeconds:             opts.StopBacklogSeconds,
-		maxBacklogBytes:                opts.MaxBacklogBytes,
-		writerFlushMaxMemtables:        opts.WriterFlushMaxMemtables,
-		writerFlushMaxDuration:         opts.WriterFlushMaxDuration,
-		flushBuildConcurrency:          opts.FlushBuildConcurrency,
-		flushBuildMinEntries:           opts.FlushBuildMinEntries,
-		flushBuildMinUnits:             opts.FlushBuildMinUnits,
-		flushBuildChunkCap:             opts.FlushBuildChunkCap,
-		flushBuildChunkTarget:          opts.FlushBuildChunkTargetBytes,
-		flushBuildChunkMinBytes:        opts.FlushBuildChunkMinBytes,
-		flushBuildChunkMaxBytes:        opts.FlushBuildChunkMaxBytes,
-		flushBuildPrefetchUnits:        opts.FlushBuildPrefetchUnits,
-		flushBackendMaxEntries:         opts.FlushBackendMaxEntries,
-		flushBackendInitEntries:        flushBackendInitEntries,
-		flushBackendMaxBatches:         opts.FlushBackendMaxBatches,
-		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
-		journalCompression:             opts.JournalCompression,
-		disableJournal:                 disableJournal,
-		disableValueLog:                false,
-		splitValueLog:                  true,
-		relaxedSync:                    opts.RelaxedSync,
-		notifyError:                    opts.NotifyError,
-		inlineThreshold:                inlineThreshold,
-		valueLogThreshold:              valueLogThreshold,
-		forceValueLogPointers:          opts.ForceValueLogPointers,
-		memtableValueLogPointers:       true,
-		valueLogReader:                 valueLogReader,
-		valueLogRetain:                 retained,
-		debugFlushPointers:             debugFlushPointers,
-		debugFlushTiming:               debugFlushTiming,
-		maxValueLogRetainedBytes:       opts.MaxValueLogRetainedBytes,
-		maxValueLogRetainedBytesHard:   opts.MaxValueLogRetainedBytesHard,
-		valueLogDictTrain:              valueLogDictTrain,
-		valueLogDictMaxK:               valueLogDictMaxK,
-		valueLogDictFrameEncodeLevel:   valueLogDictFrameEncodeLevel,
-		valueLogDictFrameEnableEntropy: valueLogDictFrameEnableEntropy,
-		valueLogDictAdaptiveRatio:      valueLogDictAdaptiveRatio,
-		valueLogDictMinPayloadSavings:  minPayloadSavings,
-		valueLogDictMetricsWindow:      valueLogDictMetricsWindow,
-		valueLogDictMetricsMinRecords:  valueLogDictMetricsMinRecords,
-		valueLogDictMetricsPauseBytes:  valueLogDictMetricsPauseBytes,
-		valueLogDictProbeBytes:         uint64(probeBytes),
-		valueLogDictPausedSampleStride: pausedSampleStride,
-		valueLogAutotuneOptions:        valueLogAutotune,
-		valueLogTemplateEnabled:        valueLogTemplateEnabled,
-		valueLogTemplateMode:           opts.ValueLogTemplateMode,
-		valueLogTemplateReadStrict:     opts.ValueLogTemplateReadStrict,
-		valueLogTemplateDecodeOpts:     valueLogTemplateDecodeOpts,
+		dir:                                       walDir,
+		backend:                                   backend,
+		flushThreshold:                            opts.FlushThreshold,
+		memtableCap:                               memCap,
+		memtableMode:                              mode,
+		memtableAdaptive:                          adaptive,
+		memtableWarmupActive:                      adaptive && warmupThreshold < opts.FlushThreshold,
+		memtableWarmupThreshold:                   warmupThreshold,
+		maxQueuedMemtables:                        opts.MaxQueuedMemtables,
+		slowdownBacklogSeconds:                    opts.SlowdownBacklogSeconds,
+		stopBacklogSeconds:                        opts.StopBacklogSeconds,
+		maxBacklogBytes:                           opts.MaxBacklogBytes,
+		writerFlushMaxMemtables:                   opts.WriterFlushMaxMemtables,
+		writerFlushMaxDuration:                    opts.WriterFlushMaxDuration,
+		flushBuildConcurrency:                     opts.FlushBuildConcurrency,
+		flushBuildMinEntries:                      opts.FlushBuildMinEntries,
+		flushBuildMinUnits:                        opts.FlushBuildMinUnits,
+		flushBuildChunkCap:                        opts.FlushBuildChunkCap,
+		flushBuildChunkTarget:                     opts.FlushBuildChunkTargetBytes,
+		flushBuildChunkMinBytes:                   opts.FlushBuildChunkMinBytes,
+		flushBuildChunkMaxBytes:                   opts.FlushBuildChunkMaxBytes,
+		flushBuildPrefetchUnits:                   opts.FlushBuildPrefetchUnits,
+		flushBackendMaxEntries:                    opts.FlushBackendMaxEntries,
+		flushBackendInitEntries:                   flushBackendInitEntries,
+		flushBackendMaxBatches:                    opts.FlushBackendMaxBatches,
+		walMaxSegmentBytes:                        opts.WALMaxSegmentBytes,
+		journalCompression:                        opts.JournalCompression,
+		disableJournal:                            disableJournal,
+		disableValueLog:                           false,
+		splitValueLog:                             true,
+		relaxedSync:                               opts.RelaxedSync,
+		notifyError:                               opts.NotifyError,
+		inlineThreshold:                           inlineThreshold,
+		valueLogThreshold:                         valueLogThreshold,
+		forceValueLogPointers:                     opts.ForceValueLogPointers,
+		memtableValueLogPointers:                  true,
+		valueLogReader:                            valueLogReader,
+		valueLogRetain:                            retained,
+		debugFlushPointers:                        debugFlushPointers,
+		debugFlushTiming:                          debugFlushTiming,
+		maxValueLogRetainedBytes:                  opts.MaxValueLogRetainedBytes,
+		maxValueLogRetainedBytesHard:              opts.MaxValueLogRetainedBytesHard,
+		valueLogDictTrain:                         valueLogDictTrain,
+		valueLogDictMaxK:                          valueLogDictMaxK,
+		valueLogDictFrameEncodeLevel:              valueLogDictFrameEncodeLevel,
+		valueLogDictFrameEnableEntropy:            valueLogDictFrameEnableEntropy,
+		valueLogDictFramePipelineWorkers:          valueLogDictFramePipelineWorkers,
+		valueLogDictFramePipelineMaxInFlightBytes: valueLogDictFramePipelineMaxInFlightBytes,
+		valueLogDictAdaptiveRatio:                 valueLogDictAdaptiveRatio,
+		valueLogDictMinPayloadSavings:             minPayloadSavings,
+		valueLogDictMetricsWindow:                 valueLogDictMetricsWindow,
+		valueLogDictMetricsMinRecords:             valueLogDictMetricsMinRecords,
+		valueLogDictMetricsPauseBytes:             valueLogDictMetricsPauseBytes,
+		valueLogDictProbeBytes:                    uint64(probeBytes),
+		valueLogDictPausedSampleStride:            pausedSampleStride,
+		valueLogAutotuneOptions:                   valueLogAutotune,
+		valueLogTemplateEnabled:                   valueLogTemplateEnabled,
+		valueLogTemplateMode:                      opts.ValueLogTemplateMode,
+		valueLogTemplateReadStrict:                opts.ValueLogTemplateReadStrict,
+		valueLogTemplateDecodeOpts:                valueLogTemplateDecodeOpts,
 		valueLogTemplateEngine: func() *template.Engine {
 			if !valueLogTemplateEnabled {
 				return nil
@@ -3873,9 +3896,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
+	payloadWriterInto := caps.payloadInto
 	rawWriterInto := caps.rawInto
 	hasStats := statsWriter != nil
 	hasInto := statsWriterInto != nil
+	hasPayloadInto := payloadWriterInto != nil
 	hasRawInto := rawWriterInto != nil
 	startSize := w.Size()
 
@@ -3948,7 +3973,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	} else {
 		ptrs = getValueLogPtrs(len(records))
 	}
-	if err == nil && !rawBatchUsed {
+	pipelineUsed := false
+	if err == nil && !rawBatchUsed && dictID != 0 && len(dict) > 0 && hasPayloadInto {
+		frameCount := (len(records) + k - 1) / k
+		if frameCount > 1 && db.valueLogDictFramePipelineWorkers > 1 {
+			rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, framesKept, encodeNsTotal, encodeRawBytes, err =
+				db.appendValueLogDictFramesPipeline(payloadWriterInto, dictID, dict, records, k, ptrs)
+			pipelineUsed = err == nil
+		}
+	}
+
+	if err == nil && !rawBatchUsed && !pipelineUsed {
 		for i := 0; i < len(records); i += k {
 			if i > 0 && i%4096 == 0 {
 				l.vlogMu.Unlock()
@@ -3966,8 +4001,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				caps = l.vlogCaps
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
+				payloadWriterInto = caps.payloadInto
 				hasStats = statsWriter != nil
 				hasInto = statsWriterInto != nil
+				hasPayloadInto = payloadWriterInto != nil
 			}
 
 			end := i + k

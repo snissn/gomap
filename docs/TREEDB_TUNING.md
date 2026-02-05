@@ -197,6 +197,8 @@ Advanced tuning is exposed via:
 - `Options.ValueLog.DictMaxK` (clamp max grouped-frame K; default 32)
 - `Options.ValueLog.DictFrameEncodeLevel` (zstd level for dict-compressed frames; default `SpeedFastest`)
 - `Options.ValueLog.DictFrameEnableEntropy` (enable entropy coding; higher ratio, lower throughput)
+- `Options.ValueLog.DictFramePipelineWorkers` (parallelize frame payload compression; default off)
+- `Options.ValueLog.DictFramePipelineMaxInFlightBytes` (bounds queued raw bytes for the pipeline)
 
 Notes / gotchas:
 - Dict compression only affects values stored in the value log. If most of your values are inline

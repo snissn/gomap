@@ -1449,6 +1449,127 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	}, nil
 }
 
+// AppendFrameFromPayloadWithStatsInto appends a grouped frame using a pre-built
+// payload. The payload must contain either the raw concatenated values
+// (kept=false) or the compressed payload bytes (kept=true).
+//
+// This is intended for higher-level pipelines that compute compression
+// concurrently and then append frames sequentially.
+func (w *Writer) AppendFrameFromPayloadWithStatsInto(dictID uint64, rids []uint64, offsets []uint32, rawPayloadBytes int, payload []byte, attempted bool, kept bool, encodeNs int64, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w == nil {
+		return nil, FrameStats{}, errors.New("valuelog: nil writer")
+	}
+	k := len(rids)
+	if k <= 0 || k > MaxFrameK {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if len(dst) < k {
+		return nil, FrameStats{}, errors.New("valuelog: dst too small")
+	}
+	dst = dst[:k]
+	if len(offsets) != k+1 {
+		return nil, FrameStats{}, ErrCorrupt
+	}
+	if dictID == 0 {
+		kept = false
+	}
+	if rawPayloadBytes < 0 {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if rawPayloadBytes > int(^uint32(0)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if limits.MaxRecordSize > 0 && int64(rawPayloadBytes) > limits.MaxRecordSize {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+
+	prefixLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4)
+	bodyLen := prefixLen + len(payload)
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if bodyLen > int(^uint32(0)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint32(bodyLen)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+
+	start := w.size
+
+	var header [HeaderSize]byte
+	header[4] = Version
+	header[5] = recordFlagGrouped
+	header[6] = 0
+	header[7] = 0
+	binary.LittleEndian.PutUint64(header[8:16], 0)
+	binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+	if cap(w.prefixBuf) < prefixLen {
+		w.prefixBuf = make([]byte, 0, prefixLen)
+	}
+	prefix := w.prefixBuf[:prefixLen]
+	prefixOff := 0
+	prefix[prefixOff] = FrameVersion
+	if kept {
+		prefix[prefixOff+1] = FrameFlagCompressed
+	} else {
+		prefix[prefixOff+1] = 0
+	}
+	prefix[prefixOff+2] = byte(k)
+	prefix[prefixOff+3] = 0
+	binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], dictID)
+	prefixOff += FrameHeaderSize
+
+	for i := 0; i < k; i++ {
+		rid := rids[i]
+		if rid == 0 {
+			return nil, FrameStats{}, errors.New("valuelog: missing rid")
+		}
+		binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
+		prefixOff += 8
+	}
+	for i := 0; i < k+1; i++ {
+		binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+		prefixOff += 4
+	}
+
+	sum := crc.ChecksumParts(header[4:], prefix, payload)
+	binary.LittleEndian.PutUint32(header[0:4], sum)
+
+	if err := w.writeBytes(header[:]); err != nil {
+		return nil, FrameStats{}, err
+	}
+	if err := w.writeBytes(prefix); err != nil {
+		return nil, FrameStats{}, err
+	}
+	if err := w.writeBytes(payload); err != nil {
+		return nil, FrameStats{}, err
+	}
+	w.size += int64(HeaderSize + bodyLen)
+
+	recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+	for i := range dst {
+		dst[i] = page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+			FileID: w.fileID,
+		}
+	}
+
+	return dst, FrameStats{
+		Records:            k,
+		RawPayloadBytes:    rawPayloadBytes,
+		StoredPayloadBytes: len(payload),
+		Attempted:          attempted,
+		Kept:               kept,
+		EncodeNs:           encodeNs,
+	}, nil
+}
+
 func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offsets *[MaxFrameK + 1]uint32, rawPayloadBytes int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
