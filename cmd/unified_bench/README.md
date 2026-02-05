@@ -63,6 +63,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
+- `-treedb-vlog-dict-frame-target-bytes` TreeDB: target raw bytes per dict-compressed value-log frame (`0`=engine/default)
 - `-treedb-vlog-dict-frame-pipeline` TreeDB: dict-frame parallel compression pipeline mode (`engine|on|off|both`)
 - `-treedb-vlog-dict-frame-pipeline-workers` TreeDB: dict-frame pipeline worker count when enabled (`0`=default)
 - `-treedb-vlog-dict-frame-pipeline-max-inflight-bytes` TreeDB: dict-frame pipeline max in-flight raw bytes (`0`=default)

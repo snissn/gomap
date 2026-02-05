@@ -1508,6 +1508,12 @@ type Options struct {
 	// ValueLogDictMaxK clamps the maximum group size (K) used for dict-compressed
 	// value-log frames. Values <= 0 use the default (32).
 	ValueLogDictMaxK int
+	// ValueLogDictFrameTargetBytes optionally overrides the dict-provided group
+	// size (K) by targeting an approximate raw payload size per dict-compressed
+	// frame.
+	//
+	// Values <= 0 preserve the dict-provided K (default).
+	ValueLogDictFrameTargetBytes int
 	// ValueLogDictFrameEncodeLevel controls the zstd encoder level used for
 	// dict-compressed value-log frames. Values <= 0 use SpeedFastest.
 	ValueLogDictFrameEncodeLevel zstd.EncoderLevel
@@ -1628,6 +1634,7 @@ type DB struct {
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain                         compression.TrainConfig
 	valueLogDictMaxK                          int
+	valueLogDictFrameTargetBytes              int
 	valueLogDictFrameEncodeLevel              zstd.EncoderLevel
 	valueLogDictFrameEnableEntropy            bool
 	valueLogDictFramePipelineWorkers          int
@@ -2340,6 +2347,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictMaxK = valuelog.MaxFrameK
 	}
 
+	valueLogDictFrameTargetBytes := opts.ValueLogDictFrameTargetBytes
+	if valueLogDictFrameTargetBytes < 0 {
+		valueLogDictFrameTargetBytes = 0
+	}
+
 	valueLogDictFrameEncodeLevel := opts.ValueLogDictFrameEncodeLevel
 	if valueLogDictFrameEncodeLevel <= 0 {
 		valueLogDictFrameEncodeLevel = zstd.SpeedFastest
@@ -2491,6 +2503,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxValueLogRetainedBytesHard:              opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:                         valueLogDictTrain,
 		valueLogDictMaxK:                          valueLogDictMaxK,
+		valueLogDictFrameTargetBytes:              valueLogDictFrameTargetBytes,
 		valueLogDictFrameEncodeLevel:              valueLogDictFrameEncodeLevel,
 		valueLogDictFrameEnableEntropy:            valueLogDictFrameEnableEntropy,
 		valueLogDictFramePipelineWorkers:          valueLogDictFramePipelineWorkers,
@@ -3842,8 +3855,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
+	maxValueLen := 0
 	for i := range records {
-		rawPayloadBytes += len(records[i].Value)
+		n := len(records[i].Value)
+		rawPayloadBytes += n
+		if n > maxValueLen {
+			maxValueLen = n
+		}
 	}
 	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
@@ -3858,8 +3876,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if dictID == 0 || templatePrepass {
 		records, _ = db.valueLogTemplateEncodeRecords(records)
 		rawPayloadBytes = 0
+		maxValueLen = 0
 		for i := range records {
-			rawPayloadBytes += len(records[i].Value)
+			n := len(records[i].Value)
+			rawPayloadBytes += n
+			if n > maxValueLen {
+				maxValueLen = n
+			}
 		}
 	}
 
@@ -3919,7 +3942,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
-		k = db.valueLogDictK(dictID)
+		if targetK := db.valueLogDictTargetK(rawPayloadBytes, len(records)); targetK > 0 {
+			k = targetK
+		} else {
+			k = db.valueLogDictK(dictID)
+		}
 	} else if len(records) > 1 {
 		// Even when dictionary compression is disabled/paused, grouping records into
 		// frames reduces per-record overhead (CRC/header writes) on append-heavy
@@ -3946,6 +3973,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		k = valuelog.MaxFrameK
 	}
 	k = db.clampValueLogDictK(k)
+	k = db.clampValueLogFrameKByMaxRecordSize(k, maxValueLen)
 
 	storedPayloadBytes := 0
 	rawFrameBytes := 0

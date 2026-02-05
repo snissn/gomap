@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -479,6 +480,24 @@ func (db *DB) valueLogDictK(dictID uint64) int {
 	return 1
 }
 
+func (db *DB) valueLogDictTargetK(rawPayloadBytes, records int) int {
+	if db == nil || db.valueLogDictFrameTargetBytes <= 0 {
+		return 0
+	}
+	if rawPayloadBytes <= 0 || records <= 1 {
+		return 0
+	}
+	avg := rawPayloadBytes / records
+	if avg <= 0 {
+		avg = 1
+	}
+	k := db.valueLogDictFrameTargetBytes / avg
+	if k < 1 {
+		return 1
+	}
+	return k
+}
+
 func (db *DB) clampValueLogDictK(k int) int {
 	if k <= 1 {
 		return 1
@@ -489,6 +508,20 @@ func (db *DB) clampValueLogDictK(k int) int {
 	}
 	if k > maxK {
 		return maxK
+	}
+	return k
+}
+
+func (db *DB) clampValueLogFrameKByMaxRecordSize(k, maxValueLen int) int {
+	if k <= 1 || maxValueLen <= 0 || limits.MaxRecordSize <= 0 {
+		return k
+	}
+	maxKBySize := int(limits.MaxRecordSize) / maxValueLen
+	if maxKBySize < 1 {
+		maxKBySize = 1
+	}
+	if k > maxKBySize {
+		return maxKBySize
 	}
 	return k
 }

@@ -68,6 +68,7 @@ var (
 	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
 	treedbVlogDictFrameEncodeLevel  = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode  = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
+	treedbVlogDictFrameTargetBytes  = flag.Int("treedb-vlog-dict-frame-target-bytes", 0, "TreeDB: target raw bytes per dict-compressed value-log frame (0=engine/default)")
 	treedbVlogDictFramePipelineMode = flag.String("treedb-vlog-dict-frame-pipeline", "engine", "TreeDB: dict-frame parallel compression pipeline mode (engine|on|off|both)")
 	treedbVlogDictFramePipelineW    = flag.Int("treedb-vlog-dict-frame-pipeline-workers", 0, "TreeDB: dict-frame pipeline worker count when enabled (0=default)")
 	treedbVlogDictFramePipelineMax  = flag.Int64("treedb-vlog-dict-frame-pipeline-max-inflight-bytes", 0, "TreeDB: dict-frame pipeline max in-flight raw bytes (0=default)")
@@ -265,6 +266,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.dict_train_bytes=%d", train.TrainBytes))
 	lines = append(lines, fmt.Sprintf("vlog.dict_dict_bytes=%d", train.DictBytes))
 	lines = append(lines, fmt.Sprintf("vlog.dict_max_k=%d", r.opts.ValueLog.DictMaxK))
+	lines = append(lines, fmt.Sprintf("vlog.dict_frame_target_bytes=%d", r.opts.ValueLog.DictFrameTargetBytes))
 	lines = append(lines, fmt.Sprintf("vlog.dict_frame_encode_level=%d", r.opts.ValueLog.DictFrameEncodeLevel))
 	lines = append(lines, fmt.Sprintf("vlog.dict_frame_entropy=%t", r.opts.ValueLog.DictFrameEnableEntropy))
 	lines = append(lines, fmt.Sprintf("vlog.dict_frame_pipeline_workers=%d", r.opts.ValueLog.DictFramePipelineWorkers))
@@ -421,6 +423,10 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		*treedbVlogDictSampleStride,
 		*treedbVlogDictDedupWindow,
 	)
+
+	if *treedbVlogDictFrameTargetBytes > 0 {
+		opts.ValueLog.DictFrameTargetBytes = *treedbVlogDictFrameTargetBytes
+	}
 
 	levelEngine, levels, err := parseTreeDBVlogDictFrameEncodeLevels("treedb-vlog-dict-frame-encode-level", *treedbVlogDictFrameEncodeLevel)
 	if err != nil {

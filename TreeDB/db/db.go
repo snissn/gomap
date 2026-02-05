@@ -166,6 +166,20 @@ type ValueLogOptions struct {
 	//
 	// Values <= 0 use the default (32). Values above the engine maximum are clamped.
 	DictMaxK int
+	// DictFrameTargetBytes optionally overrides the dict-provided group size (K)
+	// by targeting an approximate raw payload size per dict-compressed frame.
+	//
+	// When > 0, TreeDB chooses K per append based on the average value size and
+	// clamps it to DictMaxK and MaxRecordSize constraints. This avoids producing
+	// tiny frames on small values where per-frame overhead dominates and can
+	// make parallel compression pipelines ineffective.
+	//
+	// Larger targets can improve throughput and compression ratio for small
+	// values, but increase read amplification (each point read must decode a
+	// larger frame).
+	//
+	// 0 uses the per-dictionary K (default).
+	DictFrameTargetBytes int
 	// DictFrameEncodeLevel controls the zstd encoder level used for dict-compressed
 	// value-log frames.
 	//

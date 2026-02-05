@@ -321,6 +321,7 @@ func Open(opts Options) (*DB, error) {
 		ForceValueLogPointers:                     opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                         opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                          opts.ValueLog.DictMaxK,
+		ValueLogDictFrameTargetBytes:              opts.ValueLog.DictFrameTargetBytes,
 		ValueLogDictFrameEncodeLevel:              opts.ValueLog.DictFrameEncodeLevel,
 		ValueLogDictFrameEnableEntropy:            opts.ValueLog.DictFrameEnableEntropy,
 		ValueLogDictFramePipelineWorkers:          opts.ValueLog.DictFramePipelineWorkers,
