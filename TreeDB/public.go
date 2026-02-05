@@ -121,6 +121,14 @@ func Open(opts Options) (*DB, error) {
 	if chunkSizeDefaulted {
 		opts.ChunkSize = defaultChunkSize
 	}
+	dictChunkSize := opts.DictDBChunkSize
+	if dictChunkSize <= 0 {
+		dictChunkSize = defaultDictChunkSize
+	}
+	templateChunkSize := opts.TemplateDBChunkSize
+	if templateChunkSize <= 0 {
+		templateChunkSize = defaultDictChunkSize
+	}
 	if opts.KeepRecent == 0 && !opts.ReadOnly {
 		opts.KeepRecent = 1
 	}
@@ -192,9 +200,7 @@ func Open(opts Options) (*DB, error) {
 		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
 		dictOpts.ValueLog.ForcePointers = false
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
-		if chunkSizeDefaulted {
-			dictOpts.ChunkSize = defaultDictChunkSize
-		}
+		dictOpts.ChunkSize = dictChunkSize
 		var err error
 		dictBackend, err = db.Open(dictOpts)
 		if err != nil {
@@ -221,9 +227,7 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
 		templateOpts.ValueLog.TemplateLookup = nil
 		templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
-		if chunkSizeDefaulted {
-			templateOpts.ChunkSize = defaultDictChunkSize
-		}
+		templateOpts.ChunkSize = templateChunkSize
 
 		var err error
 		templateDB, err = Open(templateOpts)

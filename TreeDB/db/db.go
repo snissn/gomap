@@ -179,6 +179,19 @@ type Options struct {
 	// maintenance). Only read operations are supported.
 	ReadOnly   bool
 	ChunkSize  int64  // Default 16MiB
+	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
+	// store when TreeDB is opened via the public `treedb.Open` wrapper.
+	//
+	// It is intentionally independent of ChunkSize so benchmarks and callers can
+	// tune the main index pager without inflating dictdb disk usage.
+	//
+	// Values <= 0 use a default of 1MiB.
+	DictDBChunkSize int64
+	// TemplateDBChunkSize controls the mmap chunk size used for the `templatedb/`
+	// side store when template compression is enabled.
+	//
+	// Values <= 0 use a default of 1MiB.
+	TemplateDBChunkSize int64
 	KeepRecent uint64 // Default 10000
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
