@@ -61,7 +61,7 @@ func TestSideStoreChunkSize_DefaultsIndependentOfMainChunkSize(t *testing.T) {
 func TestSideStoreChunkSize_CustomDictDBChunkSize(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:            dir,
+		Dir:             dir,
 		ChunkSize:       64 << 20,
 		DictDBChunkSize: 2 << 20,
 	}
@@ -86,4 +86,3 @@ func TestSideStoreChunkSize_CustomDictDBChunkSize(t *testing.T) {
 		t.Fatalf("unexpected dictdb index.db size: got=%d want=%d", got, 2<<20)
 	}
 }
-
