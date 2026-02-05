@@ -171,6 +171,30 @@ Tuning/disable:
 - Set `MaxWALBytes < 0` to disable the size trigger.
 - To disable auto-checkpointing entirely, set all three to `< 0`.
 
+### Value-log dictionary compression (cached mode; opt-in)
+
+TreeDB can optionally train and apply Zstandard dictionaries to value-log **frames**
+to reduce disk bytes for repetitive / structured value streams.
+
+Enable (recommended helper):
+
+```go
+opts := treedb.Options{Dir: "./my-db-data"}
+treedb.EnableValueLogDictCompression(&opts)
+db, err := treedb.Open(opts)
+```
+
+Advanced tuning is exposed via:
+- `Options.ValueLog.DictTrain` (training budget + sampling knobs)
+- `Options.ValueLog.CompressionAutotune` (when to switch dict/K candidates)
+
+Notes / gotchas:
+- Dict compression only affects values stored in the value log. If most of your values are inline
+  (small), you may see no change unless you lower `ValueLog.PointerThreshold` or set
+  `ValueLog.ForcePointers=true`.
+- Dict training is CPU-heavy and is disabled by default.
+- Trained dictionaries are persisted in `dictdb/` and used to decode values after reopen.
+
 ### Leaf key compression (`Options.LeafPrefixCompression`)
 
 TreeDB can compress keys stored in **leaf pages** using a front-coding scheme

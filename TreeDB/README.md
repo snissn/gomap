@@ -136,6 +136,7 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 - Optional flush build parallelism: `FlushBuildConcurrency`
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `ValueLog.MaxRetainedBytes`, `ValueLog.MaxRetainedBytesHard`
+- Optional value-log dictionary compression: `treedb.EnableValueLogDictCompression(&opts)` (affects values stored in the value log)
 - Index rebuild (in-place): `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` (currently an alias for CompactIndex)
 
 Details: `docs/TREEDB_TUNING.md`.
