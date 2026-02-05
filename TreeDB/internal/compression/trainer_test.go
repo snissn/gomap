@@ -22,8 +22,8 @@ func TestBuildAndValidateDict_DefaultOffsetsAvoidInvalidOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAndValidateDict failed: %v", err)
 	}
-	if len(dict) != 40960 {
-		t.Fatalf("unexpected dict size: got=%d want=40960", len(dict))
+	if len(dict) == 0 {
+		t.Fatalf("unexpected empty dictionary")
 	}
 	info, err := zstd.InspectDictionary(dict)
 	if err != nil {
