@@ -4372,14 +4372,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		dictID = 0
 		dict = nil
 	}
-	if dictID != 0 && len(dict) == 0 {
-		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
-			dict = b
-		} else {
-			dictID = 0
-			dict = nil
-		}
-	}
 	db.valueLogDictCollectSample(value)
 
 	locked := false
@@ -4411,6 +4403,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 
+	if dictID != 0 && len(dict) == 0 {
+		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
+			dict = b
+		} else {
+			dictID = 0
+			dict = nil
+		}
+	}
 	if !locked {
 		l.vlogMu.Lock()
 	}
