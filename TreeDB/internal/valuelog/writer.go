@@ -242,12 +242,19 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 		// Allow a more aggressive no-copy path for ultra-compressible payloads
 		// where the memcpy becomes a measurable fraction of wall time.
 		noCopyUltraMinAvgBytes = 4 << 10
+		// Small-value grouped frames (e.g. 128B values at large K) can still be
+		// copy-bound on ultra-low-entropy streams.
+		noCopyTinyUltraMinRawBytes = 8 << 10
+		noCopyTinyUltraMinAvgBytes = 96
 	)
 	avg := rawPayloadBytes / k
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyMinAvgBytes {
 		return true
 	}
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyUltraMinAvgBytes {
+		return isUltraLowEntropySample(records[0].Value)
+	}
+	if rawPayloadBytes >= noCopyTinyUltraMinRawBytes && avg >= noCopyTinyUltraMinAvgBytes {
 		return isUltraLowEntropySample(records[0].Value)
 	}
 	return false

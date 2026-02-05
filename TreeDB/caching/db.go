@@ -2957,10 +2957,12 @@ var walAckPool = sync.Pool{
 }
 
 type vlogWriteRequest struct {
-	rid        uint64
-	value      []byte
-	durability journalDurability
-	ack        *vlogAck
+	rid              uint64
+	value            []byte
+	dictID           uint64
+	probeCompression bool
+	durability       journalDurability
+	ack              *vlogAck
 }
 
 type vlogAck struct {
@@ -3554,9 +3556,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	var (
 		needFlush bool
 		needSync  bool
-		maxValLen int
 	)
 	records := getValueLogRecords(len(requests))
+	dictNeeded := make(map[uint64]struct{})
 	for i := range requests {
 		req := &requests[i]
 		records[i] = valuelog.Record{RID: req.rid, Value: req.value}
@@ -3565,43 +3567,112 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		} else if req.durability == journalDurabilityFlush {
 			needFlush = true
 		}
-		if n := len(req.value); n > maxValLen {
-			maxValLen = n
+		if req.dictID != 0 {
+			dictNeeded[req.dictID] = struct{}{}
 		}
 	}
 
-	k := 1
-	if len(records) > 1 {
-		paused := db.valueLogDictPauseRemaining.Load() > 0
-		if paused && db.disableJournal {
-			k = valuelog.MaxFrameK
-		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
-			k = cur
-		} else {
-			k = 8
-			if db.disableJournal && db.forceValueLogPointers {
-				k = 16
+	dictByID := make(map[uint64][]byte, len(dictNeeded))
+	for dictID := range dictNeeded {
+		dictBytes, err := db.dictBytes(context.Background(), dictID)
+		if err == nil && len(dictBytes) > 0 {
+			dictByID[dictID] = dictBytes
+		}
+	}
+
+	type vlogBatchPlan struct {
+		start    int
+		end      int
+		dictID   uint64
+		dict     []byte
+		k        int
+		probe    bool
+		rawBytes int
+	}
+	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
+	plans := make([]vlogBatchPlan, 0, len(requests))
+	for i := 0; i < len(requests); {
+		dictID := requests[i].dictID
+		dict := dictByID[dictID]
+		if dictID == 0 || len(dict) == 0 {
+			dictID = 0
+			dict = nil
+		}
+		probe := requests[i].probeCompression
+		maxValLen := len(requests[i].value)
+		rawBytes := len(requests[i].value)
+		end := i + 1
+		for end < len(requests) {
+			nextDictID := requests[end].dictID
+			nextDict := dictByID[nextDictID]
+			if nextDictID == 0 || len(nextDict) == 0 {
+				nextDictID = 0
+			}
+			if nextDictID != dictID {
+				break
+			}
+			probe = probe || requests[end].probeCompression
+			if n := len(requests[end].value); n > maxValLen {
+				maxValLen = n
+			}
+			rawBytes += len(requests[end].value)
+			end++
+		}
+
+		k := 1
+		if end-i > 1 {
+			if dictID != 0 {
+				k = db.valueLogDictK(dictID)
+				k = db.chooseValueLogDictWriteK(k, end-i, rawBytes)
+				if db.disableJournal {
+					k = valuelog.MaxFrameK
+				}
+			} else if rawPaused && db.disableJournal {
+				k = valuelog.MaxFrameK
+			} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
+				k = cur
+			} else {
+				k = 8
+				if db.disableJournal && db.forceValueLogPointers {
+					k = 16
+				}
 			}
 		}
-	}
-	if limits.MaxRecordSize > 0 && maxValLen > 0 {
-		maxKBySize := int(limits.MaxRecordSize) / maxValLen
-		if maxKBySize < 1 {
-			maxKBySize = 1
+		if limits.MaxRecordSize > 0 && maxValLen > 0 {
+			maxKBySize := int(limits.MaxRecordSize) / maxValLen
+			if maxKBySize < 1 {
+				maxKBySize = 1
+			}
+			if k > maxKBySize {
+				k = maxKBySize
+			}
 		}
-		if k > maxKBySize {
-			k = maxKBySize
-		}
+		k = db.clampValueLogDictK(k)
+
+		plans = append(plans, vlogBatchPlan{
+			start:    i,
+			end:      end,
+			dictID:   dictID,
+			dict:     dict,
+			k:        k,
+			probe:    probe,
+			rawBytes: rawBytes,
+		})
+		i = end
 	}
-	k = db.clampValueLogDictK(k)
 
 	var (
 		ptrs        []page.ValuePtr
-		stats       valuelog.FrameStats
 		startSize   int64
 		totalBytes  int64
 		framesTotal int
+		framesTried int
+		framesKept  int
 		retainPath  string
+		probeKept   bool
+		dictRaw     int
+		dictStored  int
+		dictRecords int
 		err         error
 	)
 
@@ -3641,28 +3712,33 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
 	}
 
-	if len(records) == 1 {
-		stats = valuelog.FrameStats{Records: 1, RawPayloadBytes: len(records[0].Value), StoredPayloadBytes: len(records[0].Value)}
-		ptrs = getValueLogPtrs(1)
-		ptrs[0], err = w.Append(0, nil, records[0].RID, records[0].Value)
-		framesTotal = 1
-	} else {
-		ptrs = getValueLogPtrs(len(records))
-		if rawWriterInto != nil {
-			_, stats, err = rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
-			if err == nil && k > 0 {
-				framesTotal = (len(records) + k - 1) / k
+	ptrs = getValueLogPtrs(len(records))
+	statsWriter := caps.stats
+	statsWriterInto := caps.statsInto
+	for _, plan := range plans {
+		if err != nil {
+			break
+		}
+		segment := records[plan.start:plan.end]
+		if plan.dictID == 0 {
+			if len(segment) == 1 {
+				ptrs[plan.start], err = w.Append(0, nil, segment[0].RID, segment[0].Value)
+				if err == nil {
+					framesTotal++
+				}
+				continue
 			}
-		} else {
-			rawBytes := 0
-			for i := range records {
-				rawBytes += len(records[i].Value)
+			if rawWriterInto != nil {
+				_, _, err = rawWriterInto.AppendRawFramesWritevInto(segment, plan.k, ptrs[plan.start:plan.end])
+				if err == nil && plan.k > 0 {
+					framesTotal += (len(segment) + plan.k - 1) / plan.k
+				}
+				continue
 			}
-			stats = valuelog.FrameStats{Records: len(records), RawPayloadBytes: rawBytes, StoredPayloadBytes: rawBytes}
-			for i := 0; err == nil && i < len(records); i += k {
-				end := i + k
-				if end > len(records) {
-					end = len(records)
+			for i := plan.start; i < plan.end; i += plan.k {
+				end := i + plan.k
+				if end > plan.end {
+					end = plan.end
 				}
 				framePtrs, frameErr := w.AppendFrame(0, nil, records[i:end])
 				if frameErr != nil {
@@ -3672,6 +3748,68 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				copy(ptrs[i:end], framePtrs)
 				framesTotal++
 			}
+			continue
+		}
+
+		dictRaw += plan.rawBytes
+		dictRecords += len(segment)
+		for i := plan.start; i < plan.end; i += plan.k {
+			end := i + plan.k
+			if end > plan.end {
+				end = plan.end
+			}
+			frame := records[i:end]
+			if statsWriterInto != nil {
+				dst := ptrs[i:end]
+				_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(plan.dictID, plan.dict, frame, dst)
+				if frameErr != nil {
+					err = frameErr
+					break
+				}
+				framesTotal++
+				if stats.Attempted {
+					framesTried++
+				}
+				if stats.Kept {
+					framesKept++
+					if plan.probe {
+						probeKept = true
+					}
+				}
+				if stats.StoredPayloadBytes > 0 {
+					dictStored += stats.StoredPayloadBytes
+				}
+				continue
+			}
+			if statsWriter != nil {
+				framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(plan.dictID, plan.dict, frame)
+				if frameErr != nil {
+					err = frameErr
+					break
+				}
+				copy(ptrs[i:end], framePtrs)
+				framesTotal++
+				if stats.Attempted {
+					framesTried++
+				}
+				if stats.Kept {
+					framesKept++
+					if plan.probe {
+						probeKept = true
+					}
+				}
+				if stats.StoredPayloadBytes > 0 {
+					dictStored += stats.StoredPayloadBytes
+				}
+				continue
+			}
+			framePtrs, frameErr := w.AppendFrame(plan.dictID, plan.dict, frame)
+			if frameErr != nil {
+				err = frameErr
+				break
+			}
+			copy(ptrs[i:end], framePtrs)
+			framesTotal++
 		}
 	}
 
@@ -3701,11 +3839,24 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 
 	if err == nil && framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))
-		if stats.Attempted {
-			db.valueLogDictFrames.attempted.Add(uint64(framesTotal))
+		if framesTried > 0 {
+			db.valueLogDictFrames.attempted.Add(uint64(framesTried))
 		}
-		if stats.Kept {
-			db.valueLogDictFrames.kept.Add(uint64(framesTotal))
+		if framesKept > 0 {
+			db.valueLogDictFrames.kept.Add(uint64(framesKept))
+		}
+	}
+
+	if dictRaw > 0 {
+		if dictStored <= 0 {
+			dictStored = dictRaw
+		}
+		db.valueLogDictObservePayload(uint64(dictRaw), uint64(dictStored), dictRecords)
+	}
+	if probeKept {
+		db.valueLogDictPauseRemaining.Store(0)
+		if db.valueLogDictProbeBytes > 0 {
+			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
 		}
 	}
 
@@ -3893,6 +4044,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
+		k = db.chooseValueLogDictWriteK(k, len(records), rawPayloadBytes)
 	} else if len(records) > 1 {
 		// Even when dictionary compression is disabled/paused, grouping records into
 		// frames reduces per-record overhead (CRC/header writes) on append-heavy
@@ -4144,18 +4296,10 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		dictID = 0
 		dict = nil
 	}
-	if dictID != 0 && len(dict) == 0 {
-		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
-			dict = b
-		} else {
-			dictID = 0
-			dict = nil
-		}
-	}
 	db.valueLogDictCollectSample(value)
 
-	if dictID == 0 && wallStart.IsZero() && durability != journalDurabilitySync && l.vlogCh != nil && len(value) >= vlogQueueMinValueSize {
-		if !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+	if wallStart.IsZero() && durability != journalDurabilitySync && l.vlogCh != nil && len(value) >= vlogQueueMinValueSize {
+		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -4223,7 +4367,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		ack.err = nil
 		ack.wg.Add(1)
 
-		req := vlogWriteRequest{rid: rid, value: value, durability: durability, ack: ack}
+		req := vlogWriteRequest{
+			rid:              rid,
+			value:            value,
+			dictID:           dictID,
+			probeCompression: probeCompression,
+			durability:       durability,
+			ack:              ack,
+		}
 		select {
 		case l.vlogCh <- req:
 		case <-db.closeCh:
@@ -4237,6 +4388,15 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		err := ack.err
 		vlogAckPool.Put(ack)
 		return ptr, retainPath, err
+	}
+
+	if dictID != 0 && len(dict) == 0 {
+		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
+			dict = b
+		} else {
+			dictID = 0
+			dict = nil
+		}
 	}
 
 	l.vlogMu.Lock()

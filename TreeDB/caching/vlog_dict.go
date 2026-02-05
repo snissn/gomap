@@ -504,3 +504,22 @@ func (db *DB) clampValueLogDictK(k int) int {
 	}
 	return k
 }
+
+func (db *DB) chooseValueLogDictWriteK(baseK, records, rawPayloadBytes int) int {
+	k := db.clampValueLogDictK(baseK)
+	if records <= 1 || rawPayloadBytes <= 0 {
+		return k
+	}
+	avg := rawPayloadBytes / records
+	// For tiny values, larger grouped frames materially reduce per-frame metadata
+	// and lock/write overhead in dict mode.
+	switch {
+	case avg <= 160 && k < 96:
+		k = 96
+	case avg <= 192 && k < 64:
+		k = 64
+	case avg <= 256 && k < 32:
+		k = 32
+	}
+	return db.clampValueLogDictK(k)
+}
