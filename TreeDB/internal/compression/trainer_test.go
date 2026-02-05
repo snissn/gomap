@@ -77,3 +77,22 @@ func TestTrainerRestartsCollectingWhenDegradedAndThrottled(t *testing.T) {
 		t.Fatalf("expected collecting to restart")
 	}
 }
+
+func TestTrainerSetOnAccept_CallsCallback(t *testing.T) {
+	tr := &Trainer{}
+	called := make(chan struct{}, 1)
+	tr.SetOnAccept(func(*ActiveProfile) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+	})
+
+	tr.AcceptProfile(&ActiveProfile{Timestamp: time.Now(), TotalRatio: 0.5})
+
+	select {
+	case <-called:
+	default:
+		t.Fatalf("expected onAccept callback to be invoked")
+	}
+}
