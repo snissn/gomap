@@ -615,7 +615,6 @@ func (b *Builder) fallbackInternalBaseDeltaToUncompressed() error {
 
 	tmpAny := internalBaseDeltaRewritePool.Get()
 	tmp := tmpAny.([]byte)
-	clear(tmp)
 
 	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
 	heapStart := int(page.PageSize)
@@ -653,7 +652,10 @@ func (b *Builder) fallbackInternalBaseDeltaToUncompressed() error {
 		putUint16(tmp[dirOff:dirOff+2], uint16(heapStart))
 	}
 
-	copy(b.data, tmp)
+	// Only copy the regions we wrote (directory + heap) to avoid touching
+	// free-space bytes unnecessarily.
+	copy(b.data[NodeHeaderSize:dirEnd], tmp[NodeHeaderSize:dirEnd])
+	copy(b.data[heapStart:], tmp[heapStart:])
 	internalBaseDeltaRewritePool.Put(tmp)
 
 	b.heapStart = heapStart
@@ -704,7 +706,6 @@ func (b *Builder) finishInternalBaseDelta() bool {
 
 	tmpAny := internalBaseDeltaRewritePool.Get()
 	tmp := tmpAny.([]byte)
-	clear(tmp)
 
 	heapStart := footerStart
 
@@ -739,7 +740,10 @@ func (b *Builder) finishInternalBaseDelta() bool {
 		putUint16(tmp[NodeHeaderSize+int(i)*2:], uint16(heapStart))
 	}
 
-	copy(b.data, tmp)
+	// Only copy the regions we wrote (directory + heap) to avoid touching
+	// free-space bytes unnecessarily.
+	copy(b.data[NodeHeaderSize:dirEnd], tmp[NodeHeaderSize:dirEnd])
+	copy(b.data[heapStart:], tmp[heapStart:])
 	internalBaseDeltaRewritePool.Put(tmp)
 
 	b.heapStart = heapStart

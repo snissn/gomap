@@ -30,23 +30,19 @@ func (n *Node) internalBaseDeltaFooter() (prefix []byte, baseChildID uint64, foo
 	return prefix, baseChildID, footerStart, nil
 }
 
-func comparePrefixedKey(prefix, suffix, key []byte) int {
-	if len(prefix) == 0 {
-		return bytes.Compare(suffix, key)
+func (n *Node) internalBaseDeltaFooterCached() (prefix []byte, baseChildID uint64, footerStart int, err error) {
+	if n.internalFooterCached {
+		return n.internalPrefix, n.internalBaseChildID, n.internalFooterStart, nil
 	}
-	if len(key) < len(prefix) {
-		cmp := bytes.Compare(prefix[:len(key)], key)
-		if cmp != 0 {
-			return cmp
-		}
-		// key is a strict prefix of the entry key (entry is longer).
-		return 1
+	prefix, baseChildID, footerStart, err = n.internalBaseDeltaFooter()
+	if err != nil {
+		return nil, 0, 0, err
 	}
-	cmp := bytes.Compare(prefix, key[:len(prefix)])
-	if cmp != 0 {
-		return cmp
-	}
-	return bytes.Compare(suffix, key[len(prefix):])
+	n.internalPrefix = prefix
+	n.internalBaseChildID = baseChildID
+	n.internalFooterStart = footerStart
+	n.internalFooterCached = true
+	return prefix, baseChildID, footerStart, nil
 }
 
 // InternalEntry represents a parsed entry from an Internal Node.
@@ -58,7 +54,7 @@ type InternalEntry struct {
 // GetInternalChildID returns only the child page ID at the given index.
 func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
 	if n.internalBaseDelta() {
-		_, baseChildID, footerStart, err := n.internalBaseDeltaFooter()
+		_, baseChildID, footerStart, err := n.internalBaseDeltaFooterCached()
 		if err != nil {
 			return 0, err
 		}
@@ -108,7 +104,7 @@ func (n *Node) GetInternalEntry(index uint16) (InternalEntry, error) {
 // on the same node. Callers that need to retain the key must copy it.
 func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, err error) {
 	if n.internalBaseDelta() {
-		prefix, baseChildID, footerStart, err := n.internalBaseDeltaFooter()
+		prefix, baseChildID, footerStart, err := n.internalBaseDeltaFooterCached()
 		if err != nil {
 			return nil, 0, err
 		}
@@ -125,7 +121,7 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 		delta := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
 		suffixStart := ptr + 6
 		suffixEnd := suffixStart + suffixLen
-		if suffixLen < 0 || suffixEnd > footerStart {
+		if suffixEnd > footerStart {
 			return nil, 0, ErrCorruptedNode
 		}
 		suffix := n.data[suffixStart:suffixEnd]
@@ -165,7 +161,7 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 // If key < Entry[0].Key, returns index 0 (Left-most child rule usually handles this).
 func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 	if n.internalBaseDelta() {
-		prefix, _, footerStart, err := n.internalBaseDeltaFooter()
+		prefix, _, footerStart, err := n.internalBaseDeltaFooterCached()
 		if err != nil {
 			return 0, false
 		}
@@ -175,6 +171,34 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 		if count == 0 {
 			return 0, false
 		}
+
+		// Prefix is shared across all keys on the page. If the query differs in
+		// the prefix region, ordering is determined entirely by the prefix and we
+		// can short-circuit. Otherwise, compare only suffix bytes during search.
+		prefixLen := len(prefix)
+		keySuffix := key
+		if prefixLen > 0 {
+			if len(key) < prefixLen {
+				cmp := bytes.Compare(prefix[:len(key)], key)
+				if cmp != 0 {
+					if cmp < 0 {
+						return count - 1, true
+					}
+					return 0, false
+				}
+				// key is a strict prefix of all entry keys.
+				return 0, false
+			}
+			cmp := bytes.Compare(prefix, key[:prefixLen])
+			if cmp != 0 {
+				if cmp < 0 {
+					return count - 1, true
+				}
+				return 0, false
+			}
+			keySuffix = key[prefixLen:]
+		}
+
 		if count <= smallSearchThreshold {
 			last := -1
 			for i := 0; i < int(count); i++ {
@@ -186,10 +210,10 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 				suffixLen := int(getUint16(data[ptr : ptr+2]))
 				suffixStart := ptr + 6
 				suffixEnd := suffixStart + suffixLen
-				if suffixLen < 0 || suffixEnd > footerStart {
+				if suffixEnd > footerStart {
 					return 0, false
 				}
-				cmp := comparePrefixedKey(prefix, data[suffixStart:suffixEnd], key)
+				cmp := bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
 				if cmp <= 0 {
 					last = i
 					continue
@@ -213,11 +237,11 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 			suffixLen := int(getUint16(data[ptr : ptr+2]))
 			suffixStart := ptr + 6
 			suffixEnd := suffixStart + suffixLen
-			if suffixLen < 0 || suffixEnd > footerStart {
+			if suffixEnd > footerStart {
 				return 0, false
 			}
 
-			cmp := comparePrefixedKey(prefix, data[suffixStart:suffixEnd], key)
+			cmp := bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
 			if cmp <= 0 {
 				i = h + 1
 			} else {

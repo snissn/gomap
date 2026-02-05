@@ -62,6 +62,11 @@ type Node struct {
 	leafEntry  int
 	leafIndex  uint16
 	leafValid  bool
+
+	internalPrefix       []byte
+	internalBaseChildID  uint64
+	internalFooterStart  int
+	internalFooterCached bool
 }
 
 // NewNode creates a Node wrapper around the given page data.
@@ -113,6 +118,7 @@ func (n *Node) SetType(t page.PageType) {
 	flags := getUint16(n.data[12:14])
 	flags = (flags & nodeFlagMask) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
+	n.internalFooterCached = false
 }
 
 func (n *Node) rawFlags() uint16 {
@@ -122,6 +128,7 @@ func (n *Node) rawFlags() uint16 {
 func (n *Node) setRawFlags(flags uint16) {
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 	n.ptype = page.PageType(flags & pageTypeMask)
+	n.internalFooterCached = false
 }
 
 func (n *Node) leafPrefixCompressed() bool {
