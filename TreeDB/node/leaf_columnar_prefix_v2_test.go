@@ -77,3 +77,48 @@ func TestLeafColumnarPrefixV2_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestLeafColumnarPrefixV2_FallbackShortKeysToPlainLeaf(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+	})
+	b.SetPageID(1)
+
+	for i := 0; i < 32; i++ {
+		key := []byte{0, 0, 0, 0, byte(i >> 8), byte(i), byte(i), byte(i)}
+		if err := b.AddLeafEntry(key, nil, FlagPointer, page.ValuePtr{Offset: uint64(i + 1), Length: 4, FileID: 1}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if n.leafPrefixCompressed() {
+		t.Fatalf("expected short-key fallback to disable prefix compression")
+	}
+	if n.leafColumnar() {
+		t.Fatalf("expected short-key fallback to disable columnar leaf encoding")
+	}
+}
+
+func TestLeafColumnarPrefixV2_KeepsCombinedForLongKeys(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+	})
+	b.SetPageID(1)
+
+	keys := makeBenchKeys(32, 16)
+	for i := 0; i < len(keys); i++ {
+		if err := b.AddLeafEntry(keys[i], nil, FlagPointer, page.ValuePtr{Offset: uint64(i + 1), Length: 4, FileID: 1}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if !n.leafPrefixCompressed() || !n.leafColumnar() || !n.leafPrefixV2() {
+		t.Fatalf("expected combined columnar+prefix encoding for long keys")
+	}
+}

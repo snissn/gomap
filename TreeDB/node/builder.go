@@ -195,6 +195,7 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	b.maybeFallbackCombinedLeafEncoding(key)
 	if b.leafColumnar && !b.leafPrefixCompression {
 		if b.leafColumnarV2 {
 			return b.addLeafEntryColumnarV2(key, value, flags, valPtr)
@@ -206,6 +207,23 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
 	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+}
+
+func (b *Builder) maybeFallbackCombinedLeafEncoding(key []byte) {
+	if b.pType != page.PageTypeLeaf {
+		return
+	}
+	if b.count != 0 {
+		return
+	}
+	// For short keys, combined columnar+prefix often costs more CPU than it saves
+	// on reads/scans. Fallback to plain leaf encoding for this page.
+	if b.leafColumnar && b.leafPrefixCompression && len(key) <= 12 {
+		b.leafPrefixCompression = false
+		b.leafPrefixV2 = false
+		b.leafColumnar = false
+		b.leafColumnarV2 = false
+	}
 }
 
 func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
@@ -391,6 +409,12 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
+	}
+	prevPrefix := b.leafPrefixCompression
+	prevColumnar := b.leafColumnar
+	b.maybeFallbackCombinedLeafEncoding(key)
+	if prevPrefix != b.leafPrefixCompression || prevColumnar != b.leafColumnar {
+		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, value, flags)
 	}
 
 	if b.leafColumnar {
@@ -693,6 +717,14 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 	if len(key) > int(^uint16(0)) {
 		return ErrKeyTooLarge
 	}
+	if b.count == 0 && len(key) <= 12 {
+		// Short separator keys are cheaper to keep uncompressed. Falling back on
+		// the first entry avoids finish-time rewrite overhead on write-heavy paths.
+		if err := b.fallbackInternalBaseDeltaToUncompressed(); err != nil {
+			return err
+		}
+		return b.AddInternalChild(key, childPageID)
+	}
 
 	if b.count == 0 {
 		b.internalBaseChildID = childPageID
@@ -829,6 +861,18 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	if count == 0 {
 		return false
 	}
+	tryFallback := func() bool {
+		if err := b.fallbackInternalBaseDeltaToUncompressed(); err != nil {
+			return false
+		}
+		return true
+	}
+	if count < 16 {
+		if tryFallback() {
+			return false
+		}
+		return true
+	}
 
 	baseOff := len(b.data) - 8
 	prefixLenOff := baseOff - 2
@@ -846,7 +890,10 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	}
 
 	prefixLen := sharedPrefixLen(firstKey, lastKey)
-	if count < 2 || prefixLen <= 0 {
+	if count < 2 || prefixLen < 2 {
+		if tryFallback() {
+			return false
+		}
 		return true
 	}
 	if prefixLen > len(firstKey) {
@@ -859,7 +906,9 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	footerBytes := prefixLen + internalBaseDeltaFooterSize
 	footerStart := len(b.data) - footerBytes
 	if footerStart < dirEnd {
-		// Not enough room to store the prefix bytes. Keep prefixLen=0.
+		if tryFallback() {
+			return false
+		}
 		return true
 	}
 
@@ -868,6 +917,39 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	clear(tmp)
 
 	heapStart := footerStart
+
+	totalKeyBytes := 0
+	for i := uint16(0); i < count; i++ {
+		fullKey, _, err := b.internalBaseDeltaEntryView(i)
+		if err != nil {
+			internalBaseDeltaRewritePool.Put(tmp)
+			return true
+		}
+		if len(fullKey) < prefixLen {
+			internalBaseDeltaRewritePool.Put(tmp)
+			if tryFallback() {
+				return false
+			}
+			return true
+		}
+		totalKeyBytes += len(fullKey)
+	}
+	if totalKeyBytes/int(count) <= 12 {
+		internalBaseDeltaRewritePool.Put(tmp)
+		if tryFallback() {
+			return false
+		}
+		return true
+	}
+	plainBytes := int(count)*(2+8) + totalKeyBytes
+	compressedBytes := int(count)*(2+4) + (totalKeyBytes - int(count)*prefixLen) + footerBytes
+	if compressedBytes >= plainBytes || (plainBytes-compressedBytes)*100 < plainBytes*8 {
+		internalBaseDeltaRewritePool.Put(tmp)
+		if tryFallback() {
+			return false
+		}
+		return true
+	}
 
 	prefixStart := footerStart
 	copy(tmp[prefixStart:prefixStart+prefixLen], firstKey[:prefixLen])

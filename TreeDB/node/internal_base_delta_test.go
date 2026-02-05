@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -237,5 +238,97 @@ func TestInternalBaseDelta_IncreasesFanout(t *testing.T) {
 	// which should yield a measurable increase for typical key sizes.
 	if compressed < plain+(plain/20) {
 		t.Fatalf("expected >=5%% fanout increase: plain=%d compressed=%d", plain, compressed)
+	}
+}
+
+func TestInternalBaseDelta_FallbackLowCount(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	for i := 0; i < 15; i++ {
+		key := []byte(fmt.Sprintf("user:%08d", i))
+		if err := b.AddInternalChild(key, uint64(10_000+i)); err != nil {
+			t.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if n.internalBaseDelta() {
+		t.Fatalf("expected fallback to plain internal page when count<16")
+	}
+}
+
+func TestInternalBaseDelta_FallbackLowSharedPrefix(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	for i := 0; i < 20; i++ {
+		key := []byte(fmt.Sprintf("%c_key_%04d", byte('a'+i), i))
+		if err := b.AddInternalChild(key, uint64(20_000+i)); err != nil {
+			t.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if n.internalBaseDelta() {
+		t.Fatalf("expected fallback to plain internal page when shared prefix < 2 bytes")
+	}
+}
+
+func TestInternalBaseDelta_FallbackLowSavingsRatio(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	for i := 0; i < 16; i++ {
+		// Long keys with only a 2-byte shared prefix reduce compression ratio.
+		key := append([]byte("aa"), bytes.Repeat([]byte{byte('a' + i)}, 120)...)
+		if err := b.AddInternalChild(key, uint64(30_000+i)); err != nil {
+			t.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if n.internalBaseDelta() {
+		t.Fatalf("expected fallback to plain internal page when net savings ratio < 8%%")
+	}
+}
+
+func TestInternalBaseDelta_FallbackShortAverageSeparator(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	for i := 0; i < 64; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		if err := b.AddInternalChild(key[:], uint64(40_000+i)); err != nil {
+			t.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+
+	n := b.Finish()
+	if n.internalBaseDelta() {
+		t.Fatalf("expected fallback to plain internal page when average separator key is short")
+	}
+}
+
+func TestInternalBaseDelta_EarlyFallbackShortFirstSeparator(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	var key [8]byte
+	binary.BigEndian.PutUint64(key[:], uint64(1))
+	if err := b.AddInternalChild(key[:], 42); err != nil {
+		t.Fatalf("AddInternalChild: %v", err)
+	}
+	if b.internalBaseDelta {
+		t.Fatalf("expected internal base-delta to disable immediately for short first separator key")
+	}
+	if b.heapStart != int(page.PageSize)-(2+8+len(key)) {
+		t.Fatalf("unexpected heapStart after early fallback: got=%d want=%d", b.heapStart, int(page.PageSize)-(2+8+len(key)))
 	}
 }

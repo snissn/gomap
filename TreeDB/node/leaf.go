@@ -313,6 +313,57 @@ func (n *Node) GetLeafEntryView(index uint16) (key []byte, val []byte, valPtr pa
 	return key, val, page.ValuePtr{}, flags, nil
 }
 
+// GetLeafKeyFlagsView returns the key and flags for the entry at index without
+// decoding the value bytes/pointer payload.
+func (n *Node) GetLeafKeyFlagsView(index uint16) (key []byte, flags byte, err error) {
+	if n.Type() != page.PageTypeLeaf {
+		return nil, 0, ErrInvalidType
+	}
+	if n.leafPackedValuePtr() && !n.leafPrefixCompressed() && !n.leafColumnar() {
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return nil, 0, err
+		}
+		if int(offset) >= len(n.data) {
+			return nil, 0, ErrCorruptedNode
+		}
+		ptr := int(offset)
+		if ptr < NodeHeaderSize || ptr+7 > len(n.data) {
+			return nil, 0, ErrCorruptedNode
+		}
+		keyLen := int(getUint16(n.data[ptr : ptr+2]))
+		flags = n.data[ptr+6]
+		keyStart := ptr + 7
+		keyEnd := keyStart + keyLen
+		if keyStart < NodeHeaderSize || keyEnd > len(n.data) {
+			return nil, 0, ErrCorruptedNode
+		}
+		return n.data[keyStart:keyEnd], flags, nil
+	}
+	if n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		count := n.Count()
+		if index >= count {
+			return nil, 0, ErrCorruptedNode
+		}
+		key, err = n.leafColumnarKeyViewAtIndex(int(index))
+		if err != nil {
+			return nil, 0, err
+		}
+		flagsStart := NodeHeaderSize + int(count)*DirectoryEntrySize + int(count)*DirectoryEntrySize
+		flagsOff := flagsStart + int(index)
+		if flagsOff >= len(n.data) {
+			return nil, 0, ErrCorruptedNode
+		}
+		return key, n.data[flagsOff], nil
+	}
+
+	key, layout, _, err := n.leafEntryKeyAt(index)
+	if err != nil {
+		return nil, 0, err
+	}
+	return key, layout.flags, nil
+}
+
 // GetLeafValueView returns the value (inline or pointer) at the given index
 // without reconstructing the key. This is useful for point reads after SearchLeaf.
 func (n *Node) GetLeafValueView(index uint16) (val []byte, valPtr page.ValuePtr, flags byte, err error) {
@@ -322,6 +373,45 @@ func (n *Node) GetLeafValueView(index uint16) (val []byte, valPtr page.ValuePtr,
 
 	if n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
 		return n.getLeafValueViewColumnarV2(index)
+	}
+	if n.leafPackedValuePtr() && !n.leafPrefixCompressed() && !n.leafColumnar() {
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return nil, page.ValuePtr{}, 0, err
+		}
+		if int(offset) >= len(n.data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		entryStart := int(offset)
+		if entryStart < NodeHeaderSize || entryStart+7 > len(n.data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		keyLen := int(getUint16(n.data[entryStart : entryStart+2]))
+		flags = n.data[entryStart+6]
+		valueStart := entryStart + 7 + keyLen
+		if valueStart < NodeHeaderSize || valueStart > len(n.data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+
+		if flags&FlagTombstone != 0 {
+			return nil, page.ValuePtr{}, flags, nil
+		}
+		if flags&FlagPointer != 0 {
+			if valueStart+page.PackedValuePtrSize > len(n.data) {
+				return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+			}
+			return nil, page.DecodePackedValuePtr(n.data[valueStart : valueStart+page.PackedValuePtrSize]), flags, nil
+		}
+
+		valLenU32 := binary.LittleEndian.Uint32(n.data[entryStart+2 : entryStart+6])
+		if uint64(valLenU32) > uint64(math.MaxInt) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		valLen := int(valLenU32)
+		if valueStart+valLen > len(n.data) {
+			return nil, page.ValuePtr{}, 0, ErrCorruptedNode
+		}
+		return n.data[valueStart : valueStart+valLen], page.ValuePtr{}, flags, nil
 	}
 
 	offset, err := n.getOffset(index)
@@ -841,6 +931,10 @@ func (n *Node) getLeafValueViewColumnarV2(index uint16) (val []byte, valPtr page
 }
 
 func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
+	if n.leafColumnarV2() {
+		return n.searchLeafColumnarV2(key)
+	}
+
 	count := n.Count()
 	if count == 0 {
 		return 0, false, nil
@@ -877,6 +971,84 @@ func (n *Node) searchLeafColumnar(key []byte) (uint16, bool, error) {
 
 	if i < int(count) {
 		k, err := n.leafColumnarKeyViewAtIndex(i)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Equal(k, key) {
+			return uint16(i), true, nil
+		}
+	}
+	return uint16(i), false, nil
+}
+
+func (n *Node) searchLeafColumnarV2(key []byte) (uint16, bool, error) {
+	count := int(n.Count())
+	if count == 0 {
+		return 0, false, nil
+	}
+
+	data := n.data
+	keyDirStart := NodeHeaderSize
+	keyDirEnd := keyDirStart + count*DirectoryEntrySize
+	valDirEnd := keyDirEnd + count*DirectoryEntrySize
+	headerEnd := valDirEnd + count // flags[]
+	if headerEnd > len(data) {
+		return 0, false, ErrCorruptedNode
+	}
+
+	keyAt := func(idx int) ([]byte, error) {
+		if idx < 0 || idx >= count {
+			return nil, ErrCorruptedNode
+		}
+		keyOff := keyDirStart + idx*2
+		nextKeyOff := keyOff + 2
+		if nextKeyOff > len(data) {
+			return nil, ErrCorruptedNode
+		}
+		keyStart := int(getUint16(data[keyOff : keyOff+2]))
+		keyEnd := len(data)
+		if idx+1 < count {
+			if nextKeyOff+2 > len(data) {
+				return nil, ErrCorruptedNode
+			}
+			keyEnd = int(getUint16(data[nextKeyOff : nextKeyOff+2]))
+		}
+		if keyStart < headerEnd || keyEnd < keyStart || keyEnd > len(data) {
+			return nil, ErrCorruptedNode
+		}
+		return data[keyStart:keyEnd], nil
+	}
+
+	if count <= smallSearchThreshold {
+		for idx := 0; idx < count; idx++ {
+			k, err := keyAt(idx)
+			if err != nil {
+				return 0, false, err
+			}
+			cmp := bytes.Compare(k, key)
+			if cmp >= 0 {
+				return uint16(idx), cmp == 0, nil
+			}
+		}
+		return uint16(count), false, nil
+	}
+
+	i, j := 0, count
+	for i < j {
+		h := int(uint(i+j) >> 1)
+		k, err := keyAt(h)
+		if err != nil {
+			return 0, false, err
+		}
+		if bytes.Compare(k, key) < 0 {
+			i = h + 1
+		} else {
+			j = h
+		}
+	}
+
+	if i < count {
+		k, err := keyAt(i)
 		if err != nil {
 			return 0, false, err
 		}
@@ -1164,6 +1336,7 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 		return blockEnd, false, nil
 	}
 
+	var stackScratch [128]byte
 	restartKey, err := n.leafColumnarPrefixV2RestartKeyViewAtIndex(blockStart)
 	if err != nil {
 		return 0, false, err
@@ -1194,7 +1367,12 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 		}
 
 		keyLen := prefixLen + len(suffix)
-		cur := n.ensureKeyScratch(keyLen)
+		var cur []byte
+		if keyLen <= len(stackScratch) {
+			cur = stackScratch[:keyLen]
+		} else {
+			cur = n.ensureKeyScratch(keyLen)
+		}
 		// If prevKey and cur share backing storage, the existing prefix bytes are
 		// already in place and we only need to overwrite the suffix below.
 		sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
