@@ -64,6 +64,7 @@ var (
 	treedbVlogDictMetricsMinRecords = flag.Int("treedb-vlog-dict-metrics-min-records", 0, "TreeDB: value-log dict metrics min records (0=default)")
 	treedbVlogDictMetricsPauseBytes = flag.Int("treedb-vlog-dict-metrics-pause-bytes", 0, "TreeDB: value-log dict pause bytes when degraded (0=default)")
 	treedbVlogDictMinSavingsRatio   = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
+	treedbVlogDictK                 = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
 	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
 	treedbVlogDictMode              = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
 	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
@@ -367,6 +368,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			notes = append(notes, "vlog_compression_autotune=off: forcing vlog_dict_train_bytes=off")
 		}
 		setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	}
+	if *treedbVlogDictK > 0 {
+		opts.ValueLog.CompressionAutotune.CandidateK = []int{*treedbVlogDictK}
 	}
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
