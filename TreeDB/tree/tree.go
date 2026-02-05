@@ -109,24 +109,68 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
-	entry, err := t.GetEntry(key)
-	if err != nil {
-		return nil, err
+	currID := t.rootPageID
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
 	}
 
-	if entry.Flags&node.FlagTombstone != 0 {
-		return nil, ErrKeyNotFound
-	}
-
-	if entry.Flags&node.FlagPointer != 0 {
-		val, err := t.slabReader.ReadUnsafe(entry.ValuePtr)
+	for depth := 0; depth < 50; depth++ {
+		data, err := t.pager.Get(currID)
 		if err != nil {
 			return nil, err
 		}
-		return val, nil
+
+		n := node.NewNode(data)
+		if verifyAlways || !t.pager.IsVerified(currID) {
+			if !n.VerifyChecksum() {
+				return nil, fmt.Errorf("checksum mismatch on page %d", currID)
+			}
+			if !verifyAlways {
+				t.pager.MarkVerified(currID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			idx, _ := n.SearchInternal(key)
+			childID, err := n.GetInternalChildID(idx)
+			if err != nil {
+				return nil, err
+			}
+			currID = childID
+
+		case page.PageTypeLeaf:
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				return nil, ErrKeyNotFound
+			}
+
+			val, ptr, flags, err := n.GetLeafValueView(idx)
+			if err != nil {
+				return nil, err
+			}
+			if flags&node.FlagTombstone != 0 {
+				return nil, ErrKeyNotFound
+			}
+			if flags&node.FlagPointer != 0 {
+				out, err := t.slabReader.ReadUnsafe(ptr)
+				if err != nil {
+					return nil, err
+				}
+				return out, nil
+			}
+			return val, nil
+
+		default:
+			return nil, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+		}
 	}
 
-	return entry.Value, nil
+	return nil, errors.New("tree too deep")
 }
 
 func (t *Tree) Get(key []byte) ([]byte, error) {
