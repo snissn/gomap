@@ -3669,6 +3669,24 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 		return
 	}
+	// Rotation may replace the writer; reload it so subsequent appends use the
+	// correct segment.
+	w = l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		putValueLogRecords(records)
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = errWALUnavailable
+			ack.wg.Done()
+		}
+		return
+	}
 	if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
 		// Pre-rotate to ensure this batch never produces pointers with offsets
 		// outside the packed-offset cap.
@@ -3688,6 +3706,24 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 					ack.ptr = page.ValuePtr{}
 					ack.retainPath = ""
 					ack.err = rotateErr
+					ack.wg.Done()
+				}
+				return
+			}
+			// Reload writer after rotation to ensure subsequent operations use the
+			// new segment.
+			w = l.vlog
+			if w == nil {
+				l.vlogMu.Unlock()
+				putValueLogRecords(records)
+				for i := range requests {
+					ack := requests[i].ack
+					if ack == nil {
+						continue
+					}
+					ack.ptr = page.ValuePtr{}
+					ack.retainPath = ""
+					ack.err = errWALUnavailable
 					ack.wg.Done()
 				}
 				return
@@ -4050,6 +4086,23 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					return nil, rotateErr
 				}
 				noteRotatePath(l.vlogPath)
+				// Reload writer after rotation so subsequent appends go to the new
+				// segment and capabilities match the writer instance.
+				w = l.vlog
+				if w == nil {
+					l.vlogMu.Unlock()
+					return nil, errWALUnavailable
+				}
+				if l.vlogCaps.writer != w {
+					l.vlogCaps = computeVlogWriterCaps(w)
+				}
+				caps = l.vlogCaps
+				statsWriter = caps.stats
+				statsWriterInto = caps.statsInto
+				rawWriterInto = caps.rawInto
+				hasStats = statsWriter != nil
+				hasInto = statsWriterInto != nil
+				hasRawInto = rawWriterInto != nil
 				segmentStartSize = w.Size()
 			}
 		}
@@ -4103,6 +4156,21 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 						break
 					}
 					noteRotatePath(l.vlogPath)
+					// Rotation may replace the writer; reload it and refresh capabilities
+					// for subsequent appends.
+					w = l.vlog
+					if w == nil {
+						err = errWALUnavailable
+						break
+					}
+					if l.vlogCaps.writer != w {
+						l.vlogCaps = computeVlogWriterCaps(w)
+					}
+					caps = l.vlogCaps
+					statsWriter = caps.stats
+					statsWriterInto = caps.statsInto
+					hasStats = statsWriter != nil
+					hasInto = statsWriterInto != nil
 					segmentStartSize = w.Size()
 				}
 			}
@@ -4310,6 +4378,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", rotateErr
 			}
+			// Reload writer in case rotation replaced l.vlog.
+			w = l.vlog
+			if w == nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", errWALUnavailable
+			}
 			if l.vlogCaps.writer != w {
 				l.vlogCaps = computeVlogWriterCaps(w)
 			}
@@ -4397,6 +4471,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", rotateErr
+	}
+	// Reload writer in case rotation replaced l.vlog.
+	w = l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
