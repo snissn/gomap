@@ -156,6 +156,15 @@ type ValueLogOptions struct {
 	// DictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
 	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
 	DictMinPayloadSavingsRatio float64
+	// DictMaxK clamps the maximum group size (K) used for value-log dict-compressed
+	// frames.
+	//
+	// Larger K can improve compression ratio (more cross-record matches) and can
+	// reduce framing overhead, but may increase CPU and tail latency due to larger
+	// encode/decode units.
+	//
+	// Values <= 0 use the default (32). Values above the engine maximum are clamped.
+	DictMaxK int
 
 	// CompressionAutotune configures the wall-time value-log compression autotuner.
 	CompressionAutotune valuelog.AutotuneOptions

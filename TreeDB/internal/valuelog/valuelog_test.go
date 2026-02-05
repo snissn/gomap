@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
@@ -269,6 +270,139 @@ func TestReadAtGroupedFastPathSubIndexRange(t *testing.T) {
 		if string(got) != expect[i] {
 			t.Fatalf("ptr%d mismatch: got %q want %q", i+1, string(got), expect[i])
 		}
+	}
+}
+
+func TestReadAtGroupedK128WithDict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	records := make([]Record, MaxFrameK)
+	expect := make([]string, len(records))
+	samples := make([][]byte, len(records))
+	payload := bytes.Repeat([]byte("a"), 1024)
+	for i := range records {
+		expect[i] = fmt.Sprintf("{\"type\":\"example\",\"id\":%d,\"payload\":\"%s\"}", i, payload)
+		records[i] = Record{RID: uint64(i + 1), Value: []byte(expect[i])}
+		samples[i] = records[i].Value
+	}
+
+	const dictID = uint64(1)
+	const dictBytes = 8 << 10 // 8KiB
+	history := make([]byte, 0, dictBytes)
+	for i := range samples {
+		if len(history) >= dictBytes {
+			break
+		}
+		need := dictBytes - len(history)
+		sample := samples[i]
+		if len(sample) > need {
+			sample = sample[:need]
+		}
+		history = append(history, sample...)
+	}
+	if len(history) < dictBytes {
+		history = append(history, bytes.Repeat([]byte("x"), dictBytes-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrScratch := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(dictID, dict, records, ptrScratch)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if stats.Attempted && !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected dict compression to keep compressed bytes")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, ErrMissingDict
+		}
+		return dict, nil
+	}
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(f, ptr, true, dictLookup, nil, nil, templ.DecodeOptions{})
+		if err != nil {
+			t.Fatalf("read at ptr%d: %v", i+1, err)
+		}
+		if string(got) != expect[i] {
+			t.Fatalf("ptr%d mismatch: got %q want %q", i+1, string(got), expect[i])
+		}
+	}
+}
+
+func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+
+	overhead := headerWithoutCRC + FrameHeaderSize + 8 + 8
+	n := int(page.ValuePtrGroupedMaxRecordLen) - overhead + 1
+	if n <= 0 {
+		t.Fatalf("computed invalid payload size: %d", n)
+	}
+	value := bytes.Repeat([]byte("a"), n)
+
+	ptr, err := writer.Append(0, nil, 1, value)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if got := page.ValuePtrRecordLength(ptr); got != 0 {
+		_ = writer.Close()
+		t.Fatalf("expected length hint to be omitted for large value, got %d", got)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("read at: %v", err)
+	}
+	if len(got) != len(value) {
+		t.Fatalf("value length mismatch: got=%d want=%d", len(got), len(value))
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("value bytes mismatch")
 	}
 }
 

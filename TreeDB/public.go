@@ -320,6 +320,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogPointerThreshold:           opts.ValueLog.PointerThreshold,
 		ForceValueLogPointers:              opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                  opts.ValueLog.DictTrain,
+		ValueLogDictMaxK:                   opts.ValueLog.DictMaxK,
 		ValueLogDictAdaptiveRatio:          opts.ValueLog.DictAdaptiveRatio,
 		ValueLogDictMetricsWindowBytes:     opts.ValueLog.DictMetricsWindowBytes,
 		ValueLogDictMetricsMinRecords:      opts.ValueLog.DictMetricsMinRecords,

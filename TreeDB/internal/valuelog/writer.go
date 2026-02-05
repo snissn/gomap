@@ -538,10 +538,13 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 				}
 			}
 
-			recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+			recordLenHint := uint32(headerWithoutCRC) + bodyLen
+			if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+				recordLenHint = 0
+			}
 			return page.ValuePtr{
 				Offset: uint64(start + 4),
-				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
+				Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 				FileID: w.fileID,
 			}, nil
 		}
@@ -581,10 +584,13 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		}
 		w.size += int64(recordLen)
 
-		recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+		recordLenHint := uint32(headerWithoutCRC) + bodyLen
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
 		return page.ValuePtr{
 			Offset: uint64(start + 4),
-			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 			FileID: w.fileID,
 		}, nil
 	}
@@ -704,10 +710,13 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 		w.size += int64(recordLen)
 
-		recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+		recordLenHint := uint32(headerWithoutCRC) + bodyLen
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
 		dst[0] = page.ValuePtr{
 			Offset: uint64(start + 4),
-			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 			FileID: w.fileID,
 		}
 		return dst[:1], FrameStats{Records: 1, RawPayloadBytes: len(rec.Value), StoredPayloadBytes: len(rec.Value), Kept: false}, nil
@@ -883,11 +892,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			w.size += int64(HeaderSize + bodyLen)
 		}
 
-		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+		recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
 		for i := range records {
 			dst[i] = page.ValuePtr{
 				Offset: uint64(start + 4),
-				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+				Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 				FileID: w.fileID,
 			}
 		}
@@ -1120,11 +1132,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				}
 			}
 
-			recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+			recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+			if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+				recordLenHint = 0
+			}
 			for i := range records {
 				dst[i] = page.ValuePtr{
 					Offset: uint64(start + 4),
-					Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+					Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 					FileID: w.fileID,
 				}
 			}
@@ -1272,11 +1287,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 		w.size += int64(HeaderSize + bodyLen)
 
-		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+		recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
 		for i := range records {
 			dst[i] = page.ValuePtr{
 				Offset: uint64(start + 4),
-				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+				Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 				FileID: w.fileID,
 			}
 		}
@@ -1326,11 +1344,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	}
 	w.size += int64(recordLen)
 
-	recordLenNoCRC := uint32(headerWithoutCRC) + bodyLen
+	recordLenHint := uint32(headerWithoutCRC) + bodyLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
 	for i := range records {
 		dst[i] = page.ValuePtr{
 			Offset: uint64(start + 4),
-			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 			FileID: w.fileID,
 		}
 	}
@@ -1499,11 +1520,14 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 		w.size += int64(HeaderSize + bodyLen)
 	}
 
-	recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+	recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
 	for i := range records {
 		dst[i] = page.ValuePtr{
 			Offset: uint64(start + 4),
-			Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 			FileID: w.fileID,
 		}
 	}

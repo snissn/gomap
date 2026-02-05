@@ -154,11 +154,14 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		}
 
 		start := w.size + int64(queuedBytes)
-		recordLenNoCRC := uint32(headerWithoutCRC) + uint32(bodyLen)
+		recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
 		for i := 0; i < kFrame; i++ {
 			dst[pos+i] = page.ValuePtr{
 				Offset: uint64(start + 4),
-				Length: page.ValuePtrMarkGrouped(recordLenNoCRC, uint8(i)),
+				Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 				FileID: w.fileID,
 			}
 		}

@@ -178,7 +178,24 @@ func (db *DB) ensureValueLogDictTrainer() {
 		return
 	}
 	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
-	tr.SetAutotuneCandidates(db.valueLogAutotuneOptions.CandidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
+	candidateK := db.valueLogAutotuneOptions.CandidateK
+	if len(candidateK) > 0 {
+		seen := make(map[int]struct{}, len(candidateK))
+		filtered := make([]int, 0, len(candidateK))
+		for _, k := range candidateK {
+			k = db.clampValueLogDictK(k)
+			if k <= 0 {
+				continue
+			}
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			filtered = append(filtered, k)
+		}
+		candidateK = filtered
+	}
+	tr.SetAutotuneCandidates(candidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
 	db.valueLogDictTrainer = tr
 	db.valueLogDictMetrics = compression.NewMetrics(compression.MetricsOptions{
 		AdaptiveRatio:  db.valueLogDictAdaptiveRatio,
@@ -464,8 +481,12 @@ func (db *DB) clampValueLogDictK(k int) int {
 	if k <= 1 {
 		return 1
 	}
-	if k > valuelog.MaxFrameK {
-		return valuelog.MaxFrameK
+	maxK := valuelog.MaxFrameK
+	if db != nil && db.valueLogDictMaxK > 0 && db.valueLogDictMaxK < maxK {
+		maxK = db.valueLogDictMaxK
+	}
+	if k > maxK {
+		return maxK
 	}
 	return k
 }
