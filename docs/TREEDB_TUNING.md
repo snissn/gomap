@@ -229,6 +229,24 @@ How to evaluate:
   on/off and compare `maindb/index.db` size + ops/sec.
 - Leaf density microbench: `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count=1`
 
+### Internal base-delta compression (`Options.IndexInternalBaseDelta`)
+
+Internal pages can be encoded with base-child + delta child IDs and separator
+prefix coding. In pre-alpha builds, TreeDB applies this mode adaptively per
+page to avoid throughput regressions on low-benefit pages.
+
+Current fallback policy:
+- fallback to plain internal page when the first separator key length is `<= 12` bytes
+- fallback to plain internal page when `count < 16`
+- fallback when shared separator prefix is `< 2` bytes
+- fallback when average separator key length is `<= 12` bytes
+- fallback when estimated net byte savings is `< 8%`
+
+Rationale:
+- some internal pages gain little compression but still pay extra compare/decode
+  work during seeks; adaptive fallback keeps the hot read path fast while
+  preserving compression on pages where it materially helps.
+
 ### `Options.KeepRecent`
 
 Backend knob used to influence internal lifecycle/retention behavior.

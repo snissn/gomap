@@ -28,6 +28,7 @@ type Iterator struct {
 	currPtr      page.ValuePtr
 	flags        byte
 	valOK        bool
+	ptrOK        bool
 	reverse      bool
 	verifyAlways bool
 }
@@ -128,6 +129,7 @@ func (it *Iterator) seek(key []byte) {
 	it.currPtr = page.ValuePtr{}
 	it.flags = 0
 	it.valOK = false
+	it.ptrOK = false
 
 	currID := it.tree.rootPageID
 
@@ -189,7 +191,7 @@ func (it *Iterator) loadCurrent() {
 			return
 		}
 
-		top := it.stack[len(it.stack)-1]
+		top := &it.stack[len(it.stack)-1]
 
 		// Check Bounds
 		if top.Index < 0 {
@@ -201,7 +203,7 @@ func (it *Iterator) loadCurrent() {
 			return
 		}
 
-		keyView, valView, valPtr, flags, err := top.Node.GetLeafEntryView(uint16(top.Index))
+		keyView, flags, err := top.Node.GetLeafKeyFlagsView(uint16(top.Index))
 		if err != nil {
 			it.err = err
 			it.valid = false
@@ -224,16 +226,17 @@ func (it *Iterator) loadCurrent() {
 		// Skip tombstones; they are persisted in the index but hidden from iteration.
 		if flags&node.FlagTombstone != 0 {
 			if it.reverse {
-				it.stack[len(it.stack)-1].Index--
+				top.Index--
 			} else {
-				it.stack[len(it.stack)-1].Index++
+				top.Index++
 			}
 			continue
 		}
 
 		it.currKey = keyView
 		it.flags = flags
-		it.currPtr = valPtr
+		it.currPtr = page.ValuePtr{}
+		it.ptrOK = false
 
 		// Inline values are a view into the mmap. Pointer values are loaded on
 		// demand in UnsafeValue/Value.
@@ -241,8 +244,15 @@ func (it *Iterator) loadCurrent() {
 			it.currVal = nil
 			it.valOK = false
 		} else {
+			valView, _, _, err := top.Node.GetLeafValueView(uint16(top.Index))
+			if err != nil {
+				it.err = err
+				it.valid = false
+				return
+			}
 			it.currVal = valView
 			it.valOK = true
+			it.ptrOK = true
 		}
 
 		it.valid = true
@@ -393,6 +403,9 @@ func (it *Iterator) UnsafeValue() []byte {
 		return nil
 	}
 	if it.flags&node.FlagPointer != 0 {
+		if !it.ensurePointerLoaded() {
+			return nil
+		}
 		if it.valOK {
 			return it.currVal
 		}
@@ -409,6 +422,14 @@ func (it *Iterator) UnsafeValue() []byte {
 }
 
 func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if it.currKey == nil {
+		return nil, page.ValuePtr{}, 0
+	}
+	if it.flags&node.FlagPointer != 0 {
+		if !it.ensurePointerLoaded() {
+			return nil, page.ValuePtr{}, it.flags
+		}
+	}
 	return it.currVal, it.currPtr, it.flags
 }
 
@@ -474,4 +495,34 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	}
 
 	return n, nil
+}
+
+func (it *Iterator) ensurePointerLoaded() bool {
+	if it.ptrOK {
+		return true
+	}
+	if it.flags&node.FlagPointer == 0 {
+		it.ptrOK = true
+		return true
+	}
+	if len(it.stack) == 0 {
+		it.err = fmt.Errorf("iterator pointer load: empty stack")
+		it.valid = false
+		return false
+	}
+	top := it.stack[len(it.stack)-1]
+	_, ptr, flags, err := top.Node.GetLeafValueView(uint16(top.Index))
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return false
+	}
+	if flags&node.FlagPointer == 0 {
+		it.err = fmt.Errorf("iterator pointer load: entry is not a pointer")
+		it.valid = false
+		return false
+	}
+	it.currPtr = ptr
+	it.ptrOK = true
+	return true
 }

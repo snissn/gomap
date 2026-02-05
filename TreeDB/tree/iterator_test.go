@@ -197,3 +197,38 @@ func TestIterator_SkipsTombstones(t *testing.T) {
 		t.Fatalf("expected [A C], got %v", got)
 	}
 }
+
+func TestIterator_PointerKeysOnly_DoesNotReadValues(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // 0
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), nil, node.FlagPointer, page.ValuePtr{Offset: 1, Length: 3, FileID: 1})
+	n0.AddLeafEntry([]byte("B"), nil, node.FlagTombstone, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), nil, node.FlagPointer, page.ValuePtr{Offset: 5, Length: 3, FileID: 1})
+	n0.UpdateChecksum()
+
+	tr := New(p, panicValueReader{}, 0)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	var keys []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(keys) != 2 || keys[0] != "A" || keys[1] != "C" {
+		t.Fatalf("expected [A C], got %v", keys)
+	}
+}
