@@ -31,8 +31,9 @@ const (
 	leafPrefixV2Flag         uint16 = 0x2000
 	leafPackedValuePtrFlag   uint16 = 0x1000
 	internalBaseDeltaFlag    uint16 = 0x0800
+	internalBaseDelta16Flag  uint16 = 0x0400
 	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag
-	internalNodeFlagMask            = internalBaseDeltaFlag
+	internalNodeFlagMask            = internalBaseDeltaFlag | internalBaseDelta16Flag
 	nodeFlagMask                    = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask                    = ^nodeFlagMask
 
@@ -166,12 +167,21 @@ func (n *Node) internalBaseDelta() bool {
 	return n.rawFlags()&internalBaseDeltaFlag != 0
 }
 
+func (n *Node) internalBaseDelta16() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	flags := n.rawFlags()
+	return flags&internalBaseDeltaFlag != 0 && flags&internalBaseDelta16Flag != 0
+}
+
 func (n *Node) setInternalBaseDelta(enabled bool) {
 	flags := n.rawFlags()
 	if enabled {
 		flags |= internalBaseDeltaFlag
 	} else {
 		flags &^= internalBaseDeltaFlag
+		flags &^= internalBaseDelta16Flag
 	}
 	n.setRawFlags(flags)
 }

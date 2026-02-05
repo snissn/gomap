@@ -105,17 +105,22 @@ func entryLength(n *Node, offset int) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			if offset+6 > footerStart {
+			deltaSize := 4
+			if n.internalBaseDelta16() {
+				deltaSize = 2
+			}
+			headerSize := 2 + deltaSize
+			if offset+headerSize > footerStart {
 				return 0, ErrCorruptedNode
 			}
 			suffixLen := int(getUint16(n.data[offset : offset+2]))
 			if suffixLen < 0 {
 				return 0, ErrCorruptedNode
 			}
-			if offset+6+suffixLen > footerStart {
+			if offset+headerSize+suffixLen > footerStart {
 				return 0, ErrCorruptedNode
 			}
-			return 2 + 4 + suffixLen, nil
+			return headerSize + suffixLen, nil
 		}
 		if offset+2+8 > len(n.data) {
 			return 0, ErrCorruptedNode

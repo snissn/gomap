@@ -63,10 +63,20 @@ func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
 			return 0, err
 		}
 		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+6 > footerStart {
+		deltaSize := 4
+		if n.internalBaseDelta16() {
+			deltaSize = 2
+		}
+		headerSize := 2 + deltaSize
+		if ptr < NodeHeaderSize || ptr+headerSize > footerStart {
 			return 0, ErrCorruptedNode
 		}
-		delta := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
+		var delta uint32
+		if deltaSize == 2 {
+			delta = uint32(getUint16(n.data[ptr+2 : ptr+4]))
+		} else {
+			delta = binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
+		}
 		return baseChildID + uint64(delta), nil
 	}
 
@@ -115,13 +125,23 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 			return nil, 0, err
 		}
 		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+6 > footerStart {
+		deltaSize := 4
+		if n.internalBaseDelta16() {
+			deltaSize = 2
+		}
+		headerSize := 2 + deltaSize
+		if ptr < NodeHeaderSize || ptr+headerSize > footerStart {
 			return nil, 0, ErrCorruptedNode
 		}
 
 		suffixLen := int(getUint16(n.data[ptr : ptr+2]))
-		delta := binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
-		suffixStart := ptr + 6
+		var delta uint32
+		if deltaSize == 2 {
+			delta = uint32(getUint16(n.data[ptr+2 : ptr+4]))
+		} else {
+			delta = binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
+		}
+		suffixStart := ptr + headerSize
 		suffixEnd := suffixStart + suffixLen
 		if suffixEnd > footerStart {
 			return nil, 0, ErrCorruptedNode
@@ -161,6 +181,72 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 	return key, childID, nil
 }
 
+// GetInternalEntryPartsView returns a view of the internal entry key as
+// (prefix, suffix) slices without reconstructing the full key.
+//
+// For uncompressed internal pages, prefix is nil and suffix points directly
+// into the node's backing page.
+//
+// For internal base-delta pages, prefix points into the node's footer and
+// suffix points into the entry's heap payload.
+func (n *Node) GetInternalEntryPartsView(index uint16) (prefix, suffix []byte, childID uint64, err error) {
+	if n.internalBaseDelta() {
+		prefix, baseChildID, footerStart, err := n.internalBaseDeltaFooterCached()
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		ptr := int(offset)
+		deltaSize := 4
+		if n.internalBaseDelta16() {
+			deltaSize = 2
+		}
+		headerSize := 2 + deltaSize
+		if ptr < NodeHeaderSize || ptr+headerSize > footerStart {
+			return nil, nil, 0, ErrCorruptedNode
+		}
+
+		suffixLen := int(getUint16(n.data[ptr : ptr+2]))
+		var delta uint32
+		if deltaSize == 2 {
+			delta = uint32(getUint16(n.data[ptr+2 : ptr+4]))
+		} else {
+			delta = binary.LittleEndian.Uint32(n.data[ptr+2 : ptr+6])
+		}
+		suffixStart := ptr + headerSize
+		suffixEnd := suffixStart + suffixLen
+		if suffixEnd > footerStart {
+			return nil, nil, 0, ErrCorruptedNode
+		}
+		suffix = n.data[suffixStart:suffixEnd]
+		return prefix, suffix, baseChildID + uint64(delta), nil
+	}
+
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	ptr := int(offset)
+	if ptr+10 > len(n.data) {
+		return nil, nil, 0, ErrCorruptedNode
+	}
+
+	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+	childID = binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+
+	ptr += 10
+	if ptr+int(keyLen) > len(n.data) {
+		return nil, nil, 0, ErrCorruptedNode
+	}
+
+	suffix = n.data[ptr : ptr+int(keyLen)]
+	return nil, suffix, childID, nil
+}
+
 // SearchInternal performs a binary search for the given key in an Internal Node.
 // Returns the index of the child that covers the range containing key.
 // Logic: Find largest index i such that Entry[i].Key <= key.
@@ -177,6 +263,12 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 		if count == 0 {
 			return 0, false
 		}
+
+		deltaSize := 4
+		if n.internalBaseDelta16() {
+			deltaSize = 2
+		}
+		headerSize := 2 + deltaSize
 
 		// Prefix is shared across all keys on the page. If the query differs in
 		// the prefix region, ordering is determined entirely by the prefix and we
@@ -210,11 +302,11 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 			for i := 0; i < int(count); i++ {
 				offset := getUint16(data[NodeHeaderSize+i*2:])
 				ptr := int(offset)
-				if ptr < NodeHeaderSize || ptr+6 > footerStart {
+				if ptr < NodeHeaderSize || ptr+headerSize > footerStart {
 					return 0, false
 				}
 				suffixLen := int(getUint16(data[ptr : ptr+2]))
-				suffixStart := ptr + 6
+				suffixStart := ptr + headerSize
 				suffixEnd := suffixStart + suffixLen
 				if suffixEnd > footerStart {
 					return 0, false
@@ -237,11 +329,11 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 			h := int(uint(i+j) >> 1)
 			offset := getUint16(data[NodeHeaderSize+h*2:])
 			ptr := int(offset)
-			if ptr < NodeHeaderSize || ptr+6 > footerStart {
+			if ptr < NodeHeaderSize || ptr+headerSize > footerStart {
 				return 0, false
 			}
 			suffixLen := int(getUint16(data[ptr : ptr+2]))
-			suffixStart := ptr + 6
+			suffixStart := ptr + headerSize
 			suffixEnd := suffixStart + suffixLen
 			if suffixEnd > footerStart {
 				return 0, false

@@ -21,7 +21,12 @@ type Builder struct {
 	leafColumnar          bool
 	leafPackedValuePtr    bool
 	internalBaseDelta     bool
-	internalBaseChildID   uint64
+	internalBaseDeltaOK   bool
+	internalMinChildID    uint64
+	internalMaxChildID    uint64
+	internalPrefixLen     int
+	internalTotalKeyBytes int
+	internalEntries       []internalBuildEntry
 	leafPrevKeyBuf        [64]byte
 	leafPrevKey           []byte
 	leafIndex             int
@@ -29,9 +34,16 @@ type Builder struct {
 
 const internalBaseDeltaFooterSize = 10 // u16 prefixLen + u64 baseChildID
 
-var internalBaseDeltaRewritePool = sync.Pool{
+type internalBuildEntry struct {
+	prefix  []byte
+	suffix  []byte
+	keyLen  uint16
+	childID uint64
+}
+
+var internalEntryPool = sync.Pool{
 	New: func() any {
-		return make([]byte, page.PageSize)
+		return make([]internalBuildEntry, 0, 256)
 	},
 }
 
@@ -68,6 +80,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 		leafColumnar:          opts.LeafColumnar,
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
+		internalBaseDeltaOK:   opts.InternalBaseDelta,
 	}
 }
 
@@ -454,16 +467,28 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 
 // AddInternalChild appends a child pointer. Assumes keys are added in sorted order.
 func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
+	return b.AddInternalChildParts(nil, key, childPageID)
+}
+
+// AddInternalChildParts appends a child pointer using a split key representation
+// (prefix + suffix) to avoid allocating/reconstructing a contiguous key slice
+// in callers that already have a prefix-coded view.
+func (b *Builder) AddInternalChildParts(prefix, suffix []byte, childPageID uint64) error {
 	if b.pType != page.PageTypeInternal {
 		return ErrInvalidType
 	}
 
+	keyLen := len(prefix) + len(suffix)
+	if keyLen > int(^uint16(0)) {
+		return ErrKeyTooLarge
+	}
+
 	if b.internalBaseDelta {
-		return b.addInternalChildBaseDelta(key, childPageID)
+		return b.addInternalChildBaseDeltaParts(prefix, suffix, childPageID)
 	}
 
 	// Layout: KeyLen(2) + ChildPageID(8) + Key
-	entrySize := 2 + 8 + len(key)
+	entrySize := 2 + 8 + keyLen
 	required := entrySize + DirectoryEntrySize
 	freeSpace := b.heapStart - b.dirEnd
 
@@ -474,11 +499,11 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	entryStart := b.heapStart - entrySize
 	ptr := entryStart
 
-	keyLen := len(key)
 	b.data[ptr] = byte(keyLen)
 	b.data[ptr+1] = byte(keyLen >> 8)
 	putUint64(b.data[ptr+2:ptr+10], childPageID)
-	copy(b.data[ptr+10:], key)
+	copy(b.data[ptr+10:], prefix)
+	copy(b.data[ptr+10+len(prefix):], suffix)
 
 	b.data[b.dirEnd] = byte(entryStart)
 	b.data[b.dirEnd+1] = byte(entryStart >> 8)
@@ -494,8 +519,9 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 // Returns a Node wrapper for convenience.
 func (b *Builder) Finish() *Node {
 	internalBaseDeltaApplied := false
+	internalBaseDelta16Applied := false
 	if b.pType == page.PageTypeInternal && b.internalBaseDelta {
-		internalBaseDeltaApplied = b.finishInternalBaseDelta()
+		internalBaseDeltaApplied, internalBaseDelta16Applied = b.finishInternalBaseDelta()
 	}
 
 	// Write Header
@@ -518,6 +544,9 @@ func (b *Builder) Finish() *Node {
 	} else if b.pType == page.PageTypeInternal {
 		if internalBaseDeltaApplied {
 			flags |= internalBaseDeltaFlag
+			if internalBaseDelta16Applied {
+				flags |= internalBaseDelta16Flag
+			}
 		}
 	}
 	binary.LittleEndian.PutUint16(b.data[12:14], flags)
@@ -528,248 +557,277 @@ func (b *Builder) Finish() *Node {
 	return n
 }
 
-func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) error {
-	if len(key) > int(^uint16(0)) {
+func internalKeyLen(prefix, suffix []byte) int {
+	return len(prefix) + len(suffix)
+}
+
+func sharedPrefixLenParts(aPrefix, aSuffix, bPrefix, bSuffix []byte) int {
+	n := internalKeyLen(aPrefix, aSuffix)
+	if total := internalKeyLen(bPrefix, bSuffix); total < n {
+		n = total
+	}
+	for i := 0; i < n; i++ {
+		var a byte
+		if i < len(aPrefix) {
+			a = aPrefix[i]
+		} else {
+			a = aSuffix[i-len(aPrefix)]
+		}
+		var b byte
+		if i < len(bPrefix) {
+			b = bPrefix[i]
+		} else {
+			b = bSuffix[i-len(bPrefix)]
+		}
+		if a != b {
+			return i
+		}
+	}
+	return n
+}
+
+func copyKeyPrefix(dst []byte, prefix, suffix []byte, n int) {
+	if n <= 0 {
+		return
+	}
+	if n <= len(prefix) {
+		copy(dst, prefix[:n])
+		return
+	}
+	copy(dst, prefix)
+	copy(dst[len(prefix):], suffix[:n-len(prefix)])
+}
+
+func (b *Builder) addInternalChildBaseDeltaParts(prefix, suffix []byte, childPageID uint64) error {
+	keyLen := internalKeyLen(prefix, suffix)
+	if keyLen > int(^uint16(0)) {
 		return ErrKeyTooLarge
 	}
 
-	if b.count == 0 {
-		b.internalBaseChildID = childPageID
-	} else if childPageID < b.internalBaseChildID {
-		if !b.rebaseInternalBaseDelta(childPageID) {
-			if err := b.fallbackInternalBaseDeltaToUncompressed(); err != nil {
-				return err
-			}
-			return b.AddInternalChild(key, childPageID)
+	if b.internalEntries == nil {
+		b.internalEntries = internalEntryPool.Get().([]internalBuildEntry)[:0]
+	}
+
+	newCount := b.count + 1
+	newTotalKeyBytes := b.internalTotalKeyBytes + keyLen
+
+	newPrefixLen := b.internalPrefixLen
+	if newCount == 1 {
+		newPrefixLen = keyLen
+	} else {
+		first := b.internalEntries[0]
+		lcp := sharedPrefixLenParts(first.prefix, first.suffix, prefix, suffix)
+		if lcp < newPrefixLen {
+			newPrefixLen = lcp
 		}
 	}
 
-	delta64 := childPageID - b.internalBaseChildID
-	if delta64 > uint64(^uint32(0)) {
-		if err := b.fallbackInternalBaseDeltaToUncompressed(); err != nil {
-			return err
+	newMinChildID := b.internalMinChildID
+	newMaxChildID := b.internalMaxChildID
+	if newCount == 1 {
+		newMinChildID = childPageID
+		newMaxChildID = childPageID
+	} else {
+		if childPageID < newMinChildID {
+			newMinChildID = childPageID
 		}
-		return b.AddInternalChild(key, childPageID)
+		if childPageID > newMaxChildID {
+			newMaxChildID = childPageID
+		}
 	}
-	delta := uint32(delta64)
 
-	suffixLen := len(key)
-	entrySize := 2 + 4 + suffixLen
-	required := entrySize + DirectoryEntrySize
-	freeSpace := b.heapStart - b.dirEnd
-	if freeSpace < required {
+	baseDeltaOK := b.internalBaseDeltaOK
+	if baseDeltaOK {
+		if newMaxChildID-newMinChildID > uint64(^uint32(0)) {
+			baseDeltaOK = false
+		}
+	}
+
+	newDirEnd := NodeHeaderSize + int(newCount)*DirectoryEntrySize
+
+	var newHeapStart int
+	if baseDeltaOK {
+		prefixLen := newPrefixLen
+		if newCount < 2 {
+			prefixLen = 0
+		}
+
+		deltaSize := 4
+		if newMaxChildID-newMinChildID <= uint64(^uint16(0)) {
+			deltaSize = 2
+		}
+
+		suffixBytes := newTotalKeyBytes - prefixLen*int(newCount)
+		entryBytes := int(newCount)*(2+deltaSize) + suffixBytes
+		footerBytes := internalBaseDeltaFooterSize + prefixLen
+		newHeapStart = int(page.PageSize) - (footerBytes + entryBytes)
+	} else {
+		entryBytes := int(newCount)*(2+8) + newTotalKeyBytes
+		newHeapStart = int(page.PageSize) - entryBytes
+	}
+	if newHeapStart < newDirEnd {
 		return ErrNodeFull
 	}
 
-	entryStart := b.heapStart - entrySize
-	putUint16(b.data[entryStart:entryStart+2], uint16(suffixLen))
-	putUint32(b.data[entryStart+2:entryStart+6], delta)
-	copy(b.data[entryStart+6:entryStart+6+suffixLen], key)
+	b.internalEntries = append(b.internalEntries, internalBuildEntry{
+		prefix:  prefix,
+		suffix:  suffix,
+		keyLen:  uint16(keyLen),
+		childID: childPageID,
+	})
 
-	b.data[b.dirEnd] = byte(entryStart)
-	b.data[b.dirEnd+1] = byte(entryStart >> 8)
-
-	b.heapStart = entryStart
-	b.dirEnd += DirectoryEntrySize
-	b.count++
+	b.count = newCount
+	b.dirEnd = newDirEnd
+	b.heapStart = newHeapStart
+	b.internalBaseDeltaOK = baseDeltaOK
+	b.internalMinChildID = newMinChildID
+	b.internalMaxChildID = newMaxChildID
+	b.internalPrefixLen = newPrefixLen
+	b.internalTotalKeyBytes = newTotalKeyBytes
 	return nil
 }
 
-func (b *Builder) rebaseInternalBaseDelta(newBase uint64) bool {
-	if newBase >= b.internalBaseChildID {
-		b.internalBaseChildID = newBase
-		return true
-	}
-	diff := b.internalBaseChildID - newBase
-	if diff > uint64(^uint32(0)) {
-		return false
-	}
-	diff32 := uint32(diff)
-	for i := uint16(0); i < b.count; i++ {
-		dirOff := NodeHeaderSize + int(i)*2
-		offset := getUint16(b.data[dirOff : dirOff+2])
-		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+6 > len(b.data) {
-			return false
-		}
-		oldDelta := binary.LittleEndian.Uint32(b.data[ptr+2 : ptr+6])
-		if ^uint32(0)-oldDelta < diff32 {
-			return false
-		}
-		newDelta := oldDelta + diff32
-		putUint32(b.data[ptr+2:ptr+6], newDelta)
-	}
-	b.internalBaseChildID = newBase
-	return true
-}
-
-func (b *Builder) fallbackInternalBaseDeltaToUncompressed() error {
+func (b *Builder) finishInternalUncompressed() {
 	count := b.count
 	if count == 0 {
-		b.internalBaseDelta = false
-		b.internalBaseChildID = 0
-		b.heapStart = int(page.PageSize)
-		b.dirEnd = NodeHeaderSize
-		return nil
+		return
 	}
-
-	tmpAny := internalBaseDeltaRewritePool.Get()
-	tmp := tmpAny.([]byte)
+	if len(b.internalEntries) != int(count) {
+		panic("finishInternalUncompressed: entry count mismatch")
+	}
 
 	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
 	heapStart := int(page.PageSize)
-	baseChildID := b.internalBaseChildID
 
 	for i := uint16(0); i < count; i++ {
-		dirOff := NodeHeaderSize + int(i)*2
-		offset := getUint16(b.data[dirOff : dirOff+2])
-		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+6 > len(b.data) {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return ErrCorruptedNode
-		}
+		e := b.internalEntries[i]
+		keyLen := internalKeyLen(e.prefix, e.suffix)
 
-		keyLen := int(getUint16(b.data[ptr : ptr+2]))
-		delta := binary.LittleEndian.Uint32(b.data[ptr+2 : ptr+6])
-		keyStart := ptr + 6
-		keyEnd := keyStart + keyLen
-		if keyLen < 0 || keyEnd > len(b.data) {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return ErrCorruptedNode
-		}
-
-		childID := baseChildID + uint64(delta)
 		entrySize := 2 + 8 + keyLen
 		heapStart -= entrySize
 		if heapStart < dirEnd {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return ErrNodeFull
+			panic("finishInternalUncompressed: page overflow")
 		}
 
-		putUint16(tmp[heapStart:heapStart+2], uint16(keyLen))
-		putUint64(tmp[heapStart+2:heapStart+10], childID)
-		copy(tmp[heapStart+10:heapStart+10+keyLen], b.data[keyStart:keyEnd])
-		putUint16(tmp[dirOff:dirOff+2], uint16(heapStart))
+		putUint16(b.data[heapStart:heapStart+2], uint16(keyLen))
+		putUint64(b.data[heapStart+2:heapStart+10], e.childID)
+		copy(b.data[heapStart+10:heapStart+10+len(e.prefix)], e.prefix)
+		copy(b.data[heapStart+10+len(e.prefix):heapStart+10+keyLen], e.suffix)
+		putUint16(b.data[NodeHeaderSize+int(i)*2:], uint16(heapStart))
 	}
-
-	// Only copy the regions we wrote (directory + heap) to avoid touching
-	// free-space bytes unnecessarily.
-	copy(b.data[NodeHeaderSize:dirEnd], tmp[NodeHeaderSize:dirEnd])
-	copy(b.data[heapStart:], tmp[heapStart:])
-	internalBaseDeltaRewritePool.Put(tmp)
 
 	b.heapStart = heapStart
 	b.dirEnd = dirEnd
-	b.internalBaseDelta = false
-	b.internalBaseChildID = 0
-	return nil
 }
 
-func (b *Builder) finishInternalBaseDelta() bool {
+func (b *Builder) finishInternalBaseDelta() (applied bool, delta16 bool) {
+	defer func() {
+		if b.internalEntries != nil {
+			clear(b.internalEntries[:cap(b.internalEntries)])
+			internalEntryPool.Put(b.internalEntries[:0])
+			b.internalEntries = nil
+		}
+	}()
+
 	count := b.count
 	if count == 0 {
-		return false
+		return false, false
+	}
+	if len(b.internalEntries) != int(count) {
+		panic("finishInternalBaseDelta: entry count mismatch")
+	}
+
+	if !b.internalBaseDeltaOK {
+		b.finishInternalUncompressed()
+		return false, false
+	}
+
+	baseChildID := b.internalMinChildID
+	maxDelta := b.internalMaxChildID - baseChildID
+	deltaSize := 4
+	if maxDelta <= uint64(^uint16(0)) {
+		deltaSize = 2
+		delta16 = true
+	}
+
+	prefixLen := b.internalPrefixLen
+	if count < 2 {
+		prefixLen = 0
+	}
+
+	first := b.internalEntries[0]
+	if internalKeyLen(first.prefix, first.suffix) < prefixLen {
+		prefixLen = 0
 	}
 
 	baseOff := len(b.data) - 8
 	prefixLenOff := baseOff - 2
-	putUint16(b.data[prefixLenOff:prefixLenOff+2], 0)
-	putUint64(b.data[baseOff:baseOff+8], b.internalBaseChildID)
-
-	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
-	firstKey, _, err := b.internalBaseDeltaEntryView(0)
-	if err != nil {
-		return true
-	}
-	lastKey, _, err := b.internalBaseDeltaEntryView(count - 1)
-	if err != nil {
-		return true
-	}
-
-	prefixLen := sharedPrefixLen(firstKey, lastKey)
-	if count < 2 || prefixLen <= 0 {
-		return true
-	}
-	if prefixLen > len(firstKey) {
-		prefixLen = len(firstKey)
-	}
-	if prefixLen > int(^uint16(0)) {
-		return true
-	}
-
 	footerBytes := prefixLen + internalBaseDeltaFooterSize
 	footerStart := len(b.data) - footerBytes
+
+	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
 	if footerStart < dirEnd {
-		// Not enough room to store the prefix bytes. Keep prefixLen=0.
-		return true
+		// Should not happen if AddInternalChildParts space checks are correct.
+		// Fall back to uncompressed encoding.
+		b.internalBaseDeltaOK = false
+		b.finishInternalUncompressed()
+		return false, false
 	}
 
-	tmpAny := internalBaseDeltaRewritePool.Get()
-	tmp := tmpAny.([]byte)
+	if prefixLen > 0 {
+		copyKeyPrefix(b.data[footerStart:footerStart+prefixLen], first.prefix, first.suffix, prefixLen)
+	}
+	putUint16(b.data[prefixLenOff:prefixLenOff+2], uint16(prefixLen))
+	putUint64(b.data[baseOff:baseOff+8], baseChildID)
 
 	heapStart := footerStart
 
-	prefixStart := footerStart
-	copy(tmp[prefixStart:prefixStart+prefixLen], firstKey[:prefixLen])
-	putUint16(tmp[prefixLenOff:prefixLenOff+2], uint16(prefixLen))
-	putUint64(tmp[baseOff:baseOff+8], b.internalBaseChildID)
-
 	for i := uint16(0); i < count; i++ {
-		fullKey, delta, err := b.internalBaseDeltaEntryView(i)
-		if err != nil {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return true
+		e := b.internalEntries[i]
+		keyLen := internalKeyLen(e.prefix, e.suffix)
+		if keyLen < prefixLen {
+			panic("finishInternalBaseDelta: prefix out of bounds")
 		}
-		if len(fullKey) < prefixLen {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return true
-		}
-		suffix := fullKey[prefixLen:]
-		suffixLen := len(suffix)
 
-		entrySize := 2 + 4 + suffixLen
+		var suffixA, suffixB []byte
+		if prefixLen <= len(e.prefix) {
+			suffixA = e.prefix[prefixLen:]
+			suffixB = e.suffix
+		} else {
+			skip := prefixLen - len(e.prefix)
+			suffixA = e.suffix[skip:]
+		}
+		suffixLen := len(suffixA) + len(suffixB)
+
+		delta64 := e.childID - baseChildID
+		if delta64 > uint64(^uint32(0)) {
+			// Unexpected overflow. Fall back to uncompressed encoding.
+			b.internalBaseDeltaOK = false
+			b.finishInternalUncompressed()
+			return false, false
+		}
+
+		entrySize := 2 + deltaSize + suffixLen
 		heapStart -= entrySize
 		if heapStart < dirEnd {
-			internalBaseDeltaRewritePool.Put(tmp)
-			return true
+			panic("finishInternalBaseDelta: page overflow")
 		}
 
-		putUint16(tmp[heapStart:heapStart+2], uint16(suffixLen))
-		putUint32(tmp[heapStart+2:heapStart+6], delta)
-		copy(tmp[heapStart+6:heapStart+6+suffixLen], suffix)
-		putUint16(tmp[NodeHeaderSize+int(i)*2:], uint16(heapStart))
+		putUint16(b.data[heapStart:heapStart+2], uint16(suffixLen))
+		if deltaSize == 2 {
+			putUint16(b.data[heapStart+2:heapStart+4], uint16(delta64))
+		} else {
+			putUint32(b.data[heapStart+2:heapStart+6], uint32(delta64))
+		}
+		dst := b.data[heapStart+2+deltaSize : heapStart+2+deltaSize+suffixLen]
+		n := copy(dst, suffixA)
+		copy(dst[n:], suffixB)
+		putUint16(b.data[NodeHeaderSize+int(i)*2:], uint16(heapStart))
 	}
-
-	// Only copy the regions we wrote (directory + heap) to avoid touching
-	// free-space bytes unnecessarily.
-	copy(b.data[NodeHeaderSize:dirEnd], tmp[NodeHeaderSize:dirEnd])
-	copy(b.data[heapStart:], tmp[heapStart:])
-	internalBaseDeltaRewritePool.Put(tmp)
 
 	b.heapStart = heapStart
 	b.dirEnd = dirEnd
-	return true
-}
-
-func (b *Builder) internalBaseDeltaEntryView(index uint16) (key []byte, delta uint32, err error) {
-	dirOff := NodeHeaderSize + int(index)*2
-	if dirOff+2 > len(b.data) {
-		return nil, 0, ErrCorruptedNode
-	}
-	offset := getUint16(b.data[dirOff : dirOff+2])
-	ptr := int(offset)
-	if ptr < NodeHeaderSize || ptr+6 > len(b.data) {
-		return nil, 0, ErrCorruptedNode
-	}
-
-	keyLen := int(getUint16(b.data[ptr : ptr+2]))
-	delta = binary.LittleEndian.Uint32(b.data[ptr+2 : ptr+6])
-	ptr += 6
-	if keyLen < 0 || ptr+keyLen > len(b.data) {
-		return nil, 0, ErrCorruptedNode
-	}
-	key = b.data[ptr : ptr+keyLen]
-	return key, delta, nil
+	return true, delta16
 }
 
 func sharedPrefixLen(a, b []byte) int {

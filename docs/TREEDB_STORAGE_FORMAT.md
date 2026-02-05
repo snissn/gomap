@@ -177,7 +177,8 @@ For `PageTypeInternal`, the page-header `Flags` field stores the internal
 encoding mode in high bits (in addition to the low-bit page type).
 
 Internal-encoding flags (current):
-- `0x0800`: internal base-delta (child IDs as base+u32 delta; separator keys prefix-coded)
+- `0x0800`: internal base-delta (separator keys prefix-coded; child IDs stored as base + delta)
+- `0x0400`: internal base-delta `delta16` (when set, `ChildDelta` is encoded as `u16` instead of `u32`)
 
 #### Plain internal entries (no base-delta)
 
@@ -193,7 +194,8 @@ Each entry stores a key **suffix** and a child-ID **delta**:
 
 ```text
 [ u16 SuffixLen ]
-[ u32 ChildDelta ]   childID = baseChildID + ChildDelta
+[ u16 ChildDelta ]   if `delta16` flag is set
+[ u32 ChildDelta ]   otherwise
 [ Key suffix bytes (SuffixLen) ]
 ```
 

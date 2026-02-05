@@ -110,6 +110,82 @@ func TestInternalBaseDelta_SkipsWhenDeltaOverflowsU32(t *testing.T) {
 	}
 }
 
+func TestInternalBaseDelta_UsesDelta16WhenPossible(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	keys := make([][]byte, 0, 256)
+	childIDs := make([]uint64, 0, 256)
+	for i := 0; i < 256; i++ {
+		key := []byte(fmt.Sprintf("user:%08d", i))
+		childID := uint64(1_000_000 + i)
+		err := b.AddInternalChild(key, childID)
+		if err == ErrNodeFull {
+			break
+		}
+		if err != nil {
+			t.Fatalf("AddInternalChild: %v", err)
+		}
+		keys = append(keys, key)
+		childIDs = append(childIDs, childID)
+	}
+
+	n := b.Finish()
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta enabled")
+	}
+	if !n.internalBaseDelta16() {
+		t.Fatalf("expected internalBaseDelta16 enabled")
+	}
+
+	for i := range keys {
+		gotID, err := n.GetInternalChildID(uint16(i))
+		if err != nil {
+			t.Fatalf("GetInternalChildID(%d): %v", i, err)
+		}
+		if gotID != childIDs[i] {
+			t.Fatalf("childID mismatch idx=%d got=%d want=%d", i, gotID, childIDs[i])
+		}
+	}
+}
+
+func TestInternalBaseDelta_FallsBackToDelta32WhenNeeded(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	childIDs := []uint64{
+		1_000,
+		1_000 + uint64(^uint16(0)) + 1, // delta = MaxUint16+1 (forces u32 delta)
+	}
+	keys := [][]byte{[]byte("a"), []byte("b")}
+
+	for i := range keys {
+		if err := b.AddInternalChild(keys[i], childIDs[i]); err != nil {
+			t.Fatalf("AddInternalChild: %v", err)
+		}
+	}
+
+	n := b.Finish()
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta enabled")
+	}
+	if n.internalBaseDelta16() {
+		t.Fatalf("expected internalBaseDelta16 disabled")
+	}
+
+	for i := range keys {
+		got, id, err := n.GetInternalEntryView(uint16(i))
+		if err != nil {
+			t.Fatalf("GetInternalEntryView(%d): %v", i, err)
+		}
+		if id != childIDs[i] || !bytes.Equal(got, keys[i]) {
+			t.Fatalf("entry mismatch idx=%d key=%q want=%q id=%d want=%d", i, got, keys[i], id, childIDs[i])
+		}
+	}
+}
+
 func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
