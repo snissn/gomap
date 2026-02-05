@@ -1653,6 +1653,8 @@ type DB struct {
 	valueLogDictPausedSampleCounter atomic.Uint64
 	valueLogDictLastAppliedDictHash atomic.Uint64
 	valueLogDictLastAppliedDictID   atomic.Uint64
+	valueLogDictLastPublishUnixNano atomic.Int64
+	valueLogDictLastKUpdateUnixNano atomic.Int64
 	valueLogDictCurrentK            atomic.Uint32
 	valueLogDictKMu                 sync.RWMutex
 	valueLogDictKCache              map[uint64]int
@@ -8083,7 +8085,29 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.last_applied_dict_id"] = fmt.Sprintf("%d", db.valueLogDictLastAppliedDictID.Load())
+	stats["treedb.cache.vlog_dict.last_applied_dict_hash"] = fmt.Sprintf("%x", db.valueLogDictLastAppliedDictHash.Load())
+	stats["treedb.cache.vlog_dict.last_publish_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastPublishUnixNano.Load())
+	stats["treedb.cache.vlog_dict.last_k_update_unix_nano"] = fmt.Sprintf("%d", db.valueLogDictLastKUpdateUnixNano.Load())
 	stats["treedb.cache.vlog_dict.current_k"] = fmt.Sprintf("%d", db.valueLogDictCurrentK.Load())
+	db.valueLogDictBytesMu.Lock()
+	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)
+	stats["treedb.cache.vlog_dict.cached_dict_bytes"] = fmt.Sprintf("%d", len(db.valueLogDictBytes))
+	db.valueLogDictBytesMu.Unlock()
+	db.valueLogDictTrainerMu.Lock()
+	tr := db.valueLogDictTrainer
+	db.valueLogDictTrainerMu.Unlock()
+	if tr != nil {
+		snap := tr.Stats()
+		stats["treedb.cache.vlog_dict.trainer.profile_attempts"] = fmt.Sprintf("%d", snap.ProfileAttempts)
+		stats["treedb.cache.vlog_dict.trainer.profile_accepts"] = fmt.Sprintf("%d", snap.ProfileAccepts)
+		stats["treedb.cache.vlog_dict.trainer.profile_rejects"] = fmt.Sprintf("%d", snap.ProfileRejects)
+		stats["treedb.cache.vlog_dict.trainer.profile_reject_reason"] = snap.ProfileRejectReason
+		if !snap.LastAcceptTimestamp.IsZero() {
+			stats["treedb.cache.vlog_dict.trainer.last_accept_unix_nano"] = fmt.Sprintf("%d", snap.LastAcceptTimestamp.UnixNano())
+		} else {
+			stats["treedb.cache.vlog_dict.trainer.last_accept_unix_nano"] = "0"
+		}
+	}
 	switch vlogAutotuneMode {
 	case valuelog.AutotuneOff:
 		stats["treedb.cache.vlog_compression_autotune.mode"] = "off"
