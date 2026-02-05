@@ -489,12 +489,20 @@ func (n *Node) leafColumnarKeyViewAtIndex(idx int) ([]byte, error) {
 	}
 
 	keyLen := int(getUint16(data[ptr : ptr+2]))
-	keyOff := int(getUint16(data[ptr+7 : ptr+9]))
-	remaining := len(data) - ptr
-	if keyOff < leafColumnarHeaderSize || keyOff > remaining {
-		return nil, ErrCorruptedNode
+	valLen := int(binary.LittleEndian.Uint32(data[ptr+2 : ptr+6]))
+	flags := data[ptr+6]
+	valSize := 0
+	if flags&FlagPointer != 0 {
+		if n.leafPackedValuePtr() {
+			valSize = page.PackedValuePtrSize
+		} else {
+			valSize = page.ValuePtrSize
+		}
+	} else if flags&FlagTombstone == 0 {
+		valSize = valLen
 	}
-	keyStart := ptr + keyOff
+
+	keyStart := ptr + leafColumnarHeaderSize + valSize
 	if keyStart+keyLen > len(data) {
 		return nil, ErrCorruptedNode
 	}
@@ -857,11 +865,9 @@ func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.V
 	}
 
 	buf := make([]byte, entrySize)
-	valOff := leafColumnarHeaderSize
-	keyOff := valOff + valSize
-	writeLeafColumnarHeader(buf[:leafColumnarHeaderSize], len(key), valLen, flags, keyOff, valOff)
+	writeLeafColumnarHeader(buf[:leafColumnarHeaderSize], len(key), valLen, flags)
 
-	valueStart := valOff
+	valueStart := leafColumnarHeaderSize
 	if flags&FlagPointer != 0 {
 		if n.leafPackedValuePtr() {
 			page.EncodePackedValuePtr(buf[valueStart:valueStart+valPtrSize], valPtr)
@@ -872,7 +878,8 @@ func (n *Node) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.V
 		copy(buf[valueStart:valueStart+valLen], value)
 	}
 
-	copy(buf[keyOff:keyOff+len(key)], key)
+	keyStart := valueStart + valSize
+	copy(buf[keyStart:keyStart+len(key)], key)
 
 	heapStart := int(page.PageSize)
 	count := n.Count()

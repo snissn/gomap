@@ -107,6 +107,22 @@ func TestLeafColumnarPrefixCompression_IncreasesPageDensity_PointerEntries(t *te
 	}
 }
 
+func TestLeafColumnar_DoesNotReducePageDensity_PointerEntries(t *testing.T) {
+	plain := leafKeysPerPage(t, BuilderOptions{}, 16, FlagPointer, 0)
+	columnar := leafKeysPerPage(t, BuilderOptions{LeafColumnar: true}, 16, FlagPointer, 0)
+	if columnar < plain {
+		t.Fatalf("expected columnar leaves to not reduce keys/page for pointer entries; plain=%d columnar=%d", plain, columnar)
+	}
+}
+
+func TestLeafColumnarPrefixPacked_DoesNotReducePageDensity_PointerEntries(t *testing.T) {
+	prefixPacked := leafKeysPerPage(t, BuilderOptions{LeafPrefixCompression: true, PackedValuePtr: true}, 16, FlagPointer, 0)
+	columnarPrefixPacked := leafKeysPerPage(t, BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, PackedValuePtr: true}, 16, FlagPointer, 0)
+	if columnarPrefixPacked < prefixPacked {
+		t.Fatalf("expected columnar+prefix+packed leaves to not reduce keys/page for pointer entries; prefix_packed=%d columnar_prefix_packed=%d", prefixPacked, columnarPrefixPacked)
+	}
+}
+
 func BenchmarkLeafPageDensity(b *testing.B) {
 	type variant struct {
 		name              string

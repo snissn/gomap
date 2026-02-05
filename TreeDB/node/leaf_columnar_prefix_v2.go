@@ -7,13 +7,15 @@ import (
 
 // parseLeafColumnarPrefixV2Layout parses the combined columnar+prefix leaf
 // encoding. It reuses the v2 prefix header for shared/suffix lengths (and
-// inline value length varint), then reads explicit key/value offsets (u16 each).
+// inline value length varint). Offsets are implicit:
+//
+//	valOff = headerSize
+//	keyOff = headerSize + valSize
 //
 // The suffix bytes are located at entryStart+keyOff and have length suffixLen.
 // The value bytes/pointer are located at entryStart+valOff.
 func parseLeafColumnarPrefixV2Layout(data []byte, offset int, valPtrSize int) (leafEntryLayout, error) {
-	const offsetsSize = 4 // keyOff(u16) + valOff(u16)
-	if offset+leafPrefixV2HeaderBaseSize+offsetsSize > len(data) {
+	if offset+leafPrefixV2HeaderBaseSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
 
@@ -28,7 +30,7 @@ func parseLeafColumnarPrefixV2Layout(data []byte, offset int, valPtrSize int) (l
 		if shared8 != 0xFF || suffix8 != 0xFF {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
-		if offset+leafPrefixV2HeaderBaseSize+leafPrefixV2HeaderExtSize+offsetsSize > len(data) {
+		if offset+leafPrefixV2HeaderBaseSize+leafPrefixV2HeaderExtSize > len(data) {
 			return leafEntryLayout{}, ErrCorruptedNode
 		}
 		prefixLen = int(getUint16(data[offset+3 : offset+5]))
@@ -58,27 +60,20 @@ func parseLeafColumnarPrefixV2Layout(data []byte, offset int, valPtrSize int) (l
 		headerSize += n
 	}
 
-	if offset+headerSize+offsetsSize > len(data) {
-		return leafEntryLayout{}, ErrCorruptedNode
+	valSize := 0
+	if flags&FlagPointer != 0 {
+		valSize = valPtrSize
+	} else if flags&FlagTombstone == 0 {
+		valSize = valLen
 	}
-	keyOff := int(getUint16(data[offset+headerSize : offset+headerSize+2]))
-	valOff := int(getUint16(data[offset+headerSize+2 : offset+headerSize+4]))
-	headerSize += offsetsSize
-
-	remaining := len(data) - offset
-	if keyOff < headerSize || valOff < headerSize || keyOff > remaining || valOff > remaining {
-		return leafEntryLayout{}, ErrCorruptedNode
-	}
+	valOff := headerSize
+	keyOff := valOff + valSize
 
 	keyStart := offset + keyOff
 	if keyStart+suffixLen > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
 
-	valSize := valLen
-	if flags&FlagPointer != 0 {
-		valSize = valPtrSize
-	}
 	valStart := offset + valOff
 	if valStart+valSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode

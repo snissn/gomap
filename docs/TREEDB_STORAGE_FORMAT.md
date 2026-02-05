@@ -128,18 +128,16 @@ When `leaf columnar` is enabled and `leaf prefix-compressed` is **not** set:
 [ u16 KeyLen ]
 [ u32 ValueLen ]  ignored for pointer entries
 [ u8  Flags ]
-[ u16 KeyOff ]  offset from entry start to key bytes
-[ u16 ValOff ]  offset from entry start to value bytes / pointer bytes
-[ Key bytes (KeyLen) ]  at entryStart+KeyOff
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]  at entryStart+ValOff
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
+[ Key bytes (KeyLen) ]
 ```
 
 Notes:
-- Key/value bytes may be ordered arbitrarily within the entry; offsets are the
-  source of truth.
+- Key/value bytes are laid out with **implicit offsets**:
+  - `valOff = headerSize`
+  - `keyOff = valOff + valSize`
 - Current TreeDB encoder writes value bytes **before** key bytes to improve
-  cache locality for key-only seeks (search touches the key region without
-  pulling inline values into cache).
+  cache locality for key-only seeks.
 
 #### Columnar + prefix-compressed leaf entries (v2)
 
@@ -151,18 +149,18 @@ When both `leaf columnar` and `leaf prefix-compressed` are set (and `leaf prefix
 [ u8 Flags ]
 [ optional: u16 SharedPrefixLen16 | u16 SuffixLen16 ]  if both 8-bit lengths are 0xFF
 [ optional: uvarint ValueLen ]  only for inline, non-tombstone entries
-[ u16 KeyOff ]  offset from entry start to key suffix bytes
-[ u16 ValOff ]  offset from entry start to value bytes / pointer bytes
-[ Key suffix bytes (SuffixLen) ]  at entryStart+KeyOff
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]  at entryStart+ValOff
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
+[ Key suffix bytes (SuffixLen) ]
 ```
 
 Notes:
 - Keys reconstruct the same way as prefix v2: within restart blocks, each entry
   copies `SharedPrefixLen` bytes from the previous full key, then appends the
   suffix bytes.
-- Offsets allow value bytes to be placed away from key bytes; current TreeDB
-  encoder writes value bytes **before** key suffix bytes.
+- Key/value bytes are laid out with **implicit offsets**:
+  - `valOff = headerSize`
+  - `keyOff = valOff + valSize`
+- Current TreeDB encoder writes value bytes **before** key suffix bytes.
 - When `leaf packed ValuePtr` is set, pointer entries use the packed encoding:
   `Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE)`. This requires
   value-log segment offsets stay within `u32` (cached mode enforces this when
