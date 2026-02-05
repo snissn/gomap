@@ -156,6 +156,9 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if db.valueLogDictTrainer != nil {
 		return
 	}
+	if db.valueLogDictKickCh == nil {
+		db.valueLogDictKickCh = make(chan struct{}, 1)
+	}
 	// Trainer only needs an encoder level; use SpeedFastest to minimize CPU overhead
 	// for value-log dict compression (workloads are frequently CPU-bound).
 	cfg := compression.Config{Kind: compression.KindZSTD, Level: zstd.SpeedFastest}
@@ -174,6 +177,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if tr == nil {
 		return
 	}
+	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
 	tr.SetAutotuneCandidates(db.valueLogAutotuneOptions.CandidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
 	db.valueLogDictTrainer = tr
 	db.valueLogDictMetrics = compression.NewMetrics(compression.MetricsOptions{
@@ -198,8 +202,19 @@ func (db *DB) valueLogDictLoop() {
 		case <-db.closeCh:
 			return
 		case <-ticker.C:
+		case <-db.valueLogDictKickCh:
 		}
 		db.applyValueLogDictProfile()
+	}
+}
+
+func (db *DB) valueLogDictKick() {
+	if db == nil || db.valueLogDictKickCh == nil {
+		return
+	}
+	select {
+	case db.valueLogDictKickCh <- struct{}{}:
+	default:
 	}
 }
 

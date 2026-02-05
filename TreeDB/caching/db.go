@@ -1621,6 +1621,7 @@ type DB struct {
 
 	valueLogDictTrainerMu sync.Mutex
 	valueLogDictTrainer   *compression.Trainer
+	valueLogDictKickCh    chan struct{}
 	valueLogDictMetrics   compression.Metrics
 	valueLogDictFrames    struct {
 		total     atomic.Uint64

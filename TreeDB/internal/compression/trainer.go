@@ -88,6 +88,7 @@ type Trainer struct {
 	collectMaxNanos      atomic.Uint64
 
 	lastProfile atomic.Value // *ActiveProfile
+	onAccept    atomic.Value // func(*ActiveProfile)
 
 	// workload counters
 	totalBytesSeen   atomic.Uint64
@@ -248,6 +249,16 @@ func (t *Trainer) SetAutotuneCandidates(candidateK, candidateHistoryBytes []int)
 	if len(candidateHistoryBytes) > 0 {
 		t.candidateHistoryBytes = append([]int(nil), candidateHistoryBytes...)
 	}
+}
+
+// SetOnAccept installs a callback invoked when the trainer accepts a new active
+// profile. The callback must be fast/non-blocking; it may be called from a
+// background goroutine.
+func (t *Trainer) SetOnAccept(fn func(*ActiveProfile)) {
+	if t == nil || fn == nil {
+		return
+	}
+	t.onAccept.Store(fn)
 }
 
 func (t *Trainer) SetAutotuneIOCost(ioNsPerStoredByte float64) {
@@ -1039,6 +1050,11 @@ func (t *Trainer) acceptProfile(profile *ActiveProfile) {
 	t.rollingRatioBase.Store(math.Float64bits(profile.TotalRatio))
 	t.rollingRatioCur.Store(math.Float64bits(profile.TotalRatio))
 	t.lastRejectReason.Store("")
+	if v := t.onAccept.Load(); v != nil {
+		if fn, ok := v.(func(*ActiveProfile)); ok && fn != nil {
+			fn(profile)
+		}
+	}
 }
 
 func (t *Trainer) Stats() TrainerStats {
