@@ -113,6 +113,70 @@ func TestNodeSplit_Internal(t *testing.T) {
 	checkKey(t, n2, 1, "40")
 }
 
+func TestNodeSplit_Leaf_ColumnarV2(t *testing.T) {
+	opts := BuilderOptions{LeafColumnar: true}
+	leftBuilder := NewBuilderWithOptions(make([]byte, page.PageSize), page.PageTypeLeaf, opts)
+	leftBuilder.SetPageID(11)
+
+	for i := 0; i < 32; i++ {
+		key := []byte{byte('a' + (i / 8)), byte('0' + (i % 8)), byte(i)}
+		var val []byte
+		flags := byte(FlagInline)
+		var ptr page.ValuePtr
+		if i%3 == 0 {
+			flags = FlagPointer
+			ptr = page.ValuePtr{Offset: uint64(100 + i), Length: uint32(64 + i), FileID: 3}
+		} else {
+			val = []byte{byte(i), byte(i + 1), byte(i + 2)}
+		}
+		if err := leftBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+			t.Fatalf("add leaf entry %d: %v", i, err)
+		}
+	}
+
+	n1 := leftBuilder.Finish()
+	n2 := NewNode(make([]byte, page.PageSize))
+	n2.SetPageID(12)
+
+	pivot, err := n1.Split(n2)
+	if err != nil {
+		t.Fatalf("split failed: %v", err)
+	}
+	if len(pivot) == 0 {
+		t.Fatalf("expected non-empty pivot")
+	}
+	if !n1.leafColumnarV2() || !n2.leafColumnarV2() {
+		t.Fatalf("expected both nodes to remain columnar v2")
+	}
+
+	total := int(n1.Count() + n2.Count())
+	if total != 32 {
+		t.Fatalf("unexpected total entries after split: got=%d want=32", total)
+	}
+
+	var last []byte
+	for i := uint16(0); i < n1.Count(); i++ {
+		k, _, _, _, err := n1.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("n1 decode idx=%d: %v", i, err)
+		}
+		if len(last) > 0 && bytes.Compare(last, k) >= 0 {
+			t.Fatalf("n1 not strictly sorted at idx=%d", i)
+		}
+		last = append(last[:0], k...)
+	}
+	for i := uint16(0); i < n2.Count(); i++ {
+		k, _, _, _, err := n2.GetLeafEntryView(i)
+		if err != nil {
+			t.Fatalf("n2 decode idx=%d: %v", i, err)
+		}
+		if len(last) > 0 && bytes.Compare(last, k) >= 0 {
+			t.Fatalf("cross-node ordering violated at idx=%d", i)
+		}
+		last = append(last[:0], k...)
+	}
+}
+
 func checkKey(t *testing.T, n *Node, idx uint16, expected string) {
 	entry, _ := n.GetInternalEntry(idx)
 	if !bytes.Equal(entry.Key, []byte(expected)) {
