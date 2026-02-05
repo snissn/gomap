@@ -146,10 +146,13 @@ func BenchmarkValueLogDictReadCPU_NoIO(b *testing.B) {
 						sum := crc.ChecksumParts(header[4:], frame)
 						binary.LittleEndian.PutUint32(header[0:4], sum)
 
-						recordLenNoCRC := uint32(headerWithoutCRC) + uint32(len(frame))
+						recordLenHint := uint32(headerWithoutCRC) + uint32(len(frame))
+						if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+							recordLenHint = 0
+						}
 						ptr := page.ValuePtr{
 							Offset: 4,
-							Length: page.ValuePtrMarkGrouped(recordLenNoCRC, 0),
+							Length: page.ValuePtrMarkGrouped(recordLenHint, 0),
 							FileID: 1,
 						}
 

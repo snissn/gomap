@@ -1504,6 +1504,9 @@ type Options struct {
 	// ValueLogDictTrain configures background dictionary training for value-log frame compression.
 	// TrainBytes <= 0 disables training.
 	ValueLogDictTrain compression.TrainConfig
+	// ValueLogDictMaxK clamps the maximum group size (K) used for dict-compressed
+	// value-log frames. Values <= 0 use the default (32).
+	ValueLogDictMaxK int
 	// ValueLogDictAdaptiveRatio enables adaptive pause of dict compression when payload ratios degrade.
 	// 0 disables.
 	ValueLogDictAdaptiveRatio float64
@@ -1611,6 +1614,7 @@ type DB struct {
 
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain             compression.TrainConfig
+	valueLogDictMaxK              int
 	valueLogDictSampleStride      uint64
 	valueLogDictSampleStrideCount atomic.Uint64
 	valueLogDictAdaptiveRatio     float64
@@ -2304,6 +2308,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	debugFlushTiming := envBool(envDebugFlushTiming)
 
 	valueLogDictTrain := opts.ValueLogDictTrain
+	valueLogDictMaxK := opts.ValueLogDictMaxK
+	if valueLogDictMaxK <= 0 {
+		valueLogDictMaxK = 32
+	}
+	if valueLogDictMaxK < 1 {
+		valueLogDictMaxK = 1
+	}
+	if valueLogDictMaxK > valuelog.MaxFrameK {
+		valueLogDictMaxK = valuelog.MaxFrameK
+	}
 
 	valueLogDictAdaptiveRatio := opts.ValueLogDictAdaptiveRatio
 	valueLogDictMetricsWindow := opts.ValueLogDictMetricsWindowBytes
@@ -2433,6 +2447,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		maxValueLogRetainedBytes:       opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:   opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:              valueLogDictTrain,
+		valueLogDictMaxK:               valueLogDictMaxK,
 		valueLogDictAdaptiveRatio:      valueLogDictAdaptiveRatio,
 		valueLogDictMinPayloadSavings:  minPayloadSavings,
 		valueLogDictMetricsWindow:      valueLogDictMetricsWindow,
@@ -3874,7 +3889,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			}
 		}
 	}
-	k = db.clampValueLogDictK(k)
 	if dictID != 0 && len(dict) > 0 && db.disableJournal {
 		// When the redo/journal log is disabled (ingest-mode), favor maximum frame
 		// grouping for throughput. This reduces per-record framing overhead and
@@ -3882,6 +3896,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		// random point reads are not the dominant cost.
 		k = valuelog.MaxFrameK
 	}
+	k = db.clampValueLogDictK(k)
 
 	storedPayloadBytes := 0
 	rawFrameBytes := 0

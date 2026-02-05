@@ -156,6 +156,15 @@ type ValueLogOptions struct {
 	// DictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
 	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
 	DictMinPayloadSavingsRatio float64
+	// DictMaxK clamps the maximum group size (K) used for value-log dict-compressed
+	// frames.
+	//
+	// Larger K can improve compression ratio (more cross-record matches) and can
+	// reduce framing overhead, but may increase CPU and tail latency due to larger
+	// encode/decode units.
+	//
+	// Values <= 0 use the default (32). Values above the engine maximum are clamped.
+	DictMaxK int
 
 	// CompressionAutotune configures the wall-time value-log compression autotuner.
 	CompressionAutotune valuelog.AutotuneOptions
@@ -177,8 +186,8 @@ type Options struct {
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
-	ReadOnly   bool
-	ChunkSize  int64  // Default 16MiB
+	ReadOnly  bool
+	ChunkSize int64 // Default 16MiB
 	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
 	// store when TreeDB is opened via the public `treedb.Open` wrapper.
 	//
@@ -192,7 +201,7 @@ type Options struct {
 	//
 	// Values <= 0 use a default of 1MiB.
 	TemplateDBChunkSize int64
-	KeepRecent uint64 // Default 10000
+	KeepRecent          uint64 // Default 10000
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks
 	// in parallel during Sync. Values <= 0 use the default (1).
 	PagerSyncConcurrency int

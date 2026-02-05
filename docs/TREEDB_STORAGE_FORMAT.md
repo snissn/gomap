@@ -48,10 +48,29 @@ to an out-of-line value-log record.
 
 - `FileID`: identifies the value-log segment file (see `page.IsValueLogFileID`).
 - `Offset`: byte offset **to the record header immediately after the CRC** (i.e. record start + 4).
-- `Length`: the record length **excluding** the CRC (and may contain pointer flags for grouped frames).
+- `Length`: a packed field that contains pointer flags and an optional record-length hint.
 
 Grouped records (frames with `k>1`) embed a sub-record index inside `Length`
 (see `page.ValuePtrMarkGrouped` / `page.ValuePtrIsGrouped`).
+
+### `ValuePtr.Length` bit layout (grouped pointers)
+
+When the grouped flag is set, the `Length` field packs:
+
+- **Grouped flag**: bit 30 (`0x4000_0000`)
+- **Sub-index** (0–127) within the grouped value-log record:
+  - bits 29..26: sub-index bits 3..0
+  - bit 31: sub-index bit 4
+  - bits 25..24: sub-index bits 6..5
+- **Optional record-length hint**: low 24 bits (bits 23..0), storing the record length
+  excluding CRC (`HeaderSize-4 + ValueLen`) when it fits in 24 bits.
+
+Notes:
+- The record-length hint is **best-effort**: if the record is larger than the
+  representable range, TreeDB stores `0` and readers rely on the value-log record
+  header’s `ValueLen` instead.
+- Compression is encoded in the value-log record header (frame flags), not in
+  `ValuePtr.Length`.
 
 ### Leaf entry encoding (index leaf pages)
 

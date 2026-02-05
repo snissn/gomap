@@ -183,6 +183,10 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		}
 	}
 
+	recordLenHint := recordLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
 	r.pending = r.pending[:0]
 	for i, frameRID := range rids {
 		if frameRID == 0 {
@@ -190,7 +194,7 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 		}
 		ptr := page.ValuePtr{
 			Offset: uint64(start + 4),
-			Length: page.ValuePtrMarkGrouped(recordLen, uint8(i)),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
 			FileID: r.fileID,
 		}
 		var val []byte

@@ -6,11 +6,28 @@ const (
 
 	valuePtrSubIndexMask  uint32 = 0x3c000000
 	valuePtrSubIndexShift        = 26
+
+	// Extended grouped sub-index bits (bits 25..24). These are only interpreted
+	// when the grouped flag is set.
+	valuePtrSubIndexHiMask  uint32 = 0x03000000
+	valuePtrSubIndexHiShift        = 24
 )
+
+// ValuePtrGroupedMaxRecordLen is the maximum record length (excluding CRC) that
+// can be encoded in a grouped ValuePtr length hint.
+//
+// Grouped pointers embed a sub-index in the Length field, leaving 24 bits for a
+// best-effort record length hint. Larger records must set the hint to 0 and
+// rely on the value-log record header's ValueLen instead.
+const ValuePtrGroupedMaxRecordLen uint32 = 0x00ffffff
 
 // ValuePtrRecordLength returns the record length with internal flags stripped.
 func ValuePtrRecordLength(ptr ValuePtr) uint32 {
-	return ptr.Length &^ (valuePtrCompressedMask | valuePtrGroupedMask | valuePtrSubIndexMask)
+	mask := valuePtrCompressedMask | valuePtrGroupedMask | valuePtrSubIndexMask
+	if ValuePtrIsGrouped(ptr) {
+		mask |= valuePtrSubIndexHiMask
+	}
+	return ptr.Length &^ mask
 }
 
 // ValuePtrIsCompressed reports whether the pointer references a compressed value.
@@ -34,6 +51,7 @@ func ValuePtrSubIndex(ptr ValuePtr) uint8 {
 		return 0
 	}
 	idx := uint8((ptr.Length & valuePtrSubIndexMask) >> valuePtrSubIndexShift)
+	idx |= uint8((ptr.Length&valuePtrSubIndexHiMask)>>valuePtrSubIndexHiShift) << 5
 	if ptr.Length&valuePtrCompressedMask != 0 {
 		idx |= 0x10
 	}
@@ -45,11 +63,12 @@ func ValuePtrMarkCompressed(length uint32) uint32 {
 	return length | valuePtrCompressedMask
 }
 
-// ValuePtrMarkGrouped sets the grouped flag and sub-index (0-31) on a record length.
+// ValuePtrMarkGrouped sets the grouped flag and sub-index (0-127) on a record length.
 func ValuePtrMarkGrouped(length uint32, subIndex uint8) uint32 {
-	idx := uint32(subIndex & 0xf)
-	length &^= (valuePtrSubIndexMask | valuePtrCompressedMask)
-	out := length | valuePtrGroupedMask | (idx << valuePtrSubIndexShift)
+	idx := uint32(subIndex & 0x0f)
+	hi := uint32((subIndex >> 5) & 0x03)
+	length &^= (valuePtrSubIndexMask | valuePtrSubIndexHiMask | valuePtrCompressedMask)
+	out := length | valuePtrGroupedMask | (idx << valuePtrSubIndexShift) | (hi << valuePtrSubIndexHiShift)
 	if subIndex&0x10 != 0 {
 		out |= valuePtrCompressedMask
 	}
