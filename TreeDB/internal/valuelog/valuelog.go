@@ -64,6 +64,10 @@ type FrameHeader struct {
 }
 
 func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHeader, error) {
+	return EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
+}
+
+func EncodeFrameWithOptions(dictID uint64, dict []byte, records []Record, level zstd.EncoderLevel, enableEntropy bool) ([]byte, FrameHeader, error) {
 	if len(records) == 0 {
 		return nil, FrameHeader{}, ErrCorrupt
 	}
@@ -76,6 +80,10 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 	if dictID == 0 {
 		dict = nil
 	}
+	if level <= 0 {
+		level = zstd.SpeedFastest
+	}
+	noEntropy := !enableEntropy
 
 	rawTotal := 0
 	maxUint32 := int(^uint32(0))
@@ -107,7 +115,7 @@ func EncodeFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameHea
 	flags := byte(0)
 	encoded := payload
 	if rawTotal > 0 && len(dict) > 0 {
-		codecs := getDictCodecs(dictID, dict)
+		codecs := getDictCodecsWithOpts(dictID, dict, level, noEntropy)
 		if codecs == nil || codecs.encPool == nil {
 			return nil, FrameHeader{}, ErrMissingDict
 		}

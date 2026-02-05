@@ -195,6 +195,8 @@ Advanced tuning is exposed via:
 - `Options.ValueLog.DictTrain` (training budget + sampling knobs)
 - `Options.ValueLog.CompressionAutotune` (when to switch dict/K candidates)
 - `Options.ValueLog.DictMaxK` (clamp max grouped-frame K; default 32)
+- `Options.ValueLog.DictFrameEncodeLevel` (zstd level for dict-compressed frames; default `SpeedFastest`)
+- `Options.ValueLog.DictFrameEnableEntropy` (enable entropy coding; higher ratio, lower throughput)
 
 Notes / gotchas:
 - Dict compression only affects values stored in the value log. If most of your values are inline

@@ -43,8 +43,9 @@ type Writer struct {
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
 	skipDictID             uint64
-	codecsID               uint64
 	codecs                 *dictCodecEntry
+	dictFrameEncodeLevel   zstd.EncoderLevel
+	dictFrameEnableEntropy bool
 	noBenefit              uint8
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
@@ -207,29 +208,31 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:                f,
-		bw:               bufio.NewWriterSize(f, defaultBufferSize),
-		size:             info.Size(),
-		fileID:           fileID,
-		appendMax:        defaultBufferSize,
-		appendBuf:        make([]byte, 0, defaultBufferSize),
-		scratch:          make([]byte, 0, defaultBufferSize),
-		prefixBuf:        make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		syncFn:           func(file *os.File) error { return file.Sync() },
-		clock:            RealClock{},
-		keepSafetyMargin: DefaultKeepSafetyMargin,
+		f:                    f,
+		bw:                   bufio.NewWriterSize(f, defaultBufferSize),
+		size:                 info.Size(),
+		fileID:               fileID,
+		appendMax:            defaultBufferSize,
+		appendBuf:            make([]byte, 0, defaultBufferSize),
+		scratch:              make([]byte, 0, defaultBufferSize),
+		prefixBuf:            make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		dictFrameEncodeLevel: zstd.SpeedFastest,
+		syncFn:               func(file *os.File) error { return file.Sync() },
+		clock:                RealClock{},
+		keepSafetyMargin:     DefaultKeepSafetyMargin,
 	}, nil
 }
 
 func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	return &Writer{
-		bw:               bufio.NewWriterSize(sink, defaultBufferSize),
-		fileID:           fileID,
-		appendMax:        0,
-		scratch:          make([]byte, 0, defaultBufferSize),
-		prefixBuf:        make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		clock:            RealClock{},
-		keepSafetyMargin: DefaultKeepSafetyMargin,
+		bw:                   bufio.NewWriterSize(sink, defaultBufferSize),
+		fileID:               fileID,
+		appendMax:            0,
+		scratch:              make([]byte, 0, defaultBufferSize),
+		prefixBuf:            make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		dictFrameEncodeLevel: zstd.SpeedFastest,
+		clock:                RealClock{},
+		keepSafetyMargin:     DefaultKeepSafetyMargin,
 	}
 }
 
@@ -251,6 +254,27 @@ func (w *Writer) SetClock(clock Clock) {
 		return
 	}
 	w.clock = clock
+}
+
+func normalizeDictFrameEncodeLevel(level zstd.EncoderLevel) zstd.EncoderLevel {
+	switch level {
+	case zstd.SpeedFastest, zstd.SpeedDefault, zstd.SpeedBetterCompression, zstd.SpeedBestCompression:
+		return level
+	default:
+		return zstd.SpeedFastest
+	}
+}
+
+func (w *Writer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
+	if w == nil {
+		return
+	}
+	w.dictFrameEncodeLevel = normalizeDictFrameEncodeLevel(level)
+	w.dictFrameEnableEntropy = enableEntropy
+	w.codecs = nil
+	w.skipDictID = 0
+	w.noBenefit = 0
+	w.skipRemain = 0
 }
 
 func (w *Writer) SetEncodeSampleStride(stride uint64) {
@@ -965,11 +989,14 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			return writeRaw(false, 0)
 		}
 
+		level := normalizeDictFrameEncodeLevel(w.dictFrameEncodeLevel)
+		noEntropy := !w.dictFrameEnableEntropy
+		key := dictCodecKey{dictID: dictID, level: level, noEntropy: noEntropy}
+
 		codecs := w.codecs
-		if codecs == nil || w.codecsID != dictID {
-			codecs = getDictCodecs(dictID, dict)
+		if codecs == nil || codecs.key != key {
+			codecs = getDictCodecsWithOpts(dictID, dict, level, noEntropy)
 			if codecs != nil {
-				w.codecsID = dictID
 				w.codecs = codecs
 			}
 		}
@@ -1309,7 +1336,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}, nil
 	}
 
-	body, header, err := EncodeFrame(dictID, dict, records)
+	body, header, err := EncodeFrameWithOptions(dictID, dict, records, w.dictFrameEncodeLevel, w.dictFrameEnableEntropy)
 	if err != nil {
 		return nil, FrameStats{}, err
 	}

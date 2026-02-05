@@ -61,6 +61,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
+- `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
+- `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
@@ -126,4 +128,14 @@ Run TreeDB twice (dict on/off) and LevelDB twice (block compression on/off) in o
   -treedb-force-value-pointers \\
   -treedb-vlog-dict both \\
   -leveldb-block-compression both
+```
+
+To sweep dict-frame encoder knobs (zstd level × entropy coding), use:
+
+```bash
+./bin/unified-bench -test batch_write -dbs treedb -profile fast -keys 1000000 -format markdown \\
+  -treedb-force-value-pointers \\
+  -treedb-vlog-dict on \\
+  -treedb-vlog-dict-frame-encode-level all \\
+  -treedb-vlog-dict-frame-entropy both
 ```
