@@ -3921,11 +3921,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
-	payloadWriterInto := caps.payloadInto
+	preparedWriterInto := caps.preparedInto
 	rawWriterInto := caps.rawInto
 	hasStats := statsWriter != nil
 	hasInto := statsWriterInto != nil
-	hasPayloadInto := payloadWriterInto != nil
+	hasPreparedInto := preparedWriterInto != nil
 	hasRawInto := rawWriterInto != nil
 	startSize := w.Size()
 
@@ -4004,23 +4004,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		ptrs = getValueLogPtrs(len(records))
 	}
 	pipelineUsed := false
-	if err == nil && !rawBatchUsed && dictID != 0 && len(dict) > 0 && hasPayloadInto {
+	if err == nil && !rawBatchUsed && dictID != 0 && len(dict) > 0 && hasPreparedInto {
 		frameCount := (len(records) + k - 1) / k
-		// Heuristic: the parallel pipeline has overhead (goroutines/channels and
-		// an extra copy of encoded bytes into the writer). It is only a win when
-		// frames are large enough that dict+zstd encode dominates.
-		//
-		// We gate on average raw bytes per frame rather than total bytes because
-		// small batch sizes can otherwise invoke the pipeline for many tiny frames
-		// and regress throughput.
-		const minAvgRawBytesPerFrame = 16 << 10
-		avgFrameBytes := 0
-		if frameCount > 0 {
-			avgFrameBytes = rawPayloadBytes / frameCount
-		}
-		if frameCount > 1 && db.valueLogDictFramePipelineWorkers > 1 && avgFrameBytes >= minAvgRawBytesPerFrame {
+		if frameCount > 1 && db.valueLogDictFramePipelineWorkers > 1 {
 			rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, framesKept, encodeNsTotal, encodeRawBytes, err =
-				db.appendValueLogDictFramesPipeline(payloadWriterInto, dictID, dict, records, k, ptrs)
+				db.appendValueLogDictFramesPipeline(preparedWriterInto, dictID, dict, records, rawPayloadBytes, k, ptrs)
 			pipelineUsed = err == nil
 		}
 	}
@@ -4043,10 +4031,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				caps = l.vlogCaps
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
-				payloadWriterInto = caps.payloadInto
 				hasStats = statsWriter != nil
 				hasInto = statsWriterInto != nil
-				hasPayloadInto = payloadWriterInto != nil
 			}
 
 			end := i + k

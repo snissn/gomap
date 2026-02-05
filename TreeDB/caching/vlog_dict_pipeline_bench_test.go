@@ -61,6 +61,7 @@ func BenchmarkValueLogDictFramePipelineThroughput_NoIO(b *testing.B) {
 	}
 
 	rawBytesPerOp := int64(valueCnt * valueSize)
+	rawPayloadBytes := int(rawBytesPerOp)
 	b.SetBytes(rawBytesPerOp)
 
 	b.Run("sequential", func(b *testing.B) {
@@ -106,14 +107,14 @@ func BenchmarkValueLogDictFramePipelineThroughput_NoIO(b *testing.B) {
 		}
 
 		ptrs := make([]page.ValuePtr, len(records))
-		if _, _, _, _, _, _, _, _, err := db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, k, ptrs); err != nil {
+		if _, _, _, _, _, _, _, _, err := db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, rawPayloadBytes, k, ptrs); err != nil {
 			b.Fatalf("warmup appendValueLogDictFramesPipeline: %v", err)
 		}
 
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, _, _, _, _, _, _, _, err := db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, k, ptrs); err != nil {
+			if _, _, _, _, _, _, _, _, err := db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, rawPayloadBytes, k, ptrs); err != nil {
 				b.Fatalf("appendValueLogDictFramesPipeline: %v", err)
 			}
 		}

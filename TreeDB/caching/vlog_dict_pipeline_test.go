@@ -59,6 +59,7 @@ func TestValueLogDictFramePipeline_OrderAndPointers(t *testing.T) {
 	for i := range records {
 		records[i] = valuelog.Record{RID: uint64(i + 1), Value: values[i]}
 	}
+	rawPayloadBytes := valueSize * valueCnt
 	ptrs := make([]page.ValuePtr, len(records))
 
 	run := func(t *testing.T, maxInFlight int64) {
@@ -82,7 +83,7 @@ func TestValueLogDictFramePipeline_OrderAndPointers(t *testing.T) {
 		}
 
 		rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, _, _, _, err :=
-			db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, k, ptrs)
+			db.appendValueLogDictFramesPipeline(writer, dictID, dict, records, rawPayloadBytes, k, ptrs)
 		if err != nil {
 			t.Fatalf("appendValueLogDictFramesPipeline: %v", err)
 		}

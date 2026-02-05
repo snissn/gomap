@@ -21,17 +21,22 @@ type framePayloadWriterInto interface {
 	AppendFrameFromPayloadWithStatsInto(dictID uint64, rids []uint64, offsets []uint32, rawPayloadBytes int, payload []byte, attempted bool, kept bool, encodeNs int64, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
 }
 
+type framePreparedWriterInto interface {
+	AppendPreparedGroupedRecordInto(prep valuelog.PreparedGroupedRecord, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
+}
+
 type rawFrameBatchWriterInto interface {
 	AppendRawFramesWritevInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
 }
 
 type vlogWriterCaps struct {
-	writer      valueWriter
-	keep        keepPolicySetter
-	stats       frameStatsWriter
-	statsInto   frameStatsWriterInto
-	payloadInto framePayloadWriterInto
-	rawInto     rawFrameBatchWriterInto
+	writer       valueWriter
+	keep         keepPolicySetter
+	stats        frameStatsWriter
+	statsInto    frameStatsWriterInto
+	payloadInto  framePayloadWriterInto
+	preparedInto framePreparedWriterInto
+	rawInto      rawFrameBatchWriterInto
 }
 
 func computeVlogWriterCaps(w valueWriter) vlogWriterCaps {
@@ -51,6 +56,9 @@ func computeVlogWriterCaps(w valueWriter) vlogWriterCaps {
 	}
 	if v, ok := any(w).(framePayloadWriterInto); ok {
 		caps.payloadInto = v
+	}
+	if v, ok := any(w).(framePreparedWriterInto); ok {
+		caps.preparedInto = v
 	}
 	if v, ok := any(w).(rawFrameBatchWriterInto); ok {
 		caps.rawInto = v

@@ -10,8 +10,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-var vlogDictPipelineEncPool sync.Pool // stores []byte
-var vlogDictPipelineJobPool sync.Pool // stores *vlogDictPipelineJob
+var vlogDictPipelineRecordPool sync.Pool // stores []byte
+var vlogDictPipelineJobPool sync.Pool    // stores *vlogDictPipelineJob
 
 func getVlogDictPipelineBuf(p *sync.Pool, capacity int) []byte {
 	if capacity <= 0 {
@@ -118,23 +118,20 @@ type vlogDictPipelineJob struct {
 	enableEntropy bool
 	results       chan<- *vlogDictPipelineJob
 
-	frameIdx int
-	start    int
-	end      int
-	k        int
+	jobIdx     int
+	frameStart int
+	frameEnd   int
+	k          int
 
+	// rawBytes is the sum of raw payload bytes for all frames in this job (used
+	// only for in-flight accounting).
 	rawBytes int
-
-	rids    [valuelog.MaxFrameK]uint64
-	offsets [valuelog.MaxFrameK + 1]uint32
 
 	records []valuelog.Record
 
 	// output
-	encoded  []byte
-	kept     bool
-	encodeNs int64
-	err      error
+	preps []valuelog.PreparedGroupedRecord
+	err   error
 }
 
 type vlogDictFramePipeline struct {
@@ -182,7 +179,17 @@ func (db *DB) runVlogDictFramePipelineWorker(jobs <-chan *vlogDictPipelineJob) {
 	}
 	// Per-worker scratch to avoid per-frame allocations.
 	var rawScratch []byte
-	const maxKeepScratch = 16 << 20 // 16 MiB
+	var encScratch []byte
+	const (
+		maxKeepRawScratch     = 16 << 20 // 16 MiB
+		maxKeepEncScratch     = 4 << 20  // 4 MiB
+		maxKeepPreparedRecord = 8 << 20  // 8 MiB
+	)
+
+	var (
+		rids    [valuelog.MaxFrameK]uint64
+		offsets [valuelog.MaxFrameK + 1]uint32
+	)
 
 	for {
 		select {
@@ -193,38 +200,97 @@ func (db *DB) runVlogDictFramePipelineWorker(jobs <-chan *vlogDictPipelineJob) {
 				continue
 			}
 
-			if job.rawBytes > 0 {
-				if cap(rawScratch) < job.rawBytes && job.rawBytes <= maxKeepScratch {
-					rawScratch = make([]byte, job.rawBytes)
-				}
-				var payload []byte
-				if job.rawBytes <= maxKeepScratch {
-					payload = rawScratch[:job.rawBytes]
+			frames := job.frameEnd - job.frameStart
+			if frames <= 0 || job.k <= 0 {
+				job.err = errors.New("cachingdb: invalid pipeline job")
+			} else {
+				if cap(job.preps) < frames {
+					job.preps = make([]valuelog.PreparedGroupedRecord, frames)
 				} else {
-					payload = make([]byte, job.rawBytes)
-				}
-				off := 0
-				for i := 0; i < job.k; i++ {
-					off += copy(payload[off:], job.records[i].Value)
+					job.preps = job.preps[:frames]
+					for i := range job.preps {
+						job.preps[i] = valuelog.PreparedGroupedRecord{}
+					}
 				}
 
-				// Preallocate destination close to raw size (compressed payloads
-				// should be smaller; allow a small overhead to avoid reallocs on
-				// incompressible inputs).
-				dst := getVlogDictPipelineBuf(&vlogDictPipelineEncPool, job.rawBytes+64)
-				encoded, encErr := valuelog.CompressPayloadWithDictInto(job.dictID, job.dict, payload, job.encodeLevel, job.enableEntropy, dst[:0])
-				if encErr != nil {
-					job.err = encErr
-					putVlogDictPipelineBuf(&vlogDictPipelineEncPool, dst, 4<<20)
-				} else {
-					if len(encoded) < job.rawBytes {
-						job.kept = true
-						job.encoded = encoded
-					} else {
-						job.kept = false
-						putVlogDictPipelineBuf(&vlogDictPipelineEncPool, dst, 4<<20)
-						job.encoded = nil
+				for frameIdx := 0; frameIdx < frames; frameIdx++ {
+					start := frameIdx * job.k
+					end := start + job.k
+					if end > len(job.records) {
+						end = len(job.records)
 					}
+					if start >= end {
+						job.err = errors.New("cachingdb: pipeline frame bounds out of range")
+						break
+					}
+					recs := job.records[start:end]
+					frameK := len(recs)
+
+					rawBytes := 0
+					offsets[0] = 0
+					for i := 0; i < frameK; i++ {
+						rid := recs[i].RID
+						if rid == 0 {
+							job.err = errors.New("cachingdb: missing rid")
+							break
+						}
+						rids[i] = rid
+						rawBytes += len(recs[i].Value)
+						offsets[i+1] = uint32(rawBytes)
+					}
+					if job.err != nil {
+						break
+					}
+
+					var rawPayload []byte
+					if rawBytes > 0 {
+						if rawBytes <= maxKeepRawScratch {
+							if cap(rawScratch) < rawBytes {
+								rawScratch = make([]byte, rawBytes)
+							}
+							rawPayload = rawScratch[:rawBytes]
+						} else {
+							rawPayload = make([]byte, rawBytes)
+						}
+						off := 0
+						for i := 0; i < frameK; i++ {
+							off += copy(rawPayload[off:], recs[i].Value)
+						}
+					}
+
+					attempted := job.dictID != 0 && len(job.dict) > 0 && rawBytes > 0
+					kept := false
+					payload := rawPayload
+
+					if attempted {
+						targetCap := rawBytes + (rawBytes / 16) + 64
+						if targetCap < rawBytes+64 {
+							targetCap = rawBytes + 64
+						}
+						if rawBytes <= maxKeepEncScratch && cap(encScratch) < targetCap {
+							encScratch = make([]byte, 0, targetCap)
+						}
+						encoded, encErr := valuelog.CompressPayloadWithDictInto(job.dictID, job.dict, rawPayload, job.encodeLevel, job.enableEntropy, encScratch[:0])
+						if encErr != nil {
+							job.err = encErr
+							break
+						}
+						if len(encoded) < rawBytes {
+							kept = true
+							payload = encoded
+						}
+					}
+
+					prefixLen := valuelog.FrameHeaderSize + (frameK * 8) + ((frameK + 1) * 4)
+					recordLen := valuelog.HeaderSize + prefixLen + len(payload)
+					recordBuf := getVlogDictPipelineBuf(&vlogDictPipelineRecordPool, recordLen)
+					prep, prepErr := valuelog.BuildPreparedGroupedRecordFromPayloadInto(recordBuf[:0], job.dictID, rids[:frameK], offsets[:frameK+1], rawBytes, payload, attempted, kept, 0)
+					if prepErr != nil {
+						putVlogDictPipelineBuf(&vlogDictPipelineRecordPool, recordBuf, maxKeepPreparedRecord)
+						job.err = prepErr
+						break
+					}
+					job.preps[frameIdx] = prep
 				}
 			}
 
@@ -236,14 +302,14 @@ func (db *DB) runVlogDictFramePipelineWorker(jobs <-chan *vlogDictPipelineJob) {
 	}
 }
 
-func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID uint64, dict []byte, records []valuelog.Record, k int, ptrs []page.ValuePtr) (rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, framesKept int, encodeNsTotal int64, encodeRawBytes int, err error) {
+func (db *DB) appendValueLogDictFramesPipeline(w framePreparedWriterInto, dictID uint64, dict []byte, records []valuelog.Record, rawPayloadBytes int, k int, ptrs []page.ValuePtr) (rawFrameBytes, storedPayloadBytes, frameRecords, framesTotal, framesAttempted, framesKept int, encodeNsTotal int64, encodeRawBytes int, err error) {
 	if db == nil {
 		return 0, 0, 0, 0, 0, 0, 0, 0, errors.New("cachingdb: nil db")
 	}
 	if w == nil {
 		return 0, 0, 0, 0, 0, 0, 0, 0, errors.New("cachingdb: nil writer")
 	}
-	if dictID == 0 || len(dict) == 0 || len(records) == 0 || k <= 0 {
+	if dictID == 0 || len(dict) == 0 || len(records) == 0 || rawPayloadBytes < 0 || k <= 0 {
 		return 0, 0, 0, 0, 0, 0, 0, 0, errors.New("cachingdb: invalid pipeline args")
 	}
 	if len(ptrs) < len(records) {
@@ -267,11 +333,39 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 		return 0, 0, 0, 0, 0, 0, 0, 0, errors.New("cachingdb: too few frames for pipeline")
 	}
 
+	const targetRawBytesPerJob = 256 << 10
+	framesPerJob := 1
+	if rawPayloadBytes > 0 && frameCount > 0 {
+		avgFrameBytes := rawPayloadBytes / frameCount
+		if avgFrameBytes > 0 {
+			framesPerJob = targetRawBytesPerJob / avgFrameBytes
+		}
+	}
+	if framesPerJob < 1 {
+		framesPerJob = 1
+	}
+	if framesPerJob > 64 {
+		framesPerJob = 64
+	}
+
+	minJobs := workers * 2
+	if minJobs < 1 {
+		minJobs = 1
+	}
+	maxFramesPerJob := (frameCount + minJobs - 1) / minJobs
+	if maxFramesPerJob < 1 {
+		maxFramesPerJob = 1
+	}
+	if framesPerJob > maxFramesPerJob {
+		framesPerJob = maxFramesPerJob
+	}
+	jobCount := (frameCount + framesPerJob - 1) / framesPerJob
+
 	pipeline := db.ensureVlogDictFramePipeline()
 	if pipeline == nil {
 		return 0, 0, 0, 0, 0, 0, 0, 0, errors.New("cachingdb: pipeline unavailable")
 	}
-	call := getVlogDictPipelineCall(workers, frameCount)
+	call := getVlogDictPipelineCall(workers, jobCount)
 	defer putVlogDictPipelineCall(call)
 	results := call.results
 	pending := call.pending
@@ -282,13 +376,21 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 
 	abort := error(nil)
 
-	scheduleFrame := func(frameIdx int) *vlogDictPipelineJob {
-		start := frameIdx * k
-		end := start + k
-		if end > len(records) {
-			end = len(records)
+	scheduleJob := func(jobIdx int) *vlogDictPipelineJob {
+		frameStart := jobIdx * framesPerJob
+		frameEnd := frameStart + framesPerJob
+		if frameEnd > frameCount {
+			frameEnd = frameCount
 		}
-		frameK := end - start
+		recordStart := frameStart * k
+		recordEnd := frameEnd * k
+		if recordEnd > len(records) {
+			recordEnd = len(records)
+		}
+		if recordStart >= recordEnd {
+			return nil
+		}
+
 		jobAny := vlogDictPipelineJobPool.Get()
 		var job *vlogDictPipelineJob
 		if jobAny != nil {
@@ -297,27 +399,26 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 		if job == nil {
 			job = &vlogDictPipelineJob{}
 		}
+		preps := job.preps
+		rawBytes := 0
+		for i := recordStart; i < recordEnd; i++ {
+			rawBytes += len(records[i].Value)
+		}
+
 		*job = vlogDictPipelineJob{
 			dictID:        dictID,
 			dict:          dict,
 			encodeLevel:   encodeLevel,
 			enableEntropy: enableEntropy,
 			results:       results,
-			frameIdx:      frameIdx,
-			start:         start,
-			end:           end,
-			k:             frameK,
-			records:       records[start:end],
+			jobIdx:        jobIdx,
+			frameStart:    frameStart,
+			frameEnd:      frameEnd,
+			k:             k,
+			rawBytes:      rawBytes,
+			records:       records[recordStart:recordEnd],
 		}
-		off := 0
-		job.offsets[0] = 0
-		for i := 0; i < frameK; i++ {
-			rec := records[start+i]
-			job.rids[i] = rec.RID
-			off += len(rec.Value)
-			job.offsets[i+1] = uint32(off)
-		}
-		job.rawBytes = off
+		job.preps = preps[:0]
 		return job
 	}
 
@@ -326,21 +427,35 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 			return
 		}
 		inFlightBytes -= int64(job.rawBytes)
-		if job.encoded != nil {
-			putVlogDictPipelineBuf(&vlogDictPipelineEncPool, job.encoded, 4<<20)
-			job.encoded = nil
+		if job.preps != nil {
+			for i := range job.preps {
+				rec := job.preps[i].Record
+				if len(rec) > 0 {
+					putVlogDictPipelineBuf(&vlogDictPipelineRecordPool, rec, 8<<20)
+					job.preps[i] = valuelog.PreparedGroupedRecord{}
+				}
+			}
+			job.preps = job.preps[:0]
 		}
 		job.records = nil
 		job.dict = nil
 		job.results = nil
-		*job = vlogDictPipelineJob{}
+		job.dictID = 0
+		job.encodeLevel = 0
+		job.enableEntropy = false
+		job.jobIdx = 0
+		job.frameStart = 0
+		job.frameEnd = 0
+		job.k = 0
+		job.rawBytes = 0
+		job.err = nil
 		vlogDictPipelineJobPool.Put(job)
 	}
 
 	var nextJob *vlogDictPipelineJob
 
 	writeReady := func() {
-		for nextWrite < frameCount && pending[nextWrite] != nil {
+		for nextWrite < jobCount && pending[nextWrite] != nil {
 			job := pending[nextWrite]
 			pending[nextWrite] = nil
 
@@ -353,45 +468,39 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 				continue
 			}
 
-			payload := []byte(nil)
-			kept := job.kept
-			if kept && len(job.encoded) > 0 {
-				payload = job.encoded
-			} else {
-				kept = false
-			}
-			if !kept && job.rawBytes > 0 {
-				// Rare path: we didn't keep compression (size inflation); build a
-				// contiguous payload for the writer API.
-				payload = make([]byte, job.rawBytes)
-				off := 0
-				for i := 0; i < job.k; i++ {
-					off += copy(payload[off:], job.records[i].Value)
+			for frameIdx := 0; frameIdx < len(job.preps); frameIdx++ {
+				prep := job.preps[frameIdx]
+				if prep.K <= 0 || len(prep.Record) == 0 {
+					abort = errors.New("cachingdb: missing prepared record")
+					break
 				}
-			}
-			attempted := dictID != 0 && len(dict) > 0 && job.rawBytes > 0
-			dst := ptrs[job.start:job.end]
-			_, stats, wErr := w.AppendFrameFromPayloadWithStatsInto(dictID, job.rids[:job.k], job.offsets[:job.k+1], job.rawBytes, payload, attempted, kept, job.encodeNs, dst)
-			if wErr != nil {
-				abort = wErr
-				freeJob(job)
-				nextWrite++
-				continue
-			}
+				recordStart := (job.frameStart + frameIdx) * k
+				recordEnd := recordStart + prep.K
+				if recordStart < 0 || recordStart >= len(ptrs) || recordEnd > len(ptrs) || recordEnd < recordStart {
+					abort = errors.New("cachingdb: invalid prepared record bounds")
+					break
+				}
+				dst := ptrs[recordStart:recordEnd]
+				_, stats, wErr := w.AppendPreparedGroupedRecordInto(prep, dst)
+				if wErr != nil {
+					abort = wErr
+					break
+				}
 
-			rawFrameBytes += stats.RawPayloadBytes
-			storedPayloadBytes += stats.StoredPayloadBytes
-			frameRecords += stats.Records
-			framesTotal++
-			if stats.Attempted {
-				framesAttempted++
-			}
-			if stats.Kept {
-				framesKept++
-			}
-			if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
-				encodeNsTotal += stats.EncodeNs
-				encodeRawBytes += stats.RawPayloadBytes
+				rawFrameBytes += stats.RawPayloadBytes
+				storedPayloadBytes += stats.StoredPayloadBytes
+				frameRecords += stats.Records
+				framesTotal++
+				if stats.Attempted {
+					framesAttempted++
+				}
+				if stats.Kept {
+					framesKept++
+				}
+				if stats.EncodeNs > 0 && stats.RawPayloadBytes > 0 {
+					encodeNsTotal += stats.EncodeNs
+					encodeRawBytes += stats.RawPayloadBytes
+				}
 			}
 
 			freeJob(job)
@@ -399,7 +508,7 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 		}
 	}
 
-	for nextWrite < frameCount {
+	for nextWrite < jobCount {
 		// Yield periodically so other goroutines can make progress, matching the
 		// sequential append loop behavior.
 		if nextWrite > 0 && nextWrite%256 == 0 {
@@ -409,14 +518,18 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 		if abort != nil {
 			break
 		}
-		if received >= sent && sent >= frameCount {
+		if received >= sent && sent >= jobCount {
 			break
 		}
 
-		canSend := abort == nil && sent < frameCount
+		canSend := abort == nil && sent < jobCount
 		if canSend && nextJob == nil {
-			nextJob = scheduleFrame(sent)
-			inFlightBytes += int64(nextJob.rawBytes)
+			nextJob = scheduleJob(sent)
+			if nextJob == nil {
+				abort = errors.New("cachingdb: failed to schedule pipeline job")
+			} else {
+				inFlightBytes += int64(nextJob.rawBytes)
+			}
 		}
 		if canSend && nextJob != nil {
 			oversize := int64(nextJob.rawBytes) > maxInFlight
@@ -436,7 +549,7 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 			case job := <-results:
 				received++
 				if job != nil {
-					pending[job.frameIdx] = job
+					pending[job.jobIdx] = job
 					if job.err != nil && abort == nil {
 						abort = job.err
 					}
@@ -450,7 +563,7 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 			job := <-results
 			received++
 			if job != nil {
-				pending[job.frameIdx] = job
+				pending[job.jobIdx] = job
 				if job.err != nil && abort == nil {
 					abort = job.err
 				}
@@ -469,10 +582,10 @@ func (db *DB) appendValueLogDictFramesPipeline(w framePayloadWriterInto, dictID 
 	for received < sent {
 		job := <-results
 		received++
-		pending[job.frameIdx] = job
+		pending[job.jobIdx] = job
 	}
 
-	for nextWrite < frameCount {
+	for nextWrite < jobCount {
 		writeReady()
 		if pending[nextWrite] == nil {
 			break
