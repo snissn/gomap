@@ -49,6 +49,10 @@ func comparePrefixedKey(prefix, suffix, key []byte) int {
 	return bytes.Compare(suffix, key[len(prefix):])
 }
 
+func compareInternalSuffix(suffix, keySuffix []byte) int {
+	return bytes.Compare(suffix, keySuffix)
+}
+
 // InternalEntry represents a parsed entry from an Internal Node.
 type InternalEntry struct {
 	Key         []byte
@@ -175,6 +179,29 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 		if count == 0 {
 			return 0, false
 		}
+		keySuffix := key
+		if len(prefix) > 0 {
+			prefixLen := len(prefix)
+			if len(key) < prefixLen {
+				cmp := bytes.Compare(prefix[:len(key)], key)
+				if cmp != 0 {
+					if cmp < 0 {
+						return count - 1, true
+					}
+					return 0, false
+				}
+				// key is a strict prefix of all entry keys.
+				return 0, false
+			}
+			cmp := bytes.Compare(prefix, key[:prefixLen])
+			if cmp != 0 {
+				if cmp < 0 {
+					return count - 1, true
+				}
+				return 0, false
+			}
+			keySuffix = key[prefixLen:]
+		}
 		if count <= smallSearchThreshold {
 			last := -1
 			for i := 0; i < int(count); i++ {
@@ -189,7 +216,7 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 				if suffixLen < 0 || suffixEnd > footerStart {
 					return 0, false
 				}
-				cmp := comparePrefixedKey(prefix, data[suffixStart:suffixEnd], key)
+				cmp := compareInternalSuffix(data[suffixStart:suffixEnd], keySuffix)
 				if cmp <= 0 {
 					last = i
 					continue
@@ -217,7 +244,7 @@ func (n *Node) SearchInternal(key []byte) (uint16, bool) {
 				return 0, false
 			}
 
-			cmp := comparePrefixedKey(prefix, data[suffixStart:suffixEnd], key)
+			cmp := compareInternalSuffix(data[suffixStart:suffixEnd], keySuffix)
 			if cmp <= 0 {
 				i = h + 1
 			} else {
