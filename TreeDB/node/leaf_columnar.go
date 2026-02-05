@@ -27,6 +27,9 @@ func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntry
 
 	keyLen := int(getUint16(data[offset : offset+2]))
 	valLen := int(binary.LittleEndian.Uint32(data[offset+2 : offset+6]))
+	if valLen < 0 {
+		return leafEntryLayout{}, ErrCorruptedNode
+	}
 	flags := data[offset+6]
 
 	valSize := 0
