@@ -107,7 +107,9 @@ func predictRawFallbackFlushes(records []Record, k, maxBytes, existingBuffered i
 				flushes++
 				queued = 0
 			}
-			flushes += (totalLen + maxBytes - 1) / maxBytes
+			// Large frames bypass appendBuf and write directly once in the
+			// fallback path; do not model these as maxBytes-sized splits.
+			flushes++
 			continue
 		}
 		if queued+totalLen > maxBytes {

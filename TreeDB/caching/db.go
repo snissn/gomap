@@ -854,6 +854,12 @@ func (db *DB) SetDictStore(store DictStore) {
 	db.valueLogDictBytesID = 0
 	db.valueLogDictBytes = nil
 	db.valueLogDictBytesMu.Unlock()
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		l.vlogDictBytesMu.Lock()
+		l.vlogDictBytes = nil
+		l.vlogDictBytesMu.Unlock()
+	}
 	if db.valueLogReader != nil && store != nil {
 		db.valueLogReader.SetDictLookup(func(dictID uint64) ([]byte, error) {
 			return store.GetDictBytes(context.Background(), dictID)
@@ -1931,8 +1937,9 @@ type DB struct {
 	autoCheckpointMaxWALBytes              atomic.Int64
 
 	// testing hooks
-	testOnVlogFlush func(laneID int)
-	testOnVlogSync  func(laneID int)
+	testOnVlogFlush      func(laneID int)
+	testOnVlogSync       func(laneID int)
+	testBeforeVlogUnlock func(laneID int)
 }
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -5274,6 +5281,16 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			bytesWrittenTotal += bytesWrittenLive
 		}
 	}
+	if err == nil {
+		if durableBoundary {
+			l.vlogDirty.Store(false)
+		} else if bytesWrittenLive > 0 {
+			l.vlogDirty.Store(true)
+		}
+	}
+	if db.testBeforeVlogUnlock != nil {
+		db.testBeforeVlogUnlock(int(l.id))
+	}
 	l.vlogMu.Unlock()
 	if len(retainPaths) > 0 {
 		for _, path := range retainPaths {
@@ -5283,11 +5300,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err != nil {
 		putValueLogPtrs(ptrs)
 		return nil, err
-	}
-	if durableBoundary {
-		l.vlogDirty.Store(false)
-	} else if bytesWrittenLive > 0 {
-		l.vlogDirty.Store(true)
 	}
 	if framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))
@@ -5483,6 +5495,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				l.vlogRetainedPath = l.vlogPath
 				retainPath = l.vlogPath
 			}
+			if err == nil {
+				if durableBoundary {
+					l.vlogDirty.Store(false)
+				} else if totalBytes > 0 {
+					l.vlogDirty.Store(true)
+				}
+			}
+			if db.testBeforeVlogUnlock != nil {
+				db.testBeforeVlogUnlock(int(l.id))
+			}
 			l.vlogMu.Unlock()
 			if err != nil {
 				return page.ValuePtr{}, "", err
@@ -5493,11 +5515,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			}
 			if stats.Kept {
 				db.valueLogDictFrames.kept.Add(1)
-			}
-			if durableBoundary {
-				l.vlogDirty.Store(false)
-			} else if totalBytes > 0 {
-				l.vlogDirty.Store(true)
 			}
 			if totalBytes > 0 {
 				l.vlogLiveBytes.Add(totalBytes)
@@ -5630,6 +5647,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogRetainedPath = l.vlogPath
 		retainPath = l.vlogPath
 	}
+	if err == nil {
+		if durableBoundary {
+			l.vlogDirty.Store(false)
+		} else if totalBytes > 0 {
+			l.vlogDirty.Store(true)
+		}
+	}
+	if db.testBeforeVlogUnlock != nil {
+		db.testBeforeVlogUnlock(int(l.id))
+	}
 	l.vlogMu.Unlock()
 	if err != nil {
 		return page.ValuePtr{}, "", err
@@ -5640,11 +5667,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 	if stats.Kept {
 		db.valueLogDictFrames.kept.Add(1)
-	}
-	if durableBoundary {
-		l.vlogDirty.Store(false)
-	} else if totalBytes > 0 {
-		l.vlogDirty.Store(true)
 	}
 	if dictID != 0 && len(dict) > 0 {
 		db.valueLogDictObservePayload(uint64(stats.RawPayloadBytes), uint64(stats.StoredPayloadBytes), stats.Records)

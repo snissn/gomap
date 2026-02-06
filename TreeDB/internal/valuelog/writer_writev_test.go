@@ -149,6 +149,27 @@ func TestShouldUseRawWritev_RespectsBatchAndMinAvgKnobs(t *testing.T) {
 	}
 }
 
+func TestPredictRawFallbackFlushes_LargeFrameUsesSingleDirectWrite(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("a"), 4096)},
+	}
+	const (
+		k            = 1
+		maxBytes     = 512
+		withBuffered = 128
+	)
+
+	gotBuffered := predictRawFallbackFlushes(records, k, maxBytes, withBuffered)
+	if gotBuffered != 2 {
+		t.Fatalf("predictRawFallbackFlushes(with buffered)=%d want 2", gotBuffered)
+	}
+
+	gotEmpty := predictRawFallbackFlushes(records, k, maxBytes, 0)
+	if gotEmpty != 1 {
+		t.Fatalf("predictRawFallbackFlushes(no buffered)=%d want 1", gotEmpty)
+	}
+}
+
 func BenchmarkRawWritevStrategy_ValueSizes(b *testing.B) {
 	if !writevSupported {
 		b.Skip("writev not supported on this platform")
