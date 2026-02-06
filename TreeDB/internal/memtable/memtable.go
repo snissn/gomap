@@ -115,7 +115,7 @@ func NewWithCapacityModeAndIndexer(capacity int, mode Mode, indexer *HashSortedI
 	case ModeSkiplist:
 		return NewWithCapacity(capacity), nil
 	case ModeHashSorted:
-		return NewHashSortedWithIndexer(indexer), nil
+		return NewHashSortedWithCapacityAndIndexer(capacity, indexer), nil
 	case ModeBTree:
 		return NewBTree(), nil
 	default:

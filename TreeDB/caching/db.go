@@ -2166,6 +2166,35 @@ func (db *DB) noteWriteKey(key []byte) {
 	stats.hasLastKey = true
 }
 
+// noteWriteSortedRun records a strictly increasing key run in one shot.
+func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
+	if !db.memtableAdaptive || count <= 0 {
+		return
+	}
+	stats := &db.memtableStats
+	stats.writes.Add(uint64(count))
+	if len(last) == 0 {
+		stats.lastKeyMu.Lock()
+		stats.hasLastKey = false
+		stats.lastKeyMu.Unlock()
+		return
+	}
+	seqAdds := uint64(0)
+	if count > 1 {
+		seqAdds += uint64(count - 1)
+	}
+	stats.lastKeyMu.Lock()
+	if len(first) > 0 && stats.hasLastKey && bytes.Compare(stats.lastKey, first) < 0 {
+		seqAdds++
+	}
+	stats.lastKey = append(stats.lastKey[:0], last...)
+	stats.hasLastKey = true
+	stats.lastKeyMu.Unlock()
+	if seqAdds > 0 {
+		stats.seqWrites.Add(seqAdds)
+	}
+}
+
 func (db *DB) noteIterator(start, end []byte) {
 	if !db.memtableAdaptive {
 		return
@@ -10218,10 +10247,7 @@ func (b *Batch) writeRegular(sync bool) error {
 		useStream := b.streamEligible
 		if useStream {
 			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-				applier.ApplyStealSortedBatch(entries, func(key []byte) {
-					shard.rng.add(key)
-					b.db.noteWriteKey(key)
-				})
+				applier.ApplyStealSortedBatch(entries, nil)
 			} else {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
@@ -10237,10 +10263,15 @@ func (b *Batch) writeRegular(sync bool) error {
 							shard.mem.SetSteal(op.Key, op.Value)
 						}
 					}
-					shard.rng.add(op.Key)
-					b.db.noteWriteKey(op.Key)
 				}
 			}
+			first := entries[0].Key
+			last := entries[len(entries)-1].Key
+			shard.rng.add(first)
+			if len(entries) > 1 {
+				shard.rng.add(last)
+			}
+			b.db.noteWriteSortedRun(first, last, len(entries))
 		} else {
 			for _, op := range entries {
 				if op.Type == batch.OpDelete {

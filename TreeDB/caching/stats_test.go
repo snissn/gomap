@@ -128,3 +128,70 @@ func TestChooseAdaptiveMode(t *testing.T) {
 		t.Errorf("range scan mode = %v, want %v", got, memtable.ModeBTree)
 	}
 }
+
+func TestNoteWriteSortedRunMatchesPerKey_NoPrior(t *testing.T) {
+	perKey := &DB{memtableAdaptive: true}
+	perKey.noteWriteKey([]byte("a"))
+	perKey.noteWriteKey([]byte("b"))
+	perKey.noteWriteKey([]byte("c"))
+
+	run := &DB{memtableAdaptive: true}
+	run.noteWriteSortedRun([]byte("a"), []byte("c"), 3)
+
+	assertStatsEquivalent(t, perKey, run)
+}
+
+func TestNoteWriteSortedRunMatchesPerKey_WithPriorSmaller(t *testing.T) {
+	perKey := &DB{memtableAdaptive: true}
+	perKey.noteWriteKey([]byte("c"))
+	perKey.noteWriteKey([]byte("d"))
+	perKey.noteWriteKey([]byte("e"))
+	perKey.noteWriteKey([]byte("f"))
+
+	run := &DB{memtableAdaptive: true}
+	run.noteWriteKey([]byte("c"))
+	run.noteWriteSortedRun([]byte("d"), []byte("f"), 3)
+
+	assertStatsEquivalent(t, perKey, run)
+}
+
+func TestNoteWriteSortedRunMatchesPerKey_WithPriorGreater(t *testing.T) {
+	perKey := &DB{memtableAdaptive: true}
+	perKey.noteWriteKey([]byte("z"))
+	perKey.noteWriteKey([]byte("a"))
+	perKey.noteWriteKey([]byte("b"))
+
+	run := &DB{memtableAdaptive: true}
+	run.noteWriteKey([]byte("z"))
+	run.noteWriteSortedRun([]byte("a"), []byte("b"), 2)
+
+	assertStatsEquivalent(t, perKey, run)
+}
+
+func assertStatsEquivalent(t *testing.T, want, got *DB) {
+	t.Helper()
+
+	if w, g := want.memtableStats.writes.Load(), got.memtableStats.writes.Load(); w != g {
+		t.Fatalf("writes mismatch: want=%d got=%d", w, g)
+	}
+	if w, g := want.memtableStats.seqWrites.Load(), got.memtableStats.seqWrites.Load(); w != g {
+		t.Fatalf("seqWrites mismatch: want=%d got=%d", w, g)
+	}
+
+	want.memtableStats.lastKeyMu.Lock()
+	wantLastKey := append([]byte(nil), want.memtableStats.lastKey...)
+	wantHasLastKey := want.memtableStats.hasLastKey
+	want.memtableStats.lastKeyMu.Unlock()
+
+	got.memtableStats.lastKeyMu.Lock()
+	gotLastKey := append([]byte(nil), got.memtableStats.lastKey...)
+	gotHasLastKey := got.memtableStats.hasLastKey
+	got.memtableStats.lastKeyMu.Unlock()
+
+	if wantHasLastKey != gotHasLastKey {
+		t.Fatalf("hasLastKey mismatch: want=%v got=%v", wantHasLastKey, gotHasLastKey)
+	}
+	if string(wantLastKey) != string(gotLastKey) {
+		t.Fatalf("lastKey mismatch: want=%q got=%q", string(wantLastKey), string(gotLastKey))
+	}
+}
