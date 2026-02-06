@@ -9717,8 +9717,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
 
-	eligibleIdxs := getValueLogEligible(len(b.entries))
-	defer putValueLogEligible(eligibleIdxs)
+	eligibleIdxs := make([]int, 0, len(b.entries))
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
@@ -9768,7 +9767,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		valueRecords := getValueLogRecords(eligibleCount)
+		valueRecords := make([]valuelog.Record, eligibleCount)
 		for i, idx := range eligibleIdxs {
 			op := &b.entries[idx]
 			rid := b.db.nextRID.Add(1)
@@ -9778,7 +9777,6 @@ func (b *Batch) writeRegular(sync bool) error {
 			valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 		}
 		ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
-		putValueLogRecords(valueRecords)
 		if err != nil {
 			b.db.writeMu.RUnlock()
 			return err
