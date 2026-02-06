@@ -63,6 +63,7 @@ Behavior:
   - `Durability = DurabilityDurable`
   - `ValueLog.ReadIntegrity = IntegrityVerify`
 - Leaves background workers at their default settings.
+- Leaves index optimization booleans disabled by default.
 
 Use when you want:
 
@@ -79,6 +80,12 @@ Behavior:
   - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
+- Enables index optimization bundle:
+  - `ValueLog.ForcePointers = true`
+  - `LeafPrefixCompression = true`
+  - `IndexColumnarLeaves = true`
+  - `IndexPackedValuePtr = true`
+  - `IndexInternalBaseDelta = true`
 - Leaves background maintenance enabled by default.
 
 Notes:
@@ -102,6 +109,7 @@ Behavior:
   - `Durability = DurabilityWALOnRelaxed`
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation (`PreferAppendAlloc=true`)
+- Enables the same index optimization bundle as `ProfileFast`.
 
 Use when you want:
 

@@ -22,6 +22,8 @@ type rotateSwapValueWriter struct {
 	appends         int
 }
 
+var _ valueWriter = (*rotateSwapValueWriter)(nil)
+
 func (w *rotateSwapValueWriter) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
 	return page.ValuePtr{}, errors.New("test: unexpected Append call")
 }
@@ -31,6 +33,7 @@ func (w *rotateSwapValueWriter) AppendFrame(dictID uint64, dict []byte, records 
 }
 
 func (w *rotateSwapValueWriter) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
+	// No-op for test stub.
 }
 
 func (w *rotateSwapValueWriter) AppendRawFramesWritevInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error) {

@@ -94,9 +94,9 @@ db, err := treedb.Open(opts)
 Profiles are intended to make intent explicit:
 
 - `ProfileDurable`: safest defaults (recommended).
-- `ProfileFast`: relax durability/integrity knobs for throughput.
-- `ProfileWALOnFast`: fast ingest profile that keeps WAL on but relaxes durability checks.
-- `ProfileBench`: deterministic benchmarking profile (not production).
+- `ProfileFast`: relax durability/integrity knobs for throughput and enables index optimizations (`ForcePointers`, `LeafPrefixCompression`, `IndexColumnarLeaves`, `IndexPackedValuePtr`, `IndexInternalBaseDelta`).
+- `ProfileWALOnFast`: fast ingest profile that keeps WAL on, relaxes durability checks, and enables the same index optimizations.
+- `ProfileBench`: deterministic benchmarking profile (not production); includes `ProfileFast` index optimizations.
 
 Note: WAL-off is selected via `opts.Durability = treedb.DurabilityWALOffRelaxed`.
 The value log remains enabled in cached mode, so large values can still go
