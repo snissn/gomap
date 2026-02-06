@@ -30,6 +30,10 @@ const (
 	DefaultTrainBootstrapDictBytes  = 8 << 10
 	DefaultTrainBootstrapMinRecords = 32
 
+	// Reject tiny dictionaries. They can pass validation yet provide unstable
+	// wins and poor reuse on mixed payload streams.
+	MinValidatedDictBytes = 4 << 10
+
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB
 	MinProfileRecords     = 250_000  // records
@@ -860,11 +864,18 @@ func buildAndValidateDict(dictID uint32, samples [][]byte, history []byte, level
 		}
 		return nil, err
 	}
+	if len(dict) < MinValidatedDictBytes {
+		return nil, fmt.Errorf("dictionary too small: got=%d min=%d", len(dict), MinValidatedDictBytes)
+	}
 	if err := validateDict(dict, level); err != nil {
 		// Retry with a smaller dict to avoid invalid offset failures.
 		reduced := dict
-		for i := 0; i < 3 && len(reduced) > 64; i++ {
-			reduced = reduced[:len(reduced)/2]
+		for i := 0; i < 3 && len(reduced) > MinValidatedDictBytes; i++ {
+			nextLen := len(reduced) / 2
+			if nextLen < MinValidatedDictBytes {
+				break
+			}
+			reduced = reduced[:nextLen]
 			if err2 := validateDict(reduced, level); err2 == nil {
 				return reduced, nil
 			}
