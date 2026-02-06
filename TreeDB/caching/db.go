@@ -3259,12 +3259,10 @@ const (
 )
 
 const (
-	vlogWriteBuffer         = 4096
-	vlogWriteBatchMax       = 512
-	vlogDictPrepBuffer      = 1024
-	vlogDictPrepMaxWorkers  = 4
-	vlogDictPrepMinFrames   = 4
-	vlogDictPrepMinRawBytes = 8 << 10
+	vlogWriteBuffer        = 4096
+	vlogWriteBatchMax      = 512
+	vlogDictPrepBuffer     = 1024
+	vlogDictPrepMaxWorkers = 4
 )
 
 // Match valuelog's writevMinAvgValueSize threshold so the queueing path is only
@@ -4154,10 +4152,10 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 	if l == nil || l.vlogPrepCh == nil || l.vlogPrepWorkers < 2 {
 		return false
 	}
-	if frameCount < vlogDictPrepMinFrames {
+	if frameCount <= 0 {
 		return false
 	}
-	if rawPayloadBytes < vlogDictPrepMinRawBytes {
+	if rawPayloadBytes <= 0 {
 		return false
 	}
 	return true
