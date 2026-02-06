@@ -307,22 +307,21 @@ func (p *FramePreparer) encodePayload(enc *zstd.Encoder, records []Record, rawPa
 			}
 			return enc.EncodeAllParts(parts[:k], encDst), nil
 		}
-		if cap(p.rawScratch) < rawPayloadBytes {
-			p.rawScratch = make([]byte, rawPayloadBytes)
-		}
-		payload := p.rawScratch[:rawPayloadBytes]
-		off := 0
-		for i := 0; i < k; i++ {
-			off += copy(payload[off:], records[i].Value)
-		}
-		return enc.EncodeAll(payload, encDst), nil
+		return p.encodePayloadStreaming(enc, records[:k], rawPayloadBytes, encDst)
 	}
 
+	return p.encodePayloadStreaming(enc, records[:k], rawPayloadBytes, encDst)
+}
+
+func (p *FramePreparer) encodePayloadStreaming(enc *zstd.Encoder, records []Record, rawPayloadBytes int, encDst []byte) ([]byte, error) {
+	if enc == nil {
+		return nil, errors.New("valuelog: nil encoder")
+	}
 	p.encLimiter.buf = encDst
 	p.encLimiter.limit = rawPayloadBytes - 1
 	enc.Reset(&p.encLimiter)
 	var encodeErr error
-	for i := 0; i < k; i++ {
+	for i := 0; i < len(records); i++ {
 		if _, encodeErr = enc.Write(records[i].Value); encodeErr != nil {
 			break
 		}
