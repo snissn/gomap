@@ -242,12 +242,19 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 		// Allow a more aggressive no-copy path for ultra-compressible payloads
 		// where the memcpy becomes a measurable fraction of wall time.
 		noCopyUltraMinAvgBytes = 4 << 10
+		// Small-value grouped frames (e.g. 128B values at large K) can still be
+		// copy-bound on ultra-low-entropy streams.
+		noCopyTinyUltraMinRawBytes = 8 << 10
+		noCopyTinyUltraMinAvgBytes = 96
 	)
 	avg := rawPayloadBytes / k
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyMinAvgBytes {
 		return true
 	}
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyUltraMinAvgBytes {
+		return isUltraLowEntropySample(records[0].Value)
+	}
+	if rawPayloadBytes >= noCopyTinyUltraMinRawBytes && avg >= noCopyTinyUltraMinAvgBytes {
 		return isUltraLowEntropySample(records[0].Value)
 	}
 	return false
@@ -726,6 +733,77 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 		return nil, FrameStats{}, err
 	}
 	return ptrs, stats, nil
+}
+
+// AppendEncodedFrameInto appends a pre-encoded grouped frame body and fills dst
+// with grouped value pointers (dst must be at least k long).
+//
+// The body must be produced by EncodeFrame/EncodeFrameWithOptions.
+func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr) ([]page.ValuePtr, error) {
+	if w == nil {
+		return nil, errors.New("valuelog: nil writer")
+	}
+	if k <= 0 {
+		return dst[:0], nil
+	}
+	if k > MaxFrameK {
+		return nil, ErrRecordTooLarge
+	}
+	if len(dst) < k {
+		return nil, errors.New("valuelog: dst too small")
+	}
+	if len(body) < FrameHeaderSize {
+		return nil, ErrCorrupt
+	}
+	if body[0] != FrameVersion {
+		return nil, ErrCorrupt
+	}
+	if int(body[2]) != k {
+		return nil, ErrCorrupt
+	}
+	if len(body) > int(^uint32(0)) {
+		return nil, ErrRecordTooLarge
+	}
+	bodyLen := uint32(len(body))
+	if recordSizeExceedsMax(bodyLen) {
+		return nil, ErrRecordTooLarge
+	}
+
+	recordLen := HeaderSize + len(body)
+	start := w.size
+	if cap(w.scratch) < recordLen {
+		w.scratch = make([]byte, recordLen)
+	}
+	buf := w.scratch[:recordLen]
+
+	buf[4] = Version
+	buf[5] = recordFlagGrouped
+	buf[6] = 0
+	buf[7] = 0
+	binary.LittleEndian.PutUint64(buf[8:16], 0)
+	binary.LittleEndian.PutUint32(buf[16:20], bodyLen)
+	copy(buf[HeaderSize:], body)
+
+	sum := crc.ChecksumParts(buf[4:HeaderSize], body)
+	binary.LittleEndian.PutUint32(buf[0:4], sum)
+
+	if err := w.writeBytes(buf); err != nil {
+		return nil, err
+	}
+	w.size += int64(recordLen)
+
+	recordLenHint := uint32(headerWithoutCRC) + bodyLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+	for i := 0; i < k; i++ {
+		dst[i] = page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+			FileID: w.fileID,
+		}
+	}
+	return dst[:k], nil
 }
 
 // AppendFrameWithStatsInto appends a grouped frame and fills dst with the

@@ -190,7 +190,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 		return
 	}
 	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
-	candidateK := db.valueLogAutotuneOptions.CandidateK
+	candidateK := db.valueLogDictCandidateK()
 	if len(candidateK) > 0 {
 		seen := make(map[int]struct{}, len(candidateK))
 		filtered := make([]int, 0, len(candidateK))
@@ -219,6 +219,44 @@ func (db *DB) ensureValueLogDictTrainer() {
 	db.valueLogDictMetrics.SetSlab(1)
 	db.wg.Add(1)
 	go db.valueLogDictLoop()
+}
+
+func (db *DB) valueLogDictCandidateK() []int {
+	if db == nil {
+		return nil
+	}
+	defaultCandidateK := []int{1, 2, 4, 8, 16, 32}
+	forcePointerCandidateK := []int{8, 16, 32}
+	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
+		if db.forceValueLogPointers && !db.valueLogAutotuneCandidateKSet && intSlicesEqual(db.valueLogAutotuneOptions.CandidateK, defaultCandidateK) {
+			out := make([]int, len(forcePointerCandidateK))
+			copy(out, forcePointerCandidateK)
+			return out
+		}
+		out := make([]int, len(db.valueLogAutotuneOptions.CandidateK))
+		copy(out, db.valueLogAutotuneOptions.CandidateK)
+		return out
+	}
+	// Force-pointer mode is write-heavy and benefits from evaluating larger frame
+	// group sizes. Avoid very small K defaults that bias toward read cost.
+	if db.forceValueLogPointers {
+		out := make([]int, len(forcePointerCandidateK))
+		copy(out, forcePointerCandidateK)
+		return out
+	}
+	return nil
+}
+
+func intSlicesEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (db *DB) valueLogDictLoop() {
@@ -503,4 +541,23 @@ func (db *DB) clampValueLogDictK(k int) int {
 		return maxK
 	}
 	return k
+}
+
+func (db *DB) chooseValueLogDictWriteK(baseK, records, rawPayloadBytes int) int {
+	k := db.clampValueLogDictK(baseK)
+	if records <= 1 || rawPayloadBytes <= 0 {
+		return k
+	}
+	avg := rawPayloadBytes / records
+	// For tiny values, larger grouped frames materially reduce per-frame metadata
+	// and lock/write overhead in dict mode.
+	switch {
+	case avg <= 160 && k < 96:
+		k = 96
+	case avg <= 192 && k < 64:
+		k = 64
+	case avg <= 256 && k < 32:
+		k = 32
+	}
+	return db.clampValueLogDictK(k)
 }
