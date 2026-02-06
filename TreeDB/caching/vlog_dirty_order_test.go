@@ -3,7 +3,6 @@ package caching
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,6 +74,17 @@ func waitErr(t *testing.T, ch <-chan error, label string) error {
 	}
 }
 
+func waitBool(t *testing.T, ch <-chan bool, label string) bool {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s timed out", label)
+		return false
+	}
+}
+
 func TestFlushValueLogLane_WaitsForBarrierBeforeDirtyCheck(t *testing.T) {
 	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
 	l := &lane{id: 0}
@@ -103,22 +113,17 @@ func TestFlushValueLogLane_WaitsForBarrierBeforeDirtyCheck(t *testing.T) {
 }
 
 func TestAppendValueLog_SetsDirtyBeforeUnlock(t *testing.T) {
-	prevProcs := runtime.GOMAXPROCS(2)
-	defer runtime.GOMAXPROCS(prevProcs)
-
 	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
 	l := &lane{id: 0}
 	w := &vlogDirtyOrderWriter{}
 	l.vlog = w
 
-	flushDone := make(chan error, 1)
+	seenDirty := make(chan bool, 1)
 	db.testBeforeVlogUnlock = func(laneID int) {
 		if laneID != int(l.id) {
 			return
 		}
-		go func() { flushDone <- db.flushValueLogLane(l) }()
-		// Keep waiter blocked long enough to force mutex handoff.
-		time.Sleep(5 * time.Millisecond)
+		seenDirty <- l.vlogDirty.Load()
 	}
 
 	records := []valuelog.Record{
@@ -131,8 +136,12 @@ func TestAppendValueLog_SetsDirtyBeforeUnlock(t *testing.T) {
 	}
 	putValueLogPtrs(ptrs)
 
-	if err := waitErr(t, flushDone, "flush wait"); err != nil {
-		t.Fatalf("concurrent flush: %v", err)
+	if got := waitBool(t, seenDirty, "dirty check"); !got {
+		t.Fatalf("vlogDirty=false at pre-unlock hook; expected true")
+	}
+
+	if err := db.flushValueLogLane(l); err != nil {
+		t.Fatalf("flushValueLogLane: %v", err)
 	}
 	if got := w.flushes.Load(); got != 1 {
 		t.Fatalf("flushes=%d want 1", got)
@@ -143,21 +152,17 @@ func TestAppendValueLog_SetsDirtyBeforeUnlock(t *testing.T) {
 }
 
 func TestAppendValueLogOne_DirectSetsDirtyBeforeUnlock(t *testing.T) {
-	prevProcs := runtime.GOMAXPROCS(2)
-	defer runtime.GOMAXPROCS(prevProcs)
-
 	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
 	l := &lane{id: 0}
 	w := &vlogDirtyOrderWriter{}
 	l.vlog = w
 
-	flushDone := make(chan error, 1)
+	seenDirty := make(chan bool, 1)
 	db.testBeforeVlogUnlock = func(laneID int) {
 		if laneID != int(l.id) {
 			return
 		}
-		go func() { flushDone <- db.flushValueLogLane(l) }()
-		time.Sleep(5 * time.Millisecond)
+		seenDirty <- l.vlogDirty.Load()
 	}
 
 	ptr, _, err := db.appendValueLogOne(l, 0, nil, 1, []byte("small"), journalDurabilityNone)
@@ -168,8 +173,12 @@ func TestAppendValueLogOne_DirectSetsDirtyBeforeUnlock(t *testing.T) {
 		t.Fatalf("expected non-empty pointer")
 	}
 
-	if err := waitErr(t, flushDone, "flush wait"); err != nil {
-		t.Fatalf("concurrent flush: %v", err)
+	if got := waitBool(t, seenDirty, "dirty check"); !got {
+		t.Fatalf("vlogDirty=false at pre-unlock hook; expected true")
+	}
+
+	if err := db.flushValueLogLane(l); err != nil {
+		t.Fatalf("flushValueLogLane: %v", err)
 	}
 	if got := w.flushes.Load(); got != 1 {
 		t.Fatalf("flushes=%d want 1", got)
@@ -180,22 +189,18 @@ func TestAppendValueLogOne_DirectSetsDirtyBeforeUnlock(t *testing.T) {
 }
 
 func TestAppendValueLogOne_QueuedFastPathSetsDirtyBeforeUnlock(t *testing.T) {
-	prevProcs := runtime.GOMAXPROCS(2)
-	defer runtime.GOMAXPROCS(prevProcs)
-
 	db := &DB{closeCh: make(chan struct{}), splitValueLog: true}
 	l := &lane{id: 0}
 	w := &vlogDirtyOrderWriter{}
 	l.vlog = w
 	l.vlogCh = make(chan vlogWriteRequest, 1)
 
-	flushDone := make(chan error, 1)
+	seenDirty := make(chan bool, 1)
 	db.testBeforeVlogUnlock = func(laneID int) {
 		if laneID != int(l.id) {
 			return
 		}
-		go func() { flushDone <- db.flushValueLogLane(l) }()
-		time.Sleep(5 * time.Millisecond)
+		seenDirty <- l.vlogDirty.Load()
 	}
 
 	value := make([]byte, vlogQueueMinValueSize)
@@ -207,8 +212,12 @@ func TestAppendValueLogOne_QueuedFastPathSetsDirtyBeforeUnlock(t *testing.T) {
 		t.Fatalf("expected non-empty pointer")
 	}
 
-	if err := waitErr(t, flushDone, "flush wait"); err != nil {
-		t.Fatalf("concurrent flush: %v", err)
+	if got := waitBool(t, seenDirty, "dirty check"); !got {
+		t.Fatalf("vlogDirty=false at pre-unlock hook; expected true")
+	}
+
+	if err := db.flushValueLogLane(l); err != nil {
+		t.Fatalf("flushValueLogLane: %v", err)
 	}
 	if got := w.flushes.Load(); got != 1 {
 		t.Fatalf("flushes=%d want 1", got)
