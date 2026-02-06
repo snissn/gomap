@@ -45,6 +45,31 @@ func (n *Node) Compact() error {
 		n.count = binary.LittleEndian.Uint16(n.data[14:16])
 		return nil
 	}
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+		buf := make([]byte, page.PageSize)
+		b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+			LeafPrefixCompression: true,
+			LeafColumnar:          true,
+			PackedValuePtr:        n.leafPackedValuePtr(),
+		})
+		b.SetPageID(n.PageID())
+
+		for i := uint16(0); i < count; i++ {
+			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return err
+			}
+			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+				return err
+			}
+		}
+
+		newNode := b.Finish()
+		copy(n.data, newNode.data)
+		n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+		n.count = binary.LittleEndian.Uint16(n.data[14:16])
+		return nil
+	}
 
 	newData := make([]byte, page.PageSize)
 
@@ -130,17 +155,22 @@ func entryLength(n *Node, offset int) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			if offset+6 > footerStart {
+			deltaWidth := 4
+			if n.internalBaseDeltaU16() {
+				deltaWidth = 2
+			}
+			entryHeader := 2 + deltaWidth
+			if offset+entryHeader > footerStart {
 				return 0, ErrCorruptedNode
 			}
 			suffixLen := int(getUint16(n.data[offset : offset+2]))
 			if suffixLen < 0 {
 				return 0, ErrCorruptedNode
 			}
-			if offset+6+suffixLen > footerStart {
+			if offset+entryHeader+suffixLen > footerStart {
 				return 0, ErrCorruptedNode
 			}
-			return 2 + 4 + suffixLen, nil
+			return entryHeader + suffixLen, nil
 		}
 		if offset+2+8 > len(n.data) {
 			return 0, ErrCorruptedNode

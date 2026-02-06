@@ -111,3 +111,40 @@ func TestTreeGet(t *testing.T) {
 		}
 	}
 }
+
+func TestTreeGet_FencePrunesOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+
+	data0, _ := p.Get(0)
+	b := node.NewBuilderWithOptions(data0, page.PageTypeInternal, node.BuilderOptions{
+		InternalBaseDelta: true,
+	})
+	b.SetPageID(0)
+	b.SetInternalFenceBounds([]byte("10"), []byte("20"))
+	if err := b.AddInternalChild([]byte("10"), 9999); err != nil {
+		t.Fatalf("AddInternalChild: %v", err)
+	}
+	b.Finish()
+
+	tr := New(p, panicValueReader{}, 0)
+
+	if _, err := tr.Get([]byte("05")); err != ErrKeyNotFound {
+		t.Fatalf("expected ErrKeyNotFound for below-low query, got %v", err)
+	}
+	if _, err := tr.Get([]byte("20")); err != ErrKeyNotFound {
+		t.Fatalf("expected ErrKeyNotFound for high-bound query, got %v", err)
+	}
+	if _, err := tr.Get([]byte("15")); err == ErrKeyNotFound || err == nil {
+		t.Fatalf("expected in-fence query to descend and fail differently, got %v", err)
+	}
+}
