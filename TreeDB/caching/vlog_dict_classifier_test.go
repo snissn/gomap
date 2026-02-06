@@ -2,7 +2,6 @@ package caching
 
 import (
 	"bytes"
-	"math/rand"
 	"testing"
 
 	"github.com/snissn/compress/zstd"
@@ -32,12 +31,13 @@ func newValueLogDictClassifierTrainer(t *testing.T) *compression.Trainer {
 	return tr
 }
 
-func randomValueLogRecords(n, valueBytes int, seed int64) []valuelog.Record {
-	rng := rand.New(rand.NewSource(seed))
+func highEntropyValueLogRecords(n, valueBytes int) []valuelog.Record {
 	records := make([]valuelog.Record, n)
 	for i := range records {
 		value := make([]byte, valueBytes)
-		_, _ = rng.Read(value)
+		for j := range value {
+			value[j] = byte((j + i) & 0xff)
+		}
 		records[i] = valuelog.Record{RID: uint64(i + 1), Value: value}
 	}
 	return records
@@ -64,7 +64,7 @@ func TestValueLogDictCollectSamples_SkipsIncompressibleBeforeFirstDict(t *testin
 		valueLogDictPausedSampleStride: 256,
 	}
 
-	records := randomValueLogRecords(512, 4096, 1)
+	records := highEntropyValueLogRecords(512, 4096)
 	db.valueLogDictCollectSamples(records)
 
 	if pause := db.valueLogDictPauseRemaining.Load(); pause == 0 {

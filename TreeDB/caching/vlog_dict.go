@@ -82,9 +82,11 @@ func (db *DB) armValueLogDictPauseBytes(pauseBytes uint64) {
 		return
 	}
 	if pauseBytes == 0 {
-		pauseBytes = uint64(db.valueLogDictMetricsPauseBytes)
-		if pauseBytes == 0 {
+		pause := db.valueLogDictMetricsPauseBytes
+		if pause <= 0 {
 			pauseBytes = 64 << 20
+		} else {
+			pauseBytes = uint64(pause)
 		}
 	}
 	for {
