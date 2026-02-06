@@ -35,6 +35,7 @@ import (
 
 var (
 	numKeys            = flag.Int("keys", 100000, "Number of keys")
+	keyShapeArg        = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
 	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random)")
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
@@ -81,6 +82,12 @@ var (
 	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 )
 
+var explicitFlags = map[string]bool{}
+
+func flagExplicit(name string) bool {
+	return explicitFlags[name]
+}
+
 type DBInstance struct {
 	Name    string
 	Wrapper kvstore.DB
@@ -89,6 +96,7 @@ type DBInstance struct {
 
 type BenchConfig struct {
 	Keys          int
+	KeyShape      string
 	ValueSize     int
 	BatchSize     int
 	WriteWorkers  int
@@ -199,6 +207,44 @@ type treeDBDiskUsage struct {
 	DictWAL        walDiskUsage
 }
 
+type benchKeyShape uint8
+
+const (
+	benchKeyShapeBE8 benchKeyShape = iota
+	benchKeyShapeBE8Prefix4
+)
+
+func parseBenchKeyShape(s string) (benchKeyShape, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "be8":
+		return benchKeyShapeBE8, nil
+	case "be8_prefix4":
+		return benchKeyShapeBE8Prefix4, nil
+	default:
+		return 0, fmt.Errorf("unsupported -key-shape=%q (expected be8|be8_prefix4)", s)
+	}
+}
+
+func (s benchKeyShape) encode(dst []byte, key uint64) {
+	switch s {
+	case benchKeyShapeBE8:
+		binary.BigEndian.PutUint64(dst, key)
+	case benchKeyShapeBE8Prefix4:
+		// A fixed 4-byte high prefix plus a variable low u32 key space.
+		dst[0], dst[1], dst[2], dst[3] = 0, 0, 0, 1
+		binary.BigEndian.PutUint32(dst[4:], uint32(key))
+	default:
+		binary.BigEndian.PutUint64(dst, key)
+	}
+}
+
+func (s benchKeyShape) validate(maxKey uint64) error {
+	if s == benchKeyShapeBE8Prefix4 && maxKey > uint64(math.MaxUint32) {
+		return fmt.Errorf("-key-shape=be8_prefix4 max key %d exceeds uint32 range", maxKey)
+	}
+	return nil
+}
+
 func main() {
 	flag.Usage = customUsage
 	flag.Parse()
@@ -207,6 +253,7 @@ func main() {
 	flag.Visit(func(f *flag.Flag) {
 		isSet[f.Name] = true
 	})
+	explicitFlags = isSet
 	if err := applyProfile(*profileArg, isSet); err != nil {
 		log.Fatalf("profile: %v", err)
 	}
@@ -224,6 +271,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
 	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
+	fmt.Fprintf(os.Stderr, "             key_shape=%s\n", strings.TrimSpace(*keyShapeArg))
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
 	}
@@ -237,6 +285,7 @@ func main() {
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
+		KeyShape:                         *keyShapeArg,
 		ValueSize:                        *valSize,
 		BatchSize:                        *batchSize,
 		WriteWorkers:                     *writeWorkers,
@@ -784,6 +833,15 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
+	keyShapeName := strings.ToLower(strings.TrimSpace(cfg.KeyShape))
+	if keyShapeName == "" {
+		keyShapeName = "be8"
+	}
+	keyShape, keyShapeErr := parseBenchKeyShape(keyShapeName)
+	if keyShapeErr != nil {
+		return BenchRun{}, keyShapeErr
+	}
+	cfg.KeyShape = keyShapeName
 	if cfg.ValueSize < 0 {
 		return BenchRun{}, fmt.Errorf("invalid valsize: %d", cfg.ValueSize)
 	}
@@ -932,6 +990,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	prefixScanBase := 0
 	expectedFullScanCount := -1
 	checkPrefixCounts := false
+	encodeKey := func(dst []byte, key uint64) {
+		keyShape.encode(dst, key)
+	}
 	testFuncs := map[string]TestFunc{
 		"vacuum_index": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			td, ok := db.(*treedbadapter.DB)
@@ -988,7 +1049,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(i))
+				encodeKey(k[:], uint64(i))
 				value := values[i%len(values)]
 				if err := db.Set(k[:], value); err != nil {
 					return 0, fmt.Errorf("sequential_write: %w", err)
@@ -1014,7 +1075,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
+				encodeKey(k[:], uint64(rng.Intn(cfg.Keys*10))) // Use a larger range for randomness
 				value := values[i%len(values)]
 				if err := db.Set(k[:], value); err != nil {
 					return 0, fmt.Errorf("random_write: %w", err)
@@ -1040,7 +1101,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
+					encodeKey(k[:], uint64(rng.Intn(cfg.Keys*10)))
 					if err := db.Set(k[:], val); err != nil {
 						return 0, fmt.Errorf("random_write_parallel: %w", err)
 					}
@@ -1093,7 +1154,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 								return
 							}
 						}
-						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(total*10)))
+						encodeKey(k[:], uint64(rng.Intn(total*10)))
 						if err := db.Set(k[:], val); err != nil {
 							if stop.CompareAndSwap(false, true) {
 								select {
@@ -1190,7 +1251,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					binary.BigEndian.PutUint64(k[:], uint64(j+cfg.Keys))
+					encodeKey(k[:], uint64(j+cfg.Keys))
 					value := values[valPos%len(values)]
 					valPos++
 					if err := batch.Set(k[:], value); err != nil {
@@ -1232,7 +1293,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				offset := i * keySize
-				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
+				encodeKey(allKeys[offset:offset+keySize], uint64(rng.Intn(total*10))) // Spread out to cause random I/O
 			}
 			// Reset timer to exclude setup
 			start := time.Now()
@@ -1295,7 +1356,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				offset := i * keySize
-				binary.BigEndian.PutUint64(allKeys[offset:offset+keySize], uint64(rng.Intn(total)))
+				encodeKey(allKeys[offset:offset+keySize], uint64(rng.Intn(total)))
 			}
 			// Reset timer to exclude setup
 			start := time.Now()
@@ -1371,7 +1432,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					end = total
 				}
 				for j := i; j < end; j++ {
-					binary.BigEndian.PutUint64(k[:], uint64(j)) // Sequential
+					encodeKey(k[:], uint64(j)) // Sequential
 					value := values[valPos%len(values)]
 					valPos++
 					if err := batch.Set(k[:], value); err != nil {
@@ -1426,7 +1487,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, fmt.Errorf("update_fork_choice: new batch: %w", err)
 					}
 					for j := i; j < end; j++ {
-						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
+						encodeKey(k[:], uint64(rng.Intn(cfg.Keys*10)))
 						value := values[valPos%len(values)]
 						valPos++
 						if err := batch.Set(k[:], value); err != nil {
@@ -1443,7 +1504,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else if syncer, ok := db.(kvstore.Syncer); ok {
 					for j := i; j < end; j++ {
-						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
+						encodeKey(k[:], uint64(rng.Intn(cfg.Keys*10)))
 						value := values[valPos%len(values)]
 						valPos++
 						if err := syncer.SetSync(k[:], value); err != nil {
@@ -1452,7 +1513,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else {
 					for j := i; j < end; j++ {
-						binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys*10)))
+						encodeKey(k[:], uint64(rng.Intn(cfg.Keys*10)))
 						value := values[valPos%len(values)]
 						valPos++
 						if err := db.Set(k[:], value); err != nil {
@@ -1560,7 +1621,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				encodeKey(k[:], uint64(rng.Intn(cfg.Keys)))
 				_ = db.Delete(k[:])
 				if err := pc.Add(db, 1, perOpBytes); err != nil {
 					return 0, fmt.Errorf("random_delete checkpoint: %w", err)
@@ -1577,7 +1638,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				}
-				binary.BigEndian.PutUint64(k[:], uint64(rng.Intn(cfg.Keys)))
+				encodeKey(k[:], uint64(rng.Intn(cfg.Keys)))
 				_, _ = db.Get(k[:])
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
@@ -1718,11 +1779,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				var startKeyBuf [8]byte
-				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
+				encodeKey(startKeyBuf[:], uint64(startIdx))
 				startKey := startKeyBuf[:]
 
 				var endKeyBuf [8]byte
-				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
+				encodeKey(endKeyBuf[:], uint64(endIdx))
 				endKey := endKeyBuf[:]
 
 				buildStart := time.Now()
@@ -1814,11 +1875,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				var startKeyBuf [8]byte
-				binary.BigEndian.PutUint64(startKeyBuf[:], uint64(startIdx))
+				encodeKey(startKeyBuf[:], uint64(startIdx))
 				startKey := startKeyBuf[:]
 
 				var endKeyBuf [8]byte
-				binary.BigEndian.PutUint64(endKeyBuf[:], uint64(endIdx))
+				encodeKey(endKeyBuf[:], uint64(endIdx))
 				endKey := endKeyBuf[:]
 
 				iter, err := rs.Iterator(startKey, endKey)
@@ -1896,6 +1957,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("no tests selected")
 	}
 
+	maxEncodedKey := uint64(cfg.Keys)
+	setMaxEncoded := func(v uint64) {
+		if v > maxEncodedKey {
+			maxEncodedKey = v
+		}
+	}
+	mulUint64Cap := func(v uint64, factor uint64) uint64 {
+		if factor > 0 && v > math.MaxUint64/factor {
+			return math.MaxUint64
+		}
+		return v * factor
+	}
+	if containsAny(finalTestOrder, "random_write", "random_write_parallel", "batch_random", "update_fork_choice") {
+		setMaxEncoded(mulUint64Cap(uint64(cfg.Keys), 10))
+	}
+	if containsAny(finalTestOrder, "batch_write", "prefix_scan", "prefix_scan2") {
+		setMaxEncoded(mulUint64Cap(uint64(cfg.Keys), 2))
+	}
+	if err := keyShape.validate(maxEncodedKey); err != nil {
+		return BenchRun{}, err
+	}
+
 	// If the user selects only read/scan/delete tests, the DBs are empty unless we
 	// preload a baseline dataset. We intentionally keep this setup out of the
 	// per-test timings so that read/scan numbers reflect a populated DB.
@@ -1925,7 +2008,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		var k [8]byte
 		for _, inst := range instances {
 			for i := 0; i < cfg.Keys; i++ {
-				binary.BigEndian.PutUint64(k[:], uint64(i))
+				encodeKey(k[:], uint64(i))
 				value := values[i%len(values)]
 				if err := inst.Wrapper.Set(k[:], value); err != nil {
 					return BenchRun{}, fmt.Errorf("preload/%s: %w", inst.Wrapper.Name(), err)
@@ -2473,6 +2556,9 @@ func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
+	if strings.TrimSpace(run.Config.KeyShape) != "" {
+		sb.WriteString(fmt.Sprintf("- key-shape: %s\n", strings.TrimSpace(run.Config.KeyShape)))
+	}
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", run.Config.RangeQueries))
@@ -2572,6 +2658,9 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench sweep\n\n")
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatKeyCounts(runs)))
+	if strings.TrimSpace(runs[0].Config.KeyShape) != "" {
+		sb.WriteString(fmt.Sprintf("- key-shape: %s\n", strings.TrimSpace(runs[0].Config.KeyShape)))
+	}
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", runs[0].Config.ValueSize))
 	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", runs[0].Config.BatchSize))
 	sb.WriteString(fmt.Sprintf("- range-queries: %d\n", runs[0].Config.RangeQueries))

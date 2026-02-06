@@ -26,6 +26,7 @@ func init() {
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
+		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		// Large random-insert workloads are extremely sensitive to flush batching.
 		// Use a larger default in the "fast" profile unless the caller explicitly
 		// overrides it.
@@ -57,6 +58,7 @@ func init() {
 		setBoolIfUnset("treedb-relaxed-sync", true, isSet, treedbRelaxedSync)
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
+		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -70,11 +72,11 @@ func init() {
 
 	profiles = map[string]Profile{
 		"fast": {
-			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL (journal). UNSAFE for production data.",
+			Description: "Maximize throughput: disables fsync for supported DBs; for TreeDB also disables WAL and enables -treedb-index-optimizations. UNSAFE for production data.",
 			Apply:       applyFast,
 		},
 		"wal_on_fast": {
-			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off).",
+			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off) and enables -treedb-index-optimizations.",
 			Apply:       applyWALOnFast,
 		},
 		"unsafe": { // Alias for fast
@@ -228,7 +230,7 @@ func customUsage() {
 func isWorkloadFlag(name string) bool {
 	switch name {
 	case "keys", "valsize", "batchsize", "range-queries", "range-span",
-		"keycounts", "keyscale", "keys-min", "keys-max", "dbs", "test",
+		"keycounts", "keyscale", "keys-min", "keys-max", "key-shape", "dbs", "test",
 		"suite", "outdir", "keep", "progress", "seed", "settle-before-scans":
 		return true
 	}
