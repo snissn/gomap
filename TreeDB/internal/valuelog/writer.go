@@ -254,7 +254,7 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyUltraMinAvgBytes {
 		return isUltraLowEntropySample(records[0].Value)
 	}
-	if rawPayloadBytes >= noCopyTinyUltraMinRawBytes && avg >= noCopyTinyUltraMinAvgBytes {
+	if k >= 8 && rawPayloadBytes >= noCopyTinyUltraMinRawBytes && avg >= noCopyTinyUltraMinAvgBytes {
 		return isUltraLowEntropySample(records[0].Value)
 	}
 	return false
