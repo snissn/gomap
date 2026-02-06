@@ -139,12 +139,17 @@ func (w *Writer) shouldUseRawWritev(records []Record, k int, rawPayloadBytes int
 	if minAvgBytes > 0 && (rawPayloadBytes/len(records)) < minAvgBytes {
 		return false
 	}
+	existingBuffered := len(w.appendBuf)
 	maxBytes, maxIovs := rawWritevLimits(w)
 	writevFlushes := predictRawWritevFlushes(records, k, maxBytes, maxIovs)
 	if writevFlushes == 0 {
 		return false
 	}
-	fallbackFlushes := predictRawFallbackFlushes(records, k, maxBytes, len(w.appendBuf))
+	// The writev path must flush any existing append buffer before queuing iovs.
+	if existingBuffered > 0 {
+		writevFlushes++
+	}
+	fallbackFlushes := predictRawFallbackFlushes(records, k, maxBytes, existingBuffered)
 	if fallbackFlushes == 0 {
 		return false
 	}

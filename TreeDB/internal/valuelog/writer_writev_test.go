@@ -149,6 +149,40 @@ func TestShouldUseRawWritev_RespectsBatchAndMinAvgKnobs(t *testing.T) {
 	}
 }
 
+func TestShouldUseRawWritev_PrefersFallbackWithBufferedAppendData(t *testing.T) {
+	if !writevSupported {
+		t.Skip("writev not supported on this platform")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	const (
+		k       = 8
+		n       = 16
+		valSize = 4 << 10
+	)
+	records := make([]Record, n)
+	rawBytes := 0
+	for i := 0; i < n; i++ {
+		value := bytes.Repeat([]byte{byte(i + 1)}, valSize)
+		records[i] = Record{RID: uint64(i + 1), Value: value}
+		rawBytes += len(value)
+	}
+
+	// Non-empty appendBuf adds a mandatory flush to the writev path; for this
+	// workload fallback can coalesce existing + new data into one buffered flush.
+	writer.appendBuf = []byte("x")
+	if writer.shouldUseRawWritev(records, k, rawBytes) {
+		t.Fatalf("expected fallback path when append buffer is already non-empty")
+	}
+}
+
 func TestPredictRawFallbackFlushes_LargeFrameUsesSingleDirectWrite(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("a"), 4096)},
