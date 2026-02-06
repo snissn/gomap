@@ -1688,15 +1688,18 @@ type Options struct {
 	// high-entropy streams. While hold mode is active, dict compression attempts
 	// and trainer collection are bypassed until hold bytes are consumed.
 	//
-	// 0 disables hold mode.
+	// 0 uses profile/default hold configuration; <0 explicitly disables hold
+	// mode and opts out of profile defaults.
 	ValueLogDictIncompressibleHoldBytes int
 	// ValueLogDictProbeIntervalBytes controls periodic probe attempts while
 	// incompressible hold mode is active.
 	//
 	// Values <=0 use a default derived from hold bytes.
 	ValueLogDictProbeIntervalBytes int
-	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload ratio
-	// does not improve by at least this fraction (0 uses default).
+	// ValueLogDictMinPayloadSavingsRatio rejects newly trained dictionaries whose
+	// payload ratio does not improve by at least this fraction (0 uses a
+	// throughput-oriented default: 0.02 normally, 0.05 with force pointers or
+	// WAL disabled).
 	ValueLogDictMinPayloadSavingsRatio float64
 
 	// ValueLogCompressionAutotune configures the wall-time value-log compression autotuner.
@@ -3552,7 +3555,8 @@ const (
 	vlogDictPrepBuffer = 1024
 )
 
-// Match valuelog's writevMinAvgValueSize threshold for always-queue large values.
+// Always queue values at or above this size to avoid blocking callers on large
+// appends and to improve value-log batching efficiency.
 const vlogQueueMinValueSize = 16 << 10
 
 // Linger briefly to coalesce micro-batches for small/medium queued writes.

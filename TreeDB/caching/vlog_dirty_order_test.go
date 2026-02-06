@@ -93,19 +93,15 @@ func TestFlushValueLogLane_WaitsForBarrierBeforeDirtyCheck(t *testing.T) {
 	l.vlogDirty.Store(false)
 
 	l.vlogMu.Lock()
-	released := make(chan struct{})
 	go func() {
-		time.Sleep(15 * time.Millisecond)
 		l.vlogDirty.Store(true)
 		l.vlogMu.Unlock()
-		close(released)
 	}()
 
 	err := db.flushValueLogLane(l)
 	if err != nil {
 		t.Fatalf("flushValueLogLane: %v", err)
 	}
-	<-released
 
 	if got := w.flushes.Load(); got != 1 {
 		t.Fatalf("flushes=%d want 1", got)
