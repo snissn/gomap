@@ -139,10 +139,10 @@ func applyIndexOptimizationsProfile(opts *Options) {
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
-	if opts.ValueLog.DictIncompressibleHoldBytes <= 0 {
+	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
-	if opts.ValueLog.DictProbeIntervalBytes <= 0 {
+	if opts.ValueLog.DictProbeIntervalBytes == 0 {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
 
@@ -157,10 +157,10 @@ func applyFastProfile(opts *Options) {
 func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
-	if opts.ValueLog.DictIncompressibleHoldBytes <= 0 {
+	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
-	if opts.ValueLog.DictProbeIntervalBytes <= 0 {
+	if opts.ValueLog.DictProbeIntervalBytes == 0 {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
 
