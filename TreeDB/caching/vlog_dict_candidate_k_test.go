@@ -37,3 +37,17 @@ func TestValueLogDictCandidateK_ExplicitOverridesDefault(t *testing.T) {
 		t.Fatalf("valueLogDictCandidateK returned aliased slice")
 	}
 }
+
+func TestValueLogDictCandidateK_ForcePointersRemapsDefaultCandidateSet(t *testing.T) {
+	db := &DB{
+		forceValueLogPointers: true,
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{
+			CandidateK: []int{1, 2, 4, 8, 16, 32},
+		},
+	}
+	got := db.valueLogDictCandidateK()
+	want := []int{8, 16, 32}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("valueLogDictCandidateK remap default: got=%v want=%v", got, want)
+	}
+}

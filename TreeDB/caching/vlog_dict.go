@@ -225,7 +225,23 @@ func (db *DB) valueLogDictCandidateK() []int {
 	if db == nil {
 		return nil
 	}
+	defaultCandidateK := []int{1, 2, 4, 8, 16, 32}
+	forcePointerCandidateK := []int{8, 16, 32}
 	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
+		if db.forceValueLogPointers && len(db.valueLogAutotuneOptions.CandidateK) == len(defaultCandidateK) {
+			matchesDefault := true
+			for i := range defaultCandidateK {
+				if db.valueLogAutotuneOptions.CandidateK[i] != defaultCandidateK[i] {
+					matchesDefault = false
+					break
+				}
+			}
+			if matchesDefault {
+				out := make([]int, len(forcePointerCandidateK))
+				copy(out, forcePointerCandidateK)
+				return out
+			}
+		}
 		out := make([]int, len(db.valueLogAutotuneOptions.CandidateK))
 		copy(out, db.valueLogAutotuneOptions.CandidateK)
 		return out
@@ -233,7 +249,9 @@ func (db *DB) valueLogDictCandidateK() []int {
 	// Force-pointer mode is write-heavy and benefits from evaluating larger frame
 	// group sizes. Avoid very small K defaults that bias toward read cost.
 	if db.forceValueLogPointers {
-		return []int{8, 16, 32}
+		out := make([]int, len(forcePointerCandidateK))
+		copy(out, forcePointerCandidateK)
+		return out
 	}
 	return nil
 }
