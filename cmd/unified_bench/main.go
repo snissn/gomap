@@ -248,6 +248,9 @@ func (s benchKeyShape) validate(maxKey uint64) error {
 func main() {
 	flag.Usage = customUsage
 	flag.Parse()
+	if extras := flag.Args(); len(extras) > 0 {
+		log.Fatalf("unexpected positional args: %q (tip: for bool flags, use -flag=false, e.g. -progress=false)", strings.Join(extras, " "))
+	}
 
 	isSet := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) {
@@ -1282,7 +1285,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return 0, fmt.Errorf("batch_random values: %w", err)
 			}
 			total := cfg.Keys
-			batchSize := 1000 // Using typical batch size
+			batchSize := cfg.BatchSize
 
 			const keySize = 8
 			allKeys := make([]byte, total*keySize)
@@ -1345,7 +1348,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				return math.NaN(), nil
 			}
 			total := cfg.Keys
-			batchSize := 1000 // Using typical batch size
+			batchSize := cfg.BatchSize
 
 			const keySize = 8
 			allKeys := make([]byte, total*keySize)
