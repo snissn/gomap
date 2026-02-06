@@ -449,6 +449,168 @@ func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
 	}
 }
 
+func TestFramePreparer_PrepareFrame_RoundTripWithDict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	records := make([]Record, 16)
+	expect := make([][]byte, len(records))
+	samples := make([][]byte, len(records))
+	for i := range records {
+		v := []byte(fmt.Sprintf("{\"kind\":\"evt\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("z"), 256)))
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		expect[i] = append([]byte(nil), v...)
+		samples[i] = v
+	}
+
+	const dictID = uint64(77)
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		s := samples[i]
+		if len(s) > need {
+			s = s[:need]
+		}
+		history = append(history, s...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	prep := NewFramePreparer()
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	body, stats, err := prep.PrepareFrame(dictID, dict, records)
+	if err != nil {
+		t.Fatalf("PrepareFrame: %v", err)
+	}
+	if stats.Records != len(records) {
+		t.Fatalf("records mismatch: got=%d want=%d", stats.Records, len(records))
+	}
+	if stats.RawPayloadBytes <= 0 {
+		t.Fatalf("expected raw payload bytes > 0")
+	}
+	if !stats.Attempted {
+		t.Fatalf("expected compression attempt")
+	}
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrScratch := make([]page.ValuePtr, len(records))
+	ptrs, err := writer.AppendEncodedFrameInto(body, len(records), ptrScratch)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendEncodedFrameInto: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, ErrMissingDict
+		}
+		return dict, nil
+	}
+	for i, ptr := range ptrs {
+		got, err := ReadAtWithDict(f, ptr, true, dictLookup, nil, nil, templ.DecodeOptions{})
+		if err != nil {
+			t.Fatalf("read at ptr%d: %v", i+1, err)
+		}
+		if !bytes.Equal(got, expect[i]) {
+			t.Fatalf("ptr%d mismatch", i+1)
+		}
+	}
+}
+
+func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},
+		{RID: 2, Value: bytes.Repeat([]byte("bravo-002|"), 32)},
+		{RID: 3, Value: bytes.Repeat([]byte("charlie-003|"), 32)},
+		{RID: 4, Value: bytes.Repeat([]byte("delta-004|"), 32)},
+	}
+	const dictID = uint64(9)
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = []byte(fmt.Sprintf("{\"kind\":\"evt\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("q"), 128)))
+	}
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		s := samples[i]
+		if len(s) > need {
+			s = s[:need]
+		}
+		history = append(history, s...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+
+	prep := NewFramePreparer()
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	// Encode cost dominates IO savings: skip compression before encode.
+	prep.SetKeepPolicy(0.01, 10.0, 0.0)
+
+	body, stats, err := prep.PrepareFrame(dictID, dict, records)
+	if err != nil {
+		t.Fatalf("PrepareFrame: %v", err)
+	}
+	if stats.Attempted {
+		t.Fatalf("expected no compression attempt under keep policy")
+	}
+	if stats.Kept {
+		t.Fatalf("expected raw body to be kept")
+	}
+	hdr, _, _, _, err := DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if hdr.Flags&FrameFlagCompressed != 0 {
+		t.Fatalf("expected uncompressed frame body")
+	}
+	if hdr.DictID != dictID {
+		t.Fatalf("dict id mismatch: got=%d want=%d", hdr.DictID, dictID)
+	}
+}
+
 func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
