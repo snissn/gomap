@@ -18,61 +18,65 @@ import (
 )
 
 var (
-	treedbFlushThreshold            = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
-	treedbFlushBuildConcurrency     = flag.Int("treedb-flush-build-concurrency", 0, "TreeDB (cached): flush build concurrency (0=default)")
-	treedbFlushBuildMinEntries      = flag.Int("treedb-flush-build-min-entries", 0, "TreeDB (cached): minimum entries to enable parallel flush build (0=default)")
-	treedbFlushBuildMinUnits        = flag.Int("treedb-flush-build-min-units", 0, "TreeDB (cached): minimum queued memtables to enable parallel flush build (0=default)")
-	treedbFlushBuildChunkCap        = flag.Int("treedb-flush-build-chunk-cap", 0, "TreeDB (cached): max entries per parallel build chunk (0=adaptive, <0=fixed default, >0=fixed cap)")
-	treedbFlushBuildChunkTarget     = flag.Int("treedb-flush-build-chunk-target-bytes", 0, "TreeDB (cached): adaptive chunk target bytes (0=default)")
-	treedbFlushBuildChunkMinBytes   = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
-	treedbFlushBuildChunkMaxBytes   = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
-	treedbFlushBuildPrefetchUnits   = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
-	treedbFlushBackendMaxEntries    = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
-	treedbFlushBackendMaxBatches    = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
-	treedbPagerSyncConcurrency      = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
-	treedbPagerMmapPopulate         = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
-	treedbPagerPrefetchOnRead       = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
-	treedbChunkSize                 = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
-	treedbJournalLanes              = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
-	treedbJournalCompress           = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
-	treedbKeepRecent                = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
-	treedbMaxQueuedMems             = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
-	treedbSlowdownBacklogSeconds    = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbStopBacklogSeconds        = flag.Float64("treedb-stop-backlog-seconds", 2, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
-	treedbMaxBacklogBytes           = flag.Int64("treedb-max-backlog-bytes", 2<<30, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
-	treedbWriterFlushMaxMems        = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
-	treedbWriterFlushMaxMs          = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
-	treedbPreferAppendAlloc         = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
-	treedbFreelistRegionPages       = flag.Uint64("treedb-freelist-region-pages", 0, "TreeDB: freelist reuse region size in pages (0=default)")
-	treedbFreelistRegionRadius      = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
-	treedbLeafFillPPM               = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
-	treedbInternalFillPPM           = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
-	treedbMaintenanceOpsPerCoalesce = flag.Int("treedb-maintenance-ops-per-coalesce", 0, "TreeDB: ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
-	treedbIterDebug                 = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
-	treedbIterDebugLimit            = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
-	treedbForceValuePointers        = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
-	treedbIndexOptimizations        = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
-	treedbLeafPrefixCompression     = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
-	treedbValueLogThreshold         = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
-	treedbVlogDictTrainBytes        = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
-	treedbVlogDictDictBytes         = flag.Int("treedb-vlog-dict-dict-bytes", 0, "TreeDB: value-log dict size in bytes (0=default)")
-	treedbVlogDictMinRecords        = flag.Int("treedb-vlog-dict-min-records", 0, "TreeDB: value-log dict minimum records to train (0=default)")
-	treedbVlogDictMaxRecordBytes    = flag.Int("treedb-vlog-dict-max-record-bytes", 0, "TreeDB: value-log dict max record bytes sampled (0=default)")
-	treedbVlogDictSampleStride      = flag.Int("treedb-vlog-dict-sample-stride", 0, "TreeDB: value-log dict sample stride (0=default)")
-	treedbVlogDictDedupWindow       = flag.Int("treedb-vlog-dict-dedup-window", 0, "TreeDB: value-log dict dedup window size (0=default)")
-	treedbVlogDictAdaptiveRatio     = flag.Float64("treedb-vlog-dict-adaptive-ratio", 0, "TreeDB: value-log dict adaptive pause threshold ratio (0=default)")
-	treedbVlogDictMetricsWindow     = flag.Int("treedb-vlog-dict-metrics-window-bytes", 0, "TreeDB: value-log dict metrics window bytes (0=default)")
-	treedbVlogDictMetricsMinRecords = flag.Int("treedb-vlog-dict-metrics-min-records", 0, "TreeDB: value-log dict metrics min records (0=default)")
-	treedbVlogDictMetricsPauseBytes = flag.Int("treedb-vlog-dict-metrics-pause-bytes", 0, "TreeDB: value-log dict pause bytes when degraded (0=default)")
-	treedbVlogDictMinSavingsRatio   = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
-	treedbVlogDictK                 = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
-	treedbVlogCompressionAutotune   = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
-	treedbVlogDictFrameEncodeLevel  = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
-	treedbVlogDictFrameEntropyMode  = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
-	treedbVlogDictMode              = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
-	treedbIndexColumnarLeaves       = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
-	treedbIndexPackedValuePtr       = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
-	treedbIndexInternalBaseDelta    = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
+	treedbFlushThreshold                  = flag.Int64("treedb-flush-threshold", 64*1024*1024, "TreeDB (cached): flush threshold in bytes")
+	treedbFlushBuildConcurrency           = flag.Int("treedb-flush-build-concurrency", 0, "TreeDB (cached): flush build concurrency (0=default)")
+	treedbFlushBuildMinEntries            = flag.Int("treedb-flush-build-min-entries", 0, "TreeDB (cached): minimum entries to enable parallel flush build (0=default)")
+	treedbFlushBuildMinUnits              = flag.Int("treedb-flush-build-min-units", 0, "TreeDB (cached): minimum queued memtables to enable parallel flush build (0=default)")
+	treedbFlushBuildChunkCap              = flag.Int("treedb-flush-build-chunk-cap", 0, "TreeDB (cached): max entries per parallel build chunk (0=adaptive, <0=fixed default, >0=fixed cap)")
+	treedbFlushBuildChunkTarget           = flag.Int("treedb-flush-build-chunk-target-bytes", 0, "TreeDB (cached): adaptive chunk target bytes (0=default)")
+	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
+	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
+	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
+	treedbFlushBackendMaxEntries          = flag.Int("treedb-flush-backend-max-entries", 0, "TreeDB (cached): max entries per backend flush batch before intermediate commit (0=default, <0=disable chunking)")
+	treedbFlushBackendMaxBatches          = flag.Int("treedb-flush-backend-max-batches", 0, "TreeDB (cached): max intermediate backend commits per flush (0=default, <0=disable cap)")
+	treedbPagerSyncConcurrency            = flag.Int("treedb-pager-sync-concurrency", 0, "TreeDB: pager msync concurrency (0=default)")
+	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
+	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
+	treedbChunkSize                       = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
+	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
+	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
+	treedbKeepRecent                      = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
+	treedbMaxQueuedMems                   = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
+	treedbSlowdownBacklogSeconds          = flag.Float64("treedb-slowdown-backlog-seconds", 1, "TreeDB (cached): begin writer backpressure when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbStopBacklogSeconds              = flag.Float64("treedb-stop-backlog-seconds", 2, "TreeDB (cached): block writers when queued flush backlog exceeds this many seconds (0=disabled)")
+	treedbMaxBacklogBytes                 = flag.Int64("treedb-max-backlog-bytes", 2<<30, "TreeDB (cached): absolute cap on queued flush backlog bytes (0=disabled)")
+	treedbWriterFlushMaxMems              = flag.Int("treedb-writer-flush-max-memtables", 0, "TreeDB (cached): max memtables a writer will help flush per op when backpressure triggers (0=default)")
+	treedbWriterFlushMaxMs                = flag.Int("treedb-writer-flush-max-ms", 0, "TreeDB (cached): max milliseconds a writer will help flush per op when backpressure triggers (0=disabled)")
+	treedbPreferAppendAlloc               = flag.Bool("treedb-prefer-append-alloc", false, "TreeDB: allocate new index pages by appending instead of freelist reuse (improves scan locality under churn; grows index.db)")
+	treedbFreelistRegionPages             = flag.Uint64("treedb-freelist-region-pages", 0, "TreeDB: freelist reuse region size in pages (0=default)")
+	treedbFreelistRegionRadius            = flag.Int("treedb-freelist-region-radius", 0, "TreeDB: freelist reuse region radius (0=default, <0=disable bias)")
+	treedbLeafFillPPM                     = flag.Int("treedb-leaf-fill-ppm", 0, "TreeDB: leaf fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
+	treedbInternalFillPPM                 = flag.Int("treedb-internal-fill-ppm", 0, "TreeDB: internal fill target (ppm). Lower reduces split churn at cost of more pages (0=default=1_000_000)")
+	treedbMaintenanceOpsPerCoalesce       = flag.Int("treedb-maintenance-ops-per-coalesce", 0, "TreeDB: ops-per-coalesce maintenance budget (0=default, <0=disable budget)")
+	treedbIterDebug                       = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
+	treedbIterDebugLimit                  = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
+	treedbForceValuePointers              = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
+	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
+	treedbLeafPrefixCompression           = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
+	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
+	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
+	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
+	treedbVlogDictTrainBytes              = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
+	treedbVlogDictDictBytes               = flag.Int("treedb-vlog-dict-dict-bytes", 0, "TreeDB: value-log dict size in bytes (0=default)")
+	treedbVlogDictMinRecords              = flag.Int("treedb-vlog-dict-min-records", 0, "TreeDB: value-log dict minimum records to train (0=default)")
+	treedbVlogDictMaxRecordBytes          = flag.Int("treedb-vlog-dict-max-record-bytes", 0, "TreeDB: value-log dict max record bytes sampled (0=default)")
+	treedbVlogDictSampleStride            = flag.Int("treedb-vlog-dict-sample-stride", 0, "TreeDB: value-log dict sample stride (0=default)")
+	treedbVlogDictDedupWindow             = flag.Int("treedb-vlog-dict-dedup-window", 0, "TreeDB: value-log dict dedup window size (0=default)")
+	treedbVlogDictAdaptiveRatio           = flag.Float64("treedb-vlog-dict-adaptive-ratio", 0, "TreeDB: value-log dict adaptive pause threshold ratio (0=default)")
+	treedbVlogDictMetricsWindow           = flag.Int("treedb-vlog-dict-metrics-window-bytes", 0, "TreeDB: value-log dict metrics window bytes (0=default)")
+	treedbVlogDictMetricsMinRecords       = flag.Int("treedb-vlog-dict-metrics-min-records", 0, "TreeDB: value-log dict metrics min records (0=default)")
+	treedbVlogDictMetricsPauseBytes       = flag.Int("treedb-vlog-dict-metrics-pause-bytes", 0, "TreeDB: value-log dict pause bytes when degraded (0=default)")
+	treedbVlogDictIncompressibleHoldBytes = flag.Int("treedb-vlog-dict-incompressible-hold-bytes", 0, "TreeDB: incompressible-stream hold bytes for dict suppression (0=default)")
+	treedbVlogDictProbeIntervalBytes      = flag.Int("treedb-vlog-dict-probe-interval-bytes", 0, "TreeDB: probe interval bytes while incompressible hold is active (0=default)")
+	treedbVlogDictMinSavingsRatio         = flag.Float64("treedb-vlog-dict-min-savings-ratio", 0, "TreeDB: value-log dict min payload savings ratio (0=default)")
+	treedbVlogDictK                       = flag.Int("treedb-vlog-dict-k", 0, "TreeDB: value-log dict frame grouping K (records/frame, 0=default)")
+	treedbVlogCompressionAutotune         = flag.String("treedb-vlog-compression-autotune", "off", "TreeDB: value-log compression autotune mode (off|medium|aggressive|default)")
+	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
+	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
+	treedbVlogDictMode                    = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
+	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
+	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
+	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
 	treedbDisableWAL          = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync         = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -386,14 +390,18 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		DisablePiggybackCompaction: *treedbDisablePiggyback,
 
 		ValueLog: treedb.ValueLogOptions{
-			ForcePointers:              forcePointersEffective,
-			PointerThreshold:           *treedbValueLogThreshold,
-			ReadIntegrity:              readIntegrity,
-			DictAdaptiveRatio:          *treedbVlogDictAdaptiveRatio,
-			DictMetricsWindowBytes:     *treedbVlogDictMetricsWindow,
-			DictMetricsMinRecords:      *treedbVlogDictMetricsMinRecords,
-			DictMetricsPauseBytes:      *treedbVlogDictMetricsPauseBytes,
-			DictMinPayloadSavingsRatio: *treedbVlogDictMinSavingsRatio,
+			ForcePointers:               forcePointersEffective,
+			PointerThreshold:            *treedbValueLogThreshold,
+			RawWritevMinAvgBytes:        *treedbVlogRawWritevMinAvgBytes,
+			RawWritevMinBatchRecords:    *treedbVlogRawWritevMinBatchRecs,
+			ReadIntegrity:               readIntegrity,
+			DictAdaptiveRatio:           *treedbVlogDictAdaptiveRatio,
+			DictMetricsWindowBytes:      *treedbVlogDictMetricsWindow,
+			DictMetricsMinRecords:       *treedbVlogDictMetricsMinRecords,
+			DictMetricsPauseBytes:       *treedbVlogDictMetricsPauseBytes,
+			DictIncompressibleHoldBytes: *treedbVlogDictIncompressibleHoldBytes,
+			DictProbeIntervalBytes:      *treedbVlogDictProbeIntervalBytes,
+			DictMinPayloadSavingsRatio:  *treedbVlogDictMinSavingsRatio,
 		},
 	}
 	if *treedbWriterFlushMaxMs > 0 {
