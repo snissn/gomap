@@ -46,7 +46,6 @@ var valueLogEligiblePool sync.Pool // stores []int
 var valueLogRecordPool sync.Pool   // stores []valuelog.Record
 var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
-var valueLogFramePreparerPool sync.Pool
 
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
@@ -161,27 +160,6 @@ func putValueLogPtrs(s []page.ValuePtr) {
 		return
 	}
 	valueLogPtrPool.Put(s[:0])
-}
-
-func getValueLogFramePreparer() *valuelog.FramePreparer {
-	if v := valueLogFramePreparerPool.Get(); v != nil {
-		if prep, ok := v.(*valuelog.FramePreparer); ok && prep != nil {
-			return prep
-		}
-	}
-	return valuelog.NewFramePreparer()
-}
-
-func putValueLogFramePreparer(prep *valuelog.FramePreparer) {
-	if prep == nil {
-		return
-	}
-	prep.ResetCompressionHints()
-	prep.SetEncodeSampleStride(0)
-	prep.SetEncodeCostModel(nil)
-	prep.SetKeepPolicy(0, 0, valuelog.DefaultKeepSafetyMargin)
-	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
-	valueLogFramePreparerPool.Put(prep)
 }
 
 func getValueLogKeys(capacity int) [][]byte {
@@ -3285,7 +3263,7 @@ const (
 	vlogWriteBatchMax       = 512
 	vlogDictPrepBuffer      = 1024
 	vlogDictPrepMaxWorkers  = 4
-	vlogDictPrepMinFrames   = 2
+	vlogDictPrepMinFrames   = 4
 	vlogDictPrepMinRawBytes = 8 << 10
 )
 
@@ -4208,97 +4186,68 @@ func (db *DB) prepareAppendDictFrames(
 		return nil, nil
 	}
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
-	measureEncode := !wallStart.IsZero()
-	if useWorkers {
-		// Parallel prep frames can execute across multiple goroutines, so summing
-		// per-frame encode times would overcount relative to write-path wall time.
-		// Leave encodeNs unset for worker-prepared frames to avoid poisoning
-		// autotune keep-policy estimates.
-		measureEncode = false
+	if !useWorkers {
+		// Preserve the original writer path for small frame counts. Pre-encoding
+		// without concurrency adds extra encode/copy work with little benefit.
+		return nil, nil
 	}
+	// Parallel prep frames can execute across multiple goroutines, so summing
+	// per-frame encode times would overcount relative to write-path wall time.
+	// Leave encodeNs unset for worker-prepared frames to avoid poisoning
+	// autotune keep-policy estimates.
+	measureEncode := false
 	prepared := make([]preparedDictFrame, frameCount)
 
-	if useWorkers {
-		results := make(chan vlogDictPrepareResult, frameCount)
-		for fi := 0; fi < frameCount; fi++ {
-			start := fi * k
-			end := start + k
-			if end > len(records) {
-				end = len(records)
-			}
-			task := vlogDictPrepareTask{
-				fi:             fi,
-				dictID:         dictID,
-				dict:           dict,
-				records:        records[start:end],
-				level:          db.valueLogDictFrameEncodeLevel,
-				enableEntropy:  db.valueLogDictFrameEnableEntropy,
-				ioNsPerStored:  ioNsPerStoredByte,
-				encodeNsPerRaw: encodeNsPerRawByte,
-				safetyMargin:   safetyMargin,
-				measureEncode:  measureEncode,
-				out:            results,
-			}
-			select {
-			case l.vlogPrepCh <- task:
-			case <-db.closeCh:
-				return nil, errWALClosed
-			}
-		}
-
-		var firstErr error
-		for collected := 0; collected < frameCount; collected++ {
-			res := <-results
-			if res.err != nil {
-				if firstErr == nil {
-					firstErr = res.err
-				}
-				continue
-			}
-			start := res.fi * k
-			end := start + k
-			if end > len(records) {
-				end = len(records)
-			}
-			prepared[res.fi] = preparedDictFrame{
-				start: start,
-				end:   end,
-				body:  res.body,
-				stats: res.stats,
-			}
-		}
-		if firstErr != nil {
-			return nil, firstErr
-		}
-		return prepared, nil
-	}
-
-	preparer := getValueLogFramePreparer()
-	defer putValueLogFramePreparer(preparer)
-	preparer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
-	preparer.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
-	if measureEncode {
-		preparer.SetEncodeSampleStride(1)
-	} else {
-		preparer.SetEncodeSampleStride(0)
-	}
-
+	results := make(chan vlogDictPrepareResult, frameCount)
 	for fi := 0; fi < frameCount; fi++ {
 		start := fi * k
 		end := start + k
 		if end > len(records) {
 			end = len(records)
 		}
-		body, stats, err := preparer.PrepareFrame(dictID, dict, records[start:end])
-		if err != nil {
-			return nil, err
+		task := vlogDictPrepareTask{
+			fi:             fi,
+			dictID:         dictID,
+			dict:           dict,
+			records:        records[start:end],
+			level:          db.valueLogDictFrameEncodeLevel,
+			enableEntropy:  db.valueLogDictFrameEnableEntropy,
+			ioNsPerStored:  ioNsPerStoredByte,
+			encodeNsPerRaw: encodeNsPerRawByte,
+			safetyMargin:   safetyMargin,
+			measureEncode:  measureEncode,
+			out:            results,
 		}
-		prepared[fi] = preparedDictFrame{
+		select {
+		case l.vlogPrepCh <- task:
+		case <-db.closeCh:
+			return nil, errWALClosed
+		}
+	}
+
+	var firstErr error
+	for collected := 0; collected < frameCount; collected++ {
+		res := <-results
+		if res.err != nil {
+			if firstErr == nil {
+				firstErr = res.err
+			}
+			continue
+		}
+		start := res.fi * k
+		end := start + k
+		if end > len(records) {
+			end = len(records)
+		}
+		prepared[res.fi] = preparedDictFrame{
 			start: start,
 			end:   end,
-			body:  body,
-			stats: stats,
+			body:  res.body,
+			stats: res.stats,
 		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return prepared, nil
 }
