@@ -30,9 +30,11 @@ type lane struct {
 	vlogCaps         vlogWriterCaps
 	vlogMu           sync.Mutex
 	vlogCh           chan vlogWriteRequest
+	vlogWorkers      int
 	vlogPrepCh       chan vlogDictPrepareTask
 	vlogPrepWorkers  int
 	vlogQueueing     atomic.Bool
+	vlogDirty        atomic.Bool
 	vlogLiveBytes    atomic.Int64
 	vlogClosedBytes  atomic.Int64
 	vlogClosedSizes  map[string]int64

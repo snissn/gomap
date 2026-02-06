@@ -1069,6 +1069,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		return errWALUnavailable
 	}
 	if db.splitValueLogEnabled() {
+		if !l.vlogDirty.Load() {
+			return nil
+		}
 		waitStart := time.Now()
 		l.vlogMu.Lock()
 		waited := time.Since(waitStart)
@@ -1084,6 +1087,9 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		}
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
+		if err == nil {
+			l.vlogDirty.Store(false)
+		}
 		return err
 	}
 	waitStart := time.Now()
@@ -1124,6 +1130,9 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		}
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
 		l.vlogMu.Unlock()
+		if err == nil {
+			l.vlogDirty.Store(false)
+		}
 		return err
 	}
 	waitStart := time.Now()
@@ -1724,6 +1733,8 @@ type DB struct {
 	valueLogDictFrameEnableEntropy bool
 	valueLogDictSampleStride       uint64
 	valueLogDictSampleStrideCount  atomic.Uint64
+	valueLogDictClassifySampled    atomic.Uint64
+	valueLogDictClassifySkipped    atomic.Uint64
 	valueLogDictAdaptiveRatio      float64
 	valueLogDictMinPayloadSavings  float64
 	valueLogDictMetricsWindow      int
@@ -3424,9 +3435,11 @@ const (
 	vlogDictPrepBuffer = 1024
 )
 
-// Match valuelog's writevMinAvgValueSize threshold so the queueing path is only
-// used when we expect writev batching to be competitive.
+// Match valuelog's writevMinAvgValueSize threshold for always-queue large values.
 const vlogQueueMinValueSize = 16 << 10
+
+// Linger briefly to coalesce micro-batches for small/medium queued writes.
+const vlogWriteLinger = 75 * time.Microsecond
 
 func (db *DB) startWALWriter(l *lane) {
 	if l == nil {
@@ -3446,8 +3459,31 @@ func (db *DB) startVlogWriter(l *lane) {
 	}
 	l.vlogCh = make(chan vlogWriteRequest, vlogWriteBuffer)
 	db.startVlogDictPreparer(l)
-	db.wg.Add(1)
-	go db.vlogWriteLoop(l)
+	workers := db.vlogWriteWorkerCount()
+	l.vlogWorkers = workers
+	for i := 0; i < workers; i++ {
+		db.wg.Add(1)
+		go db.vlogWriteLoop(l)
+	}
+}
+
+func (db *DB) vlogWriteWorkerCount() int {
+	procs := runtime.GOMAXPROCS(0)
+	if procs <= 1 {
+		return 1
+	}
+	lanes := len(db.lanes)
+	if lanes < 1 {
+		lanes = 1
+	}
+	workers := procs / lanes
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 4 {
+		workers = 4
+	}
+	return workers
 }
 
 func (db *DB) vlogDictPrepWorkerCount() int {
@@ -3612,6 +3648,33 @@ func (db *DB) vlogWriteLoop(l *lane) {
 		case req = <-l.vlogCh:
 		}
 		batch = append(batch, req)
+		if len(batch) < vlogWriteBatchMax && len(req.value) < vlogQueueMinValueSize {
+			timer := time.NewTimer(vlogWriteLinger)
+			lingerDone := false
+			for len(batch) < vlogWriteBatchMax && !lingerDone {
+				select {
+				case req = <-l.vlogCh:
+					batch = append(batch, req)
+				case <-timer.C:
+					lingerDone = true
+				case <-db.closeCh:
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					db.drainVlogWriter(l, batch)
+					return
+				}
+			}
+			if !timer.Stop() && !lingerDone {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
 
 	drain:
 		for len(batch) < vlogWriteBatchMax {
@@ -4303,6 +4366,13 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	if err == nil {
 		totalBytes = w.Size() - startSize
 	}
+	if err == nil {
+		if needSync || needFlush || db.deferredValueLogEnabled() {
+			l.vlogDirty.Store(false)
+		} else if totalBytes > 0 {
+			l.vlogDirty.Store(true)
+		}
+	}
 	if err == nil && totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
@@ -4466,6 +4536,35 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 	return true
 }
 
+func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, wallStart time.Time) bool {
+	if l == nil || l.vlogCh == nil {
+		return false
+	}
+	if durability == journalDurabilitySync {
+		return false
+	}
+	// Preserve direct timing mode for autotune/profile callers.
+	if !wallStart.IsZero() {
+		return false
+	}
+	// Dict path benefits from queue coalescing even for small values.
+	if dictID != 0 {
+		return true
+	}
+	// Always queue large values.
+	if valueLen >= vlogQueueMinValueSize {
+		return true
+	}
+	// Adaptive path: queue when contention/backlog is visible.
+	if l.vlogQueueing.Load() {
+		return true
+	}
+	if len(l.vlogCh) > 0 {
+		return true
+	}
+	return false
+}
+
 func (db *DB) prepareAppendDictFrames(
 	l *lane,
 	dictID uint64,
@@ -4489,19 +4588,46 @@ func (db *DB) prepareAppendDictFrames(
 		return nil, 0, nil
 	}
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
-	if !useWorkers {
-		// Preserve the original writer path for small frame counts. Pre-encoding
-		// without concurrency adds extra encode/copy work with little benefit.
-		return nil, 0, nil
-	}
 	prepStart := time.Now()
+	prepared := getVlogPreparedFrames(frameCount)
+	clear(prepared)
+	if !useWorkers {
+		// Keep dict frame encode work out of vlogMu even when worker threads are
+		// unavailable. This reduces lock hold time on small and medium batches.
+		preparer := valuelog.NewFramePreparer()
+		preparer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+		preparer.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
+		preparer.SetEncodeSampleStride(0)
+		for fi := 0; fi < frameCount; fi++ {
+			start := fi * k
+			end := start + k
+			if end > len(records) {
+				end = len(records)
+			}
+			bodyBuf := getVlogPreparedFrameBody()
+			body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], dictID, dict, records[start:end])
+			if err != nil {
+				putVlogPreparedFrameBody(bodyBuf)
+				releasePreparedDictFrames(prepared)
+				putVlogPreparedFrames(prepared)
+				return nil, time.Since(prepStart).Nanoseconds(), err
+			}
+			bodyBuf.buf = body
+			prepared[fi] = preparedDictFrame{
+				start:   start,
+				end:     end,
+				body:    body,
+				bodyBuf: bodyBuf,
+				stats:   stats,
+			}
+		}
+		return prepared, time.Since(prepStart).Nanoseconds(), nil
+	}
 	// Parallel prep frames can execute across multiple goroutines, so summing
 	// per-frame encode times would overcount relative to write-path wall time.
 	// Leave encodeNs unset for worker-prepared frames to avoid poisoning
 	// autotune keep-policy estimates.
 	measureEncode := false
-	prepared := getVlogPreparedFrames(frameCount)
-	clear(prepared)
 	results := getVlogDictPrepareResults(frameCount)
 	for fi := 0; fi < frameCount; fi++ {
 		start := fi * k
@@ -4624,6 +4750,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	attemptCompression, probeCompression, paused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
 	if dictID != 0 && !attemptCompression {
+		dictID = 0
+		dict = nil
+	}
+	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
 	}
@@ -4769,6 +4899,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeNsTotal := int64(0)
 	encodeRawBytes := 0
 	rawBatchUsed := false
+	durableBoundary := false
 	if dictID == 0 && hasRawInto && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
@@ -4969,14 +5100,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
+			durableBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
+			durableBoundary = err == nil
 		default:
 			if db.deferredValueLogEnabled() {
 				// In deferred value-log mode, the index will publish pointers to
 				// value-log records during the flush/commit path. Ensure the value-log
 				// bytes are visible to readers even when durability is "none".
 				err = w.Flush()
+				durableBoundary = err == nil
 			}
 		}
 	}
@@ -4995,6 +5129,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err != nil {
 		putValueLogPtrs(ptrs)
 		return nil, err
+	}
+	if durableBoundary {
+		l.vlogDirty.Store(false)
+	} else if bytesWrittenLive > 0 {
+		l.vlogDirty.Store(true)
 	}
 	if framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))
@@ -5117,13 +5256,17 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		dictID = 0
 		dict = nil
 	}
+	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
+		dictID = 0
+		dict = nil
+	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
 	}
 	db.valueLogDictCollectSample(value)
 
-	if wallStart.IsZero() && durability != journalDurabilitySync && l.vlogCh != nil && len(value) >= vlogQueueMinValueSize {
+	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
@@ -5159,14 +5302,17 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			}
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
+			durableBoundary := false
 			ptr, err = w.Append(0, nil, rid, value)
 			if err == nil {
 				switch durability {
 				case journalDurabilityFlush:
 					err = w.Flush()
+					durableBoundary = err == nil
 				default:
 					if db.deferredValueLogEnabled() {
 						err = w.Flush()
+						durableBoundary = err == nil
 					}
 				}
 			}
@@ -5188,6 +5334,11 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			}
 			if stats.Kept {
 				db.valueLogDictFrames.kept.Add(1)
+			}
+			if durableBoundary {
+				l.vlogDirty.Store(false)
+			} else if totalBytes > 0 {
+				l.vlogDirty.Store(true)
 			}
 			if totalBytes > 0 {
 				l.vlogLiveBytes.Add(totalBytes)
@@ -5258,6 +5409,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	startSize := w.Size()
+	durableBoundary := false
 
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
@@ -5300,11 +5452,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		switch durability {
 		case journalDurabilityFlush:
 			err = w.Flush()
+			durableBoundary = err == nil
 		case journalDurabilitySync:
 			err = w.Sync()
+			durableBoundary = err == nil
 		default:
 			if db.deferredValueLogEnabled() {
 				err = w.Flush()
+				durableBoundary = err == nil
 			}
 		}
 	}
@@ -5326,6 +5481,11 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 	if stats.Kept {
 		db.valueLogDictFrames.kept.Add(1)
+	}
+	if durableBoundary {
+		l.vlogDirty.Store(false)
+	} else if totalBytes > 0 {
+		l.vlogDirty.Store(true)
 	}
 	if dictID != 0 && len(dict) > 0 {
 		db.valueLogDictObservePayload(uint64(stats.RawPayloadBytes), uint64(stats.StoredPayloadBytes), stats.Records)
@@ -9090,6 +9250,13 @@ func (db *DB) Stats() map[string]string {
 	if vlogFramesTotal > 0 {
 		stats["treedb.cache.vlog_dict.attempted_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesAttempted)/float64(vlogFramesTotal))
 		stats["treedb.cache.vlog_dict.kept_frac"] = fmt.Sprintf("%.6f", float64(vlogFramesKept)/float64(vlogFramesTotal))
+	}
+	classifySampled := db.valueLogDictClassifySampled.Load()
+	classifySkipped := db.valueLogDictClassifySkipped.Load()
+	stats["treedb.cache.vlog_dict.classifier.sampled"] = fmt.Sprintf("%d", classifySampled)
+	stats["treedb.cache.vlog_dict.classifier.skipped"] = fmt.Sprintf("%d", classifySkipped)
+	if classifySampled > 0 {
+		stats["treedb.cache.vlog_dict.classifier.skip_frac"] = fmt.Sprintf("%.6f", float64(classifySkipped)/float64(classifySampled))
 	}
 	if db.valueLogTemplateEngine != nil {
 		for k, v := range db.valueLogTemplateEngine.StatsSnapshot() {

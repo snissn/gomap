@@ -62,6 +62,70 @@ func likelyCompressibleSample(value []byte) bool {
 	return true
 }
 
+func (db *DB) shouldBypassValueLogDictForValue(value []byte, probeCompression bool) bool {
+	if db == nil || probeCompression {
+		return false
+	}
+	// Tiny values are already cheap; avoid classifier churn.
+	if len(value) < 4096 {
+		return false
+	}
+	db.valueLogDictClassifySampled.Add(1)
+	if likelyCompressibleSample(value) {
+		return false
+	}
+	pause := db.valueLogDictMetricsPauseBytes
+	if pause <= 0 {
+		pause = 64 << 20
+	}
+	db.valueLogDictPauseRemaining.Store(uint64(pause))
+	if db.valueLogDictProbeBytes > 0 {
+		db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+	}
+	db.valueLogDictClassifySkipped.Add(1)
+	return true
+}
+
+func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, probeCompression bool) bool {
+	if db == nil || probeCompression || len(records) == 0 {
+		return false
+	}
+	step := len(records) / 4
+	if step < 1 {
+		step = 1
+	}
+	samples := 0
+	incompressible := 0
+	for i := 0; i < len(records) && samples < 4; i += step {
+		v := records[i].Value
+		if len(v) < 4096 {
+			continue
+		}
+		samples++
+		if !likelyCompressibleSample(v) {
+			incompressible++
+		}
+	}
+	if samples == 0 {
+		return false
+	}
+	db.valueLogDictClassifySampled.Add(uint64(samples))
+	// Bypass dict work when sampled payloads are predominantly high-entropy.
+	if incompressible*4 >= samples*3 {
+		pause := db.valueLogDictMetricsPauseBytes
+		if pause <= 0 {
+			pause = 64 << 20
+		}
+		db.valueLogDictPauseRemaining.Store(uint64(pause))
+		if db.valueLogDictProbeBytes > 0 {
+			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+		}
+		db.valueLogDictClassifySkipped.Add(1)
+		return true
+	}
+	return false
+}
+
 func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if db == nil {
 		return
