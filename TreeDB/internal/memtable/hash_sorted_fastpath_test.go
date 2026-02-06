@@ -37,3 +37,21 @@ func TestHashSortedApplyStealSortedBatch_AppendAndFallback(t *testing.T) {
 		t.Fatalf("key b mismatch after update: ok=%v del=%v val=%q", ok, del, string(got))
 	}
 }
+
+func TestHashSortedApplyStealSortedBatch_DuplicateKeyForcesFallback(t *testing.T) {
+	m := NewHashSorted()
+	m.SetSteal([]byte("b"), []byte("v0"))
+
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("c"), Value: []byte("v1")},
+		{Type: batchpkg.OpPut, Key: []byte("c"), Value: []byte("v2")},
+	}
+	m.ApplyStealSortedBatch(entries, nil)
+
+	if got, del, ok := m.Get([]byte("c")); !ok || del || string(got) != "v2" {
+		t.Fatalf("key c mismatch after duplicate fallback: ok=%v del=%v val=%q", ok, del, string(got))
+	}
+	if got := m.Len(); got != 2 {
+		t.Fatalf("len=%d want 2", got)
+	}
+}

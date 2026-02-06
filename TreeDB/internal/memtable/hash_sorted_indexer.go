@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"runtime"
 	"sort"
 	"sync"
 )
@@ -27,17 +28,36 @@ type hashSortedIndexWork struct {
 // HashSortedIndexer processes sealed key chunks in the background.
 type HashSortedIndexer struct {
 	ch       chan hashSortedIndexWork
+	workers  int
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
 func NewHashSortedIndexer() *HashSortedIndexer {
 	x := &HashSortedIndexer{
-		ch: make(chan hashSortedIndexWork, hashSortedIndexerQueueSize),
+		ch:      make(chan hashSortedIndexWork, hashSortedIndexerQueueSize),
+		workers: hashSortedIndexerWorkerCount(),
 	}
-	x.wg.Add(1)
-	go x.loop()
+	x.wg.Add(x.workers)
+	for i := 0; i < x.workers; i++ {
+		go x.loop()
+	}
 	return x
+}
+
+func hashSortedIndexerWorkerCount() int {
+	procs := runtime.GOMAXPROCS(0)
+	if procs <= 2 {
+		return 1
+	}
+	workers := procs / 2
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	return workers
 }
 
 func (x *HashSortedIndexer) loop() {

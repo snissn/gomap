@@ -9,7 +9,153 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const writevMinAvgValueSize = 16 << 10
+const (
+	defaultRawWritevMinAvgBytes     = 0
+	defaultRawWritevMinBatchRecords = 8
+)
+
+func rawWritevLimits(w *Writer) (maxBytes, maxIovs int) {
+	maxBytes = defaultBufferSize
+	if w != nil && w.appendMax > 0 {
+		maxBytes = w.appendMax
+	}
+	maxIovs = writevMaxIovs
+	if maxIovs <= 0 {
+		maxIovs = 1024
+	}
+	// Leave headroom: some platforms enforce lower limits than UIO_MAXIOV.
+	if maxIovs > 128 {
+		maxIovs -= 64
+	}
+	return maxBytes, maxIovs
+}
+
+func rawFrameLen(records []Record, start, end int) (int, int, bool) {
+	kFrame := end - start
+	if kFrame <= 0 || kFrame > MaxFrameK {
+		return 0, 0, false
+	}
+	framePayloadBytes := 0
+	for i := start; i < end; i++ {
+		framePayloadBytes += len(records[i].Value)
+		if framePayloadBytes < 0 || framePayloadBytes > int(^uint32(0)) {
+			return 0, 0, false
+		}
+	}
+	prefixLen := FrameHeaderSize + (kFrame * 8) + ((kFrame + 1) * 4)
+	bodyLen := prefixLen + framePayloadBytes
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
+		return 0, 0, false
+	}
+	if bodyLen > int(^uint32(0)) || recordSizeExceedsMax(uint32(bodyLen)) {
+		return 0, 0, false
+	}
+	return HeaderSize + bodyLen, kFrame, true
+}
+
+func predictRawWritevFlushes(records []Record, k, maxBytes, maxIovs int) int {
+	if len(records) == 0 || k <= 0 {
+		return 0
+	}
+	flushes := 0
+	queuedBytes := 0
+	queuedIovs := 0
+	for pos := 0; pos < len(records); pos += k {
+		end := pos + k
+		if end > len(records) {
+			end = len(records)
+		}
+		totalLen, kFrame, ok := rawFrameLen(records, pos, end)
+		if !ok {
+			return 0
+		}
+		neededIovs := 2 + kFrame
+		if queuedIovs > 0 && (queuedIovs+neededIovs > maxIovs || queuedBytes+totalLen > maxBytes) {
+			flushes++
+			queuedBytes = 0
+			queuedIovs = 0
+		}
+		queuedBytes += totalLen
+		queuedIovs += neededIovs
+	}
+	if queuedIovs > 0 {
+		flushes++
+	}
+	return flushes
+}
+
+func predictRawFallbackFlushes(records []Record, k, maxBytes, existingBuffered int) int {
+	if len(records) == 0 || k <= 0 {
+		return 0
+	}
+	if existingBuffered < 0 {
+		existingBuffered = 0
+	}
+	flushes := 0
+	queued := existingBuffered
+	for pos := 0; pos < len(records); pos += k {
+		end := pos + k
+		if end > len(records) {
+			end = len(records)
+		}
+		totalLen, _, ok := rawFrameLen(records, pos, end)
+		if !ok {
+			return 0
+		}
+		if totalLen >= maxBytes {
+			if queued > 0 {
+				flushes++
+				queued = 0
+			}
+			// Large frames bypass appendBuf and write directly once in the
+			// fallback path; do not model these as maxBytes-sized splits.
+			flushes++
+			continue
+		}
+		if queued+totalLen > maxBytes {
+			flushes++
+			queued = 0
+		}
+		queued += totalLen
+		if queued >= maxBytes {
+			flushes++
+			queued = 0
+		}
+	}
+	if queued > 0 {
+		flushes++
+	}
+	return flushes
+}
+
+func (w *Writer) shouldUseRawWritev(records []Record, k int, rawPayloadBytes int) bool {
+	if w == nil || !writevSupported || w.f == nil {
+		return false
+	}
+	minAvgBytes, minBatchRecs := w.rawWritevStrategy()
+	if len(records) < minBatchRecs {
+		return false
+	}
+	if minAvgBytes > 0 && (rawPayloadBytes/len(records)) < minAvgBytes {
+		return false
+	}
+	existingBuffered := len(w.appendBuf)
+	maxBytes, maxIovs := rawWritevLimits(w)
+	writevFlushes := predictRawWritevFlushes(records, k, maxBytes, maxIovs)
+	if writevFlushes == 0 {
+		return false
+	}
+	// The writev path must flush any existing append buffer before queuing iovs.
+	if existingBuffered > 0 {
+		writevFlushes++
+	}
+	fallbackFlushes := predictRawFallbackFlushes(records, k, maxBytes, existingBuffered)
+	if fallbackFlushes == 0 {
+		return false
+	}
+	// Adaptive mode: choose writev when it is no worse in estimated flush count.
+	return writevFlushes <= fallbackFlushes
+}
 
 // AppendRawFramesWritevInto appends raw (uncompressed) grouped frames using a
 // writev batching strategy.
@@ -48,10 +194,9 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		}
 	}
 
-	// Only use writev when it is likely to produce large batched writes. For
-	// small average values, iov limits can force tiny writev calls and regress
-	// syscall counts compared to the contiguous-buffer path.
-	if !writevSupported || w.f == nil || (rawPayloadBytes/len(records)) < writevMinAvgValueSize {
+	// Adaptive strategy: only use writev when the estimated iov/flush behavior
+	// is no worse than the contiguous-buffer fallback.
+	if !w.shouldUseRawWritev(records, k, rawPayloadBytes) {
 		stats := FrameStats{Kept: false}
 		for i := 0; i < len(records); i += k {
 			end := i + k
@@ -73,18 +218,7 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		return nil, FrameStats{}, err
 	}
 
-	max := w.appendMax
-	if max <= 0 {
-		max = defaultBufferSize
-	}
-	// Leave headroom: some platforms enforce lower limits than UIO_MAXIOV.
-	maxIovs := writevMaxIovs
-	if maxIovs <= 0 {
-		maxIovs = 1024
-	}
-	if maxIovs > 128 {
-		maxIovs -= 64
-	}
+	max, maxIovs := rawWritevLimits(w)
 
 	fd := int(w.f.Fd())
 	iovs := make([][]byte, 0, 128)

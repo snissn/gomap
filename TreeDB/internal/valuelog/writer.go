@@ -38,6 +38,8 @@ type Writer struct {
 	fileID                 uint32
 	appendBuf              []byte
 	appendMax              int
+	rawWritevMinAvgBytes   int
+	rawWritevMinBatchRecs  int
 	scratch                []byte
 	prefixBuf              []byte
 	rawScratch             []byte
@@ -275,31 +277,35 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:                    f,
-		bw:                   bufio.NewWriterSize(f, defaultBufferSize),
-		size:                 info.Size(),
-		fileID:               fileID,
-		appendMax:            defaultBufferSize,
-		appendBuf:            make([]byte, 0, defaultBufferSize),
-		scratch:              make([]byte, 0, defaultBufferSize),
-		prefixBuf:            make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		dictFrameEncodeLevel: zstd.SpeedFastest,
-		syncFn:               func(file *os.File) error { return file.Sync() },
-		clock:                RealClock{},
-		keepSafetyMargin:     DefaultKeepSafetyMargin,
+		f:                     f,
+		bw:                    bufio.NewWriterSize(f, defaultBufferSize),
+		size:                  info.Size(),
+		fileID:                fileID,
+		appendMax:             defaultBufferSize,
+		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
+		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
+		appendBuf:             make([]byte, 0, defaultBufferSize),
+		scratch:               make([]byte, 0, defaultBufferSize),
+		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		dictFrameEncodeLevel:  zstd.SpeedFastest,
+		syncFn:                func(file *os.File) error { return file.Sync() },
+		clock:                 RealClock{},
+		keepSafetyMargin:      DefaultKeepSafetyMargin,
 	}, nil
 }
 
 func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	return &Writer{
-		bw:                   bufio.NewWriterSize(sink, defaultBufferSize),
-		fileID:               fileID,
-		appendMax:            0,
-		scratch:              make([]byte, 0, defaultBufferSize),
-		prefixBuf:            make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
-		dictFrameEncodeLevel: zstd.SpeedFastest,
-		clock:                RealClock{},
-		keepSafetyMargin:     DefaultKeepSafetyMargin,
+		bw:                    bufio.NewWriterSize(sink, defaultBufferSize),
+		fileID:                fileID,
+		appendMax:             0,
+		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
+		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
+		scratch:               make([]byte, 0, defaultBufferSize),
+		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
+		dictFrameEncodeLevel:  zstd.SpeedFastest,
+		clock:                 RealClock{},
+		keepSafetyMargin:      DefaultKeepSafetyMargin,
 	}
 }
 
@@ -368,6 +374,38 @@ func (w *Writer) SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMarg
 		safetyMargin = 0
 	}
 	w.keepSafetyMargin = safetyMargin
+}
+
+func normalizeRawWritevStrategy(minAvgBytes, minBatchRecs int) (int, int) {
+	if minAvgBytes < 0 {
+		minAvgBytes = 0
+	}
+	if minBatchRecs <= 0 {
+		minBatchRecs = defaultRawWritevMinBatchRecords
+	}
+	return minAvgBytes, minBatchRecs
+}
+
+// SetRawWritevStrategy configures grouped raw writev usage heuristics.
+//
+// minAvgBytes:
+//   - 0 enables adaptive mode (no average-bytes floor).
+//   - >0 requires average payload bytes/record to meet this floor.
+//
+// minBatchRecs:
+//   - <=0 uses the default.
+func (w *Writer) SetRawWritevStrategy(minAvgBytes, minBatchRecs int) {
+	if w == nil {
+		return
+	}
+	w.rawWritevMinAvgBytes, w.rawWritevMinBatchRecs = normalizeRawWritevStrategy(minAvgBytes, minBatchRecs)
+}
+
+func (w *Writer) rawWritevStrategy() (int, int) {
+	if w == nil {
+		return 0, defaultRawWritevMinBatchRecords
+	}
+	return normalizeRawWritevStrategy(w.rawWritevMinAvgBytes, w.rawWritevMinBatchRecs)
 }
 
 // ResetCompressionHints clears skip/backoff state for deterministic benches.

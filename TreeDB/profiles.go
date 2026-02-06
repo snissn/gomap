@@ -139,6 +139,12 @@ func applyIndexOptimizationsProfile(opts *Options) {
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
+		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
+	}
+	if opts.ValueLog.DictProbeIntervalBytes == 0 {
+		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
+	}
 
 	// Prefer appending new pages for throughput under churn unless caller opted
 	// out. This can trade disk growth for write speed.
@@ -151,6 +157,12 @@ func applyFastProfile(opts *Options) {
 func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
+		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
+	}
+	if opts.ValueLog.DictProbeIntervalBytes == 0 {
+		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
+	}
 
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true

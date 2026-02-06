@@ -143,3 +143,24 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 		t.Fatalf("MaxWALBytes overridden: got %d", opts.MaxWALBytes)
 	}
 }
+
+func TestApplyProfile_PreservesNegativeDictHoldProbeValues(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := Options{
+				ValueLog: ValueLogOptions{
+					DictIncompressibleHoldBytes: -1,
+					DictProbeIntervalBytes:      -1,
+				},
+			}
+			ApplyProfile(&opts, profile)
+
+			if opts.ValueLog.DictIncompressibleHoldBytes != -1 {
+				t.Fatalf("DictIncompressibleHoldBytes overridden: got %d", opts.ValueLog.DictIncompressibleHoldBytes)
+			}
+			if opts.ValueLog.DictProbeIntervalBytes != -1 {
+				t.Fatalf("DictProbeIntervalBytes overridden: got %d", opts.ValueLog.DictProbeIntervalBytes)
+			}
+		})
+	}
+}

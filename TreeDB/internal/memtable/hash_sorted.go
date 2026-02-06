@@ -22,8 +22,8 @@ const (
 	// Hash-sorted entries carry map/table overhead beyond key/value payload,
 	// so use a conservative bytes-per-entry estimate to avoid over-allocation.
 	hashSortedEstimatedBytesPerEntry = 64
-	hashSortedMinInitialEntries      = 1024
-	hashSortedMaxInitialEntries      = 4 << 20
+	hashSortedMinInitialEntries      = 128
+	hashSortedMaxInitialEntries      = 1 << 20
 )
 
 func hashEntryValueSize(flags byte, value []byte) int {
@@ -766,6 +766,17 @@ func (m *HashSorted) setEntryNewStealLocked(op batchpkg.Entry) ([]string, uint64
 func (m *HashSorted) canAppendSortedBatchLocked(entries []batchpkg.Entry) bool {
 	if len(entries) == 0 || entries[0].Key == nil {
 		return false
+	}
+	prev := bytesToStringNoCopy(entries[0].Key)
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Key == nil {
+			return false
+		}
+		cur := bytesToStringNoCopy(entries[i].Key)
+		if strings.Compare(cur, prev) <= 0 {
+			return false
+		}
+		prev = cur
 	}
 	if len(m.items) == 0 {
 		return true

@@ -11,6 +11,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+const (
+	// Scale trainer sampling by payload bytes so large batches of small values
+	// can bootstrap a dictionary quickly.
+	valueLogDictCollectMinPerBatchRecords = 32
+	valueLogDictCollectMaxPerBatchRecords = 2048
+	valueLogDictCollectMinPerBatchBytes   = 32 << 10
+)
+
 type dictStoreWriter interface {
 	PutDictBytes(context.Context, []byte) (uint64, error)
 	SetCurrent(context.Context, uint64) error
@@ -62,12 +70,214 @@ func likelyCompressibleSample(value []byte) bool {
 	return true
 }
 
+func saturatingRawPayloadBytes(records []valuelog.Record) uint64 {
+	total := uint64(0)
+	for i := range records {
+		n := uint64(len(records[i].Value))
+		if total > ^uint64(0)-n {
+			return ^uint64(0)
+		}
+		total += n
+	}
+	return total
+}
+
+func (db *DB) valueLogDictMinSavingsRatio() float64 {
+	if db == nil {
+		return 0.02
+	}
+	if db.valueLogDictMinPayloadSavings > 0 {
+		return db.valueLogDictMinPayloadSavings
+	}
+	if db.forceValueLogPointers || db.disableJournal {
+		return 0.05
+	}
+	return 0.02
+}
+
+func (db *DB) armValueLogDictPauseBytes(pauseBytes uint64) {
+	if db == nil {
+		return
+	}
+	if pauseBytes == 0 {
+		pause := db.valueLogDictMetricsPauseBytes
+		if pause <= 0 {
+			pauseBytes = 64 << 20
+		} else {
+			pauseBytes = uint64(pause)
+		}
+	}
+	for {
+		cur := db.valueLogDictPauseRemaining.Load()
+		if cur >= pauseBytes {
+			break
+		}
+		if db.valueLogDictPauseRemaining.CompareAndSwap(cur, pauseBytes) {
+			break
+		}
+	}
+	if db.valueLogDictProbeBytes > 0 {
+		db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
+	}
+}
+
+func (db *DB) armValueLogDictIncompressibleHoldBytes(holdBytes uint64) {
+	if db == nil {
+		return
+	}
+	if holdBytes == 0 {
+		holdBytes = db.valueLogDictIncompressibleHoldBytes
+		if holdBytes == 0 {
+			return
+		}
+	}
+	for {
+		cur := db.valueLogDictIncompressibleHoldRemaining.Load()
+		if cur >= holdBytes {
+			break
+		}
+		if db.valueLogDictIncompressibleHoldRemaining.CompareAndSwap(cur, holdBytes) {
+			break
+		}
+	}
+	probeBytes := db.valueLogDictIncompressibleProbeBytes
+	if probeBytes == 0 {
+		return
+	}
+	if probeBytes > holdBytes {
+		probeBytes = holdBytes
+	}
+	db.valueLogDictIncompressibleProbeRemaining.Store(probeBytes)
+	db.valueLogDictIncompressibleHolds.Add(1)
+}
+
+func (db *DB) valueLogDictIncompressibleDecision(rawLen uint64, allowProbe bool) (attempt bool, probe bool, holding bool) {
+	if db == nil || rawLen == 0 {
+		return true, false, false
+	}
+	remaining := db.valueLogDictIncompressibleHoldRemaining.Load()
+	for remaining > 0 {
+		next := uint64(0)
+		if rawLen < remaining {
+			next = remaining - rawLen
+		}
+		if db.valueLogDictIncompressibleHoldRemaining.CompareAndSwap(remaining, next) {
+			db.valueLogDictIncompressibleBypassBytes.Add(rawLen)
+			if !allowProbe {
+				return false, false, true
+			}
+			probeBytes := db.valueLogDictIncompressibleProbeBytes
+			if probeBytes == 0 {
+				return false, false, true
+			}
+			probeRemaining := db.valueLogDictIncompressibleProbeRemaining.Load()
+			for {
+				if probeRemaining <= rawLen {
+					nextProbe := probeBytes
+					if next > 0 && nextProbe > next {
+						nextProbe = next
+					}
+					if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, nextProbe) {
+						return true, true, true
+					}
+				} else if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawLen) {
+					return false, false, true
+				}
+				probeRemaining = db.valueLogDictIncompressibleProbeRemaining.Load()
+			}
+		}
+		remaining = db.valueLogDictIncompressibleHoldRemaining.Load()
+	}
+	return true, false, false
+}
+
+func (db *DB) valueLogDictClassifierBypass(value []byte, probeCompression bool) bool {
+	if db == nil || probeCompression {
+		return false
+	}
+	if attempt, _, holding := db.valueLogDictIncompressibleDecision(uint64(len(value)), false); holding && !attempt {
+		return true
+	}
+	// Tiny values are already cheap; avoid classifier churn.
+	if len(value) < 4096 {
+		return false
+	}
+	db.valueLogDictClassifySampled.Add(1)
+	if likelyCompressibleSample(value) {
+		db.valueLogDictIncompressibleHitStreak.Store(0)
+		return false
+	}
+	hits := db.valueLogDictIncompressibleHitStreak.Add(1)
+	db.valueLogDictIncompressibleHits.Add(1)
+	if hits >= 1 {
+		db.armValueLogDictIncompressibleHoldBytes(0)
+	}
+	db.armValueLogDictPauseBytes(0)
+	db.valueLogDictClassifySkipped.Add(1)
+	return true
+}
+
+func (db *DB) shouldBypassValueLogDictForValue(value []byte, probeCompression bool) bool {
+	return db.valueLogDictClassifierBypass(value, probeCompression)
+}
+
+func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, probeCompression bool) bool {
+	if db == nil || probeCompression || len(records) == 0 {
+		return false
+	}
+	rawBytes := saturatingRawPayloadBytes(records)
+	if attempt, _, holding := db.valueLogDictIncompressibleDecision(rawBytes, false); holding && !attempt {
+		return true
+	}
+	step := len(records) / 4
+	if step < 1 {
+		step = 1
+	}
+	samples := 0
+	incompressible := 0
+	for i := 0; i < len(records) && samples < 4; i += step {
+		v := records[i].Value
+		if len(v) < 4096 {
+			continue
+		}
+		samples++
+		if !likelyCompressibleSample(v) {
+			incompressible++
+		}
+	}
+	if samples == 0 {
+		return false
+	}
+	// Count classification decisions (not payload samples) so sampled/skipped share units.
+	db.valueLogDictClassifySampled.Add(1)
+	// Bypass dict work when sampled payloads are predominantly high-entropy.
+	if incompressible*4 >= samples*3 {
+		db.valueLogDictIncompressibleHits.Add(1)
+		hits := db.valueLogDictIncompressibleHitStreak.Add(1)
+		if hits >= 1 {
+			db.armValueLogDictIncompressibleHoldBytes(0)
+		}
+		db.armValueLogDictPauseBytes(0)
+		db.valueLogDictClassifySkipped.Add(1)
+		return true
+	}
+	db.valueLogDictIncompressibleHitStreak.Store(0)
+	return false
+}
+
 func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 	if db == nil {
 		return
 	}
 	tr := db.valueLogDictTrainer
 	if tr == nil || !tr.ShouldCollect() {
+		return
+	}
+	if db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
+		return
+	}
+	paused := db.valueLogDictPaused()
+	if paused && !db.valueLogDictShouldCollectPausedBatch(len(records)) {
 		return
 	}
 	// Seed the trainer's IO cost model early so the initial dict/K selection can
@@ -93,32 +303,69 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 		// record index, then sample records where (index % stride) == 0.
 		base = db.valueLogDictSampleStrideCount.Add(n) - n
 	}
-	// Avoid long pause windows before the first dict is active.
-	allowPause := db.valueLogDictLastAppliedDictID.Load() != 0
+	collectBudget := db.valueLogDictCollectBudget(records, paused)
+	if collectBudget <= 0 {
+		return
+	}
+	collected := 0
 	for i := range records {
 		if stride > 1 && (base+uint64(i)+1)%stride != 0 {
 			continue
 		}
-		if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
-			continue
-		}
 		v := records[i].Value
-		if !likelyCompressibleSample(v) && allowPause {
-			if db.valueLogDictPaused() {
-				continue
-			}
-			pause := db.valueLogDictMetricsPauseBytes
-			if pause <= 0 {
-				pause = 64 << 20
-			}
-			db.valueLogDictPauseRemaining.Store(uint64(pause))
-			if db.valueLogDictProbeBytes > 0 {
-				db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
-			}
+		if db.valueLogDictClassifierBypass(v, false) {
+			// One high-entropy sample is enough to stop this collect pass and keep
+			// the write path cheap on incompressible streams.
 			return
 		}
 		tr.Collect(v)
+		collected++
+		if collected >= collectBudget {
+			return
+		}
 	}
+}
+
+func (db *DB) valueLogDictCollectBudget(records []valuelog.Record, paused bool) int {
+	n := len(records)
+	if n == 0 {
+		return 0
+	}
+	if paused {
+		if n > 1 {
+			return 1
+		}
+		return n
+	}
+
+	targetBytes := compression.DefaultTrainBootstrapBytes
+	if db != nil && db.valueLogDictTrain.TrainBytes > 0 && db.valueLogDictTrain.TrainBytes < targetBytes {
+		targetBytes = db.valueLogDictTrain.TrainBytes
+	}
+	if targetBytes < valueLogDictCollectMinPerBatchBytes {
+		targetBytes = valueLogDictCollectMinPerBatchBytes
+	}
+
+	rawBytes := saturatingRawPayloadBytes(records)
+	avgBytes := uint64(1)
+	if rawBytes > 0 {
+		avgBytes = rawBytes / uint64(n)
+		if avgBytes == 0 {
+			avgBytes = 1
+		}
+	}
+
+	budget := uint64(targetBytes) / avgBytes
+	if budget < valueLogDictCollectMinPerBatchRecords {
+		budget = valueLogDictCollectMinPerBatchRecords
+	}
+	if budget > valueLogDictCollectMaxPerBatchRecords {
+		budget = valueLogDictCollectMaxPerBatchRecords
+	}
+	if budget > uint64(n) {
+		budget = uint64(n)
+	}
+	return int(budget)
 }
 
 func (db *DB) valueLogDictCollectSample(value []byte) {
@@ -127,6 +374,9 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	}
 	tr := db.valueLogDictTrainer
 	if tr == nil || !tr.ShouldCollect() {
+		return
+	}
+	if db.valueLogDictIncompressibleHoldRemaining.Load() > 0 {
 		return
 	}
 	if db.valueLogAutotuneOptions.Mode != valuelog.AutotuneOff {
@@ -142,18 +392,7 @@ func (db *DB) valueLogDictCollectSample(value []byte) {
 	if db.valueLogDictPaused() && !db.valueLogDictShouldCollectPaused() {
 		return
 	}
-	if !likelyCompressibleSample(value) && db.valueLogDictLastAppliedDictID.Load() != 0 {
-		if db.valueLogDictPaused() {
-			return
-		}
-		pause := db.valueLogDictMetricsPauseBytes
-		if pause <= 0 {
-			pause = 64 << 20
-		}
-		db.valueLogDictPauseRemaining.Store(uint64(pause))
-		if db.valueLogDictProbeBytes > 0 {
-			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
-		}
+	if db.valueLogDictClassifierBypass(value, false) {
 		return
 	}
 	tr.Collect(value)
@@ -353,10 +592,7 @@ func (db *DB) applyValueLogDictProfile() {
 		db.valueLogAutotuneRecordSwitch(candidate)
 		return
 	}
-	minSavings := db.valueLogDictMinPayloadSavings
-	if minSavings <= 0 {
-		minSavings = 0.005
-	}
+	minSavings := db.valueLogDictMinSavingsRatio()
 	if profile.PayloadRatio >= 1.0-minSavings {
 		// Do not publish no-op dictionaries (common for incompressible payloads).
 		db.valueLogDictLastAppliedDictHash.Store(profile.DictHash)
@@ -417,6 +653,23 @@ func (db *DB) valueLogDictShouldCollectPaused() bool {
 	return db.valueLogDictPausedSampleCounter.Add(1)%db.valueLogDictPausedSampleStride == 0
 }
 
+func (db *DB) valueLogDictShouldCollectPausedBatch(records int) bool {
+	if db == nil {
+		return false
+	}
+	if records <= 0 {
+		return false
+	}
+	if db.valueLogDictPausedSampleStride <= 1 {
+		return true
+	}
+	n := uint64(records)
+	next := db.valueLogDictPausedSampleCounter.Add(n)
+	prev := next - n
+	stride := db.valueLogDictPausedSampleStride
+	return prev/stride != next/stride
+}
+
 // valueLogDictShouldAttemptCompression consumes pause bytes (when set) and returns
 // whether dictionary compression should be attempted, including periodic probes
 // while paused.
@@ -430,11 +683,19 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 	if db == nil || rawLen <= 0 {
 		return true, false, false
 	}
+	rawBytes := uint64(rawLen)
+	attemptIncompressible, probeIncompressible, _ := db.valueLogDictIncompressibleDecision(rawBytes, true)
+	if !attemptIncompressible {
+		return false, false, false
+	}
+	if probeIncompressible {
+		return true, true, db.valueLogDictPauseRemaining.Load() > 0
+	}
 	remaining := db.valueLogDictPauseRemaining.Load()
 	for remaining > 0 {
 		next := uint64(0)
-		if uint64(rawLen) < remaining {
-			next = remaining - uint64(rawLen)
+		if rawBytes < remaining {
+			next = remaining - rawBytes
 		}
 		if db.valueLogDictPauseRemaining.CompareAndSwap(remaining, next) {
 			if db.valueLogDictProbeBytes == 0 {
@@ -442,11 +703,11 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 			}
 			probeRemaining := db.valueLogDictProbeRemaining.Load()
 			for {
-				if probeRemaining <= uint64(rawLen) {
+				if probeRemaining <= rawBytes {
 					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, db.valueLogDictProbeBytes) {
 						return true, true, true
 					}
-				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-uint64(rawLen)) {
+				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawBytes) {
 					return false, false, true
 				}
 				probeRemaining = db.valueLogDictProbeRemaining.Load()
@@ -484,10 +745,7 @@ func (db *DB) valueLogDictObservePayload(rawPayloadBytes, storedPayloadBytes uin
 	// low-savings / incompressible streams, repeatedly re-collecting samples can
 	// dominate CPU even while compression is paused. A future optimization can
 	// re-enable retraining with backoff / probe budgets.
-	db.valueLogDictPauseRemaining.Store(pause)
-	if db.valueLogDictProbeBytes > 0 {
-		db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
-	}
+	db.armValueLogDictPauseBytes(pause)
 	if tr := db.valueLogDictTrainer; tr != nil {
 		tr.SignalDegraded(1)
 	}

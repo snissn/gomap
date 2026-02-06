@@ -127,6 +127,15 @@ type ValueLogOptions struct {
 	PointerThreshold int
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool
+	// RawWritevMinAvgBytes controls raw grouped-frame writev usage.
+	//
+	// 0 enables adaptive mode (no average-bytes floor).
+	RawWritevMinAvgBytes int
+	// RawWritevMinBatchRecords controls minimum grouped records before raw writev
+	// is considered.
+	//
+	// <=0 uses the default.
+	RawWritevMinBatchRecords int
 
 	// ReadIntegrity configures checksum verification on value-log reads.
 	ReadIntegrity IntegrityMode
@@ -155,8 +164,22 @@ type ValueLogOptions struct {
 	// DictMetricsPauseBytes controls how long to pause dict compression after a degraded
 	// window is detected (0=default).
 	DictMetricsPauseBytes int
+	// DictIncompressibleHoldBytes enables classifier-driven hold mode for
+	// high-entropy streams. While hold mode is active, dict attempts and trainer
+	// collection are bypassed until hold bytes are consumed.
+	//
+	// 0 uses profile/default hold configuration; <0 explicitly disables hold
+	// mode and opts out of profile defaults.
+	DictIncompressibleHoldBytes int
+	// DictProbeIntervalBytes controls periodic probe attempts while
+	// incompressible hold mode is active.
+	//
+	// <=0 uses a default derived from hold bytes.
+	DictProbeIntervalBytes int
 	// DictMinPayloadSavingsRatio rejects newly trained dictionaries whose payload
-	// ratio does not improve by at least this fraction (0 uses default ~0.5%).
+	// ratio does not improve by at least this fraction (0 uses a cached-mode
+	// throughput-oriented default: 0.02 normally, 0.05 with ForcePointers or
+	// WAL disabled).
 	DictMinPayloadSavingsRatio float64
 	// DictMaxK clamps the maximum group size (K) used for value-log dict-compressed
 	// frames.

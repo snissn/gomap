@@ -482,10 +482,7 @@ func warmupDictTrainer(db *DB, writer *benchValueWriter, sink *valuelog.VirtualS
 	}
 	if tr := db.valueLogDictTrainer; tr != nil {
 		if prof, ok := tr.ActiveProfile(); ok && prof != nil {
-			minSavings := db.valueLogDictMinPayloadSavings
-			if minSavings <= 0 {
-				minSavings = 0.005
-			}
+			minSavings := db.valueLogDictMinSavingsRatio()
 			if prof.PayloadRatio >= 1.0-minSavings {
 				return nil
 			}

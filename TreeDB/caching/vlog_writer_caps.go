@@ -25,6 +25,10 @@ type preparedFrameAppender interface {
 	AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr) ([]page.ValuePtr, error)
 }
 
+type rawWritevStrategySetter interface {
+	SetRawWritevStrategy(minAvgBytes, minBatchRecs int)
+}
+
 type vlogWriterCaps struct {
 	writer    valueWriter
 	keep      keepPolicySetter
