@@ -70,6 +70,18 @@ func likelyCompressibleSample(value []byte) bool {
 	return true
 }
 
+func saturatingRawPayloadBytes(records []valuelog.Record) uint64 {
+	total := uint64(0)
+	for i := range records {
+		n := uint64(len(records[i].Value))
+		if total > ^uint64(0)-n {
+			return ^uint64(0)
+		}
+		total += n
+	}
+	return total
+}
+
 func (db *DB) valueLogDictMinSavingsRatio() float64 {
 	if db == nil {
 		return 0.02
@@ -139,18 +151,18 @@ func (db *DB) armValueLogDictIncompressibleHoldBytes(holdBytes uint64) {
 	db.valueLogDictIncompressibleHolds.Add(1)
 }
 
-func (db *DB) valueLogDictIncompressibleDecision(rawLen int, allowProbe bool) (attempt bool, probe bool, holding bool) {
-	if db == nil || rawLen <= 0 {
+func (db *DB) valueLogDictIncompressibleDecision(rawLen uint64, allowProbe bool) (attempt bool, probe bool, holding bool) {
+	if db == nil || rawLen == 0 {
 		return true, false, false
 	}
 	remaining := db.valueLogDictIncompressibleHoldRemaining.Load()
 	for remaining > 0 {
 		next := uint64(0)
-		if uint64(rawLen) < remaining {
-			next = remaining - uint64(rawLen)
+		if rawLen < remaining {
+			next = remaining - rawLen
 		}
 		if db.valueLogDictIncompressibleHoldRemaining.CompareAndSwap(remaining, next) {
-			db.valueLogDictIncompressibleBypassBytes.Add(uint64(rawLen))
+			db.valueLogDictIncompressibleBypassBytes.Add(rawLen)
 			if !allowProbe {
 				return false, false, true
 			}
@@ -160,7 +172,7 @@ func (db *DB) valueLogDictIncompressibleDecision(rawLen int, allowProbe bool) (a
 			}
 			probeRemaining := db.valueLogDictIncompressibleProbeRemaining.Load()
 			for {
-				if probeRemaining <= uint64(rawLen) {
+				if probeRemaining <= rawLen {
 					nextProbe := probeBytes
 					if next > 0 && nextProbe > next {
 						nextProbe = next
@@ -168,7 +180,7 @@ func (db *DB) valueLogDictIncompressibleDecision(rawLen int, allowProbe bool) (a
 					if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, nextProbe) {
 						return true, true, true
 					}
-				} else if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-uint64(rawLen)) {
+				} else if db.valueLogDictIncompressibleProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawLen) {
 					return false, false, true
 				}
 				probeRemaining = db.valueLogDictIncompressibleProbeRemaining.Load()
@@ -183,7 +195,7 @@ func (db *DB) valueLogDictClassifierBypass(value []byte, probeCompression bool) 
 	if db == nil || probeCompression {
 		return false
 	}
-	if attempt, _, holding := db.valueLogDictIncompressibleDecision(len(value), false); holding && !attempt {
+	if attempt, _, holding := db.valueLogDictIncompressibleDecision(uint64(len(value)), false); holding && !attempt {
 		return true
 	}
 	// Tiny values are already cheap; avoid classifier churn.
@@ -213,10 +225,7 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 	if db == nil || probeCompression || len(records) == 0 {
 		return false
 	}
-	rawBytes := 0
-	for i := range records {
-		rawBytes += len(records[i].Value)
-	}
+	rawBytes := saturatingRawPayloadBytes(records)
 	if attempt, _, holding := db.valueLogDictIncompressibleDecision(rawBytes, false); holding && !attempt {
 		return true
 	}
@@ -337,29 +346,26 @@ func (db *DB) valueLogDictCollectBudget(records []valuelog.Record, paused bool) 
 		targetBytes = valueLogDictCollectMinPerBatchBytes
 	}
 
-	rawBytes := 0
-	for i := range records {
-		rawBytes += len(records[i].Value)
-	}
-	avgBytes := 1
+	rawBytes := saturatingRawPayloadBytes(records)
+	avgBytes := uint64(1)
 	if rawBytes > 0 {
-		avgBytes = rawBytes / n
-		if avgBytes < 1 {
+		avgBytes = rawBytes / uint64(n)
+		if avgBytes == 0 {
 			avgBytes = 1
 		}
 	}
 
-	budget := targetBytes / avgBytes
+	budget := uint64(targetBytes) / avgBytes
 	if budget < valueLogDictCollectMinPerBatchRecords {
 		budget = valueLogDictCollectMinPerBatchRecords
 	}
 	if budget > valueLogDictCollectMaxPerBatchRecords {
 		budget = valueLogDictCollectMaxPerBatchRecords
 	}
-	if budget > n {
-		budget = n
+	if budget > uint64(n) {
+		budget = uint64(n)
 	}
-	return budget
+	return int(budget)
 }
 
 func (db *DB) valueLogDictCollectSample(value []byte) {
@@ -677,7 +683,8 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 	if db == nil || rawLen <= 0 {
 		return true, false, false
 	}
-	attemptIncompressible, probeIncompressible, _ := db.valueLogDictIncompressibleDecision(rawLen, true)
+	rawBytes := uint64(rawLen)
+	attemptIncompressible, probeIncompressible, _ := db.valueLogDictIncompressibleDecision(rawBytes, true)
 	if !attemptIncompressible {
 		return false, false, false
 	}
@@ -687,8 +694,8 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 	remaining := db.valueLogDictPauseRemaining.Load()
 	for remaining > 0 {
 		next := uint64(0)
-		if uint64(rawLen) < remaining {
-			next = remaining - uint64(rawLen)
+		if rawBytes < remaining {
+			next = remaining - rawBytes
 		}
 		if db.valueLogDictPauseRemaining.CompareAndSwap(remaining, next) {
 			if db.valueLogDictProbeBytes == 0 {
@@ -696,11 +703,11 @@ func (db *DB) valueLogDictShouldAttemptCompression(rawLen int) (bool, bool, bool
 			}
 			probeRemaining := db.valueLogDictProbeRemaining.Load()
 			for {
-				if probeRemaining <= uint64(rawLen) {
+				if probeRemaining <= rawBytes {
 					if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, db.valueLogDictProbeBytes) {
 						return true, true, true
 					}
-				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-uint64(rawLen)) {
+				} else if db.valueLogDictProbeRemaining.CompareAndSwap(probeRemaining, probeRemaining-rawBytes) {
 					return false, false, true
 				}
 				probeRemaining = db.valueLogDictProbeRemaining.Load()
