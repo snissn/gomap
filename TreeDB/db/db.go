@@ -66,6 +66,7 @@ type DB struct {
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
 	indexColumnarLeaves       bool
+	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
@@ -279,6 +280,12 @@ type Options struct {
 	LeafPrefixCompression bool
 	// IndexColumnarLeaves enables the experimental columnar leaf encoding for new pages.
 	IndexColumnarLeaves bool
+	// IndexPackedValuePtr enables the experimental packed 12-byte ValuePtr encoding
+	// for pointer entries in new leaf pages.
+	//
+	// Packed pointers store ValuePtr.Offset as u32 on disk. Callers must ensure
+	// value-log segments are rotated such that offsets remain representable.
+	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
@@ -609,6 +616,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
 		indexColumnarLeaves:       opts.IndexColumnarLeaves,
+		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
@@ -636,6 +644,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
 	gen.zipper.SetLeafPrefixCompression(opts.LeafPrefixCompression)
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
+	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
@@ -757,6 +766,7 @@ func (db *DB) recover() error {
 		b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		b.SetPageID(rootID)
@@ -776,6 +786,7 @@ func (db *DB) recover() error {
 		bSys := node.NewBuilderWithOptions(dataSys, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		bSys.SetPageID(sysRootID)
@@ -1129,20 +1140,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
-	entry, err := s.tree.GetEntry(key)
-	if err != nil {
-		return nil, err
-	}
-	if entry.Flags&node.FlagTombstone != 0 {
-		return nil, tree.ErrKeyNotFound
-	}
-
-	if entry.Flags&node.FlagPointer != 0 {
-		vr := ValueReaderForState(s.state)
-		return vr.ReadUnsafe(entry.ValuePtr)
-	}
-
-	return entry.Value, nil
+	return s.tree.GetUnsafe(key)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
@@ -1257,6 +1255,7 @@ func (db *DB) CompactIndex() error {
 	newRoot, err := bulk.BuildWithOptions(iter, alloc, idx.pager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
 		InternalBaseDelta:     db.indexInternalBaseDelta,
 	})
 	if err != nil {

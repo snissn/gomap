@@ -87,8 +87,11 @@ Leaf-encoding flags (current):
 - `0x8000`: leaf prefix-compressed
 - `0x4000`: leaf columnar
 - `0x2000`: leaf prefix v2 (only valid when prefix-compressed)
+- `0x1000`: leaf packed ValuePtr (pointer payload uses 12B packed encoding)
+- `0x0400`: leaf columnar v2 (dense key/value columns; see below)
 
-`leaf columnar` and `leaf prefix-compressed` are mutually exclusive.
+`leaf columnar` and `leaf prefix-compressed` can be combined. When both flags
+are set, leaf entries use a combined columnar+prefix encoding (see below).
 
 #### Plain leaf entries (no prefix compression, non-columnar)
 
@@ -97,7 +100,7 @@ Leaf-encoding flags (current):
 [ u32 ValueLen ]  ignored for pointer entries
 [ u8  Flags ]
 [ Key bytes (KeyLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 #### Prefix-compressed leaf entries (v1)
@@ -110,7 +113,7 @@ When prefix compression is enabled and `leaf prefix v2` is **not** set:
 [ u32 ValueLen ]  ignored for pointer entries
 [ u8  Flags ]
 [ Key suffix bytes (SuffixLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 Keys are reconstructed within restart blocks: every Nth entry is a restart
@@ -128,7 +131,7 @@ When prefix compression is enabled and `leaf prefix v2` is set:
 [ optional: u16 SharedPrefixLen16 | u16 SuffixLen16 ]  if both 8-bit lengths are 0xFF
 [ optional: uvarint ValueLen ]  only for inline, non-tombstone entries
 [ Key suffix bytes (SuffixLen) ]
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) ]
+[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
 Notes:
@@ -136,6 +139,105 @@ Notes:
 - Tombstone entries store no value bytes.
 - Restart points follow the same fixed interval as v1 (see `TreeDB/node` for the
   current restart interval).
+
+#### Columnar leaf entries (non-prefix, v2)
+
+When `leaf columnar` is enabled, `leaf prefix-compressed` is **not** set, and
+`leaf columnar v2` is set:
+
+```text
+Directory (Count * u16): KeyOff[i]   offset from page start to key i
+ValOff column (Count * u16): ValOff[i]  offset from page start to value/pointer i
+Flags column (Count * u8): Flags[i]
+
+Value blob: concatenated values/pointers for entries in key order
+Key blob: concatenated keys for entries in key order
+```
+
+Notes:
+- Key/value bytes are laid out as **separate blobs** so key-only seeks/searches
+  touch only the key column + key blob.
+- Key/value lengths are derived from adjacent offsets:
+  - `KeyLen[i] = KeyOff[i+1]-KeyOff[i]` (last key ends at page end)
+  - `ValLen[i] = ValOff[i+1]-ValOff[i]` (last value ends at `KeyOff[0]`)
+- Pointer entries store `ValuePtr` (16B) or `PackedValuePtr` (12B).
+
+#### Columnar + prefix-compressed leaf entries (v2)
+
+When both `leaf columnar` and `leaf prefix-compressed` are set (and `leaf prefix v2` is set):
+
+```text
+KeyOff column (Count * u16): KeyOff[i]      offset from page start to key suffix i
+ValOff column (Count * u16): ValOff[i]      offset from page start to value/pointer i
+Flags column (Count * u8): Flags[i]
+PrefixLen column (Count * u16): PrefixLen[i]
+
+Value blob: concatenated values/pointers for entries in key order
+Key-suffix blob: concatenated key suffixes for entries in key order
+```
+
+Notes:
+- Keys reconstruct with restart blocks (fixed interval): each entry copies
+  `PrefixLen[i]` bytes from the previous full key, then appends suffix bytes.
+- Restart entries are enforced with `PrefixLen=0`.
+- Offsets derive lengths from adjacent rows:
+  - `KeySuffixLen[i] = KeyOff[i+1]-KeyOff[i]` (last suffix ends at page end)
+  - `ValLen[i] = ValOff[i+1]-ValOff[i]` (last value ends at `KeyOff[0]`)
+- Values and key suffixes are physically separated so key-only search/seek paths
+  avoid touching value payload bytes.
+- When `leaf packed ValuePtr` is set, pointer entries use the packed encoding:
+  `Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE)`. This requires
+  value-log segment offsets stay within `u32` (cached mode enforces this when
+  `Options.IndexPackedValuePtr` is enabled).
+
+### Internal entry encoding (index internal pages)
+
+Internal pages use the same 4096-byte slotted-page layout as leaves (header +
+directory offsets + heap payload).
+
+For `PageTypeInternal`, the page-header `Flags` field stores the internal
+encoding mode in high bits (in addition to the low-bit page type).
+
+Internal-encoding flags (current):
+- `0x0800`: internal base-delta enabled
+- `0x0200`: internal base-delta uses `u16` child deltas (otherwise `u32`)
+- `0x0100`: exact subtree fence bounds persisted (`low`/`high`)
+
+#### Plain internal entries (no base-delta)
+
+```text
+[ u16 KeyLen ]
+[ u64 ChildPageID ]
+[ Key bytes (KeyLen) ]
+```
+
+#### Base-delta internal entries (with prefix coding)
+
+Each entry stores a key **suffix** and a child-ID **delta** (`u16` or `u32`,
+selected per page):
+
+```text
+[ u16 SuffixLen ]
+[ ChildDelta ]       childID = baseChildID + ChildDelta
+[ Key suffix bytes (SuffixLen) ]
+```
+
+The page stores a footer payload at the end containing optional exact subtree
+fence bounds plus the shared key prefix, followed by a fixed tail:
+
+```text
+[ low fence bytes (lowLen) ]
+[ high fence bytes (highLen) ]
+[ prefix bytes (prefixLen) ]
+[ u16 lowLen ]
+[ u16 highLen ]
+[ u16 prefixLen ]
+[ u64 baseChildID ]
+```
+
+The full separator key for an entry is `prefix || suffix`. `prefixLen` may be
+`0` (no prefix bytes stored). Fence semantics are `low` inclusive and `high`
+exclusive; an empty `high` means unbounded (e.g. root upper bound).
 
 ## Value-log record format (`TreeDB/internal/valuelog`)
 

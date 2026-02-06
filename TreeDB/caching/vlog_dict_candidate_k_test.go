@@ -21,7 +21,8 @@ func TestValueLogDictCandidateK_DefaultForcePointers(t *testing.T) {
 
 func TestValueLogDictCandidateK_ExplicitOverridesDefault(t *testing.T) {
 	db := &DB{
-		forceValueLogPointers: true,
+		forceValueLogPointers:         true,
+		valueLogAutotuneCandidateKSet: true,
 		valueLogAutotuneOptions: valuelog.AutotuneOptions{
 			CandidateK: []int{2, 4, 8},
 		},
@@ -38,7 +39,7 @@ func TestValueLogDictCandidateK_ExplicitOverridesDefault(t *testing.T) {
 	}
 }
 
-func TestValueLogDictCandidateK_ForcePointersRemapsDefaultCandidateSet(t *testing.T) {
+func TestValueLogDictCandidateK_ForcePointersRemapsImplicitDefaultCandidateSet(t *testing.T) {
 	db := &DB{
 		forceValueLogPointers: true,
 		valueLogAutotuneOptions: valuelog.AutotuneOptions{
@@ -49,5 +50,20 @@ func TestValueLogDictCandidateK_ForcePointersRemapsDefaultCandidateSet(t *testin
 	want := []int{8, 16, 32}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK remap default: got=%v want=%v", got, want)
+	}
+}
+
+func TestValueLogDictCandidateK_ForcePointersKeepsExplicitDefaultCandidateSet(t *testing.T) {
+	db := &DB{
+		forceValueLogPointers:         true,
+		valueLogAutotuneCandidateKSet: true,
+		valueLogAutotuneOptions: valuelog.AutotuneOptions{
+			CandidateK: []int{1, 2, 4, 8, 16, 32},
+		},
+	}
+	got := db.valueLogDictCandidateK()
+	want := []int{1, 2, 4, 8, 16, 32}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("valueLogDictCandidateK explicit default: got=%v want=%v", got, want)
 	}
 }

@@ -40,6 +40,32 @@ func TestValuePtrEncoding(t *testing.T) {
 	}
 }
 
+func TestPackedValuePtrEncoding(t *testing.T) {
+	original := ValuePtr{
+		Offset: 123456789,
+		Length: 1024,
+		FileID: 5,
+	}
+
+	buf := make([]byte, PackedValuePtrSize)
+	EncodePackedValuePtr(buf, original)
+
+	decoded := DecodePackedValuePtr(buf)
+	if decoded != original {
+		t.Errorf("Decoded packed ValuePtr mismatch. Got %+v, want %+v", decoded, original)
+	}
+}
+
+func TestEncodePackedValuePtr_OffsetOverflowPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("expected panic for offset overflow")
+		}
+	}()
+	buf := make([]byte, PackedValuePtrSize)
+	EncodePackedValuePtr(buf, ValuePtr{Offset: uint64(^uint32(0)) + 1})
+}
+
 func TestStructAlignment(t *testing.T) {
 	// Verify structs are 16 bytes and have the expected in-memory layout for the
 	// on-disk wire format (used by fast-path Encode/Decode on little-endian).

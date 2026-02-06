@@ -1579,6 +1579,13 @@ type Options struct {
 	// default is smaller to avoid catastrophic update-heavy cliffs at large key
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
+	// ValueLogMaxSegmentBytes caps the size of a single value-log segment file.
+	// 0 disables the cap.
+	//
+	// This is an internal safety knob used by experimental index encodings
+	// (e.g. packed on-disk ValuePtr) that require value-log offsets stay within a
+	// smaller representable range.
+	ValueLogMaxSegmentBytes int64
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
@@ -1734,6 +1741,7 @@ type DB struct {
 	}
 	valueLogAutotuneMetrics          vlogAutotuneMetrics
 	valueLogAutotuneOptions          valuelog.AutotuneOptions
+	valueLogAutotuneCandidateKSet    bool
 	valueLogAutotuneLastProfile      atomic.Value // *vlogAutotuneProfile
 	valueLogAutotuneLastSwitchFrames atomic.Uint64
 
@@ -1794,6 +1802,7 @@ type DB struct {
 	flushBackendInitEntries int
 	flushBackendMaxBatches  int
 	walMaxSegmentBytes      int64
+	valueLogMaxSegmentBytes int64
 	journalCompression      bool
 
 	disableJournal     bool
@@ -2373,6 +2382,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			valueLogThreshold = defaultRelaxedValueLogThreshold
 		}
 	}
+	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
+	if valueLogMaxSegmentBytes < 0 {
+		valueLogMaxSegmentBytes = 0
+	}
 	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
@@ -2440,6 +2453,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		minPayloadSavings = 0.005
 	}
 
+	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
 	valueLogAutotune := valuelog.NormalizeAutotuneOptions(opts.ValueLogCompressionAutotune, true)
 	valueLogTemplateEnabled := opts.ValueLogTemplateMode != template.TemplateOff
 	valueLogTemplateCfg := template.NormalizeConfig(opts.ValueLogTemplateConfig)
@@ -2541,6 +2555,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushBackendInitEntries:        flushBackendInitEntries,
 		flushBackendMaxBatches:         opts.FlushBackendMaxBatches,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		valueLogMaxSegmentBytes:        valueLogMaxSegmentBytes,
 		journalCompression:             opts.JournalCompression,
 		disableJournal:                 disableJournal,
 		disableValueLog:                false,
@@ -2569,6 +2584,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogDictProbeBytes:         uint64(probeBytes),
 		valueLogDictPausedSampleStride: pausedSampleStride,
 		valueLogAutotuneOptions:        valueLogAutotune,
+		valueLogAutotuneCandidateKSet:  valueLogAutotuneCandidateKSet,
 		valueLogTemplateEnabled:        valueLogTemplateEnabled,
 		valueLogTemplateMode:           opts.ValueLogTemplateMode,
 		valueLogTemplateReadStrict:     opts.ValueLogTemplateReadStrict,
@@ -3746,8 +3762,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 
 	var (
-		needFlush bool
-		needSync  bool
+		needFlush       bool
+		needSync        bool
+		rawPayloadBytes int
 	)
 	records := getValueLogRecords(len(requests))
 	dictNeeded := make(map[uint64]struct{})
@@ -3762,6 +3779,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if req.dictID != 0 {
 			dictNeeded[req.dictID] = struct{}{}
 		}
+		rawPayloadBytes += len(req.value)
 	}
 
 	dictByID := make(map[uint64][]byte, len(dictNeeded))
@@ -3957,6 +3975,102 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 		return
 	}
+	firstPath := l.vlogPath
+	var retainPaths []string
+	noteRotatePath := func(path string) {
+		if path == "" {
+			return
+		}
+		if retainPaths == nil {
+			if firstPath != "" {
+				retainPaths = append(retainPaths, firstPath)
+			} else {
+				retainPaths = make([]string, 0, 2)
+			}
+		}
+		if len(retainPaths) == 0 || retainPaths[len(retainPaths)-1] != path {
+			retainPaths = append(retainPaths, path)
+		}
+	}
+	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+		l.vlogMu.Unlock()
+		putValueLogRecords(records)
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = rotateErr
+			ack.wg.Done()
+		}
+		return
+	}
+	// Rotation may replace the writer; reload it so subsequent appends use the
+	// correct segment.
+	w = l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		putValueLogRecords(records)
+		for i := range requests {
+			ack := requests[i].ack
+			if ack == nil {
+				continue
+			}
+			ack.ptr = page.ValuePtr{}
+			ack.retainPath = ""
+			ack.err = errWALUnavailable
+			ack.wg.Done()
+		}
+		return
+	}
+	if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
+		// Pre-rotate to ensure this batch never produces pointers with offsets
+		// outside the packed-offset cap.
+		est := int64(rawPayloadBytes) + int64(len(records))*64
+		if est < 0 {
+			est = 0
+		}
+		if est > 0 && w.Size() > maxBytes-est {
+			if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+				l.vlogMu.Unlock()
+				putValueLogRecords(records)
+				for i := range requests {
+					ack := requests[i].ack
+					if ack == nil {
+						continue
+					}
+					ack.ptr = page.ValuePtr{}
+					ack.retainPath = ""
+					ack.err = rotateErr
+					ack.wg.Done()
+				}
+				return
+			}
+			// Reload writer after rotation to ensure subsequent operations use the
+			// new segment.
+			w = l.vlog
+			if w == nil {
+				l.vlogMu.Unlock()
+				putValueLogRecords(records)
+				for i := range requests {
+					ack := requests[i].ack
+					if ack == nil {
+						continue
+					}
+					ack.ptr = page.ValuePtr{}
+					ack.retainPath = ""
+					ack.err = errWALUnavailable
+					ack.wg.Done()
+				}
+				return
+			}
+		}
+	}
+	if l.vlogPath != firstPath {
+		noteRotatePath(l.vlogPath)
+	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
@@ -4125,6 +4239,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		retainPath = l.vlogPath
 	}
 	l.vlogMu.Unlock()
+	if len(retainPaths) > 0 {
+		for _, path := range retainPaths {
+			db.markValueLogRetain(path)
+		}
+	}
 
 	if err == nil && framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))
@@ -4394,9 +4513,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	var (
-		totalBytes int64
-		ptrs       []page.ValuePtr
-		err        error
+		bytesWrittenTotal int64
+		bytesWrittenLive  int64
+		ptrs              []page.ValuePtr
+		err               error
 	)
 
 	rawPayloadBytes := 0
@@ -4503,6 +4623,36 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogMu.Unlock()
 		return nil, errWALUnavailable
 	}
+	firstPath := l.vlogPath
+	var retainPaths []string
+	noteRotatePath := func(path string) {
+		if path == "" {
+			return
+		}
+		if retainPaths == nil {
+			if firstPath != "" {
+				retainPaths = append(retainPaths, firstPath)
+			} else {
+				retainPaths = make([]string, 0, 2)
+			}
+		}
+		if len(retainPaths) == 0 || retainPaths[len(retainPaths)-1] != path {
+			retainPaths = append(retainPaths, path)
+		}
+	}
+	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+		l.vlogMu.Unlock()
+		return nil, rotateErr
+	}
+	if l.vlogPath != firstPath {
+		noteRotatePath(l.vlogPath)
+	}
+	// Rotation may replace the writer; reload it before appending.
+	w = l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return nil, errWALUnavailable
+	}
 	if l.vlogCaps.writer != w {
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
@@ -4516,7 +4666,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	hasInto := statsWriterInto != nil
 	hasRawInto := rawWriterInto != nil
 	usePreparedDictFrames := dictID != 0 && len(dict) > 0 && preparedAppender != nil && len(preparedDictFrames) > 0
-	startSize := w.Size()
+	segmentStartSize := w.Size()
 
 	if policySetter != nil && !usePreparedDictFrames {
 		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, safetyMargin)
@@ -4530,10 +4680,45 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	framesKept := 0
 	encodeNsTotal := int64(0)
 	encodeRawBytes := 0
-
-	preparedUsed := false
+	rawBatchUsed := false
+	if dictID == 0 && hasRawInto && len(records) > 1 {
+		if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
+			// Ensure the entire raw batch fits within the packed-offset cap so
+			// AppendRawFramesWritevInto never returns pointers with out-of-range
+			// offsets.
+			est := int64(rawPayloadBytes) + int64(len(records))*64
+			if est < 0 {
+				est = 0
+			}
+			if est > 0 && w.Size() > maxBytes-est {
+				if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+					l.vlogMu.Unlock()
+					return nil, rotateErr
+				}
+				noteRotatePath(l.vlogPath)
+				// Reload writer after rotation so subsequent appends go to the new
+				// segment and capabilities match the writer instance.
+				w = l.vlog
+				if w == nil {
+					l.vlogMu.Unlock()
+					return nil, errWALUnavailable
+				}
+				if l.vlogCaps.writer != w {
+					l.vlogCaps = computeVlogWriterCaps(w)
+				}
+				caps = l.vlogCaps
+				statsWriter = caps.stats
+				statsWriterInto = caps.statsInto
+				rawWriterInto = caps.rawInto
+				hasStats = statsWriter != nil
+				hasInto = statsWriterInto != nil
+				hasRawInto = rawWriterInto != nil
+				segmentStartSize = w.Size()
+			}
+		}
+	}
 	if usePreparedDictFrames {
-		preparedUsed = true
+		rawBatchUsed = true
 		ptrs = getValueLogPtrs(len(records))
 		for fi := range preparedDictFrames {
 			pf := &preparedDictFrames[fi]
@@ -4560,7 +4745,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
-	rawBatchUsed := preparedUsed
 	if err == nil && !rawBatchUsed {
 		if dictID == 0 && hasRawInto && len(records) > 1 {
 			ptrs = getValueLogPtrs(len(records))
@@ -4602,6 +4786,35 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				statsWriterInto = caps.statsInto
 				hasStats = statsWriter != nil
 				hasInto = statsWriterInto != nil
+			}
+
+			if err == nil {
+				if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 && w.Size() > maxBytes {
+					if delta := w.Size() - segmentStartSize; delta > 0 {
+						bytesWrittenTotal += delta
+					}
+					if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+						err = rotateErr
+						break
+					}
+					noteRotatePath(l.vlogPath)
+					// Rotation may replace the writer; reload it and refresh capabilities
+					// for subsequent appends.
+					w = l.vlog
+					if w == nil {
+						err = errWALUnavailable
+						break
+					}
+					if l.vlogCaps.writer != w {
+						l.vlogCaps = computeVlogWriterCaps(w)
+					}
+					caps = l.vlogCaps
+					statsWriter = caps.stats
+					statsWriterInto = caps.statsInto
+					hasStats = statsWriter != nil
+					hasInto = statsWriterInto != nil
+					segmentStartSize = w.Size()
+				}
 			}
 
 			end := i + k
@@ -4680,9 +4893,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	if err == nil {
-		totalBytes = w.Size() - startSize
+		bytesWrittenLive = w.Size() - segmentStartSize
+		if bytesWrittenLive > 0 {
+			bytesWrittenTotal += bytesWrittenLive
+		}
 	}
 	l.vlogMu.Unlock()
+	if len(retainPaths) > 0 {
+		for _, path := range retainPaths {
+			db.markValueLogRetain(path)
+		}
+	}
 	if err != nil {
 		putValueLogPtrs(ptrs)
 		return nil, err
@@ -4702,7 +4923,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 		if storedPayloadBytes == 0 {
 			// Best-effort fallback when writer stats are unavailable.
-			storedPayloadBytes = int(totalBytes)
+			storedPayloadBytes = int(bytesWrittenTotal)
 		}
 		if frameRecords == 0 {
 			frameRecords = len(records)
@@ -4717,13 +4938,13 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			db.valueLogDictProbeRemaining.Store(db.valueLogDictProbeBytes)
 		}
 	}
-	if totalBytes > 0 {
-		l.vlogLiveBytes.Add(totalBytes)
+	if bytesWrittenLive > 0 {
+		l.vlogLiveBytes.Add(bytesWrittenLive)
 	}
 	if !wallStart.IsZero() {
 		storedForMetrics := storedPayloadBytes
-		if storedForMetrics == 0 && totalBytes > 0 {
-			storedForMetrics = int(totalBytes)
+		if storedForMetrics == 0 && bytesWrittenTotal > 0 {
+			storedForMetrics = int(bytesWrittenTotal)
 		}
 		db.valueLogAutotuneMetrics.observe(wallStart, rawPayloadBytes, storedForMetrics, encodeNsTotal, encodeRawBytes)
 	}
@@ -4783,6 +5004,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if wallStart.IsZero() && durability != journalDurabilitySync && l.vlogCh != nil && len(value) >= vlogQueueMinValueSize {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
+			if w == nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", errWALUnavailable
+			}
+			if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+				l.vlogMu.Unlock()
+				return page.ValuePtr{}, "", rotateErr
+			}
+			// Reload writer in case rotation replaced l.vlog.
+			w = l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", errWALUnavailable
@@ -4883,6 +5114,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 
 	l.vlogMu.Lock()
 	w := l.vlog
+	if w == nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", errWALUnavailable
+	}
+	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+		l.vlogMu.Unlock()
+		return page.ValuePtr{}, "", rotateErr
+	}
+	// Reload writer in case rotation replaced l.vlog.
+	w = l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
 		return page.ValuePtr{}, "", errWALUnavailable
@@ -6920,6 +7161,10 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
+	return db.rotateValueLogMuHeld(l)
+}
+
+func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	l.vlogSeq++
 	name := valueLogName(l.id, l.vlogSeq)
 	path := filepath.Join(db.dir, name)
@@ -6959,6 +7204,20 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
 	return nil
+}
+
+func (db *DB) rotateValueLogForMaxSegmentMuHeld(l *lane, w valueWriter) error {
+	if db == nil || l == nil || w == nil {
+		return nil
+	}
+	maxBytes := db.valueLogMaxSegmentBytes
+	if maxBytes <= 0 {
+		return nil
+	}
+	if w.Size() <= maxBytes {
+		return nil
+	}
+	return db.rotateValueLogMuHeld(l)
 }
 
 func (db *DB) untrackWALSegmentLocked(path string) {

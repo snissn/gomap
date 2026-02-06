@@ -228,19 +228,10 @@ func (db *DB) valueLogDictCandidateK() []int {
 	defaultCandidateK := []int{1, 2, 4, 8, 16, 32}
 	forcePointerCandidateK := []int{8, 16, 32}
 	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
-		if db.forceValueLogPointers && len(db.valueLogAutotuneOptions.CandidateK) == len(defaultCandidateK) {
-			matchesDefault := true
-			for i := range defaultCandidateK {
-				if db.valueLogAutotuneOptions.CandidateK[i] != defaultCandidateK[i] {
-					matchesDefault = false
-					break
-				}
-			}
-			if matchesDefault {
-				out := make([]int, len(forcePointerCandidateK))
-				copy(out, forcePointerCandidateK)
-				return out
-			}
+		if db.forceValueLogPointers && !db.valueLogAutotuneCandidateKSet && intSlicesEqual(db.valueLogAutotuneOptions.CandidateK, defaultCandidateK) {
+			out := make([]int, len(forcePointerCandidateK))
+			copy(out, forcePointerCandidateK)
+			return out
 		}
 		out := make([]int, len(db.valueLogAutotuneOptions.CandidateK))
 		copy(out, db.valueLogAutotuneOptions.CandidateK)
@@ -254,6 +245,18 @@ func (db *DB) valueLogDictCandidateK() []int {
 		return out
 	}
 	return nil
+}
+
+func intSlicesEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (db *DB) valueLogDictLoop() {

@@ -49,6 +49,53 @@ KEYS=4000000 PROFILES=fast scripts/treedb_forceptr_matrix.sh
 KEYS=2000000 PROFILES=fast,balanced PPROF_TESTS=batch_write,random_write scripts/treedb_forceptr_matrix.sh
 ```
 
+### All-flags gate (script)
+
+To validate the stacked index flags as a bundle, run:
+
+```bash
+scripts/treedb_allflags_gate.sh
+```
+
+Defaults:
+- `RUNS=7`
+- `PROFILE=fast`
+- `KEYS=4000000`
+- `TESTS=batch_write,batch_random,random_read,prefix_scan`
+- both variants include `-checkpoint-between-tests`
+
+Compared variants:
+- `base`: `-treedb-force-value-pointers`
+- `allflags`: base + `-treedb-index-columnar-leaves -treedb-leaf-prefix-compression -treedb-index-internal-base-delta -treedb-index-packed-valueptr`
+
+Pass conditions (median-of-runs):
+- `batch_write`, `batch_random`, `random_read`, `prefix_scan`: all-flags median must be strictly greater than base median.
+- `maindb/index.db`: all-flags median must be strictly smaller than base median.
+
+Outputs:
+- `artifacts/perf/treedb_allflags_gate_<timestamp>/summary.md`
+- `artifacts/perf/treedb_allflags_gate_<timestamp>/summary.json`
+- per-run markdown logs under `.../runs/`
+
+PR benchmark template:
+
+```markdown
+## All-flags gate
+
+- command: `scripts/treedb_allflags_gate.sh`
+- artifact path: `artifacts/perf/treedb_allflags_gate_<timestamp>/`
+
+| metric | base median | all-flags median | delta |
+|---|---:|---:|---:|
+| batch_write | ... | ... | ... |
+| batch_random | ... | ... | ... |
+| random_read | ... | ... | ... |
+| prefix_scan | ... | ... | ... |
+| index_db_bytes | ... | ... | ... |
+
+- gate result: PASS/FAIL
+```
+
 ### Leaf page density harness (prefix compression)
 
 When working on leaf key encodings, it’s useful to measure **keys per leaf page**
@@ -60,7 +107,8 @@ go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count
 
 Regression guardrails:
 - `TreeDB/node/leaf_density_test.go` enforces a minimum density improvement for
-  prefix-heavy key workloads when leaf prefix compression is enabled.
+  prefix-heavy key workloads when leaf prefix compression is enabled (and when
+  the combined columnar+prefix mode is enabled).
 
 ### Template encode profiling (steady-only)
 

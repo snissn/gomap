@@ -220,12 +220,27 @@ Behavior:
 Tradeoffs:
 - Extra CPU to reconstruct keys during seeks/iteration (restart points bound the
   work).
-- Incompatible with `Options.IndexColumnarLeaves` (columnar leaf encoding).
+- Can be combined with `Options.IndexColumnarLeaves`; when both are enabled,
+  TreeDB uses a combined **columnar+prefix** leaf encoding (front-coded keys +
+  explicit key/value offsets).
 
 How to evaluate:
 - Disk + throughput: `cmd/unified_bench` with `-treedb-leaf-prefix-compression`
   on/off and compare `maindb/index.db` size + ops/sec.
 - Leaf density microbench: `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count=1`
+
+### Internal base-delta compression (`Options.IndexInternalBaseDelta`)
+
+Internal pages can be encoded with base-child + delta child IDs and separator
+prefix coding.
+
+Current strict behavior:
+- when enabled, internal pages are encoded as base-delta for eligible pages
+  (no heuristic downgrade to plain internal pages),
+- child-ID deltas are adaptive per page: `u16` when representable, `u32`
+  otherwise,
+- if a page's child-ID range exceeds `u32` representability, page build returns
+  an explicit error (no silent fallback).
 
 ### `Options.KeepRecent`
 

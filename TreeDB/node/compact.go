@@ -21,6 +21,56 @@ func (n *Node) Compact() error {
 		return nil
 	}
 
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		buf := make([]byte, page.PageSize)
+		b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+			LeafColumnar:   true,
+			PackedValuePtr: n.leafPackedValuePtr(),
+		})
+		b.SetPageID(n.PageID())
+
+		for i := uint16(0); i < count; i++ {
+			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return err
+			}
+			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+				return err
+			}
+		}
+
+		newNode := b.Finish()
+		copy(n.data, newNode.data)
+		n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+		n.count = binary.LittleEndian.Uint16(n.data[14:16])
+		return nil
+	}
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+		buf := make([]byte, page.PageSize)
+		b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+			LeafPrefixCompression: true,
+			LeafColumnar:          true,
+			PackedValuePtr:        n.leafPackedValuePtr(),
+		})
+		b.SetPageID(n.PageID())
+
+		for i := uint16(0); i < count; i++ {
+			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			if err != nil {
+				return err
+			}
+			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+				return err
+			}
+		}
+
+		newNode := b.Finish()
+		copy(n.data, newNode.data)
+		n.setRawFlags(binary.LittleEndian.Uint16(n.data[12:14]))
+		n.count = binary.LittleEndian.Uint16(n.data[14:16])
+		return nil
+	}
+
 	newData := make([]byte, page.PageSize)
 
 	// Preserve page ID/type/count; checksum is recomputed at the end.
@@ -32,6 +82,14 @@ func (n *Node) Compact() error {
 
 	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
 	heapStart := int(page.PageSize)
+	if n.Type() == page.PageTypeInternal && n.internalBaseDelta() {
+		_, _, footerStart, err := n.internalBaseDeltaFooter()
+		if err != nil {
+			return err
+		}
+		copy(newData[footerStart:], n.data[footerStart:])
+		heapStart = footerStart
+	}
 
 	for i := uint16(0); i < count; i++ {
 		off, err := n.getOffset(i)
@@ -74,9 +132,13 @@ func entryLength(n *Node, offset int) (int, error) {
 		flags := layout.flags
 		valSize := layout.valLen
 		if flags&FlagPointer != 0 {
-			valSize = page.ValuePtrSize
+			if n.leafPackedValuePtr() {
+				valSize = page.PackedValuePtrSize
+			} else {
+				valSize = page.ValuePtrSize
+			}
 		}
-		keyEnd := layout.keyOff + layout.keyLen
+		keyEnd := layout.keyOff + layout.suffixLen
 		valEnd := layout.valOff + valSize
 		entryLen := keyEnd
 		if valEnd > entryLen {
@@ -88,6 +150,28 @@ func entryLength(n *Node, offset int) (int, error) {
 		return entryLen, nil
 
 	case page.PageTypeInternal:
+		if n.internalBaseDelta() {
+			_, _, footerStart, err := n.internalBaseDeltaFooter()
+			if err != nil {
+				return 0, err
+			}
+			deltaWidth := 4
+			if n.internalBaseDeltaU16() {
+				deltaWidth = 2
+			}
+			entryHeader := 2 + deltaWidth
+			if offset+entryHeader > footerStart {
+				return 0, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16(n.data[offset : offset+2]))
+			if suffixLen < 0 {
+				return 0, ErrCorruptedNode
+			}
+			if offset+entryHeader+suffixLen > footerStart {
+				return 0, ErrCorruptedNode
+			}
+			return entryHeader + suffixLen, nil
+		}
 		if offset+2+8 > len(n.data) {
 			return 0, ErrCorruptedNode
 		}

@@ -3,8 +3,6 @@ package node
 import (
 	"encoding/binary"
 	"math"
-
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
@@ -103,7 +101,7 @@ func parseLeafPrefixV2Layout(data []byte, offset int) (leafEntryLayout, error) {
 
 	valSize := valLen
 	if flags&FlagPointer != 0 {
-		valSize = page.ValuePtrSize
+		valSize = leafValuePtrSizeFromData(data)
 	}
 	valStart := offset + headerSize + suffixLen
 	if valStart+valSize > len(data) {

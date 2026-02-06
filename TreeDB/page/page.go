@@ -21,6 +21,12 @@ const (
 
 	// ValuePtrSize is the size of the ValuePtr struct.
 	ValuePtrSize = 16
+
+	// PackedValuePtrSize is the on-disk size of a packed ValuePtr encoding.
+	//
+	// Layout: Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE).
+	// This is used by experimental leaf encodings to reduce pointer payload.
+	PackedValuePtrSize = 12
 )
 
 var nativeLittleEndian = func() bool {
@@ -151,6 +157,31 @@ func DecodeValuePtr(buf []byte) ValuePtr {
 		Offset: binary.LittleEndian.Uint64(buf[0:8]),
 		Length: binary.LittleEndian.Uint32(buf[8:12]),
 		FileID: binary.LittleEndian.Uint32(buf[12:16]),
+	}
+}
+
+// EncodePackedValuePtr encodes ptr into dst using the packed 12-byte encoding.
+// dst must be at least PackedValuePtrSize bytes.
+//
+// Packed pointers store Offset as u32. Callers must ensure ptr.Offset fits.
+func EncodePackedValuePtr(dst []byte, ptr ValuePtr) {
+	_ = dst[PackedValuePtrSize-1] // Bounds check elimination
+	if ptr.Offset > uint64(^uint32(0)) {
+		panic("page: packed ValuePtr offset overflows u32")
+	}
+	binary.LittleEndian.PutUint32(dst[0:4], uint32(ptr.Offset))
+	binary.LittleEndian.PutUint32(dst[4:8], ptr.Length)
+	binary.LittleEndian.PutUint32(dst[8:12], ptr.FileID)
+}
+
+// DecodePackedValuePtr decodes a packed 12-byte ValuePtr from src.
+// src must be at least PackedValuePtrSize bytes.
+func DecodePackedValuePtr(src []byte) ValuePtr {
+	_ = src[PackedValuePtrSize-1] // Bounds check elimination
+	return ValuePtr{
+		Offset: uint64(binary.LittleEndian.Uint32(src[0:4])),
+		Length: binary.LittleEndian.Uint32(src[4:8]),
+		FileID: binary.LittleEndian.Uint32(src[8:12]),
 	}
 }
 

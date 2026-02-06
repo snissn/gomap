@@ -9,12 +9,13 @@ import (
 
 // Common errors
 var (
-	ErrKeyTooLarge   = errors.New("key too large")
-	ErrValueTooLarge = errors.New("value too large")
-	ErrNodeFull      = errors.New("node is full")
-	ErrInvalidType   = errors.New("invalid node type")
-	ErrKeyNotFound   = errors.New("key not found")
-	ErrCorruptedNode = errors.New("corrupted node: invalid offsets")
+	ErrKeyTooLarge                 = errors.New("key too large")
+	ErrValueTooLarge               = errors.New("value too large")
+	ErrNodeFull                    = errors.New("node is full")
+	ErrInvalidType                 = errors.New("invalid node type")
+	ErrKeyNotFound                 = errors.New("key not found")
+	ErrCorruptedNode               = errors.New("corrupted node: invalid offsets")
+	ErrInternalBaseDeltaOutOfRange = errors.New("internal base-delta child range exceeds uint32")
 )
 
 const (
@@ -29,8 +30,18 @@ const (
 	leafPrefixCompressedFlag uint16 = 0x8000
 	leafColumnarFlag         uint16 = 0x4000
 	leafPrefixV2Flag         uint16 = 0x2000
-	leafNodeFlagMask                = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag
-	pageTypeMask                    = ^leafNodeFlagMask
+	leafPackedValuePtrFlag   uint16 = 0x1000
+	internalBaseDeltaFlag    uint16 = 0x0800
+	leafColumnarV2Flag       uint16 = 0x0400
+	internalBaseDeltaU16Flag uint16 = 0x0200
+	internalFenceBoundsFlag  uint16 = 0x0100
+
+	// NOTE: TreeDB is currently pre-alpha; on-disk formats are not yet stable and
+	// backward compatibility is not guaranteed. Leaf/internal flags may change.
+	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag
+	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalFenceBoundsFlag
+	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
+	pageTypeMask         = ^nodeFlagMask
 
 	leafPrefixRestartInterval = 16
 )
@@ -57,7 +68,21 @@ type Node struct {
 	leafLayout leafEntryLayout
 	leafEntry  int
 	leafIndex  uint16
+	leafFlags  byte
 	leafValid  bool
+
+	leafColPrefixMetaValid    bool
+	leafColPrefixMetaCount    uint16
+	leafColPrefixValDirStart  int
+	leafColPrefixFlagsStart   int
+	leafColPrefixPrefixStart  int
+	leafColPrefixHeaderEnd    int
+	leafColPrefixKeysBlobBase int
+
+	internalMetaValid bool
+	internalMetaCount uint16
+	internalMetaFlags uint16
+	internalMeta      internalBaseDeltaMeta
 }
 
 // NewNode creates a Node wrapper around the given page data.
@@ -107,7 +132,7 @@ func (n *Node) Type() page.PageType {
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
 	flags := getUint16(n.data[12:14])
-	flags = (flags & leafNodeFlagMask) | uint16(t)
+	flags = (flags & nodeFlagMask) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
@@ -118,6 +143,8 @@ func (n *Node) rawFlags() uint16 {
 func (n *Node) setRawFlags(flags uint16) {
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 	n.ptype = page.PageType(flags & pageTypeMask)
+	n.leafColPrefixMetaValid = false
+	n.internalMetaValid = false
 }
 
 func (n *Node) leafPrefixCompressed() bool {
@@ -139,6 +166,51 @@ func (n *Node) leafColumnar() bool {
 		return false
 	}
 	return n.rawFlags()&leafColumnarFlag != 0
+}
+
+func (n *Node) leafColumnarV2() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafColumnarV2Flag != 0
+}
+
+func (n *Node) leafPackedValuePtr() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafPackedValuePtrFlag != 0
+}
+
+func (n *Node) internalBaseDelta() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	return n.rawFlags()&internalBaseDeltaFlag != 0
+}
+
+func (n *Node) internalBaseDeltaU16() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	return n.rawFlags()&internalBaseDeltaU16Flag != 0
+}
+
+func (n *Node) internalFenceBounds() bool {
+	if n.ptype != page.PageTypeInternal {
+		return false
+	}
+	return n.rawFlags()&internalFenceBoundsFlag != 0
+}
+
+func (n *Node) setInternalBaseDelta(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= internalBaseDeltaFlag
+	} else {
+		flags &^= internalBaseDeltaFlag
+	}
+	n.setRawFlags(flags)
 }
 
 func (n *Node) setLeafPrefixCompressed(enabled bool) {
@@ -168,6 +240,28 @@ func (n *Node) setLeafColumnar(enabled bool) {
 		flags |= leafColumnarFlag
 	} else {
 		flags &^= leafColumnarFlag
+		// Columnar v2 encoding is only valid for columnar leaves.
+		flags &^= leafColumnarV2Flag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafColumnarV2(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafColumnarV2Flag
+	} else {
+		flags &^= leafColumnarV2Flag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafPackedValuePtr(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafPackedValuePtrFlag
+	} else {
+		flags &^= leafPackedValuePtrFlag
 	}
 	n.setRawFlags(flags)
 }
@@ -181,6 +275,8 @@ func (n *Node) Count() uint16 {
 func (n *Node) SetCount(c uint16) {
 	n.count = c
 	binary.LittleEndian.PutUint16(n.data[14:16], c)
+	n.leafColPrefixMetaValid = false
+	n.internalMetaValid = false
 }
 
 // Checksum returns the checksum from the header.
@@ -204,6 +300,9 @@ func (n *Node) getOffset(index uint16) (uint16, error) {
 	if index >= n.count {
 		return 0, errors.New("index out of bounds")
 	}
+	// For columnar v2 and combined columnar+prefix v2 leaves this directory stores
+	// key offsets (not heap entry starts). For all other page layouts it stores
+	// entry starts.
 	// Directory starts at NodeHeaderSize
 	// Offset is at NodeHeaderSize + index*2
 	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
@@ -214,13 +313,29 @@ func (n *Node) getOffset(index uint16) (uint16, error) {
 func (n *Node) setOffset(index uint16, offset uint16) {
 	dirOffset := NodeHeaderSize + int(index)*DirectoryEntrySize
 	binary.LittleEndian.PutUint16(n.data[dirOffset:dirOffset+2], offset)
+	n.leafColPrefixMetaValid = false
+	n.internalMetaValid = false
 }
 
 // FreeSpace returns the number of bytes available for new items.
 // Free space is the gap between the end of the Directory and the start of the Heap.
 func (n *Node) FreeSpace() int {
 	// Directory End = Header + Count * 2
-	dirEnd := NodeHeaderSize + int(n.Count())*DirectoryEntrySize
+	count := n.Count()
+	dirEnd := NodeHeaderSize + int(count)*DirectoryEntrySize
+	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+		// Combined columnar+prefix leaves use top-level metadata columns:
+		// KeyOff[u16], ValOff[u16], Flags[u8], PrefixLen[u16].
+		dirEnd += int(count) * DirectoryEntrySize
+		dirEnd += int(count)
+		dirEnd += int(count) * DirectoryEntrySize
+	}
+	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		// Columnar v2 leaves store additional per-entry metadata immediately after
+		// the key directory: ValOff (u16) + Flags (u8).
+		dirEnd += int(count) * DirectoryEntrySize
+		dirEnd += int(count)
+	}
 
 	// Heap Start = Minimum offset of all items, or PageSize if empty.
 	// To find Heap Start efficiently without scanning all offsets:
@@ -243,8 +358,25 @@ func (n *Node) FreeSpace() int {
 	//    Actually, we can just find the min offset.
 
 	heapStart := int(page.PageSize)
-	count := n.Count()
 	if count > 0 {
+		if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+			valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
+			if valDirStart+2 > len(n.data) {
+				return 0
+			}
+			heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+			return heapStart - dirEnd
+		}
+		if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+			// The lowest used offset is ValOff[0] (start of the value blob).
+			valDirStart := NodeHeaderSize + int(count)*DirectoryEntrySize
+			if valDirStart+2 > len(n.data) {
+				return 0
+			}
+			heapStart = int(getUint16(n.data[valDirStart : valDirStart+2]))
+			return heapStart - dirEnd
+		}
+
 		// Scan offsets to find the lowest one.
 		// This is O(N). Is there a better way?
 		// Most implementations store "FreePtr" or "HeapOffset" in the header or special slot.
