@@ -78,7 +78,7 @@ func TestLeafColumnarPrefixV2_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestLeafColumnarPrefixV2_FallbackShortKeysToPlainLeaf(t *testing.T) {
+func TestLeafColumnarPrefixV2_StrictShortKeysStayCombined(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
 		LeafPrefixCompression: true,
@@ -94,11 +94,8 @@ func TestLeafColumnarPrefixV2_FallbackShortKeysToPlainLeaf(t *testing.T) {
 	}
 
 	n := b.Finish()
-	if n.leafPrefixCompressed() {
-		t.Fatalf("expected short-key fallback to disable prefix compression")
-	}
-	if n.leafColumnar() {
-		t.Fatalf("expected short-key fallback to disable columnar leaf encoding")
+	if !n.leafPrefixCompressed() || !n.leafColumnar() || !n.leafPrefixV2() {
+		t.Fatalf("expected strict combined columnar+prefix encoding for short keys")
 	}
 }
 
@@ -120,5 +117,72 @@ func TestLeafColumnarPrefixV2_KeepsCombinedForLongKeys(t *testing.T) {
 	n := b.Finish()
 	if !n.leafPrefixCompressed() || !n.leafColumnar() || !n.leafPrefixV2() {
 		t.Fatalf("expected combined columnar+prefix encoding for long keys")
+	}
+}
+
+func TestLeafColumnarPrefixV2_SeparatedStreamsLayout(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	b.SetPageID(1)
+
+	keys := makeBenchKeys(32, 16)
+	for i := range keys {
+		switch i % 3 {
+		case 0:
+			if err := b.AddLeafEntry(keys[i], []byte{byte(i), byte(i + 1)}, FlagInline, page.ValuePtr{}); err != nil {
+				t.Fatalf("AddLeafEntry inline(%d): %v", i, err)
+			}
+		case 1:
+			ptr := page.ValuePtr{Offset: uint64(i + 1), Length: 33, FileID: 9}
+			if err := b.AddLeafEntry(keys[i], nil, FlagPointer, ptr); err != nil {
+				t.Fatalf("AddLeafEntry ptr(%d): %v", i, err)
+			}
+		default:
+			if err := b.AddLeafEntry(keys[i], nil, FlagTombstone, page.ValuePtr{}); err != nil {
+				t.Fatalf("AddLeafEntry tombstone(%d): %v", i, err)
+			}
+		}
+	}
+
+	n := b.Finish()
+	count := int(n.Count())
+	keyDirStart := NodeHeaderSize
+	valDirStart := keyDirStart + count*DirectoryEntrySize
+	flagsStart := valDirStart + count*DirectoryEntrySize
+	prefixStart := flagsStart + count
+	headerEnd := prefixStart + count*DirectoryEntrySize
+
+	if headerEnd > len(n.Data()) {
+		t.Fatalf("invalid combined header end: %d", headerEnd)
+	}
+
+	prevKeyOff := -1
+	prevValOff := -1
+	for i := 0; i < count; i++ {
+		keyOff := int(getUint16(n.Data()[keyDirStart+i*2 : keyDirStart+i*2+2]))
+		valOff := int(getUint16(n.Data()[valDirStart+i*2 : valDirStart+i*2+2]))
+		if keyOff < headerEnd || keyOff > len(n.Data()) {
+			t.Fatalf("invalid keyOff idx=%d off=%d headerEnd=%d", i, keyOff, headerEnd)
+		}
+		if valOff < headerEnd || valOff > len(n.Data()) {
+			t.Fatalf("invalid valOff idx=%d off=%d headerEnd=%d", i, valOff, headerEnd)
+		}
+		if prevKeyOff != -1 && keyOff < prevKeyOff {
+			t.Fatalf("expected key offsets monotonic, idx=%d prev=%d cur=%d", i, prevKeyOff, keyOff)
+		}
+		if prevValOff != -1 && valOff < prevValOff {
+			t.Fatalf("expected val offsets monotonic, idx=%d prev=%d cur=%d", i, prevValOff, valOff)
+		}
+		prevKeyOff = keyOff
+		prevValOff = valOff
+
+		prefixLen := int(getUint16(n.Data()[prefixStart+i*2 : prefixStart+i*2+2]))
+		if i%leafPrefixRestartInterval == 0 && prefixLen != 0 {
+			t.Fatalf("restart idx=%d expected prefixLen=0, got %d", i, prefixLen)
+		}
 	}
 }

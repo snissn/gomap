@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -88,10 +89,67 @@ func TestInternalBaseDelta_RoundTripAndSearch(t *testing.T) {
 		if pIdx != cIdx || pFound != cFound {
 			t.Fatalf("SearchInternal mismatch q=%q plain idx=%d found=%v compressed idx=%d found=%v", q, pIdx, pFound, cIdx, cFound)
 		}
+
+		pChild, pChildFound, err := plain.SearchInternalChildID(q)
+		if err != nil {
+			t.Fatalf("plain SearchInternalChildID(%q): %v", q, err)
+		}
+		if pChildFound != pFound {
+			t.Fatalf("plain SearchInternalChildID found mismatch q=%q got=%v want=%v", q, pChildFound, pFound)
+		}
+		if want := childIDs[pIdx]; pChild != want {
+			t.Fatalf("plain SearchInternalChildID child mismatch q=%q got=%d want=%d", q, pChild, want)
+		}
+
+		cChild, cChildFound, err := compressed.SearchInternalChildID(q)
+		if err != nil {
+			t.Fatalf("compressed SearchInternalChildID(%q): %v", q, err)
+		}
+		if cChildFound != cFound {
+			t.Fatalf("compressed SearchInternalChildID found mismatch q=%q got=%v want=%v", q, cChildFound, cFound)
+		}
+		if want := childIDs[cIdx]; cChild != want {
+			t.Fatalf("compressed SearchInternalChildID child mismatch q=%q got=%d want=%d", q, cChild, want)
+		}
+		if pChild != cChild {
+			t.Fatalf("SearchInternalChildID child mismatch q=%q plain=%d compressed=%d", q, pChild, cChild)
+		}
 	}
 }
 
-func TestInternalBaseDelta_SkipsWhenDeltaOverflowsU32(t *testing.T) {
+func TestInternalBaseDelta_AdaptiveWidth_U16AndU32(t *testing.T) {
+	build := func(base uint64, step uint64, nKeys int) *Node {
+		buf := make([]byte, page.PageSize)
+		b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+		b.SetPageID(1)
+		for i := 0; i < nKeys; i++ {
+			key := []byte(fmt.Sprintf("k:%04d", i))
+			child := base + uint64(i)*step
+			if err := b.AddInternalChild(key, child); err != nil {
+				t.Fatalf("AddInternalChild(%d): %v", i, err)
+			}
+		}
+		return b.Finish()
+	}
+
+	u16Node := build(10_000, 1, 64)
+	if !u16Node.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta")
+	}
+	if !u16Node.internalBaseDeltaU16() {
+		t.Fatalf("expected u16 delta mode")
+	}
+
+	u32Node := build(10_000, 2_000, 64)
+	if !u32Node.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta")
+	}
+	if u32Node.internalBaseDeltaU16() {
+		t.Fatalf("expected u32 delta mode")
+	}
+}
+
+func TestInternalBaseDelta_RejectsDeltaOverflowsU32(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -102,12 +160,13 @@ func TestInternalBaseDelta_SkipsWhenDeltaOverflowsU32(t *testing.T) {
 	if err := b.AddInternalChild([]byte("a"), base); err != nil {
 		t.Fatalf("AddInternalChild: %v", err)
 	}
-	if err := b.AddInternalChild([]byte("b"), tooFar); err != nil {
-		t.Fatalf("AddInternalChild: %v", err)
+	err := b.AddInternalChild([]byte("b"), tooFar)
+	if !errors.Is(err, ErrInternalBaseDeltaOutOfRange) {
+		t.Fatalf("expected ErrInternalBaseDeltaOutOfRange, got %v", err)
 	}
 	n := b.Finish()
-	if n.internalBaseDelta() {
-		t.Fatalf("expected internalBaseDelta compression to be skipped")
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta encoding to remain enabled for representable entries")
 	}
 }
 
@@ -115,6 +174,7 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
+	b.SetInternalFenceBounds([]byte("user:00000000"), []byte("user:00000099"))
 	for i := 0; i < 32; i++ {
 		key := []byte(fmt.Sprintf("user:%08d", i))
 		if err := b.AddInternalChild(key, uint64(1_000+i)); err != nil {
@@ -131,6 +191,16 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	}
 	if !n.internalBaseDelta() {
 		t.Fatalf("expected internalBaseDelta preserved after compact")
+	}
+	low, high, ok, err := n.InternalFenceBounds()
+	if err != nil {
+		t.Fatalf("InternalFenceBounds: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected persisted fence bounds")
+	}
+	if !bytes.Equal(low, []byte("user:00000000")) || !bytes.Equal(high, []byte("user:00000099")) {
+		t.Fatalf("unexpected fence bounds low=%q high=%q", low, high)
 	}
 
 	// Spot-check entries still decode.
@@ -160,6 +230,7 @@ func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
+	b.SetInternalFenceBounds([]byte("user:00000000"), []byte("user:00000099"))
 	for i := 0; i < nKeys; i++ {
 		if err := b.AddInternalChild(keys[i], childIDs[i]); err != nil {
 			t.Fatalf("AddInternalChild: %v", err)
@@ -183,6 +254,27 @@ func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 	}
 	if !n2.internalBaseDelta() {
 		t.Fatalf("expected internalBaseDelta enabled on split node")
+	}
+
+	low1, high1, ok1, err := n1.InternalFenceBounds()
+	if err != nil {
+		t.Fatalf("n1 InternalFenceBounds: %v", err)
+	}
+	if !ok1 {
+		t.Fatalf("expected n1 fence bounds")
+	}
+	low2, high2, ok2, err := n2.InternalFenceBounds()
+	if err != nil {
+		t.Fatalf("n2 InternalFenceBounds: %v", err)
+	}
+	if !ok2 {
+		t.Fatalf("expected n2 fence bounds")
+	}
+	if !bytes.Equal(low1, []byte("user:00000000")) || !bytes.Equal(high1, pivot) {
+		t.Fatalf("unexpected n1 fences low=%q high=%q pivot=%q", low1, high1, pivot)
+	}
+	if !bytes.Equal(low2, pivot) || !bytes.Equal(high2, []byte("user:00000099")) {
+		t.Fatalf("unexpected n2 fences low=%q high=%q pivot=%q", low2, high2, pivot)
 	}
 
 	for i := uint16(0); i < splitIndex; i++ {
@@ -241,7 +333,7 @@ func TestInternalBaseDelta_IncreasesFanout(t *testing.T) {
 	}
 }
 
-func TestInternalBaseDelta_FallbackLowCount(t *testing.T) {
+func TestInternalBaseDelta_StrictLowCountStillEncodes(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -254,12 +346,12 @@ func TestInternalBaseDelta_FallbackLowCount(t *testing.T) {
 	}
 
 	n := b.Finish()
-	if n.internalBaseDelta() {
-		t.Fatalf("expected fallback to plain internal page when count<16")
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected strict mode to keep internal base-delta when count<16")
 	}
 }
 
-func TestInternalBaseDelta_FallbackLowSharedPrefix(t *testing.T) {
+func TestInternalBaseDelta_StrictLowSharedPrefixStillEncodes(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -272,12 +364,12 @@ func TestInternalBaseDelta_FallbackLowSharedPrefix(t *testing.T) {
 	}
 
 	n := b.Finish()
-	if n.internalBaseDelta() {
-		t.Fatalf("expected fallback to plain internal page when shared prefix < 2 bytes")
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected strict mode to keep internal base-delta when shared prefix < 2 bytes")
 	}
 }
 
-func TestInternalBaseDelta_FallbackLowSavingsRatio(t *testing.T) {
+func TestInternalBaseDelta_StrictLowSavingsStillEncodes(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -291,12 +383,12 @@ func TestInternalBaseDelta_FallbackLowSavingsRatio(t *testing.T) {
 	}
 
 	n := b.Finish()
-	if n.internalBaseDelta() {
-		t.Fatalf("expected fallback to plain internal page when net savings ratio < 8%%")
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected strict mode to keep internal base-delta when net savings ratio is low")
 	}
 }
 
-func TestInternalBaseDelta_FallbackShortAverageSeparator(t *testing.T) {
+func TestInternalBaseDelta_StrictShortAverageSeparatorStillEncodes(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -310,12 +402,12 @@ func TestInternalBaseDelta_FallbackShortAverageSeparator(t *testing.T) {
 	}
 
 	n := b.Finish()
-	if n.internalBaseDelta() {
-		t.Fatalf("expected fallback to plain internal page when average separator key is short")
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected strict mode to keep internal base-delta for short separator keys")
 	}
 }
 
-func TestInternalBaseDelta_EarlyFallbackShortFirstSeparator(t *testing.T) {
+func TestInternalBaseDelta_StrictShortFirstSeparatorNoEarlyDisable(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
@@ -325,10 +417,13 @@ func TestInternalBaseDelta_EarlyFallbackShortFirstSeparator(t *testing.T) {
 	if err := b.AddInternalChild(key[:], 42); err != nil {
 		t.Fatalf("AddInternalChild: %v", err)
 	}
-	if b.internalBaseDelta {
-		t.Fatalf("expected internal base-delta to disable immediately for short first separator key")
+	if !b.internalBaseDelta {
+		t.Fatalf("expected internal base-delta to remain enabled")
 	}
-	if b.heapStart != int(page.PageSize)-(2+8+len(key)) {
-		t.Fatalf("unexpected heapStart after early fallback: got=%d want=%d", b.heapStart, int(page.PageSize)-(2+8+len(key)))
+	if b.count != 1 {
+		t.Fatalf("expected 1 staged entry, got %d", b.count)
+	}
+	if len(b.internalBaseEntries) != 1 {
+		t.Fatalf("expected 1 staged base-delta entry, got %d", len(b.internalBaseEntries))
 	}
 }
