@@ -4068,15 +4068,14 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 
 	type vlogBatchPlan struct {
-		start        int
-		end          int
-		dictID       uint64
-		dict         []byte
-		k            int
-		probe        bool
-		rawBytes     int
-		frames       []preparedDictFrame
-		prepEncodeNs int64
+		start    int
+		end      int
+		dictID   uint64
+		dict     []byte
+		k        int
+		probe    bool
+		rawBytes int
+		frames   []preparedDictFrame
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
 	plans := make([]vlogBatchPlan, 0, len(requests))
@@ -4164,7 +4163,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			keepIoNs = 0
 			keepEncodeNs = 0
 		}
-		prepared, prepEncodeWallNs, prepErr := db.prepareAppendDictFrames(
+		prepared, _, prepErr := db.prepareAppendDictFrames(
 			l,
 			plan.dictID,
 			plan.dict,
@@ -4181,7 +4180,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			break
 		}
 		plan.frames = prepared
-		plan.prepEncodeNs = prepEncodeWallNs
 		for fi := range plan.frames {
 			plan.frames[fi].start += plan.start
 			plan.frames[fi].end += plan.start
