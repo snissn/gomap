@@ -190,7 +190,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 		return
 	}
 	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
-	candidateK := db.valueLogAutotuneOptions.CandidateK
+	candidateK := db.valueLogDictCandidateK()
 	if len(candidateK) > 0 {
 		seen := make(map[int]struct{}, len(candidateK))
 		filtered := make([]int, 0, len(candidateK))
@@ -219,6 +219,23 @@ func (db *DB) ensureValueLogDictTrainer() {
 	db.valueLogDictMetrics.SetSlab(1)
 	db.wg.Add(1)
 	go db.valueLogDictLoop()
+}
+
+func (db *DB) valueLogDictCandidateK() []int {
+	if db == nil {
+		return nil
+	}
+	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
+		out := make([]int, len(db.valueLogAutotuneOptions.CandidateK))
+		copy(out, db.valueLogAutotuneOptions.CandidateK)
+		return out
+	}
+	// Force-pointer mode is write-heavy and benefits from evaluating larger frame
+	// group sizes. Avoid very small K defaults that bias toward read cost.
+	if db.forceValueLogPointers {
+		return []int{8, 16, 32}
+	}
+	return nil
 }
 
 func (db *DB) valueLogDictLoop() {
