@@ -3287,10 +3287,9 @@ const (
 )
 
 const (
-	vlogWriteBuffer        = 4096
-	vlogWriteBatchMax      = 512
-	vlogDictPrepBuffer     = 1024
-	vlogDictPrepMaxWorkers = 4
+	vlogWriteBuffer    = 4096
+	vlogWriteBatchMax  = 512
+	vlogDictPrepBuffer = 1024
 )
 
 // Match valuelog's writevMinAvgValueSize threshold so the queueing path is only
@@ -3329,9 +3328,6 @@ func (db *DB) vlogDictPrepWorkerCount() int {
 		lanes = 1
 	}
 	workers := procs / lanes
-	if workers > vlogDictPrepMaxWorkers {
-		workers = vlogDictPrepMaxWorkers
-	}
 	if workers < 2 {
 		workers = 2
 	}
