@@ -68,6 +68,27 @@ func shortestSeparator(left, right []byte) []byte {
 	return append([]byte(nil), right...)
 }
 
+func compareKeyToParts(key, prefix, suffix []byte) int {
+	if key == nil {
+		key = []byte{}
+	}
+	if len(prefix) == 0 {
+		return bytes.Compare(key, suffix)
+	}
+	if len(key) < len(prefix) {
+		cmp := bytes.Compare(key, prefix[:len(key)])
+		if cmp != 0 {
+			return cmp
+		}
+		return -1
+	}
+	cmp := bytes.Compare(key[:len(prefix)], prefix)
+	if cmp != 0 {
+		return cmp
+	}
+	return bytes.Compare(key[len(prefix):], suffix)
+}
+
 type internalEntry struct {
 	key   []byte
 	child uint64
@@ -669,24 +690,23 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	defer putChildWorkSlice(children)
 
 	for i := uint16(0); i < count; i++ {
-		// Optimization: Use View to avoid alloc
-		key, childID, err := oldNode.GetInternalEntryView(i)
+		keyPrefix, keySuffix, childID, err := oldNode.GetInternalEntryPartsView(i)
 		if err != nil {
 			return 0, nil, nil, err
 		}
-		if key == nil {
-			key = []byte{}
-		}
-		keyCopy := append([]byte(nil), key...)
+		keyCopy := make([]byte, len(keyPrefix)+len(keySuffix))
+		copy(keyCopy, keyPrefix)
+		copy(keyCopy[len(keyPrefix):], keySuffix)
 
 		// Determine End Key for this child
-		var endKey []byte
+		var endPrefix, endSuffix []byte
+		endKeyValid := false
 		if i+1 < count {
-			nextKey, _, err := oldNode.GetInternalEntryView(i + 1)
+			endPrefix, endSuffix, _, err = oldNode.GetInternalEntryPartsView(i + 1)
 			if err != nil {
 				return 0, nil, nil, err
 			}
-			endKey = nextKey
+			endKeyValid = true
 		}
 		childHigh := high
 		if endKey != nil {
@@ -697,7 +717,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		// ops[opIdx] ... until op.Key >= endKey
 		startOpIdx := opIdx
 		for opIdx < len(ops) {
-			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+			if !endKeyValid || compareKeyToParts(ops[opIdx].Key, endPrefix, endSuffix) < 0 {
 				opIdx++
 			} else {
 				break
@@ -1338,25 +1358,22 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 	}
 
 	pageCap := page.PageSize - node.NodeHeaderSize
-	internalEntryBytes := func(key []byte) int {
-		if key == nil {
-			key = []byte{}
-		}
+	internalEntryBytes := func(keyLen int) int {
 		// Internal entry: keylen(uint16) + child + key bytes + directory entry.
-		entrySize := 2 + 8 + len(key)
+		entrySize := 2 + 8 + keyLen
 		if z.indexInternalBaseDelta {
-			entrySize = 2 + 4 + len(key)
+			entrySize = 2 + 4 + keyLen
 		}
 		return entrySize + node.DirectoryEntrySize
 	}
 	internalRequiredBytes := func(n *node.Node) (int, error) {
 		sum := 0
 		for i := uint16(0); i < n.Count(); i++ {
-			k, _, err := n.GetInternalEntryView(i)
+			prefix, suffix, _, err := n.GetInternalEntryPartsView(i)
 			if err != nil {
 				return 0, err
 			}
-			sum += internalEntryBytes(k)
+			sum += internalEntryBytes(len(prefix) + len(suffix))
 			if sum > pageCap {
 				return sum, nil
 			}
@@ -1383,21 +1400,19 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 
 		addAll := func(n *node.Node) error {
 			for i := uint16(0); i < n.Count(); i++ {
-				k, child, err := n.GetInternalEntryView(i)
+				prefix, suffix, child, err := n.GetInternalEntryPartsView(i)
 				if err != nil {
 					return err
 				}
-				if k == nil {
-					k = []byte{}
-				}
-				entrySize := 2 + 8 + len(k)
+				keyLen := len(prefix) + len(suffix)
+				entrySize := 2 + 8 + keyLen
 				if z.indexInternalBaseDelta {
-					entrySize = 2 + 4 + len(k)
+					entrySize = 2 + 4 + keyLen
 				}
 				if z.internalSoftFull(b, entrySize) {
 					return node.ErrNodeFull
 				}
-				if err := b.AddInternalChild(k, child); err != nil {
+				if err := b.AddInternalChildParts(prefix, suffix, child); err != nil {
 					return err
 				}
 			}
@@ -1467,15 +1482,14 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		combined := make([]internalEntry, 0, int(left.Count()+right.Count()))
 		for _, src := range []*node.Node{left, right} {
 			for i := uint16(0); i < src.Count(); i++ {
-				k, child, err := src.GetInternalEntryView(i)
+				prefix, suffix, child, err := src.GetInternalEntryPartsView(i)
 				if err != nil {
 					retired = append(retired, lid, rid)
 					return 0, 0, nil, false, err
 				}
-				if k == nil {
-					k = []byte{}
-				}
-				kCopy := append([]byte(nil), k...)
+				kCopy := make([]byte, len(prefix)+len(suffix))
+				copy(kCopy, prefix)
+				copy(kCopy[len(prefix):], suffix)
 				combined = append(combined, internalEntry{key: kCopy, child: child})
 			}
 		}

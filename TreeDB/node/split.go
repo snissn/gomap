@@ -110,14 +110,16 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 				return nil, err
 			}
 		} else {
-			key, childID, err := n.GetInternalEntryView(srcIdx)
+			prefix, suffix, childID, err := n.GetInternalEntryPartsView(srcIdx)
 			if err != nil {
 				return nil, err
 			}
 			if i == 0 {
-				pivotKey = append([]byte(nil), key...)
+				pivotKey = make([]byte, len(prefix)+len(suffix))
+				copy(pivotKey, prefix)
+				copy(pivotKey[len(prefix):], suffix)
 			}
-			err = internalBuilder.AddInternalChild(key, childID)
+			err = internalBuilder.AddInternalChildParts(prefix, suffix, childID)
 			if err != nil {
 				return nil, err
 			}
