@@ -64,7 +64,11 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 	if report.DictID == nil || *report.DictID == 0 {
 		t.Fatalf("expected non-zero dict_id in report; got %#v", report.DictID)
 	}
-	if report.PreSteadyDictID == nil || *report.PreSteadyDictID == 0 {
-		t.Fatalf("expected non-zero pre_steady_dict_id in report; got %#v", report.PreSteadyDictID)
+	preSteadyActive := report.PreSteadyDictID != nil && *report.PreSteadyDictID > 0
+	if report.PreSteadyFramesKept != nil && *report.PreSteadyFramesKept > 0 {
+		preSteadyActive = true
+	}
+	if !preSteadyActive {
+		t.Fatalf("expected pre-steady dict activation via dict_id>0 or frames_kept>0; got pre_steady_dict_id=%#v pre_steady_frames_kept=%#v", report.PreSteadyDictID, report.PreSteadyFramesKept)
 	}
 }

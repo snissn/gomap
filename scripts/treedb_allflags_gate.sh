@@ -13,8 +13,8 @@ PROFILE="${PROFILE:-fast}"
 TESTS="${TESTS:-batch_write,batch_random,random_read,prefix_scan}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
-BASE_FLAGS="-treedb-force-value-pointers"
-ALL_FLAGS="$BASE_FLAGS -treedb-index-columnar-leaves -treedb-leaf-prefix-compression -treedb-index-internal-base-delta -treedb-index-packed-valueptr"
+BASE_FLAGS="-treedb-force-value-pointers -treedb-index-optimizations=false"
+ALL_FLAGS="-treedb-index-optimizations=true"
 
 mkdir -p "$OUT/runs"
 

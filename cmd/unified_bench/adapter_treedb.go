@@ -51,6 +51,7 @@ var (
 	treedbIterDebug                 = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit            = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	treedbForceValuePointers        = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
+	treedbIndexOptimizations        = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
 	treedbLeafPrefixCompression     = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold         = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbVlogDictTrainBytes        = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
@@ -209,6 +210,12 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
 	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
+	lines = append(lines, fmt.Sprintf("index_optimizations=%t",
+		r.opts.ValueLog.ForcePointers &&
+			r.opts.LeafPrefixCompression &&
+			r.opts.IndexColumnarLeaves &&
+			r.opts.IndexPackedValuePtr &&
+			r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("leaf_prefix_compression=%t", r.opts.LeafPrefixCompression))
 	lines = append(lines, fmt.Sprintf("index_columnar_leaves=%t", r.opts.IndexColumnarLeaves))
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
@@ -279,6 +286,19 @@ func formatTreeDBIntegrity(mode treedb.IntegrityMode) string {
 	}
 }
 
+func resolveIndexOptimizationBool(flagName string, flagValue bool, compositeValue bool, compositeExplicit bool) bool {
+	if flagExplicit(flagName) {
+		return flagValue
+	}
+	if compositeExplicit {
+		return compositeValue
+	}
+	if compositeValue {
+		return true
+	}
+	return flagValue
+}
+
 func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 
@@ -297,21 +317,29 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		readIntegrity = treedb.IntegritySkipChecksums
 	}
 
-	leafPrefixRequested := *treedbLeafPrefixCompression
-	leafPrefixEffective := leafPrefixRequested
+	indexOptimizationsRequested := *treedbIndexOptimizations
+	indexOptimizationsExplicit := flagExplicit("treedb-index-optimizations")
+	forcePointersEffective := resolveIndexOptimizationBool("treedb-force-value-pointers", *treedbForceValuePointers, indexOptimizationsRequested, indexOptimizationsExplicit)
+	leafPrefixEffective := resolveIndexOptimizationBool("treedb-leaf-prefix-compression", *treedbLeafPrefixCompression, indexOptimizationsRequested, indexOptimizationsExplicit)
+	columnarLeavesEffective := resolveIndexOptimizationBool("treedb-index-columnar-leaves", *treedbIndexColumnarLeaves, indexOptimizationsRequested, indexOptimizationsExplicit)
+	packedValuePtrEffective := resolveIndexOptimizationBool("treedb-index-packed-valueptr", *treedbIndexPackedValuePtr, indexOptimizationsRequested, indexOptimizationsExplicit)
+	internalBaseDeltaEffective := resolveIndexOptimizationBool("treedb-index-internal-base-delta", *treedbIndexInternalBaseDelta, indexOptimizationsRequested, indexOptimizationsExplicit)
 	var notes []string
 	var warnings []string
+	if indexOptimizationsRequested {
+		notes = append(notes, "index_optimizations enables force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta")
+	}
 	if leafPrefixEffective {
 		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)")
 	}
-	if leafPrefixEffective && *treedbIndexColumnarLeaves {
+	if leafPrefixEffective && columnarLeavesEffective {
 		notes = append(notes, "leaf_prefix_compression + index_columnar_leaves: enabling combined columnar+prefix leaf encoding for new pages")
 	}
 	if *treedbDisableWAL && *treedbRelaxedSync {
 		// This is not an error, but it can be confusing. Document precedence.
 		notes = append(notes, "disable_wal takes precedence over relaxed_sync (durability=wal_off_relaxed)")
 	}
-	if *treedbIndexPackedValuePtr {
+	if packedValuePtrEffective {
 		notes = append(notes, "index_packed_valueptr uses a packed 12B leaf ValuePtr encoding (u32 offset cap; cached mode rotates value-log segments automatically)")
 	}
 
@@ -331,9 +359,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
 
 		LeafPrefixCompression:  leafPrefixEffective,
-		IndexColumnarLeaves:    *treedbIndexColumnarLeaves,
-		IndexPackedValuePtr:    *treedbIndexPackedValuePtr,
-		IndexInternalBaseDelta: *treedbIndexInternalBaseDelta,
+		IndexColumnarLeaves:    columnarLeavesEffective,
+		IndexPackedValuePtr:    packedValuePtrEffective,
+		IndexInternalBaseDelta: internalBaseDeltaEffective,
 
 		MemtableMode:               *treedbMemtableMode,
 		FlushThreshold:             *treedbFlushThreshold,
@@ -358,7 +386,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		DisablePiggybackCompaction: *treedbDisablePiggyback,
 
 		ValueLog: treedb.ValueLogOptions{
-			ForcePointers:              *treedbForceValuePointers,
+			ForcePointers:              forcePointersEffective,
 			PointerThreshold:           *treedbValueLogThreshold,
 			ReadIntegrity:              readIntegrity,
 			DictAdaptiveRatio:          *treedbVlogDictAdaptiveRatio,

@@ -28,6 +28,11 @@ Example:
 
 More details: `docs/BENCHMARK_SPEC.md`.
 
+Key-shape override for non-dataset 8-byte workloads:
+```bash
+./bin/unified-bench -dbs treedb -test batch_write,random_read,prefix_scan -key-shape be8_prefix4
+```
+
 ### Force-pointers perf matrix (script)
 
 For repeatable perf work on the TreeDB "forced value pointers" mode (value log
@@ -65,8 +70,8 @@ Defaults:
 - both variants include `-checkpoint-between-tests`
 
 Compared variants:
-- `base`: `-treedb-force-value-pointers`
-- `allflags`: base + `-treedb-index-columnar-leaves -treedb-leaf-prefix-compression -treedb-index-internal-base-delta -treedb-index-packed-valueptr`
+- `base`: `-treedb-force-value-pointers -treedb-index-optimizations=false`
+- `allflags`: `-treedb-index-optimizations=true` (enables force pointers + prefix compression + columnar leaves + packed value pointers + internal base-delta)
 
 Pass conditions (median-of-runs):
 - `batch_write`, `batch_random`, `random_read`, `prefix_scan`: all-flags median must be strictly greater than base median.

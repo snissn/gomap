@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -263,6 +264,71 @@ func TestRunBenchmark_CompressionVariantsMatrix_Smoke(t *testing.T) {
 		if _, ok := got[col]; !ok {
 			t.Fatalf("missing result column %q (have: %v)", col, mapsKeysSorted(got))
 		}
+	}
+}
+
+func TestRunBenchmark_KeyShapePrefix4(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		KeyShape:     "be8_prefix4",
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "batch_write,full_scan,prefix_scan",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	full := run.Results["full_scan"]["TreeDB"]
+	prefix := run.Results["prefix_scan"]["TreeDB"]
+	if math.IsNaN(full) || full <= 0 {
+		t.Fatalf("expected full_scan > 0, got %v", full)
+	}
+	if math.IsNaN(prefix) || prefix <= 0 {
+		t.Fatalf("expected prefix_scan > 0, got %v", prefix)
+	}
+}
+
+func TestRunBenchmark_InvalidKeyShape(t *testing.T) {
+	_, err := runBenchmark(BenchConfig{
+		Keys:         100,
+		KeyShape:     "nope",
+		ValueSize:    16,
+		BatchSize:    10,
+		RangeQueries: 5,
+		RangeSpan:    2,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported -key-shape") {
+		t.Fatalf("expected unsupported key-shape error, got %v", err)
+	}
+}
+
+func TestRunBenchmark_KeyShapePrefix4RejectsOverflow(t *testing.T) {
+	_, err := runBenchmark(BenchConfig{
+		Keys:         (math.MaxUint32 / 10) + 1,
+		KeyShape:     "be8_prefix4",
+		ValueSize:    16,
+		BatchSize:    10,
+		RangeQueries: 5,
+		RangeSpan:    2,
+		DBsArg:       "treedb",
+		TestsArg:     "random_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds uint32 range") {
+		t.Fatalf("expected be8_prefix4 overflow error, got %v", err)
 	}
 }
 

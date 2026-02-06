@@ -128,6 +128,14 @@ func applyDurableProfile(opts *Options) {
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
 }
 
+func applyIndexOptimizationsProfile(opts *Options) {
+	opts.ValueLog.ForcePointers = true
+	opts.LeafPrefixCompression = true
+	opts.IndexColumnarLeaves = true
+	opts.IndexPackedValuePtr = true
+	opts.IndexInternalBaseDelta = true
+}
+
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
@@ -137,6 +145,7 @@ func applyFastProfile(opts *Options) {
 	if !opts.PreferAppendAlloc {
 		opts.PreferAppendAlloc = true
 	}
+	applyIndexOptimizationsProfile(opts)
 }
 
 func applyWALOnFastProfile(opts *Options) {
@@ -145,6 +154,7 @@ func applyWALOnFastProfile(opts *Options) {
 
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true
+	applyIndexOptimizationsProfile(opts)
 }
 
 func applyBenchProfile(opts *Options) {
