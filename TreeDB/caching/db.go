@@ -47,6 +47,8 @@ var valueLogRecordPool sync.Pool   // stores []valuelog.Record
 var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
 var valueLogPreparedBodyPool sync.Pool
+var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
+var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
 
 type vlogPreparedFrameBody struct {
 	buf []byte
@@ -214,17 +216,79 @@ func putVlogPreparedFrameBody(body *vlogPreparedFrameBody) {
 	valueLogPreparedBodyPool.Put(body)
 }
 
+func getVlogPreparedFrames(n int) []preparedDictFrame {
+	if n < 0 {
+		n = 0
+	}
+	if v := valueLogPreparedFramesPool.Get(); v != nil {
+		if s, ok := v.([]preparedDictFrame); ok {
+			if cap(s) >= n {
+				return s[:n]
+			}
+		}
+	}
+	return make([]preparedDictFrame, n)
+}
+
+func putVlogPreparedFrames(frames []preparedDictFrame) {
+	if frames == nil {
+		return
+	}
+	clear(frames)
+	if cap(frames) > maxVlogPreparedFramesPoolCap {
+		return
+	}
+	valueLogPreparedFramesPool.Put(frames[:0])
+}
+
+func getVlogDictPrepareResults(capacity int) chan vlogDictPrepareResult {
+	if capacity < 1 {
+		capacity = 1
+	}
+	if v := valueLogDictPrepareResultsPool.Get(); v != nil {
+		if ch, ok := v.(chan vlogDictPrepareResult); ok {
+			maxCap := capacity * 2
+			if maxCap < 256 {
+				maxCap = 256
+			}
+			if len(ch) == 0 && cap(ch) >= capacity && cap(ch) <= maxCap {
+				return ch
+			}
+		}
+	}
+	return make(chan vlogDictPrepareResult, capacity)
+}
+
+func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
+	if ch == nil {
+		return
+	}
+	for {
+		select {
+		case <-ch:
+		default:
+			if cap(ch) > maxVlogDictPrepareResultsPoolCap {
+				return
+			}
+			valueLogDictPrepareResultsPool.Put(ch)
+			return
+		}
+	}
+}
+
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
 
-	minMemtablePrealloc        = 64 * 1024
-	maxMemtablePrealloc        = 256 << 20
-	adaptiveMinWrites          = 1024
-	adaptiveSequentialWritePct = 0.85
-	adaptiveWarmupBytes        = 16 * 1024 * 1024
-	maxMemtableBytesPerShard   = int64(3 << 30)
-	maxVlogPreparedBodyPoolCap = 8 << 20
+	minMemtablePrealloc              = 64 * 1024
+	maxMemtablePrealloc              = 256 << 20
+	adaptiveMinWrites                = 1024
+	adaptiveSequentialWritePct       = 0.85
+	adaptiveWarmupBytes              = 16 * 1024 * 1024
+	maxMemtableBytesPerShard         = int64(3 << 30)
+	maxVlogPreparedBodyPoolCap       = 8 << 20
+	maxVlogPreparedFramesPoolCap     = 1 << 14
+	maxVlogDictPrepareResultsPoolCap = 1 << 14
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -4244,9 +4308,9 @@ func (db *DB) prepareAppendDictFrames(
 	// Leave encodeNs unset for worker-prepared frames to avoid poisoning
 	// autotune keep-policy estimates.
 	measureEncode := false
-	prepared := make([]preparedDictFrame, frameCount)
-
-	results := make(chan vlogDictPrepareResult, frameCount)
+	prepared := getVlogPreparedFrames(frameCount)
+	clear(prepared)
+	results := getVlogDictPrepareResults(frameCount)
 	for fi := 0; fi < frameCount; fi++ {
 		start := fi * k
 		end := start + k
@@ -4270,6 +4334,9 @@ func (db *DB) prepareAppendDictFrames(
 		case l.vlogPrepCh <- task:
 		case <-db.closeCh:
 			releasePreparedDictFrames(prepared)
+			putVlogPreparedFrames(prepared)
+			// Workers may still publish into results after close is observed; do
+			// not pool this channel on early return.
 			return nil, errWALClosed
 		}
 	}
@@ -4297,8 +4364,10 @@ func (db *DB) prepareAppendDictFrames(
 			stats:   res.stats,
 		}
 	}
+	putVlogDictPrepareResults(results)
 	if firstErr != nil {
 		releasePreparedDictFrames(prepared)
+		putVlogPreparedFrames(prepared)
 		return nil, firstErr
 	}
 	return prepared, nil
@@ -4422,7 +4491,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		return nil, prepareErr
 	}
 	if len(preparedDictFrames) > 0 {
-		defer releasePreparedDictFrames(preparedDictFrames)
+		defer func() {
+			releasePreparedDictFrames(preparedDictFrames)
+			putVlogPreparedFrames(preparedDictFrames)
+		}()
 	}
 
 	l.vlogMu.Lock()
@@ -9645,7 +9717,8 @@ func (b *Batch) writeRegular(sync bool) error {
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
 
-	eligibleIdxs := make([]int, 0, len(b.entries))
+	eligibleIdxs := getValueLogEligible(len(b.entries))
+	defer putValueLogEligible(eligibleIdxs)
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
@@ -9695,7 +9768,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		valueRecords := make([]valuelog.Record, eligibleCount)
+		valueRecords := getValueLogRecords(eligibleCount)
 		for i, idx := range eligibleIdxs {
 			op := &b.entries[idx]
 			rid := b.db.nextRID.Add(1)
@@ -9705,6 +9778,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 		}
 		ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+		putValueLogRecords(valueRecords)
 		if err != nil {
 			b.db.writeMu.RUnlock()
 			return err
