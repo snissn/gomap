@@ -109,7 +109,8 @@ func (db *DB) shouldBypassValueLogDictForRecords(records []valuelog.Record, prob
 	if samples == 0 {
 		return false
 	}
-	db.valueLogDictClassifySampled.Add(uint64(samples))
+	// Count classification decisions (not payload samples) so sampled/skipped share units.
+	db.valueLogDictClassifySampled.Add(1)
 	// Bypass dict work when sampled payloads are predominantly high-entropy.
 	if incompressible*4 >= samples*3 {
 		pause := db.valueLogDictMetricsPauseBytes

@@ -1069,9 +1069,6 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		return errWALUnavailable
 	}
 	if db.splitValueLogEnabled() {
-		if !l.vlogDirty.Load() {
-			return nil
-		}
 		waitStart := time.Now()
 		l.vlogMu.Lock()
 		waited := time.Since(waitStart)
@@ -1080,16 +1077,21 @@ func (db *DB) flushValueLogLane(l *lane) error {
 			l.vlogMu.Unlock()
 			return errWALUnavailable
 		}
+		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
+		if !l.vlogDirty.Load() {
+			l.vlogMu.Unlock()
+			return nil
+		}
 		start := time.Now()
 		err := w.Flush()
 		if db.testOnVlogFlush != nil {
 			db.testOnVlogFlush(int(l.id))
 		}
 		db.debugVlogTiming("vlog_flush", int(l.id), "vlogMu", waited, time.Since(start))
-		l.vlogMu.Unlock()
 		if err == nil {
 			l.vlogDirty.Store(false)
 		}
+		l.vlogMu.Unlock()
 		return err
 	}
 	waitStart := time.Now()
@@ -1129,10 +1131,10 @@ func (db *DB) syncValueLogLane(l *lane) error {
 			db.testOnVlogSync(int(l.id))
 		}
 		db.debugVlogTiming("vlog_sync", int(l.id), "vlogMu", waited, time.Since(start))
-		l.vlogMu.Unlock()
 		if err == nil {
 			l.vlogDirty.Store(false)
 		}
+		l.vlogMu.Unlock()
 		return err
 	}
 	waitStart := time.Now()
