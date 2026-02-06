@@ -249,7 +249,7 @@ func main() {
 	flag.Usage = customUsage
 	flag.Parse()
 	if extras := flag.Args(); len(extras) > 0 {
-		log.Fatalf("unexpected positional args: %q (tip: for bool flags, use -flag=false, e.g. -progress=false)", strings.Join(extras, " "))
+		log.Fatalf("unexpected positional args: %q (tip: for bool flags, use -flag=false, e.g. -progress=false)", extras)
 	}
 
 	isSet := make(map[string]bool)
