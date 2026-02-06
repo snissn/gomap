@@ -2490,7 +2490,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 
 	minPayloadSavings := opts.ValueLogDictMinPayloadSavingsRatio
 	if minPayloadSavings <= 0 {
-		minPayloadSavings = 0.005
+		// Throughput-oriented default: avoid publishing dictionaries unless they
+		// deliver clear payload reduction. This keeps dict-enabled mode close to
+		// raw mode on incompressible streams.
+		minPayloadSavings = 0.02
+		if opts.ForceValueLogPointers || opts.DisableWAL {
+			minPayloadSavings = 0.05
+		}
 	}
 
 	valueLogAutotuneCandidateKSet := len(opts.ValueLogCompressionAutotune.CandidateK) > 0
@@ -2560,7 +2566,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if probeBytes < 64<<10 {
 		probeBytes = 64 << 10
 	}
-	pausedSampleStride := uint64(32)
+	// While paused on degraded/incompressible streams, keep sampling sparse to
+	// minimize hot-path CPU overhead.
+	pausedSampleStride := uint64(256)
 
 	lanes := make([]lane, laneCount)
 	for i := range lanes {
