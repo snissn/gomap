@@ -244,8 +244,8 @@ func shouldUseEncodeAllParts(records []Record, rawPayloadBytes int) bool {
 		noCopyUltraMinAvgBytes = 4 << 10
 		// Small-value grouped frames (e.g. 128B values at large K) can still be
 		// copy-bound on ultra-low-entropy streams.
-		noCopyTinyUltraMinRawBytes = 8 << 10
-		noCopyTinyUltraMinAvgBytes = 96
+		noCopyTinyUltraMinRawBytes = 512
+		noCopyTinyUltraMinAvgBytes = 64
 	)
 	avg := rawPayloadBytes / k
 	if rawPayloadBytes >= noCopyMinRawBytes && avg >= noCopyMinAvgBytes {
