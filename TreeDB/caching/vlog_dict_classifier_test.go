@@ -102,3 +102,67 @@ func TestValueLogDictCollectSamples_CompressibleCappedPerBatch(t *testing.T) {
 		t.Fatalf("expected trainer enqueue=%d, got=%d", valueLogDictCollectPerBatchCap, stats.Enqueued)
 	}
 }
+
+func TestValueLogDictClassifierBypass_ArmsIncompressibleHold(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+	}
+
+	highEntropy := make([]byte, 4096)
+	for i := range highEntropy {
+		highEntropy[i] = byte(i)
+	}
+	if !db.valueLogDictClassifierBypass(highEntropy, false) {
+		t.Fatalf("expected high-entropy sample to bypass dict path")
+	}
+	if hold := db.valueLogDictIncompressibleHoldRemaining.Load(); hold == 0 {
+		t.Fatalf("expected hold to arm after high-entropy hit")
+	}
+}
+
+func TestValueLogDictShouldAttemptCompression_IncompressibleHoldProbes(t *testing.T) {
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  256 << 10,
+		valueLogDictIncompressibleProbeBytes: 64 << 10,
+	}
+	db.armValueLogDictIncompressibleHoldBytes(0)
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(32 << 10)
+	if attempt || probe || paused {
+		t.Fatalf("expected hold suppression without probe; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+
+	attempt, probe, paused = db.valueLogDictShouldAttemptCompression(32 << 10)
+	if !attempt || !probe {
+		t.Fatalf("expected periodic probe during hold; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+
+	remaining := db.valueLogDictIncompressibleHoldRemaining.Load()
+	if remaining == 0 {
+		t.Fatalf("expected hold to remain active after one probe")
+	}
+}
+
+func TestValueLogDictCollectSamples_SkipsDuringIncompressibleHold(t *testing.T) {
+	tr := newValueLogDictClassifierTrainer(t)
+	db := &DB{
+		valueLogDictTrainer:                  tr,
+		valueLogDictIncompressibleHoldBytes:  1 << 20,
+		valueLogDictIncompressibleProbeBytes: 128 << 10,
+		valueLogDictMetricsPauseBytes:        1 << 20,
+		valueLogDictProbeBytes:               64 << 10,
+		valueLogDictPausedSampleStride:       256,
+	}
+	db.valueLogDictIncompressibleHoldRemaining.Store(1 << 20)
+	db.valueLogDictIncompressibleProbeRemaining.Store(128 << 10)
+
+	records := compressibleValueLogRecords(512, 4096)
+	db.valueLogDictCollectSamples(records)
+
+	stats := tr.Stats()
+	if stats.Enqueued != 0 {
+		t.Fatalf("expected no trainer enqueue while incompressible hold is active, got=%d", stats.Enqueued)
+	}
+}
