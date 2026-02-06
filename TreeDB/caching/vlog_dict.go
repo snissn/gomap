@@ -511,27 +511,15 @@ func (db *DB) chooseValueLogDictWriteK(baseK, records, rawPayloadBytes int) int 
 		return k
 	}
 	avg := rawPayloadBytes / records
-	if db != nil && db.disableJournal {
-		// WAL-off ingest mode can favor larger grouped frames to minimize
-		// per-frame metadata and syscall overhead.
-		switch {
-		case avg <= 160 && k < 96:
-			k = 96
-		case avg <= 192 && k < 64:
-			k = 64
-		case avg <= 256 && k < 32:
-			k = 32
-		}
-		return db.clampValueLogDictK(k)
-	}
-	// WAL-on mode favors moderate grouping. Extremely large K can regress dict
-	// prep/write throughput for tiny values by increasing encode/reset cost per
-	// frame without proportional I/O savings.
+	// For tiny values, larger grouped frames materially reduce per-frame metadata
+	// and lock/write overhead in dict mode.
 	switch {
-	case avg <= 192 && k < 16:
-		k = 16
-	case avg <= 256 && k < 8:
-		k = 8
+	case avg <= 160 && k < 96:
+		k = 96
+	case avg <= 192 && k < 64:
+		k = 64
+	case avg <= 256 && k < 32:
+		k = 32
 	}
 	return db.clampValueLogDictK(k)
 }
