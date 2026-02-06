@@ -11,7 +11,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-const valueLogDictCollectPerBatchCap = 32
+const (
+	// Scale trainer sampling by payload bytes so large batches of small values
+	// can bootstrap a dictionary quickly.
+	valueLogDictCollectMinPerBatchRecords = 32
+	valueLogDictCollectMaxPerBatchRecords = 2048
+	valueLogDictCollectMinPerBatchBytes   = 32 << 10
+)
 
 type dictStoreWriter interface {
 	PutDictBytes(context.Context, []byte) (uint64, error)
@@ -285,13 +291,7 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 		// record index, then sample records where (index % stride) == 0.
 		base = db.valueLogDictSampleStrideCount.Add(n) - n
 	}
-	collectBudget := valueLogDictCollectPerBatchCap
-	if collectBudget > len(records) {
-		collectBudget = len(records)
-	}
-	if paused && collectBudget > 1 {
-		collectBudget = 1
-	}
+	collectBudget := db.valueLogDictCollectBudget(records, paused)
 	if collectBudget <= 0 {
 		return
 	}
@@ -312,6 +312,51 @@ func (db *DB) valueLogDictCollectSamples(records []valuelog.Record) {
 			return
 		}
 	}
+}
+
+func (db *DB) valueLogDictCollectBudget(records []valuelog.Record, paused bool) int {
+	n := len(records)
+	if n == 0 {
+		return 0
+	}
+	if paused {
+		if n > 1 {
+			return 1
+		}
+		return n
+	}
+
+	targetBytes := compression.DefaultTrainBootstrapBytes
+	if db != nil && db.valueLogDictTrain.TrainBytes > 0 && db.valueLogDictTrain.TrainBytes < targetBytes {
+		targetBytes = db.valueLogDictTrain.TrainBytes
+	}
+	if targetBytes < valueLogDictCollectMinPerBatchBytes {
+		targetBytes = valueLogDictCollectMinPerBatchBytes
+	}
+
+	rawBytes := 0
+	for i := range records {
+		rawBytes += len(records[i].Value)
+	}
+	avgBytes := 1
+	if rawBytes > 0 {
+		avgBytes = rawBytes / n
+		if avgBytes < 1 {
+			avgBytes = 1
+		}
+	}
+
+	budget := targetBytes / avgBytes
+	if budget < valueLogDictCollectMinPerBatchRecords {
+		budget = valueLogDictCollectMinPerBatchRecords
+	}
+	if budget > valueLogDictCollectMaxPerBatchRecords {
+		budget = valueLogDictCollectMaxPerBatchRecords
+	}
+	if budget > n {
+		budget = n
+	}
+	return budget
 }
 
 func (db *DB) valueLogDictCollectSample(value []byte) {

@@ -79,7 +79,7 @@ func TestValueLogDictCollectSamples_SkipsIncompressibleBeforeFirstDict(t *testin
 	}
 }
 
-func TestValueLogDictCollectSamples_CompressibleCappedPerBatch(t *testing.T) {
+func TestValueLogDictCollectSamples_CompressibleBudgetedByPayloadBytes(t *testing.T) {
 	tr := newValueLogDictClassifierTrainer(t)
 	db := &DB{
 		valueLogDictTrainer:            tr,
@@ -89,17 +89,35 @@ func TestValueLogDictCollectSamples_CompressibleCappedPerBatch(t *testing.T) {
 	}
 
 	records := compressibleValueLogRecords(512, 4096)
+	expectedBudget := db.valueLogDictCollectBudget(records, false)
 	db.valueLogDictCollectSamples(records)
 
 	if pause := db.valueLogDictPauseRemaining.Load(); pause != 0 {
 		t.Fatalf("expected no pause on compressible stream, got=%d", pause)
 	}
-	if sampled := db.valueLogDictClassifySampled.Load(); sampled != valueLogDictCollectPerBatchCap {
-		t.Fatalf("expected classifier sampled=%d, got=%d", valueLogDictCollectPerBatchCap, sampled)
+	if sampled := db.valueLogDictClassifySampled.Load(); sampled != uint64(expectedBudget) {
+		t.Fatalf("expected classifier sampled=%d, got=%d", expectedBudget, sampled)
 	}
 	stats := tr.Stats()
-	if stats.Enqueued != uint64(valueLogDictCollectPerBatchCap) {
-		t.Fatalf("expected trainer enqueue=%d, got=%d", valueLogDictCollectPerBatchCap, stats.Enqueued)
+	if stats.Enqueued != uint64(expectedBudget) {
+		t.Fatalf("expected trainer enqueue=%d, got=%d", expectedBudget, stats.Enqueued)
+	}
+}
+
+func TestValueLogDictCollectBudget_ScalesForLargeBatchSmallValues(t *testing.T) {
+	db := &DB{
+		valueLogDictTrain: compression.TrainConfig{
+			TrainBytes: 8 << 20,
+		},
+	}
+	records := compressibleValueLogRecords(10_000, 128)
+	budget := db.valueLogDictCollectBudget(records, false)
+
+	if budget <= valueLogDictCollectMinPerBatchRecords {
+		t.Fatalf("expected scaled budget > %d for large small-value batch, got=%d", valueLogDictCollectMinPerBatchRecords, budget)
+	}
+	if budget != valueLogDictCollectMaxPerBatchRecords {
+		t.Fatalf("expected budget to clamp at max=%d, got=%d", valueLogDictCollectMaxPerBatchRecords, budget)
 	}
 }
 
