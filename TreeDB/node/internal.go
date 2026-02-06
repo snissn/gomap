@@ -306,6 +306,62 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 	return key, childID, nil
 }
 
+// GetInternalEntryPartsView returns a view of the internal entry key as
+// (prefix, suffix) slices without reconstructing a contiguous key.
+//
+// For uncompressed internal pages, prefix is nil and suffix points directly
+// into the node's backing page.
+//
+// For internal base-delta pages, prefix points into the page footer metadata
+// and suffix points into the entry payload.
+func (n *Node) GetInternalEntryPartsView(index uint16) (prefix, suffix []byte, childID uint64, err error) {
+	if n.internalBaseDelta() {
+		meta, err := n.internalBaseDeltaMeta()
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		ptr := int(offset)
+		deltaWidth, entryHeader := n.internalBaseDeltaEntryWidths()
+		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+			return nil, nil, 0, ErrCorruptedNode
+		}
+		suffixLen := int(getUint16(n.data[ptr : ptr+2]))
+		deltaStart := ptr + 2
+		var delta uint64
+		if deltaWidth == 2 {
+			delta = uint64(getUint16(n.data[deltaStart : deltaStart+2]))
+		} else {
+			delta = uint64(binary.LittleEndian.Uint32(n.data[deltaStart : deltaStart+4]))
+		}
+		suffixStart := ptr + entryHeader
+		suffixEnd := suffixStart + suffixLen
+		if suffixLen < 0 || suffixEnd > meta.footerStart {
+			return nil, nil, 0, ErrCorruptedNode
+		}
+		return meta.prefix, n.data[suffixStart:suffixEnd], meta.baseChildID + delta, nil
+	}
+
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	ptr := int(offset)
+	if ptr+10 > len(n.data) {
+		return nil, nil, 0, ErrCorruptedNode
+	}
+	keyLen := binary.LittleEndian.Uint16(n.data[ptr : ptr+2])
+	childID = binary.LittleEndian.Uint64(n.data[ptr+2 : ptr+10])
+	ptr += 10
+	if ptr+int(keyLen) > len(n.data) {
+		return nil, nil, 0, ErrCorruptedNode
+	}
+	return nil, n.data[ptr : ptr+int(keyLen)], childID, nil
+}
+
 // InternalFenceBounds returns exact subtree bounds when persisted on this
 // internal page: low inclusive and high exclusive. A nil/empty high bound means
 // unbounded.

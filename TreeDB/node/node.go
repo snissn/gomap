@@ -196,6 +196,11 @@ func (n *Node) internalBaseDeltaU16() bool {
 	return n.rawFlags()&internalBaseDeltaU16Flag != 0
 }
 
+// internalBaseDelta16 is a compatibility alias for internalBaseDeltaU16.
+func (n *Node) internalBaseDelta16() bool {
+	return n.internalBaseDeltaU16()
+}
+
 func (n *Node) internalFenceBounds() bool {
 	if n.ptype != page.PageTypeInternal {
 		return false

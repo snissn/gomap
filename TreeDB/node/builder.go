@@ -584,6 +584,22 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	return nil
 }
 
+// AddInternalChildParts appends an internal entry from split key parts.
+// This preserves call sites that already handle prefix/suffix key views.
+func (b *Builder) AddInternalChildParts(prefix, suffix []byte, childPageID uint64) error {
+	if len(prefix) == 0 {
+		return b.AddInternalChild(suffix, childPageID)
+	}
+	keyLen := len(prefix) + len(suffix)
+	if keyLen > int(^uint16(0)) {
+		return ErrKeyTooLarge
+	}
+	key := make([]byte, keyLen)
+	copy(key, prefix)
+	copy(key[len(prefix):], suffix)
+	return b.AddInternalChild(key, childPageID)
+}
+
 // Finish finalizes the page header and checksum.
 // Returns a Node wrapper for convenience.
 func (b *Builder) Finish() *Node {
