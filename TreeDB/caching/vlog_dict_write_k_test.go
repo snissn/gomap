@@ -1,6 +1,10 @@
 package caching
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/db"
+)
 
 func TestChooseValueLogDictWriteK_SmallValuesBoostK(t *testing.T) {
 	db := &DB{}
@@ -23,5 +27,29 @@ func TestChooseValueLogDictWriteK_LeavesLargeValuesAlone(t *testing.T) {
 	got := db.chooseValueLogDictWriteK(16, 10, 64<<10) // avg ~6.4KiB
 	if got != 16 {
 		t.Fatalf("chooseValueLogDictWriteK large values: got=%d want=16", got)
+	}
+}
+
+func TestChooseValueLogDictWriteK_DefaultOpenClampsToDefaultMaxK(t *testing.T) {
+	backendDir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: backendDir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cacheDir := t.TempDir()
+	cached, err := Open(cacheDir, backend, Options{})
+	if err != nil {
+		t.Fatalf("caching open: %v", err)
+	}
+	defer cached.Close()
+
+	if got, want := cached.valueLogDictMaxK, 32; got != want {
+		t.Fatalf("default valueLogDictMaxK: got=%d want=%d", got, want)
+	}
+	got := cached.chooseValueLogDictWriteK(8, 100, 12800) // avg=128 -> boost, then clamp to default max K
+	if got != 32 {
+		t.Fatalf("chooseValueLogDictWriteK default-open clamp: got=%d want=32", got)
 	}
 }

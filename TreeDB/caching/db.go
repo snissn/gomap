@@ -3105,6 +3105,29 @@ type vlogDictPrepareResult struct {
 	err     error
 }
 
+func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDictPrepareResult) {
+	if task.out == nil {
+		if res.bodyBuf != nil {
+			putVlogPreparedFrameBody(res.bodyBuf)
+		}
+		return
+	}
+	select {
+	case task.out <- res:
+		return
+	case <-db.closeCh:
+		// During shutdown callers may stop receiving. Avoid blocking workers and
+		// leaking pooled frame buffers in that case.
+		select {
+		case task.out <- res:
+		default:
+			if res.bodyBuf != nil {
+				putVlogPreparedFrameBody(res.bodyBuf)
+			}
+		}
+	}
+}
+
 const maxEntryPoolCap = 1 << 16
 
 var entrySlicePool sync.Pool
@@ -3442,34 +3465,54 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 		return
 	}
 	preparer := valuelog.NewFramePreparer()
-	for {
-		select {
-		case <-db.closeCh:
+	processTask := func(task vlogDictPrepareTask) {
+		preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
+		preparer.SetKeepPolicy(task.ioNsPerStored, task.encodeNsPerRaw, task.safetyMargin)
+		if task.measureEncode {
+			preparer.SetEncodeSampleStride(1)
+		} else {
+			preparer.SetEncodeSampleStride(0)
+		}
+		bodyBuf := getVlogPreparedFrameBody()
+		body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], task.dictID, task.dict, task.records)
+		if err != nil {
+			putVlogPreparedFrameBody(bodyBuf)
+			db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
+				fi:  task.fi,
+				err: err,
+			})
 			return
+		}
+		bodyBuf.buf = body
+		db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
+			fi:      task.fi,
+			body:    body,
+			bodyBuf: bodyBuf,
+			stats:   stats,
+		})
+	}
+	for {
+		// Prefer queued work, even during close, so enqueued tasks are not stranded.
+		select {
 		case task := <-l.vlogPrepCh:
-			preparer.SetDictFrameEncoderOptions(task.level, task.enableEntropy)
-			preparer.SetKeepPolicy(task.ioNsPerStored, task.encodeNsPerRaw, task.safetyMargin)
-			if task.measureEncode {
-				preparer.SetEncodeSampleStride(1)
-			} else {
-				preparer.SetEncodeSampleStride(0)
-			}
-			bodyBuf := getVlogPreparedFrameBody()
-			body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], task.dictID, task.dict, task.records)
-			if err != nil {
-				putVlogPreparedFrameBody(bodyBuf)
-				task.out <- vlogDictPrepareResult{
-					fi:  task.fi,
-					err: err,
+			processTask(task)
+			continue
+		default:
+		}
+		select {
+		case task := <-l.vlogPrepCh:
+			processTask(task)
+		case <-db.closeCh:
+			for {
+				select {
+				case task := <-l.vlogPrepCh:
+					db.publishVlogDictPrepareResult(task, vlogDictPrepareResult{
+						fi:  task.fi,
+						err: errWALClosed,
+					})
+				default:
+					return
 				}
-				continue
-			}
-			bodyBuf.buf = body
-			task.out <- vlogDictPrepareResult{
-				fi:      task.fi,
-				body:    body,
-				bodyBuf: bodyBuf,
-				stats:   stats,
 			}
 		}
 	}
@@ -4405,23 +4448,24 @@ func (db *DB) prepareAppendDictFrames(
 	encodeNsPerRawByte float64,
 	safetyMargin float64,
 	wallStart time.Time,
-) ([]preparedDictFrame, error) {
+) ([]preparedDictFrame, int64, error) {
 	if dictID == 0 || len(dict) == 0 || len(records) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if k <= 0 {
 		k = 1
 	}
 	frameCount := (len(records) + k - 1) / k
 	if frameCount <= 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 	useWorkers := db.shouldUseVlogDictPrepWorkers(l, frameCount, rawPayloadBytes)
 	if !useWorkers {
 		// Preserve the original writer path for small frame counts. Pre-encoding
 		// without concurrency adds extra encode/copy work with little benefit.
-		return nil, nil
+		return nil, 0, nil
 	}
+	prepStart := time.Now()
 	// Parallel prep frames can execute across multiple goroutines, so summing
 	// per-frame encode times would overcount relative to write-path wall time.
 	// Leave encodeNs unset for worker-prepared frames to avoid poisoning
@@ -4456,40 +4500,48 @@ func (db *DB) prepareAppendDictFrames(
 			putVlogPreparedFrames(prepared)
 			// Workers may still publish into results after close is observed; do
 			// not pool this channel on early return.
-			return nil, errWALClosed
+			return nil, 0, errWALClosed
 		}
 	}
 
 	var firstErr error
 	for collected := 0; collected < frameCount; collected++ {
-		res := <-results
-		if res.err != nil {
-			if firstErr == nil {
-				firstErr = res.err
+		select {
+		case res := <-results:
+			if res.err != nil {
+				if firstErr == nil {
+					firstErr = res.err
+				}
+				continue
 			}
-			continue
-		}
-		start := res.fi * k
-		end := start + k
-		if end > len(records) {
-			end = len(records)
-		}
-		releasePreparedDictFrame(&prepared[res.fi])
-		prepared[res.fi] = preparedDictFrame{
-			start:   start,
-			end:     end,
-			body:    res.body,
-			bodyBuf: res.bodyBuf,
-			stats:   res.stats,
+			start := res.fi * k
+			end := start + k
+			if end > len(records) {
+				end = len(records)
+			}
+			releasePreparedDictFrame(&prepared[res.fi])
+			prepared[res.fi] = preparedDictFrame{
+				start:   start,
+				end:     end,
+				body:    res.body,
+				bodyBuf: res.bodyBuf,
+				stats:   res.stats,
+			}
+		case <-db.closeCh:
+			releasePreparedDictFrames(prepared)
+			putVlogPreparedFrames(prepared)
+			// Workers may still publish into results after close is observed; do
+			// not pool this channel on early return.
+			return nil, time.Since(prepStart).Nanoseconds(), errWALClosed
 		}
 	}
 	putVlogDictPrepareResults(results)
 	if firstErr != nil {
 		releasePreparedDictFrames(prepared)
 		putVlogPreparedFrames(prepared)
-		return nil, firstErr
+		return nil, time.Since(prepStart).Nanoseconds(), firstErr
 	}
-	return prepared, nil
+	return prepared, time.Since(prepStart).Nanoseconds(), nil
 }
 
 func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
@@ -4595,7 +4647,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	k = db.clampValueLogDictK(k)
 
 	ioNsPerStored, encodeNsPerRaw, safetyMargin := db.valueLogKeepPolicy()
-	preparedDictFrames, prepareErr := db.prepareAppendDictFrames(
+	if probeCompression {
+		// Probe writes must actually attempt compression to detect recovery from a
+		// paused/degraded stream. Keep-policy gating can short-circuit probes when
+		// historical encode-cost estimates are stale or pessimistic.
+		ioNsPerStored = 0
+		encodeNsPerRaw = 0
+	}
+	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendDictFrames(
 		l,
 		dictID,
 		dict,
@@ -4940,6 +4999,40 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
+	}
+	if usePreparedDictFrames && prepEncodeWallNs > 0 && rawFrameBytes > 0 && encodeRawBytes == 0 {
+		// Prepared frames are encoded before taking vlogMu; account prep wall-time
+		// once per batch so autotune keep-policy sees non-zero encode cost.
+		encodeEstimateNs := prepEncodeWallNs
+		if encodeEstimateNs < 0 {
+			encodeEstimateNs = 0
+		}
+		if ioNsPerStored > 0 && rawFrameBytes > storedPayloadBytes {
+			// Bound accounting to a fraction of observed IO savings so encode cost
+			// estimates stay stable instead of oscillating into "always skip".
+			maxBySavings := int64(float64(rawFrameBytes-storedPayloadBytes) * ioNsPerStored * 0.5)
+			if maxBySavings > 0 && encodeEstimateNs > maxBySavings {
+				encodeEstimateNs = maxBySavings
+			}
+		}
+		if encodeNsPerRaw > 0 {
+			// Bound wall-time accounting to a multiple of the current encode model
+			// so unrelated scheduler stalls do not dominate encode estimates.
+			maxNs := int64(float64(rawFrameBytes) * encodeNsPerRaw * 4)
+			if maxNs > 0 && encodeEstimateNs > maxNs {
+				encodeEstimateNs = maxNs
+			}
+		} else {
+			const maxPrepEncodeNsPerRawByte = 8.0
+			maxNs := int64(float64(rawFrameBytes) * maxPrepEncodeNsPerRawByte)
+			if maxNs > 0 && encodeEstimateNs > maxNs {
+				encodeEstimateNs = maxNs
+			}
+		}
+		if encodeEstimateNs > 0 {
+			encodeNsTotal += encodeEstimateNs
+			encodeRawBytes += rawFrameBytes
+		}
 	}
 	if !wallStart.IsZero() {
 		storedForMetrics := storedPayloadBytes
