@@ -546,6 +546,41 @@ func TestFramePreparer_PrepareFrame_RoundTripWithDict(t *testing.T) {
 	}
 }
 
+func TestFramePreparer_PrepareFrameInto_ReusesBuffer(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 64)},
+		{RID: 2, Value: bytes.Repeat([]byte("bravo-002|"), 64)},
+		{RID: 3, Value: bytes.Repeat([]byte("charlie-003|"), 64)},
+		{RID: 4, Value: bytes.Repeat([]byte("delta-004|"), 64)},
+	}
+
+	prep := NewFramePreparer()
+
+	buf := make([]byte, 0, 8<<10)
+	body1, stats1, err := prep.PrepareFrameInto(buf, 0, nil, records)
+	if err != nil {
+		t.Fatalf("PrepareFrameInto first: %v", err)
+	}
+	if len(body1) == 0 {
+		t.Fatalf("expected non-empty frame body")
+	}
+	if stats1.Attempted {
+		t.Fatalf("did not expect compression attempt without dict")
+	}
+	firstPtr := &body1[0]
+
+	body2, _, err := prep.PrepareFrameInto(body1[:0], 0, nil, records)
+	if err != nil {
+		t.Fatalf("PrepareFrameInto second: %v", err)
+	}
+	if len(body2) == 0 {
+		t.Fatalf("expected non-empty second frame body")
+	}
+	if &body2[0] != firstPtr {
+		t.Fatalf("expected frame body buffer reuse")
+	}
+}
+
 func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},

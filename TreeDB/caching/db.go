@@ -46,6 +46,11 @@ var valueLogEligiblePool sync.Pool // stores []int
 var valueLogRecordPool sync.Pool   // stores []valuelog.Record
 var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
+var valueLogPreparedBodyPool sync.Pool
+
+type vlogPreparedFrameBody struct {
+	buf []byte
+}
 
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
@@ -188,6 +193,27 @@ func putValueLogKeys(s [][]byte) {
 	valueLogKeyPool.Put(s[:0])
 }
 
+func getVlogPreparedFrameBody() *vlogPreparedFrameBody {
+	if v := valueLogPreparedBodyPool.Get(); v != nil {
+		if body, ok := v.(*vlogPreparedFrameBody); ok {
+			return body
+		}
+	}
+	return &vlogPreparedFrameBody{}
+}
+
+func putVlogPreparedFrameBody(body *vlogPreparedFrameBody) {
+	if body == nil {
+		return
+	}
+	if cap(body.buf) > maxVlogPreparedBodyPoolCap {
+		body.buf = nil
+		return
+	}
+	body.buf = body.buf[:0]
+	valueLogPreparedBodyPool.Put(body)
+}
+
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
@@ -198,6 +224,7 @@ const (
 	adaptiveSequentialWritePct = 0.85
 	adaptiveWarmupBytes        = 16 * 1024 * 1024
 	maxMemtableBytesPerShard   = int64(3 << 30)
+	maxVlogPreparedBodyPoolCap = 8 << 20
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -2991,10 +3018,11 @@ type vlogDictPrepareTask struct {
 }
 
 type vlogDictPrepareResult struct {
-	fi    int
-	body  []byte
-	stats valuelog.FrameStats
-	err   error
+	fi      int
+	body    []byte
+	bodyBuf *vlogPreparedFrameBody
+	stats   valuelog.FrameStats
+	err     error
 }
 
 const maxEntryPoolCap = 1 << 16
@@ -3350,12 +3378,22 @@ func (db *DB) vlogDictPrepareLoop(l *lane) {
 			} else {
 				preparer.SetEncodeSampleStride(0)
 			}
-			body, stats, err := preparer.PrepareFrame(task.dictID, task.dict, task.records)
+			bodyBuf := getVlogPreparedFrameBody()
+			body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], task.dictID, task.dict, task.records)
+			if err != nil {
+				putVlogPreparedFrameBody(bodyBuf)
+				task.out <- vlogDictPrepareResult{
+					fi:  task.fi,
+					err: err,
+				}
+				continue
+			}
+			bodyBuf.buf = body
 			task.out <- vlogDictPrepareResult{
-				fi:    task.fi,
-				body:  body,
-				stats: stats,
-				err:   err,
+				fi:      task.fi,
+				body:    body,
+				bodyBuf: bodyBuf,
+				stats:   stats,
 			}
 		}
 	}
@@ -4133,10 +4171,26 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 }
 
 type preparedDictFrame struct {
-	start int
-	end   int
-	body  []byte
-	stats valuelog.FrameStats
+	start   int
+	end     int
+	body    []byte
+	bodyBuf *vlogPreparedFrameBody
+	stats   valuelog.FrameStats
+}
+
+func releasePreparedDictFrame(frame *preparedDictFrame) {
+	if frame == nil || frame.bodyBuf == nil {
+		return
+	}
+	putVlogPreparedFrameBody(frame.bodyBuf)
+	frame.bodyBuf = nil
+	frame.body = nil
+}
+
+func releasePreparedDictFrames(frames []preparedDictFrame) {
+	for i := range frames {
+		releasePreparedDictFrame(&frames[i])
+	}
 }
 
 func (db *DB) valueLogKeepPolicy() (ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
@@ -4219,6 +4273,7 @@ func (db *DB) prepareAppendDictFrames(
 		select {
 		case l.vlogPrepCh <- task:
 		case <-db.closeCh:
+			releasePreparedDictFrames(prepared)
 			return nil, errWALClosed
 		}
 	}
@@ -4237,14 +4292,17 @@ func (db *DB) prepareAppendDictFrames(
 		if end > len(records) {
 			end = len(records)
 		}
+		releasePreparedDictFrame(&prepared[res.fi])
 		prepared[res.fi] = preparedDictFrame{
-			start: start,
-			end:   end,
-			body:  res.body,
-			stats: res.stats,
+			start:   start,
+			end:     end,
+			body:    res.body,
+			bodyBuf: res.bodyBuf,
+			stats:   res.stats,
 		}
 	}
 	if firstErr != nil {
+		releasePreparedDictFrames(prepared)
 		return nil, firstErr
 	}
 	return prepared, nil
@@ -4367,6 +4425,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if prepareErr != nil {
 		return nil, prepareErr
 	}
+	if len(preparedDictFrames) > 0 {
+		defer releasePreparedDictFrames(preparedDictFrames)
+	}
 
 	l.vlogMu.Lock()
 	w := l.vlog
@@ -4413,6 +4474,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				err = frameErr
 				break
 			}
+			releasePreparedDictFrame(pf)
 			rawFrameBytes += pf.stats.RawPayloadBytes
 			storedPayloadBytes += pf.stats.StoredPayloadBytes
 			frameRecords += pf.stats.Records

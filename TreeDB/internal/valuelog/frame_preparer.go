@@ -160,7 +160,20 @@ func (p *FramePreparer) shouldSkipCompression(rawPayloadBytes int) bool {
 	return p.keepIoNsPerStoredByte <= costPerRaw
 }
 
+func ensureFrameBody(dst []byte, bodyLen int) []byte {
+	if cap(dst) >= bodyLen {
+		return dst[:bodyLen]
+	}
+	return make([]byte, bodyLen)
+}
+
 func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Record) ([]byte, FrameStats, error) {
+	return p.PrepareFrameInto(nil, dictID, dict, records)
+}
+
+// PrepareFrameInto behaves like PrepareFrame, but writes the frame body into dst
+// when capacity allows. Callers can reuse large frame buffers across requests.
+func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte, records []Record) ([]byte, FrameStats, error) {
 	if p == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil frame preparer")
 	}
@@ -206,14 +219,14 @@ func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Recor
 			p.skipRemain = 0
 		}
 		if rawPayloadBytes == 0 {
-			return p.buildRawFrameBody(dictID, records, &offsets, rawPayloadBytes, false, 0)
+			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
 		if p.skipRemain > 0 {
 			p.skipRemain--
-			return p.buildRawFrameBody(dictID, records, &offsets, rawPayloadBytes, false, 0)
+			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
 		if p.shouldSkipCompression(rawPayloadBytes) {
-			return p.buildRawFrameBody(dictID, records, &offsets, rawPayloadBytes, false, 0)
+			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, false, 0)
 		}
 
 		level := normalizeDictFrameEncodeLevel(p.dictFrameEncodeLevel)
@@ -250,10 +263,10 @@ func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Recor
 				p.noBenefit++
 			}
 			p.skipRemain = dictSkipFramesAggressive(p.noBenefit, rawPayloadBytes, len(encoded), encodeNs, p.keepIoNsPerStoredByte, p.keepSafetyMargin)
-			return p.buildRawFrameBody(dictID, records, &offsets, rawPayloadBytes, true, encodeNs)
+			return p.buildRawFrameBody(dst, dictID, records, &offsets, rawPayloadBytes, true, encodeNs)
 		}
 
-		body, err := p.buildCompressedFrameBody(dictID, records, &offsets, encoded)
+		body, err := p.buildCompressedFrameBody(dst, dictID, records, &offsets, encoded)
 		if err != nil {
 			return nil, FrameStats{}, err
 		}
@@ -269,7 +282,7 @@ func (p *FramePreparer) PrepareFrame(dictID uint64, dict []byte, records []Recor
 		}, nil
 	}
 
-	return p.buildRawFrameBody(0, records, &offsets, rawPayloadBytes, false, 0)
+	return p.buildRawFrameBody(dst, 0, records, &offsets, rawPayloadBytes, false, 0)
 }
 
 func (p *FramePreparer) encodePayload(enc *zstd.Encoder, records []Record, rawPayloadBytes int) ([]byte, error) {
@@ -321,7 +334,7 @@ func (p *FramePreparer) encodePayload(enc *zstd.Encoder, records []Record, rawPa
 	return p.encLimiter.buf, encodeErr
 }
 
-func (p *FramePreparer) buildRawFrameBody(dictID uint64, records []Record, offsets *[MaxFrameK + 1]uint32, rawPayloadBytes int, attempted bool, encodeNs int64) ([]byte, FrameStats, error) {
+func (p *FramePreparer) buildRawFrameBody(dst []byte, dictID uint64, records []Record, offsets *[MaxFrameK + 1]uint32, rawPayloadBytes int, attempted bool, encodeNs int64) ([]byte, FrameStats, error) {
 	k := len(records)
 	if k <= 0 || k > MaxFrameK {
 		return nil, FrameStats{}, ErrRecordTooLarge
@@ -337,7 +350,7 @@ func (p *FramePreparer) buildRawFrameBody(dictID uint64, records []Record, offse
 		return nil, FrameStats{}, ErrRecordTooLarge
 	}
 
-	body := make([]byte, bodyLen)
+	body := ensureFrameBody(dst, bodyLen)
 	body[0] = FrameVersion
 	body[1] = 0
 	body[2] = byte(k)
@@ -366,7 +379,7 @@ func (p *FramePreparer) buildRawFrameBody(dictID uint64, records []Record, offse
 	}, nil
 }
 
-func (p *FramePreparer) buildCompressedFrameBody(dictID uint64, records []Record, offsets *[MaxFrameK + 1]uint32, encoded []byte) ([]byte, error) {
+func (p *FramePreparer) buildCompressedFrameBody(dst []byte, dictID uint64, records []Record, offsets *[MaxFrameK + 1]uint32, encoded []byte) ([]byte, error) {
 	k := len(records)
 	if k <= 0 || k > MaxFrameK {
 		return nil, ErrRecordTooLarge
@@ -382,7 +395,7 @@ func (p *FramePreparer) buildCompressedFrameBody(dictID uint64, records []Record
 		return nil, ErrRecordTooLarge
 	}
 
-	body := make([]byte, bodyLen)
+	body := ensureFrameBody(dst, bodyLen)
 	body[0] = FrameVersion
 	body[1] = FrameFlagCompressed
 	body[2] = byte(k)
