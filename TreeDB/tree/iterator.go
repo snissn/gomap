@@ -1,7 +1,6 @@
 package tree
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -15,10 +14,285 @@ type CursorItem struct {
 	Index  int
 }
 
+const (
+	iteratorLeafPrefixCompressedFlag uint16 = 0x8000
+	iteratorLeafColumnarFlag         uint16 = 0x4000
+	iteratorLeafPrefixV2Flag         uint16 = 0x2000
+	iteratorLeafRestartInterval             = 16
+)
+
+type combinedLeafKeyState struct {
+	valid bool
+
+	pageID uint64
+	data   []byte
+	count  uint16
+
+	flagsStart   int
+	prefixStart  int
+	headerEnd    int
+	keysBlobBase int
+
+	keyScratch []byte
+	key        []byte
+	flags      byte
+	index      uint16
+	keyValid   bool
+	keyStart   int
+	keyEnd     int
+}
+
+func getUint16LE(b []byte) uint16 {
+	return uint16(b[0]) | uint16(b[1])<<8
+}
+
+func (s *combinedLeafKeyState) resetPage() {
+	s.valid = false
+	s.pageID = 0
+	s.data = nil
+	s.count = 0
+	s.flagsStart = 0
+	s.prefixStart = 0
+	s.headerEnd = 0
+	s.keysBlobBase = 0
+	s.key = nil
+	s.flags = 0
+	s.index = 0
+	s.keyValid = false
+	s.keyStart = 0
+	s.keyEnd = 0
+}
+
+func (s *combinedLeafKeyState) init(pageID uint64, n *node.Node) (bool, error) {
+	if s.valid && s.pageID == pageID {
+		return true, nil
+	}
+
+	s.resetPage()
+
+	if n.Type() != page.PageTypeLeaf {
+		return false, nil
+	}
+
+	data := n.Data()
+	if len(data) < node.NodeHeaderSize {
+		return false, node.ErrCorruptedNode
+	}
+	rawFlags := getUint16LE(data[12:14])
+	required := iteratorLeafPrefixCompressedFlag | iteratorLeafColumnarFlag | iteratorLeafPrefixV2Flag
+	if rawFlags&required != required {
+		return false, nil
+	}
+
+	count := n.Count()
+	valDirStart := node.NodeHeaderSize + int(count)*node.DirectoryEntrySize
+	flagsStart := valDirStart + int(count)*node.DirectoryEntrySize
+	prefixStart := flagsStart + int(count)
+	headerEnd := prefixStart + int(count)*node.DirectoryEntrySize
+	if headerEnd > len(data) {
+		return false, node.ErrCorruptedNode
+	}
+
+	keysBlobBase := len(data)
+	if count > 0 {
+		firstKeyOff := node.NodeHeaderSize
+		if firstKeyOff+2 > len(data) {
+			return false, node.ErrCorruptedNode
+		}
+		keysBlobBase = int(getUint16LE(data[firstKeyOff : firstKeyOff+2]))
+		if keysBlobBase < headerEnd || keysBlobBase > len(data) {
+			return false, node.ErrCorruptedNode
+		}
+	}
+
+	s.valid = true
+	s.pageID = pageID
+	s.data = data
+	s.count = count
+	s.flagsStart = flagsStart
+	s.prefixStart = prefixStart
+	s.headerEnd = headerEnd
+	s.keysBlobBase = keysBlobBase
+	return true, nil
+}
+
+func (s *combinedLeafKeyState) ensureScratch(size int) []byte {
+	if cap(s.keyScratch) < size {
+		s.keyScratch = make([]byte, size)
+	}
+	s.keyScratch = s.keyScratch[:size]
+	return s.keyScratch
+}
+
+func (s *combinedLeafKeyState) setKey(index uint16, key []byte, flags byte, keyStart int, keyEnd int) {
+	s.index = index
+	s.key = key
+	s.flags = flags
+	s.keyValid = true
+	s.keyStart = keyStart
+	s.keyEnd = keyEnd
+}
+
+func (s *combinedLeafKeyState) keyMetaAt(index uint16) (prefixLen int, keyStart int, keyEnd int, suffix []byte, flags byte, err error) {
+	if !s.valid || index >= s.count {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+	data := s.data
+
+	keyOff := node.NodeHeaderSize + int(index)*2
+	if keyOff+2 > len(data) {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+	keyStart = int(getUint16LE(data[keyOff : keyOff+2]))
+	keyEnd = len(data)
+	if index+1 < s.count {
+		nextKeyOff := keyOff + 2
+		if nextKeyOff+2 > len(data) {
+			return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+		}
+		keyEnd = int(getUint16LE(data[nextKeyOff : nextKeyOff+2]))
+	}
+	if keyStart < s.keysBlobBase || keyEnd < keyStart || keyEnd > len(data) {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+
+	flagsOff := s.flagsStart + int(index)
+	if flagsOff >= len(data) {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+	flags = data[flagsOff]
+
+	prefixOff := s.prefixStart + int(index)*2
+	if prefixOff+2 > len(data) {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+	prefixLen = int(getUint16LE(data[prefixOff : prefixOff+2]))
+	if prefixLen < 0 || prefixLen > len(data) {
+		return 0, 0, 0, nil, 0, node.ErrCorruptedNode
+	}
+	return prefixLen, keyStart, keyEnd, data[keyStart:keyEnd], flags, nil
+}
+
+func (s *combinedLeafKeyState) keyFlagsAt(index uint16) (key []byte, flags byte, err error) {
+	if !s.valid {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	if index >= s.count {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	if s.keyValid {
+		if s.index == index {
+			return s.key, s.flags, nil
+		}
+		if s.index+1 == index {
+			return s.advanceOne(index)
+		}
+	}
+	return s.rebuildAt(index)
+}
+
+func (s *combinedLeafKeyState) advanceOne(index uint16) (key []byte, flags byte, err error) {
+	if !s.valid || !s.keyValid || index != s.index+1 || index >= s.count {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	data := s.data
+	flagsOff := s.flagsStart + int(index)
+	if flagsOff >= len(data) {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	flags = data[flagsOff]
+
+	prefixOff := s.prefixStart + int(index)*2
+	if prefixOff+2 > len(data) {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	prefixLen := int(getUint16LE(data[prefixOff : prefixOff+2]))
+	if prefixLen < 0 || prefixLen > len(s.key) {
+		return nil, 0, node.ErrCorruptedNode
+	}
+
+	keyStart := s.keyEnd
+	keyEnd := len(data)
+	if index+1 < s.count {
+		nextKeyOff := node.NodeHeaderSize + int(index+1)*2
+		if nextKeyOff+2 > len(data) {
+			return nil, 0, node.ErrCorruptedNode
+		}
+		keyEnd = int(getUint16LE(data[nextKeyOff : nextKeyOff+2]))
+	}
+	if keyStart < s.keysBlobBase || keyEnd < keyStart || keyEnd > len(data) {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	suffix := data[keyStart:keyEnd]
+
+	if index%iteratorLeafRestartInterval == 0 {
+		if prefixLen != 0 {
+			return nil, 0, node.ErrCorruptedNode
+		}
+		s.setKey(index, suffix, flags, keyStart, keyEnd)
+		return suffix, flags, nil
+	}
+	if prefixLen == 0 {
+		s.setKey(index, suffix, flags, keyStart, keyEnd)
+		return suffix, flags, nil
+	}
+	cur := s.ensureScratch(prefixLen + len(suffix))
+	copy(cur, s.key[:prefixLen])
+	copy(cur[prefixLen:], suffix)
+	s.setKey(index, cur, flags, keyStart, keyEnd)
+	return cur, flags, nil
+}
+
+func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, err error) {
+	restart := index - (index % iteratorLeafRestartInterval)
+	prefixLen, keyStart, keyEnd, suffix, flags, err := s.keyMetaAt(restart)
+	if err != nil {
+		return nil, 0, err
+	}
+	if prefixLen != 0 {
+		return nil, 0, node.ErrCorruptedNode
+	}
+	key = suffix
+	if restart == index {
+		s.setKey(index, key, flags, keyStart, keyEnd)
+		return key, flags, nil
+	}
+
+	prev := key
+	prevStart := keyStart
+	prevEnd := keyEnd
+	for i := restart + 1; i <= index; i++ {
+		prefixLen, keyStart, keyEnd, suffix, flags, err = s.keyMetaAt(i)
+		if err != nil {
+			return nil, 0, err
+		}
+		if prefixLen > len(prev) {
+			return nil, 0, node.ErrCorruptedNode
+		}
+		if prefixLen == 0 {
+			key = suffix
+			prev = key
+			prevStart = keyStart
+			prevEnd = keyEnd
+			continue
+		}
+		cur := s.ensureScratch(prefixLen + len(suffix))
+		copy(cur, prev[:prefixLen])
+		copy(cur[prefixLen:], suffix)
+		key = cur
+		prev = key
+		prevStart = keyStart
+		prevEnd = keyEnd
+	}
+	s.setKey(index, key, flags, prevStart, prevEnd)
+	return key, flags, nil
+}
+
 type Iterator struct {
 	tree         *Tree
 	stack        []CursorItem
 	stackBuf     [16]CursorItem
+	leafState    combinedLeafKeyState
 	start        []byte
 	end          []byte
 	valid        bool
@@ -34,7 +308,7 @@ type Iterator struct {
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
 	}
 	it := &Iterator{
@@ -50,7 +324,7 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
-	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
+	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil}
 	}
 	it := &Iterator{
@@ -75,7 +349,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 	}
 
 	// Check Start bound
-	if it.valid && it.start != nil && bytes.Compare(it.currKey, it.start) < 0 {
+	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
 		it.valid = false
 	}
 
@@ -84,6 +358,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 
 func (it *Iterator) seekRightMost() {
 	it.resetStack()
+	it.leafState.resetPage()
 	it.valid = false
 	it.err = nil
 	currID := it.tree.rootPageID
@@ -122,6 +397,7 @@ func (it *Iterator) seekRightMost() {
 
 func (it *Iterator) seek(key []byte) {
 	it.resetStack()
+	it.leafState.resetPage()
 	it.valid = false
 	it.err = nil
 	it.currKey = nil
@@ -145,8 +421,31 @@ func (it *Iterator) seek(key []byte) {
 			if key == nil {
 				index = 0
 			} else {
-				idx, _ := n.SearchInternal(key)
-				index = int(idx)
+				// Fence pruning is most effective at the root and cheapest to
+				// apply there; deeper levels can rely on separator descent.
+				if len(it.stack) == 0 {
+					if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+						it.err = err
+						return
+					} else if ok {
+						if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+							it.valid = false
+							return
+						}
+						if len(low) > 0 && compareTreeKey(key, low) < 0 {
+							index = 0
+						} else {
+							idx, _ := n.SearchInternal(key)
+							index = int(idx)
+						}
+					} else {
+						idx, _ := n.SearchInternal(key)
+						index = int(idx)
+					}
+				} else {
+					idx, _ := n.SearchInternal(key)
+					index = int(idx)
+				}
 			}
 
 			it.stack = append(it.stack, CursorItem{PageID: currID, Node: n, Index: index})
@@ -203,7 +502,7 @@ func (it *Iterator) loadCurrent() {
 			return
 		}
 
-		keyView, flags, err := top.Node.GetLeafKeyFlagsView(uint16(top.Index))
+		keyView, flags, err := it.getLeafKeyFlags(top)
 		if err != nil {
 			it.err = err
 			it.valid = false
@@ -212,12 +511,12 @@ func (it *Iterator) loadCurrent() {
 
 		// Check Range Limits
 		if !it.reverse {
-			if it.end != nil && bytes.Compare(keyView, it.end) >= 0 {
+			if it.end != nil && compareTreeKey(keyView, it.end) >= 0 {
 				it.valid = false
 				return
 			}
 		} else {
-			if it.start != nil && bytes.Compare(keyView, it.start) < 0 {
+			if it.start != nil && compareTreeKey(keyView, it.start) < 0 {
 				it.valid = false
 				return
 			}
@@ -237,36 +536,34 @@ func (it *Iterator) loadCurrent() {
 		it.flags = flags
 		it.currPtr = page.ValuePtr{}
 		it.ptrOK = false
-
-		// Inline values are a view into the mmap. Pointer values are loaded on
-		// demand in UnsafeValue/Value.
-		if flags&node.FlagPointer != 0 {
-			it.currVal = nil
-			it.valOK = false
-		} else {
-			valView, _, _, err := top.Node.GetLeafValueView(uint16(top.Index))
-			if err != nil {
-				it.err = err
-				it.valid = false
-				return
-			}
-			it.currVal = valView
-			it.valOK = true
-			it.ptrOK = true
-		}
+		it.currVal = nil
+		it.valOK = false
 
 		it.valid = true
 		return
 	}
 }
 
+func (it *Iterator) getLeafKeyFlags(top *CursorItem) (key []byte, flags byte, err error) {
+	if top.Node.Type() != page.PageTypeLeaf {
+		return nil, 0, node.ErrInvalidType
+	}
+	isCombined, err := it.leafState.init(top.PageID, &top.Node)
+	if err != nil {
+		return nil, 0, err
+	}
+	if isCombined {
+		return it.leafState.keyFlagsAt(uint16(top.Index))
+	}
+	return top.Node.GetLeafKeyFlagsView(uint16(top.Index))
+}
+
 func (it *Iterator) stepForward() {
 	for len(it.stack) > 0 {
 		idx := len(it.stack) - 1
-		top := it.stack[idx]
+		top := &it.stack[idx]
 
 		top.Index++
-		it.stack[idx] = top
 
 		if top.Index < int(top.Node.Count()) {
 			if top.Node.Type() == page.PageTypeLeaf {
@@ -315,10 +612,9 @@ func (it *Iterator) stepForward() {
 func (it *Iterator) stepBackward() {
 	for len(it.stack) > 0 {
 		idx := len(it.stack) - 1
-		top := it.stack[idx]
+		top := &it.stack[idx]
 
 		top.Index--
-		it.stack[idx] = top
 
 		if top.Index >= 0 {
 			if top.Node.Type() == page.PageTypeLeaf {
@@ -417,6 +713,10 @@ func (it *Iterator) UnsafeValue() []byte {
 		}
 		it.currVal = val
 		it.valOK = true
+		return it.currVal
+	}
+	if !it.ensureInlineValueLoaded() {
+		return nil
 	}
 	return it.currVal
 }
@@ -429,6 +729,8 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 		if !it.ensurePointerLoaded() {
 			return nil, page.ValuePtr{}, it.flags
 		}
+	} else if !it.ensureInlineValueLoaded() {
+		return nil, page.ValuePtr{}, it.flags
 	}
 	return it.currVal, it.currPtr, it.flags
 }
@@ -510,7 +812,7 @@ func (it *Iterator) ensurePointerLoaded() bool {
 		it.valid = false
 		return false
 	}
-	top := it.stack[len(it.stack)-1]
+	top := &it.stack[len(it.stack)-1]
 	_, ptr, flags, err := top.Node.GetLeafValueView(uint16(top.Index))
 	if err != nil {
 		it.err = err
@@ -523,6 +825,36 @@ func (it *Iterator) ensurePointerLoaded() bool {
 		return false
 	}
 	it.currPtr = ptr
+	it.ptrOK = true
+	return true
+}
+
+func (it *Iterator) ensureInlineValueLoaded() bool {
+	if it.valOK {
+		return true
+	}
+	if it.flags&node.FlagPointer != 0 {
+		return true
+	}
+	if len(it.stack) == 0 {
+		it.err = fmt.Errorf("iterator inline value load: empty stack")
+		it.valid = false
+		return false
+	}
+	top := &it.stack[len(it.stack)-1]
+	val, _, flags, err := top.Node.GetLeafValueView(uint16(top.Index))
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return false
+	}
+	if flags&node.FlagPointer != 0 {
+		it.err = fmt.Errorf("iterator inline value load: entry is a pointer")
+		it.valid = false
+		return false
+	}
+	it.currVal = val
+	it.valOK = true
 	it.ptrOK = true
 	return true
 }

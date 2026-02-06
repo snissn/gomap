@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"unsafe"
@@ -231,4 +232,265 @@ func TestIterator_PointerKeysOnly_DoesNotReadValues(t *testing.T) {
 	if len(keys) != 2 || keys[0] != "A" || keys[1] != "C" {
 		t.Fatalf("expected [A C], got %v", keys)
 	}
+}
+
+func TestIterator_CombinedColumnarPrefixV2(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // root leaf page 0
+
+	data0, _ := p.Get(0)
+	b := node.NewBuilderWithOptions(data0, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	b.SetPageID(0)
+
+	type entry struct {
+		key   string
+		value []byte
+		flags byte
+		ptr   page.ValuePtr
+	}
+	entries := []entry{
+		{key: "aa00", flags: node.FlagPointer, ptr: page.ValuePtr{Offset: 1, Length: 10, FileID: 1}},
+		{key: "aa01", flags: node.FlagInline, value: []byte("v1")},
+		{key: "aa02", flags: node.FlagTombstone},
+		{key: "aa03", flags: node.FlagPointer, ptr: page.ValuePtr{Offset: 2, Length: 11, FileID: 1}},
+		{key: "aa04", flags: node.FlagInline, value: []byte("v4")},
+	}
+	for _, e := range entries {
+		if err := b.AddLeafEntry([]byte(e.key), e.value, e.flags, e.ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%s): %v", e.key, err)
+		}
+	}
+	n := b.Finish()
+	if !n.VerifyChecksum() {
+		t.Fatalf("checksum mismatch")
+	}
+
+	tr := New(p, panicValueReader{}, 0)
+
+	t.Run("Forward", func(t *testing.T) {
+		it := tr.Iterator(nil, nil)
+		defer it.Close()
+		var keys []string
+		for ; it.Valid(); it.Next() {
+			keys = append(keys, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+		want := []string{"aa00", "aa01", "aa03", "aa04"}
+		if len(keys) != len(want) {
+			t.Fatalf("expected %v, got %v", want, keys)
+		}
+		for i := range want {
+			if keys[i] != want[i] {
+				t.Fatalf("expected %v, got %v", want, keys)
+			}
+		}
+	})
+
+	t.Run("Reverse", func(t *testing.T) {
+		it := tr.ReverseIterator(nil, nil)
+		defer it.Close()
+		var keys []string
+		for ; it.Valid(); it.Next() {
+			keys = append(keys, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+		want := []string{"aa04", "aa03", "aa01", "aa00"}
+		if len(keys) != len(want) {
+			t.Fatalf("expected %v, got %v", want, keys)
+		}
+		for i := range want {
+			if keys[i] != want[i] {
+				t.Fatalf("expected %v, got %v", want, keys)
+			}
+		}
+	})
+
+	t.Run("Range", func(t *testing.T) {
+		it := tr.Iterator([]byte("aa01"), []byte("aa04"))
+		defer it.Close()
+		var keys []string
+		for ; it.Valid(); it.Next() {
+			keys = append(keys, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+		want := []string{"aa01", "aa03"}
+		if len(keys) != len(want) {
+			t.Fatalf("expected %v, got %v", want, keys)
+		}
+		for i := range want {
+			if keys[i] != want[i] {
+				t.Fatalf("expected %v, got %v", want, keys)
+			}
+		}
+	})
+}
+
+func TestIterator_SeekPrunesByFence(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // root internal page 0
+
+	data0, _ := p.Get(0)
+	b := node.NewBuilderWithOptions(data0, page.PageTypeInternal, node.BuilderOptions{
+		InternalBaseDelta: true,
+	})
+	b.SetPageID(0)
+	b.SetInternalFenceBounds([]byte("10"), []byte("20"))
+	if err := b.AddInternalChild([]byte("10"), 9999); err != nil {
+		t.Fatalf("AddInternalChild: %v", err)
+	}
+	b.Finish()
+
+	tr := New(p, panicValueReader{}, 0)
+	it := tr.Iterator([]byte("20"), nil)
+	defer it.Close()
+
+	if it.Valid() {
+		t.Fatalf("expected iterator to be invalid when seek key is out of fenced range")
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("expected seek prune without descent error, got %v", err)
+	}
+}
+
+func TestIterator_CombinedColumnarPrefixV2_MultiRestartBlocks(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // root leaf page 0
+
+	data0, _ := p.Get(0)
+	b := node.NewBuilderWithOptions(data0, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	b.SetPageID(0)
+
+	var allLive []string
+	for i := 0; i < 48; i++ {
+		key := fmt.Sprintf("aa%04d", i)
+		flags := byte(node.FlagInline)
+		value := []byte{byte(i)}
+		ptr := page.ValuePtr{}
+		switch {
+		case i%9 == 0:
+			flags = node.FlagTombstone
+			value = nil
+		case i%2 == 0:
+			flags = node.FlagPointer
+			value = nil
+			ptr = page.ValuePtr{Offset: uint64(100 + i), Length: uint32(10 + i), FileID: 1}
+		}
+		if flags&node.FlagTombstone == 0 {
+			allLive = append(allLive, key)
+		}
+		if err := b.AddLeafEntry([]byte(key), value, flags, ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%s): %v", key, err)
+		}
+	}
+	n := b.Finish()
+	if !n.VerifyChecksum() {
+		t.Fatalf("checksum mismatch")
+	}
+
+	tr := New(p, panicValueReader{}, 0)
+
+	t.Run("Forward", func(t *testing.T) {
+		it := tr.Iterator(nil, nil)
+		defer it.Close()
+
+		var got []string
+		for ; it.Valid(); it.Next() {
+			got = append(got, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+		if len(got) != len(allLive) {
+			t.Fatalf("expected %d keys, got %d", len(allLive), len(got))
+		}
+		for i := range allLive {
+			if got[i] != allLive[i] {
+				t.Fatalf("forward mismatch at %d: expected %q, got %q", i, allLive[i], got[i])
+			}
+		}
+	})
+
+	t.Run("Reverse", func(t *testing.T) {
+		it := tr.ReverseIterator(nil, nil)
+		defer it.Close()
+
+		var got []string
+		for ; it.Valid(); it.Next() {
+			got = append(got, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+		if len(got) != len(allLive) {
+			t.Fatalf("expected %d keys, got %d", len(allLive), len(got))
+		}
+		for i := range allLive {
+			want := allLive[len(allLive)-1-i]
+			if got[i] != want {
+				t.Fatalf("reverse mismatch at %d: expected %q, got %q", i, want, got[i])
+			}
+		}
+	})
+
+	t.Run("Range", func(t *testing.T) {
+		start := []byte("aa0010")
+		end := []byte("aa0030")
+		it := tr.Iterator(start, end)
+		defer it.Close()
+
+		var got []string
+		for ; it.Valid(); it.Next() {
+			got = append(got, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error: %v", err)
+		}
+
+		var want []string
+		for _, k := range allLive {
+			if k >= string(start) && k < string(end) {
+				want = append(want, k)
+			}
+		}
+		if len(got) != len(want) {
+			t.Fatalf("expected %d keys, got %d", len(want), len(got))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("range mismatch at %d: expected %q, got %q", i, want[i], got[i])
+			}
+		}
+	})
 }

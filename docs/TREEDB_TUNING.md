@@ -232,20 +232,15 @@ How to evaluate:
 ### Internal base-delta compression (`Options.IndexInternalBaseDelta`)
 
 Internal pages can be encoded with base-child + delta child IDs and separator
-prefix coding. In pre-alpha builds, TreeDB applies this mode adaptively per
-page to avoid throughput regressions on low-benefit pages.
+prefix coding.
 
-Current fallback policy:
-- fallback to plain internal page when the first separator key length is `<= 12` bytes
-- fallback to plain internal page when `count < 16`
-- fallback when shared separator prefix is `< 2` bytes
-- fallback when average separator key length is `<= 12` bytes
-- fallback when estimated net byte savings is `< 8%`
-
-Rationale:
-- some internal pages gain little compression but still pay extra compare/decode
-  work during seeks; adaptive fallback keeps the hot read path fast while
-  preserving compression on pages where it materially helps.
+Current strict behavior:
+- when enabled, internal pages are encoded as base-delta for eligible pages
+  (no heuristic downgrade to plain internal pages),
+- child-ID deltas are adaptive per page: `u16` when representable, `u32`
+  otherwise,
+- if a page's child-ID range exceeds `u32` representability, page build returns
+  an explicit error (no silent fallback).
 
 ### `Options.KeepRecent`
 

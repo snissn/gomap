@@ -1,6 +1,8 @@
 package tree
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -10,6 +12,21 @@ import (
 )
 
 var ErrKeyNotFound = errors.New("key not found")
+
+func compareTreeKey(a, b []byte) int {
+	if len(a) == 8 && len(b) == 8 {
+		av := binary.BigEndian.Uint64(a)
+		bv := binary.BigEndian.Uint64(b)
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+		return 0
+	}
+	return bytes.Compare(a, b)
+}
 
 type SlabReader interface {
 	Read(ptr page.ValuePtr) ([]byte, error)
@@ -59,7 +76,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 			return node.LeafEntry{}, err
 		}
 
-		n := node.NewNode(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
+		n := node.NewNodeView(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
 		// We use Verified Cache to skip it if already checked.
 		if verifyAlways || !t.pager.IsVerified(currID) {
 			if !n.VerifyChecksum() {
@@ -72,8 +89,19 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 
 		switch n.Type() {
 		case page.PageTypeInternal:
-			idx, _ := n.SearchInternal(key)
-			childID, err := n.GetInternalChildID(idx)
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return node.LeafEntry{}, ErrKeyNotFound
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return node.LeafEntry{}, ErrKeyNotFound
+					}
+				}
+			}
+			childID, _, err := n.SearchInternalChildID(key)
 			if err != nil {
 				return node.LeafEntry{}, err
 			}
@@ -121,7 +149,7 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 			return nil, err
 		}
 
-		n := node.NewNode(data)
+		n := node.NewNodeView(data)
 		if verifyAlways || !t.pager.IsVerified(currID) {
 			if !n.VerifyChecksum() {
 				return nil, fmt.Errorf("checksum mismatch on page %d", currID)
@@ -133,8 +161,19 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 
 		switch n.Type() {
 		case page.PageTypeInternal:
-			idx, _ := n.SearchInternal(key)
-			childID, err := n.GetInternalChildID(idx)
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return nil, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return nil, ErrKeyNotFound
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return nil, ErrKeyNotFound
+					}
+				}
+			}
+			childID, _, err := n.SearchInternalChildID(key)
 			if err != nil {
 				return nil, err
 			}

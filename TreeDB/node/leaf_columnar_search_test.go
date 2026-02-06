@@ -139,3 +139,66 @@ func TestLeafColumnarSearchDoesNotUseLeafEntryKeyAt(t *testing.T) {
 		t.Fatalf("SearchLeaf cleared leafValid; expected columnar search to avoid leafEntryKeyAt")
 	}
 }
+
+func benchmarkSearchLeafShape(b *testing.B, opts BuilderOptions, fixedBE8 bool) {
+	buf := make([]byte, page.PageSize)
+	builder := NewBuilderWithOptions(buf, page.PageTypeLeaf, opts)
+	builder.SetPageID(1)
+
+	inserted := 0
+	for i := 0; i < benchKeyCount; i++ {
+		var key []byte
+		if fixedBE8 {
+			var k [8]byte
+			binary.BigEndian.PutUint64(k[:], uint64(i))
+			key = k[:]
+		} else {
+			var k [16]byte
+			binary.BigEndian.PutUint64(k[:8], uint64(i))
+			binary.BigEndian.PutUint64(k[8:], uint64(i*17+3))
+			key = k[:]
+		}
+		if err := builder.AddLeafEntry(key, nil, FlagPointer, page.ValuePtr{Offset: uint64(i + 1), Length: 64, FileID: 1}); err != nil {
+			if err == ErrNodeFull {
+				break
+			}
+			b.Fatalf("AddLeafEntry: %v", err)
+		}
+		inserted++
+	}
+	n := builder.Finish()
+	if inserted == 0 {
+		b.Fatalf("expected at least one key")
+	}
+
+	queries := make([][]byte, inserted)
+	for i := 0; i < inserted; i++ {
+		if fixedBE8 {
+			var k [8]byte
+			binary.BigEndian.PutUint64(k[:], uint64(i))
+			queries[i] = append([]byte(nil), k[:]...)
+		} else {
+			var k [16]byte
+			binary.BigEndian.PutUint64(k[:8], uint64(i))
+			binary.BigEndian.PutUint64(k[8:], uint64(i*17+3))
+			queries[i] = append([]byte(nil), k[:]...)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		if _, _, err := n.SearchLeaf(q); err != nil {
+			b.Fatalf("SearchLeaf: %v", err)
+		}
+	}
+}
+
+func BenchmarkSearchLeaf_Columnar_FixedBE8(b *testing.B) {
+	benchmarkSearchLeafShape(b, BuilderOptions{LeafColumnar: true}, true)
+}
+
+func BenchmarkSearchLeaf_Columnar_Variable16(b *testing.B) {
+	benchmarkSearchLeafShape(b, BuilderOptions{LeafColumnar: true}, false)
+}

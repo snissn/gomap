@@ -167,23 +167,24 @@ Notes:
 When both `leaf columnar` and `leaf prefix-compressed` are set (and `leaf prefix v2` is set):
 
 ```text
-[ u8 SharedPrefixLen8 ]
-[ u8 SuffixLen8 ]
-[ u8 Flags ]
-[ optional: u16 SharedPrefixLen16 | u16 SuffixLen16 ]  if both 8-bit lengths are 0xFF
-[ optional: uvarint ValueLen ]  only for inline, non-tombstone entries
-[ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
-[ Key suffix bytes (SuffixLen) ]
+KeyOff column (Count * u16): KeyOff[i]      offset from page start to key suffix i
+ValOff column (Count * u16): ValOff[i]      offset from page start to value/pointer i
+Flags column (Count * u8): Flags[i]
+PrefixLen column (Count * u16): PrefixLen[i]
+
+Value blob: concatenated values/pointers for entries in key order
+Key-suffix blob: concatenated key suffixes for entries in key order
 ```
 
 Notes:
-- Keys reconstruct the same way as prefix v2: within restart blocks, each entry
-  copies `SharedPrefixLen` bytes from the previous full key, then appends the
-  suffix bytes.
-- Key/value bytes are laid out with **implicit offsets**:
-  - `valOff = headerSize`
-  - `keyOff = valOff + valSize`
-- Current TreeDB encoder writes value bytes **before** key suffix bytes.
+- Keys reconstruct with restart blocks (fixed interval): each entry copies
+  `PrefixLen[i]` bytes from the previous full key, then appends suffix bytes.
+- Restart entries are enforced with `PrefixLen=0`.
+- Offsets derive lengths from adjacent rows:
+  - `KeySuffixLen[i] = KeyOff[i+1]-KeyOff[i]` (last suffix ends at page end)
+  - `ValLen[i] = ValOff[i+1]-ValOff[i]` (last value ends at `KeyOff[0]`)
+- Values and key suffixes are physically separated so key-only search/seek paths
+  avoid touching value payload bytes.
 - When `leaf packed ValuePtr` is set, pointer entries use the packed encoding:
   `Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE)`. This requires
   value-log segment offsets stay within `u32` (cached mode enforces this when
@@ -198,7 +199,9 @@ For `PageTypeInternal`, the page-header `Flags` field stores the internal
 encoding mode in high bits (in addition to the low-bit page type).
 
 Internal-encoding flags (current):
-- `0x0800`: internal base-delta (child IDs as base+u32 delta; separator keys prefix-coded)
+- `0x0800`: internal base-delta enabled
+- `0x0200`: internal base-delta uses `u16` child deltas (otherwise `u32`)
+- `0x0100`: exact subtree fence bounds persisted (`low`/`high`)
 
 #### Plain internal entries (no base-delta)
 
@@ -210,25 +213,31 @@ Internal-encoding flags (current):
 
 #### Base-delta internal entries (with prefix coding)
 
-Each entry stores a key **suffix** and a child-ID **delta**:
+Each entry stores a key **suffix** and a child-ID **delta** (`u16` or `u32`,
+selected per page):
 
 ```text
 [ u16 SuffixLen ]
-[ u32 ChildDelta ]   childID = baseChildID + ChildDelta
+[ ChildDelta ]       childID = baseChildID + ChildDelta
 [ Key suffix bytes (SuffixLen) ]
 ```
 
-The page stores a footer at the end containing the shared key prefix and the
-base child ID:
+The page stores a footer payload at the end containing optional exact subtree
+fence bounds plus the shared key prefix, followed by a fixed tail:
 
 ```text
+[ low fence bytes (lowLen) ]
+[ high fence bytes (highLen) ]
 [ prefix bytes (prefixLen) ]
+[ u16 lowLen ]
+[ u16 highLen ]
 [ u16 prefixLen ]
 [ u64 baseChildID ]
 ```
 
 The full separator key for an entry is `prefix || suffix`. `prefixLen` may be
-`0` (no prefix bytes stored).
+`0` (no prefix bytes stored). Fence semantics are `low` inclusive and `high`
+exclusive; an empty `high` means unbounded (e.g. root upper bound).
 
 ## Value-log record format (`TreeDB/internal/valuelog`)
 
