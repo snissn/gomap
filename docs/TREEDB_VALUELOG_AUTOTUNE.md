@@ -15,7 +15,16 @@ For implementation details (agent-oriented, non-normative), see:
 In TreeDB **cached mode**, large values can be stored in a separate append-only **value log**. Values are written in **frames** (groups of up to `k` records). Each frame can be stored:
 
 - **raw** (uncompressed), or
-- **compressed** (Zstandard), optionally using a **trained dictionary**.
+- **compressed** with:
+  - block codecs (`snappy`, `lz4`, `zstd`) without dictionaries, or
+  - dictionary compression (zstd + trained dict).
+
+Compression behavior is selected with `Options.ValueLog.Compression`:
+
+- `off`: raw grouped frames only.
+- `block`: block compression only (`Options.ValueLog.BlockCodec`).
+- `dict`: dictionary path only (when a dict is available).
+- `auto`: adaptive lane that chooses `off|block|dict` per stream.
 
 Compression reduces bytes written to disk (and potentially read back), but consumes CPU. Whether compression is a net win depends on *wall-time* characteristics of the deployment: storage bandwidth/latency, `fsync` behavior, CPU availability, and the workload’s compressibility.
 

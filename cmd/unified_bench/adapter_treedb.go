@@ -56,6 +56,11 @@ var (
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
+	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default|off|block|dict|auto)")
+	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4|zstd)")
+	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
+	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
+	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
 	treedbVlogDictTrainBytes              = flag.Int("treedb-vlog-dict-train-bytes", 0, "TreeDB: value-log dict training raw sample bytes (0=default, <0=disable)")
 	treedbVlogDictDictBytes               = flag.Int("treedb-vlog-dict-dict-bytes", 0, "TreeDB: value-log dict size in bytes (0=default)")
 	treedbVlogDictMinRecords              = flag.Int("treedb-vlog-dict-min-records", 0, "TreeDB: value-log dict minimum records to train (0=default)")
@@ -197,6 +202,36 @@ func parseVlogCompressionAutotuneMode(s string) (uint64, error) {
 	}
 }
 
+func parseTreeDBVlogCompressionMode(s string) (treedb.ValueLogCompressionMode, bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "unset":
+		return treedb.ValueLogCompressionOff, false, nil
+	case "off", "false", "0":
+		return treedb.ValueLogCompressionOff, true, nil
+	case "block":
+		return treedb.ValueLogCompressionBlock, true, nil
+	case "dict":
+		return treedb.ValueLogCompressionDict, true, nil
+	case "auto":
+		return treedb.ValueLogCompressionAuto, true, nil
+	default:
+		return treedb.ValueLogCompressionOff, false, fmt.Errorf("unsupported -treedb-vlog-compression=%q (expected default|off|block|dict|auto)", s)
+	}
+}
+
+func parseTreeDBVlogBlockCodec(s string) (treedb.ValueLogBlockCodec, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "snappy":
+		return treedb.ValueLogBlockSnappy, nil
+	case "lz4":
+		return treedb.ValueLogBlockLZ4, nil
+	case "zstd":
+		return treedb.ValueLogBlockZSTD, nil
+	default:
+		return treedb.ValueLogBlockSnappy, fmt.Errorf("unsupported -treedb-vlog-block-codec=%q (expected snappy|lz4|zstd)", s)
+	}
+}
+
 type treeDBOptionsReport struct {
 	opts     treedb.Options
 	notes    []string
@@ -237,6 +272,23 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=default (effective=%dB)", effective))
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=%dB", threshold))
+	}
+	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
+	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
+	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
+		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.block_target_bytes=%dB", target))
+	}
+	if hold := r.opts.ValueLog.IncompressibleHoldBytes; hold <= 0 {
+		lines = append(lines, "vlog.incompressible_hold_bytes=default (effective=67108864B)")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.incompressible_hold_bytes=%dB", hold))
+	}
+	if probe := r.opts.ValueLog.IncompressibleProbeIntervalBytes; probe <= 0 {
+		lines = append(lines, "vlog.incompressible_probe_bytes=default (effective=8388608B)")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.incompressible_probe_bytes=%dB", probe))
 	}
 
 	// Keep output stable and readable for copy/paste.
@@ -287,6 +339,36 @@ func formatTreeDBIntegrity(mode treedb.IntegrityMode) string {
 		return "skip_checksums"
 	default:
 		return fmt.Sprintf("integrity_%d", mode)
+	}
+}
+
+func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
+	switch mode {
+	case 0:
+		return "default"
+	case treedb.ValueLogCompressionOff:
+		return "off"
+	case treedb.ValueLogCompressionBlock:
+		return "block"
+	case treedb.ValueLogCompressionDict:
+		return "dict"
+	case treedb.ValueLogCompressionAuto:
+		return "auto"
+	default:
+		return fmt.Sprintf("compression_%d", mode)
+	}
+}
+
+func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
+	switch codec {
+	case treedb.ValueLogBlockSnappy:
+		return "snappy"
+	case treedb.ValueLogBlockLZ4:
+		return "lz4"
+	case treedb.ValueLogBlockZSTD:
+		return "zstd"
+	default:
+		return fmt.Sprintf("block_codec_%d", codec)
 	}
 }
 
@@ -390,23 +472,39 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		DisablePiggybackCompaction: *treedbDisablePiggyback,
 
 		ValueLog: treedb.ValueLogOptions{
-			ForcePointers:               forcePointersEffective,
-			PointerThreshold:            *treedbValueLogThreshold,
-			RawWritevMinAvgBytes:        *treedbVlogRawWritevMinAvgBytes,
-			RawWritevMinBatchRecords:    *treedbVlogRawWritevMinBatchRecs,
-			ReadIntegrity:               readIntegrity,
-			DictAdaptiveRatio:           *treedbVlogDictAdaptiveRatio,
-			DictMetricsWindowBytes:      *treedbVlogDictMetricsWindow,
-			DictMetricsMinRecords:       *treedbVlogDictMetricsMinRecords,
-			DictMetricsPauseBytes:       *treedbVlogDictMetricsPauseBytes,
-			DictIncompressibleHoldBytes: *treedbVlogDictIncompressibleHoldBytes,
-			DictProbeIntervalBytes:      *treedbVlogDictProbeIntervalBytes,
-			DictMinPayloadSavingsRatio:  *treedbVlogDictMinSavingsRatio,
+			ForcePointers:                    forcePointersEffective,
+			PointerThreshold:                 *treedbValueLogThreshold,
+			RawWritevMinAvgBytes:             *treedbVlogRawWritevMinAvgBytes,
+			RawWritevMinBatchRecords:         *treedbVlogRawWritevMinBatchRecs,
+			BlockTargetCompressedBytes:       *treedbVlogBlockTargetBytes,
+			IncompressibleHoldBytes:          *treedbVlogIncompressibleHoldBytes,
+			IncompressibleProbeIntervalBytes: *treedbVlogIncompressibleProbeBytes,
+			ReadIntegrity:                    readIntegrity,
+			DictAdaptiveRatio:                *treedbVlogDictAdaptiveRatio,
+			DictMetricsWindowBytes:           *treedbVlogDictMetricsWindow,
+			DictMetricsMinRecords:            *treedbVlogDictMetricsMinRecords,
+			DictMetricsPauseBytes:            *treedbVlogDictMetricsPauseBytes,
+			DictIncompressibleHoldBytes:      *treedbVlogDictIncompressibleHoldBytes,
+			DictProbeIntervalBytes:           *treedbVlogDictProbeIntervalBytes,
+			DictMinPayloadSavingsRatio:       *treedbVlogDictMinSavingsRatio,
 		},
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond
 	}
+
+	compressionMode, compressionExplicit, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	if compressionExplicit {
+		opts.ValueLog.Compression = compressionMode
+	}
+	blockCodec, err := parseTreeDBVlogBlockCodec(*treedbVlogBlockCodec)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.BlockCodec = blockCodec
 
 	setOptionalVlogTrainConfig(&opts,
 		*treedbVlogDictTrainBytes,
@@ -454,15 +552,34 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
-	setOptionalVlogAutotuneMode(&opts, autotuneMode)
-	if autotuneMode == 1 {
-		// Compression off should also force dict training off, even if the caller
-		// specified training flags. TreeDB enforces the same invariant internally,
-		// but we keep unified_bench behavior explicit and deterministic.
-		if *treedbVlogDictTrainBytes > 0 {
-			notes = append(notes, "vlog_compression_autotune=off: forcing vlog_dict_train_bytes=off")
+	if compressionExplicit {
+		switch compressionMode {
+		case treedb.ValueLogCompressionOff:
+			setOptionalVlogAutotuneMode(&opts, 1)
+			if *treedbVlogDictTrainBytes > 0 {
+				notes = append(notes, "vlog_compression=off: forcing vlog_dict_train_bytes=off")
+			}
+			setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+		case treedb.ValueLogCompressionBlock:
+			setOptionalVlogAutotuneMode(&opts, 1)
+			if *treedbVlogDictTrainBytes > 0 {
+				notes = append(notes, "vlog_compression=block: forcing vlog_dict_train_bytes=off")
+			}
+			setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+		default:
+			setOptionalVlogAutotuneMode(&opts, autotuneMode)
 		}
-		setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	} else {
+		setOptionalVlogAutotuneMode(&opts, autotuneMode)
+		if autotuneMode == 1 {
+			// Compression off should also force dict training off, even if the caller
+			// specified training flags. TreeDB enforces the same invariant internally,
+			// but we keep unified_bench behavior explicit and deterministic.
+			if *treedbVlogDictTrainBytes > 0 {
+				notes = append(notes, "vlog_compression_autotune=off: forcing vlog_dict_train_bytes=off")
+			}
+			setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+		}
 	}
 	if *treedbVlogDictK > 0 {
 		opts.ValueLog.CompressionAutotune.CandidateK = []int{*treedbVlogDictK}
@@ -519,6 +636,7 @@ func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionOff
 	mode, err := resolvedTreeDBVlogCompressionModeForDictVariants()
 	if err != nil {
 		return nil, err
@@ -538,6 +656,7 @@ func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enabl
 	if err != nil {
 		return nil, err
 	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionDict
 	mode, err := resolvedTreeDBVlogCompressionModeForDictVariants()
 	if err != nil {
 		return nil, err
