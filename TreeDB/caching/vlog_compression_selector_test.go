@@ -252,3 +252,78 @@ func TestVlogCompressionSelector_AllowDictSampling(t *testing.T) {
 		t.Fatalf("expected dict writes to keep dict sampling enabled")
 	}
 }
+
+func TestVlogCompressionSelector_ExplorationSkipsOffWhenCompressionStrong(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockLZ4
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.50, throughput: 0.90, samples: 8}
+	// Make snappy clearly dominated so off would be the only alternate candidate
+	// without skip logic.
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.85, throughput: 0.95, samples: 8}
+
+	mode, codec, probe := s.choose(false, 64)
+	if probe {
+		t.Fatalf("did not expect exploration probe when compression is clearly beneficial")
+	}
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected steady lz4 choice, got mode=%v codec=%v", mode, codec)
+	}
+}
+
+func TestVlogCompressionSelector_ExplorationSkipsDominatedBlockCodec(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockLZ4
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.12, throughput: 0.90, samples: 8}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.20, throughput: 1.00, samples: 8}
+
+	mode, codec, probe := s.choose(false, 64)
+	if probe {
+		t.Fatalf("did not expect probe for dominated block codec")
+	}
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected lz4 steady choice, got mode=%v codec=%v", mode, codec)
+	}
+}
+
+func TestVlogCompressionSelector_ExplorationStopsAfterStrongBlockSignal(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockLZ4
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.10, throughput: 0.90, samples: 8}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.14, throughput: 1.00, samples: 8}
+
+	mode, codec, probe := s.choose(false, 64)
+	if probe {
+		t.Fatalf("did not expect exploration probe after strong block signal")
+	}
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected lz4 steady choice, got mode=%v codec=%v", mode, codec)
+	}
+}
+
+func TestVlogCompressionSelector_ExplorationContinuesUntilBothBlockCodecsSampled(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.12, throughput: 0.95, samples: 8}
+	// LZ4 unsampled: exploration should still probe it before freezing.
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{}
+
+	mode, codec, probe := s.choose(false, 64)
+	if !probe {
+		t.Fatalf("expected exploration probe before both block codecs are sampled")
+	}
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected lz4 exploration probe, got mode=%v codec=%v", mode, codec)
+	}
+}

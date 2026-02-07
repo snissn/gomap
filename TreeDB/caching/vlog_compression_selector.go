@@ -431,9 +431,13 @@ func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bo
 	best := current
 	bestSamples := uint64(^uint64(0))
 	bestScore := -1.0
+	currentMetric := s.metric(current)
 	found := false
 	for _, c := range cands {
 		if c == current {
+			continue
+		}
+		if s.skipExplorationCandidate(current, currentMetric, c) {
 			continue
 		}
 		m := s.metric(c)
@@ -449,6 +453,33 @@ func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bo
 		return best
 	}
 	return current
+}
+
+func isBlockCandidate(c vlogAutoCandidate) bool {
+	return c == vlogAutoCandidateBlockSnappy || c == vlogAutoCandidateBlockLZ4
+}
+
+func (s *vlogCompressionSelector) skipExplorationCandidate(current vlogAutoCandidate, currentMetric vlogCandidateMetrics, candidate vlogAutoCandidate) bool {
+	candidateMetric := s.metric(candidate)
+
+	// Once compression is clearly beneficial, avoid exploratory off probes that
+	// inflate stored bytes in steady-state runs.
+	if candidate == vlogAutoCandidateOff && current != vlogAutoCandidateOff {
+		if currentMetric.samples >= 4 && currentMetric.ratio <= 0.90 {
+			return true
+		}
+	}
+
+	// Avoid repeatedly probing a clearly dominated alternative codec. This keeps
+	// auto close to the best steady-state ratio on highly compressible streams.
+	if isBlockCandidate(current) && isBlockCandidate(candidate) {
+		if currentMetric.samples >= 4 && candidateMetric.samples >= 4 {
+			if candidateMetric.ratio > currentMetric.ratio*2.00 && candidateMetric.throughput < currentMetric.throughput*1.15 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *vlogCompressionSelector) maybeSwitch(target vlogAutoCandidate, rawBytes uint64, dictAvailable bool) vlogAutoCandidate {
@@ -593,7 +624,7 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 				nextInterval = s.exploreBytes
 			}
 			s.exploreRemaining = nextInterval
-			if nextInterval == s.exploreBytes {
+			if nextInterval == s.exploreBytes && !s.shouldSkipExploration(dictAvailable) {
 				candidate := s.preferredExplorationCandidate(dictAvailable)
 				if candidate != s.currentCandidate {
 					s.probeAttempts++
@@ -610,6 +641,31 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 	chosen := s.maybeSwitch(target, rawBytes, dictAvailable)
 	mode, codec := candidateWriteMode(chosen, s.seedCodec)
 	return mode, codec, false
+}
+
+func (s *vlogCompressionSelector) shouldSkipExploration(dictAvailable bool) bool {
+	current := s.currentCandidate
+	if current == vlogAutoCandidateOff {
+		return false
+	}
+	currentMetric := s.metric(current)
+	if currentMetric.samples < 4 || currentMetric.ratio > 0.25 {
+		return false
+	}
+	// Keep exploration on until both block codecs have initial signal.
+	if isBlockCandidate(current) {
+		snappySamples := s.metric(vlogAutoCandidateBlockSnappy).samples
+		lz4Samples := s.metric(vlogAutoCandidateBlockLZ4).samples
+		if snappySamples == 0 || lz4Samples == 0 {
+			return false
+		}
+	}
+	// If dict is available but still unsampled, allow occasional exploration so
+	// auto can still discover dict wins.
+	if dictAvailable && s.metric(vlogAutoCandidateDict).samples == 0 {
+		return false
+	}
+	return true
 }
 
 func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, storedPayloadBytes int, wallNs int64, probe bool) {
