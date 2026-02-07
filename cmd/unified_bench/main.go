@@ -1258,14 +1258,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			valPos := 0
-			maxInt := int(^uint(0) >> 1)
-			if total > maxInt/8 {
-				return 0, fmt.Errorf("batch_write: keys=%d overflows precomputed key buffer", total)
-			}
 			// Keep the precomputed-key optimization bounded so very large runs do
 			// not retain a huge contiguous key buffer for the whole benchmark.
 			const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
-			precomputeKeys := total*8 <= maxPrecomputedKeyBytes
+			precomputeKeys := total > 0 && total <= maxPrecomputedKeyBytes/8
 			var keyBytes []byte
 			if precomputeKeys {
 				keyBytes = make([]byte, total*8)

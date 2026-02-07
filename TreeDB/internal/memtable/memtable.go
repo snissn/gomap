@@ -80,9 +80,15 @@ type SortedBatchApplier interface {
 }
 
 // StableUnsafeIteratorTable marks memtable implementations whose
-// iterator.UnsafeIterator key/value views remain valid after Next/Seek while the
-// iterator is open. Callers can use this to safely avoid per-entry copies when
-// materializing immutable flush runs.
+// iterator.UnsafeIterator key/value views (from UnsafeKey/UnsafeValue/UnsafeEntry)
+// are backed by storage that outlives the iterator itself.
+//
+// Implementations returning true MUST ensure these views stay valid and
+// immutable across Next/Seek and remain valid after Close, at least until the
+// underlying memtable is reset or garbage-collected.
+//
+// Callers such as buildOpRuns rely on this stronger contract to materialize
+// immutable flush runs without per-entry defensive copies.
 type StableUnsafeIteratorTable interface {
 	StableUnsafeIteratorSlices() bool
 }
