@@ -44,7 +44,9 @@ func normalizeWriteValuePattern(pattern string) (string, error) {
 		return "highly_compressible_notail", nil
 	case "medium_compressible", "medium_compressible_sparse":
 		return "medium_compressible_sparse", nil
+	case "celestia_height_prefix_fill":
+		return "celestia_height_prefix_fill", nil
 	default:
-		return "", fmt.Errorf("unsupported -val-pattern=%q (expected zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random)", pattern)
+		return "", fmt.Errorf("unsupported -val-pattern=%q (expected zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)", pattern)
 	}
 }

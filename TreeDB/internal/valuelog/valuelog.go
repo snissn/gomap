@@ -56,9 +56,11 @@ type FrameStats struct {
 }
 
 type FrameHeader struct {
-	Version  byte
-	Flags    byte
-	K        uint8
+	Version byte
+	Flags   byte
+	K       uint8
+	// Reserved stores per-frame metadata. For compressed block frames
+	// (Flags&FrameFlagCompressed, DictID==0), this holds the BlockCodec ID.
 	Reserved uint8
 	DictID   uint64
 }

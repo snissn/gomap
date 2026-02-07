@@ -226,12 +226,15 @@ func TestRunBenchmark_VacuumBetweenTests_Smoke(t *testing.T) {
 
 func TestRunBenchmark_CompressionVariantsMatrix_Smoke(t *testing.T) {
 	prevTreeDB := *treedbVlogDictMode
+	prevTreeDBCompressionVariant := *treedbVlogCompressionVariant
 	prevLevelDB := *leveldbBlockCompressionMode
 	defer func() {
 		*treedbVlogDictMode = prevTreeDB
+		*treedbVlogCompressionVariant = prevTreeDBCompressionVariant
 		*leveldbBlockCompressionMode = prevLevelDB
 	}()
 	*treedbVlogDictMode = "both"
+	*treedbVlogCompressionVariant = "default"
 	*leveldbBlockCompressionMode = "both"
 
 	run, err := runBenchmark(BenchConfig{
@@ -257,6 +260,55 @@ func TestRunBenchmark_CompressionVariantsMatrix_Smoke(t *testing.T) {
 	wantCols := []string{
 		"TreeDB (vlog_dict=off)",
 		"TreeDB (vlog_dict=on)",
+		"LevelDB (block=off)",
+		"LevelDB (block=on)",
+	}
+	for _, col := range wantCols {
+		if _, ok := got[col]; !ok {
+			t.Fatalf("missing result column %q (have: %v)", col, mapsKeysSorted(got))
+		}
+	}
+}
+
+func TestRunBenchmark_CompressionVariantsAutoMatrix_Smoke(t *testing.T) {
+	prevTreeDB := *treedbVlogDictMode
+	prevTreeDBCompressionVariant := *treedbVlogCompressionVariant
+	prevLevelDB := *leveldbBlockCompressionMode
+	defer func() {
+		*treedbVlogDictMode = prevTreeDB
+		*treedbVlogCompressionVariant = prevTreeDBCompressionVariant
+		*leveldbBlockCompressionMode = prevLevelDB
+	}()
+	*treedbVlogDictMode = "default"
+	*treedbVlogCompressionVariant = "all"
+	*leveldbBlockCompressionMode = "both"
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    128,
+		BatchSize:    100,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb,leveldb",
+		TestsArg:     "batch_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if len(run.Instances) != 7 {
+		t.Fatalf("expected 7 instances, got %d", len(run.Instances))
+	}
+
+	got := run.Results["batch_write"]
+	wantCols := []string{
+		"TreeDB (vlog=off)",
+		"TreeDB (vlog=dict)",
+		"TreeDB (vlog=block/snappy)",
+		"TreeDB (vlog=block/lz4)",
+		"TreeDB (vlog=auto)",
 		"LevelDB (block=off)",
 		"LevelDB (block=on)",
 	}
@@ -352,6 +404,23 @@ func TestMakeWriteValuePool_RepeatNotAllIdentical(t *testing.T) {
 	}
 }
 
+func TestMakeWriteValuePool_CelestiaHeightPrefixFill(t *testing.T) {
+	values, err := makeWriteValuePool(1, "celestia_height_prefix_fill", 128, 8)
+	if err != nil {
+		t.Fatalf("makeWriteValuePool: %v", err)
+	}
+	if len(values) != 8 {
+		t.Fatalf("expected 8 values, got %d", len(values))
+	}
+	wantPrefix := []byte("celestia/height/")
+	if !bytes.HasPrefix(values[0], wantPrefix) {
+		t.Fatalf("expected prefix %q", wantPrefix)
+	}
+	if bytes.Equal(values[0], values[1]) {
+		t.Fatalf("expected distinct values across indices")
+	}
+}
+
 func mapsKeysSorted(m map[string]float64) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -364,6 +433,31 @@ func mapsKeysSorted(m map[string]float64) []string {
 func TestMakeWriteValuePool_UnknownPatternErrors(t *testing.T) {
 	if _, err := makeWriteValuePool(1, "not_a_real_pattern", 16, 0); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestParseTreeDBVlogCompressionVariant(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantErr bool
+	}{
+		{in: "default"},
+		{in: "off"},
+		{in: "dict"},
+		{in: "block_snappy"},
+		{in: "block_lz4"},
+		{in: "auto"},
+		{in: "all"},
+		{in: "nope", wantErr: true},
+	}
+	for _, tc := range cases {
+		_, err := parseTreeDBVlogCompressionVariant("treedb-vlog-compression-variant", tc.in)
+		if tc.wantErr && err == nil {
+			t.Fatalf("expected error for %q", tc.in)
+		}
+		if !tc.wantErr && err != nil {
+			t.Fatalf("unexpected error for %q: %v", tc.in, err)
+		}
 	}
 }
 

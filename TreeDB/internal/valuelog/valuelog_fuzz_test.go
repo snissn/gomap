@@ -79,3 +79,24 @@ func FuzzValueLogReader(f *testing.F) {
 		}
 	})
 }
+
+func FuzzValueLogDecodeMixedFrame(f *testing.F) {
+	f.Add(byte(BlockCodecSnappy), []byte("abc"), uint32(3))
+	f.Add(byte(BlockCodecLZ4), []byte(""), uint32(0))
+	f.Add(byte(0xFF), []byte{0x01, 0x02, 0x03}, uint32(16))
+
+	f.Fuzz(func(t *testing.T, codecID byte, payload []byte, rawLen uint32) {
+		if len(payload) > valuelogFuzzMaxRecord {
+			return
+		}
+		if rawLen > valuelogFuzzMaxRecord {
+			rawLen = valuelogFuzzMaxRecord
+		}
+		header := FrameHeader{
+			Version:  FrameVersion,
+			Flags:    FrameFlagCompressed,
+			Reserved: codecID,
+		}
+		_, _ = decodeFramePayloadTo(header, payload, nil, rawLen, nil)
+	})
+}

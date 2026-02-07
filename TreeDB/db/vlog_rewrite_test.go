@@ -37,6 +37,7 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writer1: %v", err)
 	}
+	w1.SetBlockCompression(valuelog.BlockCodecSnappy, true)
 	ptr1a, err := w1.Append(0, nil, 1, bytes.Repeat([]byte{0x01}, 128))
 	if err != nil {
 		t.Fatalf("append1a: %v", err)

@@ -1642,6 +1642,25 @@ type Options struct {
 	//
 	// Values <=0 use a default of 8.
 	ValueLogRawWritevMinBatchRecords int
+	// ValueLogCompression selects value-log compression behavior:
+	// 0=default(unset; normalized to auto by TreeDB Open), 1=off, 2=block,
+	// 3=dict, 4=auto.
+	ValueLogCompression uint8
+	// ValueLogBlockCodec selects block codec when block compression is enabled:
+	// 0=snappy, 1=lz4.
+	ValueLogBlockCodec uint8
+	// ValueLogBlockTargetCompressedBytes controls block-mode grouped frame K
+	// adaptation target (0=default).
+	ValueLogBlockTargetCompressedBytes int
+	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
+	// window bytes (0=default).
+	ValueLogIncompressibleHoldBytes int
+	// ValueLogIncompressibleProbeBytes configures auto-mode hold probe interval
+	// bytes (0=default).
+	ValueLogIncompressibleProbeBytes int
+	// ValueLogAutoPolicy controls auto-mode dict-vs-block bias:
+	// 0=balanced, 1=throughput, 2=size.
+	ValueLogAutoPolicy uint8
 	// ValueLogMaxSegmentBytes caps the size of a single value-log segment file.
 	// 0 disables the cap.
 	//
@@ -1782,6 +1801,12 @@ type DB struct {
 	forceValueLogPointers        bool
 	valueLogRawWritevMinAvgBytes int
 	valueLogRawWritevMinRecords  int
+	valueLogCompressionMode      uint8
+	valueLogBlockCodec           valuelog.BlockCodec
+	valueLogBlockTargetBytes     int
+	valueLogIncompressibleHold   uint64
+	valueLogIncompressibleProbe  uint64
+	valueLogAutoPolicy           uint8
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
@@ -2549,7 +2574,37 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
 
+	valueLogCompressionMode := normalizeVlogCompressionMode(opts.ValueLogCompression)
+	if valueLogCompressionMode == vlogCompressionDefault {
+		// ValueLogCompression=0 is "unset/default" and resolves to auto mode.
+		valueLogCompressionMode = vlogCompressionAuto
+	}
+	valueLogBlockCodec := normalizeVlogBlockCodec(opts.ValueLogBlockCodec)
+	valueLogBlockTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(opts.ValueLogBlockTargetCompressedBytes)
+	valueLogIncompressibleHold := opts.ValueLogIncompressibleHoldBytes
+	if valueLogIncompressibleHold <= 0 {
+		valueLogIncompressibleHold = defaultVlogHoldBytes
+	}
+	if valueLogIncompressibleHold < 64<<10 {
+		valueLogIncompressibleHold = 64 << 10
+	}
+	valueLogIncompressibleProbe := opts.ValueLogIncompressibleProbeBytes
+	if valueLogIncompressibleProbe <= 0 {
+		valueLogIncompressibleProbe = defaultVlogProbeBytes
+	}
+	if valueLogIncompressibleProbe < 64<<10 {
+		valueLogIncompressibleProbe = 64 << 10
+	}
+	if valueLogIncompressibleProbe > valueLogIncompressibleHold {
+		valueLogIncompressibleProbe = valueLogIncompressibleHold
+	}
+	valueLogAutoPolicy := normalizeVlogAutoPolicy(opts.ValueLogAutoPolicy)
+
 	valueLogDictTrain := opts.ValueLogDictTrain
+	if valueLogCompressionMode == vlogCompressionOff || valueLogCompressionMode == vlogCompressionBlock {
+		// Explicit off/block mode bypasses dictionary writes and training.
+		valueLogDictTrain.TrainBytes = -1
+	}
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
 		valueLogDictMaxK = 32
@@ -2677,12 +2732,22 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// While paused on degraded/incompressible streams, keep sampling sparse to
 	// minimize hot-path CPU overhead.
 	pausedSampleStride := uint64(256)
+	selectorSeedCodec := valueLogBlockCodec
+	if valueLogCompressionMode == vlogCompressionAuto && valueLogAutoPolicy != vlogAutoThroughput {
+		selectorSeedCodec = valuelog.BlockCodecLZ4
+	}
 
 	lanes := make([]lane, laneCount)
 	for i := range lanes {
 		lanes[i].id = i
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
+		lanes[i].vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
+			valueLogAutoPolicy,
+			uint64(valueLogIncompressibleHold),
+			uint64(valueLogIncompressibleProbe),
+			selectorSeedCodec,
+		)
 	}
 	db := &DB{
 		dir:                                  walDir,
@@ -2723,6 +2788,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		forceValueLogPointers:                opts.ForceValueLogPointers,
 		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
 		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
+		valueLogCompressionMode:              uint8(valueLogCompressionMode),
+		valueLogBlockCodec:                   valueLogBlockCodec,
+		valueLogBlockTargetBytes:             valueLogBlockTargetBytes,
+		valueLogIncompressibleHold:           uint64(valueLogIncompressibleHold),
+		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
+		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
 		memtableValueLogPointers:             true,
 		valueLogReader:                       valueLogReader,
 		valueLogRetain:                       retained,
@@ -3227,6 +3298,8 @@ type vlogWriteRequest struct {
 	rid              uint64
 	value            []byte
 	dictID           uint64
+	writeMode        vlogCompressionWriteMode
+	blockCodec       valuelog.BlockCodec
 	probeCompression bool
 	durability       journalDurability
 	ack              *vlogAck
@@ -4079,33 +4152,59 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 
 	type vlogBatchPlan struct {
-		start    int
-		end      int
-		dictID   uint64
-		dict     []byte
-		k        int
-		probe    bool
-		rawBytes int
-		frames   []preparedDictFrame
+		start       int
+		end         int
+		writeMode   vlogCompressionWriteMode
+		blockCodec  valuelog.BlockCodec
+		dictID      uint64
+		dict        []byte
+		k           int
+		probe       bool
+		rawBytes    int
+		frames      []preparedDictFrame
+		storedBytes int
+		wallNs      int64
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
 	plans := make([]vlogBatchPlan, 0, len(requests))
 	for i := 0; i < len(requests); {
+		writeMode := requests[i].writeMode
+		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
 		dictID := requests[i].dictID
+		if writeMode != vlogWriteDict {
+			dictID = 0
+		}
 		dict := dictByID[dictID]
-		if dictID == 0 || len(dict) == 0 {
+		if dictID == 0 || len(dict) == 0 || writeMode != vlogWriteDict {
 			dictID = 0
 			dict = nil
+			if writeMode == vlogWriteDict {
+				writeMode = vlogWriteOff
+			}
 		}
 		probe := requests[i].probeCompression
 		maxValLen := len(requests[i].value)
 		rawBytes := len(requests[i].value)
 		end := i + 1
 		for end < len(requests) {
+			nextMode := requests[end].writeMode
+			nextCodec := normalizeSelectorBlockCodec(requests[end].blockCodec)
 			nextDictID := requests[end].dictID
 			nextDict := dictByID[nextDictID]
-			if nextDictID == 0 || len(nextDict) == 0 {
+			if nextMode != vlogWriteDict {
 				nextDictID = 0
+			}
+			if nextDictID == 0 || len(nextDict) == 0 || nextMode != vlogWriteDict {
+				nextDictID = 0
+			}
+			if nextMode == vlogWriteDict && nextDictID == 0 {
+				nextMode = vlogWriteOff
+			}
+			if nextMode != writeMode {
+				break
+			}
+			if nextMode == vlogWriteBlock && nextCodec != blockCodec {
+				break
 			}
 			if nextDictID != dictID {
 				break
@@ -4120,12 +4219,14 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 
 		k := 1
 		if end-i > 1 {
-			if dictID != 0 {
+			if writeMode == vlogWriteDict && dictID != 0 {
 				k = db.valueLogDictK(dictID)
 				k = db.chooseValueLogDictWriteK(k, end-i, rawBytes)
 				if db.disableJournal {
 					k = valuelog.MaxFrameK
 				}
+			} else if writeMode == vlogWriteBlock {
+				k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
 			} else if rawPaused && db.disableJournal {
 				k = valuelog.MaxFrameK
 			} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
@@ -4149,13 +4250,15 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		k = db.clampValueLogDictK(k)
 
 		plans = append(plans, vlogBatchPlan{
-			start:    i,
-			end:      end,
-			dictID:   dictID,
-			dict:     dict,
-			k:        k,
-			probe:    probe,
-			rawBytes: rawBytes,
+			start:      i,
+			end:        end,
+			writeMode:  writeMode,
+			blockCodec: blockCodec,
+			dictID:     dictID,
+			dict:       dict,
+			k:          k,
+			probe:      probe,
+			rawBytes:   rawBytes,
 		})
 		i = end
 	}
@@ -4164,7 +4267,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	preparedErr := error(nil)
 	for pi := range plans {
 		plan := &plans[pi]
-		if plan.dictID == 0 || len(plan.dict) == 0 {
+		if plan.writeMode != vlogWriteDict || plan.dictID == 0 || len(plan.dict) == 0 {
 			continue
 		}
 		keepIoNs := ioNsPerStored
@@ -4363,52 +4466,103 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	preparedAppender := caps.prepared
 	startSize = w.Size()
 
+	baseIoNsPerStored := 0.0
+	baseEncodeNsPerRaw := 0.0
+	keepSafetyMargin := db.valueLogAutotuneSafetyMargin()
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
-		ioNsPerStored := snap.IoNsPerStoredByte
-		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		baseIoNsPerStored = snap.IoNsPerStoredByte
+		baseEncodeNsPerRaw = snap.EncodeNsPerRawByte
 		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
-			ioNsPerStored = 0
-			encodeNsPerRaw = 0
+			baseIoNsPerStored = 0
+			baseEncodeNsPerRaw = 0
 		}
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
 	}
+	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
 
 	ptrs = getValueLogPtrs(len(records))
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
-	for _, plan := range plans {
+	for pi := range plans {
+		plan := &plans[pi]
 		if err != nil {
 			break
 		}
+		if policySetter != nil {
+			ioNsPerStored := baseIoNsPerStored
+			encodeNsPerRaw := baseEncodeNsPerRaw
+			// In auto mode, block candidate evaluation must observe real compressed
+			// output (not keep-policy short-circuits), same as explicit probes.
+			if plan.probe || (autoSelectorMode && plan.writeMode == vlogWriteBlock) {
+				ioNsPerStored = 0
+				encodeNsPerRaw = 0
+			}
+			policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, keepSafetyMargin)
+		}
+		db.setVlogWriterMode(w, plan.writeMode, plan.blockCodec)
+		planStart := time.Now()
+		beforePlanSize := w.Size()
+		planStoredBytes := 0
 		segment := records[plan.start:plan.end]
-		if plan.dictID == 0 {
+		if plan.writeMode != vlogWriteDict || plan.dictID == 0 {
 			if len(segment) == 1 {
 				ptrs[plan.start], err = w.Append(0, nil, segment[0].RID, segment[0].Value)
 				if err == nil {
 					framesTotal++
 				}
-				continue
-			}
-			if rawWriterInto != nil {
-				_, _, err = rawWriterInto.AppendRawFramesWritevInto(segment, plan.k, ptrs[plan.start:plan.end])
+			} else if plan.writeMode == vlogWriteOff && rawWriterInto != nil {
+				_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(segment, plan.k, ptrs[plan.start:plan.end])
+				err = batchErr
 				if err == nil && plan.k > 0 {
 					framesTotal += (len(segment) + plan.k - 1) / plan.k
+					planStoredBytes += stats.StoredPayloadBytes
 				}
-				continue
+			} else {
+				for i := plan.start; i < plan.end; i += plan.k {
+					end := i + plan.k
+					if end > plan.end {
+						end = plan.end
+					}
+					frame := records[i:end]
+					if statsWriterInto != nil {
+						dst := ptrs[i:end]
+						_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(0, nil, frame, dst)
+						if frameErr != nil {
+							err = frameErr
+							break
+						}
+						framesTotal++
+						planStoredBytes += stats.StoredPayloadBytes
+						continue
+					}
+					if statsWriter != nil {
+						framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(0, nil, frame)
+						if frameErr != nil {
+							err = frameErr
+							break
+						}
+						copy(ptrs[i:end], framePtrs)
+						framesTotal++
+						planStoredBytes += stats.StoredPayloadBytes
+						continue
+					}
+					framePtrs, frameErr := w.AppendFrame(0, nil, frame)
+					if frameErr != nil {
+						err = frameErr
+						break
+					}
+					copy(ptrs[i:end], framePtrs)
+					framesTotal++
+				}
 			}
-			for i := plan.start; i < plan.end; i += plan.k {
-				end := i + plan.k
-				if end > plan.end {
-					end = plan.end
+			if err == nil {
+				if planStoredBytes <= 0 {
+					if delta := w.Size() - beforePlanSize; delta > 0 {
+						planStoredBytes = int(delta)
+					}
 				}
-				framePtrs, frameErr := w.AppendFrame(0, nil, records[i:end])
-				if frameErr != nil {
-					err = frameErr
-					break
-				}
-				copy(ptrs[i:end], framePtrs)
-				framesTotal++
+				plan.storedBytes = planStoredBytes
+				plan.wallNs = time.Since(planStart).Nanoseconds()
 			}
 			continue
 		}
@@ -4436,67 +4590,79 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				}
 				if pf.stats.StoredPayloadBytes > 0 {
 					dictStored += pf.stats.StoredPayloadBytes
+					planStoredBytes += pf.stats.StoredPayloadBytes
 				}
 			}
-			continue
-		}
-		for i := plan.start; i < plan.end; i += plan.k {
-			end := i + plan.k
-			if end > plan.end {
-				end = plan.end
-			}
-			frame := records[i:end]
-			if statsWriterInto != nil {
-				dst := ptrs[i:end]
-				_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(plan.dictID, plan.dict, frame, dst)
-				if frameErr != nil {
-					err = frameErr
-					break
+		} else {
+			for i := plan.start; i < plan.end; i += plan.k {
+				end := i + plan.k
+				if end > plan.end {
+					end = plan.end
 				}
-				framesTotal++
-				if stats.Attempted {
-					framesTried++
-				}
-				if stats.Kept {
-					framesKept++
-					if plan.probe {
-						probeKept = true
+				frame := records[i:end]
+				if statsWriterInto != nil {
+					dst := ptrs[i:end]
+					_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(plan.dictID, plan.dict, frame, dst)
+					if frameErr != nil {
+						err = frameErr
+						break
 					}
+					framesTotal++
+					if stats.Attempted {
+						framesTried++
+					}
+					if stats.Kept {
+						framesKept++
+						if plan.probe {
+							probeKept = true
+						}
+					}
+					if stats.StoredPayloadBytes > 0 {
+						dictStored += stats.StoredPayloadBytes
+						planStoredBytes += stats.StoredPayloadBytes
+					}
+					continue
 				}
-				if stats.StoredPayloadBytes > 0 {
-					dictStored += stats.StoredPayloadBytes
+				if statsWriter != nil {
+					framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(plan.dictID, plan.dict, frame)
+					if frameErr != nil {
+						err = frameErr
+						break
+					}
+					copy(ptrs[i:end], framePtrs)
+					framesTotal++
+					if stats.Attempted {
+						framesTried++
+					}
+					if stats.Kept {
+						framesKept++
+						if plan.probe {
+							probeKept = true
+						}
+					}
+					if stats.StoredPayloadBytes > 0 {
+						dictStored += stats.StoredPayloadBytes
+						planStoredBytes += stats.StoredPayloadBytes
+					}
+					continue
 				}
-				continue
-			}
-			if statsWriter != nil {
-				framePtrs, stats, frameErr := statsWriter.AppendFrameWithStats(plan.dictID, plan.dict, frame)
+				framePtrs, frameErr := w.AppendFrame(plan.dictID, plan.dict, frame)
 				if frameErr != nil {
 					err = frameErr
 					break
 				}
 				copy(ptrs[i:end], framePtrs)
 				framesTotal++
-				if stats.Attempted {
-					framesTried++
-				}
-				if stats.Kept {
-					framesKept++
-					if plan.probe {
-						probeKept = true
-					}
-				}
-				if stats.StoredPayloadBytes > 0 {
-					dictStored += stats.StoredPayloadBytes
-				}
-				continue
 			}
-			framePtrs, frameErr := w.AppendFrame(plan.dictID, plan.dict, frame)
-			if frameErr != nil {
-				err = frameErr
-				break
+		}
+		if err == nil {
+			if planStoredBytes <= 0 {
+				if delta := w.Size() - beforePlanSize; delta > 0 {
+					planStoredBytes = int(delta)
+				}
 			}
-			copy(ptrs[i:end], framePtrs)
-			framesTotal++
+			plan.storedBytes = planStoredBytes
+			plan.wallNs = time.Since(planStart).Nanoseconds()
 		}
 	}
 
@@ -4561,6 +4727,28 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		db.valueLogDictIncompressibleHitStreak.Store(0)
 		if db.valueLogDictIncompressibleProbeBytes > 0 {
 			db.valueLogDictIncompressibleProbeRemaining.Store(db.valueLogDictIncompressibleProbeBytes)
+		}
+	}
+	if err == nil {
+		for i := range plans {
+			plan := &plans[i]
+			rawForSelector := plan.rawBytes
+			if rawForSelector <= 0 {
+				continue
+			}
+			storedForSelector := plan.storedBytes
+			if storedForSelector <= 0 {
+				if plan.writeMode == vlogWriteOff {
+					storedForSelector = rawForSelector
+				} else {
+					storedForSelector = rawForSelector
+				}
+			}
+			codec := plan.blockCodec
+			if plan.writeMode != vlogWriteBlock {
+				codec = db.valueLogBlockCodec
+			}
+			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, storedForSelector, plan.probe, plan.wallNs)
 		}
 	}
 
@@ -4696,7 +4884,7 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 	return true
 }
 
-func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, wallStart time.Time) bool {
+func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, writeMode vlogCompressionWriteMode, wallStart time.Time) bool {
 	if l == nil || l.vlogCh == nil {
 		return false
 	}
@@ -4707,8 +4895,13 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	if !wallStart.IsZero() {
 		return false
 	}
+	// Block mode requires direct append so per-frame codec metadata and grouping
+	// are applied in the hot path.
+	if writeMode == vlogWriteBlock {
+		return false
+	}
 	// Dict path benefits from queue coalescing even for small values.
-	if dictID != 0 {
+	if writeMode == vlogWriteDict && dictID != 0 {
 		return true
 	}
 	// Always queue large values.
@@ -4883,6 +5076,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if db.needsVlogAutotuneTiming() {
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
+	selectorStart := time.Now()
 
 	var (
 		bytesWrittenTotal int64
@@ -4913,20 +5107,48 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
-	attemptCompression, probeCompression, paused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
-	if dictID != 0 && !attemptCompression {
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	selectorPayloadBytes := rawPayloadBytes
+	selectorUnitPayloadBytes := rawPayloadBytes
+	if n := len(records); n > 0 {
+		selectorUnitPayloadBytes = rawPayloadBytes / n
+	}
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	blockMode := writeMode == vlogWriteBlock
+	probeCompression := selectorProbe
+	paused := false
+	fallbackToBlock := func() {
+		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+			writeMode = vlogWriteBlock
+		}
+		blockMode = writeMode == vlogWriteBlock
+	}
+	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+	}
+
+	if dictID != 0 {
+		attemptCompression, dictProbe, dictPaused := db.valueLogDictShouldAttemptCompression(rawPayloadBytes)
+		probeCompression = probeCompression || dictProbe
+		paused = dictPaused
+		if !attemptCompression {
+			dictID = 0
+			dict = nil
+			fallbackToBlock()
+		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
+			fallbackToBlock()
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -4935,14 +5157,42 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
+			fallbackToBlock()
 		}
 	}
-	db.valueLogDictCollectSamples(records)
+	switch mode {
+	case vlogCompressionDefault, vlogCompressionDict:
+		db.valueLogDictCollectSamples(records)
+	case vlogCompressionAuto:
+		// In auto mode, skip background dict sampling while fully bypassing
+		// compression so incompressible workloads stay close to off-mode cost.
+		allowDictSampling := true
+		if l != nil && l.vlogCompressionSelector != nil {
+			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
+				if selectorUnitPayloadBytes <= 256 {
+					allowDictSampling = false
+				} else {
+					allowDictSampling = db.valueLogDictShouldCollectPaused()
+				}
+			}
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			db.valueLogDictCollectSamples(records)
+		}
+	}
 
 	k := 1
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
 		k = db.chooseValueLogDictWriteK(k, len(records), rawPayloadBytes)
+		if mode == vlogCompressionAuto && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoSize && k > 16 {
+			k = 16
+		}
+	} else if blockMode && len(records) > 1 {
+		k = db.chooseValueLogBlockWriteK(l, len(records), rawPayloadBytes, blockCodec)
 	} else if len(records) > 1 {
 		// Even when dictionary compression is disabled/paused, grouping records into
 		// frames reduces per-record overhead (CRC/header writes) on append-heavy
@@ -4968,7 +5218,16 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		// random point reads are not the dominant cost.
 		k = valuelog.MaxFrameK
 	}
-	k = db.clampValueLogDictK(k)
+	if dictID != 0 && len(dict) > 0 {
+		k = db.clampValueLogDictK(k)
+	} else {
+		if k < 1 {
+			k = 1
+		}
+		if k > valuelog.MaxFrameK {
+			k = valuelog.MaxFrameK
+		}
+	}
 
 	ioNsPerStored, encodeNsPerRaw, safetyMargin := db.valueLogKeepPolicy()
 	if probeCompression {
@@ -4998,6 +5257,28 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			releasePreparedDictFrames(preparedDictFrames)
 			putVlogPreparedFrames(preparedDictFrames)
 		}()
+	}
+
+	finalWriteMode := vlogWriteOff
+	switch {
+	case dictID != 0 && len(dict) > 0:
+		finalWriteMode = vlogWriteDict
+	case blockMode:
+		finalWriteMode = vlogWriteBlock
+	default:
+		finalWriteMode = vlogWriteOff
+	}
+	finalBlockCodec := blockCodec
+	if finalWriteMode != vlogWriteBlock {
+		finalBlockCodec = db.valueLogBlockCodec
+	}
+	ioNsPerStoredForWriter := ioNsPerStored
+	encodeNsPerRawForWriter := encodeNsPerRaw
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && finalWriteMode == vlogWriteBlock {
+		// Keep-policy bypass is required for fair auto-mode block evaluation; the
+		// selector should decide whether block stays active based on real outcomes.
+		ioNsPerStoredForWriter = 0
+		encodeNsPerRawForWriter = 0
 	}
 
 	l.vlogMu.Lock()
@@ -5040,6 +5321,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
+	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -5052,7 +5334,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	segmentStartSize := w.Size()
 
 	if policySetter != nil && !usePreparedDictFrames {
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, safetyMargin)
+		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
 	}
 
 	storedPayloadBytes := 0
@@ -5065,7 +5347,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeRawBytes := 0
 	rawBatchUsed := false
 	durableBoundary := false
-	if dictID == 0 && hasRawInto && len(records) > 1 {
+	if dictID == 0 && hasRawInto && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
 			// AppendRawFramesWritevInto never returns pointers with out-of-range
@@ -5091,6 +5373,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					l.vlogCaps = computeVlogWriterCaps(w)
 				}
 				caps = l.vlogCaps
+				db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				rawWriterInto = caps.rawInto
@@ -5130,7 +5413,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	if err == nil && !rawBatchUsed {
-		if dictID == 0 && hasRawInto && len(records) > 1 {
+		if dictID == 0 && hasRawInto && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 			ptrs = getValueLogPtrs(len(records))
 			_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
 			if batchErr != nil {
@@ -5193,6 +5476,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 						l.vlogCaps = computeVlogWriterCaps(w)
 					}
 					caps = l.vlogCaps
+					db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
 					statsWriter = caps.stats
 					statsWriterInto = caps.statsInto
 					hasStats = statsWriter != nil
@@ -5340,6 +5624,26 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			db.valueLogDictIncompressibleProbeRemaining.Store(db.valueLogDictIncompressibleProbeBytes)
 		}
 	}
+	rawForSelector := rawFrameBytes
+	if rawForSelector == 0 {
+		rawForSelector = rawPayloadBytes
+	}
+	storedForSelector := storedPayloadBytes
+	if storedForSelector <= 0 {
+		switch finalWriteMode {
+		case vlogWriteOff:
+			storedForSelector = rawForSelector
+		default:
+			if bytesWrittenTotal > 0 {
+				storedForSelector = int(bytesWrittenTotal)
+			} else {
+				storedForSelector = rawForSelector
+			}
+		}
+	}
+	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, storedForSelector, probeCompression, selectorWallNs)
+
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
 	}
@@ -5403,6 +5707,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if db.needsVlogAutotuneTiming() {
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
+	selectorStart := time.Now()
 
 	var (
 		totalBytes int64
@@ -5426,22 +5731,82 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 
-	attemptCompression, probeCompression, _ := db.valueLogDictShouldAttemptCompression(len(value))
-	if dictID != 0 && !attemptCompression {
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
+	probeCompression := selectorProbe
+	fallbackToBlock := func() {
+		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+			writeMode = vlogWriteBlock
+		}
+	}
+	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
+	}
+	if dictID != 0 {
+		attemptCompression, dictProbe, _ := db.valueLogDictShouldAttemptCompression(len(value))
+		probeCompression = probeCompression || dictProbe
+		if !attemptCompression {
+			dictID = 0
+			dict = nil
+			fallbackToBlock()
+		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
 	}
-	db.valueLogDictCollectSample(value)
+	if dictID != 0 && len(dict) == 0 {
+		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
+			dict = b
+		} else {
+			dictID = 0
+			dict = nil
+			fallbackToBlock()
+		}
+	}
+	finalWriteMode := vlogWriteOff
+	switch {
+	case dictID != 0:
+		finalWriteMode = vlogWriteDict
+	case writeMode == vlogWriteBlock:
+		finalWriteMode = vlogWriteBlock
+	default:
+		finalWriteMode = vlogWriteOff
+	}
+	finalBlockCodec := blockCodec
+	if finalWriteMode != vlogWriteBlock {
+		finalBlockCodec = db.valueLogBlockCodec
+	}
+	switch mode {
+	case vlogCompressionDefault, vlogCompressionDict:
+		db.valueLogDictCollectSample(value)
+	case vlogCompressionAuto:
+		allowDictSampling := true
+		if l != nil && l.vlogCompressionSelector != nil {
+			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
+				if len(value) <= 256 {
+					allowDictSampling = false
+				} else {
+					allowDictSampling = db.valueLogDictShouldCollectPaused()
+				}
+			}
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			db.valueLogDictCollectSample(value)
+		}
+	}
 
-	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, wallStart) {
+	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
@@ -5462,6 +5827,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				l.vlogCaps = computeVlogWriterCaps(w)
 			}
 			caps := l.vlogCaps
+			db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
 			policySetter := caps.keep
 			startSize := w.Size()
 
@@ -5478,7 +5844,31 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 			durableBoundary := false
-			ptr, err = w.Append(0, nil, rid, value)
+			if finalWriteMode == vlogWriteBlock {
+				var (
+					rec        [1]valuelog.Record
+					ptrScratch [1]page.ValuePtr
+					ptrs       []page.ValuePtr
+				)
+				rec[0] = valuelog.Record{RID: rid, Value: value}
+				switch {
+				case caps.statsInto != nil:
+					ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+				case caps.stats != nil:
+					ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
+				default:
+					ptr, err = w.Append(0, nil, rid, value)
+				}
+				if err == nil && ptr == (page.ValuePtr{}) {
+					if len(ptrs) != 1 {
+						err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+					} else {
+						ptr = ptrs[0]
+					}
+				}
+			} else {
+				ptr, err = w.Append(0, nil, rid, value)
+			}
 			if err == nil {
 				switch durability {
 				case journalDurabilityFlush:
@@ -5523,6 +5913,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			if totalBytes > 0 {
 				l.vlogLiveBytes.Add(totalBytes)
 			}
+			storedForSelector := stats.StoredPayloadBytes
+			if storedForSelector <= 0 || (finalWriteMode == vlogWriteBlock && !stats.Attempted && storedForSelector == len(value) && totalBytes > 0) {
+				if totalBytes > 0 {
+					storedForSelector = int(totalBytes)
+				} else {
+					storedForSelector = len(value)
+				}
+			}
+			selectorWallNs := time.Since(selectorStart).Nanoseconds()
+			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
 
@@ -5537,6 +5937,8 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			rid:              rid,
 			value:            value,
 			dictID:           dictID,
+			writeMode:        finalWriteMode,
+			blockCodec:       finalBlockCodec,
 			probeCompression: probeCompression,
 			durability:       durability,
 			ack:              ack,
@@ -5554,15 +5956,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		err := ack.err
 		vlogAckPool.Put(ack)
 		return ptr, retainPath, err
-	}
-
-	if dictID != 0 && len(dict) == 0 {
-		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
-			dict = b
-		} else {
-			dictID = 0
-			dict = nil
-		}
 	}
 
 	l.vlogMu.Lock()
@@ -5585,6 +5978,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
+	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -5603,7 +5997,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
-	if dictID == 0 {
+	if finalWriteMode == vlogWriteBlock {
+		var ptrScratch [1]page.ValuePtr
+		var rec [1]valuelog.Record
+		rec[0] = valuelog.Record{RID: rid, Value: value}
+		var ptrs []page.ValuePtr
+		var frameErr error
+		if statsWriterInto != nil {
+			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+		} else if statsWriter != nil {
+			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
+		} else {
+			ptr, err = w.Append(0, nil, rid, value)
+		}
+		if frameErr != nil {
+			err = frameErr
+		} else if err == nil && ptr == (page.ValuePtr{}) {
+			if len(ptrs) != 1 {
+				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			} else {
+				ptr = ptrs[0]
+			}
+		}
+	} else if dictID == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
 	} else if len(dict) == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
@@ -5686,6 +6102,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			db.valueLogDictIncompressibleProbeRemaining.Store(db.valueLogDictIncompressibleProbeBytes)
 		}
 	}
+	storedForSelector := stats.StoredPayloadBytes
+	if storedForSelector <= 0 || (finalWriteMode == vlogWriteBlock && !stats.Attempted && storedForSelector == len(value) && totalBytes > 0) {
+		if totalBytes > 0 {
+			storedForSelector = int(totalBytes)
+		} else {
+			storedForSelector = len(value)
+		}
+	}
+	selectorWallNs := time.Since(selectorStart).Nanoseconds()
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
@@ -7578,6 +8004,31 @@ func (db *DB) cleanupLaneWALWriters(l *lane) {
 	l.vlogMu.Unlock()
 }
 
+func (db *DB) defaultVlogWriteMode() vlogCompressionWriteMode {
+	if db == nil {
+		return vlogWriteOff
+	}
+	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
+	case vlogCompressionBlock:
+		return vlogWriteBlock
+	case vlogCompressionDict:
+		return vlogWriteDict
+	default:
+		return vlogWriteOff
+	}
+}
+
+func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, codec valuelog.BlockCodec) {
+	if db == nil || w == nil {
+		return
+	}
+	setter, ok := any(w).(blockCompressionSetter)
+	if !ok {
+		return
+	}
+	setter.SetBlockCompression(codec, mode == vlogWriteBlock)
+}
+
 func (db *DB) rotateWALLocked(l *lane) error {
 	if db.disableJournal {
 		return nil
@@ -7652,6 +8103,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+		db.setVlogWriterMode(l.vlog, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		if setter, ok := any(l.vlog).(rawWritevStrategySetter); ok {
 			setter.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		}
@@ -7673,6 +8125,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+		db.setVlogWriterMode(w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		w.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		l.vlog = w
 		l.vlogLiveBytes.Store(0)
@@ -9481,6 +9934,108 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)
 	stats["treedb.cache.vlog_dict.cached_dict_bytes"] = fmt.Sprintf("%d", len(db.valueLogDictBytes))
 	db.valueLogDictBytesMu.Unlock()
+	var blockKSnap vlogBlockKSnapshot
+	var blockRatioWeighted [vlogBlockCodecCount]float64
+	var blockRatioSamples [vlogBlockCodecCount]uint64
+	for i := range db.lanes {
+		kSnap := snapshotLaneVlogBlockK(&db.lanes[i])
+		rSnap := snapshotLaneVlogBlockRatio(&db.lanes[i])
+		for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+			blockKSnap.Count[codecIdx] += kSnap.Count[codecIdx]
+			blockKSnap.Sum[codecIdx] += kSnap.Sum[codecIdx]
+			if kSnap.Max[codecIdx] > blockKSnap.Max[codecIdx] {
+				blockKSnap.Max[codecIdx] = kSnap.Max[codecIdx]
+			}
+			for bucket := 0; bucket < vlogBlockKBucketCount; bucket++ {
+				blockKSnap.Buckets[codecIdx][bucket] += kSnap.Buckets[codecIdx][bucket]
+			}
+			samples := rSnap.Samples[codecIdx]
+			if samples == 0 {
+				continue
+			}
+			blockRatioSamples[codecIdx] += samples
+			blockRatioWeighted[codecIdx] += rSnap.Ratio[codecIdx] * float64(samples)
+		}
+	}
+	for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+		suffix := vlogBlockCodecSuffix(codecIdx)
+		count := blockKSnap.Count[codecIdx]
+		sum := blockKSnap.Sum[codecIdx]
+		stats["treedb.cache.vlog_block.k.count."+suffix] = fmt.Sprintf("%d", count)
+		stats["treedb.cache.vlog_block.k.max."+suffix] = fmt.Sprintf("%d", blockKSnap.Max[codecIdx])
+		if count > 0 {
+			stats["treedb.cache.vlog_block.k.avg."+suffix] = fmt.Sprintf("%.3f", float64(sum)/float64(count))
+		}
+		for bucket := 0; bucket < vlogBlockKBucketCount; bucket++ {
+			key := fmt.Sprintf("treedb.cache.vlog_block.k.bucket.%s.le_%d", suffix, vlogBlockKBucketUpperBounds[bucket])
+			stats[key] = fmt.Sprintf("%d", blockKSnap.Buckets[codecIdx][bucket])
+		}
+		if blockRatioSamples[codecIdx] > 0 {
+			ratio := blockRatioWeighted[codecIdx] / float64(blockRatioSamples[codecIdx])
+			stats["treedb.cache.vlog_block.ratio."+suffix] = fmt.Sprintf("%.6f", ratio)
+		}
+		stats["treedb.cache.vlog_block.ratio.samples."+suffix] = fmt.Sprintf("%d", blockRatioSamples[codecIdx])
+	}
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
+		var autoSnap vlogCompressionSelectorStats
+		for i := range db.lanes {
+			selector := db.lanes[i].vlogCompressionSelector
+			if selector == nil {
+				continue
+			}
+			snap := selector.snapshot()
+			for c := 0; c < vlogAutoCandidateCount; c++ {
+				autoSnap.bytesByCandidate[c] += snap.bytesByCandidate[c]
+				autoSnap.framesByCandidate[c] += snap.framesByCandidate[c]
+			}
+			for from := 0; from < vlogAutoCandidateCount; from++ {
+				for to := 0; to < vlogAutoCandidateCount; to++ {
+					autoSnap.switches[from][to] += snap.switches[from][to]
+				}
+			}
+			autoSnap.probeAttempts += snap.probeAttempts
+			autoSnap.probeSuccesses += snap.probeSuccesses
+			autoSnap.holdEnters += snap.holdEnters
+			autoSnap.holdExits += snap.holdExits
+			autoSnap.bypassBytes += snap.bypassBytes
+		}
+		var totalAutoFrames uint64
+		for c := 0; c < vlogAutoCandidateCount; c++ {
+			name := vlogAutoCandidate(c).suffix()
+			bytes := autoSnap.bytesByCandidate[c]
+			frames := autoSnap.framesByCandidate[c]
+			totalAutoFrames += frames
+			stats["treedb.cache.vlog_auto.bytes."+name] = fmt.Sprintf("%d", bytes)
+			stats["treedb.cache.vlog_auto.frames."+name] = fmt.Sprintf("%d", frames)
+		}
+		if totalAutoFrames > 0 {
+			for c := 0; c < vlogAutoCandidateCount; c++ {
+				name := vlogAutoCandidate(c).suffix()
+				stats["treedb.cache.vlog_auto.frames_frac."+name] = fmt.Sprintf("%.6f", float64(autoSnap.framesByCandidate[c])/float64(totalAutoFrames))
+			}
+		}
+		stats["treedb.cache.vlog_auto.probe_attempts"] = fmt.Sprintf("%d", autoSnap.probeAttempts)
+		stats["treedb.cache.vlog_auto.probe_successes"] = fmt.Sprintf("%d", autoSnap.probeSuccesses)
+		if autoSnap.probeAttempts > 0 {
+			stats["treedb.cache.vlog_auto.probe_success_frac"] = fmt.Sprintf("%.6f", float64(autoSnap.probeSuccesses)/float64(autoSnap.probeAttempts))
+		}
+		stats["treedb.cache.vlog_auto.hold_enters"] = fmt.Sprintf("%d", autoSnap.holdEnters)
+		stats["treedb.cache.vlog_auto.hold_exits"] = fmt.Sprintf("%d", autoSnap.holdExits)
+		stats["treedb.cache.vlog_auto.bypass_bytes"] = fmt.Sprintf("%d", autoSnap.bypassBytes)
+		for from := 0; from < vlogAutoCandidateCount; from++ {
+			for to := 0; to < vlogAutoCandidateCount; to++ {
+				if from == to {
+					continue
+				}
+				n := autoSnap.switches[from][to]
+				if n == 0 {
+					continue
+				}
+				key := fmt.Sprintf("treedb.cache.vlog_auto.switches.%s_to_%s", vlogAutoCandidate(from).suffix(), vlogAutoCandidate(to).suffix())
+				stats[key] = fmt.Sprintf("%d", n)
+			}
+		}
+	}
 	db.valueLogDictTrainerMu.Lock()
 	tr := db.valueLogDictTrainer
 	db.valueLogDictTrainerMu.Unlock()

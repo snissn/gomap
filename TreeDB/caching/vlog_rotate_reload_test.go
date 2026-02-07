@@ -87,8 +87,9 @@ func TestAppendValueLog_ReloadWriterAfterRotation(t *testing.T) {
 	t.Cleanup(func() { vlogAutotuneMetricsEnabled.Store(prevMetrics) })
 
 	db := &DB{
-		dir:     t.TempDir(),
-		closeCh: make(chan struct{}),
+		dir:                     t.TempDir(),
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
 	}
 	db.valueLogMaxSegmentBytes = 1024
 	db.valueLogAutotuneOptions.Mode = valuelog.AutotuneOff

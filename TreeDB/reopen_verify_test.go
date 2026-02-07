@@ -248,6 +248,55 @@ func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_WALOn_Checkpoint_CompressionModes(t *testing.T) {
+	cases := []struct {
+		name        string
+		compression treedb.ValueLogCompressionMode
+		codec       treedb.ValueLogBlockCodec
+	}{
+		{name: "off", compression: treedb.ValueLogCompressionOff},
+		{name: "block_snappy", compression: treedb.ValueLogCompressionBlock, codec: treedb.ValueLogBlockSnappy},
+		{name: "block_lz4", compression: treedb.ValueLogCompressionBlock, codec: treedb.ValueLogBlockLZ4},
+		{name: "dict", compression: treedb.ValueLogCompressionDict},
+		{name: "auto", compression: treedb.ValueLogCompressionAuto},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			keys, values, hash := buildVerifyDataset(1500)
+
+			opts := treedb.Options{
+				Dir: dir,
+				ValueLog: treedb.ValueLogOptions{
+					PointerThreshold: 1,
+					Compression:      tc.compression,
+					BlockCodec:       tc.codec,
+				},
+			}
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			writeDataset(t, db, keys, values, false)
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint: %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			reopen, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			defer reopen.Close()
+
+			checkGets(t, reopen, keys, values, false)
+			scanAndCheck(t, reopen, values, false, hash)
+		})
+	}
+}
+
 func TestReopenVerify_WALOff_NoJournal(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, _ := buildVerifyDataset(2000)

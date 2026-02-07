@@ -116,8 +116,15 @@ func TestValueLogDictCollectBudget_ScalesForLargeBatchSmallValues(t *testing.T) 
 	if budget <= valueLogDictCollectMinPerBatchRecords {
 		t.Fatalf("expected scaled budget > %d for large small-value batch, got=%d", valueLogDictCollectMinPerBatchRecords, budget)
 	}
-	if budget != valueLogDictCollectMaxPerBatchRecords {
-		t.Fatalf("expected budget to clamp at max=%d, got=%d", valueLogDictCollectMaxPerBatchRecords, budget)
+	expected := compression.DefaultTrainBootstrapBytes / 128
+	if expected < valueLogDictCollectMinPerBatchRecords {
+		expected = valueLogDictCollectMinPerBatchRecords
+	}
+	if expected > valueLogDictCollectMaxPerBatchRecords {
+		expected = valueLogDictCollectMaxPerBatchRecords
+	}
+	if budget != expected {
+		t.Fatalf("expected budget=%d from bootstrap bytes, got=%d", expected, budget)
 	}
 }
 

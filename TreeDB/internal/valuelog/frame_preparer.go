@@ -14,9 +14,10 @@ import (
 //
 // It is not safe for concurrent use.
 type FramePreparer struct {
-	rawScratch []byte
-	encScratch []byte
-	encLimiter limitedSliceWriter
+	rawScratch   []byte
+	encScratch   []byte
+	blockScratch []byte
+	encLimiter   limitedSliceWriter
 
 	skipDictID uint64
 	codecs     *dictCodecEntry
@@ -25,6 +26,8 @@ type FramePreparer struct {
 
 	dictFrameEncodeLevel   zstd.EncoderLevel
 	dictFrameEnableEntropy bool
+	blockCodec             BlockCodec
+	blockCompression       bool
 
 	clock              Clock
 	encodeCostModel    EncodeCostModel
@@ -39,6 +42,7 @@ type FramePreparer struct {
 func NewFramePreparer() *FramePreparer {
 	return &FramePreparer{
 		dictFrameEncodeLevel: zstd.SpeedFastest,
+		blockCodec:           BlockCodecSnappy,
 		clock:                RealClock{},
 		keepSafetyMargin:     DefaultKeepSafetyMargin,
 	}
@@ -54,6 +58,14 @@ func (p *FramePreparer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enab
 	p.skipDictID = 0
 	p.noBenefit = 0
 	p.skipRemain = 0
+}
+
+func (p *FramePreparer) SetBlockCompression(codec BlockCodec, enabled bool) {
+	if p == nil {
+		return
+	}
+	p.blockCodec = normalizeBlockCodec(codec)
+	p.blockCompression = enabled
 }
 
 func (p *FramePreparer) SetClock(clock Clock) {
@@ -212,6 +224,10 @@ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte,
 		return nil, FrameStats{}, ErrRecordTooLarge
 	}
 
+	if dictID == 0 && p.blockCompression {
+		return p.prepareBlockFrameBody(dst, records, &offsets, rawPayloadBytes)
+	}
+
 	if dictID != 0 {
 		if p.skipDictID != dictID {
 			p.skipDictID = dictID
@@ -283,6 +299,72 @@ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte,
 	}
 
 	return p.buildRawFrameBody(dst, 0, records, &offsets, rawPayloadBytes, false, 0)
+}
+
+func (p *FramePreparer) prepareBlockFrameBody(dst []byte, records []Record, offsets *[MaxFrameK + 1]uint32, rawPayloadBytes int) ([]byte, FrameStats, error) {
+	if p == nil {
+		return nil, FrameStats{}, errors.New("valuelog: nil frame preparer")
+	}
+	// Skip/backoff hints are shared with dict mode; reset when crossing into
+	// block mode so stale dict hints do not suppress block probes.
+	if p.skipDictID != 0 {
+		p.skipDictID = 0
+		p.noBenefit = 0
+		p.skipRemain = 0
+	}
+	if rawPayloadBytes == 0 || p.shouldSkipCompression(rawPayloadBytes) {
+		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, false, 0)
+	}
+	if p.skipRemain > 0 {
+		p.skipRemain--
+		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, false, 0)
+	}
+	if cap(p.rawScratch) < rawPayloadBytes {
+		p.rawScratch = make([]byte, rawPayloadBytes)
+	}
+	payload := p.rawScratch[:rawPayloadBytes]
+	off := 0
+	for i := range records {
+		off += copy(payload[off:], records[i].Value)
+	}
+	encodeStart := p.sampleEncodeStart()
+	encoded, encodeErr := encodeBlockPayload(p.blockCodec, payload, p.blockScratch[:0])
+	encodeNs := p.sampleEncodeEnd(encodeStart, rawPayloadBytes, len(records))
+	if encoded != nil {
+		p.blockScratch = encoded[:0]
+	}
+	keepCompressed := false
+	if encodeErr == nil {
+		keepCompressed = p.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+	}
+	if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
+		if p.noBenefit < 0xff {
+			p.noBenefit++
+		}
+		p.skipRemain = dictSkipFramesAggressive(p.noBenefit, rawPayloadBytes, len(encoded), encodeNs, p.keepIoNsPerStoredByte, p.keepSafetyMargin)
+		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, true, encodeNs)
+	}
+	if !keepCompressed {
+		if p.noBenefit < 0xff {
+			p.noBenefit++
+		}
+		p.skipRemain = dictSkipFramesAggressive(p.noBenefit, rawPayloadBytes, len(encoded), encodeNs, p.keepIoNsPerStoredByte, p.keepSafetyMargin)
+		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, true, encodeNs)
+	}
+	p.noBenefit = 0
+	p.skipRemain = 0
+	body, err := p.buildBlockCompressedFrameBody(dst, records, offsets, encoded)
+	if err != nil {
+		return nil, FrameStats{}, err
+	}
+	return body, FrameStats{
+		Records:            len(records),
+		RawPayloadBytes:    rawPayloadBytes,
+		StoredPayloadBytes: len(encoded),
+		Attempted:          true,
+		Kept:               true,
+		EncodeNs:           encodeNs,
+	}, nil
 }
 
 func (p *FramePreparer) encodePayload(enc *zstd.Encoder, records []Record, rawPayloadBytes int) ([]byte, error) {
@@ -409,6 +491,41 @@ func (p *FramePreparer) buildCompressedFrameBody(dst []byte, dictID uint64, reco
 	body[2] = byte(k)
 	body[3] = 0
 	binary.LittleEndian.PutUint64(body[4:12], dictID)
+	off := FrameHeaderSize
+	for i := 0; i < k; i++ {
+		binary.LittleEndian.PutUint64(body[off:off+8], records[i].RID)
+		off += 8
+	}
+	for i := 0; i < k+1; i++ {
+		binary.LittleEndian.PutUint32(body[off:off+4], offsets[i])
+		off += 4
+	}
+	copy(body[off:], encoded)
+	return body, nil
+}
+
+func (p *FramePreparer) buildBlockCompressedFrameBody(dst []byte, records []Record, offsets *[MaxFrameK + 1]uint32, encoded []byte) ([]byte, error) {
+	k := len(records)
+	if k <= 0 || k > MaxFrameK {
+		return nil, ErrRecordTooLarge
+	}
+	bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
+		return nil, ErrRecordTooLarge
+	}
+	if bodyLen > int(^uint32(0)) {
+		return nil, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint32(bodyLen)) {
+		return nil, ErrRecordTooLarge
+	}
+
+	body := ensureFrameBody(dst, bodyLen)
+	body[0] = FrameVersion
+	body[1] = FrameFlagCompressed
+	body[2] = byte(k)
+	body[3] = byte(p.blockCodec)
+	binary.LittleEndian.PutUint64(body[4:12], 0)
 	off := FrameHeaderSize
 	for i := 0; i < k; i++ {
 		binary.LittleEndian.PutUint64(body[off:off+8], records[i].RID)

@@ -27,6 +27,30 @@ const (
 
 type ValueLogOptions = db.ValueLogOptions
 
+type ValueLogCompressionMode = db.ValueLogCompressionMode
+
+const (
+	ValueLogCompressionOff   = db.ValueLogCompressionOff
+	ValueLogCompressionBlock = db.ValueLogCompressionBlock
+	ValueLogCompressionDict  = db.ValueLogCompressionDict
+	ValueLogCompressionAuto  = db.ValueLogCompressionAuto
+)
+
+type ValueLogBlockCodec = db.ValueLogBlockCodec
+
+const (
+	ValueLogBlockSnappy = db.ValueLogBlockSnappy
+	ValueLogBlockLZ4    = db.ValueLogBlockLZ4
+)
+
+type ValueLogAutoPolicy = db.ValueLogAutoPolicy
+
+const (
+	ValueLogAutoThroughput = db.ValueLogAutoThroughput
+	ValueLogAutoBalanced   = db.ValueLogAutoBalanced
+	ValueLogAutoSize       = db.ValueLogAutoSize
+)
+
 // Value-log compression autotune types (re-exported from internal packages so
 // callers can configure Options without importing internal/).
 

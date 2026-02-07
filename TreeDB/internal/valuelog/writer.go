@@ -45,10 +45,13 @@ type Writer struct {
 	rawScratch             []byte
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
+	blockScratch           []byte
 	skipDictID             uint64
 	codecs                 *dictCodecEntry
 	dictFrameEncodeLevel   zstd.EncoderLevel
 	dictFrameEnableEntropy bool
+	blockCodec             BlockCodec
+	blockCompression       bool
 	noBenefit              uint8
 	skipRemain             uint16
 	syncFn                 func(*os.File) error
@@ -288,6 +291,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
+		blockCodec:            BlockCodecSnappy,
 		syncFn:                func(file *os.File) error { return file.Sync() },
 		clock:                 RealClock{},
 		keepSafetyMargin:      DefaultKeepSafetyMargin,
@@ -304,6 +308,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
+		blockCodec:            BlockCodecSnappy,
 		clock:                 RealClock{},
 		keepSafetyMargin:      DefaultKeepSafetyMargin,
 	}
@@ -348,6 +353,16 @@ func (w *Writer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntro
 	w.skipDictID = 0
 	w.noBenefit = 0
 	w.skipRemain = 0
+}
+
+// SetBlockCompression configures grouped frame block compression for dictID=0
+// append paths.
+func (w *Writer) SetBlockCompression(codec BlockCodec, enabled bool) {
+	if w == nil {
+		return
+	}
+	w.blockCodec = normalizeBlockCodec(codec)
+	w.blockCompression = enabled
 }
 
 func (w *Writer) SetEncodeSampleStride(stride uint64) {
@@ -601,6 +616,21 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 	}
 	if rid == 0 {
 		return page.ValuePtr{}, errors.New("valuelog: missing rid")
+	}
+	if dictID == 0 && w.blockCompression {
+		var (
+			rec [1]Record
+			dst [1]page.ValuePtr
+		)
+		rec[0] = Record{RID: rid, Value: value}
+		ptrs, _, err := w.AppendFrameWithStatsInto(0, nil, rec[:], dst[:])
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if len(ptrs) != 1 {
+			return page.ValuePtr{}, ErrCorrupt
+		}
+		return ptrs[0], nil
 	}
 	// Fast path: single record, no dict/compression.
 	// Avoids the per-call allocations from AppendFrame/AppendFrameWithStats.
@@ -860,7 +890,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		return nil, FrameStats{}, errors.New("valuelog: dst too small")
 	}
 	dst = dst[:len(records)]
-	if len(records) == 1 && dictID == 0 {
+	if len(records) == 1 && dictID == 0 && !w.blockCompression {
 		rec := records[0]
 		if rec.RID == 0 {
 			return nil, FrameStats{}, errors.New("valuelog: missing rid")
@@ -925,6 +955,10 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	rawPayloadBytes := 0
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
+	}
+
+	if dictID == 0 && w.blockCompression {
+		return w.appendBlockFrameWithStats(records, rawPayloadBytes, dst)
 	}
 
 	// Fast path: grouped frame with no dict/compression.
@@ -1562,6 +1596,179 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		StoredPayloadBytes: storedPayloadBytes,
 		Attempted:          dictID != 0 && len(dict) > 0 && rawPayloadBytes > 0,
 		Kept:               header.Flags&FrameFlagCompressed != 0,
+	}, nil
+}
+
+func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w == nil {
+		return nil, FrameStats{}, errors.New("valuelog: nil writer")
+	}
+	// Skip/backoff hints are shared with dict mode; reset when crossing into
+	// block mode so stale dict hints do not suppress block probes.
+	if w.skipDictID != 0 {
+		w.skipDictID = 0
+		w.noBenefit = 0
+		w.skipRemain = 0
+	}
+	k := len(records)
+	if k <= 0 {
+		return dst[:0], FrameStats{}, nil
+	}
+	if k > MaxFrameK {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if len(dst) < k {
+		return nil, FrameStats{}, errors.New("valuelog: dst too small")
+	}
+	dst = dst[:k]
+	if rawPayloadBytes < 0 || rawPayloadBytes > int(^uint32(0)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if limits.MaxRecordSize > 0 && int64(rawPayloadBytes) > limits.MaxRecordSize {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+
+	var offsets [MaxFrameK + 1]uint32
+	offsets[0] = 0
+	payloadOff := 0
+	for i := 0; i < k; i++ {
+		rid := records[i].RID
+		if rid == 0 {
+			return nil, FrameStats{}, errors.New("valuelog: missing rid")
+		}
+		payloadOff += len(records[i].Value)
+		if payloadOff < 0 || payloadOff > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		offsets[i+1] = uint32(payloadOff)
+	}
+
+	writeRaw := func(attempted bool, encodeNs int64) ([]page.ValuePtr, FrameStats, error) {
+		ptrs, stats, err := w.appendRawFrameWithDictID(0, records, &offsets, rawPayloadBytes, dst)
+		if err != nil {
+			return nil, FrameStats{}, err
+		}
+		if attempted {
+			stats.Attempted = true
+			stats.EncodeNs = encodeNs
+		}
+		return ptrs, stats, nil
+	}
+
+	if rawPayloadBytes == 0 {
+		return writeRaw(false, 0)
+	}
+	if w.skipRemain > 0 {
+		w.skipRemain--
+		return writeRaw(false, 0)
+	}
+	if w.shouldSkipCompression(rawPayloadBytes) {
+		return writeRaw(false, 0)
+	}
+
+	if cap(w.rawScratch) < rawPayloadBytes {
+		w.rawScratch = make([]byte, rawPayloadBytes)
+	}
+	payload := w.rawScratch[:rawPayloadBytes]
+	off := 0
+	for i := 0; i < k; i++ {
+		off += copy(payload[off:], records[i].Value)
+	}
+
+	encodeStart := w.sampleEncodeStart()
+	encoded, encodeErr := encodeBlockPayload(w.blockCodec, payload, w.blockScratch[:0])
+	encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
+	if encoded != nil {
+		w.blockScratch = encoded[:0]
+	}
+	keepCompressed := false
+	if encodeErr == nil {
+		keepCompressed = w.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
+	}
+	if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
+		if w.noBenefit < 0xff {
+			w.noBenefit++
+		}
+		w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
+		return writeRaw(true, encodeNs)
+	}
+	if !keepCompressed {
+		if w.noBenefit < 0xff {
+			w.noBenefit++
+		}
+		w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
+		return writeRaw(true, encodeNs)
+	}
+	w.noBenefit = 0
+	w.skipRemain = 0
+
+	bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
+	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if bodyLen > int(^uint32(0)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	if recordSizeExceedsMax(uint32(bodyLen)) {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+
+	recordLen := HeaderSize + bodyLen
+	start := w.size
+	if cap(w.scratch) < recordLen {
+		w.scratch = make([]byte, recordLen)
+	}
+	buf := w.scratch[:recordLen]
+	buf[4] = Version
+	buf[5] = recordFlagGrouped
+	buf[6] = 0
+	buf[7] = 0
+	binary.LittleEndian.PutUint64(buf[8:16], 0)
+	binary.LittleEndian.PutUint32(buf[16:20], uint32(bodyLen))
+
+	frameOff := HeaderSize
+	buf[frameOff] = FrameVersion
+	buf[frameOff+1] = FrameFlagCompressed
+	buf[frameOff+2] = byte(k)
+	buf[frameOff+3] = byte(w.blockCodec)
+	binary.LittleEndian.PutUint64(buf[frameOff+4:frameOff+12], 0)
+	frameOff += FrameHeaderSize
+	for i := 0; i < k; i++ {
+		binary.LittleEndian.PutUint64(buf[frameOff:frameOff+8], records[i].RID)
+		frameOff += 8
+	}
+	for i := 0; i < k+1; i++ {
+		binary.LittleEndian.PutUint32(buf[frameOff:frameOff+4], offsets[i])
+		frameOff += 4
+	}
+	copy(buf[frameOff:], encoded)
+
+	sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+	binary.LittleEndian.PutUint32(buf[0:4], sum)
+	if err := w.writeBytes(buf); err != nil {
+		return nil, FrameStats{}, err
+	}
+	w.size += int64(recordLen)
+
+	recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+	for i := range records {
+		dst[i] = page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+			FileID: w.fileID,
+		}
+	}
+
+	return dst, FrameStats{
+		Records:            k,
+		RawPayloadBytes:    rawPayloadBytes,
+		StoredPayloadBytes: len(encoded),
+		Attempted:          true,
+		Kept:               true,
+		EncodeNs:           encodeNs,
 	}, nil
 }
 
