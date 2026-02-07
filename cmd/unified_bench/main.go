@@ -37,7 +37,7 @@ var (
 	numKeys            = flag.Int("keys", 100000, "Number of keys")
 	keyShapeArg        = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random)")
+	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
@@ -611,6 +611,16 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.flush_bps_ewma",
 		"treedb.cache.wal_bytes_estimate",
 		"treedb.cache.vlog_retained_bytes_estimate",
+		"treedb.cache.vlog_auto.frames.off",
+		"treedb.cache.vlog_auto.frames.dict",
+		"treedb.cache.vlog_auto.frames.block_snappy",
+		"treedb.cache.vlog_auto.frames.block_lz4",
+		"treedb.cache.vlog_auto.probe_attempts",
+		"treedb.cache.vlog_auto.probe_successes",
+		"treedb.cache.vlog_auto.hold_enters",
+		"treedb.cache.vlog_auto.hold_exits",
+		"treedb.cache.vlog_auto.bypass_bytes",
+		"treedb.cache.vlog_dict.current_k",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
@@ -2703,10 +2713,10 @@ func renderMarkdownSweep(runs []BenchRun) string {
 		sb.WriteString("\n")
 	}
 
-	// Best-effort disk usage reporting (end-of-run sizes) for TreeDB only.
+	// Best-effort disk usage reporting (end-of-run sizes) for all DBs.
 	anyDisk := false
 	for _, run := range runs {
-		if len(run.TreeDBDiskUsage) > 0 {
+		if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 			anyDisk = true
 			break
 		}
@@ -2714,12 +2724,28 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	if anyDisk {
 		sb.WriteString("## Disk Usage (End of Run)\n\n")
 		for _, run := range runs {
-			if len(run.TreeDBDiskUsage) == 0 {
+			if len(run.TreeDBDiskUsage) == 0 && len(run.DiskUsage) == 0 {
 				continue
 			}
 			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
 			sb.WriteString("```text\n")
-			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			if len(run.TreeDBDiskUsage) > 0 {
+				sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+				if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
+					sb.WriteByte('\n')
+					sb.WriteString("Other DBs:\n")
+					for _, line := range strings.Split(strings.TrimSpace(other), "\n") {
+						if strings.TrimSpace(line) == "" {
+							continue
+						}
+						sb.WriteString("  ")
+						sb.WriteString(line)
+						sb.WriteByte('\n')
+					}
+				}
+			} else {
+				sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
+			}
 			sb.WriteString("```\n\n")
 		}
 	}

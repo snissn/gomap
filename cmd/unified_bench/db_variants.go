@@ -30,6 +30,64 @@ func parseBenchVariantMode(flagName, s string) (benchVariantMode, error) {
 	}
 }
 
+type treeDBVlogCompressionVariant uint8
+
+const (
+	treeDBVlogCompressionVariantDefault treeDBVlogCompressionVariant = iota
+	treeDBVlogCompressionVariantOff
+	treeDBVlogCompressionVariantDict
+	treeDBVlogCompressionVariantBlockSnappy
+	treeDBVlogCompressionVariantBlockLZ4
+	treeDBVlogCompressionVariantAuto
+	treeDBVlogCompressionVariantAll
+)
+
+func parseTreeDBVlogCompressionVariant(flagName, s string) (treeDBVlogCompressionVariant, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "unset", "engine":
+		return treeDBVlogCompressionVariantDefault, nil
+	case "off":
+		return treeDBVlogCompressionVariantOff, nil
+	case "dict":
+		return treeDBVlogCompressionVariantDict, nil
+	case "block_snappy", "block-snappy", "snappy":
+		return treeDBVlogCompressionVariantBlockSnappy, nil
+	case "block_lz4", "block-lz4", "lz4":
+		return treeDBVlogCompressionVariantBlockLZ4, nil
+	case "auto":
+		return treeDBVlogCompressionVariantAuto, nil
+	case "all", "both", "matrix":
+		return treeDBVlogCompressionVariantAll, nil
+	default:
+		return treeDBVlogCompressionVariantDefault, fmt.Errorf("unsupported -%s=%q (expected default|off|dict|block_snappy|block_lz4|auto|all)", flagName, s)
+	}
+}
+
+func treeDBVlogCompressionVariantNames(v treeDBVlogCompressionVariant) []string {
+	switch v {
+	case treeDBVlogCompressionVariantOff:
+		return []string{"treedb_vlog_off"}
+	case treeDBVlogCompressionVariantDict:
+		return []string{"treedb_vlog_dict"}
+	case treeDBVlogCompressionVariantBlockSnappy:
+		return []string{"treedb_vlog_block_snappy"}
+	case treeDBVlogCompressionVariantBlockLZ4:
+		return []string{"treedb_vlog_block_lz4"}
+	case treeDBVlogCompressionVariantAuto:
+		return []string{"treedb_vlog_auto"}
+	case treeDBVlogCompressionVariantAll:
+		return []string{
+			"treedb_vlog_off",
+			"treedb_vlog_dict",
+			"treedb_vlog_block_snappy",
+			"treedb_vlog_block_lz4",
+			"treedb_vlog_auto",
+		}
+	default:
+		return nil
+	}
+}
+
 func parseTreeDBVlogDictFrameEncodeLevels(flagName, s string) (engine bool, levels []string, err error) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
@@ -127,6 +185,10 @@ func treeDBVlogDictOnVariantNames() ([]string, error) {
 }
 
 func applyCompressionVariants(dbNames []string, excludeArg string) ([]string, error) {
+	treedbCompressionVariantMode, err := parseTreeDBVlogCompressionVariant("treedb-vlog-compression-variant", *treedbVlogCompressionVariant)
+	if err != nil {
+		return nil, err
+	}
 	treedbMode, err := parseBenchVariantMode("treedb-vlog-dict", *treedbVlogDictMode)
 	if err != nil {
 		return nil, err
@@ -140,6 +202,10 @@ func applyCompressionVariants(dbNames []string, excludeArg string) ([]string, er
 	for _, name := range dbNames {
 		switch name {
 		case "treedb":
+			if treedbCompressionVariantMode != treeDBVlogCompressionVariantDefault {
+				out = append(out, treeDBVlogCompressionVariantNames(treedbCompressionVariantMode)...)
+				continue
+			}
 			onVariants, err := treeDBVlogDictOnVariantNames()
 			if err != nil {
 				return nil, err

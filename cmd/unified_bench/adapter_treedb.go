@@ -79,6 +79,7 @@ var (
 	treedbVlogDictFrameEncodeLevel        = flag.String("treedb-vlog-dict-frame-encode-level", "engine", "TreeDB: zstd encoder level for dict-compressed value-log frames (engine|fastest|default|better|best|all|<int>)")
 	treedbVlogDictFrameEntropyMode        = flag.String("treedb-vlog-dict-frame-entropy", "engine", "TreeDB: dict-frame entropy mode (engine|on|off|both). Controls WithNoEntropyCompression.")
 	treedbVlogDictMode                    = flag.String("treedb-vlog-dict", "default", "TreeDB: value-log dict compression mode for unified_bench (default|on|off|both). Overrides dict/compression settings for TreeDB benchmarks.")
+	treedbVlogCompressionVariant          = flag.String("treedb-vlog-compression-variant", "default", "TreeDB: value-log compression variant expansion for unified_bench (default|off|dict|block_snappy|block_lz4|auto|all). Overrides -treedb-vlog-dict when set.")
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
@@ -94,6 +95,11 @@ var (
 func init() {
 	RegisterDB("treedb", NewTreeDB)
 	RegisterAlias("treedbcached", "treedb")
+	RegisterHiddenDB("treedb_vlog_off", NewTreeDBVlogOff)
+	RegisterHiddenDB("treedb_vlog_dict", NewTreeDBVlogDict)
+	RegisterHiddenDB("treedb_vlog_block_snappy", NewTreeDBVlogBlockSnappy)
+	RegisterHiddenDB("treedb_vlog_block_lz4", NewTreeDBVlogBlockLZ4)
+	RegisterHiddenDB("treedb_vlog_auto", NewTreeDBVlogAuto)
 	RegisterHiddenDB("treedb_vlog_dict_off", NewTreeDBVlogDictOff)
 	RegisterHiddenDB("treedb_vlog_dict_on", NewTreeDBVlogDictOn)
 	RegisterHiddenDB("treedb_vlog_dict_on_entropy", func(dir string) (kvstore.DB, error) {
@@ -645,6 +651,70 @@ func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	return treedbadapter.WrapNamed(db, "TreeDB (vlog_dict=off)"), nil
+}
+
+func NewTreeDBVlogOff(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionOff
+	setOptionalVlogAutotuneMode(&opts, 1)
+	setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog=off)"), nil
+}
+
+func NewTreeDBVlogDict(dir string) (kvstore.DB, error) {
+	return newTreeDBVlogDictOnVariant(dir, treedb.ZSTDLevelFastest, false, "TreeDB (vlog=dict)")
+}
+
+func NewTreeDBVlogBlockSnappy(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionBlock
+	opts.ValueLog.BlockCodec = treedb.ValueLogBlockSnappy
+	setOptionalVlogAutotuneMode(&opts, 1)
+	setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog=block/snappy)"), nil
+}
+
+func NewTreeDBVlogBlockLZ4(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionBlock
+	opts.ValueLog.BlockCodec = treedb.ValueLogBlockLZ4
+	setOptionalVlogAutotuneMode(&opts, 1)
+	setOptionalVlogTrainConfig(&opts, -1, 0, 0, 0, 0, 0)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog=block/lz4)"), nil
+}
+
+func NewTreeDBVlogAuto(dir string) (kvstore.DB, error) {
+	opts, _, err := buildTreeDBOptions(dir)
+	if err != nil {
+		return nil, err
+	}
+	opts.ValueLog.Compression = treedb.ValueLogCompressionAuto
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return nil, err
+	}
+	return treedbadapter.WrapNamed(db, "TreeDB (vlog=auto)"), nil
 }
 
 func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enableEntropy bool, wrapperName string) (kvstore.DB, error) {

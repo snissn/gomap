@@ -399,6 +399,8 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 			}
 		case "medium_compressible", "medium_compressible_sparse":
 			fillSparseNoise(rng, buf, 256, 16, []byte("abcd1234"))
+		case "celestia_height_prefix_fill":
+			fillCelestiaHeightPrefix(buf, i)
 		case "incompressible", "random":
 			_, _ = rng.Read(buf)
 		default:
@@ -407,6 +409,21 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 		out[i] = buf
 	}
 	return out
+}
+
+func fillCelestiaHeightPrefix(dst []byte, idx int) {
+	if len(dst) == 0 {
+		return
+	}
+	for i := range dst {
+		dst[i] = 'a'
+	}
+	prefix := append([]byte("celestia/height/"), strconv.AppendInt(nil, int64(idx), 10)...)
+	if len(prefix) >= len(dst) {
+		copy(dst, prefix[:len(dst)])
+		return
+	}
+	copy(dst, prefix)
 }
 
 func fillRepeatTail(rng *rand.Rand, dst []byte, tail int, pattern []byte) {
