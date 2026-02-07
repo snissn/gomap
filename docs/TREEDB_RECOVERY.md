@@ -1,7 +1,10 @@
 # TreeDB Crash Recovery (Cached + Backend)
 
-This doc explains TreeDB’s crash recovery story at a “how it works” level.
-The normative contract is in `docs/contracts/DURABILITY.md`.
+This is a supporting crash-recovery explainer.
+
+For the canonical TreeDB recovery spec, see:
+- `TreeDB/docs/spec/README.md`
+- `TreeDB/docs/spec/recovery.md`
 
 ## TL;DR
 

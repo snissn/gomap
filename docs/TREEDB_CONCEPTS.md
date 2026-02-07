@@ -8,7 +8,7 @@ TreeDB has one engine with WAL on/off semantics:
 - **WAL on (default)**: write-back layer (`memtable + journal + value log + background flush`).
 - **WAL off**: journal disabled (unsafe), value log still enabled.
 
-This doc is intentionally high-level; the normative behavior is captured in `docs/contracts/`.
+This doc is intentionally high-level. For canonical TreeDB behavior and format specs, see `TreeDB/docs/spec/README.md`.
 
 ## Key Ordering
 

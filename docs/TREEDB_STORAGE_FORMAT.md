@@ -1,7 +1,11 @@
 # TreeDB Storage Format (Index + Value Log)
 
-This document is the canonical reference for TreeDB’s on-disk layout and the
-**persistent value log** design (no slabs).
+This is a supporting storage-format explainer.
+
+For the canonical TreeDB spec, see:
+- `TreeDB/docs/spec/README.md`
+- `TreeDB/docs/spec/storage-format.md`
+- `TreeDB/docs/spec/value-log-lifecycle.md`
 
 TreeDB is **pre-alpha**: on-disk formats may change without backward-compatibility guarantees.
 It is acceptable for new binaries to fail to open old DB directories (and vice versa).
