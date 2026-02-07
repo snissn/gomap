@@ -13,6 +13,6 @@ go test ./TreeDB -run 'TestReopenVerify_WALOn_Checkpoint|TestReopenVerify_WALOn_
 go test ./TreeDB/db -run 'TestValueLogGC_RemovesUnreferencedSegment|TestValueLogRewriteOffline_RewritesAndShrinks' -count=1
 
 # Core cached write/flush behavior remains healthy.
-go test ./TreeDB/caching -run 'TestFlushConcurrency|TestFlushLarge|TestBackpressure|TestCheckpointParallelBuild' -count=1
+go test ./TreeDB/caching -run '^(TestFlush|TestBackpressure|TestCachingDB_CheckpointParallelBuildCompletes)' -count=1
 
 echo "issue384 invariant gate: PASS"
