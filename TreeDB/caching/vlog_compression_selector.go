@@ -286,13 +286,13 @@ func (s *vlogCompressionSelector) metric(c vlogAutoCandidate) vlogCandidateMetri
 			m.ratio = 1
 			m.throughput = 1
 		case vlogAutoCandidateDict:
-			m.ratio = 1
+			m.ratio = 0.92
 			m.throughput = 0.9
 		case vlogAutoCandidateBlockLZ4:
-			m.ratio = 1
+			m.ratio = 0.92
 			m.throughput = 0.95
 		default:
-			m.ratio = 1
+			m.ratio = 0.93
 			m.throughput = 0.97
 		}
 	}
@@ -321,14 +321,35 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 	if offThroughput <= 0 {
 		offThroughput = 1.0
 	}
-	if m.ratio <= 0.985 {
+	// Strong size wins are treated as beneficial, even if throughput is moderately lower.
+	if m.ratio <= 0.90 {
 		return true
 	}
-	if m.throughput >= offThroughput*1.03 {
-		return true
-	}
-	if m.ratio <= 0.995 && m.throughput >= offThroughput*0.99 {
-		return true
+	switch s.policy {
+	case vlogAutoThroughput:
+		if m.throughput >= offThroughput*1.03 {
+			return true
+		}
+		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.99 {
+			return true
+		}
+		return false
+	case vlogAutoSize:
+		if m.ratio <= 0.98 {
+			return true
+		}
+		return m.throughput >= offThroughput*1.02
+	default:
+		if m.ratio <= 0.95 && m.throughput >= offThroughput*0.80 {
+			return true
+		}
+		if m.throughput >= offThroughput*1.03 {
+			return true
+		}
+		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.98 {
+			return true
+		}
+		return m.ratio <= 0.995 && m.throughput >= offThroughput*0.90
 	}
 	return false
 }
@@ -358,6 +379,28 @@ func (s *vlogCompressionSelector) preferredCandidate(dictAvailable bool) vlogAut
 		if score > bestScore*(1+margin) {
 			best = c
 			bestScore = score
+		}
+	}
+	// When we have strong compression evidence, avoid getting stuck in off mode.
+	if best == vlogAutoCandidateOff {
+		forced := vlogAutoCandidateOff
+		forcedScore := -1.0
+		for _, c := range cands {
+			if c == vlogAutoCandidateOff {
+				continue
+			}
+			m := s.metric(c)
+			if m.samples < 4 || m.ratio > 0.90 {
+				continue
+			}
+			score := s.candidateScore(c)
+			if score > forcedScore {
+				forced = c
+				forcedScore = score
+			}
+		}
+		if forced != vlogAutoCandidateOff {
+			return forced
 		}
 	}
 	return best
@@ -478,9 +521,9 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 		exploreRemaining: defaultVlogExploreBytes,
 		metrics: [vlogAutoCandidateCount]vlogCandidateMetrics{
 			vlogAutoCandidateOff:         {ratio: 1.0, throughput: 1.0, samples: 1},
-			vlogAutoCandidateDict:        {ratio: 1.0, throughput: 0.90},
-			vlogAutoCandidateBlockSnappy: {ratio: 1.0, throughput: 0.97},
-			vlogAutoCandidateBlockLZ4:    {ratio: 1.0, throughput: 0.95},
+			vlogAutoCandidateDict:        {ratio: 0.92, throughput: 0.90},
+			vlogAutoCandidateBlockSnappy: {ratio: 0.93, throughput: 0.97},
+			vlogAutoCandidateBlockLZ4:    {ratio: 0.92, throughput: 0.95},
 		},
 	}
 }
@@ -517,6 +560,11 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 			}
 			if s.probeRemaining <= rawBytes {
 				nextProbe := s.probeBytes
+				if s.incompressibleStreak >= 3 && s.holdRemaining > 0 {
+					// After repeated incompressible outcomes, probe sparsely while in
+					// hold to keep overhead close to off-mode behavior.
+					nextProbe = s.holdRemaining
+				}
 				if s.holdRemaining > 0 && nextProbe > s.holdRemaining {
 					nextProbe = s.holdRemaining
 				}
@@ -534,12 +582,25 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 
 	if s.exploreBytes > 0 {
 		if s.exploreRemaining <= rawBytes {
-			s.exploreRemaining = s.exploreBytes
-			candidate := s.preferredExplorationCandidate(dictAvailable)
-			if candidate != s.currentCandidate {
-				s.probeAttempts++
-				mode, codec := candidateWriteMode(candidate, s.seedCodec)
-				return mode, codec, true
+			nextInterval := s.exploreBytes
+			if s.currentCandidate == vlogAutoCandidateOff && s.incompressibleStreak >= 2 {
+				nextInterval = s.exploreBytes * 8
+			} else if s.dwellBytes > 0 && s.currentCandidate != vlogAutoCandidateOff && s.modeBytes >= 4*s.dwellBytes {
+				// Once a non-off winner has held through multiple dwell windows,
+				// reduce exploration pressure to limit steady-state probe overhead.
+				nextInterval = s.exploreBytes * 4
+			}
+			if nextInterval == 0 {
+				nextInterval = s.exploreBytes
+			}
+			s.exploreRemaining = nextInterval
+			if nextInterval == s.exploreBytes {
+				candidate := s.preferredExplorationCandidate(dictAvailable)
+				if candidate != s.currentCandidate {
+					s.probeAttempts++
+					mode, codec := candidateWriteMode(candidate, s.seedCodec)
+					return mode, codec, true
+				}
 			}
 		} else {
 			s.exploreRemaining -= rawBytes
@@ -592,7 +653,8 @@ func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCo
 		offThroughput = 1.0
 	}
 	if probe && candidate != vlogAutoCandidateOff {
-		if s.candidateLikelyBeneficial(candidate) {
+		updated := s.metric(candidate)
+		if updated.ratio < 0.99 && s.candidateLikelyBeneficial(candidate) {
 			s.probeSuccesses++
 			s.clearHold()
 		}
@@ -601,20 +663,28 @@ func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCo
 	if candidate == vlogAutoCandidateOff {
 		return
 	}
-	if ratio >= incompressibleRatio && throughput <= offThroughput*0.99 {
+	if ratio >= incompressibleRatio {
 		if s.incompressibleStreak < 0xFF {
 			s.incompressibleStreak++
 		}
-		if s.incompressibleStreak >= 2 && s.holdBytes > 0 && s.holdRemaining == 0 {
-			s.holdEnters++
-			s.holdRemaining = s.holdBytes
-			nextProbe := s.probeBytes
-			if nextProbe == 0 || nextProbe > s.holdRemaining {
-				nextProbe = s.holdRemaining
+		if s.holdBytes > 0 {
+			if s.incompressibleStreak >= 2 && s.holdRemaining == 0 {
+				s.holdEnters++
+				s.holdRemaining = s.holdBytes
+				nextProbe := s.probeBytes
+				if nextProbe == 0 || nextProbe > s.holdRemaining {
+					nextProbe = s.holdRemaining
+				}
+				s.probeRemaining = nextProbe
+				s.currentCandidate = vlogAutoCandidateOff
+				s.modeBytes = 0
+			} else if s.incompressibleStreak >= 3 && s.holdRemaining > 0 {
+				// Persist hold for long incompressible spans and probe sparsely.
+				s.holdRemaining = s.holdBytes
+				if s.probeBytes > 0 {
+					s.probeRemaining = s.holdRemaining
+				}
 			}
-			s.probeRemaining = nextProbe
-			s.currentCandidate = vlogAutoCandidateOff
-			s.modeBytes = 0
 		}
 		return
 	}
@@ -636,7 +706,7 @@ func (s *vlogCompressionSelector) blockObservedRatio(codec valuelog.BlockCodec) 
 	snappy := s.metric(vlogAutoCandidateBlockSnappy)
 	lz4 := s.metric(vlogAutoCandidateBlockLZ4)
 	if snappy.samples == 0 && lz4.samples == 0 {
-		return 1.0
+		return 0.92
 	}
 	if snappy.samples >= lz4.samples {
 		return snappy.ratio
@@ -660,6 +730,38 @@ func (s *vlogCompressionSelector) snapshot() vlogCompressionSelectorStats {
 	out.holdExits = s.holdExits
 	out.bypassBytes = s.bypassBytes
 	return out
+}
+
+func (s *vlogCompressionSelector) allowDictSampling(writeMode vlogCompressionWriteMode) bool {
+	if s == nil {
+		return writeMode != vlogWriteOff
+	}
+	if writeMode == vlogWriteDict {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.currentCandidate == vlogAutoCandidateOff && (s.holdRemaining > 0 || s.incompressibleStreak >= 2) {
+		return false
+	}
+	snappy := s.metrics[vlogAutoCandidateBlockSnappy]
+	lz4 := s.metrics[vlogAutoCandidateBlockLZ4]
+	blockSamples := snappy.samples + lz4.samples
+	if blockSamples < 4 {
+		return false
+	}
+	bestRatio := 1.0
+	if snappy.samples > 0 {
+		bestRatio = normalizeMetricRatio(snappy.ratio)
+	}
+	if lz4.samples > 0 {
+		r := normalizeMetricRatio(lz4.ratio)
+		if r < bestRatio {
+			bestRatio = r
+		}
+	}
+	return bestRatio <= 0.97
 }
 
 func ewmaMetric(prev float64, samples uint64, sample float64) (float64, uint64) {

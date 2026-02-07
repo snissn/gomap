@@ -212,3 +212,43 @@ func TestChooseValueLogBlockWriteK_RecordsBlockKStats(t *testing.T) {
 		t.Fatalf("expected snappy k max > 0")
 	}
 }
+
+func TestVlogCompressionSelector_AvoidsOffWithStrongCompressionSignal(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.dwellBytes = 0
+	s.currentCandidate = vlogAutoCandidateOff
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.50, throughput: 0.70, samples: 8}
+
+	mode, codec, probe := s.choose(false, 4096)
+	if probe {
+		t.Fatalf("did not expect probe")
+	}
+	if mode != vlogWriteBlock {
+		t.Fatalf("expected block mode, got %v", mode)
+	}
+	if codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected lz4 codec, got %v", codec)
+	}
+}
+
+func TestVlogCompressionSelector_AllowDictSampling(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	if s.allowDictSampling(vlogWriteBlock) {
+		t.Fatalf("expected dict sampling disabled before enough block signal")
+	}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.92, throughput: 0.95, samples: 2}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.90, throughput: 0.90, samples: 2}
+	if !s.allowDictSampling(vlogWriteBlock) {
+		t.Fatalf("expected dict sampling once block signal is compressible")
+	}
+	s.currentCandidate = vlogAutoCandidateOff
+	s.holdRemaining = 1024
+	s.incompressibleStreak = 3
+	if s.allowDictSampling(vlogWriteBlock) {
+		t.Fatalf("expected dict sampling disabled during incompressible hold")
+	}
+	if !s.allowDictSampling(vlogWriteDict) {
+		t.Fatalf("expected dict writes to keep dict sampling enabled")
+	}
+}

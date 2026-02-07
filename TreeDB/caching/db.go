@@ -4457,16 +4457,19 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	preparedAppender := caps.prepared
 	startSize = w.Size()
 
+	baseIoNsPerStored := 0.0
+	baseEncodeNsPerRaw := 0.0
+	keepSafetyMargin := db.valueLogAutotuneSafetyMargin()
 	if policySetter != nil {
 		snap := db.valueLogAutotuneMetrics.snapshot()
-		ioNsPerStored := snap.IoNsPerStoredByte
-		encodeNsPerRaw := snap.EncodeNsPerRawByte
+		baseIoNsPerStored = snap.IoNsPerStoredByte
+		baseEncodeNsPerRaw = snap.EncodeNsPerRawByte
 		if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
-			ioNsPerStored = 0
-			encodeNsPerRaw = 0
+			baseIoNsPerStored = 0
+			baseEncodeNsPerRaw = 0
 		}
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, db.valueLogAutotuneSafetyMargin())
 	}
+	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
 
 	ptrs = getValueLogPtrs(len(records))
 	statsWriter := caps.stats
@@ -4475,6 +4478,17 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		plan := &plans[pi]
 		if err != nil {
 			break
+		}
+		if policySetter != nil {
+			ioNsPerStored := baseIoNsPerStored
+			encodeNsPerRaw := baseEncodeNsPerRaw
+			// In auto mode, block candidate evaluation must observe real compressed
+			// output (not keep-policy short-circuits), same as explicit probes.
+			if plan.probe || (autoSelectorMode && plan.writeMode == vlogWriteBlock) {
+				ioNsPerStored = 0
+				encodeNsPerRaw = 0
+			}
+			policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, keepSafetyMargin)
 		}
 		db.setVlogWriterMode(w, plan.writeMode, plan.blockCodec)
 		planStart := time.Now()
@@ -5122,8 +5136,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			dict = nil
 		}
 	}
-	if mode := normalizeVlogCompressionMode(db.valueLogCompressionMode); mode != vlogCompressionOff && mode != vlogCompressionBlock {
+	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
+	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSamples(records)
+	case vlogCompressionAuto:
+		// In auto mode, skip background dict sampling while fully bypassing
+		// compression so incompressible workloads stay close to off-mode cost.
+		allowDictSampling := true
+		if l != nil && l.vlogCompressionSelector != nil {
+			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			db.valueLogDictCollectSamples(records)
+		}
 	}
 
 	k := 1
@@ -5211,6 +5236,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if finalWriteMode != vlogWriteBlock {
 		finalBlockCodec = db.valueLogBlockCodec
 	}
+	ioNsPerStoredForWriter := ioNsPerStored
+	encodeNsPerRawForWriter := encodeNsPerRaw
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && finalWriteMode == vlogWriteBlock {
+		// Keep-policy bypass is required for fair auto-mode block evaluation; the
+		// selector should decide whether block stays active based on real outcomes.
+		ioNsPerStoredForWriter = 0
+		encodeNsPerRawForWriter = 0
+	}
 
 	l.vlogMu.Lock()
 	w := l.vlog
@@ -5265,7 +5298,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	segmentStartSize := w.Size()
 
 	if policySetter != nil && !usePreparedDictFrames {
-		policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, safetyMargin)
+		policySetter.SetKeepPolicy(ioNsPerStoredForWriter, encodeNsPerRawForWriter, safetyMargin)
 	}
 
 	storedPayloadBytes := 0
