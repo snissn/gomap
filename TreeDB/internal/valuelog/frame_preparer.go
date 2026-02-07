@@ -305,7 +305,18 @@ func (p *FramePreparer) prepareBlockFrameBody(dst []byte, records []Record, offs
 	if p == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil frame preparer")
 	}
+	// Skip/backoff hints are shared with dict mode; reset when crossing into
+	// block mode so stale dict hints do not suppress block probes.
+	if p.skipDictID != 0 {
+		p.skipDictID = 0
+		p.noBenefit = 0
+		p.skipRemain = 0
+	}
 	if rawPayloadBytes == 0 || p.shouldSkipCompression(rawPayloadBytes) {
+		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, false, 0)
+	}
+	if p.skipRemain > 0 {
+		p.skipRemain--
 		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, false, 0)
 	}
 	if cap(p.rawScratch) < rawPayloadBytes {
@@ -327,11 +338,21 @@ func (p *FramePreparer) prepareBlockFrameBody(dst []byte, records []Record, offs
 		keepCompressed = p.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
 	}
 	if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
+		if p.noBenefit < 0xff {
+			p.noBenefit++
+		}
+		p.skipRemain = dictSkipFramesAggressive(p.noBenefit, rawPayloadBytes, len(encoded), encodeNs, p.keepIoNsPerStoredByte, p.keepSafetyMargin)
 		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, true, encodeNs)
 	}
 	if !keepCompressed {
+		if p.noBenefit < 0xff {
+			p.noBenefit++
+		}
+		p.skipRemain = dictSkipFramesAggressive(p.noBenefit, rawPayloadBytes, len(encoded), encodeNs, p.keepIoNsPerStoredByte, p.keepSafetyMargin)
 		return p.buildRawFrameBody(dst, 0, records, offsets, rawPayloadBytes, true, encodeNs)
 	}
+	p.noBenefit = 0
+	p.skipRemain = 0
 	body, err := p.buildBlockCompressedFrameBody(dst, records, offsets, encoded)
 	if err != nil {
 		return nil, FrameStats{}, err

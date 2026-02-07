@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -798,7 +799,7 @@ func TestEncodeFrameSkipsCompressionWithoutDict(t *testing.T) {
 }
 
 func TestValueLogBlockCodecRoundTrip(t *testing.T) {
-	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4, BlockCodecZSTD}
+	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4}
 	for _, codec := range codecs {
 		t.Run(fmt.Sprintf("codec_%d", codec), func(t *testing.T) {
 			dir := t.TempDir()
@@ -916,5 +917,80 @@ func TestValueLogUnsupportedBlockCodecID(t *testing.T) {
 	var codecErr UnsupportedBlockCodecError
 	if !errors.As(err, &codecErr) {
 		t.Fatalf("expected UnsupportedBlockCodecError, got %v", err)
+	}
+}
+
+func TestValueLogBlockCodec_IncompressibleBackoff(t *testing.T) {
+	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w.SetBlockCompression(BlockCodecSnappy, true)
+
+	makeBatch := func(seed int64) []Record {
+		rng := rand.New(rand.NewSource(seed))
+		records := make([]Record, 8)
+		for i := range records {
+			v := make([]byte, 4096)
+			if _, err := rng.Read(v); err != nil {
+				t.Fatalf("rng read: %v", err)
+			}
+			records[i] = Record{RID: uint64(i + 1), Value: v}
+		}
+		return records
+	}
+
+	dst := make([]page.ValuePtr, 8)
+	_, stats1, err := w.AppendFrameWithStatsInto(0, nil, makeBatch(1), dst)
+	if err != nil {
+		t.Fatalf("append first batch: %v", err)
+	}
+	if !stats1.Attempted {
+		t.Fatalf("expected initial block compression attempt")
+	}
+	if stats1.Kept {
+		t.Fatalf("expected incompressible batch to fall back to raw")
+	}
+
+	_, stats2, err := w.AppendFrameWithStatsInto(0, nil, makeBatch(2), dst)
+	if err != nil {
+		t.Fatalf("append second batch: %v", err)
+	}
+	if stats2.Attempted {
+		t.Fatalf("expected backoff skip after incompressible attempt")
+	}
+}
+
+func TestFramePreparer_BlockCodec_IncompressibleBackoff(t *testing.T) {
+	prep := NewFramePreparer()
+	prep.SetBlockCompression(BlockCodecSnappy, true)
+
+	makeBatch := func(seed int64) []Record {
+		rng := rand.New(rand.NewSource(seed))
+		records := make([]Record, 8)
+		for i := range records {
+			v := make([]byte, 4096)
+			if _, err := rng.Read(v); err != nil {
+				t.Fatalf("rng read: %v", err)
+			}
+			records[i] = Record{RID: uint64(i + 1), Value: v}
+		}
+		return records
+	}
+
+	_, stats1, err := prep.PrepareFrame(0, nil, makeBatch(11))
+	if err != nil {
+		t.Fatalf("prepare first batch: %v", err)
+	}
+	if !stats1.Attempted {
+		t.Fatalf("expected initial block compression attempt")
+	}
+	if stats1.Kept {
+		t.Fatalf("expected incompressible batch to fall back to raw")
+	}
+
+	_, stats2, err := prep.PrepareFrame(0, nil, makeBatch(12))
+	if err != nil {
+		t.Fatalf("prepare second batch: %v", err)
+	}
+	if stats2.Attempted {
+		t.Fatalf("expected backoff skip after incompressible attempt")
 	}
 }

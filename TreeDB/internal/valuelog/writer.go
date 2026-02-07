@@ -1603,6 +1603,13 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
 	}
+	// Skip/backoff hints are shared with dict mode; reset when crossing into
+	// block mode so stale dict hints do not suppress block probes.
+	if w.skipDictID != 0 {
+		w.skipDictID = 0
+		w.noBenefit = 0
+		w.skipRemain = 0
+	}
 	k := len(records)
 	if k <= 0 {
 		return dst[:0], FrameStats{}, nil
@@ -1651,6 +1658,10 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	if rawPayloadBytes == 0 {
 		return writeRaw(false, 0)
 	}
+	if w.skipRemain > 0 {
+		w.skipRemain--
+		return writeRaw(false, 0)
+	}
 	if w.shouldSkipCompression(rawPayloadBytes) {
 		return writeRaw(false, 0)
 	}
@@ -1675,11 +1686,21 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 		keepCompressed = w.shouldKeepCompressed(rawPayloadBytes, len(encoded), encodeNs)
 	}
 	if encodeErr != nil && !errors.Is(encodeErr, errEncodedTooLarge) {
+		if w.noBenefit < 0xff {
+			w.noBenefit++
+		}
+		w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 		return writeRaw(true, encodeNs)
 	}
 	if !keepCompressed {
+		if w.noBenefit < 0xff {
+			w.noBenefit++
+		}
+		w.skipRemain = dictSkipFramesAggressive(w.noBenefit, rawPayloadBytes, len(encoded), encodeNs, w.keepIoNsPerStoredByte, w.keepSafetyMargin)
 		return writeRaw(true, encodeNs)
 	}
+	w.noBenefit = 0
+	w.skipRemain = 0
 
 	bodyLen := FrameHeaderSize + (k * 8) + ((k + 1) * 4) + len(encoded)
 	if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {

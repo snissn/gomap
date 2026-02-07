@@ -41,7 +41,6 @@ type ValueLogBlockCodec = db.ValueLogBlockCodec
 const (
 	ValueLogBlockSnappy = db.ValueLogBlockSnappy
 	ValueLogBlockLZ4    = db.ValueLogBlockLZ4
-	ValueLogBlockZSTD   = db.ValueLogBlockZSTD
 )
 
 type ValueLogAutoPolicy = db.ValueLogAutoPolicy

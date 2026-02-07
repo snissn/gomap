@@ -2,11 +2,9 @@ package valuelog
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
-	"github.com/snissn/compress/zstd"
 )
 
 // BlockCodec identifies non-dictionary value-log frame compression codecs.
@@ -16,7 +14,6 @@ const (
 	BlockCodecNone BlockCodec = iota
 	BlockCodecSnappy
 	BlockCodecLZ4
-	BlockCodecZSTD
 )
 
 // UnsupportedBlockCodecError reports an unknown per-frame block codec ID.
@@ -30,38 +27,11 @@ func (e UnsupportedBlockCodecError) Error() string {
 
 func normalizeBlockCodec(codec BlockCodec) BlockCodec {
 	switch codec {
-	case BlockCodecSnappy, BlockCodecLZ4, BlockCodecZSTD:
+	case BlockCodecSnappy, BlockCodecLZ4:
 		return codec
 	default:
 		return BlockCodecSnappy
 	}
-}
-
-func newBlockZSTDEncoder() *zstd.Encoder {
-	enc, err := zstd.NewWriter(nil,
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderCRC(false),
-	)
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-func newBlockZSTDDecoder() *zstd.Decoder {
-	dec, err := zstd.NewReader(nil)
-	if err != nil {
-		panic(err)
-	}
-	return dec
-}
-
-var blockZSTDEncPool = sync.Pool{
-	New: func() any { return newBlockZSTDEncoder() },
-}
-
-var blockZSTDDecPool = sync.Pool{
-	New: func() any { return newBlockZSTDDecoder() },
 }
 
 func encodeBlockPayload(codec BlockCodec, raw []byte, dst []byte) ([]byte, error) {
@@ -88,11 +58,6 @@ func encodeBlockPayload(codec BlockCodec, raw []byte, dst []byte) ([]byte, error
 			return nil, errEncodedTooLarge
 		}
 		return dst[:n], nil
-	case BlockCodecZSTD:
-		enc := blockZSTDEncPool.Get().(*zstd.Encoder)
-		out := enc.EncodeAll(raw, dst[:0])
-		blockZSTDEncPool.Put(enc)
-		return out, nil
 	default:
 		return nil, UnsupportedBlockCodecError{CodecID: uint8(codec)}
 	}
@@ -141,17 +106,6 @@ func decodeBlockPayload(codecID uint8, payload []byte, rawLen uint32, dst []byte
 			return nil, ErrCorrupt
 		}
 		return dst[:n], nil
-	case BlockCodecZSTD:
-		dec := blockZSTDDecPool.Get().(*zstd.Decoder)
-		out, err := dec.DecodeAll(payload, dst[:0])
-		blockZSTDDecPool.Put(dec)
-		if err != nil {
-			return nil, err
-		}
-		if uint32(len(out)) != rawLen {
-			return nil, ErrCorrupt
-		}
-		return out, nil
 	default:
 		return nil, UnsupportedBlockCodecError{CodecID: codecID}
 	}

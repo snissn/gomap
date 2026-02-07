@@ -96,7 +96,6 @@ for valsize in $VALSIZES; do
     run_case "$valsize" "$raw_mib" "$pattern" "dict" "snappy" "val${valsize}_${pattern}_dict"
     run_case "$valsize" "$raw_mib" "$pattern" "block" "snappy" "val${valsize}_${pattern}_block_snappy"
     run_case "$valsize" "$raw_mib" "$pattern" "block" "lz4" "val${valsize}_${pattern}_block_lz4"
-    run_case "$valsize" "$raw_mib" "$pattern" "block" "zstd" "val${valsize}_${pattern}_block_zstd"
   done
 
   comment_file="$OUT/comments/val${valsize}.md"
@@ -110,7 +109,7 @@ out = Path(sys.argv[1])
 valsize = int(sys.argv[2])
 raw_mib = int(sys.argv[3])
 patterns = ["medium_compressible_sparse", "celestia_height_prefix_fill"]
-mode_order = ["off", "dict", "block_snappy", "block_lz4", "block_zstd"]
+mode_order = ["off", "dict", "block_snappy", "block_lz4"]
 
 def wall_sec(path: Path) -> float:
     txt = path.read_text()
@@ -128,8 +127,6 @@ def mode_label(mode_key: str):
         return ("block", "snappy")
     if mode_key == "block_lz4":
         return ("block", "lz4")
-    if mode_key == "block_zstd":
-        return ("block", "zstd")
     raise ValueError(mode_key)
 
 lines = []
@@ -137,7 +134,7 @@ lines.append(f"## Warmup-first TreeDB vlog sweep (valsize={valsize} bytes)")
 lines.append("")
 lines.append(f"- artifacts: `{out}`")
 lines.append(f"- steady raw target: `{raw_mib} MiB`")
-lines.append("- scope: TreeDB value-log only (`off`, `dict`, `block/snappy|lz4|zstd`)")
+lines.append("- scope: TreeDB value-log only (`off`, `dict`, `block/snappy|lz4`)")
 lines.append("- patterns: `medium_compressible_sparse`, `celestia_height_prefix_fill`")
 lines.append("")
 

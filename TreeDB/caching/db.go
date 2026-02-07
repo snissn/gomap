@@ -1646,7 +1646,7 @@ type Options struct {
 	// 0=off, 1=block, 2=dict, 3=auto.
 	ValueLogCompression uint8
 	// ValueLogBlockCodec selects block codec when block compression is enabled:
-	// 0=snappy, 1=lz4, 2=zstd.
+	// 0=snappy, 1=lz4.
 	ValueLogBlockCodec uint8
 	// ValueLogBlockTargetCompressedBytes controls block-mode grouped frame K
 	// adaptation target (0=default).

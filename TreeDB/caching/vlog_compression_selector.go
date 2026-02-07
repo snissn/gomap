@@ -63,8 +63,6 @@ func normalizeVlogBlockCodec(v uint8) valuelog.BlockCodec {
 		return valuelog.BlockCodecSnappy
 	case 1:
 		return valuelog.BlockCodecLZ4
-	case 2:
-		return valuelog.BlockCodecZSTD
 	default:
 		return valuelog.BlockCodecSnappy
 	}

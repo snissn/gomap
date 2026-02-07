@@ -57,7 +57,7 @@ var (
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default|off|block|dict|auto)")
-	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4|zstd)")
+	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
 	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
@@ -225,10 +225,8 @@ func parseTreeDBVlogBlockCodec(s string) (treedb.ValueLogBlockCodec, error) {
 		return treedb.ValueLogBlockSnappy, nil
 	case "lz4":
 		return treedb.ValueLogBlockLZ4, nil
-	case "zstd":
-		return treedb.ValueLogBlockZSTD, nil
 	default:
-		return treedb.ValueLogBlockSnappy, fmt.Errorf("unsupported -treedb-vlog-block-codec=%q (expected snappy|lz4|zstd)", s)
+		return treedb.ValueLogBlockSnappy, fmt.Errorf("unsupported -treedb-vlog-block-codec=%q (expected snappy|lz4)", s)
 	}
 }
 
@@ -365,8 +363,6 @@ func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
 		return "snappy"
 	case treedb.ValueLogBlockLZ4:
 		return "lz4"
-	case treedb.ValueLogBlockZSTD:
-		return "zstd"
 	default:
 		return fmt.Sprintf("block_codec_%d", codec)
 	}

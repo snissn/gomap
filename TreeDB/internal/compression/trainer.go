@@ -26,9 +26,9 @@ const (
 	// Bootstrap defaults. These are intentionally smaller than the steady-state
 	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
 	// reducing sensitivity to TrainBytes tuning.
-	DefaultTrainBootstrapBytes      = 256 << 10
+	DefaultTrainBootstrapBytes      = 128 << 10
 	DefaultTrainBootstrapDictBytes  = 8 << 10
-	DefaultTrainBootstrapMinRecords = 32
+	DefaultTrainBootstrapMinRecords = 16
 
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB
@@ -39,9 +39,9 @@ const (
 
 	// More aggressive gating when the stream is degraded (e.g., dict compression
 	// is paused due to poor observed savings).
-	MinProfileBytesDegraded    = 8 << 20 // 8 MiB
-	MinProfileRecordsDegraded  = 50_000  // records
-	MinProfileIntervalDegraded = 30 * time.Second
+	MinProfileBytesDegraded    = 1 << 20 // 1 MiB
+	MinProfileRecordsDegraded  = 8_000   // records
+	MinProfileIntervalDegraded = 5 * time.Second
 )
 
 type Trainer struct {
@@ -1036,6 +1036,46 @@ func (t *Trainer) allowRetrain(now time.Time) bool {
 		minInterval = MinProfileIntervalDegraded
 		minBytes = uint64(MinProfileBytesDegraded)
 		minRecords = uint64(MinProfileRecordsDegraded)
+		if t.targetBytes > 0 {
+			dynBytes := t.targetBytes / 2
+			if dynBytes < 256<<10 {
+				dynBytes = 256 << 10
+			}
+			if dynBytes < minBytes {
+				minBytes = dynBytes
+			}
+		}
+		if t.minRecords > 0 {
+			dynRecords := t.minRecords * 4
+			if dynRecords < 2_000 {
+				dynRecords = 2_000
+			}
+			if dynRecords < minRecords {
+				minRecords = dynRecords
+			}
+		}
+	} else {
+		if t.targetBytes > 0 {
+			dynBytes := t.targetBytes * 4
+			if dynBytes < 4<<20 {
+				dynBytes = 4 << 20
+			}
+			if dynBytes < minBytes {
+				minBytes = dynBytes
+			}
+		}
+		if t.minRecords > 0 {
+			dynRecords := t.minRecords * 8
+			if dynRecords < 20_000 {
+				dynRecords = 20_000
+			}
+			if dynRecords < minRecords {
+				minRecords = dynRecords
+			}
+		}
+		if minInterval > 2*time.Minute {
+			minInterval = 2 * time.Minute
+		}
 	}
 	if !lastTime.IsZero() && now.Sub(lastTime) < minInterval {
 		return false
