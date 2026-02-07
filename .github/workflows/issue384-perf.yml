@@ -37,7 +37,7 @@ jobs:
 
       - name: Run #384 invariants
         run: |
-          scripts/issue384_invariant_gate.sh
+          ./scripts/issue384_invariant_gate.sh
 
       - name: Run #384 per-PR perf gate
         env:
@@ -73,7 +73,7 @@ jobs:
 
       - name: Run #384 invariants
         run: |
-          scripts/issue384_invariant_gate.sh
+          ./scripts/issue384_invariant_gate.sh
 
       - name: Run #384 nightly perf gate
         env:
