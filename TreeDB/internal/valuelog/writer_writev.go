@@ -230,10 +230,11 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		meta = make([]byte, 0, 4096)
 	}
 	queuedBytes := 0
+	maxUsedIovs := 0
 	defer func() {
 		// Keep reusable writev scratch without retaining references to caller-owned values.
-		if cap(iovs) > 0 {
-			full := iovs[:cap(iovs):cap(iovs)]
+		if maxUsedIovs > 0 {
+			full := iovs[:maxUsedIovs:maxUsedIovs]
 			clear(full)
 		}
 		w.rawWritevIovs = iovs[:0]
@@ -365,6 +366,9 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		iovs = append(iovs, header, prefix)
 		for i := 0; i < kFrame; i++ {
 			iovs = append(iovs, frameRecords[i].Value)
+		}
+		if len(iovs) > maxUsedIovs {
+			maxUsedIovs = len(iovs)
 		}
 		queuedBytes += totalLen
 
