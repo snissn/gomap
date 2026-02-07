@@ -244,6 +244,12 @@ for pattern in patterns:
         k = stats.get("treedb.cache.vlog_dict.current_k", "-")
         if engine != "treedb":
             k = "-"
+        else:
+            try:
+                if int(k) <= 0:
+                    k = "-"
+            except Exception:
+                pass
 
         if vid == "treedb_auto":
             auto_stats = stats
