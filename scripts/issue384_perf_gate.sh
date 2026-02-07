@@ -31,6 +31,9 @@ export GOMAXPROCS="${GOMAXPROCS:-4}"
 mkdir -p "$OUT/runs" "$OUT/bin" "$OUT/worktrees"
 
 BASELINE_WT="$OUT/worktrees/baseline"
+if ! git cat-file -e "${BASELINE_HASH}^{commit}" >/dev/null 2>&1; then
+  git fetch --no-tags --depth=1 origin "$BASELINE_HASH" || git fetch --no-tags origin "$BASELINE_HASH"
+fi
 git worktree add --detach "$BASELINE_WT" "$BASELINE_HASH" >/dev/null
 cleanup() {
   git worktree remove --force "$BASELINE_WT" >/dev/null 2>&1 || true
@@ -129,19 +132,36 @@ run_one() {
   fi
 }
 
+run_pair() {
+  local case_id="$1"
+  local tests="$2"
+  local valsize="$3"
+  local pattern="$4"
+  local comp="$5"
+  local phase="$6"
+  local idx="$7"
+
+  # Alternate order to reduce systematic warm-cache/turbo bias.
+  if (( idx % 2 == 1 )); then
+    run_one "$OUT/bin/unified-bench-baseline" baseline "$case_id" "$tests" "$valsize" "$pattern" "$comp" "$phase" "$idx"
+    run_one "$OUT/bin/unified-bench-candidate" candidate "$case_id" "$tests" "$valsize" "$pattern" "$comp" "$phase" "$idx"
+  else
+    run_one "$OUT/bin/unified-bench-candidate" candidate "$case_id" "$tests" "$valsize" "$pattern" "$comp" "$phase" "$idx"
+    run_one "$OUT/bin/unified-bench-baseline" baseline "$case_id" "$tests" "$valsize" "$pattern" "$comp" "$phase" "$idx"
+  fi
+}
+
 for spec in "${cases[@]}"; do
   IFS='|' read -r case_id tests valsize pattern comp threshold mode <<<"$spec"
 
   echo "--- case=$case_id mode=$mode tests=$tests valsize=$valsize pattern=$pattern comp=$comp ---"
 
   for i in $(seq 1 "$WARMUP_RUNS"); do
-    run_one "$OUT/bin/unified-bench-baseline" baseline "$case_id" "$tests" "$valsize" "$pattern" "$comp" warmup "$i"
-    run_one "$OUT/bin/unified-bench-candidate" candidate "$case_id" "$tests" "$valsize" "$pattern" "$comp" warmup "$i"
+    run_pair "$case_id" "$tests" "$valsize" "$pattern" "$comp" warmup "$i"
   done
 
   for i in $(seq 1 "$RUNS"); do
-    run_one "$OUT/bin/unified-bench-baseline" baseline "$case_id" "$tests" "$valsize" "$pattern" "$comp" measured "$i"
-    run_one "$OUT/bin/unified-bench-candidate" candidate "$case_id" "$tests" "$valsize" "$pattern" "$comp" measured "$i"
+    run_pair "$case_id" "$tests" "$valsize" "$pattern" "$comp" measured "$i"
   done
 done
 
@@ -181,20 +201,25 @@ if nightly_pattern:
         ("mix_v2048_rand", "batch_write,random_read", 2048, nightly_pattern, "off", 10.0, "scored"),
     ])
 
-pat_batch = re.compile(r"^Batch Write / TreeDB = ([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", re.M)
+pat_batch_diag = re.compile(r"^Batch Write / TreeDB = ([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", re.M)
+pat_batch_md = re.compile(r"^\|\s*Batch Write\s*\|\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*\|", re.M)
+pat_batch_text = re.compile(r"^\s*Batch Write\s+([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", re.M)
 
 
 def parse_batch_write(path: Path) -> float:
     txt = path.read_text()
-    m = pat_batch.search(txt)
+    m = pat_batch_diag.search(txt)
+    if not m:
+        m = pat_batch_md.search(txt)
+    if not m:
+        m = pat_batch_text.search(txt)
     if not m:
         raise SystemExit(f"missing Batch Write metric in {path}")
     return float(m.group(1).replace(",", ""))
 
 
 def median(vals):
-    vals = sorted(vals)
-    return vals[len(vals) // 2]
+    return float(statistics.median(vals))
 
 rows = []
 all_pass = True

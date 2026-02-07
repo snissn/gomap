@@ -8,6 +8,8 @@ on:
       - 'cmd/unified_bench/**'
       - 'scripts/issue384_*'
       - '.github/workflows/issue384-perf.yml'
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,11 +18,14 @@ permissions:
 jobs:
   per_pr_gate:
     name: per-pr 4m gate (self-hosted)
+    if: github.event_name == 'pull_request'
     runs-on: [self-hosted, linux, perf]
     timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -45,12 +50,14 @@ jobs:
 
   nightly_12m:
     name: nightly 12m gate (self-hosted)
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     runs-on: [self-hosted, linux, perf]
     timeout-minutes: 180
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5

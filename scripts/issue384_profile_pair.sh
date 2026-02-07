@@ -25,6 +25,9 @@ export GOMAXPROCS="${GOMAXPROCS:-4}"
 mkdir -p "$OUT/bin" "$OUT/profiles_baseline" "$OUT/profiles_candidate" "$OUT/worktrees"
 
 BASELINE_WT="$OUT/worktrees/baseline"
+if ! git cat-file -e "${BASELINE_HASH}^{commit}" >/dev/null 2>&1; then
+  git fetch --no-tags --depth=1 origin "$BASELINE_HASH" || git fetch --no-tags origin "$BASELINE_HASH"
+fi
 git worktree add --detach "$BASELINE_WT" "$BASELINE_HASH" >/dev/null
 cleanup() {
   git worktree remove --force "$BASELINE_WT" >/dev/null 2>&1 || true
