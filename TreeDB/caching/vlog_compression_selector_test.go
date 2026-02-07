@@ -163,3 +163,52 @@ func TestVlogCompressionSelector_ConcurrentSmoke(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestObserveVlogWriteMode_NonAutoUpdatesBlockRatioForK(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+	}
+	l := &lane{}
+
+	// Without observed block ratio we should be conservative (k=1).
+	k0 := db.chooseValueLogBlockWriteK(l, 128, 128*256, valuelog.BlockCodecLZ4)
+	if k0 != 1 {
+		t.Fatalf("expected initial k=1 without signal, got %d", k0)
+	}
+
+	// Feed compressible observations in non-auto mode.
+	for i := 0; i < 8; i++ {
+		db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecLZ4, 4096, 512, false, 1000)
+	}
+
+	k1 := db.chooseValueLogBlockWriteK(l, 128, 128*256, valuelog.BlockCodecLZ4)
+	if k1 <= 1 {
+		t.Fatalf("expected k>1 after non-auto block observations, got %d", k1)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_RecordsBlockKStats(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+	}
+	l := &lane{}
+
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+	k := db.chooseValueLogBlockWriteK(l, 64, 64*512, valuelog.BlockCodecSnappy)
+	if k < 1 {
+		t.Fatalf("invalid k=%d", k)
+	}
+
+	snap := snapshotLaneVlogBlockK(l)
+	if snap.Count[0] == 0 {
+		t.Fatalf("expected snappy k count > 0")
+	}
+	if snap.Sum[0] == 0 {
+		t.Fatalf("expected snappy k sum > 0")
+	}
+	if snap.Max[0] == 0 {
+		t.Fatalf("expected snappy k max > 0")
+	}
+}

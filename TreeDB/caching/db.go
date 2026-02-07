@@ -9784,6 +9784,48 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_dict.cached_dict_id"] = fmt.Sprintf("%d", db.valueLogDictBytesID)
 	stats["treedb.cache.vlog_dict.cached_dict_bytes"] = fmt.Sprintf("%d", len(db.valueLogDictBytes))
 	db.valueLogDictBytesMu.Unlock()
+	var blockKSnap vlogBlockKSnapshot
+	var blockRatioWeighted [vlogBlockCodecCount]float64
+	var blockRatioSamples [vlogBlockCodecCount]uint64
+	for i := range db.lanes {
+		kSnap := snapshotLaneVlogBlockK(&db.lanes[i])
+		rSnap := snapshotLaneVlogBlockRatio(&db.lanes[i])
+		for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+			blockKSnap.Count[codecIdx] += kSnap.Count[codecIdx]
+			blockKSnap.Sum[codecIdx] += kSnap.Sum[codecIdx]
+			if kSnap.Max[codecIdx] > blockKSnap.Max[codecIdx] {
+				blockKSnap.Max[codecIdx] = kSnap.Max[codecIdx]
+			}
+			for bucket := 0; bucket < vlogBlockKBucketCount; bucket++ {
+				blockKSnap.Buckets[codecIdx][bucket] += kSnap.Buckets[codecIdx][bucket]
+			}
+			samples := rSnap.Samples[codecIdx]
+			if samples == 0 {
+				continue
+			}
+			blockRatioSamples[codecIdx] += samples
+			blockRatioWeighted[codecIdx] += rSnap.Ratio[codecIdx] * float64(samples)
+		}
+	}
+	for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+		suffix := vlogBlockCodecSuffix(codecIdx)
+		count := blockKSnap.Count[codecIdx]
+		sum := blockKSnap.Sum[codecIdx]
+		stats["treedb.cache.vlog_block.k.count."+suffix] = fmt.Sprintf("%d", count)
+		stats["treedb.cache.vlog_block.k.max."+suffix] = fmt.Sprintf("%d", blockKSnap.Max[codecIdx])
+		if count > 0 {
+			stats["treedb.cache.vlog_block.k.avg."+suffix] = fmt.Sprintf("%.3f", float64(sum)/float64(count))
+		}
+		for bucket := 0; bucket < vlogBlockKBucketCount; bucket++ {
+			key := fmt.Sprintf("treedb.cache.vlog_block.k.bucket.%s.le_%d", suffix, vlogBlockKBucketUpperBounds[bucket])
+			stats[key] = fmt.Sprintf("%d", blockKSnap.Buckets[codecIdx][bucket])
+		}
+		if blockRatioSamples[codecIdx] > 0 {
+			ratio := blockRatioWeighted[codecIdx] / float64(blockRatioSamples[codecIdx])
+			stats["treedb.cache.vlog_block.ratio."+suffix] = fmt.Sprintf("%.6f", ratio)
+		}
+		stats["treedb.cache.vlog_block.ratio.samples."+suffix] = fmt.Sprintf("%d", blockRatioSamples[codecIdx])
+	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
 		var autoSnap vlogCompressionSelectorStats
 		for i := range db.lanes {

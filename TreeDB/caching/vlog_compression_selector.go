@@ -44,6 +44,12 @@ const (
 
 const vlogAutoCandidateCount = int(vlogAutoCandidateBlockLZ4) + 1
 
+const vlogBlockCodecCount = 2
+
+const vlogBlockKBucketCount = 8
+
+var vlogBlockKBucketUpperBounds = [vlogBlockKBucketCount]int{1, 2, 4, 8, 16, 32, 64, valuelog.MaxFrameK}
+
 const (
 	defaultVlogHoldBytes      = 64 << 20
 	defaultVlogProbeBytes     = 8 << 20
@@ -87,6 +93,31 @@ func normalizeSelectorBlockCodec(codec valuelog.BlockCodec) valuelog.BlockCodec 
 	default:
 		return valuelog.BlockCodecSnappy
 	}
+}
+
+func vlogBlockCodecIndex(codec valuelog.BlockCodec) int {
+	switch normalizeSelectorBlockCodec(codec) {
+	case valuelog.BlockCodecLZ4:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func vlogBlockCodecSuffix(idx int) string {
+	if idx == 1 {
+		return "lz4"
+	}
+	return "snappy"
+}
+
+func vlogBlockKBucketIndex(k int) int {
+	for i, upper := range vlogBlockKBucketUpperBounds {
+		if k <= upper {
+			return i
+		}
+	}
+	return vlogBlockKBucketCount - 1
 }
 
 func autoSwitchMargin(policy vlogAutoPolicy) float64 {
@@ -642,6 +673,111 @@ func ewmaMetric(prev float64, samples uint64, sample float64) (float64, uint64) 
 	return prev*(1-alpha) + sample*alpha, samples + 1
 }
 
+type vlogBlockKSnapshot struct {
+	Count   [vlogBlockCodecCount]uint64
+	Sum     [vlogBlockCodecCount]uint64
+	Max     [vlogBlockCodecCount]uint64
+	Buckets [vlogBlockCodecCount][vlogBlockKBucketCount]uint64
+}
+
+type vlogBlockRatioSnapshot struct {
+	Ratio   [vlogBlockCodecCount]float64
+	Samples [vlogBlockCodecCount]uint64
+}
+
+func observeLaneVlogBlockRatio(l *lane, codec valuelog.BlockCodec, rawPayloadBytes, storedPayloadBytes int) {
+	if l == nil || rawPayloadBytes <= 0 {
+		return
+	}
+	ratio := 1.0
+	if storedPayloadBytes > 0 {
+		ratio = float64(storedPayloadBytes) / float64(rawPayloadBytes)
+	}
+	ratio = normalizeMetricRatio(ratio)
+	idx := vlogBlockCodecIndex(codec)
+	oldSamples := l.vlogBlockRatioSamples[idx].Load()
+	oldBits := l.vlogBlockRatioBits[idx].Load()
+	oldRatio := 1.0
+	if oldSamples > 0 && oldBits != 0 {
+		oldRatio = normalizeMetricRatio(math.Float64frombits(oldBits))
+	}
+	nextRatio, _ := ewmaMetric(oldRatio, oldSamples, ratio)
+	l.vlogBlockRatioBits[idx].Store(math.Float64bits(nextRatio))
+	l.vlogBlockRatioSamples[idx].Add(1)
+}
+
+func laneVlogBlockObservedRatio(l *lane, codec valuelog.BlockCodec) float64 {
+	if l == nil {
+		return 1.0
+	}
+	idx := vlogBlockCodecIndex(codec)
+	if l.vlogBlockRatioSamples[idx].Load() == 0 {
+		return 1.0
+	}
+	bits := l.vlogBlockRatioBits[idx].Load()
+	if bits == 0 {
+		return 1.0
+	}
+	return normalizeMetricRatio(math.Float64frombits(bits))
+}
+
+func recordLaneVlogBlockK(l *lane, codec valuelog.BlockCodec, k int) {
+	if l == nil || k <= 0 {
+		return
+	}
+	idx := vlogBlockCodecIndex(codec)
+	ku := uint64(k)
+	l.vlogBlockKCount[idx].Add(1)
+	l.vlogBlockKSum[idx].Add(ku)
+	for {
+		cur := l.vlogBlockKMax[idx].Load()
+		if ku <= cur {
+			break
+		}
+		if l.vlogBlockKMax[idx].CompareAndSwap(cur, ku) {
+			break
+		}
+	}
+	b := vlogBlockKBucketIndex(k)
+	l.vlogBlockKBuckets[idx][b].Add(1)
+}
+
+func snapshotLaneVlogBlockK(l *lane) vlogBlockKSnapshot {
+	out := vlogBlockKSnapshot{}
+	if l == nil {
+		return out
+	}
+	for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+		out.Count[codecIdx] = l.vlogBlockKCount[codecIdx].Load()
+		out.Sum[codecIdx] = l.vlogBlockKSum[codecIdx].Load()
+		out.Max[codecIdx] = l.vlogBlockKMax[codecIdx].Load()
+		for bucket := 0; bucket < vlogBlockKBucketCount; bucket++ {
+			out.Buckets[codecIdx][bucket] = l.vlogBlockKBuckets[codecIdx][bucket].Load()
+		}
+	}
+	return out
+}
+
+func snapshotLaneVlogBlockRatio(l *lane) vlogBlockRatioSnapshot {
+	out := vlogBlockRatioSnapshot{}
+	if l == nil {
+		return out
+	}
+	for codecIdx := 0; codecIdx < vlogBlockCodecCount; codecIdx++ {
+		samples := l.vlogBlockRatioSamples[codecIdx].Load()
+		out.Samples[codecIdx] = samples
+		if samples == 0 {
+			continue
+		}
+		bits := l.vlogBlockRatioBits[codecIdx].Load()
+		if bits == 0 {
+			continue
+		}
+		out.Ratio[codecIdx] = normalizeMetricRatio(math.Float64frombits(bits))
+	}
+	return out
+}
+
 func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	switch mode {
@@ -674,6 +810,9 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	if db == nil || l == nil {
 		return
 	}
+	if mode == vlogWriteBlock {
+		observeLaneVlogBlockRatio(l, blockCodec, rawPayloadBytes, storedPayloadBytes)
+	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
 		return
 	}
@@ -685,11 +824,14 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 
 func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, codec valuelog.BlockCodec) int {
 	if records <= 1 {
+		recordLaneVlogBlockK(l, codec, 1)
 		return 1
 	}
 	ratio := 1.0
-	if l != nil && l.vlogCompressionSelector != nil {
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && l != nil && l.vlogCompressionSelector != nil {
 		ratio = l.vlogCompressionSelector.blockObservedRatio(codec)
+	} else {
+		ratio = laneVlogBlockObservedRatio(l, codec)
 	}
 	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, db.valueLogBlockTargetBytes, ratio)
 	if k < 1 {
@@ -698,5 +840,6 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	if k > valuelog.MaxFrameK {
 		k = valuelog.MaxFrameK
 	}
+	recordLaneVlogBlockK(l, codec, k)
 	return k
 }

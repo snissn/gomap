@@ -38,6 +38,12 @@ type lane struct {
 	vlogDictBytesMu         sync.RWMutex
 	vlogDictBytes           map[uint64][]byte
 	vlogCompressionSelector *vlogCompressionSelector
+	vlogBlockRatioBits      [vlogBlockCodecCount]atomic.Uint64
+	vlogBlockRatioSamples   [vlogBlockCodecCount]atomic.Uint64
+	vlogBlockKCount         [vlogBlockCodecCount]atomic.Uint64
+	vlogBlockKSum           [vlogBlockCodecCount]atomic.Uint64
+	vlogBlockKMax           [vlogBlockCodecCount]atomic.Uint64
+	vlogBlockKBuckets       [vlogBlockCodecCount][vlogBlockKBucketCount]atomic.Uint64
 	vlogQueueing            atomic.Bool
 	vlogDirty               atomic.Bool
 	vlogLiveBytes           atomic.Int64
