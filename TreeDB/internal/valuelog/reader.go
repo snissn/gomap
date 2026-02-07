@@ -247,6 +247,17 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		return nil, ErrRecordTooLarge
 	}
 
+	if header.DictID == 0 && header.Flags&FrameFlagCompressed != 0 && header.Reserved != 0 {
+		if dst == nil {
+			dst = make([]byte, 0, rawLen)
+		} else if cap(dst) < int(rawLen) {
+			dst = make([]byte, 0, rawLen)
+		} else {
+			dst = dst[:0]
+		}
+		return decodeBlockPayload(header.Reserved, payload, rawLen, dst)
+	}
+
 	var dec *zstd.Decoder
 	var release func()
 	if header.DictID != 0 {

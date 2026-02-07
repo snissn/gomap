@@ -199,6 +199,7 @@ func Open(opts Options) (*DB, error) {
 		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
 		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
 		dictOpts.ValueLog.ForcePointers = false
+		dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		dictOpts.ChunkSize = dictChunkSize
 		var err error
@@ -223,6 +224,7 @@ func Open(opts Options) (*DB, error) {
 		// templatedb uses batch.Set for small routing/index entries. Do not
 		// propagate ForcePointers from the main DB into this internal store.
 		templateOpts.ValueLog.ForcePointers = false
+		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
 		templateOpts.ValueLog.TemplateLookup = nil
@@ -325,6 +327,12 @@ func Open(opts Options) (*DB, error) {
 		ValueLogRawWritevMinAvgBytes:        opts.ValueLog.RawWritevMinAvgBytes,
 		ValueLogRawWritevMinBatchRecords:    opts.ValueLog.RawWritevMinBatchRecords,
 		ValueLogMaxSegmentBytes:             valueLogMaxSegmentBytes,
+		ValueLogCompression:                 uint8(opts.ValueLog.Compression),
+		ValueLogBlockCodec:                  uint8(opts.ValueLog.BlockCodec),
+		ValueLogBlockTargetCompressedBytes:  opts.ValueLog.BlockTargetCompressedBytes,
+		ValueLogIncompressibleHoldBytes:     opts.ValueLog.IncompressibleHoldBytes,
+		ValueLogIncompressibleProbeBytes:    opts.ValueLog.IncompressibleProbeIntervalBytes,
+		ValueLogAutoPolicy:                  uint8(opts.ValueLog.AutoPolicy),
 		ForceValueLogPointers:               opts.ValueLog.ForcePointers,
 		ValueLogDictTrain:                   opts.ValueLog.DictTrain,
 		ValueLogDictMaxK:                    opts.ValueLog.DictMaxK,

@@ -118,8 +118,64 @@ const (
 	IntegritySkipChecksums
 )
 
+// ValueLogCompressionMode selects value-log compression behavior in cached mode.
+type ValueLogCompressionMode uint8
+
+const (
+	// ValueLogCompressionOff stores value-log grouped frames uncompressed.
+	//
+	// Zero is intentionally reserved as "unset/default" to preserve legacy
+	// behavior for callers that do not explicitly configure compression mode.
+	ValueLogCompressionOff ValueLogCompressionMode = iota + 1
+	// ValueLogCompressionBlock uses block compression without dictionaries.
+	ValueLogCompressionBlock
+	// ValueLogCompressionDict uses dictionary compression when available.
+	ValueLogCompressionDict
+	// ValueLogCompressionAuto adaptively chooses off/block/dict.
+	ValueLogCompressionAuto
+)
+
+// ValueLogBlockCodec selects the block codec used for block compression modes.
+type ValueLogBlockCodec uint8
+
+const (
+	ValueLogBlockSnappy ValueLogBlockCodec = iota
+	ValueLogBlockLZ4
+	ValueLogBlockZSTD
+)
+
+// ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
+type ValueLogAutoPolicy uint8
+
+const (
+	ValueLogAutoBalanced ValueLogAutoPolicy = iota
+	ValueLogAutoThroughput
+	ValueLogAutoSize
+)
+
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
+	// Compression selects value-log compression behavior.
+	Compression ValueLogCompressionMode
+	// BlockCodec selects the block codec for block compression.
+	BlockCodec ValueLogBlockCodec
+	// BlockTargetCompressedBytes guides grouped block size adaptation.
+	//
+	// 0 uses a default.
+	BlockTargetCompressedBytes int
+	// IncompressibleHoldBytes configures auto-mode suppression duration after
+	// repeated incompressible probes.
+	//
+	// 0 uses a default.
+	IncompressibleHoldBytes int
+	// IncompressibleProbeIntervalBytes controls probe cadence while
+	// incompressible hold is active.
+	//
+	// 0 uses a default.
+	IncompressibleProbeIntervalBytes int
+	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
+	AutoPolicy ValueLogAutoPolicy
+
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
 	// settings may choose a smaller default to avoid large-scale update cliffs by
@@ -583,6 +639,41 @@ func validateOptions(opts Options) error {
 	case IntegrityVerify, IntegritySkipChecksums:
 	default:
 		return fmt.Errorf("treedb: invalid value-log integrity mode %d", opts.ValueLog.ReadIntegrity)
+	}
+	switch opts.ValueLog.Compression {
+	case 0:
+		// Unset/default mode is allowed for backward-compatible behavior.
+	case ValueLogCompressionOff, ValueLogCompressionBlock, ValueLogCompressionDict, ValueLogCompressionAuto:
+	default:
+		return fmt.Errorf("treedb: invalid value-log compression mode %d", opts.ValueLog.Compression)
+	}
+	switch opts.ValueLog.BlockCodec {
+	case ValueLogBlockSnappy, ValueLogBlockLZ4, ValueLogBlockZSTD:
+	default:
+		return fmt.Errorf("treedb: invalid value-log block codec %d", opts.ValueLog.BlockCodec)
+	}
+	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
+	}
+	if opts.ValueLog.BlockTargetCompressedBytes > 0 {
+		const (
+			minBlockTargetCompressedBytes = 256
+			maxBlockTargetCompressedBytes = 1 << 20
+		)
+		if opts.ValueLog.BlockTargetCompressedBytes < minBlockTargetCompressedBytes || opts.ValueLog.BlockTargetCompressedBytes > maxBlockTargetCompressedBytes {
+			return fmt.Errorf("treedb: value-log block target compressed bytes out of range [%d,%d]: %d", minBlockTargetCompressedBytes, maxBlockTargetCompressedBytes, opts.ValueLog.BlockTargetCompressedBytes)
+		}
+	}
+	if opts.ValueLog.IncompressibleHoldBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log incompressible hold bytes %d", opts.ValueLog.IncompressibleHoldBytes)
+	}
+	if opts.ValueLog.IncompressibleProbeIntervalBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log incompressible probe interval bytes %d", opts.ValueLog.IncompressibleProbeIntervalBytes)
+	}
+	switch opts.ValueLog.AutoPolicy {
+	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:
+	default:
+		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
 	}
 	return nil
 }

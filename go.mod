@@ -10,7 +10,9 @@ require (
 	github.com/dgraph-io/badger/v4 v4.8.0
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-errors/errors v1.5.1
+	github.com/golang/snappy v0.0.4
 	github.com/nutsdb/nutsdb v1.1.0
+	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/snissn/compress v1.18.2-snissn.0.0.20260204222835-33fc0851d88e
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
@@ -51,7 +53,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
-	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect

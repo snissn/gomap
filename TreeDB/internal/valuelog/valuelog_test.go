@@ -796,3 +796,125 @@ func TestEncodeFrameSkipsCompressionWithoutDict(t *testing.T) {
 		t.Fatalf("payload mismatch")
 	}
 }
+
+func TestValueLogBlockCodecRoundTrip(t *testing.T) {
+	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4, BlockCodecZSTD}
+	for _, codec := range codecs {
+		t.Run(fmt.Sprintf("codec_%d", codec), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "value-000001.log")
+
+			records := make([]Record, 16)
+			for i := range records {
+				records[i] = Record{
+					RID:   uint64(i + 1),
+					Value: bytes.Repeat([]byte("block-compressible-payload|"), 128),
+				}
+			}
+			writer, err := NewWriter(path, page.ValueLogFileID(1))
+			if err != nil {
+				t.Fatalf("new writer: %v", err)
+			}
+			writer.SetBlockCompression(codec, true)
+			dst := make([]page.ValuePtr, len(records))
+			ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+			if err != nil {
+				_ = writer.Close()
+				t.Fatalf("append frame: %v", err)
+			}
+			if !stats.Kept {
+				_ = writer.Close()
+				t.Fatalf("expected compressed block frame to be kept")
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("close writer: %v", err)
+			}
+
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("open file: %v", err)
+			}
+			t.Cleanup(func() { _ = f.Close() })
+
+			for i, ptr := range ptrs {
+				got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
+				if err != nil {
+					t.Fatalf("read ptr[%d]: %v", i, err)
+				}
+				if !bytes.Equal(got, records[i].Value) {
+					t.Fatalf("value mismatch at %d", i)
+				}
+			}
+
+			fileData, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read file: %v", err)
+			}
+			bodyLen := binary.LittleEndian.Uint32(fileData[16:20])
+			frameBody := fileData[HeaderSize : HeaderSize+int(bodyLen)]
+			hdr, _, _, _, err := DecodeFrame(frameBody)
+			if err != nil {
+				t.Fatalf("decode frame: %v", err)
+			}
+			if hdr.Reserved != byte(codec) {
+				t.Fatalf("codec id mismatch: got=%d want=%d", hdr.Reserved, codec)
+			}
+		})
+	}
+}
+
+func TestValueLogUnsupportedBlockCodecID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-"), 256)},
+		{RID: 2, Value: bytes.Repeat([]byte("alpha-"), 256)},
+	}
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected compressed frame")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) < HeaderSize+FrameHeaderSize {
+		t.Fatalf("unexpected record length: %d", len(data))
+	}
+	// Set an invalid codec id in frame header reserved byte.
+	data[HeaderSize+3] = 0xFE
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	_, err = ReadAtWithDict(f, ptrs[0], false, nil, nil, nil, templ.DecodeOptions{})
+	if err == nil {
+		t.Fatalf("expected error for unsupported codec id")
+	}
+	var codecErr UnsupportedBlockCodecError
+	if !errors.As(err, &codecErr) {
+		t.Fatalf("expected UnsupportedBlockCodecError, got %v", err)
+	}
+}

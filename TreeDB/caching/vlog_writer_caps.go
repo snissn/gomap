@@ -29,6 +29,10 @@ type rawWritevStrategySetter interface {
 	SetRawWritevStrategy(minAvgBytes, minBatchRecs int)
 }
 
+type blockCompressionSetter interface {
+	SetBlockCompression(codec valuelog.BlockCodec, enabled bool)
+}
+
 type vlogWriterCaps struct {
 	writer    valueWriter
 	keep      keepPolicySetter

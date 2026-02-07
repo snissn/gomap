@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -33,7 +34,8 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writer1: %v", err)
 	}
-	ptr1, err := w1.Append(0, nil, 1, []byte("value-1"))
+	w1.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+	ptr1, err := w1.Append(0, nil, 1, bytes.Repeat([]byte("value-1|"), 128))
 	if err != nil {
 		t.Fatalf("append1: %v", err)
 	}
@@ -50,7 +52,7 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writer2: %v", err)
 	}
-	ptr2, err := w2.Append(0, nil, 2, []byte("value-2"))
+	ptr2, err := w2.Append(0, nil, 2, bytes.Repeat([]byte("value-2|"), 64))
 	if err != nil {
 		t.Fatalf("append2: %v", err)
 	}
