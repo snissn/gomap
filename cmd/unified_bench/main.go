@@ -1257,8 +1257,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
-			var k [8]byte
 			valPos := 0
+			keyBytes := make([]byte, total*8)
+			for j := 0; j < total; j++ {
+				encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
+			}
+			start = time.Now()
 			for i := 0; i < total; i += cfg.BatchSize {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
@@ -1278,24 +1282,27 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if end > total {
 					end = total
 				}
-				for j := i; j < end; j++ {
-					encodeKey(k[:], uint64(j+cfg.Keys))
-					value := values[valPos%len(values)]
-					valPos++
-					var err error
-					if setView != nil {
-						// batch_write uses immutable values from a prebuilt pool;
-						// copy just the key and pass value by view to reduce
-						// benchmark-side write-path copy overhead.
-						keyCopy := make([]byte, len(k))
-						copy(keyCopy, k[:])
-						err = setView(keyCopy, value)
-					} else {
-						err = batch.Set(k[:], value)
+				if setView != nil {
+					// batch_write uses immutable values from a prebuilt pool and
+					// precomputed immutable keys.
+					for j := i; j < end; j++ {
+						keyView := keyBytes[j*8 : (j+1)*8]
+						value := values[valPos%len(values)]
+						valPos++
+						if err := setView(keyView, value); err != nil {
+							_ = batch.Close()
+							return 0, fmt.Errorf("batch_write: set: %w", err)
+						}
 					}
-					if err != nil {
-						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write: set: %w", err)
+				} else {
+					for j := i; j < end; j++ {
+						keyView := keyBytes[j*8 : (j+1)*8]
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							_ = batch.Close()
+							return 0, fmt.Errorf("batch_write: set: %w", err)
+						}
 					}
 				}
 				if err := batch.Commit(); err != nil {

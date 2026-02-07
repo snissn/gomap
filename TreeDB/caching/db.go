@@ -10422,6 +10422,7 @@ type Batch struct {
 	size         int
 	walBuf       []logRecord
 	shardIdxs    []int
+	eligibleIdxs []int
 	shardAdds    []int64
 	shardCnts    []int
 	shardEntries [][]batch.Entry
@@ -10466,6 +10467,9 @@ func (b *Batch) Reset() {
 	}
 	if b.shardAdds != nil {
 		b.shardAdds = b.shardAdds[:0]
+	}
+	if b.eligibleIdxs != nil {
+		b.eligibleIdxs = b.eligibleIdxs[:0]
 	}
 	if b.shardCnts != nil {
 		b.shardCnts = b.shardCnts[:0]
@@ -11018,7 +11022,13 @@ func (b *Batch) writeRegular(sync bool) error {
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
 
-	eligibleIdxs := make([]int, 0, len(b.entries))
+	eligibleIdxs := b.eligibleIdxs
+	if cap(eligibleIdxs) < len(b.entries) {
+		eligibleIdxs = make([]int, 0, len(b.entries))
+	} else {
+		eligibleIdxs = eligibleIdxs[:0]
+	}
+	b.eligibleIdxs = eligibleIdxs
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
@@ -11505,6 +11515,7 @@ func (b *Batch) Close() error {
 		b.backend = nil
 	}
 	b.walBuf = nil
+	b.eligibleIdxs = nil
 	b.firstKey = nil
 	b.lastKey = nil
 	return nil
