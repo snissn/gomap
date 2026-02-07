@@ -351,7 +351,6 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 		}
 		return m.ratio <= 0.995 && m.throughput >= offThroughput*0.90
 	}
-	return false
 }
 
 func (s *vlogCompressionSelector) availableCandidates(dictAvailable bool) []vlogAutoCandidate {
