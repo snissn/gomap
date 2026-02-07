@@ -16,6 +16,13 @@ OUT_ROOT="${OUT_DIR:-$ROOT/artifacts/perf}"
 TS=$(date +%Y%m%d%H%M%S)
 OUT="$OUT_ROOT/issue384_profiles_${TS}"
 
+TESTS_COMPACT=${TESTS//[[:space:]]/}
+if [[ ",$TESTS_COMPACT," != *",batch_write,"* ]]; then
+  echo "TESTS must include batch_write so cpu_batch_write_treedb.pprof is generated" >&2
+  exit 2
+fi
+TESTS="$TESTS_COMPACT"
+
 RUN_PREFIX="${RUN_PREFIX:-}"
 if [[ -n "${CPUSET:-}" ]]; then
   RUN_PREFIX="taskset -c ${CPUSET} ${RUN_PREFIX}"
@@ -82,6 +89,7 @@ run_profile() {
     -treedb-cache-stats-before-reads=true
     -treedb-vlog-compression "$COMPRESSION"
     -cpuprofile "$dest/cpu"
+    -cpuprofile-tests batch_write
     -blockprofile "$dest/block.pprof"
     -mutexprofile "$dest/mutex.pprof"
     -blockprofilerate 1
@@ -100,12 +108,12 @@ run_profile() {
 run_profile "$OUT/bin/unified-bench-baseline" "$OUT/profiles_baseline"
 run_profile "$OUT/bin/unified-bench-candidate" "$OUT/profiles_candidate"
 
-go tool pprof -top "$OUT/profiles_baseline/cpu_batch_write_treedb.pprof" >"$OUT/profiles_baseline/cpu_top.txt"
-go tool pprof -top "$OUT/profiles_candidate/cpu_batch_write_treedb.pprof" >"$OUT/profiles_candidate/cpu_top.txt"
-go tool pprof -top "$OUT/profiles_baseline/block.pprof" >"$OUT/profiles_baseline/block_top.txt"
-go tool pprof -top "$OUT/profiles_candidate/block.pprof" >"$OUT/profiles_candidate/block_top.txt"
-go tool pprof -top "$OUT/profiles_baseline/mutex.pprof" >"$OUT/profiles_baseline/mutex_top.txt"
-go tool pprof -top "$OUT/profiles_candidate/mutex.pprof" >"$OUT/profiles_candidate/mutex_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-baseline" "$OUT/profiles_baseline/cpu_batch_write_treedb.pprof" >"$OUT/profiles_baseline/cpu_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-candidate" "$OUT/profiles_candidate/cpu_batch_write_treedb.pprof" >"$OUT/profiles_candidate/cpu_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-baseline" "$OUT/profiles_baseline/block.pprof" >"$OUT/profiles_baseline/block_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-candidate" "$OUT/profiles_candidate/block.pprof" >"$OUT/profiles_candidate/block_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-baseline" "$OUT/profiles_baseline/mutex.pprof" >"$OUT/profiles_baseline/mutex_top.txt"
+go tool pprof -top "$OUT/bin/unified-bench-candidate" "$OUT/profiles_candidate/mutex.pprof" >"$OUT/profiles_candidate/mutex_top.txt"
 
 python3 - "$OUT" <<'PY'
 import re

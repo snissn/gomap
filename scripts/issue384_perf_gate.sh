@@ -26,6 +26,15 @@ NIGHTLY_EXTRA_PATTERN="${NIGHTLY_EXTRA_PATTERN:-}"
 AUTO_SANITY_MIN_FRAC="${AUTO_SANITY_MIN_FRAC:-0.95}"
 STRICT_GATE="${STRICT_GATE:-1}"
 
+if (( RUNS < 1 )); then
+  echo "RUNS must be >= 1" >&2
+  exit 2
+fi
+if (( WARMUP_RUNS < 0 )); then
+  echo "WARMUP_RUNS must be >= 0" >&2
+  exit 2
+fi
+
 export GOMAXPROCS="${GOMAXPROCS:-4}"
 
 mkdir -p "$OUT/runs" "$OUT/bin" "$OUT/worktrees"
@@ -89,6 +98,9 @@ if [[ -n "$NIGHTLY_EXTRA_PATTERN" ]]; then
     "mix_v2048_rand|batch_write,random_read|2048|$NIGHTLY_EXTRA_PATTERN|off|10|scored"
   )
 fi
+
+CASES_FILE="$OUT/cases.tsv"
+printf '%s\n' "${cases[@]}" >"$CASES_FILE"
 
 run_one() {
   local bin="$1"
@@ -156,16 +168,16 @@ for spec in "${cases[@]}"; do
 
   echo "--- case=$case_id mode=$mode tests=$tests valsize=$valsize pattern=$pattern comp=$comp ---"
 
-  for i in $(seq 1 "$WARMUP_RUNS"); do
+  for ((i = 1; i <= WARMUP_RUNS; i++)); do
     run_pair "$case_id" "$tests" "$valsize" "$pattern" "$comp" warmup "$i"
   done
 
-  for i in $(seq 1 "$RUNS"); do
+  for ((i = 1; i <= RUNS; i++)); do
     run_pair "$case_id" "$tests" "$valsize" "$pattern" "$comp" measured "$i"
   done
 done
 
-python3 - "$OUT" "$AUTO_SANITY_MIN_FRAC" "$STRICT_GATE" <<'PY'
+python3 - "$OUT" "$AUTO_SANITY_MIN_FRAC" "$STRICT_GATE" "$CASES_FILE" <<'PY'
 import json
 import math
 import re
@@ -176,6 +188,7 @@ from pathlib import Path
 out = Path(sys.argv[1])
 auto_min_frac = float(sys.argv[2])
 strict_gate = sys.argv[3] not in {"0", "false", "False"}
+cases_file = Path(sys.argv[4])
 meta = {}
 for line in (out / "meta.txt").read_text().splitlines():
     if "=" in line:
@@ -183,23 +196,15 @@ for line in (out / "meta.txt").read_text().splitlines():
         meta[k] = v
 
 case_specs = []
-for raw in [
-    ("bw_v256", "batch_write", 256, meta.get("scored_pattern", "medium_compressible_sparse"), "off", 15.0, "scored"),
-    ("bw_v2048", "batch_write", 2048, meta.get("scored_pattern", "medium_compressible_sparse"), "off", 15.0, "scored"),
-    ("mix_v256", "batch_write,random_read", 256, meta.get("scored_pattern", "medium_compressible_sparse"), "off", 10.0, "scored"),
-    ("mix_v2048", "batch_write,random_read", 2048, meta.get("scored_pattern", "medium_compressible_sparse"), "off", 10.0, "scored"),
-    ("auto_sanity_v256", "batch_write,random_read", 256, meta.get("scored_pattern", "medium_compressible_sparse"), "auto", 0.0, "auto_sanity"),
-]:
-    case_specs.append(raw)
-
-nightly_pattern = meta.get("nightly_extra_pattern", "").strip()
-if nightly_pattern:
-    case_specs.extend([
-        ("bw_v256_rand", "batch_write", 256, nightly_pattern, "off", 15.0, "scored"),
-        ("bw_v2048_rand", "batch_write", 2048, nightly_pattern, "off", 15.0, "scored"),
-        ("mix_v256_rand", "batch_write,random_read", 256, nightly_pattern, "off", 10.0, "scored"),
-        ("mix_v2048_rand", "batch_write,random_read", 2048, nightly_pattern, "off", 10.0, "scored"),
-    ])
+for raw in cases_file.read_text().splitlines():
+    raw = raw.strip()
+    if not raw:
+        continue
+    parts = raw.split("|")
+    if len(parts) != 7:
+        raise SystemExit(f"invalid case spec (expected 7 fields): {raw}")
+    case_id, tests, valsize, pattern, comp, threshold, mode = parts
+    case_specs.append((case_id, tests, int(valsize), pattern, comp, float(threshold), mode))
 
 pat_batch_diag = re.compile(r"^Batch Write / TreeDB = ([0-9][0-9,]*(?:\.[0-9]+)?)\s*$", re.M)
 pat_batch_md = re.compile(r"^\|\s*Batch Write\s*\|\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*\|", re.M)

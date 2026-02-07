@@ -18,7 +18,7 @@ permissions:
 jobs:
   per_pr_gate:
     name: per-pr 4m gate (self-hosted)
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, perf]
     timeout-minutes: 90
     steps:
@@ -39,7 +39,7 @@ jobs:
         env:
           GOMAXPROCS: 4
         run: |
-          scripts/issue384_perf_gate.sh
+          ./scripts/issue384_perf_gate.sh
 
       - name: Upload perf artifacts
         if: always()
@@ -71,7 +71,7 @@ jobs:
         env:
           GOMAXPROCS: 4
         run: |
-          scripts/issue384_nightly_gate.sh
+          ./scripts/issue384_nightly_gate.sh
 
       - name: Upload perf artifacts
         if: always()
