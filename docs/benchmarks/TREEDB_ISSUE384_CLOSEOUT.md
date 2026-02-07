@@ -21,9 +21,11 @@ for issue #384.
 Commands:
 
 ```bash
-cd /Users/michaelseiler/dev/snissn/gomap
+cd "$(git rev-parse --show-toplevel)"
 scripts/issue384_invariant_gate.sh
 scripts/issue384_perf_gate.sh
+# nightly/slow gate
+scripts/issue384_nightly_gate.sh
 ISSUE_NUMBER=384 PR_NUMBER=<pr> MILESTONE=<mX> \
   SUMMARY_PATH=artifacts/perf/<gate_dir>/summary.md \
   ARTIFACT_DIR=artifacts/perf/<gate_dir> \
@@ -32,9 +34,9 @@ ISSUE_NUMBER=384 PR_NUMBER=<pr> MILESTONE=<mX> \
 
 ## Required Evidence Per Milestone
 
-- pprof hotspot diff (CPU + mutex/block)
+- pprof hotspot diff (CPU + alloc + mutex/block)
 - benchmark delta table vs fixed baseline hash
-- gate pass/fail summary
+- perf gate pass/fail summary
 - rollback note
 
 ## Risk Notes
