@@ -1,0 +1,74 @@
+name: "issue384: perf gates"
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'TreeDB/**'
+      - 'cmd/unified_bench/**'
+      - 'scripts/issue384_*'
+      - '.github/workflows/issue384-perf.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  per_pr_gate:
+    name: per-pr 4m gate (self-hosted)
+    runs-on: [self-hosted, linux, perf]
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run #384 per-PR perf gate
+        env:
+          GOMAXPROCS: 4
+        run: |
+          scripts/issue384_perf_gate.sh
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue384-per-pr-artifacts
+          path: artifacts/perf/issue384_gate_*/
+
+  nightly_12m:
+    name: nightly 12m gate (self-hosted)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, perf]
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run #384 nightly perf gate
+        env:
+          GOMAXPROCS: 4
+        run: |
+          scripts/issue384_nightly_gate.sh
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue384-nightly-artifacts
+          path: artifacts/perf/issue384_gate_*/
