@@ -43,6 +43,8 @@ type Writer struct {
 	scratch                []byte
 	prefixBuf              []byte
 	rawScratch             []byte
+	rawWritevIovs          [][]byte
+	rawWritevMeta          []byte
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
 	blockScratch           []byte

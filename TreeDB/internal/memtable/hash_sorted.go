@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"sort"
 	"strings"
 	"sync"
@@ -99,6 +100,8 @@ type HashSorted struct {
 	finalizeOnce sync.Once
 	finalizeDone chan struct{}
 }
+
+func (*HashSorted) StableUnsafeIteratorSlices() bool { return true }
 
 type hashSortedIndex struct {
 	mu      sync.Mutex
@@ -201,10 +204,24 @@ func (m *HashSorted) Reset() {
 }
 
 func (m *HashSorted) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.applyStealSortedBatch(entries, onKey, false)
+}
+
+func (m *HashSorted) ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte)) {
+	m.applyStealSortedBatch(entries, onKey, true)
+}
+
+func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
 	var chunks []hashSortedIndexWork
 
 	m.mu.Lock()
-	if m.canAppendSortedBatchLocked(entries) {
+	canAppend := false
+	if trustedOrder {
+		canAppend = m.canAppendAfterMaxLocked(entries)
+	} else {
+		canAppend = m.canAppendSortedBatchLocked(entries)
+	}
+	if canAppend {
 		for _, op := range entries {
 			if chunk, seq := m.setEntryNewStealLocked(op); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
@@ -767,16 +784,20 @@ func (m *HashSorted) canAppendSortedBatchLocked(entries []batchpkg.Entry) bool {
 	if len(entries) == 0 || entries[0].Key == nil {
 		return false
 	}
-	prev := bytesToStringNoCopy(entries[0].Key)
+	prev := entries[0].Key
 	for i := 1; i < len(entries); i++ {
-		if entries[i].Key == nil {
-			return false
-		}
-		cur := bytesToStringNoCopy(entries[i].Key)
-		if strings.Compare(cur, prev) <= 0 {
+		cur := entries[i].Key
+		if cur == nil || bytes.Compare(cur, prev) <= 0 {
 			return false
 		}
 		prev = cur
+	}
+	return m.canAppendAfterMaxLocked(entries)
+}
+
+func (m *HashSorted) canAppendAfterMaxLocked(entries []batchpkg.Entry) bool {
+	if len(entries) == 0 || entries[0].Key == nil {
+		return false
 	}
 	if len(m.items) == 0 {
 		return true
