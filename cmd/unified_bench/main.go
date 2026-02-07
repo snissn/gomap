@@ -1269,6 +1269,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err != nil {
 					return 0, fmt.Errorf("batch_write: new batch: %w", err)
 				}
+				var setView func(key, value []byte) error
+				if sv, ok := batch.(interface{ SetView(key, value []byte) error }); ok {
+					setView = sv.SetView
+				}
 
 				end := i + cfg.BatchSize
 				if end > total {
@@ -1278,7 +1282,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(k[:], uint64(j+cfg.Keys))
 					value := values[valPos%len(values)]
 					valPos++
-					if err := batch.Set(k[:], value); err != nil {
+					var err error
+					if setView != nil {
+						// batch_write uses immutable values from a prebuilt pool;
+						// copy just the key and pass value by view to reduce
+						// benchmark-side write-path copy overhead.
+						keyCopy := make([]byte, len(k))
+						copy(keyCopy, k[:])
+						err = setView(keyCopy, value)
+					} else {
+						err = batch.Set(k[:], value)
+					}
+					if err != nil {
 						_ = batch.Close()
 						return 0, fmt.Errorf("batch_write: set: %w", err)
 					}
