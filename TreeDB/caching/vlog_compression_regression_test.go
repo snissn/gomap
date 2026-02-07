@@ -15,12 +15,12 @@ func TestResolveVlogWriteMode_DefaultUsesAutoBehavior(t *testing.T) {
 		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
 	}
 
-	mode, _, probe := db.resolveVlogWriteMode(nil, 0, 4096)
+	mode, _, probe := db.resolveVlogWriteMode(nil, 0, 4096, 4096)
 	if mode != vlogWriteBlock || probe {
 		t.Fatalf("default mode with no dict should follow auto/block, got mode=%v probe=%v", mode, probe)
 	}
 
-	mode, _, probe = db.resolveVlogWriteMode(nil, 7, 4096)
+	mode, _, probe = db.resolveVlogWriteMode(nil, 7, 4096, 4096)
 	if mode != vlogWriteDict || probe {
 		t.Fatalf("default mode with dict should follow auto/dict, got mode=%v probe=%v", mode, probe)
 	}

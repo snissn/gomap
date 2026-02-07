@@ -190,6 +190,24 @@ type vlogCompressionSelector struct {
 	bypassBytes       uint64
 }
 
+func (s *vlogCompressionSelector) normalizeLargePayloadCandidate(c vlogAutoCandidate, unitPayloadBytes int) vlogAutoCandidate {
+	if s == nil {
+		return c
+	}
+	if s.policy == vlogAutoThroughput {
+		return c
+	}
+	if unitPayloadBytes >= 1024 && c == vlogAutoCandidateBlockSnappy {
+		lz4 := s.metric(vlogAutoCandidateBlockLZ4)
+		// When lz4 is already producing very small output, keep large-payload
+		// streams on lz4 to avoid ratio regressions from exploratory snappy frames.
+		if lz4.samples >= 4 && (lz4.ratio <= 0.02 || (unitPayloadBytes >= 512 && lz4.ratio <= 0.05)) {
+			return vlogAutoCandidateBlockLZ4
+		}
+	}
+	return c
+}
+
 func (c vlogAutoCandidate) suffix() string {
 	switch c {
 	case vlogAutoCandidateOff:
@@ -437,6 +455,9 @@ func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bo
 		if c == current {
 			continue
 		}
+		if c == vlogAutoCandidateOff {
+			continue
+		}
 		if s.skipExplorationCandidate(current, currentMetric, c) {
 			continue
 		}
@@ -474,8 +495,17 @@ func (s *vlogCompressionSelector) skipExplorationCandidate(current vlogAutoCandi
 	// auto close to the best steady-state ratio on highly compressible streams.
 	if isBlockCandidate(current) && isBlockCandidate(candidate) {
 		if currentMetric.samples >= 4 && candidateMetric.samples >= 4 {
-			if candidateMetric.ratio > currentMetric.ratio*2.00 && candidateMetric.throughput < currentMetric.throughput*1.15 {
-				return true
+			switch s.policy {
+			case vlogAutoThroughput:
+				if candidateMetric.ratio > currentMetric.ratio*2.00 && candidateMetric.throughput < currentMetric.throughput*1.15 {
+					return true
+				}
+			default:
+				ratioWorse := candidateMetric.ratio > currentMetric.ratio*1.20
+				throughputGain := candidateMetric.throughput >= currentMetric.throughput*1.10
+				if ratioWorse && !throughputGain {
+					return true
+				}
 			}
 		}
 	}
@@ -540,6 +570,12 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 		probeBytes = holdBytes
 	}
 	seedCodec = normalizeSelectorBlockCodec(seedCodec)
+	initialExplore := uint64(defaultVlogExploreBytes)
+	if initialExplore > 512<<10 {
+		// Prime a first exploration decision quickly, then use the normal steady
+		// exploration cadence for the rest of the stream.
+		initialExplore = 512 << 10
+	}
 	return &vlogCompressionSelector{
 		policy:           policy,
 		holdBytes:        holdBytes,
@@ -548,7 +584,7 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 		dwellBytes:       defaultVlogModeDwellBytes,
 		seedCodec:        seedCodec,
 		currentCandidate: blockCandidateFromCodec(seedCodec),
-		exploreRemaining: defaultVlogExploreBytes,
+		exploreRemaining: initialExplore,
 		metrics: [vlogAutoCandidateCount]vlogCandidateMetrics{
 			vlogAutoCandidateOff:         {ratio: 1.0, throughput: 1.0, samples: 1},
 			vlogAutoCandidateDict:        {ratio: 0.92, throughput: 0.90},
@@ -562,7 +598,7 @@ func newVlogCompressionSelector(policy vlogAutoPolicy, holdBytes, probeBytes uin
 	return newVlogCompressionSelectorWithSeed(policy, holdBytes, probeBytes, valuelog.BlockCodecSnappy)
 }
 
-func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes, unitPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	if s == nil {
 		if dictAvailable {
 			return vlogWriteDict, valuelog.BlockCodecSnappy, false
@@ -571,6 +607,9 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 	}
 	if rawPayloadBytes <= 0 {
 		return vlogWriteOff, s.seedCodec, false
+	}
+	if unitPayloadBytes <= 0 {
+		unitPayloadBytes = rawPayloadBytes
 	}
 	rawBytes := uint64(rawPayloadBytes)
 	s.mu.Lock()
@@ -600,6 +639,7 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 				}
 				s.probeRemaining = nextProbe
 				candidate := s.preferredProbeCandidate(dictAvailable)
+				candidate = s.normalizeLargePayloadCandidate(candidate, unitPayloadBytes)
 				s.probeAttempts++
 				mode, codec := candidateWriteMode(candidate, s.seedCodec)
 				return mode, codec, true
@@ -626,6 +666,7 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 			s.exploreRemaining = nextInterval
 			if nextInterval == s.exploreBytes && !s.shouldSkipExploration(dictAvailable) {
 				candidate := s.preferredExplorationCandidate(dictAvailable)
+				candidate = s.normalizeLargePayloadCandidate(candidate, unitPayloadBytes)
 				if candidate != s.currentCandidate {
 					s.probeAttempts++
 					mode, codec := candidateWriteMode(candidate, s.seedCodec)
@@ -638,6 +679,7 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 	}
 
 	target := s.preferredCandidate(dictAvailable)
+	target = s.normalizeLargePayloadCandidate(target, unitPayloadBytes)
 	chosen := s.maybeSwitch(target, rawBytes, dictAvailable)
 	mode, codec := candidateWriteMode(chosen, s.seedCodec)
 	return mode, codec, false
@@ -664,6 +706,15 @@ func (s *vlogCompressionSelector) shouldSkipExploration(dictAvailable bool) bool
 	// auto can still discover dict wins.
 	if dictAvailable && s.metric(vlogAutoCandidateDict).samples == 0 {
 		return false
+	}
+	cands := s.availableCandidates(dictAvailable)
+	for _, c := range cands {
+		if c == current {
+			continue
+		}
+		if !s.skipExplorationCandidate(current, currentMetric, c) {
+			return false
+		}
 	}
 	return true
 }
@@ -712,6 +763,16 @@ func (s *vlogCompressionSelector) observe(mode vlogCompressionWriteMode, blockCo
 		if updated.ratio < 0.99 && s.candidateLikelyBeneficial(candidate) {
 			s.probeSuccesses++
 			s.clearHold()
+			if candidate != s.currentCandidate {
+				currentMetric := s.metric(s.currentCandidate)
+				// Let successful probes steer steady-state mode quickly when the
+				// probed candidate shows a clear size or throughput advantage.
+				if updated.ratio <= currentMetric.ratio*0.90 || updated.throughput >= currentMetric.throughput*1.05 {
+					s.switches[s.currentCandidate][candidate]++
+					s.currentCandidate = candidate
+					s.modeBytes = 0
+				}
+			}
 		}
 	}
 
@@ -935,7 +996,7 @@ func snapshotLaneVlogBlockRatio(l *lane) vlogBlockRatioSnapshot {
 	return out
 }
 
-func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unitPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	switch mode {
 	case vlogCompressionOff:
@@ -949,13 +1010,21 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes int) 
 		return vlogWriteOff, db.valueLogBlockCodec, false
 	default:
 		// Default/unset compression behavior follows auto mode.
+		if unitPayloadBytes <= 0 {
+			unitPayloadBytes = rawPayloadBytes
+		}
+		if dictID == 0 && unitPayloadBytes >= 2048 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
+			// For large payloads in balanced/size policies, prefer the stable lz4
+			// block path and avoid per-write selector overhead in the hot path.
+			return vlogWriteBlock, valuelog.BlockCodecLZ4, false
+		}
 		if l == nil || l.vlogCompressionSelector == nil {
 			if dictID != 0 {
 				return vlogWriteDict, db.valueLogBlockCodec, false
 			}
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
-		return l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes)
+		return l.vlogCompressionSelector.choose(dictID != 0, rawPayloadBytes, unitPayloadBytes)
 	}
 }
 

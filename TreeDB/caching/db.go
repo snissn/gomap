@@ -2732,6 +2732,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// While paused on degraded/incompressible streams, keep sampling sparse to
 	// minimize hot-path CPU overhead.
 	pausedSampleStride := uint64(256)
+	selectorSeedCodec := valueLogBlockCodec
+	if valueLogCompressionMode == vlogCompressionAuto && valueLogAutoPolicy != vlogAutoThroughput {
+		selectorSeedCodec = valuelog.BlockCodecLZ4
+	}
 
 	lanes := make([]lane, laneCount)
 	for i := range lanes {
@@ -2742,7 +2746,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			valueLogAutoPolicy,
 			uint64(valueLogIncompressibleHold),
 			uint64(valueLogIncompressibleProbe),
-			valueLogBlockCodec,
+			selectorSeedCodec,
 		)
 	}
 	db := &DB{
@@ -5104,7 +5108,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, rawPayloadBytes)
+	selectorPayloadBytes := rawPayloadBytes
+	selectorUnitPayloadBytes := rawPayloadBytes
+	if n := len(records); n > 0 {
+		selectorUnitPayloadBytes = rawPayloadBytes / n
+	}
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
@@ -5162,6 +5171,15 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
 		}
 		if writeMode != vlogWriteOff && allowDictSampling {
+			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
+				if selectorUnitPayloadBytes <= 256 {
+					allowDictSampling = false
+				} else {
+					allowDictSampling = db.valueLogDictShouldCollectPaused()
+				}
+			}
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
 			db.valueLogDictCollectSamples(records)
 		}
 	}
@@ -5170,6 +5188,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if dictID != 0 && len(dict) > 0 {
 		k = db.valueLogDictK(dictID)
 		k = db.chooseValueLogDictWriteK(k, len(records), rawPayloadBytes)
+		if mode == vlogCompressionAuto && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoSize && k > 16 {
+			k = 16
+		}
 	} else if blockMode && len(records) > 1 {
 		k = db.chooseValueLogBlockWriteK(l, len(records), rawPayloadBytes, blockCodec)
 	} else if len(records) > 1 {
@@ -5711,7 +5732,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value))
+	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
 	probeCompression := selectorProbe
 	fallbackToBlock := func() {
 		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
@@ -5770,6 +5791,15 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		allowDictSampling := true
 		if l != nil && l.vlogCompressionSelector != nil {
 			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
+				if len(value) <= 256 {
+					allowDictSampling = false
+				} else {
+					allowDictSampling = db.valueLogDictShouldCollectPaused()
+				}
+			}
 		}
 		if writeMode != vlogWriteOff && allowDictSampling {
 			db.valueLogDictCollectSample(value)
