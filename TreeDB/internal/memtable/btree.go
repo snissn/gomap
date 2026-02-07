@@ -30,6 +30,8 @@ type BTree struct {
 	degree    int
 }
 
+func (*BTree) StableUnsafeIteratorSlices() bool { return true }
+
 func NewBTree() *BTree {
 	return NewBTreeWithDegree(btreeDefaultDegree)
 }

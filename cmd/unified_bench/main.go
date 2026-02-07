@@ -1257,8 +1257,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			pc := newPeriodicCheckpoint(cfg)
 			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
-			var k [8]byte
 			valPos := 0
+			// Keep the precomputed-key optimization bounded so very large runs do
+			// not retain a huge contiguous key buffer for the whole benchmark.
+			const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
+			precomputeKeys := total > 0 && total <= maxPrecomputedKeyBytes/8
+			var keyBytes []byte
+			if precomputeKeys {
+				keyBytes = make([]byte, total*8)
+				for j := 0; j < total; j++ {
+					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
+				}
+			}
 			for i := 0; i < total; i += cfg.BatchSize {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
@@ -1269,18 +1279,43 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if err != nil {
 					return 0, fmt.Errorf("batch_write: new batch: %w", err)
 				}
+				var setView func(key, value []byte) error
+				if sv, ok := batch.(interface{ SetView(key, value []byte) error }); ok {
+					setView = sv.SetView
+				}
 
 				end := i + cfg.BatchSize
 				if end > total {
 					end = total
 				}
-				for j := i; j < end; j++ {
-					encodeKey(k[:], uint64(j+cfg.Keys))
-					value := values[valPos%len(values)]
-					valPos++
-					if err := batch.Set(k[:], value); err != nil {
-						_ = batch.Close()
-						return 0, fmt.Errorf("batch_write: set: %w", err)
+				if setView != nil && precomputeKeys {
+					// batch_write uses immutable values from a prebuilt pool and
+					// precomputed immutable keys.
+					for j := i; j < end; j++ {
+						keyView := keyBytes[j*8 : (j+1)*8]
+						value := values[valPos%len(values)]
+						valPos++
+						if err := setView(keyView, value); err != nil {
+							_ = batch.Close()
+							return 0, fmt.Errorf("batch_write: set: %w", err)
+						}
+					}
+				} else {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = keyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j+cfg.Keys))
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							_ = batch.Close()
+							return 0, fmt.Errorf("batch_write: set: %w", err)
+						}
 					}
 				}
 				if err := batch.Commit(); err != nil {
