@@ -132,6 +132,9 @@ func Open(opts Options) (*DB, error) {
 	if opts.KeepRecent == 0 && !opts.ReadOnly {
 		opts.KeepRecent = 1
 	}
+	if opts.ValueLog.Compression == 0 {
+		opts.ValueLog.Compression = db.ValueLogCompressionAuto
+	}
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {

@@ -104,3 +104,17 @@ func TestOptions_InvalidValueLogAutoPolicy(t *testing.T) {
 		t.Fatalf("expected error for invalid value-log auto policy")
 	}
 }
+
+func TestOptions_DefaultValueLogCompressionAuto(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if _, ok := stats["treedb.cache.vlog_auto.probe_attempts"]; !ok {
+		t.Fatalf("expected auto compression stats key in default configuration")
+	}
+}

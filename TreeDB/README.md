@@ -139,6 +139,8 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 - Value-log compression mode: `ValueLog.Compression` (`off|block|dict|auto`) and `ValueLog.BlockCodec` (`snappy|lz4`)
 - Index rebuild (in-place): `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` (currently an alias for CompactIndex)
 
+`ValueLog.Compression` defaults to `auto` when unset.
+
 Details: `docs/TREEDB_TUNING.md`.
 
 ### Exclusive Open (Process Lock)

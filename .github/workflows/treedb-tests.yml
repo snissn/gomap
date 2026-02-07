@@ -91,3 +91,39 @@ jobs:
             -bench-output vlog_dict_bench.txt \
             -baseline .github/perf_baselines/vlog_dict_defaults.json \
             -strict=true
+
+      - name: Incompressible auto-vs-off gate
+        run: |
+          go run ./cmd/unified_bench \
+            -keys 1000000 \
+            -valsize 512 \
+            -batchsize 1024 \
+            -dbs treedb_vlog_off \
+            -test batch_write \
+            -val-pattern random \
+            -format markdown \
+            -progress=false \
+            -keep=false \
+            -seed 1 \
+            -treedb-force-value-pointers=true \
+            -treedb-value-log-threshold=1 \
+            > vlog_auto_incompressible_off.txt 2>&1
+          go run ./cmd/unified_bench \
+            -keys 1000000 \
+            -valsize 512 \
+            -batchsize 1024 \
+            -dbs treedb_vlog_auto \
+            -test batch_write \
+            -val-pattern random \
+            -format markdown \
+            -progress=false \
+            -keep=false \
+            -seed 1 \
+            -treedb-force-value-pointers=true \
+            -treedb-value-log-threshold=1 \
+            > vlog_auto_incompressible_auto.txt 2>&1
+          go run .github/scripts/check_vlog_auto_incompressible.go \
+            -off-log vlog_auto_incompressible_off.txt \
+            -auto-log vlog_auto_incompressible_auto.txt \
+            -min-throughput-frac 0.95 \
+            -max-size-frac 1.02

@@ -124,8 +124,8 @@ type ValueLogCompressionMode uint8
 const (
 	// ValueLogCompressionOff stores value-log grouped frames uncompressed.
 	//
-	// Zero is intentionally reserved as "unset/default" to preserve legacy
-	// behavior for callers that do not explicitly configure compression mode.
+	// Zero is intentionally reserved as "unset/default".
+	// db.Open normalizes zero to ValueLogCompressionAuto.
 	ValueLogCompressionOff ValueLogCompressionMode = iota + 1
 	// ValueLogCompressionBlock uses block compression without dictionaries.
 	ValueLogCompressionBlock
@@ -600,6 +600,9 @@ func Open(opts Options) (*DB, error) {
 	} else if !opts.PreferAppendAlloc {
 		opts.FreelistRegionPages = 8192
 		opts.FreelistRegionRadius = 1
+	}
+	if opts.ValueLog.Compression == 0 {
+		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 
 	if err := validateOptions(opts); err != nil {
