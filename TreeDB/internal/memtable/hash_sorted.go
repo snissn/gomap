@@ -101,6 +101,8 @@ type HashSorted struct {
 	finalizeDone chan struct{}
 }
 
+func (*HashSorted) StableUnsafeIteratorSlices() bool { return true }
+
 type hashSortedIndex struct {
 	mu      sync.Mutex
 	cond    *sync.Cond

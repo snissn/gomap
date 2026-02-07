@@ -1258,11 +1258,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			perOpBytes := int64(8 + cfg.ValueSize)
 			total := cfg.Keys
 			valPos := 0
-			keyBytes := make([]byte, total*8)
-			for j := 0; j < total; j++ {
-				encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
+			maxInt := int(^uint(0) >> 1)
+			if total > maxInt/8 {
+				return 0, fmt.Errorf("batch_write: keys=%d overflows precomputed key buffer", total)
 			}
-			start = time.Now()
+			// Keep the precomputed-key optimization bounded so very large runs do
+			// not retain a huge contiguous key buffer for the whole benchmark.
+			const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
+			precomputeKeys := total*8 <= maxPrecomputedKeyBytes
+			var keyBytes []byte
+			if precomputeKeys {
+				keyBytes = make([]byte, total*8)
+				for j := 0; j < total; j++ {
+					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
+				}
+			}
 			for i := 0; i < total; i += cfg.BatchSize {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
@@ -1282,7 +1292,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if end > total {
 					end = total
 				}
-				if setView != nil {
+				if setView != nil && precomputeKeys {
 					// batch_write uses immutable values from a prebuilt pool and
 					// precomputed immutable keys.
 					for j := i; j < end; j++ {
@@ -1296,7 +1306,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				} else {
 					for j := i; j < end; j++ {
-						keyView := keyBytes[j*8 : (j+1)*8]
+						var keyView []byte
+						if precomputeKeys {
+							keyView = keyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j+cfg.Keys))
+							keyView = key[:]
+						}
 						value := values[valPos%len(values)]
 						valPos++
 						if err := batch.Set(keyView, value); err != nil {

@@ -3573,18 +3573,26 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
+	stableUnsafe := false
+	if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
+		stableUnsafe = stable.StableUnsafeIteratorSlices()
+	}
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
+		key := iter.UnsafeKey()
+		if !stableUnsafe {
+			key = append([]byte(nil), key...)
+		}
 		if flags&node.FlagTombstone != 0 {
-			// Flush units are built from queued memtables, which are frozen before
-			// they enter the queue. Reuse iterator-backed key/value slices to avoid
-			// per-entry copy allocations in the flush build path.
-			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: iter.UnsafeKey()})
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
 			deleteOps++
 		} else if flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), ValuePtr: ptr, IsPtr: true})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 		} else {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), Value: val})
+			if !stableUnsafe && val != nil {
+				val = append([]byte(nil), val...)
+			}
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
 		}
 		iter.Next()
 		if len(ops) >= cap(ops) {

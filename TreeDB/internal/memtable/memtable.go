@@ -79,6 +79,14 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// StableUnsafeIteratorTable marks memtable implementations whose
+// iterator.UnsafeIterator key/value views remain valid after Next/Seek while the
+// iterator is open. Callers can use this to safely avoid per-entry copies when
+// materializing immutable flush runs.
+type StableUnsafeIteratorTable interface {
+	StableUnsafeIteratorSlices() bool
+}
+
 // TrustedSortedBatchApplier is an optional fast path for callers that already
 // guarantee strictly increasing keys (for example, stream-qualified batch
 // writes partitioned by shard while preserving source order).
@@ -90,6 +98,8 @@ type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex
 }
+
+func (*Memtable) StableUnsafeIteratorSlices() bool { return true }
 
 const defaultMemtableCapacity = 64 * 1024
 const maxInitialMemtableCapacity = 256 << 20
