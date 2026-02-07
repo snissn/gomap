@@ -6,6 +6,37 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 )
 
+func TestParseTreeDBVlogCompressionMode_DefaultIsAuto(t *testing.T) {
+	cases := []string{"", "default", "unset"}
+	for _, in := range cases {
+		mode, explicit, err := parseTreeDBVlogCompressionMode(in)
+		if err != nil {
+			t.Fatalf("parseTreeDBVlogCompressionMode(%q): %v", in, err)
+		}
+		if explicit {
+			t.Fatalf("parseTreeDBVlogCompressionMode(%q): expected explicit=false", in)
+		}
+		if mode != treedb.ValueLogCompressionAuto {
+			t.Fatalf("parseTreeDBVlogCompressionMode(%q): mode=%v want=%v", in, mode, treedb.ValueLogCompressionAuto)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	*treedbVlogCompression = "default"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
+		t.Fatalf("unexpected default compression mode: %v", opts.ValueLog.Compression)
+	}
+}
+
 func TestBuildTreeDBOptions_VlogCompressionBlockFlags(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)

@@ -56,7 +56,7 @@ var (
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
-	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default|off|block|dict|auto)")
+	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto|off|block|dict|auto)")
 	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
@@ -211,7 +211,7 @@ func parseVlogCompressionAutotuneMode(s string) (uint64, error) {
 func parseTreeDBVlogCompressionMode(s string) (treedb.ValueLogCompressionMode, bool, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "default", "unset":
-		return treedb.ValueLogCompressionOff, false, nil
+		return treedb.ValueLogCompressionAuto, false, nil
 	case "off", "false", "0":
 		return treedb.ValueLogCompressionOff, true, nil
 	case "block":
@@ -499,9 +499,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
-	if compressionExplicit {
-		opts.ValueLog.Compression = compressionMode
-	}
+	opts.ValueLog.Compression = compressionMode
 	blockCodec, err := parseTreeDBVlogBlockCodec(*treedbVlogBlockCodec)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err

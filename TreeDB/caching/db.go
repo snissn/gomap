@@ -1643,7 +1643,8 @@ type Options struct {
 	// Values <=0 use a default of 8.
 	ValueLogRawWritevMinBatchRecords int
 	// ValueLogCompression selects value-log compression behavior:
-	// 0=off, 1=block, 2=dict, 3=auto.
+	// 0=default(unset; normalized to auto by TreeDB Open), 1=off, 2=block,
+	// 3=dict, 4=auto.
 	ValueLogCompression uint8
 	// ValueLogBlockCodec selects block codec when block compression is enabled:
 	// 0=snappy, 1=lz4.
@@ -1658,7 +1659,7 @@ type Options struct {
 	// bytes (0=default).
 	ValueLogIncompressibleProbeBytes int
 	// ValueLogAutoPolicy controls auto-mode dict-vs-block bias:
-	// 0=throughput, 1=balanced, 2=size.
+	// 0=balanced, 1=throughput, 2=size.
 	ValueLogAutoPolicy uint8
 	// ValueLogMaxSegmentBytes caps the size of a single value-log segment file.
 	// 0 disables the cap.
