@@ -3561,27 +3561,30 @@ func (h *opMergeHeap) down(i0, n int) bool {
 	return i > i0
 }
 
-func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
+func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error) {
 	if mem == nil {
-		return nil, errors.New("cachingdb: nil memtable")
+		return nil, 0, errors.New("cachingdb: nil memtable")
 	}
 	if chunkCap <= 0 {
 		chunkCap = 8192
 	}
 	iter := mem.NewIterator(nil, nil)
 	var runs [][]batch.Entry
+	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
 	for iter.Valid() {
 		val, ptr, flags := iter.UnsafeEntry()
-		key := append([]byte(nil), iter.UnsafeKey()...)
 		if flags&node.FlagTombstone != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
+			// Flush units are built from queued memtables, which are frozen before
+			// they enter the queue. Reuse iterator-backed key/value slices to avoid
+			// per-entry copy allocations in the flush build path.
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: iter.UnsafeKey()})
+			deleteOps++
 		} else if flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), ValuePtr: ptr, IsPtr: true})
 		} else {
-			value := append([]byte(nil), val...)
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: iter.UnsafeKey(), Value: val})
 		}
 		iter.Next()
 		if len(ops) >= cap(ops) {
@@ -3600,14 +3603,14 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, error) {
 		for _, run := range runs {
 			putEntrySlice(run)
 		}
-		return nil, err
+		return nil, 0, err
 	}
 	if len(ops) > 0 {
 		runs = append(runs, ops)
 	} else {
 		putEntrySlice(ops)
 	}
-	return runs, nil
+	return runs, deleteOps, nil
 }
 
 type walFastItem struct {
@@ -8544,9 +8547,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 
 		type buildResult struct {
-			idx  int
-			runs [][]batch.Entry
-			err  error
+			idx       int
+			runs      [][]batch.Entry
+			deleteOps int
+			err       error
 		}
 
 		jobs := make(chan int, len(units))
@@ -8577,8 +8581,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						continue
 					default:
 					}
-					runs, err := buildOpRuns(units[idx].mem, chunkCap)
-					results <- buildResult{idx: idx, runs: runs, err: err}
+					runs, deleteOps, err := buildOpRuns(units[idx].mem, chunkCap)
+					results <- buildResult{idx: idx, runs: runs, deleteOps: deleteOps, err: err}
 				}
 			}()
 		}
@@ -8591,6 +8595,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}()
 
 		unitRuns := make([][][]batch.Entry, len(units))
+		unitDeleteOps := make([]int, len(units))
 		failed := false
 		for res := range results {
 			if res.err != nil {
@@ -8610,6 +8615,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				continue
 			}
 			unitRuns[res.idx] = res.runs
+			unitDeleteOps[res.idx] = res.deleteOps
 		}
 		if failed {
 			for _, runs := range unitRuns {
@@ -8624,14 +8630,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		// many intermediate commits (each commit re-writes leaf pages, copying
 		// surviving values). Count deletes and tighten the commit cap in that case.
 		deleteOps := 0
-		for _, runs := range unitRuns {
-			for _, run := range runs {
-				for _, e := range run {
-					if e.Type == batch.OpDelete {
-						deleteOps++
-					}
-				}
-			}
+		for _, n := range unitDeleteOps {
+			deleteOps += n
 		}
 		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 
@@ -10418,6 +10418,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 type Batch struct {
 	db           *DB
 	entries      []batch.Entry
+	copyArena    batchCopyArena
 	backend      batch.Interface
 	size         int
 	walBuf       []logRecord
@@ -10436,6 +10437,79 @@ type Batch struct {
 	dictIDValid    bool
 	dictBytes      []byte
 	dictBytesValid bool
+}
+
+const (
+	batchCopyArenaInitCap   = 64 << 10
+	batchCopyArenaMaxRetain = 16 << 20
+)
+
+type batchCopyArena struct {
+	chunks  [][]byte
+	cur     []byte
+	off     int
+	nextCap int
+}
+
+func (a *batchCopyArena) copyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	if a.nextCap <= 0 {
+		a.nextCap = batchCopyArenaInitCap
+	}
+	if a.cur == nil || len(a.cur)-a.off < len(src) {
+		chunkCap := a.nextCap
+		if chunkCap < len(src) {
+			chunkCap = len(src)
+		}
+		chunk := make([]byte, chunkCap)
+		a.chunks = append(a.chunks, chunk)
+		a.cur = chunk
+		a.off = 0
+		a.nextCap = chunkCap * 2
+		if a.nextCap > batchCopyArenaMaxRetain {
+			a.nextCap = batchCopyArenaMaxRetain
+		}
+	}
+	dst := a.cur[a.off : a.off+len(src)]
+	copy(dst, src)
+	a.off += len(src)
+	return dst
+}
+
+func (a *batchCopyArena) reset() {
+	if len(a.chunks) == 0 {
+		a.cur = nil
+		a.off = 0
+		a.nextCap = batchCopyArenaInitCap
+		return
+	}
+	first := a.chunks[0]
+	if cap(first) > batchCopyArenaMaxRetain {
+		a.chunks = nil
+		a.cur = nil
+		a.off = 0
+		a.nextCap = batchCopyArenaInitCap
+		return
+	}
+	a.chunks = a.chunks[:1]
+	a.cur = first
+	a.off = 0
+	a.nextCap = cap(first) * 2
+	if a.nextCap < batchCopyArenaInitCap {
+		a.nextCap = batchCopyArenaInitCap
+	}
+	if a.nextCap > batchCopyArenaMaxRetain {
+		a.nextCap = batchCopyArenaMaxRetain
+	}
+}
+
+func (a *batchCopyArena) clear() {
+	a.chunks = nil
+	a.cur = nil
+	a.off = 0
+	a.nextCap = 0
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -10461,6 +10535,7 @@ func (b *Batch) Reset() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
+	b.copyArena.reset()
 	if b.shardIdxs != nil {
 		b.shardIdxs = b.shardIdxs[:0]
 	}
@@ -10497,8 +10572,8 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	keyCopy := append([]byte(nil), key...)
-	valCopy := append([]byte(nil), value...)
+	keyCopy := b.copyArena.copyBytes(key)
+	valCopy := b.copyArena.copyBytes(value)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -10586,7 +10661,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := b.copyArena.copyBytes(key)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -10665,9 +10740,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		copied := make([]batch.Entry, len(ops))
 		for i, op := range ops {
 			copiedOp := op
-			copiedOp.Key = append([]byte(nil), op.Key...)
+			copiedOp.Key = b.copyArena.copyBytes(op.Key)
 			if op.Value != nil {
-				copiedOp.Value = append([]byte(nil), op.Value...)
+				copiedOp.Value = b.copyArena.copyBytes(op.Value)
 			}
 			copied[i] = copiedOp
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
@@ -10677,9 +10752,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
-		copied.Key = append([]byte(nil), op.Key...)
+		copied.Key = b.copyArena.copyBytes(op.Key)
 		if op.Value != nil {
-			copied.Value = append([]byte(nil), op.Value...)
+			copied.Value = b.copyArena.copyBytes(op.Value)
 		}
 		b.entries = append(b.entries, copied)
 		b.size += len(copied.Key) + len(copied.Value)
@@ -11166,7 +11241,9 @@ func (b *Batch) writeRegular(sync bool) error {
 		shard.mu.Lock()
 		useStream := b.streamEligible
 		if useStream {
-			if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+			if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
+				applier.ApplyStealSortedBatchTrusted(entries, nil)
+			} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
 				applier.ApplyStealSortedBatch(entries, nil)
 			} else {
 				for _, op := range entries {
@@ -11498,6 +11575,7 @@ func (b *Batch) Close() error {
 	}
 	b.closed = true
 	b.entries = nil
+	b.copyArena.clear()
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil

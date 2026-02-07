@@ -221,9 +221,24 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 	max, maxIovs := rawWritevLimits(w)
 
 	fd := int(w.f.Fd())
-	iovs := make([][]byte, 0, 128)
-	meta := make([]byte, 0, 4096)
+	iovs := w.rawWritevIovs[:0]
+	if cap(iovs) < maxIovs {
+		iovs = make([][]byte, 0, maxIovs)
+	}
+	meta := w.rawWritevMeta[:0]
+	if cap(meta) < 4096 {
+		meta = make([]byte, 0, 4096)
+	}
 	queuedBytes := 0
+	defer func() {
+		// Keep reusable writev scratch without retaining references to caller-owned values.
+		if cap(iovs) > 0 {
+			full := iovs[:cap(iovs):cap(iovs)]
+			clear(full)
+		}
+		w.rawWritevIovs = iovs[:0]
+		w.rawWritevMeta = meta[:0]
+	}()
 
 	flush := func() error {
 		if len(iovs) == 0 {
@@ -301,7 +316,18 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		}
 
 		metaOff := len(meta)
-		meta = append(meta, make([]byte, HeaderSize+prefixLen)...)
+		metaNeed := HeaderSize + prefixLen
+		if cap(meta)-metaOff < metaNeed {
+			newCap := cap(meta) * 2
+			if newCap < metaOff+metaNeed {
+				newCap = metaOff + metaNeed
+			}
+			grown := make([]byte, metaOff+metaNeed, newCap)
+			copy(grown, meta[:metaOff])
+			meta = grown
+		} else {
+			meta = meta[:metaOff+metaNeed]
+		}
 		header := meta[metaOff : metaOff+HeaderSize]
 		prefix := meta[metaOff+HeaderSize : metaOff+HeaderSize+prefixLen]
 

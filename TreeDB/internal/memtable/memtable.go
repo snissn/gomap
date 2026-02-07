@@ -79,6 +79,13 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// TrustedSortedBatchApplier is an optional fast path for callers that already
+// guarantee strictly increasing keys (for example, stream-qualified batch
+// writes partitioned by shard while preserving source order).
+type TrustedSortedBatchApplier interface {
+	ApplyStealSortedBatchTrusted(entries []batchpkg.Entry, onKey func(key []byte))
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex
