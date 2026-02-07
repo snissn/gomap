@@ -54,6 +54,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - system model, components, directory layout, side stores, lock model.
 - `TreeDB/docs/spec/contracts.md`
   - API-level behavioral contracts (reads/writes, iteration, snapshots, concurrency, locking).
+- `TreeDB/docs/spec/concurrency-paradigms.md`
+  - complete concurrency mechanism inventory, lock/worker topology, and option/flag matrix for perf/refactor audits.
 - `TreeDB/docs/spec/storage-format.md`
   - on-disk encodings for pages, node layouts, pointers, value-log records/frames, commit-log segments.
 - `TreeDB/docs/spec/write-path-and-durability.md`
