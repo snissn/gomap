@@ -22,14 +22,17 @@ Commands:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-scripts/issue384_invariant_gate.sh
-scripts/issue384_perf_gate.sh
+./scripts/issue384_invariant_gate.sh
+./scripts/issue384_perf_gate.sh
+# profile evidence pair (required for hotspot diff)
+TESTS=batch_write,random_read COMPRESSION=off \
+  ./scripts/issue384_profile_pair.sh
 # nightly/slow gate
-scripts/issue384_nightly_gate.sh
-ISSUE_NUMBER=384 PR_NUMBER=<pr> MILESTONE=<mX> \
+./scripts/issue384_nightly_gate.sh
+ISSUE_NUMBER=384 PR_NUMBER=<milestone_pr_number> MILESTONE=<m0|m1|m2|m3|m4> \
   SUMMARY_PATH=artifacts/perf/<gate_dir>/summary.md \
   ARTIFACT_DIR=artifacts/perf/<gate_dir> \
-  scripts/issue384_post_status.sh
+  ./scripts/issue384_post_status.sh
 ```
 
 ## Required Evidence Per Milestone
