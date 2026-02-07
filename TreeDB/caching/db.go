@@ -2575,6 +2575,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	debugFlushTiming := envBool(envDebugFlushTiming)
 
 	valueLogCompressionMode := normalizeVlogCompressionMode(opts.ValueLogCompression)
+	if valueLogCompressionMode == vlogCompressionDefault {
+		// ValueLogCompression=0 is "unset/default" and resolves to auto mode.
+		valueLogCompressionMode = vlogCompressionAuto
+	}
 	valueLogBlockCodec := normalizeVlogBlockCodec(opts.ValueLogBlockCodec)
 	valueLogBlockTargetBytes := valuelog.NormalizeBlockTargetCompressedBytes(opts.ValueLogBlockTargetCompressedBytes)
 	valueLogIncompressibleHold := opts.ValueLogIncompressibleHoldBytes
@@ -5099,10 +5103,17 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, rawPayloadBytes)
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
+	fallbackToBlock := func() {
+		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+			writeMode = vlogWriteBlock
+		}
+		blockMode = writeMode == vlogWriteBlock
+	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -5115,18 +5126,20 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			blockMode = writeMode == vlogWriteBlock
+			fallbackToBlock()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
+			fallbackToBlock()
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -5135,9 +5148,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
+			fallbackToBlock()
 		}
 	}
-	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
+	switch mode {
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSamples(records)
 	case vlogCompressionAuto:
@@ -5696,8 +5710,14 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value))
 	probeCompression := selectorProbe
+	fallbackToBlock := func() {
+		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+			writeMode = vlogWriteBlock
+		}
+	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -5708,15 +5728,27 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
+			fallbackToBlock()
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
+		fallbackToBlock()
+	}
+	if dictID != 0 && len(dict) == 0 {
+		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
+			dict = b
+		} else {
+			dictID = 0
+			dict = nil
+			fallbackToBlock()
+		}
 	}
 	finalWriteMode := vlogWriteOff
 	switch {
@@ -5731,8 +5763,17 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	if finalWriteMode != vlogWriteBlock {
 		finalBlockCodec = db.valueLogBlockCodec
 	}
-	if mode := normalizeVlogCompressionMode(db.valueLogCompressionMode); mode != vlogCompressionOff && mode != vlogCompressionBlock {
+	switch mode {
+	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSample(value)
+	case vlogCompressionAuto:
+		allowDictSampling := true
+		if l != nil && l.vlogCompressionSelector != nil {
+			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
+		}
+		if writeMode != vlogWriteOff && allowDictSampling {
+			db.valueLogDictCollectSample(value)
+		}
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
@@ -5773,7 +5814,31 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 			durableBoundary := false
-			ptr, err = w.Append(0, nil, rid, value)
+			if finalWriteMode == vlogWriteBlock {
+				var (
+					rec        [1]valuelog.Record
+					ptrScratch [1]page.ValuePtr
+					ptrs       []page.ValuePtr
+				)
+				rec[0] = valuelog.Record{RID: rid, Value: value}
+				switch {
+				case caps.statsInto != nil:
+					ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+				case caps.stats != nil:
+					ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
+				default:
+					ptr, err = w.Append(0, nil, rid, value)
+				}
+				if err == nil && ptr == (page.ValuePtr{}) {
+					if len(ptrs) != 1 {
+						err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+					} else {
+						ptr = ptrs[0]
+					}
+				}
+			} else {
+				ptr, err = w.Append(0, nil, rid, value)
+			}
 			if err == nil {
 				switch durability {
 				case journalDurabilityFlush:
@@ -5818,8 +5883,16 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			if totalBytes > 0 {
 				l.vlogLiveBytes.Add(totalBytes)
 			}
+			storedForSelector := stats.StoredPayloadBytes
+			if storedForSelector <= 0 || (finalWriteMode == vlogWriteBlock && !stats.Attempted && storedForSelector == len(value) && totalBytes > 0) {
+				if totalBytes > 0 {
+					storedForSelector = int(totalBytes)
+				} else {
+					storedForSelector = len(value)
+				}
+			}
 			selectorWallNs := time.Since(selectorStart).Nanoseconds()
-			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), stats.StoredPayloadBytes, probeCompression, selectorWallNs)
+			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
 
@@ -5853,15 +5926,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		err := ack.err
 		vlogAckPool.Put(ack)
 		return ptr, retainPath, err
-	}
-
-	if dictID != 0 && len(dict) == 0 {
-		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
-			dict = b
-		} else {
-			dictID = 0
-			dict = nil
-		}
 	}
 
 	l.vlogMu.Lock()
@@ -5903,7 +5967,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
-	if dictID == 0 {
+	if finalWriteMode == vlogWriteBlock {
+		var ptrScratch [1]page.ValuePtr
+		var rec [1]valuelog.Record
+		rec[0] = valuelog.Record{RID: rid, Value: value}
+		var ptrs []page.ValuePtr
+		var frameErr error
+		if statsWriterInto != nil {
+			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+		} else if statsWriter != nil {
+			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
+		} else {
+			ptr, err = w.Append(0, nil, rid, value)
+		}
+		if frameErr != nil {
+			err = frameErr
+		} else if err == nil && ptr == (page.ValuePtr{}) {
+			if len(ptrs) != 1 {
+				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			} else {
+				ptr = ptrs[0]
+			}
+		}
+	} else if dictID == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
 	} else if len(dict) == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
@@ -5987,7 +6073,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	storedForSelector := stats.StoredPayloadBytes
-	if storedForSelector <= 0 {
+	if storedForSelector <= 0 || (finalWriteMode == vlogWriteBlock && !stats.Attempted && storedForSelector == len(value) && totalBytes > 0) {
 		if totalBytes > 0 {
 			storedForSelector = int(totalBytes)
 		} else {

@@ -891,12 +891,8 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes int) 
 			return vlogWriteDict, db.valueLogBlockCodec, false
 		}
 		return vlogWriteOff, db.valueLogBlockCodec, false
-	case vlogCompressionDefault:
-		if dictID != 0 {
-			return vlogWriteDict, db.valueLogBlockCodec, false
-		}
-		return vlogWriteOff, db.valueLogBlockCodec, false
 	default:
+		// Default/unset compression behavior follows auto mode.
 		if l == nil || l.vlogCompressionSelector == nil {
 			if dictID != 0 {
 				return vlogWriteDict, db.valueLogBlockCodec, false
