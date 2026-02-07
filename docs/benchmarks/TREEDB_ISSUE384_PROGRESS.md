@@ -15,7 +15,7 @@ consistent.
 ## Recommended update command
 
 ```bash
-cd /Users/michaelseiler/dev/snissn/gomap
+cd "$(git rev-parse --show-toplevel)"
 ISSUE_NUMBER=384 \
 PR_NUMBER=<milestone_pr_number> \
 MILESTONE=<m0|m1|m2|m3|m4> \
