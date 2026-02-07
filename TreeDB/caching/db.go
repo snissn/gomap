@@ -10685,6 +10685,17 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		if op.Value != nil {
 			copied.Value = append([]byte(nil), op.Value...)
 		}
+		if b.streamEligible {
+			if b.firstKey == nil {
+				b.firstKey = copied.Key
+				b.lastKey = copied.Key
+			} else {
+				if bytes.Compare(copied.Key, b.lastKey) <= 0 {
+					b.streamEligible = false
+				}
+				b.lastKey = copied.Key
+			}
+		}
 		b.entries = append(b.entries, copied)
 		b.size += len(copied.Key) + len(copied.Value)
 	}
