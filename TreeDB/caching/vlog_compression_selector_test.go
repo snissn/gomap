@@ -37,6 +37,42 @@ func TestVlogCompressionSelector_EntersHoldAndProbes(t *testing.T) {
 	}
 }
 
+func TestVlogCompressionSelector_ExplorationProbeOutsideHold(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 1024, 256)
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+
+	mode, codec, probe := s.choose(false, 64)
+	if !probe {
+		t.Fatalf("expected exploration probe outside hold")
+	}
+	if mode != vlogWriteBlock {
+		t.Fatalf("expected block exploration probe, got mode=%v", mode)
+	}
+	if codec != valuelog.BlockCodecLZ4 {
+		t.Fatalf("expected lz4 exploration probe for unsampled block codec, got %v", codec)
+	}
+}
+
+func TestVlogCompressionSelector_ExplorationProbesDictWhenAvailable(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	s.exploreBytes = 64
+	s.exploreRemaining = 64
+	s.dwellBytes = 0
+
+	// Warm both block candidates so dict remains the least-sampled candidate.
+	s.observe(vlogWriteBlock, valuelog.BlockCodecSnappy, 1024, 760, 900, false)
+	s.observe(vlogWriteBlock, valuelog.BlockCodecLZ4, 1024, 780, 920, false)
+
+	mode, _, probe := s.choose(true, 64)
+	if !probe {
+		t.Fatalf("expected exploration probe with dict available")
+	}
+	if mode != vlogWriteDict {
+		t.Fatalf("expected dict exploration probe, got %v", mode)
+	}
+}
+
 func TestVlogCompressionSelector_DictSelectionByPolicy(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	s.dwellBytes = 0

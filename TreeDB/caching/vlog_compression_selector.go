@@ -47,6 +47,7 @@ const vlogAutoCandidateCount = int(vlogAutoCandidateBlockLZ4) + 1
 const (
 	defaultVlogHoldBytes      = 64 << 20
 	defaultVlogProbeBytes     = 8 << 20
+	defaultVlogExploreBytes   = 8 << 20
 	defaultVlogModeDwellBytes = 4 << 20
 )
 
@@ -130,17 +131,19 @@ type vlogCompressionSelectorStats struct {
 type vlogCompressionSelector struct {
 	mu sync.Mutex
 
-	policy     vlogAutoPolicy
-	holdBytes  uint64
-	probeBytes uint64
-	dwellBytes uint64
+	policy       vlogAutoPolicy
+	holdBytes    uint64
+	probeBytes   uint64
+	exploreBytes uint64
+	dwellBytes   uint64
 
 	seedCodec        valuelog.BlockCodec
 	currentCandidate vlogAutoCandidate
 	modeBytes        uint64
 
-	holdRemaining  uint64
-	probeRemaining uint64
+	holdRemaining    uint64
+	probeRemaining   uint64
+	exploreRemaining uint64
 
 	incompressibleStreak uint8
 
@@ -349,6 +352,32 @@ func (s *vlogCompressionSelector) preferredProbeCandidate(dictAvailable bool) vl
 	return best
 }
 
+func (s *vlogCompressionSelector) preferredExplorationCandidate(dictAvailable bool) vlogAutoCandidate {
+	cands := s.availableCandidates(dictAvailable)
+	current := s.currentCandidate
+	best := current
+	bestSamples := uint64(^uint64(0))
+	bestScore := -1.0
+	found := false
+	for _, c := range cands {
+		if c == current {
+			continue
+		}
+		m := s.metric(c)
+		score := s.candidateScore(c)
+		if !found || m.samples < bestSamples || (m.samples == bestSamples && score > bestScore) {
+			best = c
+			bestSamples = m.samples
+			bestScore = score
+			found = true
+		}
+	}
+	if found {
+		return best
+	}
+	return current
+}
+
 func (s *vlogCompressionSelector) maybeSwitch(target vlogAutoCandidate, rawBytes uint64, dictAvailable bool) vlogAutoCandidate {
 	current := s.currentCandidate
 	if current == vlogAutoCandidateDict && !dictAvailable {
@@ -411,9 +440,11 @@ func newVlogCompressionSelectorWithSeed(policy vlogAutoPolicy, holdBytes, probeB
 		policy:           policy,
 		holdBytes:        holdBytes,
 		probeBytes:       probeBytes,
+		exploreBytes:     defaultVlogExploreBytes,
 		dwellBytes:       defaultVlogModeDwellBytes,
 		seedCodec:        seedCodec,
 		currentCandidate: blockCandidateFromCodec(seedCodec),
+		exploreRemaining: defaultVlogExploreBytes,
 		metrics: [vlogAutoCandidateCount]vlogCandidateMetrics{
 			vlogAutoCandidateOff:         {ratio: 1.0, throughput: 1.0, samples: 1},
 			vlogAutoCandidateDict:        {ratio: 1.0, throughput: 0.90},
@@ -467,6 +498,20 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes int
 			s.probeRemaining -= rawBytes
 			s.bypassBytes += rawBytes
 			return vlogWriteOff, s.seedCodec, false
+		}
+	}
+
+	if s.exploreBytes > 0 {
+		if s.exploreRemaining <= rawBytes {
+			s.exploreRemaining = s.exploreBytes
+			candidate := s.preferredExplorationCandidate(dictAvailable)
+			if candidate != s.currentCandidate {
+				s.probeAttempts++
+				mode, codec := candidateWriteMode(candidate, s.seedCodec)
+				return mode, codec, true
+			}
+		} else {
+			s.exploreRemaining -= rawBytes
 		}
 	}
 

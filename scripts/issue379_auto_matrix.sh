@@ -289,6 +289,14 @@ for pattern in patterns:
                 b=auto_stats.get("treedb.cache.vlog_auto.bypass_bytes", "0"),
             )
         )
+        lines.append(
+            "- dict status: dict_id={dict_id} frames_attempted={attempted} frames_kept={kept} k={k}".format(
+                dict_id=auto_stats.get("treedb.cache.vlog_dict.last_applied_dict_id", "0"),
+                attempted=auto_stats.get("treedb.cache.vlog_dict.frames_attempted", "0"),
+                kept=auto_stats.get("treedb.cache.vlog_dict.frames_kept", "0"),
+                k=auto_stats.get("treedb.cache.vlog_dict.current_k", "0"),
+            )
+        )
     lines.append("")
 
 lines.append("### Reproduce (this valsize)")

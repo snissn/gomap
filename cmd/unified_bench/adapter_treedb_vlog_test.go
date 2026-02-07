@@ -64,3 +64,21 @@ func TestBuildTreeDBOptions_InvalidVlogBlockCodec(t *testing.T) {
 		t.Fatalf("expected error for invalid block codec")
 	}
 }
+
+func TestResolvedTreeDBVlogTrainDefaults(t *testing.T) {
+	train, dict := resolvedTreeDBVlogTrainDefaults(0, 0)
+	if train != 4<<20 {
+		t.Fatalf("expected default train bytes, got %d", train)
+	}
+	if dict != 40<<10 {
+		t.Fatalf("expected default dict bytes, got %d", dict)
+	}
+
+	train, dict = resolvedTreeDBVlogTrainDefaults(-1, 0)
+	if train != -1 {
+		t.Fatalf("expected explicit train disable to be preserved, got %d", train)
+	}
+	if dict != 0 {
+		t.Fatalf("expected dict bytes preserved with disabled train, got %d", dict)
+	}
+}

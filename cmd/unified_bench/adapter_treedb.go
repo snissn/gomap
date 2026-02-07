@@ -633,6 +633,19 @@ func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {
 	return mode, nil
 }
 
+func resolvedTreeDBVlogTrainDefaults(trainBytes, dictBytes int) (int, int) {
+	if trainBytes == 0 {
+		trainBytes = 4 << 20
+	}
+	if trainBytes < 0 {
+		return trainBytes, dictBytes
+	}
+	if dictBytes <= 0 {
+		dictBytes = 40 << 10
+	}
+	return trainBytes, dictBytes
+}
+
 func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
 	opts, _, err := buildTreeDBOptions(dir)
 	if err != nil {
@@ -710,6 +723,25 @@ func NewTreeDBVlogAuto(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	opts.ValueLog.Compression = treedb.ValueLogCompressionAuto
+
+	mode, err := resolvedTreeDBVlogCompressionModeForDictVariants()
+	if err != nil {
+		return nil, err
+	}
+	setOptionalVlogAutotuneMode(&opts, mode)
+
+	trainBytes := *treedbVlogDictTrainBytes
+	dictBytes := *treedbVlogDictDictBytes
+	trainBytes, dictBytes = resolvedTreeDBVlogTrainDefaults(trainBytes, dictBytes)
+	setOptionalVlogTrainConfig(&opts,
+		trainBytes,
+		dictBytes,
+		*treedbVlogDictMinRecords,
+		*treedbVlogDictMaxRecordBytes,
+		*treedbVlogDictSampleStride,
+		*treedbVlogDictDedupWindow,
+	)
+
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err
@@ -731,12 +763,7 @@ func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enabl
 
 	trainBytes := *treedbVlogDictTrainBytes
 	dictBytes := *treedbVlogDictDictBytes
-	if trainBytes <= 0 {
-		trainBytes = 4 << 20
-	}
-	if dictBytes <= 0 {
-		dictBytes = 40 << 10
-	}
+	trainBytes, dictBytes = resolvedTreeDBVlogTrainDefaults(trainBytes, dictBytes)
 
 	setOptionalVlogTrainConfig(&opts,
 		trainBytes,

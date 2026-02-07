@@ -620,6 +620,9 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_auto.hold_enters",
 		"treedb.cache.vlog_auto.hold_exits",
 		"treedb.cache.vlog_auto.bypass_bytes",
+		"treedb.cache.vlog_dict.last_applied_dict_id",
+		"treedb.cache.vlog_dict.frames_attempted",
+		"treedb.cache.vlog_dict.frames_kept",
 		"treedb.cache.vlog_dict.current_k",
 	}
 
