@@ -10418,7 +10418,6 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 type Batch struct {
 	db           *DB
 	entries      []batch.Entry
-	copyArena    batchCopyArena
 	backend      batch.Interface
 	size         int
 	walBuf       []logRecord
@@ -10437,79 +10436,6 @@ type Batch struct {
 	dictIDValid    bool
 	dictBytes      []byte
 	dictBytesValid bool
-}
-
-const (
-	batchCopyArenaInitCap   = 64 << 10
-	batchCopyArenaMaxRetain = 16 << 20
-)
-
-type batchCopyArena struct {
-	chunks  [][]byte
-	cur     []byte
-	off     int
-	nextCap int
-}
-
-func (a *batchCopyArena) copyBytes(src []byte) []byte {
-	if len(src) == 0 {
-		return nil
-	}
-	if a.nextCap <= 0 {
-		a.nextCap = batchCopyArenaInitCap
-	}
-	if a.cur == nil || len(a.cur)-a.off < len(src) {
-		chunkCap := a.nextCap
-		if chunkCap < len(src) {
-			chunkCap = len(src)
-		}
-		chunk := make([]byte, chunkCap)
-		a.chunks = append(a.chunks, chunk)
-		a.cur = chunk
-		a.off = 0
-		a.nextCap = chunkCap * 2
-		if a.nextCap > batchCopyArenaMaxRetain {
-			a.nextCap = batchCopyArenaMaxRetain
-		}
-	}
-	dst := a.cur[a.off : a.off+len(src)]
-	copy(dst, src)
-	a.off += len(src)
-	return dst
-}
-
-func (a *batchCopyArena) reset() {
-	if len(a.chunks) == 0 {
-		a.cur = nil
-		a.off = 0
-		a.nextCap = batchCopyArenaInitCap
-		return
-	}
-	first := a.chunks[0]
-	if cap(first) > batchCopyArenaMaxRetain {
-		a.chunks = nil
-		a.cur = nil
-		a.off = 0
-		a.nextCap = batchCopyArenaInitCap
-		return
-	}
-	a.chunks = a.chunks[:1]
-	a.cur = first
-	a.off = 0
-	a.nextCap = cap(first) * 2
-	if a.nextCap < batchCopyArenaInitCap {
-		a.nextCap = batchCopyArenaInitCap
-	}
-	if a.nextCap > batchCopyArenaMaxRetain {
-		a.nextCap = batchCopyArenaMaxRetain
-	}
-}
-
-func (a *batchCopyArena) clear() {
-	a.chunks = nil
-	a.cur = nil
-	a.off = 0
-	a.nextCap = 0
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -10535,7 +10461,6 @@ func (b *Batch) Reset() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
-	b.copyArena.reset()
 	if b.shardIdxs != nil {
 		b.shardIdxs = b.shardIdxs[:0]
 	}
@@ -10572,8 +10497,8 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	keyCopy := b.copyArena.copyBytes(key)
-	valCopy := b.copyArena.copyBytes(value)
+	keyCopy := append([]byte(nil), key...)
+	valCopy := append([]byte(nil), value...)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -10661,7 +10586,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	keyCopy := b.copyArena.copyBytes(key)
+	keyCopy := append([]byte(nil), key...)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -10740,9 +10665,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		copied := make([]batch.Entry, len(ops))
 		for i, op := range ops {
 			copiedOp := op
-			copiedOp.Key = b.copyArena.copyBytes(op.Key)
+			copiedOp.Key = append([]byte(nil), op.Key...)
 			if op.Value != nil {
-				copiedOp.Value = b.copyArena.copyBytes(op.Value)
+				copiedOp.Value = append([]byte(nil), op.Value...)
 			}
 			copied[i] = copiedOp
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
@@ -10752,9 +10677,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
-		copied.Key = b.copyArena.copyBytes(op.Key)
+		copied.Key = append([]byte(nil), op.Key...)
 		if op.Value != nil {
-			copied.Value = b.copyArena.copyBytes(op.Value)
+			copied.Value = append([]byte(nil), op.Value...)
 		}
 		b.entries = append(b.entries, copied)
 		b.size += len(copied.Key) + len(copied.Value)
@@ -11575,7 +11500,6 @@ func (b *Batch) Close() error {
 	}
 	b.closed = true
 	b.entries = nil
-	b.copyArena.clear()
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil
