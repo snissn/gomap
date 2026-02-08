@@ -24,10 +24,10 @@ var (
 )
 
 const (
-	maintenanceProbeBaselineWindow  = 2 * time.Second
-	maintenanceProbeDuringMinWindow = 2 * time.Second
+	maintenanceProbeBaselineWindow  = 5 * time.Second
+	maintenanceProbeDuringMinWindow = 5 * time.Second
 	maintenanceProbeDuringMaxWindow = 5 * time.Second
-	maintenanceProbeCoordMinWindow  = 2 * time.Second
+	maintenanceProbeCoordMinWindow  = 5 * time.Second
 	maintenanceProbeCoordMaxWindow  = 5 * time.Second
 	maintenanceProbeKeyRingSize     = 256
 	maintenanceProbeValueSize       = 128
