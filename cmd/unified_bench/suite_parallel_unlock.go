@@ -23,6 +23,17 @@ var (
 	suiteRebalance   = flag.Bool("rebalance", true, "Enable rebalance path in hotspot suite")
 )
 
+const (
+	maintenanceProbeBaselineWindow  = 2 * time.Second
+	maintenanceProbeDuringMinWindow = 2 * time.Second
+	maintenanceProbeDuringMaxWindow = 5 * time.Second
+	maintenanceProbeCoordMinWindow  = 2 * time.Second
+	maintenanceProbeCoordMaxWindow  = 5 * time.Second
+	maintenanceProbeKeyRingSize     = 256
+	maintenanceProbeValueSize       = 128
+	maintenanceStallThreshold       = time.Millisecond
+)
+
 type writeSuiteRun struct {
 	cfg      BenchConfig
 	testName string
@@ -165,6 +176,148 @@ func aggregateGCStats(dst *treedb.ValueLogGCStats, src treedb.ValueLogGCStats) {
 	if src.FailClosedToDryRun {
 		dst.FailClosedToDryRun = true
 	}
+}
+
+type writerProbeMetrics struct {
+	samples           int
+	window            time.Duration
+	opsPerSec         float64
+	stallDutyCyclePct float64
+	latencyP99        time.Duration
+	latencyMax        time.Duration
+}
+
+type writerProbeResult struct {
+	metrics writerProbeMetrics
+	err     error
+}
+
+func makeWriterProbeKeys(prefix string, count int) [][]byte {
+	if count <= 0 {
+		count = maintenanceProbeKeyRingSize
+	}
+	out := make([][]byte, 0, count)
+	for i := 0; i < count; i++ {
+		key := make([]byte, 0, len(prefix)+24)
+		key = append(key, prefix...)
+		key = append(key, ':')
+		key = strconv.AppendInt(key, int64(i), 10)
+		out = append(out, key)
+	}
+	return out
+}
+
+func makeWriterProbeValue(size int) []byte {
+	if size <= 0 {
+		size = maintenanceProbeValueSize
+	}
+	value := make([]byte, size)
+	for i := range value {
+		value[i] = byte((i % 251) + 1)
+	}
+	return value
+}
+
+func p99Duration(sorted []time.Duration) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	idx := (99*len(sorted) + 99) / 100
+	if idx <= 0 {
+		return sorted[0]
+	}
+	if idx > len(sorted) {
+		idx = len(sorted)
+	}
+	return sorted[idx-1]
+}
+
+func writerProbeMetricsFrom(latencies []time.Duration, window, stallBudget time.Duration) writerProbeMetrics {
+	if window <= 0 {
+		window = time.Nanosecond
+	}
+	out := writerProbeMetrics{
+		samples: len(latencies),
+		window:  window,
+	}
+	if len(latencies) == 0 {
+		return out
+	}
+	sorted := append([]time.Duration(nil), latencies...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	out.opsPerSec = float64(len(latencies)) / window.Seconds()
+	out.stallDutyCyclePct = 100 * float64(stallBudget) / float64(window)
+	out.latencyP99 = p99Duration(sorted)
+	out.latencyMax = sorted[len(sorted)-1]
+	return out
+}
+
+func runWriterProbeUntil(ctx context.Context, td *treedbadapter.DB, keyPrefix string, stallThreshold time.Duration) (writerProbeMetrics, error) {
+	keys := makeWriterProbeKeys(keyPrefix, maintenanceProbeKeyRingSize)
+	value := makeWriterProbeValue(maintenanceProbeValueSize)
+	latencies := make([]time.Duration, 0, 2048)
+	var stallBudget time.Duration
+	start := time.Now()
+	keyIdx := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return writerProbeMetricsFrom(latencies, time.Since(start), stallBudget), nil
+		default:
+		}
+		opStart := time.Now()
+		if err := td.Set(keys[keyIdx], value); err != nil {
+			return writerProbeMetrics{}, err
+		}
+		latency := time.Since(opStart)
+		latencies = append(latencies, latency)
+		if latency > stallThreshold {
+			stallBudget += latency - stallThreshold
+		}
+		keyIdx++
+		if keyIdx >= len(keys) {
+			keyIdx = 0
+		}
+	}
+}
+
+func probeOpsRatio(baselineOps, duringOps float64) float64 {
+	if baselineOps <= 0 {
+		return 0
+	}
+	return duringOps / baselineOps
+}
+
+func formatDurationMS(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
+}
+
+func parseFreshnessAge(stats map[string]string, key string, now time.Time) (time.Duration, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	raw, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	ns, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || ns <= 0 {
+		return 0, false
+	}
+	at := time.Unix(0, ns)
+	age := now.Sub(at)
+	if age < 0 {
+		age = 0
+	}
+	return age, true
+}
+
+func attributableDutyCyclePct(baseline, observed float64) float64 {
+	if observed <= baseline {
+		return 0
+	}
+	return observed - baseline
 }
 
 func runVlogQueueLagSuite(baseCfg BenchConfig) (string, error) {
@@ -326,17 +479,54 @@ func runMaintenanceGCSuite(baseCfg BenchConfig) (string, error) {
 		runs = 5
 	}
 
+	baselineCtx, baselineCancel := context.WithTimeout(context.Background(), maintenanceProbeBaselineWindow)
+	baselineProbe, err := runWriterProbeUntil(baselineCtx, td, "maintenance_gc_baseline_probe", maintenanceStallThreshold)
+	baselineCancel()
+	if err != nil {
+		return "", err
+	}
+
+	duringProbeCtx, duringProbeCancel := context.WithTimeout(context.Background(), maintenanceProbeDuringMaxWindow)
+	duringProbeCh := make(chan writerProbeResult, 1)
+	go func() {
+		m, probeErr := runWriterProbeUntil(duringProbeCtx, td, "maintenance_gc_during_probe", maintenanceStallThreshold)
+		duringProbeCh <- writerProbeResult{metrics: m, err: probeErr}
+	}()
+
 	var total treedb.ValueLogGCStats
 	var gcWall time.Duration
+	gcStart := time.Now()
+	executedRuns := 0
 	for i := 0; i < runs; i++ {
 		start := time.Now()
 		stats, err := td.DB.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{Mode: mode})
 		if err != nil {
+			duringProbeCancel()
+			<-duringProbeCh
 			return "", err
 		}
 		gcWall += time.Since(start)
 		aggregateGCStats(&total, stats)
+		executedRuns++
 	}
+	if elapsed := time.Since(gcStart); elapsed < maintenanceProbeDuringMinWindow {
+		wait := maintenanceProbeDuringMinWindow - elapsed
+		if wait > 0 && wait < maintenanceProbeDuringMaxWindow {
+			time.Sleep(wait)
+		}
+	}
+	duringProbeCancel()
+	duringProbeResult := <-duringProbeCh
+	if duringProbeResult.err != nil {
+		return "", duringProbeResult.err
+	}
+	duringProbe := duringProbeResult.metrics
+
+	throughputRatio := probeOpsRatio(baselineProbe.opsPerSec, duringProbe.opsPerSec)
+	attributableDuty := attributableDutyCyclePct(baselineProbe.stallDutyCyclePct, duringProbe.stallDutyCyclePct)
+	ratioGate := baselineProbe.samples > 0 && throughputRatio >= 0.90
+	dutyGate := duringProbe.samples > 0 && attributableDuty <= 5.0
+	p99Gate := duringProbe.samples > 0 && duringProbe.latencyP99 <= 10*time.Millisecond
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: maintenance_gc\n\n")
@@ -344,7 +534,7 @@ func runMaintenanceGCSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- gc-period: %s\n", period))
 	sb.WriteString(fmt.Sprintf("- write ops/sec: %s\n", formatFloat(s.ops)))
 	sb.WriteString(fmt.Sprintf("- write wall time: %s\n", s.wall.Truncate(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf("- gc runs: %d\n", runs))
+	sb.WriteString(fmt.Sprintf("- gc runs: %d\n", executedRuns))
 	sb.WriteString(fmt.Sprintf("- gc total wall time: %s\n", gcWall.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- gc segments eligible (sum): %d\n", total.SegmentsEligible))
 	sb.WriteString(fmt.Sprintf("- gc segments deleted (sum): %d\n", total.SegmentsDeleted))
@@ -353,8 +543,22 @@ func runMaintenanceGCSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- gc bytes deleted (sum): %s\n", formatBytes(uint64(max(0, int(total.BytesDeleted))))))
 	sb.WriteString(fmt.Sprintf("- gc bytes protected (sum): %s\n", formatBytes(uint64(max(0, int(total.BytesProtected))))))
 	sb.WriteString(fmt.Sprintf("- gc fail-closed to dry-run: %t\n", total.FailClosedToDryRun))
+	sb.WriteString(fmt.Sprintf("- writer probe baseline window: %s\n", baselineProbe.window.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- writer probe baseline samples: %s\n", formatInt(baselineProbe.samples)))
+	sb.WriteString(fmt.Sprintf("- writer probe baseline ops/sec (no maintenance): %s\n", formatFloat(baselineProbe.opsPerSec)))
+	sb.WriteString(fmt.Sprintf("- writer probe baseline stall duty cycle: %.3f%%\n", baselineProbe.stallDutyCyclePct))
+	sb.WriteString(fmt.Sprintf("- writer probe during-gc window: %s\n", duringProbe.window.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- writer probe during-gc samples: %s\n", formatInt(duringProbe.samples)))
+	sb.WriteString(fmt.Sprintf("- writer probe during-gc ops/sec: %s\n", formatFloat(duringProbe.opsPerSec)))
+	sb.WriteString(fmt.Sprintf("- writer probe throughput ratio (during-gc/baseline): %.3f\n", throughputRatio))
+	sb.WriteString(fmt.Sprintf("- writer stall duty cycle: %.3f%%\n", duringProbe.stallDutyCyclePct))
+	sb.WriteString(fmt.Sprintf("- writer stall duty cycle (GC-attributable): %.3f%%\n", attributableDuty))
+	sb.WriteString(fmt.Sprintf("- writer latency p99: %.3fms\n", formatDurationMS(duringProbe.latencyP99)))
+	sb.WriteString(fmt.Sprintf("- writer latency max: %.3fms\n", formatDurationMS(duringProbe.latencyMax)))
 	sb.WriteString("\n")
-	sb.WriteString("- note: this harness currently reports write+maintenance wall-time proxies, not per-write stall duty-cycle/percentile metrics.\n")
+	sb.WriteString(fmt.Sprintf("- gate probe-throughput-ratio>=0.90: %s\n", passFail(ratioGate)))
+	sb.WriteString(fmt.Sprintf("- gate writer-stall-duty(gc-attributable)<=5%%: %s\n", passFail(dutyGate)))
+	sb.WriteString(fmt.Sprintf("- gate writer-latency-p99<=10ms: %s\n", passFail(p99Gate)))
 	return sb.String(), nil
 }
 
@@ -379,13 +583,9 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 	if len(ops) == 0 {
 		ops = []string{"gc", "vacuum"}
 	}
-
-	counts := map[string]int{}
-	walls := map[string]time.Duration{}
-	var mu sync.Mutex
-	var firstErr error
-	startGate := make(chan struct{})
-	var wg sync.WaitGroup
+	normalizedOps := make([]string, 0, len(ops))
+	needGC := false
+	needVacuum := false
 	for _, rawOp := range ops {
 		op := strings.ToLower(strings.TrimSpace(rawOp))
 		if op == "" {
@@ -393,9 +593,44 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 		}
 		switch op {
 		case "gc", "vacuum":
+			normalizedOps = append(normalizedOps, op)
+			if op == "gc" {
+				needGC = true
+			}
+			if op == "vacuum" {
+				needVacuum = true
+			}
 		default:
 			return "", fmt.Errorf("maintenance_coordination: unsupported maintenance op %q", op)
 		}
+	}
+	if len(normalizedOps) == 0 {
+		return "", fmt.Errorf("maintenance_coordination: no valid maintenance ops")
+	}
+
+	baselineCtx, baselineCancel := context.WithTimeout(context.Background(), maintenanceProbeBaselineWindow)
+	baselineProbe, err := runWriterProbeUntil(baselineCtx, td, "maintenance_coord_baseline_probe", maintenanceStallThreshold)
+	baselineCancel()
+	if err != nil {
+		return "", err
+	}
+
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), maintenanceProbeCoordMaxWindow)
+	probeCh := make(chan writerProbeResult, 1)
+	go func() {
+		m, probeErr := runWriterProbeUntil(probeCtx, td, "maintenance_coord_probe", maintenanceStallThreshold)
+		probeCh <- writerProbeResult{metrics: m, err: probeErr}
+	}()
+
+	counts := map[string]int{}
+	walls := map[string]time.Duration{}
+	var mu sync.Mutex
+	var firstErr error
+	roundStart := time.Now()
+	executedRounds := 0
+	startGate := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, op := range normalizedOps {
 		wg.Add(1)
 		go func(op string) {
 			defer wg.Done()
@@ -422,6 +657,20 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 	}
 	close(startGate)
 	wg.Wait()
+	executedRounds = 1
+	if elapsed := time.Since(roundStart); elapsed < maintenanceProbeCoordMinWindow {
+		wait := maintenanceProbeCoordMinWindow - elapsed
+		if wait > 0 && wait < maintenanceProbeCoordMaxWindow {
+			time.Sleep(wait)
+		}
+	}
+	probeCancel()
+	probeResult := <-probeCh
+	if probeResult.err != nil {
+		return "", probeResult.err
+	}
+	probeMetrics := probeResult.metrics
+	attributableDuty := attributableDutyCyclePct(baselineProbe.stallDutyCyclePct, probeMetrics.stallDutyCyclePct)
 	if firstErr != nil {
 		return "", firstErr
 	}
@@ -436,6 +685,14 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 	waitMaxMs, _ := parseStatFloat(coordStats, "treedb.maintenance.full_scan.wait_max_ms")
 	gcRuns := parseUint(coordStats, "treedb.maintenance.full_scan.gc_runs")
 	vacuumRuns := parseUint(coordStats, "treedb.maintenance.full_scan.vacuum_runs")
+	statsNow := time.Now()
+	lastGCAge, hasLastGCAge := parseFreshnessAge(coordStats, "treedb.maintenance.full_scan.last_gc_unix_nano", statsNow)
+	lastVacuumAge, hasLastVacuumAge := parseFreshnessAge(coordStats, "treedb.maintenance.full_scan.last_vacuum_unix_nano", statsNow)
+	freshnessReported := (!needGC || hasLastGCAge) && (!needVacuum || hasLastVacuumAge)
+	overlapGate := true
+	if needGC && needVacuum {
+		overlapGate = deferrals > 0
+	}
 
 	keys := make([]string, 0, len(counts))
 	for k := range counts {
@@ -445,10 +702,11 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: maintenance_coordination\n\n")
-	sb.WriteString(fmt.Sprintf("- maintenance ops: %s\n", strings.Join(ops, ",")))
+	sb.WriteString(fmt.Sprintf("- maintenance ops: %s\n", strings.Join(normalizedOps, ",")))
 	sb.WriteString("- launch mode: concurrent\n")
 	sb.WriteString(fmt.Sprintf("- write ops/sec: %s\n", formatFloat(s.ops)))
 	sb.WriteString(fmt.Sprintf("- write wall time: %s\n", s.wall.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- maintenance rounds executed: %d\n", executedRounds))
 	for _, k := range keys {
 		sb.WriteString(fmt.Sprintf("- %s runs: %d\n", k, counts[k]))
 		sb.WriteString(fmt.Sprintf("- %s total wall time: %s\n", k, walls[k].Truncate(time.Millisecond)))
@@ -459,13 +717,29 @@ func runMaintenanceCoordinationSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- maintenance full-scan wait max: %.3fms\n", waitMaxMs))
 	sb.WriteString(fmt.Sprintf("- maintenance full-scan gc runs (stats): %s\n", formatInt(int(gcRuns))))
 	sb.WriteString(fmt.Sprintf("- maintenance full-scan vacuum runs (stats): %s\n", formatInt(int(vacuumRuns))))
-	sb.WriteString("\n")
-	if deferrals > 0 {
-		sb.WriteString("- overlap token evidence: PASS (deferrals observed under concurrent launch)\n")
+	sb.WriteString(fmt.Sprintf("- writer baseline probe window: %s\n", baselineProbe.window.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- writer baseline probe samples: %s\n", formatInt(baselineProbe.samples)))
+	sb.WriteString(fmt.Sprintf("- writer baseline stall duty cycle: %.3f%%\n", baselineProbe.stallDutyCyclePct))
+	sb.WriteString(fmt.Sprintf("- writer probe window: %s\n", probeMetrics.window.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- writer probe samples: %s\n", formatInt(probeMetrics.samples)))
+	sb.WriteString(fmt.Sprintf("- writer stall duty cycle: %.3f%%\n", probeMetrics.stallDutyCyclePct))
+	sb.WriteString(fmt.Sprintf("- writer stall duty cycle (maintenance-attributable): %.3f%%\n", attributableDuty))
+	sb.WriteString(fmt.Sprintf("- writer latency p99: %.3fms\n", formatDurationMS(probeMetrics.latencyP99)))
+	sb.WriteString(fmt.Sprintf("- writer latency max: %.3fms\n", formatDurationMS(probeMetrics.latencyMax)))
+	if hasLastGCAge {
+		sb.WriteString(fmt.Sprintf("- maintenance freshness gc age: %s\n", lastGCAge.Truncate(time.Millisecond)))
 	} else {
-		sb.WriteString("- overlap token evidence: WARN (no deferrals observed; verify contention conditions)\n")
+		sb.WriteString("- maintenance freshness gc age: n/a (last_gc_unix_nano missing or zero)\n")
 	}
-	sb.WriteString("- note: stall duty-cycle and freshness SLO percentiles are still follow-on instrumentation.\n")
+	if hasLastVacuumAge {
+		sb.WriteString(fmt.Sprintf("- maintenance freshness vacuum age: %s\n", lastVacuumAge.Truncate(time.Millisecond)))
+	} else {
+		sb.WriteString("- maintenance freshness vacuum age: n/a (last_vacuum_unix_nano missing or zero)\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("- gate overlap-token-evidence(deferrals>0): %s\n", passFail(overlapGate)))
+	sb.WriteString(fmt.Sprintf("- gate writer-stall-duty(maintenance-attributable)<=10%%: %s\n", passFail(probeMetrics.samples > 0 && attributableDuty <= 10.0)))
+	sb.WriteString(fmt.Sprintf("- gate freshness-reported: %s\n", passFail(freshnessReported)))
 	return sb.String(), nil
 }
 
