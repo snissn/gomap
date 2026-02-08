@@ -6572,12 +6572,19 @@ func (db *DB) Checkpoint() error {
 	walDir := db.dir
 	db.mu.Unlock()
 	for i := range db.lanes {
-		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
+		if err := db.rotateWALCheckpointLocked(&db.lanes[i]); err != nil {
 			releaseWriteMu()
 			return err
 		}
 	}
 	releaseWriteMu()
+	if db.splitValueLogEnabled() {
+		for i := range db.lanes {
+			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
@@ -8172,6 +8179,14 @@ func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, co
 }
 
 func (db *DB) rotateWALLocked(l *lane) error {
+	return db.rotateWALLockedWithOptions(l, true)
+}
+
+func (db *DB) rotateWALCheckpointLocked(l *lane) error {
+	return db.rotateWALLockedWithOptions(l, false)
+}
+
+func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	if db.disableJournal {
 		return nil
 	}
@@ -8209,7 +8224,7 @@ func (db *DB) rotateWALLocked(l *lane) error {
 	}
 	l.walPath = path
 	l.walLiveBytes.Store(0)
-	if db.splitValueLogEnabled() {
+	if rotateValueLog && db.splitValueLogEnabled() {
 		if err := db.rotateValueLogLocked(l); err != nil {
 			return err
 		}
@@ -10118,7 +10133,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.publish.watermark.latency_p99_ms"] = "0.000"
 	}
 	materializationMarkNS := db.materializationLastDrainUnixNano.Load()
-	if queueLen > 0 && oldestQueueEnqueueNS > 0 {
+	if backlogBytes > 0 && oldestQueueEnqueueNS > 0 {
 		materializationMarkNS = oldestQueueEnqueueNS
 	}
 	materializationLagAge := time.Duration(0)
