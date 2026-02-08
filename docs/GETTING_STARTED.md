@@ -102,5 +102,13 @@ Build and run:
 - `make unified-bench`
 - `./bin/unified-bench -keys 1000000`
 
+Profile + analyze (recommended):
+
+- `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
+- `./bin/unified-bench -keys 1000000 -profile-dir "$OUT" -progress=false`
+- `make benchprof`
+- `./bin/benchprof -profiles-dir "$OUT"`
+
 See:
 - `cmd/unified_bench/README.md`
+- `cmd/benchprof/README.md`

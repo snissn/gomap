@@ -43,7 +43,8 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 ## 📊 Benchmarking
 
 - **[Benchmark Spec](BENCHMARK_SPEC.md)**: Methodology and test definitions.
-- **[Unified Bench](cmd/unified_bench/README.md)**: Usage guide for the primary benchmark suite.
+- **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
+- **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.
 - **[Dev Notes](DEV_NOTES.md)**: Performance investigations and future optimization ideas.
 

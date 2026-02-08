@@ -183,3 +183,20 @@ If you need the HashDB cache semantics (write-back cache + optional WAL):
 - [ ] Crash tests cover torn records and partial batches
 - [ ] Benchmarks run but do not gate correctness
 
+## Benchmark Profiling Tooling (Go Harness)
+
+For HashDB performance work in this repo, use the shared Go benchmark harness
+and profile analyzer:
+
+- Capture with `unified-bench` using `-profile-dir`:
+  - `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
+  - `./bin/unified-bench ... -profile-dir "$OUT"`
+- Analyze with `benchprof`:
+  - `./bin/benchprof -profiles-dir "$OUT"`
+
+If benchmark test names, profile filenames, or `-profile-dir` defaults change,
+update parser/tests/docs in the same PR:
+
+- `cmd/benchprof/main.go` and `cmd/benchprof/main_test.go`
+- `cmd/unified_bench/profile_artifact_dir_test.go`
+- `cmd/unified_bench/README.md` and `cmd/benchprof/README.md`

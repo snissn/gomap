@@ -1,6 +1,7 @@
 HASHDB_DIR := HashDB
 TREEDB_DIR := TreeDB
 UNIFIED_BENCH_DIR := cmd/unified_bench
+BENCHPROF_DIR := cmd/benchprof
 BIN_DIR := bin
 
 BENCH_KEYCOUNTS ?= 1,10,100,1000,10000,100000,1000000
@@ -25,6 +26,7 @@ help:
 	@echo "  make bench-readme   - regenerate README benchmark snapshot"
 	@echo "  make benchmark-all  - run HashDB redis-benchmark suite (legacy)"
 	@echo "  make unified-bench  - build unified bench binary"
+	@echo "  make benchprof      - build profile analyzer binary"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
 .PHONY: fmt
@@ -82,8 +84,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench
-build: build-hashdb build-treedb unified-bench
+.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof
+build: build-hashdb build-treedb unified-bench benchprof
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -109,6 +111,10 @@ treemap-bin:
 unified-bench:
 	mkdir -p $(BIN_DIR)
 	cd $(UNIFIED_BENCH_DIR) && go build -o ../../$(BIN_DIR)/unified-bench .
+
+benchprof:
+	mkdir -p $(BIN_DIR)
+	cd $(BENCHPROF_DIR) && go build -o ../../$(BIN_DIR)/benchprof .
 
 .PHONY: bench bench-readme
 bench: unified-bench

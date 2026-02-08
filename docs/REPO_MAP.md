@@ -103,7 +103,8 @@ Key directories and their purpose.
 │   └── public.go               # Main public API (Open, Set, Get)
 │
 ├── cmd/
-│   └── unified_bench/          # The master benchmark suite (HashDB vs TreeDB vs Badger)
+│   ├── unified_bench/          # The master benchmark suite (HashDB vs TreeDB vs Badger)
+│   └── benchprof/              # Profile analysis tool for unified-bench artifacts
 │
 ├── docs/                       # Documentation & Specs
 │   ├── contracts/              # Behavioral contracts (Durability, Locking)
@@ -131,5 +132,6 @@ Key directories and their purpose.
 | Component | Path | Description |
 |---|---|---|
 | **Benchmarks** | `cmd/unified_bench/` | Run this to compare performance. |
+| **Profile Analysis** | `cmd/benchprof/` | Converts unified-bench profile artifacts into markdown/json/html insights. |
 | **Redis Wrapper** | `HashDB/redisserver/` | Use this to point `redis-benchmark` at the engines. |
 | **Spec Tests** | `internal/contracttest/` | Black-box tests ensuring durability/iterator correctness. |

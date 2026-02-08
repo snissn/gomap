@@ -70,8 +70,12 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-format` output format: `table` or `markdown`
 - `-cpuprofile` write per-test CPU profiles to `<prefix>_<test>_<db>.pprof`
 - `-cpuprofile-tests` restrict CPU profiling to a CSV list of tests (e.g. `random_read,batch_random`)
+- `-allocsprofile` write per-test allocation delta profiles to `<prefix>_<test>_<db>.pprof` (analyzable with `-sample_index=alloc_space|alloc_objects`)
+- `-allocsprofile-tests` restrict allocation profiling to a CSV list of tests
+- `-allocsprofilerate` allocation sampling rate in bytes for `runtime.MemProfileRate` (default `524288`)
 - `-checkpoint-cpuprofile` write per-checkpoint CPU profiles to `<prefix>_checkpoint_<test>_<db>.pprof`
 - `-checkpoint-cpuprofile-tests` restrict checkpoint CPU profiling to a CSV list of tests
+- `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md` for `benchprof`.
 - `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
 - `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
@@ -91,6 +95,33 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
+
+## Standard Profile Workflow (`benchprof`)
+
+Use `-profile-dir` so all profiles and ops outputs are captured in one place:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -keys 800000 \
+  -profile fast \
+  -checkpoint-between-tests \
+  -test random_write,random_delete,random_read,full_scan,prefix_scan \
+  -profile-dir "$OUT" \
+  -progress=false
+
+./bin/benchprof -profiles-dir "$OUT"
+```
+
+This writes:
+- `benchprof_results.json` / `benchprof_results.md`
+- `cpu_<test>_<db>.pprof`
+- `allocs_<test>_<db>.pprof`
+- `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
+- `block.pprof`, `mutex.pprof`, `trace.out`
+- `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
 
 ## Notes
 

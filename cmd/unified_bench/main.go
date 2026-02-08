@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -14,6 +15,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -59,6 +61,10 @@ var (
 	seed               = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
+	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
+	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
+	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
+	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
 
 	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -119,6 +125,11 @@ type BenchConfig struct {
 	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
 	// listed benchmark tests (lowercased).
 	CPUProfileTests map[string]struct{}
+	AllocsProfile   string
+	// AllocsProfileTests, when non-empty, restricts per-test alloc profiling to
+	// the listed benchmark tests (lowercased).
+	AllocsProfileTests map[string]struct{}
+	AllocsProfileRate  int
 
 	CheckpointCPUProfile      string
 	CheckpointCPUProfileTests map[string]struct{}
@@ -167,6 +178,17 @@ type BenchRun struct {
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
 	DiskUsage           map[string]dirDiskUsage
+}
+
+type benchprofExport struct {
+	GeneratedAt string               `json:"generated_at"`
+	Runs        []benchprofExportRun `json:"runs"`
+}
+
+type benchprofExportRun struct {
+	Keys    int                           `json:"keys"`
+	Profile string                        `json:"profile,omitempty"`
+	Results map[string]map[string]float64 `json:"results,omitempty"`
 }
 
 type scanDiag struct {
@@ -260,6 +282,9 @@ func main() {
 	if err := applyProfile(*profileArg, isSet); err != nil {
 		log.Fatalf("profile: %v", err)
 	}
+	if err := applyProfileArtifactDir(*profileDir, isSet); err != nil {
+		log.Fatalf("profile-dir: %v", err)
+	}
 
 	seedUsed := *seed
 	if seedUsed == 0 {
@@ -305,6 +330,8 @@ func main() {
 		SeedUsed:                         seedUsed,
 		DatasetValuePattern:              *datasetValPat,
 		CPUProfile:                       *cpuProfile,
+		AllocsProfile:                    *allocsProfile,
+		AllocsProfileRate:                *allocsProfileRate,
 		BlockProfile:                     *blockProfile,
 		BlockProfileRate:                 *blockRate,
 		MutexProfile:                     *mutexProfile,
@@ -335,6 +362,18 @@ func main() {
 					continue
 				}
 				baseCfg.CPUProfileTests[t] = struct{}{}
+			}
+		}
+	}
+	if baseCfg.AllocsProfile != "" {
+		tests := parseList(*allocsProfileTests)
+		if len(tests) > 0 && tests[0] != "" {
+			baseCfg.AllocsProfileTests = make(map[string]struct{}, len(tests))
+			for _, t := range tests {
+				if t == "" {
+					continue
+				}
+				baseCfg.AllocsProfileTests[t] = struct{}{}
 			}
 		}
 	}
@@ -432,9 +471,9 @@ func main() {
 		log.Fatalf("keycounts: %v", err)
 	}
 
-	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
+	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.AllocsProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
 	if hasAnyProfiling && len(keyCounts) > 1 {
-		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
+		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
 
 	if len(keyCounts) == 1 {
@@ -446,6 +485,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("benchmark: %v", err)
 			}
+			maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 			fmt.Print(renderMarkdownSingle(run))
 			return
 		}
@@ -454,6 +494,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("benchmark: %v", err)
 		}
+		maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 		if len(run.CheckpointDurations) > 0 {
 			fmt.Println()
@@ -493,6 +534,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("benchmark sweep: %v", err)
 	}
+	maybeWriteBenchprofArtifacts(*profileDir, runs)
 
 	switch format {
 	case "table":
@@ -548,6 +590,17 @@ func shouldCPUProfile(cfg BenchConfig, testName string) bool {
 	return ok
 }
 
+func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
+	if cfg.AllocsProfile == "" {
+		return false
+	}
+	if len(cfg.AllocsProfileTests) == 0 {
+		return true
+	}
+	_, ok := cfg.AllocsProfileTests[strings.ToLower(testName)]
+	return ok
+}
+
 func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
 	if cfg.CheckpointCPUProfile == "" {
 		return false
@@ -572,6 +625,63 @@ func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.Fi
 	return f, nil
 }
 
+func writeAllocsSnapshot(path string) error {
+	// MemProfile data can lag behind current allocations until GC updates the
+	// profile tables. Run two collections to reduce staleness before snapshotting.
+	runtime.GC()
+	runtime.GC()
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	prof := pprof.Lookup("allocs")
+	if prof == nil {
+		return fmt.Errorf("allocs profile unavailable")
+	}
+	if err := prof.WriteTo(f, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeAllocsSnapshotTemp(prefix string) (string, error) {
+	f, err := os.CreateTemp("", prefix+"_*.pprof")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := writeAllocsSnapshot(path); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func writeAllocsDeltaProfile(basePath, afterPath, outPath string) error {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := exec.Command("go", "tool", "pprof", "-proto", "-base", basePath, afterPath)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if stdout.Len() == 0 {
+		return fmt.Errorf("empty profile output")
+	}
+	if err := os.WriteFile(outPath, stdout.Bytes(), 0o644); err != nil {
+		return err
+	}
+	return nil
+}
+
 func sanitizeProfileSegment(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return strings.Map(func(r rune) rune {
@@ -584,6 +694,70 @@ func sanitizeProfileSegment(s string) string {
 			return '_'
 		}
 	}, s)
+}
+
+func applyProfileArtifactDir(dir string, isSet map[string]bool) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create profile dir %q: %w", dir, err)
+	}
+	setStringIfUnset("cpuprofile", filepath.Join(dir, "cpu"), isSet, cpuProfile)
+	setStringIfUnset("allocsprofile", filepath.Join(dir, "allocs"), isSet, allocsProfile)
+	setStringIfUnset("checkpoint-cpuprofile", filepath.Join(dir, "checkpoint_cpu"), isSet, checkpointCPUProfile)
+	setStringIfUnset("blockprofile", filepath.Join(dir, "block.pprof"), isSet, blockProfile)
+	setStringIfUnset("mutexprofile", filepath.Join(dir, "mutex.pprof"), isSet, mutexProfile)
+	setStringIfUnset("trace", filepath.Join(dir, "trace.out"), isSet, traceProfile)
+	return nil
+}
+
+func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" || len(runs) == 0 {
+		return
+	}
+	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+		log.Printf("benchprof artifacts: %v", err)
+	}
+}
+
+func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+
+	out := benchprofExport{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Runs:        make([]benchprofExportRun, 0, len(runs)),
+	}
+	for _, run := range runs {
+		out.Runs = append(out.Runs, benchprofExportRun{
+			Keys:    run.Config.Keys,
+			Profile: strings.TrimSpace(run.Config.Profile),
+			Results: run.Results,
+		})
+	}
+
+	js, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal benchprof_results.json: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
+		return fmt.Errorf("write benchprof_results.json: %w", err)
+	}
+
+	var md string
+	if len(runs) == 1 {
+		md = renderMarkdownSingle(runs[0])
+	} else {
+		md = renderMarkdownSweep(runs)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
+		return fmt.Errorf("write benchprof_results.md: %w", err)
+	}
+	return nil
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
@@ -856,6 +1030,17 @@ func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) 
 func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
+	}
+	if cfg.AllocsProfile != "" {
+		rate := cfg.AllocsProfileRate
+		if rate <= 0 {
+			rate = 512 * 1024
+		}
+		prevRate := runtime.MemProfileRate
+		runtime.MemProfileRate = rate
+		defer func() {
+			runtime.MemProfileRate = prevRate
+		}()
 	}
 	keyShapeName := strings.ToLower(strings.TrimSpace(cfg.KeyShape))
 	if keyShapeName == "" {
@@ -2288,15 +2473,46 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 
-			opsPerSec, err := fn(inst.Wrapper, rng)
+			allocBasePath := ""
+			if shouldAllocsProfile(cfg, testName) {
+				allocBasePath, err = writeAllocsSnapshotTemp("unified_bench_allocs_base")
+				if err != nil {
+					if cpuFile != nil {
+						pprof.StopCPUProfile()
+						_ = cpuFile.Close()
+					}
+					return BenchRun{}, fmt.Errorf("allocsprofile baseline %s/%s: %w", testName, inst.Name, err)
+				}
+			}
+
+			opsPerSec, runErr := fn(inst.Wrapper, rng)
 
 			if cpuFile != nil {
 				pprof.StopCPUProfile()
 				_ = cpuFile.Close()
 			}
 
-			if err != nil {
-				return BenchRun{}, fmt.Errorf("test %s on %s: %w", testName, inst.Name, err)
+			if allocBasePath != "" {
+				if runErr != nil {
+					_ = os.Remove(allocBasePath)
+				} else {
+					allocAfterPath, snapErr := writeAllocsSnapshotTemp("unified_bench_allocs_after")
+					if snapErr != nil {
+						_ = os.Remove(allocBasePath)
+						return BenchRun{}, fmt.Errorf("allocsprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
+					}
+					allocPath := cfg.AllocsProfile + "_" + testName + "_" + inst.Name + ".pprof"
+					deltaErr := writeAllocsDeltaProfile(allocBasePath, allocAfterPath, allocPath)
+					_ = os.Remove(allocBasePath)
+					_ = os.Remove(allocAfterPath)
+					if deltaErr != nil {
+						return BenchRun{}, fmt.Errorf("allocsprofile %s/%s (%s): %w", testName, inst.Name, allocPath, deltaErr)
+					}
+				}
+			}
+
+			if runErr != nil {
+				return BenchRun{}, fmt.Errorf("test %s on %s: %w", testName, inst.Name, runErr)
 			}
 
 			results[testName][inst.Wrapper.Name()] = opsPerSec

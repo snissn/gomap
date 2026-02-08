@@ -67,5 +67,32 @@ The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent wo
 ./bin/unified-bench -keys 1000000
 
 # Run specific tests
-./bin/unified-bench -tests write_seq,read_rand -dbs treedb,hashdb
+./bin/unified-bench -test write_seq,read_rand -dbs treedb,hashdb
 ```
+
+## Profiling + Analysis (Standard Workflow)
+
+Use `-profile-dir` so one directory contains all artifacts needed by
+`benchprof`.
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -keys 800000 \
+  -profile fast \
+  -test random_write,random_delete,random_read,full_scan,prefix_scan \
+  -checkpoint-between-tests \
+  -profile-dir "$OUT" \
+  -progress=false
+
+./bin/benchprof -profiles-dir "$OUT"
+```
+
+`benchprof` analyzes:
+- `benchprof_results.json` and `benchprof_results.md`
+- per-test CPU profiles: `cpu_<test>_<db>.pprof`
+- per-test allocation delta profiles: `allocs_<test>_<db>.pprof`
+- per-test checkpoint CPU profiles: `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
+- contention profiles: `block.pprof`, `mutex.pprof`
