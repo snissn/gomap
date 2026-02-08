@@ -4,6 +4,11 @@ Date: 2026-02-08
 Author: Codex (performance review follow-up)
 Related issues: #406, #393, #394, #395, #396, #398, #399, #401, #402
 
+## Canonical Status
+- Superseded by issue body: `https://github.com/snissn/gomap/issues/406`.
+- The issue description is the single source of truth for gates, scope, and promotion decisions.
+- This memo is a historical/reference mirror only.
+
 ## Purpose
 This memo proposes targeted revisions to issue #406 so that:
 1. value-log GC does not require global write-path convoys,
