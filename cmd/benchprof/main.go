@@ -46,6 +46,8 @@ type report struct {
 
 	Insights []string `json:"insights,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
+
+	InvestigationTargets []investigationTarget `json:"investigation_targets,omitempty"`
 }
 
 type opsRow struct {
@@ -77,6 +79,19 @@ type scanComparison struct {
 	SharedTop     []sharedHot  `json:"shared_top,omitempty"`
 	PrefixOnlyTop []pprofEntry `json:"prefix_only_top,omitempty"`
 	FullOnlyTop   []pprofEntry `json:"full_only_top,omitempty"`
+}
+
+type investigationTarget struct {
+	DBTag     string  `json:"db_tag,omitempty"`
+	Test      string  `json:"test,omitempty"`
+	Category  string  `json:"category"`
+	Function  string  `json:"function"`
+	FlatPct   float64 `json:"flat_pct,omitempty"`
+	Why       string  `json:"why,omitempty"`
+	File      string  `json:"file,omitempty"`
+	Line      int     `json:"line,omitempty"`
+	LineHint  string  `json:"line_hint,omitempty"`
+	Reference string  `json:"reference,omitempty"`
 }
 
 type sharedHot struct {
@@ -266,7 +281,9 @@ func buildReport(cfg config) (report, error) {
 	}
 
 	rep.Comparisons = buildComparisons(rep.CPUProfiles)
-	rep.Insights = buildInsights(rep)
+	inferredInsights := []string(nil)
+	rep.InvestigationTargets, inferredInsights = buildInvestigations(rep)
+	rep.Insights = buildInsights(rep, inferredInsights)
 	return rep, nil
 }
 
@@ -736,7 +753,343 @@ func buildComparisons(profiles []pprofSummary) []scanComparison {
 	return out
 }
 
-func buildInsights(rep report) []string {
+type sourceHint struct {
+	MatchAny  []string
+	File      string
+	LineMatch string
+	Why       string
+}
+
+var iteratorSeekPatterns = []string{
+	"(*db).iterator",
+	"(*tree).iterator",
+	"(*iterator).seek",
+	"(*hashsorted).newiterator",
+	"(*hashiterator).seek",
+	"(*hashiterator).refresh",
+	"(*hashiterator).ensureloaded",
+	"iteratorheap.less",
+	"iteratorheap.pop",
+	"iteratorheap.up",
+	"iteratorheap.down",
+	"(*mergingiterator).advance",
+	"sort.search",
+	"cmpbody",
+}
+
+var valueDecodePatterns = []string{
+	"(*valuelogiterator).loadvalue",
+	"(*db).readvaluelog",
+	"readviammapappend",
+	"decodepayloadappend",
+}
+
+var investigationSourceHints = []sourceHint{
+	{
+		MatchAny:  []string{"(*db).iterator"},
+		File:      "TreeDB/caching/db.go",
+		LineMatch: "func (db *DB) Iterator(start, end []byte) (merging.Iterator, error)",
+		Why:       "DB-level iterator setup and snapshot rotation.",
+	},
+	{
+		MatchAny:  []string{"(*tree).iterator"},
+		File:      "TreeDB/tree/iterator.go",
+		LineMatch: "func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator",
+		Why:       "Tree iterator initialization and initial seek.",
+	},
+	{
+		MatchAny:  []string{"(*iterator).seek"},
+		File:      "TreeDB/tree/iterator.go",
+		LineMatch: "func (it *Iterator) seek(key []byte)",
+		Why:       "Core btree seek path for range start.",
+	},
+	{
+		MatchAny:  []string{"(*hashsorted).newiterator"},
+		File:      "TreeDB/internal/memtable/hash_sorted.go",
+		LineMatch: "func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator",
+		Why:       "Memtable iterator creation and search bootstrap.",
+	},
+	{
+		MatchAny:  []string{"(*hashiterator).seek"},
+		File:      "TreeDB/internal/memtable/hash_sorted.go",
+		LineMatch: "func (it *hashIterator) Seek(key []byte)",
+		Why:       "Prefix seek inside sorted memtable key list.",
+	},
+	{
+		MatchAny:  []string{"(*hashiterator).refresh"},
+		File:      "TreeDB/internal/memtable/hash_sorted.go",
+		LineMatch: "func (it *hashIterator) refresh()",
+		Why:       "Iterator validity and bound checks on each move.",
+	},
+	{
+		MatchAny:  []string{"(*hashiterator).ensureloaded"},
+		File:      "TreeDB/internal/memtable/hash_sorted.go",
+		LineMatch: "func (it *hashIterator) ensureLoaded()",
+		Why:       "Loads entries from memtable map for current key.",
+	},
+	{
+		MatchAny:  []string{"sort.search"},
+		File:      "TreeDB/internal/memtable/hash_sorted.go",
+		LineMatch: "sort.SearchStrings(",
+		Why:       "Binary search callsite for iterator seeks.",
+	},
+	{
+		MatchAny:  []string{"cmpbody"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "cmp := bytes.Compare(h[i].key, h[j].key)",
+		Why:       "Key-compare callsite used in merge heap ordering.",
+	},
+	{
+		MatchAny:  []string{"iteratorheap.less"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "func (h iteratorHeap) Less(i, j int) bool",
+		Why:       "Heap comparator in merging iterator.",
+	},
+	{
+		MatchAny:  []string{"iteratorheap.pop"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "func (h *iteratorHeap) pop() heapItem",
+		Why:       "Heap pop in merging iterator advance path.",
+	},
+	{
+		MatchAny:  []string{"iteratorheap.up"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "func (h *iteratorHeap) up(j int)",
+		Why:       "Heap up-heap operation after push.",
+	},
+	{
+		MatchAny:  []string{"iteratorheap.down"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "func (h *iteratorHeap) down(i0, n int) bool",
+		Why:       "Heap down-heap operation after pop/heapify.",
+	},
+	{
+		MatchAny:  []string{"(*mergingiterator).advance"},
+		File:      "TreeDB/internal/merging/merging.go",
+		LineMatch: "func (mi *MergingIterator) advance()",
+		Why:       "Main merge loop and shadow-key skipping.",
+	},
+	{
+		MatchAny:  []string{"(*valuelogiterator).loadvalue"},
+		File:      "TreeDB/caching/value_log_iterator.go",
+		LineMatch: "func (it *valueLogIterator) loadValue()",
+		Why:       "Value pointer materialization path.",
+	},
+	{
+		MatchAny:  []string{"(*db).readvaluelog"},
+		File:      "TreeDB/caching/db.go",
+		LineMatch: "func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error)",
+		Why:       "DB wrapper around value-log reads.",
+	},
+	{
+		MatchAny:  []string{"readviammapappend"},
+		File:      "TreeDB/internal/valuelog/reader_mmap.go",
+		LineMatch: "func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error, bool)",
+		Why:       "Value-log mmap read/validate path.",
+	},
+}
+
+func buildInvestigations(rep report) ([]investigationTarget, []string) {
+	if len(rep.CPUProfiles) == 0 {
+		return nil, nil
+	}
+
+	prefixByDB := map[string]pprofSummary{}
+	for _, prof := range rep.CPUProfiles {
+		if prof.Kind == "cpu" && prof.Test == "prefix_scan" {
+			prefixByDB[prof.DBTag] = prof
+		}
+	}
+	if len(prefixByDB) == 0 {
+		return nil, nil
+	}
+
+	prefixSlower := hasAnyPrefixSlowerRow(rep.OpsRows)
+	dbTags := make([]string, 0, len(prefixByDB))
+	for dbTag := range prefixByDB {
+		dbTags = append(dbTags, dbTag)
+	}
+	sort.Strings(dbTags)
+
+	lineCache := make(map[string]int, len(investigationSourceHints))
+	targets := make([]investigationTarget, 0, 12)
+	inferred := make([]string, 0, len(dbTags))
+	seen := map[string]struct{}{}
+
+	for _, dbTag := range dbTags {
+		prof := prefixByDB[dbTag]
+		if len(prof.TopEntries) == 0 {
+			continue
+		}
+
+		iteratorPct := sumFlatPct(prof.TopEntries, iteratorSeekPatterns)
+		valueDecodePct := sumFlatPct(prof.TopEntries, valueDecodePatterns)
+		iterEntries := matchingEntries(prof.TopEntries, iteratorSeekPatterns)
+		if len(iterEntries) == 0 {
+			continue
+		}
+
+		// Signal: prefix workload and CPU point to iterator/seek path, not value decode.
+		if prefixSlower && (iteratorPct >= valueDecodePct+2.0) && len(iterEntries) >= 2 {
+			inferred = append(inferred,
+				fmt.Sprintf("%s: prefix_scan CPU is weighted toward iterator/seek work (%.2f%% flat) vs value decoding (%.2f%% flat). That points to iterator setup/seek overhead, not value decoding.",
+					dbTag, iteratorPct, valueDecodePct))
+		}
+
+		limit := len(iterEntries)
+		if limit > 8 {
+			limit = 8
+		}
+		for i := 0; i < limit; i++ {
+			entry := iterEntries[i]
+			target := investigationTarget{
+				DBTag:    dbTag,
+				Test:     "prefix_scan",
+				Category: "iterator_setup_seek",
+				Function: entry.Function,
+				FlatPct:  entry.FlatPct,
+				Why:      "Prefix-scan hotspot in iterator/seek path.",
+			}
+			if file, line, hint, ok := resolveSourceHint(entry.Function, lineCache); ok {
+				target.File = file
+				target.Line = line
+				target.LineHint = hint
+				target.Reference = sourceRef(file, line)
+				if target.Why == "" {
+					target.Why = hint
+				}
+			}
+			keyRef := target.Reference
+			if keyRef == "" {
+				keyRef = target.Function
+			}
+			key := target.DBTag + "|" + target.Test + "|" + target.Category + "|" + keyRef
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			targets = append(targets, target)
+		}
+	}
+
+	return targets, inferred
+}
+
+func hasAnyPrefixSlowerRow(rows []opsRow) bool {
+	for _, row := range rows {
+		if row.FullScan > 0 && row.Prefix > 0 && row.PrefixDiv > 0 && row.PrefixDiv < 0.95 {
+			return true
+		}
+	}
+	return false
+}
+
+func sumFlatPct(entries []pprofEntry, patterns []string) float64 {
+	var total float64
+	for _, e := range entries {
+		if matchesAnyPattern(e.Function, patterns) {
+			total += e.FlatPct
+		}
+	}
+	return total
+}
+
+func matchingEntries(entries []pprofEntry, patterns []string) []pprofEntry {
+	out := make([]pprofEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.FlatPct <= 0 {
+			continue
+		}
+		if matchesAnyPattern(e.Function, patterns) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func matchesAnyPattern(function string, patterns []string) bool {
+	fn := strings.ToLower(function)
+	for _, p := range patterns {
+		if strings.Contains(fn, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveSourceHint(function string, lineCache map[string]int) (string, int, string, bool) {
+	for _, hint := range investigationSourceHints {
+		if !matchesAnyPattern(function, hint.MatchAny) {
+			continue
+		}
+		line := findLineInFileCached(hint.File, hint.LineMatch, lineCache)
+		return hint.File, line, hint.Why, true
+	}
+	return "", 0, "", false
+}
+
+func findLineInFileCached(path, lineMatch string, cache map[string]int) int {
+	cacheKey := path + "|" + lineMatch
+	if line, ok := cache[cacheKey]; ok {
+		return line
+	}
+	line := findLineInFile(path, lineMatch)
+	cache[cacheKey] = line
+	return line
+}
+
+func findLineInFile(path, lineMatch string) int {
+	readPath := resolveReadablePath(path)
+	data, err := os.ReadFile(readPath)
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, lineMatch) {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func resolveReadablePath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return path
+	}
+	if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		return path
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return path
+	}
+	dir := cwd
+	for i := 0; i < 8; i++ {
+		candidate := filepath.Join(dir, path)
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return path
+}
+
+func sourceRef(file string, line int) string {
+	if strings.TrimSpace(file) == "" {
+		return ""
+	}
+	if line > 0 {
+		return fmt.Sprintf("%s:%d", file, line)
+	}
+	return file
+}
+
+func buildInsights(rep report, inferredInsights []string) []string {
 	insights := make([]string, 0, 12)
 
 	for _, row := range rep.OpsRows {
@@ -774,6 +1127,10 @@ func buildInsights(rep report) []string {
 	if rep.MutexProfile != nil && len(rep.MutexProfile.TopEntries) > 0 {
 		top := rep.MutexProfile.TopEntries[0]
 		insights = append(insights, fmt.Sprintf("Mutex contention hotspot: %q (%.2f%% flat).", top.Function, top.FlatPct))
+	}
+
+	for _, in := range inferredInsights {
+		insights = append(insights, in)
 	}
 
 	if len(insights) == 0 {
@@ -895,6 +1252,35 @@ func renderMarkdown(rep report) string {
 		sb.WriteString("\n")
 	}
 
+	if len(rep.InvestigationTargets) > 0 {
+		sb.WriteString("## Investigation Targets\n\n")
+		sb.WriteString("| db tag | test | category | function | flat% | code | why |\n")
+		sb.WriteString("|---|---|---|---|---:|---|---|\n")
+		for _, t := range rep.InvestigationTargets {
+			codeRef := "-"
+			if t.Reference != "" {
+				codeRef = fmt.Sprintf("`%s`", t.Reference)
+			}
+			why := t.Why
+			if strings.TrimSpace(t.LineHint) != "" {
+				if why != "" {
+					why += " "
+				}
+				why += t.LineHint
+			}
+			sb.WriteString(fmt.Sprintf("| %s | %s | %s | `%s` | %.2f%% | %s | %s |\n",
+				t.DBTag,
+				t.Test,
+				t.Category,
+				t.Function,
+				t.FlatPct,
+				codeRef,
+				escapePipe(why),
+			))
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(rep.Warnings) > 0 {
 		sb.WriteString("## Warnings\n\n")
 		for _, w := range rep.Warnings {
@@ -925,6 +1311,13 @@ func writeOneProfileMarkdown(sb *strings.Builder, title string, prof pprofSummar
 		sb.WriteString(fmt.Sprintf("| %s | %.2f%% | %s | %.2f%% | `%s` |\n", e.Flat, e.FlatPct, e.Cum, e.CumPct, e.Function))
 	}
 	sb.WriteString("\n")
+}
+
+func escapePipe(s string) string {
+	if s == "" {
+		return ""
+	}
+	return strings.ReplaceAll(s, "|", "\\|")
 }
 
 func formatOps(v float64) string {

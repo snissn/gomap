@@ -6,6 +6,9 @@
 - `insights.json` (machine-friendly summary)
 - `insights.html` (optional browser view rendered from markdown)
 
+It now also emits concrete investigation targets (function + `file:line`) when it detects
+iterator/seek-heavy prefix scans (for example: "iterator setup/seek overhead, not value decoding").
+
 ## Build
 
 ```bash

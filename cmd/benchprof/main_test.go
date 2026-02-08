@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -129,5 +130,75 @@ func TestParseScanOpsResultsJSON(t *testing.T) {
 	}
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+}
+
+func TestBuildInvestigations_IteratorOverheadInference(t *testing.T) {
+	rep := report{
+		OpsRows: []opsRow{
+			{
+				Label:     "TreeDB (vlog=off)",
+				FullScan:  1377396,
+				Prefix:    1132616,
+				PrefixDiv: 1132616.0 / 1377396.0,
+			},
+		},
+		CPUProfiles: []pprofSummary{
+			{
+				Kind:  "cpu",
+				Test:  "prefix_scan",
+				DBTag: "treedb_vlog_off",
+				TopEntries: []pprofEntry{
+					{Function: "github.com/snissn/gomap/TreeDB/caching.(*DB).Iterator", FlatPct: 5.58},
+					{Function: "github.com/snissn/gomap/TreeDB/tree.(*Tree).Iterator", FlatPct: 3.10},
+					{Function: "github.com/snissn/gomap/TreeDB/tree.(*Iterator).seek", FlatPct: 2.90},
+					{Function: "github.com/snissn/gomap/TreeDB/internal/memtable.(*hashIterator).Seek", FlatPct: 2.40},
+					{Function: "runtime.madvise", FlatPct: 76.36},
+				},
+			},
+			{
+				Kind:  "cpu",
+				Test:  "full_scan",
+				DBTag: "treedb_vlog_off",
+				TopEntries: []pprofEntry{
+					{Function: "github.com/snissn/gomap/TreeDB/caching.(*valueLogIterator).loadValue", FlatPct: 1.20},
+				},
+			},
+		},
+	}
+
+	targets, inferred := buildInvestigations(rep)
+	if len(inferred) == 0 {
+		t.Fatalf("expected at least one inferred insight")
+	}
+	foundPhrase := false
+	for _, in := range inferred {
+		if strings.Contains(in, "That points to iterator setup/seek overhead, not value decoding.") {
+			foundPhrase = true
+			break
+		}
+	}
+	if !foundPhrase {
+		t.Fatalf("expected iterator-overhead phrase in inferred insights: %+v", inferred)
+	}
+
+	if len(targets) == 0 {
+		t.Fatalf("expected investigation targets")
+	}
+
+	var foundDBIterator bool
+	for _, target := range targets {
+		if strings.Contains(target.Function, "(*DB).Iterator") {
+			foundDBIterator = true
+			if target.File == "" {
+				t.Fatalf("expected source file for DB iterator target")
+			}
+			if target.Line <= 0 {
+				t.Fatalf("expected positive source line for DB iterator target, got %d", target.Line)
+			}
+		}
+	}
+	if !foundDBIterator {
+		t.Fatalf("expected DB iterator target in %+v", targets)
 	}
 }
