@@ -4861,6 +4861,10 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 	db.walAckMu.Unlock()
 
+	if len(records) == 1 {
+		return db.appendWALOneChecked(l, records[0], durability)
+	}
+
 	db.assignCommitSeq(records)
 
 	switch durability {
@@ -4870,6 +4874,40 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 		return db.appendWALInline(l, records, true)
 	default:
 		return db.appendWALInline(l, records, false)
+	}
+}
+
+func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+	return db.appendWALOneChecked(l, record, durability)
+}
+
+func (db *DB) appendWALOneChecked(l *lane, record logRecord, durability journalDurability) error {
+	record.Seq = db.nextCommitSeq.Add(1)
+	switch durability {
+	case journalDurabilitySync:
+		return db.appendWALDirect(l, []logRecord{record}, true)
+	case journalDurabilityFlush:
+		return db.appendWALInlineOne(l, record, true)
+	default:
+		return db.appendWALInlineOne(l, record, false)
 	}
 }
 
@@ -6181,6 +6219,9 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 	if l == nil {
 		return errWALUnavailable
 	}
+	if len(records) == 1 {
+		return db.appendWALInlineOne(l, records[0], flush)
+	}
 
 	var (
 		totalBytes int64
@@ -6201,6 +6242,39 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		err = w.AppendBatch(records)
 		totalBytes = db.logBatchSize(records)
 	}
+	if err == nil && flush {
+		err = w.Flush()
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
+func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
+	err := w.Append(record)
+	totalBytes := db.logRecordSize(record.Key, record.Value)
 	if err == nil && flush {
 		err = w.Flush()
 	}
@@ -7228,7 +7302,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 		if !db.disableJournal {
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
-			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+			if err := db.appendWALOne(lane, rec, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
 			}
@@ -7242,7 +7316,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			}
 		}
 		rec := logRecord{Op: logOpSetInline, Key: key, Value: value}
-		if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
@@ -7430,7 +7504,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if err := preRotate(key); err != nil {
 				return err
 			}
-			if err := db.appendWAL(lane, []logRecord{{Op: logOpDelete, Key: key}}, journalDurabilityNone); err != nil {
+			if err := db.appendWALOne(lane, logRecord{Op: logOpDelete, Key: key}, journalDurabilityNone); err != nil {
 				return err
 			}
 			if err := applyDelete(key); err != nil {
@@ -7938,7 +8012,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 			defer db.releaseLaneSync(lane)
 		}
 		rec := logRecord{Op: logOpDelete, Key: key}
-		if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
