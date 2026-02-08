@@ -6700,11 +6700,20 @@ func (db *DB) maybeAssistFlush() {
 
 	// Adaptive policy: thresholds based on queued backlog bytes.
 	if db.adaptiveBackpressureEnabled() {
+		backlog := db.queueBacklogBytes.Load()
+		// Self-heal stale backlog accounting when the queue is empty.
+		if backlog > 0 {
+			if view := db.memtables.Load(); view == nil || len(view.queue) == 0 {
+				db.queueBacklogBytes.Store(0)
+				return
+			}
+		}
+
 		db.bpMu.Lock()
 		slowdownBytes, stopBytes, _ := db.thresholdsLocked()
 		db.bpMu.Unlock()
 
-		backlog := db.queueBacklogBytes.Load()
+		backlog = db.queueBacklogBytes.Load()
 		if stopBytes > 0 && backlog >= stopBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
@@ -6959,7 +6968,6 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.maybeWaitForStop()
 	return db.set(key, value, false)
 }
 
@@ -6971,7 +6979,6 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.maybeWaitForStop()
 	return db.set(key, value, true)
 }
 
@@ -7172,7 +7179,6 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.maybeWaitForStop()
 	return db.delete(key, false)
 }
 
@@ -7188,7 +7194,6 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return nil
 	}
 	db.waitForCheckpoint()
-	db.maybeWaitForStop()
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -7757,7 +7762,6 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.maybeWaitForStop()
 	return db.delete(key, true)
 }
 
@@ -10944,7 +10948,6 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
-	b.db.maybeWaitForStop()
 
 	if b.backend != nil {
 		var err error
