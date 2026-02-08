@@ -181,7 +181,48 @@ func syncDir(path string) (err error) {
 }
 
 func (w *Writer) Append(record Record) error {
-	return w.AppendBatch([]Record{record})
+	if err := validateRecord(&record); err != nil {
+		return err
+	}
+	if len(record.Key) > int(^uint16(0)) {
+		return ErrRecordTooLarge
+	}
+	if len(record.Value) > int(^uint32(0)) {
+		return ErrRecordTooLarge
+	}
+
+	keyLen := uint16(len(record.Key))
+	valLen := uint32(len(record.Value))
+	if recordSizeExceedsMax(keyLen, valLen) {
+		return ErrRecordTooLarge
+	}
+
+	total := int64(batchHeaderSize) + int64(recordHeaderSize) + int64(len(record.Key)) + int64(len(record.Value))
+	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if total > int64(int(^uint(0)>>1)) {
+		return ErrRecordTooLarge
+	}
+
+	if cap(w.scratch) < int(total) {
+		w.scratch = make([]byte, int(total))
+	}
+	buf := w.scratch[:int(total)]
+
+	buf[0] = Version
+	binary.LittleEndian.PutUint32(buf[1:5], 1)
+
+	off := batchHeaderSize
+	buf[off] = record.Op
+	binary.LittleEndian.PutUint16(buf[off+1:off+3], keyLen)
+	binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
+	binary.LittleEndian.PutUint64(buf[off+7:off+15], record.RID)
+	binary.LittleEndian.PutUint64(buf[off+15:off+23], record.Seq)
+	copy(buf[off+recordHeaderSize:], record.Key)
+	copy(buf[off+recordHeaderSize+len(record.Key):], record.Value)
+
+	return w.writeSegment(buf)
 }
 
 func (w *Writer) AppendBatch(records []Record) error {
