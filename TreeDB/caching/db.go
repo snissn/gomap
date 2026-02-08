@@ -4909,20 +4909,41 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 }
 
 func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, writeMode vlogCompressionWriteMode, wallStart time.Time) bool {
-	_ = db
-	_ = dictID
-	_ = valueLen
-	_ = writeMode
-	_ = wallStart
 	if l == nil || l.vlogCh == nil {
 		return false
 	}
 	if durability == journalDurabilitySync {
 		return false
 	}
-	// Stage 1 lane ownership: non-sync value-log appends are always lane-actor
-	// queued so caller goroutines do not take append-path vlogMu directly.
-	return true
+	// Preserve direct timing mode for autotune/profile callers.
+	if !wallStart.IsZero() {
+		return false
+	}
+	// Block mode requires direct append so per-frame codec metadata and grouping
+	// stay on the caller path.
+	if writeMode == vlogWriteBlock {
+		return false
+	}
+	// Force-pointer profiles intentionally run with actor-owned value-log appends.
+	if db.forceValueLogPointers {
+		return true
+	}
+	// Dict path benefits from queue coalescing even for small values.
+	if writeMode == vlogWriteDict && dictID != 0 {
+		return true
+	}
+	// Always queue large values.
+	if valueLen >= vlogQueueMinValueSize {
+		return true
+	}
+	// Adaptive path: queue when contention/backlog is visible.
+	if l.vlogQueueing.Load() {
+		return true
+	}
+	if len(l.vlogCh) > 0 {
+		return true
+	}
+	return false
 }
 
 func (db *DB) prepareAppendDictFrames(
@@ -5814,7 +5835,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		l.vlogQueueing.Store(true)
 		if dictID == 0 && !db.forceValueLogPointers && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
@@ -5934,6 +5954,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			return ptr, retainPath, nil
 		}
 
+		l.vlogQueueing.Store(true)
 		ack := vlogAckPool.Get().(*vlogAck)
 		ack.ptr = page.ValuePtr{}
 		ack.retainPath = ""
