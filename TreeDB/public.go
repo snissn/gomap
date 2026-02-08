@@ -70,6 +70,7 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
+	maintenance    maintenanceCoordinator
 }
 
 type writePathInfo struct {
@@ -77,6 +78,22 @@ type writePathInfo struct {
 	valueStore string
 	redoLog    string
 	warn       bool
+}
+
+type maintenanceCoordinator struct {
+	mu sync.Mutex
+
+	active string
+
+	deferrals uint64
+	waitTotal time.Duration
+	waitMax   time.Duration
+
+	gcRuns     uint64
+	vacuumRuns uint64
+
+	lastGCAt     time.Time
+	lastVacuumAt time.Time
 }
 
 func writePathFromOptions(opts Options) writePathInfo {
@@ -108,6 +125,72 @@ func (db *DB) ensureOpen() error {
 		return ErrClosed
 	}
 	return nil
+}
+
+func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success bool)) {
+	if db == nil {
+		return 0, func(bool) {}
+	}
+	waitStart := time.Now()
+	db.maintenance.mu.Lock()
+	wait := time.Since(waitStart)
+	if wait > 0 {
+		db.maintenance.deferrals++
+		db.maintenance.waitTotal += wait
+		if wait > db.maintenance.waitMax {
+			db.maintenance.waitMax = wait
+		}
+	}
+	db.maintenance.active = op
+
+	return wait, func(success bool) {
+		if success {
+			now := time.Now()
+			switch op {
+			case "gc":
+				db.maintenance.gcRuns++
+				db.maintenance.lastGCAt = now
+			case "vacuum":
+				db.maintenance.vacuumRuns++
+				db.maintenance.lastVacuumAt = now
+			}
+		}
+		db.maintenance.active = ""
+		db.maintenance.mu.Unlock()
+	}
+}
+
+func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
+	if stats == nil || m == nil {
+		return
+	}
+	m.mu.Lock()
+	active := m.active
+	deferrals := m.deferrals
+	waitTotal := m.waitTotal
+	waitMax := m.waitMax
+	gcRuns := m.gcRuns
+	vacuumRuns := m.vacuumRuns
+	lastGCAt := m.lastGCAt
+	lastVacuumAt := m.lastVacuumAt
+	m.mu.Unlock()
+
+	stats["treedb.maintenance.full_scan.active"] = active
+	stats["treedb.maintenance.full_scan.deferrals"] = fmt.Sprintf("%d", deferrals)
+	stats["treedb.maintenance.full_scan.wait_total_ms"] = fmt.Sprintf("%.3f", float64(waitTotal)/float64(time.Millisecond))
+	stats["treedb.maintenance.full_scan.wait_max_ms"] = fmt.Sprintf("%.3f", float64(waitMax)/float64(time.Millisecond))
+	stats["treedb.maintenance.full_scan.gc_runs"] = fmt.Sprintf("%d", gcRuns)
+	stats["treedb.maintenance.full_scan.vacuum_runs"] = fmt.Sprintf("%d", vacuumRuns)
+	if !lastGCAt.IsZero() {
+		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt.UnixNano())
+	} else {
+		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = "0"
+	}
+	if !lastVacuumAt.IsZero() {
+		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt.UnixNano())
+	} else {
+		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = "0"
+	}
 }
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
@@ -791,6 +874,7 @@ func (db *DB) Stats() map[string]string {
 		writePathStatsInto(stats, db.writePath)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
+		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
 	stats := db.backend.Stats()
@@ -800,6 +884,7 @@ func (db *DB) Stats() map[string]string {
 	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }
 
@@ -872,6 +957,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.backend == nil {
 		return ErrClosed
 	}
+	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
+	success := false
+	defer func() { finishMaintenance(success) }()
 
 	// In cached mode, ensure the backend reflects all buffered writes before
 	// rebuilding/switching the index file. This avoids exposing a backend state
@@ -883,7 +971,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		}
 	}
 
-	return db.backend.VacuumIndexOnline(ctx)
+	if err := db.backend.VacuumIndexOnline(ctx); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.

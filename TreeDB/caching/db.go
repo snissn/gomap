@@ -1318,6 +1318,12 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+// ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
+// segment paths currently pinned by cached-mode pointer lifecycle tracking.
+func (db *DB) ValueLogRetainedPaths() []string {
+	return db.valueLogRetainedPaths()
+}
+
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	it, err := db.backend.Iterator(nil, nil)
 	if err != nil {
@@ -3302,6 +3308,7 @@ type vlogWriteRequest struct {
 	blockCodec       valuelog.BlockCodec
 	probeCompression bool
 	durability       journalDurability
+	enqueuedAt       time.Time
 	ack              *vlogAck
 }
 
@@ -3884,6 +3891,7 @@ func (db *DB) vlogWriteLoop(l *lane) {
 		}
 		batch = append(batch, req)
 		backlog := len(l.vlogCh)
+		observeLaneVlogQueueDepthSample(l, backlog)
 		lingerAllowed := backlog < (vlogWriteBatchMax/4) && !l.vlogQueueing.Load()
 		if len(batch) < vlogWriteBatchMax && len(req.value) < vlogQueueMinValueSize && lingerAllowed {
 			timer.Reset(vlogWriteLinger)
@@ -3922,6 +3930,7 @@ func (db *DB) vlogWriteLoop(l *lane) {
 				break drain
 			}
 		}
+		observeLaneVlogQueueDepthSample(l, len(l.vlogCh))
 
 		db.flushVlogRequests(l, batch)
 		if len(l.vlogCh) == 0 {
@@ -4042,6 +4051,7 @@ func (db *DB) drainVlogWriter(l *lane, batch []vlogWriteRequest) {
 					break drain
 				}
 			}
+			observeLaneVlogQueueDepthSample(l, len(l.vlogCh))
 			db.flushVlogRequests(l, batch)
 		default:
 			return
@@ -4142,6 +4152,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	dictNeeded := make(map[uint64]struct{})
 	for i := range requests {
 		req := &requests[i]
+		if !req.enqueuedAt.IsZero() {
+			observeLaneVlogQueueLag(l, time.Since(req.enqueuedAt))
+		}
 		records[i] = valuelog.Record{RID: req.rid, Value: req.value}
 		if req.durability == journalDurabilitySync {
 			needSync = true
@@ -4896,37 +4909,20 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 }
 
 func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, writeMode vlogCompressionWriteMode, wallStart time.Time) bool {
+	_ = db
+	_ = dictID
+	_ = valueLen
+	_ = writeMode
+	_ = wallStart
 	if l == nil || l.vlogCh == nil {
 		return false
 	}
 	if durability == journalDurabilitySync {
 		return false
 	}
-	// Preserve direct timing mode for autotune/profile callers.
-	if !wallStart.IsZero() {
-		return false
-	}
-	// Block mode requires direct append so per-frame codec metadata and grouping
-	// are applied in the hot path.
-	if writeMode == vlogWriteBlock {
-		return false
-	}
-	// Dict path benefits from queue coalescing even for small values.
-	if writeMode == vlogWriteDict && dictID != 0 {
-		return true
-	}
-	// Always queue large values.
-	if valueLen >= vlogQueueMinValueSize {
-		return true
-	}
-	// Adaptive path: queue when contention/backlog is visible.
-	if l.vlogQueueing.Load() {
-		return true
-	}
-	if len(l.vlogCh) > 0 {
-		return true
-	}
-	return false
+	// Stage 1 lane ownership: non-sync value-log appends are always lane-actor
+	// queued so caller goroutines do not take append-path vlogMu directly.
+	return true
 }
 
 func (db *DB) prepareAppendDictFrames(
@@ -5818,7 +5814,8 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+		l.vlogQueueing.Store(true)
+		if dictID == 0 && !db.forceValueLogPointers && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -5937,7 +5934,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			return ptr, retainPath, nil
 		}
 
-		l.vlogQueueing.Store(true)
 		ack := vlogAckPool.Get().(*vlogAck)
 		ack.ptr = page.ValuePtr{}
 		ack.retainPath = ""
@@ -5952,10 +5948,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			blockCodec:       finalBlockCodec,
 			probeCompression: probeCompression,
 			durability:       durability,
+			enqueuedAt:       time.Now(),
 			ack:              ack,
 		}
 		select {
 		case l.vlogCh <- req:
+			observeLaneVlogQueueEnqueue(l, len(l.vlogCh))
 		case <-db.closeCh:
 			ack.err = errWALClosed
 			ack.wg.Done()
@@ -9851,10 +9849,56 @@ func (db *DB) Stats() map[string]string {
 	db.mu.RUnlock()
 	var walCurrentBytes int64
 	var walClosedBytes int64
+	var queueLagBuckets [vlogQueueLagBucketCount]uint64
+	var queueLagCount uint64
+	var queueLagTotalNs uint64
+	var queueLagMaxNs uint64
+	var queueDepthEnqueued uint64
+	var queueDepthSamples uint64
+	var queueDepthSum uint64
+	var queueDepthMax uint64
+	var queueDepthLast uint64
+	var queueDepthPositiveRunMaxNs uint64
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
 		walClosedBytes += l.walClosedBytes.Load()
+
+		lagSnap := snapshotLaneVlogQueueLag(l)
+		depthSnap := snapshotLaneVlogQueueDepth(l)
+		queueLagCount += lagSnap.Count
+		queueLagTotalNs += lagSnap.TotalNs
+		if lagSnap.MaxNs > queueLagMaxNs {
+			queueLagMaxNs = lagSnap.MaxNs
+		}
+		for bucket := 0; bucket < vlogQueueLagBucketCount; bucket++ {
+			queueLagBuckets[bucket] += lagSnap.Buckets[bucket]
+		}
+		queueDepthEnqueued += depthSnap.Enqueued
+		queueDepthSamples += depthSnap.Samples
+		queueDepthSum += depthSnap.Sum
+		if depthSnap.Max > queueDepthMax {
+			queueDepthMax = depthSnap.Max
+		}
+		queueDepthLast += depthSnap.Last
+		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
+			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
+		}
+
+		laneLagP99 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.99)
+		laneLagP999 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.999)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.enqueued", i)] = fmt.Sprintf("%d", depthSnap.Enqueued)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_samples", i)] = fmt.Sprintf("%d", depthSnap.Samples)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_last", i)] = fmt.Sprintf("%d", depthSnap.Last)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_max", i)] = fmt.Sprintf("%d", depthSnap.Max)
+		if depthSnap.Samples > 0 {
+			stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_avg", i)] = fmt.Sprintf("%.3f", float64(depthSnap.Sum)/float64(depthSnap.Samples))
+		}
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.positive_drift_run_max_ms", i)] = fmt.Sprintf("%.3f", float64(depthSnap.PositiveRunMaxNs)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_samples", i)] = fmt.Sprintf("%d", lagSnap.Count)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_max_ms", i)] = fmt.Sprintf("%.3f", float64(lagSnap.MaxNs)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
@@ -9871,6 +9915,28 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
+	stats["treedb.cache.vlog_queue.enqueued_total"] = fmt.Sprintf("%d", queueDepthEnqueued)
+	stats["treedb.cache.vlog_queue.depth_samples"] = fmt.Sprintf("%d", queueDepthSamples)
+	stats["treedb.cache.vlog_queue.depth_last_sum"] = fmt.Sprintf("%d", queueDepthLast)
+	stats["treedb.cache.vlog_queue.depth_max"] = fmt.Sprintf("%d", queueDepthMax)
+	if queueDepthSamples > 0 {
+		stats["treedb.cache.vlog_queue.depth_avg"] = fmt.Sprintf("%.3f", float64(queueDepthSum)/float64(queueDepthSamples))
+	}
+	stats["treedb.cache.vlog_queue.positive_drift_run_max_ms"] = fmt.Sprintf("%.3f", float64(queueDepthPositiveRunMaxNs)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_queue.lag_samples"] = fmt.Sprintf("%d", queueLagCount)
+	stats["treedb.cache.vlog_queue.lag_max_ms"] = fmt.Sprintf("%.3f", float64(queueLagMaxNs)/float64(time.Millisecond))
+	if queueLagCount > 0 {
+		stats["treedb.cache.vlog_queue.lag_avg_ms"] = fmt.Sprintf("%.3f", (float64(queueLagTotalNs)/float64(queueLagCount))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p50_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.50))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p95_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.95))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p99_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.99))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p999_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.999))/float64(time.Millisecond))
+	}
+	for bucket := 0; bucket < vlogQueueLagBucketCount; bucket++ {
+		upperUS := vlogQueueLagBucketUpperBounds[bucket].Microseconds()
+		key := fmt.Sprintf("treedb.cache.vlog_queue.lag_bucket.le_us.%d", upperUS)
+		stats[key] = fmt.Sprintf("%d", queueLagBuckets[bucket])
+	}
 	vlogSegments, vlogBytes := db.valueLogRetainedStats()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
