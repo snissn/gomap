@@ -2,6 +2,14 @@
 
 TreeDB is a high-performance, persistent key-value store optimized for the Cosmos SDK workload. It features a B+Tree index backed by a memory-mapped file plus a persistent value log for large values, with a separate journal/redo log for crash recovery.
 
+## Canonical Spec
+
+The canonical TreeDB specification now lives under:
+
+- `TreeDB/docs/spec/README.md`
+
+Use that folder for architecture, format, durability, recovery, lifecycle, and verification requirements. The root `docs/TREEDB_*.md` files remain supporting material.
+
 ## Features
 
 -   **ACID Transactions:** Atomic commits using Copy-On-Write (COW) and redundant superblocks (Meta Pages).

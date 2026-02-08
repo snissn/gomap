@@ -12,6 +12,7 @@ Welcome to the `gomap` documentation.
 
 TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 
+- **[Canonical Spec](../TreeDB/docs/spec/README.md)**: Normative TreeDB spec set (architecture, storage format, write/recovery lifecycle, verification matrix).
 - **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Value Log, COW Merge).
 - **[Storage Format](TREEDB_STORAGE_FORMAT.md)**: On-disk layout, `ValuePtr`, and value-log lifecycle (GC/rewrite).
 - **[Write Paths](TREEDB_WRITE_PATHS.md)**: WAL on/off semantics.

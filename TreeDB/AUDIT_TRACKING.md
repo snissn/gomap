@@ -6,10 +6,11 @@ removed to avoid misleading future agents.
 
 ## Current safety anchors (start here)
 
-- Contracts (normative behavior): `docs/contracts/*`
-- Storage layout + `ValuePtr` + value-log lifecycle: `docs/TREEDB_STORAGE_FORMAT.md`
-- WAL on/off semantics: `docs/TREEDB_WRITE_PATHS.md`
-- Crash recovery overview: `docs/TREEDB_RECOVERY.md`
+- Canonical spec index: `TreeDB/docs/spec/README.md`
+- Contracts (normative behavior): `TreeDB/docs/spec/contracts.md`
+- Storage layout + `ValuePtr` + value-log lifecycle: `TreeDB/docs/spec/storage-format.md` and `TreeDB/docs/spec/value-log-lifecycle.md`
+- WAL on/off semantics: `TreeDB/docs/spec/write-path-and-durability.md`
+- Crash recovery behavior: `TreeDB/docs/spec/recovery.md`
 - Crash recovery tests: `TreeDB/recovery_spec_test.go`
 - Value-log robustness tests/fuzzing: `TreeDB/internal/valuelog/*_test.go`
 - Default permissions: `TreeDB/permissions_test.go`

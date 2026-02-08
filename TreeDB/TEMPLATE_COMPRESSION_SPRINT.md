@@ -113,7 +113,7 @@ Safety invariants (MUST):
 - Cap each `gapLen`.
 - Cap total decoded size *before* allocation:
   - `decodedLen = sum(gapLens) + sum(anchorLens)`
-  - reject if overflow or exceeds a max (e.g. slab.MaxRecordSize or a separate cap).
+  - reject if overflow or exceeds a max (e.g. `limits.MaxRecordSize` or a separate cap).
 - Any parse error => `ErrCorrupt`.
 - Missing template => `ErrMissingTemplate` (strict mode).
 

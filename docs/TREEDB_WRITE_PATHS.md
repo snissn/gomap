@@ -1,7 +1,10 @@
 # TreeDB Write Paths (WAL on/off)
 
-This document defines the canonical cached-mode write paths and terminology.
-It is the recommended reference for WAL on/off semantics.
+This is a supporting write-path explainer.
+
+For the canonical TreeDB spec, see:
+- `TreeDB/docs/spec/README.md`
+- `TreeDB/docs/spec/write-path-and-durability.md`
 
 ## Terminology (canonical)
 

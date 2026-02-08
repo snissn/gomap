@@ -7,14 +7,17 @@ There is **no slab storage path** in TreeDB.
 
 - TreeDB is **pre-alpha**. On-disk formats and public APIs may change without backward-compatibility guarantees.
 - It is acceptable for new binaries to fail to open old DB directories (and vice versa).
-- When changing on-disk formats, update `docs/TREEDB_STORAGE_FORMAT.md` and add/adjust tests; avoid building migration infrastructure until we commit to stability.
+- When changing on-disk formats, update `TreeDB/docs/spec/storage-format.md` and add/adjust tests; avoid building migration infrastructure until we commit to stability.
 
 ## Canonical docs (trust these)
 
-- `docs/TREEDB_STORAGE_FORMAT.md` (on-disk layout + `ValuePtr` + value-log lifecycle)
-- `docs/TREEDB_WRITE_PATHS.md` (WAL on/off semantics)
-- `docs/TREEDB_RECOVERY.md` + `docs/contracts/DURABILITY.md` (crash/power-loss behavior)
-- `docs/contracts/*` (behavioral guarantees)
+- `TreeDB/docs/spec/README.md` (spec index and scope)
+- `TreeDB/docs/spec/storage-format.md` (on-disk layout + `ValuePtr` + wire formats)
+- `TreeDB/docs/spec/write-path-and-durability.md` (WAL on/off and sync semantics)
+- `TreeDB/docs/spec/recovery.md` (startup recovery and replay rules)
+- `TreeDB/docs/spec/value-log-lifecycle.md` (GC/rewrite/retention lifecycle)
+- `TreeDB/docs/spec/contracts.md` (API behavior contracts)
+- `TreeDB/docs/spec/verification.md` (test matrix for invariants)
 
 ## Invariants (do not break)
 
@@ -25,7 +28,7 @@ There is **no slab storage path** in TreeDB.
 ## When changing storage behavior
 
 - If you change on-disk formats, pointer encoding, GC rules, or durability boundaries:
-  - update `docs/TREEDB_STORAGE_FORMAT.md`
+  - update `TreeDB/docs/spec/storage-format.md` and any affected spec sections
   - add/adjust a reopen or crash-recovery test
 
 ## Existing tests to lean on
