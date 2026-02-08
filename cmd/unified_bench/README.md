@@ -96,6 +96,33 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
+## Standard Profile Workflow (`benchprof`)
+
+Use `-profile-dir` so all profiles and ops outputs are captured in one place:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -keys 800000 \
+  -profile fast \
+  -checkpoint-between-tests \
+  -test random_write,random_delete,random_read,full_scan,prefix_scan \
+  -profile-dir "$OUT" \
+  -progress=false
+
+./bin/benchprof -profiles-dir "$OUT"
+```
+
+This writes:
+- `benchprof_results.json` / `benchprof_results.md`
+- `cpu_<test>_<db>.pprof`
+- `allocs_<test>_<db>.pprof`
+- `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
+- `block.pprof`, `mutex.pprof`, `trace.out`
+- `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
+
 ## Notes
 
 TreeDB is a cached engine (memtable + background flush). If you run long write-heavy phases and then measure `random_read`/scans immediately, the results can be dominated by background flush work (“flush debt”).

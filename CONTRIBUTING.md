@@ -5,6 +5,7 @@
 - Format: `make fmt`
 - Tests: `make test` (plus `make test-race` optionally)
 - Bench: `make unified-bench && ./bin/unified-bench`
+- Bench analysis: `make benchprof && ./bin/benchprof -profiles-dir <dir>`
 
 ## Scope / Philosophy
 
@@ -26,6 +27,7 @@ This repo is a dev playground for two storage engines (HashDB + TreeDB) and benc
 - `make tidy`
 - `make build`
 - `make unified-bench && ./bin/unified-bench`
+- `make benchprof`
 - Optional (slow): `make test-race`
 
 ## CI
@@ -49,6 +51,22 @@ GitHub Actions runs:
 - When changing semantics (durability/iteration/locking), update:
   - `docs/contracts/*`, and
   - the relevant spec tests.
+
+## Benchmark Profiling Workflow
+
+- Prefer `-profile-dir` over ad-hoc profile flags:
+  - `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
+  - `./bin/unified-bench ... -profile-dir "$OUT"`
+  - `./bin/benchprof -profiles-dir "$OUT"`
+- `benchprof` consumes:
+  - `benchprof_results.json/md`
+  - `cpu_<test>_<db>.pprof`
+  - `allocs_<test>_<db>.pprof`
+  - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
+  - `block.pprof`, `mutex.pprof`, `trace.out`
+- If you change profile flag behavior, output names, or benchmark test names,
+  update `cmd/benchprof/main.go` parsers and `cmd/benchprof/main_test.go` in
+  the same PR.
 
 ## On-Disk Format Changes
 

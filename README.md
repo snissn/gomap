@@ -42,11 +42,16 @@ Primary tool: `cmd/unified_bench/` (side-by-side: HashDB, TreeDB, Badger, LevelD
 
 - Run: `make unified-bench && ./bin/unified-bench`
 - Sweep key counts (markdown output): `./bin/unified-bench -format markdown -keycounts 100000,1000000`
+- Profile + analyze (recommended):
+  - `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
+  - `./bin/unified-bench ... -profile-dir "$OUT"`
+  - `make benchprof && ./bin/benchprof -profiles-dir "$OUT"`
 - Update the README benchmark snapshot: `make bench-readme`
 
 More details:
 
 - `cmd/unified_bench/README.md`
+- `cmd/benchprof/README.md`
 - `docs/BENCHMARK_SPEC.md`
 
 <!-- BENCHMARK_START -->

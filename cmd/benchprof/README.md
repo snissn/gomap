@@ -4,7 +4,7 @@
 
 - `insights.md` (human-readable summary)
 - `insights.json` (machine-friendly summary)
-- `insights.html` (optional browser view rendered from markdown)
+- `insights.html` (browser view rendered from markdown)
 
 It emits concrete investigation targets (function + `file:line`) for each section using
 symbol/theme inference (iterator/seek, decode/read I/O, write/delete/flush, locking, alloc/copy, etc.),
@@ -46,6 +46,8 @@ Outputs:
 - `/tmp/scan-profiles/insights.json`
 - `/tmp/scan-profiles/insights.html`
 
+`insights.html` is always generated.
+
 ## Notes
 
 - `benchprof` currently reads:
@@ -61,3 +63,13 @@ Outputs:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
   - `-run-md` to force a specific markdown log file for ops/sec parsing
   - `-out-html` to override the default HTML output path
+
+## Maintenance Expectations
+
+If `unified-bench` profile naming, profile-dir defaults, or benchmark test names
+change, update `benchprof` in the same PR:
+
+- filename parsing in `cmd/benchprof/main.go`
+- parser tests in `cmd/benchprof/main_test.go`
+- `cmd/unified_bench/profile_artifact_dir_test.go` expectations
+- this README and `cmd/unified_bench/README.md`

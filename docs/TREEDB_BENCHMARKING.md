@@ -33,6 +33,34 @@ Key-shape override for non-dataset 8-byte workloads:
 ./bin/unified-bench -dbs treedb -test batch_write,random_read,prefix_scan -key-shape be8_prefix4
 ```
 
+### Profile Analysis with benchprof (recommended)
+
+Capture profiles and analyze them in one pass:
+
+```bash
+OUT=$(mktemp -d /tmp/treedb_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -keys 800000 \
+  -profile fast \
+  -checkpoint-between-tests \
+  -test random_write,random_delete,random_read,full_scan,prefix_scan \
+  -profile-dir "$OUT" \
+  -progress=false
+
+./bin/benchprof -profiles-dir "$OUT"
+```
+
+Outputs:
+- `$OUT/insights.md`
+- `$OUT/insights.json`
+- `$OUT/insights.html`
+
+This includes section-wise CPU hotspots, allocation hotspots
+(`alloc_space`/`alloc_objects`), contention hotspots, and investigation targets
+with source references when resolvable.
+
 ### Force-pointers perf matrix (script)
 
 For repeatable perf work on the TreeDB "forced value pointers" mode (value log

@@ -28,6 +28,8 @@ This checklist exists so a downstream project can depend on this repo without tr
 - [x] `docs/README.md` exists as an index (“start here”).
 - [x] A “repo map” exists (where to look for what).
 - [x] Benchmark methodology is documented and reproducible.
+- [x] Profiling workflow is documented (`-profile-dir` + `cmd/benchprof`) for CPU/alloc/lock analysis.
+- [x] Benchmark-tooling maintenance expectations are documented in agent docs (`docs/agents/BENCHPROF_MAINTENANCE.md`).
 
 ## Release / Change Communication
 

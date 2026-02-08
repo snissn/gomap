@@ -54,3 +54,20 @@ Focus on pointer durability and GC correctness:
 - Any documentation describing TreeDB values being stored in "slabs" is legacy and should be updated or removed (HashDB still uses slab segments).
 - If WAL is disabled, value-log writes can still be deferred to flush boundaries,
   but the value log remains persistent storage.
+
+## Benchmark Profiling Workflow (Keep Updated)
+
+- Standard capture flow:
+  - `OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)`
+  - `./bin/unified-bench ... -profile-dir "$OUT"`
+  - `./bin/benchprof -profiles-dir "$OUT"`
+- `-profile-dir` is expected to emit:
+  - `benchprof_results.json`, `benchprof_results.md`
+  - `cpu_<test>_<db>.pprof`
+  - `allocs_<test>_<db>.pprof`
+  - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
+  - `block.pprof`, `mutex.pprof`, `trace.out`
+- If benchmark test names, profile filenames, or profile-dir defaults change:
+  - update parsers in `cmd/benchprof/main.go`
+  - update tests in `cmd/benchprof/main_test.go` and `cmd/unified_bench/profile_artifact_dir_test.go`
+  - update `cmd/unified_bench/README.md` and `cmd/benchprof/README.md`
