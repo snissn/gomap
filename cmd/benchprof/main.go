@@ -99,12 +99,18 @@ type sharedHot struct {
 	PrefixFlatPct float64 `json:"prefix_flat_pct"`
 }
 
+type cpuProfileFile struct {
+	Kind  string
+	Test  string
+	DBTag string
+	Path  string
+}
+
 type profileFiles struct {
-	fullScanCPU   map[string]string
-	prefixScanCPU map[string]string
-	blockPath     string
-	mutexPath     string
-	tracePath     string
+	cpuProfiles []cpuProfileFile
+	blockPath   string
+	mutexPath   string
+	tracePath   string
 }
 
 type benchprofResultsFile struct {
@@ -238,15 +244,13 @@ func buildReport(cfg config) (report, error) {
 		Binary:      cfg.binPath,
 	}
 
-	files, err := discoverProfileFiles(cfg.profilesDir)
+	knownTests := loadKnownTests(cfg.profilesDir)
+	files, err := discoverProfileFiles(cfg.profilesDir, knownTests)
 	if err != nil {
 		return report{}, err
 	}
-	if len(files.fullScanCPU) == 0 {
-		rep.Warnings = append(rep.Warnings, "no cpu_full_scan_*.pprof profiles found")
-	}
-	if len(files.prefixScanCPU) == 0 {
-		rep.Warnings = append(rep.Warnings, "no cpu_prefix_scan_*.pprof profiles found")
+	if len(files.cpuProfiles) == 0 {
+		rep.Warnings = append(rep.Warnings, "no cpu_*.pprof profiles found")
 	}
 
 	if rows, source, err := loadOpsRows(cfg); err != nil {
@@ -261,10 +265,11 @@ func buildReport(cfg config) (report, error) {
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
 	for _, prof := range rep.CPUProfiles {
+		label := profileName(prof)
 		if d := parseProfileDuration(prof.Total); d == 0 {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("no CPU samples for %s/%s: consider larger -keys or longer scan workload", prof.Test, prof.DBTag))
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("no CPU samples for %s: consider larger -keys or longer workload", label))
 		} else if d < 20*time.Millisecond {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("low CPU sample duration for %s/%s (%s): consider larger -keys or longer scan workload", prof.Test, prof.DBTag, prof.Total))
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("low CPU sample duration for %s (%s): consider larger -keys or longer workload", label, prof.Total))
 		}
 	}
 	rep.BlockProfile, rep.Warnings = analyzeOptionalProfile("block", files.blockPath, cfg, rep.Warnings)
@@ -281,36 +286,29 @@ func buildReport(cfg config) (report, error) {
 }
 
 func appendCPUProfiles(dst []pprofSummary, warnings []string, cfg config, files profileFiles) ([]pprofSummary, []string) {
-	keys := make(map[string]struct{}, len(files.fullScanCPU)+len(files.prefixScanCPU))
-	for k := range files.fullScanCPU {
-		keys[k] = struct{}{}
-	}
-	for k := range files.prefixScanCPU {
-		keys[k] = struct{}{}
-	}
-	dbTags := make([]string, 0, len(keys))
-	for k := range keys {
-		dbTags = append(dbTags, k)
-	}
-	sort.Strings(dbTags)
+	profiles := append([]cpuProfileFile(nil), files.cpuProfiles...)
+	sort.Slice(profiles, func(i, j int) bool {
+		a := profiles[i]
+		b := profiles[j]
+		if a.Test != b.Test {
+			return a.Test < b.Test
+		}
+		if a.DBTag != b.DBTag {
+			return a.DBTag < b.DBTag
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		return a.Path < b.Path
+	})
 
-	for _, dbTag := range dbTags {
-		if p := files.fullScanCPU[dbTag]; p != "" {
-			s, err := analyzePprofPath("cpu", "full_scan", dbTag, p, cfg)
-			if err != nil {
-				warnings = append(warnings, err.Error())
-			} else {
-				dst = append(dst, s)
-			}
+	for _, prof := range profiles {
+		s, err := analyzePprofPath("cpu", prof.Test, prof.DBTag, prof.Path, cfg)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
 		}
-		if p := files.prefixScanCPU[dbTag]; p != "" {
-			s, err := analyzePprofPath("cpu", "prefix_scan", dbTag, p, cfg)
-			if err != nil {
-				warnings = append(warnings, err.Error())
-			} else {
-				dst = append(dst, s)
-			}
-		}
+		dst = append(dst, s)
 	}
 	return dst, warnings
 }
@@ -327,11 +325,8 @@ func analyzeOptionalProfile(kind, path string, cfg config, warnings []string) (*
 	return &s, warnings
 }
 
-func discoverProfileFiles(dir string) (profileFiles, error) {
-	out := profileFiles{
-		fullScanCPU:   map[string]string{},
-		prefixScanCPU: map[string]string{},
-	}
+func discoverProfileFiles(dir string, knownTests map[string]struct{}) (profileFiles, error) {
+	out := profileFiles{}
 
 	if st, err := os.Stat(dir); err != nil {
 		return out, fmt.Errorf("profiles dir: %w", err)
@@ -349,18 +344,17 @@ func discoverProfileFiles(dir string) (profileFiles, error) {
 		name := d.Name()
 
 		switch {
-		case strings.HasPrefix(name, "cpu_full_scan_") && strings.HasSuffix(name, ".pprof"):
-			dbTag := strings.TrimSuffix(strings.TrimPrefix(name, "cpu_full_scan_"), ".pprof")
-			out.fullScanCPU[dbTag] = path
-		case strings.HasPrefix(name, "cpu_prefix_scan_") && strings.HasSuffix(name, ".pprof"):
-			dbTag := strings.TrimSuffix(strings.TrimPrefix(name, "cpu_prefix_scan_"), ".pprof")
-			out.prefixScanCPU[dbTag] = path
 		case name == "block.pprof" && out.blockPath == "":
 			out.blockPath = path
 		case name == "mutex.pprof" && out.mutexPath == "":
 			out.mutexPath = path
 		case name == "trace.out" && out.tracePath == "":
 			out.tracePath = path
+		default:
+			if cpu, ok := parseCPUProfileFilename(name, knownTests); ok {
+				cpu.Path = path
+				out.cpuProfiles = append(out.cpuProfiles, cpu)
+			}
 		}
 		return nil
 	})
@@ -368,6 +362,94 @@ func discoverProfileFiles(dir string) (profileFiles, error) {
 		return out, fmt.Errorf("scan profiles dir %q: %w", dir, err)
 	}
 	return out, nil
+}
+
+func parseCPUProfileFilename(name string, knownTests map[string]struct{}) (cpuProfileFile, bool) {
+	if !strings.HasSuffix(name, ".pprof") {
+		return cpuProfileFile{}, false
+	}
+
+	stem := strings.TrimSuffix(name, ".pprof")
+	switch {
+	case strings.HasPrefix(stem, "cpu_"):
+		tail := strings.TrimPrefix(stem, "cpu_")
+		testName, dbTag := splitProfileTail(tail, knownTests)
+		if testName == "" {
+			return cpuProfileFile{}, false
+		}
+		return cpuProfileFile{
+			Kind:  "cpu",
+			Test:  testName,
+			DBTag: dbTag,
+		}, true
+	case strings.HasPrefix(stem, "checkpoint_cpu_checkpoint_"):
+		tail := strings.TrimPrefix(stem, "checkpoint_cpu_checkpoint_")
+		testName, dbTag := splitProfileTail(tail, knownTests)
+		if testName == "" {
+			return cpuProfileFile{}, false
+		}
+		return cpuProfileFile{
+			Kind:  "checkpoint_cpu",
+			Test:  "checkpoint/" + testName,
+			DBTag: dbTag,
+		}, true
+	default:
+		return cpuProfileFile{}, false
+	}
+}
+
+func splitProfileTail(tail string, knownTests map[string]struct{}) (testName, dbTag string) {
+	tail = strings.TrimSpace(tail)
+	if tail == "" {
+		return "", ""
+	}
+
+	longestTest := ""
+	for test := range knownTests {
+		if test == "" {
+			continue
+		}
+		prefix := test + "_"
+		if strings.HasPrefix(tail, prefix) && len(test) > len(longestTest) && len(tail) > len(prefix) {
+			longestTest = test
+		}
+	}
+	if longestTest != "" {
+		return longestTest, tail[len(longestTest)+1:]
+	}
+
+	// Fallback when no known test list is available: split on the first underscore.
+	if idx := strings.IndexByte(tail, '_'); idx > 0 && idx < len(tail)-1 {
+		return tail[:idx], tail[idx+1:]
+	}
+	return tail, ""
+}
+
+func loadKnownTests(profilesDir string) map[string]struct{} {
+	tests := make(map[string]struct{})
+	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return tests
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return tests
+	}
+	var parsed benchprofResultsFile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return tests
+	}
+	for _, run := range parsed.Runs {
+		for testName := range run.Results {
+			if strings.TrimSpace(testName) == "" {
+				continue
+			}
+			tests[testName] = struct{}{}
+		}
+	}
+	return tests
 }
 
 func analyzePprofPath(kind, testName, dbTag, path string, cfg config) (pprofSummary, error) {
@@ -746,212 +828,165 @@ func buildComparisons(profiles []pprofSummary) []scanComparison {
 	return out
 }
 
-type sourceHint struct {
-	MatchAny  []string
-	File      string
-	LineMatch string
-	Why       string
+type themeDef struct {
+	Key               string
+	Label             string
+	Keywords          []string
+	InvestigationHint string
 }
 
-var iteratorSeekPatterns = []string{
-	"(*db).iterator",
-	"(*tree).iterator",
-	"(*iterator).seek",
-	"(*hashsorted).newiterator",
-	"(*hashiterator).seek",
-	"(*hashiterator).refresh",
-	"(*hashiterator).ensureloaded",
-	"iteratorheap.less",
-	"iteratorheap.pop",
-	"iteratorheap.up",
-	"iteratorheap.down",
-	"(*mergingiterator).advance",
-	"sort.search",
-	"cmpbody",
+const (
+	themeIterator = "iterator_seek_compare"
+	themeDecode   = "decode_read_io"
+	themeWrite    = "write_delete_flush"
+	themeMapHash  = "map_hash_lookup"
+	themeAlloc    = "alloc_copy_gc"
+	themeLocking  = "locking_scheduling"
+	themeRuntime  = "runtime_syscall"
+	themeOther    = "other"
+)
+
+var themeDefinitions = []themeDef{
+	{
+		Key:               themeIterator,
+		Label:             "iterator/seek/compare overhead",
+		Keywords:          []string{"iterator", "seek", "search", "range", "scan", "cmp", "compare", "iteratorheap", "next"},
+		InvestigationHint: "Focus on iterator construction, seek boundaries, and key-comparison loops.",
+	},
+	{
+		Key:               themeDecode,
+		Label:             "value decode/read I/O",
+		Keywords:          []string{"decode", "encode", "read", "mmap", "vlog", "valuelog", "crc", "checksum", "compress"},
+		InvestigationHint: "Focus on value materialization, read amplification, and decode/verification work.",
+	},
+	{
+		Key:               themeWrite,
+		Label:             "write/delete/flush path",
+		Keywords:          []string{"write", "delete", "batch", "flush", "checkpoint", "commit", "compact", "append", "put", "set", "update"},
+		InvestigationHint: "Focus on mutation hot loops, flush cadence, and checkpoint/compaction boundaries.",
+	},
+	{
+		Key:               themeMapHash,
+		Label:             "map/hash lookup",
+		Keywords:          []string{"mapaccess", "mapassign", "mapiter", "hash", "lookup"},
+		InvestigationHint: "Focus on key-shape and hash-table lookup/update costs.",
+	},
+	{
+		Key:               themeAlloc,
+		Label:             "allocation/copy/gc",
+		Keywords:          []string{"alloc", "malloc", "newobject", "makeslice", "growslice", "memmove", "memclr", "copystack", "scanobject"},
+		InvestigationHint: "Focus on allocation pressure, buffer growth, and copy-heavy code paths.",
+	},
+	{
+		Key:               themeLocking,
+		Label:             "locking/scheduling contention",
+		Keywords:          []string{"mutex", "rwmutex", "lock", "unlock", "sema", "selectgo", "chan", "park", "cond"},
+		InvestigationHint: "Focus on lock scope, contention points, and channel/select coordination.",
+	},
+	{
+		Key:               themeRuntime,
+		Label:             "runtime/syscall overhead",
+		Keywords:          []string{"runtime.", "syscall.", "internal/poll", "madvise", "futex"},
+		InvestigationHint: "Focus on page-fault behavior, syscall frequency, and runtime scheduling effects.",
+	},
 }
 
-var valueDecodePatterns = []string{
-	"(*valuelogiterator).loadvalue",
-	"(*db).readvaluelog",
-	"readviammapappend",
-	"decodepayloadappend",
+type sourceLocation struct {
+	File string
+	Line int
 }
 
-var investigationSourceHints = []sourceHint{
-	{
-		MatchAny:  []string{"(*db).iterator"},
-		File:      "TreeDB/caching/db.go",
-		LineMatch: "func (db *DB) Iterator(start, end []byte) (merging.Iterator, error)",
-		Why:       "DB-level iterator setup and snapshot rotation.",
-	},
-	{
-		MatchAny:  []string{"(*tree).iterator"},
-		File:      "TreeDB/tree/iterator.go",
-		LineMatch: "func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator",
-		Why:       "Tree iterator initialization and initial seek.",
-	},
-	{
-		MatchAny:  []string{"(*iterator).seek"},
-		File:      "TreeDB/tree/iterator.go",
-		LineMatch: "func (it *Iterator) seek(key []byte)",
-		Why:       "Core btree seek path for range start.",
-	},
-	{
-		MatchAny:  []string{"(*hashsorted).newiterator"},
-		File:      "TreeDB/internal/memtable/hash_sorted.go",
-		LineMatch: "func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator",
-		Why:       "Memtable iterator creation and search bootstrap.",
-	},
-	{
-		MatchAny:  []string{"(*hashiterator).seek"},
-		File:      "TreeDB/internal/memtable/hash_sorted.go",
-		LineMatch: "func (it *hashIterator) Seek(key []byte)",
-		Why:       "Prefix seek inside sorted memtable key list.",
-	},
-	{
-		MatchAny:  []string{"(*hashiterator).refresh"},
-		File:      "TreeDB/internal/memtable/hash_sorted.go",
-		LineMatch: "func (it *hashIterator) refresh()",
-		Why:       "Iterator validity and bound checks on each move.",
-	},
-	{
-		MatchAny:  []string{"(*hashiterator).ensureloaded"},
-		File:      "TreeDB/internal/memtable/hash_sorted.go",
-		LineMatch: "func (it *hashIterator) ensureLoaded()",
-		Why:       "Loads entries from memtable map for current key.",
-	},
-	{
-		MatchAny:  []string{"sort.search"},
-		File:      "TreeDB/internal/memtable/hash_sorted.go",
-		LineMatch: "sort.SearchStrings(",
-		Why:       "Binary search callsite for iterator seeks.",
-	},
-	{
-		MatchAny:  []string{"cmpbody"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "cmp := bytes.Compare(h[i].key, h[j].key)",
-		Why:       "Key-compare callsite used in merge heap ordering.",
-	},
-	{
-		MatchAny:  []string{"iteratorheap.less"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "func (h iteratorHeap) Less(i, j int) bool",
-		Why:       "Heap comparator in merging iterator.",
-	},
-	{
-		MatchAny:  []string{"iteratorheap.pop"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "func (h *iteratorHeap) pop() heapItem",
-		Why:       "Heap pop in merging iterator advance path.",
-	},
-	{
-		MatchAny:  []string{"iteratorheap.up"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "func (h *iteratorHeap) up(j int)",
-		Why:       "Heap up-heap operation after push.",
-	},
-	{
-		MatchAny:  []string{"iteratorheap.down"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "func (h *iteratorHeap) down(i0, n int) bool",
-		Why:       "Heap down-heap operation after pop/heapify.",
-	},
-	{
-		MatchAny:  []string{"(*mergingiterator).advance"},
-		File:      "TreeDB/internal/merging/merging.go",
-		LineMatch: "func (mi *MergingIterator) advance()",
-		Why:       "Main merge loop and shadow-key skipping.",
-	},
-	{
-		MatchAny:  []string{"(*valuelogiterator).loadvalue"},
-		File:      "TreeDB/caching/value_log_iterator.go",
-		LineMatch: "func (it *valueLogIterator) loadValue()",
-		Why:       "Value pointer materialization path.",
-	},
-	{
-		MatchAny:  []string{"(*db).readvaluelog"},
-		File:      "TreeDB/caching/db.go",
-		LineMatch: "func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error)",
-		Why:       "DB wrapper around value-log reads.",
-	},
-	{
-		MatchAny:  []string{"readviammapappend"},
-		File:      "TreeDB/internal/valuelog/reader_mmap.go",
-		LineMatch: "func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error, bool)",
-		Why:       "Value-log mmap read/validate path.",
-	},
+type sourceResolver struct {
+	modulePath string
+	byFunc     map[string][]sourceLocation
+	byMethod   map[string][]sourceLocation
 }
+
+var (
+	reFuncDecl     = regexp.MustCompile(`^\s*func\s*(\(([^)]*)\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	reMethodSymbol = regexp.MustCompile(`\(\*?([A-Za-z_][A-Za-z0-9_]*)\)\.([A-Za-z_][A-Za-z0-9_]*)`)
+	reInlineSuffix = regexp.MustCompile(`\s+\(inline\)$`)
+	reFuncN        = regexp.MustCompile(`\.func[0-9]+$`)
+	reLastIdent    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)$`)
+)
 
 func buildInvestigations(rep report) ([]investigationTarget, []string) {
 	if len(rep.CPUProfiles) == 0 {
 		return nil, nil
 	}
 
-	prefixByDB := map[string]pprofSummary{}
-	for _, prof := range rep.CPUProfiles {
-		if prof.Kind == "cpu" && prof.Test == "prefix_scan" {
-			prefixByDB[prof.DBTag] = prof
+	profiles := append([]pprofSummary(nil), rep.CPUProfiles...)
+	sort.Slice(profiles, func(i, j int) bool {
+		a := profiles[i]
+		b := profiles[j]
+		if a.Test != b.Test {
+			return a.Test < b.Test
 		}
-	}
-	if len(prefixByDB) == 0 {
-		return nil, nil
-	}
+		if a.DBTag != b.DBTag {
+			return a.DBTag < b.DBTag
+		}
+		return a.Path < b.Path
+	})
 
 	prefixSlower := hasAnyPrefixSlowerRow(rep.OpsRows)
-	dbTags := make([]string, 0, len(prefixByDB))
-	for dbTag := range prefixByDB {
-		dbTags = append(dbTags, dbTag)
-	}
-	sort.Strings(dbTags)
+	resolver := newSourceResolver()
 
-	lineCache := make(map[string]int, len(investigationSourceHints))
-	targets := make([]investigationTarget, 0, 12)
-	inferred := make([]string, 0, len(dbTags))
+	targets := make([]investigationTarget, 0, len(profiles)*5)
+	inferred := make([]string, 0, len(profiles)*2)
 	seen := map[string]struct{}{}
 
-	for _, dbTag := range dbTags {
-		prof := prefixByDB[dbTag]
-		if len(prof.TopEntries) == 0 {
+	for _, prof := range profiles {
+		if prof.Kind != "cpu" || len(prof.TopEntries) == 0 {
 			continue
 		}
-
-		iteratorPct := sumFlatPct(prof.TopEntries, iteratorSeekPatterns)
-		valueDecodePct := sumFlatPct(prof.TopEntries, valueDecodePatterns)
-		iterEntries := matchingEntries(prof.TopEntries, iteratorSeekPatterns)
-		if len(iterEntries) == 0 {
-			continue
+		themes := themeBreakdown(prof.TopEntries)
+		dominantTheme, dominantPct := dominantTheme(themes)
+		if dominantTheme != themeOther && dominantPct >= 12.0 {
+			inferred = append(inferred, fmt.Sprintf("%s: dominant CPU theme is %s (%.2f%% flat across top nodes).",
+				profileName(prof), themeLabel(dominantTheme), dominantPct))
 		}
 
-		// Signal: prefix workload and CPU point to iterator/seek path, not value decode.
-		if prefixSlower && (iteratorPct >= valueDecodePct+2.0) && len(iterEntries) >= 2 {
+		top := prof.TopEntries[0]
+		if top.FlatPct >= 35 {
+			inferred = append(inferred, fmt.Sprintf("%s: top hotspot %q is %.2f%% flat; this section is highly concentrated in one function.",
+				profileName(prof), top.Function, top.FlatPct))
+		}
+
+		iteratorPct := themes[themeIterator]
+		decodePct := themes[themeDecode]
+		if prefixSlower && strings.HasPrefix(strings.ToLower(prof.Test), "prefix_scan") && iteratorPct >= decodePct+2.0 {
 			inferred = append(inferred,
 				fmt.Sprintf("%s: prefix_scan CPU is weighted toward iterator/seek work (%.2f%% flat) vs value decoding (%.2f%% flat). That points to iterator setup/seek overhead, not value decoding.",
-					dbTag, iteratorPct, valueDecodePct))
+					prof.DBTag, iteratorPct, decodePct))
 		}
 
-		limit := len(iterEntries)
+		limit := len(prof.TopEntries)
 		if limit > 8 {
 			limit = 8
 		}
 		for i := 0; i < limit; i++ {
-			entry := iterEntries[i]
+			entry := prof.TopEntries[i]
+			if entry.FlatPct <= 0 {
+				continue
+			}
+			theme := classifyFunctionTheme(entry.Function)
 			target := investigationTarget{
-				DBTag:    dbTag,
-				Test:     "prefix_scan",
-				Category: "iterator_setup_seek",
+				DBTag:    prof.DBTag,
+				Test:     prof.Test,
+				Category: theme,
 				Function: entry.Function,
 				FlatPct:  entry.FlatPct,
-				Why:      "Prefix-scan hotspot in iterator/seek path.",
+				Why:      themeHint(theme),
 			}
-			if file, line, hint, ok := resolveSourceHint(entry.Function, lineCache); ok {
-				target.File = file
-				target.Line = line
-				target.LineHint = hint
-				target.Reference = sourceRef(file, line)
-				if target.Why == "" {
-					target.Why = hint
+
+			if resolver != nil {
+				if loc, ok := resolver.Resolve(entry.Function); ok {
+					target.File = loc.File
+					target.Line = loc.Line
+					target.Reference = sourceRef(loc.File, loc.Line)
 				}
 			}
+
 			keyRef := target.Reference
 			if keyRef == "" {
 				keyRef = target.Function
@@ -968,6 +1003,76 @@ func buildInvestigations(rep report) ([]investigationTarget, []string) {
 	return targets, inferred
 }
 
+func themeBreakdown(entries []pprofEntry) map[string]float64 {
+	out := make(map[string]float64, len(themeDefinitions)+1)
+	for _, e := range entries {
+		if e.FlatPct <= 0 {
+			continue
+		}
+		out[classifyFunctionTheme(e.Function)] += e.FlatPct
+	}
+	return out
+}
+
+func dominantTheme(themes map[string]float64) (string, float64) {
+	bestKey := themeOther
+	best := 0.0
+	for key, val := range themes {
+		if val > best {
+			bestKey = key
+			best = val
+		}
+	}
+	if best <= 0 {
+		return themeOther, 0
+	}
+	return bestKey, best
+}
+
+func classifyFunctionTheme(function string) string {
+	fn := strings.ToLower(strings.TrimSpace(function))
+	if fn == "" {
+		return themeOther
+	}
+
+	bestKey := themeOther
+	bestScore := 0
+	for _, def := range themeDefinitions {
+		score := 0
+		for _, kw := range def.Keywords {
+			if strings.Contains(fn, kw) {
+				score++
+			}
+		}
+		if score > bestScore {
+			bestScore = score
+			bestKey = def.Key
+		}
+	}
+	if bestScore == 0 {
+		return themeOther
+	}
+	return bestKey
+}
+
+func themeLabel(key string) string {
+	for _, def := range themeDefinitions {
+		if def.Key == key {
+			return def.Label
+		}
+	}
+	return "mixed/other"
+}
+
+func themeHint(key string) string {
+	for _, def := range themeDefinitions {
+		if def.Key == key {
+			return def.InvestigationHint
+		}
+	}
+	return "Inspect this symbol and its callers in the section-specific hot path."
+}
+
 func hasAnyPrefixSlowerRow(rows []opsRow) bool {
 	for _, row := range rows {
 		if row.FullScan > 0 && row.Prefix > 0 && row.PrefixDiv > 0 && row.PrefixDiv < 0.95 {
@@ -975,101 +1080,6 @@ func hasAnyPrefixSlowerRow(rows []opsRow) bool {
 		}
 	}
 	return false
-}
-
-func sumFlatPct(entries []pprofEntry, patterns []string) float64 {
-	var total float64
-	for _, e := range entries {
-		if matchesAnyPattern(e.Function, patterns) {
-			total += e.FlatPct
-		}
-	}
-	return total
-}
-
-func matchingEntries(entries []pprofEntry, patterns []string) []pprofEntry {
-	out := make([]pprofEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.FlatPct <= 0 {
-			continue
-		}
-		if matchesAnyPattern(e.Function, patterns) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-func matchesAnyPattern(function string, patterns []string) bool {
-	fn := strings.ToLower(function)
-	for _, p := range patterns {
-		if strings.Contains(fn, p) {
-			return true
-		}
-	}
-	return false
-}
-
-func resolveSourceHint(function string, lineCache map[string]int) (string, int, string, bool) {
-	for _, hint := range investigationSourceHints {
-		if !matchesAnyPattern(function, hint.MatchAny) {
-			continue
-		}
-		line := findLineInFileCached(hint.File, hint.LineMatch, lineCache)
-		return hint.File, line, hint.Why, true
-	}
-	return "", 0, "", false
-}
-
-func findLineInFileCached(path, lineMatch string, cache map[string]int) int {
-	cacheKey := path + "|" + lineMatch
-	if line, ok := cache[cacheKey]; ok {
-		return line
-	}
-	line := findLineInFile(path, lineMatch)
-	cache[cacheKey] = line
-	return line
-}
-
-func findLineInFile(path, lineMatch string) int {
-	readPath := resolveReadablePath(path)
-	data, err := os.ReadFile(readPath)
-	if err != nil {
-		return 0
-	}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		if strings.Contains(line, lineMatch) {
-			return i + 1
-		}
-	}
-	return 0
-}
-
-func resolveReadablePath(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return path
-	}
-	if st, err := os.Stat(path); err == nil && !st.IsDir() {
-		return path
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return path
-	}
-	dir := cwd
-	for i := 0; i < 8; i++ {
-		candidate := filepath.Join(dir, path)
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
-	}
-	return path
 }
 
 func sourceRef(file string, line int) string {
@@ -1080,6 +1090,231 @@ func sourceRef(file string, line int) string {
 		return fmt.Sprintf("%s:%d", file, line)
 	}
 	return file
+}
+
+func profileName(prof pprofSummary) string {
+	if strings.TrimSpace(prof.DBTag) == "" {
+		return prof.Test
+	}
+	if strings.TrimSpace(prof.Test) == "" {
+		return prof.DBTag
+	}
+	return prof.Test + "/" + prof.DBTag
+}
+
+func newSourceResolver() *sourceResolver {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	root, modulePath := findModuleRoot(cwd)
+	if root == "" {
+		return nil
+	}
+	res := &sourceResolver{
+		modulePath: modulePath,
+		byFunc:     make(map[string][]sourceLocation, 1024),
+		byMethod:   make(map[string][]sourceLocation, 1024),
+	}
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			switch name {
+			case ".git", "vendor", "bin", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			m := reFuncDecl.FindStringSubmatch(line)
+			if len(m) != 4 {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(m[3]))
+			if name == "" {
+				continue
+			}
+			loc := sourceLocation{File: rel, Line: i + 1}
+			res.byFunc[name] = append(res.byFunc[name], loc)
+			recvType := parseReceiverType(m[2])
+			if recvType != "" {
+				key := strings.ToLower(recvType + "." + name)
+				res.byMethod[key] = append(res.byMethod[key], loc)
+			}
+		}
+		return nil
+	})
+	return res
+}
+
+func parseReceiverType(recv string) string {
+	recv = strings.TrimSpace(recv)
+	if recv == "" {
+		return ""
+	}
+	fields := strings.Fields(recv)
+	if len(fields) == 0 {
+		return ""
+	}
+	tok := fields[len(fields)-1]
+	tok = strings.TrimPrefix(tok, "*")
+	if idx := strings.Index(tok, "["); idx >= 0 {
+		tok = tok[:idx]
+	}
+	if idx := strings.LastIndex(tok, "."); idx >= 0 {
+		tok = tok[idx+1:]
+	}
+	if !reLastIdent.MatchString(tok) {
+		return ""
+	}
+	return tok
+}
+
+func (r *sourceResolver) Resolve(symbol string) (sourceLocation, bool) {
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" {
+		return sourceLocation{}, false
+	}
+
+	pkgHint := packageHintFromSymbol(symbol, r.modulePath)
+	candidates := make([]sourceLocation, 0, 4)
+	if recv, method := receiverMethodFromSymbol(symbol); recv != "" && method != "" {
+		key := strings.ToLower(recv + "." + method)
+		candidates = append(candidates, r.byMethod[key]...)
+	}
+	if len(candidates) == 0 {
+		if name := functionNameFromSymbol(symbol); name != "" {
+			candidates = append(candidates, r.byFunc[strings.ToLower(name)]...)
+		}
+	}
+	if len(candidates) == 0 {
+		return sourceLocation{}, false
+	}
+	return bestSourceLocation(candidates, pkgHint), true
+}
+
+func receiverMethodFromSymbol(symbol string) (string, string) {
+	m := reMethodSymbol.FindStringSubmatch(symbol)
+	if len(m) != 3 {
+		return "", ""
+	}
+	return m[1], m[2]
+}
+
+func functionNameFromSymbol(symbol string) string {
+	s := strings.TrimSpace(symbol)
+	s = reInlineSuffix.ReplaceAllString(s, "")
+	s = reFuncN.ReplaceAllString(s, "")
+	if idx := strings.LastIndex(s, "."); idx >= 0 && idx < len(s)-1 {
+		s = s[idx+1:]
+	}
+	m := reLastIdent.FindStringSubmatch(s)
+	if len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func packageHintFromSymbol(symbol, modulePath string) string {
+	s := strings.TrimSpace(symbol)
+	s = reInlineSuffix.ReplaceAllString(s, "")
+	cut := s
+	if idx := strings.Index(cut, ".("); idx >= 0 {
+		cut = cut[:idx]
+	} else if idx := strings.LastIndex(cut, "."); idx >= 0 {
+		cut = cut[:idx]
+	}
+	if modulePath != "" {
+		prefix := modulePath + "/"
+		if strings.HasPrefix(cut, prefix) {
+			cut = strings.TrimPrefix(cut, prefix)
+		}
+	}
+	// For symbols like ".../merging.iteratorHeap", keep only package path.
+	if idx := strings.Index(cut, "."); idx >= 0 {
+		cut = cut[:idx]
+	}
+	return strings.ToLower(strings.Trim(cut, "/"))
+}
+
+func bestSourceLocation(candidates []sourceLocation, pkgHint string) sourceLocation {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	best := candidates[0]
+	bestScore := scoreSourceLocation(best, pkgHint)
+	for _, c := range candidates[1:] {
+		score := scoreSourceLocation(c, pkgHint)
+		if score > bestScore {
+			best = c
+			bestScore = score
+			continue
+		}
+		if score == bestScore && len(c.File) < len(best.File) {
+			best = c
+		}
+	}
+	return best
+}
+
+func scoreSourceLocation(loc sourceLocation, pkgHint string) int {
+	score := 0
+	file := strings.ToLower(filepath.ToSlash(loc.File))
+	if pkgHint != "" && strings.Contains(file, pkgHint) {
+		score += 20
+	}
+	if strings.Contains(file, "/treedb/") || strings.HasPrefix(file, "treedb/") {
+		score += 1
+	}
+	return score
+}
+
+func findModuleRoot(start string) (string, string) {
+	dir := start
+	for {
+		goMod := filepath.Join(dir, "go.mod")
+		if st, err := os.Stat(goMod); err == nil && !st.IsDir() {
+			modulePath := readModulePath(goMod)
+			return dir, modulePath
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", ""
+}
+
+func readModulePath(goModPath string) string {
+	data, err := os.ReadFile(goModPath)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
 }
 
 func buildInsights(rep report, inferredInsights []string) []string {
@@ -1127,7 +1362,7 @@ func buildInsights(rep report, inferredInsights []string) []string {
 	}
 
 	if len(insights) == 0 {
-		insights = append(insights, "No strong insights found. Ensure cpu_full_scan_*.pprof and cpu_prefix_scan_*.pprof files are present.")
+		insights = append(insights, "No strong insights found. Ensure cpu_*.pprof files are present and contain enough samples.")
 	}
 	return insights
 }

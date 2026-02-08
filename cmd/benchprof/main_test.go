@@ -70,21 +70,38 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	}
 
 	mustWriteFile("cpu_full_scan_treedb_vlog_off.pprof")
-	mustWriteFile("nested/cpu_prefix_scan_treedb_vlog_off.pprof")
+	mustWriteFile("nested/cpu_random_delete_treedb_vlog_off.pprof")
+	mustWriteFile("checkpoint_cpu_checkpoint_full_scan_treedb_vlog_off.pprof")
 	mustWriteFile("block.pprof")
 	mustWriteFile("mutex.pprof")
 	mustWriteFile("trace.out")
 
-	files, err := discoverProfileFiles(dir)
+	files, err := discoverProfileFiles(dir, map[string]struct{}{
+		"full_scan":     {},
+		"random_delete": {},
+	})
 	if err != nil {
 		t.Fatalf("discoverProfileFiles: %v", err)
 	}
 
-	if got := files.fullScanCPU["treedb_vlog_off"]; got == "" {
-		t.Fatalf("missing full_scan profile")
+	if len(files.cpuProfiles) != 3 {
+		t.Fatalf("expected 3 cpu profiles, got %d", len(files.cpuProfiles))
 	}
-	if got := files.prefixScanCPU["treedb_vlog_off"]; got == "" {
-		t.Fatalf("missing prefix_scan profile")
+	found := map[string]bool{
+		"full_scan/treedb_vlog_off":            false,
+		"random_delete/treedb_vlog_off":        false,
+		"checkpoint/full_scan/treedb_vlog_off": false,
+	}
+	for _, p := range files.cpuProfiles {
+		key := p.Test + "/" + p.DBTag
+		if _, ok := found[key]; ok {
+			found[key] = true
+		}
+	}
+	for key, ok := range found {
+		if !ok {
+			t.Fatalf("missing cpu profile %s", key)
+		}
 	}
 	if files.blockPath == "" {
 		t.Fatalf("missing block profile")
@@ -94,6 +111,19 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	}
 	if files.tracePath == "" {
 		t.Fatalf("missing trace profile")
+	}
+}
+
+func TestSplitProfileTail_UsesKnownTests(t *testing.T) {
+	testName, dbTag := splitProfileTail("prefix_scan_treedb_vlog_off", map[string]struct{}{
+		"prefix_scan": {},
+		"prefix":      {},
+	})
+	if testName != "prefix_scan" {
+		t.Fatalf("unexpected test split: %q", testName)
+	}
+	if dbTag != "treedb_vlog_off" {
+		t.Fatalf("unexpected db split: %q", dbTag)
 	}
 }
 

@@ -1,13 +1,14 @@
 # benchprof
 
-`benchprof` analyzes `unified-bench` profile artifacts and emits:
+`benchprof` analyzes `unified-bench` profile artifacts (all discovered CPU profile sections) and emits:
 
 - `insights.md` (human-readable summary)
 - `insights.json` (machine-friendly summary)
 - `insights.html` (optional browser view rendered from markdown)
 
-It now also emits concrete investigation targets (function + `file:line`) when it detects
-iterator/seek-heavy prefix scans (for example: "iterator setup/seek overhead, not value decoding").
+It emits concrete investigation targets (function + `file:line`) for each section using
+symbol/theme inference (iterator/seek, decode/read I/O, write/delete/flush, locking, etc.),
+so it can adapt as implementations evolve without hardcoding specific function names.
 
 ## Build
 
@@ -50,8 +51,8 @@ Outputs:
 - `benchprof` currently reads:
   - `benchprof_results.json` (preferred; auto-written by `unified-bench -profile-dir`)
   - `benchprof_results.md` (fallback; auto-written by `unified-bench -profile-dir`)
-  - `cpu_full_scan_*.pprof`
-  - `cpu_prefix_scan_*.pprof`
+  - `cpu_<test>_<db>.pprof` (all test sections)
+  - `checkpoint_cpu_checkpoint_<test>_<db>.pprof` (checkpoint CPU sections)
   - `block.pprof`
   - `mutex.pprof`
   - `trace.out` (detected, but not deeply analyzed yet)
