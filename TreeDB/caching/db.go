@@ -6570,6 +6570,8 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	walDir := db.dir
+	preRotateWALPaths := db.currentWALPaths()
+	ridBeforeWALRotate := db.nextRID.Load()
 	db.mu.Unlock()
 	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
@@ -6582,6 +6584,8 @@ func (db *DB) Checkpoint() error {
 			rotateLaneIDs = append(rotateLaneIDs, i)
 		}
 	}
+	releaseWriteMu()
+
 	errCh := make(chan error, len(rotateLaneIDs))
 	var rotateWG sync.WaitGroup
 	for _, laneID := range rotateLaneIDs {
@@ -6597,11 +6601,10 @@ func (db *DB) Checkpoint() error {
 	close(errCh)
 	for err := range errCh {
 		if err != nil {
-			releaseWriteMu()
 			return err
 		}
 	}
-	releaseWriteMu()
+	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
@@ -6652,11 +6655,23 @@ func (db *DB) Checkpoint() error {
 	for _, path := range db.currentWALPaths() {
 		currentWALs[path] = struct{}{}
 	}
+	unsafeWALDeletes := make(map[string]struct{})
+	if wroteDuringWALRotate {
+		for _, path := range preRotateWALPaths {
+			if path == "" {
+				continue
+			}
+			unsafeWALDeletes[path] = struct{}{}
+		}
+	}
 
 	removed := false
 	for _, seg := range segments {
 		path := seg.path
 		if _, ok := currentWALs[path]; ok {
+			continue
+		}
+		if _, ok := unsafeWALDeletes[path]; ok {
 			continue
 		}
 		if db.valueLogRetained(path) {
