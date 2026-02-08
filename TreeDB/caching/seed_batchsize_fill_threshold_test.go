@@ -67,7 +67,10 @@ func TestCachedSeed_BatchSizeFillShouldBeHigh(t *testing.T) {
 			t.Fatalf("backend open (batch=%d): %v", batchSize, err)
 		}
 
-		cached, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+		cached, err := Open(dir, backend, Options{
+			FlushThreshold: 1 << 20,
+			JournalLanes:   1,
+		})
 		if err != nil {
 			_ = backend.Close()
 			t.Fatalf("cached open (batch=%d): %v", batchSize, err)

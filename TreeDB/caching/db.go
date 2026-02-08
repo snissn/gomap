@@ -1619,7 +1619,8 @@ type Options struct {
 
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
-	// JournalLanes controls the number of active commit/value log lanes (0=default).
+	// JournalLanes controls the number of active commit/value log lanes
+	// (0=GOMAXPROCS-aware default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
@@ -2519,7 +2520,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	laneCount := opts.JournalLanes
 	if laneCount <= 0 {
-		laneCount = 1
+		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
 	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
 	if maxLaneID+1 > laneCount {
@@ -3668,6 +3669,22 @@ const vlogQueueMinValueSize = 1 << 10
 
 // Linger briefly to coalesce micro-batches for small/medium queued writes.
 const vlogWriteLinger = 75 * time.Microsecond
+
+func defaultJournalLaneCount(procs int) int {
+	if procs <= 2 {
+		return 1
+	}
+	// Keep defaults conservative: enough lanes to reduce walMu/vlogMu
+	// contention on multicore hosts without over-fragmenting work.
+	lanes := procs / 4
+	if lanes < 1 {
+		lanes = 1
+	}
+	if lanes > 4 {
+		lanes = 4
+	}
+	return lanes
+}
 
 func (db *DB) startWALWriter(l *lane) {
 	if l == nil {

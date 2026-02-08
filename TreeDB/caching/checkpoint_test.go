@@ -98,6 +98,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
 		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -239,6 +240,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
 		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -273,6 +275,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
 		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -338,6 +341,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
 		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -373,8 +377,13 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 		t.Fatalf("ReadDir(wal): %v", err)
 	}
 	walFiles := countCommitLogFiles(ents)
-	if walFiles != 1 {
-		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+	if walFiles < len(db.lanes) || walFiles > len(db.lanes)+1 {
+		t.Fatalf("expected %d..%d WAL segments after size checkpoint, got %d", len(db.lanes), len(db.lanes)+1, walFiles)
+	}
+	for _, ent := range ents {
+		if ent.Name() == "commit-l0-000010.log" {
+			t.Fatalf("expected seeded WAL segment to be trimmed, still present: %s", ent.Name())
+		}
 	}
 }
 

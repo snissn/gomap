@@ -213,7 +213,6 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		if err != nil {
 			return err
 		}
-		truncated := false
 		for {
 			records, err := reader.ReadBatch()
 			if err == nil {
@@ -232,7 +231,9 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 				continue
 			}
 			if isTruncatedLogError(err) {
-				truncated = true
+				// Treat EOF/truncated tail as end-of-segment and continue replaying
+				// other segments/l lanes. Each segment is replayed as far as valid
+				// batches permit.
 				break
 			}
 			_ = reader.Close()
@@ -242,9 +243,6 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 			return err
 		}
 		commitPaths = append(commitPaths, segment.path)
-		if truncated {
-			break
-		}
 	}
 	if len(batches) > 1 {
 		sort.Slice(batches, func(i, j int) bool {
