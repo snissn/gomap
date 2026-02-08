@@ -6665,6 +6665,34 @@ func (db *DB) waitForStop() {
 	}
 }
 
+func (db *DB) shouldWaitForStop() bool {
+	if !db.adaptiveBackpressureEnabled() {
+		return false
+	}
+	backlog := db.queueBacklogBytes.Load()
+	if backlog <= 0 {
+		return false
+	}
+	// Self-heal stale backlog accounting when the queue is already empty.
+	if view := db.memtables.Load(); view == nil || len(view.queue) == 0 {
+		db.queueBacklogBytes.Store(0)
+		return false
+	}
+	db.bpMu.Lock()
+	_, stopBytes, _ := db.thresholdsLocked()
+	db.bpMu.Unlock()
+	if stopBytes <= 0 {
+		return false
+	}
+	return backlog >= stopBytes
+}
+
+func (db *DB) maybeWaitForStop() {
+	if db.shouldWaitForStop() {
+		db.waitForStop()
+	}
+}
+
 func (db *DB) maybeAssistFlush() {
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
@@ -6931,7 +6959,7 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
+	db.maybeWaitForStop()
 	return db.set(key, value, false)
 }
 
@@ -6943,7 +6971,7 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
+	db.maybeWaitForStop()
 	return db.set(key, value, true)
 }
 
@@ -7144,7 +7172,7 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
+	db.maybeWaitForStop()
 	return db.delete(key, false)
 }
 
@@ -7160,7 +7188,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return nil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
+	db.maybeWaitForStop()
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -7729,7 +7757,7 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
+	db.maybeWaitForStop()
 	return db.delete(key, true)
 }
 
@@ -10916,7 +10944,7 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
-	b.db.waitForStop()
+	b.db.maybeWaitForStop()
 
 	if b.backend != nil {
 		var err error
