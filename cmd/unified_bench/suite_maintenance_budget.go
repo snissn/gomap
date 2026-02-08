@@ -20,11 +20,12 @@ var (
 )
 
 type maintenanceSweepResult struct {
-	OpsPerCoalesce int
-	Checkpoint     time.Duration
-	WriteOpsPerSec float64
-	IndexBytes     int64
-	Dir            string
+	OpsPerCoalesce   int
+	Checkpoint       time.Duration
+	WriteOpsPerSec   float64
+	CutoverFromStats bool
+	IndexBytes       int64
+	Dir              string
 }
 
 type maintFlagSnapshot struct {
@@ -56,6 +57,21 @@ func parseIntList(s string) ([]int, error) {
 		out = append(out, n)
 	}
 	return out, nil
+}
+
+func parseMaintenanceStatFloat(stats map[string]string, key string) (float64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	raw, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
@@ -94,6 +110,7 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 		var checkpoint time.Duration
 		var writeOps float64
 		var indexBytes int64
+		usedCutoverMetric := false
 		for _, inst := range run.Instances {
 			row, ok := run.CheckpointDurations[maintBudgetCheckpointRow]
 			if !ok {
@@ -105,6 +122,12 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 				return "", fmt.Errorf("maintenance_budget: missing checkpoint for %s in row %q", name, maintBudgetCheckpointRow)
 			}
 			checkpoint = dur
+			if treeStats, ok := run.TreeDBStats[name]; ok {
+				if cutoverMS, ok := parseMaintenanceStatFloat(treeStats, "treedb.cache.checkpoint.cutover_last_ms"); ok && cutoverMS >= 0 {
+					checkpoint = time.Duration(cutoverMS*float64(time.Millisecond) + 0.5)
+					usedCutoverMetric = true
+				}
+			}
 
 			if wr, ok := run.Results["random_write"]; ok {
 				if v, vok := wr[name]; vok {
@@ -125,10 +148,11 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 		}
 
 		results = append(results, maintenanceSweepResult{
-			OpsPerCoalesce: k,
-			Checkpoint:     checkpoint,
-			WriteOpsPerSec: writeOps,
-			IndexBytes:     indexBytes,
+			OpsPerCoalesce:   k,
+			Checkpoint:       checkpoint,
+			WriteOpsPerSec:   writeOps,
+			CutoverFromStats: usedCutoverMetric,
+			IndexBytes:       indexBytes,
 		})
 	}
 
@@ -188,6 +212,17 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- checkpoint row: %s (checkpoint after random_write)\n", maintBudgetCheckpointRow))
 	sb.WriteString(fmt.Sprintf("- k sweep: %s\n", *maintBudgetSweepKList))
 	sb.WriteString(fmt.Sprintf("- size slack: %.0f%%\n\n", sizeSlack*100))
+	cutoverMetricRuns := 0
+	for _, r := range results {
+		if r.CutoverFromStats {
+			cutoverMetricRuns++
+		}
+	}
+	sb.WriteString(fmt.Sprintf("- cutover source: treedb.cache.checkpoint.cutover_last_ms used at %d/%d sweep points\n", cutoverMetricRuns, len(results)))
+	if cutoverMetricRuns == 0 {
+		sb.WriteString("- note: cutover source fell back to full Checkpoint() wall time (cutover metric unavailable).\n")
+	}
+	sb.WriteString("\n")
 
 	var buf bytes.Buffer
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)

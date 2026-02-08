@@ -1772,6 +1772,7 @@ type DB struct {
 	queueShardIDs    []uint16
 	queueLaneIDs     []uint16
 	queueIDs         []uint64
+	queueEnqueueNS   []int64
 	nextQueueID      atomic.Uint64
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
@@ -1969,6 +1970,18 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
+
+	checkpointCutoverLastNanos    atomic.Int64
+	checkpointCutoverMaxNanos     atomic.Int64
+	checkpointCutoverTotalNanos   atomic.Int64
+	checkpointCutoverSamples      atomic.Uint64
+	checkpointCutoverLastUnixNano atomic.Int64
+
+	materializationLastDrainUnixNano atomic.Int64
+
+	publishWatermarkLagMu            sync.Mutex
+	publishWatermarkLastBacklogBytes int64
+	publishWatermarkLastUnixNano     int64
 
 	// testing hooks
 	testOnVlogFlush      func(laneID int)
@@ -2846,6 +2859,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	nowNS := time.Now().UnixNano()
+	db.materializationLastDrainUnixNano.Store(nowNS)
+	db.publishWatermarkLastUnixNano = nowNS
 
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.
@@ -6466,6 +6482,47 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) recordCheckpointCutover(d time.Duration) {
+	if db == nil {
+		return
+	}
+	if d < 0 {
+		d = 0
+	}
+	ns := d.Nanoseconds()
+	db.checkpointCutoverLastNanos.Store(ns)
+	db.checkpointCutoverLastUnixNano.Store(time.Now().UnixNano())
+	db.checkpointCutoverTotalNanos.Add(ns)
+	db.checkpointCutoverSamples.Add(1)
+	for {
+		cur := db.checkpointCutoverMaxNanos.Load()
+		if ns <= cur || db.checkpointCutoverMaxNanos.CompareAndSwap(cur, ns) {
+			break
+		}
+	}
+}
+
+func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time) float64 {
+	if db == nil {
+		return 0
+	}
+	nowNS := now.UnixNano()
+	db.publishWatermarkLagMu.Lock()
+	defer db.publishWatermarkLagMu.Unlock()
+	prevNS := db.publishWatermarkLastUnixNano
+	prevBacklog := db.publishWatermarkLastBacklogBytes
+	db.publishWatermarkLastUnixNano = nowNS
+	db.publishWatermarkLastBacklogBytes = backlogBytes
+	if prevNS <= 0 || nowNS <= prevNS {
+		return 0
+	}
+	dt := float64(nowNS-prevNS) / float64(time.Second)
+	if dt <= 0 {
+		return 0
+	}
+	return float64(backlogBytes-prevBacklog) / dt
+}
+
 // Checkpoint forces a durable backend boundary and trims the WAL so long-running
 // cached-mode runs do not accumulate unbounded `wal/` growth.
 //
@@ -6496,6 +6553,11 @@ func (db *DB) Checkpoint() error {
 	}()
 
 	db.writeMu.Lock()
+	cutoverStart := time.Now()
+	releaseWriteMu := func() {
+		db.writeMu.Unlock()
+		db.recordCheckpointCutover(time.Since(cutoverStart))
+	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
@@ -6503,7 +6565,7 @@ func (db *DB) Checkpoint() error {
 	if db.mutableBytes.Load() > 0 {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
-			db.writeMu.Unlock()
+			releaseWriteMu()
 			return err
 		}
 	}
@@ -6511,11 +6573,11 @@ func (db *DB) Checkpoint() error {
 	db.mu.Unlock()
 	for i := range db.lanes {
 		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
-			db.writeMu.Unlock()
+			releaseWriteMu()
 			return err
 		}
 	}
-	db.writeMu.Unlock()
+	releaseWriteMu()
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
@@ -7430,10 +7492,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
+			db.queueEnqueueNS = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
+			db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
 				db.mu.Unlock()
 				db.flushMu.Unlock()
@@ -7488,10 +7552,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
+			db.queueEnqueueNS = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
+			db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
 				db.mu.Unlock()
 				return err
@@ -7556,6 +7622,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			dstShardIDs := db.queueShardIDs[:0]
 			dstLaneIDs := db.queueLaneIDs[:0]
 			dstIDs := db.queueIDs[:0]
+			dstEnqueueNS := db.queueEnqueueNS[:0]
 			dstRanges := db.queueRanges[:0]
 			dstWALPaths := db.queueWALPaths[:0]
 			dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -7584,6 +7651,11 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				} else {
 					dstIDs = append(dstIDs, 0)
 				}
+				if i < len(db.queueEnqueueNS) {
+					dstEnqueueNS = append(dstEnqueueNS, db.queueEnqueueNS[i])
+				} else {
+					dstEnqueueNS = append(dstEnqueueNS, 0)
+				}
 				dstRanges = append(dstRanges, r)
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
@@ -7600,9 +7672,13 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = dstShardIDs
 			db.queueLaneIDs = dstLaneIDs
 			db.queueIDs = dstIDs
+			db.queueEnqueueNS = dstEnqueueNS
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
+			if len(db.queue) == 0 {
+				db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+			}
 		}
 		db.publishMemtablesLocked()
 
@@ -7874,6 +7950,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.memtableWarmupActive = false
 	}
 	db.mutableBytes.Store(0)
+	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
@@ -7883,6 +7960,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -7999,6 +8077,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			locked[i].mu.Unlock()
 		}
 	}()
+	enqueueNS := time.Now().UnixNano()
 
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -8018,6 +8097,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -8504,6 +8584,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	dstShardIDs := db.queueShardIDs[:0]
 	dstLaneIDs := db.queueLaneIDs[:0]
 	dstIDs := db.queueIDs[:0]
+	dstEnqueueNS := db.queueEnqueueNS[:0]
 	dstRanges := db.queueRanges[:0]
 	dstWALPaths := db.queueWALPaths[:0]
 	dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -8529,6 +8610,11 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		if i < len(db.queueIDs) {
 			dstIDs = append(dstIDs, db.queueIDs[i])
 		}
+		if i < len(db.queueEnqueueNS) {
+			dstEnqueueNS = append(dstEnqueueNS, db.queueEnqueueNS[i])
+		} else {
+			dstEnqueueNS = append(dstEnqueueNS, 0)
+		}
 		if i < len(db.queueRanges) {
 			dstRanges = append(dstRanges, db.queueRanges[i])
 		}
@@ -8544,10 +8630,14 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.queueShardIDs = dstShardIDs
 	db.queueLaneIDs = dstLaneIDs
 	db.queueIDs = dstIDs
+	db.queueEnqueueNS = dstEnqueueNS
 	db.queueRanges = dstRanges
 	db.queueWALPaths = dstWALPaths
 	db.queueValueLogPaths = dstValueLogPaths
 	db.queueBacklogBytes.Add(-totalBytes)
+	if len(db.queue) == 0 {
+		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+	}
 	db.publishMemtablesLocked()
 }
 
@@ -9564,6 +9654,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueIDs) > 0 {
 		db.queueIDs = db.queueIDs[1:]
 	}
+	if len(db.queueEnqueueNS) > 0 {
+		db.queueEnqueueNS = db.queueEnqueueNS[1:]
+	}
 	if len(db.queueRanges) > 0 {
 		db.queueRanges = db.queueRanges[1:]
 	}
@@ -9574,6 +9667,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.queueValueLogPaths = db.queueValueLogPaths[1:]
 	}
 	db.queueBacklogBytes.Add(-memBytes)
+	if len(db.queue) == 0 {
+		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+	}
 	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(walPaths))
@@ -9899,6 +9995,16 @@ func (db *DB) Stats() map[string]string {
 	memtableWarmupActive := db.memtableWarmupActive
 	maxQueued := db.maxQueuedMemtables
 	vlogAutotuneMode := db.valueLogAutotuneOptions.Mode
+	oldestQueueEnqueueNS := int64(0)
+	for i := range db.queueEnqueueNS {
+		ts := db.queueEnqueueNS[i]
+		if ts <= 0 {
+			continue
+		}
+		if oldestQueueEnqueueNS == 0 || ts < oldestQueueEnqueueNS {
+			oldestQueueEnqueueNS = ts
+		}
+	}
 	db.mu.RUnlock()
 	var walCurrentBytes int64
 	var walClosedBytes int64
@@ -9998,9 +10104,32 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.backpressure_mode"] = "queue_len"
 	}
-	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
+	now := time.Now()
+	backlogBytes := db.queueBacklogBytes.Load()
+	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
+	watermarkLagDriftBps := db.observePublishWatermarkLagDrift(backlogBytes, now)
+	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = fmt.Sprintf("%.3f", watermarkLagDriftBps)
+	if _, ok := stats["treedb.publish.watermark.lock_delay_share_pct"]; !ok {
+		stats["treedb.publish.watermark.lock_delay_share_pct"] = "0.000"
+	}
+	if _, ok := stats["treedb.publish.watermark.latency_p99_ms"]; !ok {
+		stats["treedb.publish.watermark.latency_p99_ms"] = "0.000"
+	}
+	materializationMarkNS := db.materializationLastDrainUnixNano.Load()
+	if queueLen > 0 && oldestQueueEnqueueNS > 0 {
+		materializationMarkNS = oldestQueueEnqueueNS
+	}
+	materializationLagAge := time.Duration(0)
+	if materializationMarkNS > 0 {
+		if ageNS := now.UnixNano() - materializationMarkNS; ageNS > 0 {
+			materializationLagAge = time.Duration(ageNS)
+		}
+	}
+	stats["treedb.cache.materialization.last_unix_nano"] = fmt.Sprintf("%d", materializationMarkNS)
+	stats["treedb.cache.materialization.oldest_enqueue_unix_nano"] = fmt.Sprintf("%d", oldestQueueEnqueueNS)
+	stats["treedb.cache.materialization.lag_age_ms"] = fmt.Sprintf("%.3f", float64(materializationLagAge)/float64(time.Millisecond))
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
@@ -10014,6 +10143,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.auto_checkpoint.last_wal_reclaimable_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALReclaimableAfter.Load())
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_trimmed"] = fmt.Sprintf("%d", db.autoCheckpointLastWALTrimmed.Load())
 	stats["treedb.cache.auto_checkpoint.last_unix_nano"] = fmt.Sprintf("%d", db.autoCheckpointLastUnixNano.Load())
+	cutoverSamples := db.checkpointCutoverSamples.Load()
+	cutoverTotalNS := db.checkpointCutoverTotalNanos.Load()
+	cutoverAvgMS := 0.0
+	if cutoverSamples > 0 {
+		cutoverAvgMS = (float64(cutoverTotalNS) / float64(cutoverSamples)) / float64(time.Millisecond)
+	}
+	stats["treedb.cache.checkpoint.cutover_samples"] = fmt.Sprintf("%d", cutoverSamples)
+	stats["treedb.cache.checkpoint.cutover_last_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointCutoverLastNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.checkpoint.cutover_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointCutoverMaxNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.checkpoint.cutover_avg_ms"] = fmt.Sprintf("%.3f", cutoverAvgMS)
+	stats["treedb.cache.checkpoint.cutover_last_unix_nano"] = fmt.Sprintf("%d", db.checkpointCutoverLastUnixNano.Load())
 
 	vlogFramesTotal := db.valueLogDictFrames.total.Load()
 	vlogFramesAttempted := db.valueLogDictFrames.attempted.Load()

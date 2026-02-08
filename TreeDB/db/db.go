@@ -88,6 +88,13 @@ type DB struct {
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
+
+	// Stage-5 publish watermark metrics (backend commit publish path).
+	publishWatermarkWaitTotalNs    atomic.Uint64
+	publishWatermarkHoldTotalNs    atomic.Uint64
+	publishWatermarkLatencySamples atomic.Uint64
+	publishWatermarkLatencyMaxNs   atomic.Uint64
+	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
 }
 
 const (
@@ -1110,6 +1117,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	if debugTiming {
 		start = time.Now()
 	}
+	var watermarkWait, watermarkHold time.Duration
 
 	// 1. Sync Data (Index Pages) - No DB Lock
 	if sync {
@@ -1123,7 +1131,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	// 2. Prepare Meta - Short Lock
+	lockStart := time.Now()
 	db.mu.Lock()
+	watermarkWait += time.Since(lockStart)
+	holdStart := time.Now()
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -1136,6 +1147,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		targetPageID = 1
 	}
 	db.mu.Unlock()
+	watermarkHold += time.Since(holdStart)
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
@@ -1158,7 +1170,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	// 5. Update visible state and retire pages.
+	lockStart = time.Now()
 	db.mu.Lock()
+	watermarkWait += time.Since(lockStart)
+	holdStart = time.Now()
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
 	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
@@ -1171,6 +1186,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 	db.state.Store(newState)
 	db.mu.Unlock()
+	watermarkHold += time.Since(holdStart)
+	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
 
 	post.kickPrune = db.pruner.Enabled()
 	post.doPrune = !post.kickPrune

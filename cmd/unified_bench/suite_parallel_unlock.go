@@ -530,6 +530,8 @@ func runBackendMaterializationDebtSuite(baseCfg BenchConfig) (string, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	backlogSamples := make([]int64, 0, 128)
 	lagSamples := make([]time.Duration, 0, 128)
+	lagSamplesFromMaterialization := 0
+	lagSamplesFromCheckpoint := 0
 sampleLoop:
 	for {
 		select {
@@ -547,8 +549,12 @@ sampleLoop:
 				}
 				backlogSamples = append(backlogSamples, backlog)
 			}
-			if age, ok := parseFreshnessAge(stats, "treedb.cache.auto_checkpoint.last_unix_nano", now); ok {
+			if age, ok := parseFreshnessAge(stats, "treedb.cache.materialization.last_unix_nano", now); ok {
 				lagSamples = append(lagSamples, age)
+				lagSamplesFromMaterialization++
+			} else if age, ok := parseFreshnessAge(stats, "treedb.cache.auto_checkpoint.last_unix_nano", now); ok {
+				lagSamples = append(lagSamples, age)
+				lagSamplesFromCheckpoint++
 			}
 		}
 	}
@@ -601,6 +607,8 @@ sampleLoop:
 	sb.WriteString(fmt.Sprintf("- debt probe workers: %d\n", probeWorkers))
 	sb.WriteString(fmt.Sprintf("- debt probe backlog samples: %s\n", formatInt(len(backlogSamples))))
 	sb.WriteString(fmt.Sprintf("- debt probe lag-age samples: %s\n", formatInt(len(lagSamples))))
+	sb.WriteString(fmt.Sprintf("- lag-age sample source materialization.last_unix_nano: %s\n", formatInt(lagSamplesFromMaterialization)))
+	sb.WriteString(fmt.Sprintf("- lag-age sample source auto_checkpoint.last_unix_nano: %s\n", formatInt(lagSamplesFromCheckpoint)))
 	sb.WriteString(fmt.Sprintf("- materialization lag p99: %s\n", lagP99.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- materialization lag p999: %s\n", lagP999.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- materialization lag max: %s\n", lagMax.Truncate(time.Millisecond)))
