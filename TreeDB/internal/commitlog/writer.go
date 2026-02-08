@@ -45,6 +45,8 @@ type Writer struct {
 	bw             *bufio.Writer
 	scratch        []byte
 	encScratch     []byte
+	headerBuf      [segmentHeaderSize]byte
+	rawLenPrefix   [4]byte
 	size           int64
 	maxSegmentSize int64
 	compress       bool
@@ -289,32 +291,32 @@ func (w *Writer) writeSegment(payload []byte) error {
 	stored := payload
 	length := uint32(len(payload))
 	wantCRC := crc.Checksum(payload)
+	rawLenPrefix := w.rawLenPrefix[:]
 
-	var rawLenPrefix [4]byte
 	if w.compress && w.enc != nil && len(payload) >= defaultCompressMinLen {
 		encDst := w.encScratch[:0]
 		encoded := w.enc.EncodeAll(payload, encDst)
 		// Only keep compressed bytes when it is a strict size win even after
 		// including the raw-length prefix.
 		if len(encoded)+len(rawLenPrefix) < len(payload) && len(encoded) <= int(segmentLenMask)-len(rawLenPrefix) {
-			binary.LittleEndian.PutUint32(rawLenPrefix[:], uint32(len(payload)))
+			binary.LittleEndian.PutUint32(rawLenPrefix, uint32(len(payload)))
 			length = uint32(len(encoded) + len(rawLenPrefix))
 			length |= segmentFlagCompressed
-			wantCRC = crc.ChecksumParts(rawLenPrefix[:], encoded)
+			wantCRC = crc.ChecksumParts(rawLenPrefix, encoded)
 			stored = encoded
 			w.encScratch = encoded[:0]
 		}
 	}
 
-	var header [segmentHeaderSize]byte
+	header := w.headerBuf[:]
 	binary.LittleEndian.PutUint32(header[0:4], length)
 	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
 
-	if _, err := w.bw.Write(header[:]); err != nil {
+	if _, err := w.bw.Write(header); err != nil {
 		return err
 	}
 	if length&segmentFlagCompressed != 0 {
-		if _, err := w.bw.Write(rawLenPrefix[:]); err != nil {
+		if _, err := w.bw.Write(rawLenPrefix); err != nil {
 			return err
 		}
 	}
