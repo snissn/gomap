@@ -29,18 +29,11 @@ mkdir -p /tmp/scan-profiles
   -checkpoint-between-tests \
   -treedb-vlog-compression-variant off \
   -test full_scan,prefix_scan \
-  -cpuprofile /tmp/scan-profiles/cpu \
-  -cpuprofile-tests full_scan,prefix_scan \
-  -blockprofile /tmp/scan-profiles/block.pprof \
-  -mutexprofile /tmp/scan-profiles/mutex.pprof \
-  -trace /tmp/scan-profiles/trace.out \
-  -progress=false \
-  > /tmp/scan-profiles/run.md 2>&1
+  -profile-dir /tmp/scan-profiles \
+  -progress=false
 
 ./bin/benchprof \
   -profiles-dir /tmp/scan-profiles \
-  -bin ./bin/unified-bench \
-  -run-md /tmp/scan-profiles/run.md \
   -html
 ```
 
@@ -53,9 +46,13 @@ Outputs:
 ## Notes
 
 - `benchprof` currently reads:
+  - `benchprof_results.json` (preferred; auto-written by `unified-bench -profile-dir`)
+  - `benchprof_results.md` (fallback; auto-written by `unified-bench -profile-dir`)
   - `cpu_full_scan_*.pprof`
   - `cpu_prefix_scan_*.pprof`
   - `block.pprof`
   - `mutex.pprof`
   - `trace.out` (detected, but not deeply analyzed yet)
-- For ops/sec parsing from run logs, capture **combined stdout+stderr** (`> run.md 2>&1`).
+- Optional flags:
+  - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
+  - `-run-md` to force a specific markdown log file for ops/sec parsing

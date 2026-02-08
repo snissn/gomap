@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -168,6 +169,17 @@ type BenchRun struct {
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
 	DiskUsage           map[string]dirDiskUsage
+}
+
+type benchprofExport struct {
+	GeneratedAt string               `json:"generated_at"`
+	Runs        []benchprofExportRun `json:"runs"`
+}
+
+type benchprofExportRun struct {
+	Keys    int                           `json:"keys"`
+	Profile string                        `json:"profile,omitempty"`
+	Results map[string]map[string]float64 `json:"results,omitempty"`
 }
 
 type scanDiag struct {
@@ -450,6 +462,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("benchmark: %v", err)
 			}
+			maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 			fmt.Print(renderMarkdownSingle(run))
 			return
 		}
@@ -458,6 +471,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("benchmark: %v", err)
 		}
+		maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 		if len(run.CheckpointDurations) > 0 {
 			fmt.Println()
@@ -497,6 +511,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("benchmark sweep: %v", err)
 	}
+	maybeWriteBenchprofArtifacts(*profileDir, runs)
 
 	switch format {
 	case "table":
@@ -603,6 +618,53 @@ func applyProfileArtifactDir(dir string, isSet map[string]bool) error {
 	setStringIfUnset("blockprofile", filepath.Join(dir, "block.pprof"), isSet, blockProfile)
 	setStringIfUnset("mutexprofile", filepath.Join(dir, "mutex.pprof"), isSet, mutexProfile)
 	setStringIfUnset("trace", filepath.Join(dir, "trace.out"), isSet, traceProfile)
+	return nil
+}
+
+func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" || len(runs) == 0 {
+		return
+	}
+	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+		log.Printf("benchprof artifacts: %v", err)
+	}
+}
+
+func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+
+	out := benchprofExport{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Runs:        make([]benchprofExportRun, 0, len(runs)),
+	}
+	for _, run := range runs {
+		out.Runs = append(out.Runs, benchprofExportRun{
+			Keys:    run.Config.Keys,
+			Profile: strings.TrimSpace(run.Config.Profile),
+			Results: run.Results,
+		})
+	}
+
+	js, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal benchprof_results.json: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
+		return fmt.Errorf("write benchprof_results.json: %w", err)
+	}
+
+	var md string
+	if len(runs) == 1 {
+		md = renderMarkdownSingle(runs[0])
+	} else {
+		md = renderMarkdownSweep(runs)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
+		return fmt.Errorf("write benchprof_results.md: %w", err)
+	}
 	return nil
 }
 

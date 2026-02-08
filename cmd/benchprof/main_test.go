@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -92,5 +93,41 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	}
 	if files.tracePath == "" {
 		t.Fatalf("missing trace profile")
+	}
+}
+
+func TestParseScanOpsResultsJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "benchprof_results.json")
+	payload := benchprofResultsFile{
+		Runs: []benchprofResultsRun{
+			{
+				Keys: 800000,
+				Results: map[string]map[string]float64{
+					"full_scan": {
+						"TreeDB (vlog=off)":  1000,
+						"LevelDB (block=on)": 500,
+					},
+					"prefix_scan": {
+						"TreeDB (vlog=off)":  1200,
+						"LevelDB (block=on)": 550,
+					},
+				},
+			},
+		},
+	}
+	js, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, js, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	rows, err := parseScanOpsResultsJSON(path)
+	if err != nil {
+		t.Fatalf("parseScanOpsResultsJSON: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
 	}
 }

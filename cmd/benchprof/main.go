@@ -36,7 +36,7 @@ type report struct {
 	GeneratedAt string `json:"generated_at"`
 	ProfilesDir string `json:"profiles_dir"`
 	Binary      string `json:"binary"`
-	RunMarkdown string `json:"run_markdown,omitempty"`
+	OpsSource   string `json:"ops_source,omitempty"`
 
 	OpsRows      []opsRow         `json:"ops_rows,omitempty"`
 	CPUProfiles  []pprofSummary   `json:"cpu_profiles,omitempty"`
@@ -91,6 +91,15 @@ type profileFiles struct {
 	blockPath     string
 	mutexPath     string
 	tracePath     string
+}
+
+type benchprofResultsFile struct {
+	Runs []benchprofResultsRun `json:"runs"`
+}
+
+type benchprofResultsRun struct {
+	Keys    int                           `json:"keys"`
+	Results map[string]map[string]float64 `json:"results"`
 }
 
 func main() {
@@ -148,8 +157,8 @@ func parseFlags() (config, error) {
 
 	fs := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	fs.StringVar(&cfg.profilesDir, "profiles-dir", "", "Directory containing profile artifacts (required)")
-	fs.StringVar(&cfg.binPath, "bin", "", "Path to benchmark binary used to generate profiles (required)")
-	fs.StringVar(&cfg.runMarkdown, "run-md", "", "Path to benchmark markdown/stdout capture (optional)")
+	fs.StringVar(&cfg.binPath, "bin", "", "Path to benchmark binary used to generate profiles (optional; defaults to profile-only mode)")
+	fs.StringVar(&cfg.runMarkdown, "run-md", "", "Path to benchmark markdown/stdout capture (optional; usually auto-discovered)")
 	fs.StringVar(&cfg.outMarkdown, "out-md", "", "Output markdown report path (default <profiles-dir>/insights.md)")
 	fs.StringVar(&cfg.outJSON, "out-json", "", "Output JSON report path (default <profiles-dir>/insights.json)")
 	fs.StringVar(&cfg.outHTML, "out-html", "", "Output HTML report path (implies -html)")
@@ -165,9 +174,6 @@ func parseFlags() (config, error) {
 	if strings.TrimSpace(cfg.profilesDir) == "" {
 		return config{}, errors.New("missing required -profiles-dir")
 	}
-	if strings.TrimSpace(cfg.binPath) == "" {
-		return config{}, errors.New("missing required -bin")
-	}
 	if cfg.nodeCount <= 0 {
 		return config{}, fmt.Errorf("invalid -nodecount=%d (must be > 0)", cfg.nodeCount)
 	}
@@ -178,6 +184,9 @@ func parseFlags() (config, error) {
 	cfg.outMarkdown = strings.TrimSpace(cfg.outMarkdown)
 	cfg.outJSON = strings.TrimSpace(cfg.outJSON)
 	cfg.outHTML = strings.TrimSpace(cfg.outHTML)
+	if cfg.binPath == "" {
+		cfg.binPath = discoverDefaultBinaryPath(cfg.profilesDir)
+	}
 
 	if cfg.outMarkdown == "" {
 		cfg.outMarkdown = filepath.Join(cfg.profilesDir, "insights.md")
@@ -201,12 +210,24 @@ func deriveHTMLOutPath(markdownPath string) string {
 	return markdownPath + ".html"
 }
 
+func discoverDefaultBinaryPath(profilesDir string) string {
+	candidates := []string{
+		filepath.Join(profilesDir, "unified-bench"),
+		"./bin/unified-bench",
+	}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 func buildReport(cfg config) (report, error) {
 	rep := report{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		ProfilesDir: cfg.profilesDir,
 		Binary:      cfg.binPath,
-		RunMarkdown: cfg.runMarkdown,
 	}
 
 	files, err := discoverProfileFiles(cfg.profilesDir)
@@ -220,19 +241,24 @@ func buildReport(cfg config) (report, error) {
 		rep.Warnings = append(rep.Warnings, "no cpu_prefix_scan_*.pprof profiles found")
 	}
 
-	if cfg.runMarkdown != "" {
-		data, err := os.ReadFile(cfg.runMarkdown)
-		if err != nil {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("failed to read -run-md %q: %v", cfg.runMarkdown, err))
-		} else {
-			rep.OpsRows = parseScanOpsMarkdown(string(data))
-			if len(rep.OpsRows) == 0 {
-				rep.Warnings = append(rep.Warnings, "no full/prefix ops parsed from -run-md (capture combined stdout+stderr, e.g. `> run.md 2>&1`)")
-			}
-		}
+	if rows, source, err := loadOpsRows(cfg); err != nil {
+		rep.Warnings = append(rep.Warnings, err.Error())
+	} else {
+		rep.OpsRows = rows
+		rep.OpsSource = source
+	}
+	if len(rep.OpsRows) == 0 {
+		rep.Warnings = append(rep.Warnings, "no scan ops found; unified-bench -profile-dir now writes benchprof_results.json automatically")
 	}
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
+	for _, prof := range rep.CPUProfiles {
+		if d := parseProfileDuration(prof.Total); d == 0 {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("no CPU samples for %s/%s: consider larger -keys or longer scan workload", prof.Test, prof.DBTag))
+		} else if d < 20*time.Millisecond {
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf("low CPU sample duration for %s/%s (%s): consider larger -keys or longer scan workload", prof.Test, prof.DBTag, prof.Total))
+		}
+	}
 	rep.BlockProfile, rep.Warnings = analyzeOptionalProfile("block", files.blockPath, cfg, rep.Warnings)
 	rep.MutexProfile, rep.Warnings = analyzeOptionalProfile("mutex", files.mutexPath, cfg, rep.Warnings)
 	if files.tracePath != "" {
@@ -351,7 +377,13 @@ func analyzePprofPath(kind, testName, dbTag, path string, cfg config) (pprofSumm
 }
 
 func runPprofTop(binPath, profilePath string, nodeCount int) (string, error) {
-	cmd := exec.Command("go", "tool", "pprof", "-top", "-nodecount", strconv.Itoa(nodeCount), binPath, profilePath)
+	args := []string{"tool", "pprof", "-top", "-nodecount", strconv.Itoa(nodeCount)}
+	if strings.TrimSpace(binPath) != "" {
+		args = append(args, binPath, profilePath)
+	} else {
+		args = append(args, profilePath)
+	}
+	cmd := exec.Command("go", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
@@ -386,6 +418,9 @@ func parsePprofTopOutput(text string) parsedTop {
 		flatPct, err1 := parsePercent(fields[1])
 		cumPct, err2 := parsePercent(fields[4])
 		if err1 != nil || err2 != nil {
+			continue
+		}
+		if flatPct <= 0 && cumPct < 1.0 {
 			continue
 		}
 		out.entries = append(out.entries, pprofEntry{
@@ -428,6 +463,19 @@ func isPercent(s string) bool {
 func parsePercent(s string) (float64, error) {
 	s = strings.TrimSuffix(strings.TrimSpace(s), "%")
 	return strconv.ParseFloat(s, 64)
+}
+
+func parseProfileDuration(total string) time.Duration {
+	total = strings.TrimSpace(total)
+	if total == "" || total == "0" {
+		return 0
+	}
+	// pprof totals use Go duration units (s, ms, us, µs, ns).
+	d, err := time.ParseDuration(total)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 var (
@@ -487,6 +535,97 @@ func parseScanOpsMarkdown(text string) []opsRow {
 	return rows
 }
 
+func loadOpsRows(cfg config) ([]opsRow, string, error) {
+	jsonPath := filepath.Join(cfg.profilesDir, "benchprof_results.json")
+	if st, err := os.Stat(jsonPath); err == nil && !st.IsDir() {
+		rows, err := parseScanOpsResultsJSON(jsonPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("parse %q: %w", jsonPath, err)
+		}
+		if len(rows) > 0 {
+			return rows, jsonPath, nil
+		}
+	}
+
+	candidates := make([]string, 0, 3)
+	if strings.TrimSpace(cfg.runMarkdown) != "" {
+		candidates = append(candidates, cfg.runMarkdown)
+	}
+	candidates = append(candidates,
+		filepath.Join(cfg.profilesDir, "benchprof_results.md"),
+		filepath.Join(cfg.profilesDir, "run.md"),
+	)
+	for _, path := range candidates {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		st, err := os.Stat(path)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("read %q: %w", path, err)
+		}
+		rows := parseScanOpsMarkdown(string(data))
+		if len(rows) > 0 {
+			return rows, path, nil
+		}
+	}
+	return nil, "", nil
+}
+
+func parseScanOpsResultsJSON(path string) ([]opsRow, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var parsed benchprofResultsFile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, err
+	}
+	if len(parsed.Runs) == 0 {
+		return nil, nil
+	}
+	includeKeys := len(parsed.Runs) > 1
+	rows := make([]opsRow, 0, len(parsed.Runs))
+	for _, run := range parsed.Runs {
+		full := run.Results["full_scan"]
+		prefix := run.Results["prefix_scan"]
+		labelSet := map[string]struct{}{}
+		for label := range full {
+			labelSet[label] = struct{}{}
+		}
+		for label := range prefix {
+			labelSet[label] = struct{}{}
+		}
+		labels := make([]string, 0, len(labelSet))
+		for label := range labelSet {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		for _, label := range labels {
+			rowLabel := label
+			if includeKeys {
+				rowLabel = fmt.Sprintf("keys=%d / %s", run.Keys, label)
+			}
+			fullV := full[label]
+			prefixV := prefix[label]
+			ratio := 0.0
+			if fullV > 0 {
+				ratio = prefixV / fullV
+			}
+			rows = append(rows, opsRow{
+				Label:     rowLabel,
+				FullScan:  fullV,
+				Prefix:    prefixV,
+				PrefixDiv: ratio,
+			})
+		}
+	}
+	return rows, nil
+}
+
 func parseNumber(s string) (float64, error) {
 	s = strings.ReplaceAll(strings.TrimSpace(s), ",", "")
 	return strconv.ParseFloat(s, 64)
@@ -523,6 +662,14 @@ func buildComparisons(profiles []pprofSummary) []scanComparison {
 	for _, dbTag := range dbTags {
 		full := fullByDB[dbTag]
 		prefix := prefixByDB[dbTag]
+		if len(full.TopEntries) == 0 || len(prefix.TopEntries) == 0 {
+			continue
+		}
+		fullDur := parseProfileDuration(full.Total)
+		prefixDur := parseProfileDuration(prefix.Total)
+		if (fullDur > 0 && fullDur < 20*time.Millisecond) || (prefixDur > 0 && prefixDur < 20*time.Millisecond) {
+			continue
+		}
 
 		fullByFn := make(map[string]pprofEntry, len(full.TopEntries))
 		prefixByFn := make(map[string]pprofEntry, len(prefix.TopEntries))
@@ -640,9 +787,13 @@ func renderMarkdown(rep report) string {
 	sb.WriteString("# Bench Profile Insights\n\n")
 	sb.WriteString(fmt.Sprintf("- generated: `%s`\n", rep.GeneratedAt))
 	sb.WriteString(fmt.Sprintf("- profiles dir: `%s`\n", rep.ProfilesDir))
-	sb.WriteString(fmt.Sprintf("- binary: `%s`\n", rep.Binary))
-	if strings.TrimSpace(rep.RunMarkdown) != "" {
-		sb.WriteString(fmt.Sprintf("- run markdown: `%s`\n", rep.RunMarkdown))
+	if strings.TrimSpace(rep.Binary) != "" {
+		sb.WriteString(fmt.Sprintf("- binary: `%s`\n", rep.Binary))
+	} else {
+		sb.WriteString("- binary: `(profile-only mode)`\n")
+	}
+	if strings.TrimSpace(rep.OpsSource) != "" {
+		sb.WriteString(fmt.Sprintf("- ops source: `%s`\n", rep.OpsSource))
 	}
 	sb.WriteString("\n")
 
@@ -780,10 +931,7 @@ func formatOps(v float64) string {
 	if v <= 0 {
 		return "-"
 	}
-	if math.Abs(v-math.Round(v)) < 0.0001 {
-		return formatCommasInt(int64(math.Round(v)))
-	}
-	return fmt.Sprintf("%.2f", v)
+	return formatCommasInt(int64(math.Round(v)))
 }
 
 func formatCommasInt(n int64) string {

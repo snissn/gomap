@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -476,5 +479,53 @@ func TestRunFlushDrainSuite_ShortKeys(t *testing.T) {
 	}
 	if _, err := runFlushDrainSuite(cfg); err != nil {
 		t.Fatalf("runFlushDrainSuite failed: %v", err)
+	}
+}
+
+func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{
+		{
+			Config: BenchConfig{
+				Keys:    123,
+				Profile: "fast",
+			},
+			Results: map[string]map[string]float64{
+				"full_scan": {
+					"TreeDB": 1000,
+				},
+				"prefix_scan": {
+					"TreeDB": 1200,
+				},
+			},
+		},
+	}
+
+	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+		t.Fatalf("writeBenchprofArtifacts: %v", err)
+	}
+
+	jsonPath := filepath.Join(dir, "benchprof_results.json")
+	mdPath := filepath.Join(dir, "benchprof_results.md")
+	if _, err := os.Stat(jsonPath); err != nil {
+		t.Fatalf("expected json output: %v", err)
+	}
+	if _, err := os.Stat(mdPath); err != nil {
+		t.Fatalf("expected markdown output: %v", err)
+	}
+
+	var parsed benchprofExport
+	data, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("expected 1 run in json, got %d", len(parsed.Runs))
+	}
+	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
+		t.Fatalf("unexpected full_scan value: %v", got)
 	}
 }
