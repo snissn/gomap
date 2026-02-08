@@ -63,38 +63,34 @@ func (db *DB) Has(key []byte) (bool, error) {
 
 // Set sets the value for a key.
 func (db *DB) Set(key, value []byte) error {
-	b := db.NewBatch().(*Batch)
-	if err := b.batch.Set(key, value); err != nil {
+	if handled, err := db.writeViaCommitCombiner(key, value, false, false); handled {
 		return err
 	}
-	return b.Write() // Using Write for better throughput (async)
+	return db.writeSingleKV(key, value, false, false)
 }
 
 // SetSync sets the value and syncs to disk.
 func (db *DB) SetSync(key, value []byte) error {
-	b := db.NewBatch().(*Batch)
-	if err := b.batch.Set(key, value); err != nil {
+	if handled, err := db.writeViaCommitCombiner(key, value, false, true); handled {
 		return err
 	}
-	return b.WriteSync()
+	return db.writeSingleKV(key, value, false, true)
 }
 
 // Delete removes a key.
 func (db *DB) Delete(key []byte) error {
-	b := db.NewBatch().(*Batch)
-	if err := b.batch.Delete(key); err != nil {
+	if handled, err := db.writeViaCommitCombiner(key, nil, true, false); handled {
 		return err
 	}
-	return b.Write() // Using Write for better throughput (async)
+	return db.writeSingleKV(key, nil, true, false)
 }
 
 // DeleteSync removes a key and syncs.
 func (db *DB) DeleteSync(key []byte) error {
-	b := db.NewBatch().(*Batch)
-	if err := b.batch.Delete(key); err != nil {
+	if handled, err := db.writeViaCommitCombiner(key, nil, true, true); handled {
 		return err
 	}
-	return b.WriteSync()
+	return db.writeSingleKV(key, nil, true, true)
 }
 
 // DBIterator wraps tree.Iterator and holds a Snapshot.

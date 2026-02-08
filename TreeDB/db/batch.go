@@ -143,12 +143,13 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	err = b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
+	b.db.finalizeCommitPostWork(post)
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordOps(b.batch.Ops())
 	}
