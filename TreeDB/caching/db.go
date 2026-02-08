@@ -6563,7 +6563,7 @@ func (db *DB) Checkpoint() error {
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
-		if err := db.rotateMemtableLocked(true); err != nil {
+		if err := db.rotateMutableShardsLocked(-1, false); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
 			return err
@@ -10121,6 +10121,9 @@ func (db *DB) Stats() map[string]string {
 	}
 	now := time.Now()
 	backlogBytes := db.queueBacklogBytes.Load()
+	if backlogBytes <= 0 {
+		db.materializationLastDrainUnixNano.Store(now.UnixNano())
+	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
