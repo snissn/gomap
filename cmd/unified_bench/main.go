@@ -59,6 +59,7 @@ var (
 	seed               = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
+	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
 
 	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -259,6 +260,9 @@ func main() {
 	explicitFlags = isSet
 	if err := applyProfile(*profileArg, isSet); err != nil {
 		log.Fatalf("profile: %v", err)
+	}
+	if err := applyProfileArtifactDir(*profileDir, isSet); err != nil {
+		log.Fatalf("profile-dir: %v", err)
 	}
 
 	seedUsed := *seed
@@ -584,6 +588,22 @@ func sanitizeProfileSegment(s string) string {
 			return '_'
 		}
 	}, s)
+}
+
+func applyProfileArtifactDir(dir string, isSet map[string]bool) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create profile dir %q: %w", dir, err)
+	}
+	setStringIfUnset("cpuprofile", filepath.Join(dir, "cpu"), isSet, cpuProfile)
+	setStringIfUnset("checkpoint-cpuprofile", filepath.Join(dir, "checkpoint_cpu"), isSet, checkpointCPUProfile)
+	setStringIfUnset("blockprofile", filepath.Join(dir, "block.pprof"), isSet, blockProfile)
+	setStringIfUnset("mutexprofile", filepath.Join(dir, "mutex.pprof"), isSet, mutexProfile)
+	setStringIfUnset("trace", filepath.Join(dir, "trace.out"), isSet, traceProfile)
+	return nil
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {

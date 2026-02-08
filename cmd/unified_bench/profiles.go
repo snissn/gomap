@@ -138,6 +138,12 @@ func setInt64IfUnset(name string, val int64, isSet map[string]bool, target *int6
 	}
 }
 
+func setStringIfUnset(name, val string, isSet map[string]bool, target *string) {
+	if !isSet[name] {
+		*target = val
+	}
+}
+
 func applyProfile(name string, isSet map[string]bool) error {
 	if name == "" {
 		return nil
