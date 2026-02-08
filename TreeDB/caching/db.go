@@ -6571,8 +6571,32 @@ func (db *DB) Checkpoint() error {
 	}
 	walDir := db.dir
 	db.mu.Unlock()
+	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
-		if err := db.rotateWALCheckpointLocked(&db.lanes[i]); err != nil {
+		if db.lanes[i].walLiveBytes.Load() > 0 {
+			rotateLaneIDs = append(rotateLaneIDs, i)
+		}
+	}
+	if len(rotateLaneIDs) == 0 {
+		for i := range db.lanes {
+			rotateLaneIDs = append(rotateLaneIDs, i)
+		}
+	}
+	errCh := make(chan error, len(rotateLaneIDs))
+	var rotateWG sync.WaitGroup
+	for _, laneID := range rotateLaneIDs {
+		rotateWG.Add(1)
+		go func(id int) {
+			defer rotateWG.Done()
+			if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
+				errCh <- err
+			}
+		}(laneID)
+	}
+	rotateWG.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
 			releaseWriteMu()
 			return err
 		}
