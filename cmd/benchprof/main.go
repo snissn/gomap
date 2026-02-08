@@ -39,6 +39,8 @@ type report struct {
 
 	OpsRows      []opsRow         `json:"ops_rows,omitempty"`
 	CPUProfiles  []pprofSummary   `json:"cpu_profiles,omitempty"`
+	AllocSpace   []pprofSummary   `json:"alloc_space_profiles,omitempty"`
+	AllocObjects []pprofSummary   `json:"alloc_object_profiles,omitempty"`
 	Comparisons  []scanComparison `json:"comparisons,omitempty"`
 	BlockProfile *pprofSummary    `json:"block_profile,omitempty"`
 	MutexProfile *pprofSummary    `json:"mutex_profile,omitempty"`
@@ -108,6 +110,7 @@ type cpuProfileFile struct {
 
 type profileFiles struct {
 	cpuProfiles []cpuProfileFile
+	allocs      []cpuProfileFile
 	blockPath   string
 	mutexPath   string
 	tracePath   string
@@ -264,6 +267,7 @@ func buildReport(cfg config) (report, error) {
 	}
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
+	rep.AllocSpace, rep.AllocObjects, rep.Warnings = appendAllocsProfiles(rep.AllocSpace, rep.AllocObjects, rep.Warnings, cfg, files)
 	for _, prof := range rep.CPUProfiles {
 		label := profileName(prof)
 		if d := parseProfileDuration(prof.Total); d == 0 {
@@ -303,7 +307,7 @@ func appendCPUProfiles(dst []pprofSummary, warnings []string, cfg config, files 
 	})
 
 	for _, prof := range profiles {
-		s, err := analyzePprofPath("cpu", prof.Test, prof.DBTag, prof.Path, cfg)
+		s, err := analyzePprofPath("cpu", prof.Test, prof.DBTag, prof.Path, "", cfg)
 		if err != nil {
 			warnings = append(warnings, err.Error())
 			continue
@@ -313,11 +317,42 @@ func appendCPUProfiles(dst []pprofSummary, warnings []string, cfg config, files 
 	return dst, warnings
 }
 
+func appendAllocsProfiles(spaceDst, objectsDst []pprofSummary, warnings []string, cfg config, files profileFiles) ([]pprofSummary, []pprofSummary, []string) {
+	profiles := append([]cpuProfileFile(nil), files.allocs...)
+	sort.Slice(profiles, func(i, j int) bool {
+		a := profiles[i]
+		b := profiles[j]
+		if a.Test != b.Test {
+			return a.Test < b.Test
+		}
+		if a.DBTag != b.DBTag {
+			return a.DBTag < b.DBTag
+		}
+		return a.Path < b.Path
+	})
+
+	for _, prof := range profiles {
+		space, err := analyzePprofPath("alloc_space", prof.Test, prof.DBTag, prof.Path, "alloc_space", cfg)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+		} else {
+			spaceDst = append(spaceDst, space)
+		}
+		objects, err := analyzePprofPath("alloc_objects", prof.Test, prof.DBTag, prof.Path, "alloc_objects", cfg)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+		} else {
+			objectsDst = append(objectsDst, objects)
+		}
+	}
+	return spaceDst, objectsDst, warnings
+}
+
 func analyzeOptionalProfile(kind, path string, cfg config, warnings []string) (*pprofSummary, []string) {
 	if path == "" {
 		return nil, warnings
 	}
-	s, err := analyzePprofPath(kind, "", "", path, cfg)
+	s, err := analyzePprofPath(kind, "", "", path, "", cfg)
 	if err != nil {
 		warnings = append(warnings, err.Error())
 		return nil, warnings
@@ -354,6 +389,9 @@ func discoverProfileFiles(dir string, knownTests map[string]struct{}) (profileFi
 			if cpu, ok := parseCPUProfileFilename(name, knownTests); ok {
 				cpu.Path = path
 				out.cpuProfiles = append(out.cpuProfiles, cpu)
+			} else if alloc, ok := parseAllocsProfileFilename(name, knownTests); ok {
+				alloc.Path = path
+				out.allocs = append(out.allocs, alloc)
 			}
 		}
 		return nil
@@ -396,6 +434,26 @@ func parseCPUProfileFilename(name string, knownTests map[string]struct{}) (cpuPr
 	default:
 		return cpuProfileFile{}, false
 	}
+}
+
+func parseAllocsProfileFilename(name string, knownTests map[string]struct{}) (cpuProfileFile, bool) {
+	if !strings.HasSuffix(name, ".pprof") {
+		return cpuProfileFile{}, false
+	}
+	stem := strings.TrimSuffix(name, ".pprof")
+	if !strings.HasPrefix(stem, "allocs_") {
+		return cpuProfileFile{}, false
+	}
+	tail := strings.TrimPrefix(stem, "allocs_")
+	testName, dbTag := splitProfileTail(tail, knownTests)
+	if testName == "" {
+		return cpuProfileFile{}, false
+	}
+	return cpuProfileFile{
+		Kind:  "allocs",
+		Test:  testName,
+		DBTag: dbTag,
+	}, true
 }
 
 func splitProfileTail(tail string, knownTests map[string]struct{}) (testName, dbTag string) {
@@ -452,8 +510,8 @@ func loadKnownTests(profilesDir string) map[string]struct{} {
 	return tests
 }
 
-func analyzePprofPath(kind, testName, dbTag, path string, cfg config) (pprofSummary, error) {
-	pprofText, err := runPprofTop(cfg.binPath, path, cfg.nodeCount)
+func analyzePprofPath(kind, testName, dbTag, path, sampleIndex string, cfg config) (pprofSummary, error) {
+	pprofText, err := runPprofTop(cfg.binPath, path, cfg.nodeCount, sampleIndex)
 	if err != nil {
 		return pprofSummary{}, fmt.Errorf("pprof (%s %s %s) %q: %w", kind, testName, dbTag, path, err)
 	}
@@ -468,8 +526,11 @@ func analyzePprofPath(kind, testName, dbTag, path string, cfg config) (pprofSumm
 	}, nil
 }
 
-func runPprofTop(binPath, profilePath string, nodeCount int) (string, error) {
+func runPprofTop(binPath, profilePath string, nodeCount int, sampleIndex string) (string, error) {
 	args := []string{"tool", "pprof", "-top", "-nodecount", strconv.Itoa(nodeCount)}
+	if strings.TrimSpace(sampleIndex) != "" {
+		args = append(args, "-sample_index", sampleIndex)
+	}
 	if strings.TrimSpace(binPath) != "" {
 		args = append(args, binPath, profilePath)
 	} else {
@@ -504,7 +565,7 @@ func parsePprofTopOutput(text string) parsedTop {
 		if len(fields) < 6 {
 			continue
 		}
-		if !isDurationLike(fields[0]) || !isPercent(fields[1]) || !isPercent(fields[2]) || !isDurationLike(fields[3]) || !isPercent(fields[4]) {
+		if !isPercent(fields[1]) || !isPercent(fields[2]) || !isPercent(fields[4]) {
 			continue
 		}
 		flatPct, err1 := parsePercent(fields[1])
@@ -524,28 +585,6 @@ func parsePprofTopOutput(text string) parsedTop {
 		})
 	}
 	return out
-}
-
-func isDurationLike(s string) bool {
-	if s == "0" {
-		return true
-	}
-	if s == "" {
-		return false
-	}
-	// Examples: 1.23s, 53ms, 200us, 12µs
-	last := s[len(s)-1]
-	if (last >= '0' && last <= '9') || last == '.' {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if (ch >= '0' && ch <= '9') || ch == '.' {
-			continue
-		}
-		return i > 0
-	}
-	return false
 }
 
 func isPercent(s string) bool {
@@ -911,14 +950,20 @@ var (
 )
 
 func buildInvestigations(rep report) ([]investigationTarget, []string) {
-	if len(rep.CPUProfiles) == 0 {
+	profiles := make([]pprofSummary, 0, len(rep.CPUProfiles)+len(rep.AllocSpace)+len(rep.AllocObjects))
+	profiles = append(profiles, rep.CPUProfiles...)
+	profiles = append(profiles, rep.AllocSpace...)
+	profiles = append(profiles, rep.AllocObjects...)
+	if len(profiles) == 0 {
 		return nil, nil
 	}
 
-	profiles := append([]pprofSummary(nil), rep.CPUProfiles...)
 	sort.Slice(profiles, func(i, j int) bool {
 		a := profiles[i]
 		b := profiles[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
 		if a.Test != b.Test {
 			return a.Test < b.Test
 		}
@@ -936,17 +981,25 @@ func buildInvestigations(rep report) ([]investigationTarget, []string) {
 	seen := map[string]struct{}{}
 
 	for _, prof := range profiles {
-		if prof.Kind != "cpu" || len(prof.TopEntries) == 0 {
+		if len(prof.TopEntries) == 0 {
 			continue
 		}
 		themes := themeBreakdown(prof.TopEntries)
 		dominantTheme, dominantPct := dominantTheme(themes)
 		if dominantTheme != themeOther && dominantPct >= 12.0 {
-			inferred = append(inferred, fmt.Sprintf("%s: dominant CPU theme is %s (%.2f%% flat across top nodes).",
+			inferred = append(inferred, fmt.Sprintf("%s: dominant theme is %s (%.2f%% flat across top nodes).",
 				profileName(prof), themeLabel(dominantTheme), dominantPct))
 		}
 
 		top := prof.TopEntries[0]
+		switch prof.Kind {
+		case "alloc_space":
+			inferred = append(inferred, fmt.Sprintf("%s: top allocator by bytes is %q (%s flat, %.2f%%).",
+				profileName(prof), top.Function, top.Flat, top.FlatPct))
+		case "alloc_objects":
+			inferred = append(inferred, fmt.Sprintf("%s: top allocator by count is %q (%s flat, %.2f%%).",
+				profileName(prof), top.Function, top.Flat, top.FlatPct))
+		}
 		if top.FlatPct >= 35 {
 			inferred = append(inferred, fmt.Sprintf("%s: top hotspot %q is %.2f%% flat; this section is highly concentrated in one function.",
 				profileName(prof), top.Function, top.FlatPct))
@@ -954,7 +1007,7 @@ func buildInvestigations(rep report) ([]investigationTarget, []string) {
 
 		iteratorPct := themes[themeIterator]
 		decodePct := themes[themeDecode]
-		if prefixSlower && strings.HasPrefix(strings.ToLower(prof.Test), "prefix_scan") && iteratorPct >= decodePct+2.0 {
+		if prof.Kind == "cpu" && prefixSlower && strings.HasPrefix(strings.ToLower(prof.Test), "prefix_scan") && iteratorPct >= decodePct+2.0 {
 			inferred = append(inferred,
 				fmt.Sprintf("%s: prefix_scan CPU is weighted toward iterator/seek work (%.2f%% flat) vs value decoding (%.2f%% flat). That points to iterator setup/seek overhead, not value decoding.",
 					prof.DBTag, iteratorPct, decodePct))
@@ -991,7 +1044,7 @@ func buildInvestigations(rep report) ([]investigationTarget, []string) {
 			if keyRef == "" {
 				keyRef = target.Function
 			}
-			key := target.DBTag + "|" + target.Test + "|" + target.Category + "|" + keyRef
+			key := prof.Kind + "|" + target.DBTag + "|" + target.Test + "|" + target.Category + "|" + keyRef
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -1093,13 +1146,17 @@ func sourceRef(file string, line int) string {
 }
 
 func profileName(prof pprofSummary) string {
+	prefix := ""
+	if strings.TrimSpace(prof.Kind) != "" && prof.Kind != "cpu" {
+		prefix = prof.Kind + "/"
+	}
 	if strings.TrimSpace(prof.DBTag) == "" {
-		return prof.Test
+		return prefix + prof.Test
 	}
 	if strings.TrimSpace(prof.Test) == "" {
-		return prof.DBTag
+		return prefix + prof.DBTag
 	}
-	return prof.Test + "/" + prof.DBTag
+	return prefix + prof.Test + "/" + prof.DBTag
 }
 
 func newSourceResolver() *sourceResolver {
@@ -1412,6 +1469,46 @@ func renderMarkdown(rep report) string {
 			sb.WriteString(fmt.Sprintf("- source: `%s`\n", prof.Path))
 			if prof.Total != "" {
 				sb.WriteString(fmt.Sprintf("- total samples: `%s`\n", prof.Total))
+			}
+			sb.WriteString("\n")
+			if len(prof.TopEntries) == 0 {
+				sb.WriteString("_No entries parsed._\n\n")
+				continue
+			}
+			sb.WriteString("| flat | flat% | cum | cum% | function |\n")
+			sb.WriteString("|---:|---:|---:|---:|---|\n")
+			for _, e := range prof.TopEntries {
+				sb.WriteString(fmt.Sprintf("| %s | %.2f%% | %s | %.2f%% | `%s` |\n", e.Flat, e.FlatPct, e.Cum, e.CumPct, e.Function))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	if len(rep.AllocSpace) > 0 || len(rep.AllocObjects) > 0 {
+		sb.WriteString("## Allocation Hotspots\n\n")
+		allocProfiles := make([]pprofSummary, 0, len(rep.AllocSpace)+len(rep.AllocObjects))
+		allocProfiles = append(allocProfiles, rep.AllocSpace...)
+		allocProfiles = append(allocProfiles, rep.AllocObjects...)
+		sort.Slice(allocProfiles, func(i, j int) bool {
+			a := allocProfiles[i]
+			b := allocProfiles[j]
+			if a.Test != b.Test {
+				return a.Test < b.Test
+			}
+			if a.DBTag != b.DBTag {
+				return a.DBTag < b.DBTag
+			}
+			if a.Kind != b.Kind {
+				return a.Kind < b.Kind
+			}
+			return a.Path < b.Path
+		})
+		for _, prof := range allocProfiles {
+			title := fmt.Sprintf("%s (%s/%s)", prof.Test, prof.DBTag, prof.Kind)
+			sb.WriteString(fmt.Sprintf("### %s\n\n", title))
+			sb.WriteString(fmt.Sprintf("- source: `%s`\n", prof.Path))
+			if prof.Total != "" {
+				sb.WriteString(fmt.Sprintf("- total: `%s`\n", prof.Total))
 			}
 			sb.WriteString("\n")
 			if len(prof.TopEntries) == 0 {

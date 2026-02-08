@@ -1,13 +1,13 @@
 # benchprof
 
-`benchprof` analyzes `unified-bench` profile artifacts (all discovered CPU profile sections) and emits:
+`benchprof` analyzes `unified-bench` profile artifacts (CPU + allocation sections) and emits:
 
 - `insights.md` (human-readable summary)
 - `insights.json` (machine-friendly summary)
 - `insights.html` (optional browser view rendered from markdown)
 
 It emits concrete investigation targets (function + `file:line`) for each section using
-symbol/theme inference (iterator/seek, decode/read I/O, write/delete/flush, locking, etc.),
+symbol/theme inference (iterator/seek, decode/read I/O, write/delete/flush, locking, alloc/copy, etc.),
 so it can adapt as implementations evolve without hardcoding specific function names.
 
 ## Build
@@ -52,6 +52,7 @@ Outputs:
   - `benchprof_results.json` (preferred; auto-written by `unified-bench -profile-dir`)
   - `benchprof_results.md` (fallback; auto-written by `unified-bench -profile-dir`)
   - `cpu_<test>_<db>.pprof` (all test sections)
+  - `allocs_<test>_<db>.pprof` (allocation delta profiles by section; auto-written by `unified-bench -profile-dir`)
   - `checkpoint_cpu_checkpoint_<test>_<db>.pprof` (checkpoint CPU sections)
   - `block.pprof`
   - `mutex.pprof`

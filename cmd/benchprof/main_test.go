@@ -72,6 +72,7 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	mustWriteFile("cpu_full_scan_treedb_vlog_off.pprof")
 	mustWriteFile("nested/cpu_random_delete_treedb_vlog_off.pprof")
 	mustWriteFile("checkpoint_cpu_checkpoint_full_scan_treedb_vlog_off.pprof")
+	mustWriteFile("allocs_random_read_treedb_vlog_off.pprof")
 	mustWriteFile("block.pprof")
 	mustWriteFile("mutex.pprof")
 	mustWriteFile("trace.out")
@@ -86,6 +87,9 @@ func TestDiscoverProfileFiles(t *testing.T) {
 
 	if len(files.cpuProfiles) != 3 {
 		t.Fatalf("expected 3 cpu profiles, got %d", len(files.cpuProfiles))
+	}
+	if len(files.allocs) != 1 {
+		t.Fatalf("expected 1 alloc profile, got %d", len(files.allocs))
 	}
 	found := map[string]bool{
 		"full_scan/treedb_vlog_off":            false,
@@ -124,6 +128,67 @@ func TestSplitProfileTail_UsesKnownTests(t *testing.T) {
 	}
 	if dbTag != "treedb_vlog_off" {
 		t.Fatalf("unexpected db split: %q", dbTag)
+	}
+}
+
+func TestParseAllocsProfileFilename(t *testing.T) {
+	got, ok := parseAllocsProfileFilename("allocs_random_write_treedb_vlog_off.pprof", map[string]struct{}{
+		"random_write": {},
+	})
+	if !ok {
+		t.Fatalf("expected allocs filename to parse")
+	}
+	if got.Test != "random_write" {
+		t.Fatalf("unexpected test: %q", got.Test)
+	}
+	if got.DBTag != "treedb_vlog_off" {
+		t.Fatalf("unexpected db tag: %q", got.DBTag)
+	}
+}
+
+func TestBuildInvestigations_AllocProfiles(t *testing.T) {
+	rep := report{
+		AllocObjects: []pprofSummary{
+			{
+				Kind:  "alloc_objects",
+				Test:  "random_write",
+				DBTag: "treedb_vlog_off",
+				TopEntries: []pprofEntry{
+					{Flat: "120000", FlatPct: 44.0, Function: "github.com/snissn/gomap/TreeDB/caching.(*DB).noteWriteKey"},
+				},
+			},
+		},
+		AllocSpace: []pprofSummary{
+			{
+				Kind:  "alloc_space",
+				Test:  "random_write",
+				DBTag: "treedb_vlog_off",
+				TopEntries: []pprofEntry{
+					{Flat: "512MB", FlatPct: 41.0, Function: "runtime.makeslice"},
+				},
+			},
+		},
+	}
+
+	targets, inferred := buildInvestigations(rep)
+	if len(targets) == 0 {
+		t.Fatalf("expected investigation targets for alloc profiles")
+	}
+	if len(inferred) == 0 {
+		t.Fatalf("expected inferred insights for alloc profiles")
+	}
+	foundObjects := false
+	foundSpace := false
+	for _, line := range inferred {
+		if strings.Contains(line, "top allocator by count") {
+			foundObjects = true
+		}
+		if strings.Contains(line, "top allocator by bytes") {
+			foundSpace = true
+		}
+	}
+	if !foundObjects || !foundSpace {
+		t.Fatalf("expected alloc object/space insights, got: %+v", inferred)
 	}
 }
 
