@@ -28,7 +28,6 @@ type config struct {
 	outMarkdown string
 	outJSON     string
 	outHTML     string
-	writeHTML   bool
 	nodeCount   int
 }
 
@@ -153,18 +152,16 @@ func main() {
 	fmt.Printf("wrote markdown: %s\n", cfg.outMarkdown)
 	fmt.Printf("wrote json:     %s\n", cfg.outJSON)
 
-	if cfg.writeHTML {
-		htmlDoc, err := markdownToHTMLDoc(md)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "benchprof: render html: %v\n", err)
-			os.Exit(1)
-		}
-		if err := os.WriteFile(cfg.outHTML, htmlDoc, 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "benchprof: write html: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("wrote html:     %s\n", cfg.outHTML)
+	htmlDoc, err := markdownToHTMLDoc(md)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "benchprof: render html: %v\n", err)
+		os.Exit(1)
 	}
+	if err := os.WriteFile(cfg.outHTML, htmlDoc, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "benchprof: write html: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("wrote html:     %s\n", cfg.outHTML)
 }
 
 func parseFlags() (config, error) {
@@ -176,8 +173,7 @@ func parseFlags() (config, error) {
 	fs.StringVar(&cfg.runMarkdown, "run-md", "", "Path to benchmark markdown/stdout capture (optional; usually auto-discovered)")
 	fs.StringVar(&cfg.outMarkdown, "out-md", "", "Output markdown report path (default <profiles-dir>/insights.md)")
 	fs.StringVar(&cfg.outJSON, "out-json", "", "Output JSON report path (default <profiles-dir>/insights.json)")
-	fs.StringVar(&cfg.outHTML, "out-html", "", "Output HTML report path (implies -html)")
-	fs.BoolVar(&cfg.writeHTML, "html", false, "Also write an HTML report generated from markdown")
+	fs.StringVar(&cfg.outHTML, "out-html", "", "Output HTML report path (default <profiles-dir>/insights.html)")
 	fs.IntVar(&cfg.nodeCount, "nodecount", 25, "Top node count to request from go tool pprof")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -209,10 +205,7 @@ func parseFlags() (config, error) {
 	if cfg.outJSON == "" {
 		cfg.outJSON = filepath.Join(cfg.profilesDir, "insights.json")
 	}
-	if cfg.outHTML != "" {
-		cfg.writeHTML = true
-	}
-	if cfg.writeHTML && cfg.outHTML == "" {
+	if cfg.outHTML == "" {
 		cfg.outHTML = deriveHTMLOutPath(cfg.outMarkdown)
 	}
 	return cfg, nil

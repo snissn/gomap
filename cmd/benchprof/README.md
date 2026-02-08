@@ -36,8 +36,7 @@ mkdir -p /tmp/scan-profiles
   -progress=false
 
 ./bin/benchprof \
-  -profiles-dir /tmp/scan-profiles \
-  -html
+  -profiles-dir /tmp/scan-profiles
 ```
 
 Outputs:
@@ -59,3 +58,4 @@ Outputs:
 - Optional flags:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
   - `-run-md` to force a specific markdown log file for ops/sec parsing
+  - `-out-html` to override the default HTML output path
