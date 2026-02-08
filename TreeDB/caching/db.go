@@ -6502,6 +6502,25 @@ func (db *DB) recordCheckpointCutover(d time.Duration) {
 	}
 }
 
+// checkpointRotateCapacity returns the memtable capacity used when checkpoint
+// rotates mutable shards. We intentionally cap checkpoint-time preallocation to
+// keep write-locked cutover latency bounded; normal growth resumes as writers
+// repopulate the fresh mutable shard.
+func (db *DB) checkpointRotateCapacity() int {
+	if db == nil {
+		return -1
+	}
+	capacity := db.memtableCap
+	if capacity <= 0 {
+		return -1
+	}
+	const checkpointRotateCapMax = 256 * 1024
+	if capacity > checkpointRotateCapMax {
+		return checkpointRotateCapMax
+	}
+	return capacity
+}
+
 func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time) float64 {
 	if db == nil {
 		return 0
@@ -6563,7 +6582,7 @@ func (db *DB) Checkpoint() error {
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
-		if err := db.rotateMutableShardsLocked(-1, false); err != nil {
+		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
 			return err
