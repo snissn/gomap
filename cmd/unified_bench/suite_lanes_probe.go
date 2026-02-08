@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -15,7 +16,18 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 	cfg.KeepDir = true
 	cfg.DBsArg = "treedb"
 	cfg.DBsExcludeArg = ""
-	cfg.TestsArg = "batch_write"
+	cfg.TestsArg = "random_write_parallel"
+	if cfg.WriteWorkers <= 1 {
+		// Ensure lane probes stress concurrent writers by default.
+		w := runtime.GOMAXPROCS(0)
+		if w < 2 {
+			w = 2
+		}
+		if w > 16 {
+			w = 16
+		}
+		cfg.WriteWorkers = w
+	}
 
 	start := time.Now()
 	run, err := runBenchmark(cfg)
@@ -29,7 +41,7 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 		return "", err
 	}
 
-	const testName = "batch_write"
+	const testName = "random_write_parallel"
 	dbName := inst.Wrapper.Name()
 	opsByDB, ok := run.Results[testName]
 	if !ok {
@@ -58,7 +70,7 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- lanes requested: %d\n", *treedbJournalLanes))
 	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(run.Config.Keys)))
 	sb.WriteString(fmt.Sprintf("- valsize: %d\n", run.Config.ValueSize))
-	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", run.Config.BatchSize))
+	sb.WriteString(fmt.Sprintf("- write-workers: %d\n", run.Config.WriteWorkers))
 	sb.WriteString(fmt.Sprintf("- ops/sec: %s\n", formatFloat(ops)))
 	sb.WriteString(fmt.Sprintf("- wall time: %s\n", wall.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- index.db bytes: %s\n", formatFloat(float64(indexBytes))))
