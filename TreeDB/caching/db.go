@@ -3664,7 +3664,7 @@ const (
 
 // Always queue values at or above this size to avoid blocking callers on large
 // appends and to improve value-log batching efficiency.
-const vlogQueueMinValueSize = 16 << 10
+const vlogQueueMinValueSize = 1 << 10
 
 // Linger briefly to coalesce micro-batches for small/medium queued writes.
 const vlogWriteLinger = 75 * time.Microsecond
