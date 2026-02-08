@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -21,6 +22,7 @@ var (
 type maintenanceSweepResult struct {
 	OpsPerCoalesce int
 	Checkpoint     time.Duration
+	WriteOpsPerSec float64
 	IndexBytes     int64
 	Dir            string
 }
@@ -90,6 +92,7 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 		}
 
 		var checkpoint time.Duration
+		var writeOps float64
 		var indexBytes int64
 		for _, inst := range run.Instances {
 			row, ok := run.CheckpointDurations[maintBudgetCheckpointRow]
@@ -102,6 +105,12 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 				return "", fmt.Errorf("maintenance_budget: missing checkpoint for %s in row %q", name, maintBudgetCheckpointRow)
 			}
 			checkpoint = dur
+
+			if wr, ok := run.Results["random_write"]; ok {
+				if v, vok := wr[name]; vok {
+					writeOps = v
+				}
+			}
 
 			indexPath, info, err := findIndexDB(inst.Dir)
 			if err != nil {
@@ -118,6 +127,7 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 		results = append(results, maintenanceSweepResult{
 			OpsPerCoalesce: k,
 			Checkpoint:     checkpoint,
+			WriteOpsPerSec: writeOps,
 			IndexBytes:     indexBytes,
 		})
 	}
@@ -134,6 +144,21 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 	if minSize == 0 {
 		return "", fmt.Errorf("maintenance_budget: invalid index sizes")
 	}
+
+	checkpointSamples := make([]time.Duration, 0, len(results))
+	dutySamplesPct := make([]float64, 0, len(results))
+	for _, r := range results {
+		checkpointSamples = append(checkpointSamples, r.Checkpoint)
+		if r.WriteOpsPerSec > 0 && baseCfg.Keys > 0 {
+			writePhase := time.Duration(float64(baseCfg.Keys)/r.WriteOpsPerSec*float64(time.Second) + 0.5)
+			total := writePhase + r.Checkpoint
+			if total > 0 {
+				dutySamplesPct = append(dutySamplesPct, 100*float64(r.Checkpoint)/float64(total))
+			}
+		}
+	}
+	sort.Slice(checkpointSamples, func(i, j int) bool { return checkpointSamples[i] < checkpointSamples[j] })
+	sort.Float64s(dutySamplesPct)
 
 	sizeCap := int64(float64(minSize) * (1 + sizeSlack))
 	best := results[0]
@@ -183,7 +208,77 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 		sb.WriteString("- note: no candidate met size slack; selected fastest overall\n")
 	}
 
+	checkpointP99 := percentileDurationFromSorted(checkpointSamples, 0.99)
+	checkpointP999 := percentileDurationFromSorted(checkpointSamples, 0.999)
+	checkpointMax := time.Duration(0)
+	if len(checkpointSamples) > 0 {
+		checkpointMax = checkpointSamples[len(checkpointSamples)-1]
+	}
+	dutyP99 := percentileFloat64FromSorted(dutySamplesPct, 0.99)
+	dutyMax := 0.0
+	if len(dutySamplesPct) > 0 {
+		dutyMax = dutySamplesPct[len(dutySamplesPct)-1]
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("- cutover pause p99: %s\n", checkpointP99.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- cutover pause p999: %s\n", checkpointP999.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- cutover pause max: %s\n", checkpointMax.Truncate(time.Millisecond)))
+	if len(dutySamplesPct) > 0 {
+		sb.WriteString(fmt.Sprintf("- cutover pause duty cycle p99 (checkpoint/(random_write+checkpoint)): %.3f%%\n", dutyP99))
+		sb.WriteString(fmt.Sprintf("- cutover pause duty cycle max: %.3f%%\n", dutyMax))
+	} else {
+		sb.WriteString("- cutover pause duty cycle: n/a (missing random_write ops/sec)\n")
+	}
+	sb.WriteString(fmt.Sprintf("- gate cutover-pause-p99<=10ms: %s\n", passFail(len(checkpointSamples) > 0 && checkpointP99 <= 10*time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- gate cutover-pause-p999<=40ms: %s\n", passFail(len(checkpointSamples) > 0 && checkpointP999 <= 40*time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- gate cutover-pause-max<=150ms: %s\n", passFail(len(checkpointSamples) > 0 && checkpointMax <= 150*time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- gate cutover-duty-cycle<=5%%: %s\n", passFail(len(dutySamplesPct) > 0 && dutyP99 <= 5.0)))
+	if len(dutySamplesPct) == 0 {
+		sb.WriteString("- note: duty-cycle gate fails closed when random_write ops/sec is unavailable.\n")
+	}
+
 	return sb.String(), nil
+}
+
+func percentileDurationFromSorted(sorted []time.Duration, q float64) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if q <= 0 {
+		return sorted[0]
+	}
+	if q >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(float64(len(sorted))*q + 0.999999)
+	if idx < 1 {
+		idx = 1
+	}
+	if idx > len(sorted) {
+		idx = len(sorted)
+	}
+	return sorted[idx-1]
+}
+
+func percentileFloat64FromSorted(sorted []float64, q float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if q <= 0 {
+		return sorted[0]
+	}
+	if q >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(float64(len(sorted))*q + 0.999999)
+	if idx < 1 {
+		idx = 1
+	}
+	if idx > len(sorted) {
+		idx = len(sorted)
+	}
+	return sorted[idx-1]
 }
 
 func findIndexDB(dir string) (string, os.FileInfo, error) {

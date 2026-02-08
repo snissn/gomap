@@ -153,6 +153,21 @@ func parseStatFloat(stats map[string]string, key string) (float64, bool) {
 	return v, true
 }
 
+func parseStatInt64(stats map[string]string, key string) (int64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	raw, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 func passFail(ok bool) string {
 	if ok {
 		return "PASS"
@@ -225,6 +240,46 @@ func p99Duration(sorted []time.Duration) time.Duration {
 	idx := (99*len(sorted) + 99) / 100
 	if idx <= 0 {
 		return sorted[0]
+	}
+	if idx > len(sorted) {
+		idx = len(sorted)
+	}
+	return sorted[idx-1]
+}
+
+func percentileDuration(sorted []time.Duration, q float64) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if q <= 0 {
+		return sorted[0]
+	}
+	if q >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(float64(len(sorted))*q + 0.999999)
+	if idx < 1 {
+		idx = 1
+	}
+	if idx > len(sorted) {
+		idx = len(sorted)
+	}
+	return sorted[idx-1]
+}
+
+func percentileInt64(sorted []int64, q float64) int64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	if q <= 0 {
+		return sorted[0]
+	}
+	if q >= 1 {
+		return sorted[len(sorted)-1]
+	}
+	idx := int(float64(len(sorted))*q + 0.999999)
+	if idx < 1 {
+		idx = 1
 	}
 	if idx > len(sorted) {
 		idx = len(sorted)
@@ -429,9 +484,108 @@ func runBackendMaterializationDebtSuite(baseCfg BenchConfig) (string, error) {
 	}
 	defer cleanup()
 
-	keys := max(1, s.cfg.Keys)
-	indexBytesPerKey := float64(s.mainIndexBytes) / float64(keys)
-	walBytesPerKey := float64(s.mainWALBytes) / float64(keys)
+	td, err := openTreeDBAdapterFromDir(s.dir)
+	if err != nil {
+		return "", err
+	}
+	defer td.Close()
+
+	probeWindow := 8 * time.Second
+	probeWorkers := max(1, s.cfg.WriteWorkers)
+	probeValue := max(128, s.cfg.ValueSize)
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), probeWindow)
+	defer probeCancel()
+
+	keyRing := makeWriterProbeKeys("materialization_debt_probe", 4096)
+	value := makeWriterProbeValue(probeValue)
+	errCh := make(chan error, probeWorkers)
+	var wg sync.WaitGroup
+	for w := 0; w < probeWorkers; w++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			idx := worker % len(keyRing)
+			for {
+				select {
+				case <-probeCtx.Done():
+					return
+				default:
+				}
+				if err := td.Set(keyRing[idx], value); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				idx++
+				if idx >= len(keyRing) {
+					idx = 0
+				}
+			}
+		}(w)
+	}
+
+	start := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	backlogSamples := make([]int64, 0, 128)
+	lagSamples := make([]time.Duration, 0, 128)
+sampleLoop:
+	for {
+		select {
+		case <-probeCtx.Done():
+			break sampleLoop
+		case err := <-errCh:
+			probeCancel()
+			wg.Wait()
+			return "", err
+		case now := <-ticker.C:
+			stats := td.Stats()
+			if backlog, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok {
+				if backlog < 0 {
+					backlog = 0
+				}
+				backlogSamples = append(backlogSamples, backlog)
+			}
+			if age, ok := parseFreshnessAge(stats, "treedb.cache.auto_checkpoint.last_unix_nano", now); ok {
+				lagSamples = append(lagSamples, age)
+			}
+		}
+	}
+	ticker.Stop()
+	wg.Wait()
+	probeElapsed := time.Since(start)
+
+	backlogSorted := append([]int64(nil), backlogSamples...)
+	sort.Slice(backlogSorted, func(i, j int) bool { return backlogSorted[i] < backlogSorted[j] })
+	lagSorted := append([]time.Duration(nil), lagSamples...)
+	sort.Slice(lagSorted, func(i, j int) bool { return lagSorted[i] < lagSorted[j] })
+
+	backlogP99 := percentileInt64(backlogSorted, 0.99)
+	backlogP999 := percentileInt64(backlogSorted, 0.999)
+	backlogMax := int64(0)
+	if len(backlogSorted) > 0 {
+		backlogMax = backlogSorted[len(backlogSorted)-1]
+	}
+	backlogSlopeBps := 0.0
+	hasBacklogSlope := len(backlogSamples) >= 2 && probeElapsed > 0
+	if hasBacklogSlope {
+		backlogSlopeBps = float64(backlogSamples[len(backlogSamples)-1]-backlogSamples[0]) / probeElapsed.Seconds()
+	}
+
+	lagP99 := percentileDuration(lagSorted, 0.99)
+	lagP999 := percentileDuration(lagSorted, 0.999)
+	lagMax := time.Duration(0)
+	if len(lagSorted) > 0 {
+		lagMax = lagSorted[len(lagSorted)-1]
+	}
+
+	lagGateP99 := len(lagSorted) > 0 && lagP99 <= 2*time.Second
+	lagGateP999 := len(lagSorted) > 0 && lagP999 <= 5*time.Second
+	lagGateMax := len(lagSorted) > 0 && lagMax <= 15*time.Second
+	debtSlopeGate := hasBacklogSlope && backlogSlopeBps <= 0
+	debtP99Gate := len(backlogSorted) > 0 && backlogP99 <= int64(512<<20)
+	debtMaxGate := len(backlogSorted) > 0 && backlogMax <= int64(1<<30)
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: backend_materialization_debt\n\n")
@@ -443,10 +597,31 @@ func runBackendMaterializationDebtSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- wall time: %s\n", s.wall.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- maindb index bytes: %s\n", formatBytes(s.mainIndexBytes)))
 	sb.WriteString(fmt.Sprintf("- maindb wal bytes (total): %s\n", formatBytes(s.mainWALBytes)))
-	sb.WriteString(fmt.Sprintf("- index bytes/key (proxy): %.3f\n", indexBytesPerKey))
-	sb.WriteString(fmt.Sprintf("- wal bytes/key (proxy): %.3f\n", walBytesPerKey))
+	sb.WriteString(fmt.Sprintf("- debt probe window: %s\n", probeElapsed.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- debt probe workers: %d\n", probeWorkers))
+	sb.WriteString(fmt.Sprintf("- debt probe backlog samples: %s\n", formatInt(len(backlogSamples))))
+	sb.WriteString(fmt.Sprintf("- debt probe lag-age samples: %s\n", formatInt(len(lagSamples))))
+	sb.WriteString(fmt.Sprintf("- materialization lag p99: %s\n", lagP99.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- materialization lag p999: %s\n", lagP999.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- materialization lag max: %s\n", lagMax.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- pending debt bytes p99: %s\n", formatBytes(uint64(max(0, int(backlogP99))))))
+	sb.WriteString(fmt.Sprintf("- pending debt bytes p999: %s\n", formatBytes(uint64(max(0, int(backlogP999))))))
+	sb.WriteString(fmt.Sprintf("- pending debt bytes max: %s\n", formatBytes(uint64(max(0, int(backlogMax))))))
+	if hasBacklogSlope {
+		sb.WriteString(fmt.Sprintf("- debt slope (bytes/sec, probe window): %.0f\n", backlogSlopeBps))
+	} else {
+		sb.WriteString("- debt slope (bytes/sec, probe window): n/a (insufficient backlog samples)\n")
+	}
 	sb.WriteString("\n")
-	sb.WriteString("- note: debt lag percentiles/slope are not yet exported by this harness; bytes-per-key proxies are reported for baseline tracking.\n")
+	sb.WriteString(fmt.Sprintf("- gate materialization-lag-p99<=2s: %s\n", passFail(lagGateP99)))
+	sb.WriteString(fmt.Sprintf("- gate materialization-lag-p999<=5s: %s\n", passFail(lagGateP999)))
+	sb.WriteString(fmt.Sprintf("- gate materialization-lag-max<=15s: %s\n", passFail(lagGateMax)))
+	sb.WriteString(fmt.Sprintf("- gate debt-slope<=0-bytes-per-sec: %s\n", passFail(debtSlopeGate)))
+	sb.WriteString(fmt.Sprintf("- gate pending-debt-p99<=512MiB: %s\n", passFail(debtP99Gate)))
+	sb.WriteString(fmt.Sprintf("- gate pending-debt-max<=1GiB: %s\n", passFail(debtMaxGate)))
+	if len(lagSorted) == 0 {
+		sb.WriteString("- note: no materialization lag age samples were exported; lag gates fail closed.\n")
+	}
 	return sb.String(), nil
 }
 
@@ -802,8 +977,18 @@ func runPublishWatermarkSuite(baseCfg BenchConfig) (string, error) {
 	keys := []string{
 		"treedb.cache.queue_backlog_bytes",
 		"treedb.cache.flush_bps_ewma",
+		"treedb.cache.auto_checkpoint.count",
 		"treedb.cache.auto_checkpoint.last_duration_ms",
+		"treedb.cache.auto_checkpoint.last_unix_nano",
 	}
+
+	watermarkShare, hasWatermarkShare := parseStatFloat(stats, "treedb.publish.watermark.lock_delay_share_pct")
+	watermarkP99, hasWatermarkP99 := parseStatFloat(stats, "treedb.publish.watermark.latency_p99_ms")
+	watermarkDrift, hasWatermarkDrift := parseStatFloat(stats, "treedb.publish.watermark.lag_drift_bytes_per_sec")
+
+	gateShare := hasWatermarkShare && watermarkShare <= 3.0
+	gateP99 := hasWatermarkP99 && watermarkP99 <= 1.5
+	gateDrift := hasWatermarkDrift && watermarkDrift <= 0
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: publish_watermark\n\n")
@@ -814,8 +999,32 @@ func runPublishWatermarkSuite(baseCfg BenchConfig) (string, error) {
 			sb.WriteString(fmt.Sprintf("- %s: %s\n", k, v))
 		}
 	}
+	if hasWatermarkShare {
+		sb.WriteString(fmt.Sprintf("- treedb.publish.watermark.lock_delay_share_pct: %.3f\n", watermarkShare))
+	}
+	if hasWatermarkP99 {
+		sb.WriteString(fmt.Sprintf("- treedb.publish.watermark.latency_p99_ms: %.3f\n", watermarkP99))
+	}
+	if hasWatermarkDrift {
+		sb.WriteString(fmt.Sprintf("- treedb.publish.watermark.lag_drift_bytes_per_sec: %.3f\n", watermarkDrift))
+	}
 	sb.WriteString("\n")
-	sb.WriteString("- note: explicit publish-watermark lock-share metrics are not exported yet; cache checkpoint/backlog proxies are reported.\n")
+	sb.WriteString(fmt.Sprintf("- gate watermark-lock-delay-share<=3%%: %s\n", passFail(gateShare)))
+	sb.WriteString(fmt.Sprintf("- gate watermark-latency-p99<=1.5ms: %s\n", passFail(gateP99)))
+	sb.WriteString(fmt.Sprintf("- gate watermark-lag-drift<=0: %s\n", passFail(gateDrift)))
+	if !hasWatermarkShare || !hasWatermarkP99 || !hasWatermarkDrift {
+		missing := make([]string, 0, 3)
+		if !hasWatermarkShare {
+			missing = append(missing, "treedb.publish.watermark.lock_delay_share_pct")
+		}
+		if !hasWatermarkP99 {
+			missing = append(missing, "treedb.publish.watermark.latency_p99_ms")
+		}
+		if !hasWatermarkDrift {
+			missing = append(missing, "treedb.publish.watermark.lag_drift_bytes_per_sec")
+		}
+		sb.WriteString(fmt.Sprintf("- note: missing watermark metrics (fail closed): %s\n", strings.Join(missing, ", ")))
+	}
 	return sb.String(), nil
 }
 
