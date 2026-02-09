@@ -2150,6 +2150,13 @@ type memtableStats struct {
 	lastKeyMu  sync.Mutex
 	lastKey    []byte
 	hasLastKey bool
+	shardSeq   []memtableSeqTracker
+}
+
+type memtableSeqTracker struct {
+	mu         sync.Mutex
+	lastKey    []byte
+	hasLastKey bool
 }
 
 func (r *keyRange) add(key []byte) {
@@ -2282,28 +2289,43 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		shard.bytes = 0
 		shard.mu.Unlock()
 	}
-	db.memtableStats.writes.Store(0)
-	db.memtableStats.seqWrites.Store(0)
-	db.memtableStats.iterators.Store(0)
-	db.memtableStats.rangeIters.Store(0)
-	db.memtableStats.lastKeyMu.Lock()
-	db.memtableStats.hasLastKey = false
-	db.memtableStats.lastKeyMu.Unlock()
+	db.resetMemtableStatsLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	return nil
 }
 
 func (db *DB) noteWriteKey(key []byte) {
+	db.noteWriteKeyForShard(-1, key)
+}
+
+func (db *DB) noteWriteKeyForShard(shardID int, key []byte) {
 	if !db.memtableAdaptive {
 		return
 	}
 	stats := &db.memtableStats
 	stats.writes.Add(1)
+	tracker := db.memtableSeqTracker(shardID)
 	if len(key) == 0 {
+		if tracker != nil {
+			tracker.mu.Lock()
+			tracker.hasLastKey = false
+			tracker.mu.Unlock()
+			return
+		}
 		stats.lastKeyMu.Lock()
 		stats.hasLastKey = false
 		stats.lastKeyMu.Unlock()
+		return
+	}
+	if tracker != nil {
+		tracker.mu.Lock()
+		if tracker.hasLastKey && bytes.Compare(tracker.lastKey, key) < 0 {
+			stats.seqWrites.Add(1)
+		}
+		tracker.lastKey = append(tracker.lastKey[:0], key...)
+		tracker.hasLastKey = true
+		tracker.mu.Unlock()
 		return
 	}
 	stats.lastKeyMu.Lock()
@@ -2317,12 +2339,25 @@ func (db *DB) noteWriteKey(key []byte) {
 
 // noteWriteSortedRun records a strictly increasing key run in one shot.
 func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
+	db.noteWriteSortedRunForShard(-1, first, last, count)
+}
+
+// noteWriteSortedRunForShard records a strictly increasing key run for a single
+// shard in one shot.
+func (db *DB) noteWriteSortedRunForShard(shardID int, first, last []byte, count int) {
 	if !db.memtableAdaptive || count <= 0 {
 		return
 	}
 	stats := &db.memtableStats
 	stats.writes.Add(uint64(count))
+	tracker := db.memtableSeqTracker(shardID)
 	if len(last) == 0 {
+		if tracker != nil {
+			tracker.mu.Lock()
+			tracker.hasLastKey = false
+			tracker.mu.Unlock()
+			return
+		}
 		stats.lastKeyMu.Lock()
 		stats.hasLastKey = false
 		stats.lastKeyMu.Unlock()
@@ -2331,6 +2366,19 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 	seqAdds := uint64(0)
 	if count > 1 {
 		seqAdds += uint64(count - 1)
+	}
+	if tracker != nil {
+		tracker.mu.Lock()
+		if len(first) > 0 && tracker.hasLastKey && bytes.Compare(tracker.lastKey, first) < 0 {
+			seqAdds++
+		}
+		tracker.lastKey = append(tracker.lastKey[:0], last...)
+		tracker.hasLastKey = true
+		tracker.mu.Unlock()
+		if seqAdds > 0 {
+			stats.seqWrites.Add(seqAdds)
+		}
+		return
 	}
 	stats.lastKeyMu.Lock()
 	if len(first) > 0 && stats.hasLastKey && bytes.Compare(stats.lastKey, first) < 0 {
@@ -2341,6 +2389,43 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 	stats.lastKeyMu.Unlock()
 	if seqAdds > 0 {
 		stats.seqWrites.Add(seqAdds)
+	}
+}
+
+func (db *DB) memtableSeqTracker(shardID int) *memtableSeqTracker {
+	if !db.adaptiveShardedStats || shardID < 0 {
+		return nil
+	}
+	stats := &db.memtableStats
+	if shardID >= len(stats.shardSeq) {
+		return nil
+	}
+	return &stats.shardSeq[shardID]
+}
+
+func (db *DB) resetMemtableStatsLocked() {
+	stats := &db.memtableStats
+	stats.writes.Store(0)
+	stats.seqWrites.Store(0)
+	stats.iterators.Store(0)
+	stats.rangeIters.Store(0)
+	stats.lastKeyMu.Lock()
+	stats.hasLastKey = false
+	stats.lastKey = stats.lastKey[:0]
+	stats.lastKeyMu.Unlock()
+	if db.adaptiveShardedStats {
+		if len(stats.shardSeq) != len(db.mutableShards) {
+			stats.shardSeq = make([]memtableSeqTracker, len(db.mutableShards))
+		}
+		for i := range stats.shardSeq {
+			tracker := &stats.shardSeq[i]
+			tracker.mu.Lock()
+			tracker.hasLastKey = false
+			tracker.lastKey = tracker.lastKey[:0]
+			tracker.mu.Unlock()
+		}
+	} else {
+		stats.shardSeq = nil
 	}
 }
 
@@ -2801,6 +2886,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableCap:                          memCap,
 		memtableMode:                         mode,
 		memtableAdaptive:                     adaptive,
+		adaptiveShardedStats:                 adaptive && shardCount > 1,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:              warmupThreshold,
 		domainIngressWorkers:                 domainIngressWorkers,
@@ -2883,6 +2969,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
+	db.resetMemtableStatsLocked()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
@@ -7488,7 +7575,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	usePointer := false
 	debugPtr := db.debugFlushPointers
 
-	shard := db.shardForKey(key)
+	shardID := db.shardIndex(key)
+	shard := &db.mutableShards[shardID]
 	shard.mu.Lock()
 	if db.shardExceedsLimit(shard, int64(len(key)+len(value))) {
 		shard.mu.Unlock()
@@ -7519,7 +7607,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	var lane *lane
 	if allowPointers || !db.disableJournal {
-		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
+		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(shardID))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -7601,7 +7689,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
-	db.noteWriteKey(key)
+	db.noteWriteKeyForShard(shardID, key)
 
 	// 3. Check Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -7671,7 +7759,8 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				return ErrMemtableFull
 			}
 			for {
-				shard := db.shardForKey(key)
+				shardID := db.shardIndex(key)
+				shard := &db.mutableShards[shardID]
 				shard.mu.Lock()
 				if db.shardExceedsLimit(shard, int64(len(key))) {
 					shard.mu.Unlock()
@@ -7693,7 +7782,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				shard.bytes = newBytes
 				db.mutableBytes.Add(delta)
 				shard.mu.Unlock()
-				db.noteWriteKey(key)
+				db.noteWriteKeyForShard(shardID, key)
 				if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 					db.mu.Lock()
 					if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -8249,7 +8338,8 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	needRotate := false
 	needSyncBarrier := false
 
-	shard := db.shardForKey(key)
+	shardID := db.shardIndex(key)
+	shard := &db.mutableShards[shardID]
 	shard.mu.Lock()
 	if db.shardExceedsLimit(shard, int64(len(key))) {
 		shard.mu.Unlock()
@@ -8267,7 +8357,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 				durability = journalDurabilitySync
 			}
 		}
-		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
+		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(shardID))
 		if err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -8290,7 +8380,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
-	db.noteWriteKey(key)
+	db.noteWriteKeyForShard(shardID, key)
 
 	// 3. Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -11910,7 +12000,7 @@ func (b *Batch) writeRegular(sync bool) error {
 			if len(entries) > 1 {
 				shard.rng.add(last)
 			}
-			b.db.noteWriteSortedRun(first, last, len(entries))
+			b.db.noteWriteSortedRunForShard(i, first, last, len(entries))
 		} else {
 			for _, op := range entries {
 				if op.Type == batch.OpDelete {
@@ -11927,7 +12017,7 @@ func (b *Batch) writeRegular(sync bool) error {
 					}
 				}
 				shard.rng.add(op.Key)
-				b.db.noteWriteKey(op.Key)
+				b.db.noteWriteKeyForShard(i, op.Key)
 			}
 		}
 		newBytes := shard.mem.Size()
