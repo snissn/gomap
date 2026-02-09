@@ -11505,6 +11505,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 const (
 	streamSwitchMinEntries = 4096
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
+	// Only fan out value-log appends across multiple lanes when a batch is large
+	// enough to amortize per-lane setup and goroutine overhead.
+	multiLaneValueLogMinRecords = 1024
 )
 
 func (b *Batch) maybeSwitchToStreaming() {
@@ -11760,7 +11763,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeRegular(sync bool) error {
+func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -11825,7 +11828,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	// - When DisableWAL=false, we also append commit-intent records that can
 	//   be replayed to recover unflushed writes.
 	durability := journalDurabilityNone
-	if sync {
+	if syncWrite {
 		if b.db.relaxedSync {
 			durability = journalDurabilityFlush
 		} else {
@@ -11866,12 +11869,17 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.debugPtrDenied.Add(int64(eligibleCount))
 		}
 	}
+	multiLanePointers := allowPointers &&
+		b.db.disableJournal &&
+		durability == journalDurabilityNone &&
+		len(b.db.lanes) > 1 &&
+		eligibleCount >= multiLaneValueLogMinRecords
 
 	var (
 		lane *lane
 		rids []uint64
 	)
-	if allowPointers || !b.db.disableJournal {
+	if (!multiLanePointers && allowPointers) || !b.db.disableJournal {
 		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
 		if err != nil {
 			b.db.writeMu.RUnlock()
@@ -11891,53 +11899,169 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		valueRecords := getValueLogRecords(eligibleCount)
-		safeNoClear := true
-		defer func() {
-			if safeNoClear {
-				putValueLogRecordsNoClear(valueRecords)
-				return
+		if multiLanePointers {
+			type laneValueLogBatch struct {
+				laneID      int
+				idxs        []int
+				records     []valuelog.Record
+				safeNoClear bool
+				ptrs        []page.ValuePtr
+				err         error
 			}
-			putValueLogRecords(valueRecords)
-		}()
-		for i, idx := range eligibleIdxs {
-			op := &b.entries[idx]
-			rid := b.db.nextRID.Add(1)
-			if rids != nil {
-				rids[idx] = rid
+
+			laneCounts := make([]int, len(b.db.lanes))
+			for _, idx := range eligibleIdxs {
+				laneID := b.db.laneForShardIndex(shardIdxs[idx])
+				if laneID < 0 || laneID >= len(b.db.lanes) {
+					laneID = 0
+				}
+				laneCounts[laneID]++
 			}
-			if safeNoClear {
-				if len(op.Value) > 64 || cap(op.Value) > 64 {
-					safeNoClear = false
+
+			laneBatches := make([]laneValueLogBatch, len(b.db.lanes))
+			activeLaneIDs := make([]int, 0, len(b.db.lanes))
+			for laneID, count := range laneCounts {
+				if count == 0 {
+					continue
+				}
+				lb := &laneBatches[laneID]
+				lb.laneID = laneID
+				lb.idxs = make([]int, 0, count)
+				lb.records = getValueLogRecordsCap(count)
+				lb.safeNoClear = true
+				activeLaneIDs = append(activeLaneIDs, laneID)
+			}
+
+			defer func() {
+				for _, laneID := range activeLaneIDs {
+					lb := &laneBatches[laneID]
+					if lb.records != nil {
+						if lb.safeNoClear {
+							putValueLogRecordsNoClear(lb.records)
+						} else {
+							putValueLogRecords(lb.records)
+						}
+						lb.records = nil
+					}
+					if lb.ptrs != nil {
+						putValueLogPtrs(lb.ptrs)
+						lb.ptrs = nil
+					}
+				}
+			}()
+
+			for _, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				rid := b.db.nextRID.Add(1)
+				if rids != nil {
+					rids[idx] = rid
+				}
+				laneID := b.db.laneForShardIndex(shardIdxs[idx])
+				if laneID < 0 || laneID >= len(b.db.lanes) {
+					laneID = 0
+				}
+				lb := &laneBatches[laneID]
+				if lb.safeNoClear && (len(op.Value) > 64 || cap(op.Value) > 64) {
+					lb.safeNoClear = false
+				}
+				lb.idxs = append(lb.idxs, idx)
+				lb.records = append(lb.records, valuelog.Record{RID: rid, Value: op.Value})
+			}
+
+			var wg sync.WaitGroup
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				wg.Add(1)
+				go func(batch *laneValueLogBatch) {
+					defer wg.Done()
+					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+				}(lb)
+			}
+			wg.Wait()
+
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				if lb.err != nil {
+					b.db.writeMu.RUnlock()
+					return lb.err
 				}
 			}
-			valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
-		}
-		ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
-		if err != nil {
-			b.db.writeMu.RUnlock()
-			return err
-		}
-		if len(ptrs) == eligibleCount {
-			for i, idx := range eligibleIdxs {
-				op := &b.entries[idx]
-				op.ValuePtr = ptrs[i]
-				op.IsPtr = true
-				if b.db.memtableValueLogPointers {
-					op.Value = nil
+
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				if len(lb.ptrs) != len(lb.idxs) {
+					if debugPtr {
+						b.db.debugPtrNoPtr.Add(int64(len(lb.idxs)))
+					}
+					continue
+				}
+				for i, idx := range lb.idxs {
+					op := &b.entries[idx]
+					op.ValuePtr = lb.ptrs[i]
+					op.IsPtr = true
+					if b.db.memtableValueLogPointers {
+						op.Value = nil
+					}
 				}
 				if debugPtr {
-					b.db.debugPtrUsed.Add(1)
+					b.db.debugPtrUsed.Add(int64(len(lb.idxs)))
 				}
+				retainPath := b.db.currentValueLogPath(&b.db.lanes[lb.laneID])
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+				putValueLogPtrs(lb.ptrs)
+				lb.ptrs = nil
 			}
-			retainPath := b.db.currentValueLogPath(lane)
-			if retainPath != "" {
-				b.db.markValueLogRetain(retainPath)
+		} else {
+			valueRecords := getValueLogRecords(eligibleCount)
+			safeNoClear := true
+			defer func() {
+				if safeNoClear {
+					putValueLogRecordsNoClear(valueRecords)
+					return
+				}
+				putValueLogRecords(valueRecords)
+			}()
+			for i, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				rid := b.db.nextRID.Add(1)
+				if rids != nil {
+					rids[idx] = rid
+				}
+				if safeNoClear {
+					if len(op.Value) > 64 || cap(op.Value) > 64 {
+						safeNoClear = false
+					}
+				}
+				valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 			}
-		} else if debugPtr && eligibleCount > 0 {
-			b.db.debugPtrNoPtr.Add(int64(eligibleCount))
+			ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			if err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+			if len(ptrs) == eligibleCount {
+				for i, idx := range eligibleIdxs {
+					op := &b.entries[idx]
+					op.ValuePtr = ptrs[i]
+					op.IsPtr = true
+					if b.db.memtableValueLogPointers {
+						op.Value = nil
+					}
+					if debugPtr {
+						b.db.debugPtrUsed.Add(1)
+					}
+				}
+				retainPath := b.db.currentValueLogPath(lane)
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+			} else if debugPtr && eligibleCount > 0 {
+				b.db.debugPtrNoPtr.Add(int64(eligibleCount))
+			}
+			putValueLogPtrs(ptrs)
 		}
-		putValueLogPtrs(ptrs)
 	}
 
 	if !b.db.disableJournal {
@@ -12060,7 +12184,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		needRotate = true
 	}
-	if sync && b.db.disableJournal {
+	if syncWrite && b.db.disableJournal {
 		needSyncBarrier = true
 	}
 	b.db.writeMu.RUnlock()
