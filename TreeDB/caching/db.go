@@ -125,6 +125,17 @@ func putValueLogRecords(s []valuelog.Record) {
 	valueLogRecordPool.Put(s[:0])
 }
 
+func putValueLogRecordsNoClear(s []valuelog.Record) {
+	if s == nil {
+		return
+	}
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogRecordPool.Put(s[:0])
+}
+
 func getValueLogPtrs(n int) []page.ValuePtr {
 	if n < 0 {
 		n = 0
@@ -11815,12 +11826,25 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		valueRecords := make([]valuelog.Record, eligibleCount)
+		valueRecords := getValueLogRecords(eligibleCount)
+		safeNoClear := true
+		defer func() {
+			if safeNoClear {
+				putValueLogRecordsNoClear(valueRecords)
+				return
+			}
+			putValueLogRecords(valueRecords)
+		}()
 		for i, idx := range eligibleIdxs {
 			op := &b.entries[idx]
 			rid := b.db.nextRID.Add(1)
 			if rids != nil {
 				rids[idx] = rid
+			}
+			if safeNoClear {
+				if len(op.Value) > 64 || cap(op.Value) > 64 {
+					safeNoClear = false
+				}
 			}
 			valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 		}
