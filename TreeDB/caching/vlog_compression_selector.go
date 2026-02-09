@@ -50,6 +50,11 @@ const vlogBlockKBucketCount = 8
 
 var vlogBlockKBucketUpperBounds = [vlogBlockKBucketCount]int{1, 2, 4, 8, 16, 32, 64, valuelog.MaxFrameK}
 
+var (
+	vlogAutoCandidatesNoDict   = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4}
+	vlogAutoCandidatesWithDict = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4, vlogAutoCandidateDict}
+)
+
 const (
 	defaultVlogHoldBytes      = 64 << 20
 	defaultVlogProbeBytes     = 8 << 20
@@ -372,12 +377,10 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 }
 
 func (s *vlogCompressionSelector) availableCandidates(dictAvailable bool) []vlogAutoCandidate {
-	out := make([]vlogAutoCandidate, 0, 4)
-	out = append(out, vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4)
 	if dictAvailable {
-		out = append(out, vlogAutoCandidateDict)
+		return vlogAutoCandidatesWithDict[:]
 	}
-	return out
+	return vlogAutoCandidatesNoDict[:]
 }
 
 func (s *vlogCompressionSelector) preferredCandidate(dictAvailable bool) vlogAutoCandidate {
