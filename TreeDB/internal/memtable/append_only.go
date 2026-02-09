@@ -15,13 +15,16 @@ const (
 	appendOnlyEstimatedBytesPerEntry = 32
 	appendOnlyMinInitialEntries      = 128
 	appendOnlyMaxInitialEntries      = 1 << 20
+	appendOnlyInlineKeyLen           = 8
 )
 
 type appendOnlyEntry struct {
-	key   []byte
-	value []byte
-	ptr   page.ValuePtr
-	flags byte
+	key       []byte
+	value     []byte
+	ptr       page.ValuePtr
+	inlineKey [appendOnlyInlineKeyLen]byte
+	flags     byte
+	keyInline bool
 }
 
 type AppendOnly struct {
@@ -32,7 +35,7 @@ type AppendOnly struct {
 
 	ordered bool
 	hasLast bool
-	lastKey []byte
+	lastIdx int
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -52,9 +55,19 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 		entries:   make([]appendOnlyEntry, 0, n),
 		ordered:   true,
 		hasLast:   false,
-		lastKey:   nil,
+		lastIdx:   -1,
 		sizeBytes: 0,
 	}
+}
+
+func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
+	if ent == nil {
+		return nil
+	}
+	if ent.keyInline {
+		return ent.inlineKey[:]
+	}
+	return ent.key
 }
 
 func cloneBytes(src []byte) []byte {
@@ -80,38 +93,43 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	if key == nil {
 		return
 	}
-	k := key
-	v := value
-	if !steal {
-		k = cloneBytes(key)
-		v = cloneBytes(value)
+	ent := appendOnlyEntry{ptr: ptr, flags: flags}
+	if steal {
+		ent.key = key
+		ent.value = value
+	} else {
+		if len(key) == appendOnlyInlineKeyLen {
+			copy(ent.inlineKey[:], key)
+			ent.keyInline = true
+		} else {
+			ent.key = cloneBytes(key)
+		}
+		ent.value = cloneBytes(value)
 	}
 	if flags&node.FlagTombstone != 0 {
-		v = nil
-		ptr = page.ValuePtr{}
+		ent.value = nil
+		ent.ptr = page.ValuePtr{}
 	}
-	m.entries = append(m.entries, appendOnlyEntry{
-		key:   k,
-		value: v,
-		ptr:   ptr,
-		flags: flags,
-	})
-	m.sizeBytes += int64(len(k) + entryValueSize(flags, v))
+	m.entries = append(m.entries, ent)
+	idx := len(m.entries) - 1
+	k := appendOnlyEntryKey(&m.entries[idx])
+	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
 
 	if !m.hasLast {
-		m.lastKey = k
+		m.lastIdx = idx
 		m.hasLast = true
 		return
 	}
 	if !m.ordered {
 		return
 	}
-	cmp := bytes.Compare(k, m.lastKey)
+	prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
+	cmp := bytes.Compare(k, prev)
 	if cmp <= 0 {
 		m.ordered = false
 		return
 	}
-	m.lastKey = k
+	m.lastIdx = idx
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -206,8 +224,8 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i := len(m.entries) - 1; i >= 0; i-- {
-		ent := m.entries[i]
-		if bytes.Equal(ent.key, key) {
+		ent := &m.entries[i]
+		if bytes.Equal(appendOnlyEntryKey(ent), key) {
 			if ent.flags&node.FlagTombstone != 0 {
 				return nil, true, true
 			}
@@ -221,8 +239,8 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for i := len(m.entries) - 1; i >= 0; i-- {
-		ent := m.entries[i]
-		if bytes.Equal(ent.key, key) {
+		ent := &m.entries[i]
+		if bytes.Equal(appendOnlyEntryKey(ent), key) {
 			return ent.value, ent.ptr, ent.flags, true
 		}
 	}
@@ -249,14 +267,17 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 	}
 	latest := make(map[string]int, len(m.entries))
 	for i := range m.entries {
-		latest[string(m.entries[i].key)] = i
+		latest[string(appendOnlyEntryKey(&m.entries[i]))] = i
 	}
 	indices := make([]int, 0, len(latest))
 	for _, idx := range latest {
 		indices = append(indices, idx)
 	}
 	sort.Slice(indices, func(i, j int) bool {
-		return bytes.Compare(m.entries[indices[i]].key, m.entries[indices[j]].key) < 0
+		return bytes.Compare(
+			appendOnlyEntryKey(&m.entries[indices[i]]),
+			appendOnlyEntryKey(&m.entries[indices[j]]),
+		) < 0
 	})
 	snapshot := make([]appendOnlyEntry, len(indices))
 	for i, idx := range indices {
@@ -293,7 +314,7 @@ func (it *appendOnlyIterator) validIndex() bool {
 	if it.idx < 0 || it.idx >= len(it.entries) {
 		return false
 	}
-	if it.end != nil && bytes.Compare(it.entries[it.idx].key, it.end) >= 0 {
+	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -311,7 +332,7 @@ func (it *appendOnlyIterator) Next() {
 
 func (it *appendOnlyIterator) Seek(key []byte) {
 	it.idx = sort.Search(len(it.entries), func(i int) bool {
-		return bytes.Compare(it.entries[i].key, key) >= 0
+		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
 	})
 }
 
@@ -319,7 +340,7 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	return it.entries[it.idx].key
+	return appendOnlyEntryKey(&it.entries[it.idx])
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
