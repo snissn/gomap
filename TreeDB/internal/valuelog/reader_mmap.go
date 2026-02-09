@@ -286,7 +286,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		f.cacheFlags = fFlags
 		f.cacheLen = prefixLen
 		f.cacheOffs = offsets
-		f.cacheRaw = raw
+		f.setCacheRawLocked(raw, false)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
@@ -303,7 +303,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	f.cacheRaw = nil
+	f.setCacheRawLocked(nil, false)
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 
@@ -484,7 +484,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.cacheFlags = fFlags
 		f.cacheLen = prefixLen
 		f.cacheOffs = offsets
-		f.cacheRaw = nil
+		f.setCacheRawLocked(nil, false)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
@@ -519,6 +519,50 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
 	if int(valueLen) < prefixLen {
 		return nil, ErrCorrupt, true
+	}
+
+	if f.cacheStart.Load() == start {
+		f.cacheMu.Lock()
+		hit := f.cacheStart.Load() == start &&
+			f.cacheK > 0 &&
+			f.cacheLen > 0 &&
+			subIndex < f.cacheK &&
+			(f.cacheFlags&FrameFlagCompressed) == (fFlags&FrameFlagCompressed) &&
+			len(f.cacheRaw) > 0
+		if hit {
+			valStart := f.cacheOffs[subIndex]
+			valEnd := f.cacheOffs[subIndex+1]
+			rawLen := f.cacheOffs[f.cacheK]
+			cachedRaw := f.cacheRaw
+			f.cacheMu.Unlock()
+
+			if valEnd < valStart || valEnd > rawLen {
+				return nil, ErrCorrupt, true
+			}
+			if uint32(len(cachedRaw)) != rawLen {
+				return nil, ErrCorrupt, true
+			}
+			n := int(valEnd - valStart)
+			oldLen := len(dst)
+			dst = grow(dst, n)
+			copy(dst[oldLen:], cachedRaw[valStart:valEnd])
+			if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+				payload := dst[oldLen:]
+				decodedStart := len(dst)
+				var err error
+				dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+					return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+				}, f.templateDecodeOpts)
+				if err != nil {
+					return nil, err, true
+				}
+				decodedLen := len(dst) - decodedStart
+				copy(dst[oldLen:], dst[decodedStart:])
+				dst = dst[:oldLen+decodedLen]
+			}
+			return dst, nil, true
+		}
+		f.cacheMu.Unlock()
 	}
 	off := FrameHeaderSize + ridBytes
 	var offsets [MaxFrameK + 1]uint32
@@ -560,11 +604,19 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
+	f.cacheMu.Lock()
+	f.cacheK = k
+	f.cacheFlags = fFlags
+	f.cacheLen = prefixLen
+	f.cacheOffs = offsets
+	f.setCacheRawLocked(raw, true)
+	f.cacheStart.Store(start)
+	f.cacheMu.Unlock()
+
 	n := int(valEnd - valStart)
 	oldLen := len(dst)
 	dst = grow(dst, n)
 	copy(dst[oldLen:], raw[valStart:valEnd])
-	putDecodeScratch(raw)
 
 	if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
 		payload := dst[oldLen:]
