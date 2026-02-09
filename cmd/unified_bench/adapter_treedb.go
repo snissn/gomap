@@ -58,6 +58,7 @@ var (
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto; values: off|block|dict|auto)")
 	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
+	treedbVlogAutoPolicy                  = flag.String("treedb-vlog-auto-policy", "balanced", "TreeDB: value-log auto policy (balanced|throughput|size)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
 	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
@@ -239,6 +240,19 @@ func parseTreeDBVlogBlockCodec(s string) (treedb.ValueLogBlockCodec, error) {
 	}
 }
 
+func parseTreeDBVlogAutoPolicy(s string) (treedb.ValueLogAutoPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "balanced", "default":
+		return treedb.ValueLogAutoBalanced, nil
+	case "throughput", "speed":
+		return treedb.ValueLogAutoThroughput, nil
+	case "size":
+		return treedb.ValueLogAutoSize, nil
+	default:
+		return treedb.ValueLogAutoBalanced, fmt.Errorf("unsupported -treedb-vlog-auto-policy=%q (expected balanced|throughput|size)", s)
+	}
+}
+
 type treeDBOptionsReport struct {
 	opts     treedb.Options
 	notes    []string
@@ -284,6 +298,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	}
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
+	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
 	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
 		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
 	} else {
@@ -376,6 +391,19 @@ func formatTreeDBVlogBlockCodec(codec treedb.ValueLogBlockCodec) string {
 		return "lz4"
 	default:
 		return fmt.Sprintf("block_codec_%d", codec)
+	}
+}
+
+func formatTreeDBVlogAutoPolicy(policy treedb.ValueLogAutoPolicy) string {
+	switch policy {
+	case treedb.ValueLogAutoBalanced:
+		return "balanced"
+	case treedb.ValueLogAutoThroughput:
+		return "throughput"
+	case treedb.ValueLogAutoSize:
+		return "size"
+	default:
+		return fmt.Sprintf("auto_policy_%d", policy)
 	}
 }
 
@@ -512,6 +540,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.BlockCodec = blockCodec
+	autoPolicy, err := parseTreeDBVlogAutoPolicy(*treedbVlogAutoPolicy)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.AutoPolicy = autoPolicy
 
 	setOptionalVlogTrainConfig(&opts,
 		*treedbVlogDictTrainBytes,

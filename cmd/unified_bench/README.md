@@ -31,8 +31,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
   - `durable` (strict durability)
-  - `fast` (max throughput; TreeDB WAL off; unsafe)
-  - `wal_on_fast` (TreeDB WAL on + relaxed durability; unsafe)
+  - `fast` (max throughput; TreeDB WAL off + throughput-biased vlog auto policy; unsafe)
+  - `wal_on_fast` (TreeDB WAL on + relaxed durability + throughput-biased vlog auto policy; unsafe)
 - `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
@@ -61,6 +61,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
+- `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
