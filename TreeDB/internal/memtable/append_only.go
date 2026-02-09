@@ -103,6 +103,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		m.hasLast = true
 		return
 	}
+	if !m.ordered {
+		return
+	}
 	cmp := bytes.Compare(k, m.lastKey)
 	if cmp <= 0 {
 		m.ordered = false
