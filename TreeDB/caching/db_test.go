@@ -426,6 +426,7 @@ func TestCachingDB_FlushAllCombinesMemtablesParallel(t *testing.T) {
 		FlushBuildConcurrency: 4,
 		FlushBuildMinEntries:  1,
 		FlushBuildMinUnits:    2,
+		MemtableShards:        1,
 		JournalLanes:          1,
 	})
 	if err != nil {

@@ -419,8 +419,8 @@ func defaultMemtableShards() int {
 		n = 1
 	}
 	n *= 2
-	if n > 8 {
-		n = 8
+	if n > 16 {
+		n = 16
 	}
 	return normalizeShardCount(n)
 }
