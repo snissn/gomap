@@ -808,7 +808,60 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 	}
 
-	entries := make([]internalEntry, 0, len(children)+4)
+	target := builder
+	appendInternal := func(key []byte, childID uint64, first bool) error {
+		if childID >= z.pager.PageCount() {
+			return errors.New("zipper: detected OOB child ID")
+		}
+		if first && key == nil {
+			key = []byte{}
+		}
+		entrySize := 2 + 8 + len(key)
+		if z.indexInternalBaseDelta {
+			entrySize = 2 + 4 + len(key)
+		}
+		if z.internalSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddInternalChild(key, childID)
+		}
+		if err == node.ErrNodeFull {
+			target, err = z.createNewSplitInternal(target, builder, &splits, key, childID, metrics)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+	}
+
+	if !maintenance {
+		firstEntry := true
+		for i := range children {
+			child := &children[i]
+			if err := appendInternal(child.key, child.newChild, firstEntry); err != nil {
+				return 0, nil, nil, err
+			}
+			firstEntry = false
+			for _, s := range child.splits {
+				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
+					return 0, nil, nil, err
+				}
+				firstEntry = false
+			}
+		}
+		if target != builder {
+			_ = target.Finish()
+			metrics.IndexWriteBytes += page.PageSize
+		}
+		return builder.PageID(), splits, retired, nil
+	}
+
+	totalEntries := len(children)
+	for i := range children {
+		totalEntries += len(children[i].splits)
+	}
+	entries := make([]internalEntry, 0, totalEntries)
 	for i := range children {
 		child := children[i]
 		if child.newChild >= z.pager.PageCount() {
@@ -826,46 +879,26 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	coalesced := entries
-	if maintenance {
-		var extraRetired []uint64
-		coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		if len(extraRetired) > 0 {
-			retired = append(retired, extraRetired...)
-		}
+	var extraRetired []uint64
+	coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(extraRetired) > 0 {
+		retired = append(retired, extraRetired...)
+	}
 
-		coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		if len(extraRetired) > 0 {
-			retired = append(retired, extraRetired...)
-		}
+	coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(extraRetired) > 0 {
+		retired = append(retired, extraRetired...)
 	}
 
 	// Write final internal entries, splitting if needed.
-	target := builder
-	for i, e := range coalesced {
-		if i == 0 && (e.key == nil) {
-			e.key = []byte{}
-		}
-		entrySize := 2 + 8 + len(e.key)
-		if z.indexInternalBaseDelta {
-			entrySize = 2 + 4 + len(e.key)
-		}
-		if z.internalSoftFull(target, entrySize) {
-			err = node.ErrNodeFull
-		} else {
-			err = target.AddInternalChild(e.key, e.child)
-		}
-		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, e.key, e.child, metrics)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-		} else if err != nil {
+	for i := range coalesced {
+		if err := appendInternal(coalesced[i].key, coalesced[i].child, i == 0); err != nil {
 			return 0, nil, nil, err
 		}
 	}
