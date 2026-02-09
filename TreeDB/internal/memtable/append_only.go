@@ -93,7 +93,11 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	if key == nil {
 		return
 	}
-	ent := appendOnlyEntry{ptr: ptr, flags: flags}
+	m.entries = append(m.entries, appendOnlyEntry{})
+	idx := len(m.entries) - 1
+	ent := &m.entries[idx]
+	ent.ptr = ptr
+	ent.flags = flags
 	if steal {
 		ent.key = key
 		ent.value = value
@@ -110,9 +114,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		ent.value = nil
 		ent.ptr = page.ValuePtr{}
 	}
-	m.entries = append(m.entries, ent)
-	idx := len(m.entries) - 1
-	k := appendOnlyEntryKey(&m.entries[idx])
+	k := appendOnlyEntryKey(ent)
 	m.sizeBytes += int64(len(k) + entryValueSize(flags, ent.value))
 
 	if !m.hasLast {
