@@ -18,6 +18,7 @@ const (
 	ModeSkiplist Mode = iota
 	ModeHashSorted
 	ModeBTree
+	ModeAppendOnly
 )
 
 func ModeFromString(mode string) (Mode, error) {
@@ -28,6 +29,8 @@ func ModeFromString(mode string) (Mode, error) {
 		return ModeHashSorted, nil
 	case "btree":
 		return ModeBTree, nil
+	case "append_only":
+		return ModeAppendOnly, nil
 	default:
 		return ModeSkiplist, fmt.Errorf("unknown memtable mode %q", mode)
 	}
@@ -41,6 +44,8 @@ func (m Mode) String() string {
 		return "hash_sorted"
 	case ModeBTree:
 		return "btree"
+	case ModeAppendOnly:
+		return "append_only"
 	default:
 		return "skiplist"
 	}
@@ -141,6 +146,8 @@ func NewWithCapacityModeAndIndexer(capacity int, mode Mode, indexer *HashSortedI
 		return NewHashSortedWithCapacityAndIndexer(capacity, indexer), nil
 	case ModeBTree:
 		return NewBTree(), nil
+	case ModeAppendOnly:
+		return NewAppendOnlyWithCapacity(capacity), nil
 	default:
 		return nil, fmt.Errorf("unknown memtable mode %q", mode.String())
 	}
