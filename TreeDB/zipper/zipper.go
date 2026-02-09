@@ -89,6 +89,17 @@ const maxChildWorkCap = 1 << 14
 
 var childWorkPool sync.Pool
 
+const (
+	internalKeyArenaInitCap = page.PageSize
+	internalKeyArenaMaxCap  = 1 << 16
+)
+
+var internalKeyArenaPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, internalKeyArenaInitCap)
+	},
+}
+
 type maintenanceBudget struct {
 	remaining int64
 }
@@ -668,17 +679,23 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	children := getChildWorkSlice(int(count))
 	defer putChildWorkSlice(children)
 
-	keyArenaCap := int(count) * 16
-	if keyArenaCap < 64 {
-		keyArenaCap = 64
-	}
-	keyArena := make([]byte, 0, keyArenaCap)
-	cloneKey := func(src []byte) []byte {
-		if src == nil {
-			return nil
+	copyKeys := oldNode.InternalBaseDeltaEnabled()
+	var keyArena []byte
+	if copyKeys {
+		if v := internalKeyArenaPool.Get(); v != nil {
+			keyArena = v.([]byte)[:0]
+		} else {
+			keyArena = make([]byte, 0, internalKeyArenaInitCap)
 		}
-		if len(src) == 0 {
-			return []byte{}
+		defer func() {
+			if cap(keyArena) <= internalKeyArenaMaxCap {
+				internalKeyArenaPool.Put(keyArena[:0])
+			}
+		}()
+	}
+	cloneKey := func(src []byte) []byte {
+		if !copyKeys || len(src) == 0 {
+			return src
 		}
 		start := len(keyArena)
 		keyArena = append(keyArena, src...)
@@ -699,6 +716,10 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			low:     keyCopy,
 			childID: childID,
 		})
+	}
+
+	if count > 0 {
+		retired = make([]uint64, 0, count)
 	}
 
 	for i := range children {

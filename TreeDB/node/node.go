@@ -189,6 +189,13 @@ func (n *Node) internalBaseDelta() bool {
 	return n.rawFlags()&internalBaseDeltaFlag != 0
 }
 
+// InternalBaseDeltaEnabled reports whether this internal node uses base-delta
+// key encoding. When true, GetInternalEntryView keys are scratch-backed and
+// callers that retain keys must copy them.
+func (n *Node) InternalBaseDeltaEnabled() bool {
+	return n.internalBaseDelta()
+}
+
 func (n *Node) internalBaseDeltaU16() bool {
 	if n.ptype != page.PageTypeInternal {
 		return false
