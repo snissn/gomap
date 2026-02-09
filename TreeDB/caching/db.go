@@ -3700,6 +3700,7 @@ const (
 	walFastBatchMax               = 2048
 	walFastQueueMax               = 16384
 	defaultDomainIngressQueueSize = 1024
+	domainIngressBatchMax         = 128
 )
 
 const (
@@ -3773,17 +3774,78 @@ func (db *DB) stopDomainIngressWorkers() {
 
 func (db *DB) domainIngressLoop(ch <-chan domainIngressRequest) {
 	defer db.wg.Done()
-	for req := range ch {
+	batchReqs := make([]domainIngressRequest, 0, domainIngressBatchMax)
+	for {
+		req, ok := <-ch
+		if !ok {
+			return
+		}
+		batchReqs = append(batchReqs[:0], req)
+	drain:
+		for len(batchReqs) < domainIngressBatchMax {
+			select {
+			case req, ok = <-ch:
+				if !ok {
+					db.processDomainIngressBatch(batchReqs)
+					return
+				}
+				batchReqs = append(batchReqs, req)
+			default:
+				break drain
+			}
+		}
+		db.processDomainIngressBatch(batchReqs)
+	}
+}
+
+func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
+	if len(reqs) == 0 {
+		return
+	}
+	if len(reqs) == 1 {
+		req := reqs[0]
 		var err error
 		switch req.op {
 		case domainIngressOpSet:
-			err = db.setDirect(req.key, req.value, req.sync)
+			err = db.setDirect(req.key, req.value, false)
 		case domainIngressOpDelete:
-			err = db.deleteDirect(req.key, req.sync)
+			err = db.deleteDirect(req.key, false)
 		default:
 			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
 		}
 		db.domainIngressProcessed.Add(1)
+		if req.done != nil {
+			req.done <- err
+			close(req.done)
+		}
+		return
+	}
+
+	b := db.NewBatchWithSize(len(reqs))
+	var err error
+	for i := range reqs {
+		req := reqs[i]
+		switch req.op {
+		case domainIngressOpSet:
+			err = b.Set(req.key, req.value)
+		case domainIngressOpDelete:
+			err = b.Delete(req.key)
+		default:
+			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
+		}
+		if err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = b.Write()
+	}
+	if closeErr := b.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	db.domainIngressProcessed.Add(uint64(len(reqs)))
+	for i := range reqs {
+		req := reqs[i]
 		if req.done != nil {
 			req.done <- err
 			close(req.done)
@@ -3811,8 +3873,22 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 	if db == nil {
 		return false, nil
 	}
+	if db.domainIngressWorkers <= 0 {
+		return false, nil
+	}
+	// Preserve legacy sync behavior until ingress batching has explicit sync-fence
+	// handling and per-request durable completion accounting.
+	if sync {
+		return false, nil
+	}
 	if db.closing.Load() {
 		return true, errDBClosing
+	}
+
+	db.domainIngressMu.Lock()
+	if len(db.domainIngressCh) == 0 {
+		db.domainIngressMu.Unlock()
+		return false, nil
 	}
 	req := domainIngressRequest{
 		op:    op,
@@ -3820,12 +3896,6 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 		value: value,
 		sync:  sync,
 		done:  make(chan error, 1),
-	}
-
-	db.domainIngressMu.Lock()
-	if len(db.domainIngressCh) == 0 {
-		db.domainIngressMu.Unlock()
-		return false, nil
 	}
 	shardID := db.shardIndex(key)
 	workerID := shardID % len(db.domainIngressCh)
