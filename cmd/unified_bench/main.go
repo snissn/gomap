@@ -1535,19 +1535,65 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
 				}
 			}
+			type batcherWithSize interface {
+				NewBatchWithSize(size int) (kvstore.Batch, error)
+			}
+			type batchSetView interface {
+				SetView(key, value []byte) error
+			}
+			type resettableBatch interface {
+				Reset()
+			}
+			var (
+				batch      kvstore.Batch
+				setView    func(key, value []byte) error
+				resetBatch func()
+			)
+			openBatch := func() error {
+				var err error
+				if bs, ok := batcher.(batcherWithSize); ok {
+					batch, err = bs.NewBatchWithSize(cfg.BatchSize)
+				} else {
+					batch, err = batcher.NewBatch()
+				}
+				if err != nil {
+					return err
+				}
+				setView = nil
+				if sv, ok := batch.(batchSetView); ok {
+					setView = sv.SetView
+				}
+				resetBatch = nil
+				if rb, ok := batch.(resettableBatch); ok {
+					resetBatch = rb.Reset
+				}
+				return nil
+			}
+			defer func() {
+				if batch != nil {
+					_ = batch.Close()
+				}
+			}()
 			for i := 0; i < total; i += cfg.BatchSize {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
 						return 0, err
 					}
 				}
-				batch, err := batcher.NewBatch()
-				if err != nil {
-					return 0, fmt.Errorf("batch_write: new batch: %w", err)
-				}
-				var setView func(key, value []byte) error
-				if sv, ok := batch.(interface{ SetView(key, value []byte) error }); ok {
-					setView = sv.SetView
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_write: new batch: %w", err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("batch_write: close: %w", err)
+					}
+					batch = nil
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("batch_write: new batch: %w", err)
+					}
 				}
 
 				end := i + cfg.BatchSize
@@ -1562,7 +1608,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						value := values[valPos%len(values)]
 						valPos++
 						if err := setView(keyView, value); err != nil {
-							_ = batch.Close()
 							return 0, fmt.Errorf("batch_write: set: %w", err)
 						}
 					}
@@ -1579,17 +1624,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						value := values[valPos%len(values)]
 						valPos++
 						if err := batch.Set(keyView, value); err != nil {
-							_ = batch.Close()
 							return 0, fmt.Errorf("batch_write: set: %w", err)
 						}
 					}
 				}
 				if err := batch.Commit(); err != nil {
-					_ = batch.Close()
 					return 0, fmt.Errorf("batch_write: commit: %w", err)
 				}
-				if err := batch.Close(); err != nil {
-					return 0, fmt.Errorf("batch_write: close: %w", err)
+				if resetBatch == nil {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("batch_write: close: %w", err)
+					}
+					batch = nil
 				}
 				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
 					return 0, fmt.Errorf("batch_write checkpoint: %w", err)

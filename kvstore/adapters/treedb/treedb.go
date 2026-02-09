@@ -112,6 +112,21 @@ func (d *DB) NewBatch() (kvstore.Batch, error) {
 	return wrapped, nil
 }
 
+func (d *DB) NewBatchWithSize(size int) (kvstore.Batch, error) {
+	b := d.DB.NewBatchWithSize(size)
+	if b == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	wrapped := &batch{b: b}
+	if sv, ok := b.(interface{ SetView(key, value []byte) error }); ok {
+		wrapped.setView = sv.SetView
+	}
+	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
+		wrapped.deleteView = dv.DeleteView
+	}
+	return wrapped, nil
+}
+
 type batch struct {
 	b          treedb.Batch
 	setView    func(key, value []byte) error

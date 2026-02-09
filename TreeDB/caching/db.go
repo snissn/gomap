@@ -1550,7 +1550,7 @@ type Options struct {
 	FlushThreshold int64
 
 	// MemtableMode selects the in-memory write buffer implementation.
-	// Supported: "skiplist", "hash_sorted", "btree", "adaptive".
+	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
 	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
 	MemtableMode string
 
@@ -11434,7 +11434,9 @@ func (b *Batch) maybeSwitchToStreaming() {
 	// We intentionally use a small threshold (rather than flushThreshold) so
 	// "BatchWrite1M" style workloads can switch early and avoid materializing the
 	// entire batch in memory before Write().
-	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
+	// Require both entry-count and byte-size thresholds to avoid switching tiny-value
+	// batches to backend streaming solely due to key count.
+	if len(b.entries) < streamSwitchMinEntries || b.size < streamSwitchMinBytes {
 		return
 	}
 
@@ -11583,7 +11585,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if b.firstKey == nil || b.lastKey == nil {
 		return false, nil
 	}
-	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
+	// Mirror maybeSwitchToStreaming: bypass only when both dimensions are large.
+	if len(b.entries) < streamSwitchMinEntries || b.size < streamSwitchMinBytes {
 		return false, nil
 	}
 

@@ -63,6 +63,14 @@ func (d *treeDBBackendAdapter) NewBatch() (kvstore.Batch, error) {
 	return &treeDBBackendBatch{b: b}, nil
 }
 
+func (d *treeDBBackendAdapter) NewBatchWithSize(size int) (kvstore.Batch, error) {
+	b := d.db.NewBatchWithSize(size)
+	if b == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	return &treeDBBackendBatch{b: b}, nil
+}
+
 type treeDBBackendBatch struct {
 	b batch.Interface
 }
@@ -92,4 +100,10 @@ func (b *treeDBBackendBatch) CommitSync() error {
 
 func (b *treeDBBackendBatch) Close() error {
 	return b.b.Close()
+}
+
+func (b *treeDBBackendBatch) Reset() {
+	if r, ok := b.b.(interface{ Reset() }); ok {
+		r.Reset()
+	}
 }
