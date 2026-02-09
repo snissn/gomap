@@ -42,7 +42,7 @@ var (
 	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
-	batchSize          = flag.Int("batchsize", 1000, "Size of batches")
+	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
