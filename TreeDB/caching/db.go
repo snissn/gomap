@@ -3720,14 +3720,21 @@ func defaultJournalLaneCount(procs int) int {
 	if procs <= 2 {
 		return 1
 	}
-	// Keep defaults conservative: enough lanes to reduce walMu/vlogMu
-	// contention on multicore hosts without over-fragmenting work.
+	// Keep defaults conservative on low/mid core hosts.
 	lanes := procs / 4
 	if lanes < 1 {
 		lanes = 1
 	}
-	if lanes > 4 {
-		lanes = 4
+	// On high-core hosts, increase lane fanout to unlock journal/value-log
+	// parallelism, but avoid the most aggressive split to limit queue overhead.
+	if procs >= 16 {
+		highCoreLanes := (procs * 3) / 8
+		if highCoreLanes > lanes {
+			lanes = highCoreLanes
+		}
+	}
+	if lanes > 8 {
+		lanes = 8
 	}
 	return lanes
 }
