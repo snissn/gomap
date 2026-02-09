@@ -27,10 +27,6 @@ func init() {
 		setBoolIfUnset("treedb-disable-read-checksum", true, isSet, treedbDisableReadChecksum)
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
-		// Large random-insert workloads are extremely sensitive to flush batching.
-		// Use a larger default in the "fast" profile unless the caller explicitly
-		// overrides it.
-		setInt64IfUnset("treedb-flush-threshold", 256*1024*1024, isSet, treedbFlushThreshold)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
