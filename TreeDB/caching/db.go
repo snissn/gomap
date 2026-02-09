@@ -458,6 +458,26 @@ func (db *DB) splitValueLogEnabled() bool {
 	return true
 }
 
+func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
+	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+		return vlogWriteBlock
+	}
+	return writeMode
+}
+
+func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, dictByID map[uint64][]byte) []byte {
+	if dictID == 0 {
+		return nil
+	}
+	if dictByID == nil {
+		if dictID == singleDictID {
+			return singleDict
+		}
+		return nil
+	}
+	return dictByID[dictID]
+}
+
 func (db *DB) deferredValueLogEnabled() bool {
 	return false
 }
@@ -4433,9 +4453,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		needFlush       bool
 		needSync        bool
 		rawPayloadBytes int
+		singleDictID    uint64
+		sawDictID       bool
+		multipleDictIDs bool
 	)
 	records := getValueLogRecords(len(requests))
-	dictNeeded := make(map[uint64]struct{})
 	for i := range requests {
 		req := &requests[i]
 		if !req.enqueuedAt.IsZero() {
@@ -4448,16 +4470,40 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			needFlush = true
 		}
 		if req.dictID != 0 {
-			dictNeeded[req.dictID] = struct{}{}
+			if !sawDictID {
+				sawDictID = true
+				singleDictID = req.dictID
+			} else if req.dictID != singleDictID {
+				multipleDictIDs = true
+			}
 		}
 		rawPayloadBytes += len(req.value)
 	}
 
-	dictByID := make(map[uint64][]byte, len(dictNeeded))
-	for dictID := range dictNeeded {
-		dictBytes, err := db.dictBytesForLane(context.Background(), l, dictID)
-		if err == nil && len(dictBytes) > 0 {
-			dictByID[dictID] = dictBytes
+	var (
+		singleDict []byte
+		dictByID   map[uint64][]byte
+	)
+	if sawDictID {
+		if !multipleDictIDs {
+			dictBytes, err := db.dictBytesForLane(context.Background(), l, singleDictID)
+			if err == nil && len(dictBytes) > 0 {
+				singleDict = dictBytes
+			}
+		} else {
+			dictNeeded := make(map[uint64]struct{})
+			for i := range requests {
+				if dictID := requests[i].dictID; dictID != 0 {
+					dictNeeded[dictID] = struct{}{}
+				}
+			}
+			dictByID = make(map[uint64][]byte, len(dictNeeded))
+			for dictID := range dictNeeded {
+				dictBytes, err := db.dictBytesForLane(context.Background(), l, dictID)
+				if err == nil && len(dictBytes) > 0 {
+					dictByID[dictID] = dictBytes
+				}
+			}
 		}
 	}
 
@@ -4484,7 +4530,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if writeMode != vlogWriteDict {
 			dictID = 0
 		}
-		dict := dictByID[dictID]
+		dict := lookupVlogDictBytes(dictID, singleDictID, singleDict, dictByID)
 		if dictID == 0 || len(dict) == 0 || writeMode != vlogWriteDict {
 			dictID = 0
 			dict = nil
@@ -4500,7 +4546,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			nextMode := requests[end].writeMode
 			nextCodec := normalizeSelectorBlockCodec(requests[end].blockCodec)
 			nextDictID := requests[end].dictID
-			nextDict := dictByID[nextDictID]
+			nextDict := lookupVlogDictBytes(nextDictID, singleDictID, singleDict, dictByID)
 			if nextMode != vlogWriteDict {
 				nextDictID = 0
 			}
@@ -5469,12 +5515,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
-	fallbackToBlock := func() {
-		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
-			writeMode = vlogWriteBlock
-		}
-		blockMode = writeMode == vlogWriteBlock
-	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -5487,20 +5527,23 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		blockMode = writeMode == vlogWriteBlock
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -5509,7 +5552,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	switch mode {
@@ -6086,11 +6130,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
 	probeCompression := selectorProbe
-	fallbackToBlock := func() {
-		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
-			writeMode = vlogWriteBlock
-		}
-	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -6101,18 +6140,18 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
@@ -6120,7 +6159,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		} else {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 		}
 	}
 	finalWriteMode := vlogWriteOff
