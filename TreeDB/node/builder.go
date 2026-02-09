@@ -809,8 +809,6 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 		panic("leaf columnar+prefix v2 packing overflow")
 	}
 
-	valOff := valuesStart
-	keyOff := suffixStart
 	entries := b.leafColumnarPrefixV2Entries
 	suffixArena := b.leafColumnarV2Arena
 	valueArena := b.leafColumnarPrefixV2ValueArena
@@ -824,7 +822,46 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 		}
 		copy(b.data[valuesStart:suffixStart], valueArena)
 		copy(b.data[suffixStart:], suffixArena)
+
+		if builderNativeLittleEndian {
+			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+			if prefixStart&1 == 0 {
+				prefixDirU16 := bytesAsUint16Slice(prefixCol)
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
+					flagsCol[i] = e.flags
+					prefixDirU16[i] = e.prefixLen
+				}
+			} else {
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
+					flagsCol[i] = e.flags
+					putUint16At(prefixCol, i*2, e.prefixLen)
+				}
+			}
+		} else {
+			for i := 0; i < count; i++ {
+				e := &entries[i]
+				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
+				putUint16At(b.data, valDirStart+i*2, uint16(valuesStart+int(e.valueOff)))
+				flagsCol[i] = e.flags
+				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+			}
+		}
+
+		b.dirEnd = metaEnd
+		b.heapStart = valuesStart
+		b.releaseLeafColumnarPrefixV2Scratch()
+		return
 	}
+
+	valOff := valuesStart
+	keyOff := suffixStart
 
 	if builderNativeLittleEndian {
 		keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
@@ -839,9 +876,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				flagsCol[i] = e.flags
 				prefixDirU16[i] = e.prefixLen
 
-				if allInline {
-					valOff += int(e.valueLen)
-				} else if e.flags&FlagPointer != 0 {
+				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
 						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
 					} else {
@@ -856,10 +891,8 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				}
 
 				suffixLen := int(e.suffixLen)
-				if !allInline {
-					suffixStart := int(e.suffixOff)
-					copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-				}
+				suffixStart := int(e.suffixOff)
+				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
 				keyOff += suffixLen
 			}
 		} else {
@@ -870,9 +903,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				flagsCol[i] = e.flags
 				putUint16At(prefixCol, i*2, e.prefixLen)
 
-				if allInline {
-					valOff += int(e.valueLen)
-				} else if e.flags&FlagPointer != 0 {
+				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
 						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
 					} else {
@@ -887,10 +918,8 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				}
 
 				suffixLen := int(e.suffixLen)
-				if !allInline {
-					suffixStart := int(e.suffixOff)
-					copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-				}
+				suffixStart := int(e.suffixOff)
+				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
 				keyOff += suffixLen
 			}
 		}
@@ -905,9 +934,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 			flagsCol[i] = e.flags
 			putUint16At(b.data, prefixPos, e.prefixLen)
 
-			if allInline {
-				valOff += int(e.valueLen)
-			} else if e.flags&FlagPointer != 0 {
+			if e.flags&FlagPointer != 0 {
 				if b.leafPackedValuePtr {
 					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
 				} else {
@@ -922,10 +949,8 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 			}
 
 			suffixLen := int(e.suffixLen)
-			if !allInline {
-				suffixStart := int(e.suffixOff)
-				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
-			}
+			suffixStart := int(e.suffixOff)
+			copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
 			keyOff += suffixLen
 		}
 	}
